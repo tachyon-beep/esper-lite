@@ -117,6 +117,11 @@ The generated files are stored in `src/esper/leyline/_generated/` and include
   `choose_template(...)` for deterministic selection—context strings hash to
   stable templates and conservative mode restricts results to the safe pool.
 
+- Kasmina uses those same blueprint ids when grafting seeds. The seed manager
+  requests kernels from Urza via `UrzaRuntime.fetch_kernel`, enforces a
+  10 ms latency budget, and automatically falls back to a conservative
+  blueprint (`BP001` by default) or an identity kernel if the fetch fails.
+
 ### Tezzeret Compilation Forge
 
 - `TezzeretForge` orchestrates blueprint compilation at startup. Provide a

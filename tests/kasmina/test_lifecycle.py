@@ -18,9 +18,9 @@ class _RuntimeStub:
     def __init__(self) -> None:
         self.loaded = []
 
-    def load_kernel(self, blueprint_id: str) -> nn.Module:
+    def fetch_kernel(self, blueprint_id: str) -> tuple[nn.Module, float]:
         self.loaded.append(blueprint_id)
-        return nn.Identity()
+        return nn.Identity(), 1.0
 
 
 def test_lifecycle_transitions_follow_order() -> None:

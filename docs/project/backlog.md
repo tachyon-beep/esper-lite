@@ -118,7 +118,7 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
   - Cache hits after warmup achieve <10 ms p50 fetch.
   - WAL/transaction logs allow recovery after crash; metadata governance matches `docs/design/detailed_design/old/08-urza.md`.
 
-### TKT-204: Kasmina Kernel Fetch Integration ◔
+### TKT-204: Kasmina Kernel Fetch Integration ✅
 - **Description:** Connect Kasmina to Urza for kernel retrieval during seed activation; enforce latency budget.
 - **Acceptance Criteria:**
   - Kasmina requests blueprint id → receives compiled module.

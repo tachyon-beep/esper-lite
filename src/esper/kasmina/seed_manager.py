@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Protocol
+import logging
 
 from torch import nn
 
@@ -16,11 +17,15 @@ from esper.leyline import leyline_pb2
 from .lifecycle import KasminaLifecycle, LifecycleEvent, LifecycleState
 
 
+logger = logging.getLogger(__name__)
+
+
 class BlueprintRuntime(Protocol):
     """Protocol for runtime kernel execution support (Tezzeret/Urza)."""
 
-    def load_kernel(self, blueprint_id: str) -> nn.Module:
-        """Load a compiled kernel module for grafting."""
+    def fetch_kernel(self, blueprint_id: str) -> tuple[nn.Module, float]:
+        """Load a compiled kernel module and return latency in milliseconds."""
+        ...
 
 
 @dataclass(slots=True)
@@ -35,9 +40,19 @@ class SeedContext:
 class KasminaSeedManager:
     """Skeleton seed manager handling Tamiyo adaptation commands."""
 
-    def __init__(self, runtime: BlueprintRuntime) -> None:
+    def __init__(
+        self,
+        runtime: BlueprintRuntime,
+        *,
+        latency_budget_ms: float = 10.0,
+        fallback_blueprint_id: str | None = "BP001",
+    ) -> None:
         self._runtime = runtime
         self._seeds: dict[str, SeedContext] = {}
+        self._latency_budget_ms = latency_budget_ms
+        self._fallback_blueprint_id = fallback_blueprint_id
+        self._last_latency_ms: float = 0.0
+        self._last_fallback_used: bool = False
 
     def handle_command(self, command: leyline_pb2.AdaptationCommand) -> None:
         """Dispatch a Tamiyo command to the appropriate lifecycle handler."""
@@ -78,7 +93,21 @@ class KasminaSeedManager:
         elif lifecycle.state != LifecycleState.GERMINATING:
             # Already in an active state; skip re-germination
             pass
-        kernel = self._runtime.load_kernel(blueprint_id)
+        try:
+            kernel, latency_ms = self._runtime.fetch_kernel(blueprint_id)
+            self._last_latency_ms = latency_ms
+            self._last_fallback_used = False
+            if latency_ms > self._latency_budget_ms:
+                logger.warning(
+                    "Kasmina kernel fetch exceeded budget: %s took %.2fms (budget %.2fms)",
+                    blueprint_id,
+                    latency_ms,
+                    self._latency_budget_ms,
+                )
+                kernel = self._load_fallback(seed_id)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.error("Kasmina failed to load kernel %s: %s", blueprint_id, exc)
+            kernel = self._load_fallback(seed_id)
         self._attach_kernel(seed_id, kernel)
         if lifecycle.state != LifecycleState.ACTIVE:
             lifecycle.apply(LifecycleEvent.ACTIVATE)
@@ -99,11 +128,34 @@ class KasminaSeedManager:
 
         _ = (seed_id, kernel)
 
+    def _load_fallback(self, seed_id: str) -> nn.Module:
+        self._last_fallback_used = True
+        if self._fallback_blueprint_id:
+            try:
+                kernel, _ = self._runtime.fetch_kernel(self._fallback_blueprint_id)
+                logger.info(
+                    "Kasmina fallback blueprint %s applied to seed %s",
+                    self._fallback_blueprint_id,
+                    seed_id,
+                )
+                return kernel
+            except Exception as exc:  # pragma: no cover - defensive guard
+                logger.error("Fallback blueprint %s unavailable: %s", self._fallback_blueprint_id, exc)
+        return nn.Identity()
+
     def _log_adjustment(self, command: leyline_pb2.AdaptationCommand) -> None:
         _ = command
 
     def _noop(self, command: leyline_pb2.AdaptationCommand) -> None:
         _ = command
+
+    @property
+    def last_fetch_latency_ms(self) -> float:
+        return self._last_latency_ms
+
+    @property
+    def last_fallback_used(self) -> bool:
+        return self._last_fallback_used
 
 
 __all__ = ["KasminaSeedManager", "BlueprintRuntime", "SeedContext"]
