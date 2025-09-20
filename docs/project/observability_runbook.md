@@ -83,3 +83,8 @@ process. The service will log a warning when the stub is activated.
 - Tamiyo action selection metrics (`tamiyo.policy.action`,
   `tamiyo.policy.param_delta`) are emitted alongside validation metrics to help
   correlate policy decisions with Simic training outcomes.
+- Tamiyo persists field reports to `var/tamiyo/field_reports.log` with a
+  retention window controlled by `TAMIYO_FIELD_REPORT_RETENTION_HOURS`
+  (default 24). The log is safe to truncate once the service is stopped if you
+  need to reset the replay buffer; otherwise the WAL guarantees crash recovery
+  for Simic’s ingestion pipeline.

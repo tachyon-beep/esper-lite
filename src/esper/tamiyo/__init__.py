@@ -5,6 +5,14 @@ in accordance with `docs/design/detailed_design/03-tamiyo.md`.
 """
 
 from .policy import TamiyoPolicy, TamiyoPolicyConfig
+from .persistence import FieldReportStore, FieldReportStoreConfig
 from .service import RiskConfig, TamiyoService
 
-__all__ = ["TamiyoPolicy", "TamiyoPolicyConfig", "TamiyoService", "RiskConfig"]
+__all__ = [
+    "TamiyoPolicy",
+    "TamiyoPolicyConfig",
+    "TamiyoService",
+    "RiskConfig",
+    "FieldReportStore",
+    "FieldReportStoreConfig",
+]

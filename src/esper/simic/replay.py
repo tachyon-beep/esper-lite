@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 import random
 from typing import TYPE_CHECKING, Mapping
 
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
 
 MAX_METRIC_FEATURES = 8
 METRIC_SEQUENCE_LENGTH = 16
+DEFAULT_REPLAY_TTL = timedelta(hours=24)
 
 
 @dataclass(slots=True)
@@ -95,16 +97,20 @@ class FieldReportReplayBuffer:
     metric_window: int = METRIC_SEQUENCE_LENGTH
     seed_vocab: int = 1024
     blueprint_vocab: int = 1024
+    ttl: timedelta = DEFAULT_REPLAY_TTL
     seed_registry: EmbeddingRegistry | None = None
     blueprint_registry: EmbeddingRegistry | None = None
     _reports: deque[leyline_pb2.FieldReport] = field(init=False, repr=False)
     _experiences: deque[SimicExperience] = field(init=False, repr=False)
+    _timestamps: deque[datetime] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "_reports", deque(maxlen=self.capacity))
-        object.__setattr__(self, "_experiences", deque(maxlen=self.capacity))
+        object.__setattr__(self, "_reports", deque())
+        object.__setattr__(self, "_experiences", deque())
+        object.__setattr__(self, "_timestamps", deque())
 
     def add(self, report: leyline_pb2.FieldReport) -> None:
+        issued_at = _issued_at(report)
         self._reports.append(report)
         self._experiences.append(
             SimicExperience.from_report(
@@ -117,6 +123,10 @@ class FieldReportReplayBuffer:
                 blueprint_registry=self.blueprint_registry,
             )
         )
+        self._timestamps.append(issued_at)
+        now = datetime.now(tz=UTC)
+        self._prune(now=now)
+        self._enforce_capacity()
 
     def extend(self, reports: Iterable[leyline_pb2.FieldReport]) -> None:
         for report in reports:
@@ -172,6 +182,20 @@ class FieldReportReplayBuffer:
     def clear(self) -> None:
         self._reports.clear()
         self._experiences.clear()
+        self._timestamps.clear()
+
+    def _prune(self, *, now: datetime) -> None:
+        cutoff = now - self.ttl
+        while self._timestamps and self._timestamps[0] < cutoff:
+            self._timestamps.popleft()
+            self._reports.popleft()
+            self._experiences.popleft()
+
+    def _enforce_capacity(self) -> None:
+        while len(self._experiences) > self.capacity:
+            self._timestamps.popleft()
+            self._reports.popleft()
+            self._experiences.popleft()
 
     async def ingest_from_oona(
         self,
@@ -204,6 +228,14 @@ def _compute_reward(loss_delta: float, report: leyline_pb2.FieldReport) -> float
     if report.outcome == leyline_pb2.FIELD_REPORT_OUTCOME_DEGRADED:
         return -0.5
     return -1.0
+
+
+def _issued_at(report: leyline_pb2.FieldReport) -> datetime:
+    if report.HasField("issued_at"):
+        issued = report.issued_at.ToDatetime().replace(tzinfo=UTC)
+        if issued.timestamp() > 0:
+            return issued
+    return datetime.now(tz=UTC)
 
 
 def _populate_features(

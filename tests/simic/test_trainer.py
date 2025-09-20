@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from datetime import timedelta
 
 import torch
 
@@ -68,3 +69,10 @@ def test_trainer_supports_lora_enabled() -> None:
 
     lora_params = [name for name, _ in trainer._policy.named_parameters() if "lora" in name]
     assert lora_params, "LoRA parameters should be present when use_lora=True"
+
+
+def test_trainer_configures_replay_ttl() -> None:
+    buffer = FieldReportReplayBuffer(capacity=4, ttl=timedelta(hours=12))
+    config = SimicTrainerConfig(replay_ttl_hours=6)
+    SimicTrainer(policy=None, buffer=buffer, config=config)
+    assert buffer.ttl == timedelta(hours=6)

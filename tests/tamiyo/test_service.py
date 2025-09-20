@@ -6,11 +6,17 @@ from fakeredis.aioredis import FakeRedis
 
 from esper.leyline import leyline_pb2
 from esper.oona import OonaClient, StreamConfig
-from esper.tamiyo import RiskConfig, TamiyoPolicy, TamiyoService
+from esper.tamiyo import (
+    FieldReportStoreConfig,
+    RiskConfig,
+    TamiyoPolicy,
+    TamiyoService,
+)
 
 
-def test_tamiyo_service_generates_command() -> None:
-    service = TamiyoService(policy=TamiyoPolicy())
+def test_tamiyo_service_generates_command(tmp_path) -> None:
+    config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    service = TamiyoService(policy=TamiyoPolicy(), store_config=config)
     packet = leyline_pb2.SystemStatePacket(
         version=1,
         current_epoch=1,
@@ -28,10 +34,12 @@ def test_tamiyo_service_generates_command() -> None:
     assert service.telemetry_packets
 
 
-def test_conservative_mode_overrides_directive() -> None:
+def test_conservative_mode_overrides_directive(tmp_path) -> None:
+    config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
     service = TamiyoService(
         policy=TamiyoPolicy(),
         risk_config=RiskConfig(conservative_mode=True),
+        store_config=config,
     )
     packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1)
     command = service.evaluate_epoch(packet)
@@ -40,8 +48,9 @@ def test_conservative_mode_overrides_directive() -> None:
     assert any(event.description == "Tamiyo pause triggered" for event in telemetry.events)
 
 
-def test_field_report_generation() -> None:
-    service = TamiyoService()
+def test_field_report_generation(tmp_path) -> None:
+    config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    service = TamiyoService(store_config=config)
     packet = leyline_pb2.SystemStatePacket(
         version=1,
         current_epoch=0,
@@ -62,8 +71,9 @@ def test_field_report_generation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tamiyo_publish_history_to_oona() -> None:
-    service = TamiyoService()
+async def test_tamiyo_publish_history_to_oona(tmp_path) -> None:
+    config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    service = TamiyoService(store_config=config)
     packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=0)
     service.evaluate_epoch(packet)
     command = service.evaluate_epoch(packet)
@@ -91,8 +101,9 @@ async def test_tamiyo_publish_history_to_oona() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tamiyo_consume_policy_updates() -> None:
-    service = TamiyoService()
+async def test_tamiyo_consume_policy_updates(tmp_path) -> None:
+    config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    service = TamiyoService(store_config=config)
     redis_config = StreamConfig(
         normal_stream="oona.normal",
         emergency_stream="oona.emergency",

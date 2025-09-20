@@ -99,6 +99,14 @@ The generated files are stored in `src/esper/leyline/_generated/` and include
   and policy hot-reload via Oona. Tamiyo consumes the same shared features to
   produce multi-head actions which are observable through new telemetry fields.
 
+### Field Report Persistence
+
+- Tamiyo writes every generated field report to `var/tamiyo/field_reports.log`
+  using a WAL-style binary log. Entries are retained for 24 hours by default
+  (override with `TAMIYO_FIELD_REPORT_RETENTION_HOURS`) and are reloaded on
+  startup so Simic always has a consistent replay source after a restart.
+  Delete the log file if you need a clean slate for local testing.
+
 ## Repository Layout
 
 - `src/esper/` — Python packages for Esper subsystems, organised by lifecycle phase.

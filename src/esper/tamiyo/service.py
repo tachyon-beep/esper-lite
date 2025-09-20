@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
+from pathlib import Path
 from io import BytesIO
 from typing import TYPE_CHECKING
 
 import torch
 import logging
 
-from esper.core import TelemetryEvent, TelemetryMetric, build_telemetry_packet
+from esper.core import EsperSettings, TelemetryEvent, TelemetryMetric, build_telemetry_packet
 from esper.leyline import leyline_pb2
 
 from .policy import TamiyoPolicy, TamiyoPolicyConfig
+from .persistence import FieldReportStore, FieldReportStoreConfig
 
 if TYPE_CHECKING:
     from esper.oona import OonaClient, OonaMessage
@@ -26,6 +29,9 @@ class RiskConfig:
     conservative_mode: bool = False
 
 
+_DEFAULT_REPORT_LOG = Path("var/tamiyo/field_reports.log")
+
+
 class TamiyoService:
     """High-level Tamiyo orchestration component."""
 
@@ -33,11 +39,26 @@ class TamiyoService:
         self,
         policy: TamiyoPolicy | None = None,
         risk_config: RiskConfig | None = None,
+        store: FieldReportStore | None = None,
+        store_config: FieldReportStoreConfig | None = None,
+        settings: EsperSettings | None = None,
     ) -> None:
         self._policy = policy or TamiyoPolicy(TamiyoPolicyConfig())
         self._risk = risk_config or RiskConfig()
+        self._settings = settings or EsperSettings()
+        if store and store_config:
+            msg = "Provide either a FieldReportStore instance or a config, not both"
+            raise ValueError(msg)
+        if store is None:
+            if store_config is None:
+                store_config = FieldReportStoreConfig(
+                    path=_DEFAULT_REPORT_LOG,
+                    retention=timedelta(hours=self._settings.tamiyo_field_report_retention_hours),
+                )
+            store = FieldReportStore(store_config)
+        self._field_report_store = store
         self._telemetry_packets: list[leyline_pb2.TelemetryPacket] = []
-        self._field_reports: list[leyline_pb2.FieldReport] = []
+        self._field_reports: list[leyline_pb2.FieldReport] = store.reports()
         self._policy_updates: list[leyline_pb2.PolicyUpdate] = []
         self._last_validation_loss: float | None = None
         self._policy_version = "policy-stub"
@@ -120,7 +141,8 @@ class TamiyoService:
         for key, value in metrics_delta.items():
             report.metrics[key] = value
         report.issued_at.CopyFrom(command.issued_at)
-        self._field_reports.append(report)
+        self._field_report_store.append(report)
+        self._field_reports = self._field_report_store.reports()
         return report
 
     def update_policy(self, new_policy: TamiyoPolicy) -> None:

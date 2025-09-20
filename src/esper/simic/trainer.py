@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from typing import TYPE_CHECKING
 
@@ -53,6 +53,7 @@ class SimicTrainerConfig:
     use_metric_attention: bool = True
     metric_attention_heads: int = 2
     embedding_dir: Path = Path("var/simic")
+    replay_ttl_hours: int = 24
 
 
 class SimicTrainer:
@@ -70,6 +71,7 @@ class SimicTrainer:
         self._buffer.metric_window = self._config.metric_window
         self._buffer.seed_vocab = self._config.seed_vocab
         self._buffer.blueprint_vocab = self._config.blueprint_vocab
+        self._buffer.ttl = timedelta(hours=self._config.replay_ttl_hours)
         if self._buffer.seed_registry is None:
             self._buffer.seed_registry = EmbeddingRegistry(
                 EmbeddingRegistryConfig(self._config.embedding_dir / "seed_registry.json", self._config.seed_vocab)

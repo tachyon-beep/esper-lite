@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+from datetime import UTC, datetime, timedelta
 
 import torch
 
@@ -8,7 +9,12 @@ from esper.leyline import leyline_pb2
 from esper.simic import FieldReportReplayBuffer, SimicExperience
 
 
-def _make_report(loss_delta: float, outcome: int = leyline_pb2.FIELD_REPORT_OUTCOME_SUCCESS) -> leyline_pb2.FieldReport:
+def _make_report(
+    loss_delta: float,
+    outcome: int = leyline_pb2.FIELD_REPORT_OUTCOME_SUCCESS,
+    *,
+    issued_at: datetime | None = None,
+) -> leyline_pb2.FieldReport:
     report = leyline_pb2.FieldReport(
         version=1,
         report_id=f"fr-{random.randint(0, 1_000_000)}",
@@ -21,14 +27,21 @@ def _make_report(loss_delta: float, outcome: int = leyline_pb2.FIELD_REPORT_OUTC
         tamiyo_policy_version="policy",
     )
     report.metrics["loss_delta"] = loss_delta
+    if issued_at:
+        report.issued_at.FromDatetime(issued_at)
     return report
 
 
-def test_buffer_eviction_respects_capacity() -> None:
-    buffer = FieldReportReplayBuffer(capacity=3)
-    for idx in range(5):
-        buffer.add(_make_report(loss_delta=-0.1 * idx))
-    assert len(buffer) == 3
+def test_buffer_enforces_capacity() -> None:
+    buffer = FieldReportReplayBuffer(capacity=2)
+    for idx in range(4):
+        buffer.add(
+            _make_report(
+                loss_delta=-0.1 * idx,
+                issued_at=datetime.now(tz=UTC),
+            )
+        )
+    assert len(buffer) == 2
     experiences = buffer.sample(10)
     assert all(isinstance(exp, SimicExperience) for exp in experiences)
 
@@ -62,3 +75,17 @@ def test_sample_handles_empty_buffer() -> None:
     assert batch["reward"].numel() == 0
     assert batch["features"].numel() == 0
     assert batch["metric_sequence"].numel() == 0
+
+
+def test_buffer_enforces_ttl() -> None:
+    buffer = FieldReportReplayBuffer(capacity=4, ttl=timedelta(hours=1))
+    stale = _make_report(
+        loss_delta=-0.1,
+        issued_at=datetime.now(tz=UTC) - timedelta(hours=2),
+    )
+    buffer.add(stale)
+    assert len(buffer) == 0
+
+    fresh = _make_report(loss_delta=-0.2, issued_at=datetime.now(tz=UTC))
+    buffer.add(fresh)
+    assert len(buffer) == 1
