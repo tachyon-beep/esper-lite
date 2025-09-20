@@ -94,11 +94,10 @@ The generated files are stored in `src/esper/leyline/_generated/` and include
   ```
 
 - `scripts/run_demo.py` demonstrates the full loop: Tolaria → Tamiyo → Kasmina
-  followed by Simic PPO training with feature-rich replay vectors, multi-head
-  policy outputs (discrete action + parameter head), optional LoRA adapters,
-  hashed/embedded categorical signals, light-weight attention over telemetry
-  metrics, and
-  policy hot-reload via Oona.
+  followed by Simic PPO training with feature-rich replay vectors (numeric,
+  metric sequence, persistent embeddings, attention), optional LoRA adapters,
+  and policy hot-reload via Oona. Tamiyo consumes the same shared features to
+  produce multi-head actions which are observable through new telemetry fields.
 
 ## Repository Layout
 

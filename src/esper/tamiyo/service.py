@@ -46,6 +46,9 @@ class TamiyoService:
         """Evaluate epoch state and apply risk gating."""
 
         command = self._policy.select_action(state)
+        last_action = self._policy.last_action
+        command.annotations["policy_action"] = str(int(last_action.get("action", 0.0)))
+        command.annotations["policy_param_delta"] = f"{last_action.get('param_delta', 0.0):.6f}"
         risk_event: list[TelemetryEvent] = []
         loss_delta = 0.0
         if self._last_validation_loss is not None:
@@ -75,6 +78,8 @@ class TamiyoService:
         metrics = [
             TelemetryMetric("tamiyo.validation_loss", state.validation_loss, unit="loss"),
             TelemetryMetric("tamiyo.loss_delta", loss_delta, unit="loss"),
+            TelemetryMetric("tamiyo.policy.action", last_action.get("action", 0.0), unit="index"),
+            TelemetryMetric("tamiyo.policy.param_delta", last_action.get("param_delta", 0.0), unit="delta"),
         ]
         telemetry = build_telemetry_packet(
             packet_id=state.packet_id or "tamiyo-telemetry",

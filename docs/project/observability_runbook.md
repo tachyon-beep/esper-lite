@@ -80,3 +80,6 @@ process. The service will log a warning when the stub is activated.
   `esper_simic_training_reward_total` and
   `esper_simic_training_iterations_total` expose cumulative reward and PPO
   iterations while documents are indexed under `simic_metrics`.
+- Tamiyo action selection metrics (`tamiyo.policy.action`,
+  `tamiyo.policy.param_delta`) are emitted alongside validation metrics to help
+  correlate policy decisions with Simic training outcomes.

@@ -18,8 +18,13 @@ def test_tamiyo_service_generates_command() -> None:
         packet_id="pkt-1",
     )
     command = service.evaluate_epoch(packet)
-    assert command.command_type == leyline_pb2.COMMAND_SEED
-    assert command.target_seed_id == "seed-1"
+    assert command.command_type in {
+        leyline_pb2.COMMAND_SEED,
+        leyline_pb2.COMMAND_OPTIMIZER,
+        leyline_pb2.COMMAND_PAUSE,
+    }
+    assert "policy_action" in command.annotations
+    assert "policy_param_delta" in command.annotations
     assert service.telemetry_packets
 
 

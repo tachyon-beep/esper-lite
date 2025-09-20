@@ -62,6 +62,7 @@ class TamiyoPolicy(nn.Module):
         )
         self._action_head = nn.Linear(cfg.hidden_dim, cfg.action_classes)
         self._param_head = nn.Linear(cfg.hidden_dim, 1)
+        self._last_action: dict[str, float] = {"action": 0, "param_delta": 0.0}
 
     def forward(
         self,
@@ -85,6 +86,7 @@ class TamiyoPolicy(nn.Module):
         logits, param = self.forward(numeric, seed_idx, blueprint_idx)
         action = torch.argmax(logits, dim=-1).item()
         param_delta = float(param.squeeze().detach())
+        self._last_action = {"action": float(action), "param_delta": param_delta}
 
         command = leyline_pb2.AdaptationCommand(
             version=1,
@@ -123,8 +125,12 @@ class TamiyoPolicy(nn.Module):
         if limit + 1 < numeric.shape[1]:
             numeric[0, limit] = float(packet.current_epoch)
         seed_idx = torch.tensor([[self._seed_registry.get(packet.training_run_id)]], dtype=torch.long)
-        blueprint_idx = torch.tensor([[self._blueprint_registry.get(packet.training_run_id)]], dtype=torch.long)
+        blueprint_idx = torch.tensor([[self._blueprint_registry.get(packet.packet_id or packet.training_run_id)]], dtype=torch.long)
         return numeric, seed_idx, blueprint_idx
+
+    @property
+    def last_action(self) -> dict[str, float]:
+        return dict(self._last_action)
 
     @staticmethod
     def encode_tags(packet: leyline_pb2.SystemStatePacket) -> dict[str, str]:
