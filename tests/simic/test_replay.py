@@ -34,14 +34,15 @@ def test_buffer_eviction_respects_capacity() -> None:
 
 
 def test_sample_batch_returns_tensors() -> None:
-    buffer = FieldReportReplayBuffer(capacity=10)
+    buffer = FieldReportReplayBuffer(capacity=10, feature_dim=12)
     for idx in range(4):
         buffer.add(_make_report(loss_delta=float(idx)))
 
     batch = buffer.sample_batch(3)
-    assert set(batch.keys()) == {"reward", "loss_delta", "outcome_success"}
+    assert set(batch.keys()) == {"reward", "loss_delta", "outcome_success", "features"}
     assert all(isinstance(t, torch.Tensor) for t in batch.values())
     assert batch["reward"].shape[0] == 3
+    assert batch["features"].shape == (3, 12)
 
 
 def test_sample_handles_empty_buffer() -> None:
@@ -49,3 +50,4 @@ def test_sample_handles_empty_buffer() -> None:
     assert buffer.sample(2) == []
     batch = buffer.sample_batch(2)
     assert batch["reward"].numel() == 0
+    assert batch["features"].numel() == 0

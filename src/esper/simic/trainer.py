@@ -39,6 +39,10 @@ class SimicTrainerConfig:
     use_lora: bool = False
     lora_rank: int = 4
     lora_alpha: float = 8.0
+    feature_dim: int = 32
+    gae_lambda: float = 0.95
+    action_classes: int = 3
+    param_coef: float = 0.1
 
 
 class SimicTrainer:
@@ -52,6 +56,7 @@ class SimicTrainer:
     ) -> None:
         self._buffer = buffer
         self._config = config or SimicTrainerConfig()
+        self._buffer.feature_dim = self._config.feature_dim
         self._policy = policy or _build_policy_network(self._config)
         self._optimizer = optim.Adam(self._policy.parameters(), lr=self._config.learning_rate)
         self._policy_updates: list[leyline_pb2.PolicyUpdate] = []
@@ -61,6 +66,9 @@ class SimicTrainer:
         self._last_reward: float = 0.0
         self._last_value_loss: float = 0.0
         self._iterations: int = 0
+        self._last_policy_loss: float = 0.0
+        self._last_param_loss: float = 0.0
+        self._last_entropy: float = 0.0
 
     def run_training(self) -> None:
         """Execute PPO-like training on buffered field reports."""
@@ -81,41 +89,48 @@ class SimicTrainer:
 
     def _compute_loss(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         rewards = batch["reward"].to(self._device)
-        loss_deltas = batch["loss_delta"].to(self._device)
+        features = batch["features"].to(self._device)
         outcome_success = batch["outcome_success"].to(self._device)
+        discounted_returns = _compute_discounted_returns(rewards, self._config.gamma)
 
-        inputs = self._prepare_inputs(loss_deltas, outcome_success)
+        inputs = features
         outputs = self._policy(inputs)
         if isinstance(outputs, tuple):
-            logits, values = outputs
+            action_logits, param_pred, values = outputs
         else:
             if outputs.dim() == 1:
-                outputs = outputs.unsqueeze(-1)
-            logits = outputs[..., 0]
-            value_col = outputs[..., 1] if outputs.shape[-1] > 1 else logits
-            values = value_col.squeeze(-1)
-        logits = logits.squeeze(-1)
+                outputs = outputs.unsqueeze(0)
+            action_logits = outputs[..., : self._config.action_classes]
+            remaining = outputs[..., self._config.action_classes :]
+            if remaining.shape[-1] >= 2:
+                param_pred = remaining[..., :1]
+                values = remaining[..., 1:2]
+            else:
+                param_pred = remaining[..., :1]
+                values = remaining[..., :1]
         values = values.squeeze(-1)
-        dist = torch.distributions.Bernoulli(logits=torch.clamp(logits, -20, 20))
-        actions = outcome_success
-        log_probs = dist.log_prob(actions)
-        entropy = dist.entropy().mean()
+        action_dist = torch.distributions.Categorical(logits=action_logits)
+        actions = _derive_actions(outcome_success, rewards)
+        log_probs = action_dist.log_prob(actions)
+        entropy = action_dist.entropy().mean()
 
-        advantages = rewards - values.detach()
+        advantages = discounted_returns - values.detach()
+        advantages = (advantages - advantages.mean()) / (advantages.std(unbiased=False) + 1e-8)
         policy_loss = -(advantages * log_probs).mean()
-        value_loss = F.mse_loss(values, rewards)
+        value_loss = F.mse_loss(values, discounted_returns)
+        param_loss = F.mse_loss(param_pred.squeeze(-1), batch["loss_delta"].to(self._device))
 
-        loss = policy_loss + self._config.value_coef * value_loss - self._config.entropy_coef * entropy
+        loss = (
+            policy_loss
+            + self._config.value_coef * value_loss
+            + self._config.param_coef * param_loss
+            - self._config.entropy_coef * entropy
+        )
         self._last_value_loss = float(value_loss.detach().cpu())
+        self._last_policy_loss = float(policy_loss.detach().cpu())
+        self._last_param_loss = float(param_loss.detach().cpu())
+        self._last_entropy = float(entropy.detach().cpu())
         return loss
-
-    def _prepare_inputs(self, loss_deltas: torch.Tensor, outcomes: torch.Tensor) -> torch.Tensor:
-        input_dim = self._infer_input_dim()
-        inputs = torch.zeros((loss_deltas.shape[0], input_dim), device=self._device)
-        inputs[:, 0] = loss_deltas
-        if input_dim > 1:
-            inputs[:, 1] = outcomes
-        return inputs
 
     def _infer_input_dim(self) -> int:
         for module in self._policy.modules():
@@ -171,6 +186,9 @@ class SimicTrainer:
             TelemetryMetric("simic.training.reward", self._last_reward, unit="reward"),
             TelemetryMetric("simic.value.loss", self._last_value_loss, unit="loss"),
             TelemetryMetric("simic.training.iterations", float(self._iterations), unit="count"),
+            TelemetryMetric("simic.policy.loss", self._last_policy_loss, unit="loss"),
+            TelemetryMetric("simic.param.loss", self._last_param_loss, unit="loss"),
+            TelemetryMetric("simic.policy.entropy", self._last_entropy, unit="nats"),
         ]
         packet = build_telemetry_packet(
             packet_id=f"simic-metrics-{training_run_id}",
@@ -197,12 +215,13 @@ __all__ = ["SimicTrainer", "SimicTrainerConfig"]
 
 def _build_policy_network(config: SimicTrainerConfig) -> nn.Module:
     return _PolicyNetwork(
-        input_dim=2,
+        input_dim=config.feature_dim,
         hidden_size=config.hidden_size,
         dropout=config.dropout,
         use_lora=config.use_lora,
         lora_rank=config.lora_rank,
         lora_alpha=config.lora_alpha,
+        action_classes=config.action_classes,
     )
 
 
@@ -247,6 +266,7 @@ class _PolicyNetwork(nn.Module):
         use_lora: bool,
         lora_rank: int,
         lora_alpha: float,
+        action_classes: int,
     ) -> None:
         super().__init__()
         self.backbone = nn.Sequential(
@@ -256,11 +276,29 @@ class _PolicyNetwork(nn.Module):
             _LoRALinear(hidden_size, hidden_size, enable_lora=use_lora, rank=lora_rank, alpha=lora_alpha),
             nn.Tanh(),
         )
-        self.policy_head = _LoRALinear(hidden_size, 1, enable_lora=use_lora, rank=lora_rank, alpha=lora_alpha)
+        self.policy_head = _LoRALinear(hidden_size, action_classes, enable_lora=use_lora, rank=lora_rank, alpha=lora_alpha)
+        self.param_head = _LoRALinear(hidden_size, 1, enable_lora=use_lora, rank=lora_rank, alpha=lora_alpha)
         self.value_head = _LoRALinear(hidden_size, 1, enable_lora=use_lora, rank=lora_rank, alpha=lora_alpha)
 
     def forward(self, inputs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         features = self.backbone(inputs)
-        logits = self.policy_head(features).squeeze(-1)
-        value = self.value_head(features).squeeze(-1)
-        return logits, value
+        action_logits = self.policy_head(features)
+        param = self.param_head(features)
+        value = self.value_head(features)
+        return action_logits, param, value
+
+
+def _compute_discounted_returns(rewards: torch.Tensor, gamma: float) -> torch.Tensor:
+    returns = torch.zeros_like(rewards)
+    running = 0.0
+    for idx in reversed(range(rewards.shape[0])):
+        running = rewards[idx] + gamma * running
+        returns[idx] = running
+    return returns
+
+
+def _derive_actions(outcome_success: torch.Tensor, rewards: torch.Tensor) -> torch.Tensor:
+    actions = torch.zeros_like(outcome_success, dtype=torch.long)
+    actions[outcome_success < 0.5] = 2  # pause/emergency
+    actions[(outcome_success >= 0.5) & (rewards < 0)] = 1  # adjust blueprint/optimizer
+    return actions
