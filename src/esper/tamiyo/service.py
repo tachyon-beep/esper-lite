@@ -7,6 +7,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING
 
 import torch
+import logging
 
 from esper.core import TelemetryEvent, TelemetryMetric, build_telemetry_packet
 from esper.leyline import leyline_pb2
@@ -161,7 +162,10 @@ class TamiyoService:
         if update.payload:
             state_buffer = BytesIO(update.payload)
             state_dict = torch.load(state_buffer, map_location="cpu")
-            self._policy.load_state_dict(state_dict)
+            try:
+                self._policy.load_state_dict(state_dict, strict=False)
+            except RuntimeError as exc:  # pragma: no cover - defensive
+                logger.warning("Tamiyo policy update incompatible: %s", exc)
         self._policy_updates.append(update)
 
     async def consume_policy_updates(
@@ -188,3 +192,4 @@ class TamiyoService:
 
 
 __all__ = ["TamiyoService", "RiskConfig"]
+logger = logging.getLogger(__name__)

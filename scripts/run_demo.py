@@ -216,7 +216,7 @@ async def run_demo() -> None:
         buffer = FieldReportReplayBuffer(capacity=256)
         buffer.extend(tamiyo_service.field_reports)
         simic_trainer = SimicTrainer(
-            policy=tamiyo_service._policy,  # reuse current policy
+            policy=None,
             buffer=buffer,
             config=SimicTrainerConfig(
                 epochs=2,

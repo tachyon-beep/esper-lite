@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 
 MAX_METRIC_FEATURES = 8
+METRIC_SEQUENCE_LENGTH = 16
 
 
 @dataclass(slots=True)
@@ -34,7 +35,10 @@ class SimicExperience:
     seed_id: str
     command_id: str
     blueprint_id: str
-    features: torch.Tensor
+    features_numeric: torch.Tensor
+    metric_sequence: torch.Tensor
+    seed_index: int
+    blueprint_index: int
     report: leyline_pb2.FieldReport
 
     @classmethod
@@ -43,13 +47,27 @@ class SimicExperience:
         report: leyline_pb2.FieldReport,
         *,
         feature_dim: int,
+        metric_window: int,
+        seed_vocab: int,
+        blueprint_vocab: int,
     ) -> "SimicExperience":
         metrics = report.metrics
         loss_delta = float(metrics.get("loss_delta", 0.0))
         reward = _compute_reward(loss_delta, report)
         outcome = leyline_pb2.FieldReportOutcome.Name(report.outcome)
         features = torch.zeros(feature_dim, dtype=torch.float32)
-        _populate_features(features, report, loss_delta, reward, outcome, metrics)
+        metric_sequence = torch.zeros(metric_window, dtype=torch.float32)
+        _populate_features(
+            features,
+            metric_sequence,
+            report,
+            loss_delta,
+            reward,
+            outcome,
+            metrics,
+        )
+        seed_index = _hash_to_vocab(report.seed_id, seed_vocab)
+        blueprint_index = _hash_to_vocab(report.blueprint_id, blueprint_vocab)
         return cls(
             reward=reward,
             loss_delta=loss_delta,
@@ -57,7 +75,10 @@ class SimicExperience:
             seed_id=report.seed_id,
             command_id=report.command_id,
             blueprint_id=report.blueprint_id,
-            features=features,
+            features_numeric=features,
+            metric_sequence=metric_sequence,
+            seed_index=seed_index,
+            blueprint_index=blueprint_index,
             report=report,
         )
 
@@ -68,6 +89,9 @@ class FieldReportReplayBuffer:
 
     capacity: int = 1024
     feature_dim: int = 32
+    metric_window: int = METRIC_SEQUENCE_LENGTH
+    seed_vocab: int = 1024
+    blueprint_vocab: int = 1024
     _reports: deque[leyline_pb2.FieldReport] = field(init=False, repr=False)
     _experiences: deque[SimicExperience] = field(init=False, repr=False)
 
@@ -77,7 +101,15 @@ class FieldReportReplayBuffer:
 
     def add(self, report: leyline_pb2.FieldReport) -> None:
         self._reports.append(report)
-        self._experiences.append(SimicExperience.from_report(report, feature_dim=self.feature_dim))
+        self._experiences.append(
+            SimicExperience.from_report(
+                report,
+                feature_dim=self.feature_dim,
+                metric_window=self.metric_window,
+                seed_vocab=self.seed_vocab,
+                blueprint_vocab=self.blueprint_vocab,
+            )
+        )
 
     def extend(self, reports: Iterable[leyline_pb2.FieldReport]) -> None:
         for report in reports:
@@ -103,6 +135,9 @@ class FieldReportReplayBuffer:
                 "loss_delta": torch.empty(0),
                 "outcome_success": torch.empty(0),
                 "features": torch.empty(0, self.feature_dim),
+                "metric_sequence": torch.empty(0, self.metric_window),
+                "seed_index": torch.empty(0, dtype=torch.long),
+                "blueprint_index": torch.empty(0, dtype=torch.long),
             }
         rewards = torch.tensor([exp.reward for exp in experiences], dtype=torch.float32)
         loss_deltas = torch.tensor([exp.loss_delta for exp in experiences], dtype=torch.float32)
@@ -110,12 +145,18 @@ class FieldReportReplayBuffer:
             [1.0 if exp.outcome == "FIELD_REPORT_OUTCOME_SUCCESS" else 0.0 for exp in experiences],
             dtype=torch.float32,
         )
-        feature_stack = torch.stack([exp.features for exp in experiences])
+        feature_stack = torch.stack([exp.features_numeric for exp in experiences])
+        metric_stack = torch.stack([exp.metric_sequence for exp in experiences])
+        seed_indices = torch.tensor([exp.seed_index for exp in experiences], dtype=torch.long)
+        blueprint_indices = torch.tensor([exp.blueprint_index for exp in experiences], dtype=torch.long)
         return {
             "reward": rewards,
             "loss_delta": loss_deltas,
             "outcome_success": outcomes,
             "features": feature_stack,
+            "metric_sequence": metric_stack,
+            "seed_index": seed_indices,
+            "blueprint_index": blueprint_indices,
         }
 
     def __len__(self) -> int:  # pragma: no cover - trivial
@@ -160,6 +201,7 @@ def _compute_reward(loss_delta: float, report: leyline_pb2.FieldReport) -> float
 
 def _populate_features(
     features: torch.Tensor,
+    metric_sequence: torch.Tensor,
     report: leyline_pb2.FieldReport,
     loss_delta: float,
     reward: float,
@@ -187,12 +229,22 @@ def _populate_features(
         features[idx] = float(value)
         idx += 1
 
+    seq_limit = min(len(metrics), metric_sequence.numel())
+    if seq_limit:
+        metric_sequence[:seq_limit] = torch.tensor(list(metrics.values())[:seq_limit], dtype=torch.float32)
+
     if idx < features.numel():
         features[idx] = _hash_to_unit_interval(report.seed_id)
         idx += 1
     if idx < features.numel():
         features[idx] = _hash_to_unit_interval(report.blueprint_id)
         idx += 1
+
+
+def _hash_to_vocab(value: str, vocab: int) -> int:
+    if not value or vocab <= 0:
+        return 0
+    return (hash(value) % vocab + vocab) % vocab
 
 
 def _hash_to_unit_interval(value: str) -> float:

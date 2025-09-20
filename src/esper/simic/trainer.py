@@ -43,6 +43,12 @@ class SimicTrainerConfig:
     gae_lambda: float = 0.95
     action_classes: int = 3
     param_coef: float = 0.1
+    embedding_dim: int = 16
+    seed_vocab: int = 1024
+    blueprint_vocab: int = 1024
+    metric_window: int = 16
+    use_metric_attention: bool = True
+    metric_attention_heads: int = 2
 
 
 class SimicTrainer:
@@ -57,6 +63,9 @@ class SimicTrainer:
         self._buffer = buffer
         self._config = config or SimicTrainerConfig()
         self._buffer.feature_dim = self._config.feature_dim
+        self._buffer.metric_window = self._config.metric_window
+        self._buffer.seed_vocab = self._config.seed_vocab
+        self._buffer.blueprint_vocab = self._config.blueprint_vocab
         self._policy = policy or _build_policy_network(self._config)
         self._optimizer = optim.Adam(self._policy.parameters(), lr=self._config.learning_rate)
         self._policy_updates: list[leyline_pb2.PolicyUpdate] = []
@@ -91,10 +100,12 @@ class SimicTrainer:
         rewards = batch["reward"].to(self._device)
         features = batch["features"].to(self._device)
         outcome_success = batch["outcome_success"].to(self._device)
+        metric_sequence = batch["metric_sequence"].to(self._device)
+        seed_index = batch["seed_index"].to(self._device)
+        blueprint_index = batch["blueprint_index"].to(self._device)
         discounted_returns = _compute_discounted_returns(rewards, self._config.gamma)
 
-        inputs = features
-        outputs = self._policy(inputs)
+        outputs = self._policy(features, metric_sequence, seed_index, blueprint_index)
         if isinstance(outputs, tuple):
             action_logits, param_pred, values = outputs
         else:
@@ -215,13 +226,19 @@ __all__ = ["SimicTrainer", "SimicTrainerConfig"]
 
 def _build_policy_network(config: SimicTrainerConfig) -> nn.Module:
     return _PolicyNetwork(
-        input_dim=config.feature_dim,
+        feature_dim=config.feature_dim,
         hidden_size=config.hidden_size,
         dropout=config.dropout,
         use_lora=config.use_lora,
         lora_rank=config.lora_rank,
         lora_alpha=config.lora_alpha,
         action_classes=config.action_classes,
+        embedding_dim=config.embedding_dim,
+        seed_vocab=config.seed_vocab,
+        blueprint_vocab=config.blueprint_vocab,
+        metric_window=config.metric_window,
+        use_metric_attention=config.use_metric_attention,
+        metric_attention_heads=config.metric_attention_heads,
     )
 
 
@@ -260,17 +277,48 @@ class _PolicyNetwork(nn.Module):
     def __init__(
         self,
         *,
-        input_dim: int,
+        feature_dim: int,
         hidden_size: int,
         dropout: float,
         use_lora: bool,
         lora_rank: int,
         lora_alpha: float,
         action_classes: int,
+        embedding_dim: int,
+        seed_vocab: int,
+        blueprint_vocab: int,
+        metric_window: int,
+        use_metric_attention: bool,
+        metric_attention_heads: int,
     ) -> None:
         super().__init__()
+        self.use_metric_attention = use_metric_attention
+        self.metric_window = metric_window
+        self.embedding_dim = embedding_dim
+        self.seed_embedding = nn.Embedding(seed_vocab, embedding_dim) if seed_vocab > 0 else None
+        self.blueprint_embedding = nn.Embedding(blueprint_vocab, embedding_dim) if blueprint_vocab > 0 else None
+        if use_metric_attention:
+            self.metric_encoder = nn.Linear(1, embedding_dim)
+            self.metric_attention = nn.MultiheadAttention(
+                embedding_dim,
+                metric_attention_heads,
+                batch_first=True,
+            )
+            metric_context_dim = embedding_dim
+        else:
+            self.metric_encoder = nn.Linear(metric_window, embedding_dim)
+            self.metric_attention = None
+            metric_context_dim = embedding_dim
+
+        total_input_dim = feature_dim
+        if self.seed_embedding is not None:
+            total_input_dim += embedding_dim
+        if self.blueprint_embedding is not None:
+            total_input_dim += embedding_dim
+        total_input_dim += metric_context_dim
+
         self.backbone = nn.Sequential(
-            _LoRALinear(input_dim, hidden_size, enable_lora=use_lora, rank=lora_rank, alpha=lora_alpha),
+            _LoRALinear(total_input_dim, hidden_size, enable_lora=use_lora, rank=lora_rank, alpha=lora_alpha),
             nn.Tanh(),
             nn.Dropout(dropout),
             _LoRALinear(hidden_size, hidden_size, enable_lora=use_lora, rank=lora_rank, alpha=lora_alpha),
@@ -280,8 +328,31 @@ class _PolicyNetwork(nn.Module):
         self.param_head = _LoRALinear(hidden_size, 1, enable_lora=use_lora, rank=lora_rank, alpha=lora_alpha)
         self.value_head = _LoRALinear(hidden_size, 1, enable_lora=use_lora, rank=lora_rank, alpha=lora_alpha)
 
-    def forward(self, inputs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        features = self.backbone(inputs)
+    def forward(
+        self,
+        numeric_features: torch.Tensor,
+        metric_sequence: torch.Tensor,
+        seed_index: torch.Tensor,
+        blueprint_index: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        pieces = [numeric_features]
+
+        if self.seed_embedding is not None:
+            pieces.append(self.seed_embedding(seed_index))
+        if self.blueprint_embedding is not None:
+            pieces.append(self.blueprint_embedding(blueprint_index))
+
+        if self.use_metric_attention:
+            seq = metric_sequence.unsqueeze(-1)
+            seq_embed = self.metric_encoder(seq)
+            context, _ = self.metric_attention(seq_embed, seq_embed, seq_embed)
+            metric_context = context.mean(dim=1)
+        else:
+            metric_context = self.metric_encoder(metric_sequence)
+
+        pieces.append(metric_context)
+        fused = torch.cat(pieces, dim=1)
+        features = self.backbone(fused)
         action_logits = self.policy_head(features)
         param = self.param_head(features)
         value = self.value_head(features)

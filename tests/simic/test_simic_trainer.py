@@ -41,7 +41,7 @@ def test_simic_trainer_runs() -> None:
     for idx in range(4):
         buffer.add(_make_report(idx))
     trainer = SimicTrainer(
-        policy=TamiyoPolicy(),
+        policy=None,
         buffer=buffer,
         config=SimicTrainerConfig(epochs=1, batch_size=2),
     )
@@ -72,7 +72,7 @@ async def test_field_report_buffer_ingest_from_oona() -> None:
 
 def test_simic_create_policy_update() -> None:
     trainer = SimicTrainer(
-        policy=TamiyoPolicy(),
+        policy=None,
         buffer=FieldReportReplayBuffer(),
     )
     update = trainer.create_policy_update(
@@ -88,7 +88,7 @@ def test_simic_create_policy_update() -> None:
 @pytest.mark.asyncio
 async def test_simic_publish_policy_updates() -> None:
     trainer = SimicTrainer(
-        policy=TamiyoPolicy(),
+        policy=None,
         buffer=FieldReportReplayBuffer(),
     )
     trainer.create_policy_update(

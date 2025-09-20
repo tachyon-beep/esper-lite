@@ -652,9 +652,10 @@ class PolicyChaosTestFramework:
 > **Esper-Lite prototype note (2025-09-21):** current scaffold includes a
 > feature-rich FIFO replay buffer and PPO-style trainer with optional LoRA
 > adapters (`src/esper/simic/replay.py`, `src/esper/simic/trainer.py`). The
-> implementation extracts structured features from Tamiyo field reports,
-> produces multi-head policy updates, exports Simic training metrics, and
-> integrates with the demo control loop. Full production features described
+> implementation extracts structured features (hash embeddings, metric attention)
+> from Tamiyo field reports, produces multi-head policy outputs, exports Simic
+> training telemetry, and integrates with the demo control loop. Full production
+> features described
 > below (IMPALA/V-trace, distributed training, curriculum learning) remain
 > future work.
 
