@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Mapping
 import torch
 
 from esper.leyline import leyline_pb2
+from esper.simic.registry import EmbeddingRegistry
 
 if TYPE_CHECKING:
     from esper.oona import OonaClient, OonaMessage
@@ -50,6 +51,8 @@ class SimicExperience:
         metric_window: int,
         seed_vocab: int,
         blueprint_vocab: int,
+        seed_registry: EmbeddingRegistry | None,
+        blueprint_registry: EmbeddingRegistry | None,
     ) -> "SimicExperience":
         metrics = report.metrics
         loss_delta = float(metrics.get("loss_delta", 0.0))
@@ -66,8 +69,8 @@ class SimicExperience:
             outcome,
             metrics,
         )
-        seed_index = _hash_to_vocab(report.seed_id, seed_vocab)
-        blueprint_index = _hash_to_vocab(report.blueprint_id, blueprint_vocab)
+        seed_index = _resolve_index(report.seed_id, seed_vocab, seed_registry)
+        blueprint_index = _resolve_index(report.blueprint_id, blueprint_vocab, blueprint_registry)
         return cls(
             reward=reward,
             loss_delta=loss_delta,
@@ -92,6 +95,8 @@ class FieldReportReplayBuffer:
     metric_window: int = METRIC_SEQUENCE_LENGTH
     seed_vocab: int = 1024
     blueprint_vocab: int = 1024
+    seed_registry: EmbeddingRegistry | None = None
+    blueprint_registry: EmbeddingRegistry | None = None
     _reports: deque[leyline_pb2.FieldReport] = field(init=False, repr=False)
     _experiences: deque[SimicExperience] = field(init=False, repr=False)
 
@@ -108,6 +113,8 @@ class FieldReportReplayBuffer:
                 metric_window=self.metric_window,
                 seed_vocab=self.seed_vocab,
                 blueprint_vocab=self.blueprint_vocab,
+                seed_registry=self.seed_registry,
+                blueprint_registry=self.blueprint_registry,
             )
         )
 
@@ -251,6 +258,12 @@ def _hash_to_unit_interval(value: str) -> float:
     if not value:
         return 0.0
     return (hash(value) & 0xFFFFFFFF) / 0xFFFFFFFF
+
+
+def _resolve_index(value: str, vocab: int, registry: EmbeddingRegistry | None) -> int:
+    if registry is not None:
+        return registry.get(value)
+    return _hash_to_vocab(value, vocab)
 
 
 __all__ = ["FieldReportReplayBuffer", "SimicExperience"]

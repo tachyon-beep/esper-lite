@@ -12,10 +12,13 @@ import torch
 from torch import nn, optim
 from torch.nn import functional as F
 
+from pathlib import Path
+
 from esper.leyline import leyline_pb2
 
 from esper.core.telemetry import TelemetryMetric, build_telemetry_packet
 from esper.core import TelemetryEvent
+from esper.simic.registry import EmbeddingRegistry, EmbeddingRegistryConfig
 
 from .replay import FieldReportReplayBuffer, SimicExperience
 
@@ -49,6 +52,7 @@ class SimicTrainerConfig:
     metric_window: int = 16
     use_metric_attention: bool = True
     metric_attention_heads: int = 2
+    embedding_dir: Path = Path("var/simic")
 
 
 class SimicTrainer:
@@ -66,6 +70,15 @@ class SimicTrainer:
         self._buffer.metric_window = self._config.metric_window
         self._buffer.seed_vocab = self._config.seed_vocab
         self._buffer.blueprint_vocab = self._config.blueprint_vocab
+        if self._buffer.seed_registry is None:
+            self._buffer.seed_registry = EmbeddingRegistry(
+                EmbeddingRegistryConfig(self._config.embedding_dir / "seed_registry.json", self._config.seed_vocab)
+            )
+        if self._buffer.blueprint_registry is None:
+            self._buffer.blueprint_registry = EmbeddingRegistry(
+                EmbeddingRegistryConfig(self._config.embedding_dir / "blueprint_registry.json", self._config.blueprint_vocab)
+            )
+        (self._config.embedding_dir).mkdir(parents=True, exist_ok=True)
         self._policy = policy or _build_policy_network(self._config)
         self._optimizer = optim.Adam(self._policy.parameters(), lr=self._config.learning_rate)
         self._policy_updates: list[leyline_pb2.PolicyUpdate] = []

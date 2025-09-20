@@ -6,10 +6,13 @@ Implements the replay buffer and PPO+LoRA training loop described in
 
 from .replay import FieldReportReplayBuffer, SimicExperience
 from .trainer import SimicTrainer, SimicTrainerConfig
+from .registry import EmbeddingRegistry, EmbeddingRegistryConfig
 
 __all__ = [
     "FieldReportReplayBuffer",
     "SimicExperience",
     "SimicTrainer",
     "SimicTrainerConfig",
+    "EmbeddingRegistry",
+    "EmbeddingRegistryConfig",
 ]
