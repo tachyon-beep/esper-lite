@@ -236,7 +236,7 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
   - Profiling scripts produce latency reports for key operations.
   - Dashboards/metrics show epoch timing, graft latency, publish latency.
 
-### TKT-504: Prototype Report Compilation ◑
+### TKT-504: Prototype Report Compilation ✅
 - **Description:** Maintain living document capturing metrics, lessons learned, and recommendations for Phase 2.
 - **Acceptance Criteria:**
   - Report updated at end of each slice.
@@ -249,6 +249,7 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
 - Oona client now enforces priority routing and backpressure thresholds while exporting reroute/drop counters for Nissa alerts, bringing TKT-303 to completion.
 - GitHub Actions CI matrix executes unit, integration, contract, and serialization suites (with optional perf benchmark) to guard new changes end-to-end.
 - Leyline/Oona messages now support optional HMAC signing via `ESPER_LEYLINE_SECRET`, with secrets documented and enforced in the Oona client (TKT-501).
+- Prototype report (`docs/project/prototype_report.md`) summarises slice progress, metrics, and next steps; keep updated through final demo (TKT-504).
 
 ---
 
