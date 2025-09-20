@@ -24,6 +24,8 @@ Deliver an end-to-end Esper-Lite implementation that proves morphogenetic adapta
 - **Oona:** Redis Streams message bus with NORMAL/EMERGENCY routing, at-least-once delivery, breaker-protected publish/consume paths.
 - **Nissa:** Prometheus + Elasticsearch ingest, alerting rules (`training_latency_high`, `kasmina_isolation_violation`, etc.), mission-control API/WS endpoints.
 
+> Legacy subsystem specifications in `docs/design/detailed_design/old/` remain the authoritative reference for lifecycle/state-machine behaviour and must be consulted during implementation.
+
 ## Success Criteria
 - **Latency:** Tolaria end-of-epoch hook ≤18 ms (3.5 ms state assembly + 12 ms Tamiyo inference + 1.5 ms adaptation + 1 ms guard); Kasmina kernel graft <0.5 ms hot; Oona publish p95 <25 ms.
 - **Correctness:** Kasmina enforces `∇L_host ⋂ ∇L_seed = ∅`; Leyline schema version locked at 1; blueprint fetch hit rate ≥95 % after warmup.

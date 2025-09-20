@@ -76,18 +76,6 @@ File: docs/design/detailed_design/04-simic-unified-design.md
 - Chaos testing & property-based tests baked into validation to avoid regressions.
 - Health endpoints expose breaker states, buffer depth, GPU utilisation, throughput.
 
-### Mission-Critical Behaviours (Authoritative Reference)
-
-Simic’s authoritative design remains codified in `docs/design/detailed_design/old/04-simic.md`. Esper-Lite keeps the following core behaviours even in the lightweight build:
-
-- **Field Report Pipeline:** Simic consumes Tamiyo’s `FieldReport` stream, validates schema versions, and enriches experiences with provenance before storing them in the graph-aware replay buffer (Old §"Field Report Processor").
-- **Replay Buffer Governance:** The `GraphExperienceBuffer` enforces TTL, memory caps (~12 GB), and prioritised sampling to prevent unbounded growth (Old §"Experience Replay").
-- **PPO/IMPALA Training Loop:** Even if IMPALA fan-out is deferred, the canonical optimisation flow (PPO objectives, V-trace corrections, LoRA adapters) must stay intact for single-node runs (Old §"Training Stack" and §"Implementation Blueprint").
-- **Policy Validation & Versioning:** Before publishing an update, Simic executes the full validation pipeline (performance, regression, chaos/property tests) and records metadata in the policy registry (Old §"PolicyManager & Validator").
-- **Policy Deployment:** Validated checkpoints are published via Narset/Oona with accompanying telemetry; Tamiyo consumes them under its own safety gates (Old §"Deploy" stage).
-
-These behaviours constitute Simic’s main job: offline learning that continually improves Tamiyo without disturbing live training.
-
 ## References
 - `docs/design/detailed_design/04.1-simic-rl-algorithms.md`
 - `docs/design/detailed_design/04.2-simic-experience-replay.md`

@@ -2,6 +2,8 @@
 
 This plan translates the charter and capability matrix into concrete work packages. It is organised as four vertical slices that deliver incremental end-to-end functionality, plus cross-cutting enablement tasks.
 
+> The full legacy specifications live under `docs/design/detailed_design/old/`. Treat those documents as the authoritative reference for lifecycle/state-machine behaviour while implementing the lightweight slices below.
+
 ## Delivery Pillars
 
 1. **Environment & Contracts Enablement (Sprint 0)**
@@ -17,9 +19,9 @@ This plan translates the charter and capability matrix into concrete work packag
 2. **Slice 1 – Control Loop Core (Sprints 1–2)**
    - *Goal:* Demonstrate real-time morphogenesis with stubbed blueprint retrieval.
    - **Tasks**
-     - Implement minimal Tolaria trainer with configurable host model (decide ResNet-lite vs Transformer-lite); emit `SystemStatePacket`s via Leyline contracts.
-     - Implement Kasmina seed manager supporting seed registration, graft placeholder kernels, gradient isolation checks (initially verifying host tensor IDs).
-     - Implement Tamiyo inference service with stub GNN (pretrained or simple MLP) returning deterministic adaptation command; integrate risk thresholds and conservative mode toggles.
+     - Implement minimal Tolaria trainer with configurable host model (decide ResNet-lite vs Transformer-lite); emit `SystemStatePacket`s via Leyline contracts, adhering to the control loop defined in `docs/design/detailed_design/old/01-tolaria.md`.
+     - Implement Kasmina seed manager supporting seed registration, graft placeholder kernels, gradient isolation checks (initially verifying host tensor IDs) while preserving the full 11-state lifecycle from `old/02-kasmina.md`.
+     - Implement Tamiyo inference service with stub GNN (pretrained or simple MLP) returning deterministic adaptation command; integrate risk thresholds and conservative mode toggles per `old/03-tamiyo.md`.
      - Implement Oona integration for Tolaria→Tamiyo telemetry and Tamiyo→Kasmina commands; configure stream names, consumer groups.
      - Add Kasmina telemetry publishing + Tamiyo aggregation path; deliver field report stub.
      - Create integration test harness to assert epoch hook budget, command delivery, and telemetry round-trip.
@@ -27,9 +29,9 @@ This plan translates the charter and capability matrix into concrete work packag
 3. **Slice 2 – Blueprint Pipeline (Sprints 3–4)**
    - *Goal:* Replace stubs with real static blueprint lifecycle.
    - **Tasks**
-     - Populate Karn template catalog (metadata files + service interface); implement basic request routing and logging (no breakers).
-     - Build Tezzeret startup compiler: load blueprint definitions, run single Standard torch.compile pipeline, persist artifacts, handle basic retries.
-     - Implement Urza catalog service: metadata storage (SQLite or Postgres) with local FS object store and in-process cache; add WAL persistence (no Redis tier).
+     - Populate Karn template catalog (metadata files + service interface); implement basic request routing and logging (no breakers) while respecting tiered safeguards from `old/05-karn.md`.
+     - Build Tezzeret startup compiler: load blueprint definitions, run single Standard torch.compile pipeline, persist artifacts, handle basic retries; maintain WAL/telemetry requirements from `old/06-tezzeret.md`.
+     - Implement Urza catalog service: metadata storage (SQLite or Postgres) with local FS object store and in-process cache; add WAL persistence (no Redis tier) in line with `old/08-urza.md`.
      - Wire Kasmina seed activation path to request kernels from Urza; validate fetch latency budget (<10 ms p50).
      - Extend Tamiyo to request blueprint metadata for policy context.
      - Add tests covering blueprint query flow, compilation recovery, WAL replay scenario.
@@ -37,8 +39,8 @@ This plan translates the charter and capability matrix into concrete work packag
 4. **Slice 3 – Telemetry, Observability, and Safety (Sprints 5–6)**
    - *Goal:* Operational visibility and breaker behaviours.
    - **Tasks**
-     - Flesh out Kasmina/Tolaria/Tamiyo telemetry payloads; map metrics to Nissa dashboards; implement serialization property tests.
-     - Complete Nissa alert/SLO rules (`training_latency_high`, `kasmina_isolation_violation`, `oona_queue_depth`, `tezzeret_compile_retry_high`); wire routing stubs (Slack/email).
+     - Flesh out Kasmina/Tolaria/Tamiyo telemetry payloads; map metrics to Nissa dashboards; implement serialization property tests (see telemetry responsibilities in `old/01-tolaria.md`, `old/02-kasmina.md`, `old/03-tamiyo.md`).
+     - Complete Nissa alert/SLO rules (`training_latency_high`, `kasmina_isolation_violation`, `oona_queue_depth`, `tezzeret_compile_retry_high`); wire routing stubs (Slack/email) as defined in `old/10-nissa.md`.
      - Implement Oona conservative-mode triggers; create load-test script to exercise queue depth thresholds.
      - Add breaker and rollback drills: simulate Kasmina gradient isolation failure, Tamiyo timeout, Tezzeret compile error; ensure telemetry/alerts fire.
      - Document operator runbook (normal operations, breaker handling, rollback, alert response).
@@ -47,7 +49,7 @@ This plan translates the charter and capability matrix into concrete work packag
    - *Goal:* Close the learning loop by updating Tamiyo policy from field reports.
    - **Tasks**
      - Finalise field report schema (metrics, outcome enums) and persistence (WAL + retention).
-     - Implement Simic field report ingestion, replay buffer (PyG `HeteroData`), and single-node PPO training with LoRA fine-tuning support (IMPALA deferred).
+     - Implement Simic field report ingestion, replay buffer (PyG `HeteroData`), and single-node PPO training with LoRA fine-tuning support (IMPALA deferred), following the process in `old/04-simic.md`.
      - Add policy validation harness (chaos/property tests scaled to prototype) and gating logic.
      - Implement Oona-based policy update publication; integrate Tamiyo hot-reload with safety checks.
      - Demonstrate end-to-end run: initial policy deploy → adaptation events → Simic training → policy redeploy → new adaptations.

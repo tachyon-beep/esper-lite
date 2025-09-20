@@ -63,17 +63,6 @@ oona:
 
 Oona therefore acts as a simple, reliable messaging layer for Esper-Lite without the heavier routing features used in the full Esper deployment.
 
-### Mission-Critical Behaviours (Authoritative Reference)
-
-`docs/design/detailed_design/old/09-oona.md` documents the canonical bus implementation. The following behaviours remain required:
-
-- **At-Least-Once Delivery:** Streams, consumer groups, and ack/retry semantics must ensure messages are processed reliably, with dead-letter handling for failures (Old §"Consume Path").
-- **Priority Routing:** Emergency queues bypass normal traffic so critical telemetry/commands propagate even under load (Old §"PriorityRouter").
-- **TTL & Backpressure:** Stream trimming, TTL cleanup, and queue depth monitoring prevent unbounded growth and trigger conservative behaviour when thresholds are exceeded (Old §"TTL & Cleanup").
-- **Telemetry:** Oona exports publish/consume latency, queue depth, and breaker state metrics to feed Nissa dashboards (Old §"Metrics & Logging").
-
-Circuit-breaker scaffolding can be simplified, but the messaging guarantees above define Oona’s core function.
-
 ---
 File: docs/design/detailed_design/09.1-oona-internals.md
 ---
@@ -120,3 +109,4 @@ def consume(group: str, consumer: str, stream: str):
 - Breaker transitions logged with reason and stream.
 
 This pared-down implementation keeps Oona dependable while remaining lightweight for Esper-Lite deployments.
+

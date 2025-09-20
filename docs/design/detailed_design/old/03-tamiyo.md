@@ -159,18 +159,6 @@ class TamiyoGNN(nn.Module):
 - PyTorch 2.8 (baseline), PyG heterogeneous ops, CUDA graphs for inference batching.
 - Leyline contracts for schema validation (raises if version mismatch).
 
-### Mission-Critical Behaviours (Authoritative Reference)
-
-Detailed policy flow, risk gating, and field-report handling are described in `docs/design/detailed_design/old/03-tamiyo.md`. The following capabilities remain mandatory for Esper-Lite deployments:
-
-- **Synchronous Inference Loop:** `Tamiyo.step()` ingests `SystemStatePacket`, runs the hetero-GNN policy, applies the risk engine, and emits an `AdaptationCommand` within the 45 ms budget (Old §"Inference Pipeline").
-- **Risk Governance:** Dynamic thresholds, conservative mode, and emergency downgrade paths must guard every command (Old §"Risk Modeling" and §"Conservative Mode").
-- **Field Report Lifecycle:** Every adaptation generates WAL-backed field reports that capture outcome metrics, mitigation actions, and policy version for Simic replay (Old §"Field Report Workflow").
-- **Telemetry Aggregation:** Tamiyo remains the telemetry hub—ingesting Kasmina/Tolaria signals, normalising them, and forwarding structured metrics to Nissa and Simic (Old §"Telemetry & Observability").
-- **Policy Update Interface:** Tamiyo accepts hot-reload of policy checkpoints (and optional LoRA adapters) only after validation gates pass, with rollback on failure (Old §"Policy Deployment").
-
-These behaviours define Tamiyo’s core responsibilities; optional accelerators (e.g., IMPALA fan-out) can be deferred, but the control loop, risk gates, and reporting pipeline must stay intact.
-
 Tamiyo’s GNN remains the cornerstone of strategic inference; preserving these structural and budget constraints is mandatory for Esper-Lite reliability.
 
 ---

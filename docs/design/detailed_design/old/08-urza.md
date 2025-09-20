@@ -69,17 +69,6 @@ urza:
 - `docs/design/detailed_design/08.1-urza-internals.md`
 - `docs/design/detailed_design/00-leyline-shared-contracts.md`
 
-### Mission-Critical Behaviours (Authoritative Reference)
-
-Legacy design details live in `docs/design/detailed_design/old/08-urza.md`. Esper-Lite continues to rely on the following behaviours:
-
-- **Immutable Catalogue:** BlueprintIR metadata and compiled artefacts are stored with versioning, checksums, and WAL-backed durability to guarantee integrity (Old §"Workflow" steps 1–4).
-- **Low-Latency Retrieval:** Multi-tier caching (memory/Redis/object store) can be simplified, but Urza must still deliver p50 <10 ms responses via an in-process cache and maintain >95 % hit rates (Old §"Performance Targets").
-- **Metadata Governance:** Query APIs expose tags, curriculum stages, and validation status so Tamiyo/Kasmina can filter artefacts safely (Old §"Workflow" and §"Configuration").
-- **Telemetry:** Urza emits query latency, cache hit rate, and breaker state metrics for Nissa to monitor (`urza.query.*`, `urza.cache.*`) (Old §"Telemetry & Operations").
-
-These behaviours ensure Urza remains the single source of truth for blueprint assets even in the slimmed environment.
-
 ---
 File: docs/design/detailed_design/08.1-urza-internals.md
 ---
@@ -1709,3 +1698,4 @@ logger.error(f"Urza integrity check failed: {kernel_id}", exc_info=True)
 ---
 
 *Component Owner: System Architecture Team | Last Updated: 2025-01-10*
+

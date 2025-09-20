@@ -53,6 +53,7 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
   - Trainer runs epochs with configurable dataset stub.
   - Emits serialized `SystemStatePacket` passing Leyline tests.
   - Hooks ready for Tamiyo call-out and Kasmina grafting.
+  - Control loop behaviour consistent with `docs/design/detailed_design/old/01-tolaria.md` (end-of-epoch handshake, WAL checkpoints, rollback stack).
 
 ### TKT-102: Kasmina Seed Manager Skeleton
 - **Description:** Implement seed registration, placeholder kernel grafting, and gradient isolation checks.
@@ -60,6 +61,7 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
   - Seeds can register/deregister with Tolaria.
   - Placeholder kernel graft modifies model without breaking training.
   - Gradient isolation check logs violation when host/seed grads overlap.
+  - Eleven-stage lifecycle (Dormant → … → Terminated) implemented as defined in `docs/design/detailed_design/old/02-kasmina.md`.
 
 ### TKT-103: Tamiyo Stub Policy Inference
 - **Description:** Implement Tamiyo service with initial GNN (or MLP stub) returning deterministic adaptation commands, risk gating, and conservative mode toggles.
@@ -67,6 +69,7 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
   - Service accepts `SystemStatePacket`, responds with `AdaptationCommand`.
   - Risk thresholds configurable; conservative mode toggled on demand.
   - Latency ≤45 ms on target hardware.
+  - Risk engine, telemetry aggregation, and field-report generation follow `docs/design/detailed_design/old/03-tamiyo.md`.
 
 ### TKT-104: Oona Control Loop Integration
 - **Description:** Wire Tolaria→Tamiyo telemetry and Tamiyo→Kasmina commands over Redis streams; configure stream names & consumer groups.
@@ -74,6 +77,7 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
   - Telemetry publishes to defined topic; Tamiyo consumes.
   - Commands delivered to Kasmina within expected latency.
   - Retry/backoff handles transient Redis errors.
+  - Message semantics honour at-least-once guarantees from `docs/design/detailed_design/old/09-oona.md`.
 
 ### TKT-105: Tamiyo Field Report Stub
 - **Description:** Implement Tamiyo field report creation and publication to Oona; stub schema aligned with Leyline.
@@ -81,6 +85,7 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
   - Field report appears on `tamiyo.field_reports` stream.
   - Payload validates against Leyline schema.
   - Tamiyo persists report metadata for at least one epoch.
+  - Field-report content matches lifecycle documented in `docs/design/detailed_design/old/03-tamiyo.md`.
 
 ### TKT-106: Control Loop Integration Test Harness
 - **Description:** Create automated test verifying epoch hook timing, message delivery, and telemetry round-trip.
@@ -97,20 +102,21 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
   - 50 templates defined with ids, tiers, and allowed params.
   - Service responds to blueprint query with deterministic template.
   - Basic request/response logging in place.
+  - Safety tiers, approval flags, and conservative pool behaviour match `docs/design/detailed_design/old/05-karn.md`.
 
 ### TKT-202: Tezzeret Standard Compiler
 - **Description:** Implement Tezzeret startup compiler running single Standard `torch.compile` pipeline with basic retry logic.
 - **Acceptance Criteria:**
   - On startup, all templates compiled to artifacts stored on disk.
   - Job retry logic handles at least one simulated failure.
-  - WAL ensures restart resumes incomplete compile.
+  - WAL ensures restart resumes incomplete compile in line with `docs/design/detailed_design/old/06-tezzeret.md`.
 
 ### TKT-203: Urza Catalog Service
 - **Description:** Build Urza service using SQLite (or Postgres) metadata + local filesystem artifacts; include in-process cache.
 - **Acceptance Criteria:**
   - API stores/retrieves blueprint metadata and artifact path.
   - Cache hits after warmup achieve <10 ms p50 fetch.
-  - WAL/transaction logs allow recovery after crash.
+  - WAL/transaction logs allow recovery after crash; metadata governance matches `docs/design/detailed_design/old/08-urza.md`.
 
 ### TKT-204: Kasmina Kernel Fetch Integration
 - **Description:** Connect Kasmina to Urza for kernel retrieval during seed activation; enforce latency budget.
@@ -124,6 +130,7 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
 - **Acceptance Criteria:**
   - Tamiyo can query Urza/Karn for blueprint info synchronously/asynchronously as needed.
   - Metadata influences adaptation command selection (configurable).
+  - Integration honours metadata contracts defined in `docs/design/detailed_design/old/03-tamiyo.md` and `old/08-urza.md`.
 
 ### TKT-206: Blueprint Pipeline Tests
 - **Description:** Add tests covering blueprint query flow, compile retry, and WAL recovery.
@@ -139,14 +146,14 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
 - **Acceptance Criteria:**
   - Telemetry schema documented with example payloads.
   - Serialization tests ensure Option B budgets satisfied.
-  - Telemetry fields cover metrics required by Nissa.
+  - Telemetry fields cover metrics required by Nissa and legacy subsystem diagrams (`docs/design/detailed_design/old/01-tolaria.md`, `old/02-kasmina.md`, `old/03-tamiyo.md`).
 
 ### TKT-302: Nissa Alert/SLO Implementation
 - **Description:** Implement alert rules (`training_latency_high`, `kasmina_isolation_violation`, `oona_queue_depth`, `tezzeret_compile_retry_high`) and routing stubs.
 - **Acceptance Criteria:**
   - Alerts configured and fire during simulated faults.
   - Routing stubs deliver notifications (Slack/email placeholders).
-  - SLO dashboard displays error budget burn.
+  - SLO dashboard displays error budget burn consistent with `docs/design/detailed_design/old/10-nissa.md`.
 
 ### TKT-303: Oona Backpressure & Testing
 - **Description:** Implement priority handling/backpressure without breakers; create load-test to exercise queue thresholds.
@@ -154,6 +161,7 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
   - Emergency path bypasses normal queue under load.
   - Load-test demonstrates dropping/delaying messages within defined thresholds.
   - Metrics expose queue depth & retry counts.
+  - Behaviour validated against routing/backpressure rules in `docs/design/detailed_design/old/09-oona.md`.
 
 ### TKT-304: Breaker & Rollback Drills
 - **Description:** Simulate gradient isolation failure, Tamiyo timeout, Tezzeret compile retry escalation; ensure telemetry/alerts respond.
@@ -175,7 +183,7 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
 - **Acceptance Criteria:**
   - Schema documented; payloads pass Leyline validation.
   - Reports stored with WAL guaranteeing recovery after crash.
-  - Retention policy (e.g., 24 h) enforced via cleanup.
+  - Retention policy (e.g., 24 h) enforced via cleanup in alignment with `docs/design/detailed_design/old/03-tamiyo.md` and `old/04-simic.md` field-report workflow.
 
 ### TKT-402: Simic Ingestion & PPO+LoRA Training
 - **Description:** Implement field report ingestion, replay buffer (PyG `HeteroData`), and single-node PPO training with LoRA fine-tuning.
@@ -183,6 +191,7 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
   - Reports ingested into replay buffer with TTL/size bounds.
   - PPO training loop runs on sample data producing updated policy weights.
   - LoRA adapter support toggled via config.
+  - Replay buffer management and validation gating follow `docs/design/detailed_design/old/04-simic.md`.
 
 ### TKT-403: Policy Validation Harness
 - **Description:** Implement chaos/property tests and gating logic for new Tamiyo policies.
@@ -197,6 +206,7 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
   - Policy update message delivered to Tamiyo.
   - Tamiyo performs staged load (verify → activate) with rollback on failure.
   - Hot reload is logged and observable.
+  - Deployment workflow matches `docs/design/detailed_design/old/04-simic.md` (publish) and `old/03-tamiyo.md` (hot reload).
 
 ### TKT-405: End-to-End Learning Demo
 - **Description:** Demonstrate full loop: initial policy deploy → adaptations → Simic training → policy redeploy → new adaptations.

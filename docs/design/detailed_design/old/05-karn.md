@@ -57,17 +57,6 @@ File: docs/design/detailed_design/05-karn-unified-design.md
 - `docs/design/detailed_design/05.1-karn-template-system.md`
 - `docs/design/detailed_design/00-leyline-shared-contracts.md`
 
-### Mission-Critical Behaviours (Authoritative Reference)
-
-`docs/design/detailed_design/old/05-karn.md` remains the canonical blueprint for Karn. The lightweight build must still honour the following responsibilities:
-
-- **Tiered Template Library:** All 50 blueprints are partitioned into Production / Experimental / Adversarial tiers with approval metadata and quarantine rules (Old §"Blueprint Library" and §"Three-Tier Safety").
-- **Request Handling:** Karn processes `BlueprintQuery` requests, enforces safety gates (approval flags, conservative pool when necessary), and returns `BlueprintIR` payloads matching Leyline contracts (Old §"Generation Flow").
-- **Usage Logging & Telemetry:** Each selection emits telemetry (template id, tier, latency) for auditability and policy training (Old §"Reward & Metrics").
-- **Safety Breakers:** Even if we simplify runtime breakers, the logical safeguards—quarantine of adversarial templates, fallback to conservative pool on repeated failures—must remain active (Old §"Safety Architecture").
-
-These behaviours ensure Karn continues to function as the static blueprint authority for Esper-Lite.
-
 ---
 File: docs/design/detailed_design/05.1-karn-template-system.md
 ---
@@ -118,3 +107,4 @@ def generate_blueprint(context):
 - Oona/Nissa: event publication & telemetry.
 
 Esper-Lite’s Karn remains a deterministic template server with strong safety guarantees and zero dynamic blueprint generation.
+

@@ -7,7 +7,7 @@ File: docs/design/detailed_design/02-kasmina-unified-design.md
 
 ## Snapshot
 - **Role**: Execution layer that grafts pre-approved kernels into the host network without stalling Tolaria’s training loop.
-- **Scope**: Kernel execution, gradient isolation, memory governance, parameter registration, safety controls, performance validation.
+- **Scope**: Kernel execution, gradient isolation, memory governance, parameter registration, safety controls, performance validation, checkpoint-driven pruning.
 - **Status**: Production (C-022 hardening + C-024 knowledge-distillation support).
 - **Core Invariant**: `∇L_host ∩ ∇L_seed = ∅` – enforced per forward pass with runtime hooks and circuit breakers.
 
@@ -18,6 +18,7 @@ File: docs/design/detailed_design/02-kasmina-unified-design.md
 - **State Machine**: Eleven lifecycle states (Dormant → … → Terminated) with validation gates G1–G5. Each transition verifies registration, memory budgets, and gradient isolation readiness.
 - **Telemetry Pipeline**: Kasmina ships structured telemetry directly to Tamiyo, which now owns aggregation and prioritisation for Esper-Lite.
 - **Distributed Coordination**: Epoch-aligned barriers keep multi-GPU replicas consistent; Byzantine detection is log-only but flags outliers for SRE follow-up.
+- **Structured Pruning (C-020)**: Kasmina exposes basic importance telemetry only; external pruning integrations are deferred in Esper-Lite.
 - **Knowledge Distillation (C-024)**: Optional teacher model loaded with gradient checkpointing (14 GB → 7 GB). Teacher params register as immutable, and KD losses integrate with gradient isolation checks.
 
 ## Responsibilities by Subsystem
@@ -31,21 +32,22 @@ File: docs/design/detailed_design/02-kasmina-unified-design.md
 
 ## Interfaces & Data Contracts
 - **Leyline (`esper.leyline.contracts`)**
-  - `AdaptationCommand`, `SeedLifecycleStage`, `TelemetryPacket`, `GradientIsolationAlert` messages.
+  - `AdaptationCommand`, `SeedLifecycleStage`, `TelemetryPacket`, `GradientIsolationAlert`, `StructuralPruning*` messages.
   - Single `uint32 version` field; native `map<string, float>` usage keeps serialization <80 µs and messages <280 B.
 - **Tolaria**: Sends signed optimizer directives and lifecycle transitions; receives health telemetry and isolation alerts. Tolaria retains optimizer ownership (two-optimizer pattern).
 - **Tamiyo**: Consumes aggregated telemetry and gradient risk scores each epoch.
 - **Urza**: Urza supplies kernel artifacts vetted offline before release.
+- **Elesh / Emrakul**: Deferred; Esper-Lite only emits basic telemetry for potential future use.
 
 ## Operational Guarantees
-- **Non-Blocking Execution**: Kernel swaps and telemetry run asynchronously from the training hot path; GPU caches prevent PCIe thrash.
+- **Non-Blocking Execution**: Kernel swaps, telemetry, and pruning coordination run asynchronously from the training hot path; GPU caches prevent PCIe thrash.
 - **Gradient Isolation Runtime Check**: Backward hooks verify `seed_grad • host_grad = 0`; any anomaly increments a counter feeding the circuit breaker. Fix introduced in C-022: host activations blend via `.detach()`.
 - **Security & Replay Protection**: Nonce table (5 min TTL) and timestamp window reject replays; invalid messages logged and escalated.
 - **Telemetry Backpressure**: Emergency events bypass queues; non-critical streams drop on saturation with rate-limited warnings.
 - **Rollback Readiness**: All stateful changes emit checkpoints compatible with Tolaria’s 500 ms/12 s rollback stack.
 
 ## Key Metrics & Alerts
-- Isolation violation rate, KD memory usage, kernel cache hit rate, TTL cache evictions, circuit breaker state transitions, Leyline serialization latency.
+- Isolation violation rate, KD memory usage, kernel cache hit rate, TTL cache evictions, circuit breaker state transitions, Leyline serialization latency, checkpoint pruning success/failure counts.
 
 ## Future Work
 - Extend Byzantine logging into active quorum scoring.
@@ -132,27 +134,7 @@ seen.add(nonce)
 - Kernel cache stats, authentication failures, KD memory warnings, isolation violations, and hook latency buckets are emitted through Leyline telemetry packets with priority escalation for CRITICAL issues.
 - Emergency path bypasses queue (sent directly to Oona) so Tolaria can react before the next epoch.
 
-Kasmina’s execution module therefore remains a pure, authenticated kernel runner that enforces gradient isolation continuously while providing hooks for KD without breaking the latency envelope.
-
-### Lifecycle State Machine (Authoritative Reference)
-
-Kasmina’s seed manager executes an eleven-stage lifecycle. These states mirror the historic specification captured in the legacy design documents (`docs/design/detailed_design/old/02-kasmina.md`) and remain the authoritative control flow for Esper-Lite:
-
-| State | Description | Validation Gate(s) | Next States |
-| --- | --- | --- | --- |
-| `DORMANT` | Seed socket is inert; buffers telemetry and listens for Tamiyo commands. | — | `GERMINATED` (on Tamiyo request) |
-| `GERMINATED` | Seed request acknowledged; placeholder module registered, awaiting scheduler slot. | G0 (sanity) | `TRAINING` |
-| `TRAINING` | Local optimiser trains the germinated module using buffered data; host activations remain identity. | G1 (gradient/health) | `BLENDING` or `CULLED` |
-| `BLENDING` | Module output blended into host using alpha ramp while gradients remain isolated. | G2 (stability) | `SHADOWING` or `CULLED` |
-| `SHADOWING` | Forward pass temporarily inert; internal probes verify stability and interface adherence. | G3 (interface) | `PROBATIONARY` or `CULLED` |
-| `PROBATIONARY` | Module fully active; Tamiyo monitors global metrics for regressions. | G4 (system impact) | `FOSSILIZED` or `CULLED` |
-| `FOSSILIZED` | Module accepted; parameters become part of the host graph, gradients disabled. | — | Terminal |
-| `CULLED` | Lifecycle aborted; slot embargoed before returning to dormant state. | — | `EMBARGOED` |
-| `EMBARGOED` | Time-boxed hold to prevent thrashing on failure sites. | — | `RESETTING` |
-| `RESETTING` | Slot scrubbed, buffers cleared, telemetry counters reset. | G5 (sanity) | `DORMANT` |
-| `TERMINATED` | Administrative terminal state used during teardown/decommissioning. | — | — |
-
-All stages, guard conditions, and transitions MUST remain in place even when optional features (e.g., KD) are disabled. Lightweight experiments may stub certain hooks, but the lifecycle contract itself is non-negotiable and forms the “main job” of Kasmina’s execution layer.
+Kasmina’s execution module therefore remains a pure, authenticated kernel runner that enforces gradient isolation continuously while providing hooks for pruning and KD without breaking the latency envelope.
 
 ---
 File: docs/design/detailed_design/02.2-kasmina-memory-pools.md

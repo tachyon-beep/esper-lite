@@ -43,17 +43,6 @@ File: docs/design/detailed_design/10-nissa-unified-design.md
 - Health endpoint reports queue lag, storage status, breaker state, active alerts count.
 - Metrics: `nissa.ingest.latency_ms`, `nissa.alerts.active`, `nissa.breaker.state`, `nissa.telemetry.dropped_total`.
 
-### Mission-Critical Behaviours (Authoritative Reference)
-
-Full observability requirements are preserved in `docs/design/detailed_design/old/10-nissa.md`. Esper-Lite must keep the following behaviours:
-
-- **Telemetry Ingestion:** Nissa continuously consumes Leyline `TelemetryPacket`s via Oona, validates schemas, and writes to Prometheus/Elasticsearch with retention policies (Old §"Metrics & Telemetry").
-- **Dashboard/API Surface:** `/api/status`, `/api/metrics/summary`, and the WebSocket stream provide operators with live breaker states, queue lag, and alert counts (Old §"Mission Control").
-- **Alerting & SLO Engine:** Threshold alerts (epoch latency, isolation violations, queue depth, Tezzeret retries) plus error-budget tracking remain in place, even if integrations are stubbed (Old §"Alerting & SLO").
-- **Runbooks & Notifications:** Alert routing stubs (Slack/email/PagerDuty) and the operator runbook workflow are required for operational readiness (Old §"Notification Pipeline").
-
-These behaviours ensure Nissa remains the observability backbone for Esper-Lite.
-
 Nissa thus offers a slimmed-down observability surface appropriate for Esper-Lite while keeping the critical safety and monitoring hooks from the full platform.
 
 ---

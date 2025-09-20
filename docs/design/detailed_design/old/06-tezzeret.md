@@ -64,17 +64,6 @@ File: docs/design/detailed_design/06-tezzeret-unified-design.md
 - `docs/design/detailed_design/06.1-tezzeret-compilation-internals.md`
 - `docs/design/detailed_design/00-leyline-shared-contracts.md`
 
-### Mission-Critical Behaviours (Authoritative Reference)
-
-See `docs/design/detailed_design/old/06-tezzeret.md` for the full forge specification. The lite build retains these non-negotiable behaviours:
-
-- **Blueprint Polling & Queueing:** On startup (and manual refresh), Tezzeret enumerates all BlueprintIRs from Urza/Karn and enqueues compilation jobs respecting priority (Old §"PollingEngine").
-- **Compilation Pipeline:** Each job executes a deterministic `torch.compile` flow, capturing metrics, signatures, and artefact metadata; even with a single Standard pipeline we must preserve the logging and failure handling described in the legacy doc (Old §"CompilationCore" and §"PipelineManager").
-- **WAL & Crash Recovery:** Compilation progress is persisted via WAL so the forge can resume safely after interruption (Old §"WALCheckpointManager").
-- **Telemetry & Observability:** Tezzeret publishes status, duration, and breaker events to Oona/Nissa (`tezzeret.compilation.*`) giving operators visibility into the pipeline (Old §"Telemetry & Metrics").
-
-Optional features like aggressive pipelines or conservative-mode throttling can remain disabled, but the core forge duties above must remain intact.
-
 ---
 File: docs/design/detailed_design/06.1-tezzeret-compilation-internals.md
 ---
@@ -157,3 +146,4 @@ tezzeret:
 ```
 
 Tezzeret thus acts as a startup compilation service with robust recovery and observability, ensuring Urza holds ready-to-use kernels for Esper-Lite.
+
