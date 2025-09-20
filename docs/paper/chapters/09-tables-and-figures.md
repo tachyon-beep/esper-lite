@@ -13,36 +13,42 @@ generated_by: scripts/split_paper.py
 # Tables and Figures
 This section provides a consolidated view of reference data and design artefacts introduced throughout the document.
 ## 9.1 Seed Lifecycle States
-The formal 8-state lifecycle of a SentinelSeed, managed by the SeedManager, TamiyoController, and the seed's internal logic.
+The authoritative Esper‑Lite design uses an 11‑state lifecycle managed by Kasmina’s seed manager, with validation gates G0–G5. This table reflects that contract.
 
-| State        | Trigger                                      | Key Process                                                                 | Next State(s)            |
-|--------------|----------------------------------------------|------------------------------------------------------------------------------|--------------------------|
-| DORMANT      | Default on insertion or after embargo         | Monitors telemetry for Tamiyo; forward pass is identity                      | GERMINATED               |
-| GERMINATED   | `request_germination` from Tamiyo             | Enters a training queue managed by the SeedManager                           | TRAINING                 |
-| TRAINING     | Promoted from queue by SeedManager            | Child trains on buffered data; forward pass remains identity                  | BLENDING                 |
-| BLENDING     | Local training complete                       | Mix child output into forward pass via increasing alpha                       | SHADOWING                |
-| SHADOWING    | Blending complete (alpha ≈ 1.0)               | Validation Gate 1: Forward pass inert for internal stability checks          | PROBATIONARY or CULLED   |
-| PROBATIONARY | Passes shadowing validation                    | Validation Gate 2: Forward fully live; Tamiyo monitors systemic impact        | FOSSILIZED or CULLED     |
-| FOSSILIZED   | Passes probationary validation                 | Permanently replace seed by child network in the model graph (terminal)       | —                        |
-| CULLED       | Fails any validation stage                     | Freeze slot, place under timed embargo                                        | DORMANT (after embargo)  |
+| State         | Trigger                                       | Key Process                                                                  | Next State(s)             |
+|---------------|-----------------------------------------------|-------------------------------------------------------------------------------|---------------------------|
+| DORMANT       | Default on insertion or after reset           | Monitors telemetry for Tamiyo; forward pass is identity                       | GERMINATED                |
+| GERMINATED    | `request_germination` from Tamiyo             | Placeholder registered; awaiting scheduler slot (G0: sanity)                  | TRAINING                  |
+| TRAINING      | Promoted from queue by SeedManager            | Local training on buffered data; host path remains identity (G1: health)      | BLENDING or CULLED        |
+| BLENDING      | Local training complete                       | Mix child output via alpha ramp; gradients stay isolated (G2: stability)      | SHADOWING or CULLED       |
+| SHADOWING     | Blending complete (alpha ≈ 1.0)               | Forward inert; internal probes verify stability, interface (G3: interface)    | PROBATIONARY or CULLED    |
+| PROBATIONARY  | Passes shadowing validation                   | Fully live; Tamiyo monitors systemic impact (G4: system impact)               | FOSSILISED or CULLED      |
+| FOSSILISED    | Passes probationary validation                | Accept module; parameters become part of host; gradients disabled             | —                         |
+| CULLED        | Fails any validation stage                    | Abort; slot embargoed                                                         | EMBARGOED                 |
+| EMBARGOED     | On cull                                       | Time‑boxed hold to prevent thrashing                                          | RESETTING                 |
+| RESETTING     | Embargo elapsed                               | Scrub slot; clear buffers; reset counters (G5: sanity)                        | DORMANT                   |
+| TERMINATED    | Administrative                                 | Teardown/decommission terminal                                                | —                         |
 
 ### 9.1.a Lifecycle State Diagram (Mermaid)
 
 ```mermaid
 stateDiagram-v2
     [*] --> DORMANT
-    DORMANT --> GERMINATED: Tamiyo request_germination
+    DORMANT --> GERMINATED: Tamiyo request_germination (G0)
     GERMINATED --> TRAINING: SeedManager promote
-    TRAINING --> BLENDING: Local objective met
-    BLENDING --> SHADOWING: Alpha → 1.0
-    SHADOWING --> PROBATIONARY: Internal stability OK
-    PROBATIONARY --> FOSSILISED: Systemic impact OK
+    TRAINING --> BLENDING: Local objective met (G1)
+    BLENDING --> SHADOWING: Alpha → 1.0 (G2)
+    SHADOWING --> PROBATIONARY: Interface OK (G3)
+    PROBATIONARY --> FOSSILISED: Systemic impact OK (G4)
 
     %% Failure paths
     TRAINING --> CULLED: Collapse/NaN/No improvement
-    SHADOWING --> CULLED: Unstable outputs
+    BLENDING --> CULLED: Instability
+    SHADOWING --> CULLED: Interface violations
     PROBATIONARY --> CULLED: Drift/regression
-    CULLED --> DORMANT: Embargo elapsed
+    CULLED --> EMBARGOED
+    EMBARGOED --> RESETTING: Embargo elapsed
+    RESETTING --> DORMANT: Reset OK (G5)
 
     FOSSILISED --> [*]
 ```
