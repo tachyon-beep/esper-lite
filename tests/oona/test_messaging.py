@@ -15,6 +15,7 @@ async def test_oona_publish_and_consume() -> None:
         consumer="tester",
         max_stream_length=50,
         emergency_threshold=10,
+        telemetry_stream="oona.telemetry",
     )
     client = OonaClient(redis_url="redis://localhost", config=config, redis_client=redis)
     await client.ensure_consumer_group()
@@ -69,6 +70,7 @@ async def test_oona_max_stream_length_trims() -> None:
         emergency_stream="oona.emergency",
         group="oona-test",
         max_stream_length=5,
+        telemetry_stream="oona.telemetry",
     )
     client = OonaClient(redis_url="redis://localhost", config=config, redis_client=redis)
     await client.ensure_consumer_group()
@@ -78,4 +80,51 @@ async def test_oona_max_stream_length_trims() -> None:
         await client.publish_state(packet)
 
     assert await client.stream_length("oona.normal") <= 5
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_oona_publish_telemetry() -> None:
+    redis = FakeRedis()
+    config = StreamConfig(
+        normal_stream="oona.normal",
+        emergency_stream="oona.emergency",
+        telemetry_stream="oona.telemetry",
+        policy_stream="oona.policy",
+        group="oona-test",
+    )
+    client = OonaClient(redis_url="redis://localhost", config=config, redis_client=redis)
+    await client.ensure_consumer_group()
+
+    packet = leyline_pb2.TelemetryPacket(
+        packet_id="pkt-telemetry",
+        source_subsystem="tolaria",
+        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+    )
+    await client.publish_telemetry(packet)
+    assert await client.stream_length("oona.telemetry") == 1
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_oona_publish_policy_update() -> None:
+    redis = FakeRedis()
+    config = StreamConfig(
+        normal_stream="oona.normal",
+        emergency_stream="oona.emergency",
+        telemetry_stream="oona.telemetry",
+        policy_stream="oona.policy",
+        group="oona-test",
+    )
+    client = OonaClient(redis_url="redis://localhost", config=config, redis_client=redis)
+    await client.ensure_consumer_group()
+
+    update = leyline_pb2.PolicyUpdate(
+        version=1,
+        policy_id="policy-1",
+        training_run_id="run-1",
+        tamiyo_policy_version="policy-v2",
+    )
+    await client.publish_policy_update(update)
+    assert await client.stream_length("oona.policy") == 1
     await client.close()

@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from time import time_ns
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 import torch
 from torch import nn
@@ -18,6 +18,9 @@ from torch.utils.data import DataLoader
 
 from esper.core import TelemetryMetric, build_telemetry_packet
 from esper.leyline import leyline_pb2
+
+if TYPE_CHECKING:
+    from esper.oona import OonaClient
 
 
 class TamiyoClient(Protocol):
@@ -89,6 +92,7 @@ class TolariaTrainer:
         self._current_epoch = 0
         self._run_id = "training-run"
         self._telemetry_packets: list[leyline_pb2.TelemetryPacket] = []
+        self._state_packets: list[leyline_pb2.SystemStatePacket] = []
 
     def run(self) -> Iterable[leyline_pb2.SystemStatePacket]:
         """Run the training loop, yielding `SystemStatePacket`s each epoch."""
@@ -100,6 +104,7 @@ class TolariaTrainer:
             state = self._emit_state(epoch, stats)
             telemetry = self._emit_telemetry(state, stats)
             self._telemetry_packets.append(telemetry)
+            self._state_packets.append(state)
             command = self._tamiyo.evaluate_epoch(state)
             self._kasmina.apply_command(command)
             yield state
@@ -108,6 +113,7 @@ class TolariaTrainer:
         state = self._emit_state(self._config.max_epochs, final_stats, completion=True)
         telemetry = self._emit_telemetry(state, final_stats)
         self._telemetry_packets.append(telemetry)
+        self._state_packets.append(state)
         yield state
 
     def _train_single_epoch(self) -> EpochStats:
@@ -213,6 +219,19 @@ class TolariaTrainer:
         """Expose telemetry packets emitted during training."""
 
         return list(self._telemetry_packets)
+
+    @property
+    def state_packets(self) -> list[leyline_pb2.SystemStatePacket]:
+        """Expose the system state packets produced during training."""
+
+        return list(self._state_packets)
+
+    async def publish_history(self, oona: OonaClient) -> None:
+        """Publish collected state and telemetry packets via Oona."""
+
+        for state, telemetry in zip(self._state_packets, self._telemetry_packets, strict=False):
+            await oona.publish_state(state)
+            await oona.publish_telemetry(telemetry)
 
 
 __all__ = ["TolariaTrainer", "TrainingLoopConfig", "TamiyoClient", "KasminaClient"]

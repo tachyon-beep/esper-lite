@@ -10,8 +10,12 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from esper.leyline import leyline_pb2
+
+if TYPE_CHECKING:
+    from esper.oona import OonaClient, OonaMessage
 
 
 @dataclass(slots=True)
@@ -39,6 +43,28 @@ class FieldReportReplayBuffer:
 
     def __len__(self) -> int:  # pragma: no cover - trivial
         return len(self._buffer)
+
+    async def ingest_from_oona(
+        self,
+        client: OonaClient,
+        *,
+        stream: str | None = None,
+        count: int = 50,
+        block_ms: int = 1000,
+    ) -> None:
+        """Consume field reports from Oona and load them into the buffer."""
+
+        async def handler(message: OonaMessage) -> None:
+            report = leyline_pb2.FieldReport()
+            report.ParseFromString(message.payload)
+            self.add(report)
+
+        await client.consume(
+            handler,
+            stream=stream or client.normal_stream,
+            count=count,
+            block_ms=block_ms,
+        )
 
 
 __all__ = ["FieldReportReplayBuffer"]

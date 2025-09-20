@@ -198,6 +198,15 @@ message FieldReport {
   string notes = 13;
 }
 
+message PolicyUpdate {
+  uint32 version = 1;
+  string policy_id = 2;
+  string training_run_id = 3;
+  google.protobuf.Timestamp issued_at = 4;
+  string tamiyo_policy_version = 5;
+  bytes payload = 6;
+}
+
 // -----------------------------------------------------------------------------
 // Observability & Messaging
 // -----------------------------------------------------------------------------

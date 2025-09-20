@@ -1,6 +1,8 @@
 import pytest
+from fakeredis.aioredis import FakeRedis
 
 from esper.leyline import leyline_pb2
+from esper.oona import OonaClient, StreamConfig
 from esper.tamiyo import RiskConfig, TamiyoPolicy, TamiyoService
 
 
@@ -49,3 +51,57 @@ def test_field_report_generation() -> None:
     assert report.outcome == leyline_pb2.FIELD_REPORT_OUTCOME_SUCCESS
     assert report.metrics["loss"] == pytest.approx(-0.05)
     assert service.field_reports
+
+
+@pytest.mark.asyncio
+async def test_tamiyo_publish_history_to_oona() -> None:
+    service = TamiyoService()
+    packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=0)
+    service.evaluate_epoch(packet)
+    command = service.evaluate_epoch(packet)
+    service.generate_field_report(
+        command=command,
+        outcome=leyline_pb2.FIELD_REPORT_OUTCOME_NEUTRAL,
+        metrics_delta={"loss": 0.0},
+        training_run_id="run-1",
+        seed_id="seed-1",
+        blueprint_id="bp-1",
+    )
+
+    redis_config = StreamConfig(
+        normal_stream="oona.normal",
+        emergency_stream="oona.emergency",
+        telemetry_stream="oona.telemetry",
+        group="tamiyo-test",
+    )
+    oona = OonaClient("redis://localhost", config=redis_config, redis_client=FakeRedis())
+    await oona.ensure_consumer_group()
+    await service.publish_history(oona)
+    assert await oona.stream_length("oona.normal") >= 1
+    assert await oona.stream_length("oona.telemetry") >= 1
+    await oona.close()
+
+
+@pytest.mark.asyncio
+async def test_tamiyo_consume_policy_updates() -> None:
+    service = TamiyoService()
+    redis_config = StreamConfig(
+        normal_stream="oona.normal",
+        emergency_stream="oona.emergency",
+        telemetry_stream="oona.telemetry",
+        policy_stream="oona.policy",
+        group="tamiyo-policy-test",
+    )
+    client = OonaClient("redis://localhost", config=redis_config, redis_client=FakeRedis())
+    await client.ensure_consumer_group()
+    update = leyline_pb2.PolicyUpdate(
+        version=1,
+        policy_id="policy-1",
+        training_run_id="run-1",
+        tamiyo_policy_version="policy-v42",
+    )
+    await client.publish_policy_update(update)
+    await client.ensure_consumer_group()
+    await service.consume_policy_updates(client)
+    assert service.policy_updates
+    await client.close()

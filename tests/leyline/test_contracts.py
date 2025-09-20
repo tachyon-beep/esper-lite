@@ -94,6 +94,17 @@ def test_system_state_packet_serialization_roundtrip() -> None:
     assert restored.report_id == "rpt-1"
     assert restored.outcome == leyline_pb2.FIELD_REPORT_OUTCOME_SUCCESS
 
+    update = leyline_pb2.PolicyUpdate(
+        version=1,
+        policy_id="policy-1",
+        training_run_id="run-1",
+        tamiyo_policy_version="policy-v2",
+    )
+    update_blob = update.SerializeToString()
+    restored_update = leyline_pb2.PolicyUpdate()
+    restored_update.ParseFromString(update_blob)
+    assert restored_update.policy_id == "policy-1"
+
 
 def test_contract_bundle_path_relative() -> None:
     registry = register_default_bundle()

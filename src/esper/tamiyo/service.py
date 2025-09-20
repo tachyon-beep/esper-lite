@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from esper.core import TelemetryEvent, TelemetryMetric, build_telemetry_packet
 from esper.leyline import leyline_pb2
 
 from .policy import TamiyoPolicy, TamiyoPolicyConfig
+
+if TYPE_CHECKING:
+    from esper.oona import OonaClient, OonaMessage
 
 
 @dataclass(slots=True)
@@ -30,7 +34,9 @@ class TamiyoService:
         self._risk = risk_config or RiskConfig()
         self._telemetry_packets: list[leyline_pb2.TelemetryPacket] = []
         self._field_reports: list[leyline_pb2.FieldReport] = []
+        self._policy_updates: list[leyline_pb2.PolicyUpdate] = []
         self._last_validation_loss: float | None = None
+        self._policy_version = "policy-stub"
 
     def evaluate_epoch(self, state: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
         """Evaluate epoch state and apply risk gating."""
@@ -99,7 +105,7 @@ class TamiyoService:
             blueprint_id=blueprint_id,
             outcome=outcome,
             observation_window_epochs=1,
-            tamiyo_policy_version="policy-stub",
+            tamiyo_policy_version=self._policy_version,
             notes=notes or "",
         )
         for key, value in metrics_delta.items():
@@ -129,6 +135,49 @@ class TamiyoService:
         """Return cached field reports for inspection/testing."""
 
         return list(self._field_reports)
+
+    @property
+    def policy_updates(self) -> list[leyline_pb2.PolicyUpdate]:
+        """Return policy updates applied to the service."""
+
+        return list(self._policy_updates)
+
+    async def publish_history(self, oona: OonaClient) -> None:
+        """Publish collected field reports and telemetry via Oona."""
+
+        for report in self._field_reports:
+            await oona.publish_field_report(report)
+        for telemetry in self._telemetry_packets:
+            await oona.publish_telemetry(telemetry)
+
+    def ingest_policy_update(self, update: leyline_pb2.PolicyUpdate) -> None:
+        """Apply a policy update produced by Simic."""
+
+        if update.tamiyo_policy_version:
+            self._policy_version = update.tamiyo_policy_version
+        self._policy_updates.append(update)
+
+    async def consume_policy_updates(
+        self,
+        client: OonaClient,
+        *,
+        stream: str | None = None,
+        count: int = 10,
+        block_ms: int = 1000,
+    ) -> None:
+        """Consume policy updates from Oona and apply them."""
+
+        async def handler(message: OonaMessage) -> None:
+            update = leyline_pb2.PolicyUpdate()
+            update.ParseFromString(message.payload)
+            self.ingest_policy_update(update)
+
+        await client.consume(
+            handler,
+            stream=stream or client.policy_stream,
+            count=count,
+            block_ms=block_ms,
+        )
 
 
 __all__ = ["TamiyoService", "RiskConfig"]

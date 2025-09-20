@@ -21,6 +21,8 @@ async def test_oona_docker_compose_redis_round_trip() -> None:
     config = StreamConfig(
         normal_stream="oona.int.normal",
         emergency_stream="oona.int.emergency",
+        telemetry_stream="oona.int.telemetry",
+        policy_stream="oona.int.policy",
         group="oona-int",
         emergency_threshold=5,
         max_stream_length=100,
@@ -37,7 +39,7 @@ async def test_oona_docker_compose_redis_round_trip() -> None:
         await client.publish_state(packet)
 
     # threshold triggers emergency routing
-    assert await client.backlog("oona.int.emergency") >= 1
+    assert await client.stream_length("oona.int.emergency") >= 1
 
     collected: list[OonaMessage] = []
 

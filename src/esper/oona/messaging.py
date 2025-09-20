@@ -19,6 +19,8 @@ class StreamConfig:
     consumer: str = "oona-client"
     max_stream_length: int | None = None
     emergency_threshold: int | None = None
+    telemetry_stream: str | None = None
+    policy_stream: str | None = None
 
 
 @dataclass(slots=True)
@@ -43,6 +45,8 @@ class OonaClient:
     ) -> None:
         self._config = config
         self._redis = redis_client or aioredis.from_url(redis_url)
+        self._telemetry_stream = config.telemetry_stream or config.normal_stream
+        self._policy_stream = config.policy_stream or config.normal_stream
 
     async def close(self) -> None:
         await self._redis.close()
@@ -50,11 +54,23 @@ class OonaClient:
     async def ensure_consumer_group(self) -> None:
         """Create consumer groups for both streams if they do not already exist."""
 
-        for stream in (self._config.normal_stream, self._config.emergency_stream):
+        streams = {
+            self._config.normal_stream,
+            self._config.emergency_stream,
+            self._telemetry_stream,
+            self._policy_stream,
+        }
+        for stream in streams:
             try:
                 await self._redis.xgroup_create(stream, self._config.group, id="$", mkstream=True)
             except aioredis.ResponseError as exc:  # group exists
-                if "BUSYGROUP" not in str(exc):
+                message = str(exc)
+                if "BUSYGROUP" in message:
+                    continue
+                if "NOGROUP" in message or "No such key" in message:
+                    await self._redis.xadd(stream, {"bootstrap": b""})
+                    await self._redis.xgroup_create(stream, self._config.group, id="0-0")
+                else:
                     raise
 
     async def publish_state(
@@ -84,6 +100,22 @@ class OonaClient:
             emergency_flag=False,
             message_type="field_report",
             payload=report.SerializeToString(),
+        )
+
+    async def publish_telemetry(self, packet: leyline_pb2.TelemetryPacket) -> None:
+        await self._publish_proto(
+            preferred_stream=self._telemetry_stream,
+            emergency_flag=False,
+            message_type="telemetry",
+            payload=packet.SerializeToString(),
+        )
+
+    async def publish_policy_update(self, update: leyline_pb2.PolicyUpdate) -> None:
+        await self._publish_proto(
+            preferred_stream=self._policy_stream,
+            emergency_flag=False,
+            message_type="policy_update",
+            payload=update.SerializeToString(),
         )
 
     async def consume(
@@ -133,6 +165,24 @@ class OonaClient:
 
         target = stream or self._config.normal_stream
         return int(await self._redis.xlen(target))
+
+    @property
+    def telemetry_stream(self) -> str:
+        """Return the configured telemetry stream name."""
+
+        return self._telemetry_stream
+
+    @property
+    def policy_stream(self) -> str:
+        """Return the configured policy update stream name."""
+
+        return self._policy_stream
+
+    @property
+    def normal_stream(self) -> str:
+        """Return the configured normal stream name."""
+
+        return self._config.normal_stream
 
     async def _publish_proto(
         self,

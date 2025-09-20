@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 import torch
 from torch import nn, optim
@@ -16,6 +18,9 @@ from torch import nn, optim
 from esper.leyline import leyline_pb2
 
 from .replay import FieldReportReplayBuffer
+
+if TYPE_CHECKING:
+    from esper.oona import OonaClient
 
 
 @dataclass(slots=True)
@@ -40,6 +45,7 @@ class SimicTrainer:
         self._buffer = buffer
         self._config = config or SimicTrainerConfig()
         self._optimizer = optim.Adam(self._policy.parameters(), lr=self._config.learning_rate)
+        self._policy_updates: list[leyline_pb2.PolicyUpdate] = []
 
     def run_training(self) -> None:
         """Execute PPO-like training on buffered field reports."""
@@ -70,6 +76,37 @@ class SimicTrainer:
     ) -> Iterable[list[leyline_pb2.FieldReport]]:
         for start in range(0, len(data), batch_size):
             yield data[start : start + batch_size]
+
+    def create_policy_update(
+        self,
+        *,
+        policy_id: str,
+        training_run_id: str,
+        policy_version: str,
+    ) -> leyline_pb2.PolicyUpdate:
+        """Create a policy update protobuf for downstream consumption."""
+
+        update = leyline_pb2.PolicyUpdate(
+            version=1,
+            policy_id=policy_id,
+            training_run_id=training_run_id,
+            tamiyo_policy_version=policy_version,
+        )
+        update.issued_at.FromDatetime(datetime.now(tz=UTC))
+        self._policy_updates.append(update)
+        return update
+
+    async def publish_policy_updates(self, oona: OonaClient) -> None:
+        """Publish any generated policy updates via Oona."""
+
+        for update in self._policy_updates:
+            await oona.publish_policy_update(update)
+
+    @property
+    def policy_updates(self) -> list[leyline_pb2.PolicyUpdate]:
+        """Expose buffered policy updates."""
+
+        return list(self._policy_updates)
 
 
 __all__ = ["SimicTrainer", "SimicTrainerConfig"]

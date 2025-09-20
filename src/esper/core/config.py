@@ -16,7 +16,13 @@ class EsperSettings(BaseSettings):
 
     redis_url: str = Field(alias="REDIS_URL", default="redis://localhost:6379/0")
     oona_normal_stream: str = Field(alias="OONA_NORMAL_STREAM", default="oona.normal")
-    oona_emergency_stream: str = Field(alias="OONA_EMERGENCY_STREAM", default="oona.emergency")
+    oona_emergency_stream: str = Field(
+        alias="OONA_EMERGENCY_STREAM", default="oona.emergency"
+    )
+    oona_telemetry_stream: str = Field(
+        alias="OONA_TELEMETRY_STREAM", default="oona.telemetry"
+    )
+    oona_policy_stream: str = Field(alias="OONA_POLICY_STREAM", default="oona.policy")
 
     prometheus_pushgateway: str = Field(
         alias="PROMETHEUS_PUSHGATEWAY", default="http://localhost:9091"

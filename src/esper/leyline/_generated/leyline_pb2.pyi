@@ -355,6 +355,22 @@ class FieldReport(_message.Message):
     notes: str
     def __init__(self, version: _Optional[int] = ..., report_id: _Optional[str] = ..., command_id: _Optional[str] = ..., training_run_id: _Optional[str] = ..., seed_id: _Optional[str] = ..., blueprint_id: _Optional[str] = ..., outcome: _Optional[_Union[FieldReportOutcome, str]] = ..., metrics: _Optional[_Mapping[str, float]] = ..., observation_window_epochs: _Optional[int] = ..., issued_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., tamiyo_policy_version: _Optional[str] = ..., follow_up_actions: _Optional[_Iterable[_Union[MitigationAction, _Mapping]]] = ..., notes: _Optional[str] = ...) -> None: ...
 
+class PolicyUpdate(_message.Message):
+    __slots__ = ("version", "policy_id", "training_run_id", "issued_at", "tamiyo_policy_version", "payload")
+    VERSION_FIELD_NUMBER: _ClassVar[int]
+    POLICY_ID_FIELD_NUMBER: _ClassVar[int]
+    TRAINING_RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    ISSUED_AT_FIELD_NUMBER: _ClassVar[int]
+    TAMIYO_POLICY_VERSION_FIELD_NUMBER: _ClassVar[int]
+    PAYLOAD_FIELD_NUMBER: _ClassVar[int]
+    version: int
+    policy_id: str
+    training_run_id: str
+    issued_at: _timestamp_pb2.Timestamp
+    tamiyo_policy_version: str
+    payload: bytes
+    def __init__(self, version: _Optional[int] = ..., policy_id: _Optional[str] = ..., training_run_id: _Optional[str] = ..., issued_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., tamiyo_policy_version: _Optional[str] = ..., payload: _Optional[bytes] = ...) -> None: ...
+
 class MetricPoint(_message.Message):
     __slots__ = ("name", "value", "unit", "attributes")
     class AttributesEntry(_message.Message):

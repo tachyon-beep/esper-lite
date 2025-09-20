@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+import pytest
 import torch
+from fakeredis.aioredis import FakeRedis
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from esper.leyline import leyline_pb2
+from esper.oona import OonaClient, StreamConfig
 from esper.tolaria import KasminaClient, TamiyoClient, TolariaTrainer, TrainingLoopConfig
 
 
@@ -66,3 +69,35 @@ def test_tolaria_trainer_emits_state_packets() -> None:
     telemetry = trainer.telemetry_packets
     assert len(telemetry) == len(states)
     assert telemetry[0].metrics[0].name == "training.loss"
+
+
+@pytest.mark.asyncio
+async def test_tolaria_publish_history_to_oona() -> None:
+    model = _dummy_model(8, 4)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+    loader = _dummy_loader(16, 8, 4)
+    tamiyo = _TamiyoStub()
+    kasmina = _KasminaStub()
+    trainer = TolariaTrainer(
+        model=model,
+        optimizer=optimizer,
+        dataloader=loader,
+        tamiyo=tamiyo,
+        kasmina=kasmina,
+        config=TrainingLoopConfig(max_epochs=1, gradient_accumulation_steps=1),
+    )
+    list(trainer.run())
+
+    redis = FakeRedis()
+    config = StreamConfig(
+        normal_stream="oona.normal",
+        emergency_stream="oona.emergency",
+        telemetry_stream="oona.telemetry",
+        group="tolaria-test",
+    )
+    oona = OonaClient("redis://localhost", config=config, redis_client=redis)
+    await oona.ensure_consumer_group()
+    await trainer.publish_history(oona)
+    assert await oona.stream_length("oona.normal") >= 1
+    assert await oona.stream_length("oona.telemetry") >= 1
+    await oona.close()
