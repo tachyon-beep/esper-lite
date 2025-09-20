@@ -217,7 +217,7 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
 
 ## Cross-Cutting & Supporting Tickets
 
-### TKT-501: Security & Secrets Management ◔
+### TKT-501: Security & Secrets Management ✅
 - **Description:** Implement shared secret/HMAC handling across Leyline messages; manage secrets via environment config.
 - **Acceptance Criteria:**
   - Messages signed/verified in Kasmina/Tamiyo/Tolaria as per design.
@@ -248,6 +248,7 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
 - Urza/Karn/Tezzeret blueprint pipeline handles synchronous requests, compiles artifacts, persists them in a SQLite catalog, and provides a runtime loader for Kasmina.
 - Oona client now enforces priority routing and backpressure thresholds while exporting reroute/drop counters for Nissa alerts, bringing TKT-303 to completion.
 - GitHub Actions CI matrix executes unit, integration, contract, and serialization suites (with optional perf benchmark) to guard new changes end-to-end.
+- Leyline/Oona messages now support optional HMAC signing via `ESPER_LEYLINE_SECRET`, with secrets documented and enforced in the Oona client (TKT-501).
 
 ---
 

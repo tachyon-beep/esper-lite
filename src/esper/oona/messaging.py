@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import inspect
+import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 import redis.asyncio as aioredis
 
 from esper.leyline import leyline_pb2
+from esper.security.signing import DEFAULT_SECRET_ENV, SignatureContext, sign, verify
 
 
 @dataclass(slots=True)
@@ -43,6 +45,7 @@ class OonaClient:
         config: StreamConfig,
         *,
         redis_client: aioredis.Redis | None = None,
+        signing_context: SignatureContext | None = None,
     ) -> None:
         self._config = config
         self._redis = redis_client or aioredis.from_url(redis_url)
@@ -54,6 +57,7 @@ class OonaClient:
             "publish_dropped": 0.0,
             "queue_depth_max": 0.0,
         }
+        self._signing_context = signing_context or self._load_signing_context()
 
     async def close(self) -> None:
         await self._redis.close()
@@ -152,6 +156,9 @@ class OonaClient:
                     message_type=payload.get(b"type", b"").decode("utf-8"),
                     payload=bytes(payload.get(b"payload", b"")),
                 )
+                sig = payload.get(b"signature", b"").decode("utf-8")
+                if not self._verify_payload(message.payload, sig):
+                    continue
                 result = handler(message)
                 if inspect.isawaitable(result):
                     await result
@@ -215,6 +222,9 @@ class OonaClient:
         if rerouted:
             self._metrics["publish_rerouted"] += 1.0
         fields = {"type": message_type, "payload": payload}
+        signature = self._generate_signature(payload)
+        if signature:
+            fields["signature"] = signature.encode("utf-8")
         if self._config.max_stream_length:
             await self._redis.xadd(
                 stream,
@@ -252,6 +262,24 @@ class OonaClient:
             return self._config.emergency_stream, True, False, int(backlog)
 
         return preferred, False, False, int(backlog)
+
+    def _load_signing_context(self) -> SignatureContext | None:
+        env_var = DEFAULT_SECRET_ENV
+        if env_var in os.environ:
+            return SignatureContext.from_environment(env_var)
+        return None
+
+    def _generate_signature(self, payload: bytes) -> str | None:
+        if not self._signing_context:
+            return None
+        return sign(payload, self._signing_context)
+
+    def _verify_payload(self, payload: bytes, signature: str) -> bool:
+        if not self._signing_context:
+            return True
+        if not signature:
+            return False
+        return verify(payload, signature, self._signing_context)
 
 
 __all__ = ["OonaClient", "StreamConfig", "OonaMessage"]
