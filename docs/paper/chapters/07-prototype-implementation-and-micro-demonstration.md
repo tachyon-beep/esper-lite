@@ -16,6 +16,19 @@ This section documents the prototype implementation of the morphogenetic archite
 To validate the core germination principle, we begin with the smallest possible non-linear problem: XOR. A network with a linear bottleneck is incapable of solving this task, making it the perfect environment to demonstrate how a seed can progress through its lifecycle to add the required non-linear capacity.
 ### 7.1.1 Architecture and Updated Seed Logic
 The pre-germination network is microscopic. For this minimal example, we simulate the decision of the Tamiyo controller with a simple heuristic and focus on the seed's internal state machine (its "Kasmina" logic). The SentinelSeed is no longer a simple toggle; it is a state machine that manages its own development.
+
+```mermaid
+flowchart LR
+    I[Input (2D)] --> L1[fc1: Linear 2→2\n+sigmoid]
+    L1 --> SEED[[SentinelSeed]]
+    SEED --> L2[fc2: Linear 2→1\n+sigmoid]
+    L2 --> O[Output]
+
+    classDef seed fill:#eef,stroke:#336,stroke-width:1px;
+    class SEED seed;
+```
+
+Figure: Minimal XOR network with embedded SentinelSeed position.
 import torch
 import torch.nn as nn
 
