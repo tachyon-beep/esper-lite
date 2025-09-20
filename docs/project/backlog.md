@@ -111,7 +111,7 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
   - Job retry logic handles at least one simulated failure.
   - WAL ensures restart resumes incomplete compile in line with `docs/design/detailed_design/old/06-tezzeret.md`.
 
-### TKT-203: Urza Catalog Service ◑
+### TKT-203: Urza Catalog Service ✅
 - **Description:** Build Urza service using SQLite (or Postgres) metadata + local filesystem artifacts; include in-process cache.
 - **Acceptance Criteria:**
   - API stores/retrieves blueprint metadata and artifact path.

@@ -125,6 +125,14 @@ The generated files are stored in `src/esper/leyline/_generated/` and include
   simple JSON WAL. Use `CompileJobConfig(max_retries=...)` to control retry
   behaviour; failures leave the WAL intact for the next run.
 
+### Urza Catalog
+
+- `UrzaLibrary` now stores artifacts in SQLite with an LRU cache and WAL-based
+  crash recovery. Save operations copy artifacts into the Urza root, log a WAL
+  entry, upsert the catalog row, and then clear the WAL. On restart any
+  residual WAL entry is replayed automatically. Use `fetch_by_tier`/`get` for
+  low-latency lookups or run TezzeretForge to populate missing artifacts.
+
 ### Field Report Persistence
 
 - Tamiyo writes every generated field report to `var/tamiyo/field_reports.log`
