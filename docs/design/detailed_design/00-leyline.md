@@ -27,7 +27,6 @@ Leyline is the canonical library of cross-subsystem data contracts for Esper-Lit
 | Control Plane | `AdaptationCommand` (+ `SeedOperation`, `CommandType` enums) | Tamiyo-originated commands with execution constraints and metadata bundles. |
 | Observability | `EventEnvelope`, `TelemetryPacket`, tracing structs | Oona and Nissa use these wrappers for bus routing and telemetry fan-out. |
 | Learning Feedback | `FieldReport`, `MitigationAction` | Tamiyo publishes adaptation outcomes; Simic consumes them for offline policy training. |
-| Structured Pruning (C-020) | `StructuralPruningRequest`, `StructuralPruningResponse`, importance/pruning mask models | Enables Elesh ↔ Emrakul collaboration with explicit safety metadata. |
 | Constants & Limits | `PerformanceBudgets`, `MemoryBudgets`, `SystemLimits` | Budgets for epoch work, rollback timing, memory ratios, retry ceilings, etc. |
 
 Detailed schemas and enumerations reside in:
@@ -41,9 +40,8 @@ Detailed schemas and enumerations reside in:
 | Tolaria | `SystemStatePacket`, `PerformanceBudgets` | Publishes training state; enforces epoch timing envelopes. |
 | Kasmina | `SystemStatePacket`, checkpoint metadata, `SystemLimits` | Applies control commands; validates kernel injection quotas. |
 | Tamiyo | `SystemStatePacket`, `AdaptationCommand`, `FieldReport`, command enums | Makes inference decisions, publishes outcomes, and issues germination directives. |
-| Simic | `FieldReport`, telemetry + pruning reports | Trains policies offline; relies on provenance fields for replay. |
+| Simic | `FieldReport`, telemetry reports | Trains policies offline; relies on provenance fields for replay. |
 | Oona / Nissa | `EventEnvelope`, `TelemetryPacket`, delivery enums | Bus routing, telemetry ingestion, SLO enforcement. |
-| Elesh / Emrakul | Pruning request & response contracts | Coordinate C-020 structured pruning phases within stated safety bounds. |
 
 ## Performance & Configuration
 
@@ -97,7 +95,6 @@ File: docs/design/detailed_design/00.1-leyline-message-contracts.md
 | Core Training State | `SystemStatePacket`, `SeedState`, `HardwareContext` | Tolaria broadcasts consolidated training telemetry to control and execution planes. |
 | Control Plane | `AdaptationCommand` with `SeedOperation` / `CommandType` enums | Tamiyo issues germination, rollback, and safety actions executed by Kasmina. |
 | Learning Feedback | `FieldReport`, `MitigationAction` | Summarises adaptation outcomes that Simic replays offline. |
-| Structured Pruning (C-020) | `StructuralPruningRequest`, `StructuralPruningResponse` plus helper structs | Elesh ↔ Emrakul handshake for importance analysis, validation, and rollback guidance. |
 | Observability & Bus | `EventEnvelope`, `TelemetryPacket`, telemetry primitives | Oona wraps any payload for routing; Nissa consumes telemetry streams. |
 | Checkpoint Metadata | `CheckpointMetadata` and subordinate detail blocks | Kasmina ↔ Tolaria checkpoint coordination. |
 
@@ -154,38 +151,7 @@ message HardwareContext {
 - `command_type` (`CommandType` enum)
 - `target_seed_id` (if applicable)
 - `execution_deadline_ms` (enforces epoch budget)
-- A `oneof` with payloads for seed operations, optimizer adjustments, circuit breaker toggles, or structured pruning flows.
-
-Structured pruning contracts retain full fidelity from C-020:
-```protobuf
-message StructuralPruningRequest {
-  string request_id = 1;
-  string checkpoint_id = 2;
-  uint32 epoch = 3;
-  PruningPhase phase = 4;
-  ImportanceStatistics importance_stats = 5;
-  PruningConfiguration config = 6;
-  map<string, float> safety_constraints = 7;
-  google.protobuf.Timestamp created_at = 10;
-  string source_subsystem = 11;
-  google.protobuf.Duration timeout = 12;
-}
-
-message StructuralPruningResponse {
-  string request_id = 1;
-  string response_id = 2;
-  bool validation_passed = 3;
-  StructuralAnalysisResult analysis_result = 4;
-  repeated PruningMask pruning_masks = 5;
-  PruningDecisionReport decision_report = 6;
-  StructuralSafetyReport safety_report = 7;
-  bool rollback_required = 8;
-  string rollback_reason = 9;
-  google.protobuf.Timestamp completed_at = 10;
-  string source_subsystem = 11;
-  uint32 processing_time_ms = 12;
-}
-```
+- A `oneof` with payloads for seed operations, optimizer adjustments, or circuit breaker toggles.
 
 Observability wrappers:
 ```protobuf
@@ -268,7 +234,6 @@ enum FieldReportOutcome {
 | `SystemStatePacket` serialize | <80 µs | Microbench in `tests/leyline/contracts/test_performance.py`. |
 | `AdaptationCommand` serialize | <40 µs | Same harness. |
 | `EventEnvelope` wrap | <20 µs | Ensures Oona bus budget compliance. |
-| Structural pruning serialize | <120 µs | Covers full importance statistics payload. |
 
 ## Testing Expectations
 - Unit tests confirm serialization latency and size budgets for representative packets.
@@ -366,37 +331,6 @@ enum DeliveryGuarantee {
   DELIVERY_GUARANTEE_EXACTLY_ONCE = 3;
 }
 
-// Structured pruning (C-020)
-enum PruningPhase {
-  PRUNING_PHASE_UNKNOWN = 0;
-  PRUNING_PHASE_VALIDATION_ONLY = 1;
-  PRUNING_PHASE_ACTIVE_PRUNING = 2;
-  PRUNING_PHASE_DISABLED = 3;
-}
-
-enum PruningDecision {
-  PRUNING_DECISION_UNKNOWN = 0;
-  PRUNING_DECISION_GO = 1;
-  PRUNING_DECISION_NO_GO = 2;
-  PRUNING_DECISION_CONDITIONAL_GO = 3;
-}
-
-enum PruningMaskType {
-  PRUNING_MASK_UNKNOWN = 0;
-  PRUNING_MASK_CHANNEL = 1;
-  PRUNING_MASK_ATTENTION_HEAD = 2;
-  PRUNING_MASK_LAYER = 3;
-  PRUNING_MASK_UNSTRUCTURED = 4;
-}
-
-enum PruningOperation {
-  PRUNING_OP_UNKNOWN = 0;
-  PRUNING_OP_ANALYZE = 1;
-  PRUNING_OP_VALIDATE = 2;
-  PRUNING_OP_APPLY = 3;
-  PRUNING_OP_ROLLBACK = 4;
-  PRUNING_OP_PHASE_TRANSITION = 5;
-}
 ```
 
 ## Constants: Performance, Memory, Limits
@@ -567,4 +501,3 @@ Circuit breaker defaults (`failure_threshold=5`, recovery timeout 1 h) halt fu
 ## Outstanding Work
 - GOV-001: Wire governance validation rules into CI (tracking ticket).
 - GOV-002: Finish automated impact analysis reporting in dashboards.
-

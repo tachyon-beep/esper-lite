@@ -7,50 +7,36 @@ File: docs/design/detailed_design/01-tolaria-unified-design.md
 
 ## Snapshot
 - **Role**: Training orchestrator and stability authority for Esper-Lite
-- **Scope**: Core training loop, optimizer governance, rollback orchestration, structured pruning coordination
-- **Status**: Implementation-ready (C-016 safety fixes + C-020 structured pruning)
-- **Key Budgets**: 18 ms epoch boundary, 500 ms fast rollback, 12 s full rollback, <0.1 % pruning overhead
+- **Scope**: Core training loop, optimizer governance, rollback orchestration
+- **Status**: Implementation-ready (C-016 safety fixes)
+- **Key Budgets**: 18 ms epoch boundary, 500 ms fast rollback, 12 s full rollback
 
 ## Architectural Spine
 - **Epoch-Driven Core**: Training loop synchronises all major work at epoch boundaries; morphogenetic operations must not pause batch processing.
 - **Tight Kasmina/Tamiyo Coupling**: Direct calls for low latency in critical paths (no message bus); Tolaria remains final arbiter for rollbacks.
 - **Consistent State Surfaces**: Model, optimizer, controller, and checkpoint metadata move in lockstep. UnifiedLRController holds exclusive LR mutation rights.
-- **Checkpoint-Gated Pruning**: Structured pruning (C-020) rides on checkpoint boundaries so pruning analysis never blocks the training loop.
 
 ## Component Map
 | Component | Core Responsibility | Notes |
 | --- | --- | --- |
-| Training Loop Manager | Batch/epoch orchestration, telemetry, Tamiyo handshake | Coordinates pruning checkpoints and importance exports. See `01.1`. |
-| Structured Pruning Phase Manager | Two-phase schedule (validation → execution) with safety limits | Enforces progressive budgets and rollback triggers. |
+| Training Loop Manager | Batch/epoch orchestration, telemetry, Tamiyo handshake | Coordinates checkpoints and telemetry exports. See `01.1`. |
 | UnifiedLRController | Single source of truth for all learning-rate changes | Circuit breakers replace asserts; monitors integrity at runtime. See `01.3`. |
 | Dynamic Optimizer Manager | Rebuilds optimizers while preserving momentum | Registers all groups with LR controller. |
-| Checkpoint + WAL System | Atomic persistence with O_DSYNC semantics | Stores pruning metadata + importance stats. See `01.2`. |
+| Checkpoint + WAL System | Atomic persistence with O_DSYNC semantics | Stores model, optimizer, and telemetry metadata. See `01.2`. |
 | Rollback Stack | 500 ms fast path + 12 s full recovery | Shared-memory signalling for CRITICAL events. |
 | Integration Layer | Protocol Buffer wiring, telemetry, performance targets | Aligns with Leyline contracts. See `01.4`. |
 
-## Structured Pruning Highlights (C-020)
-- **Phase Schedule** (`StructuredPruningPhaseManager`)
-  ```python
-  if epoch <= phase_transition_epoch: return PruningPhase.VALIDATION_ONLY
-  return PruningPhase.ACTIVE_PRUNING if epoch % pruning_checkpoint_interval == 0 else False
-  ```
-- **Phase 1 (epochs ≤30)**: Importance telemetry only; zero parameter changes; <0.1 % overhead.
-- **Phase 2 (epochs >30)**: Checkpoint-aligned pruning with progressive budgets (1 %, 3 %, 5 % max removal). Validation performed offline before deployment; Tolaria retains rollback hooks.
-- **Safety Triggers**: 2 % accuracy drop, 5× gradient norm, 90 % memory pressure, or 3 failed attempts activate rollback.
-- **Checkpoint Storage**: Keep last three checkpoints (7–25 GB each) with pruning metadata + importance history (30-day retention).
-
 ## Control Loop Contract
 1. **Train Epoch**: Run batches, aggregate multi-seed gradients, step optimizer via LR controller.
-2. **Checkpoint Boundary**: If scheduled, export importance stats, request Emrakul analysis, apply validated masks, write checkpoint with pruning metadata.
+2. **Checkpoint Boundary**: If scheduled, persist a checkpoint, rotate rollback slots, and emit checkpoint metadata for downstream telemetry.
 3. **End-of-Epoch Hook** (≤18 ms): Validate model, assemble `SystemStatePacket`, invoke `Tamiyo.step()` with 2 s timeout, process `AdaptationCommand`, schedule async checkpoint.
 4. **Stability Enforcement**: Circuit breakers swap Tolaria into conservative mode on timing or integrity violations; rollback stack ready for CRITICAL/SEVERE events.
 
 ## Integration Summary
 | Subsystem | Interface | Key Contracts |
 | --- | --- | --- |
-| Tamiyo | End-of-epoch call | `SystemStatePacket`, `AdaptationCommand`, `PruningPhase` |
-| Kasmina | Direct kernels & telemetry | Importance export, pruning mask application |
-| Emrakul | Pruning analysis coordination | `StructuralPruningRequest/Response` |
+| Tamiyo | End-of-epoch call | `SystemStatePacket`, `AdaptationCommand` |
+| Kasmina | Direct kernels & telemetry | Checkpoint metadata, telemetry alerts |
 | Oona / Nissa | Telemetry & tracing | `EventEnvelope`, `TelemetryPacket` |
 
 Contracts, enums, and limits originate from Leyline (`leyline.*` namespace) to guarantee binary compatibility and <80 µs serialization.
@@ -58,18 +44,16 @@ Contracts, enums, and limits originate from Leyline (`leyline.*` namespace) to g
 ## Reliability & Performance
 - **Epoch boundary**: 3.5 ms state assembly + 12 ms Tamiyo inference + 1.5 ms adaptation processing + 1 ms guard.
 - **Rollback**: Fast path uses LRU checkpoint cache, shared-memory signalling; full path uses WAL-protected checkpoints and deterministic subsystem order (Tamiyo → Kasmina → Tolaria → auxiliaries).
-- **Monitoring**: Metrics for timing budgets, rollback latency, LR integrity, pruning success rate; conservative mode downgrades experimental features when circuit breakers trip.
+- **Monitoring**: Metrics for timing budgets, rollback latency, LR integrity; conservative mode downgrades experimental features when circuit breakers trip.
 
 ## Critical Decisions
 1. **Keep Kasmina/Tamiyo synchronous** to meet latency targets.
 2. **Exclusive LR controller** prevents mutation races and enforces invariants.
 3. **Two-tier rollback** balances sub-second containment with full recovery guarantees.
-4. **Checkpoint-gated pruning** ensures zero training disruption while enabling structured pruning.
-5. **Modular docs**: `01.1`–`01.4` capture detailed algorithms, configs, and APIs; this overview anchors the architecture.
+4. **Modular docs**: `01.1`–`01.4` capture detailed algorithms, configs, and APIs; this overview anchors the architecture.
 
 ## Forward Look
 - Phase 2 distributed training + schema evolution once multi-node runs begin.
-- Advanced pruning heuristics (e.g., Fisher information) layered on top of existing phase manager.
 - Optional dynamic contract discovery (post-Leyline Phase 3) for heterogenous deployments.
 
 ## References
@@ -93,8 +77,6 @@ File: docs/design/detailed_design/01.1-tolaria-epoch-lifecycle.md
 class TolariaTrainer:
     def train_epoch(self, epoch: int):
         self.model.train()
-        pruning_active = self.phase_manager.is_pruning_epoch(epoch)
-
         for batch_idx, batch in enumerate(self.train_loader):
             host_loss, seed_infos = self._forward(batch)
             total_loss, telemetry = self.gradient_aggregator.aggregate_losses(
@@ -107,7 +89,7 @@ class TolariaTrainer:
 
             if self._is_checkpoint_boundary(epoch, batch_idx):
                 self.checkpoint_coordinator.handle_boundary(
-                    epoch, batch_idx, pruning_active
+                    epoch, batch_idx
                 )
 
         self.end_of_epoch_hook()
@@ -529,9 +511,7 @@ class TelemetryCollector:
 | Subsystem | Channel | Purpose |
 | --- | --- | --- |
 | Oona | Async queue + immediate path | Telemetry, non-critical messaging |
-| Kasmina | Direct calls | Parameter addition, importance export |
+| Kasmina | Direct calls | Parameter addition, telemetry exchange |
 | Tamiyo | Synchronous call | End-of-epoch control loop |
-| Simic / Emrakul | Message contracts | Structured pruning coordination |
 
 This condensed integration spec keeps the critical contracts, budgets, and helper utilities required for Tolaria’s production footprint.
-
