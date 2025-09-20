@@ -76,6 +76,15 @@ Example schematic (pseudocode):
                 'location_logits': self.location(h),
                 'intensity': torch.sigmoid(self.intensity(h)),
             }
+
+Design alignment:
+
+| Aspect                 | Esper‑Lite Design Reference                                                                 |
+|------------------------|---------------------------------------------------------------------------------------------|
+| Policy Architecture    | 4‑layer hetero‑GNN (GraphSAGE → GAT) with risk/value/policy heads (Tamiyo v4.1)            |
+| Inference Budget       | < 45 ms latency; ≤ 2 GB VRAM                                                                |
+| Risk Governance        | Multi‑signal risk engine, conservative mode, circuit breakers                               |
+| Messaging Contracts    | Leyline Option B budgets; signed `AdaptationCommand`/`FieldReport`; telemetry aggregation   |
 ## 8.4 Reward Function and Optimisation
 Tamiyo is trained via reinforcement learning to maximize a composite reward that trades off performance gains against safety, stability, and resource costs. A practical shaping is:
 
