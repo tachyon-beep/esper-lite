@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from esper.karn import BlueprintMetadata, BlueprintTier, KarnCatalog
 from esper.leyline import leyline_pb2
 from esper.tamiyo import TamiyoService
@@ -43,6 +45,7 @@ class _StaticPolicy:
         return {}
 
 
+@pytest.mark.integration
 def test_tamiyo_end_to_end_blueprint_pipeline(tmp_path) -> None:
     metadata = BlueprintMetadata(
         blueprint_id="bp-end",

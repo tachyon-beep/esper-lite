@@ -99,6 +99,10 @@ process. The service will log a warning when the stub is activated.
   inspection, and the `/metrics/summary` endpoint surfaces active alerts
   alongside SLO burn rates computed from telemetry keys prefixed with
   `slo.` (e.g. `slo.latency_actual`/`slo.latency_objective`).
+- Oona now emits backpressure counters (`oona.publish.rerouted`,
+  `oona.publish.dropped`, `oona.queue.depth.max`) via the client metrics snapshot.
+  These feed the queue-depth alert and provide early warning on drop behaviour
+  during synthetic load generation.
 - Fault drills can be exercised with `scripts/run_fault_drills.py`, which feeds
   synthetic telemetry into Nissa and verifies the alerts clear once normal
   metrics resume. Use this before major showcases to confirm breaker coverage

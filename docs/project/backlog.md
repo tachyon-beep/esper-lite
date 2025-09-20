@@ -87,7 +87,7 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
   - Tamiyo persists report metadata for at least one epoch.
   - Field-report content matches lifecycle documented in `docs/design/detailed_design/old/03-tamiyo.md`.
 
-### TKT-106: Control Loop Integration Test Harness ◑
+### TKT-106: Control Loop Integration Test Harness ✅
 - **Description:** Create automated test verifying epoch hook timing, message delivery, and telemetry round-trip.
 - **Acceptance Criteria:**
   - Test spins up Tolaria/Kasmina/Tamiyo with mocked blueprint fetch.
@@ -132,7 +132,7 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
   - Metadata influences adaptation command selection (configurable).
   - Integration honours metadata contracts defined in `docs/design/detailed_design/old/03-tamiyo.md` and `old/08-urza.md`.
 
-### TKT-206: Blueprint Pipeline Tests ◔
+### TKT-206: Blueprint Pipeline Tests ✅
 - **Description:** Add tests covering blueprint query flow, compile retry, and WAL recovery.
 - **Acceptance Criteria:**
   - Test suite simulates compile failure and verifies retry path.
@@ -155,7 +155,7 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
   - Routing stubs deliver notifications (Slack/email placeholders).
   - SLO dashboard displays error budget burn consistent with `docs/design/detailed_design/old/10-nissa.md`.
 
-### TKT-303: Oona Backpressure & Testing ◔
+### TKT-303: Oona Backpressure & Testing ✅
 - **Description:** Implement priority handling/backpressure without breakers; create load-test to exercise queue thresholds.
 - **Acceptance Criteria:**
   - Emergency path bypasses normal queue under load.
@@ -170,7 +170,7 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
   - Runbook documents recovery steps.
   - System returns to nominal state post-drill.
 
-### TKT-305: Operator Runbook ◑
+### TKT-305: Operator Runbook ✅
 - **Description:** Document standard operations, alert handling, rollback procedures for Tolaria/Kasmina/Tamiyo/Oona/Nissa.
 - **Acceptance Criteria:**
   - Runbook covers start/stop, health checks, alert response, rollback.
@@ -224,7 +224,7 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
   - Secrets stored securely (env vars, not committed).
   - Documentation covers rotation procedure.
 
-### TKT-502: CI Test Matrix ◑
+### TKT-502: CI Test Matrix ✅
 - **Description:** Expand CI to run unit, integration, contract, and serialization tests per slice.
 - **Acceptance Criteria:**
   - CI executes relevant tests on PR.
@@ -246,6 +246,8 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
 - Tolaria/Tamiyo stream telemetry and field reports through Oona; Nissa ingests those packets and exposes Prometheus metrics via the new ASGI helper.
 - Simic consumes Tamiyo field reports, trains against buffered telemetry, and publishes serialized policy updates that Tamiyo can hot-reload safely.
 - Urza/Karn/Tezzeret blueprint pipeline handles synchronous requests, compiles artifacts, persists them in a SQLite catalog, and provides a runtime loader for Kasmina.
+- Oona client now enforces priority routing and backpressure thresholds while exporting reroute/drop counters for Nissa alerts, bringing TKT-303 to completion.
+- GitHub Actions CI matrix executes unit, integration, contract, and serialization suites (with optional perf benchmark) to guard new changes end-to-end.
 
 ---
 

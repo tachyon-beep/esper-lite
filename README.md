@@ -20,6 +20,11 @@ Esper-Lite is a streamlined morphogenetic control stack centred on a PyTorch 2.8
    pylint --rcfile .codacy/tools-configs/pylint.rc src/esper
    ruff check src tests
    mypy src/esper
+   # CI runs the following focused suites as well:
+   pytest -m "not integration and not performance"
+   pytest -m integration
+   pytest tests/leyline/test_contracts.py
+   pytest -m "not performance" tests/leyline/test_serialization.py
    ```
 
 3. **Launch local infrastructure (placeholder)**

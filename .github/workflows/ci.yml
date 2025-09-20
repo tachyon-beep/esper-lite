@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  tests:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: unit-tests
+            pytest-args: -m "not integration and not performance"
+          - name: integration-tests
+            pytest-args: -m integration
+          - name: contract-tests
+            pytest-args: tests/leyline/test_contracts.py
+          - name: serialization-tests
+            pytest-args: -m "not performance" tests/leyline/test_serialization.py
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+
+      - name: Run ${{ matrix.name }}
+        env:
+          REDIS_URL: redis://localhost:6379/0
+        run: |
+          pytest ${{ matrix.pytest-args }}

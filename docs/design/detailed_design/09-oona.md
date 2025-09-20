@@ -21,9 +21,10 @@ File: docs/design/detailed_design/09-oona-unified-design.md
 | --- | --- | --- |
 | StreamManager | Wraps Redis Streams publish/ack APIs | Configures TTL, maxlen. |
 | PriorityRouter | Places messages into NORMAL vs EMERGENCY streams | EMERGENCY always delivered. |
+| BackpressureController | Applies depth thresholds and drops when necessary | Tracks reroutes and drops for metrics. |
 | CircuitBreakerLayer | Guards publish/consume operations | Falls back to conservative mode. |
 | TTLHousekeeper | Periodic cleanup of idle consumer groups | Prevents memory creep. |
-| MetricsEmitter | Publishes queue depth, latency, breaker state | Consumed by Nissa. |
+| MetricsEmitter | Publishes queue depth, latency, breaker/backpressure counters | Consumed by Nissa. |
 
 ## Message Envelope
 All payloads wrapped in Leyline `EventEnvelope` (Option B) containing `event_id`, `priority`, timestamps, `payload_data`, and optional correlation info. No map fields. Publish/subscribe clients decode payload into subsystem-specific Protocol Buffers.
@@ -40,6 +41,7 @@ All payloads wrapped in Leyline `EventEnvelope` (Option B) containing `event_i
 | Delivery latency p95 | <100 ms | Consumer group fetch. |
 | Queue depth recovery | <10 s | After spike ends. |
 | Availability | 99.9 % | Measured via health endpoint. |
+| Backpressure drop rate | ≤5 % of burst | Drops only when depth exceeds `backpressure_drop_threshold`. |
 
 ## Configuration Highlights
 ```yaml
@@ -69,8 +71,8 @@ Oona therefore acts as a simple, reliable messaging layer for Esper-Lite without
 
 - **At-Least-Once Delivery:** Streams, consumer groups, and ack/retry semantics must ensure messages are processed reliably, with dead-letter handling for failures (Old §"Consume Path").
 - **Priority Routing:** Emergency queues bypass normal traffic so critical telemetry/commands propagate even under load (Old §"PriorityRouter").
-- **TTL & Backpressure:** Stream trimming, TTL cleanup, and queue depth monitoring prevent unbounded growth and trigger conservative behaviour when thresholds are exceeded (Old §"TTL & Cleanup").
-- **Telemetry:** Oona exports publish/consume latency, queue depth, and breaker state metrics to feed Nissa dashboards (Old §"Metrics & Logging").
+- **TTL & Backpressure:** Stream trimming, TTL cleanup, and queue depth monitoring prevent unbounded growth, with optional drop thresholds when NORMAL queues exceed `backpressure_drop_threshold` (Old §"TTL & Cleanup").
+- **Telemetry:** Oona exports publish/consume latency, queue depth, breaker state, and backpressure counters (`publish_rerouted`, `publish_dropped`, `queue_depth_max`) to feed Nissa dashboards (Old §"Metrics & Logging").
 
 Circuit-breaker scaffolding can be simplified, but the messaging guarantees above define Oona’s core function.
 
