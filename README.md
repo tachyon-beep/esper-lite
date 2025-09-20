@@ -5,22 +5,37 @@ Esper-Lite is a streamlined morphogenetic control stack centred on a PyTorch 2.8
 ## Getting Started
 
 1. **Create a virtual environment**
+
    ```bash
    python3.11 -m venv .venv
    source .venv/bin/activate
    pip install --upgrade pip
    pip install -e .[dev]
    ```
+
 2. **Run quality gates**
+
    ```bash
    pytest tests
    pylint --rcfile .codacy/tools-configs/pylint.rc src/esper
    ruff check src tests
    mypy src/esper
    ```
+
 3. **Launch local infrastructure (placeholder)**
    - Docker compose definitions will live under `infra/` (see backlog TKT-003).
    - Redis, Prometheus, and Elasticsearch endpoints are documented in `docs/project/implementation_plan.md`.
+
+### Redis for Oona integration tests
+
+Spin up the local Redis instance used by the Oona integration suite:
+
+```bash
+docker compose -f infra/docker-compose.redis.yml up -d
+pytest -m integration tests/oona/test_messaging_integration.py
+```
+
+Set `REDIS_URL` if you expose Redis on a non-default port.
 
 ## Repository Layout
 
@@ -45,4 +60,3 @@ Each subsystem module exposes a narrow public API under `src/esper/<subsystem>/_
 The backlog in `docs/project/backlog.md` decomposes the first implementation sprints. Slice 0 focuses on CI/tooling and Leyline contracts. Slice 1 establishes the control loop with Tolaria, Kasmina, and Tamiyo, followed by blueprint management, observability, and offline learning in subsequent slices.
 
 Refer to `docs/project/implementation_plan.md` for full sequencing and ownership recommendations.
-

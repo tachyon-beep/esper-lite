@@ -1,5 +1,10 @@
-
-
 #Ignore vscode AI rules
 .github/instructions/codacy.instructions.md
 .venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+*.db
+*.log

@@ -60,5 +60,9 @@ def test_tolaria_trainer_emits_state_packets() -> None:
 
     states: Iterable[leyline_pb2.SystemStatePacket] = list(trainer.run())
     assert len(states) == 3  # two epochs + completion packet
+    assert states[0].training_loss >= 0.0
     assert states[-1].validation_accuracy == 1.0
     assert kasmina.received
+    telemetry = trainer.telemetry_packets
+    assert len(telemetry) == len(states)
+    assert telemetry[0].metrics[0].name == "training.loss"

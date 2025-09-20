@@ -15,6 +15,7 @@ from .events import (
     SystemStatePacket,
     TrainingPhase,
 )
+from .telemetry import TelemetryEvent, TelemetryMetric, build_telemetry_packet
 
 __all__ = [
     "EsperSettings",
@@ -25,4 +26,7 @@ __all__ = [
     "FieldReportOutcome",
     "SeedLifecycleStage",
     "TrainingPhase",
+    "TelemetryMetric",
+    "TelemetryEvent",
+    "build_telemetry_packet",
 ]

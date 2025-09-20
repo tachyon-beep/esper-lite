@@ -15,6 +15,7 @@ def test_tamiyo_service_generates_command() -> None:
     command = service.evaluate_epoch(packet)
     assert command.command_type == leyline_pb2.COMMAND_SEED
     assert command.target_seed_id == "seed-1"
+    assert service.telemetry_packets
 
 
 def test_conservative_mode_overrides_directive() -> None:
@@ -25,6 +26,8 @@ def test_conservative_mode_overrides_directive() -> None:
     packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1)
     command = service.evaluate_epoch(packet)
     assert command.command_type == leyline_pb2.COMMAND_PAUSE
+    telemetry = service.telemetry_packets[-1]
+    assert any(event.description == "Tamiyo pause triggered" for event in telemetry.events)
 
 
 def test_field_report_generation() -> None:
@@ -45,3 +48,4 @@ def test_field_report_generation() -> None:
     )
     assert report.outcome == leyline_pb2.FIELD_REPORT_OUTCOME_SUCCESS
     assert report.metrics["loss"] == pytest.approx(-0.05)
+    assert service.field_reports

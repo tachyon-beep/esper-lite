@@ -16,6 +16,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
+from esper.core import TelemetryMetric, build_telemetry_packet
 from esper.leyline import leyline_pb2
 
 
@@ -45,6 +46,27 @@ class TrainingLoopConfig:
     )
     gradient_accumulation_steps: int = 1
 
+@dataclass(slots=True)
+class EpochStats:
+    """Aggregated statistics for a completed epoch."""
+
+    loss_sum: float = 0.0
+    sample_count: int = 0
+    correct: int = 0
+    gradient_norm_sum: float = 0.0
+
+    @property
+    def average_loss(self) -> float:
+        return self.loss_sum / self.sample_count if self.sample_count else 0.0
+
+    @property
+    def accuracy(self) -> float:
+        return self.correct / self.sample_count if self.sample_count else 0.0
+
+    @property
+    def average_gradient_norm(self) -> float:
+        return self.gradient_norm_sum / self.sample_count if self.sample_count else 0.0
+
 
 class TolariaTrainer:
     """Minimal training-loop coordinator for PyTorch 2.8 models."""
@@ -66,6 +88,7 @@ class TolariaTrainer:
         self._config = config
         self._current_epoch = 0
         self._run_id = "training-run"
+        self._telemetry_packets: list[leyline_pb2.TelemetryPacket] = []
 
     def run(self) -> Iterable[leyline_pb2.SystemStatePacket]:
         """Run the training loop, yielding `SystemStatePacket`s each epoch."""
@@ -73,24 +96,44 @@ class TolariaTrainer:
         for epoch in range(self._config.max_epochs):
             self._current_epoch = epoch
             self._model.train()
-            self._train_single_epoch(epoch)
-            state = self._emit_state(epoch)
+            stats = self._train_single_epoch()
+            state = self._emit_state(epoch, stats)
+            telemetry = self._emit_telemetry(state, stats)
+            self._telemetry_packets.append(telemetry)
             command = self._tamiyo.evaluate_epoch(state)
             self._kasmina.apply_command(command)
             yield state
 
-        yield self._emit_state(self._config.max_epochs, completion=True)
+        final_stats = EpochStats()
+        state = self._emit_state(self._config.max_epochs, final_stats, completion=True)
+        telemetry = self._emit_telemetry(state, final_stats)
+        self._telemetry_packets.append(telemetry)
+        yield state
 
-    def _train_single_epoch(self, epoch: int) -> None:
+    def _train_single_epoch(self) -> EpochStats:
         """Execute the forward/backward passes for one epoch."""
 
+        stats = EpochStats()
         for step, batch in enumerate(self._dataloader):
-            outputs = self._model(batch[0].to(self._config.device))
-            loss = self._compute_loss(outputs, batch)
+            inputs, targets = batch
+            inputs = inputs.to(self._config.device)
+            targets = targets.to(self._config.device)
+            outputs = self._model(inputs)
+            loss = self._compute_loss(outputs, (inputs, targets))
             loss.backward()
+            stats.loss_sum += float(loss.detach())
+            stats.sample_count += targets.size(0)
+            stats.correct += int((outputs.argmax(dim=1) == targets).sum().item())
+            grad_norm = 0.0
+            for param in self._model.parameters():
+                if param.grad is not None:
+                    grad_norm += float(param.grad.data.norm().item())
+            stats.gradient_norm_sum += grad_norm
             if (step + 1) % self._config.gradient_accumulation_steps == 0:
                 self._optimizer.step()
                 self._optimizer.zero_grad(set_to_none=True)
+
+        return stats
 
     def _compute_loss(
         self,
@@ -105,6 +148,7 @@ class TolariaTrainer:
     def _emit_state(
         self,
         epoch: int,
+        stats: EpochStats,
         *,
         completion: bool = False,
     ) -> leyline_pb2.SystemStatePacket:
@@ -113,9 +157,9 @@ class TolariaTrainer:
         packet = leyline_pb2.SystemStatePacket(
             version=1,
             current_epoch=epoch,
-            validation_accuracy=0.0,
-            validation_loss=float(epoch),
-            training_loss=float(epoch),
+            validation_accuracy=stats.accuracy,
+            validation_loss=stats.average_loss,
+            training_loss=stats.average_loss,
             packet_id=f"{self._run_id}-epoch-{epoch}",
             source_subsystem="tolaria",
             training_run_id=self._run_id,
@@ -123,7 +167,9 @@ class TolariaTrainer:
             global_step=epoch,
         )
         packet.timestamp_ns = time_ns()
-        packet.training_metrics["loss"] = float(epoch)
+        packet.training_metrics["loss"] = stats.average_loss
+        packet.training_metrics["accuracy"] = stats.accuracy
+        packet.training_metrics["gradient_norm"] = stats.average_gradient_norm
         hardware = packet.hardware_context
         hardware.device_type = "cuda" if torch.cuda.is_available() else "cpu"
         hardware.device_id = "0"
@@ -137,6 +183,36 @@ class TolariaTrainer:
             packet.validation_accuracy = 1.0
 
         return packet
+
+    def _emit_telemetry(
+        self,
+        state: leyline_pb2.SystemStatePacket,
+        stats: EpochStats,
+    ) -> leyline_pb2.TelemetryPacket:
+        """Build a telemetry packet derived from the state snapshot."""
+
+        metrics = [
+            TelemetryMetric("training.loss", stats.average_loss, unit="loss"),
+            TelemetryMetric("training.accuracy", stats.accuracy, unit="ratio"),
+            TelemetryMetric(
+                "training.gradient_norm",
+                stats.average_gradient_norm,
+                unit="l2_norm",
+            ),
+        ]
+        telemetry = build_telemetry_packet(
+            packet_id=state.packet_id,
+            source="tolaria",
+            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+            metrics=metrics,
+        )
+        return telemetry
+
+    @property
+    def telemetry_packets(self) -> list[leyline_pb2.TelemetryPacket]:
+        """Expose telemetry packets emitted during training."""
+
+        return list(self._telemetry_packets)
 
 
 __all__ = ["TolariaTrainer", "TrainingLoopConfig", "TamiyoClient", "KasminaClient"]
