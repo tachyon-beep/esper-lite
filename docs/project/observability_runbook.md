@@ -76,3 +76,7 @@ process. The service will log a warning when the stub is activated.
   http://localhost:9200/_cat/indices?v` or the DevTools console; indices are
   created automatically for `telemetry`, `system_state`, and `field_report`
   documents.
+- Simic training publishes telemetry under the `simic` subsystem; counters
+  `esper_simic_training_reward_total` and
+  `esper_simic_training_iterations_total` expose cumulative reward and PPO
+  iterations while documents are indexed under `simic_metrics`.

@@ -14,6 +14,9 @@ from torch.nn import functional as F
 
 from esper.leyline import leyline_pb2
 
+from esper.core.telemetry import TelemetryMetric, build_telemetry_packet
+from esper.core import TelemetryEvent
+
 from .replay import FieldReportReplayBuffer, SimicExperience
 
 if TYPE_CHECKING:
@@ -55,6 +58,9 @@ class SimicTrainer:
         self._device = next(self._policy.parameters()).device
         self._policy.to(self._device)
         self._last_loss: float = 0.0
+        self._last_reward: float = 0.0
+        self._last_value_loss: float = 0.0
+        self._iterations: int = 0
 
     def run_training(self) -> None:
         """Execute PPO-like training on buffered field reports."""
@@ -70,6 +76,8 @@ class SimicTrainer:
             self._optimizer.step()
             self._optimizer.zero_grad(set_to_none=True)
             self._last_loss = float(loss.detach().cpu())
+            self._last_reward = float(batch["reward"].mean().detach().cpu())
+            self._iterations += 1
 
     def _compute_loss(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         rewards = batch["reward"].to(self._device)
@@ -98,6 +106,7 @@ class SimicTrainer:
         value_loss = F.mse_loss(values, rewards)
 
         loss = policy_loss + self._config.value_coef * value_loss - self._config.entropy_coef * entropy
+        self._last_value_loss = float(value_loss.detach().cpu())
         return loss
 
     def _prepare_inputs(self, loss_deltas: torch.Tensor, outcomes: torch.Tensor) -> torch.Tensor:
@@ -155,6 +164,32 @@ class SimicTrainer:
         """Return the last observed training loss."""
 
         return self._last_loss
+
+    def build_metrics_packet(self, *, training_run_id: str) -> leyline_pb2.TelemetryPacket:
+        metrics = [
+            TelemetryMetric("simic.training.loss", self._last_loss, unit="loss"),
+            TelemetryMetric("simic.training.reward", self._last_reward, unit="reward"),
+            TelemetryMetric("simic.value.loss", self._last_value_loss, unit="loss"),
+            TelemetryMetric("simic.training.iterations", float(self._iterations), unit="count"),
+        ]
+        packet = build_telemetry_packet(
+            packet_id=f"simic-metrics-{training_run_id}",
+            source="simic",
+            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+            metrics=metrics,
+            events=[
+                TelemetryEvent(
+                    description="Simic PPO update",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+                    attributes={"training_run_id": training_run_id},
+                )
+            ],
+        )
+        return packet
+
+    async def publish_metrics(self, oona: OonaClient, *, training_run_id: str) -> None:
+        packet = self.build_metrics_packet(training_run_id=training_run_id)
+        await oona.publish_telemetry(packet)
 
 
 __all__ = ["SimicTrainer", "SimicTrainerConfig"]

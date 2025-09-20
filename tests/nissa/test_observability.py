@@ -78,6 +78,36 @@ def test_ingest_telemetry_records_metrics_and_indexes() -> None:
     assert es.indexed and es.indexed[0][0] == "telemetry"
 
 
+def test_ingest_simic_metrics_updates_counters() -> None:
+    registry = CollectorRegistry()
+    es = _ElasticsearchStub()
+    config = NissaIngestorConfig(
+        prometheus_gateway="http://localhost:9091",
+        elasticsearch_url="http://localhost:9200",
+    )
+    ingest = NissaIngestor(config, es_client=es, registry=registry)
+
+    packet = leyline_pb2.TelemetryPacket(
+        packet_id="simic-1",
+        source_subsystem="simic",
+        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+    )
+    metric_reward = packet.metrics.add()
+    metric_reward.name = "simic.training.reward"
+    metric_reward.value = 1.25
+    metric_iter = packet.metrics.add()
+    metric_iter.name = "simic.training.iterations"
+    metric_iter.value = 3
+
+    ingest.ingest_telemetry(packet)
+
+    reward_total = registry.get_sample_value("esper_simic_training_reward_total")
+    iterations_total = registry.get_sample_value("esper_simic_training_iterations_total")
+    assert reward_total == 1.25
+    assert iterations_total == 3.0
+    assert es.indexed[-1][0] == "simic_metrics"
+
+
 @pytest.mark.asyncio
 async def test_consume_from_oona_ingests_packets() -> None:
     registry = CollectorRegistry()

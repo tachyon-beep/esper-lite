@@ -49,6 +49,11 @@ def test_trainer_updates_policy_parameters() -> None:
     )
     assert update.payload
 
+    metrics = trainer.build_metrics_packet(training_run_id="run")
+    metric_names = {metric.name for metric in metrics.metrics}
+    assert "simic.training.loss" in metric_names
+    assert "simic.training.iterations" in metric_names
+
 
 def test_trainer_supports_lora_enabled() -> None:
     buffer = FieldReportReplayBuffer(capacity=16)

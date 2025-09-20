@@ -62,6 +62,16 @@ class NissaIngestor:
             registry=self._registry,
             labelnames=("outcome",),
         )
+        self._simic_reward_counter = Counter(
+            "esper_simic_training_reward_total",
+            "Cumulative Simic training reward",
+            registry=self._registry,
+        )
+        self._simic_iterations_counter = Counter(
+            "esper_simic_training_iterations_total",
+            "Number of Simic PPO iterations processed",
+            registry=self._registry,
+        )
         self._es = es_client or Elasticsearch(hosts=[config.elasticsearch_url])
 
     def ingest_state(self, packet: SystemStatePacket | Mapping[str, object]) -> None:
@@ -95,10 +105,16 @@ class NissaIngestor:
 
     def ingest_telemetry(self, packet: leyline_pb2.TelemetryPacket) -> None:
         self._telemetry_counter.labels(source=packet.source_subsystem).inc()
-        self._index_document(
-            "telemetry",
-            MessageToDict(packet, preserving_proto_field_name=True),
-        )
+        document = MessageToDict(packet, preserving_proto_field_name=True)
+        if packet.source_subsystem == "simic":
+            metrics = {m.name: m.value for m in packet.metrics}
+            reward = metrics.get("simic.training.reward", 0.0)
+            iterations = metrics.get("simic.training.iterations", 0.0)
+            self._simic_reward_counter.inc(reward)
+            self._simic_iterations_counter.inc(iterations if iterations else 1.0)
+            self._index_document("simic_metrics", document)
+        else:
+            self._index_document("telemetry", document)
 
     def metrics(self) -> dict[str, str]:
         """Return the Prometheus metrics exposition text."""
@@ -155,6 +171,7 @@ class NissaIngestor:
         """Expose the Prometheus registry for HTTP export."""
 
         return self._registry
+
 
 
 __all__ = ["NissaIngestor", "NissaIngestorConfig"]

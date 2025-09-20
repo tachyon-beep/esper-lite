@@ -233,6 +233,7 @@ async def run_demo() -> None:
             training_run_id="run-demo",
             policy_version="policy-updated",
         )
+        await simic_trainer.publish_metrics(oona, training_run_id="run-demo")
         await simic_trainer.publish_policy_updates(oona)
         await consume_policy_updates(tamiyo_service, oona)
         logger.info(
