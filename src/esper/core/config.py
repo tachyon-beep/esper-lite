@@ -8,11 +8,17 @@ variables (see `.env.example`).
 from __future__ import annotations
 
 from pydantic import Field
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class EsperSettings(BaseSettings):
     """Top-level configuration container for Esper-Lite services."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=True,
+        frozen=True,
+    )
 
     redis_url: str = Field(alias="REDIS_URL", default="redis://localhost:6379/0")
     oona_normal_stream: str = Field(alias="OONA_NORMAL_STREAM", default="oona.normal")
@@ -45,11 +51,5 @@ class EsperSettings(BaseSettings):
     urza_artifact_dir: str = Field(alias="URZA_ARTIFACT_DIR", default="./var/urza/artifacts")
 
     log_level: str = Field(alias="ESP_LOG_LEVEL", default="INFO")
-
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
-        allow_mutation = False
-
 
 __all__ = ["EsperSettings"]

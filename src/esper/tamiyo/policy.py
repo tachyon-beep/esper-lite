@@ -56,6 +56,7 @@ class TamiyoPolicy(nn.Module):
             issued_by="tamiyo",
         )
         command.seed_operation.operation = leyline_pb2.SEED_OP_GERMINATE
+        command.seed_operation.blueprint_id = "bp-demo"
         command.seed_operation.parameters["alpha"] = 0.1
         command.issued_at.FromNanoseconds(packet.timestamp_ns or 0)
         return command

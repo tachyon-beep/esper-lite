@@ -61,6 +61,9 @@ docs = [
   "mkdocs-material>=9.5.20,<10"
 ]
 
+[project.scripts]
+esper-nissa-service = "esper.nissa.service_runner:main"
+
 [project.urls]
 "Homepage" = "https://github.com/esperai/esper-lite"
 "Documentation" = "https://github.com/esperai/esper-lite/docs"

@@ -100,3 +100,7 @@ def test_metrics_endpoint_serves_prometheus() -> None:
     response = client.get("/metrics")
     assert response.status_code == 200
     assert "esper_telemetry_packets_total" in response.text
+
+    health = client.get("/healthz")
+    assert health.status_code == 200
+    assert health.json() == {"status": "ok"}

@@ -2,6 +2,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import torch
+from torch import nn
 
 from esper.karn import BlueprintMetadata, BlueprintTier, KarnCatalog
 from esper.tezzeret import CompileJobConfig, TezzeretCompiler
@@ -54,6 +55,7 @@ def test_blueprint_pipeline_compiles_and_stores() -> None:
         assert response.metadata.blueprint_id == "bp-1"
         assert Path(response.artifact_path).exists()
         artifact = torch.load(response.artifact_path)
-        assert artifact["parameters"]["alpha"] == 0.5
+        assert isinstance(artifact, nn.Module)
+        assert artifact.blueprint_params["alpha"] == 0.5
         stored = library.get("bp-1")
         assert stored is not None

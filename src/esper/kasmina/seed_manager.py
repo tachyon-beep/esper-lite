@@ -73,10 +73,15 @@ class KasminaSeedManager:
         if lifecycle.state == LifecycleState.DORMANT:
             lifecycle.apply(LifecycleEvent.REGISTER)
 
-        lifecycle.apply(LifecycleEvent.GERMINATE)
+        if lifecycle.state == LifecycleState.REGISTERED:
+            lifecycle.apply(LifecycleEvent.GERMINATE)
+        elif lifecycle.state != LifecycleState.GERMINATING:
+            # Already in an active state; skip re-germination
+            pass
         kernel = self._runtime.load_kernel(blueprint_id)
         self._attach_kernel(seed_id, kernel)
-        lifecycle.apply(LifecycleEvent.ACTIVATE)
+        if lifecycle.state != LifecycleState.ACTIVE:
+            lifecycle.apply(LifecycleEvent.ACTIVATE)
 
     def _retire_seed(self, seed_id: str) -> None:
         context = self._seeds.get(seed_id)

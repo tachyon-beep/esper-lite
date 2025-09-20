@@ -43,17 +43,26 @@ Set `REDIS_URL` if you expose Redis on a non-default port.
 - `OONA_NORMAL_STREAM`, `OONA_EMERGENCY_STREAM`, `OONA_TELEMETRY_STREAM`, and `OONA_POLICY_STREAM` define the Redis Streams used for Tolaria system state, Tamiyo telemetry, and Simic policy updates. Defaults are provided in `.env.example`.
 - Nissa exposes Prometheus metrics via the ASGI helper in `src/esper/nissa/server.py`. Run `uvicorn esper.nissa.server:create_app --factory` with a configured `NissaIngestor` to scrape metrics and feed dashboards/alerts.
 
-### Observability Stack (Prometheus + Grafana)
+### Observability Stack (Prometheus + Grafana + Elasticsearch)
 
-Bring up the local observability stack and point it at the Nissa metrics endpoint:
+Bring up the local observability stack and wire it to the Nissa runner:
 
 ```bash
 docker compose -f infra/docker-compose.observability.yml up -d
-# in another shell, run the Nissa metrics server after configuring EsperSettings
-uvicorn esper.nissa.server:create_default_app --factory --host 0.0.0.0 --port 9100
+esper-nissa-service  # in a separate shell
 ```
 
-Prometheus is preconfigured via `infra/prometheus/prometheus.yml` to scrape `localhost:9100/metrics`. Grafana is available on <http://localhost:3000> (default admin/admin). Update dashboards/alerts in Grafana and export them alongside the infra manifests as they evolve.
+The compose file launches Prometheus (host networking), Grafana (port `3000`),
+and a single-node Elasticsearch instance at `http://localhost:9200`. The
+`esper-nissa-service` entry point (also accessible via
+`scripts/run_nissa_service.py`) drains telemetry from Oona and exposes
+`/metrics` and `/healthz` on `http://localhost:9100`.
+
+Prometheus is preconfigured via `infra/prometheus/prometheus.yml` to scrape
+`localhost:9100/metrics`. Grafana ships with provisioning in `infra/grafana/`
+and is available on <http://localhost:3000> (admin/admin). Operational
+procedures and teardown steps live in
+`docs/project/observability_runbook.md`.
 
 ## Repository Layout
 

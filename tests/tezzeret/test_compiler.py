@@ -20,5 +20,5 @@ def test_compiler_persists_artifact() -> None:
         compiler = TezzeretCompiler(config=config)
         path = compiler.compile(metadata, parameters={"alpha": 0.1})
         assert path.exists()
-        payload = torch.load(path)
-        assert payload["parameters"]["alpha"] == 0.1
+        module = torch.load(path)
+        assert module.blueprint_params["alpha"] == 0.1
