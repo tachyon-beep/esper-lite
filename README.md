@@ -64,6 +64,25 @@ and is available on <http://localhost:3000> (admin/admin). Operational
 procedures and teardown steps live in
 `docs/project/observability_runbook.md`.
 
+### Leyline Contracts
+
+- Protobuf definitions live under `contracts/leyline/leyline.proto`.
+- Regenerate Python bindings with:
+
+  ```bash
+  scripts/generate_leyline.py
+  ```
+
+- Validate serialization semantics:
+
+  ```bash
+  pytest tests/leyline/test_serialization.py
+  ESPER_RUN_PERF_TESTS=1 pytest tests/leyline/test_serialization.py -m performance  # optional
+  ```
+
+The generated files are stored in `src/esper/leyline/_generated/` and include
+`.pyi` type stubs for static analysis.
+
 ## Repository Layout
 
 - `src/esper/` — Python packages for Esper subsystems, organised by lifecycle phase.

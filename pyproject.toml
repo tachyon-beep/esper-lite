@@ -102,6 +102,7 @@ testpaths = ["tests"]
 xfail_strict = true
 markers = [
   "integration: tests that require external infrastructure",
+  "performance: performance-sensitive benchmarks",
 ]
 
 [tool.coverage.run]

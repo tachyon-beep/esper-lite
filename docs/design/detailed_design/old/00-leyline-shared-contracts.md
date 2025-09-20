@@ -228,6 +228,13 @@ leyline:
 - [ ] Security review
 - [ ] Production readiness review
 
+### Tooling Notes
+- Python bindings regenerate via `scripts/generate_leyline.py` (requires
+  `grpcio-tools`). Outputs live in `src/esper/leyline/_generated/`.
+- Serialization tests enforce size and latency budgets:
+  `pytest tests/leyline/test_serialization.py` (set `ESPER_RUN_PERF_TESTS=1`
+  to activate performance measurements).
+
 ## History & Context
 
 ### Version History
