@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
 
 import torch
 
@@ -24,28 +23,27 @@ class CompileJobConfig:
     max_retries: int = 1
 
 
-class UrzaArtifactStore(Protocol):
-    """Protocol for Urza artifact persistence."""
-
-    def save_kernel(self, blueprint_id: str, artifact_path: Path) -> None:
-        """Persist the compiled kernel for later retrieval."""
-
-
 class TezzeretCompiler:
     """Stub compiler that fakes torch.compile execution."""
 
-    def __init__(self, artifact_store: UrzaArtifactStore, config: CompileJobConfig) -> None:
-        self._store = artifact_store
+    def __init__(self, config: CompileJobConfig) -> None:
         self._config = config
 
-    def compile(self, metadata: BlueprintMetadata) -> Path:
+    def compile(
+        self,
+        metadata: BlueprintMetadata,
+        parameters: dict[str, float] | None = None,
+    ) -> Path:
         """Compile the blueprint and persist the artifact."""
 
         artifact_path = self._config.artifact_dir / f"{metadata.blueprint_id}.pt"
         artifact_path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save({"blueprint": metadata.blueprint_id}, artifact_path)
-        self._store.save_kernel(metadata.blueprint_id, artifact_path)
+        payload = {
+            "blueprint": metadata.blueprint_id,
+            "parameters": parameters or {},
+        }
+        torch.save(payload, artifact_path)
         return artifact_path
 
 
-__all__ = ["TezzeretCompiler", "CompileJobConfig", "UrzaArtifactStore"]
+__all__ = ["TezzeretCompiler", "CompileJobConfig"]

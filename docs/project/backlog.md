@@ -242,6 +242,11 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
   - Report updated at end of each slice.
   - Final version summarises success criteria and open risks.
 
+## Recent Progress Highlights
+- Tolaria/Tamiyo stream telemetry and field reports through Oona; Nissa ingests those packets and exposes Prometheus metrics via the new ASGI helper.
+- Simic consumes Tamiyo field reports, trains against buffered telemetry, and publishes serialized policy updates that Tamiyo can hot-reload safely.
+- Urza/Karn/Tezzeret blueprint pipeline handles synchronous requests, compiles artifacts, persists them in a SQLite catalog, and provides a runtime loader for Kasmina.
+
 ---
 
 This backlog should be refined during sprint planning; tickets can be split/merged as capacity dictates.

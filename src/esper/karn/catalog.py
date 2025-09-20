@@ -25,6 +25,17 @@ class BlueprintMetadata:
     description: str
     allowed_parameters: dict[str, tuple[float, float]]
 
+    def validate_parameters(self, parameters: dict[str, float]) -> None:
+        for key, bounds in self.allowed_parameters.items():
+            value = parameters.get(key)
+            if value is None:
+                raise ValueError(f"Missing required parameter '{key}'")
+            lower, upper = bounds
+            if not (lower <= float(value) <= upper):
+                raise ValueError(
+                    f"Parameter '{key}'={value} outside bounds [{lower}, {upper}]"
+                )
+
 
 class KarnCatalog:
     """In-memory blueprint metadata registry."""
@@ -43,6 +54,15 @@ class KarnCatalog:
 
     def remove(self, blueprint_id: str) -> None:
         self._catalog.pop(blueprint_id, None)
+
+    def validate_request(
+        self, blueprint_id: str, parameters: dict[str, float]
+    ) -> BlueprintMetadata:
+        metadata = self.get(blueprint_id)
+        if metadata is None:
+            raise KeyError(f"Blueprint '{blueprint_id}' not found")
+        metadata.validate_parameters(parameters)
+        return metadata
 
 
 __all__ = ["BlueprintMetadata", "BlueprintTier", "KarnCatalog"]
