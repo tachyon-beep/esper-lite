@@ -1,4 +1,7 @@
+from io import BytesIO
+
 import pytest
+import torch
 from fakeredis.aioredis import FakeRedis
 
 from esper.leyline import leyline_pb2
@@ -100,8 +103,12 @@ async def test_tamiyo_consume_policy_updates() -> None:
         training_run_id="run-1",
         tamiyo_policy_version="policy-v42",
     )
+    buffer = BytesIO()
+    torch.save(service._policy.state_dict(), buffer)  # type: ignore[attr-defined]
+    update.payload = buffer.getvalue()
     await client.publish_policy_update(update)
     await client.ensure_consumer_group()
     await service.consume_policy_updates(client)
     assert service.policy_updates
+    assert service.policy_updates[0].tamiyo_policy_version == "policy-v42"
     await client.close()

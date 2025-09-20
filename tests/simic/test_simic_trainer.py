@@ -81,6 +81,7 @@ def test_simic_create_policy_update() -> None:
         policy_version="policy-v2",
     )
     assert update.tamiyo_policy_version == "policy-v2"
+    assert update.payload
     assert trainer.policy_updates
 
 

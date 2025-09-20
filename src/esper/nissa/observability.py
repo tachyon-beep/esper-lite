@@ -105,5 +105,11 @@ class NissaIngestor:
             block_ms=block_ms,
         )
 
+    @property
+    def registry(self) -> CollectorRegistry:
+        """Expose the Prometheus registry for HTTP export."""
+
+        return self._registry
+
 
 __all__ = ["NissaIngestor", "NissaIngestorConfig"]

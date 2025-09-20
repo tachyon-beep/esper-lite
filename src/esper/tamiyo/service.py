@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from io import BytesIO
 from typing import TYPE_CHECKING
+
+import torch
 
 from esper.core import TelemetryEvent, TelemetryMetric, build_telemetry_packet
 from esper.leyline import leyline_pb2
@@ -155,6 +158,10 @@ class TamiyoService:
 
         if update.tamiyo_policy_version:
             self._policy_version = update.tamiyo_policy_version
+        if update.payload:
+            state_buffer = BytesIO(update.payload)
+            state_dict = torch.load(state_buffer, map_location="cpu")
+            self._policy.load_state_dict(state_dict)
         self._policy_updates.append(update)
 
     async def consume_policy_updates(

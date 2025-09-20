@@ -23,7 +23,7 @@ Esper-Lite is a streamlined morphogenetic control stack centred on a PyTorch 2.8
    ```
 
 3. **Launch local infrastructure (placeholder)**
-   - Docker compose definitions will live under `infra/` (see backlog TKT-003).
+   - Docker compose definitions live under `infra/`. Use `docker compose -f infra/docker-compose.redis.yml up -d` to start Redis bound to the host.
    - Redis, Prometheus, and Elasticsearch endpoints are documented in `docs/project/implementation_plan.md`.
 
 ### Redis for Oona integration tests
@@ -33,9 +33,15 @@ Spin up the local Redis instance used by the Oona integration suite:
 ```bash
 docker compose -f infra/docker-compose.redis.yml up -d
 pytest -m integration tests/oona/test_messaging_integration.py
+docker compose -f infra/docker-compose.redis.yml down
 ```
 
 Set `REDIS_URL` if you expose Redis on a non-default port.
+
+### Telemetry & Policy Streams
+
+- `OONA_NORMAL_STREAM`, `OONA_EMERGENCY_STREAM`, `OONA_TELEMETRY_STREAM`, and `OONA_POLICY_STREAM` define the Redis Streams used for Tolaria system state, Tamiyo telemetry, and Simic policy updates. Defaults are provided in `.env.example`.
+- Nissa exposes Prometheus metrics via the ASGI helper in `src/esper/nissa/server.py`. Run `uvicorn esper.nissa.server:create_app --factory` with a configured `NissaIngestor` to scrape metrics and feed dashboards/alerts.
 
 ## Repository Layout
 

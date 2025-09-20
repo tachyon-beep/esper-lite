@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from io import BytesIO
 from typing import TYPE_CHECKING
 
 import torch
@@ -83,6 +84,7 @@ class SimicTrainer:
         policy_id: str,
         training_run_id: str,
         policy_version: str,
+        policy_state: dict | None = None,
     ) -> leyline_pb2.PolicyUpdate:
         """Create a policy update protobuf for downstream consumption."""
 
@@ -93,6 +95,10 @@ class SimicTrainer:
             tamiyo_policy_version=policy_version,
         )
         update.issued_at.FromDatetime(datetime.now(tz=UTC))
+        state_dict = policy_state or self._policy.state_dict()
+        buffer = BytesIO()
+        torch.save(state_dict, buffer)
+        update.payload = buffer.getvalue()
         self._policy_updates.append(update)
         return update
 
