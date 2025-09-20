@@ -15,23 +15,32 @@ generated_by: scripts/split_paper.py
 ## 2.1 Morphogenetic Architecture
 The term morphogenetic architecture refers to a neural network design paradigm in which a static, frozen model is permitted to undergo controlled, localised structural evolution through the activation and training of embedded seed modules. These seeds act as encapsulated loci of potential development—capable of instantiating new parameters or substructures that expand or enhance the host model’s functionality, without modifying its pre-existing weights or topology.
 This architectural strategy draws loose inspiration from biological morphogenesis, where structures develop from localised triggers and encoded developmental rules rather than global template changes. However, the intent here is strictly functional: enabling targeted increases in representational or behavioural capacity under strict global constraints.
-Key features of a morphogenetic architecture include:
-• A frozen base: a pretrained, static model in which most parameters and structures are immutable post-deployment.
-• One or more seed modules embedded at specific sites in the architecture, typically alongside bottlenecks or performance-critical pathways.
-• A germination policy that defines when and how a seed is allowed to activate and instantiate additional structure.
-• A training regime constrained to operate only within the seed’s scope: newly germinated parameters may be optimised, but no upstream or downstream weights may be modified.
+Key features of a morphogenetic architecture:
+
+| Feature             | Description                                                                                                           |
+|---------------------|-----------------------------------------------------------------------------------------------------------------------|
+| Frozen base         | Pre‑trained, static model; most parameters and structures are immutable post‑deployment                               |
+| Embedded seeds      | One or more seed modules at specific sites (e.g., bottlenecks or performance‑critical pathways)                       |
+| Germination policy  | Rules defining when and how a seed may activate and instantiate additional structure                                   |
+| Local training only | Optimisation constrained to the seed’s scope; newly germinated parameters may be trained; base weights remain frozen   |
 This design is intended to preserve operational consistency, reproducibility, and safety guarantees while still allowing for adaptive behaviour and capacity extension when required.
 ## 2.2 The Role of the Seed
-A seed is the atomic unit of morphogenetic change. It is a tensor or module—initialised but untrained—embedded within a frozen host network and designed to remain inert unless explicitly triggered by the surrounding context. Seeds are responsible for instantiating additional structure (e.g., a sublayer, micro-network, or branching path) in response to local signals, such as:
-• High task loss or persistent prediction error,
-• Activation bottlenecks (e.g., low variance, vanishing signal),
-• Failure to meet minimal representational thresholds.
+A seed is the atomic unit of morphogenetic change. It is a tensor or module—initialised but untrained—embedded within a frozen host network and designed to remain inert unless explicitly triggered by the surrounding context. Seeds instantiate additional structure (e.g., sub‑layer, micro‑network, branching path) in response to local signals:
+
+| Trigger Signal                | Example                                                                 |
+|-------------------------------|-------------------------------------------------------------------------|
+| High task loss/plateau        | Persistent prediction error                                             |
+| Activation bottleneck         | Low variance, vanishing signal                                          |
+| Minimal representational fail | Features fail basic separability thresholds                             |
 Once triggered, a seed germinates, instantiating its internal structure and enabling gradient flow within its local scope. In most designs, the seed’s internal structure begins near-identity (e.g., skip connections or reparameterised no-ops) to minimise disruption, and gradually evolves towards a meaningful learned transformation.
-A seed may encode one or more of the following:
-• Structural blueprint – topology and layer types of the module to be instantiated.
-• Parameter initialisation – specific weight values or parameter distributions.
-• Control policy – rules for when and how germination occurs.
-• Loss contract – local optimisation targets that define what success means for the seed (e.g., reducing residual error, increasing separability).
+A seed may encode:
+
+| Element                    | Description                                                                                          |
+|---------------------------|------------------------------------------------------------------------------------------------------|
+| Structural blueprint      | Topology and layer types of the module to be instantiated                                            |
+| Parameter initialisation  | Specific weight values or parameter distributions                                                    |
+| Control policy            | Rules for when and how germination occurs                                                            |
+| Loss contract             | Local optimisation targets that define success (e.g., reduce residual error, increase separability)  |
 In practice, the seed interface must be carefully constructed to ensure compatibility with upstream and downstream signals, preserve input-output dimensionality, and avoid gradient leakage or interference across model boundaries.
 ## 2.3 Core Constraints and System Tensions
 The seed-based approach introduces a set of intentional constraints and unresolved tensions that shape its design space:
