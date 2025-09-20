@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import os
 import time
+import uuid
 
 import pytest
 
+from hypothesis import given
+from hypothesis import strategies as st
+
+from esper.core.telemetry import TelemetryMetric, TelemetryEvent, build_telemetry_packet
 from esper.leyline import leyline_pb2
 
 
@@ -74,6 +79,32 @@ def _build_field_report() -> leyline_pb2.FieldReport:
     return report
 
 
+def _build_telemetry_packet() -> leyline_pb2.TelemetryPacket:
+    metrics = [
+        TelemetryMetric("tolaria.training.loss", 0.456, unit="loss"),
+        TelemetryMetric("tolaria.training.latency_ms", 17.2, unit="ms"),
+        TelemetryMetric("kasmina.isolation.violations", 0.0, unit="count"),
+        TelemetryMetric("tamiyo.validation_loss", 0.321, unit="loss"),
+    ]
+    events = [
+        TelemetryEvent(
+            description="seed_operation",
+            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+            attributes={"seed_id": "seed-1"},
+        )
+    ]
+    return build_telemetry_packet(
+        packet_id="telemetry-sample",
+        source="tolaria",
+        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+        metrics=metrics,
+        events=events,
+        health_status=leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY,
+        health_summary="stable",
+        health_indicators={"epoch": "3"},
+    )
+
+
 def test_system_state_roundtrip_size() -> None:
     packet = _build_system_state()
     payload = packet.SerializeToString()
@@ -98,6 +129,58 @@ def test_field_report_roundtrip() -> None:
     clone = leyline_pb2.FieldReport()
     clone.ParseFromString(payload)
     assert clone == report
+
+
+def test_telemetry_packet_roundtrip_size() -> None:
+    packet = _build_telemetry_packet()
+    payload = packet.SerializeToString()
+    clone = leyline_pb2.TelemetryPacket()
+    clone.ParseFromString(payload)
+    assert clone == packet
+    assert len(payload) < 280
+
+
+_metric_names = (
+    "tolaria.training.loss",
+    "tolaria.training.accuracy",
+    "tolaria.training.latency_ms",
+    "kasmina.seeds.active",
+    "kasmina.isolation.violations",
+    "tamiyo.validation_loss",
+    "tamiyo.loss_delta",
+    "tamiyo.conservative_mode",
+    "tamiyo.blueprint.risk",
+)
+
+
+@given(
+    st.lists(
+        st.builds(
+            TelemetryMetric,
+            name=st.sampled_from(_metric_names),
+            value=st.floats(min_value=-10_000, max_value=10_000, allow_nan=False, allow_infinity=False),
+            unit=st.sampled_from(["loss", "ms", "count", "ratio", "bool", "delta"]),
+        ),
+        min_size=1,
+        max_size=4,
+    )
+)
+def test_telemetry_packet_property_roundtrip(metrics: list[TelemetryMetric]) -> None:
+    packet_id = f"telemetry-prop-{uuid.uuid4()}"
+    packet = build_telemetry_packet(
+        packet_id=packet_id,
+        source="tamiyo",
+        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+        metrics=metrics,
+    )
+    payload = packet.SerializeToString()
+    clone = leyline_pb2.TelemetryPacket()
+    clone.ParseFromString(payload)
+    assert len(clone.metrics) == len(metrics)
+    for proto_metric, metric in zip(clone.metrics, metrics, strict=True):
+        assert proto_metric.name == metric.name
+        assert proto_metric.value == pytest.approx(metric.value)
+        assert proto_metric.unit == metric.unit
 
 
 @pytest.mark.performance

@@ -9,14 +9,14 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from time import time_ns
+from time import perf_counter, time_ns
 from typing import TYPE_CHECKING, Protocol
 
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
-from esper.core import TelemetryMetric, build_telemetry_packet
+from esper.core import TelemetryEvent, TelemetryMetric, build_telemetry_packet
 from esper.leyline import leyline_pb2
 
 if TYPE_CHECKING:
@@ -57,6 +57,7 @@ class EpochStats:
     sample_count: int = 0
     correct: int = 0
     gradient_norm_sum: float = 0.0
+    epoch_duration_ms: float = 0.0
 
     @property
     def average_loss(self) -> float:
@@ -69,6 +70,12 @@ class EpochStats:
     @property
     def average_gradient_norm(self) -> float:
         return self.gradient_norm_sum / self.sample_count if self.sample_count else 0.0
+
+    @property
+    def throughput_samples_per_s(self) -> float:
+        if self.epoch_duration_ms <= 0.0:
+            return 0.0
+        return self.sample_count / (self.epoch_duration_ms / 1000.0)
 
 
 class TolariaTrainer:
@@ -100,7 +107,9 @@ class TolariaTrainer:
         for epoch in range(self._config.max_epochs):
             self._current_epoch = epoch
             self._model.train()
+            epoch_start = perf_counter()
             stats = self._train_single_epoch()
+            stats.epoch_duration_ms = (perf_counter() - epoch_start) * 1000.0
             state = self._emit_state(epoch, stats)
             telemetry = self._emit_telemetry(state, stats)
             self._telemetry_packets.append(telemetry)
@@ -111,7 +120,7 @@ class TolariaTrainer:
 
         final_stats = EpochStats()
         state = self._emit_state(self._config.max_epochs, final_stats, completion=True)
-        telemetry = self._emit_telemetry(state, final_stats)
+        telemetry = self._emit_telemetry(state, final_stats, completion=True)
         self._telemetry_packets.append(telemetry)
         self._state_packets.append(state)
         yield state
@@ -176,6 +185,10 @@ class TolariaTrainer:
         packet.training_metrics["loss"] = stats.average_loss
         packet.training_metrics["accuracy"] = stats.accuracy
         packet.training_metrics["gradient_norm"] = stats.average_gradient_norm
+        if stats.epoch_duration_ms:
+            packet.training_metrics["latency_ms"] = stats.epoch_duration_ms
+        if stats.throughput_samples_per_s:
+            packet.training_metrics["samples_per_s"] = stats.throughput_samples_per_s
         hardware = packet.hardware_context
         hardware.device_type = "cuda" if torch.cuda.is_available() else "cpu"
         hardware.device_id = "0"
@@ -194,23 +207,58 @@ class TolariaTrainer:
         self,
         state: leyline_pb2.SystemStatePacket,
         stats: EpochStats,
+        *,
+        completion: bool = False,
     ) -> leyline_pb2.TelemetryPacket:
         """Build a telemetry packet derived from the state snapshot."""
 
         metrics = [
-            TelemetryMetric("training.loss", stats.average_loss, unit="loss"),
-            TelemetryMetric("training.accuracy", stats.accuracy, unit="ratio"),
+            TelemetryMetric("tolaria.training.loss", stats.average_loss, unit="loss"),
+            TelemetryMetric("tolaria.training.accuracy", stats.accuracy, unit="ratio"),
+            TelemetryMetric("tolaria.training.latency_ms", stats.epoch_duration_ms, unit="ms"),
             TelemetryMetric(
-                "training.gradient_norm",
-                stats.average_gradient_norm,
-                unit="l2_norm",
+                "tolaria.seeds.active",
+                float(len(state.seed_states)),
+                unit="count",
             ),
         ]
+
+        events: list[TelemetryEvent] = []
+        health_status = leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY
+        health_summary = "stable"
+        health_indicators = {"epoch": str(state.current_epoch)}
+
+        if stats.epoch_duration_ms > 18.0:
+            events.append(
+                TelemetryEvent(
+                    description="latency_high",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={},
+                )
+            )
+            health_status = leyline_pb2.HealthStatus.HEALTH_STATUS_DEGRADED
+            health_summary = "latency_high"
+
+        if stats.sample_count == 0 and not completion:
+            events.append(
+                TelemetryEvent(
+                    description="zero_samples",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_ERROR,
+                    attributes={"epoch": str(state.current_epoch)},
+                )
+            )
+            health_status = leyline_pb2.HealthStatus.HEALTH_STATUS_UNHEALTHY
+            health_summary = "zero_samples"
+
         telemetry = build_telemetry_packet(
             packet_id=state.packet_id,
             source="tolaria",
             level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
             metrics=metrics,
+            events=events,
+            health_status=health_status,
+            health_summary=health_summary,
+            health_indicators=health_indicators,
         )
         return telemetry
 

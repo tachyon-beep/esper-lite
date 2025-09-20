@@ -6,12 +6,13 @@ Actual kernel grafting logic will land in Slice 1 (see backlog TKT-102).
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Protocol
-import logging
 
 from torch import nn
 
+from esper.core import TelemetryEvent, TelemetryMetric, build_telemetry_packet
 from esper.leyline import leyline_pb2
 
 from .lifecycle import KasminaLifecycle, LifecycleEvent, LifecycleState
@@ -53,10 +54,15 @@ class KasminaSeedManager:
         self._fallback_blueprint_id = fallback_blueprint_id
         self._last_latency_ms: float = 0.0
         self._last_fallback_used: bool = False
+        self._isolation_violations: int = 0
+        self._telemetry_packets: list[leyline_pb2.TelemetryPacket] = []
+        self._telemetry_counter: int = 0
 
     def handle_command(self, command: leyline_pb2.AdaptationCommand) -> None:
         """Dispatch a Tamiyo command to the appropriate lifecycle handler."""
 
+        events: list[TelemetryEvent] = []
+        command_label = leyline_pb2.CommandType.Name(command.command_type)
         if command.command_type == leyline_pb2.COMMAND_SEED and command.HasField("seed_operation"):
             raw_seed_id = (
                 command.target_seed_id
@@ -65,14 +71,47 @@ class KasminaSeedManager:
             seed_id = str(raw_seed_id)
             blueprint_id = command.seed_operation.blueprint_id
             operation = command.seed_operation.operation
+            events.append(
+                TelemetryEvent(
+                    description="seed_operation",
+                    attributes={
+                        "command_type": command_label,
+                        "operation": leyline_pb2.SeedOperation.Name(operation),
+                        "seed_id": seed_id,
+                        "blueprint_id": blueprint_id,
+                    },
+                )
+            )
             if operation == leyline_pb2.SEED_OP_GERMINATE:
                 self._graft_seed(seed_id, blueprint_id)
             elif operation in (leyline_pb2.SEED_OP_CULL, leyline_pb2.SEED_OP_CANCEL):
                 self._retire_seed(seed_id)
         elif command.command_type == leyline_pb2.COMMAND_OPTIMIZER:
             self._log_adjustment(command)
+            optimizer_id = ""
+            if command.HasField("optimizer_adjustment"):
+                optimizer_id = command.optimizer_adjustment.optimizer_id
+            events.append(
+                TelemetryEvent(
+                    description="optimizer_adjust",
+                    attributes={
+                        "command_type": command_label,
+                        "optimizer_id": optimizer_id,
+                    },
+                )
+            )
         else:
             self._noop(command)
+            events.append(
+                TelemetryEvent(
+                    description="unsupported_command",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"command_type": command_label},
+                )
+            )
+
+        if events:
+            self._emit_telemetry(events=events)
 
     def seeds(self) -> dict[str, SeedContext]:
         """Return the tracked seed contexts."""
@@ -149,6 +188,106 @@ class KasminaSeedManager:
     def _noop(self, command: leyline_pb2.AdaptationCommand) -> None:
         _ = command
 
+    def _emit_telemetry(
+        self,
+        *,
+        events: list[TelemetryEvent] | None = None,
+        packet_id: str | None = None,
+    ) -> None:
+        packet = self.build_telemetry_packet(
+            packet_id=packet_id,
+            events_override=events,
+        )
+        self._telemetry_packets.append(packet)
+        self._telemetry_counter += 1
+
+    def build_telemetry_packet(
+        self,
+        *,
+        packet_id: str | None = None,
+        events_override: list[TelemetryEvent] | None = None,
+    ) -> leyline_pb2.TelemetryPacket:
+        metrics = [
+            TelemetryMetric(
+                "kasmina.seeds.active",
+                float(len(self._seeds)),
+                unit="count",
+            ),
+            TelemetryMetric(
+                "kasmina.isolation.violations",
+                float(self._isolation_violations),
+                unit="count",
+            ),
+        ]
+        if not self._last_fallback_used and self._last_latency_ms:
+            metrics.append(
+                TelemetryMetric(
+                    "kasmina.kernel.fetch_latency_ms",
+                    self._last_latency_ms,
+                    unit="ms",
+                )
+            )
+
+        events = list(events_override or [])
+        if self._last_fallback_used:
+            events.append(
+                TelemetryEvent(
+                    description="fallback_applied",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"lat": f"{self._last_latency_ms:.1f}"},
+                )
+            )
+        if self._isolation_violations:
+            events.append(
+                TelemetryEvent(
+                    description="isolation_violations",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={
+                        "violations": str(self._isolation_violations),
+                    },
+                )
+            )
+
+        health_status = leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY
+        health_summary = "nominal"
+        if self._isolation_violations:
+            health_status = leyline_pb2.HealthStatus.HEALTH_STATUS_UNHEALTHY
+            health_summary = "violations"
+        elif self._last_fallback_used or self._last_latency_ms > self._latency_budget_ms:
+            health_status = leyline_pb2.HealthStatus.HEALTH_STATUS_DEGRADED
+            health_summary = "fallback" if self._last_fallback_used else "latency_high"
+
+        health_indicators = {"seeds": str(len(self._seeds))}
+
+        identifier = packet_id or f"kasmina-telemetry-{self._telemetry_counter}"
+        return build_telemetry_packet(
+            packet_id=identifier,
+            source="kasmina",
+            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+            metrics=metrics,
+            events=events,
+            health_status=health_status,
+            health_summary=health_summary,
+            health_indicators=health_indicators,
+        )
+
+    def record_isolation_violation(self, seed_id: str | None = None) -> None:
+        """Increment isolation violation counters and emit telemetry."""
+
+        self._isolation_violations += 1
+        attributes = {"violations": str(self._isolation_violations)}
+        if seed_id:
+            attributes["seed_id"] = seed_id
+        self._emit_telemetry(
+            events=[
+                TelemetryEvent(
+                    description="violation_recorded",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes=attributes,
+                )
+            ]
+        )
+
     @property
     def last_fetch_latency_ms(self) -> float:
         return self._last_latency_ms
@@ -156,6 +295,18 @@ class KasminaSeedManager:
     @property
     def last_fallback_used(self) -> bool:
         return self._last_fallback_used
+
+    @property
+    def telemetry_packets(self) -> list[leyline_pb2.TelemetryPacket]:
+        """Return buffered telemetry packets for inspection/testing."""
+
+        return list(self._telemetry_packets)
+
+    @property
+    def isolation_violations(self) -> int:
+        """Expose cumulative isolation violation count."""
+
+        return self._isolation_violations
 
 
 __all__ = ["KasminaSeedManager", "BlueprintRuntime", "SeedContext"]

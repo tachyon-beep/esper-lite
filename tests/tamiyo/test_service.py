@@ -47,7 +47,7 @@ def test_conservative_mode_overrides_directive(tmp_path) -> None:
     command = service.evaluate_epoch(packet)
     assert command.command_type == leyline_pb2.COMMAND_PAUSE
     telemetry = service.telemetry_packets[-1]
-    assert any(event.description == "Tamiyo pause triggered" for event in telemetry.events)
+    assert any(event.description == "pause_triggered" for event in telemetry.events)
 
 
 def test_field_report_generation(tmp_path) -> None:

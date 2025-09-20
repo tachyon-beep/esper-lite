@@ -94,12 +94,9 @@ class TamiyoService:
                 command.annotations.setdefault("risk_reason", "blueprint_high_risk")
                 risk_event.append(
                     TelemetryEvent(
-                        description="Tamiyo quarantined blueprint",
+                        description="bp_quarantine",
                         level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                        attributes={
-                            "tier": blueprint_info["tier"],
-                            "risk_score": f"{blueprint_info['risk']:.2f}",
-                        },
+                        attributes={"tier": blueprint_info["tier"]},
                     )
                 )
 
@@ -108,17 +105,16 @@ class TamiyoService:
             and loss_delta > self._risk.max_loss_spike
         ):
             command.command_type = leyline_pb2.COMMAND_PAUSE
-            command.annotations["risk_reason"] = (
-                "conservative_mode"
-                if self._risk.conservative_mode
-                else f"loss_spike:{loss_delta:.6f}"
-            )
+            if self._risk.conservative_mode:
+                command.annotations["risk_reason"] = "conservative_mode"
+            else:
+                command.annotations["risk_reason"] = "loss_spike"
             risk_event.append(
                 TelemetryEvent(
-                    description="Tamiyo pause triggered",
+                    description="pause_triggered",
                     level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
                     attributes={
-                        "loss_delta": f"{loss_delta:.6f}",
+                        "loss_delta": f"{loss_delta:.3f}",
                         "conservative": str(self._risk.conservative_mode).lower(),
                     },
                 )
@@ -127,8 +123,11 @@ class TamiyoService:
         metrics = [
             TelemetryMetric("tamiyo.validation_loss", state.validation_loss, unit="loss"),
             TelemetryMetric("tamiyo.loss_delta", loss_delta, unit="loss"),
-            TelemetryMetric("tamiyo.policy.action", last_action.get("action", 0.0), unit="index"),
-            TelemetryMetric("tamiyo.policy.param_delta", last_action.get("param_delta", 0.0), unit="delta"),
+            TelemetryMetric(
+                "tamiyo.conservative_mode",
+                1.0 if self._risk.conservative_mode else 0.0,
+                unit="bool",
+            ),
         ]
         if blueprint_info:
             metrics.append(
@@ -138,23 +137,64 @@ class TamiyoService:
                     unit="score",
                 )
             )
-            metrics.append(
-                TelemetryMetric(
-                    "tamiyo.blueprint.stage",
-                    float(blueprint_info["stage"]),
-                    unit="stage",
-                )
-            )
         telemetry = build_telemetry_packet(
             packet_id=state.packet_id or "tamiyo-telemetry",
             source="tamiyo",
             level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
             metrics=metrics,
             events=risk_event,
+            health_status=self._derive_health_status(command, risk_event),
+            health_summary=self._derive_health_summary(command, risk_event, loss_delta),
+            health_indicators=self._build_health_indicators(loss_delta, blueprint_info),
         )
         self._telemetry_packets.append(telemetry)
         self._last_validation_loss = state.validation_loss
         return command
+
+    def _derive_health_status(
+        self,
+        command: leyline_pb2.AdaptationCommand,
+        events: list[TelemetryEvent],
+    ) -> leyline_pb2.HealthStatus:
+        if any(event.level == leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL for event in events):
+            return leyline_pb2.HealthStatus.HEALTH_STATUS_CRITICAL
+        if command.command_type == leyline_pb2.COMMAND_PAUSE:
+            return leyline_pb2.HealthStatus.HEALTH_STATUS_DEGRADED
+        if any(event.level == leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING for event in events):
+            return leyline_pb2.HealthStatus.HEALTH_STATUS_DEGRADED
+        return leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY
+
+    def _derive_health_summary(
+        self,
+        command: leyline_pb2.AdaptationCommand,
+        events: list[TelemetryEvent],
+        loss_delta: float,
+    ) -> str:
+        if command.command_type == leyline_pb2.COMMAND_PAUSE:
+            reason = command.annotations.get("risk_reason", "pause")
+            if reason == "blueprint_high_risk":
+                return "bp_high_risk"
+            return reason
+        if events:
+            return events[-1].description
+        if loss_delta > self._risk.max_loss_spike:
+            return "loss_spike"
+        return "stable"
+
+    def _build_health_indicators(
+        self,
+        loss_delta: float,
+        blueprint_info: dict[str, float | str | bool | int] | None,
+    ) -> dict[str, str]:
+        indicators = {
+            "policy": self._policy_version[:8],
+            "mode": "1" if self._risk.conservative_mode else "0",
+        }
+        if blueprint_info:
+            tier = blueprint_info.get("tier")
+            if tier is not None:
+                indicators["tier"] = str(tier)
+        return indicators
 
     def generate_field_report(
         self,

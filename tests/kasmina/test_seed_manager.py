@@ -50,3 +50,28 @@ def test_seed_manager_warns_on_latency() -> None:
     manager.handle_command(command)
     assert runtime.calls == ["BP002", "BP001"]
     assert manager.last_fetch_latency_ms >= 25.0
+
+
+def test_seed_manager_emits_telemetry_for_commands() -> None:
+    runtime = _Runtime(latency=5.0)
+    manager = KasminaSeedManager(runtime, latency_budget_ms=10.0, fallback_blueprint_id="BP001")
+    command = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP010")
+    manager.handle_command(command)
+
+    packets = manager.telemetry_packets
+    assert packets, "kasmina should emit telemetry after handling a command"
+    packet = packets[-1]
+    metric_names = {metric.name for metric in packet.metrics}
+    assert "kasmina.seeds.active" in metric_names
+    assert "kasmina.kernel.fetch_latency_ms" in metric_names
+    assert packet.source_subsystem == "kasmina"
+    assert any(event.description == "seed_operation" for event in packet.events)
+
+
+def test_record_isolation_violation_updates_health() -> None:
+    runtime = _Runtime()
+    manager = KasminaSeedManager(runtime)
+    manager.record_isolation_violation("seed-2")
+    packet = manager.telemetry_packets[-1]
+    assert any(metric.name == "kasmina.isolation.violations" and metric.value >= 1.0 for metric in packet.metrics)
+    assert packet.system_health.status == leyline_pb2.HealthStatus.HEALTH_STATUS_UNHEALTHY

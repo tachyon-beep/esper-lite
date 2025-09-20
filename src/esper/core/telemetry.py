@@ -28,6 +28,7 @@ class TelemetryEvent:
     description: str
     level: leyline_pb2.TelemetryLevel = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO
     attributes: Mapping[str, str] = field(default_factory=dict)
+    event_id: str | None = None
 
 
 def build_telemetry_packet(
@@ -39,6 +40,8 @@ def build_telemetry_packet(
     events: Iterable[TelemetryEvent] | None = None,
     health_status: leyline_pb2.HealthStatus = leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY,
     health_summary: str = "",
+    health_indicators: Mapping[str, str] | None = None,
+    timestamp: datetime | None = None,
 ) -> leyline_pb2.TelemetryPacket:
     """Construct a `TelemetryPacket` populated with metrics and optional events."""
 
@@ -48,7 +51,7 @@ def build_telemetry_packet(
         level=level,
     )
     ts = timestamp_pb2.Timestamp()
-    ts.FromDatetime(datetime.now(tz=UTC))
+    ts.FromDatetime(timestamp or datetime.now(tz=UTC))
     telemetry.timestamp.CopyFrom(ts)
 
     for metric in metrics:
@@ -60,9 +63,9 @@ def build_telemetry_packet(
         for key, value in metric.attributes.items():
             point.attributes[key] = value
 
-    for event in events or ():
+    for index, event in enumerate(events or (), start=1):
         entry = telemetry.events.add()
-        entry.event_id = f"evt-{telemetry.events.__len__()}"
+        entry.event_id = event.event_id or f"evt-{index}"
         entry.description = event.description
         entry.level = event.level
         for key, value in event.attributes.items():
@@ -70,6 +73,9 @@ def build_telemetry_packet(
 
     telemetry.system_health.status = health_status
     telemetry.system_health.summary = health_summary
+    if health_indicators:
+        for key, value in health_indicators.items():
+            telemetry.system_health.indicators[key] = value
     return telemetry
 
 

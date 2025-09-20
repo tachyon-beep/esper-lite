@@ -185,6 +185,80 @@ message TelemetryPacket {
 }
 ```
 
+### Telemetry Packet Catalog
+
+Leyline telemetry adheres to the “Option B” budget (<280 B, ≤4 allocations, <80 µs) while
+capturing the observability signals mandated in the legacy subsystem designs
+(`old/01-tolaria-unified-design.md`, `old/02-kasmina-unified-design.md`,
+`old/03-tamiyo-unified-design.md`, `old/10-nissa-unified-design.md`). The following
+metrics are emitted today:
+
+| Subsystem | Metric(s) | Notes |
+| --- | --- | --- |
+| Tolaria | `tolaria.training.loss`, `tolaria.training.accuracy`, `tolaria.training.latency_ms`, `tolaria.seeds.active` | Latency is compared against the 18 ms epoch budget and drives the `training_latency_high` alert. Additional epoch diagnostics live in the richer `SystemStatePacket` payload. |
+| Kasmina | `kasmina.seeds.active`, `kasmina.isolation.violations` (+ `kasmina.kernel.fetch_latency_ms` when no fallback is in play) | Isolation violations and fallback fetches raise warning events (`fallback_applied`, `isolation_violations`) that bubble into Nissa’s `kasmina_isolation_violation` alert while keeping each packet within the Option B size budget. |
+| Tamiyo | `tamiyo.validation_loss`, `tamiyo.loss_delta`, `tamiyo.conservative_mode`, `tamiyo.blueprint.risk` | Risk-induced pauses (loss spikes, high-risk blueprints, conservative mode) are surfaced via succinct telemetry events (`pause_triggered`, `bp_quarantine`) and degrade the health status to `DEGRADED`. |
+| Simic (context) | `simic.training.loss`, `simic.training.reward`, `simic.value.loss`, `simic.training.iterations`, `simic.policy.loss`, `simic.param.loss`, `simic.policy.entropy`, `simic.validation.pass` | Included for completeness; emitted by the PPO trainer and ingested by Nissa for dashboards. |
+
+`TelemetryEvent` entries accompany the metrics with subsystem-specific context (e.g.
+“Kasmina handled seed operation”, “Tolaria epoch latency above budget”). The
+`SystemHealth` section is populated using the same logic—`status` escalates to
+`DEGRADED` when budgets are breached and to `CRITICAL` when Tamiyo applies hard risk
+stops.
+
+Examples (JSON, after protobuf decoding):
+
+```json
+{
+  "packet_id": "training-run-epoch-1",
+  "source_subsystem": "tolaria",
+  "metrics": [
+    {"name": "tolaria.training.loss", "value": 0.342, "unit": "loss"},
+    {"name": "tolaria.training.accuracy", "value": 0.91, "unit": "ratio"},
+    {"name": "tolaria.training.latency_ms", "value": 16.8, "unit": "ms"},
+    {"name": "tolaria.seeds.active", "value": 2.0, "unit": "count"}
+  ],
+  "events": [
+    {
+      "description": "latency_high",
+      "level": "WARNING"
+    }
+  ],
+  "system_health": {
+    "status": "DEGRADED",
+    "summary": "latency_high",
+    "indicators": {"epoch": "1"}
+  }
+}
+```
+
+```json
+{
+  "packet_id": "kasmina-telemetry-3",
+  "source_subsystem": "kasmina",
+  "metrics": [
+    {"name": "kasmina.seeds.active", "value": 1.0, "unit": "count"},
+    {"name": "kasmina.isolation.violations", "value": 1.0, "unit": "count"}
+  ],
+  "events": [
+    {
+      "description": "isolation_violations",
+      "level": "WARNING",
+      "attributes": {"violations": "1"}
+    }
+  ],
+  "system_health": {
+    "status": "UNHEALTHY",
+    "summary": "violations",
+    "indicators": {
+      "seeds": "1"
+    }
+  }
+}
+```
+
+These examples provide the canonical payloads used in tests (`tests/leyline/test_serialization.py`) to enforce the Option B budgets.
+
 Field reports feed Simic’s replay buffer with bounded payloads (<280 B, ≤4 allocations):
 ```protobuf
 message FieldReport {

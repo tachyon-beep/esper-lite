@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -58,13 +59,44 @@ def test_forge_resumes_from_wal(tmp_path) -> None:
         return False
 
     forge, library, compiler, wal_path = _setup(tmp_path, catalog, error_sampler=sampler, max_retries=0)
+    first_meta = next(iter(catalog.all()))
 
     with pytest.raises(RuntimeError):
         forge.run()
     assert wal_path.exists()
-    pending = wal_path.read_text(encoding="utf-8")
-    assert "BP001" in pending or "BP" in pending
+    pending_payload = json.loads(wal_path.read_text(encoding="utf-8"))
+    assert first_meta.blueprint_id in pending_payload.get("pending", [])
+
+    compiler_wal = compiler._wal_path  # type: ignore[attr-defined]
+    assert compiler_wal.exists()
+    compiler_record = json.loads(compiler_wal.read_text(encoding="utf-8"))
+    assert compiler_record.get("blueprint_id") == first_meta.blueprint_id
 
     forge.run()
     assert len(library.list_all()) == 2
     assert not wal_path.exists()
+    assert not compiler_wal.exists()
+
+
+def test_forge_retries_failed_job(tmp_path) -> None:
+    catalog = _catalog_subset(1)
+    attempt_counter = {"count": 0}
+
+    def sampler(metadata):
+        attempt_counter["count"] += 1
+        return attempt_counter["count"] == 1
+
+    forge, library, compiler, wal_path = _setup(
+        tmp_path,
+        catalog,
+        error_sampler=sampler,
+        max_retries=2,
+    )
+
+    forge.run()
+
+    assert attempt_counter["count"] >= 2
+    assert len(library.list_all()) == 1
+    assert not wal_path.exists()
+    compiler_wal = compiler._wal_path  # type: ignore[attr-defined]
+    assert not compiler_wal.exists()

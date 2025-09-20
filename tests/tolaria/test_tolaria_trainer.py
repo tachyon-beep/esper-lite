@@ -68,7 +68,17 @@ def test_tolaria_trainer_emits_state_packets() -> None:
     assert kasmina.received
     telemetry = trainer.telemetry_packets
     assert len(telemetry) == len(states)
-    assert telemetry[0].metrics[0].name == "training.loss"
+    metric_names = {metric.name for metric in telemetry[0].metrics}
+    assert {
+        "tolaria.training.loss",
+        "tolaria.training.accuracy",
+        "tolaria.training.latency_ms",
+        "tolaria.seeds.active",
+    }.issubset(metric_names)
+    assert telemetry[0].system_health.status in {
+        leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY,
+        leyline_pb2.HealthStatus.HEALTH_STATUS_DEGRADED,
+    }
 
 
 @pytest.mark.asyncio

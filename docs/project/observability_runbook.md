@@ -80,9 +80,11 @@ process. The service will log a warning when the stub is activated.
   `esper_simic_training_reward_total` and
   `esper_simic_training_iterations_total` expose cumulative reward and PPO
   iterations while documents are indexed under `simic_metrics`.
-- Tamiyo action selection metrics (`tamiyo.policy.action`,
-  `tamiyo.policy.param_delta`) are emitted alongside validation metrics to help
-  correlate policy decisions with Simic training outcomes.
+- Tamiyo telemetry focuses on stability signals now that the Option B budgets
+  are enforced: `tamiyo.validation_loss`, `tamiyo.loss_delta`,
+  `tamiyo.conservative_mode`, and (when relevant) `tamiyo.blueprint.risk`
+  provide the necessary context for alerting and dashboards without breaching
+  the 280 B limit.
 - Tamiyo persists field reports to `var/tamiyo/field_reports.log` with a
   retention window controlled by `TAMIYO_FIELD_REPORT_RETENTION_HOURS`
   (default 24). The log is safe to truncate once the service is stopped if you

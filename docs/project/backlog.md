@@ -141,7 +141,7 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
 
 ## Slice 3 – Telemetry, Observability, Safety (Sprints 5–6)
 
-### TKT-301: Telemetry Schema Finalisation ◑
+### TKT-301: Telemetry Schema Finalisation ✅
 - **Description:** Finalise telemetry payloads for Tolaria, Kasmina, Tamiyo; add serialization property tests.
 - **Acceptance Criteria:**
   - Telemetry schema documented with example payloads.
