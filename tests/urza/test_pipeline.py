@@ -30,7 +30,7 @@ def test_blueprint_pipeline_compiles_and_stores() -> None:
         description="",
         allowed_parameters={"alpha": (0.0, 1.0)},
     )
-    catalog = KarnCatalog()
+    catalog = KarnCatalog(load_defaults=False)
     catalog.register(metadata)
 
     with TemporaryDirectory() as tmp:

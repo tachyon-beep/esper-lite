@@ -1,9 +1,30 @@
-"""Nissa observability stack helpers.
+"""Nissa observability stack helpers."""
 
-Consumes telemetry envelopes and exports Prometheus/Elasticsearch metrics as
-outlined in `docs/design/detailed_design/10-nissa.md`.
-"""
-
+from .alerts import AlertEngine, AlertEvent, AlertRouter, AlertRule, DEFAULT_ALERT_RULES
+from .drills import (
+    run_all_drills,
+    simulate_kasmina_isolation_breach,
+    simulate_oona_queue_depth_spike,
+    simulate_tezzeret_retry_burst,
+    simulate_training_latency_spike,
+)
 from .observability import NissaIngestor, NissaIngestorConfig
+from .slo import SLOConfig, SLOStatus, SLOTracker
 
-__all__ = ["NissaIngestor", "NissaIngestorConfig"]
+__all__ = [
+    "AlertEngine",
+    "AlertEvent",
+    "AlertRouter",
+    "AlertRule",
+    "DEFAULT_ALERT_RULES",
+    "NissaIngestor",
+    "NissaIngestorConfig",
+    "SLOTracker",
+    "SLOConfig",
+    "SLOStatus",
+    "simulate_training_latency_spike",
+    "simulate_kasmina_isolation_breach",
+    "simulate_oona_queue_depth_spike",
+    "simulate_tezzeret_retry_burst",
+    "run_all_drills",
+]

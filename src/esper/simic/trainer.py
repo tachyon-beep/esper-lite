@@ -19,6 +19,7 @@ from esper.leyline import leyline_pb2
 from esper.core.telemetry import TelemetryMetric, build_telemetry_packet
 from esper.core import TelemetryEvent
 from esper.simic.registry import EmbeddingRegistry, EmbeddingRegistryConfig
+from esper.simic.validation import PolicyValidator, ValidationConfig, ValidationResult
 
 from .replay import FieldReportReplayBuffer, SimicExperience
 
@@ -54,6 +55,11 @@ class SimicTrainerConfig:
     metric_attention_heads: int = 2
     embedding_dir: Path = Path("var/simic")
     replay_ttl_hours: int = 24
+    validation_min_reward: float = 0.0
+    validation_max_policy_loss: float = 5.0
+    validation_max_value_loss: float = 50.0
+    validation_max_param_loss: float = 5.0
+    validation_min_entropy: float = 0.0
 
 
 class SimicTrainer:
@@ -64,6 +70,7 @@ class SimicTrainer:
         policy: nn.Module | None,
         buffer: FieldReportReplayBuffer,
         config: SimicTrainerConfig | None = None,
+        validator: PolicyValidator | None = None,
     ) -> None:
         self._buffer = buffer
         self._config = config or SimicTrainerConfig()
@@ -93,6 +100,15 @@ class SimicTrainer:
         self._last_policy_loss: float = 0.0
         self._last_param_loss: float = 0.0
         self._last_entropy: float = 0.0
+        validation_config = ValidationConfig(
+            min_average_reward=self._config.validation_min_reward,
+            max_policy_loss=self._config.validation_max_policy_loss,
+            max_value_loss=self._config.validation_max_value_loss,
+            max_param_loss=self._config.validation_max_param_loss,
+            min_entropy=self._config.validation_min_entropy,
+        )
+        self._validator = validator or PolicyValidator(validation_config)
+        self._validation_result: ValidationResult | None = None
 
     def run_training(self) -> None:
         """Execute PPO-like training on buffered field reports."""
@@ -110,6 +126,8 @@ class SimicTrainer:
             self._last_loss = float(loss.detach().cpu())
             self._last_reward = float(batch["reward"].mean().detach().cpu())
             self._iterations += 1
+
+        self._validation_result = self._validator.validate(self._collect_validation_metrics())
 
     def _compute_loss(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         rewards = batch["reward"].to(self._device)
@@ -164,6 +182,17 @@ class SimicTrainer:
                 return module.in_features
         raise RuntimeError("Unable to infer policy input dimension")
 
+    def _collect_validation_metrics(self) -> dict[str, float]:
+        """Aggregate metrics for the validation harness."""
+
+        return {
+            "average_reward": self._last_reward,
+            "policy_loss": self._last_policy_loss,
+            "value_loss": self._last_value_loss,
+            "param_loss": self._last_param_loss,
+            "policy_entropy": self._last_entropy,
+        }
+
     def create_policy_update(
         self,
         *,
@@ -173,6 +202,12 @@ class SimicTrainer:
         policy_state: dict | None = None,
     ) -> leyline_pb2.PolicyUpdate:
         """Create a policy update protobuf for downstream consumption."""
+
+        if not self._validation_result:
+            raise RuntimeError("Policy validation has not been executed")
+        if not self._validation_result.passed:
+            joined = "; ".join(self._validation_result.reasons) or "validation failed"
+            raise RuntimeError(f"Policy update blocked: {joined}")
 
         update = leyline_pb2.PolicyUpdate(
             version=1,
@@ -216,24 +251,54 @@ class SimicTrainer:
             TelemetryMetric("simic.param.loss", self._last_param_loss, unit="loss"),
             TelemetryMetric("simic.policy.entropy", self._last_entropy, unit="nats"),
         ]
+        if self._validation_result:
+            metrics.append(
+                TelemetryMetric(
+                    "simic.validation.pass",
+                    1.0 if self._validation_result.passed else 0.0,
+                    unit="bool",
+                )
+            )
+
         packet = build_telemetry_packet(
             packet_id=f"simic-metrics-{training_run_id}",
             source="simic",
             level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
             metrics=metrics,
-            events=[
-                TelemetryEvent(
-                    description="Simic PPO update",
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
-                    attributes={"training_run_id": training_run_id},
-                )
-            ],
+            events=self._build_telemetry_events(training_run_id),
         )
         return packet
 
     async def publish_metrics(self, oona: OonaClient, *, training_run_id: str) -> None:
         packet = self.build_metrics_packet(training_run_id=training_run_id)
         await oona.publish_telemetry(packet)
+
+    @property
+    def validation_result(self) -> ValidationResult | None:
+        """Return the last validation result."""
+
+        return self._validation_result
+
+    def _build_telemetry_events(self, training_run_id: str) -> list[TelemetryEvent]:
+        events = [
+            TelemetryEvent(
+                description="Simic PPO update",
+                level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+                attributes={"training_run_id": training_run_id},
+            )
+        ]
+        if self._validation_result and not self._validation_result.passed:
+            events.append(
+                TelemetryEvent(
+                    description="Simic policy validation failed",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={
+                        "training_run_id": training_run_id,
+                        "reasons": "; ".join(self._validation_result.reasons) or "unspecified",
+                    },
+                )
+            )
+        return events
 
 
 __all__ = ["SimicTrainer", "SimicTrainerConfig"]

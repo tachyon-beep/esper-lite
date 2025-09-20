@@ -98,6 +98,32 @@ The generated files are stored in `src/esper/leyline/_generated/` and include
   metric sequence, persistent embeddings, attention), optional LoRA adapters,
   and policy hot-reload via Oona. Tamiyo consumes the same shared features to
   produce multi-head actions which are observable through new telemetry fields.
+- Simic automatically executes a validation harness after each training run;
+  tweak thresholds via `SimicTrainerConfig` (e.g., `validation_min_reward`,
+  `validation_max_policy_loss`) to suit your scenario. Policy updates are only
+  published if validation succeeds, and failures emit telemetry warnings.
+- Nissa now evaluates alert rules (`training_latency_high`,
+  `kasmina_isolation_violation`, `oona_queue_depth`,
+  `tezzeret_compile_retry_high`) and exposes a `/metrics/summary` endpoint with
+  active alerts and SLO burn rates. Feed SLO metrics via telemetry using
+  `slo.<name>_actual`/`slo.<name>_objective` pairs.
+
+### Blueprint Catalog
+
+- Karn ships with 50 pre-approved blueprints spanning safe (BP001–BP035),
+  experimental (BP036–BP042), and high-risk quarantine (BP043–BP050) tiers.
+  Instantiate `KarnCatalog()` to load the full library, or pass
+  `load_defaults=False` in tests to start with an empty catalog. Use
+  `choose_template(...)` for deterministic selection—context strings hash to
+  stable templates and conservative mode restricts results to the safe pool.
+
+### Tezzeret Compilation Forge
+
+- `TezzeretForge` orchestrates blueprint compilation at startup. Provide a
+  `KarnCatalog`, `UrzaLibrary`, and `TezzeretCompiler`—it will queue every
+  blueprint, compile missing artifacts, and resume from interruptions via a
+  simple JSON WAL. Use `CompileJobConfig(max_retries=...)` to control retry
+  behaviour; failures leave the WAL intact for the next run.
 
 ### Field Report Persistence
 

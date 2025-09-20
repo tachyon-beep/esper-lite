@@ -31,7 +31,7 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from esper.core import EsperSettings
-from esper.karn import BlueprintMetadata, BlueprintTier, KarnCatalog
+from esper.karn import KarnCatalog
 from esper.kasmina import KasminaSeedManager
 from esper.leyline import leyline_pb2
 from esper.nissa import NissaIngestor, NissaIngestorConfig
@@ -97,14 +97,10 @@ def build_model() -> nn.Module:
 
 def initialise_blueprint_pipeline(root: Path) -> tuple[KarnCatalog, UrzaLibrary, UrzaRuntime]:
     catalog = KarnCatalog()
-    metadata = BlueprintMetadata(
-        blueprint_id="bp-demo",
-        name="Demo Blueprint",
-        tier=BlueprintTier.SAFE,
-        description="Synthetic graft for demo",
-        allowed_parameters={"alpha": (0.0, 1.0)},
-    )
-    catalog.register(metadata)
+    blueprint_id = "BP001"
+    blueprint = catalog.get(blueprint_id)
+    if blueprint is None:
+        raise RuntimeError("Default blueprint catalog missing BP001")
 
     artifact_dir = root / "artifacts"
     library = UrzaLibrary(root=root / "urza")
@@ -112,8 +108,12 @@ def initialise_blueprint_pipeline(root: Path) -> tuple[KarnCatalog, UrzaLibrary,
     pipeline = BlueprintPipeline(catalog=catalog, compiler=compiler, library=library)
     pipeline.handle_request(
         BlueprintRequest(
-            blueprint_id="bp-demo",
-            parameters={"alpha": 0.5},
+            blueprint_id=blueprint_id,
+            parameters={
+                key: (bounds[0] + bounds[1]) / 2.0 for key, bounds in blueprint.allowed_parameters.items()
+            }
+            if blueprint.allowed_parameters
+            else {},
             training_run_id="run-demo",
         )
     )

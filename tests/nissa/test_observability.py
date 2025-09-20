@@ -169,3 +169,98 @@ def test_metrics_endpoint_serves_prometheus() -> None:
     health = client.get("/healthz")
     assert health.status_code == 200
     assert health.json() == {"status": "ok"}
+
+    summary = client.get("/metrics/summary")
+    assert summary.status_code == 200
+
+
+def test_training_latency_alert_triggers_after_consecutive_breaches() -> None:
+    registry = CollectorRegistry()
+    es = _ElasticsearchStub()
+    config = NissaIngestorConfig(
+        prometheus_gateway="http://localhost:9091",
+        elasticsearch_url="http://localhost:9200",
+    )
+    ingest = NissaIngestor(config, es_client=es, registry=registry)
+
+    for value in (19.0, 20.0, 21.0):
+        packet = build_telemetry_packet(
+            packet_id=f"lat-{value}",
+            source="tolaria",
+            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+            metrics=[TelemetryMetric("tolaria.training.latency_ms", value)],
+        )
+        ingest.ingest_telemetry(packet)
+
+    assert "training_latency_high" in ingest.active_alerts
+    last_event = ingest.alert_events[-1]
+    assert last_event.routes == ("pagerduty", "slack")
+
+
+def test_oona_queue_depth_alert_requires_two_samples() -> None:
+    registry = CollectorRegistry()
+    es = _ElasticsearchStub()
+    config = NissaIngestorConfig(
+        prometheus_gateway="http://localhost:9091",
+        elasticsearch_url="http://localhost:9200",
+    )
+    ingest = NissaIngestor(config, es_client=es, registry=registry)
+
+    packet_low = build_telemetry_packet(
+        packet_id="queue-low",
+        source="oona",
+        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+        metrics=[TelemetryMetric("oona.queue.depth", 3500.0)],
+    )
+    ingest.ingest_telemetry(packet_low)
+    assert "oona_queue_depth" not in ingest.active_alerts
+
+    packet_high = build_telemetry_packet(
+        packet_id="queue-high-1",
+        source="oona",
+        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+        metrics=[TelemetryMetric("oona.queue.depth", 4500.0)],
+    )
+    ingest.ingest_telemetry(packet_high)
+    assert "oona_queue_depth" not in ingest.active_alerts
+
+    packet_high_second = build_telemetry_packet(
+        packet_id="queue-high-2",
+        source="oona",
+        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+        metrics=[TelemetryMetric("oona.queue.depth", 4600.0)],
+    )
+    ingest.ingest_telemetry(packet_high_second)
+    assert "oona_queue_depth" in ingest.active_alerts
+    event = ingest.active_alerts["oona_queue_depth"]
+    assert event.routes == ("slack",)
+
+
+def test_slo_summary_reports_burn_rate() -> None:
+    registry = CollectorRegistry()
+    es = _ElasticsearchStub()
+    config = NissaIngestorConfig(
+        prometheus_gateway="http://localhost:9091",
+        elasticsearch_url="http://localhost:9200",
+    )
+    ingest = NissaIngestor(config, es_client=es, registry=registry)
+
+    for actual, objective in ((120.0, 100.0), (90.0, 100.0), (130.0, 100.0)):
+        metrics = [
+            TelemetryMetric("slo.latency_actual", actual),
+            TelemetryMetric("slo.latency_objective", objective),
+        ]
+        packet = build_telemetry_packet(
+            packet_id=f"slo-{actual}",
+            source="tolaria",
+            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+            metrics=metrics,
+        )
+        ingest.ingest_telemetry(packet)
+
+    summary = ingest.slo_summary()
+    assert "latency" in summary
+    status = summary["latency"]
+    assert status.total == 3
+    assert status.violations == 2
+    assert status.burn_rate == pytest.approx(2 / 3, rel=1e-3)

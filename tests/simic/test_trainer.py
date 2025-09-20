@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import copy
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
+import pytest
 import torch
 
 from esper.simic import FieldReportReplayBuffer, SimicTrainer, SimicTrainerConfig
@@ -56,6 +57,8 @@ def test_trainer_updates_policy_parameters() -> None:
     assert "simic.training.iterations" in metric_names
     assert "simic.policy.loss" in metric_names
     assert "simic.param.loss" in metric_names
+    assert "simic.validation.pass" in metric_names
+    assert trainer.validation_result is not None and trainer.validation_result.passed
 
 
 def test_trainer_supports_lora_enabled() -> None:
@@ -76,3 +79,28 @@ def test_trainer_configures_replay_ttl() -> None:
     config = SimicTrainerConfig(replay_ttl_hours=6)
     SimicTrainer(policy=None, buffer=buffer, config=config)
     assert buffer.ttl == timedelta(hours=6)
+
+
+def test_trainer_blocks_policy_update_on_validation_failure() -> None:
+    buffer = FieldReportReplayBuffer(capacity=16)
+    for idx in range(8):
+        buffer.add(_make_report(loss_delta=-0.01 * idx))
+
+    config = SimicTrainerConfig(validation_min_reward=0.5, epochs=2, batch_size=4)
+    trainer = SimicTrainer(policy=None, buffer=buffer, config=config)
+    trainer.run_training()
+
+    with pytest.raises(RuntimeError) as exc_info:
+        trainer.create_policy_update(
+            policy_id="tamiyo-policy",
+            training_run_id="run",
+            policy_version="v3",
+        )
+    assert "Policy update blocked" in str(exc_info.value)
+
+    packet = trainer.build_metrics_packet(training_run_id="run")
+    reasons_event = next(
+        (event for event in packet.events if "validation" in event.description.lower()),
+        None,
+    )
+    assert reasons_event is not None

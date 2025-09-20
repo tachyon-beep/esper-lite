@@ -6,6 +6,7 @@ Implements the replay buffer and PPO+LoRA training loop described in
 
 from .replay import FieldReportReplayBuffer, SimicExperience
 from .trainer import SimicTrainer, SimicTrainerConfig
+from .validation import PolicyValidator, ValidationConfig, ValidationResult
 from .registry import EmbeddingRegistry, EmbeddingRegistryConfig
 
 __all__ = [
@@ -15,4 +16,7 @@ __all__ = [
     "SimicTrainerConfig",
     "EmbeddingRegistry",
     "EmbeddingRegistryConfig",
+    "PolicyValidator",
+    "ValidationConfig",
+    "ValidationResult",
 ]

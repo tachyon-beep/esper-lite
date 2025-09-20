@@ -5,5 +5,6 @@ Holds blueprint metadata definitions as per
 """
 
 from .catalog import BlueprintMetadata, BlueprintTier, KarnCatalog
+from .templates import DEFAULT_BLUEPRINTS
 
-__all__ = ["BlueprintMetadata", "BlueprintTier", "KarnCatalog"]
+__all__ = ["BlueprintMetadata", "BlueprintTier", "KarnCatalog", "DEFAULT_BLUEPRINTS"]

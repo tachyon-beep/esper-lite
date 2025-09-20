@@ -64,7 +64,7 @@ def test_seed_manager_grafts_and_retires_seed() -> None:
 
 
 def test_seed_manager_with_urza_runtime() -> None:
-    catalog = KarnCatalog()
+    catalog = KarnCatalog(load_defaults=False)
     metadata = BlueprintMetadata(
         blueprint_id="bp-1",
         name="Test",

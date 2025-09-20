@@ -1,0 +1,101 @@
+"""Canonical blueprint definitions for Karn.
+
+Each blueprint corresponds to the curriculum outlined in
+`docs/design/detailed_design/old/05.1-karn-template-system.md`.
+"""
+
+from __future__ import annotations
+
+from .catalog import BlueprintMetadata, BlueprintTier
+
+
+def _bp(
+    blueprint_id: str,
+    name: str,
+    *,
+    tier: BlueprintTier,
+    description: str,
+    risk: float,
+    stage: int,
+    allowed_parameters: dict[str, tuple[float, float]] | None = None,
+    quarantine_only: bool = False,
+    approval_required: bool = False,
+) -> BlueprintMetadata:
+    return BlueprintMetadata(
+        blueprint_id=blueprint_id,
+        name=name,
+        tier=tier,
+        description=description,
+        allowed_parameters=allowed_parameters or {},
+        risk=risk,
+        stage=stage,
+        quarantine_only=quarantine_only,
+        approval_required=approval_required,
+    )
+
+
+SAFE_BLUEPRINTS = (
+    _bp("BP001", "identity_passthrough", tier=BlueprintTier.SAFE, description="Identity pass-through block", risk=0.0, stage=0),
+    _bp("BP002", "linear_projection", tier=BlueprintTier.SAFE, description="Linear projection layer", risk=0.1, stage=0, allowed_parameters={"scale": (0.5, 2.0)}),
+    _bp("BP003", "layer_norm_basic", tier=BlueprintTier.SAFE, description="Layer normalization", risk=0.1, stage=0, allowed_parameters={"epsilon": (1e-6, 1e-3)}),
+    _bp("BP004", "dropout_light", tier=BlueprintTier.SAFE, description="Lightweight dropout", risk=0.2, stage=0, allowed_parameters={"dropout": (0.0, 0.4)}),
+    _bp("BP005", "relu_activation", tier=BlueprintTier.SAFE, description="ReLU activation", risk=0.1, stage=0),
+    _bp("BP006", "batch_norm_1d", tier=BlueprintTier.SAFE, description="1D batch normalization", risk=0.2, stage=0, allowed_parameters={"momentum": (0.5, 0.99)}),
+    _bp("BP007", "pooling_max", tier=BlueprintTier.SAFE, description="Max pooling block", risk=0.2, stage=0, allowed_parameters={"kernel": (2.0, 5.0)}),
+    _bp("BP008", "skip_connection", tier=BlueprintTier.SAFE, description="Skip connection", risk=0.2, stage=1),
+    _bp("BP009", "residual_block", tier=BlueprintTier.SAFE, description="Residual block", risk=0.3, stage=1, allowed_parameters={"depth": (1.0, 4.0)}),
+    _bp("BP010", "concat_fusion", tier=BlueprintTier.SAFE, description="Concatenation fusion block", risk=0.3, stage=1, allowed_parameters={"branches": (2.0, 4.0)}),
+    _bp("BP011", "gelu_activation", tier=BlueprintTier.SAFE, description="GELU activation", risk=0.2, stage=1),
+    _bp("BP012", "layer_scaling", tier=BlueprintTier.SAFE, description="Layer scaling block", risk=0.3, stage=1, allowed_parameters={"scale": (0.8, 1.2)}),
+    _bp("BP013", "grouped_conv", tier=BlueprintTier.SAFE, description="Grouped convolution", risk=0.4, stage=1, allowed_parameters={"groups": (2.0, 8.0)}),
+    _bp("BP014", "highway_gate", tier=BlueprintTier.SAFE, description="Highway gating block", risk=0.4, stage=1, allowed_parameters={"gate_bias": (-3.0, 3.0)}),
+    _bp("BP015", "depthwise_separable", tier=BlueprintTier.SAFE, description="Depthwise separable convolution", risk=0.4, stage=2, allowed_parameters={"kernel": (3.0, 7.0)}),
+    _bp("BP016", "squeeze_excitation", tier=BlueprintTier.SAFE, description="Squeeze-and-Excitation block", risk=0.4, stage=2, allowed_parameters={"reduction": (4.0, 16.0)}),
+    _bp("BP017", "channel_attention", tier=BlueprintTier.SAFE, description="Channel attention block", risk=0.4, stage=2, allowed_parameters={"heads": (1.0, 4.0)}),
+    _bp("BP018", "spatial_attention", tier=BlueprintTier.SAFE, description="Spatial attention block", risk=0.4, stage=2, allowed_parameters={"radius": (1.0, 3.0)}),
+    _bp("BP019", "cross_attention", tier=BlueprintTier.SAFE, description="Cross-attention module", risk=0.5, stage=2, allowed_parameters={"heads": (2.0, 4.0)}),
+    _bp("BP020", "attention_single_head", tier=BlueprintTier.SAFE, description="Single-head attention", risk=0.5, stage=2, allowed_parameters={"sequence_length": (16.0, 256.0)}),
+    _bp("BP021", "feedforward_gated", tier=BlueprintTier.SAFE, description="Gated feed-forward block", risk=0.5, stage=2, allowed_parameters={"hidden_multiple": (2.0, 6.0)}),
+    _bp("BP022", "multi_head_attention_4", tier=BlueprintTier.SAFE, description="Multi-head attention (4 heads)", risk=0.5, stage=3, allowed_parameters={"heads": (4.0, 6.0)}),
+    _bp("BP023", "transformer_block", tier=BlueprintTier.SAFE, description="Transformer encoder block", risk=0.5, stage=3, allowed_parameters={"layers": (1.0, 6.0)}),
+    _bp("BP024", "conv_transformer", tier=BlueprintTier.SAFE, description="Hybrid conv-transformer block", risk=0.5, stage=3, allowed_parameters={"kernel": (3.0, 11.0)}),
+    _bp("BP025", "dynamic_conv", tier=BlueprintTier.SAFE, description="Dynamic convolution module", risk=0.5, stage=3, allowed_parameters={"experts": (2.0, 8.0)}),
+    _bp("BP026", "adaptive_pooling", tier=BlueprintTier.SAFE, description="Adaptive pooling head", risk=0.5, stage=3, allowed_parameters={"output_size": (4.0, 16.0)}),
+    _bp("BP027", "feature_pyramid", tier=BlueprintTier.SAFE, description="Feature pyramid fusion", risk=0.5, stage=3, allowed_parameters={"levels": (3.0, 5.0)}),
+    _bp("BP028", "dense_connection", tier=BlueprintTier.SAFE, description="Dense connection block", risk=0.5, stage=3, allowed_parameters={"growth_rate": (8.0, 48.0)}),
+    _bp("BP029", "multi_head_attention_8", tier=BlueprintTier.SAFE, description="Multi-head attention (8 heads)", risk=0.5, stage=4, allowed_parameters={"heads": (8.0, 10.0)}),
+    _bp("BP030", "graph_attention", tier=BlueprintTier.SAFE, description="Graph attention layer", risk=0.5, stage=4, allowed_parameters={"hops": (1.0, 3.0)}),
+    _bp("BP031", "temporal_conv", tier=BlueprintTier.SAFE, description="Temporal convolution", risk=0.5, stage=4, allowed_parameters={"dilation": (1.0, 5.0)}),
+    _bp("BP032", "dilated_conv", tier=BlueprintTier.SAFE, description="Dilated convolution stack", risk=0.5, stage=4, allowed_parameters={"dilation": (1.0, 8.0)}),
+    _bp("BP033", "deformable_conv", tier=BlueprintTier.SAFE, description="Deformable convolution", risk=0.5, stage=4, allowed_parameters={"offset_groups": (1.0, 4.0)}),
+    _bp("BP034", "non_local_block", tier=BlueprintTier.SAFE, description="Non-local attention block", risk=0.5, stage=4, allowed_parameters={"window": (4.0, 16.0)}),
+    _bp("BP035", "learned_positional", tier=BlueprintTier.SAFE, description="Learned positional encoding", risk=0.5, stage=4, allowed_parameters={"frequency": (0.1, 1.0)}),
+)
+
+EXPERIMENTAL_BLUEPRINTS = (
+    _bp("BP036", "mixture_of_experts_4", tier=BlueprintTier.EXPERIMENTAL, description="Mixture-of-Experts block (4 experts)", risk=0.7, stage=5, allowed_parameters={"experts": (4.0, 8.0), "capacity": (1.0, 2.0)}, approval_required=True),
+    _bp("BP037", "hierarchical_attention", tier=BlueprintTier.EXPERIMENTAL, description="Hierarchical attention module", risk=0.7, stage=5, allowed_parameters={"levels": (2.0, 4.0)}, approval_required=True),
+    _bp("BP038", "memory_augmented", tier=BlueprintTier.EXPERIMENTAL, description="Memory-augmented block", risk=0.8, stage=5, allowed_parameters={"memory_slots": (32.0, 128.0)}, approval_required=True),
+    _bp("BP039", "neural_ode_block", tier=BlueprintTier.EXPERIMENTAL, description="Neural ODE integration block", risk=0.8, stage=5, allowed_parameters={"steps": (1.0, 10.0)}, approval_required=True),
+    _bp("BP040", "differentiable_nas", tier=BlueprintTier.EXPERIMENTAL, description="Differentiable NAS head", risk=0.8, stage=5, allowed_parameters={"temperature": (0.5, 2.0)}, approval_required=True),
+    _bp("BP041", "meta_learning_layer", tier=BlueprintTier.EXPERIMENTAL, description="Meta-learning adaptation layer", risk=0.8, stage=5, allowed_parameters={"adapt_steps": (1.0, 5.0)}, approval_required=True),
+    _bp("BP042", "recursive_processing", tier=BlueprintTier.EXPERIMENTAL, description="Recursive processing block", risk=0.8, stage=5, allowed_parameters={"depth": (2.0, 6.0)}, approval_required=True),
+)
+
+ADVERSARIAL_BLUEPRINTS = (
+    _bp("BP043", "exploding_gradient", tier=BlueprintTier.HIGH_RISK, description="Exploding gradient stressor", risk=0.9, stage=6, allowed_parameters={"scale": (5.0, 20.0)}, quarantine_only=True, approval_required=True),
+    _bp("BP044", "vanishing_gradient", tier=BlueprintTier.HIGH_RISK, description="Vanishing gradient stressor", risk=0.9, stage=6, allowed_parameters={"decay": (0.0, 0.1)}, quarantine_only=True, approval_required=True),
+    _bp("BP045", "nan_injection", tier=BlueprintTier.HIGH_RISK, description="NaN injection adversarial template", risk=1.0, stage=6, allowed_parameters={"frequency": (0.01, 0.1)}, quarantine_only=True, approval_required=True),
+    _bp("BP046", "infinite_loop", tier=BlueprintTier.HIGH_RISK, description="Infinite loop adversarial template", risk=1.0, stage=6, allowed_parameters={"iterations": (1000.0, 10000.0)}, quarantine_only=True, approval_required=True),
+    _bp("BP047", "memory_leak", tier=BlueprintTier.HIGH_RISK, description="Memory leak simulation", risk=1.0, stage=6, allowed_parameters={"growth_rate": (1.0, 5.0)}, quarantine_only=True, approval_required=True),
+    _bp("BP048", "deadlock_pattern", tier=BlueprintTier.HIGH_RISK, description="Deadlock pattern stressor", risk=1.0, stage=6, allowed_parameters={"threads": (2.0, 16.0)}, quarantine_only=True, approval_required=True),
+    _bp("BP049", "race_condition", tier=BlueprintTier.HIGH_RISK, description="Race condition adversarial template", risk=0.9, stage=6, allowed_parameters={"window_ns": (10.0, 1000.0)}, quarantine_only=True, approval_required=True),
+    _bp("BP050", "adversarial_noise", tier=BlueprintTier.HIGH_RISK, description="Adversarial noise injection", risk=0.9, stage=6, allowed_parameters={"epsilon": (0.1, 1.0)}, quarantine_only=True, approval_required=True),
+)
+
+
+DEFAULT_BLUEPRINTS = SAFE_BLUEPRINTS + EXPERIMENTAL_BLUEPRINTS + ADVERSARIAL_BLUEPRINTS
+
+
+__all__ = ["DEFAULT_BLUEPRINTS", "SAFE_BLUEPRINTS", "EXPERIMENTAL_BLUEPRINTS", "ADVERSARIAL_BLUEPRINTS"]
+

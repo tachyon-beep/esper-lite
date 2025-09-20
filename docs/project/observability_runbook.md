@@ -88,3 +88,16 @@ process. The service will log a warning when the stub is activated.
   (default 24). The log is safe to truncate once the service is stopped if you
   need to reset the replay buffer; otherwise the WAL guarantees crash recovery
   for Simic’s ingestion pipeline.
+- Simic publishes `simic.validation.pass` as part of its telemetry packet and
+  emits a warning event when validation fails, giving operators immediate
+  visibility into blocked policy updates.
+- Alert rules (`training_latency_high`, `kasmina_isolation_violation`,
+  `oona_queue_depth`, `tezzeret_compile_retry_high`) are evaluated inside the
+  ingestor. Routing stubs capture Slack/PagerDuty/Email notifications for
+  inspection, and the `/metrics/summary` endpoint surfaces active alerts
+  alongside SLO burn rates computed from telemetry keys prefixed with
+  `slo.` (e.g. `slo.latency_actual`/`slo.latency_objective`).
+- Fault drills can be exercised with `scripts/run_fault_drills.py`, which feeds
+  synthetic telemetry into Nissa and verifies the alerts clear once normal
+  metrics resume. Use this before major showcases to confirm breaker coverage
+  remains intact.

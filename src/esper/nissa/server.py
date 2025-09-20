@@ -24,6 +24,26 @@ def create_app(ingestor: NissaIngestor) -> FastAPI:
     async def healthz() -> dict[str, str]:  # pragma: no cover - thin wrapper
         return {"status": "ok"}
 
+    @app.get("/metrics/summary")
+    async def metrics_summary() -> dict[str, object]:
+        summary = {
+            metric: {
+                "total": status.total,
+                "violations": status.violations,
+                "burn_rate": status.burn_rate,
+            }
+            for metric, status in ingestor.slo_summary().items()
+        }
+        alerts = {
+            name: {
+                "metric": event.metric,
+                "value": event.value,
+                "routes": event.routes,
+            }
+            for name, event in ingestor.active_alerts.items()
+        }
+        return {"slo": summary, "alerts": alerts}
+
     return app
 
 

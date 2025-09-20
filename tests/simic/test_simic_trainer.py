@@ -75,6 +75,7 @@ def test_simic_create_policy_update() -> None:
         policy=None,
         buffer=FieldReportReplayBuffer(),
     )
+    trainer.run_training()
     update = trainer.create_policy_update(
         policy_id="policy-1",
         training_run_id="run-1",
@@ -91,6 +92,7 @@ async def test_simic_publish_policy_updates() -> None:
         policy=None,
         buffer=FieldReportReplayBuffer(),
     )
+    trainer.run_training()
     trainer.create_policy_update(
         policy_id="policy-1",
         training_run_id="run-1",

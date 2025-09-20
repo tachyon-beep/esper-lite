@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from elasticsearch import Elasticsearch
@@ -16,6 +17,8 @@ from prometheus_client import CollectorRegistry, Counter
 
 from esper.core import FieldReport, SystemStatePacket
 from esper.leyline import leyline_pb2
+from esper.nissa.alerts import AlertEngine, AlertRouter, DEFAULT_ALERT_RULES, AlertEvent
+from esper.nissa.slo import SLOTracker, SLOStatus
 
 if TYPE_CHECKING:
     from esper.oona import OonaClient, OonaMessage
@@ -39,6 +42,9 @@ class NissaIngestor:
     ) -> None:
         self._config = config
         self._registry = registry or CollectorRegistry()
+        self._alert_router = AlertRouter()
+        self._alert_engine = AlertEngine(DEFAULT_ALERT_RULES, router=self._alert_router)
+        self._slo_tracker = SLOTracker()
         self._run_counter = Counter(
             "esper_training_runs",
             "Count of training runs processed",
@@ -106,8 +112,12 @@ class NissaIngestor:
     def ingest_telemetry(self, packet: leyline_pb2.TelemetryPacket) -> None:
         self._telemetry_counter.labels(source=packet.source_subsystem).inc()
         document = MessageToDict(packet, preserving_proto_field_name=True)
+        metrics = {metric.name: metric.value for metric in packet.metrics}
+        if metrics:
+            self._alert_engine.evaluate(metrics, packet.source_subsystem)
+            self._process_slo_metrics(metrics)
+
         if packet.source_subsystem == "simic":
-            metrics = {m.name: m.value for m in packet.metrics}
             reward = metrics.get("simic.training.reward", 0.0)
             iterations = metrics.get("simic.training.iterations", 0.0)
             self._simic_reward_counter.inc(reward)
@@ -171,6 +181,46 @@ class NissaIngestor:
         """Expose the Prometheus registry for HTTP export."""
 
         return self._registry
+
+    @property
+    def alert_engine(self) -> AlertEngine:
+        return self._alert_engine
+
+    @property
+    def active_alerts(self) -> dict[str, AlertEvent]:
+        return self._alert_engine.active_alerts
+
+    @property
+    def alert_events(self) -> list[AlertEvent]:
+        return self._alert_router.events()
+
+    @property
+    def slo_tracker(self) -> SLOTracker:
+        return self._slo_tracker
+
+    def slo_summary(self) -> dict[str, SLOStatus]:
+        return self._slo_tracker.summary()
+
+    def _process_slo_metrics(self, metrics: dict[str, float]) -> None:
+        objectives: dict[str, float] = {}
+        actuals: dict[str, float] = {}
+        for name, value in metrics.items():
+            if not name.startswith("slo."):
+                continue
+            label = name[4:]
+            if label.endswith("_objective"):
+                key = label[:-10]
+                objectives[key] = value
+            elif label.endswith("_actual"):
+                key = label[:-7]
+                actuals[key] = value
+
+        reference = datetime.now(tz=UTC)
+        for key, actual in actuals.items():
+            objective = objectives.get(key)
+            if objective is None:
+                continue
+            self._slo_tracker.record(key, objective=objective, actual=actual, timestamp=reference)
 
 
 
