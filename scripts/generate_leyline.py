@@ -7,14 +7,29 @@ writes Python outputs to `src/esper/leyline/_generated/`.
 
 from __future__ import annotations
 
-import pathlib
-import subprocess
+from importlib import resources
+from pathlib import Path
 import sys
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
+from grpc_tools import protoc
+
+ROOT = Path(__file__).resolve().parents[1]
 CONTRACT_DIR = ROOT / "contracts" / "leyline"
 PROTO_PATH = CONTRACT_DIR / "leyline.proto"
 OUTPUT_DIR = ROOT / "src" / "esper" / "leyline" / "_generated"
+
+
+def inject_pylint_skip(target: Path) -> None:
+    if not target.exists():
+        return
+    content = target.read_text(encoding="utf-8")
+    lines = content.splitlines()
+    head = lines[:2]
+    if "# pylint: skip-file" in head:
+        return
+    insert_at = 1 if lines and lines[0].startswith("# -*- coding") else 0
+    lines.insert(insert_at, "# pylint: skip-file")
+    target.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def main() -> int:
@@ -22,36 +37,23 @@ def main() -> int:
         print(f"Proto file not found: {PROTO_PATH}", file=sys.stderr)
         return 1
 
-    cmd = [
-        sys.executable,
-        "-m",
-        "grpc_tools.protoc",
-        f"--proto_path={CONTRACT_DIR}",
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    include_dir = resources.files("grpc_tools") / "_proto"
+
+    args = [
+        "protoc",
+        f"-I{CONTRACT_DIR}",
+        f"-I{include_dir}",
         f"--python_out={OUTPUT_DIR}",
         f"--pyi_out={OUTPUT_DIR}",
-        PROTO_PATH.name,
+        str(PROTO_PATH),
     ]
 
-    result = subprocess.run(
-        cmd,
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        cwd=CONTRACT_DIR,
-    )
-    if result.returncode != 0:
-        sys.stdout.write(result.stdout.decode())
-        return result.returncode
+    result = protoc.main(args)
+    if result != 0:
+        return result
 
-    target = OUTPUT_DIR / "leyline_pb2.py"
-    if target.exists():
-        content = target.read_text(encoding="utf-8")
-        lines = content.splitlines()
-        head = lines[:2]
-        if "# pylint: skip-file" not in head:
-            insert_at = 1 if lines and lines[0].startswith("# -*- coding") else 0
-            lines.insert(insert_at, "# pylint: skip-file")
-            target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    inject_pylint_skip(OUTPUT_DIR / "leyline_pb2.py")
     return 0
 
 
