@@ -25,6 +25,7 @@ File: docs/design/detailed_design/01-tolaria-unified-design.md
 | Checkpoint + WAL System | Atomic persistence with O_DSYNC semantics | Stores model, optimizer, and telemetry metadata. See `01.2`. |
 | Rollback Stack | 500 ms fast path + 12 s full recovery | Shared-memory signalling for CRITICAL events. |
 | Integration Layer | Protocol Buffer wiring, telemetry, performance targets | Aligns with Leyline contracts. See `01.4`. |
+| Profiling Harness | Capture epoch and batch timings with PyTorch profiler | `scripts/profile_tolaria.py` emits `epoch_time_ms`, optional chrome traces. |
 
 ## Control Loop Contract
 1. **Train Epoch**: Run batches, aggregate multi-seed gradients, step optimizer via LR controller.
