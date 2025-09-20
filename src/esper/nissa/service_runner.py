@@ -88,8 +88,15 @@ async def _ingest_loop(
         try:
             await ingestor.consume_from_oona(
                 client,
+                stream=client.telemetry_stream,
                 count=100,
                 block_ms=1000,
+            )
+            await ingestor.consume_from_oona(
+                client,
+                stream=client.normal_stream,
+                count=50,
+                block_ms=500,
             )
         except asyncio.CancelledError:  # pragma: no cover - graceful shutdown
             raise

@@ -6,7 +6,7 @@ alignment with `docs/design/detailed_design/10-nissa.md`.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -50,14 +50,48 @@ class NissaIngestor:
             registry=self._registry,
             labelnames=("source",),
         )
+        self._state_counter = Counter(
+            "esper_system_state_packets_total",
+            "Count of system state packets ingested",
+            registry=self._registry,
+            labelnames=("phase",),
+        )
+        self._field_report_counter = Counter(
+            "esper_field_reports_total",
+            "Count of field reports ingested",
+            registry=self._registry,
+            labelnames=("outcome",),
+        )
         self._es = es_client or Elasticsearch(hosts=[config.elasticsearch_url])
 
-    def ingest_state(self, packet: SystemStatePacket) -> None:
-        self._run_counter.inc()
-        self._index_document("system_state", packet.model_dump())
+    def ingest_state(self, packet: SystemStatePacket | Mapping[str, object]) -> None:
+        """Ingest a system state packet from pydantic or dict payload."""
 
-    def ingest_field_report(self, report: FieldReport) -> None:
-        self._index_document("field_report", report.model_dump())
+        if isinstance(packet, SystemStatePacket):
+            phase = packet.phase.value
+            document = packet.model_dump()
+        else:
+            document = dict(packet)
+            raw_phase = document.get("phase")
+            if raw_phase is None:
+                raw_phase = document.get("source_subsystem", "unknown")
+            phase = _normalise_enum_label(str(raw_phase), prefix="TRAINING_PHASE_")
+        self._run_counter.inc()
+        self._state_counter.labels(phase=phase).inc()
+        self._index_document("system_state", document)
+
+    def ingest_field_report(self, report: FieldReport | Mapping[str, object]) -> None:
+        """Ingest a field report packet from pydantic or dict payload."""
+
+        if isinstance(report, FieldReport):
+            outcome = report.outcome.value
+            document = report.model_dump()
+        else:
+            document = dict(report)
+            raw_outcome = str(document.get("outcome", "unknown"))
+            outcome = _normalise_enum_label(raw_outcome, prefix="FIELD_REPORT_OUTCOME_")
+        self._field_report_counter.labels(outcome=outcome).inc()
+        self._index_document("field_report", document)
 
     def ingest_telemetry(self, packet: leyline_pb2.TelemetryPacket) -> None:
         self._telemetry_counter.labels(source=packet.source_subsystem).inc()
@@ -94,9 +128,20 @@ class NissaIngestor:
         """Consume telemetry packets from Oona and ingest them."""
 
         async def handler(message: OonaMessage) -> None:
-            packet = leyline_pb2.TelemetryPacket()
-            packet.ParseFromString(message.payload)
-            self.ingest_telemetry(packet)
+            if message.message_type == "telemetry":
+                packet = leyline_pb2.TelemetryPacket()
+                packet.ParseFromString(message.payload)
+                self.ingest_telemetry(packet)
+            elif message.message_type == "system_state":
+                packet = leyline_pb2.SystemStatePacket()
+                packet.ParseFromString(message.payload)
+                payload = MessageToDict(packet, preserving_proto_field_name=True)
+                self.ingest_state(payload)
+            elif message.message_type == "field_report":
+                field_report = leyline_pb2.FieldReport()
+                field_report.ParseFromString(message.payload)
+                payload = MessageToDict(field_report, preserving_proto_field_name=True)
+                self.ingest_field_report(payload)
 
         await client.consume(
             handler,
@@ -113,3 +158,10 @@ class NissaIngestor:
 
 
 __all__ = ["NissaIngestor", "NissaIngestorConfig"]
+
+
+def _normalise_enum_label(raw: str, *, prefix: str) -> str:
+    value = raw
+    if raw.upper().startswith(prefix):
+        value = raw[len(prefix) :]
+    return value.lower()

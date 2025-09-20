@@ -157,6 +157,7 @@ async def publish_history(
 ) -> None:
     await tol.publish_history(oona)
     await tamiyo.publish_history(oona)
+    await nissa.consume_from_oona(oona, stream=settings.oona_normal_stream)
     await nissa.consume_from_oona(oona, stream=settings.oona_telemetry_stream)
 
 

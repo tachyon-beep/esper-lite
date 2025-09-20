@@ -68,3 +68,11 @@ process. The service will log a warning when the stub is activated.
 - The Nissa service exposes a `/healthz` endpoint suitable for container or
   systemd health probes. The ingest loop logs and retries on Redis/Oona
   interruptions without exiting the process.
+- Prometheus counters available for dashboards include
+  `esper_telemetry_packets_total`, `esper_system_state_packets_total`, and
+  `esper_field_reports_total` (labelled by source, phase, and outcome
+  respectively).
+- Validate Elasticsearch ingestion with `curl
+  http://localhost:9200/_cat/indices?v` or the DevTools console; indices are
+  created automatically for `telemetry`, `system_state`, and `field_report`
+  documents.
