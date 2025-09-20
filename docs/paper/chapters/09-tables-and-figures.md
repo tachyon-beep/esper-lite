@@ -26,6 +26,29 @@ The formal 8-state lifecycle of a SentinelSeed, managed by the SeedManager, Tami
 | FOSSILIZED   | Passes probationary validation                 | Permanently replace seed by child network in the model graph (terminal)       | —                        |
 | CULLED       | Fails any validation stage                     | Freeze slot, place under timed embargo                                        | DORMANT (after embargo)  |
 
+### 9.1.a Lifecycle State Diagram (Mermaid)
+
+```mermaid
+stateDiagram-v2
+    [*] --> DORMANT
+    DORMANT --> GERMINATED: Tamiyo request_germination
+    GERMINATED --> TRAINING: SeedManager promote
+    TRAINING --> BLENDING: Local objective met
+    BLENDING --> SHADOWING: Alpha → 1.0
+    SHADOWING --> PROBATIONARY: Internal stability OK
+    PROBATIONARY --> FOSSILISED: Systemic impact OK
+
+    %% Failure paths
+    TRAINING --> CULLED: Collapse/NaN/No improvement
+    SHADOWING --> CULLED: Unstable outputs
+    PROBATIONARY --> CULLED: Drift/regression
+    CULLED --> DORMANT: Embargo elapsed
+
+    FOSSILISED --> [*]
+```
+
+Figure: Formal lifecycle and validation gates (see Section 5).
+
 ## 9.2 Techniques for Structural Grafting
 (See: [Techniques for Grafting and Precise Editing](04-techniques-for-grafting-and-precise-editing.md))
 
@@ -77,4 +100,48 @@ graph TD
     D --> E[Linear(32->2) --> Output]
 ```
 Note: The above diagram can be converted to a rendered graphic in the final typeset.
+
+## 9.8 Evaluation Pipeline Flow
+(See: [Evaluation Criteria and Safety Constraints](10-evaluation-criteria-and-safety-constraints.md))
+
+```mermaid
+flowchart LR
+    A[1. Baseline Capture] --> B[2. Policy‑Driven Germination]
+    B --> C[3. Lifecycle: TRAINING → BLENDING]
+    C --> D[Validation Gate 1: SHADOWING]
+    D --> E{Stable?}
+    E -- No --> X[CULLED + Embargo]
+    E -- Yes --> F[Validation Gate 2: PROBATIONARY]
+    F --> G{Systemic Impact OK?}
+    G -- No --> X
+    G -- Yes --> H[4. Post‑Fossilisation Audit]
+```
+
+Figure: End‑to‑end evaluation flow with lifecycle gates (Section 10.3).
+
+## 9.9 Controller Interaction Sequence
+(See: [Controller Training](08-controller-training-the-tamiyo-curriculum.md), [Failure Handling](05-failure-handling-and-risk-containment.md))
+
+```mermaid
+sequenceDiagram
+    participant T as Tamiyo (Controller)
+    participant M as SeedManager
+    participant S as Seed
+    participant B as Base Model
+
+    T->>M: request_germination(seed_site, blueprint)
+    M->>S: enqueue GERMINATED
+    M->>S: promote TRAINING
+    S-->>B: forward pass inert; local training on buffer
+    S->>S: BLENDING (alpha 0→1)
+    S-->>B: SHADOWING (inert) – internal stability checks
+    M-->>T: telemetry + validation results
+    alt Systemic impact OK
+        M->>S: PROBATIONARY → FOSSILISED
+    else Drift/regression
+        M->>S: CULLED; embargo slot
+    end
+```
+
+Figure: Interaction during a germination episode from trigger to outcome.
 Seed Module: A site for germination, located post first hidden layer. When triggered by Tamiyo, a new module blueprint is inserted, often as a residual path. All layers except the germinated module are frozen post-pretraining.
