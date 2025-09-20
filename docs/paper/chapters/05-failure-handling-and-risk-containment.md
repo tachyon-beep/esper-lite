@@ -55,3 +55,18 @@ When a seed fails repeatedly, the system uses logged data to learn and adapt.
 | Emergency Kill Switch   | Abort on systemic instability; force CULLED and revert to last known-good network state.                                      |
 ## 5.5 Summary
 Failure handling in this framework is not reactive—it is an integrated and anticipatory part of the seed lifecycle. Every seed is treated as a hypothesis to be rigorously tested. Failures are handled cleanly through the Culling and Embargo protocol, ensuring system stability. The detailed logging of these events provides a rich dataset for improving the governing policies of Karn and Tamiyo, making the entire system safer and more intelligent over time. Each failure teaches the system what not to become.
+
+## 5.6 Kasmina Safety Stack (Prototype)
+The prototype implements the production safety controls described in the detailed design. The following mechanisms are active during all experiments:
+
+| Mechanism                       | Description                                                                                   | Outcome / Action                         |
+|---------------------------------|-----------------------------------------------------------------------------------------------|------------------------------------------|
+| Gradient Isolation Hooks        | Backward hooks enforce `∇L_host ∩ ∇L_seed = ∅`; alpha blending uses `.detach()` on host acts | Violations increment breaker; quarantine |
+| Circuit Breakers                | Thresholded counters across health, gradients, stability, latency                            | Downgrade to conservative mode; alerts   |
+| Lifecycle Validation Gates      | G0–G5 checks at GERMINATED/ TRAINING/ BLENDING/ SHADOWING/ PROBATIONARY/ RESETTING           | Transition to CULLED on failure          |
+| Quarantine & Embargo            | Seeds moved to CULLED; slot embargoed; reset after embargo window                            | Prevents thrashing at failure sites      |
+| Emergency Checkpoint/Rollback   | Checkpoints emitted; Tolaria rollback available on critical anomalies                         | Rapid recovery to last known‑good state  |
+| Signed Commands + Freshness     | Leyline HMAC‑SHA256 signatures; 60 s freshness; nonce TTL table                               | Replays rejected; conservative mode      |
+| Telemetry Backpressure          | Emergency signals bypass; non‑critical streams drop on saturation                             | Stability under overload                 |
+
+See also: Kasmina detailed design (`docs/design/detailed_design/02-kasmina.md`).
