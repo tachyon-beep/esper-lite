@@ -1,10 +1,12 @@
 import pytest
 from fakeredis.aioredis import FakeRedis
+from fastapi.testclient import TestClient
 from prometheus_client import CollectorRegistry
 
 from esper.core.telemetry import TelemetryMetric, build_telemetry_packet
 from esper.leyline import leyline_pb2
 from esper.nissa import NissaIngestor, NissaIngestorConfig
+from esper.nissa.server import create_app
 from esper.oona import OonaClient, StreamConfig
 
 
@@ -75,3 +77,26 @@ async def test_consume_from_oona_ingests_packets() -> None:
         "esper_telemetry_packets_total", {"source": "tolaria"}
     )
     assert value == 1.0
+
+
+def test_metrics_endpoint_serves_prometheus() -> None:
+    registry = CollectorRegistry()
+    es = _ElasticsearchStub()
+    config = NissaIngestorConfig(
+        prometheus_gateway="http://localhost:9091",
+        elasticsearch_url="http://localhost:9200",
+    )
+    ingest = NissaIngestor(config, es_client=es, registry=registry)
+    packet = build_telemetry_packet(
+        packet_id="pkt-1",
+        source="tamiyo",
+        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+        metrics=[TelemetryMetric("tamiyo.validation_loss", 0.42)],
+    )
+    ingest.ingest_telemetry(packet)
+
+    app = create_app(ingest)
+    client = TestClient(app)
+    response = client.get("/metrics")
+    assert response.status_code == 200
+    assert "esper_telemetry_packets_total" in response.text

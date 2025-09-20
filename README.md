@@ -43,6 +43,18 @@ Set `REDIS_URL` if you expose Redis on a non-default port.
 - `OONA_NORMAL_STREAM`, `OONA_EMERGENCY_STREAM`, `OONA_TELEMETRY_STREAM`, and `OONA_POLICY_STREAM` define the Redis Streams used for Tolaria system state, Tamiyo telemetry, and Simic policy updates. Defaults are provided in `.env.example`.
 - Nissa exposes Prometheus metrics via the ASGI helper in `src/esper/nissa/server.py`. Run `uvicorn esper.nissa.server:create_app --factory` with a configured `NissaIngestor` to scrape metrics and feed dashboards/alerts.
 
+### Observability Stack (Prometheus + Grafana)
+
+Bring up the local observability stack and point it at the Nissa metrics endpoint:
+
+```bash
+docker compose -f infra/docker-compose.observability.yml up -d
+# in another shell, run the Nissa metrics server after configuring EsperSettings
+uvicorn esper.nissa.server:create_default_app --factory --host 0.0.0.0 --port 9100
+```
+
+Prometheus is preconfigured via `infra/prometheus/prometheus.yml` to scrape `localhost:9100/metrics`. Grafana is available on <http://localhost:3000> (default admin/admin). Update dashboards/alerts in Grafana and export them alongside the infra manifests as they evolve.
+
 ## Repository Layout
 
 - `src/esper/` — Python packages for Esper subsystems, organised by lifecycle phase.
