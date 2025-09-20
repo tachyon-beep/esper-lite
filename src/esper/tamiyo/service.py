@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from io import BytesIO
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Dict, Tuple
 
 import torch
 import logging
 
 from esper.core import EsperSettings, TelemetryEvent, TelemetryMetric, build_telemetry_packet
 from esper.leyline import leyline_pb2
+try:
+    from esper.urza import UrzaLibrary
+except ImportError:  # pragma: no cover - optional import in certain test contexts
+    UrzaLibrary = None  # type: ignore
 
 from .policy import TamiyoPolicy, TamiyoPolicyConfig
 from .persistence import FieldReportStore, FieldReportStoreConfig
@@ -42,10 +46,15 @@ class TamiyoService:
         store: FieldReportStore | None = None,
         store_config: FieldReportStoreConfig | None = None,
         settings: EsperSettings | None = None,
+        urza: UrzaLibrary | None = None,
+        metadata_cache_ttl: timedelta = timedelta(minutes=5),
     ) -> None:
         self._policy = policy or TamiyoPolicy(TamiyoPolicyConfig())
         self._risk = risk_config or RiskConfig()
         self._settings = settings or EsperSettings()
+        self._urza = urza
+        self._metadata_cache_ttl = metadata_cache_ttl
+        self._blueprint_cache: Dict[str, Tuple[datetime, dict[str, float | str | bool | int]]] = {}
         if store and store_config:
             msg = "Provide either a FieldReportStore instance or a config, not both"
             raise ValueError(msg)
@@ -75,6 +84,25 @@ class TamiyoService:
         if self._last_validation_loss is not None:
             loss_delta = state.validation_loss - self._last_validation_loss
 
+        blueprint_info = self._resolve_blueprint_info(command)
+        if blueprint_info:
+            command.annotations["blueprint_tier"] = blueprint_info["tier"]
+            command.annotations["blueprint_stage"] = str(blueprint_info["stage"])
+            command.annotations["blueprint_risk"] = f"{blueprint_info['risk']:.2f}"
+            if blueprint_info["quarantine_only"] or blueprint_info["risk"] >= 0.8:
+                command.command_type = leyline_pb2.COMMAND_PAUSE
+                command.annotations.setdefault("risk_reason", "blueprint_high_risk")
+                risk_event.append(
+                    TelemetryEvent(
+                        description="Tamiyo quarantined blueprint",
+                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                        attributes={
+                            "tier": blueprint_info["tier"],
+                            "risk_score": f"{blueprint_info['risk']:.2f}",
+                        },
+                    )
+                )
+
         if self._risk.conservative_mode or (
             self._last_validation_loss is not None
             and loss_delta > self._risk.max_loss_spike
@@ -102,6 +130,21 @@ class TamiyoService:
             TelemetryMetric("tamiyo.policy.action", last_action.get("action", 0.0), unit="index"),
             TelemetryMetric("tamiyo.policy.param_delta", last_action.get("param_delta", 0.0), unit="delta"),
         ]
+        if blueprint_info:
+            metrics.append(
+                TelemetryMetric(
+                    "tamiyo.blueprint.risk",
+                    blueprint_info["risk"],
+                    unit="score",
+                )
+            )
+            metrics.append(
+                TelemetryMetric(
+                    "tamiyo.blueprint.stage",
+                    float(blueprint_info["stage"]),
+                    unit="stage",
+                )
+            )
         telemetry = build_telemetry_packet(
             packet_id=state.packet_id or "tamiyo-telemetry",
             source="tamiyo",
@@ -216,6 +259,37 @@ class TamiyoService:
             count=count,
             block_ms=block_ms,
         )
+
+    def _resolve_blueprint_info(
+        self, command: leyline_pb2.AdaptationCommand
+    ) -> dict[str, float | str | bool | int] | None:
+        if not self._urza:
+            return None
+        if command.command_type != leyline_pb2.COMMAND_SEED or not command.HasField("seed_operation"):
+            return None
+        blueprint_id = command.seed_operation.blueprint_id
+        if not blueprint_id:
+            return None
+
+        cached = self._blueprint_cache.get(blueprint_id)
+        now = datetime.now(tz=UTC)
+        if cached:
+            timestamp, data = cached
+            if (now - timestamp) < self._metadata_cache_ttl:
+                return data
+
+        record = self._urza.get(blueprint_id)
+        if record is None:
+            return None
+        data = {
+            "tier": record.metadata.tier.value,
+            "risk": float(record.metadata.risk),
+            "stage": int(record.metadata.stage),
+            "quarantine_only": bool(record.metadata.quarantine_only),
+            "approval_required": bool(record.metadata.approval_required),
+        }
+        self._blueprint_cache[blueprint_id] = (now, data)
+        return data
 
 
 __all__ = ["TamiyoService", "RiskConfig"]

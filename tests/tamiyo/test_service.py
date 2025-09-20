@@ -5,6 +5,8 @@ import torch
 from fakeredis.aioredis import FakeRedis
 
 from esper.leyline import leyline_pb2
+from esper.urza import UrzaLibrary
+from esper.karn import BlueprintMetadata, BlueprintTier
 from esper.oona import OonaClient, StreamConfig
 from esper.tamiyo import (
     FieldReportStoreConfig,
@@ -128,3 +130,43 @@ async def test_tamiyo_consume_policy_updates(tmp_path) -> None:
     assert service.policy_updates
     assert service.policy_updates[0].tamiyo_policy_version == "policy-v42"
     await client.close()
+
+
+def test_tamiyo_annotations_include_blueprint_metadata(tmp_path) -> None:
+    config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    urza = UrzaLibrary(root=tmp_path / "urza")
+    metadata = BlueprintMetadata(
+        blueprint_id="bp-demo",
+        name="Demo",
+        tier=BlueprintTier.EXPERIMENTAL,
+        description="Test blueprint",
+        allowed_parameters={},
+        risk=0.85,
+        stage=5,
+        quarantine_only=True,
+        approval_required=True,
+    )
+    artifact = tmp_path / "artifact.pt"
+    artifact.write_bytes(b"demo")
+    urza.save(metadata, artifact)
+
+    class _PolicyStub(TamiyoPolicy):
+        def select_action(self, packet: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
+            command = leyline_pb2.AdaptationCommand(
+                version=1,
+                command_id="cmd",
+                command_type=leyline_pb2.COMMAND_SEED,
+                target_seed_id="seed-1",
+            )
+            command.seed_operation.operation = leyline_pb2.SEED_OP_GERMINATE
+            command.seed_operation.blueprint_id = "bp-demo"
+            self._last_action = {"action": 0.0, "param_delta": 0.0}
+            return command
+
+    service = TamiyoService(policy=_PolicyStub(), store_config=config, urza=urza)
+    packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1)
+    command = service.evaluate_epoch(packet)
+    assert command.annotations["blueprint_tier"] == "experimental"
+    assert command.annotations["blueprint_stage"] == "5"
+    assert command.annotations["blueprint_risk"] == "0.85"
+    assert command.command_type == leyline_pb2.COMMAND_PAUSE

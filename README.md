@@ -138,6 +138,14 @@ The generated files are stored in `src/esper/leyline/_generated/` and include
   residual WAL entry is replayed automatically. Use `fetch_by_tier`/`get` for
   low-latency lookups or run TezzeretForge to populate missing artifacts.
 
+### Tamiyo Blueprint Awareness
+
+- When Tamiyo issues a seed command, it fetches blueprint metadata from Urza
+  (tier, risk, stage, quarantine flag). High-risk or quarantined blueprints
+  automatically trigger a pause command, and telemetry emits
+  `tamiyo.blueprint.*` metrics for Nissa. Metadata lookups are cached for
+  five minutes and respect Urza’s persisted risk data.
+
 ### Field Report Persistence
 
 - Tamiyo writes every generated field report to `var/tamiyo/field_reports.log`

@@ -125,7 +125,7 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
   - Activation path maintains training continuity.
   - Observed fetch latency meets <10 ms p50 target.
 
-### TKT-205: Tamiyo Blueprint Metadata Consumption ◔
+### TKT-205: Tamiyo Blueprint Metadata Consumption ✅
 - **Description:** Extend Tamiyo to pull blueprint metadata for decision context.
 - **Acceptance Criteria:**
   - Tamiyo can query Urza/Karn for blueprint info synchronously/asynchronously as needed.
