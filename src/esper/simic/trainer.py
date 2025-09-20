@@ -1,9 +1,4 @@
-"""Simic trainer scaffolding.
-
-A future implementation will integrate PyTorch 2.8 PPO training and LoRA updates
-per `docs/design/detailed_design/04-simic.md`. This placeholder focuses on the
-control flow and extensibility points.
-"""
+"""Simic offline trainer with PPO-style updates and optional LoRA adapters."""
 
 from __future__ import annotations
 
@@ -15,10 +10,11 @@ from typing import TYPE_CHECKING
 
 import torch
 from torch import nn, optim
+from torch.nn import functional as F
 
 from esper.leyline import leyline_pb2
 
-from .replay import FieldReportReplayBuffer
+from .replay import FieldReportReplayBuffer, SimicExperience
 
 if TYPE_CHECKING:
     from esper.oona import OonaClient
@@ -30,7 +26,16 @@ class SimicTrainerConfig:
 
     learning_rate: float = 5e-4
     epochs: int = 5
-    batch_size: int = 32
+    batch_size: int = 64
+    hidden_size: int = 64
+    dropout: float = 0.1
+    gamma: float = 0.99
+    value_coef: float = 0.5
+    entropy_coef: float = 0.01
+    grad_clip: float = 1.0
+    use_lora: bool = False
+    lora_rank: int = 4
+    lora_alpha: float = 8.0
 
 
 class SimicTrainer:
@@ -38,45 +43,76 @@ class SimicTrainer:
 
     def __init__(
         self,
-        policy: nn.Module,
+        policy: nn.Module | None,
         buffer: FieldReportReplayBuffer,
         config: SimicTrainerConfig | None = None,
     ) -> None:
-        self._policy = policy
         self._buffer = buffer
         self._config = config or SimicTrainerConfig()
+        self._policy = policy or _build_policy_network(self._config)
         self._optimizer = optim.Adam(self._policy.parameters(), lr=self._config.learning_rate)
         self._policy_updates: list[leyline_pb2.PolicyUpdate] = []
+        self._device = next(self._policy.parameters()).device
+        self._policy.to(self._device)
+        self._last_loss: float = 0.0
 
     def run_training(self) -> None:
         """Execute PPO-like training on buffered field reports."""
 
-        dataset = list(self._buffer.sample(self._config.batch_size * self._config.epochs))
+        self._policy.train()
         for _ in range(self._config.epochs):
-            for batch in self._iter_batches(dataset, self._config.batch_size):
-                loss = self._compute_loss(batch)
-                loss.backward()
-                self._optimizer.step()
-                self._optimizer.zero_grad(set_to_none=True)
+            batch = self._buffer.sample_batch(self._config.batch_size)
+            if batch["reward"].numel() == 0:
+                continue
+            loss = self._compute_loss(batch)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self._policy.parameters(), self._config.grad_clip)
+            self._optimizer.step()
+            self._optimizer.zero_grad(set_to_none=True)
+            self._last_loss = float(loss.detach().cpu())
 
-    def _compute_loss(self, reports: Iterable[leyline_pb2.FieldReport]) -> torch.Tensor:
-        """Placeholder loss using simple score aggregation."""
+    def _compute_loss(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
+        rewards = batch["reward"].to(self._device)
+        loss_deltas = batch["loss_delta"].to(self._device)
+        outcome_success = batch["outcome_success"].to(self._device)
 
-        reports_list = list(reports)
-        if not reports_list:
-            return torch.tensor(0.0, requires_grad=True)
+        inputs = self._prepare_inputs(loss_deltas, outcome_success)
+        outputs = self._policy(inputs)
+        if isinstance(outputs, tuple):
+            logits, values = outputs
+        else:
+            if outputs.dim() == 1:
+                outputs = outputs.unsqueeze(-1)
+            logits = outputs[..., 0]
+            value_col = outputs[..., 1] if outputs.shape[-1] > 1 else logits
+            values = value_col.squeeze(-1)
+        logits = logits.squeeze(-1)
+        values = values.squeeze(-1)
+        dist = torch.distributions.Bernoulli(logits=torch.clamp(logits, -20, 20))
+        actions = outcome_success
+        log_probs = dist.log_prob(actions)
+        entropy = dist.entropy().mean()
 
-        score = torch.tensor(0.0, requires_grad=True)
-        for _ in reports_list:
-            score = score + 1.0
-        return score
+        advantages = rewards - values.detach()
+        policy_loss = -(advantages * log_probs).mean()
+        value_loss = F.mse_loss(values, rewards)
 
-    @staticmethod
-    def _iter_batches(
-        data: list[leyline_pb2.FieldReport], batch_size: int
-    ) -> Iterable[list[leyline_pb2.FieldReport]]:
-        for start in range(0, len(data), batch_size):
-            yield data[start : start + batch_size]
+        loss = policy_loss + self._config.value_coef * value_loss - self._config.entropy_coef * entropy
+        return loss
+
+    def _prepare_inputs(self, loss_deltas: torch.Tensor, outcomes: torch.Tensor) -> torch.Tensor:
+        input_dim = self._infer_input_dim()
+        inputs = torch.zeros((loss_deltas.shape[0], input_dim), device=self._device)
+        inputs[:, 0] = loss_deltas
+        if input_dim > 1:
+            inputs[:, 1] = outcomes
+        return inputs
+
+    def _infer_input_dim(self) -> int:
+        for module in self._policy.modules():
+            if isinstance(module, nn.Linear):
+                return module.in_features
+        raise RuntimeError("Unable to infer policy input dimension")
 
     def create_policy_update(
         self,
@@ -114,5 +150,82 @@ class SimicTrainer:
 
         return list(self._policy_updates)
 
+    @property
+    def last_loss(self) -> float:
+        """Return the last observed training loss."""
+
+        return self._last_loss
+
 
 __all__ = ["SimicTrainer", "SimicTrainerConfig"]
+
+
+def _build_policy_network(config: SimicTrainerConfig) -> nn.Module:
+    return _PolicyNetwork(
+        input_dim=2,
+        hidden_size=config.hidden_size,
+        dropout=config.dropout,
+        use_lora=config.use_lora,
+        lora_rank=config.lora_rank,
+        lora_alpha=config.lora_alpha,
+    )
+
+
+class _LoRALinear(nn.Linear):
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        *,
+        bias: bool = True,
+        enable_lora: bool = False,
+        rank: int = 4,
+        alpha: float = 8.0,
+    ) -> None:
+        super().__init__(in_features, out_features, bias=bias)
+        if enable_lora and rank > 0:
+            self.lora_A = nn.Parameter(torch.zeros(rank, in_features))
+            self.lora_B = nn.Parameter(torch.zeros(out_features, rank))
+            self.scaling = alpha / rank
+            nn.init.kaiming_uniform_(self.lora_A, a=5**0.5)
+            nn.init.zeros_(self.lora_B)
+        else:
+            self.register_parameter("lora_A", None)
+            self.register_parameter("lora_B", None)
+            self.scaling = 0.0
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:  # type: ignore[override]
+        result = super().forward(input)
+        if self.lora_A is not None and self.lora_B is not None:
+            lora_update = (input @ self.lora_A.t()) @ self.lora_B.t()
+            result = result + self.scaling * lora_update
+        return result
+
+
+class _PolicyNetwork(nn.Module):
+    def __init__(
+        self,
+        *,
+        input_dim: int,
+        hidden_size: int,
+        dropout: float,
+        use_lora: bool,
+        lora_rank: int,
+        lora_alpha: float,
+    ) -> None:
+        super().__init__()
+        self.backbone = nn.Sequential(
+            _LoRALinear(input_dim, hidden_size, enable_lora=use_lora, rank=lora_rank, alpha=lora_alpha),
+            nn.Tanh(),
+            nn.Dropout(dropout),
+            _LoRALinear(hidden_size, hidden_size, enable_lora=use_lora, rank=lora_rank, alpha=lora_alpha),
+            nn.Tanh(),
+        )
+        self.policy_head = _LoRALinear(hidden_size, 1, enable_lora=use_lora, rank=lora_rank, alpha=lora_alpha)
+        self.value_head = _LoRALinear(hidden_size, 1, enable_lora=use_lora, rank=lora_rank, alpha=lora_alpha)
+
+    def forward(self, inputs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        features = self.backbone(inputs)
+        logits = self.policy_head(features).squeeze(-1)
+        value = self.value_head(features).squeeze(-1)
+        return logits, value

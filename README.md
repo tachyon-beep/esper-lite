@@ -83,6 +83,20 @@ procedures and teardown steps live in
 The generated files are stored in `src/esper/leyline/_generated/` and include
 `.pyi` type stubs for static analysis.
 
+### Simic Offline Training
+
+- Field reports collected from Tamiyo populate the replay buffer used by Simic
+  (`esper.simic.replay`).
+- Run the smoke tests with:
+
+  ```bash
+  pytest tests/simic/test_replay.py tests/simic/test_trainer.py
+  ```
+
+- `scripts/run_demo.py` demonstrates the full loop: Tolaria → Tamiyo → Kasmina
+  followed by Simic PPO training (with optional LoRA adapters) and policy
+  hot-reload via Oona.
+
 ## Repository Layout
 
 - `src/esper/` — Python packages for Esper subsystems, organised by lifecycle phase.

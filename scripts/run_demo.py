@@ -213,13 +213,18 @@ async def run_demo() -> None:
         generate_field_reports(tamiyo_service, kasmina_adapter.commands, trainer.state_packets)
         await publish_history(trainer, tamiyo_service, oona, nissa, settings)
 
-        buffer = FieldReportReplayBuffer(capacity=64)
-        for report in tamiyo_service.field_reports:
-            buffer.add(report)
+        buffer = FieldReportReplayBuffer(capacity=256)
+        buffer.extend(tamiyo_service.field_reports)
         simic_trainer = SimicTrainer(
             policy=tamiyo_service._policy,  # reuse current policy
             buffer=buffer,
-            config=SimicTrainerConfig(epochs=1, batch_size=4),
+            config=SimicTrainerConfig(
+                epochs=2,
+                batch_size=16,
+                hidden_size=32,
+                use_lora=True,
+                lora_rank=4,
+            ),
         )
         logger.info("Running Simic offline training")
         simic_trainer.run_training()
@@ -230,6 +235,11 @@ async def run_demo() -> None:
         )
         await simic_trainer.publish_policy_updates(oona)
         await consume_policy_updates(tamiyo_service, oona)
+        logger.info(
+            "Simic training complete: loss=%.4f, policy updates=%s",
+            simic_trainer.last_loss,
+            len(simic_trainer.policy_updates),
+        )
         logger.info("Tamiyo applied %s policy updates", len(tamiyo_service.policy_updates))
 
         command_offset = len(kasmina_adapter.commands)
