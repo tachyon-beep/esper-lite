@@ -6,6 +6,7 @@ Documents in this folder:
 - `delta-matrix.md` — requirement‑by‑requirement status with evidence
 - `traceability-map.md` — mapping of design assertions to code/tests
 - `implementation-roadmap.md` — suggested backlog to close gaps
+- `pytorch-2.8-upgrades.md` — mandatory PyTorch 2.8 changes (no feature flags)
 
 Design sources:
 - `docs/design/detailed_design/02-kasmina-unified-design.md`
