@@ -59,6 +59,12 @@ class TTLMemoryCache(Generic[T]):
     def delete(self, key: str) -> None:
         self._store.pop(key, None)
 
+    def clear(self) -> None:
+        self._store.clear()
+        self._hits = 0
+        self._misses = 0
+        self._evictions = 0
+
 
 @dataclass(slots=True)
 class KasminaMemoryManager:
@@ -66,10 +72,66 @@ class KasminaMemoryManager:
 
     kernel_cache: TTLMemoryCache[Any] = field(default_factory=TTLMemoryCache)
     telemetry_cache: TTLMemoryCache[Any] = field(default_factory=TTLMemoryCache)
+    gc_frequency: int = 10
+    _last_gc_epoch: int = 0
+    _gc_counter: int = 0
 
     def cleanup(self) -> None:
         self.kernel_cache.cleanup()
         self.telemetry_cache.cleanup()
+
+    def periodic_gc(self, epoch: int) -> dict[str, int]:
+        """Run periodic garbage collection based on the configured frequency."""
+
+        if self.gc_frequency <= 0:
+            return {"gc_skipped": 1, "reason": "disabled"}
+        if epoch < self._last_gc_epoch:
+            self._last_gc_epoch = epoch
+        if (epoch - self._last_gc_epoch) < self.gc_frequency:
+            return {"gc_skipped": 1, "reason": "frequency_not_met"}
+
+        kernel_expired = self.kernel_cache.cleanup()
+        telemetry_expired = self.telemetry_cache.cleanup()
+        try:
+            import gc
+
+            python_collected = gc.collect()
+        except Exception:  # pragma: no cover - optional GC hook
+            python_collected = 0
+
+        self._gc_counter += 1
+        self._last_gc_epoch = epoch
+        return {
+            "kernel_cache_expired": kernel_expired,
+            "telemetry_cache_expired": telemetry_expired,
+            "python_gc_collected": python_collected,
+            "gc_counter": self._gc_counter,
+            "gc_epoch": epoch,
+        }
+
+    def emergency_cleanup(self, *, include_teacher: bool = False) -> dict[str, int]:
+        """Aggressively clear caches and trigger Python garbage collection."""
+
+        kernel_stats = self.kernel_cache.stats()
+        telemetry_stats = self.telemetry_cache.stats()
+        preserved_teacher = None
+        if not include_teacher:
+            preserved_teacher = self.kernel_cache.get("teacher")
+        self.kernel_cache.clear()
+        if preserved_teacher is not None:
+            self.kernel_cache.set("teacher", preserved_teacher)
+        self.telemetry_cache.clear()
+        try:
+            import gc
+
+            python_collected = gc.collect()
+        except Exception:  # pragma: no cover
+            python_collected = 0
+        return {
+            "kernel_cache_cleared": kernel_stats.size,
+            "telemetry_cache_cleared": telemetry_stats.size,
+            "python_gc_collected": python_collected,
+        }
 
 
 __all__ = ["KasminaMemoryManager", "TTLMemoryCache", "CacheStats"]

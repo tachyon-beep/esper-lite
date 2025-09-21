@@ -46,6 +46,32 @@ def _sign_command(command: leyline_pb2.AdaptationCommand) -> None:
     command.annotations["signature"] = signature
 
 
+def _make_pause_command(seed_id: str, *, resume: bool = False) -> leyline_pb2.AdaptationCommand:
+    command_id = f"{'resume' if resume else 'pause'}-{seed_id}"
+    command = leyline_pb2.AdaptationCommand(
+        version=1,
+        command_id=command_id,
+        command_type=leyline_pb2.COMMAND_PAUSE,
+        target_seed_id=seed_id,
+    )
+    if resume:
+        command.annotations["resume"] = "true"
+    _sign_command(command)
+    return command
+
+
+def _make_emergency_command(*, include_teacher: bool = False) -> leyline_pb2.AdaptationCommand:
+    command = leyline_pb2.AdaptationCommand(
+        version=1,
+        command_id="emergency-cleanup",
+        command_type=leyline_pb2.COMMAND_EMERGENCY,
+    )
+    if include_teacher:
+        command.annotations["include_teacher"] = "true"
+    _sign_command(command)
+    return command
+
+
 def test_seed_manager_uses_fallback_on_failure() -> None:
     runtime = _Runtime(fail=True)
     manager = KasminaSeedManager(runtime, fallback_blueprint_id="BP001", signing_context=_SIGNING_CONTEXT)
@@ -80,6 +106,7 @@ def test_seed_manager_emits_telemetry_for_commands() -> None:
     assert "kasmina.seeds.active" in metric_names
     assert "kasmina.kernel.fetch_latency_ms" in metric_names
     assert "kasmina.cache.kernel_size" in metric_names
+    assert "kasmina.cache.gpu_capacity" in metric_names
     assert packet.source_subsystem == "kasmina"
     assert any(event.description == "seed_operation" for event in packet.events)
     assert any(event.description == "seed_stage" for event in packet.events)
@@ -136,6 +163,86 @@ def test_gradient_isolation_all_clear_for_distinct_params() -> None:
     command = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP101")
     manager.handle_command(command)
     assert manager.isolation_violations == 0
+
+
+def test_gpu_cache_enables_reuse_between_seeds() -> None:
+    runtime = _Runtime(latency=2.0)
+    manager = KasminaSeedManager(
+        runtime,
+        fallback_blueprint_id=None,
+        signing_context=_SIGNING_CONTEXT,
+        gpu_cache_capacity=8,
+    )
+    manager.register_host_model(nn.Linear(1, 1))
+
+    first = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP777")
+    manager.handle_command(first)
+
+    second = leyline_pb2.AdaptationCommand(
+        version=1,
+        command_id="cmd-2",
+        command_type=leyline_pb2.COMMAND_SEED,
+        target_seed_id="seed-2",
+    )
+    second.seed_operation.operation = leyline_pb2.SEED_OP_GERMINATE
+    second.seed_operation.blueprint_id = "BP777"
+    _sign_command(second)
+    manager.handle_command(second)
+
+    # Only the initial fetch should be observed; the second germination uses the cache.
+    assert runtime.calls.count("BP777") == 1
+
+
+def test_pause_and_resume_cycle() -> None:
+    runtime = _Runtime(latency=1.0)
+    manager = KasminaSeedManager(runtime, fallback_blueprint_id=None, signing_context=_SIGNING_CONTEXT)
+    manager.register_host_model(nn.Linear(1, 1))
+
+    germinate = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP808")
+    manager.handle_command(germinate)
+
+    pause_cmd = _make_pause_command("seed-1")
+    manager.handle_command(pause_cmd)
+    context = manager.seeds()["seed-1"]
+    assert context.metadata.get("paused") == "true"
+
+    resume_cmd = _make_pause_command("seed-1", resume=True)
+    manager.handle_command(resume_cmd)
+    context = manager.seeds()["seed-1"]
+    assert context.metadata.get("paused") == "false"
+    assert context.kernel_attached
+    event_names = {e.description for e in manager.telemetry_packets[-1].events}
+    assert "seed_resumed" in event_names
+
+
+def test_isolation_breaker_escalates_after_repeated_violations() -> None:
+    runtime = _Runtime()
+    manager = KasminaSeedManager(runtime, signing_context=_SIGNING_CONTEXT)
+    for _ in range(4):
+        manager.record_isolation_violation("seed-x")
+    packet = manager.telemetry_packets[-1]
+    levels = {event.description: event.level for event in packet.events}
+    assert levels.get("violation_recorded") == leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
+
+
+def test_memory_gc_emits_telemetry_when_due() -> None:
+    runtime = _Runtime()
+    manager = KasminaSeedManager(runtime, signing_context=_SIGNING_CONTEXT)
+    manager.update_epoch(9)  # below frequency
+    initial_packets = len(manager.telemetry_packets)
+    manager.update_epoch(10)
+    assert len(manager.telemetry_packets) > initial_packets
+    assert any(event.description == "memory_gc" for event in manager.telemetry_packets[-1].events)
+
+
+def test_emergency_command_triggers_cleanup() -> None:
+    runtime = _Runtime()
+    manager = KasminaSeedManager(runtime, signing_context=_SIGNING_CONTEXT)
+    manager._memory.kernel_cache.set("seed-x", nn.Identity())  # prime cache
+    command = _make_emergency_command()
+    manager.handle_command(command)
+    packet = manager.telemetry_packets[-1]
+    assert any(event.description == "emergency_cleanup" for event in packet.events)
 
 
 def test_isolation_stats_capture_detached_blend() -> None:

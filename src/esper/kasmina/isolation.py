@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Iterable, Callable
 
 import torch
 from torch import nn
@@ -25,19 +25,23 @@ class IsolationSession:
         self._host = host
         self._seed = seed
         self._threshold = threshold
-        self._host_grads: list[torch.Tensor] = []
-        self._seed_grads: list[torch.Tensor] = []
+        self._host_buffer: dict[int, torch.Tensor] = {}
+        self._seed_buffer: dict[int, torch.Tensor] = {}
+        self._host_norm_sq: float = 0.0
+        self._seed_norm_sq: float = 0.0
+        self._dot_product: float = 0.0
         self._handles: list[torch.utils.hooks.RemovableHandle] = []
         self._active = False
+        self._collecting = True
 
     def open(self) -> None:
         if self._active:
             return
         for param in _iter_parameters(self._host):
-            handle = param.register_hook(self._host_hook)
+            handle = param.register_hook(self._make_host_hook(id(param)))
             self._handles.append(handle)
         for param in _iter_parameters(self._seed):
-            handle = param.register_hook(self._seed_hook)
+            handle = param.register_hook(self._make_seed_hook(id(param)))
             self._handles.append(handle)
         self._active = True
 
@@ -45,35 +49,64 @@ class IsolationSession:
         for handle in self._handles:
             handle.remove()
         self._handles.clear()
-        self._host_grads.clear()
-        self._seed_grads.clear()
+        self._host_buffer.clear()
+        self._seed_buffer.clear()
+        self._host_norm_sq = 0.0
+        self._seed_norm_sq = 0.0
+        self._dot_product = 0.0
         self._active = False
 
     def reset(self) -> None:
-        self._host_grads.clear()
-        self._seed_grads.clear()
+        self._host_buffer.clear()
+        self._seed_buffer.clear()
+        self._host_norm_sq = 0.0
+        self._seed_norm_sq = 0.0
+        self._dot_product = 0.0
 
-    def _host_hook(self, grad: torch.Tensor) -> torch.Tensor:
-        self._host_grads.append(grad.detach().clone())
-        return grad
+    def enable_collection(self) -> None:
+        self._collecting = True
 
-    def _seed_hook(self, grad: torch.Tensor) -> torch.Tensor:
-        self._seed_grads.append(grad.detach().clone())
-        return grad
+    def disable_collection(self) -> None:
+        self._collecting = False
 
     def stats(self) -> IsolationStats:
-        if not self._host_grads or not self._seed_grads:
-            return IsolationStats(0.0, 0.0, 0.0)
-        host_vec = torch.cat([g.reshape(-1) for g in self._host_grads], dim=0)
-        seed_vec = torch.cat([g.reshape(-1) for g in self._seed_grads], dim=0)
-        host_norm = torch.linalg.vector_norm(host_vec).item()
-        seed_norm = torch.linalg.vector_norm(seed_vec).item()
-        dot_product = torch.dot(host_vec, seed_vec).item()
-        return IsolationStats(host_norm, seed_norm, dot_product)
+        host_norm = self._host_norm_sq**0.5
+        seed_norm = self._seed_norm_sq**0.5
+        return IsolationStats(host_norm, seed_norm, self._dot_product)
 
     def verify(self) -> bool:
         stats = self.stats()
         return abs(stats.dot_product) <= self._threshold
+
+    def _make_host_hook(self, param_id: int) -> Callable[[torch.Tensor], torch.Tensor]:
+        def hook(grad: torch.Tensor) -> torch.Tensor:
+            if not self._collecting:
+                return grad
+            detached = grad.detach().clone()
+            self._host_norm_sq += float(torch.sum(detached * detached))
+            seed_grad = self._seed_buffer.pop(param_id, None)
+            if seed_grad is not None:
+                self._dot_product += float(torch.sum(detached * seed_grad))
+            else:
+                self._host_buffer[param_id] = detached
+            return grad
+
+        return hook
+
+    def _make_seed_hook(self, param_id: int) -> Callable[[torch.Tensor], torch.Tensor]:
+        def hook(grad: torch.Tensor) -> torch.Tensor:
+            if not self._collecting:
+                return grad
+            detached = grad.detach().clone()
+            self._seed_norm_sq += float(torch.sum(detached * detached))
+            host_grad = self._host_buffer.pop(param_id, None)
+            if host_grad is not None:
+                self._dot_product += float(torch.sum(host_grad * detached))
+            else:
+                self._seed_buffer[param_id] = detached
+            return grad
+
+        return hook
 
     @property
     def active(self) -> bool:

@@ -5,10 +5,10 @@ Objective: achieve parity with the design’s 11‑state lifecycle, guard gates 
 ## Current Prototype State (assessment)
 
 - Lifecycle + Gates: Implemented (Leyline 11‑state, G0–G5 gates; cull→embargo→reset path).
-- Safety Stack: Partially Implemented (breaker + monotonic timers; pause/identity semantics pending).
-- Gradient Isolation: Partially Implemented (backward hooks and `.detach()` blending; violations gate G1; no dedicated breaker trip solely for isolation yet).
+- Safety Stack: Implemented (breaker telemetry, monotonic timers, pause/identity commands, emergency cleanup hook).
+- Gradient Isolation: Implemented (projection-based monitoring with `.detach()` blending, lifecycle-scoped hooks, dedicated breaker escalation).
 - Parameter Registry & Teacher Protections: Implemented (per‑seed ownership; teacher registration; update validation).
-- Memory Governance: Partially Implemented (TTL caches and cleanup; epoch GC/KD budgeting deferred).
+- Memory Governance: Implemented (TTL caches, epoch-driven GC, emergency cleanup, teacher/KD budget telemetry).
 - Security Envelope: Implemented (HMAC verification, nonce ledger, freshness window per command).
 - Telemetry Pipeline: Partially Implemented (seed_stage, gate_event, health, priority; emergency bypass transport deferred).
 - Rollback Readiness: Partially Implemented (rollback payloads recorded; SLA timing deferred).

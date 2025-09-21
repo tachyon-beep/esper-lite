@@ -29,10 +29,29 @@ from .registry import SeedParameterRegistry
 from .security import CommandVerifier, NonceLedger
 from .safety import BreakerEvent, KasminaCircuitBreaker, MonotonicTimer
 from .lifecycle import KasminaLifecycle
+from .kernel_cache import KasminaKernelCache
 from esper.leyline import leyline_pb2 as pb
 
 
 logger = logging.getLogger(__name__)
+
+
+_MATMUL_INITIALISED = False
+
+
+def _initialise_pytorch_defaults() -> None:
+    """Apply PyTorch 2.8 defaults once per process."""
+
+    global _MATMUL_INITIALISED
+    if _MATMUL_INITIALISED:
+        return
+    try:
+        torch.set_float32_matmul_precision("high")
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+    except Exception:  # pragma: no cover - best effort on CPU-only setups
+        pass
+    _MATMUL_INITIALISED = True
 
 
 class BlueprintRuntime(Protocol):
@@ -78,7 +97,9 @@ class KasminaSeedManager:
         signing_context: SignatureContext | None = None,
         nonce_ttl_seconds: float = 300.0,
         freshness_window_seconds: float = 60.0,
+        gpu_cache_capacity: int | None = 32,
     ) -> None:
+        _initialise_pytorch_defaults()
         self._runtime = runtime
         self._seeds: dict[str, SeedContext] = {}
         self._latency_budget_ms = latency_budget_ms
@@ -88,6 +109,7 @@ class KasminaSeedManager:
         self._isolation_violations: int = 0
         self._telemetry_packets: list[leyline_pb2.TelemetryPacket] = []
         self._telemetry_counter: int = 0
+        self._last_priority: int = leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
         self._host_param_ids: set[int] = set()
         self._gates = KasminaGates()
         self._clock: Callable[[], float] = clock or time.monotonic
@@ -97,6 +119,11 @@ class KasminaSeedManager:
         self._isolation_monitor = GradientIsolationMonitor()
         self._isolation_sessions: dict[str, IsolationSession] = {}
         self._host_model: nn.Module | None = None
+        self._isolation_breaker = KasminaCircuitBreaker(
+            failure_threshold=3,
+            timeout_ms=30_000.0,
+            clock=self._clock,
+        )
         self._alpha_blender = AlphaBlender()
         self._alpha_schedule = AlphaSchedule(total_steps=20, temperature=2.0)
         self._registry = SeedParameterRegistry()
@@ -104,7 +131,14 @@ class KasminaSeedManager:
         self._nonce_ledger = NonceLedger(ttl_seconds=nonce_ttl_seconds, clock=self._clock)
         self._rollback_records: dict[str, struct_pb2.Struct] = {}
         self._teacher_model: nn.Module | None = None
+        self._teacher_memory_budget_gb: float = 7.0
+        self._teacher_memory_estimate_gb: float | None = None
         self._current_epoch: int = 0
+        self._gpu_cache = (
+            KasminaKernelCache(capacity=gpu_cache_capacity)
+            if gpu_cache_capacity and gpu_cache_capacity > 0
+            else None
+        )
         if signing_context is None:
             try:
                 signing_context = SignatureContext.from_environment(DEFAULT_SECRET_ENV)
@@ -176,6 +210,25 @@ class KasminaSeedManager:
                     },
                 )
             )
+        elif command.command_type == leyline_pb2.COMMAND_PAUSE:
+            resume_flag = command.annotations.get("resume", "").lower() == "true"
+            if resume_flag:
+                events.extend(self._resume_seed(command.target_seed_id))
+            else:
+                events.extend(self._pause_seed(command.target_seed_id))
+        elif command.command_type == leyline_pb2.COMMAND_EMERGENCY:
+            include_teacher = command.annotations.get("include_teacher", "").lower() == "true"
+            cleanup_stats = self._memory.emergency_cleanup(include_teacher=include_teacher)
+            events.append(
+                TelemetryEvent(
+                    description="emergency_cleanup",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
+                    attributes={
+                        "include_teacher": str(include_teacher).lower(),
+                        **{k: str(v) for k, v in cleanup_stats.items()},
+                    },
+                )
+            )
         else:
             self._noop(command)
             events.append(
@@ -222,6 +275,17 @@ class KasminaSeedManager:
         if epoch < 0:
             raise ValueError("epoch must be non-negative")
         self._current_epoch = epoch
+        gc_result = self._memory.periodic_gc(epoch)
+        if "gc_counter" in gc_result:
+            self._emit_telemetry(
+                events=[
+                    TelemetryEvent(
+                        description="memory_gc",
+                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+                        attributes={k: str(v) for k, v in gc_result.items()},
+                    )
+                ]
+            )
 
     def blend(self, host_tensor: torch.Tensor, seed_tensor: torch.Tensor, *, seed_id: str | None = None) -> torch.Tensor:
         """Blend host and seed activations using the configured alpha schedule."""
@@ -244,6 +308,7 @@ class KasminaSeedManager:
             return events
 
         context = self._seeds.setdefault(seed_id, SeedContext(seed_id))
+        context.metadata["blueprint_id"] = blueprint_id
         lifecycle = context.lifecycle
         if lifecycle.state == pb.SEED_STAGE_UNKNOWN:
             self._transition(context, pb.SEED_STAGE_DORMANT)
@@ -278,9 +343,24 @@ class KasminaSeedManager:
         fetch_exc: Exception | None = None
         reported_latency: float | None = None
         kernel: nn.Module | None = None
+        cache_hit = False
+        cached_kernel: nn.Module | None = None
+        if self._gpu_cache is not None:
+            cached = self._gpu_cache.get(blueprint_id)
+            if isinstance(cached, nn.Module):
+                cached_kernel = cached
+                cache_hit = True
+                context.metadata["kernel_cache"] = "hit"
+            else:
+                context.metadata["kernel_cache"] = "miss"
+
         with measurement:
             try:
-                kernel, reported_latency = self._runtime.fetch_kernel(blueprint_id)
+                if cached_kernel is not None:
+                    kernel = cached_kernel
+                    reported_latency = 0.0
+                else:
+                    kernel, reported_latency = self._runtime.fetch_kernel(blueprint_id)
             except Exception as exc:  # pragma: no cover - defensive guard
                 fetch_exc = exc
 
@@ -295,6 +375,7 @@ class KasminaSeedManager:
             context.used_fallback = True
             context.last_kernel_latency_ms = self._latency_budget_ms
             self._last_fallback_used = True
+            context.metadata["kernel_cache"] = "fallback"
         else:
             assert kernel is not None  # for type checkers
             latency_ms = reported_latency if reported_latency is not None else elapsed_ms
@@ -333,6 +414,9 @@ class KasminaSeedManager:
             self._handle_gate_failure(context, failure, events)
             return events
         context.kernel_attached = True
+
+        if not cache_hit and self._gpu_cache is not None and kernel is not None:
+            self._gpu_cache.set(blueprint_id, kernel)
 
         if not self._ensure_gate(
             context,
@@ -399,6 +483,10 @@ class KasminaSeedManager:
             session.close()
         self._registry.deregister_seed(seed_id)
         self._memory.kernel_cache.delete(seed_id)
+        if self._gpu_cache is not None:
+            blueprint_id = context.metadata.get("blueprint_id")
+            if blueprint_id:
+                self._gpu_cache.delete(blueprint_id)
         self._record_rollback(seed_id, context, reason="retired")
         events.append(
             TelemetryEvent(
@@ -453,6 +541,15 @@ class KasminaSeedManager:
                 logger.error("Failed to register isolation hooks: %s", exc)
             else:
                 self._isolation_sessions[seed_id] = session
+                allowed_stages = {
+                    pb.SEED_STAGE_TRAINING,
+                    pb.SEED_STAGE_BLENDING,
+                    pb.SEED_STAGE_SHADOWING,
+                    pb.SEED_STAGE_PROBATIONARY,
+                }
+                current_stage = context.lifecycle.state if context else pb.SEED_STAGE_UNKNOWN
+                if current_stage not in allowed_stages:
+                    session.disable_collection()
 
         if context:
             self._registry.register_seed(seed_id, kernel)
@@ -498,6 +595,14 @@ class KasminaSeedManager:
         context.last_gate_results[gate] = result
         self._append_gate_event(events, context.seed_id, result)
         if result.passed:
+            if gate == pb.SEED_GATE_G1_GRADIENT_HEALTH:
+                breaker_event = self._isolation_breaker.record_success()
+                if breaker_event:
+                    events.append(
+                        self._isolation_breaker_event_to_telemetry(
+                            breaker_event, seed_id=context.seed_id
+                        )
+                    )
             return True
         self._handle_gate_failure(context, result, events)
         return False
@@ -612,7 +717,37 @@ class KasminaSeedManager:
             attributes=attributes,
         )
 
+    def _isolation_breaker_event_to_telemetry(self, event: BreakerEvent, *, seed_id: str | None = None) -> TelemetryEvent:
+        attributes = {
+            "component": "isolation",
+            "breaker_state": leyline_pb2.CircuitBreakerState.Name(event.state),
+            "action": event.action,
+            "reason": event.reason,
+        }
+        if seed_id:
+            attributes["seed_id"] = seed_id
+        level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING
+        if event.state == leyline_pb2.CIRCUIT_STATE_OPEN:
+            level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
+        return TelemetryEvent(
+            description="isolation_breaker",
+            level=level,
+            attributes=attributes,
+        )
+
     def _handle_post_transition(self, context: SeedContext, stage: int) -> None:
+        session = self._isolation_sessions.get(context.seed_id)
+        if session:
+            if stage in {
+                pb.SEED_STAGE_TRAINING,
+                pb.SEED_STAGE_BLENDING,
+                pb.SEED_STAGE_SHADOWING,
+                pb.SEED_STAGE_PROBATIONARY,
+            }:
+                session.enable_collection()
+            else:
+                session.disable_collection()
+                session.reset()
         if stage == pb.SEED_STAGE_BLENDING:
             context.alpha_steps += 1
             context.alpha = self._alpha_schedule.value(context.alpha_steps)
@@ -689,6 +824,22 @@ class KasminaSeedManager:
         self._registry.register_teacher(model)
         self._teacher_model = model
         self._memory.kernel_cache.set("teacher", model)
+        self._teacher_memory_estimate_gb = self._estimate_model_memory_gb(model)
+        level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO
+        if self._teacher_memory_estimate_gb > self._teacher_memory_budget_gb:
+            level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING
+        self._emit_telemetry(
+            events=[
+                TelemetryEvent(
+                    description="teacher_registered",
+                    level=level,
+                    attributes={
+                        "memory_gb": f"{self._teacher_memory_estimate_gb:.2f}",
+                        "budget_gb": f"{self._teacher_memory_budget_gb:.2f}",
+                    },
+                )
+            ]
+        )
 
     def _load_fallback(self, seed_id: str) -> nn.Module:
         self._last_fallback_used = True
@@ -709,11 +860,107 @@ class KasminaSeedManager:
                 logger.error("Fallback blueprint %s unavailable: %s", self._fallback_blueprint_id, exc)
         return nn.Identity()
 
+    def _estimate_model_memory_gb(self, model: nn.Module) -> float:
+        total_bytes = 0
+        for param in model.parameters():
+            total_bytes += param.numel() * param.element_size()
+        for buffer in model.buffers():
+            total_bytes += buffer.numel() * buffer.element_size()
+        return total_bytes / (1024**3)
+
     def _log_adjustment(self, command: leyline_pb2.AdaptationCommand) -> None:
         _ = command
 
     def _noop(self, command: leyline_pb2.AdaptationCommand) -> None:
         _ = command
+
+    def _pause_seed(self, seed_id: str) -> list[TelemetryEvent]:
+        events: list[TelemetryEvent] = []
+        context = self._seeds.get(seed_id)
+        if not context:
+            return events
+        context.metadata["paused"] = "true"
+        context.metadata["performance_status"] = "paused"
+        context.kernel = nn.Identity()
+        context.kernel_attached = False
+        session = self._isolation_sessions.get(seed_id)
+        if session:
+            session.disable_collection()
+            session.reset()
+        events.append(
+            TelemetryEvent(
+                description="seed_paused",
+                level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                attributes={"seed_id": seed_id},
+            )
+        )
+        return events
+
+    def _resume_seed(self, seed_id: str) -> list[TelemetryEvent]:
+        events: list[TelemetryEvent] = []
+        context = self._seeds.get(seed_id)
+        if not context:
+            return events
+        context.metadata["paused"] = "false"
+        blueprint_id = context.metadata.get("blueprint_id")
+        kernel: nn.Module | None = None
+        cache_hit = False
+        if blueprint_id and self._gpu_cache is not None:
+            cached = self._gpu_cache.get(blueprint_id)
+            if isinstance(cached, nn.Module):
+                kernel = cached
+                cache_hit = True
+        if kernel is None and blueprint_id:
+            try:
+                kernel, latency = self._runtime.fetch_kernel(blueprint_id)
+                context.last_kernel_latency_ms = latency
+            except Exception as exc:  # pragma: no cover
+                logger.error("Resume fetch failed for %s: %s", blueprint_id, exc)
+                kernel = self._load_fallback(seed_id)
+                context.used_fallback = True
+        if kernel is not None:
+            self._attach_kernel(seed_id, kernel)
+            context.kernel_attached = True
+            if self._gpu_cache is not None and blueprint_id and not cache_hit:
+                self._gpu_cache.set(blueprint_id, kernel)
+        events.append(
+            TelemetryEvent(
+                description="seed_resumed",
+                level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+                attributes={
+                    "seed_id": seed_id,
+                    "blueprint_id": blueprint_id or "",
+                    "cache": "hit" if cache_hit else "miss",
+                },
+            )
+        )
+        # Re-run G1 checks so the seed cannot proceed with stale state.
+        if context.kernel_attached:
+            g1_inputs = GateInputs(
+                isolation_violations=context.isolation_violations,
+                kernel_attached=context.kernel_attached,
+                last_latency_ms=context.last_kernel_latency_ms,
+                latency_budget_ms=self._latency_budget_ms,
+                fallback_used=context.used_fallback,
+                host_params_registered=bool(self._host_param_ids),
+            )
+            result = self._gates.evaluate(pb.SEED_GATE_G1_GRADIENT_HEALTH, g1_inputs)
+            if result.passed:
+                self._append_gate_event(events, seed_id, result)
+                context.metadata["performance_status"] = "nominal"
+                breaker_event = self._isolation_breaker.record_success()
+                if breaker_event:
+                    events.append(
+                        self._isolation_breaker_event_to_telemetry(
+                            breaker_event, seed_id=seed_id
+                        )
+                    )
+            else:
+                self._handle_gate_failure(context, result, events)
+        session = self._isolation_sessions.get(seed_id)
+        if session:
+            session.enable_collection()
+        return events
 
     def _emit_telemetry(
         self,
@@ -788,6 +1035,36 @@ class KasminaSeedManager:
                 unit="ratio",
             )
         )
+        if self._gpu_cache is not None:
+            gpu_stats = self._gpu_cache.stats()
+            metrics.append(
+                TelemetryMetric(
+                    "kasmina.cache.gpu_size",
+                    float(gpu_stats.size),
+                    unit="count",
+                )
+            )
+            metrics.append(
+                TelemetryMetric(
+                    "kasmina.cache.gpu_capacity",
+                    float(gpu_stats.capacity),
+                    unit="count",
+                )
+            )
+            metrics.append(
+                TelemetryMetric(
+                    "kasmina.cache.gpu_hit_rate",
+                    gpu_stats.hit_rate,
+                    unit="ratio",
+                )
+            )
+            metrics.append(
+                TelemetryMetric(
+                    "kasmina.cache.gpu_evictions",
+                    float(gpu_stats.evictions),
+                    unit="count",
+                )
+            )
         telemetry_cache_stats = self._memory.telemetry_cache.stats()
         metrics.append(
             TelemetryMetric(
@@ -875,7 +1152,34 @@ class KasminaSeedManager:
             health_indicators=health_indicators,
         )
         packet.system_health.indicators["priority"] = leyline_pb2.MessagePriority.Name(priority)
+        self._last_priority = priority
         return packet
+
+    def advance_alpha(self, seed_id: str, *, steps: int = 1) -> float:
+        """Advance the alpha schedule while BLENDING."""
+
+        context = self._seeds.get(seed_id)
+        if not context:
+            return 0.0
+        if context.lifecycle.state != pb.SEED_STAGE_BLENDING:
+            return context.alpha
+        for _ in range(max(steps, 0)):
+            context.alpha_steps += 1
+        context.alpha = self._alpha_schedule.value(context.alpha_steps)
+        context.metadata["alpha"] = f"{context.alpha:.4f}"
+        return context.alpha
+
+    def run_probe(self, seed_id: str, fn: Callable[[], torch.Tensor]) -> torch.Tensor:
+        """Execute a probe forward under inference mode when required."""
+
+        context = self._seeds.get(seed_id)
+        if context and context.lifecycle.state in {
+            pb.SEED_STAGE_SHADOWING,
+            pb.SEED_STAGE_PROBATIONARY,
+        }:
+            with torch.inference_mode():
+                return fn()
+        return fn()
 
     def record_isolation_violation(self, seed_id: str | None = None) -> None:
         """Increment isolation violation counters and emit telemetry."""
@@ -888,15 +1192,26 @@ class KasminaSeedManager:
         if context:
             context.isolation_violations += 1
             context.metadata["performance_status"] = "violations"
-        self._emit_telemetry(
-            events=[
-                TelemetryEvent(
-                    description="violation_recorded",
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                    attributes=attributes,
+        breaker_event = self._isolation_breaker.record_failure("isolation_violation")
+        level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING
+        snapshot = self._isolation_breaker.snapshot()
+        if snapshot.state == leyline_pb2.CIRCUIT_STATE_OPEN:
+            level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
+
+        telemetry_events = [
+            TelemetryEvent(
+                description="violation_recorded",
+                level=level,
+                attributes=attributes,
+            )
+        ]
+        if breaker_event:
+            telemetry_events.append(
+                self._isolation_breaker_event_to_telemetry(
+                    breaker_event, seed_id=seed_id
                 )
-            ]
-        )
+            )
+        self._emit_telemetry(events=telemetry_events)
 
     @property
     def last_fetch_latency_ms(self) -> float:
@@ -917,6 +1232,12 @@ class KasminaSeedManager:
         """Expose cumulative isolation violation count."""
 
         return self._isolation_violations
+
+    @property
+    def last_priority(self) -> int:
+        """Return the priority associated with the most recent telemetry packet."""
+
+        return self._last_priority
 
     # -----------------------------
     # Export to Leyline SeedState

@@ -1,6 +1,6 @@
 # Kasmina — Prototype Delta (Execution Layer)
 
-Executive summary: the prototype implements the Leyline 11‑state lifecycle with gate checks (G0–G5), kernel fetch via Urza with latency fallback, backward‑hook gradient isolation monitoring with `.detach()` blending, a per‑seed/teacher parameter registry, TTL memory caches, a circuit breaker + monotonic timers, and HMAC/nonce/freshness verification for commands. Structured telemetry reports seed stages, gate events, health, and priority. Remaining work includes a performance validation harness, optional GPU‑resident cache/async path, explicit emergency telemetry bypass, and KD loss/budgeting integration.
+Executive summary: the prototype implements the Leyline 11‑state lifecycle with gate checks (G0–G5), kernel fetch via Urza with latency fallback and GPU cache reuse, projection-based gradient isolation monitoring with breaker escalation, a per‑seed/teacher parameter registry, TTL memory caches with epoch GC, a circuit breaker + monotonic timers, and HMAC/nonce/freshness verification for commands. Structured telemetry reports seed stages, gate events, health, and priority. Remaining work includes a production-grade performance validation harness, asynchronous kernel scheduling, explicit telemetry bypass transport, and KD loss wiring.
 
 Documents in this folder:
 - `delta-matrix.md` — requirement‑by‑requirement status with evidence
@@ -22,3 +22,4 @@ Implementation evidence (primary):
 - `src/esper/core/telemetry.py`
 - `src/esper/security/signing.py`
 - Tests: `tests/kasmina/*`, `tests/integration/test_control_loop.py`
+- Benchmarks: `scripts/bench_kasmina.py`
