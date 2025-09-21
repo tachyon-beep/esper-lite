@@ -1,7 +1,5 @@
 ---
 title: Introduction
-source: /home/john/esper-lite/docs/paper/draft_paper.md
-source_lines: 142-189
 split_mode: consolidated
 chapter: 1
 coauthors:

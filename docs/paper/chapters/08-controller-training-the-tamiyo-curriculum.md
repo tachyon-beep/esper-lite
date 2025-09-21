@@ -1,7 +1,5 @@
 ---
 title: CONTROLLER TRAINING: THE TAMIYO CURRICULUM
-source: /home/john/esper-lite/docs/paper/draft_paper.md
-source_lines: 455-544
 split_mode: consolidated
 chapter: 8
 coauthors:
@@ -81,10 +79,10 @@ Design alignment:
 
 | Aspect                 | Esper‑Lite Design Reference                                                                 |
 |------------------------|---------------------------------------------------------------------------------------------|
-| Policy Architecture    | 4‑layer hetero‑GNN (GraphSAGE → GAT) with risk/value/policy heads (Tamiyo v4.1)            |
-| Inference Budget       | < 45 ms latency; ≤ 2 GB VRAM                                                                |
+| Policy Architecture    | Graph‑based policy with risk, value, and action heads                                      |
+| Inference Budget       | Low‑latency inference under fixed resource budgets                                         |
 | Risk Governance        | Multi‑signal risk engine, conservative mode, circuit breakers                               |
-| Messaging Contracts    | Leyline Option B budgets; signed `AdaptationCommand`/`FieldReport`; telemetry aggregation   |
+| Messaging Contracts    | Compact, authenticated control messages and structured telemetry aggregation               |
 ## 8.4 Reward Function and Optimisation
 Tamiyo is trained via reinforcement learning to maximize a composite reward that trades off performance gains against safety, stability, and resource costs. A practical shaping is:
 

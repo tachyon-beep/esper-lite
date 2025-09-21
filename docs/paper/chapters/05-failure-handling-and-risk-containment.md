@@ -1,7 +1,5 @@
 ---
 title: FAILURE HANDLING AND RISK CONTAINMENT
-source: /home/john/esper-lite/docs/paper/draft_paper.md
-source_lines: 296-326
 split_mode: consolidated
 chapter: 5
 coauthors:
@@ -55,3 +53,16 @@ When a seed fails repeatedly, the system uses logged data to learn and adapt.
 | Emergency Kill Switch   | Abort on systemic instability; force CULLED and revert to last known-good network state.                                      |
 ## 5.5 Summary
 Failure handling in this framework is not reactive—it is an integrated and anticipatory part of the seed lifecycle. Every seed is treated as a hypothesis to be rigorously tested. Failures are handled cleanly through the Culling and Embargo protocol, ensuring system stability. The detailed logging of these events provides a rich dataset for improving the governing policies of Karn and Tamiyo, making the entire system safer and more intelligent over time. Each failure teaches the system what not to become.
+
+## 5.6 Safety Stack (Prototype)
+The prototype implements the production safety controls. The following mechanisms are active during all experiments:
+
+| Mechanism                       | Description                                                                                   | Outcome / Action                         |
+|---------------------------------|-----------------------------------------------------------------------------------------------|------------------------------------------|
+| Gradient isolation              | Backward hooks enforce strict separation of host and seed gradients; safe blending            | Violations increment breaker; quarantine |
+| Circuit breakers                | Thresholded counters across health, gradients, stability, latency                            | Downgrade to conservative mode; alerts   |
+| Lifecycle validation gates      | Checks at key stages (germination, training, blending, shadowing, probationary, resetting)   | Transition to CULLED on failure          |
+| Quarantine & embargo            | Seeds moved to CULLED; slot embargoed; reset after embargo window                            | Prevents thrashing at failure sites      |
+| Checkpoint & rollback           | Checkpoints emitted; quick rollback available on critical anomalies                           | Rapid recovery to last known‑good state  |
+| Authenticated control messages  | Control messages are authenticated and subject to freshness windows                           | Replays rejected; conservative mode      |
+| Telemetry backpressure          | Emergency signals bypass; non‑critical streams drop on saturation                             | Stability under overload                 |

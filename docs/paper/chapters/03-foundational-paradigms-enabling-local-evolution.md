@@ -1,7 +1,5 @@
 ---
 title: FOUNDATIONAL PARADIGMS ENABLING LOCAL EVOLUTION
-source: /home/john/esper-lite/docs/paper/draft_paper.md
-source_lines: 227-256
 split_mode: consolidated
 chapter: 3
 coauthors:

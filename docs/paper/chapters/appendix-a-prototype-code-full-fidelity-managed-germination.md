@@ -1,7 +1,5 @@
 ---
 title: PROTOTYPE CODE – FULL-FIDELITY MANAGED GERMINATION
-source: /home/john/esper-lite/docs/paper/draft_paper.md
-source_lines: 767-1169
 split_mode: consolidated
 appendix: "A"
 coauthors:

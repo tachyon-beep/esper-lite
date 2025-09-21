@@ -1,7 +1,5 @@
 ---
 title: Preface
-source: /home/john/esper-lite/docs/paper/draft_paper.md
-source_lines: 1-141
 split_mode: consolidated
 coauthors:
   - John Morrissey
@@ -40,17 +38,9 @@ Version 3.0RC1
   - [Appendix C: Bibliography / Reading List](appendix-c-bibliography-reading-list.md)
 
 ## Design Reference & Authority
-This paper documents the Esper‑Lite prototype and aligns with the broader Esper system design. The “old” directory under `docs/design/detailed_design/old/` is not deprecated; it contains the full, more detailed system definition. Where any divergence exists, treat those detailed design files as authoritative, and update this paper accordingly.
+This paper documents the Esper‑Lite prototype and aligns with the broader Esper system design. The detailed system definition (including lifecycle, safety, policy, and observability) is authoritative; where any divergence exists, treat those specifications as canonical, and update this paper accordingly.
 
-| Topic                        | Primary Design Reference                                             | Notes |
-|-----------------------------|-----------------------------------------------------------------------|-------|
-| High‑Level Architecture     | `docs/design/HLD.md`                                                 | Subsystems, planes, interaction flow |
-| Leyline Contracts & Budgets | `docs/design/detailed_design/00-leyline.md`                          | Option B budgets, schemas, governance |
-| Kasmina Lifecycle & Safety  | `docs/design/detailed_design/02-kasmina.md` and `old/02-kasmina-*.md`| 11‑state lifecycle, guards, circuit breakers |
-| Tamiyo Policy & Risk        | `docs/design/detailed_design/03-tamiyo.md` and `old/03-tamiyo-*.md`  | Hetero‑GNN policy, risk governance, field reports |
-| Telemetry & Observability   | `old/10-nissa-unified-design.md` (referenced)                         | SLOs, telemetry routing |
-
-Scope: Esper‑Lite implements the minimal, production‑safe slice of the full Esper architecture. This paper’s prototype examples (e.g., XOR, make_moons) illustrate the morphogenetic lifecycle without the full kernel compilation and governance stack; production behaviour follows the detailed design.
+Scope note: Esper‑Lite implements the minimal, production‑safe slice of the full architecture. Prototype examples (e.g., XOR, make_moons) illustrate the morphogenetic lifecycle and safety regime; production behaviour follows the detailed design principles without enumerating implementation details here.
 
 ## Abstract
 This document outlines the formal groundwork and technical scaffolding for a class of neural architectures capable of localised, seed-driven structural evolution within frozen host networks. The approach—referred to as morphogenetic architecture—enables the introduction of trainable components that can independently develop new capabilities in response to local failure signals or performance deficits.

@@ -1,7 +1,5 @@
 ---
 title: CONCEPTUAL FOUNDATIONS
-source: /home/john/esper-lite/docs/paper/draft_paper.md
-source_lines: 190-226
 split_mode: consolidated
 chapter: 2
 coauthors:

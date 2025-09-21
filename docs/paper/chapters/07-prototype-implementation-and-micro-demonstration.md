@@ -1,7 +1,5 @@
 ---
 title: PROTOTYPE IMPLEMENTATION AND MICRO-DEMONSTRATION
-source: /home/john/esper-lite/docs/paper/draft_paper.md
-source_lines: 357-454
 split_mode: consolidated
 chapter: 7
 coauthors:

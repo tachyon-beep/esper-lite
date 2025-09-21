@@ -1,7 +1,5 @@
 ---
 title: ARCHITECTURAL PATTERNS AND AGENT ROLES
-source: /home/john/esper-lite/docs/paper/draft_paper.md
-source_lines: 327-356
 split_mode: consolidated
 chapter: 6
 coauthors:

@@ -1,7 +1,5 @@
 ---
 title: TABLES AND FIGURES
-source: /home/john/esper-lite/docs/paper/draft_paper.md
-source_lines: 545-603
 split_mode: consolidated
 chapter: 9
 coauthors:

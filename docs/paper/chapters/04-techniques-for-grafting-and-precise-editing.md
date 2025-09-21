@@ -1,7 +1,5 @@
 ---
 title: TECHNIQUES FOR GRAFTING AND PRECISE EDITING
-source: /home/john/esper-lite/docs/paper/draft_paper.md
-source_lines: 257-295
 split_mode: consolidated
 chapter: 4
 coauthors:

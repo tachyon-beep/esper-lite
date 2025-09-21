@@ -1,7 +1,5 @@
 ---
 title: CITATIONS
-source: /home/john/esper-lite/docs/paper/draft_paper.md
-source_lines: 739-766
 split_mode: consolidated
 chapter: 13
 coauthors:

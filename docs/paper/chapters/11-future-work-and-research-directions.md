@@ -1,7 +1,5 @@
 ---
 title: FUTURE WORK AND RESEARCH DIRECTIONS
-source: /home/john/esper-lite/docs/paper/draft_paper.md
-source_lines: 656-722
 split_mode: consolidated
 chapter: 11
 coauthors:
