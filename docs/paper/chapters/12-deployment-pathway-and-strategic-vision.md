@@ -1,13 +1,10 @@
 ---
 title: DEPLOYMENT PATHWAY AND STRATEGIC VISION
-source: /home/john/esper-lite/docs/paper/draft_paper.md
-source_lines: 723-738
 split_mode: consolidated
 chapter: 12
 coauthors:
   - John Morrissey
   - Codex CLI (OpenAI)
-generated_by: scripts/split_paper.py
 ---
 
 # Deployment Pathway and Strategic Vision

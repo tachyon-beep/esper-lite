@@ -1,20 +1,17 @@
 ---
 title: CONCEPTUAL FOUNDATIONS
-source: /home/john/esper-lite/docs/paper/draft_paper.md
-source_lines: 190-226
 split_mode: consolidated
 chapter: 2
 coauthors:
   - John Morrissey
   - Codex CLI (OpenAI)
-generated_by: scripts/split_paper.py
 ---
 
 # Conceptual Foundations
 
 ## 2.1 Morphogenetic Architecture
-The term morphogenetic architecture refers to a neural network design paradigm in which a static, frozen model is permitted to undergo controlled, localised structural evolution through the activation and training of embedded seed modules. These seeds act as encapsulated loci of potential development—capable of instantiating new parameters or substructures that expand or enhance the host model’s functionality, without modifying its pre-existing weights or topology.
-This architectural strategy draws loose inspiration from biological morphogenesis, where structures develop from localised triggers and encoded developmental rules rather than global template changes. However, the intent here is strictly functional: enabling targeted increases in representational or behavioural capacity under strict global constraints.
+The term morphogenetic architecture refers to a neural network design paradigm in which a static, frozen model is permitted to undergo controlled, localised structural evolution through the activation and training of embedded seed modules. These seeds act as encapsulated loci of potential development—capable of instantiating new parameters or substructures that expand or enhance the host model’s functionality, without modifying its pre‑existing weights or topology (see definitions in Preface: 00-preface.md).
+This architectural strategy draws loose inspiration from biological morphogenesis, where structures develop from localised triggers and encoded developmental rules rather than global template changes. However, the intent here is strictly functional: enabling targeted increases in representational or behavioural capacity under strict global constraints (cf. Parisi et al., 2019).
 Key features of a morphogenetic architecture:
 
 | Feature             | Description                                                                                                           |
@@ -41,7 +38,7 @@ A seed may encode:
 | Parameter initialisation  | Specific weight values or parameter distributions                                                    |
 | Control policy            | Rules for when and how germination occurs                                                            |
 | Loss contract             | Local optimisation targets that define success (e.g., reduce residual error, increase separability)  |
-In practice, the seed interface must be carefully constructed to ensure compatibility with upstream and downstream signals, preserve input-output dimensionality, and avoid gradient leakage or interference across model boundaries.
+In practice, the seed interface must be carefully constructed to ensure compatibility with upstream and downstream signals, preserve input‑output dimensionality, and avoid gradient leakage or interference across model boundaries. Lifecycle validation gates and safety mechanisms are detailed in Section 5 and illustrated in Figures (09-tables-and-figures.md).
 ## 2.3 Core Constraints and System Tensions
 The seed-based approach introduces a set of intentional constraints and unresolved tensions that shape its design space:
 Constraint Description
@@ -49,7 +46,7 @@ Frozen base The host model is not updated or retrained. Only seed modules may be
 Local learning Optimisation is confined to the seed and its internal parameters. No external gradient propagation is permitted.
 Structural isolation Seeds must not introduce side effects, change tensor shapes, or compromise compatibility of the model pipeline.
 Trigger discipline Germination must occur only under defined and justified conditions to avoid uncontrolled capacity growth.
-These constraints reflect the deployment realities that motivate this design: systems that must remain functionally stable over long periods, support internal augmentation without global revalidation, and isolate new behaviour for auditability and safety review.
+These constraints reflect the deployment realities that motivate this design: systems that must remain functionally stable over long periods, support internal augmentation without global revalidation, and isolate new behaviour for auditability and safety review (Sun et al., 2024). The architectural roles and flows are shown in the Overview (01-introduction.md) and the system figure in Figures (09-tables-and-figures.md).
 However, these same constraints introduce system tensions, including:
 • Limited feedback: the seed may not receive sufficient gradient signal or task information to optimise effectively.
 • Structural rigidity: the inability to rewire or adapt upstream components may limit the expressivity of any local adaptation.

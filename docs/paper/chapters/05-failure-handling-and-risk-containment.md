@@ -1,13 +1,10 @@
 ---
 title: FAILURE HANDLING AND RISK CONTAINMENT
-source: /home/john/esper-lite/docs/paper/draft_paper.md
-source_lines: 296-326
 split_mode: consolidated
 chapter: 5
 coauthors:
   - John Morrissey
   - Codex CLI (OpenAI)
-generated_by: scripts/split_paper.py
 ---
 
 # Failure Handling and Risk Containment
@@ -22,13 +19,25 @@ Common failure modes and their descriptions:
 | Training Collapse      | Local optimiser fails to converge; exploding gradients or NaN during the TRAINING phase.     |
 | Destabilising Emergence| New module degrades pre-existing competencies; detected in the PROBATIONARY phase.           |
 
-Validation checks mapped to lifecycle states:
+Validation checks mapped to lifecycle states (see lifecycle diagram in Figures: 09-tables-and-figures.md):
 
 | Phase  | Lifecycle State | Primary Checks                                                                                           | Outcome on Failure |
 |--------|------------------|---------------------------------------------------------------------------------------------------------|--------------------|
 | 1      | TRAINING         | Non-zero gradient norms; bounded weight changes; local loss improvement after N steps                   | CULLED             |
 | 2      | SHADOWING        | Internal stability with inert forward; probe with live data; reject chaotic/unbounded outputs           | CULLED             |
 | 3      | PROBATIONARY     | Systemic impact: monitor global metrics (val_loss, val_acc) within tolerance                           | CULLED             |
+
+### 5.1.1 Gate Definitions (G0–G5)
+Lifecycle validation gates ensure safety and stability at key transition points:
+
+| Gate | Purpose                   | Applied At            | Typical Checks                                      |
+|------|---------------------------|-----------------------|-----------------------------------------------------|
+| G0   | Sanity/registration       | GERMINATED           | Registration, resource budgets, initial health      |
+| G1   | Gradient/health           | TRAINING             | Non‑zero gradients, bounded updates, loss improvement |
+| G2   | Stability                  | BLENDING             | Output stability under alpha ramp                   |
+| G3   | Interface integrity        | SHADOWING            | Shape/distribution checks; inert forward behaviour  |
+| G4   | Systemic impact            | PROBATIONARY         | No regression in global metrics                     |
+| G5   | Reset sanity               | RESETTING            | Buffers cleared; counters reset; ready for DORMANT  |
 ## 5.2 The Culling and Embargo Protocol
 This framework replaces ambiguous “rollback” procedures with a formal, state-driven Culling and Embargo protocol managed by the SeedManager.
 
@@ -39,7 +48,7 @@ This framework replaces ambiguous “rollback” procedures with a formal, state
 | Re-entry to DORMANT       | After embargo, the module is reset to DORMANT and becomes eligible for a new attempt, often with a different blueprint from Karn.  |
 Each culling event is recorded in a SeedManager log, including failure type, the lifecycle stage at which it failed, and the blueprint used. This enables later audit, forensics, and pattern mining of recurrent faults.
 ## 5.3 Interface Drift Detection
-Frozen-base systems can still experience interface drift when a graft modifies the statistical distribution of features passed downstream. This is a primary failure condition checked during the PROBATIONARY stage.
+Frozen-base systems can still experience interface drift when a graft modifies the statistical distribution of features passed downstream. This is a primary failure condition checked during the PROBATIONARY stage, and relates to representational stability concerns studied in alignment work (e.g., Wortsman et al., 2024).
 
 | Detection Method              | Description                                                                                 |
 |------------------------------|---------------------------------------------------------------------------------------------|
@@ -56,17 +65,15 @@ When a seed fails repeatedly, the system uses logged data to learn and adapt.
 ## 5.5 Summary
 Failure handling in this framework is not reactive—it is an integrated and anticipatory part of the seed lifecycle. Every seed is treated as a hypothesis to be rigorously tested. Failures are handled cleanly through the Culling and Embargo protocol, ensuring system stability. The detailed logging of these events provides a rich dataset for improving the governing policies of Karn and Tamiyo, making the entire system safer and more intelligent over time. Each failure teaches the system what not to become.
 
-## 5.6 Kasmina Safety Stack (Prototype)
-The prototype implements the production safety controls described in the detailed design. The following mechanisms are active during all experiments:
+## 5.6 Safety Stack (Prototype)
+The prototype implements the production safety controls. The following mechanisms are active during all experiments:
 
 | Mechanism                       | Description                                                                                   | Outcome / Action                         |
 |---------------------------------|-----------------------------------------------------------------------------------------------|------------------------------------------|
-| Gradient Isolation Hooks        | Backward hooks enforce `∇L_host ∩ ∇L_seed = ∅`; alpha blending uses `.detach()` on host acts | Violations increment breaker; quarantine |
-| Circuit Breakers                | Thresholded counters across health, gradients, stability, latency                            | Downgrade to conservative mode; alerts   |
-| Lifecycle Validation Gates      | G0–G5 checks at GERMINATED/ TRAINING/ BLENDING/ SHADOWING/ PROBATIONARY/ RESETTING           | Transition to CULLED on failure          |
-| Quarantine & Embargo            | Seeds moved to CULLED; slot embargoed; reset after embargo window                            | Prevents thrashing at failure sites      |
-| Emergency Checkpoint/Rollback   | Checkpoints emitted; Tolaria rollback available on critical anomalies                         | Rapid recovery to last known‑good state  |
-| Signed Commands + Freshness     | Leyline HMAC‑SHA256 signatures; 60 s freshness; nonce TTL table                               | Replays rejected; conservative mode      |
-| Telemetry Backpressure          | Emergency signals bypass; non‑critical streams drop on saturation                             | Stability under overload                 |
-
-See also: Kasmina detailed design (`docs/design/detailed_design/02-kasmina.md`).
+| Gradient isolation              | Backward hooks enforce strict separation of host and seed gradients; safe blending            | Violations increment breaker; quarantine |
+| Circuit breakers                | Thresholded counters across health, gradients, stability, latency                            | Downgrade to conservative mode; alerts   |
+| Lifecycle validation gates      | Checks at key stages (germination, training, blending, shadowing, probationary, resetting)   | Transition to CULLED on failure          |
+| Quarantine & embargo            | Seeds moved to CULLED; slot embargoed; reset after embargo window                            | Prevents thrashing at failure sites      |
+| Checkpoint & rollback           | Checkpoints emitted; quick rollback available on critical anomalies                           | Rapid recovery to last known‑good state  |
+| Authenticated control messages  | Control messages are authenticated and subject to freshness windows                           | Replays rejected; conservative mode      |
+| Telemetry backpressure          | Emergency signals bypass; non‑critical streams drop on saturation                             | Stability under overload                 |

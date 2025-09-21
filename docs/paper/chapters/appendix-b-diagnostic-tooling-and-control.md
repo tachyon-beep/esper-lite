@@ -1,13 +1,10 @@
 ---
 title: DIAGNOSTIC TOOLING AND CONTROL
-source: /home/john/esper-lite/docs/paper/draft_paper.md
-source_lines: 1170-1362
 split_mode: consolidated
 appendix: "B"
 coauthors:
   - John Morrissey
   - Codex CLI (OpenAI)
-generated_by: scripts/split_paper.py
 ---
 
 # Appendix B: Diagnostic Tooling and Control

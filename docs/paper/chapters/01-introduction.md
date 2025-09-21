@@ -1,19 +1,16 @@
 ---
 title: Introduction
-source: /home/john/esper-lite/docs/paper/draft_paper.md
-source_lines: 142-189
 split_mode: consolidated
 chapter: 1
 coauthors:
   - John Morrissey
   - Codex CLI (OpenAI)
-generated_by: scripts/split_paper.py
 ---
 
 # Introduction
 
 ## Overview: A New Approach for Adaptive Systems
-While techniques for modular and parameter‑efficient adaptation, such as adapters and network surgery, have shown promise, they often lack a cohesive, system‑level framework for ensuring safety, auditability, and autonomous control. This paper seeks to bridge that gap by establishing the formal groundwork for morphogenetic computing: a discipline where neural networks are treated not as static artefacts, but as dynamic systems capable of controlled, localised, and auditable structural evolution.
+While techniques for modular and parameter‑efficient adaptation, such as adapters and network surgery (Houlsby et al., 2019; Chen, 2021), have shown promise, they often lack a cohesive, system‑level framework for ensuring safety, auditability, and autonomous control. This paper seeks to bridge that gap by establishing the formal groundwork for morphogenetic computing: a discipline where neural networks are treated not as static artefacts, but as dynamic systems capable of controlled, localised, and auditable structural evolution.
 Rather than proposing an entirely new low-level mechanism, this work introduces a unifying framework orchestrated by a co-evolutionary system of intelligent agents. This system features:
 An external 'inventor' agent, Karn, which discovers and validates a diverse library of architectural blueprints in a competitive environment.
 An internal 'policy controller' agent, Tamiyo, which monitors the host network's real-time performance and telemetry to strategically select and deploy Karn's blueprints, triggering growth precisely where it is needed. This agent-driven approach transforms the abstract idea of a 'policy-governed lifecycle' into a concrete, trainable, and auditable engineering reality.
@@ -26,8 +23,60 @@ Within this framework, this document introduces several critical innovations tha
 First is the evolution of the Seed from a passive placeholder into an active sensor and programmable gateway. By constantly streaming telemetry (like activation variance and local error) to the Tamiyo controller, each seed provides the critical, real-time data necessary for intelligent, system-wide decision-making. When commanded by Tamiyo, the seed then acts as the execution site, ensuring the injection of a new blueprint adheres to the local architectural contract.
 Building on this, the Tamiyo policy controller learns to manage the entire network's evolution. By analysing telemetry from all seed sites simultaneously, it moves beyond simple protocols to perform intelligent, multi-seed arbitration, prioritising resources and preventing conflicts to enable emergent structural cooperation. This foreshadows the formation of complex neural "tissues" and moves beyond simple, isolated changes.
 Crucially, this process is interpretable. The resulting germination logs create biographical architectures, where a model's final topology is a readable, causal record of its developmental history. For the first time, we can ask not only what a model is, but how it came to be.
-Finally, the framework re-contextualizes failure. The quarantine buffer system treats failed germination events not as errors to be discarded, but as negative knowledge to be logged and learned from. This creates a system that intelligently and safely prunes its own evolutionary search space.
+Finally, the framework re‑contextualises failure. The quarantine buffer system treats failed germination events not as errors to be discarded, but as negative knowledge to be logged and learned from. This creates a system that intelligently and safely prunes its own evolutionary search space.
 In synthesis, these principles formalize neural ontogeny—the study of an organism's development—as a discrete engineering discipline. By solving the plasticity-stability dilemma through enforced contracts and making growth auditable, this work lays the groundwork for a new generation of truly adaptive systems.
+
+## Architecture Overview (Conceptual)
+The architecture organises learning and control into distinct roles to preserve stability while enabling targeted growth. A strategic controller (Tamiyo) analyses system state and telemetry, issuing adaptation commands to an execution layer (Kasmina) that applies lifecycle‑guarded changes to embedded seed sockets inside a frozen model, all without disrupting the training loop (Tolaria). Offline learning (Simic) improves the policy from field reports. Contracts and observability provide the safety envelope.
+
+```mermaid
+flowchart LR
+    subgraph Training & Execution
+        TL[Tolaria\n(Training Orchestrator)]
+        KS[Kasmina\n(Execution Layer)]
+        FM[(Frozen Model\nSeed Sockets)]
+        TL --> KS --> FM
+    end
+
+    TM["Tamiyo\n(Strategic Controller)"]
+    SM[Simic\n(Offline Policy Trainer)]
+    CG[Contracts & Governance]
+    OB[Messaging & Observability]
+    BL[Blueprint Library]
+
+    %% Conceptual flows
+    TL -- System State --> TM
+    KS -- Telemetry --> TM
+    TM -- Adaptation Command --> KS
+    TM -- Field Reports --> SM
+    SM -- Policy Update --> TM
+
+    CG --- TL
+    CG --- KS
+    CG --- TM
+    OB --- TL
+    OB --- KS
+    OB --- TM
+    BL --> TM
+```
+
+Figure: High‑level organisation of the morphogenetic system. Strategic decisions are auditable and lifecycle‑guarded; the execution layer enforces isolation and safety while enabling controlled growth.
+
+## Related Work (Brief)
+Our approach intersects several research threads:
+- Modular & dynamic networks: modularisation and dynamic topology under controlled regimes (Sun et al., 2024; Lu et al., 2024).
+- Parameter‑efficient methods: adapters and related bottleneck approaches for efficient adaptation (Houlsby et al., 2019).
+- Grafting & stitching: reusing pre‑trained components via structured insertion (Rusu et al., 2016; Du et al., 2025).
+- Stability & safety: managing representational drift and enforcing rollback/validation gates (Parisi et al., 2019; Wortsman et al., 2024).
+This work differs by formalising a policy‑governed, lifecycle‑validated mechanism for structural growth within a frozen host, with explicit safety gates and evaluation criteria.
+
+## Paper Roadmap
+- Concepts and constraints: see Conceptual Foundations (02-conceptual-foundations.md) and Foundational Paradigms (03-foundational-paradigms-enabling-local-evolution.md).
+- Techniques for structural growth: see Techniques for Grafting (04-techniques-for-grafting-and-precise-editing.md) and the comparison diagram in Figures (09-tables-and-figures.md).
+- Safety and validation: see Failure Handling & Risk Containment (05-failure-handling-and-risk-containment.md) and the lifecycle diagram in Figures (09-tables-and-figures.md).
+- Prototype implementation and protocol: see Prototype & Micro-Demonstration (07-prototype-implementation-and-micro-demonstration.md) and evaluation pipeline figure in Figures (09-tables-and-figures.md).
+- Controller policy and training: see Controller Training (08-controller-training-the-tamiyo-curriculum.md) and interaction sequence in Figures (09-tables-and-figures.md).
+- Evaluation criteria: see Evaluation & Safety (10-evaluation-criteria-and-safety-constraints.md).
 
 ## 1.1 Motivation
 This document defines a foundational mechanism for enabling localised structural adaptation within otherwise static neural architectures. The motivation is to allow systems to increase task-specific or representational capacity without retraining or reinitialising the global model. This is achieved through a biologically inspired construct referred to as a seed: a latent trainable element embedded within the host network, capable of germinating additional modules. In this framework, germination is not random; it is a controlled event, triggered by a dedicated policy controller in response to observed performance plateaus, and the germinated modules themselves are drawn from a library of validated architectural blueprints.

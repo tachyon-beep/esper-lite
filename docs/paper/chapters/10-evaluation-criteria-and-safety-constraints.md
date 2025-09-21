@@ -1,19 +1,16 @@
 ---
 title: EVALUATION CRITERIA AND SAFETY CONSTRAINTS
-source: /home/john/esper-lite/docs/paper/draft_paper.md
-source_lines: 604-655
 split_mode: consolidated
 chapter: 10
 coauthors:
   - John Morrissey
   - Codex CLI (OpenAI)
-generated_by: scripts/split_paper.py
 ---
 
 # Evaluation Criteria and Safety Constraints
 The introduction of seed-based local evolution mechanisms within frozen neural architectures presents novel evaluation challenges. Because the global model remains static, traditional training metrics are insufficient: functional gain must be measured relative to localised intervention, and safety guarantees must be enforced to prevent unintended cross-model effects. This section outlines the formal criteria under which a morphogenetic architecture is to be assessed.
 ## 10.1 Evaluation Domains
-Seed-enabled systems must be evaluated across multiple axes to ensure correctness, stability, and effective governance by the policy controller.
+Seed-enabled systems must be evaluated across multiple axes to ensure correctness, stability, and effective governance by the policy controller (cf. Parisi et al., 2019 for continual learning concerns; Wortsman et al., 2024 for representational stability). The overall evaluation pipeline is depicted in Figures (09-tables-and-figures.md).
 
 | Domain                  | Goal                                                    | Metrics / Methods                                                  |
 |-------------------------|---------------------------------------------------------|--------------------------------------------------------------------|
@@ -80,15 +77,14 @@ The framework's layered defences are resilient to adversarial manipulation.
 ## 10.8 Long-Term Stability and Cumulative Drift
 To simulate a long deployment lifecycle, a ResNet-18 model was subjected to an accelerated aging process over 5,000 training cycles, with the Tamiyo policy controller permitted to trigger up to 20 germination events. The results indicate that the system maintains high stability, with cumulative interface drift and regression on the original core task remaining minimal and well-bounded.
 
-## 10.9 Contracts & Budgets (Leyline Alignment)
-Esper‑Lite enforces strict messaging and contract budgets via Leyline. These budgets should be validated alongside model metrics.
+## 10.9 Contracts & Budgets
+Esper‑Lite enforces strict messaging and contract budgets. These should be validated alongside model metrics to ensure the control plane remains safe and responsive.
 
-| Item                                 | Target/Budget          | Notes                                                                              |
-|--------------------------------------|------------------------|------------------------------------------------------------------------------------|
-| `SystemStatePacket` serialisation    | < 80 µs; < 280 B       | Validated in CI; Option B budget; ≤4 GC allocations per message                    |
-| `AdaptationCommand` serialisation    | < 40 µs                | Tamiyo issues commands within control‑plane latency envelopes                      |
-| HMAC‑SHA256 signatures               | Required               | All control messages signed; 60 s freshness window; replays trigger conservative mode |
-| Nonce tracking / TTL                 | 5 min TTL table        | Replay‑protection in Kasmina/Tolaria; invalid messages logged + downgraded         |
-| Governance checks                    | Schema version = 1     | Contract parity enforced; mismatches block deploy                                  |
+| Category                 | Design Intent                                                                      |
+|--------------------------|-------------------------------------------------------------------------------------|
+| Serialisation budgets    | Keep control/state messages small and fast to encode/decode                        |
+| Authentication & freshness| Control messages are authenticated and subject to freshness windows                |
+| Replay protection        | Reject replays; degrade to conservative mode on anomalies                          |
+| Governance               | Contract parity enforced; incompatible changes are rejected                         |
 
-These budgets complement model‑level guarantees (gradient isolation, lifecycle validation) to provide end‑to‑end safety.
+These controls complement model‑level guarantees (gradient isolation, lifecycle validation) to provide end‑to‑end safety.

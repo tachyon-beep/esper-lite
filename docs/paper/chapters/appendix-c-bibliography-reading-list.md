@@ -1,13 +1,10 @@
 ---
 title: BIBLIOGRAPHY / READING LIST
-source: /home/john/esper-lite/docs/paper/draft_paper.md
-source_lines: 1363-1401
 split_mode: consolidated
 appendix: "C"
 coauthors:
   - John Morrissey
   - Codex CLI (OpenAI)
-generated_by: scripts/split_paper.py
 ---
 
 # Appendix C: Bibliography / Reading List

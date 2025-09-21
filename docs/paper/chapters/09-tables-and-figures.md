@@ -1,13 +1,10 @@
 ---
 title: TABLES AND FIGURES
-source: /home/john/esper-lite/docs/paper/draft_paper.md
-source_lines: 545-603
 split_mode: consolidated
 chapter: 9
 coauthors:
   - John Morrissey
   - Codex CLI (OpenAI)
-generated_by: scripts/split_paper.py
 ---
 
 # Tables and Figures
@@ -150,4 +147,96 @@ sequenceDiagram
 ```
 
 Figure: Interaction during a germination episode from trigger to outcome.
+
+## 9.10 System Overview (Conceptual)
+(See: [Introduction](01-introduction.md), [Architectural Patterns](06-architectural-patterns-and-agent-roles.md))
+
+```mermaid
+flowchart LR
+    subgraph TrainExec[Training & Execution]
+        T[Tolaria (Training Orchestrator)]
+        KAS[Kasmina (Execution Layer)]
+        M[(Frozen Model\n+Seed Sockets)]
+        T --> KAS
+        KAS --> M
+    end
+
+    TAM["Tamiyo (Strategic Controller)"]
+    SIM[Simic (Offline Policy Trainer)]
+    LEY[Contracts & Governance]
+    OBS[Messaging & Observability]
+    LIB[Blueprint Library]
+
+    %% Data & control flows
+    T -- System State --> TAM
+    KAS -- Telemetry --> TAM
+    TAM -- Adaptation Command --> KAS
+
+    TAM -- Field Reports --> SIM
+    SIM -- Policy Update --> TAM
+
+    LEY --- T
+    LEY --- KAS
+    LEY --- TAM
+
+    OBS --- T
+    OBS --- KAS
+    OBS --- TAM
+
+    LIB --> TAM
+```
+
+Figure: Conceptual overview of Esper‑Lite subsystems and flows. The controller analyses state/telemetry and issues adaptation commands; the execution layer applies lifecycle‑guarded changes to embedded seed sockets. Offline training improves the policy from field reports.
+
+## 9.11 Technique Comparison Diagram
+(See: [Techniques for Grafting and Precise Editing](04-techniques-for-grafting-and-precise-editing.md))
+
+```mermaid
+flowchart LR
+    subgraph Surgery[Neural Network Surgery]
+        A1[Input] --> S1[Layer]
+        S1 -->|parallel| SNew[Inserted Module]
+        S1 --> M1[Merge]
+        SNew --> M1
+        M1 --> O1[Output]
+    end
+
+    subgraph Adapter[Adapter Layer]
+        A2[Input] --> L21[Upstream Layer]
+        L21 --> ADP[Bottleneck Adapter\n+(near‑identity init)]
+        ADP --> L22[Downstream Layer]
+        L22 --> O2[Output]
+    end
+
+    subgraph GM[GM Injection (Pre‑trained)]
+        A3[Input] --> G1[Layer]
+        G1 --> GMod[Pre‑trained Module\n+ (task‑optimised)]
+        GMod --> O3[Output]
+    end
+```
+
+Figure: Structural comparison of techniques. Surgery inserts structure alongside existing paths; adapters provide low‑cost bottlenecks with near‑identity initialisation; GM injection deploys pre‑trained modules for targeted capability reuse.
+
+## 9.12 Result Plot Templates
+This section defines the canonical plots for reporting prototype outcomes. Plots should reflect mean ± 95% confidence bands over repeated runs, and use consistent axes and units across datasets.
+
+### 9.12.1 Pareto Curve (Δ Performance vs Δ Parameters)
+
+Description: For each method, plot the change in task performance (ΔAcc or ΔF1) against parameters added (ΔParams). This visualises efficiency of added capacity. Include Baseline, Adapter, Morphogenetic (policy + gates), Morphogenetic (ablations). Annotate the knee/sweet‑spot region.
+
+Axes: X = ΔParams (log or linear as appropriate); Y = ΔAcc/F1. Error bands reflect across‑run variance.
+
+### 9.12.2 Safety Dashboard (Multi‑Panel)
+
+Description: A multi‑panel figure summarising safety outcomes per method:
+- Drift (box or violin of interface drift metrics)
+- Isolation violations (bar; proportion of steps)
+- Gate pass rates (stacked bars; shadowing/probationary)
+- Cull/embargo counts (bars per 1k steps or per run)
+
+### 9.12.3 Policy Metrics
+
+Description: For policy‑driven runs, show trigger precision/recall for “useful growth”, selection entropy over sites/blueprints, and the no‑op ratio. Use small multiples per dataset.
+
+Figure notes: All plots should include clear legends and include consistent colour mapping across methods.
 Seed Module: A site for germination, located post first hidden layer. When triggered by Tamiyo, a new module blueprint is inserted, often as a residual path. All layers except the germinated module are frozen post-pretraining.

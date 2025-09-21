@@ -1,16 +1,46 @@
 ---
 title: CITATIONS
-source: /home/john/esper-lite/docs/paper/draft_paper.md
-source_lines: 739-766
 split_mode: consolidated
 chapter: 13
 coauthors:
   - John Morrissey
   - Codex CLI (OpenAI)
-generated_by: scripts/split_paper.py
 ---
 
 # Citations
+
+## Citation Style & Keys
+We use an author–year inline citation style: (Surname et al., Year), with anchor keys of the form SurnameYear (e.g., Rusu2016). For works with common surnames or multiple in the same year, disambiguate with a short suffix (e.g., Sun2024a, Sun2024b) or by including a second surname.
+
+Examples:
+- (Rusu et al., 2016) → Rusu2016 — Progressive networks / knowledge transfer
+- (Houlsby et al., 2019) → Houlsby2019 — Adapters for parameter‑efficient fine‑tuning
+- (Parisi et al., 2019) → Parisi2019 — Continual learning survey
+- (Du et al., 2025) → Du2025 — Knowledge grafting / model stitching
+- (Sun et al., 2024) → Sun2024 — Modularising neural networks for maintenance
+
+## Related Work Buckets (to reference inline)
+- Modular & dynamic networks: modularization, dynamic topology, MoE variants.
+- Parameter‑efficient methods: adapters, LoRA, bottleneck variants.
+- Grafting & stitching: knowledge transfer via pre‑trained modules.
+- Safety & rollback: stability checks, circuit breakers, conservative modes.
+- Risk‑aware RL & control: gating risky actions under resource/safety budgets.
+
+## Mapping Keys to Bibliography
+When citing, include the key inline and ensure the entry exists in the bibliography/reading list. If not present, add it to the bibliography before submission. The following keys will be used in the paper body and should be mapped to entries in the reading list:
+
+| Key         | Title / Topic (abbrev)                          |
+|-------------|--------------------------------------------------|
+| Rusu2016    | Progressive networks; knowledge transfer        |
+| Houlsby2019 | Adapters; parameter‑efficient fine‑tuning       |
+| Parisi2019  | Continual learning survey                       |
+| Du2025      | Knowledge grafting; stitching                   |
+| Sun2024     | Modularising neural networks; maintenance       |
+| Wortsman2024| Latent alignment; representational stability    |
+| Chen2021    | Neural network surgery                          |
+| Lu2024      | Dynamic neural network structure review         |
+
+Note: This mapping acts as a checklist during polishing; reconcile keys with the bibliography once Results/Discussion are finalised.
 This section lists the key publications that directly inform the core concepts, techniques, and architectural patterns discussed in this document. Each citation includes a note on its specific relevance.
 [1] Houlsby, N., Giurgiu, A., Jastrzebski, S., Morrone, B., de Laroussilhe, Q., Gesmundo, A., ... & Gelly, S. (2019). Parameter-efficient transfer learning for NLP. In Proceedings of the 36th International Conference on Machine Learning (ICML).
 Cited in Section 4. Basis for adapter layers as minimal, non-intrusive grafting strategies.

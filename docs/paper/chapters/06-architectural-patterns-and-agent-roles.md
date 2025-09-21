@@ -1,13 +1,10 @@
 ---
 title: ARCHITECTURAL PATTERNS AND AGENT ROLES
-source: /home/john/esper-lite/docs/paper/draft_paper.md
-source_lines: 327-356
 split_mode: consolidated
 chapter: 6
 coauthors:
   - John Morrissey
   - Codex CLI (OpenAI)
-generated_by: scripts/split_paper.py
 ---
 
 # Architectural Patterns and Agent Roles
