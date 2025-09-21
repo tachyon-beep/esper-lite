@@ -6,6 +6,7 @@ Documents in this folder:
 - `delta-matrix.md` — requirement‑by‑requirement status with evidence
 - `traceability-map.md` — mapping of design assertions to code/tests
 - `implementation-roadmap.md` — ordered plan to close gaps without tech debt
+- `pytorch-2.8-upgrades.md` — mandatory hetero‑GNN inference upgrades (compile, inference_mode, TF32, data transfer)
 
 Design sources:
 - `docs/design/detailed_design/03-tamiyo-unified-design.md`
