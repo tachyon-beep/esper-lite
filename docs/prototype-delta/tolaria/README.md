@@ -1,6 +1,24 @@
 # Tolaria — Prototype Delta (Training Orchestrator)
 
-Executive summary: the prototype provides a minimal training loop with epoch boundary state assembly, a Tamiyo handshake (with timeout + fallback), Kasmina command application, telemetry emission, and a lightweight checkpoint/WAL for rollback. End‑of‑epoch budget enforcement, circuit‑breaker‑driven conservative mode, and PyTorch 2.8 upgrades (compile step, AMP, TF32, pinned memory/foreach) are implemented. Outstanding items remain: unified learning‑rate controller, dynamic optimiser rebuilds, two‑tier rollback (500 ms/12 s), emergency escalation/broadcast protocol, and multi‑seed gradient aggregation. Leyline remains the single source of truth for contracts and enums.
+Executive summary: the prototype provides a training loop with epoch boundary state assembly, a Tamiyo handshake (with timeout + fallback), Kasmina command application, telemetry emission, and a lightweight checkpoint/WAL for rollback. End‑of‑epoch budget enforcement, circuit‑breaker‑driven conservative mode, and PyTorch 2.8 upgrades (compile step, AMP, TF32, pinned memory/foreach) are implemented. Recent additions include a unified LR controller (constant/cosine/step with warmup), an optimizer rebuild manager with breaker guards, a two‑tier rollback (fast in‑mem snapshots + full restore with deadline), an emergency controller with L4 halt paths, and optional epoch‑scope profiler traces. Remaining items: multi‑seed gradient aggregation and hardening for cross‑process signaling/broadcast in rollback/emergency. Leyline remains the single source of truth for contracts and enums.
+
+Outstanding Items (for coders)
+
+- Multi‑seed gradient aggregation
+  - Implement state‑aware weighting across host/seed losses; optionally add PCGrad‑like conflict handling; expose metrics.
+  - Pointers: `trainer._compute_loss` hook and a small aggregator utility (`src/esper/tolaria/*`).
+
+- Cross‑process signaling/broadcast (rollback/emergency)
+  - Add a shared signaling primitive (multiprocessing/shared memory) for rollback deadlines and emergency broadcast integration with Weatherlight.
+  - Pointers: `src/esper/tolaria/rollback.py::DeadlineSignal` (stub), `src/esper/tolaria/emergency.py`.
+
+- WAL durability upgrades
+  - Add CRC and atomic O_DSYNC to checkpoint and WAL writes; document recovery guarantees.
+  - Pointers: `trainer._checkpoint()`, directory fsync paths.
+
+- Tests & telemetry enrichment
+  - Property tests for LR schedules; rollback deadline edge cases; emergency escalate/resume; add per‑feature metrics if helpful.
+  - Pointers: `tests/tolaria/*` patterns.
 
 Documents in this folder:
 - `delta-matrix.md` — requirement‑by‑requirement status with evidence

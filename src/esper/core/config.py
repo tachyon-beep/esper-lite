@@ -117,6 +117,15 @@ class EsperSettings(BaseSettings):
     tolaria_pcgrad_enabled: bool = Field(
         alias="TOLARIA_PCGRAD_ENABLED", default=False
     )
+    tolaria_aggregation_mode: str = Field(
+        alias="TOLARIA_AGGREGATION_MODE", default="seed"
+    )  # seed|microbatch
+    tolaria_aggregation_attribution: str = Field(
+        alias="TOLARIA_AGGREGATION_ATTRIBUTION", default="approx"
+    )  # approx|probe|dataloader
+    tolaria_aggregation_conflict_warn: float = Field(
+        alias="TOLARIA_AGGREGATION_CONFLICT_WARN", default=0.75
+    )
 
     # Optimizer rebuild storm guard
     tolaria_opt_rebuild_min_interval_steps: int = Field(

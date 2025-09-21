@@ -15,9 +15,13 @@ Goal: close the gap to the design without tech debt, keeping Leyline as the sing
 | 9 | Profiling harness | Integrate profiler hooks; optional Chrome traces for epoch/hook timings | Clear performance visibility |
 
 Status update:
-- Steps 1–2: Implemented in `src/esper/tolaria/trainer.py` (budgets, breaker, conservative mode, timeouts, telemetry).
-- Step 9: Partially implemented via external harness `scripts/profile_tolaria.py`; optional in‑trainer hooks remain.
-- Steps 3–8: Outstanding.
+- Steps 1–2: Implemented (budgets, breaker, conservative mode, timeouts, telemetry).
+- Steps 3–4: Implemented (LR controller and optimizer rebuild manager with breaker guards and metrics).
+- Step 5: Outstanding.
+- Step 6: Partially implemented (fast in‑mem snapshots + full restore with deadline; signaling/broadcast pending).
+- Step 7: Partially implemented (emergency controller with L4 halt paths; broadcast stubbed).
+- Step 8: Implemented (priority mapping in telemetry; Weatherlight routes HIGH/CRITICAL via Oona).
+- Step 9: Partially implemented (epoch‑scope profiler hooks + external harness).
 
 Notes:
 - All lifecycle/contract artefacts must use Leyline enums & messages directly; do not create local mirrors.

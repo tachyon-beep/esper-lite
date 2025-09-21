@@ -33,6 +33,28 @@ Notes
 - You can throttle to once every N batches if you use gradient accumulation.
 - Telemetry: Kasmina publishes current α in seed context metadata; expect to see the ramp in telemetry.
 
+Outstanding Items (for coders)
+
+- Alternate blend modes (executor‑side)
+  - Implement the approved modes (Residual, Channel/Group‑wise, Confidence‑gated) with safety rails (host.detach, α clamps, hysteresis) and telemetry.
+  - Pointers: `docs/prototype-delta/kasmina/blending-upgrade.md`, `src/esper/kasmina/blending.py`, `seed_manager.blend()`.
+
+- Performance validation harness
+  - Add micro‑benchmarks for kernel load latency and isolation overhead; emit telemetry for operator visibility.
+  - Pointers: `docs/design/detailed_design/02.5-kasmina-performance-validation.md`, `scripts/bench_kasmina.py`.
+
+- Telemetry priority routing tests
+  - Ensure CRITICAL/WARNING events (e.g., isolation breaker open) route to Oona emergency via Weatherlight; add tests.
+  - Pointers: `seed_manager.build_telemetry_packet()`, `weatherlight._kasmina_telemetry_loop()`.
+
+- Distributed coordination (optional)
+  - Add epoch barriers/quorum semantics if needed; otherwise document single‑process assumptions.
+  - Pointers: `seed_manager.update_epoch()` and memory GC cadence.
+
+- KD loss wiring (optional)
+  - Plumb KD losses/activations using teacher model buffers; retain memory budget checks.
+  - Pointers: `seed_manager.register_teacher_model()` and blend hooks.
+
 Blend mechanism ownership
 - Blending is a seed‑integration concern. Tamiyo selects the blending mechanism from a small approved list (policy), and Kasmina executes the requested mode safely; Kasmina does not choose the mode.
 - Prototype default is convex blend with `host.detach()`. Advanced modes are described in `blending-upgrade.md` and should be activated by Tamiyo via command annotations/parameters when ready.

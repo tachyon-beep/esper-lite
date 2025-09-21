@@ -287,6 +287,15 @@ class TolariaTrainer:
             self._metrics["tolaria.rollback.restore_latency_ms"] = 0.0
             self._metrics["tolaria.rollback.snapshots_total"] = 0.0
 
+        # Aggregation knobs
+        self._agg_mode = (self._settings.tolaria_aggregation_mode or "seed").lower()
+        self._attr_mode = (self._settings.tolaria_aggregation_attribution or "approx").lower()
+        self._pcgrad_enabled = bool(self._settings.tolaria_pcgrad_enabled)
+        try:
+            self._conflict_warn = float(self._settings.tolaria_aggregation_conflict_warn)
+        except Exception:
+            self._conflict_warn = 0.75
+
         self._emergency: EmergencyController | None = None
         if self._settings.tolaria_emergency_enabled:
             self._emergency = EmergencyController(
@@ -552,6 +561,10 @@ class TolariaTrainer:
         seed_share_sum: dict[str, float] = {}
         seed_alpha_sum: dict[str, float] = {}
         seed_conflicts_total: dict[str, int] = {}
+        # Teacher split accumulators
+        teacher_split_sum: dict[str, float] = {}
+        teacher_overall_share_sum: float = 0.0
+        teacher_overall_uses: int = 0
         exporter = getattr(self._kasmina, "export_seed_states", None)
         advancer = getattr(self._kasmina, "advance_alpha", None)
         # Optional tight-coupling: access Kasmina's registry for per-parameter ownership
@@ -566,6 +579,9 @@ class TolariaTrainer:
         teacher_key = "__teacher__"
         seed_param_elems: dict[str, int] | None = None
         total_elems: int | None = None
+        # Attribution accumulators (per microbatch)
+        attrib_sums: dict[str, float] = {}
+        attrib_uses: int = 0
 
         def _build_seed_masks_if_needed(param_grads: list[torch.Tensor], flat: torch.Tensor, shp: list[torch.Size]) -> None:
             nonlocal seed_masks, owner_for_param, seed_param_elems, total_elems
@@ -609,7 +625,12 @@ class TolariaTrainer:
             total_elems = total
 
         for step, batch in enumerate(self._dataloader):
-            inputs, targets = batch
+            # Support dataloader triplet (inputs, targets, seed_ids)
+            if isinstance(batch, (list, tuple)) and len(batch) == 3:
+                inputs, targets, seed_ids = batch
+            else:
+                inputs, targets = batch
+                seed_ids = None
             inputs = inputs.to(self._device, non_blocking=self._non_blocking)
             targets = targets.to(self._device, non_blocking=self._non_blocking)
 
@@ -653,9 +674,42 @@ class TolariaTrainer:
                 _build_seed_masks_if_needed(param_grads, flat, shapes)
             micro_flats.append(flat)
 
+            # Accumulate attribution per microbatch if configured
+            try:
+                weights_mb: dict[str, float] | None = None
+                if self._attr_mode == "dataloader" and seed_ids is not None:
+                    # seed_ids may be list[str] or tensor/array
+                    try:
+                        ids = [str(x) for x in seed_ids]
+                    except Exception:
+                        try:
+                            ids = [str(int(x)) for x in seed_ids.tolist()]
+                        except Exception:
+                            ids = []
+                    if ids:
+                        total = float(len(ids))
+                        weights_mb = {}
+                        for sid in ids:
+                            weights_mb[sid] = weights_mb.get(sid, 0.0) + 1.0 / total
+                elif self._attr_mode in {"approx", "probe"}:
+                    attribute_batch = getattr(self._kasmina, "attribute_batch", None)
+                    if callable(attribute_batch):
+                        try:
+                            weights_mb = dict(attribute_batch(inputs, targets))
+                        except Exception:
+                            weights_mb = None
+                if weights_mb:
+                    for k, v in weights_mb.items():
+                        attrib_sums[k] = attrib_sums.get(k, 0.0) + float(v)
+                    attrib_uses += 1
+            except Exception:  # pragma: no cover - defensive
+                pass
+
             if step_ready:
                 # Combine gradients at the fence
-                if seed_masks is None:
+                # Mode override: force microbatch aggregation if configured
+                force_micro = (self._agg_mode == "microbatch")
+                if seed_masks is None or force_micro:
                     # Fall back: microbatch aggregation (previous behavior)
                     # State-aware weights (approximate): prefer ACTIVE seeds; default equal weights
                     weights: list[float] | None = None
@@ -690,6 +744,25 @@ class TolariaTrainer:
                             contrib = mf * mask
                             acc = contrib if acc is None else (acc + contrib)
                         per_seed[name] = acc if acc is not None else torch.zeros_like(next(iter(seed_masks.values())))
+                    # Teacher split if attribution weights are available
+                    if teacher_key in per_seed and attrib_uses > 0:
+                        teacher_acc = per_seed.pop(teacher_key)
+                        # Normalized weights
+                        total_w = sum(attrib_sums.values())
+                        if total_w > 0.0:
+                            for sid, wsum in attrib_sums.items():
+                                w = float(wsum) / float(total_w)
+                                addition = teacher_acc * w
+                                if sid in per_seed:
+                                    per_seed[sid] = per_seed[sid] + addition
+                                else:
+                                    per_seed[sid] = addition.clone()
+                            # Telemetry: teacher overall share
+                            try:
+                                teacher_overall_share_sum += float(torch.norm(teacher_acc).item())
+                            except Exception:
+                                pass
+                            teacher_overall_uses += 1
                     # Build weights by seed stage (+alpha heuristic if published in metrics)
                     weights_by_seed: dict[str, float] = {}
                     alpha_by_seed: dict[str, float] = {}
@@ -725,7 +798,7 @@ class TolariaTrainer:
                         agg_weights_uses += 1
                     combined, conflicts = combine_flat_grads(
                         seed_flats,
-                        use_pcgrad=len(seed_flats) > 1,
+                        use_pcgrad=(len(seed_flats) > 1) and self._pcgrad_enabled,
                         weights=weights,
                     )
                     # Accumulate per-seed telemetry
@@ -740,6 +813,10 @@ class TolariaTrainer:
                         seen_seeds.add(name)
                         if name in alpha_by_seed:
                             seed_alpha_sum[name] = seed_alpha_sum.get(name, 0.0) + float(alpha_by_seed[name])
+                        # Teacher split fraction per seed (approximate): use attribution weight if present
+                        if attrib_uses > 0 and total_w > 0.0:
+                            sid_w = float(attrib_sums.get(name, 0.0)) / float(total_w)
+                            teacher_split_sum[name] = teacher_split_sum.get(name, 0.0) + sid_w
                     # Per-fence share and conflicts (guard for too many seeds)
                     try:
                         norms = [float(torch.norm(g).item()) for g in seed_flats]
@@ -846,6 +923,20 @@ class TolariaTrainer:
             float(agg_weights_sum / agg_weights_uses) if agg_weights_uses > 0 else 0.0
         )
         self._metrics["tolaria.grad_agg.pcgrad_applied"] = 1.0 if agg_conflicts_total > 0 else 0.0
+        # Conflict ratio rollup (best-effort): conflicts per neighbor
+        try:
+            denom = max(1.0, float(len(seed_weight_sum) - 1))
+            self._metrics["tolaria.grad_agg.conflict_ratio"] = float(agg_conflicts_total) / denom
+        except Exception:
+            self._metrics["tolaria.grad_agg.conflict_ratio"] = 0.0
+        # Teacher overall share (as gradient norm average across fences)
+        if teacher_overall_uses > 0:
+            try:
+                self._metrics["tolaria.grad_agg.teacher_share"] = float(teacher_overall_share_sum) / float(teacher_overall_uses)
+            except Exception:
+                self._metrics["tolaria.grad_agg.teacher_share"] = 0.0
+        else:
+            self._metrics["tolaria.grad_agg.teacher_share"] = 0.0
 
         # Build per-seed telemetry metrics (averages across fences)
         per_seed_metrics: list[TelemetryMetric] = []
@@ -890,6 +981,10 @@ class TolariaTrainer:
                 elems = float(seed_param_elems.get(name, 0))
                 per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.params", elems, unit="elems", attributes=attrs))
                 per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.mask_fraction", (elems / float(total_elems)), unit="ratio", attributes=attrs))
+            # Teacher split share (approximate)
+            if name in teacher_split_sum and seed_uses.get(name, 0) > 0:
+                avg_tsplit = float(teacher_split_sum[name]) / max(1, attrib_uses)
+                per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.teacher_share", avg_tsplit, unit="ratio", attributes=attrs))
         # Include teacher bucket if present
         if teacher_key in seen_seeds:
             uses = max(1, seed_uses.get(teacher_key, 0))
@@ -1141,6 +1236,11 @@ class TolariaTrainer:
                     unit="bool",
                 ),
                 TelemetryMetric(
+                    "tolaria.grad_agg.conflict_ratio",
+                    self._metrics.get("tolaria.grad_agg.conflict_ratio", 0.0),
+                    unit="ratio",
+                ),
+                TelemetryMetric(
                     "tolaria.profiler.enabled",
                     self._metrics.get("tolaria.profiler.enabled", 0.0),
                     unit="bool",
@@ -1170,7 +1270,15 @@ class TolariaTrainer:
         # Append per-seed aggregation metrics (if computed this epoch)
         if getattr(self, "_seed_agg_metrics", None):
             metrics.extend(self._seed_agg_metrics)
-        
+        # Teacher overall share (rollup)
+        metrics.append(
+            TelemetryMetric(
+                "tolaria.grad_agg.teacher_share",
+                self._metrics.get("tolaria.grad_agg.teacher_share", 0.0),
+                unit="grad",
+            )
+        )
+
         events: list[TelemetryEvent] = []
         health_status = leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY
         health_summary = "stable"
@@ -1211,6 +1319,10 @@ class TolariaTrainer:
 
         if self._events:
             events.extend(self.drain_telemetry_events())
+
+        # Conflict warning event
+        if self._metrics.get("tolaria.grad_agg.conflict_ratio", 0.0) >= self._conflict_warn:
+            events.append(TelemetryEvent(description="grad_conflict_high", level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING, attributes={"conflict_ratio": f"{self._metrics['tolaria.grad_agg.conflict_ratio']:.3f}"}))
 
         if health_status == leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY:
             for event in events:
