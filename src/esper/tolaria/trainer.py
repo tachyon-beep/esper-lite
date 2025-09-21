@@ -20,6 +20,7 @@ from torch.utils.data import DataLoader
 
 from esper.core import TelemetryEvent, TelemetryMetric, build_telemetry_packet
 from esper.leyline import leyline_pb2
+from esper.oona.messaging import CircuitBreaker, BreakerSnapshot
 
 if TYPE_CHECKING:
     from esper.oona import OonaClient
@@ -50,6 +51,12 @@ class TrainingLoopConfig:
         )
     )
     gradient_accumulation_steps: int = 1
+    epoch_budget_ms: float = 250.0
+    hook_budget_ms: float = 50.0
+    tamiyo_timeout_s: float = 2.0
+    breaker_failure_threshold: int = 3
+    breaker_success_threshold: int = 1
+    breaker_timeout_s: float = 30.0
 
 @dataclass(slots=True)
 class EpochStats:
@@ -102,6 +109,21 @@ class TolariaTrainer:
         self._run_id = "training-run"
         self._telemetry_packets: list[leyline_pb2.TelemetryPacket] = []
         self._state_packets: list[leyline_pb2.SystemStatePacket] = []
+        self._breaker = CircuitBreaker(
+            failure_threshold=self._config.breaker_failure_threshold,
+            success_threshold=self._config.breaker_success_threshold,
+            timeout_ms=max(self._config.breaker_timeout_s, 0.0) * 1000.0,
+        )
+        snapshot = self._breaker.snapshot()
+        self._conservative_mode = False
+        self._metrics: dict[str, float] = {
+            "tolaria.epochs.total": 0.0,
+            "tolaria.epochs.failed": 0.0,
+            "tolaria.breaker.state": float(snapshot.state),
+            "tolaria.mode.conservative": 0.0,
+            "tolaria.hook.latency_ms": 0.0,
+        }
+        self._events: list[TelemetryEvent] = []
 
     def run(self) -> Iterable[leyline_pb2.SystemStatePacket]:
         """Run the training loop, yielding `SystemStatePacket`s each epoch."""
@@ -113,12 +135,94 @@ class TolariaTrainer:
             stats = self._train_single_epoch()
             stats.epoch_duration_ms = (perf_counter() - epoch_start) * 1000.0
             state = self._emit_state(epoch, stats)
-            # Measure end-of-epoch hook (state assembly + Tamiyo + Kasmina)
+            self._metrics["tolaria.epochs.total"] += 1.0
+
+            failure_reason: str | None = None
+            allowed, snapshot = self._breaker.allow()
+            if snapshot is not None:
+                self._update_breaker_state(snapshot)
+            if not allowed:
+                failure_reason = "breaker_open"
+                self._enter_conservative_mode(failure_reason)
+
+            if stats.epoch_duration_ms > self._config.epoch_budget_ms:
+                failure_reason = failure_reason or "epoch_budget"
+                self._emit_event(
+                    "tolaria.epoch_budget_exceeded",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"latency_ms": f"{stats.epoch_duration_ms:.2f}"},
+                )
+
             hook_start = perf_counter()
-            command = self._tamiyo.evaluate_epoch(state)
-            self._kasmina.apply_command(command)
-            hook_latency_ms = (perf_counter() - hook_start) * 1000.0
-            telemetry = self._emit_telemetry(state, stats, hook_latency_ms=hook_latency_ms)
+            hook_latency_ms = 0.0
+            command: leyline_pb2.AdaptationCommand | None = None
+
+            if self._conservative_mode:
+                failure_reason = failure_reason or "conservative_mode"
+                command = self._build_conservative_command()
+            else:
+                try:
+                    command, hook_latency_ms = self._invoke_tamiyo(state)
+                except TimeoutError as exc:
+                    failure_reason = failure_reason or "tamiyo_timeout"
+                    self._emit_event(
+                        "tolaria.tamiyo_timeout",
+                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                        attributes={"error": str(exc)},
+                    )
+                    command = self._build_conservative_command()
+                except Exception as exc:  # pragma: no cover - defensive
+                    failure_reason = failure_reason or "tamiyo_error"
+                    self._emit_event(
+                        "tolaria.tamiyo_error",
+                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                        attributes={"error": type(exc).__name__},
+                    )
+                    command = self._build_conservative_command()
+
+            if command is None:
+                command = self._build_conservative_command()
+
+            try:
+                self._kasmina.apply_command(command)
+            except Exception as exc:  # pragma: no cover - defensive
+                failure_reason = failure_reason or "kasmina_error"
+                self._emit_event(
+                    "tolaria.kasmina_error",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"error": type(exc).__name__},
+                )
+
+            hook_latency_ms = max(
+                hook_latency_ms,
+                (perf_counter() - hook_start) * 1000.0,
+            )
+
+            if hook_latency_ms > self._config.hook_budget_ms:
+                failure_reason = failure_reason or "hook_budget"
+                self._emit_event(
+                    "tolaria.hook_budget_exceeded",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"latency_ms": f"{hook_latency_ms:.2f}"},
+                )
+
+            self._metrics["tolaria.hook.latency_ms"] = hook_latency_ms
+
+            if failure_reason is not None:
+                self._metrics["tolaria.epochs.failed"] += 1.0
+                failure_snapshot = self._breaker.record_failure()
+                self._update_breaker_state(failure_snapshot)
+                self._enter_conservative_mode(failure_reason)
+            else:
+                success_snapshot = self._breaker.record_success()
+                self._update_breaker_state(success_snapshot)
+                self._exit_conservative_mode()
+
+            telemetry = self._emit_telemetry(
+                state,
+                stats,
+                hook_latency_ms=hook_latency_ms,
+            )
             self._telemetry_packets.append(telemetry)
             self._state_packets.append(state)
             # Persist a lightweight checkpoint/WAL for rollback support
@@ -258,6 +362,36 @@ class TolariaTrainer:
                 TelemetryMetric("tolaria.epoch_hook.latency_ms", hook_latency_ms, unit="ms")
             )
 
+        metrics.extend(
+            [
+                TelemetryMetric(
+                    "tolaria.breaker.state",
+                    self._metrics.get("tolaria.breaker.state", 0.0),
+                    unit="state",
+                ),
+                TelemetryMetric(
+                    "tolaria.mode.conservative",
+                    self._metrics.get("tolaria.mode.conservative", 0.0),
+                    unit="bool",
+                ),
+                TelemetryMetric(
+                    "tolaria.epochs.total",
+                    self._metrics.get("tolaria.epochs.total", 0.0),
+                    unit="count",
+                ),
+                TelemetryMetric(
+                    "tolaria.epochs.failed",
+                    self._metrics.get("tolaria.epochs.failed", 0.0),
+                    unit="count",
+                ),
+                TelemetryMetric(
+                    "tolaria.hook.latency_ms",
+                    self._metrics.get("tolaria.hook.latency_ms", 0.0),
+                    unit="ms",
+                ),
+            ]
+        )
+
         events: list[TelemetryEvent] = []
         health_status = leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY
         health_summary = "stable"
@@ -296,6 +430,9 @@ class TolariaTrainer:
             health_status = leyline_pb2.HealthStatus.HEALTH_STATUS_UNHEALTHY
             health_summary = "zero_samples"
 
+        if self._events:
+            events.extend(self.drain_telemetry_events())
+
         telemetry = build_telemetry_packet(
             packet_id=state.packet_id,
             source="tolaria",
@@ -307,6 +444,75 @@ class TolariaTrainer:
             health_indicators=health_indicators,
         )
         return telemetry
+
+    def metrics_snapshot(self) -> dict[str, float]:
+        return dict(self._metrics)
+
+    def drain_telemetry_events(self) -> list[TelemetryEvent]:
+        events = list(self._events)
+        self._events.clear()
+        return events
+
+    def _invoke_tamiyo(
+        self, state: leyline_pb2.SystemStatePacket
+    ) -> tuple[leyline_pb2.AdaptationCommand, float]:
+        start = perf_counter()
+        command = self._tamiyo.evaluate_epoch(state)
+        latency_ms = (perf_counter() - start) * 1000.0
+        if latency_ms > self._config.tamiyo_timeout_s * 1000.0:
+            raise TimeoutError(
+                f"Tamiyo evaluation exceeded timeout ({latency_ms:.2f}ms)"
+            )
+        return command, latency_ms
+
+    def _build_conservative_command(self) -> leyline_pb2.AdaptationCommand:
+        cmd = leyline_pb2.AdaptationCommand()
+        cmd.command_id = f"{self._run_id}-conservative"
+        return cmd
+
+    def _update_breaker_state(self, snapshot: BreakerSnapshot) -> None:
+        self._metrics["tolaria.breaker.state"] = float(snapshot.state)
+        if snapshot.state == leyline_pb2.CIRCUIT_STATE_OPEN:
+            self._emit_event(
+                "tolaria.breaker_opened",
+                level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                attributes={"failures": str(snapshot.failure_count)},
+            )
+
+    def _enter_conservative_mode(self, reason: str) -> None:
+        if not self._conservative_mode:
+            self._conservative_mode = True
+            self._metrics["tolaria.mode.conservative"] = 1.0
+            self._emit_event(
+                "tolaria.conservative_mode_entered",
+                level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                attributes={"reason": reason},
+            )
+
+    def _exit_conservative_mode(self) -> None:
+        if self._conservative_mode:
+            self._conservative_mode = False
+            self._metrics["tolaria.mode.conservative"] = 0.0
+            self._emit_event(
+                "tolaria.conservative_mode_cleared",
+                attributes={},
+            )
+
+    def _emit_event(
+        self,
+        description: str,
+        *,
+        level: leyline_pb2.TelemetryLevel = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+        attributes: dict[str, str] | None = None,
+    ) -> None:
+        payload = {k: str(v) for k, v in (attributes or {}).items()}
+        self._events.append(
+            TelemetryEvent(
+                description=description,
+                level=level,
+                attributes=payload,
+            )
+        )
 
     @property
     def telemetry_packets(self) -> list[leyline_pb2.TelemetryPacket]:

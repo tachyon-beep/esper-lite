@@ -27,6 +27,11 @@ class _TamiyoStub(TamiyoClient):
         return command
 
 
+class _TimeoutTamiyoStub(TamiyoClient):
+    def evaluate_epoch(self, state: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
+        raise TimeoutError("simulated-timeout")
+
+
 class _KasminaStub(KasminaClient):
     def __init__(self) -> None:
         self.received: list[leyline_pb2.AdaptationCommand] = []
@@ -71,6 +76,8 @@ def test_tolaria_trainer_emits_state_packets() -> None:
             max_epochs=2,
             gradient_accumulation_steps=1,
             device=torch.device("cpu"),
+            epoch_budget_ms=500.0,
+            hook_budget_ms=200.0,
         ),
     )
 
@@ -88,11 +95,19 @@ def test_tolaria_trainer_emits_state_packets() -> None:
         "tolaria.training.latency_ms",
         "tolaria.epoch_hook.latency_ms",
         "tolaria.seeds.active",
+        "tolaria.breaker.state",
+        "tolaria.mode.conservative",
+        "tolaria.epochs.total",
+        "tolaria.epochs.failed",
+        "tolaria.hook.latency_ms",
     }.issubset(metric_names)
     assert telemetry[0].system_health.status in {
         leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY,
         leyline_pb2.HealthStatus.HEALTH_STATUS_DEGRADED,
     }
+    metrics_snapshot = trainer.metrics_snapshot()
+    assert metrics_snapshot["tolaria.epochs.total"] == 2.0
+    assert metrics_snapshot["tolaria.epochs.failed"] == 0.0
 
 
 def test_tolaria_advances_alpha_during_blending() -> None:
@@ -116,6 +131,7 @@ def test_tolaria_advances_alpha_during_blending() -> None:
             max_epochs=1,
             gradient_accumulation_steps=1,
             device=torch.device("cpu"),
+            hook_budget_ms=18.0,
         ),
     )
 
@@ -190,6 +206,35 @@ def test_epoch_hook_latency_budget_guard() -> None:
     pkt = trainer.telemetry_packets[0]
     hook_ms = _get_metric(pkt, "tolaria.epoch_hook.latency_ms")
     assert hook_ms <= 18.0
+
+
+def test_tolaria_enters_conservative_mode_on_tamiyo_timeout() -> None:
+    model = _dummy_model(4, 2)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+    loader = _dummy_loader(8, 4, 2)
+    tamiyo = _TimeoutTamiyoStub()
+    kasmina = _KasminaStub()
+    trainer = TolariaTrainer(
+        model=model,
+        optimizer=optimizer,
+        dataloader=loader,
+        tamiyo=tamiyo,
+        kasmina=kasmina,
+        config=TrainingLoopConfig(
+            max_epochs=1,
+            gradient_accumulation_steps=1,
+            device=torch.device("cpu"),
+            tamiyo_timeout_s=0.01,
+            breaker_failure_threshold=1,
+            breaker_timeout_s=60.0,
+        ),
+    )
+
+    list(trainer.run())
+    snapshot = trainer.metrics_snapshot()
+    assert snapshot["tolaria.mode.conservative"] == 1.0
+    all_events = [event.description for pkt in trainer.telemetry_packets for event in pkt.events]
+    assert "tolaria.conservative_mode_entered" in all_events
 
 
 def test_tolaria_checkpoint_and_rollback(tmp_path, monkeypatch) -> None:
