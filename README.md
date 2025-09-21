@@ -8,6 +8,18 @@ For an end-to-end view of subsystems, contracts, flows, telemetry, and operation
 
 - docs/architecture_summary.md
 
+Also see visual diagrams of integrations and flows:
+
+- docs/architecture_diagrams.md
+
+### Prototype Delta (Green‑for‑Prototype Scope)
+
+This repo tracks a pragmatic prototype scope distinct from the full detailed design. The living diff is documented per subsystem here:
+
+- docs/prototype-delta/README.md
+
+Use the prototype‑delta docs and rubric to judge readiness for the “green for prototype” build. Only adopt full detailed‑design features when explicitly called out by the delta.
+
 ## Getting Started
 
 1. **Create a virtual environment**

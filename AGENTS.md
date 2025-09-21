@@ -41,3 +41,9 @@
 - Update `docs/` whenever behaviour diverges from the canonical `old/` design files, and surface new operational learnings in `docs/project/backlog.md`.
 - Never commit secrets; document required environment variables in a checked-in `README` or `.env.example` within the relevant subsystem folder.
 - Keep docker-compose or deployment manifests beside the service code once infrastructure scaffolding begins.
+
+### Prototype Delta Guidance
+
+- We maintain a prototype scope that differs from the full detailed design; see `docs/prototype-delta/README.md` and its per‑subsystem deltas.
+- When implementing changes, optimise for the “green for prototype” acceptance (prototype‑delta) rather than the full design unless the delta calls for a full feature.
+- Use `docs/prototype-delta/rubric.md` when assessing completeness; reference delta docs in PRs where appropriate.
