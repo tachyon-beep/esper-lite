@@ -6,6 +6,7 @@ Documents in this folder:
 - `delta-matrix.md` — requirement‑by‑requirement status with evidence
 - `traceability-map.md` — mapping of design assertions to code/tests
 - `implementation-roadmap.md` — suggested backlog to close gaps without tech debt
+- `pytorch-2.8-upgrades.md` — mandatory training‑loop improvements (compile step, AMP, TF32, data transfer)
 
 Design sources:
 - `docs/design/detailed_design/01-tolaria-unified-design.md`
