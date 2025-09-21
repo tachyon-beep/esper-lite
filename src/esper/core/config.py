@@ -62,6 +62,7 @@ class EsperSettings(BaseSettings):
 
     urza_database_url: str = Field(alias="URZA_DATABASE_URL", default="sqlite:///./var/urza/catalog.db")
     urza_artifact_dir: str = Field(alias="URZA_ARTIFACT_DIR", default="./var/urza/artifacts")
+    urza_cache_ttl_seconds: int | None = Field(alias="URZA_CACHE_TTL_SECONDS", default=None)
 
     log_level: str = Field(alias="ESP_LOG_LEVEL", default="INFO")
 

@@ -71,6 +71,11 @@ class UrzaPrefetchWorker:
             self._metrics.latency_ms = (time.perf_counter() - start) * 1000.0
             return
         checksum = self._checksum_fn(artifact_path)
+        if record.checksum and checksum != record.checksum:
+            await self._emit_error(request, reason="checksum_mismatch")
+            self._metrics.errors += 1
+            self._metrics.latency_ms = (time.perf_counter() - start) * 1000.0
+            return
         guard_digest = record.guard_digest
         if not guard_digest:
             guard_digest = self._fallback_guard_digest(record)

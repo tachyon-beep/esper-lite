@@ -28,6 +28,7 @@ class UrzaRecord:
     guard_digest: str | None = None
     prewarm_samples: tuple[float, ...] = ()
     artifact_mtime: float | None = None
+    checksum: str | None = None
     compile_ms: float | None = None
     prewarm_ms: float | None = None
     compile_strategy: str | None = None
@@ -189,6 +190,7 @@ class UrzaLibrary:
             guard_digest=extras.get("guard_digest"),
             prewarm_samples=samples,
             artifact_mtime=extras.get("artifact_mtime"),
+            checksum=extras.get("checksum"),
             compile_ms=float(extras.get("compile_ms", 0.0)) if extras.get("compile_ms") is not None else None,
             prewarm_ms=float(extras.get("prewarm_ms", 0.0)) if extras.get("prewarm_ms") is not None else None,
             compile_strategy=extras.get("compile_strategy"),
@@ -208,11 +210,14 @@ class UrzaLibrary:
     ) -> dict[str, Any]:
         guard_digest: str | None = None
         samples = list(self._prewarm_samples.get(blueprint_id, []))
+        checksum: str | None = None
         if catalog_update is not None:
             if catalog_update.guard_digest:
                 guard_digest = catalog_update.guard_digest
             if catalog_update.prewarm_ms:
                 samples.append(float(catalog_update.prewarm_ms))
+            if catalog_update.checksum:
+                checksum = catalog_update.checksum
         if len(samples) > self._max_prewarm_samples:
             samples = samples[-self._max_prewarm_samples :]
         if samples:
@@ -229,6 +234,8 @@ class UrzaLibrary:
             "prewarm_samples": samples,
             "artifact_mtime": artifact_mtime,
         }
+        if checksum:
+            extras["checksum"] = checksum
         if catalog_update is not None:
             extras["compile_ms"] = float(catalog_update.compile_ms)
             extras["prewarm_ms"] = float(catalog_update.prewarm_ms)
@@ -322,6 +329,7 @@ class UrzaLibrary:
             guard_digest=extras.get("guard_digest"),
             prewarm_samples=tuple(float(x) for x in extras.get("prewarm_samples", [])),
             artifact_mtime=extras.get("artifact_mtime"),
+            checksum=extras.get("checksum"),
             compile_ms=float(extras.get("compile_ms", 0.0)) if extras.get("compile_ms") is not None else None,
             prewarm_ms=float(extras.get("prewarm_ms", 0.0)) if extras.get("prewarm_ms") is not None else None,
             compile_strategy=extras.get("compile_strategy"),
@@ -373,6 +381,7 @@ def _clone_record(record: UrzaRecord) -> UrzaRecord:
         guard_digest=record.guard_digest,
         prewarm_samples=tuple(record.prewarm_samples),
         artifact_mtime=record.artifact_mtime,
+        checksum=record.checksum,
         compile_ms=record.compile_ms,
         prewarm_ms=record.prewarm_ms,
         compile_strategy=record.compile_strategy,

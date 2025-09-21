@@ -106,12 +106,20 @@ async def initialise_blueprint_pipeline(
     if blueprint is None:
         raise RuntimeError("Default blueprint catalog missing BP001")
 
+    settings = EsperSettings()
     artifact_dir = root / "artifacts"
-    library = UrzaLibrary(root=root / "urza")
+    library = UrzaLibrary(
+        root=root / "urza",
+        cache_ttl_seconds=settings.urza_cache_ttl_seconds,
+    )
     compiler = TezzeretCompiler(
         config=CompileJobConfig(
             artifact_dir=artifact_dir,
-            inductor_cache_dir=(root / "inductor_cache"),
+            inductor_cache_dir=(
+                Path(settings.tezzeret_inductor_cache_dir)
+                if settings.tezzeret_inductor_cache_dir
+                else root / "inductor_cache"
+            ),
         )
     )
     pipeline = BlueprintPipeline(

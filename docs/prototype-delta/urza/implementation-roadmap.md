@@ -5,7 +5,7 @@ Goal: move the prototype library toward the design without tech debt.
 | Order | Theme | Key Tasks | Outcome |
 | --- | --- | --- | --- |
 | 0 | Prefetch bus | Async worker consumes kernel requests, emits ready/error updates | ✅ Oona-based prefetch in place |
-| 1 | Integrity & WAL | Add SHA‑256 checksums for artifacts; include checksum + version in DB; WAL with CRC and atomic writes | Strong integrity and recovery |
+| 1 | Integrity & WAL | Add SHA‑256 checksums for artifacts; include checksum + version in DB; WAL with CRC and atomic writes | ✅ Checksums stored/verified; WAL durability upgrades still pending |
 | 2 | Query surface | Expose tag/stage queries; index metadata; simple search | Useful metadata queries for Tamiyo |
 | 3 | Circuit breakers & latency SLO | Add query time guards, breaker states; optionally conservative mode (cache‑only) | Predictable performance under load |
 | 4 | Telemetry | Emit `urza.query.duration_ms`, `urza.cache.hit_rate`, breaker state via Oona | Operator visibility (prefetch metrics already included in Weatherlight telemetry) |

@@ -12,6 +12,13 @@ from esper.karn import (
     BlueprintTier,
 )
 from esper.urza import UrzaLibrary
+from esper.urza.runtime import UrzaRuntime
+from esper.leyline import leyline_pb2
+from esper.tezzeret.compiler import CompiledBlueprint
+
+import hashlib
+import torch
+from torch import nn
 
 
 def _metadata(blueprint_id: str, *, risk: float = 0.2, stage: int = 1) -> BlueprintDescriptor:
@@ -51,6 +58,7 @@ def test_urza_library_persists_metadata(tmp_path: Path) -> None:
     bounds = persisted.metadata.allowed_parameters["alpha"]
     assert bounds.min_value == pytest.approx(0.0)
     assert bounds.max_value == pytest.approx(1.0)
+    assert persisted.checksum is None
 
 
 def test_urza_library_cache_eviction(tmp_path: Path) -> None:
@@ -112,3 +120,26 @@ def test_urza_library_cache_ttl_enforces_expiry(tmp_path: Path) -> None:
     metrics = library.metrics_snapshot()
     assert metrics["cache_expired"] >= 1.0
     assert metrics["cache_misses"] >= 1.0
+
+
+def test_urza_runtime_verifies_checksum(tmp_path: Path) -> None:
+    library = UrzaLibrary(root=tmp_path)
+    metadata = _metadata("BPCHK")
+    artifact = tmp_path / "artifact.pt"
+    module = CompiledBlueprint(nn.Identity(), blueprint_id=metadata.blueprint_id, parameters={})
+    torch.save(module, artifact)
+    checksum = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    catalog_update = leyline_pb2.KernelCatalogUpdate(
+        blueprint_id=metadata.blueprint_id,
+        artifact_ref=str(artifact),
+        checksum=checksum,
+    )
+    library.save(metadata, artifact, catalog_update=catalog_update)
+    runtime = UrzaRuntime(library)
+    module, latency_ms = runtime.fetch_kernel("BPCHK")
+    assert isinstance(module, nn.Module)
+    assert latency_ms >= 0.0
+
+    artifact.write_bytes(b"tampered")
+    with pytest.raises(ValueError):
+        runtime.fetch_kernel("BPCHK")

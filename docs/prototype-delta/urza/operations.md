@@ -3,46 +3,31 @@
 Purpose: give a clear checklist for wiring integrity, TTL, telemetry, and (optionally) cache tiers so coders can land improvements with minimal friction.
 
 Environment and settings
-- Existing (EsperSettings)
+- Present in `EsperSettings`
   - `URZA_DATABASE_URL` — SQLite URL (default `sqlite:///./var/urza/catalog.db`).
   - `URZA_ARTIFACT_DIR` — Artifact directory root (default `./var/urza/artifacts`).
-- Recommended (add to settings; already supported by library constructor)
-  - `URZA_CACHE_TTL_SECONDS` — Expire artifacts based on mtime; pass into `UrzaLibrary(cache_ttl_seconds=...)`.
+  - `URZA_CACHE_TTL_SECONDS` — Optional TTL (seconds) applied to on-disk artifacts.
 - Optional (future)
   - `URZA_REDIS_URL` — L2 cache endpoint (if/when cache tiers are added).
   - `URZA_CACHE_SIZE` — In‑process LRU capacity.
 
 Integrity (checksums)
-- What: verify artifact SHA‑256 before serve to Kasmina.
-- Where:
-  - Persist checksum via Tezzeret `KernelCatalogUpdate` → UrzaLibrary extras (already stores extras; include `checksum`).
-  - Verify on load in `UrzaLibrary.get` and/or `UrzaRuntime.fetch_kernel`:
-    - Compute SHA‑256 for `artifact_path` and compare to stored.
-    - On mismatch: increment `urza.integrity.checksum_mismatch`, delete record, and return None (or raise), then let Kasmina fall back.
-- Telemetry: emit `urza.integrity.checksum_mismatch` and a `checksum_mismatch` event with blueprint_id.
+- Urza persists the SHA‑256 provided by Tezzeret and verifies artifacts during `UrzaRuntime.fetch_kernel`.
+- Prefetch worker cross-checks the checksum before responding; mismatches emit `checksum_mismatch` errors.
+- Recommended telemetry counter: `urza.integrity.checksum_mismatch` (Weatherlight can include it once wired).
 
 TTL / retention
-- Use `UrzaLibrary(cache_ttl_seconds=...)` to expire stale artifacts by mtime (implemented; tested).
-- Add a periodic maintenance hook (e.g., run from Weatherlight housekeeping) to list and remove expired artifacts/rows to bound disk usage.
-- Metrics: `urza.cache.expired`, `urza.cache.size`.
+- `UrzaLibrary(cache_ttl_seconds=...)` (configurable via settings) expires stale artifacts by mtime.
+- Future: add maintenance hook to prune expired rows proactively and surface `urza.cache.expired`.
 
 Telemetry (names and routing)
-- Query/cache metrics (export periodically via Weatherlight):
-  - `urza.query.duration_ms` (from `metrics_snapshot()['lookup_latency_ms']`)
-  - `urza.cache.hits`, `urza.cache.misses`, `urza.cache.errors`, `urza.cache.expired`
-  - `urza.cache.size` (records in LRU)
-- Prefetch metrics (already available on worker):
-  - `urza.prefetch.hits`, `urza.prefetch.misses`, `urza.prefetch.errors`, `urza.prefetch.latency_ms`
-- Integrity:
-  - `urza.integrity.checksum_mismatch`
-- Breaker (optional):
-  - `urza.breaker.state` (0=closed,1=half‑open,2=open), `urza.breaker.open_total`
-- Events (TelemetryEvent examples):
-  - `artifact_expired`, `checksum_mismatch`, `prefetch_ready`, `prefetch_error{reason}`
+- Query/cache metrics (Weatherlight now includes `urza.library.*` in its telemetry packet):
+  - `urza.library.cache_hits`, `urza.library.cache_misses`, `urza.library.cache_errors`, `urza.library.cache_expired`, `urza.library.lookup_latency_ms`
+- Prefetch worker metrics: `urza.prefetch.hits`, `urza.prefetch.misses`, `urza.prefetch.errors`, `urza.prefetch.latency_ms`
+- Integrity/TTL counters can be appended once maintenance hooks land.
 
 Weatherlight integration
-- Add `urza.query.*` and `urza.cache.*` from `UrzaLibrary.metrics_snapshot()` in Weatherlight’s telemetry loop (similar to Oona/Urza prefetch metrics already included).
-- Run TTL cleanup from Weatherlight housekeeping if you add a maintenance API.
+- Weatherlight aggregates `urza.library.*` metrics each cycle; TTL cleanup hook remains future work.
 
 Cache tiers (optional)
 - L2 Redis: cache artifact bytes or small serialized modules keyed by blueprint_id + version; expire aggressively.
@@ -58,4 +43,3 @@ Touchpoints for coders
 
 Safety defaults
 - On checksum mismatch or missing artifact, prefer returning None/raising and let the caller (Kasmina) take the eager/identity fallback path with a WARNING event.
-

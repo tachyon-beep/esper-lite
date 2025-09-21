@@ -170,6 +170,7 @@ class WeatherlightService:
         library = UrzaLibrary(
             root=library_root,
             database_url=self._settings.urza_database_url,
+            cache_ttl_seconds=self._settings.urza_cache_ttl_seconds,
         )
         runtime = UrzaRuntime(library)
         return library, runtime

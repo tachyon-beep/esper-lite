@@ -1,6 +1,6 @@
 # Urza — Prototype Delta (Kernel Library)
 
-Executive summary: the prototype implements a local Urza library backed by SQLite + filesystem artifacts with a small in‑process LRU cache and a JSON WAL for recovery. It supports save/get/list, is used by Tezzeret and Tamiyo tests, and powers Kasmina via `UrzaRuntime` to load compiled kernels. The full design specifies multi‑tier caching (memory/Redis/object store), explicit integrity checksums, query circuit breakers, TTL cleanup, telemetry, and a metadata query surface (tags/stage/tier) with latency SLOs. Leyline remains canonical for blueprint descriptors.
+Executive summary: the prototype implements a local Urza library backed by SQLite + filesystem artifacts with a small in‑process LRU cache, checksum‑verified artifacts, and a JSON WAL for recovery. It supports save/get/list, is used by Tezzeret and Tamiyo tests, and powers Kasmina via `UrzaRuntime` to load compiled kernels (now verifying checksums). Single-tier caching includes optional TTL, while prefetchers validate checksums before publishing READY messages. Remaining design work covers multi‑tier caching (Redis/object store), query circuit breakers, richer telemetry, and metadata query surfaces (tags/stage/tier) with latency SLOs. Leyline remains canonical for blueprint descriptors.
 
 Documents in this folder:
 - `delta-matrix.md` — requirement‑by‑requirement status with evidence
