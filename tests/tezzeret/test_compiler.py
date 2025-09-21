@@ -35,6 +35,8 @@ def test_compiler_persists_artifact() -> None:
     assert result is not None
     assert result.guard_spec
     assert result.guard_digest == update.guard_digest
+    assert result.guard_summary
+    assert all(isinstance(entry, str) for entry in result.guard_summary)
     if result.compile_strategy == "standard":
         assert result.eager_fallback is False
     else:
@@ -63,10 +65,11 @@ def test_compiler_falls_back_to_eager(monkeypatch) -> None:
         module = torch.load(path)
         sample = torch.randn(8, 32)
         _ = module(sample)
-        result = compiler.latest_result()
-        assert result is not None
-        assert result.eager_fallback is True
-        assert result.compile_strategy == "eager"
+    result = compiler.latest_result()
+    assert result is not None
+    assert result.eager_fallback is True
+    assert result.compile_strategy == "eager"
+    assert result.guard_summary
 
 
 def test_compiler_retries_and_clears_wal(tmp_path) -> None:
@@ -105,3 +108,41 @@ def test_compiler_raises_after_retries(tmp_path) -> None:
     with pytest.raises(RuntimeError):
         compiler.compile(metadata, parameters={})
     assert (tmp_path / "tezzeret_wal.json").exists()
+
+
+def test_compile_job_config_uses_env_cache(monkeypatch, tmp_path) -> None:
+    cache_dir = tmp_path / "cache"
+    monkeypatch.setenv("TORCHINDUCTOR_CACHE_DIR", str(cache_dir))
+    config = CompileJobConfig(artifact_dir=tmp_path)
+    assert config.inductor_cache_dir == cache_dir
+    compiler = TezzeretCompiler(config=config)
+    metadata = BlueprintDescriptor(
+        blueprint_id="bp-env",
+        name="Env",
+        tier=BlueprintTier.BLUEPRINT_TIER_SAFE,
+        description="",
+    )
+    path = compiler.compile(metadata, parameters={})
+    assert path.exists()
+    result = compiler.latest_result()
+    assert result is not None
+    assert result.inductor_cache_dir == str(cache_dir)
+    monkeypatch.delenv("TORCHINDUCTOR_CACHE_DIR", raising=False)
+
+
+def test_guard_digest_consistency(tmp_path) -> None:
+    metadata = BlueprintDescriptor(
+        blueprint_id="bp-digest",
+        name="Digest",
+        tier=BlueprintTier.BLUEPRINT_TIER_SAFE,
+        description="",
+    )
+    compiler = TezzeretCompiler(CompileJobConfig(artifact_dir=tmp_path))
+    compiler.compile(metadata, parameters={})
+    first = compiler.latest_result()
+    assert first is not None
+    compiler.compile(metadata, parameters={})
+    second = compiler.latest_result()
+    assert second is not None
+    assert first.guard_digest == second.guard_digest
+    assert first.guard_summary == second.guard_summary

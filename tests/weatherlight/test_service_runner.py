@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 from fakeredis.aioredis import FakeRedis
 
-from esper.core import EsperSettings
+from esper.core import EsperSettings, TelemetryMetric, build_telemetry_packet
+from esper.leyline import leyline_pb2
 from esper.weatherlight.service_runner import WeatherlightService
 
 
@@ -64,3 +65,62 @@ async def test_weatherlight_builds_telemetry_packet(fake_redis: FakeRedis, weath
     metric_names = {metric.name for metric in packet.metrics}
     assert "weatherlight.tasks.running" in metric_names
     assert packet.source_subsystem == "weatherlight"
+    assert "urza.library.cache_size" in metric_names
+
+
+@pytest.mark.asyncio
+async def test_weatherlight_streams_tezzeret_packets(
+    fake_redis: FakeRedis,
+    weatherlight_settings: EsperSettings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = WeatherlightService(settings=weatherlight_settings)
+    await service.start()
+    try:
+        await asyncio.sleep(0.1)
+
+        class _DummyForge:
+            def __init__(self) -> None:
+                self.count = 0
+
+            def metrics_snapshot(self) -> dict[str, float]:
+                return {"tezzeret.jobs.total": 3.0}
+
+            def build_telemetry_packet(self) -> leyline_pb2.TelemetryPacket:
+                self.count += 1
+                return build_telemetry_packet(
+                    packet_id=f"tezzeret-{self.count}",
+                    source="tezzeret",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    metrics=[TelemetryMetric("tezzeret.jobs.total", 3.0)],
+                    events=[],
+                )
+
+        forge = _DummyForge()
+        service.connect_tezzeret_forge(forge)
+
+        published: list[tuple[str, leyline_pb2.MessagePriority]] = []
+
+        async def _fake_publish(
+            packet: leyline_pb2.TelemetryPacket,
+            *,
+            priority: leyline_pb2.MessagePriority = leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL,
+        ) -> None:
+            published.append((packet.source_subsystem, priority))
+
+        async def _noop_metrics_telemetry(**_kwargs: object) -> None:
+            return None
+
+        monkeypatch.setattr(service._oona, "publish_telemetry", _fake_publish)
+        monkeypatch.setattr(service._oona, "emit_metrics_telemetry", _noop_metrics_telemetry)
+
+        await service._flush_telemetry_once()
+
+        assert ("weatherlight", leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL) in published
+        assert ("tezzeret", leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH) in published
+
+        packet = await service._build_telemetry_packet()
+        metric_names = {metric.name for metric in packet.metrics}
+        assert "tezzeret.jobs.total" in metric_names
+    finally:
+        await service.shutdown()

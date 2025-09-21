@@ -11,7 +11,7 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 from google.protobuf.json_format import MessageToDict, ParseDict
 from sqlalchemy import Column, MetaData, String, Table, create_engine, select, delete
@@ -19,6 +19,7 @@ from sqlalchemy.engine import Engine
 
 from esper.karn import BlueprintDescriptor, BlueprintTier
 from esper.leyline import leyline_pb2
+from esper.oona.messaging import CircuitBreaker, BreakerSnapshot
 
 
 @dataclass(slots=True)
@@ -35,6 +36,8 @@ class UrzaRecord:
     eager_fallback: bool = False
     guard_spec: tuple[dict[str, Any], ...] = ()
     inductor_cache_dir: str | None = None
+    guard_spec_summary: tuple[str, ...] = ()
+    tags: tuple[str, ...] = ()
 
 
 class UrzaLibrary:
@@ -49,6 +52,10 @@ class UrzaLibrary:
         cache_size: int = 128,
         cache_ttl_seconds: int | None = None,
         max_prewarm_samples: int = 20,
+        breaker_latency_threshold_ms: float = 250.0,
+        breaker_failure_threshold: int = 3,
+        breaker_success_threshold: int = 2,
+        breaker_timeout_ms: float = 30_000.0,
     ) -> None:
         self._root = root
         self._root.mkdir(parents=True, exist_ok=True)
@@ -63,6 +70,13 @@ class UrzaLibrary:
             "cache_errors": 0.0,
             "cache_expired": 0.0,
             "lookup_latency_ms": 0.0,
+            "evictions": 0.0,
+            "integrity_failures": 0.0,
+            "slow_queries": 0.0,
+            "breaker_open_total": 0.0,
+            "breaker_denied": 0.0,
+            "breaker_state": 0.0,
+            "conservative_mode": 0.0,
         }
         db_url = database_url or f"sqlite:///{(self._root / 'catalog.db').resolve()}"
         self._engine: Engine = create_engine(db_url, future=True)
@@ -80,6 +94,16 @@ class UrzaLibrary:
         self._wal_path = wal_path or (self._root / "urza_wal.json")
         self._recover_from_wal()
         self._hydrate_cache()
+        self._breaker = CircuitBreaker(
+            failure_threshold=breaker_failure_threshold,
+            success_threshold=breaker_success_threshold,
+            timeout_ms=breaker_timeout_ms,
+        )
+        self._breaker_latency_threshold_ms = max(breaker_latency_threshold_ms, 0.0)
+        initial_snapshot = self._breaker.snapshot()
+        self._breaker_last_state = initial_snapshot.state
+        self._conservative_mode = False
+        self._update_breaker_state(initial_snapshot)
 
     def save(
         self,
@@ -114,9 +138,22 @@ class UrzaLibrary:
                     record = None
                 else:
                     self._metrics["cache_hits"] += 1.0
-                    self._metrics["lookup_latency_ms"] = (time.perf_counter() - start) * 1000.0
+
+                    latency_ms = (time.perf_counter() - start) * 1000.0
+                    self._metrics["lookup_latency_ms"] = latency_ms
+                    self._breaker_record_success(latency_ms)
                     self._touch_cache(blueprint_id, record)
                     return _clone_record(record)
+
+            allowed, snapshot = self._breaker.allow()
+            if snapshot is not None:
+                self._update_breaker_state(snapshot)
+            else:
+                self._update_breaker_state(self._breaker.snapshot())
+            if not allowed:
+                self._metrics["breaker_denied"] += 1.0
+                self._metrics["lookup_latency_ms"] = (time.perf_counter() - start) * 1000.0
+                return None
 
             with self._engine.begin() as conn:
                 result = conn.execute(
@@ -124,20 +161,29 @@ class UrzaLibrary:
                 ).mappings().first()
             if not result:
                 self._metrics["cache_misses"] += 1.0
-                self._metrics["lookup_latency_ms"] = (time.perf_counter() - start) * 1000.0
+                latency_ms = (time.perf_counter() - start) * 1000.0
+                self._metrics["lookup_latency_ms"] = latency_ms
+                self._breaker_record_success(latency_ms)
                 return None
             record = self._record_from_row(result)
             if self._is_expired(record):
                 self._metrics["cache_expired"] += 1.0
                 self._evict_record(blueprint_id, record, delete_artifact=True)
-                self._metrics["lookup_latency_ms"] = (time.perf_counter() - start) * 1000.0
+                latency_ms = (time.perf_counter() - start) * 1000.0
+                self._metrics["lookup_latency_ms"] = latency_ms
+                self._breaker_record_success(latency_ms)
                 return None
             self._touch_cache(blueprint_id, record)
             self._metrics["cache_misses"] += 1.0
-            self._metrics["lookup_latency_ms"] = (time.perf_counter() - start) * 1000.0
+            latency_ms = (time.perf_counter() - start) * 1000.0
+            self._metrics["lookup_latency_ms"] = latency_ms
+            self._breaker_record_success(latency_ms)
             return _clone_record(record)
         except Exception:  # pragma: no cover - defensive guard for IO/DB issues
             self._metrics["cache_errors"] += 1.0
+            latency_ms = (time.perf_counter() - start) * 1000.0
+            self._metrics["lookup_latency_ms"] = latency_ms
+            self._breaker_record_failure()
             return None
 
     def list_all(self) -> dict[str, UrzaRecord]:
@@ -149,12 +195,47 @@ class UrzaLibrary:
     def fetch_by_tier(self, tier: BlueprintTier) -> Iterable[UrzaRecord]:
         return [
             _clone_record(record)
-            for record in self._records.values()
+            for record in self._iter_all_records()
             if record.metadata.tier == tier
         ]
 
+    def fetch_by_stage(self, stage: int) -> Iterable[UrzaRecord]:
+        return [
+            _clone_record(record)
+            for record in self._iter_all_records()
+            if record.metadata.stage == stage
+        ]
+
+    def fetch_by_tag(self, tag: str) -> Iterable[UrzaRecord]:
+        normalized = tag.lower()
+        return [
+            _clone_record(record)
+            for record in self._iter_all_records()
+            if any(entry.lower() == normalized for entry in record.tags)
+        ]
+
     def metrics_snapshot(self) -> dict[str, float]:
-        return dict(self._metrics)
+        snapshot = dict(self._metrics)
+        snapshot.setdefault("cache_size", float(len(self._records)))
+        snapshot.setdefault("query_duration_ms", snapshot.get("lookup_latency_ms", 0.0))
+        return snapshot
+
+    def evict(self, blueprint_id: str, *, delete_artifact: bool = False) -> bool:
+        record = self._records.get(blueprint_id)
+        if record is None:
+            with self._engine.begin() as conn:
+                row = conn.execute(
+                    select(self._table).where(self._table.c.blueprint_id == blueprint_id)
+                ).mappings().first()
+            if not row:
+                return False
+            record = self._record_from_row(row)
+        self._evict_record(blueprint_id, record, delete_artifact=delete_artifact)
+        return True
+
+    def record_integrity_failure(self, blueprint_id: str) -> None:
+        _ = blueprint_id  # reserved for future enrichment
+        self._metrics["integrity_failures"] += 1.0
 
     def _hydrate_cache(self) -> None:
         with self._engine.begin() as conn:
@@ -197,6 +278,8 @@ class UrzaLibrary:
             eager_fallback=bool(extras.get("eager_fallback", False)),
             guard_spec=tuple(extras.get("guard_spec", [])),
             inductor_cache_dir=extras.get("inductor_cache_dir"),
+            guard_spec_summary=tuple(extras.get("guard_spec_summary", [])),
+            tags=tuple(extras.get("tags", [])),
         )
         return record
 
@@ -273,6 +356,7 @@ class UrzaLibrary:
                 record.artifact_path.unlink()
             except FileNotFoundError:
                 pass
+        self._metrics["evictions"] += 1.0
         with self._engine.begin() as conn:
             conn.execute(
                 delete(self._table).where(self._table.c.blueprint_id == blueprint_id)
@@ -336,6 +420,8 @@ class UrzaLibrary:
             eager_fallback=bool(extras.get("eager_fallback", False)),
             guard_spec=tuple(extras.get("guard_spec", [])),
             inductor_cache_dir=extras.get("inductor_cache_dir"),
+            guard_spec_summary=tuple(extras.get("guard_spec_summary", [])),
+            tags=tuple(extras.get("tags", [])),
         )
         self._touch_cache(metadata.blueprint_id, record)
         with self._engine.begin() as conn:
@@ -364,6 +450,43 @@ class UrzaLibrary:
         while len(self._records) > self._cache_size:
             self._records.popitem(last=False)
 
+    def _iter_all_records(self) -> Iterator[UrzaRecord]:
+        seen: set[str] = set()
+        for blueprint_id, record in self._records.items():
+            seen.add(blueprint_id)
+            yield _clone_record(record)
+        with self._engine.begin() as conn:
+            rows = conn.execute(select(self._table)).mappings()
+            for row in rows:
+                blueprint_id = row["blueprint_id"]
+                if blueprint_id in seen:
+                    continue
+                yield self._record_from_row(row)
+
+    def _update_breaker_state(self, snapshot: BreakerSnapshot) -> None:
+        state = snapshot.state
+        if state != self._breaker_last_state:
+            if state == leyline_pb2.CIRCUIT_STATE_OPEN:
+                self._metrics["breaker_open_total"] += 1.0
+                self._conservative_mode = True
+            elif state == leyline_pb2.CIRCUIT_STATE_CLOSED:
+                self._conservative_mode = False
+            self._breaker_last_state = state
+        self._metrics["breaker_state"] = float(state)
+        self._metrics["conservative_mode"] = 1.0 if self._conservative_mode else 0.0
+
+    def _breaker_record_success(self, latency_ms: float) -> None:
+        if latency_ms > self._breaker_latency_threshold_ms:
+            self._metrics["slow_queries"] += 1.0
+            snapshot = self._breaker.record_failure()
+        else:
+            snapshot = self._breaker.record_success()
+        self._update_breaker_state(snapshot)
+
+    def _breaker_record_failure(self) -> None:
+        snapshot = self._breaker.record_failure()
+        self._update_breaker_state(snapshot)
+
 
 __all__ = ["UrzaLibrary", "UrzaRecord"]
 
@@ -388,4 +511,6 @@ def _clone_record(record: UrzaRecord) -> UrzaRecord:
         eager_fallback=record.eager_fallback,
         guard_spec=tuple(record.guard_spec),
         inductor_cache_dir=record.inductor_cache_dir,
+        guard_spec_summary=tuple(record.guard_spec_summary),
+        tags=tuple(record.tags),
     )

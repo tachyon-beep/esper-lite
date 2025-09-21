@@ -69,6 +69,7 @@ async def test_blueprint_pipeline_compiles_and_stores() -> None:
         assert stored.guard_digest
         assert stored.compile_ms is not None
         assert stored.guard_spec
+        assert stored.guard_spec_summary
 
 
 @pytest.mark.asyncio

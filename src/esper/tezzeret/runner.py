@@ -6,12 +6,14 @@ import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Literal
 
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 import logging
 
+from esper.core import TelemetryEvent, TelemetryMetric, build_telemetry_packet
 from esper.karn import BlueprintDescriptor, KarnCatalog
+from esper.leyline import leyline_pb2
 from esper.urza import UrzaLibrary
 
 from .compiler import TezzeretCompiler
@@ -29,6 +31,11 @@ class ForgeMetrics:
     breaker_open_total: int = 0
     consecutive_failures: int = 0
     last_error: str = ""
+    jobs_started: int = 0
+    jobs_completed: int = 0
+    jobs_failed: int = 0
+    conservative_mode: int = 0
+    last_strategy: str = "standard"
 
 
 @dataclass(slots=True)
@@ -58,7 +65,9 @@ class TezzeretForge:
         self._breaker_threshold = max(breaker_threshold, 1)
         self._consecutive_failures = 0
         self._breaker_open_until: float | None = None
+        self._conservative_mode = False
         self._metrics = ForgeMetrics()
+        self._telemetry_events: list[TelemetryEvent] = []
 
     def run(self) -> None:
         pending = self._load_pending_jobs()
@@ -71,6 +80,11 @@ class TezzeretForge:
                 LOGGER.warning(
                     "Tezzeret breaker open; skipping compilation for %s",
                     blueprint_id,
+                )
+                self._emit_event(
+                    "breaker_open_skip",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"blueprint_id": blueprint_id},
                 )
                 break
             metadata = self._catalog.get(blueprint_id)
@@ -89,7 +103,26 @@ class TezzeretForge:
                 for key, bounds in metadata.allowed_parameters.items()
             }
 
-            artifact_path = self._compile_with_breaker(metadata, parameters)
+            strategy = "conservative" if self._conservative_mode else "standard"
+            self._metrics.conservative_mode = 1 if self._conservative_mode else 0
+            self._metrics.jobs_started += 1
+            self._emit_event(
+                "compile_started",
+                attributes={
+                    "blueprint_id": blueprint_id,
+                    "strategy": strategy,
+                },
+            )
+            try:
+                artifact_path = self._compile_with_breaker(
+                    metadata,
+                    parameters,
+                    strategy=strategy,
+                )
+            except Exception:
+                self._metrics.jobs_failed += 1
+                self._metrics.last_strategy = strategy
+                raise
             update = self._compiler.latest_catalog_update()
             result = self._compiler.latest_result()
             extras = None
@@ -97,12 +130,20 @@ class TezzeretForge:
                 extras = {
                     "guard_spec": result.guard_spec,
                     "guard_digest": result.guard_digest,
+                    "guard_spec_summary": list(result.guard_summary),
                     "compile_ms": result.compile_ms,
                     "prewarm_ms": result.prewarm_ms,
                     "compile_strategy": result.compile_strategy,
                     "eager_fallback": result.eager_fallback,
                     "inductor_cache_dir": result.inductor_cache_dir,
                 }
+                strategy_used = result.compile_strategy
+                compile_ms = f"{result.compile_ms:.2f}"
+                prewarm_ms = f"{result.prewarm_ms:.2f}"
+            else:
+                strategy_used = strategy
+                compile_ms = "0.00"
+                prewarm_ms = "0.00"
             self._library.save(
                 metadata,
                 artifact_path,
@@ -112,6 +153,20 @@ class TezzeretForge:
             self._consecutive_failures = 0
             self._metrics.consecutive_failures = 0
             self._metrics.breaker_state = 0
+            self._metrics.jobs_completed += 1
+            self._metrics.last_error = ""
+            self._conservative_mode = False
+            self._metrics.conservative_mode = 0
+            self._metrics.last_strategy = strategy_used
+            self._emit_event(
+                "compile_succeeded",
+                attributes={
+                    "blueprint_id": blueprint_id,
+                    "strategy": strategy_used,
+                    "compile_ms": compile_ms,
+                    "prewarm_ms": prewarm_ms,
+                },
+            )
             pending.remove(blueprint_id)
             self._persist_pending(pending)
 
@@ -150,15 +205,31 @@ class TezzeretForge:
         self._breaker_open_until = time.monotonic() + backoff
         self._metrics.breaker_state = 2
         self._metrics.breaker_open_total += 1
+        self._enter_conservative_mode()
+        self._emit_event(
+            "breaker_open",
+            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_ERROR,
+            attributes={
+                "backoff": f"{backoff:.1f}",
+                "failures": str(self._consecutive_failures),
+            },
+        )
         LOGGER.error("Tezzeret breaker opened for %.1f seconds", backoff)
 
     def _compile_with_breaker(
         self,
         metadata: BlueprintDescriptor,
         parameters: dict[str, float],
+        *,
+        strategy: Literal["standard", "conservative"],
     ) -> Path:
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(self._compiler.compile, metadata, parameters)
+            future = executor.submit(
+                self._compiler.compile,
+                metadata,
+                parameters,
+                strategy=strategy,
+            )
             try:
                 artifact_path = future.result(timeout=self._compile_timeout_s)
                 return artifact_path
@@ -169,6 +240,16 @@ class TezzeretForge:
                 self._metrics.last_error = "timeout"
                 if self._consecutive_failures >= self._breaker_threshold:
                     self._open_breaker()
+                self._metrics.last_strategy = strategy
+                self._emit_event(
+                    "compile_failed",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={
+                        "blueprint_id": metadata.blueprint_id,
+                        "strategy": strategy,
+                        "reason": "timeout",
+                    },
+                )
                 LOGGER.error(
                     "Tezzeret compile timed out for %s after %.1fs",
                     metadata.blueprint_id,
@@ -181,6 +262,16 @@ class TezzeretForge:
                 self._metrics.last_error = type(exc).__name__
                 if self._consecutive_failures >= self._breaker_threshold:
                     self._open_breaker()
+                self._metrics.last_strategy = strategy
+                self._emit_event(
+                    "compile_failed",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={
+                        "blueprint_id": metadata.blueprint_id,
+                        "strategy": strategy,
+                        "reason": type(exc).__name__,
+                    },
+                )
                 LOGGER.error("Tezzeret compile failed for %s: %s", metadata.blueprint_id, exc)
                 raise
 
@@ -191,9 +282,67 @@ class TezzeretForge:
                 "tezzeret.breaker.state": float(self._metrics.breaker_state),
                 "tezzeret.breaker.open_total": float(self._metrics.breaker_open_total),
                 "tezzeret.compile.consecutive_failures": float(self._metrics.consecutive_failures),
+                "tezzeret.breaker.consecutive_failures": float(self._metrics.consecutive_failures),
+                "tezzeret.mode.conservative": float(self._metrics.conservative_mode),
+                "tezzeret.jobs.started": float(self._metrics.jobs_started),
+                "tezzeret.jobs.completed": float(self._metrics.jobs_completed),
+                "tezzeret.jobs.failed": float(self._metrics.jobs_failed),
             }
         )
         return snapshot
+
+    def build_telemetry_packet(
+        self,
+        *,
+        packet_id: str | None = None,
+        level_override: leyline_pb2.TelemetryLevel | None = None,
+    ) -> leyline_pb2.TelemetryPacket:
+        snapshot = self.metrics_snapshot()
+        metrics = [
+            TelemetryMetric(name, float(value))
+            for name, value in snapshot.items()
+        ]
+        events = self.drain_telemetry_events()
+        level = level_override
+        if level is None:
+            if self._metrics.breaker_state >= 2 or self._conservative_mode:
+                level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING
+            elif any(event.level == leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_ERROR for event in events):
+                level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_ERROR
+            else:
+                level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO
+        return build_telemetry_packet(
+            packet_id=packet_id or f"tezzeret-{int(time.time() * 1000)}",
+            source="tezzeret",
+            level=level,
+            metrics=metrics,
+            events=events,
+        )
+
+    def drain_telemetry_events(self) -> list[TelemetryEvent]:
+        events = list(self._telemetry_events)
+        self._telemetry_events.clear()
+        return events
+
+    def _emit_event(
+        self,
+        description: str,
+        *,
+        level: leyline_pb2.TelemetryLevel = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+        attributes: dict[str, str] | None = None,
+    ) -> None:
+        payload = {k: str(v) for k, v in (attributes or {}).items()}
+        self._telemetry_events.append(
+            TelemetryEvent(
+                description=f"tezzeret.{description}",
+                level=level,
+                attributes=payload,
+            )
+        )
+
+    def _enter_conservative_mode(self) -> None:
+        self._conservative_mode = True
+        self._metrics.conservative_mode = 1
 
 
 __all__ = ["TezzeretForge", "CompilationJob"]

@@ -122,6 +122,29 @@ def test_urza_library_cache_ttl_enforces_expiry(tmp_path: Path) -> None:
     assert metrics["cache_misses"] >= 1.0
 
 
+def test_urza_library_fetch_by_stage_and_tag(tmp_path: Path) -> None:
+    library = UrzaLibrary(root=tmp_path)
+
+    metadata_stage_one = _metadata("BPSTAGE1", stage=1)
+    artifact_one = tmp_path / "artifact1.pt"
+    artifact_one.write_bytes(b"stage1")
+
+    metadata_stage_two = _metadata("BPSTAGE2", stage=2)
+    artifact_two = tmp_path / "artifact2.pt"
+    artifact_two.write_bytes(b"stage2")
+
+    library.save(metadata_stage_one, artifact_one, extras={"tags": ["cnn", "gpu"]})
+    library.save(metadata_stage_two, artifact_two, extras={"tags": ["transformer"]})
+
+    stage_one_records = library.fetch_by_stage(1)
+    assert {record.metadata.blueprint_id for record in stage_one_records} == {"BPSTAGE1"}
+
+    gpu_records = library.fetch_by_tag("GPU")
+    assert {record.metadata.blueprint_id for record in gpu_records} == {"BPSTAGE1"}
+    transformer_records = library.fetch_by_tag("transformer")
+    assert {record.metadata.blueprint_id for record in transformer_records} == {"BPSTAGE2"}
+
+
 def test_urza_runtime_verifies_checksum(tmp_path: Path) -> None:
     library = UrzaLibrary(root=tmp_path)
     metadata = _metadata("BPCHK")
@@ -143,3 +166,38 @@ def test_urza_runtime_verifies_checksum(tmp_path: Path) -> None:
     artifact.write_bytes(b"tampered")
     with pytest.raises(ValueError):
         runtime.fetch_kernel("BPCHK")
+    assert library.get("BPCHK") is None
+    metrics = library.metrics_snapshot()
+    assert metrics["integrity_failures"] >= 1.0
+    assert metrics["evictions"] >= 1.0
+
+
+def test_urza_library_breaker_enters_conservative_mode(tmp_path: Path) -> None:
+    library = UrzaLibrary(
+        root=tmp_path,
+        breaker_latency_threshold_ms=0.0,
+        breaker_failure_threshold=1,
+        breaker_success_threshold=1,
+        breaker_timeout_ms=1.0,
+    )
+
+    metadata = _metadata("BPBREAKER", stage=3)
+    artifact = tmp_path / "artifact-breaker.pt"
+    artifact.write_bytes(b"breaker")
+    library.save(metadata, artifact)
+
+    # Drop cache to force database access and trigger latency failure.
+    library._records.clear()
+
+    result = library.get("BPBREAKER")
+    assert result is not None
+
+    metrics = library.metrics_snapshot()
+    assert metrics["breaker_state"] == float(leyline_pb2.CIRCUIT_STATE_OPEN)
+    assert metrics["conservative_mode"] == 1.0
+    assert metrics["slow_queries"] >= 1.0
+
+    denied_result = library.get("BP_UNKNOWN")
+    assert denied_result is None
+    metrics = library.metrics_snapshot()
+    assert metrics["breaker_denied"] >= 1.0

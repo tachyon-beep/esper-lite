@@ -5,11 +5,11 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import time
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Literal
 
 import torch
 from torch import nn
@@ -29,6 +29,20 @@ class CompileJobConfig:
     max_retries: int = 1
     wal_path: Path | None = None
     inductor_cache_dir: Path | None = None
+
+    def __post_init__(self) -> None:
+        self.artifact_dir = Path(self.artifact_dir)
+        if self.wal_path is not None:
+            self.wal_path = Path(self.wal_path)
+        if self.inductor_cache_dir is None:
+            env_value = (
+                os.environ.get("TEZZERET_INDUCTOR_CACHE_DIR")
+                or os.environ.get("TORCHINDUCTOR_CACHE_DIR")
+            )
+            if env_value:
+                self.inductor_cache_dir = Path(env_value)
+        elif not isinstance(self.inductor_cache_dir, Path):
+            self.inductor_cache_dir = Path(self.inductor_cache_dir)
 
 
 class CompiledBlueprint(nn.Module):
@@ -81,6 +95,7 @@ class CompilationResult:
     artifact_path: Path
     guard_spec: list[dict[str, Any]]
     guard_digest: str
+    guard_summary: tuple[str, ...]
     compile_ms: float
     prewarm_ms: float
     eager_fallback: bool
@@ -92,10 +107,14 @@ class CompilationResult:
 class CompilerMetrics:
     total_jobs: int = 0
     failed_jobs: int = 0
+    failed_attempts: int = 0
+    retried_jobs: int = 0
     eager_fallbacks: int = 0
     last_compile_ms: float = 0.0
     last_prewarm_ms: float = 0.0
     last_strategy: str = ""
+    duration_by_strategy: dict[str, float] = field(default_factory=dict)
+    prewarm_by_strategy: dict[str, float] = field(default_factory=dict)
 
 
 class TezzeretCompiler:
@@ -119,24 +138,33 @@ class TezzeretCompiler:
         self,
         metadata: BlueprintDescriptor,
         parameters: dict[str, float] | None = None,
+        *,
+        strategy: Literal["standard", "conservative"] = "standard",
     ) -> Path:
         """Compile the blueprint and persist the artifact."""
+
+        if strategy not in {"standard", "conservative"}:
+            raise ValueError(f"Unsupported compile strategy: {strategy}")
 
         artifact_path = self._config.artifact_dir / f"{metadata.blueprint_id}.pt"
         artifact_path.parent.mkdir(parents=True, exist_ok=True)
         params = parameters or {}
         self._persist_wal(metadata, params)
 
-        attempts = 0
         last_error: Exception | None = None
-        compile_start = time.perf_counter()
         self._latest_result = None
-        while attempts <= self._config.max_retries:
-            attempts += 1
+        max_attempts = max(1, self._config.max_retries + 1)
+        had_failures = False
+        for attempt in range(1, max_attempts + 1):
             try:
                 if self._error_sampler(metadata):
                     raise RuntimeError("Simulated compile failure")
-                result = self._compile_blueprint(metadata, params, artifact_path)
+                result = self._compile_blueprint(
+                    metadata,
+                    params,
+                    artifact_path,
+                    strategy=strategy,
+                )
                 self._latest_result = result
                 self._latest_catalog_update = self._build_catalog_update(
                     metadata,
@@ -145,27 +173,38 @@ class TezzeretCompiler:
                     result.prewarm_ms,
                     result.guard_digest,
                 )
-                self._record_success(result)
+                self._record_success(result, had_failures=had_failures)
                 self._clear_wal()
                 return artifact_path
             except Exception as exc:  # pragma: no cover - defensive guard
                 last_error = exc
-                if attempts > self._config.max_retries:
+                self._record_attempt_failure()
+                had_failures = True
+                if attempt >= max_attempts:
                     break
-                self._record_failure()
+        self._record_job_failure()
         raise RuntimeError(f"Failed to compile blueprint {metadata.blueprint_id}: {last_error}")
 
     def latest_result(self) -> CompilationResult | None:
         return self._latest_result
 
     def metrics_snapshot(self) -> dict[str, float]:
-        return {
+        snapshot: dict[str, float] = {
             "tezzeret.compilation.total": float(self._metrics.total_jobs),
             "tezzeret.compilation.failed": float(self._metrics.failed_jobs),
+            "tezzeret.compilation.failed_attempts": float(self._metrics.failed_attempts),
             "tezzeret.compilation.eager_fallback": float(self._metrics.eager_fallbacks),
+            "tezzeret.jobs.total": float(self._metrics.total_jobs),
+            "tezzeret.jobs.failed": float(self._metrics.failed_jobs),
+            "tezzeret.jobs.retried": float(self._metrics.retried_jobs),
             "tezzeret.compilation.last_compile_ms": self._metrics.last_compile_ms,
             "tezzeret.compilation.last_prewarm_ms": self._metrics.last_prewarm_ms,
         }
+        for strategy, value in self._metrics.duration_by_strategy.items():
+            snapshot[f"tezzeret.compilation.duration_ms.{strategy}"] = value
+        for strategy, value in self._metrics.prewarm_by_strategy.items():
+            snapshot[f"tezzeret.prewarm.ms.{strategy}"] = value
+        return snapshot
 
     def _persist_wal(self, metadata: BlueprintDescriptor, parameters: dict[str, float]) -> None:
         record = {
@@ -213,31 +252,39 @@ class TezzeretCompiler:
         metadata: BlueprintDescriptor,
         params: dict[str, float],
         artifact_path: Path,
+        *,
+        strategy: Literal["standard", "conservative"],
     ) -> CompilationResult:
         device = torch.device("cuda" if self._config.use_cuda and torch.cuda.is_available() else "cpu")
         module, example_inputs = _build_blueprint_module(metadata, params, device)
         module.eval()
         guard_spec = _build_guard_spec(example_inputs)
         guard_digest = _guard_digest(guard_spec)
+        guard_summary = _guard_summary(guard_spec)
 
         compile_ms: float = 0.0
         prewarm_ms: float = 0.0
         eager_fallback = False
-        strategy = "standard"
+        selected_strategy = strategy
+        cache_dir = self._resolve_inductor_cache_dir()
 
-        with _inductor_cache(self._config.inductor_cache_dir):
-            try:
-                compile_start = time.perf_counter()
-                compiled = torch.compile(module, dynamic=True)  # type: ignore[attr-defined]
-                with torch.inference_mode():
-                    compiled(*example_inputs)
-                if device.type == "cuda":
-                    torch.cuda.synchronize()
-                compile_ms = (time.perf_counter() - compile_start) * 1000.0
-            except Exception:
+        with _inductor_cache(cache_dir):
+            if strategy == "conservative":
                 eager_fallback = True
-                strategy = "eager"
                 compiled = module
+            else:
+                try:
+                    compile_start = time.perf_counter()
+                    compiled = torch.compile(module, dynamic=True)  # type: ignore[attr-defined]
+                    with torch.inference_mode():
+                        compiled(*example_inputs)
+                    if device.type == "cuda":
+                        torch.cuda.synchronize()
+                    compile_ms = (time.perf_counter() - compile_start) * 1000.0
+                except Exception:
+                    eager_fallback = True
+                    selected_strategy = "eager"
+                    compiled = module
 
             prewarm_start = time.perf_counter()
             with torch.inference_mode():
@@ -254,7 +301,7 @@ class TezzeretCompiler:
             parameters=params,
             guard_spec=guard_spec,
             guard_digest=guard_digest,
-            compile_strategy=strategy,
+            compile_strategy=selected_strategy,
             eager_fallback=eager_fallback,
         )
         torch.save(artifact, artifact_path)
@@ -263,23 +310,41 @@ class TezzeretCompiler:
             artifact_path=artifact_path,
             guard_spec=guard_spec,
             guard_digest=guard_digest,
+            guard_summary=guard_summary,
             compile_ms=compile_ms,
             prewarm_ms=prewarm_ms,
             eager_fallback=eager_fallback,
-            compile_strategy=strategy,
-            inductor_cache_dir=str(self._config.inductor_cache_dir) if self._config.inductor_cache_dir else None,
+            compile_strategy=selected_strategy,
+            inductor_cache_dir=str(cache_dir) if cache_dir else None,
         )
 
-    def _record_success(self, result: CompilationResult) -> None:
+    def _record_success(self, result: CompilationResult, *, had_failures: bool) -> None:
         self._metrics.total_jobs += 1
+        if had_failures:
+            self._metrics.retried_jobs += 1
         self._metrics.last_compile_ms = result.compile_ms
         self._metrics.last_prewarm_ms = result.prewarm_ms
         self._metrics.last_strategy = result.compile_strategy
+        self._metrics.duration_by_strategy[result.compile_strategy] = result.compile_ms
+        self._metrics.prewarm_by_strategy[result.compile_strategy] = result.prewarm_ms
         if result.eager_fallback:
             self._metrics.eager_fallbacks += 1
 
-    def _record_failure(self) -> None:
+    def _record_attempt_failure(self) -> None:
+        self._metrics.failed_attempts += 1
+
+    def _record_job_failure(self) -> None:
+        self._metrics.total_jobs += 1
         self._metrics.failed_jobs += 1
+
+    def _resolve_inductor_cache_dir(self) -> Path | None:
+        if self._config.inductor_cache_dir is not None:
+            return self._config.inductor_cache_dir
+        env_value = (
+            os.environ.get("TEZZERET_INDUCTOR_CACHE_DIR")
+            or os.environ.get("TORCHINDUCTOR_CACHE_DIR")
+        )
+        return Path(env_value) if env_value else None
 
 
 def _build_guard_spec(inputs: Iterable[torch.Tensor]) -> list[dict[str, Any]]:
@@ -301,6 +366,16 @@ def _build_guard_spec(inputs: Iterable[torch.Tensor]) -> list[dict[str, Any]]:
 def _guard_digest(guard_spec: Iterable[dict[str, Any]]) -> str:
     payload = json.dumps(list(guard_spec), sort_keys=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _guard_summary(guard_spec: Iterable[dict[str, Any]]) -> tuple[str, ...]:
+    summary: list[str] = []
+    for entry in guard_spec:
+        shape = entry.get("shape", [])
+        shape_descriptor = "x".join(str(dim) for dim in shape) or "scalar"
+        dtype = entry.get("dtype", "unknown")
+        summary.append(f"{dtype}[{shape_descriptor}]")
+    return tuple(summary)
 
 
 def _build_blueprint_module(

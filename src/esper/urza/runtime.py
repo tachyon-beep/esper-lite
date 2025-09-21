@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from pathlib import Path
 from time import perf_counter
 from typing import Tuple
@@ -14,6 +15,9 @@ from torch.serialization import add_safe_globals
 
 from esper.tezzeret.compiler import CompiledBlueprint
 from esper.urza.library import UrzaLibrary
+
+
+LOGGER = logging.getLogger("esper.urza.runtime")
 
 
 class UrzaRuntime:
@@ -31,6 +35,14 @@ class UrzaRuntime:
         if record.checksum:
             actual = self._compute_checksum(artifact_path)
             if actual != record.checksum:
+                self._library.record_integrity_failure(blueprint_id)
+                self._library.evict(blueprint_id, delete_artifact=True)
+                LOGGER.error(
+                    "Checksum mismatch for blueprint '%s' (expected=%s actual=%s)",
+                    blueprint_id,
+                    record.checksum,
+                    actual,
+                )
                 raise ValueError(
                     f"Checksum mismatch for blueprint '{blueprint_id}'"
                 )

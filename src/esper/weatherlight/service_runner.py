@@ -18,7 +18,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Awaitable, Callable, Dict
+from typing import TYPE_CHECKING, Awaitable, Callable, Dict
 
 from esper.core import EsperSettings, TelemetryEvent, TelemetryMetric, build_telemetry_packet
 from esper.kasmina import KasminaPrefetchCoordinator, KasminaSeedManager
@@ -28,6 +28,9 @@ from esper.security.signing import DEFAULT_SECRET_ENV
 from esper.tamiyo import TamiyoService
 from esper.urza import UrzaLibrary, UrzaRuntime
 from esper.urza.prefetch import UrzaPrefetchWorker
+
+if TYPE_CHECKING:  # pragma: no cover - typing support only
+    from esper.tezzeret import TezzeretForge
 
 LOGGER = logging.getLogger("esper.weatherlight")
 
@@ -71,6 +74,7 @@ class WeatherlightService:
         self._kasmina_coordinator: KasminaPrefetchCoordinator | None = None
         self._tamiyo_service: TamiyoService | None = None
         self._tezzeret_metrics_provider: Callable[[], dict[str, float]] | None = None
+        self._tezzeret_telemetry_provider: Callable[[], leyline_pb2.TelemetryPacket | None] | None = None
 
     async def start(self) -> None:
         """Initialise subsystems and spawn background workers (Slice 1 & 2)."""
@@ -143,6 +147,19 @@ class WeatherlightService:
         """Register a callable that returns Tezzeret metrics for telemetry."""
 
         self._tezzeret_metrics_provider = provider
+
+    def set_tezzeret_telemetry_provider(
+        self, provider: Callable[[], leyline_pb2.TelemetryPacket | None] | None
+    ) -> None:
+        """Register a callable that returns Tezzeret telemetry packets."""
+
+        self._tezzeret_telemetry_provider = provider
+
+    def connect_tezzeret_forge(self, forge: "TezzeretForge") -> None:
+        """Attach TezzeretForge telemetry streams to Weatherlight."""
+
+        self.set_tezzeret_metrics_provider(forge.metrics_snapshot)
+        self.set_tezzeret_telemetry_provider(forge.build_telemetry_packet)
 
     async def _build_oona_client(self) -> OonaClient:
         hostname = socket.gethostname().replace(" ", "-")
@@ -242,12 +259,7 @@ class WeatherlightService:
             if self._shutdown_requested.is_set():
                 break
             try:
-                packet = await self._build_telemetry_packet()
-                await self._oona.publish_telemetry(packet)
-                await self._oona.emit_metrics_telemetry(
-                    source_subsystem="weatherlight.oona",
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
-                )
+                await self._flush_telemetry_once()
             except asyncio.CancelledError:  # pragma: no cover - cancellation path
                 raise
             except Exception as exc:  # pragma: no cover - best effort logging
@@ -400,6 +412,44 @@ class WeatherlightService:
             },
         )
         return packet
+
+    async def _flush_telemetry_once(self) -> None:
+        assert self._oona is not None
+        packets: list[leyline_pb2.TelemetryPacket] = []
+        packets.append(await self._build_telemetry_packet())
+        tezzeret_packet = self._build_tezzeret_packet()
+        if tezzeret_packet is not None:
+            packets.append(tezzeret_packet)
+        for packet in packets:
+            priority = self._telemetry_priority(packet)
+            await self._oona.publish_telemetry(packet, priority=priority)
+        await self._oona.emit_metrics_telemetry(
+            source_subsystem="weatherlight.oona",
+            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+        )
+
+    def _build_tezzeret_packet(self) -> leyline_pb2.TelemetryPacket | None:
+        if self._tezzeret_telemetry_provider is None:
+            return None
+        try:
+            packet = self._tezzeret_telemetry_provider()
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.debug("Tezzeret telemetry provider failed: %s", exc)
+            return None
+        if packet is None:
+            return None
+        return packet
+
+    @staticmethod
+    def _telemetry_priority(packet: leyline_pb2.TelemetryPacket) -> leyline_pb2.MessagePriority:
+        level = packet.level
+        if level in (
+            leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+            leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_ERROR,
+            leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
+        ):
+            return leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH
+        return leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
 
     def _configure_logging(self) -> None:
         if logging.getLogger().handlers:

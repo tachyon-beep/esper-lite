@@ -53,6 +53,7 @@ class BlueprintPipeline:
             extras = {
                 "guard_spec": result.guard_spec,
                 "guard_digest": result.guard_digest,
+                "guard_spec_summary": list(result.guard_summary),
                 "compile_ms": result.compile_ms,
                 "prewarm_ms": result.prewarm_ms,
                 "compile_strategy": result.compile_strategy,
