@@ -1,6 +1,6 @@
 # Tolaria — Prototype Delta (Training Orchestrator)
 
-Executive summary: the prototype provides a minimal training loop with epoch boundary state assembly, a Tamiyo handshake, Kasmina command application, telemetry emission, and a lightweight checkpoint/WAL for rollback. The unified learning‑rate controller, dynamic optimiser rebuilds, two‑tier rollback (500 ms/12 s), circuit‑breaker‑driven conservative mode, multi‑seed gradient aggregation, and strict end‑of‑epoch timing/timeout enforcement from the design are not yet implemented. Leyline remains the single source of truth for contracts and enums.
+Executive summary: the prototype provides a minimal training loop with epoch boundary state assembly, a Tamiyo handshake (with timeout + fallback), Kasmina command application, telemetry emission, and a lightweight checkpoint/WAL for rollback. End‑of‑epoch budget enforcement, circuit‑breaker‑driven conservative mode, and PyTorch 2.8 upgrades (compile step, AMP, TF32, pinned memory/foreach) are implemented. Outstanding items remain: unified learning‑rate controller, dynamic optimiser rebuilds, two‑tier rollback (500 ms/12 s), emergency escalation/broadcast protocol, and multi‑seed gradient aggregation. Leyline remains the single source of truth for contracts and enums.
 
 Documents in this folder:
 - `delta-matrix.md` — requirement‑by‑requirement status with evidence
