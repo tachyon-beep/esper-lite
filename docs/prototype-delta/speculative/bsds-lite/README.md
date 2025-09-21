@@ -17,3 +17,11 @@ Adoption (Low‑risk, prototype)
 
 Cross‑Subsystem Impact
 - Urza/Karn (descriptor shape), Tamiyo (gating hints), Kasmina (telemetry), Nissa (observability).
+
+Implementation Tasks (Speculative)
+- Leyline RFC: Extend `BlueprintDescriptor` with BSDS‑Lite fields (`overall_risk_score`, `gradient_instability_flag`, `memory_consumption_class`, `numerical_stability_notes`, `recommended_grafting_strategy`, `resource_requirements`).
+- Karn: Populate BSDS‑Lite fields in templates where known; default unknowns to safe values.
+- Urza: Persist and surface the new fields; expose in queries.
+- Tamiyo: Read BSDS‑Lite in Urza metadata; adjust risk gating/annotations; pause high‑risk blueprints by policy.
+- Kasmina: Emit warnings in telemetry when deploying high‑risk categories (telemetry only).
+- Nissa: Add dashboards/alerts for high BSDS risk usage.

@@ -23,3 +23,13 @@ Cross‑Subsystem Impact
 - Tamiyo: gating + annotations.
 - Kasmina: telemetry overlay.
 - Emrakul/Elesh (future): use foldability descriptors at checkpoint.
+
+Implementation Tasks (Speculative)
+- Leyline RFC: Extend `BlueprintDescriptor` with scaffold fields (`supports_scaffold`, `ttl_ckpts`, `alpha_policy`, `success_gates`, `foldability_descriptor`).
+- Karn: Populate new fields in templates where applicable; add conservative defaults.
+- Urza: Persist and expose scaffold metadata; include in `UrzaRecord` JSON.
+- Tezzeret: Accept paired manifests; add foldability descriptor to artifact manifest without changing compilation.
+- Tamiyo: Allow requesting scaffold class via command annotations; surface persist/sunset hints; log scaffold budgets in telemetry.
+- Kasmina: Emit scaffold gauges (alpha, weaning flags) in telemetry; ensure host branch uses `.detach()` during blending (already required).
+- Oona/Nissa: Add scaffold lifecycle topics and dashboards for `scaffold.*` events and gauges.
+- Docs: Add operator runbook notes for scaffold TTL, exit gates, and telemetry interpretation.

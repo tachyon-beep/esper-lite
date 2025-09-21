@@ -32,6 +32,14 @@ Out‑of‑Scope Placeholders (prototype excludes these)
 - `emrakul/` — System‑level orchestration (not in prototype).
 - `elesh/` — Importance tracking and analysis (not in prototype).
 
+Speculative (Research‑Driven Additions)
+- `speculative/` — Curated proposals framed as design‑style deltas with low‑risk adoption notes and concrete implementation task lists:
+  - `scaffolds/` — Temporary, foldable blueprints as a policy overlay
+  - `tamiyo-narset-split/` — Strategic vs tactical controllers, protected zones
+  - `mycosynth-config-fabric/` — Centralised runtime configuration fabric
+  - `future-pruning/` — Hardware‑aware pruning & torch.ao integration
+  - `bsds-lite/` — Lightweight Blueprint Safety Data Sheet metadata
+
 Quick Status Snapshot
 - Implemented core deltas for Kasmina, Tolaria, Tamiyo, Simic, Karn (Phase‑1), Tezzeret, Urza, Oona, Nissa.
 - Leyline delta defines a single, breaking update to the lifecycle (11 stages + gates) with no tech debt.

@@ -18,3 +18,10 @@ Adoption (Low‑risk, prototype)
 
 Cross‑Subsystem Impact
 - Tezzeret/Urza (artifacts), Emrakul/Elesh (analysis), Kasmina (unchanged at runtime), Tamiyo/Nissa (telemetry visibility).
+
+Implementation Tasks (Speculative)
+- Urza manifest: Add optional optimisation descriptor fields (e.g., `sparsity_pattern`, `quantization_bits`, `backend_hint`).
+- Tezzeret: Add a no‑op “optimisation” stage that records descriptors and compile duration; behind a feature flag.
+- Nissa: Dashboards for compile durations and optimisation descriptors; track adoption over time.
+- Emrakul/Elesh: Define structured masks/fold plans message shapes for future use (design only).
+- Benchmarks: Add micro‑benchmarks plan for 2:4 sparsity (design doc + telemetry names), without enabling transforms yet.

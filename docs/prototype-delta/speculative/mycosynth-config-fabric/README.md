@@ -18,3 +18,11 @@ Adoption (Low‑risk, prototype)
 
 Cross‑Subsystem Impact
 - Touches all subsystems at config boundaries; best adopted incrementally via client abstraction, not by adding a new service right now.
+
+Implementation Tasks (Speculative)
+- Schema: Define a small set of high‑value config schemas (YAML/JSON) for epoch budgets, Oona thresholds, breaker settings.
+- Client shim: Add a shared helper to load+validate configs and hot‑reload on a timer; expose typed getters per subsystem.
+- Subsystem wiring: Replace hardcoded constants with config lookups (Tolaria hook budget; Oona thresholds; Kasmina breaker params).
+- Telemetry: Emit `config.version` and key values in telemetry for traceability.
+- Ops: Draft rotation/runbook for config changes; add a dry‑run validation command.
+- Future: Spec a gRPC service if the shim proves insufficient (out of prototype scope).

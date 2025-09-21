@@ -20,3 +20,12 @@ Adoption (Low‑risk, prototype)
 
 Cross‑Subsystem Impact
 - Tamiyo/Narset split (controllers), Emrakul (planning windows), Elesh (importance), Kasmina (no lifecycle change), Oona (topics).
+
+Implementation Tasks (Speculative)
+- Leyline RFC: Define `PolicyEnvelope`, `BudgetEnvelope`, `ProtectedZoneGrant`, `ScaffoldStatus`, `ScaffoldSunsetNotice` messages; add enums/fields for zones.
+- Controllers: Create a minimal `Narset` process (or Tamiyo submodule) that consumes envelopes and produces `AdaptationCommand`s scoped by region.
+- Tamiyo: Produce envelopes; compute inverse‑throttle budget; track protected zones and their TTL.
+- Emrakul: Honour `ProtectedZoneGrant` (embargo in zones); plan only outside active zones; add global abort on conflict.
+- Oona: Add topics for `zones.*` and `scaffold.*` lifecycle; integrate with existing streams.
+- Nissa: Dashboards for zone counts, embargoed regions, and inverse‑throttle budget over time.
+- Docs: Decision log for when to shard Emrakul; conflict resolution procedures.
