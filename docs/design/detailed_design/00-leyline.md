@@ -575,3 +575,10 @@ Circuit breaker defaults (`failure_threshold=5`, recovery timeout 1 h) halt fu
 ## Outstanding Work
 - GOV-001: Wire governance validation rules into CI (tracking ticket).
 - GOV-002: Finish automated impact analysis reporting in dashboards.
+# Enum Policy and Canonicalization (ADR‑003)
+
+Leyline is the canonical source for all enums. Subsystems MUST use Leyline enums
+internally and externally. No parallel or mapped lifecycle enums are allowed.
+Operational conditions such as degraded or isolated states are reported via
+`TelemetryPacket.system_health` and events rather than overloading lifecycle stages.
+See `old/decisions/ADR-003-enum-canonicalization.md`.
