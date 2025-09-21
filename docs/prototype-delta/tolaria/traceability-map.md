@@ -14,3 +14,5 @@ Mapping of design assertions to implementation artefacts and tests.
 | Emergency escalation protocol | `01.2` | — | — |
 | Multi‑seed gradient aggregation | `01.1` | — | — |
 
+| PyTorch 2.8 upgrades (compile/AMP/TF32/pinned/foreach) | `01.1` | `trainer.__init__` (compile/AMP/TF32/pin/foreach), `_eager_train_step` | `tests/tolaria/test_tolaria_trainer.py::{test_tolaria_compile_fallback,test_tolaria_amp_metrics_disabled_on_cpu}` |
+| Advance α during BLENDING | `01.1` | `trainer._train_single_epoch()` (export + `advance_alpha`) | `tests/tolaria/test_tolaria_trainer.py::test_tolaria_advances_alpha_during_blending` |

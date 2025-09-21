@@ -1,22 +1,27 @@
 # Urza Combined Design
 
 ---
+
 File: docs/design/detailed_design/08-urza-unified-design.md
 ---
+
 # Urza Unified Design (Esper-Lite)
 
 ## Snapshot
+
 - **Role**: Central library holding blueprint metadata and compiled kernel artifacts.
 - **Scope**: Receive static blueprints/compiled binaries from Tezzeret, store them immutably, and serve metadata to Tamiyo and binaries to Kasmina (and other consumers) with low latency.
 - **Status**: Production; C‑016 safety features (WAL durability, circuit breakers, conservative mode, TTL cleanup) remain, but Urabrask integration is dropped for Esper-Lite.
 
 ## Responsibilities
+
 - Store BlueprintIR descriptors and compiled artifacts with versioned metadata.
 - Provide fast query API (Tag/ID lookup) for Tamiyo and other clients. No validation workflow in-lite.
 - Deliver kernel binaries to Kasmina within <10 ms p50 via cache tiering.
 - Maintain integrity (SHA-256) and recovery (WAL) for all assets.
 
 ## Component Map
+
 | Component | Purpose | Reference |
 | --- | --- | --- |
 | Object Store (S3/Zstd) | Immutable artifact storage | `08.1-urza-internals.md` |
@@ -27,17 +32,20 @@ File: docs/design/detailed_design/08-urza-unified-design.md
 | Lifecycle Manager | Track availability, deprecation, retention | `08.1` |
 
 ## Simplifications for Esper-Lite
+
 - Inputs limited to Tezzeret (compiled artifacts) and pre-vetted blueprint bundles. No dynamic submissions from Karn or Urabrask.
 - Validation status assumed “approved”; Urza only stores metadata provided by upstream tools.
 - Query API trimmed to lookup by blueprint id, tag, or curriculum stage.
 
 ## Workflow
+
 1. **Ingest**: Tezzeret posts `BlueprintIR` + `CompiledKernelArtifact`; Urza verifies checksum, writes WAL, stores object & metadata.
 2. **Catalog**: Metadata DB stores version, tags, platform info, performance hints.
 3. **Serve**: Tamiyo/Kasmina query; Query Engine uses cache tiers -> fallback to DB/object store.
 4. **Monitor**: Circuit breakers guard query timeouts, cache failures; conservative mode falls back to identity kernels.
 
 ## Performance Targets
+
 | Metric | Target | Notes |
 | --- | --- | --- |
 | Query latency p50 | <10 ms | Served from memory/Redis. |
@@ -47,6 +55,7 @@ File: docs/design/detailed_design/08-urza-unified-design.md
 | WAL recovery | <12 s | Verified via chaos tests. |
 
 ## Configuration Highlights
+
 ```yaml
 urza:
   storage:
@@ -61,17 +70,19 @@ urza:
 ```
 
 ## Telemetry & Operations
+
 - Metrics: `urza.query.duration_ms`, `urza.cache.hit_rate`, `urza.breaker.state`, `urza.wal.transactions_total`.
 - Logs include asset id, version, checksum, source, retrieval tier used.
 - Health endpoint displays cache utilisation, DB lag, breaker states, conservative-mode flag.
 
 ## References
+
 - `docs/design/detailed_design/08.1-urza-internals.md`
 - `docs/design/detailed_design/00-leyline-shared-contracts.md`
 
 ### Mission-Critical Behaviours (Authoritative Reference)
 
-Legacy design details live in `docs/design/detailed_design/old/08-urza.md`. Esper-Lite continues to rely on the following behaviours:
+Legacy design details live in `docs/design/detailed_design/08-urza.md`. Esper-Lite continues to rely on the following behaviours:
 
 - **Immutable Catalogue:** BlueprintIR metadata and compiled artefacts are stored with versioning, checksums, and WAL-backed durability to guarantee integrity (Old §"Workflow" steps 1–4).
 - **Low-Latency Retrieval:** Multi-tier caching (memory/Redis/object store) can be simplified, but Urza must still deliver p50 <10 ms responses via an in-process cache and maintain >95 % hit rates (Old §"Performance Targets").
@@ -81,8 +92,10 @@ Legacy design details live in `docs/design/detailed_design/old/08-urza.md`. Espe
 These behaviours ensure Urza remains the single source of truth for blueprint assets even in the slimmed environment.
 
 ---
+
 File: docs/design/detailed_design/08.1-urza-internals.md
 ---
+
 # Urza - Internals
 
 ## Document Metadata
@@ -100,6 +113,7 @@ File: docs/design/detailed_design/08.1-urza-internals.md
 This document provides the internal implementation details of Urza for the Esper-Lite build. Urza acts as the central library that stores pre-approved blueprints and compiled kernel artifacts produced by Tezzeret, then serves metadata to Tamiyo and binaries to Kasmina. Dynamic validation or generative ingestion is outside the current scope, but the C‑016 safety improvements (WAL, circuit breakers, TTL cleanup) remain in place.
 
 Key characteristics:
+
 - **Content-Addressable Storage**: SHA-256 based immutable storage with integrity verification
 - **Multi-Tier Caching**: Sub-10 ms retrieval through memory/Redis/DB tiers
 - **Circuit Breaker Protection**: All operations protected with timeout and failure handling
@@ -126,6 +140,7 @@ Key characteristics:
 ### Core Abstractions
 
 **UrzaCentralLibrary**
+
 ```python
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass
@@ -205,6 +220,7 @@ class UrzaCentralLibrary:
 ### Object Store
 
 **S3 Object Store with WAL Durability**
+
 ```python
 class S3ObjectStore:
     """[C-016] Object storage with Write-Ahead Log durability."""
@@ -266,6 +282,7 @@ class WALDurabilityConfig:
 ### Metadata Database
 
 **PostgreSQL Metadata Storage**
+
 ```python
 class PostgreSQLDatabase:
     """Metadata storage with connection pooling and read replicas."""
@@ -1337,6 +1354,7 @@ class KernelSizeLimiter:
 ### Leyline Contracts Used
 
 This component uses the following shared contracts:
+
 - `leyline.BlueprintMetadata` - Blueprint storage schema
 - `leyline.KernelMetadata` - Kernel storage schema
 - `leyline.KernelQuery` - Query request/response
@@ -1538,6 +1556,7 @@ circuit_breaker = CircuitBreaker(
 ### Fallback Behavior
 
 When this component fails:
+
 1. Query timeout → Return identity kernel
 2. Circuit breaker open → Enter conservative mode
 3. Conservative mode → Cache-only serving
@@ -1685,11 +1704,13 @@ logger.error(f"Urza integrity check failed: {kernel_id}", exc_info=True)
 ## References
 
 ### Internal References
+
 - Parent: [08-urza-unified-design.md](08-urza-unified-design.md)
 - Tests: `tests/urza/`
 - Implementation: `src/esper/urza/`
 
 ### External References
+
 - [Tarjan's Algorithm](https://en.wikipedia.org/wiki/Tarjan%27s_strongly_connected_components_algorithm)
 - [Dijkstra's Algorithm](https://en.wikipedia.org/wiki/Dijkstra%27s_algorithm)
 - [Protocol Buffers v2](https://developers.google.com/protocol-buffers)
@@ -1697,12 +1718,14 @@ logger.error(f"Urza integrity check failed: {kernel_id}", exc_info=True)
 ## History & Context
 
 ### Implementation Notes
+
 - **2025-01-10**: C-016 critical fixes integrated
 - **2025-01-10**: Circuit breakers replace all assertions
 - **2025-01-10**: 500ms query timeout enforced
 - **2025-01-10**: Conservative mode implemented
 
 ### Known Issues
+
 - **URZA-001**: Cache invalidation complexity - use TTL approach
 - **URZA-002**: Query optimizer needs ML enhancement (Phase 3)
 

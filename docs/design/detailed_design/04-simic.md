@@ -1,22 +1,27 @@
 # Simic Combined Design
 
 ---
+
 File: docs/design/detailed_design/04-simic-unified-design.md
 ---
+
 # Simic Unified Design (v3.0)
 
 ## Snapshot
+
 - **Role**: Offline policy-training service that improves Tamiyo’s controller without touching production traffic.
 - **Scope**: IMPALA/PPO training loop, graph-aware experience replay, policy versioning/validation, and C‑016 safety controls.
 - **Status**: Production-ready; design keeps original architecture but trimmed to the essentials so Esper-Lite can run it with minimal surprises.
 
 ## Responsibilities
+
 - Ingest Leyline `FieldReport` messages from Tamiyo, map them to rewards/graph features, and store them safely for replay.
 - Train policies (Tamiyo, optional Karn) using conventional RL/IL methods, respecting LR governance and conservative-mode triggers.
 - Validate, version, and publish new policy checkpoints via Tamiyo’s Oona streams once they pass safety gates.
 - Emit telemetry and circuit-breaker state so operators can monitor training health.
 
 ## Component Map
+
 | Component | Focus | Reference |
 | --- | --- | --- |
 | SimicTrainer | IMPALA/PPO training with UnifiedLRController & safety hooks | `04.1-simic-rl-algorithms.md` |
@@ -26,6 +31,7 @@ File: docs/design/detailed_design/04-simic-unified-design.md
 | Service Layer | API/health metrics, circuit breakers, conservative mode | Included below |
 
 ## Architecture Highlights
+
 - **Offline first**: Simic runs on dedicated GPU nodes; production decisions continue uninterrupted.
 - **Event driven**: Field reports arrive over Oona (Leyline `EventEnvelope`) on the `tamiyo.field_reports` stream; policy updates published the same way.
 - **Graph native**: Experiences stored as `HeteroData` so Tamiyo’s GNN policy can learn topology-preserving patterns.
@@ -33,12 +39,14 @@ File: docs/design/detailed_design/04-simic-unified-design.md
 - **Safety baked in**: Circuit breakers wrap training, storage, validation, and LR mutations; conservative mode halves batch size and relaxes timeouts when instability detected.
 
 ## Training & Replay (summary)
+
 - IMPALA with V-trace corrections is the default; PPO available for local fine-tuning.
 - Experience buffer capacity 100 k trajectories (≈12 GB budget) with TTL cleanup and prioritized replay.
 - EWC + LoRA optional modules prevent catastrophic forgetting and reduce weight-update cost.
 - UnifiedLRController ensures Simic never double-steps LRs; breaker opens if integrity violated.
 
 ## Policy Lifecycle
+
 1. **Ingest**: FieldReportProcessor validates schema version, parses `command_id`, `blueprint_id`, `seed_id`, `observation_window_epochs`, outcome, metrics map, mitigation actions, and `tamiyo_policy_version`, then computes reward/graph features.
 2. **Store**: GraphExperienceBuffer writes to circular buffer; TTL & memory budgets enforced; breaker handles overflow.
 3. **Train**: SimicTrainer samples batches, runs IMPALA/PPO updates, writes metrics (`simic_training_time_ms`, `simic_loss`, etc.).
@@ -47,21 +55,25 @@ File: docs/design/detailed_design/04-simic-unified-design.md
 6. **Deploy**: Policy updates are published on the Oona bus; Tamiyo consumes them after running its safety checks.
 
 ## Field Report Stream Handling
+
 - Consumes from Oona `tamiyo.field_reports` stream via dedicated consumer group; ack deadline 2 s aligns with Tamiyo’s retry budget.
 - Missing ack triggers replay once; second failure opens messaging breaker, emits `simic.field_report.retry` telemetry, and requests Tamiyo to enter conservative mode until recovery.
 - Reports are persisted to disk until acked (24 h TTL) to survive restarts; duplicates detected via `command_id` + `report_id` shard key.
 
 ## PolicyManager & Validator Essentials
+
 - Checkpoints stored with metadata (training iteration, metrics, safety scores, approvals).
 - Validation pipeline produces `ValidationResult` capturing chaos/property/security outcomes.
 - Rollbacks supported by simply switching active version; count tracked for audit.
 
 ## Integration Contracts (Leyline Option B)
+
 - `FieldReport` (Tamiyo → Simic) carrying `command_id`, `blueprint_id`, `seed_id`, observation window, outcome enum, metrics map (<280 B), mitigation actions, and Tamiyo policy version.
 - `PolicyUpdate` (Simic → Tamiyo/Karn), `TelemetryPacket` (Simic → Nissa), `EventEnvelope` (bus delivery).
 - All messages use single `uint32` version, native metric maps, HMAC signatures where applicable.
 
 ## Performance Targets
+
 | Metric | Target | Notes |
 | --- | --- | --- |
 | Training step | <500 ms per 32-experience batch | Breaker opens after sustained overruns. |
@@ -71,6 +83,7 @@ File: docs/design/detailed_design/04-simic-unified-design.md
 | Throughput | 180–250 experiences/s | Telemetry verifies; conservative mode lowers target. |
 
 ## Safety & Operations
+
 - Circuit breakers for storage, sampling, training, validation, messaging.
 - Conservative triggers: high error rate, memory pressure, SLO violation, breaker open, training instability.
 - Chaos testing & property-based tests baked into validation to avoid regressions.
@@ -78,7 +91,7 @@ File: docs/design/detailed_design/04-simic-unified-design.md
 
 ### Mission-Critical Behaviours (Authoritative Reference)
 
-Simic’s authoritative design remains codified in `docs/design/detailed_design/old/04-simic.md`. Esper-Lite keeps the following core behaviours even in the lightweight build:
+Simic’s authoritative design remains codified in `docs/design/detailed_design/04-simic.md`. Esper-Lite keeps the following core behaviours even in the lightweight build:
 
 - **Field Report Pipeline:** Simic consumes Tamiyo’s `FieldReport` stream, validates schema versions, and enriches experiences with provenance before storing them in the graph-aware replay buffer (Old §"Field Report Processor").
 - **Replay Buffer Governance:** The `GraphExperienceBuffer` enforces TTL, memory caps (~12 GB), and prioritised sampling to prevent unbounded growth (Old §"Experience Replay").
@@ -89,19 +102,24 @@ Simic’s authoritative design remains codified in `docs/design/detailed_design/
 These behaviours constitute Simic’s main job: offline learning that continually improves Tamiyo without disturbing live training.
 
 ## References
+
 - `docs/design/detailed_design/04.1-simic-rl-algorithms.md`
 - `docs/design/detailed_design/04.2-simic-experience-replay.md`
 - `docs/design/detailed_design/00-leyline-shared-contracts.md`
 
 ---
+
 File: docs/design/detailed_design/04.1-simic-rl-algorithms.md
 ---
+
 # Simic Reinforcement-Learning Algorithms (Doc 04.1)
 
 ## Scope
+
 Shows how Simic trains Tamiyo’s policy using IMPALA/PPO, UnifiedLRController, and hardening features. Retains numeric targets and safeguard logic from the original document.
 
 ## Training Stack
+
 | Element | Purpose |
 | --- | --- |
 | IMPALA + V-trace | Default distributed learner (32 CPU actors, 4 GPU learners). |
@@ -111,6 +129,7 @@ Shows how Simic trains Tamiyo’s policy using IMPALA/PPO, UnifiedLRController, 
 | Curriculum hooks | Stage-based data weighting (configurable). |
 
 ## Configuration Snapshot
+
 ```yaml
 algorithm: IMPALA
 learning_rate: 3e-4
@@ -125,6 +144,7 @@ lora_rank: 16
 ```
 
 ## SimicTrainer Highlights
+
 ```python
 class SimicTrainer:
     def __init__(self, config, lr_controller):
@@ -136,12 +156,14 @@ class SimicTrainer:
         lr_controller.register_optimizer('simic_value', self.value_opt, GroupConfig(...))
         self.training_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout_ms=60_000)
 ```
+
 - Training batches built via PyG `Batch.from_data_list` to preserve graph topology.
 - V-trace returns computed per batch; PPO path uses conventional surrogate loss.
 - EWC penalty added when prior policies tracked; LoRA adapters initialised when configured.
 - Gradient norm clipping (1.0) and AMP scaler monitored by breaker.
 
 ## Training Loop (IMPALA path)
+
 ```python
 async def train_policy(experiences):
     if not training_breaker.is_closed():
@@ -160,15 +182,18 @@ async def train_policy(experiences):
     lr_controller.step(metrics={"loss": total_loss.item()})
     optimizer.step(); optimizer.zero_grad()
 ```
+
 - `enter_conservative_mode()` halves batch size, raises timeouts, and reduces LR via controller configuration.
 - Training metrics recorded: loss, grad norm, throughput, latency (histograms via telemetry).
 
 ## Safety Notes
+
 - Circuit breakers guard storage failures, training instability, LR integrity, AMP explosions.
 - Conservative mode triggers: high loss, repeated breaker trips, memory pressure, SLO violations.
 - Chaos/property tests run during validation (see unified doc) before policies ship.
 
 ## Observability
+
 - Metrics: `simic.training.loss`, `simic.training.kl`, `simic.training.lr`, `simic.training.breaker_state`.
 - Logs include batch id, loss components, gradient norms, conservative mode flag.
 - Traces sample top latency updates for root-cause analysis.
@@ -176,19 +201,24 @@ async def train_policy(experiences):
 Simic’s training loop thus remains a standard RL pipeline, hardened with LR governance and breaker-driven safety to support Tamiyo in production.
 
 ---
+
 File: docs/design/detailed_design/04.2-simic-experience-replay.md
 ---
+
 # Simic Experience Replay (Doc 04.2)
 
 ## Scope
+
 Details the graph-aware replay buffer and field-report ingestion that feed Simic’s training loop. Content is condensed but retains TTL cleanup, prioritised sampling, and safety hooks.
 
 ## Pipeline
+
 1. **FieldReportProcessor** validates Leyline schema, maps outcome→reward, lifts `metrics` map into feature tensors, encodes mitigation actions/policy version into `info`, filters noise, and converts reports to `GraphExperience` objects (`HeteroData` + metadata).
 2. **GraphExperienceBuffer** stores experiences in a circular array with TTL and memory budgeting (≈12 GB total).
 3. **GraphBatchCreator** samples prioritised batches, attaches importance weights, and hands them to SimicTrainer.
 
 ## GraphExperience
+
 ```python
 @dataclass
 class GraphExperience:
@@ -199,9 +229,11 @@ class GraphExperience:
     timestamp: float = field(default_factory=time.time)
     priority: float = 1.0
 ```
+
 - Migration note: slated for future Leyline contract once multiple subsystems share graph replay patterns.
 
 ## Buffer Mechanics
+
 ```python
 class GraphExperienceBuffer:
     def __init__(self, capacity=100_000, ttl_seconds=3600, memory_budget_gb=6.0):
@@ -211,21 +243,25 @@ class GraphExperienceBuffer:
         self.storage_breaker = CircuitBreaker(failure_threshold=3)
         self.sampling_breaker = CircuitBreaker(failure_threshold=5)
 ```
+
 - `store()` enforces memory budget (`_estimate_memory_usage()`), triggers `_force_cleanup()` when exceeded, and runs periodic `cleanup_expired()`.
 - Prioritised replay: probability ∝ priority^α (α=0.6), importance sampling weight ∝ (N·p)^−β (β=0.4).
 - Sampling breaker trips after repeated failures; conservative mode disables prioritisation until restored.
 
 ## Memory & TTL Policies
+
 - TTL default 1 h; cleanup invoked every 100 s or when breaker trips.
 - Memory usage tracked; forced GC when buffer crosses budget.
 - Metadata recorded: hit/miss counts, eviction tally, current memory footprint; exposed via `simic.buffer.*` telemetry.
 
 ## Safety Considerations
+
 - Store/sampling operations guarded by circuit breakers; failures produce structured telemetry and skip batch to avoid poisoning training.
 - Conservative mode reduces batch size and disables prioritized sampling when buffer health degrades.
 - Field reports validated for schema version, reward range, and topology sanity before insertion.
 
 ## Telemetry & Ops
+
 - Metrics: `simic.buffer.size`, `simic.buffer.memory_mb`, `simic.buffer.priority_max`, `simic.buffer.breaker_state`.
 - Logs tag experiences with correlation IDs so Tamiyo rollbacks can be traced back to replay entries.
 - Health endpoint returns buffer depth, TTL cleanup stats, and breaker status.

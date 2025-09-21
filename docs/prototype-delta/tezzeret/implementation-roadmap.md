@@ -16,6 +16,15 @@ Notes
 - Keep inputs as Karn’s Leyline descriptors; no dynamic blueprint generation in lite build.
 - Coordinate WAL and telemetry schema with Urza consumers.
 
+Status update
+- Step 1: Implemented — torch.compile pipeline with pre‑warm; guard spec + digest persisted; fallback recorded.
+- Step 2: Partially implemented — conservative strategy present; Fast/Emergency variants pending.
+- Step 3: Partially implemented — timeout breaker + conservative mode present; resource‑aware throttling pending.
+- Step 4: Partially implemented — JSON WALs for compiler and forge; no CRC/O_DSYNC.
+- Step 5: Partially implemented — metrics snapshots + TelemetryPacket builder; periodic Oona emission pending.
+- Step 6: Missing — resource monitoring & TTL cleanup not implemented.
+- Step 7: Missing — artifact signing/versioning not implemented.
+
 Acceptance Criteria
 - Standard pipeline compiles catalog at startup; guards exported; failures recover via WAL and mark eager fallback.
 - Breakers and conservative mode kick in under resource/time pressure.

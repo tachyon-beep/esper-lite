@@ -14,7 +14,11 @@ Goal: close the gap to the design without tech debt, keeping Leyline as the sing
 | 8 | Telemetry priorities | CRITICAL emergency bypass; timing/gate events; health semantics | Operator‑friendly observability |
 | 9 | Profiling harness | Integrate profiler hooks; optional Chrome traces for epoch/hook timings | Clear performance visibility |
 
+Status update:
+- Steps 1–2: Implemented in `src/esper/tolaria/trainer.py` (budgets, breaker, conservative mode, timeouts, telemetry).
+- Step 9: Partially implemented via external harness `scripts/profile_tolaria.py`; optional in‑trainer hooks remain.
+- Steps 3–8: Outstanding.
+
 Notes:
 - All lifecycle/contract artefacts must use Leyline enums & messages directly; do not create local mirrors.
 - Coordinate changes with Kasmina/Tamiyo where control‑loop contracts touch (AdaptationCommand handling, rollback orchestration).
-

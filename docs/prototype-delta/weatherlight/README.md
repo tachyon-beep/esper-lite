@@ -75,3 +75,29 @@ Design Sources
 Status at a glance
 
 - Core mechanics exist across subsystems (clients/workers), but no unified boot service yet. See `delta-matrix.md` for details.
+
+Outstanding Items (for coders)
+
+- Unified supervisor implementation
+  - Finalise `WeatherlightService` as the single async supervisor (start/stop, backoff/jitter, signal handling) and expose `esper-weatherlight-service` CLI.
+  - Pointers: `src/esper/weatherlight/service_runner.py` (implementation scaffold already present; wire into packaging/CLI).
+
+- Periodic telemetry + health
+  - Publish Weatherlight health/metrics (workers running/backoff/restarts, uptime, last error) to Oona at a fixed cadence; attach Tezzeret telemetry if provider set.
+  - Pointers: `WeatherlightService._build_telemetry_packet/_flush_telemetry_once` (present), ensure routing via Oona.
+
+- Housekeeping integration
+  - Invoke Oona housekeeping and Urza maintenance periodically; ensure errors are logged and non‑fatal; expose counters.
+  - Pointers: `WeatherlightService._housekeeping_loop()` (present).
+
+- Kasmina telemetry forwarding
+  - Drain KasminaSeedManager telemetry and publish with proper priority mapping (present); add tests for priority routing.
+  - Pointers: `WeatherlightService._kasmina_telemetry_loop()`.
+
+- Boot guards & secrets
+  - Validate `ESPER_LEYLINE_SECRET` presence at start (present) and redis connectivity; fail fast with clear error.
+  - Pointers: `WeatherlightService._ensure_secret_present()`.
+
+- Nissa integration (optional)
+  - Optionally detect running Nissa and forward a lightweight heartbeat or enrich metrics; keep decoupled.
+  - Pointers: service runner and operations docs.

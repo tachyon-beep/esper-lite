@@ -27,3 +27,11 @@ Acceptance Criteria
 - Field reports implement observation windows, ack/retry, and WAL durability.
 - Telemetry aggregation and security envelopes function as specified.
 
+Status update
+- Steps 1–2: Partially implemented — FFN policy stub with basic loss/blueprint risk gating; latency budget asserted; GNN/risk engine pending.
+- Step 3: Missing — no breaker framework; conservative mode is a manual flag only.
+- Step 4: Partially implemented — inference measured; strict deadline enforcement pending.
+- Steps 5–7: Missing — no in‑process learning/replay/IMPALA (handled by Simic in prototype).
+- Step 8: Partially implemented — WAL + retention present; ack/retry and observation windows pending.
+- Step 9: Missing — no aggregation hub; emits own telemetry only.
+- Step 10: Missing — no signing/verification on commands/updates.

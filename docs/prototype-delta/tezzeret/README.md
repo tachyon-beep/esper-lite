@@ -2,6 +2,36 @@
 
 Executive summary: the prototype now executes a torch.compile pipeline that builds representative blueprint modules, exports guard metadata, primes the Inductor cache, and persists artifacts into Urza with compile/pre‑warm timings. `TezzeretForge` enumerates Karn templates, implements a timeout breaker with eager fallback, resumes via WAL on failure, and stores guard specs / fallback flags alongside each artifact, with `KernelCatalogUpdate` updates flowing to Oona. Compiler/forge metrics are captured for Weatherlight to surface, while richer strategy selection, continuous telemetry emission, and resource monitoring/TTL cleanup remain on the roadmap.
 
+Outstanding Items (for coders)
+
+- Periodic telemetry emission to Oona
+  - Wire `TezzeretForge.build_telemetry_packet()` into a periodic publisher (Weatherlight). Ensure breaker state elevates severity.
+  - Pointers: `src/esper/tezzeret/runner.py` (packet builder, event buffer); `src/esper/weatherlight/service_runner.py` (publisher hook).
+
+- Resource monitoring and TTL maintenance
+  - Sample GPU utilisation/memory (when CUDA available) and bound compile concurrency; add TTL cleanup for Inductor cache dir and stale WAL files.
+  - Pointers: `src/esper/tezzeret/runner.py` (main loop); `src/esper/tezzeret/compiler.py` (cache dir resolution).
+
+- Inductor cache lifecycle + metrics
+  - Track basic cache size/age and expose metrics; optional hit/miss counters if observable; add TTL eviction policy.
+  - Pointers: `src/esper/tezzeret/compiler.py` ( `_inductor_cache`, `CompileJobConfig.inductor_cache_dir`).
+
+- Strategy matrix expansion
+  - Add Fast (reduced flags) and Emergency (CPU‑only) strategies; select based on breaker/resource state; record strategy in extras and telemetry.
+  - Pointers: `src/esper/tezzeret/compiler.py::_compile_blueprint` (strategy switch), `src/esper/tezzeret/runner.py` (choose strategy).
+
+- WAL durability
+  - Add CRC and atomic O_DSYNC writes; unify compiler/forge WAL schema and cleanly resume/clear.
+  - Pointers: `src/esper/tezzeret/compiler.py` (`_persist_wal/_clear_wal`), `src/esper/tezzeret/runner.py` (`_persist_pending/_load_pending_jobs`).
+
+- Artifact signing + versioning
+  - Stamp semantic version and optional signature/HMAC in Urza extras and include in `KernelCatalogUpdate`.
+  - Pointers: `src/esper/urza/library.py` (extras read/write), `src/esper/tezzeret/compiler.py` (build extras), `src/esper/urza/pipeline.py`.
+
+- Catalog refresh
+  - Add periodic re‑enumeration of blueprints (or explicit trigger) beyond the startup scan.
+  - Pointers: `src/esper/tezzeret/runner.py::_discover_jobs`.
+
 Documents in this folder:
 - `delta-matrix.md` — requirement‑by‑requirement status with evidence
 - `traceability-map.md` — mapping of design assertions to code/tests
@@ -17,21 +47,20 @@ Implementation evidence (primary):
 - Tests: `tests/tezzeret/test_compiler.py`, `tests/tezzeret/test_runner.py`
 
 Status (prototype)
-- Implemented: catalog enumeration; per‑job WAL; stub compilation; compile + pre‑warm timing; KernelCatalogUpdate emission (via pipeline); Urza metadata persists checksum/guard_digest(prelim)/pre‑warm samples.
-- Missing/Partial: torch.compile/export guards; Inductor cache reuse; breaker/telemetry around compilation; resource monitoring and TTL cleanup; signed/versioned artifacts.
+- Implemented: catalog enumeration; per‑job WAL; torch.compile pipeline; guard spec + digest persisted; compile + pre‑warm timing; KernelCatalogUpdate emission (via pipeline); Urza extras persist checksum/guard_digest/guard_spec(_summary)/pre‑warm metrics; forge breaker with conservative mode; telemetry events and packet builder.
+- Missing/Partial: Inductor cache lifecycle/TTL; periodic Oona telemetry emission (metrics snapshots exist); resource monitoring and TTL cleanup; artifact signing/versioning.
 
 Next Actions (minimal, high‑leverage)
-- Torch 2.8 compile + export guards (compiler.py)
-  - Wrap blueprint modules with `torch.compile(..., dynamic=True)`; pre‑warm with representative shapes.
-  - Export guards with `torch.export` (shape/dtype/stride constraints) and persist alongside the artifact in Urza.
-  - On failure, fall back to eager, set an `eager_fallback=true` flag in the catalog update/Urza extras.
+- Torch 2.8 export graphs (optional)
+  - Current build records guard specs (shape/dtype/stride) and digest. Consider `torch.export` graph capture if/when needed for stricter verification.
+  - Eager fallback strategy and flags already recorded on failure.
 - Inductor cache reuse (env + compiler.py)
   - Honour `TORCHINDUCTOR_CACHE_DIR` (settable via env/EsperSettings) to persist the compiled cache; log cache path in KernelCatalogUpdate.
 - Breakers + conservative mode (runner.py)
-  - Add a small circuit breaker around per‑job compile (threshold/timeouts); when open, throttle to a “Fast” strategy or pause new jobs with backoff.
-  - Record breaker state and last error in a periodic telemetry heartbeat.
+  - Present: timeout‑backed breaker with backoff and conservative strategy. Add resource‑aware throttling if GPU constraints are added.
+  - Add periodic telemetry heartbeat via Oona emission.
 - Telemetry (runner.py and/or pipeline caller)
-  - Emit `tezzeret.compilation.duration_ms{strategy}`, `tezzeret.prewarm.ms`, and breaker state via Oona’s telemetry stream at a modest interval.
+  - Present: metrics snapshots + event buffer + TelemetryPacket builder. Wire periodic publish to Oona.
 - Resource monitoring + TTL (runner.py)
   - Sample GPU utilisation/memory (if CUDA available) and bound concurrency; schedule periodic TTL cleanup of any local caches/WAL debris.
 - Signing/versioning (compiler.py + Urza extras)

@@ -8,7 +8,7 @@
 
 - Source modules live under `src/esper/`; create subsystem packages (e.g. `tolaria`, `kasmina`, `tamiyo`) in line with the detailed-design docs.
 - Tests live in `tests/`, mirroring the code; slower integration suites belong under `tests/integration`.
-- Specifications sit in `docs/design/detailed_design/` (legacy `old/` remains authoritative); planning materials live in `docs/project/`.
+- Specifications sit in `docs/design/detailed_design/`; planning materials live in `docs/project/`.
 
 ## Build, Test, and Development Commands
 
@@ -38,7 +38,7 @@
 
 ## Design & Operations Reference
 
-- Update `docs/` whenever behaviour diverges from the canonical `old/` design files, and surface new operational learnings in `docs/project/backlog.md`.
+- Update `docs/` whenever behaviour diverges from the canonical design files, and surface new operational learnings in `docs/project/backlog.md`.
 - Never commit secrets; document required environment variables in a checked-in `README` or `.env.example` within the relevant subsystem folder.
 - Keep docker-compose or deployment manifests beside the service code once infrastructure scaffolding begins.
 

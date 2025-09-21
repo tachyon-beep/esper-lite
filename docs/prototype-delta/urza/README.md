@@ -2,6 +2,28 @@
 
 Executive summary: the prototype implements a local Urza library backed by SQLite + filesystem artifacts with a small in‑process LRU cache, checksum‑verified artifacts, and a JSON WAL for recovery. It supports save/get/list, is used by Tezzeret and Tamiyo tests, and powers Kasmina via `UrzaRuntime` to load compiled kernels (now verifying checksums). Single-tier caching includes optional TTL, while prefetchers validate checksums before publishing READY messages. Remaining design work covers multi‑tier caching (Redis/object store), query circuit breakers, richer telemetry, and metadata query surfaces (tags/stage/tier) with latency SLOs. Leyline remains canonical for blueprint descriptors.
 
+Outstanding Items (for coders)
+
+- Multi‑tier caching
+  - Add optional Redis tier (L2) for artifacts/metadata; keep object store out of scope for prototype.
+  - Pointers: `src/esper/urza/library.py` (cache abstraction), `EsperSettings` for configuration.
+
+- Query circuit breaker & SLOs
+  - Enforce latency budgets (p50/p95) with a breaker; conservative mode (cache‑only) on repeated slow/failed queries; emit telemetry.
+  - Pointers: `src/esper/urza/library.py` (lookup path), `runtime.py` (fetch), metrics hooks.
+
+- Telemetry emission
+  - Publish `urza.query.duration_ms`, `urza.cache.{hits,misses,expired}`, and breaker state periodically via Weatherlight.
+  - Pointers: add `metrics_snapshot()` + TelemetryPacket builder or provider for Weatherlight.
+
+- WAL durability
+  - Add CRC headers and atomic O_DSYNC writes; include metadata version; document recovery semantics.
+  - Pointers: `src/esper/urza/library.py` (JSON WAL read/write locations).
+
+- Metadata query surfaces
+  - Add tag/stage/tier filters and indexing in SQLite; expose lookups for Tamiyo/Kasmina (risk/selection paths).
+  - Pointers: `src/esper/urza/library.py` (schema and query methods).
+
 Documents in this folder:
 - `delta-matrix.md` — requirement‑by‑requirement status with evidence
 - `traceability-map.md` — mapping of design assertions to code/tests

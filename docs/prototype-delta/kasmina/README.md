@@ -1,6 +1,6 @@
 # Kasmina — Prototype Delta (Execution Layer)
 
-Executive summary: the prototype implements the Leyline 11‑state lifecycle with gate checks (G0–G5), kernel prefetch via Oona/Urza with GPU cache reuse, projection-based gradient isolation monitoring with breaker escalation, a per‑seed/teacher parameter registry, TTL memory caches with epoch GC, a circuit breaker + monotonic timers, and HMAC/nonce/freshness verification for commands. Structured telemetry reports seed stages, gate/prefetch events, health, and priority. Remaining work includes a production-grade performance validation harness, explicit telemetry bypass transport (Kasmina emits; Oona/Weatherlight route), and KD loss wiring.
+Executive summary: the prototype implements the Leyline 11‑state lifecycle with gate checks (G0–G5), kernel prefetch via Oona/Urza with GPU cache reuse, projection-based gradient isolation monitoring with breaker escalation, a per‑seed/teacher parameter registry, TTL memory caches with epoch GC, a circuit breaker + monotonic timers, and HMAC/nonce/freshness verification for commands. Structured telemetry reports seed stages, gate/prefetch events, health, and priority. The per‑batch α ramp during BLENDING is integrated via Tolaria’s training loop and covered by tests. Remaining work includes a production‑grade performance validation harness, explicit telemetry bypass transport (Kasmina emits; Oona/Weatherlight route), and KD loss wiring.
 
 Documents in this folder:
 - `delta-matrix.md` — requirement‑by‑requirement status with evidence
@@ -32,6 +32,10 @@ Notes
 - α changes do not retrace host graphs (blend uses runtime buffer/tensor on Kasmina’s side).
 - You can throttle to once every N batches if you use gradient accumulation.
 - Telemetry: Kasmina publishes current α in seed context metadata; expect to see the ramp in telemetry.
+
+Blend mechanism ownership
+- Blending is a seed‑integration concern. Tamiyo selects the blending mechanism from a small approved list (policy), and Kasmina executes the requested mode safely; Kasmina does not choose the mode.
+- Prototype default is convex blend with `host.detach()`. Advanced modes are described in `blending-upgrade.md` and should be activated by Tamiyo via command annotations/parameters when ready.
 
 Design sources:
 - `docs/design/detailed_design/02-kasmina-unified-design.md`

@@ -9,6 +9,11 @@ Scope and invariants
 - No Leyline schema changes: choose blend mode via internal config/state; do not add new enums to Leyline.
 - PyTorch 2.8 assumptions: torch.compile available; prefer shape‑stable, fused elementwise ops; avoid .item() in hot paths.
 
+Policy selection boundary
+- Blending applies to seed integration phases only (grafting: TRAINING → BLENDING → SHADOWING/PROBATIONARY), not general training.
+- Tamiyo selects the blending mechanism from a small, approved set based on policy/risk. Kasmina executes the requested mode safely; it does not choose the mode.
+- The selection signal should be conveyed by Tamiyo via `AdaptationCommand` annotations or parameters. If omitted, Kasmina uses its safe default (convex blend with host.detach()).
+
 Safety rails and budgets
 - α bounds: clamp α to [0, 1]. For maps: cap fraction of elements > τ (e.g., τ=0.8) to ≤ p% (e.g., 20%).
 - Hysteresis: apply a small dead‑band (±0.02) around α thresholds to reduce flapping and retraces.
@@ -98,6 +103,15 @@ B) Logit‑Space Blending (classification)
   - z = α · z_seed + (1 − α) · z_host
   - p = softmax(z)
 - Alternative is probability‑space mixture p = α·softmax(z_seed) + (1−α)·softmax(z_host) (avoid if you need logit continuity).
+
+Integration with Tamiyo (selection and safety)
+- Tamiyo chooses the mode and (optionally) hyper‑parameters from the approved list.
+- Kasmina validates the requested mode against safety constraints (isolation, shapes, dtype), applies it, or falls back to default on mismatch.
+- Telemetry includes `blend_mode`, α summary, and any clamping applied; on fallback, emit a warning event.
+
+Defaults & prototype behaviour
+- Default mode: convex blend `α·seed + (1−α)·host.detach()` (implemented by `AlphaBlender`).
+- Advanced modes above are design‑complete and intended to be selected by Tamiyo; prototype keeps default unless explicitly requested.
 - Ensure host logits come from a detached forward.
 
 C) Two‑Expert Soft Gate (seed vs host)
@@ -146,4 +160,3 @@ Implementation order of operations (coder checklist)
 4. Add per‑batch α advance helper and call during BLENDING.
 5. Add tests per Safety and tests section; extend telemetry with blend summaries.
 6. Benchmark to confirm budgets and compile cache stability.
-

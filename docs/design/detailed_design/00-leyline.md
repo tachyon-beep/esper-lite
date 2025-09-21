@@ -1,19 +1,24 @@
 # Leyline Combined Design
 
 ---
+
 File: docs/design/detailed_design/00-leyline-shared-contracts.md
 ---
+
 # Leyline Shared Contracts
 
 ## Metadata
+
 - Version: 1.0 (virtual subsystem, compiled into every build)
 - Status: Design complete; enforcement delivered through CI/CD and build tooling
 - Ownership: Data Architect (contract authority) with System Architect + Integration Specialist reviewers
 
 ## Purpose
+
 Leyline is the canonical library of cross-subsystem data contracts for Esper-Lite. It has no runtime footprint; instead it distributes Protocol Buffer schemas, enums, and constants that every subsystem imports during compilation. The goal is to guarantee consistent serialization, keep the training loop free from schema drift, and uphold tight latency budgets (<80 µs for `SystemStatePacket`).
 
 ## Architecture Essentials
+
 - **Canonical Source**: `.proto` files define all payloads, enums, and constants under the `leyline.*` namespace.
 - **Distribution Model**: Contracts ship alongside subsystem builds; CI rejects mismatched versions.
 - **Governance Hooks**: Schema changes flow through the Leyline governance workflow (see `00.3-leyline-governance-implementation.md`).
@@ -30,6 +35,7 @@ Leyline is the canonical library of cross-subsystem data contracts for Esper-Lit
 | Constants & Limits | `PerformanceBudgets`, `MemoryBudgets`, `SystemLimits` | Budgets for epoch work, rollback timing, memory ratios, retry ceilings, etc. |
 
 Detailed schemas and enumerations reside in:
+
 - `00.1-leyline-message-contracts.md`
 - `00.2-leyline-enums-constants.md`
 
@@ -54,6 +60,7 @@ Detailed schemas and enumerations reside in:
 | Governance approvals | ≥2 | CI enforces `min_approvals`; failures block merge. |
 
 YAML configuration stub (shared by subsystems):
+
 ```yaml
 leyline:
   schema_version: 1
@@ -64,26 +71,32 @@ leyline:
 ```
 
 ## Operational Notes
+
 - **Health Checks**: None (virtual component). Success criteria measured by "contract parity" metrics emitted during subsystem startup.
 - **Failure Modes**: Build-time schema mismatch, runtime version mismatch, or serialization exceptions. Each triggers circuit breakers defined per subsystem.
 - **Security**: Change control is the primary guard. Message payloads may contain sensitive training data, so downstream services must handle transport encryption.
 
 ## Evolution Roadmap
+
 1. **Schema Evolution (Phase 2)**: Introduce backward-compatible versioning once multi-version deployments begin.
 2. **Dynamic Discovery (Phase 3)**: Optional runtime negotiation for heterogeneous clusters; blocked until after Phase 2 stabilises.
 
 ## References
+
 - `docs/design/detailed_design/00.1-leyline-message-contracts.md`
 - `docs/design/detailed_design/00.2-leyline-enums-constants.md`
 - `docs/design/detailed_design/00.3-leyline-governance-implementation.md`
 - Esper HLD (`docs/design/HLD.md`)
 
 ---
+
 File: docs/design/detailed_design/00.1-leyline-message-contracts.md
 ---
+
 # Leyline Message Contracts
 
 ## Scope & Status
+
 - Version 1.0 (production)
 - Implements Protocol Buffer schemas consumed by every Esper-Lite subsystem
 - Owned by Data Architect; changes must pass Leyline governance review
@@ -147,6 +160,7 @@ message HardwareContext {
 ```
 
 `AdaptationCommand` encapsulates all control-plane actions via a `oneof` structure. The command always carries:
+
 - `command_id` (UUID)
 - `command_type` (`CommandType` enum)
 - `target_seed_id` (if applicable)
@@ -154,6 +168,7 @@ message HardwareContext {
 - A `oneof` with payloads for seed operations, optimizer adjustments, or circuit breaker toggles.
 
 Observability wrappers:
+
 ```protobuf
 message EventEnvelope {
   string event_id = 1;
@@ -189,8 +204,8 @@ message TelemetryPacket {
 
 Leyline telemetry adheres to the “Option B” budget (<280 B, ≤4 allocations, <80 µs) while
 capturing the observability signals mandated in the legacy subsystem designs
-(`old/01-tolaria-unified-design.md`, `old/02-kasmina-unified-design.md`,
-`old/03-tamiyo-unified-design.md`, `old/10-nissa-unified-design.md`). The following
+(`01-tolaria-unified-design.md`, `02-kasmina-unified-design.md`,
+`03-tamiyo-unified-design.md`, `10-nissa-unified-design.md`). The following
 metrics are emitted today:
 
 | Subsystem | Metric(s) | Notes |
@@ -260,6 +275,7 @@ Examples (JSON, after protobuf decoding):
 These examples provide the canonical payloads used in tests (`tests/leyline/test_serialization.py`) to enforce the Option B budgets.
 
 Field reports feed Simic’s replay buffer with bounded payloads (<280 B, ≤4 allocations):
+
 ```protobuf
 message FieldReport {
   string report_id = 1;
@@ -291,12 +307,14 @@ enum FieldReportOutcome {
 ```
 
 ## Serialization Strategy
+
 1. Prefer primitive types and native maps; avoid wrapper messages to keep allocations ≤4.
 2. Pack numeric repeated fields; reserve number ranges for future expansion.
 3. Fail builds if serialized size exceeds `leyline.max_message_size_bytes` (280 B default).
 4. Circuit breakers in downstream services trip after three consecutive serialization failures.
 
 ## Integration Patterns
+
 - `protoc` generates Python bindings consumed by every subsystem build.
 - Schema validation runs in CI via `validate_schema()` and `check_version()`; both reject version drift.
 - Version field in each message must equal `SchemaVersion.CURRENT_VERSION (1)` until backward-compatible evolution lands.
@@ -310,27 +328,34 @@ enum FieldReportOutcome {
 | `EventEnvelope` wrap | <20 µs | Ensures Oona bus budget compliance. |
 
 ## Testing Expectations
+
 - Unit tests confirm serialization latency and size budgets for representative packets.
 - Cross-language integration tests ensure every subsystem can deserialize canonical fixtures.
 - Property tests (Hypothesis) retain data integrity for metric ranges (accuracy 0–1, epoch 0–10 000, etc.).
 
 ## Change Management
+
 All schema edits require:
+
 1. Change proposal with performance impact estimate.
 2. Updated golden fixtures + tests.
 3. Approval via the Leyline governance workflow before resealing version 1.x.
 
 ---
+
 File: docs/design/detailed_design/00.2-leyline-enums-constants.md
 ---
+
 # Leyline Enums & Constants
 
 ## Scope & Status
+
 - Version 1.0 (production)
 - Provides the canonical enum values and system budgets referenced throughout Esper-Lite
 - `leyline.enums` and `leyline.constants` modules are generated from these definitions
 
 ## Lifecycle & Health Enumerations
+
 Keep exact numeric values to maintain network compatibility.
 
 ```protobuf
@@ -457,37 +482,46 @@ message SystemLimits {
 ```
 
 ## Usage Guidelines
+
 - Reserve enum value `0` for `UNKNOWN`/`UNSPECIFIED` to maintain backward-compatibility headroom.
 - Treat constants as **hard limits**; exceeding them should trigger local circuit breakers or refusal to operate.
 - CI validates that memory budget percentages sum to ≤1.0 and that new enum values are strictly appended.
 
 ## Testing & Validation
+
 - Snapshot tests confirm enum numeric stability across language bindings.
 - Budget validation runs during subsystem startup; failure halts boot with actionable logs.
 - Property tests ensure all `SeedLifecycleStage` values fall within allowed transitions.
 
 ## Change Control
+
 Any new enum or constant requires:
+
 1. Governance approval (minimum two reviewers).
 2. Explicit documentation of affected subsystems and migration steps.
 3. Updated fixtures in `tests/leyline/enums` before merge.
 
 ---
+
 File: docs/design/detailed_design/00.3-leyline-governance-implementation.md
 ---
+
 # Leyline Governance & Implementation
 
 ## Scope & Status
+
 - Version 1.0 governance for all Leyline contracts (production)
 - Component type: virtual; enforces process, versioning, and tooling for the shared schemas
 - Implementation: core helpers exist (`SchemaVersion`, change proposal structures); CI wiring still in flight
 
 ## Roles & Ownership
+
 - **Owner**: Data Architect (final approval + release authority)
 - **Reviewers**: System Architect, Integration Specialist (technical validation)
 - **Contributors**: Subsystem teams proposing contract changes
 
 ## Change Workflow
+
 1. **Proposal** – submit a `ChangeProposal` with protobuf diff, rationale, affected subsystems, performance expectations.
 2. **Impact Analysis** – automated script (`analyze_change_impact`) classifies compatibility (`BACKWARD_COMPATIBLE` vs `BREAKING_CHANGE`), highlights serialization and consumer risk.
 3. **Review & Approval** – minimum approvals: 2 reviewers + owner sign-off. Review window capped at 3 days.
@@ -497,6 +531,7 @@ File: docs/design/detailed_design/00.3-leyline-governance-implementation.md
 Emergency bypass is disabled; all changes must follow the standard path.
 
 ## Version Management
+
 ```python
 class SchemaVersion:
     CURRENT_VERSION = 1
@@ -510,9 +545,11 @@ class SchemaVersion:
         # Strict mode until backward compatibility support ships
         return message_version == SchemaVersion.CURRENT_VERSION
 ```
+
 - Future roadmap introduces backward-compatible support (Phase 2) and runtime negotiation (Phase 3).
 
 ## Core Data Structures
+
 ```python
 @dataclass
 class ChangeProposal:
@@ -540,12 +577,14 @@ class GovernanceDecision:
 `analyze_change_impact` scans added/removed fields, recalculates serialization cost deltas, and enumerates all dependent subsystems via contract ownership metadata. Breaking removals automatically flag the proposal as high risk.
 
 ## Tooling Pipeline
+
 - `validate_contracts()` (CI) ensures schema consistency and enforces governance configuration.
 - `compile_protobuf()` rebuilds generated assets; incremental compilation keeps runtime <2 s.
 - `check_version()` runs in subsystem startup to catch mismatched schema versions before live traffic.
 - Impact analysis and regression tests execute in parallel to keep total review cycle <30 minutes.
 
 ## Configuration Snapshot
+
 ```yaml
 governance:
   owner: data-architect
@@ -561,6 +600,7 @@ governance:
 ```
 
 ## Failure Handling
+
 | Failure | Detection | Response |
 | --- | --- | --- |
 | Schema validation failure | CI `validate_contracts` | Block merge, notify proposer + owner |
@@ -570,17 +610,20 @@ governance:
 Circuit breaker defaults (`failure_threshold=5`, recovery timeout 1 h) halt further deployments if repeated violations occur.
 
 ## Metrics & Audit
+
 - Counters: `leyline.governance.proposals`, `...approvals`, `...violations`, `leyline.version.mismatches`.
 - Logs: proposal submission, decision events, compilation failures.
 - Full audit trail stored in version control + governance dashboard.
 
 ## Outstanding Work
+
 - GOV-001: Wire governance validation rules into CI (tracking ticket).
 - GOV-002: Finish automated impact analysis reporting in dashboards.
+
 # Enum Policy and Canonicalization (ADR‑003)
 
 Leyline is the canonical source for all enums. Subsystems MUST use Leyline enums
 internally and externally. No parallel or mapped lifecycle enums are allowed.
 Operational conditions such as degraded or isolated states are reported via
 `TelemetryPacket.system_health` and events rather than overloading lifecycle stages.
-See `old/decisions/ADR-003-enum-canonicalization.md`.
+See `decisions/ADR-003-enum-canonicalization.md`.

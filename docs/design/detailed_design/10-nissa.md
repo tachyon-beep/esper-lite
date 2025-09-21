@@ -1,22 +1,27 @@
 # Nissa Combined Design
 
 ---
+
 File: docs/design/detailed_design/10-nissa-unified-design.md
 ---
+
 # Nissa Unified Design (Esper-Lite)
 
 ## Snapshot
+
 - **Role**: Lightweight observability stack for Esper-Lite. Collects metrics from Oona feeds, exposes dashboards, raises basic alerts, and tracks SLOs.
 - **Scope**: Metrics ingestion, telemetry forwarding, alert evaluation, and simple mission control APIs. Heavy analytics and advanced automation from full Esper are out of scope.
 - **Status**: Production; retains C‑016 safety features (TTL cleanup, circuit breakers, conservative mode).
 
 ## Responsibilities
+
 - Ingest telemetry (`TelemetryPacket`) from subsystems via Oona.
 - Store metrics/logs in Prometheus + Elasticsearch (single-node) with retention policies.
 - Provide mission-control REST endpoints/WebSocket stream for dashboards.
 - Evaluate alert rules and error budgets; notify operators through email/PagerDuty stubs.
 
 ## Component Map
+
 | Component | Purpose | Reference |
 | --- | --- | --- |
 | MetricsEngine | Scrape/ingest metrics into Prometheus | `10.1-nissa-metrics-telemetry.md` |
@@ -27,17 +32,20 @@ File: docs/design/detailed_design/10-nissa-unified-design.md
 | TTLHousekeeper | Drop stale telemetry/alerts | `10.1` |
 
 ## Simplifications
+
 - Single Prometheus + Elasticsearch instance; no federation.
 - Limited alert types (threshold, rate-of-change, error budget burn). No ML anomaly detection.
 - Mission control offers read-only dashboards plus simple controls (e.g., ack alert). No workflow automation.
 
 ## Data Flow
+
 1. Oona pushes telemetry → TelemetryProcessor validates schema and writes to Prometheus/ES.
 2. MetricsEngine exposes `/metrics` for scraping; dashboards read from Prometheus + ES.
 3. AlertManagerLite evaluates rules every 30 s, emits notifications via Oona `alert.events` topic and optional webhooks.
 4. MissionControlAPI aggregates status for UI/WebSocket clients.
 
 ## Reliability & Operations
+
 - Circuit breakers guard ingestion/export; conservative mode skips low-priority telemetry when load high.
 - TTL cleanup purges logs >7 days, metrics >30 days (configurable).
 - Health endpoint reports queue lag, storage status, breaker state, active alerts count.
@@ -45,7 +53,7 @@ File: docs/design/detailed_design/10-nissa-unified-design.md
 
 ### Mission-Critical Behaviours (Authoritative Reference)
 
-Full observability requirements are preserved in `docs/design/detailed_design/old/10-nissa.md`. Esper-Lite must keep the following behaviours:
+Full observability requirements are preserved in `docs/design/detailed_design/10-nissa.md`. Esper-Lite must keep the following behaviours:
 
 - **Telemetry Ingestion:** Nissa continuously consumes Leyline `TelemetryPacket`s via Oona, validates schemas, and writes to Prometheus/Elasticsearch with retention policies (Old §"Metrics & Telemetry").
 - **Dashboard/API Surface:** `/api/status`, `/api/metrics/summary`, and the WebSocket stream provide operators with live breaker states, queue lag, and alert counts (Old §"Mission Control").
@@ -57,14 +65,18 @@ These behaviours ensure Nissa remains the observability backbone for Esper-Lite.
 Nissa thus offers a slimmed-down observability surface appropriate for Esper-Lite while keeping the critical safety and monitoring hooks from the full platform.
 
 ---
+
 File: docs/design/detailed_design/10.1-nissa-metrics-telemetry.md
 ---
+
 # Nissa Metrics & Telemetry (Esper-Lite)
 
 ## Scope
+
 Defines the ingestion pipeline for metrics/telemetry. Keeps C‑016 safeguards (circuit breakers, TTL cleanup) but removes advanced analytics.
 
 ## Ingestion Pipeline
+
 ```python
 def process_telemetry(envelope: EventEnvelope):
     with ingest_breaker.protect():
@@ -74,20 +86,24 @@ def process_telemetry(envelope: EventEnvelope):
         if packet.events:
             telemetry_log.store(packet)
 ```
+
 - `metrics_engine` forwards counters/gauges/histograms to Prometheus (via remote-write or exporter).
 - `telemetry_log` stores structured events in Elasticsearch with TTL.
 
 ## Scraping & Export
+
 - `/metrics` endpoint exposes Prometheus scrape target.
 - Downsampling handled by Prometheus recording rules (1 m/5 m). No hierarchical aggregation.
 - Optional pushgateway support for batch jobs.
 
 ## Safeguards
+
 - Ingestion breaker opens after 3 consecutive failures; fallback drops packet and increments `nissa.telemetry.dropped_total`.
 - Conservative mode disables verbose telemetry categories when breaker half-open.
 - TTL cleanup runs hourly: deletes logs older than 7 days, metrics older than 30 days.
 
 ## Configuration Snippet
+
 ```yaml
 nissa:
   telemetry:
@@ -105,14 +121,18 @@ nissa:
 This simple flow keeps metrics and telemetry available for dashboards/alerts without the heavier tooling from the full Esper deployment.
 
 ---
+
 File: docs/design/detailed_design/10.2-nissa-mission-control.md
 ---
+
 # Nissa Mission Control (Esper-Lite)
 
 ## Scope
+
 Provides a thin API and UI layer for viewing system status and acknowledging alerts. No complex automation.
 
 ## API Endpoints
+
 | Method | Path | Description |
 | --- | --- | --- |
 | GET | `/api/status` | Returns breaker states, queue lag, active alerts count. |
@@ -121,11 +141,13 @@ Provides a thin API and UI layer for viewing system status and acknowledging ale
 | GET | `/ws/stream` | WebSocket delivering live telemetry snapshots (JSON). |
 
 ## Implementation Notes
+
 - FastAPI (or Flask) service with auth middleware (basic token).
 - WebSocket stream publishes small JSON payload every 5 s: `queue_depth`, `alert_count`, `conservative_mode` flags.
 - Rate limiting prevents overuse (default 20 req/min per user).
 
 ## Safety & Ops
+
 - Circuit breaker wraps outbound DB/Prom queries; fallback returns cached snapshot.
 - TTL for session tokens (8 h); mission control stores audit logs in PostgreSQL.
 - UI built with simple dashboard (Grafana or custom React) pointing at these endpoints.
@@ -133,14 +155,18 @@ Provides a thin API and UI layer for viewing system status and acknowledging ale
 Mission Control in Esper-Lite is intentionally minimal—operators can view status, acknowledge alerts, and monitor conservative mode without the heavier control-plane features of the full platform.
 
 ---
+
 File: docs/design/detailed_design/10.3-nissa-alerting-slo.md
 ---
+
 # Nissa Alerting & SLO (Esper-Lite)
 
 ## Scope
+
 Defines the lean alerting and SLO framework. Focuses on threshold alerts, error budget burn, and simple routing.
 
 ## Alert Types
+
 | Alert | Condition | Default Routing |
 | --- | --- | --- |
 | `training_latency_high` | Tolaria epoch hook >18 ms for 3 epochs | PagerDuty + Slack |
@@ -151,11 +177,13 @@ Defines the lean alerting and SLO framework. Focuses on threshold alerts, error 
 Rules evaluated every 30 s. Alerts include description, current value, suggested action.
 
 ## SLO Tracking
+
 - Metrics: `availability`, `latency`, `error_rate` per subsystem.
 - Error budget computed over 30-day window; burn alerts triggered when ≥40 % budget consumed in 24 h.
 - Results stored in PostgreSQL table (`slo_snapshots`), exposed via `/api/metrics/summary`.
 
 ## Notification Pipeline
+
 ```python
 def notify(alert):
     for channel in alert.routes:
@@ -164,9 +192,11 @@ def notify(alert):
         except Exception:
             dead_letter_queue.add(alert)
 ```
+
 - Channels: Slack webhook, email SMTP stub, PagerDuty event API (configurable). Dead-letter queue persisted in Redis for manual replay.
 
 ## Configuration Example
+
 ```yaml
 alerts:
   evaluation_interval_s: 30

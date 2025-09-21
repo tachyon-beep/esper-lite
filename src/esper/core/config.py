@@ -66,4 +66,72 @@ class EsperSettings(BaseSettings):
 
     log_level: str = Field(alias="ESP_LOG_LEVEL", default="INFO")
 
+    # ----------------------
+    # Tolaria (Training) CFG
+    # ----------------------
+    # LR + Optimizer governance
+    tolaria_lr_policy: str | None = Field(alias="TOLARIA_LR_POLICY", default=None)
+    tolaria_lr_warmup_steps: int = Field(alias="TOLARIA_LR_WARMUP_STEPS", default=0)
+    tolaria_opt_rebuild_enabled: bool = Field(
+        alias="TOLARIA_OPT_REBUILD_ENABLED", default=False
+    )
+    tolaria_opt_rebuild_fence: str = Field(
+        alias="TOLARIA_OPT_REBUILD_FENCE", default="epoch"
+    )  # epoch|n_steps
+    tolaria_opt_rebuild_backoff_ms: int = Field(
+        alias="TOLARIA_OPT_REBUILD_BACKOFF_MS", default=10_000
+    )
+
+    # Rollback (two-tier)
+    tolaria_rollback_enabled: bool = Field(
+        alias="TOLARIA_ROLLBACK_ENABLED", default=False
+    )
+    tolaria_rollback_fast_cap_mb: int = Field(
+        alias="TOLARIA_ROLLBACK_FAST_CAP_MB", default=32
+    )
+    tolaria_rollback_deadline_ms: int = Field(
+        alias="TOLARIA_ROLLBACK_DEADLINE_MS", default=250
+    )
+    tolaria_rollback_snapshot_steps: int = Field(
+        alias="TOLARIA_ROLLBACK_SNAPSHOT_STEPS", default=1
+    )
+
+    # Emergency protocol
+    tolaria_emergency_enabled: bool = Field(
+        alias="TOLARIA_EMERGENCY_ENABLED", default=False
+    )
+    tolaria_emergency_bypass_max_per_min: int = Field(
+        alias="TOLARIA_EMERGENCY_BYPASS_MAX_PER_MIN", default=60
+    )
+    tolaria_emergency_l4_on_rollback_deadline: bool = Field(
+        alias="TOLARIA_EMERGENCY_L4_ON_ROLLBACK_DEADLINE", default=True
+    )
+    tolaria_emergency_l4_failed_epochs_threshold: int = Field(
+        alias="TOLARIA_EMERGENCY_L4_FAILED_EPOCHS", default=3
+    )
+
+    # Multi-seed aggregation
+    tolaria_aggregation_scheme: str = Field(
+        alias="TOLARIA_AGGREGATION_SCHEME", default="mean"
+    )  # mean|sum|state_weighted
+    tolaria_pcgrad_enabled: bool = Field(
+        alias="TOLARIA_PCGRAD_ENABLED", default=False
+    )
+
+    # Optimizer rebuild storm guard
+    tolaria_opt_rebuild_min_interval_steps: int = Field(
+        alias="TOLARIA_OPT_REBUILD_MIN_INTERVAL_STEPS", default=0
+    )
+
+    # Profiler
+    tolaria_profiler_enabled: bool = Field(
+        alias="TOLARIA_PROFILER_ENABLED", default=False
+    )
+    tolaria_profiler_dir: str = Field(
+        alias="TOLARIA_PROFILER_DIR", default="./var/profiler"
+    )
+    tolaria_profiler_active_steps: int = Field(
+        alias="TOLARIA_PROFILER_ACTIVE_STEPS", default=50
+    )
+
 __all__ = ["EsperSettings"]

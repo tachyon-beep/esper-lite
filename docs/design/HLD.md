@@ -24,7 +24,7 @@ Esper-Lite is a streamlined version of the full Esper morphogenetic system, focu
 
 ### 🔧 Infrastructure Services (Contracts, Messaging, Observability)
 
-> **Reference note:** Detailed legacy specifications for each subsystem remain available under `docs/design/detailed_design/old/`. Those documents capture the full lifecycle state machines and validation gates that continue to govern the Esper-Lite implementation.
+> **Reference note:** Detailed legacy specifications for each subsystem remain available under `docs/design/detailed_design/`. Those documents capture the full lifecycle state machines and validation gates that continue to govern the Esper-Lite implementation.
 
 - **Leyline (Shared Contracts):** Leyline distributes the Protocol Buffer schemas, enums, and performance budgets that every subsystem uses for control, telemetry, and learning feedback. Strict version gating ensures Tolaria’s `SystemStatePacket`, Tamiyo’s `AdaptationCommand`, Kasmina’s telemetry, and Simic’s `FieldReport` messages serialize in <80 µs and remain binary compatible across releases (`docs/design/detailed_design/00-leyline.md`).
 - **Oona (Message Bus):** Oona provides an at-least-once Redis Streams message fabric for Esper-Lite. It carries Leyline `EventEnvelope` payloads between producers (e.g., Tolaria checkpoints, Tamiyo field reports, Kasmina alerts) and consumers (Tamiyo, Simic, Nissa), enforces priority routing for emergency traffic, and exposes breaker-guarded health metrics (`docs/design/detailed_design/09-oona.md`).

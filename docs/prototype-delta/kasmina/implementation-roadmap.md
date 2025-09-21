@@ -15,5 +15,9 @@ Prioritised steps to reach parity with the design. This is documentation only; n
 | 9 | KD (Optional) | Teacher load + checkpointed memory budgeting; KD loss side‑channel | 3,6 | C‑024 capability |
 
 Notes:
+- Status update:
+  - Steps 1–7: Implemented in current prototype (safety stack, isolation, registry, telemetry priorities with packet annotations, security envelope, memory governance, prefetch attach path).
+  - Step 8: Missing (performance validation harness not implemented for Kasmina).
+  - Step 9: Partially Implemented (teacher registration + budgeting; KD losses deferred).
 - Where the design references optional features (e.g., KD), stub interfaces can land without enabling runtime paths until data/experiments require them.
 - Align lifecycle semantics: adopt the canonical 11‑state model (with G0–G5) via Leyline enums and use them directly (no internal substates or mappings).

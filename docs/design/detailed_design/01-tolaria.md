@@ -1,22 +1,27 @@
 # Tolaria Combined Design
 
 ---
+
 File: docs/design/detailed_design/01-tolaria-unified-design.md
 ---
+
 # Tolaria Unified Design (v3.1)
 
 ## Snapshot
+
 - **Role**: Training orchestrator and stability authority for Esper-Lite
 - **Scope**: Core training loop, optimizer governance, rollback orchestration
 - **Status**: Implementation-ready (C-016 safety fixes)
 - **Key Budgets**: 18 ms epoch boundary, 500 ms fast rollback, 12 s full rollback
 
 ## Architectural Spine
+
 - **Epoch-Driven Core**: Training loop synchronises all major work at epoch boundaries; morphogenetic operations must not pause batch processing.
 - **Tight Kasmina/Tamiyo Coupling**: Direct calls for low latency in critical paths (no message bus); Tolaria remains final arbiter for rollbacks.
 - **Consistent State Surfaces**: Model, optimizer, controller, and checkpoint metadata move in lockstep. UnifiedLRController holds exclusive LR mutation rights.
 
 ## Component Map
+
 | Component | Core Responsibility | Notes |
 | --- | --- | --- |
 | Training Loop Manager | Batch/epoch orchestration, telemetry, Tamiyo handshake | Coordinates checkpoints and telemetry exports. See `01.1`. |
@@ -28,12 +33,14 @@ File: docs/design/detailed_design/01-tolaria-unified-design.md
 | Profiling Harness | Capture epoch and batch timings with PyTorch profiler | `scripts/profile_tolaria.py` emits `epoch_time_ms`, optional chrome traces. |
 
 ## Control Loop Contract
+
 1. **Train Epoch**: Run batches, aggregate multi-seed gradients, step optimizer via LR controller.
 2. **Checkpoint Boundary**: If scheduled, persist a checkpoint, rotate rollback slots, and emit checkpoint metadata for downstream telemetry.
 3. **End-of-Epoch Hook** (≤18 ms): Validate model, assemble `SystemStatePacket`, invoke `Tamiyo.step()` with 2 s timeout, process `AdaptationCommand`, schedule async checkpoint.
 4. **Stability Enforcement**: Circuit breakers swap Tolaria into conservative mode on timing or integrity violations; rollback stack ready for CRITICAL/SEVERE events.
 
 ## Integration Summary
+
 | Subsystem | Interface | Key Contracts |
 | --- | --- | --- |
 | Tamiyo | End-of-epoch call | `SystemStatePacket`, `AdaptationCommand` |
@@ -43,21 +50,25 @@ File: docs/design/detailed_design/01-tolaria-unified-design.md
 Contracts, enums, and limits originate from Leyline (`leyline.*` namespace) to guarantee binary compatibility and <80 µs serialization.
 
 ## Reliability & Performance
+
 - **Epoch boundary**: 3.5 ms state assembly + 12 ms Tamiyo inference + 1.5 ms adaptation processing + 1 ms guard.
 - **Rollback**: Fast path uses LRU checkpoint cache, shared-memory signalling; full path uses WAL-protected checkpoints and deterministic subsystem order (Tamiyo → Kasmina → Tolaria → auxiliaries).
 - **Monitoring**: Metrics for timing budgets, rollback latency, LR integrity; conservative mode downgrades experimental features when circuit breakers trip.
 
 ## Critical Decisions
+
 1. **Keep Kasmina/Tamiyo synchronous** to meet latency targets.
 2. **Exclusive LR controller** prevents mutation races and enforces invariants.
 3. **Two-tier rollback** balances sub-second containment with full recovery guarantees.
 4. **Modular docs**: `01.1`–`01.4` capture detailed algorithms, configs, and APIs; this overview anchors the architecture.
 
 ## Forward Look
+
 - Phase 2 distributed training + schema evolution once multi-node runs begin.
 - Optional dynamic contract discovery (post-Leyline Phase 3) for heterogenous deployments.
 
 ## References
+
 - `docs/design/detailed_design/01.1-tolaria-epoch-lifecycle.md`
 - `docs/design/detailed_design/01.2-tolaria-rollback-systems.md`
 - `docs/design/detailed_design/01.3-tolaria-optimizer-lr.md`
@@ -65,15 +76,19 @@ Contracts, enums, and limits originate from Leyline (`leyline.*` namespace) to g
 - `docs/design/detailed_design/00-leyline-shared-contracts.md`
 
 ---
+
 File: docs/design/detailed_design/01.1-tolaria-epoch-lifecycle.md
 ---
+
 # Tolaria – Epoch Lifecycle
 
 ## Scope
+
 - Owns the core training loop, epoch boundary orchestration, and multi-seed gradient aggregation.
 - Version 3.0 components retained; wording trimmed to the behaviours that affect system contracts and timing guarantees.
 
 ## Training Epoch Skeleton
+
 ```python
 class TolariaTrainer:
     def train_epoch(self, epoch: int):
@@ -95,10 +110,12 @@ class TolariaTrainer:
 
         self.end_of_epoch_hook()
 ```
+
 - **Non-blocking rule**: telemetry and checkpoint coordination are async to keep batches flowing.
 - **LR discipline**: only `UnifiedLRController` mutates learning rates.
 
 ## End-of-Epoch Hook (≤18 ms)
+
 ```python
 def end_of_epoch_hook(self):
     start = perf_counter()
@@ -124,11 +141,14 @@ def end_of_epoch_hook(self):
 
     MonotonicTimer.within_budget_ms(start, 18.0, lambda d: self._timing_violation('epoch', d))
 ```
+
 - **Budget split**: 3.5 ms state assembly, 12 ms Tamiyo inference, 1.5 ms command handling, 1 ms guard.
 - Circuit breakers flip Tolaria into conservative mode instead of raising asserts.
 
 ## Multi-Seed Gradient Aggregation
+
 Mathematics retained to preserve tuning authority.
+
 ```python
 class MultiSeedGradientAggregator:
     def aggregate_losses(self, host_loss, seed_infos, host_batch_size, epoch, total_epochs):
@@ -146,11 +166,13 @@ class MultiSeedGradientAggregator:
 
         return self._stabilise(total, telemetry), telemetry
 ```
+
 - **State weights**: Dormant 0, Germinated 0.01, Training 0.1, Grafting α(t), Stabilisation 0.5, FineTune 1.0.
 - **Grafting α(t)**: `σ((epoch/total_epochs – 0.5) * 2πτ)` smoothing (sigmoid) for gentle blending.
 - **Conflict resolution**: PCGrad projections keep gradients orthogonal when conflicts appear.
 
 ## Timing & Memory Guards
+
 | Component | Target | Notes |
 | --- | --- | --- |
 | Epoch boundary | 18 ms | Hard stop; violation flips to conservative mode. |
@@ -159,6 +181,7 @@ class MultiSeedGradientAggregator:
 | Gradient aggregation | Batch budget | Pre-allocated buffers for active seeds. |
 
 ## Inputs & Outputs
+
 - **Inputs**: PyTorch `DataLoader`, host model with embedded Kasmina layers, seed descriptors, Leyline contracts.
 - **Outputs**: `SystemStatePacket` to Tamiyo, telemetry via Oona, checkpoint tasks to rollback stack.
 - **Dependencies**: UnifiedLRController (`01.3`), rollback systems (`01.2`), protobuf infrastructure (`01.4`).
@@ -166,14 +189,18 @@ class MultiSeedGradientAggregator:
 The behaviours above remain the contract for downstream teams while stripping the previous template verbosity.
 
 ---
+
 File: docs/design/detailed_design/01.2-tolaria-rollback-systems.md
 ---
+
 # Tolaria – Rollback & Emergency Systems
 
 ## Scope
+
 Two-tier rollback (500 ms fast path, 12 s full recovery) backed by durable checkpoints and four-level emergency escalation. Version 3.0 logic retained; wording trimmed around operational guarantees.
 
 ## Fast Rollback (≤500 ms)
+
 ```python
 class FastRollbackCoordinator:
     def __init__(self):
@@ -194,10 +221,12 @@ class FastRollbackCoordinator:
         self.telemetry.publish('fast_rollback_complete', success=True, elapsed_ms=elapsed, reason=reason)
         return True
 ```
+
 - In-memory checkpoints (last five) enable sub-second restoration.
 - Circuit-breaker path escalates to full rollback if any phase fails.
 
 ## Four-Level Emergency Protocol
+
 | Level | Response | Deadline | Actions |
 | --- | --- | --- | --- |
 | CRITICAL | Freeze | 100 ms | Shared-memory broadcast, await core acks |
@@ -208,6 +237,7 @@ class FastRollbackCoordinator:
 Critical path bypasses message bus; uses shared memory handshake with Tolaria/Kasmina/Tamiyo.
 
 ## Distributed Rollback Coordinator
+
 ```python
 class DistributedRollbackCoordinator:
     def initiate_rollback(self, checkpoint_epoch: int, reason: str, severity: str = 'HIGH'):
@@ -223,11 +253,13 @@ class DistributedRollbackCoordinator:
         await self._commit(request)       # Deterministic order: Tamiyo → Kasmina → Tolaria → auxiliaries
         await self._complete(request)
 ```
+
 - **Quorum**: 2/3 threshold across core + auxiliary subsystems.
 - **Heartbeat**: 500 ms while rollback active.
 - **Abort** path restores previous state and raises conservative mode.
 
 ## WAL & Checkpoint Durability
+
 ```python
 class CheckpointWAL:
     WAL_MAGIC = b'ESPERWAL'
@@ -249,10 +281,12 @@ class CheckpointWAL:
         os.fsync(self.fd)  # Fallback if O_DSYNC absent
         return True
 ```
+
 - Execution context (model hash, toolchain, hardware fingerprint) stored in WAL header.
 - 1 GB chunking supports large tensor writes; WAL rotates at 100 MB.
 
 ## Performance & Memory Guardrails
+
 | Item | Target | Notes |
 | --- | --- | --- |
 | Fast rollback | 500 ms | PREPARE 150 ms • COMMIT 250 ms • CONFIRM 100 ms |
@@ -261,20 +295,25 @@ class CheckpointWAL:
 | Checkpoint cache | ≤5 entries | LRU eviction + GC every 5 min |
 
 ## Outputs & Telemetry
+
 - `fast_rollback_complete`, `full_rollback_complete`, and circuit-breaker metrics feed Nissa dashboards.
 - Emergency events share reason, participants, elapsed time, and success (boolean) for post-mortems.
 
 The condensed spec keeps the exact rollback semantics, timing budgets, and durability requirements needed by engineering and operations teams.
 
 ---
+
 File: docs/design/detailed_design/01.3-tolaria-optimizer-lr.md
 ---
+
 # Tolaria – Optimizer & Learning-Rate Control
 
 ## Scope
+
 Covers momentum-preserving optimizer rebuilds and the C-016 UnifiedLRController (exclusive LR authority). Trimmed to core invariants and algorithms required for implementation.
 
 ## Dynamic Optimizer Preservation
+
 ```python
 class DynamicOptimizerStatePreserver:
     def __init__(self, lr_controller: UnifiedLRController):
@@ -299,10 +338,12 @@ class DynamicOptimizerStatePreserver:
         self._validate(new_opt, old_optimizer)
         return new_opt
 ```
+
 - Handles expand/contract/reshape scenarios, keeping Adam/RMSprop momentum tensors consistent.
 - New parameters initialised via LR controller to respect warm-up and reduced base LR.
 
 ## UnifiedLRController (Exclusive LR Entry Point)
+
 ```python
 class UnifiedLRController:
     def __init__(self, config, enable_guards=True):
@@ -348,12 +389,14 @@ class UnifiedLRController:
         self._record_history(epoch, applied)
         return applied
 ```
+
 - **Invariant L1**: All LR mutations flow through `step()`; schedulers elsewhere are forbidden.
 - **Invariant L2**: Optimizer state must survive architecture changes (validated after preservation).
 - **Invariant L3**: Runtime integrity guard compares current vs last verified LR with relative epsilon tolerance (prevents false positives below 1e-6).
 - Circuit breaker toggles conservative mode (no crash) if integrity fails or timing budgets are exceeded.
 
 ## Adding Morphogenetic Parameters
+
 ```python
 def add_new_parameters(self, optimizer, new_params):
     base = self.group_configs.get('primary').base_lr
@@ -370,10 +413,12 @@ def add_new_parameters(self, optimizer, new_params):
     self.group_configs[config.name] = config
     self._snapshot_lr_state(config.name, optimizer)
 ```
+
 - Guarantees differential LR + warm-up for new seeds.
 - Scheduler choice depends on `LRPolicy` (cosine for host, adaptive for morpho groups, frozen for fossilised parameters).
 
 ## Operational Budgets
+
 | Operation | Target | Notes |
 | --- | --- | --- |
 | LR step (all groups) | ≤5 ms | Includes integrity verification and history snapshot. |
@@ -382,6 +427,7 @@ def add_new_parameters(self, optimizer, new_params):
 | Param addition | ≤20 ms | Warning logged if budget exceeded. |
 
 ## Outputs & Telemetry
+
 - `applied_lrs`: dict per optimizer for Tamiyo/SRE debugging.
 - `lr_history`: stored snapshots (cap 1000) for post-mortem reconstruction.
 - `conservative_mode_triggered`: counter increments when guard trips.
@@ -389,19 +435,24 @@ def add_new_parameters(self, optimizer, new_params):
 This abridged document keeps the full invariant surface and the algorithms teams rely on, minus the template noise.
 
 ---
+
 File: docs/design/detailed_design/01.4-tolaria-integration-protocols.md
 ---
+
 # Tolaria – Integration & Infrastructure
 
 ## Scope
+
 Summarises the integration points, performance targets, and shared infrastructure that Tolaria relies on. Derived from v3.0 (C-008 + C-016 updates), trimmed to the contracts and guarantees downstream teams must honour.
 
 ## Shared Contracts & Configuration
+
 - All cross-subsystem messages come from Leyline (`leyline.*` namespace):
   - `SystemStatePacket`, `AdaptationCommand`, `TelemetryPacket`, `HardwareContext`, `StructuralPruning*`.
 - Leyline also supplies circuit-breaker defaults, timeout ceilings, and delivery guarantees; Tolaria consumes them without local overrides.
 
 ## Performance Targets (Hardware-Realistic)
+
 | Operation | Budget | Notes |
 | --- | --- | --- |
 | Epoch boundary | 18 ms | 12 ms Tamiyo GNN + 3.5 ms state assembly + 1.5 ms command handling + 1 ms guard. |
@@ -412,6 +463,7 @@ Summarises the integration points, performance targets, and shared infrastructur
 | Loss explosion threshold | 15× | Above this triggers SEVERE response. |
 
 ## Serialization & Versioning
+
 ```python
 class SystemStateSerializer:
     CURRENT_VERSION = 1
@@ -434,9 +486,11 @@ class SystemStateSerializer:
             pb_seed.learning_rate = seed.learning_rate
         return pb.SerializeToString()
 ```
+
 - `deserialize()` rejects future versions; Tolaria depends on Leyline governance to bump versions safely.
 
 ## Optimizer Rebuild Coordination
+
 ```python
 class OptimizerRebuildCoordinator:
     def __init__(self, optimizer, model, lr_controller, max_time_ms=10):
@@ -462,9 +516,11 @@ class OptimizerRebuildCoordinator:
             logging.warning('Optimizer rebuild exceeded budget %.2fms', elapsed)
         return True
 ```
+
 - Two-phase commit logic kept: snapshot state → attempt → rollback on failure.
 
 ## Memory & Telemetry
+
 ```python
 class MemoryBudgetManager:
     BUDGETS = {'model': 0.40, 'optimizer': 0.25, 'gradients': 0.15,
@@ -483,6 +539,7 @@ class MemoryBudgetManager:
             return True
         return False
 ```
+
 ```python
 class TelemetryCollector:
     def __init__(self, oona_bus, max_queue=10_000):
@@ -502,13 +559,16 @@ class TelemetryCollector:
             if self.dropped % 1000 == 0:
                 logging.warning('Dropped %d telemetry messages', self.dropped)
 ```
+
 - Emergency telemetry bypasses queue to meet CRITICAL deadlines.
 
 ## Testing Expectations
+
 - Integration tests enforce 18 ms epoch hook and 500 ms fast rollback budgets.
 - Property-based tests validate momentum tensor reshaping and LR invariants (see `01.3`).
 
 ## Interfaces Consumed
+
 | Subsystem | Channel | Purpose |
 | --- | --- | --- |
 | Oona | Async queue + immediate path | Telemetry, non-critical messaging |
@@ -519,7 +579,7 @@ This condensed integration spec keeps the critical contracts, budgets, and helpe
 
 ### Mission-Critical Behaviours (Authoritative Reference)
 
-For full lifecycle logic, consult `docs/design/detailed_design/old/01-tolaria.md`. The following behaviours remain mandatory for Esper-Lite even in the pared-down implementation:
+For full lifecycle logic, consult `docs/design/detailed_design/01-tolaria.md`. The following behaviours remain mandatory for Esper-Lite even in the pared-down implementation:
 
 - **Epoch Handshake:** `TolariaTrainer.end_of_epoch_hook()` must assemble the `SystemStatePacket`, invoke `Tamiyo.step()` synchronously, and apply the returned `AdaptationCommand` within the 18 ms budget (see Old §"End-of-Epoch Contract").
 - **Checkpoint & WAL Discipline:** `CheckpointCoordinator` maintains the rotating stack (`fast` vs `full` rollback) with WAL-backed atomicity, including optimizer/seed metadata (Old §"Checkpoint Lifecycle").

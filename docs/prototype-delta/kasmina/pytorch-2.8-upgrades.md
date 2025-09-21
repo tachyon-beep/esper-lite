@@ -45,8 +45,8 @@ Mandatory changes
 6) Route telemetry by priority to Oona
 - What: Map message priority to Oona routing so CRITICAL/WARNING paths avoid queue head‑of‑line blocking.
 - How:
-  - The builder already computes `MessagePriority`; propagate this to the publisher and route HIGH/CRITICAL to the emergency stream, NORMAL to normal.
-- Acceptance: Gate failures/breaker events appear on emergency stream; normal events stay on normal stream.
+  - Kasmina annotates telemetry with `MessagePriority`; Weatherlight/Oona use this to select emergency vs normal streams.
+- Acceptance: Gate failures/breaker events appear on emergency stream (via supervisor routing); normal events stay on normal stream.
 
 7) TTL cleanup on epoch boundaries
 - What: Trigger TTL cleanup regularly in long runs.

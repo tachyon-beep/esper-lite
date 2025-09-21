@@ -10,4 +10,4 @@
 | Inductor cache and pre‑warm metrics | `06.1` | `src/esper/tezzeret/compiler.py::latest_catalog_update` | `tests/tezzeret/test_compiler.py::test_compiler_persists_artifact` |
 | Pre‑warm percentiles at serve time | `06.1` | `src/esper/urza/library.py` stores samples; `src/esper/urza/prefetch.py` computes p50/p95 | — |
 | Publish KernelCatalogUpdate to Oona | `06-tezzeret.md` | `src/esper/urza/pipeline.py::BlueprintPipeline` (catalog_notifier) | `scripts/run_demo.py` (wires Oona publisher) |
-| Breakers + telemetry around compilation | `06.1` | `runner.py` (to be implemented) | — |
+| Breakers + telemetry around compilation | `06.1` | `src/esper/tezzeret/runner.py` (breaker + events + telemetry packet) | `tests/tezzeret/test_runner.py::{test_forge_enters_conservative_mode_after_breaker,test_forge_builds_telemetry_packet}` |

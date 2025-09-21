@@ -1,7 +1,7 @@
 """Kasmina execution layer controller.
 
 Implements the seed lifecycle and kernel grafting mechanics from
-`docs/design/detailed_design/02-kasmina.md` and `old/02-kasmina.md`.
+`docs/design/detailed_design/02-kasmina.md` and `02-kasmina.md`.
 """
 
 from .lifecycle import KasminaLifecycle
