@@ -23,7 +23,7 @@ Within this framework, this document introduces several critical innovations tha
 First is the evolution of the Seed from a passive placeholder into an active sensor and programmable gateway. By constantly streaming telemetry (like activation variance and local error) to the Tamiyo controller, each seed provides the critical, real-time data necessary for intelligent, system-wide decision-making. When commanded by Tamiyo, the seed then acts as the execution site, ensuring the injection of a new blueprint adheres to the local architectural contract.
 Building on this, the Tamiyo policy controller learns to manage the entire network's evolution. By analysing telemetry from all seed sites simultaneously, it moves beyond simple protocols to perform intelligent, multi-seed arbitration, prioritising resources and preventing conflicts to enable emergent structural cooperation. This foreshadows the formation of complex neural "tissues" and moves beyond simple, isolated changes.
 Crucially, this process is interpretable. The resulting germination logs create biographical architectures, where a model's final topology is a readable, causal record of its developmental history. For the first time, we can ask not only what a model is, but how it came to be.
-Finally, the framework re-contextualizes failure. The quarantine buffer system treats failed germination events not as errors to be discarded, but as negative knowledge to be logged and learned from. This creates a system that intelligently and safely prunes its own evolutionary search space.
+Finally, the framework re‑contextualises failure. The quarantine buffer system treats failed germination events not as errors to be discarded, but as negative knowledge to be logged and learned from. This creates a system that intelligently and safely prunes its own evolutionary search space.
 In synthesis, these principles formalize neural ontogeny—the study of an organism's development—as a discrete engineering discipline. By solving the plasticity-stability dilemma through enforced contracts and making growth auditable, this work lays the groundwork for a new generation of truly adaptive systems.
 
 ## Architecture Overview (Conceptual)
@@ -61,6 +61,14 @@ flowchart LR
 ```
 
 Figure: High‑level organisation of the morphogenetic system. Strategic decisions are auditable and lifecycle‑guarded; the execution layer enforces isolation and safety while enabling controlled growth.
+
+## Related Work (Brief)
+Our approach intersects several research threads:
+- Modular & dynamic networks: modularisation and dynamic topology under controlled regimes (Sun et al., 2024; Lu et al., 2024).
+- Parameter‑efficient methods: adapters and related bottleneck approaches for efficient adaptation (Houlsby et al., 2019).
+- Grafting & stitching: reusing pre‑trained components via structured insertion (Rusu et al., 2016; Du et al., 2025).
+- Stability & safety: managing representational drift and enforcing rollback/validation gates (Parisi et al., 2019; Wortsman et al., 2024).
+This work differs by formalising a policy‑governed, lifecycle‑validated mechanism for structural growth within a frozen host, with explicit safety gates and evaluation criteria.
 
 ## Paper Roadmap
 - Concepts and constraints: see Conceptual Foundations (02-conceptual-foundations.md) and Foundational Paradigms (03-foundational-paradigms-enabling-local-evolution.md).

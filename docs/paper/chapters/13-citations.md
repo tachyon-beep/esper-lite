@@ -36,9 +36,8 @@ When citing, include the key inline and ensure the entry exists in the bibliogra
 | Parisi2019  | Continual learning survey                       |
 | Du2025      | Knowledge grafting; stitching                   |
 | Sun2024     | Modularising neural networks; maintenance       |
-| Wortsman2024| Latent alignment (representational stability)   |
+| Wortsman2024| Latent alignment; representational stability    |
 | Chen2021    | Neural network surgery                          |
-| Wortsman2024| Latent alignment; stability checks              |
 | Lu2024      | Dynamic neural network structure review         |
 
 Note: This mapping acts as a checklist during polishing; reconcile keys with the bibliography once Results/Discussion are finalised.
