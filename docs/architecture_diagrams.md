@@ -169,3 +169,4 @@ sequenceDiagram
 - Edge labels in the context diagram indicate primary message types.
 - All inter‑service payloads are Leyline protobuf messages; avoid shadow enums.
 - Circuit breakers and conservative modes are omitted for clarity in diagrams but are enforced in code paths (see architecture summary).
+

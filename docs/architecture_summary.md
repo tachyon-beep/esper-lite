@@ -296,6 +296,46 @@ Documentation‑adjacent (not core to runtime):
 - `split_paper.py`
   - Utility to split `docs/paper/draft_paper.md` into chapters; useful for documentation workflows, not required for building/running services.
 
+## Dev Scripts & Utilities
+
+Convenience scripts live under `scripts/`. Helpful ones when developing locally:
+
+- `start_all_infra.sh` / `stop_all_infra.sh`
+  - Bring up/down Redis, Prometheus, Grafana, and Elasticsearch via compose.
+  - Use before running Weatherlight/Nissa locally.
+
+- `check_infra.sh`
+  - Quick health checks for Redis (container), Prometheus `/ready`, Grafana `/api/health`, and Elasticsearch cluster health.
+
+- `run_integration.sh`
+  - Spins up Redis and runs `pytest -m integration`, then tears Redis down.
+
+- `run_nissa_service.py`
+  - Simple wrapper invoking the packaged Nissa service runner.
+
+- `run_fault_drills.py`
+  - Executes Nissa fault drills to exercise alert rules and SLO tracker.
+
+- `run_demo.py`
+  - End‑to‑end demo: initialises Urza + Tezzeret, runs Tolaria→Tamiyo→Kasmina, publishes telemetry to Oona, executes Simic offline training, and applies policy updates.
+
+- `generate_leyline.py`
+  - Regenerates Leyline protobuf bindings into `src/esper/leyline/_generated/`.
+
+- `bench_kasmina.py`
+  - Micro‑benchmark for Kasmina graft/attach path; prints cache hit rate and timings, with optional simulated Urza latency.
+
+- `profile_tolaria.py`
+  - Profiles Tolaria training loop (PyTorch profiler), optional Chrome trace output.
+
+- `check_shared_types.py`
+  - Guardrail to ensure shared enums remain centralized in Leyline; fails the run if stray Python Enum classes are detected in `src/esper`.
+
+Documentation‑adjacent (not core to runtime):
+
+- `split_paper.py`
+  - Utility to split `docs/paper/draft_paper.md` into chapters; useful for documentation workflows, not required for building/running services.
+
 ## Testing & Structure Notes
 
 - Tests mirror `src/esper/*` layout under `tests/` (unit) and `tests/integration/` (slower flows).
