@@ -5,7 +5,6 @@ appendix: "A"
 coauthors:
   - John Morrissey
   - Codex CLI (OpenAI)
-generated_by: scripts/split_paper.py
 ---
 
 # Appendix A: Prototype Code – Full-Fidelity Managed Germination

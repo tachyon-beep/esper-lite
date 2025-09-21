@@ -5,7 +5,6 @@ chapter: 10
 coauthors:
   - John Morrissey
   - Codex CLI (OpenAI)
-generated_by: scripts/split_paper.py
 ---
 
 # Evaluation Criteria and Safety Constraints

@@ -5,7 +5,6 @@ chapter: 12
 coauthors:
   - John Morrissey
   - Codex CLI (OpenAI)
-generated_by: scripts/split_paper.py
 ---
 
 # Deployment Pathway and Strategic Vision

@@ -5,7 +5,6 @@ chapter: 11
 coauthors:
   - John Morrissey
   - Codex CLI (OpenAI)
-generated_by: scripts/split_paper.py
 ---
 
 # Future Work and Research Directions

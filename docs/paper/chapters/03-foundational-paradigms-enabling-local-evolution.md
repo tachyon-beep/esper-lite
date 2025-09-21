@@ -5,7 +5,6 @@ chapter: 3
 coauthors:
   - John Morrissey
   - Codex CLI (OpenAI)
-generated_by: scripts/split_paper.py
 ---
 
 # Foundational Paradigms Enabling Local Evolution

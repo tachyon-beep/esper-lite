@@ -5,7 +5,6 @@ chapter: 8
 coauthors:
   - John Morrissey
   - Codex CLI (OpenAI)
-generated_by: scripts/split_paper.py
 ---
 
 # Controller Training: The Tamiyo Curriculum

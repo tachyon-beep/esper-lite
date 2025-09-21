@@ -18,3 +18,4 @@
   - [Appendix A: Prototype Code – Full-Fidelity Managed Germination](appendix-a-prototype-code-full-fidelity-managed-germination.md)
   - [Appendix B: Diagnostic Tooling and Control](appendix-b-diagnostic-tooling-and-control.md)
   - [Appendix C: Bibliography / Reading List](appendix-c-bibliography-reading-list.md)
+  - [Appendix D: Reproducibility Checklist](appendix-d-reproducibility-checklist.md)

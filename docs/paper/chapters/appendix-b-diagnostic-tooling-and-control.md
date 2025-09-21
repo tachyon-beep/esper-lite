@@ -5,7 +5,6 @@ appendix: "B"
 coauthors:
   - John Morrissey
   - Codex CLI (OpenAI)
-generated_by: scripts/split_paper.py
 ---
 
 # Appendix B: Diagnostic Tooling and Control

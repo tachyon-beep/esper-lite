@@ -5,7 +5,6 @@ appendix: "C"
 coauthors:
   - John Morrissey
   - Codex CLI (OpenAI)
-generated_by: scripts/split_paper.py
 ---
 
 # Appendix C: Bibliography / Reading List

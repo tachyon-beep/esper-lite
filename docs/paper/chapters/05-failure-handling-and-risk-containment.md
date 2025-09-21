@@ -5,7 +5,6 @@ chapter: 5
 coauthors:
   - John Morrissey
   - Codex CLI (OpenAI)
-generated_by: scripts/split_paper.py
 ---
 
 # Failure Handling and Risk Containment
@@ -27,6 +26,18 @@ Validation checks mapped to lifecycle states (see lifecycle diagram in Figures: 
 | 1      | TRAINING         | Non-zero gradient norms; bounded weight changes; local loss improvement after N steps                   | CULLED             |
 | 2      | SHADOWING        | Internal stability with inert forward; probe with live data; reject chaotic/unbounded outputs           | CULLED             |
 | 3      | PROBATIONARY     | Systemic impact: monitor global metrics (val_loss, val_acc) within tolerance                           | CULLED             |
+
+### 5.1.1 Gate Definitions (G0–G5)
+Lifecycle validation gates ensure safety and stability at key transition points:
+
+| Gate | Purpose                   | Applied At            | Typical Checks                                      |
+|------|---------------------------|-----------------------|-----------------------------------------------------|
+| G0   | Sanity/registration       | GERMINATED           | Registration, resource budgets, initial health      |
+| G1   | Gradient/health           | TRAINING             | Non‑zero gradients, bounded updates, loss improvement |
+| G2   | Stability                  | BLENDING             | Output stability under alpha ramp                   |
+| G3   | Interface integrity        | SHADOWING            | Shape/distribution checks; inert forward behaviour  |
+| G4   | Systemic impact            | PROBATIONARY         | No regression in global metrics                     |
+| G5   | Reset sanity               | RESETTING            | Buffers cleared; counters reset; ready for DORMANT  |
 ## 5.2 The Culling and Embargo Protocol
 This framework replaces ambiguous “rollback” procedures with a formal, state-driven Culling and Embargo protocol managed by the SeedManager.
 

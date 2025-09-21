@@ -5,7 +5,6 @@ chapter: 6
 coauthors:
   - John Morrissey
   - Codex CLI (OpenAI)
-generated_by: scripts/split_paper.py
 ---
 
 # Architectural Patterns and Agent Roles

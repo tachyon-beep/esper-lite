@@ -5,7 +5,6 @@ chapter: 4
 coauthors:
   - John Morrissey
   - Codex CLI (OpenAI)
-generated_by: scripts/split_paper.py
 ---
 
 # Techniques for Grafting and Precise Editing

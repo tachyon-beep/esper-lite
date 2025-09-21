@@ -4,7 +4,6 @@ split_mode: consolidated
 coauthors:
   - John Morrissey
   - Codex CLI (OpenAI)
-generated_by: scripts/split_paper.py
 ---
 
 # Preface
@@ -36,11 +35,24 @@ Version 3.0RC1
   - [Appendix A: Prototype Code – Full-Fidelity Managed Germination](appendix-a-prototype-code-full-fidelity-managed-germination.md)
   - [Appendix B: Diagnostic Tooling and Control](appendix-b-diagnostic-tooling-and-control.md)
   - [Appendix C: Bibliography / Reading List](appendix-c-bibliography-reading-list.md)
+  - [Appendix D: Reproducibility Checklist](appendix-d-reproducibility-checklist.md)
 
 ## Design Reference & Authority
 This paper documents the Esper‑Lite prototype and aligns with the broader Esper system design. The detailed system definition (including lifecycle, safety, policy, and observability) is authoritative; where any divergence exists, treat those specifications as canonical, and update this paper accordingly.
 
 Scope note: Esper‑Lite implements the minimal, production‑safe slice of the full architecture. Prototype examples (e.g., XOR, make_moons) illustrate the morphogenetic lifecycle and safety regime; production behaviour follows the detailed design principles without enumerating implementation details here.
+
+## Notation & Symbols
+| Symbol     | Meaning                                        |
+|------------|------------------------------------------------|
+| ΔAcc/ΔF1   | Change in accuracy/F1 after intervention      |
+| ΔParams    | Parameters added by successful germination     |
+| ΔLatency   | Change in inference latency (relative)         |
+| ΔMemory    | Change in peak memory (relative)               |
+| α          | Blending factor (0→1) during activation        |
+| Drift      | Interface drift metric at graft boundaries     |
+| r          | Risk score used by controller policy           |
+| G0–G5      | Lifecycle validation gates (see Section 5)     |
 
 ## Abstract
 This document outlines the formal groundwork and technical scaffolding for a class of neural architectures capable of localised, seed-driven structural evolution within frozen host networks. The approach—referred to as morphogenetic architecture—enables the introduction of trainable components that can independently develop new capabilities in response to local failure signals or performance deficits.
