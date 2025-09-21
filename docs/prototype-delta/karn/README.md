@@ -8,10 +8,9 @@ Documents in this folder:
 - `implementation-roadmap.md` — plan to close gaps (Phase‑1 only)
 
 Design sources:
-- `docs/design/detailed_design/05-karn.md`
+- `docs/design/detailed_design/05-karn-unified-design.md`
 - `docs/design/detailed_design/05.1-karn-template-system.md`
 
 Implementation evidence (primary):
 - `src/esper/karn/catalog.py`, `src/esper/karn/templates.py`
 - Tests: `tests/karn/test_catalog.py`, `tests/integration/test_blueprint_pipeline_integration.py`
-

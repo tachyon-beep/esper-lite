@@ -8,10 +8,9 @@ Documents in this folder:
 - `implementation-roadmap.md` — plan to close gaps without tech debt
 
 Design sources:
-- `docs/design/detailed_design/08-urza.md`
+- `docs/design/detailed_design/08-urza-unified-design.md`
 - `docs/design/detailed_design/08.1-urza-internals.md`
 
 Implementation evidence (primary):
 - `src/esper/urza/library.py`, `src/esper/urza/runtime.py`, `src/esper/urza/pipeline.py`
 - Tests: `tests/urza/*`, `tests/integration/test_blueprint_pipeline_integration.py`
-

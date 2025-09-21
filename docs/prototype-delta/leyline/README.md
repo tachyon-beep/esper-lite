@@ -8,10 +8,9 @@ Documents in this folder:
 - `implementation-roadmap.md` — single, batched schema change + adoption plan (no tech debt)
 
 Design sources:
-- `docs/design/detailed_design/00-leyline.md`
 - `docs/design/detailed_design/00-leyline-shared-contracts.md`
+- `docs/design/detailed_design/00-leyline.md`
 
 Implementation evidence (primary):
 - Generated: `src/esper/leyline/_generated/leyline_pb2.py`
 - Widespread usage in: Kasmina, Tolaria, Tamiyo, Simic, Oona, Nissa, Urza, Tezzeret, Karn
-

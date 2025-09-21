@@ -8,7 +8,6 @@ Documents in this folder:
 - `implementation-roadmap.md` — ordered plan to close gaps without tech debt
 
 Design sources:
-- `docs/design/detailed_design/03-tamiyo.md`
 - `docs/design/detailed_design/03-tamiyo-unified-design.md`
 - `docs/design/detailed_design/03.2-tamiyo-policy-training.md`
 - `docs/design/detailed_design/03.3-tamiyo-risk-modeling.md`
@@ -17,4 +16,3 @@ Design sources:
 Implementation evidence (primary):
 - `src/esper/tamiyo/service.py`, `src/esper/tamiyo/policy.py`, `src/esper/tamiyo/persistence.py`
 - Tests: `tests/tamiyo/test_service.py`, `tests/integration/test_blueprint_pipeline_integration.py`
-

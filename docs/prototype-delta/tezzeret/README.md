@@ -8,10 +8,9 @@ Documents in this folder:
 - `implementation-roadmap.md` — plan to close gaps without tech debt
 
 Design sources:
-- `docs/design/detailed_design/06-tezzeret.md`
+- `docs/design/detailed_design/06-tezzeret-unified-design.md`
 - `docs/design/detailed_design/06.1-tezzeret-compilation-internals.md`
 
 Implementation evidence (primary):
 - `src/esper/tezzeret/compiler.py`, `src/esper/tezzeret/runner.py`
 - Tests: `tests/tezzeret/test_compiler.py`, `tests/tezzeret/test_runner.py`
-

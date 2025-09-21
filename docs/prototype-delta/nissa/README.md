@@ -8,7 +8,7 @@ Documents in this folder:
 - `implementation-roadmap.md` — plan to close gaps (leyline‑first, no tech debt)
 
 Design sources:
-- `docs/design/detailed_design/10-nissa.md`
+- `docs/design/detailed_design/10-nissa-unified-design.md`
 - `docs/design/detailed_design/10.1-nissa-metrics-telemetry.md`
 - `docs/design/detailed_design/10.2-nissa-mission-control.md`
 - `docs/design/detailed_design/10.3-nissa-alerting-slo.md`
@@ -16,4 +16,3 @@ Design sources:
 Implementation evidence (primary):
 - `src/esper/nissa/observability.py`, `src/esper/nissa/alerts.py`, `src/esper/nissa/slo.py`, `src/esper/nissa/server.py`, `src/esper/nissa/service_runner.py`
 - Tests: `tests/nissa/test_observability.py`
-

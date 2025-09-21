@@ -8,7 +8,7 @@ Documents in this folder:
 - `implementation-roadmap.md` — suggested backlog to close gaps without tech debt
 
 Design sources:
-- `docs/design/detailed_design/01-tolaria.md`
+- `docs/design/detailed_design/01-tolaria-unified-design.md`
 - `docs/design/detailed_design/01.1-tolaria-epoch-lifecycle.md`
 - `docs/design/detailed_design/01.2-tolaria-rollback-systems.md`
 - `docs/design/detailed_design/01.3-tolaria-optimizer-lr.md`
@@ -17,4 +17,3 @@ Design sources:
 Implementation evidence (primary):
 - `src/esper/tolaria/trainer.py`
 - Tests: `tests/tolaria/test_tolaria_trainer.py`, `tests/integration/test_control_loop.py`
-

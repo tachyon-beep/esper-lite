@@ -8,11 +8,10 @@ Documents in this folder:
 - `implementation-roadmap.md` — plan to close gaps without tech debt
 
 Design sources:
-- `docs/design/detailed_design/04-simic.md`
+- `docs/design/detailed_design/04-simic-unified-design.md`
 - `docs/design/detailed_design/04.1-simic-rl-algorithms.md`
 - `docs/design/detailed_design/04.2-simic-experience-replay.md`
 
 Implementation evidence (primary):
 - `src/esper/simic/replay.py`, `src/esper/simic/trainer.py`, `src/esper/simic/validation.py`, `src/esper/simic/registry.py`
 - Tests: `tests/simic/*`
-

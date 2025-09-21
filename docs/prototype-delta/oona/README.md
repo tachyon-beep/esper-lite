@@ -8,10 +8,9 @@ Documents in this folder:
 - `implementation-roadmap.md` — plan to close gaps without tech debt
 
 Design sources:
-- `docs/design/detailed_design/09-oona.md`
+- `docs/design/detailed_design/09-oona-unified-design.md`
 - `docs/design/detailed_design/09.1-oona-internals.md`
 
 Implementation evidence (primary):
 - `src/esper/oona/messaging.py`
 - Tests: `tests/oona/*`, plus integration usages in Tamiyo/Tolaria/Simic/Nissa tests
-
