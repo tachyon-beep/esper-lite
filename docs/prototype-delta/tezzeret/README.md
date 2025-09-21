@@ -1,6 +1,6 @@
 # Tezzeret — Prototype Delta (Compilation Forge)
 
-Executive summary: the prototype now executes a torch.compile pipeline that builds representative blueprint modules, exports guard metadata, primes the Inductor cache, and persists artifacts into Urza with compile/pre‑warm timings. `TezzeretForge` enumerates Karn templates, resumes via WAL on failure, and stores guard specs / fallback flags alongside each artifact, with `KernelCatalogUpdate` updates flowing to Oona. Remaining gaps include richer strategy selection, circuit breakers, streaming telemetry, and resource monitoring/TTL cleanup.
+Executive summary: the prototype now executes a torch.compile pipeline that builds representative blueprint modules, exports guard metadata, primes the Inductor cache, and persists artifacts into Urza with compile/pre‑warm timings. `TezzeretForge` enumerates Karn templates, implements a timeout breaker with eager fallback, resumes via WAL on failure, and stores guard specs / fallback flags alongside each artifact, with `KernelCatalogUpdate` updates flowing to Oona. Compiler/forge metrics are captured for Weatherlight to surface, while richer strategy selection, continuous telemetry emission, and resource monitoring/TTL cleanup remain on the roadmap.
 
 Documents in this folder:
 - `delta-matrix.md` — requirement‑by‑requirement status with evidence

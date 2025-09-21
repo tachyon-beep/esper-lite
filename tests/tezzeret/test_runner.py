@@ -39,6 +39,9 @@ def test_forge_compiles_catalog(tmp_path) -> None:
     assert record is not None
     assert record.compile_ms is not None
     assert record.guard_spec
+    metrics = forge.metrics_snapshot()
+    assert metrics["tezzeret.compilation.total"] >= 5.0
+    assert "tezzeret.compilation.last_compile_ms" in metrics
 
 
 def test_forge_skips_existing(tmp_path) -> None:
@@ -107,3 +110,5 @@ def test_forge_retries_failed_job(tmp_path) -> None:
     record = library.get(next(iter(catalog.all())).blueprint_id)
     assert record is not None
     assert record.compile_ms is not None
+    metrics = forge.metrics_snapshot()
+    assert metrics["tezzeret.compilation.failed"] >= 1.0

@@ -14,7 +14,7 @@ Notes
 - Tezzeret now honours `TEZZERET_INDUCTOR_CACHE_DIR`; other variables remain operational hints.
 - Keep the cache on a fast local disk (NVMe). Clean periodically if not bounded by TTL.
 
-Telemetry (Oona → Nissa) — suggested metric names
+Telemetry (Oona → Nissa)
 - Compilation latency (per job/strategy):
   - `tezzeret.compilation.duration_ms{strategy}`
   - `tezzeret.prewarm.ms{strategy}`
@@ -34,4 +34,4 @@ Event examples (TelemetryEvent description)
 - `prewarm_completed`, `breaker_open`, `conservative_mode_enabled`
 
 Routing
-- Send Tezzeret telemetry to Oona’s telemetry stream (normal priority). Breaker transitions and repeated job failures can be sent at HIGH priority if the platform’s policy requires.
+- Weatherlight can include `tezzeret.*` metrics in its periodic telemetry packet via `WeatherlightService.set_tezzeret_metrics_provider`; breakers should elevate severity when repeatedly opening.

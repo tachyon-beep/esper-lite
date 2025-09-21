@@ -88,6 +88,16 @@ class CompilationResult:
     inductor_cache_dir: str | None
 
 
+@dataclass(slots=True)
+class CompilerMetrics:
+    total_jobs: int = 0
+    failed_jobs: int = 0
+    eager_fallbacks: int = 0
+    last_compile_ms: float = 0.0
+    last_prewarm_ms: float = 0.0
+    last_strategy: str = ""
+
+
 class TezzeretCompiler:
     """Torch 2.8 compilation pipeline for Tezzeret."""
 
@@ -103,6 +113,7 @@ class TezzeretCompiler:
         self._wal_path.parent.mkdir(parents=True, exist_ok=True)
         self._latest_catalog_update: leyline_pb2.KernelCatalogUpdate | None = None
         self._latest_result: CompilationResult | None = None
+        self._metrics = CompilerMetrics()
 
     def compile(
         self,
@@ -134,16 +145,27 @@ class TezzeretCompiler:
                     result.prewarm_ms,
                     result.guard_digest,
                 )
+                self._record_success(result)
                 self._clear_wal()
                 return artifact_path
             except Exception as exc:  # pragma: no cover - defensive guard
                 last_error = exc
                 if attempts > self._config.max_retries:
                     break
+                self._record_failure()
         raise RuntimeError(f"Failed to compile blueprint {metadata.blueprint_id}: {last_error}")
 
     def latest_result(self) -> CompilationResult | None:
         return self._latest_result
+
+    def metrics_snapshot(self) -> dict[str, float]:
+        return {
+            "tezzeret.compilation.total": float(self._metrics.total_jobs),
+            "tezzeret.compilation.failed": float(self._metrics.failed_jobs),
+            "tezzeret.compilation.eager_fallback": float(self._metrics.eager_fallbacks),
+            "tezzeret.compilation.last_compile_ms": self._metrics.last_compile_ms,
+            "tezzeret.compilation.last_prewarm_ms": self._metrics.last_prewarm_ms,
+        }
 
     def _persist_wal(self, metadata: BlueprintDescriptor, parameters: dict[str, float]) -> None:
         record = {
@@ -247,6 +269,17 @@ class TezzeretCompiler:
             compile_strategy=strategy,
             inductor_cache_dir=str(self._config.inductor_cache_dir) if self._config.inductor_cache_dir else None,
         )
+
+    def _record_success(self, result: CompilationResult) -> None:
+        self._metrics.total_jobs += 1
+        self._metrics.last_compile_ms = result.compile_ms
+        self._metrics.last_prewarm_ms = result.prewarm_ms
+        self._metrics.last_strategy = result.compile_strategy
+        if result.eager_fallback:
+            self._metrics.eager_fallbacks += 1
+
+    def _record_failure(self) -> None:
+        self._metrics.failed_jobs += 1
 
 
 def _build_guard_spec(inputs: Iterable[torch.Tensor]) -> list[dict[str, Any]]:

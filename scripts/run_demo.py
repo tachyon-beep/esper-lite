@@ -108,7 +108,12 @@ async def initialise_blueprint_pipeline(
 
     artifact_dir = root / "artifacts"
     library = UrzaLibrary(root=root / "urza")
-    compiler = TezzeretCompiler(config=CompileJobConfig(artifact_dir=artifact_dir))
+    compiler = TezzeretCompiler(
+        config=CompileJobConfig(
+            artifact_dir=artifact_dir,
+            inductor_cache_dir=(root / "inductor_cache"),
+        )
+    )
     pipeline = BlueprintPipeline(
         catalog=catalog,
         compiler=compiler,

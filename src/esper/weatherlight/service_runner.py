@@ -70,6 +70,7 @@ class WeatherlightService:
         self._kasmina_manager: KasminaSeedManager | None = None
         self._kasmina_coordinator: KasminaPrefetchCoordinator | None = None
         self._tamiyo_service: TamiyoService | None = None
+        self._tezzeret_metrics_provider: Callable[[], dict[str, float]] | None = None
 
     async def start(self) -> None:
         """Initialise subsystems and spawn background workers (Slice 1 & 2)."""
@@ -135,6 +136,13 @@ class WeatherlightService:
         self.initiate_shutdown()
         await self._shutdown()
         await self._shutdown_complete.wait()
+
+    def set_tezzeret_metrics_provider(
+        self, provider: Callable[[], dict[str, float]] | None
+    ) -> None:
+        """Register a callable that returns Tezzeret metrics for telemetry."""
+
+        self._tezzeret_metrics_provider = provider
 
     async def _build_oona_client(self) -> OonaClient:
         hostname = socket.gethostname().replace(" ", "-")
@@ -354,6 +362,13 @@ class WeatherlightService:
         oona_snapshot = await self._oona.metrics_snapshot()
         for name, value in oona_snapshot.items():
             metrics.append(TelemetryMetric(f"oona.{name}", float(value)))
+        if self._tezzeret_metrics_provider is not None:
+            try:
+                tezzeret_metrics = self._tezzeret_metrics_provider()
+            except Exception:  # pragma: no cover - defensive
+                tezzeret_metrics = {}
+            for name, value in tezzeret_metrics.items():
+                metrics.append(TelemetryMetric(name, float(value)))
         events: list[TelemetryEvent] = []
         health_status = leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY
         health_summary = "steady"
