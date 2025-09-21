@@ -8,14 +8,12 @@ Baseline
 
 Mandatory changes
 
-1) Pre‑compile and pre‑warm seed kernels off the hot path
-- What: After loading a kernel from Urza, compile it with `torch.compile` once and cache the compiled callable alongside the module; pre‑warm it to avoid first‑run cost.
-- How (guarded):
-  - In `src/esper/kasmina/seed_manager.py::_attach_kernel` (post‑attach):
-    - Try `compiled = torch.compile(kernel, dynamic=True)` (or `mode='reduce-overhead'` for inference‑heavy paths).
-    - If compilation fails, record a breaker event and keep eager.
-    - Pre‑warm with a representative batch (if available) to populate the cache.
-- Acceptance: BLENDING/TRAINING first iterations avoid compile latency; failures fall back to eager with a breaker event.
+1) Pre‑warm only in Kasmina; Tezzeret owns compilation
+- What: Kasmina must not call `torch.compile`. Tezzeret pre‑compiles kernels; Kasmina only pre‑warms the loaded artifact to hydrate caches.
+- How:
+  - Kasmina: after attach, optionally run a single forward with a representative batch to pre‑warm (no compile calls).
+  - Tezzeret: see `docs/prototype-delta/tezzeret/pytorch-2.8-upgrades.md` for the mandatory `torch.compile` pipeline.
+- Acceptance: No runtime compilation in Kasmina; first BLENDING/TRAINING iterations do not pay compile latency.
 
 2) Use `torch.inference_mode()` for SHADOWING/PROBATIONARY probes
 - What: Wrap any forward probes during SHADOWING/PROBATIONARY in `torch.inference_mode()` to prevent autograd overhead and reduce memory churn.

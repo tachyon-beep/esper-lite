@@ -6,6 +6,7 @@ Documents in this folder:
 - `delta-matrix.md` — requirement‑by‑requirement status with evidence
 - `traceability-map.md` — mapping of design assertions to code/tests
 - `implementation-roadmap.md` — plan to close gaps without tech debt
+- `pytorch-2.8-upgrades.md` — mandatory 2.8 compilation pipeline (torch.compile/export, pre‑warm, guards)
 
 Design sources:
 - `docs/design/detailed_design/06-tezzeret-unified-design.md`
