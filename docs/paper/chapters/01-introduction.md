@@ -63,6 +63,14 @@ flowchart LR
 
 Figure: High‑level organisation of the morphogenetic system. Strategic decisions are auditable and lifecycle‑guarded; the execution layer enforces isolation and safety while enabling controlled growth.
 
+## Paper Roadmap
+- Concepts and constraints: see Conceptual Foundations (02-conceptual-foundations.md) and Foundational Paradigms (03-foundational-paradigms-enabling-local-evolution.md).
+- Techniques for structural growth: see Techniques for Grafting (04-techniques-for-grafting-and-precise-editing.md) and the comparison diagram in Figures (09-tables-and-figures.md).
+- Safety and validation: see Failure Handling & Risk Containment (05-failure-handling-and-risk-containment.md) and the lifecycle diagram in Figures (09-tables-and-figures.md).
+- Prototype implementation and protocol: see Prototype & Micro-Demonstration (07-prototype-implementation-and-micro-demonstration.md) and evaluation pipeline figure in Figures (09-tables-and-figures.md).
+- Controller policy and training: see Controller Training (08-controller-training-the-tamiyo-curriculum.md) and interaction sequence in Figures (09-tables-and-figures.md).
+- Evaluation criteria: see Evaluation & Safety (10-evaluation-criteria-and-safety-constraints.md).
+
 ## 1.1 Motivation
 This document defines a foundational mechanism for enabling localised structural adaptation within otherwise static neural architectures. The motivation is to allow systems to increase task-specific or representational capacity without retraining or reinitialising the global model. This is achieved through a biologically inspired construct referred to as a seed: a latent trainable element embedded within the host network, capable of germinating additional modules. In this framework, germination is not random; it is a controlled event, triggered by a dedicated policy controller in response to observed performance plateaus, and the germinated modules themselves are drawn from a library of validated architectural blueprints.
 The primary application space for this technique includes:

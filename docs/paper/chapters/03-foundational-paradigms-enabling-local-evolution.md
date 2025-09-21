@@ -23,7 +23,7 @@ Characteristics inherited from dynamic models:
 • Deferred instantiation – Seeds may remain unmaterialised until needed.
 • Conditional execution – A seed's internal operations are conditional on its current state in the lifecycle.
 • Runtime adaptation – Structure is not fixed at compile time and may vary across instances.
-However, morphogenetic systems intentionally restrict this flexibility. Dynamic growth is not used for adaptive computation or routing (e.g., Mixture‑of‑Experts), but is reserved strictly for structural evolution in response to commands from the Tamiyo policy controller.
+However, morphogenetic systems intentionally restrict this flexibility. Dynamic growth is not used for adaptive computation or routing (e.g., Mixture‑of‑Experts), but is reserved strictly for structural evolution in response to commands from the Tamiyo policy controller (see Controller Training: 08-controller-training-the-tamiyo-curriculum.md and controller interaction sequence in Figures: 09-tables-and-figures.md).
 This distinction matters operationally: morphogenetic systems must remain auditably stable in deployment. No runtime topological change is permitted after a seed has been fossilised. Dynamism is constrained to the formal, multi‑stage seed lifecycle during the training regime.
 ## 3.3 Continual Learning and Forgetting Constraints
 The seed mechanism exists in tension with both continual learning goals and catastrophic forgetting risks. Because the base model is frozen, the system avoids the most common form of interference—destructive global weight update—but still faces challenges:

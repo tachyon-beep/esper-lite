@@ -21,7 +21,7 @@ Common surgery patterns for germination include:
 • Residual Grafting: Inserting a residual block in parallel with an existing connection, initialised such that the new path returns zero or near‑zero output.
 • Intermediate Injection: Splitting a linear or convolutional layer mid‑flow to insert an additional transformation, typically with identity initialisation.
 • Layer Substitution: Replacing an existing module with a seed‑wrapped variant, where the original function is recoverable via parameter configuration.
-The Tamiyo controller acts as the high-level orchestrator for this process, while the seed module serves as the local execution mechanism, ensuring that insertion is minimal, reversible where possible, and auditable.
+The Tamiyo controller acts as the high‑level orchestrator for this process, while the seed module serves as the local execution mechanism, ensuring that insertion is minimal, reversible where possible, and auditable. For a visual comparison of techniques, see Figures (09-tables-and-figures.md).
 ## 4.2 Adapter Layers
 Adapter layers are lightweight, often bottlenecked modules inserted between existing layers to introduce trainable capacity with minimal overhead. Originally popularised for parameter‑efficient fine‑tuning in transformer models (Houlsby et al., 2019), adapters provide a natural grafting mechanism for morphogenetic growth. In our framework, an adapter can be considered a minimal form of a Germinal Module—a simple but effective blueprint that Karn can discover and Tamiyo can deploy for low‑cost capacity increases.
 Key characteristics relevant to seed-driven architectures:

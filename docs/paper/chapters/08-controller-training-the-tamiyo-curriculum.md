@@ -75,7 +75,7 @@ Example schematic (pseudocode):
                 'intensity': torch.sigmoid(self.intensity(h)),
             }
 
-Design alignment:
+Design alignment (see controller interaction sequence in Figures: 09-tables-and-figures.md):
 
 | Aspect                 | Esper‑Lite Design Reference                                                                 |
 |------------------------|---------------------------------------------------------------------------------------------|

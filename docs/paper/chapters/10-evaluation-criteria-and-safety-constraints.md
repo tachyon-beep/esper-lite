@@ -11,7 +11,7 @@ generated_by: scripts/split_paper.py
 # Evaluation Criteria and Safety Constraints
 The introduction of seed-based local evolution mechanisms within frozen neural architectures presents novel evaluation challenges. Because the global model remains static, traditional training metrics are insufficient: functional gain must be measured relative to localised intervention, and safety guarantees must be enforced to prevent unintended cross-model effects. This section outlines the formal criteria under which a morphogenetic architecture is to be assessed.
 ## 10.1 Evaluation Domains
-Seed-enabled systems must be evaluated across multiple axes to ensure correctness, stability, and effective governance by the policy controller (cf. Parisi et al., 2019 for continual learning concerns; Wortsman et al., 2024 for representational stability).
+Seed-enabled systems must be evaluated across multiple axes to ensure correctness, stability, and effective governance by the policy controller (cf. Parisi et al., 2019 for continual learning concerns; Wortsman et al., 2024 for representational stability). The overall evaluation pipeline is depicted in Figures (09-tables-and-figures.md).
 
 | Domain                  | Goal                                                    | Metrics / Methods                                                  |
 |-------------------------|---------------------------------------------------------|--------------------------------------------------------------------|

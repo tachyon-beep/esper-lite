@@ -149,6 +149,7 @@ This section defines a research‑oriented protocol for evaluating morphogenetic
 | CIFAR‑10    | Standard train/val/test                | Baseline image classification benchmark     |
 
 ### 7.4.3 Measurement Windows
+The overall evaluation flow is illustrated in the evaluation pipeline figure (see Figures: 09-tables-and-figures.md).
 Unless stated otherwise, metrics are computed over a steady‑state window after convergence (e.g., last N validation epochs) and reported with mean ± 95% confidence intervals over R independent trials.
 
 ## 7.5 Metrics & Reporting

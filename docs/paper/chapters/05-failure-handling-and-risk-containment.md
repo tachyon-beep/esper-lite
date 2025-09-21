@@ -20,7 +20,7 @@ Common failure modes and their descriptions:
 | Training Collapse      | Local optimiser fails to converge; exploding gradients or NaN during the TRAINING phase.     |
 | Destabilising Emergence| New module degrades pre-existing competencies; detected in the PROBATIONARY phase.           |
 
-Validation checks mapped to lifecycle states:
+Validation checks mapped to lifecycle states (see lifecycle diagram in Figures: 09-tables-and-figures.md):
 
 | Phase  | Lifecycle State | Primary Checks                                                                                           | Outcome on Failure |
 |--------|------------------|---------------------------------------------------------------------------------------------------------|--------------------|
