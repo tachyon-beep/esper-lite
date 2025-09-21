@@ -7,6 +7,7 @@ Documents in this folder:
 - `traceability-map.md` — mapping of design assertions to code/tests
 - `implementation-roadmap.md` — plan to close gaps (Phase‑1 only)
 - `pytorch-2.8-upgrades.md` — 2.8 review (no changes needed in Karn; compile stays in Tezzeret)
+- `parameter-bounds-audit.md` — summary of allowed_parameters coverage and guidance
 
 Design sources:
 - `docs/design/detailed_design/05-karn-unified-design.md`
