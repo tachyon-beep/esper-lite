@@ -109,6 +109,9 @@ class EsperSettings(BaseSettings):
     tolaria_emergency_l4_failed_epochs_threshold: int = Field(
         alias="TOLARIA_EMERGENCY_L4_FAILED_EPOCHS", default=3
     )
+    tolaria_rollback_signal_name: str | None = Field(
+        alias="TOLARIA_ROLLBACK_SIGNAL_NAME", default=None
+    )
 
     # Multi-seed aggregation
     tolaria_aggregation_scheme: str = Field(

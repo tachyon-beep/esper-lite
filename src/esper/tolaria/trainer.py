@@ -28,7 +28,7 @@ from esper.leyline import leyline_pb2
 from esper.oona.messaging import CircuitBreaker, BreakerSnapshot
 from .lr_controller import build_controller, LRController
 from .optimizer_manager import OptimizerManager
-from .rollback import FastRollbackCache, attempt_two_tier_rollback
+from .rollback import FastRollbackCache, attempt_two_tier_rollback, DeadlineSignal, SharedDeadlineSignal
 from .profiler import maybe_profile
 from .emergency import EmergencyController, Level as EmergencyLevel
 from .aggregation import grads_to_flat, flat_to_grads, combine_flat_grads
@@ -254,6 +254,7 @@ class TolariaTrainer:
         # Profiler telemetry
         self._metrics["tolaria.profiler.enabled"] = 1.0 if getattr(self._settings, "tolaria_profiler_enabled", False) else 0.0
         self._metrics["tolaria.profiler.traces_emitted_total"] = 0.0
+        self._rollback_signal: DeadlineSignal | None = None
 
         # Optional controllers (feature-flagged via settings)
         self._lr_controller: LRController | None = build_controller(
@@ -288,6 +289,15 @@ class TolariaTrainer:
             self._metrics["tolaria.rollback.fast_misses_total"] = 0.0
             self._metrics["tolaria.rollback.restore_latency_ms"] = 0.0
             self._metrics["tolaria.rollback.snapshots_total"] = 0.0
+            # Initialize a rollback deadline signal
+            name = getattr(self._settings, "tolaria_rollback_signal_name", None)
+            if name:
+                try:
+                    self._rollback_signal = SharedDeadlineSignal.create(name)
+                except Exception:
+                    self._rollback_signal = DeadlineSignal()
+            else:
+                self._rollback_signal = DeadlineSignal()
 
         # Aggregation knobs
         self._agg_mode = (self._settings.tolaria_aggregation_mode or "seed").lower()
@@ -468,6 +478,7 @@ class TolariaTrainer:
                             model=self._model,
                             optimizer=self._optimizer,
                             full_restore_cb=self.rollback_to_last_checkpoint,
+                            signal=self._rollback_signal,
                         )
                     self._metrics["tolaria.rollback.restore_latency_ms"] = rr.latency_ms
                     if rr.used_fast and rr.hit:
@@ -1520,6 +1531,17 @@ class TolariaTrainer:
         back to the internal queue that `publish_history` flushes.
         """
         self._emergency_publisher = publisher
+
+    def get_rollback_signal(self) -> DeadlineSignal | None:
+        """Return the local rollback deadline signal (prototype slice 1)."""
+        return self._rollback_signal
+
+    def set_shared_rollback_signal(self, name: str) -> None:
+        """Force the rollback signal to a shared-memory backed signal (tests/ops)."""
+        try:
+            self._rollback_signal = SharedDeadlineSignal.create(name)
+        except Exception:
+            self._rollback_signal = DeadlineSignal()
 
     # ----------------------------
     # Checkpoint & Rollback (WAL)

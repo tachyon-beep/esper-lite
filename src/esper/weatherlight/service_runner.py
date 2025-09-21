@@ -24,6 +24,7 @@ from esper.core import EsperSettings, TelemetryEvent, TelemetryMetric, build_tel
 from esper.kasmina import KasminaPrefetchCoordinator, KasminaSeedManager
 from esper.leyline import leyline_pb2
 from esper.oona import OonaClient, StreamConfig
+from esper.tolaria.rollback import SharedDeadlineSignal
 from esper.security.signing import DEFAULT_SECRET_ENV
 from esper.tamiyo import TamiyoService
 from esper.urza import UrzaLibrary, UrzaRuntime
@@ -75,6 +76,9 @@ class WeatherlightService:
         self._tamiyo_service: TamiyoService | None = None
         self._tezzeret_metrics_provider: Callable[[], dict[str, float]] | None = None
         self._tezzeret_telemetry_provider: Callable[[], leyline_pb2.TelemetryPacket | None] | None = None
+        self._rollback_signal_name: str | None = self._settings.tolaria_rollback_signal_name
+        self._rollback_signal: SharedDeadlineSignal | None = None
+        self._rollback_monitor_task: asyncio.Task | None = None
 
     async def start(self) -> None:
         """Initialise subsystems and spawn background workers (Slice 1 & 2)."""
@@ -119,6 +123,10 @@ class WeatherlightService:
             self._kasmina_telemetry_loop(),
             name="weatherlight.kasmina_telemetry",
         )
+        # Rollback signal monitor (slice 2)
+        if self._rollback_signal_name:
+            # Always start the monitor; it will attempt to attach when available
+            self._rollback_monitor_task = asyncio.create_task(self._rollback_signal_loop(), name="weatherlight.rollback_monitor")
 
     def initiate_shutdown(self) -> None:
         """Trigger graceful shutdown (idempotent)."""
@@ -160,6 +168,36 @@ class WeatherlightService:
 
         self.set_tezzeret_metrics_provider(forge.metrics_snapshot)
         self.set_tezzeret_telemetry_provider(forge.build_telemetry_packet)
+
+    async def _rollback_signal_loop(self) -> None:
+        """Monitor a shared rollback signal and publish emergency telemetry when triggered."""
+        assert self._oona is not None
+        while not self._shutdown_requested.is_set():
+            try:
+                # Lazy attach if signal not yet available
+                if self._rollback_signal is None and self._rollback_signal_name:
+                    try:
+                        self._rollback_signal = SharedDeadlineSignal.attach(self._rollback_signal_name)
+                    except Exception:
+                        await asyncio.sleep(0.1)
+                        continue
+                if self._rollback_signal.is_set():
+                    pkt = build_telemetry_packet(
+                        packet_id=f"weatherlight-rollback-signal",
+                        source="weatherlight",
+                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
+                        metrics=[],
+                        events=[TelemetryEvent(description="rollback_deadline_triggered", level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL, attributes={})],
+                        health_status=leyline_pb2.HealthStatus.HEALTH_STATUS_UNHEALTHY,
+                        health_summary="rollback_deadline_triggered",
+                        health_indicators={"priority": "MESSAGE_PRIORITY_HIGH"},
+                    )
+                    await self._oona.publish_telemetry(pkt, priority=leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH)
+                    # Clear to avoid repeated floods; rely on trainer to set on each deadline
+                    self._rollback_signal.clear()
+            except Exception:
+                pass
+            await asyncio.sleep(0.1)
 
     async def _build_oona_client(self) -> OonaClient:
         hostname = socket.gethostname().replace(" ", "-")

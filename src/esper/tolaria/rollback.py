@@ -98,6 +98,65 @@ class DeadlineSignal:
     def is_set(self) -> bool:
         return self._ev.is_set()
 
+    def clear(self) -> None:
+        self._ev.clear()
+
+
+class SharedDeadlineSignal:
+    """Cross-process deadline signal using shared memory (1-byte flag).
+
+    Prototype: provides best-effort cross-process coordination without external
+    brokers. Uses Python's `multiprocessing.shared_memory` when available.
+    """
+
+    def __init__(self, name: str, create: bool = True) -> None:
+        try:
+            from multiprocessing import shared_memory  # type: ignore
+        except Exception as exc:  # pragma: no cover - platform dependent
+            raise RuntimeError("shared_memory unavailable") from exc
+        self._name = name
+        self._created = create
+        if create:
+            try:
+                self._shm = shared_memory.SharedMemory(name=name, create=True, size=1)
+            except FileExistsError:
+                self._shm = shared_memory.SharedMemory(name=name, create=False)
+        else:
+            self._shm = shared_memory.SharedMemory(name=name, create=False)
+        # Zero-initialize if created
+        if create:
+            self.clear()
+
+    @classmethod
+    def create(cls, name: str) -> "SharedDeadlineSignal":
+        return cls(name, create=True)
+
+    @classmethod
+    def attach(cls, name: str) -> "SharedDeadlineSignal":
+        return cls(name, create=False)
+
+    def trigger(self) -> None:
+        self._shm.buf[0] = 1  # type: ignore[attr-defined]
+
+    def clear(self) -> None:
+        self._shm.buf[0] = 0  # type: ignore[attr-defined]
+
+    def is_set(self) -> bool:
+        return int(self._shm.buf[0]) == 1  # type: ignore[attr-defined]
+
+    def close(self) -> None:
+        try:
+            self._shm.close()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+    def unlink(self) -> None:
+        if self._created:
+            try:
+                self._shm.unlink()  # type: ignore[attr-defined]
+            except Exception:
+                pass
+
 
 @dataclass(slots=True)
 class RollbackResult:
@@ -114,6 +173,7 @@ def attempt_two_tier_rollback(
     model,  # type: ignore[no-untyped-def]
     optimizer,  # type: ignore[no-untyped-def]
     full_restore_cb,  # type: ignore[no-untyped-def]
+    signal: DeadlineSignal | None = None,
 ) -> RollbackResult:
     start = perf_counter()
     if cache is not None:
@@ -132,6 +192,11 @@ def attempt_two_tier_rollback(
             fut.cancel()
         except Exception:
             pass
+        if signal is not None:
+            try:
+                signal.trigger()
+            except Exception:
+                pass
         return RollbackResult(False, (perf_counter() - start) * 1000.0, False)
     return RollbackResult(False, (perf_counter() - start) * 1000.0, hit)
 
