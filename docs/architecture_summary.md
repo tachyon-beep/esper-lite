@@ -28,7 +28,6 @@ Esper‑Lite orchestrates adaptive training and runtime kernel grafting for ML m
 
 Core contracts: Leyline protobufs for SystemState, TelemetryPacket, AdaptationCommand, FieldReport, Kernel* messages, etc. (see `src/esper/leyline/_generated/leyline_pb2.py`).
 
-
 ## Design Principles
 
 - Contracts First: Leyline enums/messages are the source of truth; no shadow enums.
@@ -36,7 +35,6 @@ Core contracts: Leyline protobufs for SystemState, TelemetryPacket, AdaptationCo
 - Observability by Default: All subsystems emit structured telemetry; important events are explicit.
 - Durability Where It Matters: WAL and checkpoints for recovery (Tolaria, Tezzeret, Urza, Tamiyo reports).
 - Extensibility: Protocols and interfaces keep subsystems loosely coupled.
-
 
 ## Data Contracts (Leyline)
 
@@ -52,7 +50,6 @@ Key messages used across the system (not exhaustive):
 
 Telemetry helpers live in `src/esper/core/telemetry.py` and are used project‑wide to ensure consistent packet structure.
 
-
 ## Observability Model
 
 - Standardized telemetry via `build_telemetry_packet` with metrics and events.
@@ -60,7 +57,6 @@ Telemetry helpers live in `src/esper/core/telemetry.py` and are used project‑w
 - Nissa ingests telemetry/state/field reports and exposes Prometheus metrics and Elasticsearch documents.
 - Default alert rules cover: training latency, Kasmina isolation violations, Oona queue depth, Tezzeret retries.
 - SLOs are driven by `slo.*` metrics (objective/actual) and tracked as rolling burn rate.
-
 
 ## Subsystems
 
@@ -76,7 +72,6 @@ Telemetry helpers live in `src/esper/core/telemetry.py` and are used project‑w
   - Kasmina via `apply_command(AdaptationCommand)` and opt‑in seed state export + alpha advancement during BLENDING.
 - Telemetry:
   - `tolaria.training.loss|accuracy|latency_ms|seeds.active|epoch_hook.latency_ms` and events for high latency/zero samples.
-
 
 ### Tamiyo (Strategic Controller)
 
@@ -94,7 +89,6 @@ Telemetry helpers live in `src/esper/core/telemetry.py` and are used project‑w
 - Telemetry:
   - `tamiyo.validation_loss|loss_delta|inference.latency_ms|conservative_mode|blueprint.risk`, events for pause triggers/blueprint quarantine.
 
-
 ### Kasmina (Execution Controller)
 
 - Files: many under `src/esper/kasmina/`: `seed_manager.py`, `gates.py`, `lifecycle.py`, `blending.py`, `isolation.py`, `memory.py`, `kernel_cache.py`, `prefetch.py`, `security.py`, `safety.py`, `registry.py`.
@@ -110,14 +104,12 @@ Telemetry helpers live in `src/esper/core/telemetry.py` and are used project‑w
   - Registry: tracks parameter ownership (seeds vs teacher) to validate updates.
 - Telemetry: rich events for gates, breakers, prefetch, isolation; metrics include last fetch latency, cache stats, isolation violations, priority, etc.
 
-
 ### Karn (Blueprint Catalog)
 
 - Files: `src/esper/karn/catalog.py`, `src/esper/karn/templates.py`, `src/esper/karn/__init__.py`
 - `KarnCatalog`: in‑memory registry of `BlueprintDescriptor` with parameter bound validation, tier filtering/selection, and circuit breaker around selection.
 - Templates: `DEFAULT_BLUEPRINTS` (SAFE/EXPERIMENTAL/HIGH_RISK; BP001–BP050) including `quarantine_only` and `approval_required` flags.
 - Telemetry: emits selection/breaker events (buffered); metrics cover selection counts per tier and selection latency.
-
 
 ### Tezzeret (Compilation Engine)
 
@@ -129,7 +121,6 @@ Telemetry helpers live in `src/esper/core/telemetry.py` and are used project‑w
 - `TezzeretForge`:
   - Discovers jobs (or via WAL), skips if already in Urza, compiles with timeout + thread isolation, tracks failures and opens breaker/backoff, can switch to conservative mode.
   - Builds telemetry packets with compiler/forge metrics and buffered events.
-
 
 ### Urza (Artifact Library & Runtime)
 
@@ -144,7 +135,6 @@ Telemetry helpers live in `src/esper/core/telemetry.py` and are used project‑w
 - Pipeline:
   - `BlueprintPipeline` composes Karn+Tezzeret+Urza; validates, compiles, saves, optionally notifies via Oona; returns metadata+artifact path.
 
-
 ### Oona (Messaging Fabric)
 
 - Files: `src/esper/oona/messaging.py`, `src/esper/oona/__init__.py`
@@ -154,14 +144,12 @@ Telemetry helpers live in `src/esper/core/telemetry.py` and are used project‑w
   - Safety: HMAC signing/verification (optional), retries with dead‑letter, circuit breakers for publish/consume, freshness/replay guards for kernel messages, TTL housekeeping per stream, backpressure drop threshold, emergency stream routing when backlog crosses thresholds.
   - Metrics snapshot and telemetry emission helper.
 
-
 ### Simic (Offline Trainer)
 
 - Files: `src/esper/simic/replay.py`, `src/esper/simic/trainer.py`, `src/esper/simic/validation.py`, `src/esper/simic/registry.py`, `src/esper/simic/__init__.py`
 - Replay buffer converts `FieldReport` → `SimicExperience` (numeric features, metric sequence, categorical indices), with TTL and capacity pruning; can ingest from Oona.
 - PPO‑style trainer with optional LoRA and metric attention; emits `PolicyUpdate`s after `PolicyValidator` passes; telemetry for losses/rewards/iterations and validation flag.
 - Embedding registries persist seed/blueprint indices for stability.
-
 
 ### Nissa (Observability)
 
@@ -170,14 +158,12 @@ Telemetry helpers live in `src/esper/core/telemetry.py` and are used project‑w
 - Alert engine + router with default rules; SLO tracker uses `slo.*` metrics to compute burn rate; `/metrics` and `/metrics/summary` endpoints expose Prometheus and SLO/alerts summary.
 - Service runner boots Oona group, drains telemetry/state/reports, and runs FastAPI+Uvicorn; uses an in‑memory Elasticsearch stub if ES is unavailable.
 
-
 ### Weatherlight (Supervisor)
 
 - Files: `src/esper/weatherlight/service_runner.py`, `__init__.py`
 - Composes Oona, Urza library/runtime, Urza prefetch worker, Kasmina seed manager + prefetch coordinator, and Tamiyo service.
 - Spawns background workers with restart/backoff; periodic telemetry aggregation; housekeeping for Oona and Urza; forwards Kasmina telemetry to Oona.
 - Requires `ESPER_LEYLINE_SECRET` for HMAC signing (validated at start).
-
 
 ## End‑to‑End Flows
 
@@ -216,7 +202,6 @@ Telemetry helpers live in `src/esper/core/telemetry.py` and are used project‑w
 3. Documents are indexed to Elasticsearch (or in‑mem stub).
 4. `/metrics` and `/metrics/summary` provide operational endpoints.
 
-
 ## Safety & Security
 
 - Signing & Freshness: HMAC signatures on Oona envelopes (`ESPER_LEYLINE_SECRET`), nonce replay prevention (Kasmina `NonceLedger`), timestamp freshness windows.
@@ -226,13 +211,11 @@ Telemetry helpers live in `src/esper/core/telemetry.py` and are used project‑w
 - Latency Budgets: Kernel fetch budgets enforced; breaker opens on exceed and fallbacks are applied.
 - Durability: WAL/checkpoints for Tolaria; Tezzeret job WAL; Urza WAL for saves; Tamiyo field report WAL; defensive JSON load paths.
 
-
 ## Storage & Persistence
 
 - Tolaria: `var/tolaria/checkpoints/ckpt-epoch-*.pt` + `var/tolaria/wal.json`.
 - Tamiyo: `var/tamiyo/field_reports.log` append‑only WAL with periodic retention rewrite.
 - Urza: `var/urza/catalog.db` (SQLite) + artifact files in `var/urza/artifacts/`.
-
 
 ## Configuration
 
@@ -246,7 +229,6 @@ Telemetry helpers live in `src/esper/core/telemetry.py` and are used project‑w
   - Logging: `ESP_LOG_LEVEL`.
 - Secrets: `ESPER_LEYLINE_SECRET` required by Weatherlight/Oona/Kasmina command verification.
 
-
 ## Telemetry Cheat Sheet (Selected)
 
 - Tolaria: `tolaria.training.{loss,accuracy,latency_ms}`, `tolaria.seeds.active`, `tolaria.epoch_hook.latency_ms`.
@@ -258,7 +240,6 @@ Telemetry helpers live in `src/esper/core/telemetry.py` and are used project‑w
 - Oona: queue depths per stream, breaker states, conservative mode, retry/dead‑letter counts, kernel staleness/replay drops.
 - Simic: `simic.training.{loss,reward,iterations}`, `simic.value.loss`, `simic.policy.{loss,entropy}`, optional validation pass.
 - Weatherlight: worker running/backoff/restarts, uptime, last error timestamp.
-
 
 ## Running Locally (Pointers)
 
@@ -274,7 +255,6 @@ Telemetry helpers live in `src/esper/core/telemetry.py` and are used project‑w
 
 - Simic Trainer
   - Build `FieldReportReplayBuffer`, ingest from Oona if desired, construct `SimicTrainer`, call `run_training()`, then emit policy updates.
-
 
 ## Dev Scripts & Utilities
 
@@ -322,7 +302,6 @@ Documentation‑adjacent (not core to runtime):
 - Prefer pytest fixtures for shared infra fakes (e.g., Redis Streams, Prometheus/ES stubs).
 - Target ≥80% coverage; add property tests for Leyline serialization where feasible.
 
-
 ## Quick File Index (by subsystem)
 
 - Tolaria: `src/esper/tolaria/trainer.py`
@@ -335,7 +314,6 @@ Documentation‑adjacent (not core to runtime):
 - Simic: `src/esper/simic/{replay.py,trainer.py,validation.py,registry.py}`
 - Nissa: `src/esper/nissa/{observability.py,alerts.py,slo.py,server.py,service_runner.py}`
 - Weatherlight: `src/esper/weatherlight/service_runner.py`
-
 
 ## Gotchas & Best Practices
 
