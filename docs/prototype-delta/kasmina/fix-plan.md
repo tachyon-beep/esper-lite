@@ -4,15 +4,15 @@ Objective: achieve parity with the design’s 11‑state lifecycle, guard gates 
 
 ## Current Prototype State (assessment)
 
-- Lifecycle + Gates: Missing (reduced stage set; no G0–G5; no embargo/reset/terminated). Requires Leyline schema update first.
-- Safety Stack: Missing (no circuit breakers, monotonic timers, or pause/identity semantics).
-- Gradient Isolation: Missing (no backward hooks or blending; only a one‑time parameter‑ID overlap sanity check).
-- Parameter Registry & Teacher Protections: Missing.
-- Memory Governance: Missing (no TTL caches/GC; no KD budgeting).
-- Security Envelope: Missing in Kasmina (Oona bus supports optional HMAC; commands are not verified at Kasmina).
-- Telemetry Pipeline: Partial (basic metrics/events/health; no emergency bypass; no gate/rollback events).
-- Rollback Readiness: Missing.
-- Knowledge Distillation: Missing in Kasmina.
+- Lifecycle + Gates: Implemented (Leyline 11‑state, G0–G5 gates; cull→embargo→reset path).
+- Safety Stack: Partially Implemented (breaker + monotonic timers; pause/identity semantics pending).
+- Gradient Isolation: Partially Implemented (backward hooks and `.detach()` blending; violations gate G1; no dedicated breaker trip solely for isolation yet).
+- Parameter Registry & Teacher Protections: Implemented (per‑seed ownership; teacher registration; update validation).
+- Memory Governance: Partially Implemented (TTL caches and cleanup; epoch GC/KD budgeting deferred).
+- Security Envelope: Implemented (HMAC verification, nonce ledger, freshness window per command).
+- Telemetry Pipeline: Partially Implemented (seed_stage, gate_event, health, priority; emergency bypass transport deferred).
+- Rollback Readiness: Partially Implemented (rollback payloads recorded; SLA timing deferred).
+- Knowledge Distillation: Partially Implemented (teacher registration only; KD losses/budgets deferred).
 
 Non‑goals:
 - Do not introduce any internal lifecycle overlays or enum mappings inside Kasmina (or any subsystem).
@@ -53,7 +53,7 @@ Sequencing & Milestones
   - Transition table coverage for all 11 states.
   - Gate pass/fail paths and embargo timing with monotonic clock fakes.
 
-Acceptance: All 11 Leyline stages are present and used directly across Kasmina; G0–G5 checks gate transitions; embargo/reset semantics observable. No alternative lifecycle representation exists in code.
+Acceptance: All 11 Leyline stages are present and used directly across Kasmina; G0–G5 checks gate transitions; embargo/reset semantics observable. (This acceptance is already met in the prototype.)
 
 3) Safety Stack (Circuit Breakers + Monotonic Timers)
 - New module: `kasmina/safety.py`:
