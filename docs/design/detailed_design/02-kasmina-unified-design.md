@@ -8,6 +8,39 @@
 
 ---
 
+## Lifecycle Canonicalisation (Esper‑Lite Prototype)
+
+Authoritative notice (prototype scope): The lifecycle and gates listed below are the single source of truth for Kasmina in Esper‑Lite. These names and numbers are defined in the Leyline schema and are used directly by code and tests. Any differing lifecycle descriptions elsewhere in this document or in older materials are superseded by this section.
+
+- Lifecycle states (Leyline `SeedLifecycleStage`):
+  - `SEED_STAGE_DORMANT`
+  - `SEED_STAGE_GERMINATED`
+  - `SEED_STAGE_TRAINING`
+  - `SEED_STAGE_BLENDING`
+  - `SEED_STAGE_SHADOWING`
+  - `SEED_STAGE_PROBATIONARY`
+  - `SEED_STAGE_FOSSILIZED`
+  - `SEED_STAGE_CULLED`
+  - `SEED_STAGE_EMBARGOED`
+  - `SEED_STAGE_RESETTING`
+  - `SEED_STAGE_TERMINATED`
+  - (Bootstrap: `SEED_STAGE_UNKNOWN` is used internally at initialisation only.)
+
+- Lifecycle gates (Leyline `SeedLifecycleGate`):
+  - `SEED_GATE_G0_SANITY`
+  - `SEED_GATE_G1_GRADIENT_HEALTH`
+  - `SEED_GATE_G2_STABILITY`
+  - `SEED_GATE_G3_INTERFACE`
+  - `SEED_GATE_G4_SYSTEM_IMPACT`
+  - `SEED_GATE_G5_RESET`
+
+Provenance and usage:
+- Schema: `src/esper/leyline/_generated/leyline_pb2.py` (generated from Leyline `.proto`).
+- Implementation: `src/esper/kasmina/lifecycle.py` (transitions), `src/esper/kasmina/gates.py` (gate evaluation).
+- Tests: `tests/kasmina/test_lifecycle.py` (ordering, cull/embargo/reset), and related unit tests.
+
+This canonical section is binding for Esper‑Lite. Future harmonisation work will reflow the remainder of this document to match these state and gate names in full.
+
 ## Executive Summary
 
 This document presents the unified design for Kasmina, the execution layer of the Esper platform. Kasmina serves as a streamlined, high-performance **Pure Executor** - its sole responsibility is to execute adaptations by loading and running pre-compiled, pre-validated kernel artifacts provided by Tamiyo. It performs no compilation, enabling zero-disruption training through complete separation of execution from the expensive compilation and validation pipeline (Tezzeret/Urabrask).
