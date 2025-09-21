@@ -28,6 +28,12 @@ class UrzaRecord:
     guard_digest: str | None = None
     prewarm_samples: tuple[float, ...] = ()
     artifact_mtime: float | None = None
+    compile_ms: float | None = None
+    prewarm_ms: float | None = None
+    compile_strategy: str | None = None
+    eager_fallback: bool = False
+    guard_spec: tuple[dict[str, Any], ...] = ()
+    inductor_cache_dir: str | None = None
 
 
 class UrzaLibrary:
@@ -80,14 +86,20 @@ class UrzaLibrary:
         artifact_path: Path,
         *,
         catalog_update: leyline_pb2.KernelCatalogUpdate | None = None,
+        extras: dict[str, Any] | None = None,
     ) -> None:
         destination = self._root / artifact_path.name
         destination.parent.mkdir(parents=True, exist_ok=True)
         if artifact_path != destination:
             destination.write_bytes(artifact_path.read_bytes())
-        extras = self._build_extras(metadata.blueprint_id, destination, catalog_update)
-        self._persist_wal(metadata, destination, extras)
-        self._upsert(metadata, destination, extras)
+        extras_payload = self._build_extras(
+            metadata.blueprint_id,
+            destination,
+            catalog_update,
+            extra_metadata=extras,
+        )
+        self._persist_wal(metadata, destination, extras_payload)
+        self._upsert(metadata, destination, extras_payload)
         self._clear_wal()
 
     def get(self, blueprint_id: str) -> UrzaRecord | None:
@@ -177,6 +189,12 @@ class UrzaLibrary:
             guard_digest=extras.get("guard_digest"),
             prewarm_samples=samples,
             artifact_mtime=extras.get("artifact_mtime"),
+            compile_ms=float(extras.get("compile_ms", 0.0)) if extras.get("compile_ms") is not None else None,
+            prewarm_ms=float(extras.get("prewarm_ms", 0.0)) if extras.get("prewarm_ms") is not None else None,
+            compile_strategy=extras.get("compile_strategy"),
+            eager_fallback=bool(extras.get("eager_fallback", False)),
+            guard_spec=tuple(extras.get("guard_spec", [])),
+            inductor_cache_dir=extras.get("inductor_cache_dir"),
         )
         return record
 
@@ -185,6 +203,8 @@ class UrzaLibrary:
         blueprint_id: str,
         destination: Path,
         catalog_update: leyline_pb2.KernelCatalogUpdate | None,
+        *,
+        extra_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         guard_digest: str | None = None
         samples = list(self._prewarm_samples.get(blueprint_id, []))
@@ -209,6 +229,11 @@ class UrzaLibrary:
             "prewarm_samples": samples,
             "artifact_mtime": artifact_mtime,
         }
+        if catalog_update is not None:
+            extras["compile_ms"] = float(catalog_update.compile_ms)
+            extras["prewarm_ms"] = float(catalog_update.prewarm_ms)
+        if extra_metadata:
+            extras.update(extra_metadata)
         return extras
 
     def _current_mtime(self, record: UrzaRecord) -> float | None:
@@ -297,6 +322,12 @@ class UrzaLibrary:
             guard_digest=extras.get("guard_digest"),
             prewarm_samples=tuple(float(x) for x in extras.get("prewarm_samples", [])),
             artifact_mtime=extras.get("artifact_mtime"),
+            compile_ms=float(extras.get("compile_ms", 0.0)) if extras.get("compile_ms") is not None else None,
+            prewarm_ms=float(extras.get("prewarm_ms", 0.0)) if extras.get("prewarm_ms") is not None else None,
+            compile_strategy=extras.get("compile_strategy"),
+            eager_fallback=bool(extras.get("eager_fallback", False)),
+            guard_spec=tuple(extras.get("guard_spec", [])),
+            inductor_cache_dir=extras.get("inductor_cache_dir"),
         )
         self._touch_cache(metadata.blueprint_id, record)
         with self._engine.begin() as conn:
@@ -342,4 +373,10 @@ def _clone_record(record: UrzaRecord) -> UrzaRecord:
         guard_digest=record.guard_digest,
         prewarm_samples=tuple(record.prewarm_samples),
         artifact_mtime=record.artifact_mtime,
+        compile_ms=record.compile_ms,
+        prewarm_ms=record.prewarm_ms,
+        compile_strategy=record.compile_strategy,
+        eager_fallback=record.eager_fallback,
+        guard_spec=tuple(record.guard_spec),
+        inductor_cache_dir=record.inductor_cache_dir,
     )

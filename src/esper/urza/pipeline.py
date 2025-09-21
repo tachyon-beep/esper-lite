@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Awaitable, Callable
 
 from esper.karn import BlueprintDescriptor, KarnCatalog
 from esper.tezzeret import TezzeretCompiler
@@ -46,7 +47,24 @@ class BlueprintPipeline:
         metadata = self._catalog.validate_request(request.blueprint_id, request.parameters)
         artifact_path = self._compiler.compile(metadata, parameters=request.parameters)
         update = self._compiler.latest_catalog_update()
-        self._library.save(metadata, artifact_path, catalog_update=update)
+        result = self._compiler.latest_result()
+        extras = None
+        if result is not None:
+            extras = {
+                "guard_spec": result.guard_spec,
+                "guard_digest": result.guard_digest,
+                "compile_ms": result.compile_ms,
+                "prewarm_ms": result.prewarm_ms,
+                "compile_strategy": result.compile_strategy,
+                "eager_fallback": result.eager_fallback,
+                "inductor_cache_dir": result.inductor_cache_dir,
+            }
+        self._library.save(
+            metadata,
+            artifact_path,
+            catalog_update=update,
+            extras=extras,
+        )
         if update and self._catalog_notifier is not None:
             await self._catalog_notifier(update)
         return BlueprintResponse(

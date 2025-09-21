@@ -35,6 +35,10 @@ def test_forge_compiles_catalog(tmp_path) -> None:
     forge.run()
     assert len(library.list_all()) == 5
     assert not wal_path.exists()
+    record = library.get(next(iter(catalog.all())).blueprint_id)
+    assert record is not None
+    assert record.compile_ms is not None
+    assert record.guard_spec
 
 
 def test_forge_skips_existing(tmp_path) -> None:
@@ -100,3 +104,6 @@ def test_forge_retries_failed_job(tmp_path) -> None:
     assert not wal_path.exists()
     compiler_wal = compiler._wal_path  # type: ignore[attr-defined]
     assert not compiler_wal.exists()
+    record = library.get(next(iter(catalog.all())).blueprint_id)
+    assert record is not None
+    assert record.compile_ms is not None

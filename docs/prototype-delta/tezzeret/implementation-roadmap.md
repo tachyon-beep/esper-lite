@@ -4,7 +4,7 @@ Goal: evolve the forge to match the design (Leyline‑first, no tech debt).
 
 | Order | Theme | Key Tasks | Outcome |
 | --- | --- | --- | --- |
-| 1 | torch.compile pipeline | Implement Standard pipeline using torch.compile; export guards; pre‑warm representative shapes | Real compilation artefacts + guards, no runtime compile in Kasmina |
+| 1 | torch.compile pipeline | Implement Standard pipeline using torch.compile; export guards; pre‑warm representative shapes | ✅ Real compilation artefacts + guards, no runtime compile in Kasmina |
 | 2 | Strategies | Add Fast (reduced flags) and Emergency (CPU‑only) strategies; optional Aggressive flag | Flexible performance envelope |
 | 3 | Circuit breakers | Breakers around timeouts, GPU utilisation, memory; conservative mode throttles concurrency and strategy | Safe degradation and recovery |
 | 4 | WAL durability | CRC headers and atomic O_DSYNC writes; resume incomplete jobs; unify forge+compiler WAL format | Robust crash recovery |

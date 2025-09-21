@@ -64,7 +64,24 @@ class TezzeretForge:
 
             artifact_path = self._compiler.compile(metadata, parameters)
             update = self._compiler.latest_catalog_update()
-            self._library.save(metadata, artifact_path, catalog_update=update)
+            result = self._compiler.latest_result()
+            extras = None
+            if result is not None:
+                extras = {
+                    "guard_spec": result.guard_spec,
+                    "guard_digest": result.guard_digest,
+                    "compile_ms": result.compile_ms,
+                    "prewarm_ms": result.prewarm_ms,
+                    "compile_strategy": result.compile_strategy,
+                    "eager_fallback": result.eager_fallback,
+                    "inductor_cache_dir": result.inductor_cache_dir,
+                }
+            self._library.save(
+                metadata,
+                artifact_path,
+                catalog_update=update,
+                extras=extras,
+            )
             pending.remove(blueprint_id)
             self._persist_pending(pending)
 

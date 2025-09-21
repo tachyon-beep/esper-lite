@@ -35,6 +35,10 @@ class EsperSettings(BaseSettings):
         alias="KERNEL_FRESHNESS_WINDOW_MS", default=60_000
     )
     kernel_nonce_cache_size: int = Field(alias="KERNEL_NONCE_CACHE_SIZE", default=4096)
+    tezzeret_inductor_cache_dir: str | None = Field(
+        alias="TEZZERET_INDUCTOR_CACHE_DIR",
+        default=None,
+    )
 
     prometheus_pushgateway: str = Field(
         alias="PROMETHEUS_PUSHGATEWAY", default="http://localhost:9091"

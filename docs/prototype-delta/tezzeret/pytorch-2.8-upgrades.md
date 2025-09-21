@@ -6,27 +6,22 @@ Scope
 Mandatory changes
 
 1) Compile blueprints with `torch.compile`
-- What: For each blueprint, construct a representative module and compile it with `torch.compile` to eliminate first‑run latency in Kasmina.
+- Status: ✅ Implemented in `src/esper/tezzeret/compiler.py`.
 - How:
-  - In `src/esper/tezzeret/compiler.py` and/or `runner.py`:
-    - Build the module for the blueprint.
-    - Wrap with `compiled = torch.compile(module, dynamic=True)` (consider `mode='reduce-overhead'` for inference‑dominant kernels).
-    - Pre‑warm with one or more representative input shapes to populate caches.
-    - Persist the artifact (weights + exported graph and/or metadata needed for guard checks). Prefer `torch.export` to capture guards for shape validation, alongside state dict.
-    - Persist Inductor cache (set `TORCHINDUCTOR_CACHE_DIR`) to enable cross‑process reuse when feasible.
-  - On any compilation failure, store a fallback eager artifact and record the failure in metadata for Kasmina to surface via telemetry when used.
+  - Build representative modules per blueprint, invoke `torch.compile(..., dynamic=True)`, and execute a pre‑warm pass to hydrate caches.
+  - Persist the eager module plus metadata while priming Inductor cache (honouring `TEZZERET_INDUCTOR_CACHE_DIR`).
+  - Capture fallback when compilation fails and surface the strategy in artifact metadata.
 
 2) Attach shape/guard metadata to artifacts
-- What: Provide Kasmina with the information to verify input compatibility without recompiling.
-- How: Save guards from `torch.export` or a schema describing dynamic dims and constraints; store with the artifact in Urza.
+- Status: ✅ Guard specs (shape/dtype/stride) persisted via Urza extras; digest stored in `KernelCatalogUpdate`.
+- How: Guard spec derived from representative inputs accompanies each artifact and is available to Kasmina for verification.
 
 3) Validate numeric and latency budgets at compile time
-- What: Ensure compiled kernels meet basic inference/training budget expectations before publishing to Urza.
-- How: After pre‑warm, record p50/p95 latencies on a small set of shapes; write results into artifact metadata.
+- Status: ✅ Compile and pre‑warm timings are captured per artifact and stored in Urza extras (baseline percentiles forthcoming).
 
 4) Versioning and fallback routing
-- What: Version compiled artifacts per kernel+shape profile; include a flag signalling eager fallback when compiled path is unavailable at runtime.
-- How: Add version/flags to the Urza descriptor; Kasmina reads and logs metadata; if eager fallback is used, surface a WARNING event.
+- Status: Partially complete — eager fallback flag and strategy recorded; semantic versioning & signing remain TODO.
+- Next: Extend extras with semantic version identifiers and signatures once contract decided.
 
 Kasmina (for completeness)
 - Load the compiled artifact; verify shape guards; pre‑warm once (no compile calls).
@@ -36,4 +31,3 @@ Acceptance criteria
 - No `torch.compile` in Kasmina; all compilation occurs in Tezzeret.
 - Compiled artifacts published via Urza include guards and basic performance metadata.
 - First‑use latency in Kasmina is dominated by cache warm‑up, not compilation.
-

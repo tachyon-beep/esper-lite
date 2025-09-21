@@ -62,8 +62,13 @@ async def test_blueprint_pipeline_compiles_and_stores() -> None:
         artifact = torch.load(response.artifact_path)
         assert isinstance(artifact, nn.Module)
         assert artifact.blueprint_params["alpha"] == 0.5
+        sample = torch.randn(8, 32)
+        assert artifact(sample).shape == sample.shape
         stored = library.get("bp-1")
         assert stored is not None
+        assert stored.guard_digest
+        assert stored.compile_ms is not None
+        assert stored.guard_spec
 
 
 @pytest.mark.asyncio
@@ -102,3 +107,6 @@ async def test_blueprint_pipeline_notifies_catalog_update(tmp_path) -> None:
 
     assert received
     assert received[0].blueprint_id == "bp-notify"
+    record = library.get("bp-notify")
+    assert record is not None
+    assert record.compile_ms is not None

@@ -1,8 +1,8 @@
 # Tezzeret — Operations & Configuration (Prototype)
 
 Environment variables (recommended)
-- `TORCHINDUCTOR_CACHE_DIR`
-  - Path to a persistent directory for PyTorch Inductor’s compiled cache.
+- `TEZZERET_INDUCTOR_CACHE_DIR`
+  - Path to a persistent directory for PyTorch Inductor’s compiled cache (wired into `EsperSettings`).
   - Rationale: enables cross‑process reuse of compiled kernels; reduces first‑run latency.
   - Example: `/var/cache/tezzeret/inductor`
 - `CUDA_VISIBLE_DEVICES`
@@ -11,7 +11,7 @@ Environment variables (recommended)
   - Control CPU thread pool during compilation to stabilise timings on shared hosts.
 
 Notes
-- These are operational hints. The prototype does not yet read these via `EsperSettings`; the compiler should honour `TORCHINDUCTOR_CACHE_DIR` when the 2.8 pipeline is implemented.
+- Tezzeret now honours `TEZZERET_INDUCTOR_CACHE_DIR`; other variables remain operational hints.
 - Keep the cache on a fast local disk (NVMe). Clean periodically if not bounded by TTL.
 
 Telemetry (Oona → Nissa) — suggested metric names
@@ -35,4 +35,3 @@ Event examples (TelemetryEvent description)
 
 Routing
 - Send Tezzeret telemetry to Oona’s telemetry stream (normal priority). Breaker transitions and repeated job failures can be sent at HIGH priority if the platform’s policy requires.
-
