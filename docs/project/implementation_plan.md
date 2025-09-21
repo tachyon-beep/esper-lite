@@ -61,12 +61,14 @@ This plan translates the charter and capability matrix into concrete work packag
    - **Documentation:** Maintain subsystem READMEs, API docs, and sequence diagrams; update prototype report throughout milestones.
 
 ## Dependencies & Sequencing
+
 - Environment enablement must complete before slice 1 development starts.
 - Blueprint pipeline requires Karn templates prepared during slice 1 backlog (parallelizable by separate engineer).
 - Observability slice depends on telemetry definitions stabilised in slices 1–2.
 - Offline learning slice requires field reports emitted in slice 2 and telemetry plumbing from slice 3.
 
 ## Roles & Ownership (suggested)
+
 - **Control Loop Lead:** Own Tolaria/Kasmina/Tamiyo integration.
 - **Blueprint Lead:** Own Karn/Tezzeret/Urza stack and blueprint catalog.
 - **Infrastructure Lead:** Own Leyline, Oona, Nissa, and deployment tooling.
@@ -74,12 +76,14 @@ This plan translates the charter and capability matrix into concrete work packag
 - **QA/Tooling:** Cross-functional support for CI, tests, and runbooks.
 
 ## Open Decisions Affecting Implementation
+
 - Host model architecture selection (impacts Tolaria/Kasmina work).
 - Deployment footprint (docker-compose vs Kubernetes) which affects automation scripts.
 - Telemetry retention requirements (affects Nissa storage sizing).
 - Policy training hardware availability (GPU vs CPU) for Simic.
 
 ## Next Actions
+
 1. Pre-Implementation Enum Validation (Leyline)
    - Audit enum usage in code and docs vs `contracts/leyline/leyline.proto`.
    - Produce subsystem mapping tables (internal → Leyline) and attach to PR.

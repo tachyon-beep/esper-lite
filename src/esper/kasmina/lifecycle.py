@@ -27,7 +27,7 @@ class KasminaLifecycle:
     """State machine enforcing Leyline seed lifecycle stages."""
 
     def __init__(self) -> None:
-        self._stage: SeedStage = leyline_pb2.SEED_STAGE_UNKNOWN
+        self._stage: SeedStage = leyline_pb2.SEED_STAGE_DORMANT
 
     @property
     def state(self) -> SeedStage:
@@ -51,45 +51,45 @@ class KasminaLifecycle:
         s = stage if stage is not None else self._stage
         m: dict[SeedStage, tuple[SeedStage, ...]] = {
             leyline_pb2.SEED_STAGE_UNKNOWN: (
-                leyline_pb2.SEED_STAGE_GERMINATING,
-                leyline_pb2.SEED_STAGE_CANCELLED,
+                leyline_pb2.SEED_STAGE_DORMANT,
             ),
-            leyline_pb2.SEED_STAGE_GERMINATING: (
-                leyline_pb2.SEED_STAGE_GRAFTING,
-                leyline_pb2.SEED_STAGE_TRAINING,  # fast path
-                leyline_pb2.SEED_STAGE_CANCELLED,
+            leyline_pb2.SEED_STAGE_DORMANT: (
+                leyline_pb2.SEED_STAGE_GERMINATED,
+                leyline_pb2.SEED_STAGE_TERMINATED,
             ),
-            leyline_pb2.SEED_STAGE_GRAFTING: (
-                leyline_pb2.SEED_STAGE_STABILIZING,
-                leyline_pb2.SEED_STAGE_CANCELLED,
-            ),
-            leyline_pb2.SEED_STAGE_STABILIZING: (
+            leyline_pb2.SEED_STAGE_GERMINATED: (
                 leyline_pb2.SEED_STAGE_TRAINING,
-                leyline_pb2.SEED_STAGE_CANCELLED,
+                leyline_pb2.SEED_STAGE_CULLED,
             ),
             leyline_pb2.SEED_STAGE_TRAINING: (
-                leyline_pb2.SEED_STAGE_EVALUATING,
-                leyline_pb2.SEED_STAGE_FINE_TUNING,
-                leyline_pb2.SEED_STAGE_FOSSILIZED,
-                leyline_pb2.SEED_STAGE_CULLING,
+                leyline_pb2.SEED_STAGE_BLENDING,
+                leyline_pb2.SEED_STAGE_CULLED,
             ),
-            leyline_pb2.SEED_STAGE_EVALUATING: (
-                leyline_pb2.SEED_STAGE_FINE_TUNING,
-                leyline_pb2.SEED_STAGE_FOSSILIZED,
-                leyline_pb2.SEED_STAGE_CULLING,
+            leyline_pb2.SEED_STAGE_BLENDING: (
+                leyline_pb2.SEED_STAGE_SHADOWING,
+                leyline_pb2.SEED_STAGE_CULLED,
             ),
-            leyline_pb2.SEED_STAGE_FINE_TUNING: (
-                leyline_pb2.SEED_STAGE_EVALUATING,
+            leyline_pb2.SEED_STAGE_SHADOWING: (
+                leyline_pb2.SEED_STAGE_PROBATIONARY,
+                leyline_pb2.SEED_STAGE_CULLED,
+            ),
+            leyline_pb2.SEED_STAGE_PROBATIONARY: (
                 leyline_pb2.SEED_STAGE_FOSSILIZED,
-                leyline_pb2.SEED_STAGE_CULLING,
+                leyline_pb2.SEED_STAGE_CULLED,
             ),
             leyline_pb2.SEED_STAGE_FOSSILIZED: (
-                leyline_pb2.SEED_STAGE_CULLING,
+                leyline_pb2.SEED_STAGE_TERMINATED,
             ),
-            leyline_pb2.SEED_STAGE_CULLING: (
-                leyline_pb2.SEED_STAGE_CANCELLED,
+            leyline_pb2.SEED_STAGE_CULLED: (
+                leyline_pb2.SEED_STAGE_EMBARGOED,
             ),
-            leyline_pb2.SEED_STAGE_CANCELLED: (),
+            leyline_pb2.SEED_STAGE_EMBARGOED: (
+                leyline_pb2.SEED_STAGE_RESETTING,
+            ),
+            leyline_pb2.SEED_STAGE_RESETTING: (
+                leyline_pb2.SEED_STAGE_DORMANT,
+            ),
+            leyline_pb2.SEED_STAGE_TERMINATED: (),
         }
         return m.get(s, ())
 
@@ -98,4 +98,3 @@ class KasminaLifecycle:
 
 
 __all__ = ["KasminaLifecycle", "LifecycleTransition", "SeedStage"]
-

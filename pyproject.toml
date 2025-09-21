@@ -105,6 +105,9 @@ markers = [
   "integration: tests that require external infrastructure",
   "performance: performance-sensitive benchmarks",
 ]
+timeout = 120
+timeout_method = "signal"
+timeout_func_only = false
 
 [tool.coverage.run]
 branch = true

@@ -2,6 +2,18 @@
 
 Objective: achieve parity with the design’s 11‑state lifecycle, guard gates (G0–G5), gradient‑isolation enforcement, safety stack, parameter registration, and supporting telemetry/performance tooling — with Leyline as the single authoritative source of truth for all data classes and enums.
 
+## Status Update (April 2025)
+
+- **Lifecycle + Gates**: ✅ Leyline schema and Kasmina state machine now enforce the full 11-stage flow with G0–G5 guard rails.
+- **Safety Stack**: ⚠️ Circuit breaker and monotonic timers are wired in; pause/resume semantics remain on the backlog.
+- **Gradient Isolation**: ⚠️ Backward-hook monitor and alpha blender land, but automated dot-product enforcement still needs integration with the training loop.
+- **Parameter Registry & Teacher Protections**: ✅ Seed/teacher registration and validation complete.
+- **Memory Governance**: ⚠️ TTL caches operational; KD budgeting heuristics still TODO.
+- **Security Envelope**: ✅ HMAC signature, nonce ledger, and freshness checks gate all commands.
+- **Telemetry Pipeline**: ⚠️ Priority/rollback indicators emitted; emergency bypass transport still outstanding.
+- **Rollback Readiness**: ⚠️ Rollback payloads captured on failure/retire; SLA instrumentation pending.
+- **Knowledge Distillation**: ⚠️ Teacher model registration supported; KD loss plumbing to follow.
+
 Non‑goals:
 - Do not introduce any internal lifecycle overlays or enum mappings inside Kasmina (or any subsystem).
 - Do not diverge between design doc terminology and Leyline enums once updated; align naming to Leyline.
@@ -26,7 +38,7 @@ Sequencing & Milestones
 
 1) Leyline Schema Update (single source of truth)
 - Protobuf updates (breaking, batched across prototype):
-  - `enum SeedLifecycleStage`: ensure the full 11 canonical stages exist: `SEED_STAGE_DORMANT`, `SEED_STAGE_GERMINATING`, `SEED_STAGE_TRAINING`, `SEED_STAGE_GRAFTING`, `SEED_STAGE_STABILIZING`, `SEED_STAGE_EVALUATING`, `SEED_STAGE_FINE_TUNING`, `SEED_STAGE_FOSSILIZED`, `SEED_STAGE_CULLING`, `SEED_STAGE_EMBARGOED`, `SEED_STAGE_RESETTING`, `SEED_STAGE_TERMINATED`.
+  - `enum SeedLifecycleStage`: ensure the full 11 canonical stages exist: `SEED_STAGE_DORMANT`, `SEED_STAGE_GERMINATED`, `SEED_STAGE_TRAINING`, `SEED_STAGE_BLENDING`, `SEED_STAGE_SHADOWING`, `SEED_STAGE_PROBATIONARY`, `SEED_STAGE_FOSSILIZED`, `SEED_STAGE_CULLED`, `SEED_STAGE_EMBARGOED`, `SEED_STAGE_RESETTING`, `SEED_STAGE_TERMINATED`.
   - Remove `SEED_STAGE_CANCELLED` and update every caller to use the correct canonical state (RESETTING/TERMINATED as appropriate).
   - New `enum SeedLifecycleGate { GATE_G0 = 0; ... GATE_G5 = 5; }`.
   - Optional: `message GateEvent { SeedLifecycleGate gate; bool passed; string reason; }` and allow inclusion in telemetry/field reports.
@@ -36,7 +48,7 @@ Sequencing & Milestones
 2) Lifecycle Engine (11‑state + Gates) using Leyline enums
 - `KasminaLifecycle` transitions use only `leyline_pb2.SeedLifecycleStage` (with the new entries).
 - `KasminaSeedManager` implements embargo/reset semantics using the new Leyline stages:
-  - Failure path: `SEED_STAGE_CULLING` → `SEED_STAGE_EMBARGOED` (time‑boxed) → `SEED_STAGE_RESETTING` → `SEED_STAGE_DORMANT`.
+  - Failure path: `SEED_STAGE_CULLED` → `SEED_STAGE_EMBARGOED` (time‑boxed) → `SEED_STAGE_RESETTING` → `SEED_STAGE_DORMANT`.
   - Administrative teardown ends in `SEED_STAGE_TERMINATED`.
 - Gate checks (G0–G5) implemented as guard functions invoked before transitions; emit `GateEvent` telemetry with the corresponding `SeedLifecycleGate`.
 - Tests:
@@ -130,14 +142,13 @@ Canonical Lifecycle (Leyline enums)
 | Leyline stage | Phase semantics |
 | --- | --- |
 | SEED_STAGE_DORMANT | Quiescent slot; accepts germination requests. |
-| SEED_STAGE_GERMINATING | Sanity checks and registration (G0). |
+| SEED_STAGE_GERMINATED | Sanity checks and registration (G0). |
 | SEED_STAGE_TRAINING | Isolated seed training; G1 constraints. |
-| SEED_STAGE_GRAFTING | Blending with alpha; host activations detached; G2. |
-| SEED_STAGE_STABILIZING | Shadowing/inert probe; interface checks; G3. |
-| SEED_STAGE_EVALUATING | System‑impact observation; G4. |
-| SEED_STAGE_FINE_TUNING | Optional intensified probationary training. |
+| SEED_STAGE_BLENDING | Blending with alpha; host activations detached; G2. |
+| SEED_STAGE_SHADOWING | Shadowing/inert probe; interface checks; G3. |
+| SEED_STAGE_PROBATIONARY | System‑impact observation; G4. |
 | SEED_STAGE_FOSSILIZED | Accepted; frozen params. |
-| SEED_STAGE_CULLING | Failure path activated. |
+| SEED_STAGE_CULLED | Failure path activated. |
 | SEED_STAGE_EMBARGOED | Time‑boxed hold to prevent thrash. |
 | SEED_STAGE_RESETTING | Cleanup/reset before returning to dormant. |
 | SEED_STAGE_TERMINATED | Administrative teardown. |

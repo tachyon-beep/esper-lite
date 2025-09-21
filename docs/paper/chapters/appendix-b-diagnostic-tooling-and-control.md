@@ -7,7 +7,6 @@ coauthors:
   - Codex CLI (OpenAI)
 ---
 
-# Appendix B: Diagnostic Tooling and Control
 To support the rapid development, debugging, and analysis of morphogenetic architectures, a suite of diagnostic and control tools is essential. This appendix outlines the design for a command-line interface for real-time inspection, visual models of core mechanics, and key extensions required for production-level performance.
 B.1 INTERACTIVE DIAGNOSTICS: THE SEEDNET COMMAND-LINE INTERFACE (CLI)
 A major accelerator for research is the ability to interact with the model during training. The SeedNetCLI is a proposed Read-Eval-Print Loop (REPL) interface that allows a researcher to monitor and manually control the germination lifecycle without halting the training process.

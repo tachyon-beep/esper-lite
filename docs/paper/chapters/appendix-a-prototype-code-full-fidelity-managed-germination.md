@@ -7,7 +7,6 @@ coauthors:
   - Codex CLI (OpenAI)
 ---
 
-# Appendix A: Prototype Code – Full-Fidelity Managed Germination
 import os
 import random
 import threading

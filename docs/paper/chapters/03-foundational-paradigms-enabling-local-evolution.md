@@ -7,16 +7,19 @@ coauthors:
   - Codex CLI (OpenAI)
 ---
 
-# Foundational Paradigms Enabling Local Evolution
 Morphogenetic architectures are made viable by the convergence of several foundational paradigms in neural network design and training methodology. This section outlines the structural, algorithmic, and procedural principles that provide the enabling substrate for seed-driven local adaptation within frozen models.
+
 ## 3.1 Modular Neural Network Design
+
 Modularisation is a prerequisite for effective structural grafting and localised adaptation (Sun et al., 2024). The seed mechanism assumes that the host model is either explicitly modular—composed of clearly defined, independently evaluable components—or at least structurally decomposable through interface analysis and activation tracing.
 Benefits of modular design in this context include:
 • Isolation of failure points – Modules exhibiting performance degradation or bottleneck characteristics can be individually identified as targets for seed placement.
 • Constrained surface area for germination – Seeds can be inserted at clearly defined interfaces (e.g., between encoder layers, projection steps, or decoder blocks), minimising disruption.
 • Reduction in parameter entanglement – Modularity encourages weight segregation, making it less likely that local changes will result in emergent global drift.
 Where explicit modular design is not available, implicit modularity may still emerge through dropout regularisation, sparse activation, or low‑rank decomposition. These modular affordances are critical, as they define the discrete locations for both the telemetry monitoring and the targeted intervention performed by the Tamiyo policy controller.
+
 ## 3.2 Dynamic Neural Networks
+
 Dynamic neural network architectures allow for the creation, insertion, or reconfiguration of structural elements during training or inference (Lu et al., 2024). Morphogenetic architectures exploit a constrained subset of this flexibility: static base, dynamic insert. Unlike general dynamic networks where topology may evolve globally, the morphogenetic regime maintains a fixed global structure while permitting controlled local change.
 Characteristics inherited from dynamic models:
 • Deferred instantiation – Seeds may remain unmaterialised until needed.
@@ -24,7 +27,9 @@ Characteristics inherited from dynamic models:
 • Runtime adaptation – Structure is not fixed at compile time and may vary across instances.
 However, morphogenetic systems intentionally restrict this flexibility. Dynamic growth is not used for adaptive computation or routing (e.g., Mixture‑of‑Experts), but is reserved strictly for structural evolution in response to commands from the Tamiyo policy controller (see Controller Training: 08-controller-training-the-tamiyo-curriculum.md and controller interaction sequence in Figures: 09-tables-and-figures.md).
 This distinction matters operationally: morphogenetic systems must remain auditably stable in deployment. No runtime topological change is permitted after a seed has been fossilised. Dynamism is constrained to the formal, multi‑stage seed lifecycle during the training regime.
+
 ## 3.3 Continual Learning and Forgetting Constraints
+
 The seed mechanism exists in tension with both continual learning goals and catastrophic forgetting risks. Because the base model is frozen, the system avoids the most common form of interference—destructive global weight update—but still faces challenges:
 • Interface drift – The functional boundary between the frozen model and an active seed may shift as the seed trains, altering outputs in uncontrolled ways.
 • Gradient leakage – Improper backpropagation isolation may cause unintended parameter updates or optimisation feedback loops.

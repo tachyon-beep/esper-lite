@@ -7,7 +7,6 @@ coauthors:
   - Codex CLI (OpenAI)
 ---
 
-# Appendix C: Bibliography / Reading List
 This appendix provides a consolidated list of all references from the original research notes for further reading and to acknowledge the broader literature that informed this work.
 
 1. Beaulieu, S., Frasca, F., Xu, Y., Goyal, S., Pal, C., & Larochelle, H. (2020). Learning sparse representations in reinforcement learning with the successor features. In Advances in Neural Information Processing Systems (NeurIPS).

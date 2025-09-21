@@ -7,9 +7,8 @@ coauthors:
   - Codex CLI (OpenAI)
 ---
 
-# Architectural Patterns and Agent Roles
-
 ## 6.1 Pattern: The Blueprint as a Reusable Skill (Germinal Module)
+
 This is the primary pattern for capability transfer in the framework and represents the output of the Karn agent's discovery process. A Germinal Module (GM) is a complete architectural blueprint that defines a latent structure to be instantiated upon germination. It consolidates the concepts of a compressed skill and an architectural template into a single, unified entity.
 
 GM blueprint specification:
@@ -29,7 +28,9 @@ Advantages when Tamiyo selects a GM from Karn’s library:
 | Deterministic capability integration       | Reduce training variance via fixed, versioned modules             |
 | Efficient deployment                       | High compression enables low‑bandwidth environments               |
 This pattern is foundational for reproducible morphogenesis: every germination event corresponds to the deployment of a specific, versioned, and pre-validated blueprint.
+
 ## 6.2 The Role: Seed Site as Interface Contract
+
 This describes the static role of the location where a seed is placed in the host network. The seed site is not just a placeholder but an enforceable interface contract that allows the Tamiyo controller to safely interact with and modify the frozen model.
 As a contract, the seed site defines:
 
@@ -41,6 +42,7 @@ As a contract, the seed site defines:
 This pattern enables the static instrumentation of frozen models with known, modifiable points. These contracts serve as the essential scaffolding for safe grafting, providing the stable "sockets" into which Tamiyo can plug the various blueprints discovered by Karn.
 
 ## 6.3 The Role: Controller as Locus of Constraint Negotiation
+
 This role, previously misattributed to the seed, is the primary function of the Tamiyo policy controller. Tamiyo acts as the central intelligence, mediating between competing architectural pressures to balance the need for new capacity against the imperative to preserve base model integrity.
 This policy-driven role includes:
 

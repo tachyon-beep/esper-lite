@@ -7,9 +7,10 @@ coauthors:
   - Codex CLI (OpenAI)
 ---
 
-# Tables and Figures
 This section provides a consolidated view of reference data and design artefacts introduced throughout the document.
+
 ## 9.1 Seed Lifecycle States
+
 The authoritative Esper‑Lite design uses an 11‑state lifecycle managed by Kasmina’s seed manager, with validation gates G0–G5. This table reflects that contract.
 
 | State         | Trigger                                       | Key Process                                                                  | Next State(s)             |
@@ -53,6 +54,7 @@ stateDiagram-v2
 Figure: Formal lifecycle and validation gates (see Section 5).
 
 ## 9.2 Techniques for Structural Grafting
+
 (See: [Techniques for Grafting and Precise Editing](04-techniques-for-grafting-and-precise-editing.md))
 
 | Technique             | Insertion Type            | Initial Behaviour        | Parameter Origin         | Best Use Case                           |
@@ -60,7 +62,9 @@ Figure: Formal lifecycle and validation gates (see Section 5).
 | Neural Surgery        | Structural (layer/branch) | Identity / near-identity | From scratch or copied   | Custom pipelines, deep insertion        |
 | Adapter Layer         | Bottleneck insert         | Identity approximation   | From scratch             | MLP/Transformer backbones               |
 | Germinal Module (GM)  | Pre-trained module        | Task-optimised           | Discovered by Karn agent | Reuse under budget constraints          |
+
 ## 9.3 Architectural Patterns and Agent Roles
+
 (See: [Architectural Patterns and Agent Roles](06-architectural-patterns-and-agent-roles.md))
 
 | Pattern / Role                         | Governing Agent     | Description                                                                 |
@@ -68,7 +72,9 @@ Figure: Formal lifecycle and validation gates (see Section 5).
 | Blueprint as Reusable Skill (GM)       | Karn (Inventor)     | Validated architectural blueprints (GMs) as reusable subproblem solutions   |
 | Seed Site as Interface Contract        | Static Architecture | Stable socket with fixed I/O contract enabling safe intervention            |
 | Controller as Constraint Negotiator    | Tamiyo (Controller) | Balances performance needs against system constraints via telemetry         |
+
 ## 9.4 Prototype Validation Metrics
+
 (See: [Prototype Implementation and Micro-Demonstration](07-prototype-implementation-and-micro-demonstration.md))
 Metric Before Germination Post‑Fossilisation Comments
 Validation Accuracy 93.2% 97.1% Shows improved performance after successful lifecycle.
@@ -95,6 +101,7 @@ Batch Size 128
 Training Steps 2000
 9.7 SEED PLACEMENT: VISUAL SCHEMA (SYNTHETIC MLP)
 (See: [Prototype Implementation and Micro-Demonstration](07-prototype-implementation-and-micro-demonstration.md))
+
 ```mermaid
 graph TD
     A[Input 2D] --> B[Linear(2->32) --> ReLU]
@@ -102,9 +109,11 @@ graph TD
     C --> D[Linear(32->32) --> ReLU]
     D --> E[Linear(32->2) --> Output]
 ```
+
 Note: The above diagram can be converted to a rendered graphic in the final typeset.
 
 ## 9.8 Evaluation Pipeline Flow
+
 (See: [Evaluation Criteria and Safety Constraints](10-evaluation-criteria-and-safety-constraints.md))
 
 ```mermaid
@@ -123,6 +132,7 @@ flowchart LR
 Figure: End‑to‑end evaluation flow with lifecycle gates (Section 10.3).
 
 ## 9.9 Controller Interaction Sequence
+
 (See: [Controller Training](08-controller-training-the-tamiyo-curriculum.md), [Failure Handling](05-failure-handling-and-risk-containment.md))
 
 ```mermaid
@@ -149,6 +159,7 @@ sequenceDiagram
 Figure: Interaction during a germination episode from trigger to outcome.
 
 ## 9.10 System Overview (Conceptual)
+
 (See: [Introduction](01-introduction.md), [Architectural Patterns](06-architectural-patterns-and-agent-roles.md))
 
 ```mermaid
@@ -189,6 +200,7 @@ flowchart LR
 Figure: Conceptual overview of Esper‑Lite subsystems and flows. The controller analyses state/telemetry and issues adaptation commands; the execution layer applies lifecycle‑guarded changes to embedded seed sockets. Offline training improves the policy from field reports.
 
 ## 9.11 Technique Comparison Diagram
+
 (See: [Techniques for Grafting and Precise Editing](04-techniques-for-grafting-and-precise-editing.md))
 
 ```mermaid
@@ -218,6 +230,7 @@ flowchart LR
 Figure: Structural comparison of techniques. Surgery inserts structure alongside existing paths; adapters provide low‑cost bottlenecks with near‑identity initialisation; GM injection deploys pre‑trained modules for targeted capability reuse.
 
 ## 9.12 Result Plot Templates
+
 This section defines the canonical plots for reporting prototype outcomes. Plots should reflect mean ± 95% confidence bands over repeated runs, and use consistent axes and units across datasets.
 
 ### 9.12.1 Pareto Curve (Δ Performance vs Δ Parameters)
@@ -229,6 +242,7 @@ Axes: X = ΔParams (log or linear as appropriate); Y = ΔAcc/F1. Error bands ref
 ### 9.12.2 Safety Dashboard (Multi‑Panel)
 
 Description: A multi‑panel figure summarising safety outcomes per method:
+
 - Drift (box or violin of interface drift metrics)
 - Isolation violations (bar; proportion of steps)
 - Gate pass rates (stacked bars; shadowing/probationary)

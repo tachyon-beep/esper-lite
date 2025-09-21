@@ -5,10 +5,7 @@ coauthors:
   - John Morrissey
   - Codex CLI (OpenAI)
 ---
-
-# Preface
-
-MORPHOGENETIC ARCHITECTURES
+ MORPHOGENETIC ARCHITECTURES
 A FORMAL FRAMEWORK FOR LOCALIZED STRUCTURAL EVOLUTION IN FROZEN NEURAL NETWORKS
 
 Author: John Morrissey
@@ -18,6 +15,7 @@ Status: Conceptual Draft Only, Results are placeholders and should not be relied
 Version 3.0RC1
 
 ## Contents
+
 - [Introduction](01-introduction.md)
 - [Conceptual Foundations](02-conceptual-foundations.md)
 - [Foundational Paradigms Enabling Local Evolution](03-foundational-paradigms-enabling-local-evolution.md)
@@ -38,11 +36,13 @@ Version 3.0RC1
   - [Appendix D: Reproducibility Checklist](appendix-d-reproducibility-checklist.md)
 
 ## Design Reference & Authority
+
 This paper documents the Esper‑Lite prototype and aligns with the broader Esper system design. The detailed system definition (including lifecycle, safety, policy, and observability) is authoritative; where any divergence exists, treat those specifications as canonical, and update this paper accordingly.
 
 Scope note: Esper‑Lite implements the minimal, production‑safe slice of the full architecture. Prototype examples (e.g., XOR, make_moons) illustrate the morphogenetic lifecycle and safety regime; production behaviour follows the detailed design principles without enumerating implementation details here.
 
 ## Notation & Symbols
+
 | Symbol     | Meaning                                        |
 |------------|------------------------------------------------|
 | ΔAcc/ΔF1   | Change in accuracy/F1 after intervention      |
@@ -55,11 +55,14 @@ Scope note: Esper‑Lite implements the minimal, production‑safe slice of the 
 | G0–G5      | Lifecycle validation gates (see Section 5)     |
 
 ## Abstract
+
 This document outlines the formal groundwork and technical scaffolding for a class of neural architectures capable of localised, seed-driven structural evolution within frozen host networks. The approach—referred to as morphogenetic architecture—enables the introduction of trainable components that can independently develop new capabilities in response to local failure signals or performance deficits.
 The central concept is that of a seed: a compact, parameter-initialised tensor or module with the capacity to 'germinate'—that is, instantiate and integrate new trainable subnetworks into a frozen model context. This strategy allows targeted increases in representational or task-specific capacity without retraining the global model.
 Seed-driven structural growth is proposed as a minimally invasive method to evolve capacity-constrained models in safety-critical, memory-limited, or field-deployed conditions. This is of particular interest for low-parameter systems (<10M), edge hardware applications, and environments where full-model retraining is not feasible.
 This document serves as a reference design for an MVP architecture implementing these principles and includes technical background, prior art survey, architectural constraints, training constraints, evaluation strategies, and a prototype demonstration.
+
 ## Writing Conventions
+
 This document uses the following terminological and structural conventions:
 
 | Style            | Usage                                                                                 |
@@ -86,6 +89,7 @@ This document uses the following terminological and structural conventions:
 | Karn                 | Evolutionary seed architect that proposes new blueprint variants in response to Tamiyo’s feedback and system telemetry.          |
 
 ## Document Version and Metadata
+
 Document Title: Morphogenetic Architectures: Localised Evolution in Neural Networks – Seed-Bursting MVP and Reference Design
 Version: 2.0a (Draft)
 Date: 14 June 2025
@@ -97,6 +101,7 @@ Audience: Research collaborators, system engineers, model designers involved in 
 Document Type: Technical Design Specification and Reference Overview
 
 ## Document Scope
+
 This document defines and clarifies the following:
 • The theoretical and operational rationale for seed-based localised evolution in neural networks.
 • Architectural and training constraints required to support seed-driven adaptation without catastrophic interference.

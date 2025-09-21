@@ -7,10 +7,11 @@ coauthors:
   - Codex CLI (OpenAI)
 ---
 
-# Controller Training: The Tamiyo Curriculum
 The mere existence of a seed mechanism is insufficient for creating robust, adaptive systems. Uncontrolled germination can lead to runaway parameter growth or catastrophic forgetting. Therefore, the morphogenetic architecture is governed by a sophisticated policy controller, Tamiyo, which learns to make precise decisions about when, where, and how to trigger local evolution.
 This section outlines the structured, multi‑stage training programme—the Tamiyo Curriculum—designed to develop this controller from first principles. By training Tamiyo on a large population of tasks with increasing complexity and strict safety guardrails, we can cultivate a robust policy that can be deployed to govern germination in larger, more critical models.
+
 ## 8.1 The Tamiyo Training Curriculum
+
 The curriculum consists of a series of stages, each introducing a new task, hardware profile, and set of safety constraints. At each stage, Tamiyo's objective is to select the correct blueprint, location, and intensity for germination to meet the stage's success criteria without violating its safety or hardware guardrails. Advancement to the next stage is only permitted once all targets are met.
 
 | Stage | Task                           | Success Metric         | Safety Constraints                                  | Hardware     | Available Blueprints                                  |
@@ -25,7 +26,9 @@ The curriculum consists of a series of stages, each introducing a new task, hard
 | 4.5   | Tiny-CLIP (Image↔Text)        | R@1 ≥ 60%              | Cross-modal drift < 0.05, Privacy passed            | TPU          | Cross-Attention Adapter, Latent Align, No-Op          |
 | 5     | XOR-N / Checkerboard          | ≥ 99% accuracy         | Drift < 0.05, Utilisation check                      | GPU          | Nested Seed, Low-Rank Residual, No-Op                 |
 | 6     | Edge Deployment (IMU + Net)   | ≥ 88% acc; ≤ 15 µJ/inf | Packet loss < 15%, Latency budget                   | LoRa/5G/ASIC | Quant-Adapter, Pruning, Fail-Safe Gating              |
+
 ## 8.2 The Blueprint Library (Karn's Contribution)
+
 The TamiyoController does not invent new architectures; it selects from a pre-validated library of blueprints. This library represents the output of the Karn agent's offline discovery process, ensuring that Tamiyo's choices are grounded in a set of efficient and effective modules.
 
 | Blueprint Name    | Structure                         | Use Case                                                     |
@@ -41,7 +44,9 @@ The TamiyoController does not invent new architectures; it selects from a pre-va
 | Quant-Adapter     | QAT adapter                       | Capacity optimised for low‑precision edge deployment         |
 | Fail-Safe Gating  | σ(g)·x + (1−σ)·new                | Fallback mechanism for high-risk operations                  |
 (This is an abbreviated version of the full library presented in the specification document)
+
 ## 8.3 Controller Architecture and Telemetry
+
 At each decision point, every seed in the host network emits a telemetry vector containing real-time information about its status. This vector serves as the input to the TamiyoController's policy network.
 Seed Telemetry Vector (see table below). The TamiyoController processes this telemetry using a multi‑headed policy network to make decisions.
 
@@ -82,7 +87,9 @@ Design alignment (see controller interaction sequence in Figures: 09-tables-and-
 | Inference Budget       | Low‑latency inference under fixed resource budgets                                         |
 | Risk Governance        | Multi‑signal risk engine, conservative mode, circuit breakers                               |
 | Messaging Contracts    | Compact, authenticated control messages and structured telemetry aggregation               |
+
 ## 8.4 Reward Function and Optimisation
+
 Tamiyo is trained via reinforcement learning to maximize a composite reward that trades off performance gains against safety, stability, and resource costs. A practical shaping is:
 
 - Performance gain: +α · (val_acc_post − val_acc_pre)

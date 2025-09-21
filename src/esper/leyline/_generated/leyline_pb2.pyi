@@ -15,15 +15,27 @@ DESCRIPTOR: _descriptor.FileDescriptor
 class SeedLifecycleStage(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     SEED_STAGE_UNKNOWN: _ClassVar[SeedLifecycleStage]
-    SEED_STAGE_GERMINATING: _ClassVar[SeedLifecycleStage]
+    SEED_STAGE_DORMANT: _ClassVar[SeedLifecycleStage]
+    SEED_STAGE_GERMINATED: _ClassVar[SeedLifecycleStage]
     SEED_STAGE_TRAINING: _ClassVar[SeedLifecycleStage]
-    SEED_STAGE_GRAFTING: _ClassVar[SeedLifecycleStage]
-    SEED_STAGE_STABILIZING: _ClassVar[SeedLifecycleStage]
-    SEED_STAGE_EVALUATING: _ClassVar[SeedLifecycleStage]
-    SEED_STAGE_FINE_TUNING: _ClassVar[SeedLifecycleStage]
+    SEED_STAGE_BLENDING: _ClassVar[SeedLifecycleStage]
+    SEED_STAGE_SHADOWING: _ClassVar[SeedLifecycleStage]
+    SEED_STAGE_PROBATIONARY: _ClassVar[SeedLifecycleStage]
     SEED_STAGE_FOSSILIZED: _ClassVar[SeedLifecycleStage]
-    SEED_STAGE_CULLING: _ClassVar[SeedLifecycleStage]
-    SEED_STAGE_CANCELLED: _ClassVar[SeedLifecycleStage]
+    SEED_STAGE_CULLED: _ClassVar[SeedLifecycleStage]
+    SEED_STAGE_EMBARGOED: _ClassVar[SeedLifecycleStage]
+    SEED_STAGE_RESETTING: _ClassVar[SeedLifecycleStage]
+    SEED_STAGE_TERMINATED: _ClassVar[SeedLifecycleStage]
+
+class SeedLifecycleGate(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    SEED_GATE_UNKNOWN: _ClassVar[SeedLifecycleGate]
+    SEED_GATE_G0_SANITY: _ClassVar[SeedLifecycleGate]
+    SEED_GATE_G1_GRADIENT_HEALTH: _ClassVar[SeedLifecycleGate]
+    SEED_GATE_G2_STABILITY: _ClassVar[SeedLifecycleGate]
+    SEED_GATE_G3_INTERFACE: _ClassVar[SeedLifecycleGate]
+    SEED_GATE_G4_SYSTEM_IMPACT: _ClassVar[SeedLifecycleGate]
+    SEED_GATE_G5_RESET: _ClassVar[SeedLifecycleGate]
 
 class HealthStatus(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -111,15 +123,24 @@ class BusMessageType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     BUS_MESSAGE_TYPE_TELEMETRY: _ClassVar[BusMessageType]
     BUS_MESSAGE_TYPE_POLICY_UPDATE: _ClassVar[BusMessageType]
 SEED_STAGE_UNKNOWN: SeedLifecycleStage
-SEED_STAGE_GERMINATING: SeedLifecycleStage
+SEED_STAGE_DORMANT: SeedLifecycleStage
+SEED_STAGE_GERMINATED: SeedLifecycleStage
 SEED_STAGE_TRAINING: SeedLifecycleStage
-SEED_STAGE_GRAFTING: SeedLifecycleStage
-SEED_STAGE_STABILIZING: SeedLifecycleStage
-SEED_STAGE_EVALUATING: SeedLifecycleStage
-SEED_STAGE_FINE_TUNING: SeedLifecycleStage
+SEED_STAGE_BLENDING: SeedLifecycleStage
+SEED_STAGE_SHADOWING: SeedLifecycleStage
+SEED_STAGE_PROBATIONARY: SeedLifecycleStage
 SEED_STAGE_FOSSILIZED: SeedLifecycleStage
-SEED_STAGE_CULLING: SeedLifecycleStage
-SEED_STAGE_CANCELLED: SeedLifecycleStage
+SEED_STAGE_CULLED: SeedLifecycleStage
+SEED_STAGE_EMBARGOED: SeedLifecycleStage
+SEED_STAGE_RESETTING: SeedLifecycleStage
+SEED_STAGE_TERMINATED: SeedLifecycleStage
+SEED_GATE_UNKNOWN: SeedLifecycleGate
+SEED_GATE_G0_SANITY: SeedLifecycleGate
+SEED_GATE_G1_GRADIENT_HEALTH: SeedLifecycleGate
+SEED_GATE_G2_STABILITY: SeedLifecycleGate
+SEED_GATE_G3_INTERFACE: SeedLifecycleGate
+SEED_GATE_G4_SYSTEM_IMPACT: SeedLifecycleGate
+SEED_GATE_G5_RESET: SeedLifecycleGate
 HEALTH_STATUS_UNKNOWN: HealthStatus
 HEALTH_STATUS_HEALTHY: HealthStatus
 HEALTH_STATUS_DEGRADED: HealthStatus

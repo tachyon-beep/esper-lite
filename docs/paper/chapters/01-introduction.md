@@ -7,9 +7,8 @@ coauthors:
   - Codex CLI (OpenAI)
 ---
 
-# Introduction
-
 ## Overview: A New Approach for Adaptive Systems
+
 While techniques for modular and parameter‑efficient adaptation, such as adapters and network surgery (Houlsby et al., 2019; Chen, 2021), have shown promise, they often lack a cohesive, system‑level framework for ensuring safety, auditability, and autonomous control. This paper seeks to bridge that gap by establishing the formal groundwork for morphogenetic computing: a discipline where neural networks are treated not as static artefacts, but as dynamic systems capable of controlled, localised, and auditable structural evolution.
 Rather than proposing an entirely new low-level mechanism, this work introduces a unifying framework orchestrated by a co-evolutionary system of intelligent agents. This system features:
 An external 'inventor' agent, Karn, which discovers and validates a diverse library of architectural blueprints in a competitive environment.
@@ -27,6 +26,7 @@ Finally, the framework re‑contextualises failure. The quarantine buffer system
 In synthesis, these principles formalize neural ontogeny—the study of an organism's development—as a discrete engineering discipline. By solving the plasticity-stability dilemma through enforced contracts and making growth auditable, this work lays the groundwork for a new generation of truly adaptive systems.
 
 ## Architecture Overview (Conceptual)
+
 The architecture organises learning and control into distinct roles to preserve stability while enabling targeted growth. A strategic controller (Tamiyo) analyses system state and telemetry, issuing adaptation commands to an execution layer (Kasmina) that applies lifecycle‑guarded changes to embedded seed sockets inside a frozen model, all without disrupting the training loop (Tolaria). Offline learning (Simic) improves the policy from field reports. Contracts and observability provide the safety envelope.
 
 ```mermaid
@@ -63,7 +63,9 @@ flowchart LR
 Figure: High‑level organisation of the morphogenetic system. Strategic decisions are auditable and lifecycle‑guarded; the execution layer enforces isolation and safety while enabling controlled growth.
 
 ## Related Work (Brief)
+
 Our approach intersects several research threads:
+
 - Modular & dynamic networks: modularisation and dynamic topology under controlled regimes (Sun et al., 2024; Lu et al., 2024).
 - Parameter‑efficient methods: adapters and related bottleneck approaches for efficient adaptation (Houlsby et al., 2019).
 - Grafting & stitching: reusing pre‑trained components via structured insertion (Rusu et al., 2016; Du et al., 2025).
@@ -71,6 +73,7 @@ Our approach intersects several research threads:
 This work differs by formalising a policy‑governed, lifecycle‑validated mechanism for structural growth within a frozen host, with explicit safety gates and evaluation criteria.
 
 ## Paper Roadmap
+
 - Concepts and constraints: see Conceptual Foundations (02-conceptual-foundations.md) and Foundational Paradigms (03-foundational-paradigms-enabling-local-evolution.md).
 - Techniques for structural growth: see Techniques for Grafting (04-techniques-for-grafting-and-precise-editing.md) and the comparison diagram in Figures (09-tables-and-figures.md).
 - Safety and validation: see Failure Handling & Risk Containment (05-failure-handling-and-risk-containment.md) and the lifecycle diagram in Figures (09-tables-and-figures.md).
@@ -79,6 +82,7 @@ This work differs by formalising a policy‑governed, lifecycle‑validated mech
 - Evaluation criteria: see Evaluation & Safety (10-evaluation-criteria-and-safety-constraints.md).
 
 ## 1.1 Motivation
+
 This document defines a foundational mechanism for enabling localised structural adaptation within otherwise static neural architectures. The motivation is to allow systems to increase task-specific or representational capacity without retraining or reinitialising the global model. This is achieved through a biologically inspired construct referred to as a seed: a latent trainable element embedded within the host network, capable of germinating additional modules. In this framework, germination is not random; it is a controlled event, triggered by a dedicated policy controller in response to observed performance plateaus, and the germinated modules themselves are drawn from a library of validated architectural blueprints.
 The primary application space for this technique includes:
 
@@ -89,8 +93,11 @@ The primary application space for this technique includes:
 | TinyML / Extreme edge                 | On‑device capacity is microscopic; adaptive growth is the only viable path                                  |
 | Safety‑critical / long‑lived systems  | Retraining risks functional degradation or loss of certification                                            |
 | Modular AI systems                    | Targeted capacity expansion or behavioural modification without global model churn                           |
+
 Unlike traditional methods of continual learning, domain adaptation, or neural architecture search, the proposed seed mechanism operates entirely within a frozen base model, with no structural change to the host unless and until germination is triggered. This approach is specifically designed to preserve backwards compatibility, deterministic behaviour, and localised safety guarantees, while still allowing for new capabilities to emerge.
+
 ## 1.2 Objectives
+
 The objectives of this document are:
 • To define the operational concept of seed-bursting and its implementation in a modular neural network.
 • To articulate the architectural constraints and interface contracts required to support localised structural evolution.
@@ -100,11 +107,15 @@ o An external 'inventor' agent (Karn) that discovers and validates a library of 
 o An internal policy controller agent (Tamiyo) that learns to trigger germination by selecting the optimal seed site and GM blueprint in response to real-time network telemetry.
 • To provide a minimal prototype and supporting micro-demonstration that confirms the viability of this agent-driven approach in practice.
 These objectives are framed within a system context where strict modular boundaries, interface contracts, and controlled local learning are necessary to maintain overall system integrity.
+
 ## 1.3 Background and Context
+
 This work evolves the concept of a morphogenetic seed from a standalone unit into a component of a larger, intelligent system. Where a seed was previously a self-contained representation of a potential capability, it now functions as an active sensor and execution site within a hierarchical control framework. The intelligence that governs growth is externalised into two specialised agents: Karn and Tamiyo.
 This agent-based paradigm is inspired by prior work in multi-agent and reinforcement learning and shifts the focus from simple, hardcoded triggers to learned, emergent policies. Where the surrounding architecture remains frozen—either for safety, certification, reproducibility, or latency reasons—the seed provides a pathway to plasticity that is now governed by an explicit, auditable control agent rather than implicit heuristics.
 The concept of injecting pre-trained modules is conceptually related to recent work in knowledge grafting and model stitching. However, the morphogenetic framework differs by focusing on autonomous, policy-driven germination within a single host. This process is governed by the Tamiyo agent, which dynamically selects from a library of Germinal Modules previously discovered and validated by the Karn agent. This creates a closed-loop system of discovery and deployment, distinguishing it from offline model fusion techniques.
+
 ## 1.4 Limitations
+
 This document focuses exclusively on the mechanisms required for localised structural evolution within a neural model. It does not address:
 • General continual learning or lifelong learning frameworks.
 • Non-structural methods of modularity (e.g., sparse activation, gating).

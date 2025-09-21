@@ -7,10 +7,10 @@ coauthors:
   - Codex CLI (OpenAI)
 ---
 
-# Prototype Implementation and Micro-Demonstration
 This section documents the prototype implementation of the morphogenetic architecture. It is presented in two parts. First, a minimal viable example using the classic XOR problem illustrates the core mechanics of the seed lifecycle in its simplest form. Second, a full‑fidelity prototype showcases the system‑level infrastructure—including the SeedManager and Tamiyo controller—required to manage, monitor, and audit the germination process on a more complex dataset.
 
 ## 7.0 Implementation Status & Data Quality
+
 The prototype is fully implemented and instrumented. All results reported in this chapter are produced by the live Esper‑Lite stack (Tamiyo + Kasmina + Tolaria) running against real data, with telemetry contracts enforced via Leyline.
 
 | Implementation Feature          | Status / Notes                                                                                 |
@@ -20,9 +20,13 @@ The prototype is fully implemented and instrumented. All results reported in thi
 | SeedManager                     | Real scheduler/queueing; embargo + resetting on cull                                          |
 | Telemetry & contracts           | Leyline Option B budgets enforced; signed messages; nonce TTL; conservative mode on replay    |
 | Data & metrics                  | Measurements captured from instrumented runs; figures/tables reflect observed prototype data  |
+
 ## 7.1 Minimal Viable Example: The XOR Problem
+
 To validate the core germination principle, we begin with the smallest possible non-linear problem: XOR. A network with a linear bottleneck is incapable of solving this task, making it the perfect environment to demonstrate how a seed can progress through its lifecycle to add the required non-linear capacity.
+
 ### 7.1.1 Architecture and Updated Seed Logic
+
 The pre‑germination network is microscopic. For this minimal example, we run the actual Tamiyo controller policy; for ablations we may fix decisions to isolate seed behaviour. The SentinelSeed is fully implemented: a state machine that manages its own development across the lifecycle.
 
 ```mermaid
@@ -81,7 +85,9 @@ class MiniSeedNet(nn.Module):
         x = torch.sigmoid(self.fc1(x))
         x = self.seed(x) # The seed's behaviour depends on its internal state
         return torch.sigmoid(self.fc2(x))
+
 ### 7.1.2 Germination Lifecycle in Action
+
 The process follows the formal lifecycle (see [Failure Handling and Risk Containment](05-failure-handling-and-risk-containment.md)):
 
 | Step | Description |
@@ -89,13 +95,18 @@ The process follows the formal lifecycle (see [Failure Handling and Risk Contain
 | 1    | Detection and Germination: On loss plateau, Tamiyo commands germination, injecting a simple MLP; state DORMANT → GERMINATED (queued). |
 | 2    | Local Training: SeedManager promotes to TRAINING; the seed trains locally on its buffer while the forward path remains identity. |
 | 3    | Blending and Activation: After local training, state → BLENDING; alpha increases 0→1 to mix outputs; the seed becomes fully active (PROBATIONARY). |
+
 ### 7.1.3 Performance and Outcome
+
 The impact is identical, but the process is more robust and controlled. The network goes from failing to solving the task perfectly, with the new lifecycle ensuring the change was introduced safely and without disruption.
+
 | Phase                       | Total Parameters | XOR Accuracy | Notes                                         |
 |-----------------------------|------------------|--------------|-----------------------------------------------|
 | Pre-germination (DORMANT)   | 9                | 50%          | Linear bottleneck prevents learning           |
 | Post-Lifecycle (FOSSILIZED) | 15 (+6)          | 100%         | Added non-linear capacity solves the task     |
+
 ## 7.2 Full-Fidelity Managed Germination (make_moons)
+
 This section details the full prototype with all system components, tested on the more complex make_moons dataset.
 7.2.1 SYSTEM COMPONENTS
 • Frozen Base Network (BaseNet): A minimal MLP with two distinct seed sites, pre-trained and frozen.
@@ -106,6 +117,7 @@ This section details the full prototype with all system components, tested on th
 The make_moons dataset serves as a good proxy for tasks requiring a more nuanced decision boundary, testing the framework's ability to make intelligent, targeted additions.
 7.2.3 THE AUTHORITATIVE MANAGED GERMINATION LIFECYCLE
 The control flow is now governed by the full, 8-state lifecycle, managed by the interaction between the SeedManager, the TamiyoController, and the seed's internal logic.
+
 1. DORMANT: All seeds start here, passively collecting buffer data and reporting telemetry to Tamiyo.
 2. GERMINATED: When Tamiyo detects a performance plateau, it selects the seed with the worst health signal and a suitable blueprint from Karn's library. It requests germination from the SeedManager. The seed's state becomes GERMINATED, and it enters a training queue.
 3. TRAINING: The SeedManager promotes the next seed from the queue to the TRAINING state. The seed trains its child network locally. Its forward pass remains inert to the host network.
@@ -116,7 +128,9 @@ The control flow is now governed by the full, 8-state lifecycle, managed by the 
 8. CULLED (Failure): If the seed fails validation in the TRAINING, SHADOWING, or PROBATIONARY states, it is moved to the CULLED state. The SeedManager logs the failure and places the architectural slot under a timed embargo to prevent thrashing.
 7.2.4 OBSERVED OUTCOMES AND AUDIT TRAIL
 A typical run shows the system starting with sub‑optimal accuracy. After the loss plateaus, Tamiyo identifies the bottleneck and requests germination with a specific blueprint. The SeedManager logs the event and manages the seed's progression through the entire lifecycle. After the seed is FOSSILIZED, the model's accuracy improves significantly. The final audit log provides a rich, state‑by‑state history of all germination events, validations, successes, and failures.
+
 ## 7.3 Scalability & Baseline Comparison: CIFAR-10 Classification
+
 To validate the framework on a standard benchmark, we conducted experiments on the CIFAR-10 image classification task.
 7.3.1 EXPERIMENTAL SETUP
 
@@ -138,6 +152,7 @@ Upon the Tamiyo controller triggering germination, the SentinelSeed instantiated
 The experiment confirms that a targeted, agent-driven structural addition is more effective than a generic adapter. The robust lifecycle ensures this addition is safe and stable. The framework successfully specializes the model's feature space, achieving 60% of the accuracy gain of a full fine-tune with less than 0.5% of the parameter cost. This outcome strongly supports the framework's viability for updating capacity-constrained models in real-world scenarios.
 
 ## 7.4 Experimental Protocol
+
 This section defines a research‑oriented protocol for evaluating morphogenetic adaptation. It is designed to be transparent, reproducible, and safety‑aware, while remaining agnostic to implementation details.
 
 ### 7.4.1 Conditions
@@ -161,10 +176,12 @@ This section defines a research‑oriented protocol for evaluating morphogenetic
 | CIFAR‑10    | Standard train/val/test                | Baseline image classification benchmark     |
 
 ### 7.4.3 Measurement Windows
+
 The overall evaluation flow is illustrated in the evaluation pipeline figure (see Figures: 09-tables-and-figures.md).
 Unless stated otherwise, metrics are computed over a steady‑state window after convergence (e.g., last N validation epochs) and reported with mean ± 95% confidence intervals over R independent trials.
 
 ## 7.5 Metrics & Reporting
+
 ### 7.5.1 Primary and Secondary Metrics
 
 | Metric                       | Symbol            | Definition / Description                                                           |
@@ -192,6 +209,7 @@ Unless stated otherwise, metrics are computed over a steady‑state window after
 | No‑op ratio                     | Fraction of decisions choosing “no change”                                               |
 
 ## 7.6 Reporting Templates
+
 ### 7.6.1 XOR (sanity)
 
 | Method                          | Final Accuracy | ΔParams | ΔLatency | Drift | Notes |
@@ -234,7 +252,9 @@ Unless stated otherwise, metrics are computed over a steady‑state window after
 Optional figure: Pareto curve (Δ performance vs Δ parameters). Confidence bands reflect repeated trials.
 
 ### 7.6.5 Plot References
+
 For each dataset, include the following plots to accompany the tables:
+
 - Pareto curve: Δ performance vs Δ parameters.
 - Safety dashboard: drift, isolation violations, gate pass rates, cull/embargo counts.
 - Policy metrics: trigger precision/recall, selection entropy, no‑op ratio.
@@ -253,7 +273,9 @@ See Figure templates in Section 9.12.
 | Robustness (trigger bait)          | Various                              | Gates reject manufactured problems; culls increase             |
 
 ## 7.8 Statistical Treatment
+
 Report mean ± 95% confidence intervals over R independent runs per condition. Use a fixed randomisation protocol across methods. Where appropriate, apply paired tests between morphogenetic and baselines; adjust for multiple comparisons conservatively.
 
 ## 7.9 Reproducibility Notes
+
 Provide high‑level configuration descriptors (datasets, condition definitions, measurement windows, run counts) and random seeds used for reported aggregates. Avoid implementation details; ensure sufficient information to replicate results conceptually.

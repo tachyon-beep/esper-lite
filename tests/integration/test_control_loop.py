@@ -10,6 +10,9 @@ from esper.leyline import leyline_pb2
 from esper.oona import OonaClient, StreamConfig
 from esper.tolaria import KasminaClient, TamiyoClient, TolariaTrainer, TrainingLoopConfig
 from esper.kasmina import KasminaSeedManager
+from esper.security.signing import SignatureContext, sign
+
+SIGNING_CONTEXT = SignatureContext(secret=b"kasmina-integration-secret")
 
 
 class _TamiyoProbe(TamiyoClient):
@@ -28,6 +31,7 @@ class _TamiyoProbe(TamiyoClient):
         command.issued_at.GetCurrentTime()
         command.seed_operation.operation = leyline_pb2.SEED_OP_GERMINATE
         command.seed_operation.blueprint_id = "bp-integration"
+        command.annotations["signature"] = sign(command.SerializeToString(), SIGNING_CONTEXT)
         self.commands.append(command)
         return command
 
@@ -140,10 +144,14 @@ async def test_control_loop_with_kasmina_manager_exports_seed_states() -> None:
             cmd.issued_at.GetCurrentTime()
             cmd.seed_operation.operation = leyline_pb2.SEED_OP_GERMINATE
             cmd.seed_operation.blueprint_id = "bp-any"
+            cmd.annotations["signature"] = sign(cmd.SerializeToString(), SIGNING_CONTEXT)
             return cmd
 
     tamiyo = _TamiyoSeed()
-    kasmina = KasminaSeedManager(runtime=type("_R", (), {"fetch_kernel": lambda *_: (nn.Identity(), 1.0)})())
+    kasmina = KasminaSeedManager(
+        runtime=type("_R", (), {"fetch_kernel": lambda *_: (nn.Identity(), 1.0)})(),
+        signing_context=SIGNING_CONTEXT,
+    )
     kasmina.register_host_model(model)
     trainer = TolariaTrainer(
         model=model,
@@ -160,4 +168,12 @@ async def test_control_loop_with_kasmina_manager_exports_seed_states() -> None:
     completion_state = states[-1]
     assert len(completion_state.seed_states) >= 1
     stages = {s.stage for s in completion_state.seed_states}
-    assert leyline_pb2.SEED_STAGE_TRAINING in stages or leyline_pb2.SEED_STAGE_STABILIZING in stages
+    assert any(
+        stage in stages
+        for stage in (
+            leyline_pb2.SEED_STAGE_TRAINING,
+            leyline_pb2.SEED_STAGE_BLENDING,
+            leyline_pb2.SEED_STAGE_SHADOWING,
+            leyline_pb2.SEED_STAGE_PROBATIONARY,
+        )
+    )

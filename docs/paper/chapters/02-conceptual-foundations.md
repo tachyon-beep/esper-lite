@@ -7,9 +7,8 @@ coauthors:
   - Codex CLI (OpenAI)
 ---
 
-# Conceptual Foundations
-
 ## 2.1 Morphogenetic Architecture
+
 The term morphogenetic architecture refers to a neural network design paradigm in which a static, frozen model is permitted to undergo controlled, localised structural evolution through the activation and training of embedded seed modules. These seeds act as encapsulated loci of potential development—capable of instantiating new parameters or substructures that expand or enhance the host model’s functionality, without modifying its pre‑existing weights or topology (see definitions in Preface: 00-preface.md).
 This architectural strategy draws loose inspiration from biological morphogenesis, where structures develop from localised triggers and encoded developmental rules rather than global template changes. However, the intent here is strictly functional: enabling targeted increases in representational or behavioural capacity under strict global constraints (cf. Parisi et al., 2019).
 Key features of a morphogenetic architecture:
@@ -21,7 +20,9 @@ Key features of a morphogenetic architecture:
 | Germination policy  | Rules defining when and how a seed may activate and instantiate additional structure                                   |
 | Local training only | Optimisation constrained to the seed’s scope; newly germinated parameters may be trained; base weights remain frozen   |
 This design is intended to preserve operational consistency, reproducibility, and safety guarantees while still allowing for adaptive behaviour and capacity extension when required.
+
 ## 2.2 The Role of the Seed
+
 A seed is the atomic unit of morphogenetic change. It is a tensor or module—initialised but untrained—embedded within a frozen host network and designed to remain inert unless explicitly triggered by the surrounding context. Seeds instantiate additional structure (e.g., sub‑layer, micro‑network, branching path) in response to local signals:
 
 | Trigger Signal                | Example                                                                 |
@@ -39,7 +40,9 @@ A seed may encode:
 | Control policy            | Rules for when and how germination occurs                                                            |
 | Loss contract             | Local optimisation targets that define success (e.g., reduce residual error, increase separability)  |
 In practice, the seed interface must be carefully constructed to ensure compatibility with upstream and downstream signals, preserve input‑output dimensionality, and avoid gradient leakage or interference across model boundaries. Lifecycle validation gates and safety mechanisms are detailed in Section 5 and illustrated in Figures (09-tables-and-figures.md).
+
 ## 2.3 Core Constraints and System Tensions
+
 The seed-based approach introduces a set of intentional constraints and unresolved tensions that shape its design space:
 Constraint Description
 Frozen base The host model is not updated or retrained. Only seed modules may be modified.

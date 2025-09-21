@@ -12,6 +12,7 @@ from esper.leyline import leyline_pb2
 from esper.tezzeret import CompileJobConfig, TezzeretCompiler
 from esper.urza import UrzaLibrary, UrzaRuntime
 from esper.urza.pipeline import BlueprintPipeline, BlueprintRequest
+from esper.security.signing import SignatureContext, sign
 
 
 class _RuntimeStub:
@@ -23,22 +24,37 @@ class _RuntimeStub:
         return nn.Identity(), 1.0
 
 
+def test_lifecycle_default_state_is_dormant() -> None:
+    lifecycle = KasminaLifecycle()
+    assert lifecycle.state == leyline_pb2.SEED_STAGE_DORMANT
+
+
 def test_lifecycle_transitions_follow_order() -> None:
     lifecycle = KasminaLifecycle()
-    lifecycle.transition(leyline_pb2.SEED_STAGE_GERMINATING)
-    lifecycle.transition(leyline_pb2.SEED_STAGE_TRAINING)
-    assert lifecycle.state == leyline_pb2.SEED_STAGE_TRAINING
+    ordered = [
+        leyline_pb2.SEED_STAGE_GERMINATED,
+        leyline_pb2.SEED_STAGE_TRAINING,
+        leyline_pb2.SEED_STAGE_BLENDING,
+        leyline_pb2.SEED_STAGE_SHADOWING,
+        leyline_pb2.SEED_STAGE_PROBATIONARY,
+        leyline_pb2.SEED_STAGE_FOSSILIZED,
+        leyline_pb2.SEED_STAGE_TERMINATED,
+    ]
+    for stage in ordered:
+        lifecycle.transition(stage)
+    assert lifecycle.state == leyline_pb2.SEED_STAGE_TERMINATED
 
 
 def test_lifecycle_rejects_invalid_transition() -> None:
     lifecycle = KasminaLifecycle()
     with pytest.raises(ValueError):
-        lifecycle.transition(leyline_pb2.SEED_STAGE_TRAINING)
+        lifecycle.transition(leyline_pb2.SEED_STAGE_SHADOWING)
 
 
 def test_seed_manager_grafts_and_retires_seed() -> None:
     runtime = _RuntimeStub()
-    manager = KasminaSeedManager(runtime=runtime)
+    manager = KasminaSeedManager(runtime=runtime, signing_context=_SIGNING_CONTEXT)
+    manager.register_host_model(nn.Linear(1, 1))
     command = leyline_pb2.AdaptationCommand(
         version=1,
         command_id="cmd-1",
@@ -47,8 +63,12 @@ def test_seed_manager_grafts_and_retires_seed() -> None:
     )
     command.seed_operation.operation = leyline_pb2.SEED_OP_GERMINATE
     command.seed_operation.blueprint_id = "bp-1"
+    _sign_command(command)
     manager.handle_command(command)
-    assert "seed-1" in manager.seeds()
+    seeds = manager.seeds()
+    assert "seed-1" in seeds
+    assert seeds["seed-1"].lifecycle.state == leyline_pb2.SEED_STAGE_PROBATIONARY
+    assert pytest.approx(seeds["seed-1"].alpha, rel=1e-5) == 1.0
     assert runtime.loaded == ["bp-1"]
 
     retire = leyline_pb2.AdaptationCommand(
@@ -58,8 +78,12 @@ def test_seed_manager_grafts_and_retires_seed() -> None:
         target_seed_id="seed-1",
     )
     retire.seed_operation.operation = leyline_pb2.SEED_OP_CULL
+    _sign_command(retire)
     manager.handle_command(retire)
     assert "seed-1" not in manager.seeds()
+    payload = manager.rollback_payload("seed-1")
+    assert payload is not None
+    assert payload["reason"] == "retired"
 
 
 def test_seed_manager_with_urza_runtime() -> None:
@@ -88,7 +112,8 @@ def test_seed_manager_with_urza_runtime() -> None:
             )
         )
         urza_runtime = UrzaRuntime(library)
-        manager = KasminaSeedManager(runtime=urza_runtime)
+        manager = KasminaSeedManager(runtime=urza_runtime, signing_context=_SIGNING_CONTEXT)
+        manager.register_host_model(nn.Linear(1, 1))
         command = leyline_pb2.AdaptationCommand(
             version=1,
             command_id="cmd",
@@ -97,36 +122,39 @@ def test_seed_manager_with_urza_runtime() -> None:
         )
         command.seed_operation.operation = leyline_pb2.SEED_OP_GERMINATE
         command.seed_operation.blueprint_id = "bp-1"
+        _sign_command(command)
         manager.handle_command(command)
         assert "seed-urza" in manager.seeds()
 
 
 def test_full_lifecycle_path() -> None:
     lc = KasminaLifecycle()
-    assert lc.state == leyline_pb2.SEED_STAGE_UNKNOWN
-    lc.transition(leyline_pb2.SEED_STAGE_GERMINATING)
-    lc.transition(leyline_pb2.SEED_STAGE_GRAFTING)
-    lc.transition(leyline_pb2.SEED_STAGE_STABILIZING)
+    stages = [
+        leyline_pb2.SEED_STAGE_GERMINATED,
+        leyline_pb2.SEED_STAGE_TRAINING,
+        leyline_pb2.SEED_STAGE_BLENDING,
+        leyline_pb2.SEED_STAGE_SHADOWING,
+        leyline_pb2.SEED_STAGE_PROBATIONARY,
+        leyline_pb2.SEED_STAGE_FOSSILIZED,
+        leyline_pb2.SEED_STAGE_TERMINATED,
+    ]
+    for stage in stages:
+        lc.transition(stage)
+    assert lc.state == leyline_pb2.SEED_STAGE_TERMINATED
+
+
+def test_cull_path_returns_to_dormant() -> None:
+    lc = KasminaLifecycle()
+    lc.transition(leyline_pb2.SEED_STAGE_GERMINATED)
     lc.transition(leyline_pb2.SEED_STAGE_TRAINING)
-    lc.transition(leyline_pb2.SEED_STAGE_EVALUATING)
-    lc.transition(leyline_pb2.SEED_STAGE_FINE_TUNING)
-    lc.transition(leyline_pb2.SEED_STAGE_EVALUATING)
-    lc.transition(leyline_pb2.SEED_STAGE_FOSSILIZED)
-    lc.transition(leyline_pb2.SEED_STAGE_CULLING)
-    lc.transition(leyline_pb2.SEED_STAGE_CANCELLED)
-    assert lc.state == leyline_pb2.SEED_STAGE_CANCELLED
+    lc.transition(leyline_pb2.SEED_STAGE_CULLED)
+    lc.transition(leyline_pb2.SEED_STAGE_EMBARGOED)
+    lc.transition(leyline_pb2.SEED_STAGE_RESETTING)
+    lc.transition(leyline_pb2.SEED_STAGE_DORMANT)
+    assert lc.state == leyline_pb2.SEED_STAGE_DORMANT
+_SIGNING_CONTEXT = SignatureContext(secret=b"kasmina-test-secret")
 
 
-def test_fast_path_to_training_and_cull() -> None:
-    lc = KasminaLifecycle()
-    lc.transition(leyline_pb2.SEED_STAGE_GERMINATING)
-    lc.transition(leyline_pb2.SEED_STAGE_TRAINING)  # fast path allowed
-    lc.transition(leyline_pb2.SEED_STAGE_CULLING)
-    lc.transition(leyline_pb2.SEED_STAGE_CANCELLED)
-    assert lc.state == leyline_pb2.SEED_STAGE_CANCELLED
-
-
-def test_cancel_from_unknown() -> None:
-    lc = KasminaLifecycle()
-    lc.transition(leyline_pb2.SEED_STAGE_CANCELLED)
-    assert lc.state == leyline_pb2.SEED_STAGE_CANCELLED
+def _sign_command(command: leyline_pb2.AdaptationCommand) -> None:
+    command.issued_at.GetCurrentTime()
+    command.annotations["signature"] = sign(command.SerializeToString(), _SIGNING_CONTEXT)
