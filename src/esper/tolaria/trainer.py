@@ -8,11 +8,13 @@ and extension points for later slices (see `docs/project/implementation_plan.md`
 from __future__ import annotations
 
 from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from dataclasses import dataclass, field
 from time import perf_counter, time_ns
 from typing import TYPE_CHECKING, Protocol
 from pathlib import Path
 import json
+import os
 
 import torch
 from torch import nn
@@ -184,7 +186,14 @@ class TolariaTrainer:
                 command = self._build_conservative_command()
 
             try:
-                self._kasmina.apply_command(command)
+                self._apply_kasmina_command(command)
+            except TimeoutError as exc:
+                failure_reason = failure_reason or "kasmina_timeout"
+                self._emit_event(
+                    "tolaria.kasmina_timeout",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"error": str(exc)},
+                )
             except Exception as exc:  # pragma: no cover - defensive
                 failure_reason = failure_reason or "kasmina_error"
                 self._emit_event(
@@ -397,7 +406,7 @@ class TolariaTrainer:
         health_summary = "stable"
         health_indicators = {"epoch": str(state.current_epoch)}
 
-        if hook_latency_ms and hook_latency_ms > 18.0:
+        if hook_latency_ms and hook_latency_ms > self._config.hook_budget_ms:
             events.append(
                 TelemetryEvent(
                     description="epoch_hook_latency_high",
@@ -408,7 +417,7 @@ class TolariaTrainer:
             health_status = leyline_pb2.HealthStatus.HEALTH_STATUS_DEGRADED
             health_summary = "epoch_hook_latency_high"
 
-        if stats.epoch_duration_ms > 18.0:
+        if stats.epoch_duration_ms > self._config.epoch_budget_ms:
             events.append(
                 TelemetryEvent(
                     description="latency_high",
@@ -432,6 +441,22 @@ class TolariaTrainer:
 
         if self._events:
             events.extend(self.drain_telemetry_events())
+
+        if health_status == leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY:
+            for event in events:
+                if event.level in (
+                    leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_ERROR,
+                    leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
+                ):
+                    health_status = leyline_pb2.HealthStatus.HEALTH_STATUS_DEGRADED
+                    health_summary = event.description
+                    break
+
+        if health_status != leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY:
+            health_indicators["priority"] = "MESSAGE_PRIORITY_HIGH"
+        else:
+            health_indicators["priority"] = "MESSAGE_PRIORITY_NORMAL"
 
         telemetry = build_telemetry_packet(
             packet_id=state.packet_id,
@@ -457,13 +482,24 @@ class TolariaTrainer:
         self, state: leyline_pb2.SystemStatePacket
     ) -> tuple[leyline_pb2.AdaptationCommand, float]:
         start = perf_counter()
-        command = self._tamiyo.evaluate_epoch(state)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(self._tamiyo.evaluate_epoch, state)
+            try:
+                command = future.result(timeout=self._config.tamiyo_timeout_s)
+            except FuturesTimeout as exc:
+                future.cancel()
+                raise TimeoutError("Tamiyo evaluation timed out") from exc
         latency_ms = (perf_counter() - start) * 1000.0
-        if latency_ms > self._config.tamiyo_timeout_s * 1000.0:
-            raise TimeoutError(
-                f"Tamiyo evaluation exceeded timeout ({latency_ms:.2f}ms)"
-            )
         return command, latency_ms
+
+    def _apply_kasmina_command(self, command: leyline_pb2.AdaptationCommand) -> None:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(self._kasmina.apply_command, command)
+            try:
+                future.result(timeout=self._config.tamiyo_timeout_s)
+            except FuturesTimeout as exc:
+                future.cancel()
+                raise TimeoutError("Kasmina command application timed out") from exc
 
     def _build_conservative_command(self) -> leyline_pb2.AdaptationCommand:
         cmd = leyline_pb2.AdaptationCommand()
@@ -546,7 +582,8 @@ class TolariaTrainer:
         """Persist model/optimizer state and update WAL.
 
         This is a lightweight prototype aligned with the old Tolaria design; it enables
-        rollback to the most recent epoch boundary.
+        rollback to the most recent epoch boundary. Multi-tier rollback and advanced
+        LR/optimizer governance are intentionally out of scope for this slice.
         """
 
         root = self._checkpoint_root()
@@ -556,9 +593,23 @@ class TolariaTrainer:
             "optimizer": self._optimizer.state_dict(),
             "epoch": epoch,
         }
-        torch.save(payload, ckpt_path)
+        tmp_ckpt = ckpt_path.with_suffix(".pt.tmp")
+        with open(tmp_ckpt, "wb") as handle:
+            torch.save(payload, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_ckpt, ckpt_path)
+        self._fsync_directory(ckpt_path.parent)
+
+        wal_path = root / "wal.json"
+        tmp_wal = wal_path.with_suffix(".tmp")
         wal = {"last_checkpoint": str(ckpt_path), "epoch": epoch}
-        (root / "wal.json").write_text(json.dumps(wal), encoding="utf-8")
+        with open(tmp_wal, "w", encoding="utf-8") as handle:
+            json.dump(wal, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_wal, wal_path)
+        self._fsync_directory(wal_path.parent)
 
     def rollback_to_last_checkpoint(self) -> bool:
         """Attempt to restore the last saved checkpoint via WAL.
@@ -585,6 +636,16 @@ class TolariaTrainer:
             # Optimizer may not restore perfectly across environments; best-effort
             pass
         return True
+
+    def _fsync_directory(self, path: Path) -> None:
+        try:
+            fd = os.open(str(path), os.O_DIRECTORY)
+        except (AttributeError, FileNotFoundError, NotADirectoryError, PermissionError):  # pragma: no cover - platform dependent
+            return
+        try:
+            os.fsync(fd)
+        finally:  # pragma: no cover - ensure descriptor closed
+            os.close(fd)
 
 
 __all__ = ["TolariaTrainer", "TrainingLoopConfig", "TamiyoClient", "KasminaClient"]

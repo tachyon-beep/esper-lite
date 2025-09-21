@@ -100,7 +100,8 @@ async def test_control_loop_integration_round_trip() -> None:
     latency_ms = _extract_metric(telemetry_packets[0], "tolaria.training.latency_ms")
     assert latency_ms >= 0.0
     events = {event.description for event in telemetry_packets[0].events}
-    if latency_ms > 18.0:
+    budget = trainer._config.epoch_budget_ms
+    if latency_ms > budget:
         assert "latency_high" in events
     else:
         assert "latency_high" not in events

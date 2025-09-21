@@ -105,6 +105,10 @@ def test_tolaria_trainer_emits_state_packets() -> None:
         leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY,
         leyline_pb2.HealthStatus.HEALTH_STATUS_DEGRADED,
     }
+    assert telemetry[0].system_health.indicators.get("priority") in {
+        "MESSAGE_PRIORITY_HIGH",
+        "MESSAGE_PRIORITY_NORMAL",
+    }
     metrics_snapshot = trainer.metrics_snapshot()
     assert metrics_snapshot["tolaria.epochs.total"] == 2.0
     assert metrics_snapshot["tolaria.epochs.failed"] == 0.0
@@ -235,6 +239,8 @@ def test_tolaria_enters_conservative_mode_on_tamiyo_timeout() -> None:
     assert snapshot["tolaria.mode.conservative"] == 1.0
     all_events = [event.description for pkt in trainer.telemetry_packets for event in pkt.events]
     assert "tolaria.conservative_mode_entered" in all_events
+    priorities = {pkt.system_health.indicators.get("priority") for pkt in trainer.telemetry_packets}
+    assert "MESSAGE_PRIORITY_HIGH" in priorities
 
 
 def test_tolaria_checkpoint_and_rollback(tmp_path, monkeypatch) -> None:
@@ -268,6 +274,8 @@ def test_tolaria_checkpoint_and_rollback(tmp_path, monkeypatch) -> None:
     # Run one epoch and capture a checkpoint
     list(trainer.run())
     saved_state = [p.detach().clone() for p in model.parameters()]
+    tmp_files = list((tmp_path / "tolaria" / "checkpoints").glob("*.tmp"))
+    assert not tmp_files
 
     # Mutate model with another tiny training step
     model.train()
