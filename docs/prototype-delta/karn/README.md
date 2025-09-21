@@ -6,6 +6,7 @@ Documents in this folder:
 - `delta-matrix.md` — requirement‑by‑requirement status with evidence
 - `traceability-map.md` — mapping of design assertions to code/tests
 - `implementation-roadmap.md` — plan to close gaps (Phase‑1 only)
+- `pytorch-2.8-upgrades.md` — 2.8 review (no changes needed in Karn; compile stays in Tezzeret)
 
 Design sources:
 - `docs/design/detailed_design/05-karn-unified-design.md`
