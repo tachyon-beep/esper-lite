@@ -6,5 +6,6 @@
 | Skip existing artifacts | `06-tezzeret.md` | Forge checks Urza before compile | `tests/tezzeret/test_runner.py::test_forge_skips_existing` |
 | Resume from WAL after failure | `06.1` | Forge WAL (`forge_wal.json`); compiler WAL | `tests/tezzeret/test_runner.py::test_forge_resumes_from_wal` |
 | Retry failed jobs | `06.1` | Compiler retries | `tests/tezzeret/test_runner.py::test_forge_retries_failed_job` |
-| torch.compile strategies, breakers, telemetry | `06.1` | — | — |
-
+| torch.compile pipeline + export guards | `06.1` | `compiler.py` (to be implemented); `pytorch-2.8-upgrades.md` | — |
+| Inductor cache and pre‑warm metrics | `06.1` | `compiler.py` persistence + pre‑warm | — |
+| Breakers + telemetry around compilation | `06.1` | `runner.py` (to be implemented) | — |
