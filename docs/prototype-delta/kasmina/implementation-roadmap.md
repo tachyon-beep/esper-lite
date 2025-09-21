@@ -15,5 +15,4 @@ Prioritised steps to reach parity with the design. This is documentation only; n
 
 Notes:
 - Where the design references optional features (e.g., KD), stub interfaces can land without enabling runtime paths until data/experiments require them.
-- Align lifecycle semantics: if 11‑state model (with G0–G5) remains authoritative, extend the Leyline enum alignment or model the additional states as internal substates with explicit gate checks.
-
+- Align lifecycle semantics: adopt the canonical 11‑state model (with G0–G5) via Leyline enums and use them directly (no internal substates or mappings).

@@ -2,17 +2,17 @@
 
 Objective: achieve parity with the design’s 11‑state lifecycle, guard gates (G0–G5), gradient‑isolation enforcement, safety stack, parameter registration, and supporting telemetry/performance tooling — with Leyline as the single authoritative source of truth for all data classes and enums.
 
-## Status Update (April 2025)
+## Current Prototype State (assessment)
 
-- **Lifecycle + Gates**: ✅ Leyline schema and Kasmina state machine now enforce the full 11-stage flow with G0–G5 guard rails.
-- **Safety Stack**: ⚠️ Circuit breaker and monotonic timers are wired in; pause/resume semantics remain on the backlog.
-- **Gradient Isolation**: ⚠️ Backward-hook monitor and alpha blender land, but automated dot-product enforcement still needs integration with the training loop.
-- **Parameter Registry & Teacher Protections**: ✅ Seed/teacher registration and validation complete.
-- **Memory Governance**: ⚠️ TTL caches operational; KD budgeting heuristics still TODO.
-- **Security Envelope**: ✅ HMAC signature, nonce ledger, and freshness checks gate all commands.
-- **Telemetry Pipeline**: ⚠️ Priority/rollback indicators emitted; emergency bypass transport still outstanding.
-- **Rollback Readiness**: ⚠️ Rollback payloads captured on failure/retire; SLA instrumentation pending.
-- **Knowledge Distillation**: ⚠️ Teacher model registration supported; KD loss plumbing to follow.
+- Lifecycle + Gates: Missing (reduced stage set; no G0–G5; no embargo/reset/terminated). Requires Leyline schema update first.
+- Safety Stack: Missing (no circuit breakers, monotonic timers, or pause/identity semantics).
+- Gradient Isolation: Missing (no backward hooks or blending; only a one‑time parameter‑ID overlap sanity check).
+- Parameter Registry & Teacher Protections: Missing.
+- Memory Governance: Missing (no TTL caches/GC; no KD budgeting).
+- Security Envelope: Missing in Kasmina (Oona bus supports optional HMAC; commands are not verified at Kasmina).
+- Telemetry Pipeline: Partial (basic metrics/events/health; no emergency bypass; no gate/rollback events).
+- Rollback Readiness: Missing.
+- Knowledge Distillation: Missing in Kasmina.
 
 Non‑goals:
 - Do not introduce any internal lifecycle overlays or enum mappings inside Kasmina (or any subsystem).
