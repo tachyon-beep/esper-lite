@@ -14,6 +14,8 @@ import contextlib
 from time import perf_counter, time_ns
 from typing import TYPE_CHECKING, Protocol
 from pathlib import Path
+import zlib
+import io
 import json
 import os
 
@@ -1538,27 +1540,31 @@ class TolariaTrainer:
 
         root = self._checkpoint_root()
         ckpt_path = root / "checkpoints" / f"ckpt-epoch-{epoch}.pt"
+        # Serialize checkpoint to bytes and compute CRC32 for durability verification
         payload = {
             "model": self._model.state_dict(),
             "optimizer": self._optimizer.state_dict(),
             "epoch": epoch,
         }
-        tmp_ckpt = ckpt_path.with_suffix(".pt.tmp")
-        with open(tmp_ckpt, "wb") as handle:
-            torch.save(payload, handle)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp_ckpt, ckpt_path)
+        buf = io.BytesIO()
+        torch.save(payload, buf)
+        ckpt_bytes = buf.getvalue()
+        ckpt_crc32 = int(zlib.crc32(ckpt_bytes) & 0xFFFFFFFF)
+        self._atomic_write_bytes(ckpt_path, ckpt_bytes)
         self._fsync_directory(ckpt_path.parent)
 
         wal_path = root / "wal.json"
-        tmp_wal = wal_path.with_suffix(".tmp")
-        wal = {"last_checkpoint": str(ckpt_path), "epoch": epoch}
-        with open(tmp_wal, "w", encoding="utf-8") as handle:
-            json.dump(wal, handle)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp_wal, wal_path)
+        wal = {
+            "wal_version": 1,
+            "last_checkpoint": str(ckpt_path),
+            "epoch": int(epoch),
+            "ckpt_crc32": ckpt_crc32,
+        }
+        # Compute a simple WAL CRC over canonical fields
+        wal_canonical = f"{wal['last_checkpoint']}:{wal['epoch']}:{wal['ckpt_crc32']}"
+        wal["wal_crc32"] = int(zlib.crc32(wal_canonical.encode("utf-8")) & 0xFFFFFFFF)
+        wal_bytes = json.dumps(wal, separators=(",", ":")).encode("utf-8")
+        self._atomic_write_bytes(wal_path, wal_bytes)
         self._fsync_directory(wal_path.parent)
 
     def rollback_to_last_checkpoint(self) -> bool:
@@ -1572,12 +1578,33 @@ class TolariaTrainer:
         if not wal_path.exists():
             return False
         try:
-            wal = json.loads(wal_path.read_text(encoding="utf-8"))
+            raw = wal_path.read_text(encoding="utf-8")
+            wal = json.loads(raw)
         except json.JSONDecodeError:
             return False
+        # Verify WAL CRC if present
+        try:
+            if "wal_crc32" in wal and "last_checkpoint" in wal and "epoch" in wal and "ckpt_crc32" in wal:
+                canonical = f"{wal['last_checkpoint']}:{int(wal['epoch'])}:{int(wal['ckpt_crc32'])}"
+                if int(wal["wal_crc32"]) != int(zlib.crc32(canonical.encode("utf-8")) & 0xFFFFFFFF):
+                    return False
+        except Exception:
+            return False
+
         ckpt_path = Path(wal.get("last_checkpoint", ""))
         if not ckpt_path.exists():
             return False
+        # Verify checkpoint CRC if present in WAL
+        try:
+            if "ckpt_crc32" in wal:
+                with open(ckpt_path, "rb") as fh:
+                    data = fh.read()
+                crc_actual = int(zlib.crc32(data) & 0xFFFFFFFF)
+                if crc_actual != int(wal["ckpt_crc32"]):
+                    return False
+        except Exception:
+            return False
+
         payload = torch.load(ckpt_path, map_location=self._config.device)
         self._model.load_state_dict(payload.get("model", {}))
         try:
@@ -1596,6 +1623,30 @@ class TolariaTrainer:
             os.fsync(fd)
         finally:  # pragma: no cover - ensure descriptor closed
             os.close(fd)
+
+    def _atomic_write_bytes(self, path: Path, data: bytes) -> None:
+        """Atomically write bytes to path using a .tmp and fsync (O_DSYNC if available)."""
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        # Try to use O_DSYNC if available for data sync writes
+        if hasattr(os, "O_DSYNC"):
+            flags |= os.O_DSYNC  # type: ignore[attr-defined]
+        try:
+            fd = os.open(str(tmp_path), flags, 0o644)
+            with os.fdopen(fd, "wb", closefd=True) as handle:
+                handle.write(data)
+                handle.flush()
+                try:
+                    os.fsync(handle.fileno())
+                except Exception:
+                    pass
+            os.replace(tmp_path, path)
+        finally:
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink(missing_ok=True)  # type: ignore[call-arg]
+            except Exception:
+                pass
 
 
 __all__ = ["TolariaTrainer", "TrainingLoopConfig", "TamiyoClient", "KasminaClient"]

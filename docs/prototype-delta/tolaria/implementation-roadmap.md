@@ -17,11 +17,14 @@ Goal: close the gap to the design without tech debt, keeping Leyline as the sing
 Status update:
 - Steps 1–2: Implemented (budgets, breaker, conservative mode, timeouts, telemetry).
 - Steps 3–4: Implemented (LR controller and optimizer rebuild manager with breaker guards and metrics).
-- Step 5: Outstanding.
+- Step 5: Implemented (seed‑aware aggregation via registry masks; attribution split from dataloader or Kasmina; optional PCGrad; per‑seed telemetry).
 - Step 6: Partially implemented (fast in‑mem snapshots + full restore with deadline; signaling/broadcast pending).
 - Step 7: Partially implemented (emergency controller with L4 halt paths; broadcast stubbed).
 - Step 8: Implemented (priority mapping in telemetry; Weatherlight routes HIGH/CRITICAL via Oona).
-- Step 9: Partially implemented (epoch‑scope profiler hooks + external harness).
+- Step 9: Implemented (epoch‑scope profiler hooks + record_function ranges; JSON traces).
+
+Additional prototype upgrades:
+- Durability: Implemented CRC32 and atomic WAL/ckpt writes with fsync and O_DSYNC (where supported).
 
 Notes:
 - All lifecycle/contract artefacts must use Leyline enums & messages directly; do not create local mirrors.
