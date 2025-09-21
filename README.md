@@ -2,6 +2,12 @@
 
 Esper-Lite is a streamlined morphogenetic control stack centred on a PyTorch 2.8 runtime. This scaffold establishes the shared tooling, package layout, and subsystem contracts needed to begin feature development across Tolaria, Kasmina, Tamiyo, Simic, and the blueprint and infrastructure services.
 
+## Architecture Summary
+
+For an end-to-end view of subsystems, contracts, flows, telemetry, and operational guardrails, see:
+
+- docs/architecture_summary.md
+
 ## Getting Started
 
 1. **Create a virtual environment**

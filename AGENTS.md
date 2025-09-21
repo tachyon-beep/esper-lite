@@ -1,5 +1,9 @@
 # Repository Guidelines
 
+## Agent Crib Sheet
+
+- When starting any task, skim docs/architecture_summary.md first. It summarizes subsystem responsibilities, Leyline contracts, safety/telemetry patterns, and key integration points. Treat it as the canonical quick reference when navigating code or adding features.
+
 ## Project Structure & Module Organization
 
 - Source modules live under `src/esper/`; create subsystem packages (e.g. `tolaria`, `kasmina`, `tamiyo`) in line with the detailed-design docs.
