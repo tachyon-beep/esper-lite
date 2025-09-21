@@ -172,6 +172,35 @@ def test_urza_runtime_verifies_checksum(tmp_path: Path) -> None:
     assert metrics["evictions"] >= 1.0
 
 
+def test_urza_library_maintenance_removes_expired(tmp_path: Path) -> None:
+    library = UrzaLibrary(root=tmp_path, cache_ttl_seconds=0)
+    metadata = _metadata("BPMNT")
+    artifact = tmp_path / "artifact-mnt.pt"
+    artifact.write_bytes(b"mnt")
+    library.save(metadata, artifact)
+
+    # Force expiry by backdating mtime.
+    old = artifact.stat().st_mtime - 10
+    os.utime(artifact, (old, old))
+
+    report = library.maintenance()
+    assert report["expired"] >= 1.0
+    assert library.get("BPMNT") is None
+
+
+def test_urza_library_maintenance_removes_missing_artifact(tmp_path: Path) -> None:
+    library = UrzaLibrary(root=tmp_path)
+    metadata = _metadata("BPMISS")
+    artifact = tmp_path / "artifact-miss.pt"
+    artifact.write_bytes(b"miss")
+    library.save(metadata, artifact)
+    artifact.unlink()
+
+    report = library.maintenance()
+    assert report["missing"] >= 1.0
+    assert library.get("BPMISS") is None
+
+
 def test_urza_library_breaker_enters_conservative_mode(tmp_path: Path) -> None:
     library = UrzaLibrary(
         root=tmp_path,

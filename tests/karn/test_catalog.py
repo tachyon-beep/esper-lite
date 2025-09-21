@@ -1,6 +1,11 @@
+import pytest
+
+from esper.leyline import leyline_pb2
+
 from esper.karn import (
     BlueprintDescriptor,
     BlueprintTier,
+    BlueprintQuery,
     KarnCatalog,
 )
 
@@ -57,3 +62,53 @@ def test_choose_template_deterministic_by_context() -> None:
         tier=BlueprintTier.BLUEPRINT_TIER_EXPERIMENTAL, context="exp"
     )
     assert experimental.tier == BlueprintTier.BLUEPRINT_TIER_EXPERIMENTAL
+
+
+def test_handle_query_validates_parameters() -> None:
+    catalog = KarnCatalog(load_defaults=False)
+    descriptor = _descriptor()
+    catalog.register(descriptor)
+
+    query = BlueprintQuery(
+        blueprint_id="bp-1",
+        parameters={"alpha": 0.5},
+    )
+    selection = catalog.handle_query(query)
+    assert selection.descriptor.blueprint_id == "bp-1"
+    metrics = catalog.metrics_snapshot()
+    assert metrics["karn.requests.total"] == 1.0
+    assert metrics["karn.requests.failed"] == 0.0
+    assert metrics["karn.selection.safe"] == 1.0
+
+
+def test_handle_query_rejects_out_of_bounds() -> None:
+    catalog = KarnCatalog(load_defaults=False)
+    descriptor = _descriptor()
+    catalog.register(descriptor)
+
+    with pytest.raises(ValueError):
+        catalog.handle_query(
+            BlueprintQuery(blueprint_id="bp-1", parameters={"alpha": 2.0})
+        )
+
+    metrics = catalog.metrics_snapshot()
+    assert metrics["karn.requests.failed"] == 1.0
+
+
+def test_karn_breaker_opens_after_failures() -> None:
+    catalog = KarnCatalog(
+        load_defaults=False,
+        breaker_failure_threshold=1,
+        breaker_timeout_s=60.0,
+    )
+
+    with pytest.raises(KeyError):
+        catalog.handle_query(BlueprintQuery(blueprint_id="missing", parameters={}))
+
+    with pytest.raises(RuntimeError):
+        catalog.handle_query(BlueprintQuery(blueprint_id="missing", parameters={}))
+
+    metrics = catalog.metrics_snapshot()
+    assert metrics["karn.requests.failed"] >= 1.0
+    assert metrics["karn.breaker.denied"] >= 1.0
+    assert metrics["karn.breaker.state"] == float(leyline_pb2.CIRCUIT_STATE_OPEN)

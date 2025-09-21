@@ -8,7 +8,9 @@ from .catalog import (
     BlueprintDescriptor,
     BlueprintParameterBounds,
     BlueprintTier,
+    BlueprintQuery,
     KarnCatalog,
+    KarnSelection,
 )
 from .templates import DEFAULT_BLUEPRINTS
 
@@ -16,6 +18,8 @@ __all__ = [
     "BlueprintDescriptor",
     "BlueprintParameterBounds",
     "BlueprintTier",
+    "BlueprintQuery",
     "KarnCatalog",
+    "KarnSelection",
     "DEFAULT_BLUEPRINTS",
 ]

@@ -310,6 +310,8 @@ class WeatherlightService:
                 break
             try:
                 await self._oona.housekeeping()
+                if self._urza_library is not None:
+                    self._urza_library.maintenance()
             except asyncio.CancelledError:  # pragma: no cover - cancellation path
                 raise
             except Exception as exc:  # pragma: no cover - defensive logging

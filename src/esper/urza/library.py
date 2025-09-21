@@ -220,6 +220,35 @@ class UrzaLibrary:
         snapshot.setdefault("query_duration_ms", snapshot.get("lookup_latency_ms", 0.0))
         return snapshot
 
+    def maintenance(self) -> dict[str, float]:
+        expired = 0
+        missing = 0
+        for blueprint_id, record in list(self._records.items()):
+            if self._is_expired(record):
+                self._evict_record(blueprint_id, record, delete_artifact=True)
+                expired += 1
+                continue
+            if not record.artifact_path.exists():
+                self._evict_record(blueprint_id, record, delete_artifact=False)
+                missing += 1
+        with self._engine.begin() as conn:
+            rows = conn.execute(select(self._table)).mappings()
+            for row in rows:
+                blueprint_id = row["blueprint_id"]
+                if blueprint_id in self._records:
+                    continue
+                record = self._record_from_row(row)
+                if self._is_expired(record):
+                    self._evict_record(blueprint_id, record, delete_artifact=True)
+                    expired += 1
+                elif not record.artifact_path.exists():
+                    self._evict_record(blueprint_id, record, delete_artifact=False)
+                    missing += 1
+        return {
+            "expired": float(expired),
+            "missing": float(missing),
+        }
+
     def evict(self, blueprint_id: str, *, delete_artifact: bool = False) -> bool:
         record = self._records.get(blueprint_id)
         if record is None:
