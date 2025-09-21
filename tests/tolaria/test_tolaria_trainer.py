@@ -100,6 +100,11 @@ def test_tolaria_trainer_emits_state_packets() -> None:
         "tolaria.epochs.total",
         "tolaria.epochs.failed",
         "tolaria.hook.latency_ms",
+        "tolaria.train.compile_enabled",
+        "tolaria.train.amp_enabled",
+        "tolaria.train.tf32_enabled",
+        "tolaria.train.foreach_enabled",
+        "tolaria.train.pin_memory",
     }.issubset(metric_names)
     assert telemetry[0].system_health.status in {
         leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY,
@@ -112,6 +117,8 @@ def test_tolaria_trainer_emits_state_packets() -> None:
     metrics_snapshot = trainer.metrics_snapshot()
     assert metrics_snapshot["tolaria.epochs.total"] == 2.0
     assert metrics_snapshot["tolaria.epochs.failed"] == 0.0
+    assert "tolaria.train.compile_enabled" in metrics_snapshot
+    assert "tolaria.train.amp_enabled" in metrics_snapshot
 
 
 def test_tolaria_advances_alpha_during_blending() -> None:
@@ -294,3 +301,58 @@ def test_tolaria_checkpoint_and_rollback(tmp_path, monkeypatch) -> None:
     restored_state = [p.detach().clone() for p in model.parameters()]
     for a, b in zip(saved_state, restored_state):
         assert torch.allclose(a, b)
+
+
+@pytest.mark.skipif(
+    not (hasattr(torch, "compile") and torch.cuda.is_available()),
+    reason="torch.compile unavailable",
+)
+def test_tolaria_compile_fallback(monkeypatch) -> None:
+    device = torch.device("cuda")
+    model = _dummy_model(4, 2).to(device)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+    loader = _dummy_loader(8, 4, 2)
+    tamiyo = _TamiyoStub()
+    kasmina = _KasminaStub()
+
+    def _failing_compile(fn, **kwargs):  # type: ignore[unused-argument]
+        raise RuntimeError("compile failure")
+
+    monkeypatch.setattr(torch, "compile", _failing_compile)
+
+    trainer = TolariaTrainer(
+        model=model,
+        optimizer=optimizer,
+        dataloader=loader,
+        tamiyo=tamiyo,
+        kasmina=kasmina,
+        config=TrainingLoopConfig(
+            max_epochs=1,
+            gradient_accumulation_steps=1,
+            device=device,
+            enable_compile=True,
+        ),
+    )
+
+    list(trainer.run())
+    metrics_snapshot = trainer.metrics_snapshot()
+    assert metrics_snapshot["tolaria.train.compile_enabled"] == 0.0
+    events = [event.description for pkt in trainer.telemetry_packets for event in pkt.events]
+    assert "tolaria.compile_fallback" in events
+
+
+def test_tolaria_amp_metrics_disabled_on_cpu() -> None:
+    model = _dummy_model(4, 2)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+    loader = _dummy_loader(8, 4, 2)
+    trainer = TolariaTrainer(
+        model=model,
+        optimizer=optimizer,
+        dataloader=loader,
+        tamiyo=_TamiyoStub(),
+        kasmina=_KasminaStub(),
+        config=TrainingLoopConfig(max_epochs=1, gradient_accumulation_steps=1, device=torch.device("cpu")),
+    )
+    metrics_snapshot = trainer.metrics_snapshot()
+    assert metrics_snapshot["tolaria.train.amp_enabled"] == 0.0
+    assert metrics_snapshot["tolaria.train.tf32_enabled"] in {0.0, 1.0}

@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from dataclasses import dataclass, field
+import contextlib
 from time import perf_counter, time_ns
 from typing import TYPE_CHECKING, Protocol
 from pathlib import Path
@@ -59,6 +60,10 @@ class TrainingLoopConfig:
     breaker_failure_threshold: int = 3
     breaker_success_threshold: int = 1
     breaker_timeout_s: float = 30.0
+    enable_compile: bool = True
+    enable_amp: bool = True
+    enable_tf32: bool = True
+    enable_foreach_optim: bool = True
 
 @dataclass(slots=True)
 class EpochStats:
@@ -89,6 +94,25 @@ class EpochStats:
         return self.sample_count / (self.epoch_duration_ms / 1000.0)
 
 
+_MATMUL_INITIALISED = False
+
+
+def _initialise_pytorch_defaults(enable_tf32: bool) -> bool:
+    """Apply PyTorch 2.8 matmul defaults once per process."""
+
+    global _MATMUL_INITIALISED
+    if not enable_tf32 or _MATMUL_INITIALISED:
+        return False
+    try:
+        torch.set_float32_matmul_precision("high")
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+    except Exception:  # pragma: no cover - best effort on CPU-only setups
+        return False
+    _MATMUL_INITIALISED = True
+    return True
+
+
 class TolariaTrainer:
     """Minimal training-loop coordinator for PyTorch 2.8 models."""
 
@@ -101,7 +125,28 @@ class TolariaTrainer:
         kasmina: KasminaClient,
         config: TrainingLoopConfig,
     ) -> None:
-        self._model = model.to(config.device)
+        self._device = config.device
+        self._device_type = self._device.type
+        self._non_blocking = self._device_type == "cuda"
+
+        self._tf32_enabled = _initialise_pytorch_defaults(
+            config.enable_tf32 and self._device_type == "cuda"
+        )
+
+        self._model = model.to(self._device)
+
+        if (
+            config.enable_foreach_optim
+            and self._device_type == "cuda"
+            and hasattr(optimizer, "defaults")
+        ):
+            for group in optimizer.param_groups:
+                group.setdefault("foreach", True)
+            optimizer.defaults["foreach"] = True
+            self._foreach_enabled = True
+        else:
+            self._foreach_enabled = False
+
         self._optimizer = optimizer
         self._dataloader = dataloader
         self._tamiyo = tamiyo
@@ -118,14 +163,59 @@ class TolariaTrainer:
         )
         snapshot = self._breaker.snapshot()
         self._conservative_mode = False
+        self._events: list[TelemetryEvent] = []
+        self._amp_enabled = (
+            self._config.enable_amp
+            and self._device_type == "cuda"
+            and torch.cuda.is_available()
+        )
+        self._amp_dtype = torch.bfloat16
+        self._scaler = torch.cuda.amp.GradScaler() if self._amp_enabled else None
+
+        self._compile_enabled = False
+        self._compiled_step = None
+        self._train_step_fn = self._eager_train_step
+        if (
+            self._config.enable_compile
+            and hasattr(torch, "compile")
+            and self._device_type == "cuda"
+        ):
+            try:
+                self._compiled_step = torch.compile(self._eager_train_step, dynamic=True)
+                self._train_step_fn = self._compiled_step
+                self._compile_enabled = True
+            except Exception as exc:  # pragma: no cover - best effort
+                self._emit_event(
+                    "tolaria.compile_fallback",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"error": type(exc).__name__},
+                )
+
+        # Enable pinned memory for CUDA workloads where possible
+        if self._device_type == "cuda" and hasattr(self._dataloader, "pin_memory"):
+            try:
+                if not getattr(self._dataloader, "pin_memory", False):
+                    self._dataloader.pin_memory = True
+                    self._pin_memory_enabled = True
+                else:
+                    self._pin_memory_enabled = True
+            except Exception:  # pragma: no cover - DataLoader may not allow mutation
+                self._pin_memory_enabled = False
+        else:
+            self._pin_memory_enabled = False
+
         self._metrics: dict[str, float] = {
             "tolaria.epochs.total": 0.0,
             "tolaria.epochs.failed": 0.0,
             "tolaria.breaker.state": float(snapshot.state),
             "tolaria.mode.conservative": 0.0,
             "tolaria.hook.latency_ms": 0.0,
+            "tolaria.train.compile_enabled": 1.0 if self._compile_enabled else 0.0,
+            "tolaria.train.amp_enabled": 1.0 if self._amp_enabled else 0.0,
+            "tolaria.train.tf32_enabled": 1.0 if self._tf32_enabled else 0.0,
+            "tolaria.train.foreach_enabled": 1.0 if self._foreach_enabled else 0.0,
+            "tolaria.train.pin_memory": 1.0 if self._pin_memory_enabled else 0.0,
         }
-        self._events: list[TelemetryEvent] = []
 
     def run(self) -> Iterable[leyline_pb2.SystemStatePacket]:
         """Run the training loop, yielding `SystemStatePacket`s each epoch."""
@@ -164,7 +254,8 @@ class TolariaTrainer:
                 command = self._build_conservative_command()
             else:
                 try:
-                    command, hook_latency_ms = self._invoke_tamiyo(state)
+                    with torch.inference_mode():
+                        command, hook_latency_ms = self._invoke_tamiyo(state)
                 except TimeoutError as exc:
                     failure_reason = failure_reason or "tamiyo_timeout"
                     self._emit_event(
@@ -186,7 +277,8 @@ class TolariaTrainer:
                 command = self._build_conservative_command()
 
             try:
-                self._apply_kasmina_command(command)
+                with torch.inference_mode():
+                    self._apply_kasmina_command(command)
             except TimeoutError as exc:
                 failure_reason = failure_reason or "kasmina_timeout"
                 self._emit_event(
@@ -254,24 +346,45 @@ class TolariaTrainer:
         stats = EpochStats()
         exporter = getattr(self._kasmina, "export_seed_states", None)
         advancer = getattr(self._kasmina, "advance_alpha", None)
+        accumulation_steps = max(1, self._config.gradient_accumulation_steps)
+
         for step, batch in enumerate(self._dataloader):
             inputs, targets = batch
-            inputs = inputs.to(self._config.device)
-            targets = targets.to(self._config.device)
-            outputs = self._model(inputs)
-            loss = self._compute_loss(outputs, (inputs, targets))
-            loss.backward()
-            stats.loss_sum += float(loss.detach())
+            inputs = inputs.to(self._device, non_blocking=self._non_blocking)
+            targets = targets.to(self._device, non_blocking=self._non_blocking)
+
+            try:
+                loss_tensor, correct_tensor = self._train_step_fn(inputs, targets)
+            except Exception as exc:
+                if self._compile_enabled:
+                    self._compile_enabled = False
+                    self._train_step_fn = self._eager_train_step
+                    self._metrics["tolaria.train.compile_enabled"] = 0.0
+                    self._emit_event(
+                        "tolaria.compile_runtime_fallback",
+                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                        attributes={"error": type(exc).__name__},
+                    )
+                    loss_tensor, correct_tensor = self._eager_train_step(inputs, targets)
+                else:
+                    raise
+            stats.loss_sum += float(loss_tensor.item())
             stats.sample_count += targets.size(0)
-            stats.correct += int((outputs.argmax(dim=1) == targets).sum().item())
+            stats.correct += int(correct_tensor.item())
+
+            step_ready = (step + 1) % accumulation_steps == 0
             grad_norm = 0.0
-            for param in self._model.parameters():
-                if param.grad is not None:
-                    grad_norm += float(param.grad.data.norm().item())
-            stats.gradient_norm_sum += grad_norm
-            if (step + 1) % self._config.gradient_accumulation_steps == 0:
-                self._optimizer.step()
+            if step_ready:
+                if self._scaler is not None:
+                    self._scaler.unscale_(self._optimizer)
+                grad_norm = self._compute_grad_norm()
+                if self._scaler is not None:
+                    self._scaler.step(self._optimizer)
+                    self._scaler.update()
+                else:
+                    self._optimizer.step()
                 self._optimizer.zero_grad(set_to_none=True)
+            stats.gradient_norm_sum += grad_norm
 
             if callable(exporter) and callable(advancer):
                 try:
@@ -398,6 +511,31 @@ class TolariaTrainer:
                     self._metrics.get("tolaria.hook.latency_ms", 0.0),
                     unit="ms",
                 ),
+                TelemetryMetric(
+                    "tolaria.train.compile_enabled",
+                    self._metrics.get("tolaria.train.compile_enabled", 0.0),
+                    unit="bool",
+                ),
+                TelemetryMetric(
+                    "tolaria.train.amp_enabled",
+                    self._metrics.get("tolaria.train.amp_enabled", 0.0),
+                    unit="bool",
+                ),
+                TelemetryMetric(
+                    "tolaria.train.tf32_enabled",
+                    self._metrics.get("tolaria.train.tf32_enabled", 0.0),
+                    unit="bool",
+                ),
+                TelemetryMetric(
+                    "tolaria.train.foreach_enabled",
+                    self._metrics.get("tolaria.train.foreach_enabled", 0.0),
+                    unit="bool",
+                ),
+                TelemetryMetric(
+                    "tolaria.train.pin_memory",
+                    self._metrics.get("tolaria.train.pin_memory", 0.0),
+                    unit="bool",
+                ),
             ]
         )
 
@@ -477,6 +615,31 @@ class TolariaTrainer:
         events = list(self._events)
         self._events.clear()
         return events
+
+    def _autocast_context(self):
+        if self._amp_enabled:
+            return torch.cuda.amp.autocast(dtype=self._amp_dtype)
+        return contextlib.nullcontext()
+
+    def _eager_train_step(
+        self, inputs: torch.Tensor, targets: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        with self._autocast_context():
+            outputs = self._model(inputs)
+            loss = self._compute_loss(outputs, (inputs, targets))
+        if self._scaler is not None:
+            self._scaler.scale(loss).backward()
+        else:
+            loss.backward()
+        correct = (outputs.argmax(dim=1) == targets).sum()
+        return loss.detach(), correct.detach()
+
+    def _compute_grad_norm(self) -> float:
+        grad_norm = 0.0
+        for param in self._model.parameters():
+            if param.grad is not None:
+                grad_norm += float(param.grad.detach().norm().item())
+        return grad_norm
 
     def _invoke_tamiyo(
         self, state: leyline_pb2.SystemStatePacket

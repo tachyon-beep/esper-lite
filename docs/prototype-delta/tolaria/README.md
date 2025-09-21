@@ -7,6 +7,7 @@ Documents in this folder:
 - `traceability-map.md` — mapping of design assertions to code/tests
 - `implementation-roadmap.md` — suggested backlog to close gaps without tech debt
 - `pytorch-2.8-upgrades.md` — mandatory training‑loop improvements (compile step, AMP, TF32, data transfer)
+- Profiling helper: see `scripts/profile_tolaria.py` for a ready-made loop instrumentation harness (described in `docs/project/profiling.md`).
 
 Design sources:
 - `docs/design/detailed_design/01-tolaria-unified-design.md`
@@ -45,3 +46,4 @@ Integration guide: advance Kasmina’s alpha each batch during BLENDING
 Notes
 - If using gradient accumulation, you can call `advance_alpha` every N batches to match accumulation.
 - α is managed on Kasmina’s side as a runtime buffer; changing it does not trigger graph retraces on the host.
+- Two-tier rollback (fast/full) and multi-seed conflict resolution remain explicitly out of scope for this prototype; see the roadmap for forward work.
