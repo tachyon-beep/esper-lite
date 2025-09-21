@@ -124,3 +124,123 @@ Upon the Tamiyo controller triggering germination, the SentinelSeed instantiated
 | Adapter Fine‑Tuning             | 92.1%          | 65k (0.58%)          | 1.04x                   | Parameter‑efficient; moderate accuracy gain    |
 | Morphogenetic (Post‑Germination)| 92.4%          | 50k (0.45%)          | 1.02x                   | Best accuracy‑to‑parameter trade‑off           |
 The experiment confirms that a targeted, agent-driven structural addition is more effective than a generic adapter. The robust lifecycle ensures this addition is safe and stable. The framework successfully specializes the model's feature space, achieving 60% of the accuracy gain of a full fine-tune with less than 0.5% of the parameter cost. This outcome strongly supports the framework's viability for updating capacity-constrained models in real-world scenarios.
+
+## 7.4 Experimental Protocol
+This section defines a research‑oriented protocol for evaluating morphogenetic adaptation. It is designed to be transparent, reproducible, and safety‑aware, while remaining agnostic to implementation details.
+
+### 7.4.1 Conditions
+
+| Condition                              | Description                                                                                 | Purpose                                  |
+|----------------------------------------|---------------------------------------------------------------------------------------------|------------------------------------------|
+| Baseline (Frozen)                      | Pre‑trained, frozen model with no structural change                                         | Reference signature and stability        |
+| Full fine‑tune (upper bound)           | All weights trainable                                                                       | Accuracy upper bound, not safety‑preserving |
+| Adapter fine‑tune (PEFT baseline)      | Low‑cost bottlenecks inserted and trained                                                   | Parameter‑efficient baseline             |
+| Morphogenetic (policy + gates)         | Policy‑driven germination with lifecycle validation gates                                   | Main method                              |
+| Morphogenetic (heuristic + gates)      | Heuristic triggers with identical lifecycle gates                                           | Policy ablation                          |
+| Morphogenetic (policy, no gates)       | Lifecycle gates suppressed                                                                  | Safety ablation                          |
+| Morphogenetic (random triggers)        | Random site/blueprint selection                                                             | Sanity ablation                          |
+
+### 7.4.2 Datasets
+
+| Dataset     | Split policy (conceptual)              | Notes                                       |
+|-------------|----------------------------------------|---------------------------------------------|
+| XOR         | Synthetic; balanced                    | Sanity and lifecycle demonstration          |
+| make_moons  | Synthetic; train/val/test              | Micro‑benchmark for managed germination     |
+| CIFAR‑10    | Standard train/val/test                | Baseline image classification benchmark     |
+
+### 7.4.3 Measurement Windows
+Unless stated otherwise, metrics are computed over a steady‑state window after convergence (e.g., last N validation epochs) and reported with mean ± 95% confidence intervals over R independent trials.
+
+## 7.5 Metrics & Reporting
+### 7.5.1 Primary and Secondary Metrics
+
+| Metric                       | Symbol            | Definition / Description                                                           |
+|------------------------------|-------------------|------------------------------------------------------------------------------------|
+| Functional gain              | ΔAcc (or ΔF1)     | Post‑intervention minus baseline task score                                        |
+| Parameter increase           | ΔParams           | Parameters added by successful germination                                          |
+| Latency change               | ΔLatency          | Inference latency delta (relative)                                                 |
+| Memory change                | ΔMemory           | Peak memory delta (relative)                                                       |
+
+### 7.5.2 Safety Metrics
+
+| Metric                          | Definition / Description                                                                 |
+|---------------------------------|------------------------------------------------------------------------------------------|
+| Interface drift                 | Change in activation statistics at graft boundaries                                      |
+| Isolation violations            | Fraction of steps with host–seed gradient leakage                                        |
+| Gate pass rates                 | Pass/fail counts for shadowing and probationary validation gates                         |
+| Cull & embargo counts           | Number of culled seeds and embargo invocations                                           |
+
+### 7.5.3 Policy Quality
+
+| Metric                          | Definition / Description                                                                 |
+|---------------------------------|------------------------------------------------------------------------------------------|
+| Trigger precision/recall        | Alignment of triggers with “useful growth” episodes (post‑hoc ≥τ functional gain)       |
+| Selection entropy               | Entropy of blueprint/site selection distributions                                        |
+| No‑op ratio                     | Fraction of decisions choosing “no change”                                               |
+
+## 7.6 Reporting Templates
+### 7.6.1 XOR (sanity)
+
+| Method                          | Final Accuracy | ΔParams | ΔLatency | Drift | Notes |
+|---------------------------------|----------------|---------|----------|-------|-------|
+| Baseline (Frozen)               |                |         |          |       |       |
+| Adapter fine‑tune               |                |         |          |       |       |
+| Morphogenetic (policy + gates)  |                |         |          |       |       |
+| Morphogenetic (heuristic + gates)|               |         |          |       |       |
+| Morphogenetic (no gates)        |                |         |          |       |       |
+
+### 7.6.2 make_moons (micro)
+
+| Method                          | Val Acc | Test Acc | ΔParams | ΔLatency | Drift | Gate Pass | Cull |
+|---------------------------------|---------|----------|---------|----------|-------|-----------|------|
+| Baseline (Frozen)               |         |          |         |          |       |           |      |
+| Adapter fine‑tune               |         |          |         |          |       |           |      |
+| Morphogenetic (policy + gates)  |         |          |         |          |       |           |      |
+| Morphogenetic (heuristic + gates)|        |          |         |          |       |           |      |
+| Morphogenetic (no gates)        |         |          |         |          |       |           |      |
+
+### 7.6.3 CIFAR‑10 (baseline)
+
+| Method                          | Val Acc | Test Acc | ΔParams | ΔLatency | Drift | Gate Pass | Cull |
+|---------------------------------|---------|----------|---------|----------|-------|-----------|------|
+| Baseline (Frozen)               |         |          |         |          |       |           |      |
+| Full fine‑tune                  |         |          |         |          |       |           |      |
+| Adapter fine‑tune               |         |          |         |          |       |           |      |
+| Morphogenetic (policy + gates)  |         |          |         |          |       |           |      |
+| Morphogenetic (heuristic + gates)|        |          |         |          |       |           |      |
+| Morphogenetic (no gates)        |         |          |         |          |       |           |      |
+
+### 7.6.4 Aggregate Reporting
+
+| Dataset    | Method                         | ΔAcc/F1 | ΔParams | ΔLatency | Drift | Notes |
+|------------|---------------------------------|---------|---------|----------|-------|-------|
+| XOR        |                                 |         |         |          |       |       |
+| make_moons |                                 |         |         |          |       |       |
+| CIFAR‑10   |                                 |         |         |          |       |       |
+
+Optional figure: Pareto curve (Δ performance vs Δ parameters). Confidence bands reflect repeated trials.
+
+### 7.6.5 Plot References
+For each dataset, include the following plots to accompany the tables:
+- Pareto curve: Δ performance vs Δ parameters.
+- Safety dashboard: drift, isolation violations, gate pass rates, cull/embargo counts.
+- Policy metrics: trigger precision/recall, selection entropy, no‑op ratio.
+See Figure templates in Section 9.12.
+
+## 7.7 Ablations
+
+| Ablation                          | Setting(s)                          | Hypothesis / Expected Effect                                  |
+|-----------------------------------|-------------------------------------|----------------------------------------------------------------|
+| Lifecycle gates                    | On vs Off                           | Gates reduce regressions; Off increases drift/culls            |
+| Blending schedule                  | Linear vs alternative               | Impacts stability during activation                            |
+| Growth budget                      | Tight vs loose                      | Affects trigger frequency, gains, and parameter footprint      |
+| Policy vs heuristic vs random      | As named                             | Policy yields higher useful‑trigger precision/recall           |
+| Seed site count                    | 1 vs N                              | More sites increase opportunity but also interference risk     |
+| Library size                        | Small vs large                      | Richer libraries improve gains up to saturation                |
+| Robustness (trigger bait)          | Various                              | Gates reject manufactured problems; culls increase             |
+
+## 7.8 Statistical Treatment
+Report mean ± 95% confidence intervals over R independent runs per condition. Use a fixed randomisation protocol across methods. Where appropriate, apply paired tests between morphogenetic and baselines; adjust for multiple comparisons conservatively.
+
+## 7.9 Reproducibility Notes
+Provide high‑level configuration descriptors (datasets, condition definitions, measurement windows, run counts) and random seeds used for reported aggregates. Avoid implementation details; ensure sufficient information to replicate results conceptually.

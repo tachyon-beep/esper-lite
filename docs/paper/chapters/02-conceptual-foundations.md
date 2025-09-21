@@ -12,7 +12,7 @@ generated_by: scripts/split_paper.py
 
 ## 2.1 Morphogenetic Architecture
 The term morphogenetic architecture refers to a neural network design paradigm in which a static, frozen model is permitted to undergo controlled, localised structural evolution through the activation and training of embedded seed modules. These seeds act as encapsulated loci of potential development—capable of instantiating new parameters or substructures that expand or enhance the host model’s functionality, without modifying its pre-existing weights or topology.
-This architectural strategy draws loose inspiration from biological morphogenesis, where structures develop from localised triggers and encoded developmental rules rather than global template changes. However, the intent here is strictly functional: enabling targeted increases in representational or behavioural capacity under strict global constraints.
+This architectural strategy draws loose inspiration from biological morphogenesis, where structures develop from localised triggers and encoded developmental rules rather than global template changes. However, the intent here is strictly functional: enabling targeted increases in representational or behavioural capacity under strict global constraints (cf. Parisi et al., 2019).
 Key features of a morphogenetic architecture:
 
 | Feature             | Description                                                                                                           |
@@ -47,7 +47,7 @@ Frozen base The host model is not updated or retrained. Only seed modules may be
 Local learning Optimisation is confined to the seed and its internal parameters. No external gradient propagation is permitted.
 Structural isolation Seeds must not introduce side effects, change tensor shapes, or compromise compatibility of the model pipeline.
 Trigger discipline Germination must occur only under defined and justified conditions to avoid uncontrolled capacity growth.
-These constraints reflect the deployment realities that motivate this design: systems that must remain functionally stable over long periods, support internal augmentation without global revalidation, and isolate new behaviour for auditability and safety review.
+These constraints reflect the deployment realities that motivate this design: systems that must remain functionally stable over long periods, support internal augmentation without global revalidation, and isolate new behaviour for auditability and safety review (Sun et al., 2024).
 However, these same constraints introduce system tensions, including:
 • Limited feedback: the seed may not receive sufficient gradient signal or task information to optimise effectively.
 • Structural rigidity: the inability to rewire or adapt upstream components may limit the expressivity of any local adaptation.

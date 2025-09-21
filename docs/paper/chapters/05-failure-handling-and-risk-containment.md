@@ -37,7 +37,7 @@ This framework replaces ambiguous “rollback” procedures with a formal, state
 | Re-entry to DORMANT       | After embargo, the module is reset to DORMANT and becomes eligible for a new attempt, often with a different blueprint from Karn.  |
 Each culling event is recorded in a SeedManager log, including failure type, the lifecycle stage at which it failed, and the blueprint used. This enables later audit, forensics, and pattern mining of recurrent faults.
 ## 5.3 Interface Drift Detection
-Frozen-base systems can still experience interface drift when a graft modifies the statistical distribution of features passed downstream. This is a primary failure condition checked during the PROBATIONARY stage.
+Frozen-base systems can still experience interface drift when a graft modifies the statistical distribution of features passed downstream. This is a primary failure condition checked during the PROBATIONARY stage, and relates to representational stability concerns studied in alignment work (e.g., Wortsman et al., 2024).
 
 | Detection Method              | Description                                                                                 |
 |------------------------------|---------------------------------------------------------------------------------------------|
