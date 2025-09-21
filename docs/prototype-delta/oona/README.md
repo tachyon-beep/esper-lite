@@ -1,6 +1,6 @@
 # Oona — Prototype Delta (Messaging Bus)
 
-Executive summary: the prototype implements a Redis Streams client with publish/consume methods, optional HMAC signing/verification via a shared secret, basic priority routing (NORMAL → EMERGENCY when depth exceeds a threshold), an optional drop threshold for backpressure, consumer‑group ack semantics, and a simple metrics snapshot. The full design specifies circuit breakers and conservative mode, TTL housekeeping beyond stream maxlen trimming, at‑least‑once with retry/claim/dead‑letter handling, richer telemetry (latency, breaker/backpressure counters), and a health surface. Leyline remains canonical for the envelope and message enums.
+Executive summary: the prototype implements a Redis Streams client with publish/consume methods, optional HMAC signing/verification via a shared secret, basic priority routing (NORMAL → EMERGENCY when depth exceeds a threshold), an optional drop threshold for backpressure, consumer‑group ack semantics, retry/claim/dead-letter handling, TTL housekeeping for aged entries, circuit breakers with conservative mode routing, and richer metrics/health snapshots. Remaining work covers latency instrumentation and the production health surface, but Leyline remains canonical for the envelope and message enums.
 
 Documents in this folder:
 - `delta-matrix.md` — requirement‑by‑requirement status with evidence
@@ -14,3 +14,4 @@ Design sources:
 Implementation evidence (primary):
 - `src/esper/oona/messaging.py`
 - Tests: `tests/oona/*`, plus integration usages in Tamiyo/Tolaria/Simic/Nissa tests
+- Kernel streams: `oona.kernels.requests`, `.ready`, `.errors` for prefetch UX

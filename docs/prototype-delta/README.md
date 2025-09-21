@@ -19,6 +19,7 @@ Principles
 Subsystem Index (in scope unless noted)
 
 - `kasmina/` — Execution layer: lifecycle, gates, isolation, safety.
+- `weatherlight/` — Foundation orchestrator: boots Oona, Urza prefetch, Kasmina prefetch, Tamiyo consumers.
 - `tolaria/` — Training orchestrator: epoch budget, LR controller, rollback.
 - `tamiyo/` — Strategic controller: policy, risk engine, field reports.
 - `simic/` — Offline trainer: replay, PPO/IMPALA, validation, updates.

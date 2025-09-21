@@ -5,6 +5,7 @@ Stores compiled blueprint metadata and artifacts per
 """
 
 from .library import UrzaLibrary
+from .prefetch import PrefetchMetrics, UrzaPrefetchWorker
 from .runtime import UrzaRuntime
 
-__all__ = ["UrzaLibrary", "UrzaRuntime"]
+__all__ = ["UrzaLibrary", "UrzaRuntime", "UrzaPrefetchWorker", "PrefetchMetrics"]

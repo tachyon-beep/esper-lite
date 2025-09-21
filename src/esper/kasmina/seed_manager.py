@@ -6,10 +6,11 @@ Actual kernel grafting logic will land in Slice 1 (see backlog TKT-102).
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 import time
 from dataclasses import dataclass, field
-import contextlib
 from typing import Callable, Iterable, Protocol
 
 import torch
@@ -18,6 +19,7 @@ from torch import nn
 
 from esper.core import TelemetryEvent, TelemetryMetric, build_telemetry_packet
 from esper.leyline import leyline_pb2
+from esper.leyline import leyline_pb2 as pb
 from google.protobuf import struct_pb2
 from esper.security.signing import DEFAULT_SECRET_ENV, SignatureContext
 
@@ -60,6 +62,22 @@ class BlueprintRuntime(Protocol):
     def fetch_kernel(self, blueprint_id: str) -> tuple[nn.Module, float]:
         """Load a compiled kernel module and return latency in milliseconds."""
         ...
+
+
+class PrefetchCoordinator(Protocol):
+    """Protocol for managing kernel prefetch requests."""
+
+    def request_kernel(
+        self,
+        seed_id: str,
+        blueprint_id: str,
+        *,
+        training_run_id: str | None = None,
+    ) -> str:
+        """Submit a prefetch request and return the request identifier."""
+
+    async def close(self) -> None:
+        """Clean up background tasks."""
 
 
 DEFAULT_EMBARGO_SECONDS = 30.0
@@ -130,6 +148,7 @@ class KasminaSeedManager:
         self._memory = KasminaMemoryManager()
         self._nonce_ledger = NonceLedger(ttl_seconds=nonce_ttl_seconds, clock=self._clock)
         self._rollback_records: dict[str, struct_pb2.Struct] = {}
+        self._last_rollback_latency_ms: float = 0.0
         self._teacher_model: nn.Module | None = None
         self._teacher_memory_budget_gb: float = 7.0
         self._teacher_memory_estimate_gb: float | None = None
@@ -139,6 +158,9 @@ class KasminaSeedManager:
             if gpu_cache_capacity and gpu_cache_capacity > 0
             else None
         )
+        self._prefetch: PrefetchCoordinator | None = None
+        self._prefetch_requests: dict[str, tuple[str, str]] = {}
+        self._request_counter: int = 0
         if signing_context is None:
             try:
                 signing_context = SignatureContext.from_environment(DEFAULT_SECRET_ENV)
@@ -275,6 +297,7 @@ class KasminaSeedManager:
         if epoch < 0:
             raise ValueError("epoch must be non-negative")
         self._current_epoch = epoch
+        self._memory.cleanup()
         gc_result = self._memory.periodic_gc(epoch)
         if "gc_counter" in gc_result:
             self._emit_telemetry(
@@ -324,6 +347,20 @@ class KasminaSeedManager:
             return events
 
         self._transition(context, pb.SEED_STAGE_GERMINATED)
+
+        if self._prefetch is not None:
+            request_id = self._register_prefetch(context, blueprint_id)
+            events.append(
+                TelemetryEvent(
+                    description="prefetch_requested",
+                    attributes={
+                        "seed_id": seed_id,
+                        "blueprint_id": blueprint_id,
+                        "request_id": request_id,
+                    },
+                )
+            )
+            return events
 
         allow, breaker_event = self._breaker.allow()
         if breaker_event:
@@ -418,33 +455,7 @@ class KasminaSeedManager:
         if not cache_hit and self._gpu_cache is not None and kernel is not None:
             self._gpu_cache.set(blueprint_id, kernel)
 
-        if not self._ensure_gate(
-            context,
-            pb.SEED_GATE_G1_GRADIENT_HEALTH,
-            events,
-            expected_stage=self._stage_name(pb.SEED_STAGE_TRAINING),
-        ):
-            return events
-
-        self._transition(context, pb.SEED_STAGE_TRAINING)
-
-        progression: tuple[tuple[int, int], ...] = (
-            (pb.SEED_STAGE_BLENDING, pb.SEED_GATE_G2_STABILITY),
-            (pb.SEED_STAGE_SHADOWING, pb.SEED_GATE_G3_INTERFACE),
-            (pb.SEED_STAGE_PROBATIONARY, pb.SEED_GATE_G4_SYSTEM_IMPACT),
-        )
-        for stage, gate in progression:
-            if context.lifecycle.state in (pb.SEED_STAGE_CULLED, pb.SEED_STAGE_TERMINATED):
-                break
-            if not self._ensure_gate(
-                context,
-                gate,
-                events,
-                expected_stage=self._stage_name(stage),
-            ):
-                break
-            self._transition(context, stage)
-
+        self._finalise_kernel_attachment(context, events)
         return events
 
     def _retire_seed(self, seed_id: str) -> list[TelemetryEvent]:
@@ -487,6 +498,9 @@ class KasminaSeedManager:
             blueprint_id = context.metadata.get("blueprint_id")
             if blueprint_id:
                 self._gpu_cache.delete(blueprint_id)
+        for request_id, (tracked_seed, _) in list(self._prefetch_requests.items()):
+            if tracked_seed == seed_id:
+                self._prefetch_requests.pop(request_id, None)
         self._record_rollback(seed_id, context, reason="retired")
         events.append(
             TelemetryEvent(
@@ -677,7 +691,11 @@ class KasminaSeedManager:
                 },
             )
         )
-        self._record_rollback(context.seed_id, context, reason=result.reason or "gate_failure")
+        latency_ms = self._record_rollback(
+            context.seed_id,
+            context,
+            reason=result.reason or "gate_failure",
+        )
         events.append(
             TelemetryEvent(
                 description="rollback_ready",
@@ -685,6 +703,7 @@ class KasminaSeedManager:
                 attributes={
                     "seed_id": context.seed_id,
                     "stage": pb.SeedLifecycleStage.Name(context.lifecycle.state),
+                    "latency_ms": f"{latency_ms:.3f}",
                 },
             )
         )
@@ -764,7 +783,8 @@ class KasminaSeedManager:
             context.alpha_steps = 0
             context.metadata.pop("alpha", None)
 
-    def _record_rollback(self, seed_id: str, context: SeedContext, *, reason: str) -> None:
+    def _record_rollback(self, seed_id: str, context: SeedContext, *, reason: str) -> float:
+        start = time.perf_counter()
         payload = struct_pb2.Struct()
         payload.update(
             {
@@ -774,6 +794,9 @@ class KasminaSeedManager:
             }
         )
         self._rollback_records[seed_id] = payload
+        latency_ms = (time.perf_counter() - start) * 1000.0
+        self._last_rollback_latency_ms = latency_ms
+        return latency_ms
 
     def _verify_command(
         self, command: leyline_pb2.AdaptationCommand, events: list[TelemetryEvent]
@@ -809,6 +832,124 @@ class KasminaSeedManager:
             )
         )
         return False
+
+    def _register_prefetch(self, context: SeedContext, blueprint_id: str) -> str:
+        if self._prefetch is None:
+            raise RuntimeError("Prefetch coordinator not configured")
+        self._request_counter += 1
+        training_run_id = context.metadata.get("training_run_id", "prototype")
+        request_id = self._prefetch.request_kernel(
+            context.seed_id,
+            blueprint_id,
+            training_run_id=training_run_id,
+        )
+        self._prefetch_requests[request_id] = (context.seed_id, blueprint_id)
+        context.metadata["prefetch_request_id"] = request_id
+        context.metadata["pending_kernel"] = "true"
+        return request_id
+
+    def set_prefetch(self, coordinator: PrefetchCoordinator) -> None:
+        self._prefetch = coordinator
+
+    def _finalise_kernel_attachment(
+        self,
+        context: SeedContext,
+        events: list[TelemetryEvent],
+    ) -> None:
+        if not self._ensure_gate(
+            context,
+            pb.SEED_GATE_G1_GRADIENT_HEALTH,
+            events,
+            expected_stage=self._stage_name(pb.SEED_STAGE_TRAINING),
+        ):
+            return
+
+        self._transition(context, pb.SEED_STAGE_TRAINING)
+
+        progression: tuple[tuple[int, int], ...] = (
+            (pb.SEED_STAGE_BLENDING, pb.SEED_GATE_G2_STABILITY),
+            (pb.SEED_STAGE_SHADOWING, pb.SEED_GATE_G3_INTERFACE),
+            (pb.SEED_STAGE_PROBATIONARY, pb.SEED_GATE_G4_SYSTEM_IMPACT),
+        )
+        for stage, gate in progression:
+            if context.lifecycle.state in (pb.SEED_STAGE_CULLED, pb.SEED_STAGE_TERMINATED):
+                break
+            if not self._ensure_gate(
+                context,
+                gate,
+                events,
+                expected_stage=self._stage_name(stage),
+            ):
+                break
+            self._transition(context, stage)
+
+    def process_prefetch_ready(self, ready: leyline_pb2.KernelArtifactReady) -> None:
+        entry = self._prefetch_requests.pop(ready.request_id, None)
+        if not entry:
+            return
+        seed_id, blueprint_id = entry
+        context = self._seeds.get(seed_id)
+        if not context:
+            return
+        events: list[TelemetryEvent] = [
+            TelemetryEvent(
+                description="prefetch_ready",
+                attributes={
+                    "seed_id": seed_id,
+                    "blueprint_id": blueprint_id,
+                    "request_id": ready.request_id,
+                },
+            )
+        ]
+        context.metadata["pending_kernel"] = "false"
+        try:
+            kernel, _ = self._runtime.fetch_kernel(blueprint_id)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            events.append(
+                TelemetryEvent(
+                    description="prefetch_attach_failed",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={
+                        "seed_id": seed_id,
+                        "reason": str(exc),
+                    },
+                )
+            )
+            self._emit_telemetry(events=events)
+            return
+        self._attach_kernel(seed_id, kernel)
+        context.kernel_attached = True
+        self._finalise_kernel_attachment(context, events)
+        self._emit_telemetry(events=events)
+
+    def process_prefetch_error(self, error: leyline_pb2.KernelArtifactError) -> None:
+        entry = self._prefetch_requests.pop(error.request_id, None)
+        if not entry:
+            return
+        seed_id, blueprint_id = entry
+        context = self._seeds.get(seed_id)
+        if not context:
+            return
+        context.metadata["pending_kernel"] = "false"
+        failure = GateResult(
+            gate=pb.SEED_GATE_G1_GRADIENT_HEALTH,
+            passed=False,
+            reason=error.reason,
+            attributes={"blueprint_id": blueprint_id},
+        )
+        events: list[TelemetryEvent] = [
+            TelemetryEvent(
+                description="prefetch_error",
+                level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                attributes={
+                    "seed_id": seed_id,
+                    "blueprint_id": blueprint_id,
+                    "reason": error.reason,
+                },
+            )
+        ]
+        self._handle_gate_failure(context, failure, events)
+        self._emit_telemetry(events=events)
     def register_host_model(self, model: nn.Module) -> None:
         """Register the host model whose params must remain isolated."""
 
@@ -1073,6 +1214,14 @@ class KasminaSeedManager:
                 unit="count",
             )
         )
+        if self._last_rollback_latency_ms > 0.0:
+            metrics.append(
+                TelemetryMetric(
+                    "kasmina.rollback.latency_ms",
+                    self._last_rollback_latency_ms,
+                    unit="ms",
+                )
+            )
 
         events = list(events_override or [])
         if self._last_fallback_used:
@@ -1226,6 +1375,13 @@ class KasminaSeedManager:
         """Return buffered telemetry packets for inspection/testing."""
 
         return list(self._telemetry_packets)
+
+    def drain_telemetry_packets(self) -> list[leyline_pb2.TelemetryPacket]:
+        """Return and clear buffered telemetry packets (runtime consumption)."""
+
+        packets = list(self._telemetry_packets)
+        self._telemetry_packets.clear()
+        return packets
 
     @property
     def isolation_violations(self) -> int:

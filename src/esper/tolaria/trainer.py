@@ -139,6 +139,8 @@ class TolariaTrainer:
         """Execute the forward/backward passes for one epoch."""
 
         stats = EpochStats()
+        exporter = getattr(self._kasmina, "export_seed_states", None)
+        advancer = getattr(self._kasmina, "advance_alpha", None)
         for step, batch in enumerate(self._dataloader):
             inputs, targets = batch
             inputs = inputs.to(self._config.device)
@@ -157,6 +159,14 @@ class TolariaTrainer:
             if (step + 1) % self._config.gradient_accumulation_steps == 0:
                 self._optimizer.step()
                 self._optimizer.zero_grad(set_to_none=True)
+
+            if callable(exporter) and callable(advancer):
+                try:
+                    for seed_state in exporter():
+                        if seed_state.stage == leyline_pb2.SEED_STAGE_BLENDING:
+                            advancer(seed_state.seed_id)
+                except Exception:  # pragma: no cover - defensive
+                    pass
 
         return stats
 

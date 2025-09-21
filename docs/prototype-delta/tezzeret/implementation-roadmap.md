@@ -8,7 +8,7 @@ Goal: evolve the forge to match the design (Leyline‑first, no tech debt).
 | 2 | Strategies | Add Fast (reduced flags) and Emergency (CPU‑only) strategies; optional Aggressive flag | Flexible performance envelope |
 | 3 | Circuit breakers | Breakers around timeouts, GPU utilisation, memory; conservative mode throttles concurrency and strategy | Safe degradation and recovery |
 | 4 | WAL durability | CRC headers and atomic O_DSYNC writes; resume incomplete jobs; unify forge+compiler WAL format | Robust crash recovery |
-| 5 | Telemetry | Emit `tezzeret.compilation.duration_ms{strategy}`, pre‑warm p50/p95, breaker state; publish via Oona | Operator visibility |
+| 5 | Telemetry | Emit `tezzeret.compilation.duration_ms{strategy}`, pre‑warm p50/p95, breaker state; publish via Oona | Partially complete — per‑job metrics captured and `KernelCatalogUpdate` published in pipeline; streaming telemetry pending |
 | 6 | Resource monitoring & TTL | Track GPU/memory; TTL cleanup on caches/queues; periodic maintenance | Bounded resource usage |
 | 7 | Signing/versioning | Add artifact signatures and semantic versioning in Urza metadata; eager‑fallback flag | Integrity and traceability |
 

@@ -22,6 +22,11 @@ def test_compiler_persists_artifact() -> None:
         assert path.exists()
         module = torch.load(path)
         assert module.blueprint_params["alpha"] == 0.1
+        update = compiler.latest_catalog_update()
+        assert update is not None
+        assert update.blueprint_id == "bp-1"
+        assert update.artifact_ref == str(path)
+        assert update.checksum
 
 
 def test_compiler_retries_and_clears_wal(tmp_path) -> None:

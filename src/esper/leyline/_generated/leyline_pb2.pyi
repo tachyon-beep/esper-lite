@@ -122,6 +122,10 @@ class BusMessageType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     BUS_MESSAGE_TYPE_FIELD_REPORT: _ClassVar[BusMessageType]
     BUS_MESSAGE_TYPE_TELEMETRY: _ClassVar[BusMessageType]
     BUS_MESSAGE_TYPE_POLICY_UPDATE: _ClassVar[BusMessageType]
+    BUS_MESSAGE_TYPE_KERNEL_PREFETCH_REQUEST: _ClassVar[BusMessageType]
+    BUS_MESSAGE_TYPE_KERNEL_PREFETCH_READY: _ClassVar[BusMessageType]
+    BUS_MESSAGE_TYPE_KERNEL_PREFETCH_ERROR: _ClassVar[BusMessageType]
+    BUS_MESSAGE_TYPE_KERNEL_CATALOG_UPDATE: _ClassVar[BusMessageType]
 SEED_STAGE_UNKNOWN: SeedLifecycleStage
 SEED_STAGE_DORMANT: SeedLifecycleStage
 SEED_STAGE_GERMINATED: SeedLifecycleStage
@@ -197,6 +201,10 @@ BUS_MESSAGE_TYPE_ADAPTATION_COMMAND: BusMessageType
 BUS_MESSAGE_TYPE_FIELD_REPORT: BusMessageType
 BUS_MESSAGE_TYPE_TELEMETRY: BusMessageType
 BUS_MESSAGE_TYPE_POLICY_UPDATE: BusMessageType
+BUS_MESSAGE_TYPE_KERNEL_PREFETCH_REQUEST: BusMessageType
+BUS_MESSAGE_TYPE_KERNEL_PREFETCH_READY: BusMessageType
+BUS_MESSAGE_TYPE_KERNEL_PREFETCH_ERROR: BusMessageType
+BUS_MESSAGE_TYPE_KERNEL_CATALOG_UPDATE: BusMessageType
 
 class HardwareContext(_message.Message):
     __slots__ = ("device_type", "device_id", "total_memory_gb", "available_memory_gb", "temperature_celsius", "utilization_percent", "compute_capability")
@@ -356,6 +364,62 @@ class AdaptationCommand(_message.Message):
     rollback_payload: _struct_pb2.Struct
     annotations: _containers.ScalarMap[str, str]
     def __init__(self, version: _Optional[int] = ..., command_id: _Optional[str] = ..., command_type: _Optional[_Union[CommandType, str]] = ..., target_seed_id: _Optional[str] = ..., execution_deadline_ms: _Optional[int] = ..., issued_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., issued_by: _Optional[str] = ..., seed_operation: _Optional[_Union[CommandSeedOperation, _Mapping]] = ..., optimizer_adjustment: _Optional[_Union[CommandOptimizerAdjustment, _Mapping]] = ..., circuit_breaker: _Optional[_Union[CommandCircuitBreaker, _Mapping]] = ..., rollback_payload: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., annotations: _Optional[_Mapping[str, str]] = ...) -> None: ...
+
+class KernelPrefetchRequest(_message.Message):
+    __slots__ = ("request_id", "blueprint_id", "training_run_id", "issued_at")
+    REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
+    BLUEPRINT_ID_FIELD_NUMBER: _ClassVar[int]
+    TRAINING_RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    ISSUED_AT_FIELD_NUMBER: _ClassVar[int]
+    request_id: str
+    blueprint_id: str
+    training_run_id: str
+    issued_at: _timestamp_pb2.Timestamp
+    def __init__(self, request_id: _Optional[str] = ..., blueprint_id: _Optional[str] = ..., training_run_id: _Optional[str] = ..., issued_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
+
+class KernelArtifactReady(_message.Message):
+    __slots__ = ("request_id", "blueprint_id", "artifact_ref", "checksum", "guard_digest", "prewarm_p50_ms", "prewarm_p95_ms")
+    REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
+    BLUEPRINT_ID_FIELD_NUMBER: _ClassVar[int]
+    ARTIFACT_REF_FIELD_NUMBER: _ClassVar[int]
+    CHECKSUM_FIELD_NUMBER: _ClassVar[int]
+    GUARD_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    PREWARM_P50_MS_FIELD_NUMBER: _ClassVar[int]
+    PREWARM_P95_MS_FIELD_NUMBER: _ClassVar[int]
+    request_id: str
+    blueprint_id: str
+    artifact_ref: str
+    checksum: str
+    guard_digest: str
+    prewarm_p50_ms: float
+    prewarm_p95_ms: float
+    def __init__(self, request_id: _Optional[str] = ..., blueprint_id: _Optional[str] = ..., artifact_ref: _Optional[str] = ..., checksum: _Optional[str] = ..., guard_digest: _Optional[str] = ..., prewarm_p50_ms: _Optional[float] = ..., prewarm_p95_ms: _Optional[float] = ...) -> None: ...
+
+class KernelArtifactError(_message.Message):
+    __slots__ = ("request_id", "blueprint_id", "reason")
+    REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
+    BLUEPRINT_ID_FIELD_NUMBER: _ClassVar[int]
+    REASON_FIELD_NUMBER: _ClassVar[int]
+    request_id: str
+    blueprint_id: str
+    reason: str
+    def __init__(self, request_id: _Optional[str] = ..., blueprint_id: _Optional[str] = ..., reason: _Optional[str] = ...) -> None: ...
+
+class KernelCatalogUpdate(_message.Message):
+    __slots__ = ("blueprint_id", "artifact_ref", "checksum", "guard_digest", "compile_ms", "prewarm_ms")
+    BLUEPRINT_ID_FIELD_NUMBER: _ClassVar[int]
+    ARTIFACT_REF_FIELD_NUMBER: _ClassVar[int]
+    CHECKSUM_FIELD_NUMBER: _ClassVar[int]
+    GUARD_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    COMPILE_MS_FIELD_NUMBER: _ClassVar[int]
+    PREWARM_MS_FIELD_NUMBER: _ClassVar[int]
+    blueprint_id: str
+    artifact_ref: str
+    checksum: str
+    guard_digest: str
+    compile_ms: float
+    prewarm_ms: float
+    def __init__(self, blueprint_id: _Optional[str] = ..., artifact_ref: _Optional[str] = ..., checksum: _Optional[str] = ..., guard_digest: _Optional[str] = ..., compile_ms: _Optional[float] = ..., prewarm_ms: _Optional[float] = ...) -> None: ...
 
 class MitigationAction(_message.Message):
     __slots__ = ("action_type", "rationale")

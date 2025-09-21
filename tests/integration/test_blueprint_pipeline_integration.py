@@ -45,8 +45,9 @@ class _StaticPolicy:
         return {}
 
 
+@pytest.mark.asyncio
 @pytest.mark.integration
-def test_tamiyo_end_to_end_blueprint_pipeline(tmp_path) -> None:
+async def test_tamiyo_end_to_end_blueprint_pipeline(tmp_path) -> None:
     metadata = BlueprintDescriptor(
         blueprint_id="bp-end",
         name="End-to-End",
@@ -75,7 +76,7 @@ def test_tamiyo_end_to_end_blueprint_pipeline(tmp_path) -> None:
         parameters={"alpha": 0.2},
         training_run_id="run-123",
     )
-    response = pipeline.handle_request(request)
+    response = await pipeline.handle_request(request)
 
     assert Path(response.artifact_path).exists()
     record = library.get(metadata.blueprint_id)

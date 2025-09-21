@@ -9,6 +9,7 @@ Objective: achieve parity with the design’s 11‑state lifecycle, guard gates 
 - Gradient Isolation: Implemented (projection-based monitoring with `.detach()` blending, lifecycle-scoped hooks, dedicated breaker escalation).
 - Parameter Registry & Teacher Protections: Implemented (per‑seed ownership; teacher registration; update validation).
 - Memory Governance: Implemented (TTL caches, epoch-driven GC, emergency cleanup, teacher/KD budget telemetry).
+- Async Prefetch Orchestration: Implemented (PrefetchCoordinator + Urza worker; attach on KernelArtifactReady; fallback path retained).
 - Security Envelope: Implemented (HMAC verification, nonce ledger, freshness window per command).
 - Telemetry Pipeline: Partially Implemented (seed_stage, gate_event, health, priority; emergency bypass transport deferred).
 - Rollback Readiness: Partially Implemented (rollback payloads recorded; SLA timing deferred).

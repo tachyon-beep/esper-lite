@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -88,3 +89,26 @@ def test_urza_library_recovers_from_wal(tmp_path: Path) -> None:
     record = recovered.get("BPWAL")
     assert record is not None
     assert not wal.exists()
+
+
+def test_urza_library_cache_ttl_enforces_expiry(tmp_path: Path) -> None:
+    library_root = tmp_path / "library"
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    library = UrzaLibrary(root=library_root, cache_ttl_seconds=1)
+    metadata = _metadata("BPTTL")
+    artifact = source_root / "artifact.pt"
+    artifact.write_bytes(b"ttl")
+
+    library.save(metadata, artifact)
+    record = library.get("BPTTL")
+    assert record is not None
+    stored_path = record.artifact_path
+    old = (os.path.getmtime(stored_path) - 10)
+    os.utime(stored_path, (old, old))
+
+    expired = library.get("BPTTL")
+    assert expired is None
+    metrics = library.metrics_snapshot()
+    assert metrics["cache_expired"] >= 1.0
+    assert metrics["cache_misses"] >= 1.0

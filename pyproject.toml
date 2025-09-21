@@ -64,6 +64,7 @@ docs = [
 
 [project.scripts]
 esper-nissa-service = "esper.nissa.service_runner:main"
+esper-weatherlight-service = "esper.weatherlight.service_runner:main"
 
 [project.urls]
 "Homepage" = "https://github.com/esperai/esper-lite"

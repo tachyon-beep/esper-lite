@@ -119,6 +119,10 @@ enum BusMessageType {
   BUS_MESSAGE_TYPE_FIELD_REPORT = 3;
   BUS_MESSAGE_TYPE_TELEMETRY = 4;
   BUS_MESSAGE_TYPE_POLICY_UPDATE = 5;
+  BUS_MESSAGE_TYPE_KERNEL_PREFETCH_REQUEST = 6;
+  BUS_MESSAGE_TYPE_KERNEL_PREFETCH_READY = 7;
+  BUS_MESSAGE_TYPE_KERNEL_PREFETCH_ERROR = 8;
+  BUS_MESSAGE_TYPE_KERNEL_CATALOG_UPDATE = 9;
 }
 
 // -----------------------------------------------------------------------------
@@ -199,6 +203,42 @@ message AdaptationCommand {
     google.protobuf.Struct rollback_payload = 13;
   }
   map<string, string> annotations = 20;
+}
+
+// -----------------------------------------------------------------------------
+// Kernel Prefetch Pipeline
+// -----------------------------------------------------------------------------
+
+message KernelPrefetchRequest {
+  string request_id = 1;
+  string blueprint_id = 2;
+  string training_run_id = 3;
+  google.protobuf.Timestamp issued_at = 4;
+}
+
+message KernelArtifactReady {
+  string request_id = 1;
+  string blueprint_id = 2;
+  string artifact_ref = 3;
+  string checksum = 4;
+  string guard_digest = 5;
+  float prewarm_p50_ms = 6;
+  float prewarm_p95_ms = 7;
+}
+
+message KernelArtifactError {
+  string request_id = 1;
+  string blueprint_id = 2;
+  string reason = 3;
+}
+
+message KernelCatalogUpdate {
+  string blueprint_id = 1;
+  string artifact_ref = 2;
+  string checksum = 3;
+  string guard_digest = 4;
+  float compile_ms = 5;
+  float prewarm_ms = 6;
 }
 
 // -----------------------------------------------------------------------------

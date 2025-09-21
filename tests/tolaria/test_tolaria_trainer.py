@@ -30,9 +30,18 @@ class _TamiyoStub(TamiyoClient):
 class _KasminaStub(KasminaClient):
     def __init__(self) -> None:
         self.received: list[leyline_pb2.AdaptationCommand] = []
+        self.export_states: list[leyline_pb2.SeedState] = []
+        self.alpha_advances: list[str] = []
 
     def apply_command(self, command: leyline_pb2.AdaptationCommand) -> None:
         self.received.append(command)
+
+    def export_seed_states(self) -> list[leyline_pb2.SeedState]:
+        return list(self.export_states)
+
+    def advance_alpha(self, seed_id: str, *, steps: int = 1) -> float:
+        self.alpha_advances.append(seed_id)
+        return 0.0
 
 
 def _dummy_model(input_dim: int, output_dim: int) -> nn.Module:
@@ -84,6 +93,35 @@ def test_tolaria_trainer_emits_state_packets() -> None:
         leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY,
         leyline_pb2.HealthStatus.HEALTH_STATUS_DEGRADED,
     }
+
+
+def test_tolaria_advances_alpha_during_blending() -> None:
+    model = _dummy_model(4, 2)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+    loader = _dummy_loader(8, 4, 2)
+    tamiyo = _TamiyoStub()
+    kasmina = _KasminaStub()
+    seed_state = leyline_pb2.SeedState(
+        seed_id="seed-blending",
+        stage=leyline_pb2.SEED_STAGE_BLENDING,
+    )
+    kasmina.export_states = [seed_state]
+    trainer = TolariaTrainer(
+        model=model,
+        optimizer=optimizer,
+        dataloader=loader,
+        tamiyo=tamiyo,
+        kasmina=kasmina,
+        config=TrainingLoopConfig(
+            max_epochs=1,
+            gradient_accumulation_steps=1,
+            device=torch.device("cpu"),
+        ),
+    )
+
+    list(trainer.run())
+    assert kasmina.alpha_advances
+    assert kasmina.alpha_advances.count("seed-blending") >= 1
 
 
 @pytest.mark.asyncio

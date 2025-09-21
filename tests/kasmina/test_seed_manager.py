@@ -46,6 +46,25 @@ def _sign_command(command: leyline_pb2.AdaptationCommand) -> None:
     command.annotations["signature"] = signature
 
 
+class _PrefetchStub:
+    def __init__(self) -> None:
+        self.requests: list[tuple[str, str, str]] = []
+
+    def request_kernel(
+        self,
+        seed_id: str,
+        blueprint_id: str,
+        *,
+        training_run_id: str | None = None,
+    ) -> str:
+        request_id = f"req-{len(self.requests)}"
+        self.requests.append((request_id, seed_id, blueprint_id))
+        return request_id
+
+    async def close(self) -> None:
+        return None
+
+
 def _make_pause_command(seed_id: str, *, resume: bool = False) -> leyline_pb2.AdaptationCommand:
     command_id = f"{'resume' if resume else 'pause'}-{seed_id}"
     command = leyline_pb2.AdaptationCommand(
@@ -110,6 +129,52 @@ def test_seed_manager_emits_telemetry_for_commands() -> None:
     assert packet.source_subsystem == "kasmina"
     assert any(event.description == "seed_operation" for event in packet.events)
     assert any(event.description == "seed_stage" for event in packet.events)
+
+
+def test_prefetch_flow_attaches_kernel() -> None:
+    runtime = _Runtime()
+    prefetch = _PrefetchStub()
+    manager = KasminaSeedManager(runtime, signing_context=_SIGNING_CONTEXT)
+    manager.set_prefetch(prefetch)
+    manager.register_host_model(nn.Linear(1, 1))
+    command = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP777")
+    manager.handle_command(command)
+
+    assert prefetch.requests
+    request_id, seed_id, blueprint_id = prefetch.requests[0]
+    assert seed_id == "seed-1"
+    ready = leyline_pb2.KernelArtifactReady(
+        request_id=request_id,
+        blueprint_id=blueprint_id,
+        artifact_ref="/tmp/unused",
+        checksum="",
+        guard_digest="",
+        prewarm_p50_ms=0.0,
+        prewarm_p95_ms=0.0,
+    )
+    manager.process_prefetch_ready(ready)
+    seeds = manager.seeds()
+    assert seed_id in seeds
+    assert seeds[seed_id].kernel_attached
+
+
+def test_prefetch_error_triggers_gate_failure() -> None:
+    runtime = _Runtime()
+    prefetch = _PrefetchStub()
+    manager = KasminaSeedManager(runtime, signing_context=_SIGNING_CONTEXT)
+    manager.set_prefetch(prefetch)
+    manager.register_host_model(nn.Linear(1, 1))
+    command = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP888")
+    manager.handle_command(command)
+    request_id, seed_id, _ = prefetch.requests[0]
+    error = leyline_pb2.KernelArtifactError(
+        request_id=request_id,
+        blueprint_id="BP888",
+        reason="not_found",
+    )
+    manager.process_prefetch_error(error)
+    packet = manager.telemetry_packets[-1]
+    assert any(event.description == "prefetch_error" for event in packet.events)
 
 
 def test_record_isolation_violation_updates_health() -> None:

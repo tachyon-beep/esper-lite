@@ -30,6 +30,11 @@ class EsperSettings(BaseSettings):
         alias="OONA_TELEMETRY_STREAM", default="oona.telemetry"
     )
     oona_policy_stream: str = Field(alias="OONA_POLICY_STREAM", default="oona.policy")
+    oona_message_ttl_ms: int | None = Field(alias="OONA_MESSAGE_TTL_MS", default=900_000)
+    kernel_freshness_window_ms: int = Field(
+        alias="KERNEL_FRESHNESS_WINDOW_MS", default=60_000
+    )
+    kernel_nonce_cache_size: int = Field(alias="KERNEL_NONCE_CACHE_SIZE", default=4096)
 
     prometheus_pushgateway: str = Field(
         alias="PROMETHEUS_PUSHGATEWAY", default="http://localhost:9091"

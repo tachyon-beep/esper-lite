@@ -18,3 +18,30 @@ Design sources:
 Implementation evidence (primary):
 - `src/esper/tolaria/trainer.py`
 - Tests: `tests/tolaria/test_tolaria_trainer.py`, `tests/integration/test_control_loop.py`
+
+Integration guide: advance Kasmina’s alpha each batch during BLENDING
+- Goal: Smooth α ramp while seeds are grafting; call into Kasmina per batch.
+- Where: In `TolariaTrainer._train_single_epoch()` after backward()/optimiser step.
+- How:
+  - Discover seeds in BLENDING using `export_seed_states()` on the Kasmina client.
+  - For each, call `advance_alpha(seed_id)` once per batch (or once per accumulation step).
+- Example snippet:
+
+  ```python
+  # Inside training loop after optimizer.step()
+  from esper.leyline import leyline_pb2
+
+  exporter = getattr(self._kasmina, "export_seed_states", None)
+  advancer = getattr(self._kasmina, "advance_alpha", None)
+  if callable(exporter) and callable(advancer):
+      try:
+          for seed_state in exporter():
+              if seed_state.stage == leyline_pb2.SEED_STAGE_BLENDING:
+                  advancer(seed_state.seed_id)
+      except Exception:
+          pass  # best-effort in prototype
+  ```
+
+Notes
+- If using gradient accumulation, you can call `advance_alpha` every N batches to match accumulation.
+- α is managed on Kasmina’s side as a runtime buffer; changing it does not trigger graph retraces on the host.

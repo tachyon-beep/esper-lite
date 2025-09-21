@@ -4,6 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import pytest
+import torch
 from torch import nn
 
 from esper.karn import BlueprintDescriptor, BlueprintTier, KarnCatalog
@@ -86,7 +87,8 @@ def test_seed_manager_grafts_and_retires_seed() -> None:
     assert payload["reason"] == "retired"
 
 
-def test_seed_manager_with_urza_runtime() -> None:
+@pytest.mark.asyncio
+async def test_seed_manager_with_urza_runtime() -> None:
     catalog = KarnCatalog(load_defaults=False)
     metadata = BlueprintDescriptor(
         blueprint_id="bp-1",
@@ -104,7 +106,7 @@ def test_seed_manager_with_urza_runtime() -> None:
         library = UrzaLibrary(root=urza_root)
         compiler = TezzeretCompiler(config=CompileJobConfig(artifact_dir=artifact_dir))
         pipeline = BlueprintPipeline(catalog=catalog, compiler=compiler, library=library)
-        pipeline.handle_request(
+        await pipeline.handle_request(
             BlueprintRequest(
                 blueprint_id="bp-1",
                 parameters={"alpha": 0.5},

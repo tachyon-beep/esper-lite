@@ -10,8 +10,9 @@ Prioritised steps to reach parity with the design. This is documentation only; n
 | 4 | Telemetry priorities (Should‑have) | Elevate CRITICAL events (violations/breakers) and add emergency path | 1 | Faster operator awareness |
 | 5 | Security envelope (Should‑have) | Verify HMAC + nonce + freshness on incoming commands before action | None | Defend against replay and forgery |
 | 6 | Memory governance (Should‑have) | TTL caches, epoch GC plumbing; metrics; KD memory checks (stub until KD) | None | Predictable long‑run memory |
-| 7 | Performance validation (Nice‑to‑have) | Add micro‑benchmarks for load latency and isolation overhead; report via telemetry | 1–2 | Track regressions |
-| 8 | KD (Optional) | Teacher load + checkpointed memory budgeting; KD loss side‑channel | 3,6 | C‑024 capability |
+| 7 | Kernel prefetch (Must-have) | Use Oona/Urza prefetch for kernels; attach asynchronously; update telemetry | 1 | ✅ Implemented with Oona coordinator |
+| 8 | Performance validation (Nice‑to‑have) | Add micro‑benchmarks for load latency and isolation overhead; report via telemetry | 1–2 | Track regressions |
+| 9 | KD (Optional) | Teacher load + checkpointed memory budgeting; KD loss side‑channel | 3,6 | C‑024 capability |
 
 Notes:
 - Where the design references optional features (e.g., KD), stub interfaces can land without enabling runtime paths until data/experiments require them.

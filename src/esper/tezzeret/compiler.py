@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+import hashlib
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -17,6 +19,7 @@ from torch import nn
 from torch.serialization import add_safe_globals
 
 from esper.karn import BlueprintDescriptor
+from esper.leyline import leyline_pb2
 
 
 @dataclass(slots=True)
@@ -58,6 +61,7 @@ class TezzeretCompiler:
         self._error_sampler = error_sampler or (lambda _: False)
         self._wal_path = config.wal_path or (config.artifact_dir / "tezzeret_wal.json")
         self._wal_path.parent.mkdir(parents=True, exist_ok=True)
+        self._latest_catalog_update: leyline_pb2.KernelCatalogUpdate | None = None
 
     def compile(
         self,
@@ -73,6 +77,7 @@ class TezzeretCompiler:
 
         attempts = 0
         last_error: Exception | None = None
+        compile_start = time.perf_counter()
         while attempts <= self._config.max_retries:
             attempts += 1
             try:
@@ -80,6 +85,18 @@ class TezzeretCompiler:
                     raise RuntimeError("Simulated compile failure")
                 module = CompiledBlueprint(metadata.blueprint_id, params)
                 torch.save(module, artifact_path)
+                compile_ms = (time.perf_counter() - compile_start) * 1000.0
+                prewarm_start = time.perf_counter()
+                with torch.inference_mode():
+                    sample = torch.randn(1)
+                    module(sample)
+                prewarm_ms = (time.perf_counter() - prewarm_start) * 1000.0
+                self._latest_catalog_update = self._build_catalog_update(
+                    metadata,
+                    artifact_path,
+                    compile_ms,
+                    prewarm_ms,
+                )
                 self._clear_wal()
                 return artifact_path
             except Exception as exc:  # pragma: no cover - defensive guard
@@ -98,6 +115,38 @@ class TezzeretCompiler:
     def _clear_wal(self) -> None:
         if self._wal_path.exists():
             self._wal_path.unlink()
+
+    def latest_catalog_update(self) -> leyline_pb2.KernelCatalogUpdate | None:
+        return self._latest_catalog_update
+
+    def _build_catalog_update(
+        self,
+        metadata: BlueprintDescriptor,
+        artifact_path: Path,
+        compile_ms: float,
+        prewarm_ms: float,
+    ) -> leyline_pb2.KernelCatalogUpdate:
+        checksum = self._compute_checksum(artifact_path)
+        guard_digest = hashlib.sha256(
+            f"{metadata.blueprint_id}:{metadata.tier}".encode("utf-8")
+        ).hexdigest()
+        update = leyline_pb2.KernelCatalogUpdate(
+            blueprint_id=metadata.blueprint_id,
+            artifact_ref=str(artifact_path),
+            checksum=checksum,
+            guard_digest=guard_digest,
+            compile_ms=compile_ms,
+            prewarm_ms=prewarm_ms,
+        )
+        return update
+
+    @staticmethod
+    def _compute_checksum(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(8192), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
 
 
 __all__ = ["TezzeretCompiler", "CompileJobConfig", "CompiledBlueprint"]

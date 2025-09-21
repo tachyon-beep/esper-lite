@@ -63,7 +63,8 @@ class TezzeretForge:
             }
 
             artifact_path = self._compiler.compile(metadata, parameters)
-            self._library.save(metadata, artifact_path)
+            update = self._compiler.latest_catalog_update()
+            self._library.save(metadata, artifact_path, catalog_update=update)
             pending.remove(blueprint_id)
             self._persist_pending(pending)
 

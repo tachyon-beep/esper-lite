@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -32,7 +32,7 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from esper.core import EsperSettings
 from esper.karn import KarnCatalog
-from esper.kasmina import KasminaSeedManager
+from esper.kasmina import KasminaPrefetchCoordinator, KasminaSeedManager
 from esper.leyline import leyline_pb2
 from esper.nissa import NissaIngestor, NissaIngestorConfig
 from esper.oona import OonaClient, StreamConfig
@@ -95,7 +95,11 @@ def build_model() -> nn.Module:
     return nn.Sequential(nn.Linear(INPUT_DIM, 16), nn.ReLU(), nn.Linear(16, OUTPUT_DIM))
 
 
-def initialise_blueprint_pipeline(root: Path) -> tuple[KarnCatalog, UrzaLibrary, UrzaRuntime]:
+async def initialise_blueprint_pipeline(
+    root: Path,
+    *,
+    catalog_notifier: Callable[[leyline_pb2.KernelCatalogUpdate], Awaitable[None]] | None = None,
+) -> tuple[KarnCatalog, UrzaLibrary, UrzaRuntime]:
     catalog = KarnCatalog()
     blueprint_id = "BP001"
     blueprint = catalog.get(blueprint_id)
@@ -105,8 +109,13 @@ def initialise_blueprint_pipeline(root: Path) -> tuple[KarnCatalog, UrzaLibrary,
     artifact_dir = root / "artifacts"
     library = UrzaLibrary(root=root / "urza")
     compiler = TezzeretCompiler(config=CompileJobConfig(artifact_dir=artifact_dir))
-    pipeline = BlueprintPipeline(catalog=catalog, compiler=compiler, library=library)
-    pipeline.handle_request(
+    pipeline = BlueprintPipeline(
+        catalog=catalog,
+        compiler=compiler,
+        library=library,
+        catalog_notifier=catalog_notifier,
+    )
+    await pipeline.handle_request(
         BlueprintRequest(
             blueprint_id=blueprint_id,
             parameters={
@@ -189,9 +198,15 @@ async def run_demo() -> None:
 
     with TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
-        _, _, urza_runtime = initialise_blueprint_pipeline(root)
+        _, _, urza_runtime = await initialise_blueprint_pipeline(
+            root,
+            catalog_notifier=lambda update: oona.publish_kernel_catalog_update(update),
+        )
 
         kasmina_manager = KasminaSeedManager(runtime=urza_runtime)
+        prefetch_coordinator = KasminaPrefetchCoordinator(kasmina_manager, oona)
+        kasmina_manager.set_prefetch(prefetch_coordinator)
+        prefetch_coordinator.start()
         kasmina_adapter = DemoKasminaAdapter(kasmina_manager)
         tamiyo_service = TamiyoService()
         tamiyo_client = DemoTamiyoClient(tamiyo_service)
@@ -262,6 +277,7 @@ async def run_demo() -> None:
             len(tamiyo_service.policy_updates),
         )
 
+        await prefetch_coordinator.close()
     await oona.close()
 
 

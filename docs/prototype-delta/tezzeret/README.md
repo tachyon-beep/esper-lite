@@ -1,6 +1,6 @@
 # Tezzeret — Prototype Delta (Compilation Forge)
 
-Executive summary: the prototype includes a stub compiler that writes `CompiledBlueprint` modules to disk with a simple WAL, and a `TezzeretForge` that enumerates Karn templates and compiles them into Urza, resuming from a WAL on failure. The full design specifies polling, multiple compilation strategies (Fast/Standard/Aggressive/Emergency) on top of torch.compile, circuit breakers with conservative mode, resource monitoring, TTL cleanup, telemetry, and signing/versioning of artifacts.
+Executive summary: the prototype includes a stub compiler that writes `CompiledBlueprint` modules to disk with a simple WAL, and a `TezzeretForge` that enumerates Karn templates and compiles them into Urza, resuming from a WAL on failure. The compiler records compile and pre‑warm timings and emits a `KernelCatalogUpdate` (checksum, guard_digest placeholder, compile_ms, prewarm_ms), which the demo pipeline publishes to Oona. The full design specifies polling, multiple compilation strategies (Fast/Standard/Aggressive/Emergency) on top of torch.compile, export guards for shape validation, circuit breakers with conservative mode, resource monitoring, TTL cleanup, richer telemetry, and signing/versioning of artifacts.
 
 Documents in this folder:
 - `delta-matrix.md` — requirement‑by‑requirement status with evidence
@@ -15,3 +15,29 @@ Design sources:
 Implementation evidence (primary):
 - `src/esper/tezzeret/compiler.py`, `src/esper/tezzeret/runner.py`
 - Tests: `tests/tezzeret/test_compiler.py`, `tests/tezzeret/test_runner.py`
+
+Status (prototype)
+- Implemented: catalog enumeration; per‑job WAL; stub compilation; compile + pre‑warm timing; KernelCatalogUpdate emission (via pipeline); Urza metadata persists checksum/guard_digest(prelim)/pre‑warm samples.
+- Missing/Partial: torch.compile/export guards; Inductor cache reuse; breaker/telemetry around compilation; resource monitoring and TTL cleanup; signed/versioned artifacts.
+
+Next Actions (minimal, high‑leverage)
+- Torch 2.8 compile + export guards (compiler.py)
+  - Wrap blueprint modules with `torch.compile(..., dynamic=True)`; pre‑warm with representative shapes.
+  - Export guards with `torch.export` (shape/dtype/stride constraints) and persist alongside the artifact in Urza.
+  - On failure, fall back to eager, set an `eager_fallback=true` flag in the catalog update/Urza extras.
+- Inductor cache reuse (env + compiler.py)
+  - Honour `TORCHINDUCTOR_CACHE_DIR` (settable via env/EsperSettings) to persist the compiled cache; log cache path in KernelCatalogUpdate.
+- Breakers + conservative mode (runner.py)
+  - Add a small circuit breaker around per‑job compile (threshold/timeouts); when open, throttle to a “Fast” strategy or pause new jobs with backoff.
+  - Record breaker state and last error in a periodic telemetry heartbeat.
+- Telemetry (runner.py and/or pipeline caller)
+  - Emit `tezzeret.compilation.duration_ms{strategy}`, `tezzeret.prewarm.ms`, and breaker state via Oona’s telemetry stream at a modest interval.
+- Resource monitoring + TTL (runner.py)
+  - Sample GPU utilisation/memory (if CUDA available) and bound concurrency; schedule periodic TTL cleanup of any local caches/WAL debris.
+- Signing/versioning (compiler.py + Urza extras)
+  - Attach artifact version (semver) and a signature/HMAC (optional) in Urza’s `_urza` extras; include in KernelCatalogUpdate for traceability.
+
+Touchpoints
+- `src/esper/tezzeret/compiler.py`: implement compile/export/guards; attach metadata to `KernelCatalogUpdate`.
+- `src/esper/tezzeret/runner.py`: add breakers, telemetry emission, resource checks, and simple strategy selection.
+- `src/esper/urza/library.py`: store new guard/metadata fields (already handles extras); ensure retrieval to feed prefetch p50/p95.
