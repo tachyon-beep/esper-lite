@@ -12,15 +12,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from google.protobuf.json_format import MessageToDict, ParseDict
 from sqlalchemy import Column, MetaData, String, Table, create_engine, select, delete
 from sqlalchemy.engine import Engine
 
-from esper.karn import BlueprintMetadata, BlueprintTier
+from esper.karn import BlueprintDescriptor, BlueprintTier
 
 
 @dataclass(slots=True)
 class UrzaRecord:
-    metadata: BlueprintMetadata
+    metadata: BlueprintDescriptor
     artifact_path: Path
 
 
@@ -56,7 +57,7 @@ class UrzaLibrary:
         self._recover_from_wal()
         self._hydrate_cache()
 
-    def save(self, metadata: BlueprintMetadata, artifact_path: Path) -> None:
+    def save(self, metadata: BlueprintDescriptor, artifact_path: Path) -> None:
         destination = self._root / artifact_path.name
         destination.parent.mkdir(parents=True, exist_ok=True)
         if artifact_path != destination:
@@ -68,8 +69,9 @@ class UrzaLibrary:
     def get(self, blueprint_id: str) -> UrzaRecord | None:
         record = self._records.get(blueprint_id)
         if record:
+            clone = UrzaRecord(_clone(record.metadata), record.artifact_path)
             self._touch_cache(blueprint_id, record)
-            return record
+            return clone
 
         with self._engine.begin() as conn:
             result = conn.execute(
@@ -79,13 +81,20 @@ class UrzaLibrary:
             return None
         record = self._record_from_row(result)
         self._touch_cache(blueprint_id, record)
-        return record
+        return UrzaRecord(_clone(record.metadata), record.artifact_path)
 
     def list_all(self) -> dict[str, UrzaRecord]:
-        return dict(self._records)
+        return {
+            blueprint_id: UrzaRecord(_clone(record.metadata), record.artifact_path)
+            for blueprint_id, record in self._records.items()
+        }
 
     def fetch_by_tier(self, tier: BlueprintTier) -> Iterable[UrzaRecord]:
-        return [record for record in self._records.values() if record.metadata.tier is tier]
+        return [
+            UrzaRecord(_clone(record.metadata), record.artifact_path)
+            for record in self._records.values()
+            if record.metadata.tier == tier
+        ]
 
     def _hydrate_cache(self) -> None:
         with self._engine.begin() as conn:
@@ -96,37 +105,29 @@ class UrzaLibrary:
 
     def _record_from_row(self, row: Any) -> UrzaRecord:
         metadata_json = json.loads(row["metadata_json"])
-        metadata = BlueprintMetadata(
-            blueprint_id=row["blueprint_id"],
-            name=row["name"],
-            tier=BlueprintTier(metadata_json.get("tier", row["tier"])),
-            description=metadata_json.get("description", ""),
-            allowed_parameters={
-                key: tuple(value)
-                for key, value in metadata_json.get("allowed_parameters", {}).items()
-            },
-            risk=float(metadata_json.get("risk", 0.0)),
-            stage=int(metadata_json.get("stage", 0)),
-            quarantine_only=bool(metadata_json.get("quarantine_only", False)),
-            approval_required=bool(metadata_json.get("approval_required", False)),
-        )
+        metadata = BlueprintDescriptor()
+        ParseDict(metadata_json, metadata, ignore_unknown_fields=True)
+        if not metadata.blueprint_id:
+            metadata.blueprint_id = row["blueprint_id"]
+        if not metadata.name:
+            metadata.name = row["name"]
+        tier_value = row.get("tier")
+        if tier_value:
+            try:
+                metadata.tier = BlueprintTier.Value(tier_value)
+            except ValueError:  # stored as numeric string
+                metadata.tier = BlueprintTier(int(tier_value))  # type: ignore[arg-type]
         artifact_path = Path(row["artifact_path"])
-        return UrzaRecord(metadata=metadata, artifact_path=artifact_path)
+        return UrzaRecord(metadata=_clone(metadata), artifact_path=artifact_path)
 
-    def _persist_wal(self, metadata: BlueprintMetadata, destination: Path) -> None:
+    def _persist_wal(self, metadata: BlueprintDescriptor, destination: Path) -> None:
         payload = {
             "blueprint_id": metadata.blueprint_id,
             "artifact_path": str(destination),
-            "metadata": {
-                "name": metadata.name,
-                "tier": metadata.tier.value,
-                "description": metadata.description,
-                "allowed_parameters": metadata.allowed_parameters,
-                "risk": metadata.risk,
-                "stage": metadata.stage,
-                "quarantine_only": metadata.quarantine_only,
-                "approval_required": metadata.approval_required,
-            },
+            "descriptor": MessageToDict(
+                metadata,
+                preserving_proto_field_name=True,
+            ),
         }
         self._wal_path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -144,28 +145,20 @@ class UrzaLibrary:
         blueprint_id = payload.get("blueprint_id")
         if not blueprint_id:
             return
-        meta_json = payload.get("metadata", {})
-        metadata = BlueprintMetadata(
-            blueprint_id=blueprint_id,
-            name=meta_json.get("name", ""),
-            tier=BlueprintTier(meta_json.get("tier", BlueprintTier.SAFE.value)),
-            description=meta_json.get("description", ""),
-            allowed_parameters={
-                key: tuple(value)
-                for key, value in meta_json.get("allowed_parameters", {}).items()
-            },
-            risk=float(meta_json.get("risk", 0.0)),
-            stage=int(meta_json.get("stage", 0)),
-            quarantine_only=bool(meta_json.get("quarantine_only", False)),
-            approval_required=bool(meta_json.get("approval_required", False)),
-        )
+        descriptor_json = payload.get("descriptor", {})
+        metadata = BlueprintDescriptor()
+        ParseDict(descriptor_json, metadata, ignore_unknown_fields=True)
+        if not metadata.blueprint_id:
+            metadata.blueprint_id = blueprint_id
+        if metadata.tier == BlueprintTier.BLUEPRINT_TIER_UNSPECIFIED:
+            metadata.tier = BlueprintTier.BLUEPRINT_TIER_SAFE
         artifact = Path(payload.get("artifact_path", ""))
         if artifact.exists():
             self._upsert(metadata, artifact)
             self._clear_wal()
 
-    def _upsert(self, metadata: BlueprintMetadata, destination: Path) -> None:
-        record = UrzaRecord(metadata, destination)
+    def _upsert(self, metadata: BlueprintDescriptor, destination: Path) -> None:
+        record = UrzaRecord(_clone(metadata), destination)
         self._touch_cache(metadata.blueprint_id, record)
         with self._engine.begin() as conn:
             conn.execute(
@@ -175,18 +168,13 @@ class UrzaLibrary:
                 self._table.insert().values(
                     blueprint_id=metadata.blueprint_id,
                     name=metadata.name,
-                    tier=metadata.tier.value,
+                    tier=BlueprintTier.Name(metadata.tier),
                     artifact_path=str(destination),
                     metadata_json=json.dumps(
-                        {
-                            "allowed_parameters": metadata.allowed_parameters,
-                            "description": metadata.description,
-                            "tier": metadata.tier.value,
-                            "risk": metadata.risk,
-                            "stage": metadata.stage,
-                            "quarantine_only": metadata.quarantine_only,
-                            "approval_required": metadata.approval_required,
-                        }
+                        MessageToDict(
+                            metadata,
+                            preserving_proto_field_name=True,
+                        )
                     ),
                 )
             )
@@ -194,9 +182,15 @@ class UrzaLibrary:
     def _touch_cache(self, blueprint_id: str, record: UrzaRecord) -> None:
         if blueprint_id in self._records:
             self._records.pop(blueprint_id)
-        self._records[blueprint_id] = record
+        self._records[blueprint_id] = UrzaRecord(_clone(record.metadata), record.artifact_path)
         while len(self._records) > self._cache_size:
             self._records.popitem(last=False)
 
 
 __all__ = ["UrzaLibrary", "UrzaRecord"]
+
+
+def _clone(descriptor: BlueprintDescriptor) -> BlueprintDescriptor:
+    clone = BlueprintDescriptor()
+    clone.CopyFrom(descriptor)
+    return clone

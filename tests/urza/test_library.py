@@ -4,23 +4,30 @@ import json
 from pathlib import Path
 
 import pytest
+from google.protobuf.json_format import MessageToDict
 
-from esper.karn import BlueprintMetadata, BlueprintTier
+from esper.karn import (
+    BlueprintDescriptor,
+    BlueprintTier,
+)
 from esper.urza import UrzaLibrary
 
 
-def _metadata(blueprint_id: str, *, risk: float = 0.2, stage: int = 1) -> BlueprintMetadata:
-    return BlueprintMetadata(
+def _metadata(blueprint_id: str, *, risk: float = 0.2, stage: int = 1) -> BlueprintDescriptor:
+    descriptor = BlueprintDescriptor(
         blueprint_id=blueprint_id,
         name=f"Blueprint {blueprint_id}",
-        tier=BlueprintTier.SAFE,
+        tier=BlueprintTier.BLUEPRINT_TIER_SAFE,
         description="Unit test blueprint",
-        allowed_parameters={"alpha": (0.0, 1.0)},
         risk=risk,
         stage=stage,
         quarantine_only=False,
         approval_required=False,
     )
+    bounds = descriptor.allowed_parameters["alpha"]
+    bounds.min_value = 0.0
+    bounds.max_value = 1.0
+    return descriptor
 
 
 def test_urza_library_persists_metadata(tmp_path: Path) -> None:
@@ -40,7 +47,9 @@ def test_urza_library_persists_metadata(tmp_path: Path) -> None:
     relaunch = UrzaLibrary(root=tmp_path)
     persisted = relaunch.get("BPTEST")
     assert persisted is not None
-    assert persisted.metadata.allowed_parameters["alpha"] == (0.0, 1.0)
+    bounds = persisted.metadata.allowed_parameters["alpha"]
+    assert bounds.min_value == pytest.approx(0.0)
+    assert bounds.max_value == pytest.approx(1.0)
 
 
 def test_urza_library_cache_eviction(tmp_path: Path) -> None:
@@ -68,16 +77,10 @@ def test_urza_library_recovers_from_wal(tmp_path: Path) -> None:
     payload = {
         "blueprint_id": metadata.blueprint_id,
         "artifact_path": str(artifact),
-        "metadata": {
-            "name": metadata.name,
-            "tier": metadata.tier.value,
-            "description": metadata.description,
-            "allowed_parameters": metadata.allowed_parameters,
-            "risk": metadata.risk,
-            "stage": metadata.stage,
-            "quarantine_only": metadata.quarantine_only,
-            "approval_required": metadata.approval_required,
-        },
+        "descriptor": MessageToDict(
+            metadata,
+            preserving_proto_field_name=True,
+        ),
     }
     wal.write_text(json.dumps(payload), encoding="utf-8")
 

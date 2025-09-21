@@ -105,6 +105,33 @@ def _build_telemetry_packet() -> leyline_pb2.TelemetryPacket:
     )
 
 
+def _build_blueprint_descriptor() -> leyline_pb2.BlueprintDescriptor:
+    descriptor = leyline_pb2.BlueprintDescriptor(
+        blueprint_id="bp-42",
+        name="UnitTest",
+        tier=leyline_pb2.BlueprintTier.BLUEPRINT_TIER_EXPERIMENTAL,
+        risk=0.75,
+        stage=4,
+        quarantine_only=False,
+        approval_required=True,
+        description="Test blueprint",
+    )
+    bounds = descriptor.allowed_parameters["alpha"]
+    bounds.min_value = 0.1
+    bounds.max_value = 0.9
+    return descriptor
+
+
+def _build_bus_envelope() -> leyline_pb2.BusEnvelope:
+    descriptor = _build_blueprint_descriptor()
+    payload = descriptor.SerializeToString()
+    return leyline_pb2.BusEnvelope(
+        message_type=leyline_pb2.BusMessageType.BUS_MESSAGE_TYPE_SYSTEM_STATE,
+        payload=payload,
+        attributes={"origin": "unit-test"},
+    )
+
+
 def test_system_state_roundtrip_size() -> None:
     packet = _build_system_state()
     payload = packet.SerializeToString()
@@ -138,6 +165,26 @@ def test_telemetry_packet_roundtrip_size() -> None:
     clone.ParseFromString(payload)
     assert clone == packet
     assert len(payload) < 280
+
+
+def test_blueprint_descriptor_roundtrip() -> None:
+    descriptor = _build_blueprint_descriptor()
+    payload = descriptor.SerializeToString()
+    clone = leyline_pb2.BlueprintDescriptor()
+    clone.ParseFromString(payload)
+    assert clone == descriptor
+
+
+def test_bus_envelope_roundtrip() -> None:
+    envelope = _build_bus_envelope()
+    payload = envelope.SerializeToString()
+    clone = leyline_pb2.BusEnvelope()
+    clone.ParseFromString(payload)
+    assert clone.message_type == envelope.message_type
+    assert clone.attributes == envelope.attributes
+    descriptor = leyline_pb2.BlueprintDescriptor()
+    descriptor.ParseFromString(clone.payload)
+    assert descriptor.blueprint_id == "bp-42"
 
 
 _metric_names = (

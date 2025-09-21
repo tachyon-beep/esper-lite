@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from esper.karn import BlueprintMetadata, KarnCatalog
+from esper.karn import BlueprintDescriptor, KarnCatalog
 from esper.tezzeret import TezzeretCompiler
 from esper.urza import UrzaLibrary
 
@@ -18,7 +18,7 @@ class BlueprintRequest:
 
 @dataclass(slots=True)
 class BlueprintResponse:
-    metadata: BlueprintMetadata
+    metadata: BlueprintDescriptor
     artifact_path: str
 
 

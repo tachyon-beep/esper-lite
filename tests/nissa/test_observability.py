@@ -3,14 +3,6 @@ from fakeredis.aioredis import FakeRedis
 from fastapi.testclient import TestClient
 from prometheus_client import CollectorRegistry
 
-from esper.core import (
-    AdaptationCommand,
-    AdaptationDirective,
-    FieldReport,
-    FieldReportOutcome,
-    SystemStatePacket,
-    TrainingPhase,
-)
 from esper.core.telemetry import TelemetryMetric, build_telemetry_packet
 from esper.leyline import leyline_pb2
 from esper.nissa import NissaIngestor, NissaIngestorConfig
@@ -44,23 +36,10 @@ def test_ingest_telemetry_records_metrics_and_indexes() -> None:
 
     ingest.ingest_telemetry(packet)
 
-    state = SystemStatePacket(
-        run_id="run-1",
-        epoch_index=0,
-        phase=TrainingPhase.EPOCH,
-    )
+    state = {"run_id": "run-1", "epoch_index": 0, "phase": "epoch"}
     ingest.ingest_state(state)
 
-    report = FieldReport(
-        run_id="run-1",
-        command=AdaptationCommand(
-            run_id="run-1",
-            epoch_index=0,
-            directive=AdaptationDirective.NO_OP,
-        ),
-        outcome=FieldReportOutcome.SUCCESS,
-        metrics_delta={"loss_delta": -0.1},
-    )
+    report = {"run_id": "run-1", "outcome": "success", "metrics_delta": {"loss_delta": -0.1}}
     ingest.ingest_field_report(report)
 
     value = registry.get_sample_value(
@@ -68,11 +47,11 @@ def test_ingest_telemetry_records_metrics_and_indexes() -> None:
     )
     assert value == 1.0
     state_value = registry.get_sample_value(
-        "esper_system_state_packets_total", {"phase": TrainingPhase.EPOCH.value}
+        "esper_system_state_packets_total", {"phase": "epoch"}
     )
     assert state_value == 1.0
     report_value = registry.get_sample_value(
-        "esper_field_reports_total", {"outcome": FieldReportOutcome.SUCCESS.value}
+        "esper_field_reports_total", {"outcome": "success"}
     )
     assert report_value == 1.0
     assert es.indexed and es.indexed[0][0] == "telemetry"

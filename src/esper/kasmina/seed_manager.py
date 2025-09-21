@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+import contextlib
 from typing import Protocol
 
 from torch import nn
@@ -15,7 +16,8 @@ from torch import nn
 from esper.core import TelemetryEvent, TelemetryMetric, build_telemetry_packet
 from esper.leyline import leyline_pb2
 
-from .lifecycle import KasminaLifecycle, LifecycleEvent, LifecycleState
+from .lifecycle import KasminaLifecycle
+from esper.leyline import leyline_pb2 as pb
 
 
 logger = logging.getLogger(__name__)
@@ -57,6 +59,7 @@ class KasminaSeedManager:
         self._isolation_violations: int = 0
         self._telemetry_packets: list[leyline_pb2.TelemetryPacket] = []
         self._telemetry_counter: int = 0
+        self._host_param_ids: set[int] = set()
 
     def handle_command(self, command: leyline_pb2.AdaptationCommand) -> None:
         """Dispatch a Tamiyo command to the appropriate lifecycle handler."""
@@ -113,6 +116,10 @@ class KasminaSeedManager:
         if events:
             self._emit_telemetry(events=events)
 
+    # Compatibility: satisfy Tolaria's KasminaClient protocol
+    def apply_command(self, command: leyline_pb2.AdaptationCommand) -> None:  # pragma: no cover - thin wrapper
+        self.handle_command(command)
+
     def seeds(self) -> dict[str, SeedContext]:
         """Return the tracked seed contexts."""
 
@@ -124,14 +131,9 @@ class KasminaSeedManager:
 
         context = self._seeds.setdefault(seed_id, SeedContext(seed_id))
         lifecycle = context.lifecycle
-        if lifecycle.state == LifecycleState.DORMANT:
-            lifecycle.apply(LifecycleEvent.REGISTER)
-
-        if lifecycle.state == LifecycleState.REGISTERED:
-            lifecycle.apply(LifecycleEvent.GERMINATE)
-        elif lifecycle.state != LifecycleState.GERMINATING:
-            # Already in an active state; skip re-germination
-            pass
+        # Ensure lifecycle begins
+        if lifecycle.state == pb.SEED_STAGE_UNKNOWN:
+            lifecycle.transition(pb.SEED_STAGE_GERMINATING)
         try:
             kernel, latency_ms = self._runtime.fetch_kernel(blueprint_id)
             self._last_latency_ms = latency_ms
@@ -147,9 +149,14 @@ class KasminaSeedManager:
         except Exception as exc:  # pragma: no cover - defensive guard
             logger.error("Kasmina failed to load kernel %s: %s", blueprint_id, exc)
             kernel = self._load_fallback(seed_id)
+        # Progress through grafting/stabilizing if applicable
+        if lifecycle.state == pb.SEED_STAGE_GERMINATING:
+            with contextlib.suppress(Exception):
+                lifecycle.transition(pb.SEED_STAGE_GRAFTING)
+                lifecycle.transition(pb.SEED_STAGE_STABILIZING)
         self._attach_kernel(seed_id, kernel)
-        if lifecycle.state != LifecycleState.ACTIVE:
-            lifecycle.apply(LifecycleEvent.ACTIVATE)
+        if lifecycle.state != pb.SEED_STAGE_TRAINING:
+            lifecycle.transition(pb.SEED_STAGE_TRAINING)
 
     def _retire_seed(self, seed_id: str) -> None:
         context = self._seeds.get(seed_id)
@@ -157,15 +164,30 @@ class KasminaSeedManager:
             return
 
         lifecycle = context.lifecycle
-        if lifecycle.state in {LifecycleState.ACTIVE, LifecycleState.OBSERVING}:
-            lifecycle.apply(LifecycleEvent.RETIRE)
-            lifecycle.apply(LifecycleEvent.TERMINATE)
-            self._seeds.pop(seed_id, None)
+        # Begin culling path and cancel
+        if lifecycle.state in {pb.SEED_STAGE_TRAINING, pb.SEED_STAGE_EVALUATING, pb.SEED_STAGE_FINE_TUNING}:
+            with contextlib.suppress(Exception):
+                lifecycle.transition(pb.SEED_STAGE_CULLING)
+                lifecycle.transition(pb.SEED_STAGE_CANCELLED)
+        self._seeds.pop(seed_id, None)
 
     def _attach_kernel(self, seed_id: str, kernel: nn.Module) -> None:
         """Placeholder for kernel attachment logic."""
-
+        # Enforce gradient isolation: kernel parameters must not overlap
+        # with host model parameters. If overlap is detected, record a
+        # violation and proceed with attachment for robustness.
+        if self._host_param_ids:
+            for param in kernel.parameters(recurse=True):
+                if hasattr(param, "requires_grad") and param.requires_grad:
+                    if id(param) in self._host_param_ids:
+                        self.record_isolation_violation(seed_id)
+                        break
         _ = (seed_id, kernel)
+
+    def register_host_model(self, model: nn.Module) -> None:
+        """Register the host model whose params must remain isolated."""
+
+        self._host_param_ids = {id(p) for p in model.parameters(recurse=True)}
 
     def _load_fallback(self, seed_id: str) -> nn.Module:
         self._last_fallback_used = True
@@ -247,6 +269,17 @@ class KasminaSeedManager:
                     },
                 )
             )
+        # Add per-seed stage events for observability
+        for seed_id, ctx in self._seeds.items():
+            events.append(
+                TelemetryEvent(
+                    description="seed_stage",
+                    attributes={
+                        "seed_id": seed_id,
+                        "stage": pb.SeedLifecycleStage.Name(ctx.lifecycle.state),
+                    },
+                )
+            )
 
         health_status = leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY
         health_summary = "nominal"
@@ -307,6 +340,23 @@ class KasminaSeedManager:
         """Expose cumulative isolation violation count."""
 
         return self._isolation_violations
+
+    # -----------------------------
+    # Export to Leyline SeedState
+    # -----------------------------
+
+    def export_seed_states(self) -> list[leyline_pb2.SeedState]:
+        """Export internal lifecycle into Leyline SeedState messages."""
+
+        result: list[leyline_pb2.SeedState] = []
+        for seed_id, ctx in self._seeds.items():
+            state = leyline_pb2.SeedState(
+                seed_id=seed_id,
+                stage=ctx.lifecycle.state,
+                age_epochs=0,
+            )
+            result.append(state)
+        return result
 
 
 __all__ = ["KasminaSeedManager", "BlueprintRuntime", "SeedContext"]

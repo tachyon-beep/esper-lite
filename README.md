@@ -43,6 +43,12 @@ docker compose -f infra/docker-compose.redis.yml down
 
 Set `REDIS_URL` if you expose Redis on a non-default port.
 
+Or run all integration tests with automatic Redis bring-up/teardown:
+
+```bash
+scripts/run_integration.sh
+```
+
 ### Telemetry & Policy Streams
 
 - `OONA_NORMAL_STREAM`, `OONA_EMERGENCY_STREAM`, `OONA_TELEMETRY_STREAM`, and `OONA_POLICY_STREAM` define the Redis Streams used for Tolaria system state, Tamiyo telemetry, and Simic policy updates. Defaults are provided in `.env.example`.
@@ -68,6 +74,18 @@ Prometheus is preconfigured via `infra/prometheus/prometheus.yml` to scrape
 and is available on <http://localhost:3000> (admin/admin). Operational
 procedures and teardown steps live in
 `docs/project/observability_runbook.md`.
+
+Always-on local infra (recommended)
+
+```bash
+# Start all containers (Redis, Prometheus, Grafana, Elasticsearch) and leave them running
+scripts/start_all_infra.sh
+
+# When you need to stop them
+scripts/stop_all_infra.sh
+```
+
+All services are configured with `restart: unless-stopped`, so they’ll auto-restart on reboot.
 
 ### Leyline Contracts
 

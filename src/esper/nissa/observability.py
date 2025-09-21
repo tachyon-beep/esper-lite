@@ -15,7 +15,6 @@ from elasticsearch import Elasticsearch
 from google.protobuf.json_format import MessageToDict
 from prometheus_client import CollectorRegistry, Counter
 
-from esper.core import FieldReport, SystemStatePacket
 from esper.leyline import leyline_pb2
 from esper.nissa.alerts import AlertEngine, AlertRouter, DEFAULT_ALERT_RULES, AlertEvent
 from esper.nissa.slo import SLOTracker, SLOStatus
@@ -80,32 +79,24 @@ class NissaIngestor:
         )
         self._es = es_client or Elasticsearch(hosts=[config.elasticsearch_url])
 
-    def ingest_state(self, packet: SystemStatePacket | Mapping[str, object]) -> None:
-        """Ingest a system state packet from pydantic or dict payload."""
+    def ingest_state(self, packet: Mapping[str, object]) -> None:
+        """Ingest a system state packet from a mapping payload."""
 
-        if isinstance(packet, SystemStatePacket):
-            phase = packet.phase.value
-            document = packet.model_dump()
-        else:
-            document = dict(packet)
-            raw_phase = document.get("phase")
-            if raw_phase is None:
-                raw_phase = document.get("source_subsystem", "unknown")
-            phase = _normalise_enum_label(str(raw_phase), prefix="TRAINING_PHASE_")
+        document = dict(packet)
+        raw_phase = document.get("phase")
+        if raw_phase is None:
+            raw_phase = document.get("source_subsystem", "unknown")
+        phase = _normalise_enum_label(str(raw_phase), prefix="TRAINING_PHASE_")
         self._run_counter.inc()
         self._state_counter.labels(phase=phase).inc()
         self._index_document("system_state", document)
 
-    def ingest_field_report(self, report: FieldReport | Mapping[str, object]) -> None:
-        """Ingest a field report packet from pydantic or dict payload."""
+    def ingest_field_report(self, report: Mapping[str, object]) -> None:
+        """Ingest a field report packet from a mapping payload."""
 
-        if isinstance(report, FieldReport):
-            outcome = report.outcome.value
-            document = report.model_dump()
-        else:
-            document = dict(report)
-            raw_outcome = str(document.get("outcome", "unknown"))
-            outcome = _normalise_enum_label(raw_outcome, prefix="FIELD_REPORT_OUTCOME_")
+        document = dict(report)
+        raw_outcome = str(document.get("outcome", "unknown"))
+        outcome = _normalise_enum_label(raw_outcome, prefix="FIELD_REPORT_OUTCOME_")
         self._field_report_counter.labels(outcome=outcome).inc()
         self._index_document("field_report", document)
 
@@ -154,16 +145,16 @@ class NissaIngestor:
         """Consume telemetry packets from Oona and ingest them."""
 
         async def handler(message: OonaMessage) -> None:
-            if message.message_type == "telemetry":
+            if message.message_type == leyline_pb2.BusMessageType.BUS_MESSAGE_TYPE_TELEMETRY:
                 packet = leyline_pb2.TelemetryPacket()
                 packet.ParseFromString(message.payload)
                 self.ingest_telemetry(packet)
-            elif message.message_type == "system_state":
+            elif message.message_type == leyline_pb2.BusMessageType.BUS_MESSAGE_TYPE_SYSTEM_STATE:
                 packet = leyline_pb2.SystemStatePacket()
                 packet.ParseFromString(message.payload)
                 payload = MessageToDict(packet, preserving_proto_field_name=True)
                 self.ingest_state(payload)
-            elif message.message_type == "field_report":
+            elif message.message_type == leyline_pb2.BusMessageType.BUS_MESSAGE_TYPE_FIELD_REPORT:
                 field_report = leyline_pb2.FieldReport()
                 field_report.ParseFromString(message.payload)
                 payload = MessageToDict(field_report, preserving_proto_field_name=True)

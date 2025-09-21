@@ -1,42 +1,28 @@
-import pytest
-
-from esper.core import (
-    AdaptationCommand,
-    AdaptationDirective,
-    FieldReport,
-    FieldReportOutcome,
-    SystemStatePacket,
-    TrainingPhase,
-)
+from esper.core import TelemetryEvent, TelemetryMetric, build_telemetry_packet
+from esper.leyline import leyline_pb2
 
 
-def test_system_state_packet_defaults() -> None:
-    packet = SystemStatePacket(run_id="r1", epoch_index=0, phase=TrainingPhase.INIT)
-    assert packet.host_metrics == {}
-    assert packet.seed_snapshots == {}
+def test_leyline_enums_exist_and_are_usable() -> None:
+    # Check several enums are present and usable
+    assert leyline_pb2.SEED_STAGE_TRAINING > 0
+    assert leyline_pb2.TELEMETRY_LEVEL_INFO >= 0
+    assert leyline_pb2.FIELD_REPORT_OUTCOME_SUCCESS >= 0
 
 
-def test_adaptation_command_roundtrip() -> None:
-    command = AdaptationCommand(
-        run_id="r1",
-        epoch_index=1,
-        directive=AdaptationDirective.NO_OP,
+def test_build_telemetry_packet_uses_leyline_contracts() -> None:
+    metrics = [
+        TelemetryMetric("demo.metric", 1.23, unit="count"),
+    ]
+    events = [TelemetryEvent("demo_event", level=leyline_pb2.TELEMETRY_LEVEL_INFO)]
+    packet = build_telemetry_packet(
+        packet_id="pkt-1",
+        source="test",
+        level=leyline_pb2.TELEMETRY_LEVEL_INFO,
+        metrics=metrics,
+        events=events,
+        health_status=leyline_pb2.HEALTH_STATUS_HEALTHY,
+        health_summary="ok",
     )
-    serialized = command.model_dump()
-    restored = AdaptationCommand.model_validate(serialized)
-    assert restored == command
-
-
-def test_field_report_outcome_enum() -> None:
-    report = FieldReport(
-        run_id="r1",
-        command=AdaptationCommand(run_id="r1", epoch_index=2, directive=AdaptationDirective.NO_OP),
-        outcome=FieldReportOutcome.SUCCESS,
-        metrics_delta={"loss": -0.1},
-    )
-    assert report.outcome is FieldReportOutcome.SUCCESS
-
-
-@pytest.mark.parametrize("directive", list(AdaptationDirective))
-def test_adaptation_directive_members(directive: AdaptationDirective) -> None:
-    assert directive.value
+    assert packet.source_subsystem == "test"
+    assert len(packet.metrics) == 1
+    assert packet.events[0].description == "demo_event"

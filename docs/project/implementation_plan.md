@@ -80,7 +80,12 @@ This plan translates the charter and capability matrix into concrete work packag
 - Policy training hardware availability (GPU vs CPU) for Simic.
 
 ## Next Actions
-1. Review and confirm slice sequencing and resource assignments.
-2. Convert slice tasks into backlog tickets with acceptance criteria.
-3. Finalise open decisions (host model, deployment tooling) before starting Slice 1.
-4. Kick off Sprint 0 focusing on environment and contract enablement.
+1. Pre-Implementation Enum Validation (Leyline)
+   - Audit enum usage in code and docs vs `contracts/leyline/leyline.proto`.
+   - Produce subsystem mapping tables (internal → Leyline) and attach to PR.
+   - Confirm no functional coverage is lost by mapping (use `system_health`/events for operational states).
+   - Run serialization size/latency checks to ensure Option B budgets hold.
+2. Review and confirm slice sequencing and resource assignments.
+3. Convert slice tasks into backlog tickets with acceptance criteria.
+4. Finalise open decisions (host model, deployment tooling) before starting Slice 1.
+5. Kick off Sprint 0 focusing on environment and contract enablement.

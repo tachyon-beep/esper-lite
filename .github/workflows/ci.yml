@@ -6,6 +6,40 @@ on:
   pull_request:
 
 jobs:
+  quality:
+    name: quality-checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+
+      - name: Ruff (lint)
+        run: |
+          ruff --version
+          ruff check src tests
+
+      - name: Pylint (lint)
+        run: |
+          pylint --rcfile .codacy/tools-configs/pylint.rc src/esper
+
+      - name: Mypy (type-check)
+        run: |
+          mypy src/esper
+
+      - name: Guard Shared Enums
+        run: |
+          python scripts/check_shared_types.py
+
   tests:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest

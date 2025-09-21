@@ -11,11 +11,18 @@ from esper.oona import OonaClient, OonaMessage, StreamConfig
 @pytest.mark.integration
 async def test_oona_docker_compose_redis_round_trip() -> None:
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
-    redis = aioredis.from_url(redis_url)
+    # Use aggressive timeouts so environments without Redis don't hang
+    redis = aioredis.from_url(
+        redis_url,
+        socket_connect_timeout=1.0,
+        socket_timeout=2.0,
+    )
     try:
         await redis.ping()
     except Exception:  # pragma: no cover - environment dependent
         await redis.close()
+        if os.getenv("REQUIRE_REDIS"):
+            pytest.fail("REQUIRE_REDIS=1 set but Redis is not available at REDIS_URL")
         pytest.skip("Redis instance not available at REDIS_URL")
 
     config = StreamConfig(
@@ -48,6 +55,10 @@ async def test_oona_docker_compose_redis_round_trip() -> None:
 
     await client.consume(handler, stream="oona.int.emergency")
     assert collected
+    assert (
+        collected[0].message_type
+        == leyline_pb2.BusMessageType.BUS_MESSAGE_TYPE_SYSTEM_STATE
+    )
 
     await client.close()
     await redis.delete(config.normal_stream)

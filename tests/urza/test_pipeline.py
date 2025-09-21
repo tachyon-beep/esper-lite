@@ -4,7 +4,7 @@ from tempfile import TemporaryDirectory
 import torch
 from torch import nn
 
-from esper.karn import BlueprintMetadata, BlueprintTier, KarnCatalog
+from esper.karn import BlueprintDescriptor, BlueprintTier, KarnCatalog
 from esper.tezzeret import CompileJobConfig, TezzeretCompiler
 from esper.urza import UrzaLibrary
 from esper.urza.pipeline import BlueprintPipeline, BlueprintRequest
@@ -23,13 +23,15 @@ class _UrzaStoreAdapter:
 
 
 def test_blueprint_pipeline_compiles_and_stores() -> None:
-    metadata = BlueprintMetadata(
+    metadata = BlueprintDescriptor(
         blueprint_id="bp-1",
         name="Test",
-        tier=BlueprintTier.SAFE,
+        tier=BlueprintTier.BLUEPRINT_TIER_SAFE,
         description="",
-        allowed_parameters={"alpha": (0.0, 1.0)},
     )
+    bounds = metadata.allowed_parameters["alpha"]
+    bounds.min_value = 0.0
+    bounds.max_value = 1.0
     catalog = KarnCatalog(load_defaults=False)
     catalog.register(metadata)
 

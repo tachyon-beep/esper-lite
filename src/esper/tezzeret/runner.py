@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from esper.karn import BlueprintMetadata, KarnCatalog
+from esper.karn import BlueprintDescriptor, KarnCatalog
 from esper.urza import UrzaLibrary
 
 from .compiler import TezzeretCompiler
@@ -58,7 +58,7 @@ class TezzeretForge:
                 continue
 
             parameters = {
-                key: _midpoint(bounds)
+                key: _midpoint((bounds.min_value, bounds.max_value))
                 for key, bounds in metadata.allowed_parameters.items()
             }
 
@@ -89,4 +89,3 @@ class TezzeretForge:
 
 
 __all__ = ["TezzeretForge", "CompilationJob"]
-

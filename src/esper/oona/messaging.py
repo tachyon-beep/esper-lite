@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 import os
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import redis.asyncio as aioredis
 
@@ -32,8 +32,9 @@ class OonaMessage:
 
     stream: str
     message_id: str
-    message_type: str
+    message_type: leyline_pb2.BusMessageType.ValueType
     payload: bytes
+    attributes: dict[str, str] = field(default_factory=dict)
 
 
 class OonaClient:
@@ -93,7 +94,7 @@ class OonaClient:
         return await self._publish_proto(
             preferred_stream=self._config.normal_stream,
             emergency_flag=emergency,
-            message_type="system_state",
+            message_type=leyline_pb2.BusMessageType.BUS_MESSAGE_TYPE_SYSTEM_STATE,
             payload=packet.SerializeToString(),
         )
 
@@ -101,7 +102,7 @@ class OonaClient:
         return await self._publish_proto(
             preferred_stream=self._config.normal_stream,
             emergency_flag=False,
-            message_type="adaptation_command",
+            message_type=leyline_pb2.BusMessageType.BUS_MESSAGE_TYPE_ADAPTATION_COMMAND,
             payload=command.SerializeToString(),
         )
 
@@ -109,7 +110,7 @@ class OonaClient:
         return await self._publish_proto(
             preferred_stream=self._config.normal_stream,
             emergency_flag=False,
-            message_type="field_report",
+            message_type=leyline_pb2.BusMessageType.BUS_MESSAGE_TYPE_FIELD_REPORT,
             payload=report.SerializeToString(),
         )
 
@@ -117,7 +118,7 @@ class OonaClient:
         return await self._publish_proto(
             preferred_stream=self._telemetry_stream,
             emergency_flag=False,
-            message_type="telemetry",
+            message_type=leyline_pb2.BusMessageType.BUS_MESSAGE_TYPE_TELEMETRY,
             payload=packet.SerializeToString(),
         )
 
@@ -125,7 +126,7 @@ class OonaClient:
         return await self._publish_proto(
             preferred_stream=self._policy_stream,
             emergency_flag=False,
-            message_type="policy_update",
+            message_type=leyline_pb2.BusMessageType.BUS_MESSAGE_TYPE_POLICY_UPDATE,
             payload=update.SerializeToString(),
         )
 
@@ -150,15 +151,19 @@ class OonaClient:
 
         for stream_name, messages in response:
             for message_id, payload in messages:
+                envelope_bytes = bytes(payload.get(b"payload", b""))
+                sig = payload.get(b"signature", b"").decode("utf-8")
+                if not self._verify_payload(envelope_bytes, sig):
+                    continue
+                envelope = leyline_pb2.BusEnvelope()
+                envelope.ParseFromString(envelope_bytes)
                 message = OonaMessage(
                     stream=stream_name,
                     message_id=message_id,
-                    message_type=payload.get(b"type", b"").decode("utf-8"),
-                    payload=bytes(payload.get(b"payload", b"")),
+                    message_type=envelope.message_type,
+                    payload=envelope.payload,
+                    attributes=dict(envelope.attributes),
                 )
-                sig = payload.get(b"signature", b"").decode("utf-8")
-                if not self._verify_payload(message.payload, sig):
-                    continue
                 result = handler(message)
                 if inspect.isawaitable(result):
                     await result
@@ -211,7 +216,7 @@ class OonaClient:
         *,
         preferred_stream: str,
         emergency_flag: bool,
-        message_type: str,
+        message_type: leyline_pb2.BusMessageType.ValueType,
         payload: bytes,
     ) -> bool:
         stream, rerouted, dropped, backlog = await self._resolve_stream(preferred_stream, emergency_flag)
@@ -221,8 +226,10 @@ class OonaClient:
             return False
         if rerouted:
             self._metrics["publish_rerouted"] += 1.0
-        fields = {"type": message_type, "payload": payload}
-        signature = self._generate_signature(payload)
+        envelope = leyline_pb2.BusEnvelope(message_type=message_type, payload=payload)
+        envelope_bytes = envelope.SerializeToString()
+        fields = {"payload": envelope_bytes}
+        signature = self._generate_signature(envelope_bytes)
         if signature:
             fields["signature"] = signature.encode("utf-8")
         if self._config.max_stream_length:

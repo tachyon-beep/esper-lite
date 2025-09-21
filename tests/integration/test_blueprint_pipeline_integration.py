@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from esper.karn import BlueprintMetadata, BlueprintTier, KarnCatalog
+from esper.karn import BlueprintDescriptor, BlueprintTier, KarnCatalog
 from esper.leyline import leyline_pb2
 from esper.tamiyo import TamiyoService
 from esper.tamiyo.persistence import FieldReportStoreConfig
@@ -47,17 +47,19 @@ class _StaticPolicy:
 
 @pytest.mark.integration
 def test_tamiyo_end_to_end_blueprint_pipeline(tmp_path) -> None:
-    metadata = BlueprintMetadata(
+    metadata = BlueprintDescriptor(
         blueprint_id="bp-end",
         name="End-to-End",
-        tier=BlueprintTier.EXPERIMENTAL,
+        tier=BlueprintTier.BLUEPRINT_TIER_EXPERIMENTAL,
         description="Pipeline integration",
-        allowed_parameters={"alpha": (0.1, 0.9)},
         risk=0.85,
         stage=3,
         quarantine_only=False,
         approval_required=False,
     )
+    alpha_bounds = metadata.allowed_parameters["alpha"]
+    alpha_bounds.min_value = 0.1
+    alpha_bounds.max_value = 0.9
 
     catalog = KarnCatalog(load_defaults=False)
     catalog.register(metadata)
@@ -99,7 +101,7 @@ def test_tamiyo_end_to_end_blueprint_pipeline(tmp_path) -> None:
     command = service.evaluate_epoch(state)
 
     assert command.command_type == leyline_pb2.COMMAND_PAUSE
-    assert command.annotations["blueprint_tier"] == metadata.tier.value
+    assert command.annotations["blueprint_tier"] == leyline_pb2.BlueprintTier.Name(metadata.tier)
     assert command.annotations["blueprint_risk"] == f"{metadata.risk:.2f}"
     assert command.annotations["blueprint_stage"] == str(metadata.stage)
 

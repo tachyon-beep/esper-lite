@@ -1,130 +1,101 @@
-"""Kasmina lifecycle state machine scaffolding.
+"""Kasmina lifecycle using Leyline enums as the single source of truth.
 
-The detailed behaviour must follow the eleven-state lifecycle defined in
-`docs/design/detailed_design/old/02-kasmina.md`. This placeholder provides the
-state transitions and guard hooks that future work will implement.
+All lifecycle stages are represented by `leyline_pb2.SeedLifecycleStage` values.
+No parallel internal enums are used.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from enum import Enum
+
+from esper.leyline import leyline_pb2
 
 
-class LifecycleEvent(str, Enum):
-    """Lifecycle events that drive state transitions."""
-
-    REGISTER = "register"
-    GERMINATE = "germinate"
-    ACTIVATE = "activate"
-    OBSERVE = "observe"
-    DEGRADE = "degrade"
-    ISOLATE = "isolate"
-    ROLLBACK = "rollback"
-    RETIRE = "retire"
-    TERMINATE = "terminate"
-
-
-class LifecycleState(str, Enum):
-    """Kasmina lifecycle states (subset placeholder)."""
-
-    DORMANT = "dormant"
-    REGISTERED = "registered"
-    GERMINATING = "germinating"
-    ACTIVE = "active"
-    OBSERVING = "observing"
-    DEGRADED = "degraded"
-    ISOLATED = "isolated"
-    ROLLING_BACK = "rolling_back"
-    RETIRED = "retired"
-    TERMINATED = "terminated"
+SeedStage = int
 
 
 @dataclass(slots=True)
 class LifecycleTransition:
-    """Represents a transition attempt between states."""
+    """Represents a transition attempt between stages."""
 
-    current: LifecycleState
-    event: LifecycleEvent
-    next_state: LifecycleState
+    current: SeedStage
+    next_stage: SeedStage
 
 
 class KasminaLifecycle:
-    """State machine shell for seed lifecycle enforcement."""
+    """State machine enforcing Leyline seed lifecycle stages."""
 
     def __init__(self) -> None:
-        self._state = LifecycleState.DORMANT
+        self._stage: SeedStage = leyline_pb2.SEED_STAGE_UNKNOWN
 
     @property
-    def state(self) -> LifecycleState:
-        return self._state
+    def state(self) -> SeedStage:
+        return self._stage
 
-    def apply(self, event: LifecycleEvent) -> LifecycleTransition:
-        """Apply an event and transition to the resulting state."""
+    def transition(self, next_stage: SeedStage) -> LifecycleTransition:
+        """Transition to a Leyline stage if allowed."""
 
-        current = self._state
-        next_state = self._resolve_next_state(current, event)
-        self._state = next_state
-        return LifecycleTransition(current, event, next_state)
+        current = self._stage
+        if next_stage not in self.allowed_next(current):
+            raise ValueError(
+                f"Transition {leyline_pb2.SeedLifecycleStage.Name(current)} -> "
+                f"{leyline_pb2.SeedLifecycleStage.Name(next_stage)} not allowed"
+            )
+        self._stage = next_stage
+        return LifecycleTransition(current, next_stage)
 
-    def allowed_events(self, state: LifecycleState | None = None) -> Iterable[LifecycleEvent]:
-        """Return the allowed events for the current or provided state."""
+    def allowed_next(self, stage: SeedStage | None = None) -> Iterable[SeedStage]:
+        """Return allowed next stages given current stage using Leyline enums."""
 
-        mapping = {
-            LifecycleState.DORMANT: (LifecycleEvent.REGISTER,),
-            LifecycleState.REGISTERED: (LifecycleEvent.GERMINATE, LifecycleEvent.TERMINATE),
-            LifecycleState.GERMINATING: (LifecycleEvent.ACTIVATE, LifecycleEvent.DEGRADE),
-            LifecycleState.ACTIVE: (
-                LifecycleEvent.OBSERVE,
-                LifecycleEvent.DEGRADE,
-                LifecycleEvent.RETIRE,
+        s = stage if stage is not None else self._stage
+        m: dict[SeedStage, tuple[SeedStage, ...]] = {
+            leyline_pb2.SEED_STAGE_UNKNOWN: (
+                leyline_pb2.SEED_STAGE_GERMINATING,
+                leyline_pb2.SEED_STAGE_CANCELLED,
             ),
-            LifecycleState.OBSERVING: (
-                LifecycleEvent.DEGRADE,
-                LifecycleEvent.RETIRE,
+            leyline_pb2.SEED_STAGE_GERMINATING: (
+                leyline_pb2.SEED_STAGE_GRAFTING,
+                leyline_pb2.SEED_STAGE_TRAINING,  # fast path
+                leyline_pb2.SEED_STAGE_CANCELLED,
             ),
-            LifecycleState.DEGRADED: (
-                LifecycleEvent.ISOLATE,
-                LifecycleEvent.ROLLBACK,
+            leyline_pb2.SEED_STAGE_GRAFTING: (
+                leyline_pb2.SEED_STAGE_STABILIZING,
+                leyline_pb2.SEED_STAGE_CANCELLED,
             ),
-            LifecycleState.ISOLATED: (LifecycleEvent.ROLLBACK, LifecycleEvent.RETIRE),
-            LifecycleState.ROLLING_BACK: (LifecycleEvent.OBSERVE,),
-            LifecycleState.RETIRED: (LifecycleEvent.TERMINATE,),
-            LifecycleState.TERMINATED: (),
+            leyline_pb2.SEED_STAGE_STABILIZING: (
+                leyline_pb2.SEED_STAGE_TRAINING,
+                leyline_pb2.SEED_STAGE_CANCELLED,
+            ),
+            leyline_pb2.SEED_STAGE_TRAINING: (
+                leyline_pb2.SEED_STAGE_EVALUATING,
+                leyline_pb2.SEED_STAGE_FINE_TUNING,
+                leyline_pb2.SEED_STAGE_FOSSILIZED,
+                leyline_pb2.SEED_STAGE_CULLING,
+            ),
+            leyline_pb2.SEED_STAGE_EVALUATING: (
+                leyline_pb2.SEED_STAGE_FINE_TUNING,
+                leyline_pb2.SEED_STAGE_FOSSILIZED,
+                leyline_pb2.SEED_STAGE_CULLING,
+            ),
+            leyline_pb2.SEED_STAGE_FINE_TUNING: (
+                leyline_pb2.SEED_STAGE_EVALUATING,
+                leyline_pb2.SEED_STAGE_FOSSILIZED,
+                leyline_pb2.SEED_STAGE_CULLING,
+            ),
+            leyline_pb2.SEED_STAGE_FOSSILIZED: (
+                leyline_pb2.SEED_STAGE_CULLING,
+            ),
+            leyline_pb2.SEED_STAGE_CULLING: (
+                leyline_pb2.SEED_STAGE_CANCELLED,
+            ),
+            leyline_pb2.SEED_STAGE_CANCELLED: (),
         }
+        return m.get(s, ())
 
-        return mapping[state or self._state]
-
-    def _resolve_next_state(
-        self, state: LifecycleState, event: LifecycleEvent
-    ) -> LifecycleState:
-        """Resolve the next state; raises ValueError when disallowed."""
-
-        if event not in self.allowed_events(state):
-            msg = f"Lifecycle event {event} not allowed from {state}"
-            raise ValueError(msg)
-
-        transitions = {
-            (LifecycleState.DORMANT, LifecycleEvent.REGISTER): LifecycleState.REGISTERED,
-            (LifecycleState.REGISTERED, LifecycleEvent.GERMINATE): LifecycleState.GERMINATING,
-            (LifecycleState.REGISTERED, LifecycleEvent.TERMINATE): LifecycleState.TERMINATED,
-            (LifecycleState.GERMINATING, LifecycleEvent.ACTIVATE): LifecycleState.ACTIVE,
-            (LifecycleState.GERMINATING, LifecycleEvent.DEGRADE): LifecycleState.DEGRADED,
-            (LifecycleState.ACTIVE, LifecycleEvent.OBSERVE): LifecycleState.OBSERVING,
-            (LifecycleState.ACTIVE, LifecycleEvent.DEGRADE): LifecycleState.DEGRADED,
-            (LifecycleState.ACTIVE, LifecycleEvent.RETIRE): LifecycleState.RETIRED,
-            (LifecycleState.OBSERVING, LifecycleEvent.DEGRADE): LifecycleState.DEGRADED,
-            (LifecycleState.OBSERVING, LifecycleEvent.RETIRE): LifecycleState.RETIRED,
-            (LifecycleState.DEGRADED, LifecycleEvent.ISOLATE): LifecycleState.ISOLATED,
-            (LifecycleState.DEGRADED, LifecycleEvent.ROLLBACK): LifecycleState.ROLLING_BACK,
-            (LifecycleState.ISOLATED, LifecycleEvent.ROLLBACK): LifecycleState.ROLLING_BACK,
-            (LifecycleState.ISOLATED, LifecycleEvent.RETIRE): LifecycleState.RETIRED,
-            (LifecycleState.ROLLING_BACK, LifecycleEvent.OBSERVE): LifecycleState.OBSERVING,
-            (LifecycleState.RETIRED, LifecycleEvent.TERMINATE): LifecycleState.TERMINATED,
-        }
-
-        return transitions[(state, event)]
+    def stage_name(self) -> str:
+        return leyline_pb2.SeedLifecycleStage.Name(self._stage)
 
 
-__all__ = ["KasminaLifecycle", "LifecycleEvent", "LifecycleState", "LifecycleTransition"]
+__all__ = ["KasminaLifecycle", "LifecycleTransition", "SeedStage"]
+

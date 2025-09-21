@@ -11,6 +11,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from time import perf_counter, time_ns
 from typing import TYPE_CHECKING, Protocol
+from pathlib import Path
+import json
 
 import torch
 from torch import nn
@@ -111,11 +113,19 @@ class TolariaTrainer:
             stats = self._train_single_epoch()
             stats.epoch_duration_ms = (perf_counter() - epoch_start) * 1000.0
             state = self._emit_state(epoch, stats)
-            telemetry = self._emit_telemetry(state, stats)
-            self._telemetry_packets.append(telemetry)
-            self._state_packets.append(state)
+            # Measure end-of-epoch hook (state assembly + Tamiyo + Kasmina)
+            hook_start = perf_counter()
             command = self._tamiyo.evaluate_epoch(state)
             self._kasmina.apply_command(command)
+            hook_latency_ms = (perf_counter() - hook_start) * 1000.0
+            telemetry = self._emit_telemetry(state, stats, hook_latency_ms=hook_latency_ms)
+            self._telemetry_packets.append(telemetry)
+            self._state_packets.append(state)
+            # Persist a lightweight checkpoint/WAL for rollback support
+            try:
+                self._checkpoint(epoch)
+            except Exception:  # pragma: no cover - defensive
+                pass
             yield state
 
         final_stats = EpochStats()
@@ -198,6 +208,16 @@ class TolariaTrainer:
         hardware.utilization_percent = 0.0
         hardware.compute_capability = 0
 
+        # Optionally enrich with Kasmina seed states if supported
+        exporter = getattr(self._kasmina, "export_seed_states", None)
+        if callable(exporter):
+            try:
+                for seed in exporter():
+                    slot = packet.seed_states.add()
+                    slot.CopyFrom(seed)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
         if completion:
             packet.validation_accuracy = 1.0
 
@@ -209,6 +229,7 @@ class TolariaTrainer:
         stats: EpochStats,
         *,
         completion: bool = False,
+        hook_latency_ms: float = 0.0,
     ) -> leyline_pb2.TelemetryPacket:
         """Build a telemetry packet derived from the state snapshot."""
 
@@ -222,11 +243,26 @@ class TolariaTrainer:
                 unit="count",
             ),
         ]
+        if hook_latency_ms:
+            metrics.append(
+                TelemetryMetric("tolaria.epoch_hook.latency_ms", hook_latency_ms, unit="ms")
+            )
 
         events: list[TelemetryEvent] = []
         health_status = leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY
         health_summary = "stable"
         health_indicators = {"epoch": str(state.current_epoch)}
+
+        if hook_latency_ms and hook_latency_ms > 18.0:
+            events.append(
+                TelemetryEvent(
+                    description="epoch_hook_latency_high",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"latency_ms": f"{hook_latency_ms:.3f}"},
+                )
+            )
+            health_status = leyline_pb2.HealthStatus.HEALTH_STATUS_DEGRADED
+            health_summary = "epoch_hook_latency_high"
 
         if stats.epoch_duration_ms > 18.0:
             events.append(
@@ -280,6 +316,59 @@ class TolariaTrainer:
         for state, telemetry in zip(self._state_packets, self._telemetry_packets, strict=False):
             await oona.publish_state(state)
             await oona.publish_telemetry(telemetry)
+
+    # ----------------------------
+    # Checkpoint & Rollback (WAL)
+    # ----------------------------
+
+    def _checkpoint_root(self) -> Path:
+        root = Path("var/tolaria")
+        (root / "checkpoints").mkdir(parents=True, exist_ok=True)
+        return root
+
+    def _checkpoint(self, epoch: int) -> None:
+        """Persist model/optimizer state and update WAL.
+
+        This is a lightweight prototype aligned with the old Tolaria design; it enables
+        rollback to the most recent epoch boundary.
+        """
+
+        root = self._checkpoint_root()
+        ckpt_path = root / "checkpoints" / f"ckpt-epoch-{epoch}.pt"
+        payload = {
+            "model": self._model.state_dict(),
+            "optimizer": self._optimizer.state_dict(),
+            "epoch": epoch,
+        }
+        torch.save(payload, ckpt_path)
+        wal = {"last_checkpoint": str(ckpt_path), "epoch": epoch}
+        (root / "wal.json").write_text(json.dumps(wal), encoding="utf-8")
+
+    def rollback_to_last_checkpoint(self) -> bool:
+        """Attempt to restore the last saved checkpoint via WAL.
+
+        Returns True if a rollback was performed.
+        """
+
+        root = self._checkpoint_root()
+        wal_path = root / "wal.json"
+        if not wal_path.exists():
+            return False
+        try:
+            wal = json.loads(wal_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return False
+        ckpt_path = Path(wal.get("last_checkpoint", ""))
+        if not ckpt_path.exists():
+            return False
+        payload = torch.load(ckpt_path, map_location=self._config.device)
+        self._model.load_state_dict(payload.get("model", {}))
+        try:
+            self._optimizer.load_state_dict(payload.get("optimizer", {}))
+        except Exception:
+            # Optimizer may not restore perfectly across environments; best-effort
+            pass
+        return True
 
 
 __all__ = ["TolariaTrainer", "TrainingLoopConfig", "TamiyoClient", "KasminaClient"]

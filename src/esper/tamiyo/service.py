@@ -75,7 +75,22 @@ class TamiyoService:
     def evaluate_epoch(self, state: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
         """Evaluate epoch state and apply risk gating."""
 
+        # Measure inference time for budget guardrails
+        start = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None
+        end = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None
+        if start and end:
+            torch.cuda.synchronize()
+            start.record()
+        wall_start = None if start else datetime.now(tz=UTC)
+
         command = self._policy.select_action(state)
+
+        if start and end:
+            end.record()
+            torch.cuda.synchronize()
+            inference_ms = float(start.elapsed_time(end))
+        else:
+            inference_ms = float((datetime.now(tz=UTC) - wall_start).total_seconds() * 1000.0)  # type: ignore[arg-type]
         last_action = self._policy.last_action
         command.annotations["policy_action"] = str(int(last_action.get("action", 0.0)))
         command.annotations["policy_param_delta"] = f"{last_action.get('param_delta', 0.0):.6f}"
@@ -129,6 +144,10 @@ class TamiyoService:
                 unit="bool",
             ),
         ]
+        if inference_ms >= 0.0:
+            metrics.append(
+                TelemetryMetric("tamiyo.inference.latency_ms", inference_ms, unit="ms")
+            )
         if blueprint_info:
             metrics.append(
                 TelemetryMetric(
@@ -321,12 +340,14 @@ class TamiyoService:
         record = self._urza.get(blueprint_id)
         if record is None:
             return None
+        tier_name = leyline_pb2.BlueprintTier.Name(record.metadata.tier)
         data = {
-            "tier": record.metadata.tier.value,
+            "tier": tier_name,
             "risk": float(record.metadata.risk),
             "stage": int(record.metadata.stage),
             "quarantine_only": bool(record.metadata.quarantine_only),
             "approval_required": bool(record.metadata.approval_required),
+            "description": record.metadata.description,
         }
         self._blueprint_cache[blueprint_id] = (now, data)
         return data

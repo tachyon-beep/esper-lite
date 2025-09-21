@@ -1,6 +1,7 @@
 services:
   prometheus:
     image: prom/prometheus:v2.53.0
+    restart: unless-stopped
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
     volumes:
@@ -9,6 +10,7 @@ services:
 
   grafana:
     image: grafana/grafana:11.2.0
+    restart: unless-stopped
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin
     ports:
@@ -23,6 +25,7 @@ services:
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.14.3
+    restart: unless-stopped
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false

@@ -82,6 +82,11 @@ references (`docs/design/detailed_design/old/`).
    Telemetry events should include `pause_triggered` or `bp_quarantine` when the
    risk engine engages.
 
+6. Enum policy (Leyline): All lifecycle and outcome enums are defined and enforced
+   by Leyline. Subsystems must use Leyline enums directly; no internal variants.
+   Operational conditions (e.g., degraded or isolated) should be assessed via
+   `TelemetryPacket.system_health` and events, not lifecycle stages.
+
 ### 3.2 Oona Message Bus
 
 1. Redis is handled via Docker compose. Optional environment variables:
@@ -330,4 +335,3 @@ references (`docs/design/detailed_design/old/`).
 Keep this runbook updated as subsystems evolve. For any behaviour not covered
 here, refer to the authoritative legacy design documents under
 `docs/design/detailed_design/old/`.
-

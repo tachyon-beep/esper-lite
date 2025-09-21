@@ -34,6 +34,10 @@ async def test_oona_publish_and_consume() -> None:
     restored = leyline_pb2.SystemStatePacket()
     restored.ParseFromString(collected[0].payload)
     assert restored.version == 1
+    assert (
+        collected[0].message_type
+        == leyline_pb2.BusMessageType.BUS_MESSAGE_TYPE_SYSTEM_STATE
+    )
     assert await client.backlog("oona.normal") == 0
 
     await client.close()

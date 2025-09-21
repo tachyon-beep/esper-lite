@@ -6,7 +6,7 @@ from fakeredis.aioredis import FakeRedis
 
 from esper.leyline import leyline_pb2
 from esper.urza import UrzaLibrary
-from esper.karn import BlueprintMetadata, BlueprintTier
+from esper.karn import BlueprintDescriptor, BlueprintTier
 from esper.oona import OonaClient, StreamConfig
 from esper.tamiyo import (
     FieldReportStoreConfig,
@@ -34,6 +34,10 @@ def test_tamiyo_service_generates_command(tmp_path) -> None:
     assert "policy_action" in command.annotations
     assert "policy_param_delta" in command.annotations
     assert service.telemetry_packets
+    # Budget guardrail: inference latency <= 45 ms
+    metrics = {m.name: m.value for m in service.telemetry_packets[-1].metrics}
+    assert "tamiyo.inference.latency_ms" in metrics
+    assert metrics["tamiyo.inference.latency_ms"] <= 45.0
 
 
 def test_conservative_mode_overrides_directive(tmp_path) -> None:
@@ -135,12 +139,11 @@ async def test_tamiyo_consume_policy_updates(tmp_path) -> None:
 def test_tamiyo_annotations_include_blueprint_metadata(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
     urza = UrzaLibrary(root=tmp_path / "urza")
-    metadata = BlueprintMetadata(
+    metadata = BlueprintDescriptor(
         blueprint_id="bp-demo",
         name="Demo",
-        tier=BlueprintTier.EXPERIMENTAL,
+        tier=BlueprintTier.BLUEPRINT_TIER_EXPERIMENTAL,
         description="Test blueprint",
-        allowed_parameters={},
         risk=0.85,
         stage=5,
         quarantine_only=True,
@@ -166,7 +169,7 @@ def test_tamiyo_annotations_include_blueprint_metadata(tmp_path) -> None:
     service = TamiyoService(policy=_PolicyStub(), store_config=config, urza=urza)
     packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1)
     command = service.evaluate_epoch(packet)
-    assert command.annotations["blueprint_tier"] == "experimental"
+    assert command.annotations["blueprint_tier"] == leyline_pb2.BlueprintTier.Name(metadata.tier)
     assert command.annotations["blueprint_stage"] == "5"
     assert command.annotations["blueprint_risk"] == "0.85"
     assert command.command_type == leyline_pb2.COMMAND_PAUSE

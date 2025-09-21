@@ -94,6 +94,22 @@ class FieldReportOutcome(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     FIELD_REPORT_OUTCOME_NEUTRAL: _ClassVar[FieldReportOutcome]
     FIELD_REPORT_OUTCOME_REGRESSION: _ClassVar[FieldReportOutcome]
     FIELD_REPORT_OUTCOME_ABORTED: _ClassVar[FieldReportOutcome]
+
+class BlueprintTier(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    BLUEPRINT_TIER_UNSPECIFIED: _ClassVar[BlueprintTier]
+    BLUEPRINT_TIER_SAFE: _ClassVar[BlueprintTier]
+    BLUEPRINT_TIER_EXPERIMENTAL: _ClassVar[BlueprintTier]
+    BLUEPRINT_TIER_HIGH_RISK: _ClassVar[BlueprintTier]
+
+class BusMessageType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    BUS_MESSAGE_TYPE_UNSPECIFIED: _ClassVar[BusMessageType]
+    BUS_MESSAGE_TYPE_SYSTEM_STATE: _ClassVar[BusMessageType]
+    BUS_MESSAGE_TYPE_ADAPTATION_COMMAND: _ClassVar[BusMessageType]
+    BUS_MESSAGE_TYPE_FIELD_REPORT: _ClassVar[BusMessageType]
+    BUS_MESSAGE_TYPE_TELEMETRY: _ClassVar[BusMessageType]
+    BUS_MESSAGE_TYPE_POLICY_UPDATE: _ClassVar[BusMessageType]
 SEED_STAGE_UNKNOWN: SeedLifecycleStage
 SEED_STAGE_GERMINATING: SeedLifecycleStage
 SEED_STAGE_TRAINING: SeedLifecycleStage
@@ -150,6 +166,16 @@ FIELD_REPORT_OUTCOME_SUCCESS: FieldReportOutcome
 FIELD_REPORT_OUTCOME_NEUTRAL: FieldReportOutcome
 FIELD_REPORT_OUTCOME_REGRESSION: FieldReportOutcome
 FIELD_REPORT_OUTCOME_ABORTED: FieldReportOutcome
+BLUEPRINT_TIER_UNSPECIFIED: BlueprintTier
+BLUEPRINT_TIER_SAFE: BlueprintTier
+BLUEPRINT_TIER_EXPERIMENTAL: BlueprintTier
+BLUEPRINT_TIER_HIGH_RISK: BlueprintTier
+BUS_MESSAGE_TYPE_UNSPECIFIED: BusMessageType
+BUS_MESSAGE_TYPE_SYSTEM_STATE: BusMessageType
+BUS_MESSAGE_TYPE_ADAPTATION_COMMAND: BusMessageType
+BUS_MESSAGE_TYPE_FIELD_REPORT: BusMessageType
+BUS_MESSAGE_TYPE_TELEMETRY: BusMessageType
+BUS_MESSAGE_TYPE_POLICY_UPDATE: BusMessageType
 
 class HardwareContext(_message.Message):
     __slots__ = ("device_type", "device_id", "total_memory_gb", "available_memory_gb", "temperature_celsius", "utilization_percent", "compute_capability")
@@ -354,6 +380,60 @@ class FieldReport(_message.Message):
     follow_up_actions: _containers.RepeatedCompositeFieldContainer[MitigationAction]
     notes: str
     def __init__(self, version: _Optional[int] = ..., report_id: _Optional[str] = ..., command_id: _Optional[str] = ..., training_run_id: _Optional[str] = ..., seed_id: _Optional[str] = ..., blueprint_id: _Optional[str] = ..., outcome: _Optional[_Union[FieldReportOutcome, str]] = ..., metrics: _Optional[_Mapping[str, float]] = ..., observation_window_epochs: _Optional[int] = ..., issued_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., tamiyo_policy_version: _Optional[str] = ..., follow_up_actions: _Optional[_Iterable[_Union[MitigationAction, _Mapping]]] = ..., notes: _Optional[str] = ...) -> None: ...
+
+class BlueprintParameterBounds(_message.Message):
+    __slots__ = ("min_value", "max_value")
+    MIN_VALUE_FIELD_NUMBER: _ClassVar[int]
+    MAX_VALUE_FIELD_NUMBER: _ClassVar[int]
+    min_value: float
+    max_value: float
+    def __init__(self, min_value: _Optional[float] = ..., max_value: _Optional[float] = ...) -> None: ...
+
+class BlueprintDescriptor(_message.Message):
+    __slots__ = ("blueprint_id", "name", "tier", "allowed_parameters", "risk", "stage", "quarantine_only", "approval_required", "description")
+    class AllowedParametersEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: BlueprintParameterBounds
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[_Union[BlueprintParameterBounds, _Mapping]] = ...) -> None: ...
+    BLUEPRINT_ID_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    TIER_FIELD_NUMBER: _ClassVar[int]
+    ALLOWED_PARAMETERS_FIELD_NUMBER: _ClassVar[int]
+    RISK_FIELD_NUMBER: _ClassVar[int]
+    STAGE_FIELD_NUMBER: _ClassVar[int]
+    QUARANTINE_ONLY_FIELD_NUMBER: _ClassVar[int]
+    APPROVAL_REQUIRED_FIELD_NUMBER: _ClassVar[int]
+    DESCRIPTION_FIELD_NUMBER: _ClassVar[int]
+    blueprint_id: str
+    name: str
+    tier: BlueprintTier
+    allowed_parameters: _containers.MessageMap[str, BlueprintParameterBounds]
+    risk: float
+    stage: int
+    quarantine_only: bool
+    approval_required: bool
+    description: str
+    def __init__(self, blueprint_id: _Optional[str] = ..., name: _Optional[str] = ..., tier: _Optional[_Union[BlueprintTier, str]] = ..., allowed_parameters: _Optional[_Mapping[str, BlueprintParameterBounds]] = ..., risk: _Optional[float] = ..., stage: _Optional[int] = ..., quarantine_only: bool = ..., approval_required: bool = ..., description: _Optional[str] = ...) -> None: ...
+
+class BusEnvelope(_message.Message):
+    __slots__ = ("message_type", "payload", "attributes")
+    class AttributesEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    MESSAGE_TYPE_FIELD_NUMBER: _ClassVar[int]
+    PAYLOAD_FIELD_NUMBER: _ClassVar[int]
+    ATTRIBUTES_FIELD_NUMBER: _ClassVar[int]
+    message_type: BusMessageType
+    payload: bytes
+    attributes: _containers.ScalarMap[str, str]
+    def __init__(self, message_type: _Optional[_Union[BusMessageType, str]] = ..., payload: _Optional[bytes] = ..., attributes: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class PolicyUpdate(_message.Message):
     __slots__ = ("version", "policy_id", "training_run_id", "issued_at", "tamiyo_policy_version", "payload")

@@ -16,7 +16,7 @@ from torch import nn
 
 from torch.serialization import add_safe_globals
 
-from esper.karn import BlueprintMetadata
+from esper.karn import BlueprintDescriptor
 
 
 @dataclass(slots=True)
@@ -48,7 +48,12 @@ add_safe_globals([CompiledBlueprint])
 class TezzeretCompiler:
     """Stub compiler that fakes torch.compile execution."""
 
-    def __init__(self, config: CompileJobConfig, *, error_sampler: Callable[[BlueprintMetadata], bool] | None = None) -> None:
+    def __init__(
+        self,
+        config: CompileJobConfig,
+        *,
+        error_sampler: Callable[[BlueprintDescriptor], bool] | None = None,
+    ) -> None:
         self._config = config
         self._error_sampler = error_sampler or (lambda _: False)
         self._wal_path = config.wal_path or (config.artifact_dir / "tezzeret_wal.json")
@@ -56,7 +61,7 @@ class TezzeretCompiler:
 
     def compile(
         self,
-        metadata: BlueprintMetadata,
+        metadata: BlueprintDescriptor,
         parameters: dict[str, float] | None = None,
     ) -> Path:
         """Compile the blueprint and persist the artifact."""
@@ -83,7 +88,7 @@ class TezzeretCompiler:
                     break
         raise RuntimeError(f"Failed to compile blueprint {metadata.blueprint_id}: {last_error}")
 
-    def _persist_wal(self, metadata: BlueprintMetadata, parameters: dict[str, float]) -> None:
+    def _persist_wal(self, metadata: BlueprintDescriptor, parameters: dict[str, float]) -> None:
         record = {
             "blueprint_id": metadata.blueprint_id,
             "parameters": parameters,

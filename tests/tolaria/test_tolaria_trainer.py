@@ -58,7 +58,11 @@ def test_tolaria_trainer_emits_state_packets() -> None:
         dataloader=loader,
         tamiyo=tamiyo,
         kasmina=kasmina,
-        config=TrainingLoopConfig(max_epochs=2, gradient_accumulation_steps=1),
+        config=TrainingLoopConfig(
+            max_epochs=2,
+            gradient_accumulation_steps=1,
+            device=torch.device("cpu"),
+        ),
     )
 
     states: Iterable[leyline_pb2.SystemStatePacket] = list(trainer.run())
@@ -73,6 +77,7 @@ def test_tolaria_trainer_emits_state_packets() -> None:
         "tolaria.training.loss",
         "tolaria.training.accuracy",
         "tolaria.training.latency_ms",
+        "tolaria.epoch_hook.latency_ms",
         "tolaria.seeds.active",
     }.issubset(metric_names)
     assert telemetry[0].system_health.status in {
@@ -94,7 +99,11 @@ async def test_tolaria_publish_history_to_oona() -> None:
         dataloader=loader,
         tamiyo=tamiyo,
         kasmina=kasmina,
-        config=TrainingLoopConfig(max_epochs=1, gradient_accumulation_steps=1),
+        config=TrainingLoopConfig(
+            max_epochs=1,
+            gradient_accumulation_steps=1,
+            device=torch.device("cpu"),
+        ),
     )
     list(trainer.run())
 
@@ -111,3 +120,86 @@ async def test_tolaria_publish_history_to_oona() -> None:
     assert await oona.stream_length("oona.normal") >= 1
     assert await oona.stream_length("oona.telemetry") >= 1
     await oona.close()
+
+
+def _get_metric(pkt: leyline_pb2.TelemetryPacket, name: str) -> float:
+    for m in pkt.metrics:
+        if m.name == name:
+            return m.value
+    raise AssertionError(f"metric {name} not found")
+
+
+def test_epoch_hook_latency_budget_guard() -> None:
+    model = _dummy_model(4, 2)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+    # keep the loader tiny to minimise epoch work; budget applies to hook only
+    loader = _dummy_loader(4, 4, 2)
+    tamiyo = _TamiyoStub()
+    kasmina = _KasminaStub()
+    trainer = TolariaTrainer(
+        model=model,
+        optimizer=optimizer,
+        dataloader=loader,
+        tamiyo=tamiyo,
+        kasmina=kasmina,
+        config=TrainingLoopConfig(
+            max_epochs=1,
+            gradient_accumulation_steps=1,
+            device=torch.device("cpu"),
+        ),
+    )
+    list(trainer.run())
+    pkt = trainer.telemetry_packets[0]
+    hook_ms = _get_metric(pkt, "tolaria.epoch_hook.latency_ms")
+    assert hook_ms <= 18.0
+
+
+def test_tolaria_checkpoint_and_rollback(tmp_path, monkeypatch) -> None:
+    # Redirect checkpoint root to temporary directory
+    model = _dummy_model(4, 2)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+    loader = _dummy_loader(8, 4, 2)
+    tamiyo = _TamiyoStub()
+    kasmina = _KasminaStub()
+    trainer = TolariaTrainer(
+        model=model,
+        optimizer=optimizer,
+        dataloader=loader,
+        tamiyo=tamiyo,
+        kasmina=kasmina,
+        config=TrainingLoopConfig(
+            max_epochs=1,
+            gradient_accumulation_steps=1,
+            device=torch.device("cpu"),
+        ),
+    )
+
+    # Monkeypatch checkpoint root to tmp
+    def _root(self):
+        root = tmp_path / "tolaria"
+        (root / "checkpoints").mkdir(parents=True, exist_ok=True)
+        return root
+
+    monkeypatch.setattr(TolariaTrainer, "_checkpoint_root", _root, raising=True)
+
+    # Run one epoch and capture a checkpoint
+    list(trainer.run())
+    saved_state = [p.detach().clone() for p in model.parameters()]
+
+    # Mutate model with another tiny training step
+    model.train()
+    for inputs, targets in loader:
+        loss = nn.CrossEntropyLoss()(model(inputs), targets)
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad(set_to_none=True)
+        break
+
+    mutated_state = [p.detach().clone() for p in model.parameters()]
+    assert any((a != b).any().item() for a, b in zip(saved_state, mutated_state))
+
+    # Roll back and expect original weights restored
+    assert trainer.rollback_to_last_checkpoint() is True
+    restored_state = [p.detach().clone() for p in model.parameters()]
+    for a, b in zip(saved_state, restored_state):
+        assert torch.allclose(a, b)

@@ -66,6 +66,7 @@ def test_seed_manager_emits_telemetry_for_commands() -> None:
     assert "kasmina.kernel.fetch_latency_ms" in metric_names
     assert packet.source_subsystem == "kasmina"
     assert any(event.description == "seed_operation" for event in packet.events)
+    assert any(event.description == "seed_stage" for event in packet.events)
 
 
 def test_record_isolation_violation_updates_health() -> None:
@@ -75,3 +76,47 @@ def test_record_isolation_violation_updates_health() -> None:
     packet = manager.telemetry_packets[-1]
     assert any(metric.name == "kasmina.isolation.violations" and metric.value >= 1.0 for metric in packet.metrics)
     assert packet.system_health.status == leyline_pb2.HealthStatus.HEALTH_STATUS_UNHEALTHY
+
+
+def test_gradient_isolation_detects_overlap() -> None:
+    # Host model
+    host = nn.Linear(4, 2)
+
+    # Runtime that returns a kernel sharing a parameter with host
+    class _OverlapRuntime(_Runtime):
+        def fetch_kernel(self, blueprint_id: str) -> tuple[nn.Module, float]:
+            module = nn.Module()
+            # Share the host weight parameter directly
+            module.shared_weight = host.weight  # type: ignore[attr-defined]
+            return module, 1.0
+
+    runtime = _OverlapRuntime()
+    manager = KasminaSeedManager(runtime)
+    manager.register_host_model(host)
+    command = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP777")
+    manager.handle_command(command)
+    assert manager.isolation_violations >= 1
+    pkt = manager.telemetry_packets[-1]
+    # Either a violation event or degraded health must be present
+    event_names = {e.description for e in pkt.events}
+    assert ("violation_recorded" in event_names) or (
+        pkt.system_health.status in {
+            leyline_pb2.HealthStatus.HEALTH_STATUS_UNHEALTHY,
+            leyline_pb2.HealthStatus.HEALTH_STATUS_DEGRADED,
+        }
+    )
+
+
+def test_gradient_isolation_all_clear_for_distinct_params() -> None:
+    host = nn.Linear(4, 2)
+
+    class _FreshRuntime(_Runtime):
+        def fetch_kernel(self, blueprint_id: str) -> tuple[nn.Module, float]:
+            return nn.Linear(4, 2), 1.0
+
+    runtime = _FreshRuntime()
+    manager = KasminaSeedManager(runtime)
+    manager.register_host_model(host)
+    command = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP101")
+    manager.handle_command(command)
+    assert manager.isolation_violations == 0

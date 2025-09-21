@@ -18,6 +18,7 @@ class EsperSettings(BaseSettings):
         env_file=".env",
         case_sensitive=True,
         frozen=True,
+        extra="ignore",
     )
 
     redis_url: str = Field(alias="REDIS_URL", default="redis://localhost:6379/0")

@@ -4,17 +4,16 @@ from tempfile import TemporaryDirectory
 import pytest
 import torch
 
-from esper.karn import BlueprintMetadata, BlueprintTier
+from esper.karn import BlueprintDescriptor, BlueprintTier
 from esper.tezzeret import CompileJobConfig, TezzeretCompiler
 
 
 def test_compiler_persists_artifact() -> None:
-    metadata = BlueprintMetadata(
+    metadata = BlueprintDescriptor(
         blueprint_id="bp-1",
         name="Test",
-        tier=BlueprintTier.SAFE,
+        tier=BlueprintTier.BLUEPRINT_TIER_SAFE,
         description="",
-        allowed_parameters={},
     )
     with TemporaryDirectory() as tmp:
         config = CompileJobConfig(artifact_dir=Path(tmp))
@@ -26,16 +25,16 @@ def test_compiler_persists_artifact() -> None:
 
 
 def test_compiler_retries_and_clears_wal(tmp_path) -> None:
-    metadata = BlueprintMetadata(
+    metadata = BlueprintDescriptor(
         blueprint_id="BP001",
         name="identity_passthrough",
-        tier=BlueprintTier.SAFE,
+        tier=BlueprintTier.BLUEPRINT_TIER_SAFE,
         description="Identity",
     )
 
     failures: list[bool] = [True, False]
 
-    def sampler(_: BlueprintMetadata) -> bool:
+    def sampler(_: BlueprintDescriptor) -> bool:
         return failures.pop(0)
 
     config = CompileJobConfig(artifact_dir=tmp_path, max_retries=1)
@@ -46,14 +45,14 @@ def test_compiler_retries_and_clears_wal(tmp_path) -> None:
 
 
 def test_compiler_raises_after_retries(tmp_path) -> None:
-    metadata = BlueprintMetadata(
+    metadata = BlueprintDescriptor(
         blueprint_id="BP002",
         name="linear_projection",
-        tier=BlueprintTier.SAFE,
+        tier=BlueprintTier.BLUEPRINT_TIER_SAFE,
         description="Linear",
     )
 
-    def sampler(_: BlueprintMetadata) -> bool:
+    def sampler(_: BlueprintDescriptor) -> bool:
         return True
 
     config = CompileJobConfig(artifact_dir=tmp_path, max_retries=1)
