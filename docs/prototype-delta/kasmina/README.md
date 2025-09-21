@@ -8,7 +8,7 @@ Documents in this folder:
 - `implementation-roadmap.md` — suggested backlog to close gaps
 
 Design sources:
-- `docs/design/detailed_design/02-kasmina.md`
+- `docs/design/detailed_design/02-kasmina-unified-design.md`
 - `docs/design/detailed_design/02.1-kasmina-kernel-execution.md`
 - `docs/design/detailed_design/02.2-kasmina-memory-pools.md`
 - `docs/design/detailed_design/02.3-kasmina-parameter-registration.md`
@@ -21,4 +21,3 @@ Implementation evidence (primary):
 - `src/esper/core/telemetry.py`
 - `src/esper/security/signing.py`
 - Tests: `tests/kasmina/*`, `tests/integration/test_control_loop.py`
-

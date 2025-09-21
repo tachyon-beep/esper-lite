@@ -38,12 +38,10 @@ Sequencing & Milestones
 
 1) Leyline Schema Update (single source of truth)
 - Protobuf updates (breaking, batched across prototype):
-  - `enum SeedLifecycleStage`: ensure the full 11 canonical stages exist: `SEED_STAGE_DORMANT`, `SEED_STAGE_GERMINATED`, `SEED_STAGE_TRAINING`, `SEED_STAGE_BLENDING`, `SEED_STAGE_SHADOWING`, `SEED_STAGE_PROBATIONARY`, `SEED_STAGE_FOSSILIZED`, `SEED_STAGE_CULLED`, `SEED_STAGE_EMBARGOED`, `SEED_STAGE_RESETTING`, `SEED_STAGE_TERMINATED`.
-  - Remove `SEED_STAGE_CANCELLED` and update every caller to use the correct canonical state (RESETTING/TERMINATED as appropriate).
-  - New `enum SeedLifecycleGate { GATE_G0 = 0; ... GATE_G5 = 5; }`.
-  - Optional: `message GateEvent { SeedLifecycleGate gate; bool passed; string reason; }` and allow inclusion in telemetry/field reports.
+  - Update `SeedLifecycleStage` to the unified design’s 11‑state lifecycle as defined in `02-kasmina-unified-design.md` (v4.0) and remove deprecated states.
+  - Add `SeedLifecycleGate` (G0–G5) and, optionally, a `GateEvent { gate, passed, reason }` for telemetry.
 - Regenerate language bindings and update imports in a single change.
-- Update design docs to use Leyline canonical names (no local synonyms).
+- Align code and docs to the unified design’s canonical names; avoid local synonyms.
 
 2) Lifecycle Engine (11‑state + Gates) using Leyline enums
 - `KasminaLifecycle` transitions use only `leyline_pb2.SeedLifecycleStage` (with the new entries).
@@ -137,21 +135,9 @@ Acceptance: Benchmarks run and publish metrics; soft thresholds alert on regress
 
 Acceptance: KD can be enabled safely with clear memory/latency limits; disabled by default.
 
-Canonical Lifecycle (Leyline enums)
+Canonical Lifecycle
 
-| Leyline stage | Phase semantics |
-| --- | --- |
-| SEED_STAGE_DORMANT | Quiescent slot; accepts germination requests. |
-| SEED_STAGE_GERMINATED | Sanity checks and registration (G0). |
-| SEED_STAGE_TRAINING | Isolated seed training; G1 constraints. |
-| SEED_STAGE_BLENDING | Blending with alpha; host activations detached; G2. |
-| SEED_STAGE_SHADOWING | Shadowing/inert probe; interface checks; G3. |
-| SEED_STAGE_PROBATIONARY | System‑impact observation; G4. |
-| SEED_STAGE_FOSSILIZED | Accepted; frozen params. |
-| SEED_STAGE_CULLED | Failure path activated. |
-| SEED_STAGE_EMBARGOED | Time‑boxed hold to prevent thrash. |
-| SEED_STAGE_RESETTING | Cleanup/reset before returning to dormant. |
-| SEED_STAGE_TERMINATED | Administrative teardown. |
+Use the 11‑state lifecycle as specified in `docs/design/detailed_design/02-kasmina-unified-design.md` (v4.0). Reflect those exact names in Leyline enums once the schema is updated; do not invent local aliases or intermediate overlays.
 
 Gate Definitions (Operational Checks)
 - G0 Sanity: basic seed request validity, parameter bounds, blueprint availability.

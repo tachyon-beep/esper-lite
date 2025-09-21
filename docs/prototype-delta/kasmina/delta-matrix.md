@@ -4,7 +4,7 @@ Status and evidence per requirement. See rubric in `../rubric.md`.
 
 | Area | Design Source | Expected Behaviour | Prototype Evidence | Status | Severity | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| Lifecycle states & gates | `02-kasmina.md` (Lifecycle), 11‑state with G0–G5 | Enforce 11 states with validation gates; transitions guarded | `src/esper/kasmina/lifecycle.py`, `src/esper/kasmina/seed_manager.py` | Missing | Must‑have | Prototype uses a reduced Leyline stage set with no gates; DORMANT/EMBARGOED/RESETTING/TERMINATED require a Leyline schema update before adoption. |
+| Lifecycle states & gates | `02-kasmina-unified-design.md` (Lifecycle, v4.0), 11‑state with G0–G5 | Enforce 11 states with validation gates; transitions guarded | `src/esper/kasmina/lifecycle.py`, `src/esper/kasmina/seed_manager.py` | Missing | Must‑have | Prototype uses a reduced Leyline stage set with no gates; adoption requires a Leyline schema update to the unified design’s 11 states + gates. |
 | Lifecycle fast path | `02-kasmina.md` | Allow germinating→training fast path | `tests/kasmina/test_lifecycle.py` | Implemented | Nice‑to‑have | Covered by tests. |
 | Kernel execution (Urza/Tezzeret) | `02.1-kasmina-kernel-execution.md` | Load vetted kernel artefacts; async path; GPU cache | `src/esper/kasmina/seed_manager.py` (runtime.fetch_kernel) | Partially Implemented | Should‑have | Synchronous fetch with simple fallback; no GPU‑resident cache or async scheduling. |
 | Fallback kernel | `02.1-kasmina-kernel-execution.md` | Identity/fallback kernel on failure or latency breach | `src/esper/kasmina/seed_manager.py` (`_load_fallback`) | Implemented | Should‑have | Budget breach triggers fallback and telemetry. |
