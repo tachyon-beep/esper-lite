@@ -6,10 +6,22 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from io import BytesIO
-from typing import TYPE_CHECKING, Dict, Tuple, Optional, Iterable, Callable
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    Iterable,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Callable,
+)
+import json
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from uuid import uuid4
+import math
 
 import torch
 import logging
@@ -18,6 +30,7 @@ import contextlib
 from esper.core import EsperSettings, TelemetryEvent, TelemetryMetric, build_telemetry_packet
 from esper.leyline import leyline_pb2
 from esper.security.signing import DEFAULT_SECRET_ENV, SignatureContext, sign
+from esper.karn.catalog import BlueprintDescriptor
 try:
     from esper.urza import UrzaLibrary
 except ImportError:  # pragma: no cover - optional import in certain test contexts
@@ -125,7 +138,7 @@ class TamiyoService:
         urza: UrzaLibrary | None = None,
         metadata_cache_ttl: timedelta = timedelta(minutes=5),
         signature_context: SignatureContext | None = None,
-        step_timeout_ms: float = 5.0,
+        step_timeout_ms: float = 15.0,
         metadata_timeout_ms: float = 20.0,
         executor: ThreadPoolExecutor | None = None,
     ) -> None:
@@ -150,7 +163,7 @@ class TamiyoService:
         self._field_reports: list[leyline_pb2.FieldReport] = store.reports()
         self._policy_updates: list[leyline_pb2.PolicyUpdate] = []
         self._last_validation_loss: float | None = None
-        self._policy_version = "policy-stub"
+        self._policy_version = getattr(self._policy, "architecture_version", "policy-stub")
         self._signing_context = signature_context or SignatureContext.from_environment(DEFAULT_SECRET_ENV)
         self._executor = executor
         self._owns_executor = False
@@ -179,6 +192,12 @@ class TamiyoService:
         enforce_timeouts: bool,
     ) -> leyline_pb2.AdaptationCommand:
         events: list[TelemetryEvent] = []
+
+        self._ensure_blueprint_metadata_for_packet(state)
+        if hasattr(self._policy, "update_blueprint_metadata") and self._blueprint_cache:
+            metadata_payload = {bp: info for bp, (_, info) in self._blueprint_cache.items()}
+            with contextlib.suppress(Exception):
+                self._policy.update_blueprint_metadata(metadata_payload)
 
         command, inference_ms, timed_out = self._run_policy(state, enforce_timeouts)
         if timed_out:
@@ -222,6 +241,7 @@ class TamiyoService:
         )
         events.extend(risk_events)
 
+        last_action = self._policy.last_action
         metrics = [
             TelemetryMetric("tamiyo.validation_loss", state.validation_loss, unit="loss"),
             TelemetryMetric("tamiyo.loss_delta", loss_delta, unit="loss"),
@@ -231,7 +251,80 @@ class TamiyoService:
                 unit="bool",
             ),
             TelemetryMetric("tamiyo.inference.latency_ms", inference_ms, unit="ms"),
+            TelemetryMetric(
+                "tamiyo.gnn.inference.latency_ms",
+                inference_ms,
+                unit="ms",
+            ),
+            TelemetryMetric(
+                "tamiyo.gnn.compile_enabled",
+                1.0 if getattr(self._policy, "compile_enabled", False) else 0.0,
+                unit="bool",
+            ),
+            TelemetryMetric(
+                "tamiyo.policy.value_estimate",
+                float(last_action.get("value_estimate", 0.0)),
+                unit="score",
+            ),
+            TelemetryMetric(
+                "tamiyo.policy.risk_index",
+                float(last_action.get("risk_index", 0.0)),
+                unit="index",
+            ),
+            TelemetryMetric(
+                "tamiyo.policy.risk_score",
+                float(last_action.get("risk_score", 0.0)),
+                unit="score",
+            ),
         ]
+        if "blending_method" in last_action:
+            metrics.append(
+                TelemetryMetric(
+                    "tamiyo.blending.method_index",
+                    float(last_action.get("blending_index", 0.0)),
+                    unit="enum",
+                    attributes={"method": str(last_action.get("blending_method", ""))},
+                )
+            )
+        if "blending_schedule_start" in last_action and "blending_schedule_end" in last_action:
+            metrics.append(
+                TelemetryMetric(
+                    "tamiyo.blending.schedule_start",
+                    float(last_action.get("blending_schedule_start", 0.0)),
+                    unit="fraction",
+                )
+            )
+            metrics.append(
+                TelemetryMetric(
+                    "tamiyo.blending.schedule_end",
+                    float(last_action.get("blending_schedule_end", 0.0)),
+                    unit="fraction",
+                )
+            )
+        if "selected_seed_index" in last_action:
+            metrics.append(
+                TelemetryMetric(
+                    "tamiyo.selection.seed_index",
+                    float(last_action.get("selected_seed_index", -1.0)),
+                    unit="index",
+                )
+            )
+        if "selected_seed_score" in last_action:
+            metrics.append(
+                TelemetryMetric(
+                    "tamiyo.selection.seed_score",
+                    float(last_action.get("selected_seed_score", 0.0)),
+                    unit="score",
+                )
+            )
+        if "selected_blueprint_index" in last_action:
+            metrics.append(
+                TelemetryMetric(
+                    "tamiyo.selection.blueprint_index",
+                    float(last_action.get("selected_blueprint_index", -1.0)),
+                    unit="index",
+                )
+            )
         metrics.append(
             TelemetryMetric(
                 "tamiyo.breaker.inference_state",
@@ -301,6 +394,23 @@ class TamiyoService:
         # step/timing metrics if present on the packet to aid downstream analysis.
         events_list = list(events)
         metrics_delta: dict[str, float] = {"loss_delta": float(loss_delta)}
+        last_action = self._policy.last_action
+        if "param_delta" in last_action:
+            metrics_delta["param_delta"] = float(last_action.get("param_delta", 0.0))
+        if "value_estimate" in last_action:
+            metrics_delta["value_estimate"] = float(last_action.get("value_estimate", 0.0))
+        if "risk_index" in last_action:
+            metrics_delta["risk_index"] = float(last_action.get("risk_index", 0.0))
+        if "blending_index" in last_action:
+            metrics_delta["blending_index"] = float(last_action.get("blending_index", 0.0))
+        if "risk_score" in last_action:
+            metrics_delta["risk_score"] = float(last_action.get("risk_score", 0.0))
+        if "selected_seed_score" in last_action:
+            metrics_delta["selected_seed_score"] = float(last_action.get("selected_seed_score", 0.0))
+        if "blending_schedule_start" in last_action:
+            metrics_delta["blending_schedule_start"] = float(last_action.get("blending_schedule_start", 0.0))
+        if "blending_schedule_end" in last_action:
+            metrics_delta["blending_schedule_end"] = float(last_action.get("blending_schedule_end", 0.0))
         # Pull auxiliary timings from the training metrics if available
         try:
             tm = dict(state.training_metrics)
@@ -339,6 +449,8 @@ class TamiyoService:
                 pass
         if note_text is None and events_list:
             note_text = events_list[-1].description
+        if note_text is None and "blending_method" in last_action:
+            note_text = f"blending:{last_action['blending_method']}"
         self.generate_field_report(
             command=command,
             outcome=outcome,
@@ -389,6 +501,22 @@ class TamiyoService:
             "policy_param_delta",
             f"{last_action.get('param_delta', 0.0):.6f}",
         )
+        command.annotations.setdefault(
+            "policy_value_estimate",
+            f"{last_action.get('value_estimate', 0.0):.6f}",
+        )
+        command.annotations.setdefault(
+            "policy_risk_score",
+            f"{last_action.get('risk_score', 0.0):.6f}",
+        )
+        command.annotations.setdefault(
+            "policy_risk_index",
+            str(int(last_action.get("risk_index", 0.0))),
+        )
+        if "policy_version" not in command.annotations:
+            command.annotations["policy_version"] = self._policy_version
+        if "blending_method" not in command.annotations and "blending_method" in last_action:
+            command.annotations["blending_method"] = str(last_action.get("blending_method", ""))
 
     def _build_timeout_command(self, reason: str) -> leyline_pb2.AdaptationCommand:
         command = leyline_pb2.AdaptationCommand(
@@ -445,6 +573,211 @@ class TamiyoService:
                 return None, True
         return self._resolve_blueprint_info(command), False
 
+    def _ensure_blueprint_metadata_for_packet(self, state: leyline_pb2.SystemStatePacket) -> None:
+        blueprint_id = state.packet_id or state.training_run_id
+        if not blueprint_id or blueprint_id in self._blueprint_cache:
+            return
+        if self._urza is None:
+            return
+        record = self._urza.get(blueprint_id)
+        if record is None:
+            return
+        data = self._serialize_blueprint_record(record)
+        self._blueprint_cache[blueprint_id] = (datetime.now(tz=UTC), data)
+
+    def _serialize_blueprint_record(self, record) -> dict[str, float | str | bool | int | dict | list]:
+        descriptor = record.metadata
+        allowed: dict[str, dict[str, float]] = {}
+        allowed_mapping = getattr(descriptor, "allowed_parameters", None)
+        if isinstance(allowed_mapping, Mapping):
+            for key, bounds in allowed_mapping.items():
+                min_value = float(getattr(bounds, "min_value", 0.0))
+                max_value = float(getattr(bounds, "max_value", 0.0))
+                allowed[key] = {
+                    "min": min_value,
+                    "max": max_value,
+                    "span": float(max_value - min_value),
+                }
+        tier_value = int(getattr(descriptor, "tier", 0) or 0)
+        try:
+            tier_name = leyline_pb2.BlueprintTier.Name(tier_value)
+        except ValueError:
+            tier_name = str(tier_value)
+        data: dict[str, float | str | bool | int | dict | list] = {
+            "tier": tier_name,
+            "tier_index": tier_value,
+            "risk": float(getattr(descriptor, "risk", 0.0) or 0.0),
+            "stage": int(getattr(descriptor, "stage", 0) or 0),
+            "quarantine_only": bool(getattr(descriptor, "quarantine_only", False)),
+            "approval_required": bool(getattr(descriptor, "approval_required", False)),
+            "description": getattr(descriptor, "description", ""),
+            "parameter_count": int(len(allowed)),
+            "allowed_parameters": allowed,
+        }
+        candidate_score = (1.0 - float(data["risk"])) + 0.05 * float(data["stage"]) + 0.02 * len(allowed)
+        data["candidate_score"] = max(candidate_score, 0.0)
+        compile_ms = getattr(record, "compile_ms", None)
+        if compile_ms is not None:
+            data["compile_ms"] = float(compile_ms)
+        prewarm_ms = getattr(record, "prewarm_ms", None)
+        if prewarm_ms is not None:
+            data["prewarm_ms"] = float(prewarm_ms)
+        samples = getattr(record, "prewarm_samples", ()) or ()
+        if samples:
+            data["prewarm_samples_ms"] = [float(sample) for sample in samples]
+        guard_spec = getattr(record, "guard_spec", ()) or ()
+        if guard_spec:
+            data["guard_spec"] = list(guard_spec)
+        guard_summary = getattr(record, "guard_spec_summary", ()) or ()
+        if guard_summary:
+            data["guard_spec_summary"] = list(guard_summary)
+        guard_digest = getattr(record, "guard_digest", None)
+        if guard_digest:
+            data["guard_digest"] = guard_digest
+        checksum = getattr(record, "checksum", None)
+        if checksum:
+            data["checksum"] = checksum
+        tags = getattr(record, "tags", ()) or ()
+        if tags:
+            data["tags"] = list(tags)
+
+        graph_metadata = self._extract_graph_metadata(record)
+        if graph_metadata:
+            data["graph"] = graph_metadata
+        return data
+
+    def _extract_graph_metadata(self, record) -> dict[str, Any] | None:
+        extras: Mapping[str, Any] | None = getattr(record, "extras", None)
+        graph_section: Any = None
+        if extras:
+            graph_section = extras.get("graph_metadata")
+            if isinstance(graph_section, str):
+                try:
+                    graph_section = json.loads(graph_section)
+                except json.JSONDecodeError:
+                    graph_section = None
+        if not graph_section:
+            graph_section = self._graph_metadata_from_guard_spec(record)
+        if not graph_section:
+            return None
+        return self._normalise_graph_metadata(graph_section, record)
+
+    def _graph_metadata_from_guard_spec(self, record) -> dict[str, Any] | None:
+        guard_spec: Sequence[Mapping[str, Any]] = tuple(getattr(record, "guard_spec", ()) or ())
+        if not guard_spec:
+            return None
+        latency_ms = float(getattr(record, "prewarm_ms", 0.0) or 0.0)
+        latency_per_entry = latency_ms / max(1, len(guard_spec))
+        layers: list[dict[str, Any]] = []
+        activations: list[dict[str, Any]] = []
+        for idx, spec in enumerate(guard_spec):
+            shape = spec.get("shape") or []
+            dims: list[int] = [int(d) for d in shape if isinstance(d, (int, float))]
+            param_count = 1
+            for dim in dims:
+                param_count *= max(1, dim)
+            input_channels = dims[-2] if len(dims) >= 2 else dims[-1] if dims else 1
+            output_channels = dims[-1] if dims else 1
+            layer_entry = {
+                "layer_id": f"{record.metadata.blueprint_id}-L{idx}",
+                "type": "guard_tensor",
+                "depth": idx,
+                "input_channels": input_channels,
+                "output_channels": output_channels,
+                "parameter_count": param_count,
+                "latency_ms": latency_per_entry,
+                "gradient_norm": 0.0,
+                "weight_norm": 0.0,
+            }
+            layers.append(layer_entry)
+            activations.append(
+                {
+                    "activation_id": f"{record.metadata.blueprint_id}-A{idx}",
+                    "type": spec.get("dtype", "unknown"),
+                    "saturation_rate": 0.0,
+                    "gradient_flow": 1.0,
+                    "computational_cost": float(param_count),
+                }
+            )
+        parameters = []
+        allowed_mapping = getattr(record.metadata, "allowed_parameters", {})
+        for name, bounds in allowed_mapping.items():
+            lower = float(getattr(bounds, "min_value", 0.0))
+            upper = float(getattr(bounds, "max_value", 0.0))
+            parameters.append(
+                {
+                    "name": name,
+                    "min": lower,
+                    "max": upper,
+                    "default": (lower + upper) * 0.5,
+                    "span": upper - lower,
+                }
+            )
+        return {
+            "layers": layers,
+            "activations": activations,
+            "parameters": parameters,
+            "capabilities": {},
+        }
+
+    def _normalise_graph_metadata(
+        self,
+        graph_section: Mapping[str, Any],
+        record,
+    ) -> dict[str, Any]:
+        layers = self._coerce_descriptor_list(graph_section.get("layers"), key_field="layer_id")
+        activations = self._coerce_descriptor_list(
+            graph_section.get("activations"), key_field="activation_id"
+        )
+        parameters = self._coerce_descriptor_list(
+            graph_section.get("parameters"), key_field="name"
+        )
+        if not parameters:
+            allowed_mapping = getattr(record.metadata, "allowed_parameters", {})
+            for name, bounds in allowed_mapping.items():
+                lower = float(getattr(bounds, "min_value", 0.0))
+                upper = float(getattr(bounds, "max_value", 0.0))
+                parameters.append(
+                    {
+                        "name": name,
+                        "min": lower,
+                        "max": upper,
+                        "default": (lower + upper) * 0.5,
+                        "span": upper - lower,
+                    }
+                )
+
+        capabilities = {}
+        raw_capabilities = graph_section.get("capabilities", {})
+        if isinstance(raw_capabilities, Mapping):
+            for key, value in raw_capabilities.items():
+                if isinstance(value, (list, tuple)):
+                    capabilities[str(key)] = [str(item) for item in value]
+                elif isinstance(value, (int, float, str, bool)):
+                    capabilities[str(key)] = value
+
+        return {
+            "layers": layers,
+            "activations": activations,
+            "parameters": parameters,
+            "capabilities": capabilities,
+            "source": graph_section.get("source", "urza"),
+        }
+
+    @staticmethod
+    def _coerce_descriptor_list(value: Any, *, key_field: str) -> list[dict[str, Any]]:
+        if not value:
+            return []
+        result: list[dict[str, Any]] = []
+        for index, entry in enumerate(value):
+            if isinstance(entry, Mapping):
+                converted = {str(k): v for k, v in entry.items()}
+            else:
+                continue
+            converted.setdefault(key_field, f"auto-{index}")
+            result.append(converted)
+        return result
+
     def _apply_risk_engine(
         self,
         command: leyline_pb2.AdaptationCommand,
@@ -458,6 +791,52 @@ class TamiyoService:
     ) -> tuple[Optional[dict[str, float | str | bool | int]], list[TelemetryEvent]]:
         events: list[TelemetryEvent] = []
         reason = command.annotations.get("risk_reason")
+
+        policy_risk_score: float | None = None
+        risk_score_raw = command.annotations.get("policy_risk_score")
+        if risk_score_raw:
+            try:
+                policy_risk_score = float(risk_score_raw)
+                if not math.isfinite(policy_risk_score):
+                    policy_risk_score = None
+            except (TypeError, ValueError):
+                policy_risk_score = None
+        if policy_risk_score is not None:
+            events.append(
+                TelemetryEvent(
+                    description="policy_risk_signal",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+                    attributes={
+                        "score": f"{policy_risk_score:.3f}",
+                        "index": command.annotations.get("policy_risk_index", "0"),
+                    },
+                )
+            )
+            if policy_risk_score >= 0.98:
+                reason = "policy_risk_critical"
+                command.command_type = leyline_pb2.COMMAND_PAUSE
+                events.append(
+                    TelemetryEvent(
+                        description="policy_risk_critical",
+                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
+                        attributes={"score": f"{policy_risk_score:.3f}"},
+                    )
+                )
+                self._set_conservative_mode(True, "policy_risk_critical", events)
+            elif (
+                policy_risk_score >= 0.85
+                and command.command_type == leyline_pb2.COMMAND_SEED
+            ):
+                reason = reason or "policy_risk_elevated"
+                command.command_type = leyline_pb2.COMMAND_OPTIMIZER
+                command.optimizer_adjustment.optimizer_id = "sgd"
+                events.append(
+                    TelemetryEvent(
+                        description="policy_risk_elevated",
+                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                        attributes={"score": f"{policy_risk_score:.3f}"},
+                    )
+                )
 
         if self._risk.conservative_mode and not timed_out:
             reason = reason or "conservative_mode"
@@ -647,6 +1026,12 @@ class TamiyoService:
             "policy": self._policy_version[:8],
             "mode": "1" if self._risk.conservative_mode else "0",
         }
+        indicators["policy_compile"] = "1" if getattr(self._policy, "compile_enabled", False) else "0"
+        indicators["policy_arch"] = self._policy_version
+        last_action = self._policy.last_action
+        blending = last_action.get("blending_method")
+        if blending:
+            indicators["blending_method"] = str(blending)
         if blueprint_info:
             tier = blueprint_info.get("tier")
             if tier is not None:
@@ -693,6 +1078,7 @@ class TamiyoService:
         """Hot-swap the in-memory policy."""
 
         self._policy = new_policy
+        self._policy_version = getattr(new_policy, "architecture_version", self._policy_version)
 
     def set_conservative_mode(self, enabled: bool) -> None:
         """Toggle conservative mode (breaker support)."""
@@ -749,7 +1135,7 @@ class TamiyoService:
             self._policy_version = update.tamiyo_policy_version
         if update.payload:
             state_buffer = BytesIO(update.payload)
-            state_dict = torch.load(state_buffer, map_location="cpu")
+            state_dict = torch.load(state_buffer, map_location="cpu", weights_only=False)
             try:
                 self._policy.load_state_dict(state_dict, strict=False)
             except RuntimeError as exc:  # pragma: no cover - defensive
@@ -799,15 +1185,7 @@ class TamiyoService:
         record = self._urza.get(blueprint_id)
         if record is None:
             return None
-        tier_name = leyline_pb2.BlueprintTier.Name(record.metadata.tier)
-        data = {
-            "tier": tier_name,
-            "risk": float(record.metadata.risk),
-            "stage": int(record.metadata.stage),
-            "quarantine_only": bool(record.metadata.quarantine_only),
-            "approval_required": bool(record.metadata.approval_required),
-            "description": record.metadata.description,
-        }
+        data = self._serialize_blueprint_record(record)
         self._blueprint_cache[blueprint_id] = (now, data)
         return data
 

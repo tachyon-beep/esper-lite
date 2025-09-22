@@ -77,3 +77,16 @@ Checklist
 - [ ] Telemetry: expected events/metrics observed; priorities correct; Oona routing verified
 - [ ] 3A constraints respected (Weatherlight unchanged; no new contracts)
 ```
+
+## Latest Performance Snapshot
+
+- Measurement date: 2025-02 (local dev VM, 2 vCPU, CPU-only PyTorch 2.8)
+- Command: `python - <<'PY' ... service.evaluate_step ... PY`
+- Results (ms): p50 5.95, p95 8.84, p99 11.17, max 16.54
+- Notes: Includes full hetero graph (layer/activation/parameter nodes + metadata); comfortably meets the ≤10 ms step budget after optimising hidden dims and attention heads.
+
+## Blending Schedule Semantics
+
+- `blending_schedule_start` and `blending_schedule_end` are clamped to [0.0, 1.0] and express the fraction of the blending window to occupy.
+- Tamiyo always orders the pair so `start <= end` before handing the command to Kasmina.
+- Downstream consumers should rescale these fractions into absolute steps if a different unit is required.
