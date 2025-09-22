@@ -1,4 +1,6 @@
 from io import BytesIO
+import time
+from types import SimpleNamespace
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -27,6 +29,43 @@ _SIGNATURE_CONTEXT = SignatureContext(secret=b"tamiyo-test-secret")
 class _KasminaRuntime:
     def fetch_kernel(self, blueprint_id: str) -> tuple[nn.Module, float]:
         return nn.Identity(), 1.0
+
+
+class _SlowPolicy(TamiyoPolicy):
+    def select_action(self, packet: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
+        time.sleep(0.02)
+        return super().select_action(packet)
+
+
+class _SeedPolicy(TamiyoPolicy):
+    def select_action(self, packet: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
+        command = leyline_pb2.AdaptationCommand(
+            version=1,
+            command_type=leyline_pb2.COMMAND_SEED,
+            target_seed_id="seed-timeout",
+        )
+        command.seed_operation.operation = leyline_pb2.SEED_OP_GERMINATE
+        command.seed_operation.blueprint_id = "bp-timeout"
+        self._last_action = {"action": 0.0, "param_delta": 0.0}
+        return command
+
+
+class _SlowUrza:
+    def __init__(self) -> None:
+        self._record = SimpleNamespace(
+            metadata=SimpleNamespace(
+                tier=leyline_pb2.BlueprintTier.BLUEPRINT_TIER_EXPERIMENTAL,
+                risk=0.1,
+                stage=1,
+                quarantine_only=False,
+                approval_required=False,
+                description="slow",
+            )
+        )
+
+    def get(self, blueprint_id: str) -> SimpleNamespace:
+        time.sleep(0.05)
+        return self._record
 
 
 def test_tamiyo_service_generates_command(tmp_path) -> None:
@@ -76,6 +115,51 @@ def test_tamiyo_signed_command_accepted_and_replay_rejected(tmp_path) -> None:
     manager.finalize_step(step_index=2)
     packets = manager.drain_telemetry_packets()
     assert any(event.description == "command_rejected" for pkt in packets for event in pkt.events)
+
+
+def test_evaluate_step_timeout_inference(tmp_path) -> None:
+    config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    service = TamiyoService(
+        policy=_SlowPolicy(),
+        store_config=config,
+        signature_context=_SIGNATURE_CONTEXT,
+        step_timeout_ms=1.0,
+    )
+    packet = leyline_pb2.SystemStatePacket(
+        version=1,
+        current_epoch=1,
+        training_run_id="run-timeout",
+        global_step=42,
+    )
+    command = service.evaluate_step(packet)
+    assert command.command_type == leyline_pb2.COMMAND_PAUSE
+    assert command.annotations["risk_reason"] == "timeout_inference"
+    telemetry = service.telemetry_packets[-1]
+    assert any(event.description == "timeout_inference" for event in telemetry.events)
+    priority = telemetry.system_health.indicators.get("priority")
+    assert priority == leyline_pb2.MessagePriority.Name(
+        leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH
+    )
+
+
+def test_evaluate_step_timeout_urza(tmp_path) -> None:
+    config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    service = TamiyoService(
+        policy=_SeedPolicy(),
+        store_config=config,
+        urza=_SlowUrza(),
+        signature_context=_SIGNATURE_CONTEXT,
+        metadata_timeout_ms=1.0,
+    )
+    packet = leyline_pb2.SystemStatePacket(
+        version=1,
+        current_epoch=1,
+        training_run_id="run-urza",
+    )
+    command = service.evaluate_step(packet)
+    telemetry = service.telemetry_packets[-1]
+    assert any(event.description == "timeout_urza" for event in telemetry.events)
+    assert "blueprint_tier" not in command.annotations
 
 
 def test_conservative_mode_overrides_directive(tmp_path) -> None:

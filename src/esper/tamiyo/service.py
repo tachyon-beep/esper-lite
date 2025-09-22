@@ -6,11 +6,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from io import BytesIO
-from typing import TYPE_CHECKING, Dict, Tuple
+from typing import TYPE_CHECKING, Dict, Tuple, Optional, Iterable
+import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from uuid import uuid4
 
 import torch
 import logging
+import contextlib
 
 from esper.core import EsperSettings, TelemetryEvent, TelemetryMetric, build_telemetry_packet
 from esper.leyline import leyline_pb2
@@ -51,6 +54,9 @@ class TamiyoService:
         urza: UrzaLibrary | None = None,
         metadata_cache_ttl: timedelta = timedelta(minutes=5),
         signature_context: SignatureContext | None = None,
+        step_timeout_ms: float = 5.0,
+        metadata_timeout_ms: float = 20.0,
+        executor: ThreadPoolExecutor | None = None,
     ) -> None:
         self._policy = policy or TamiyoPolicy(TamiyoPolicyConfig())
         self._risk = risk_config or RiskConfig()
@@ -75,35 +81,62 @@ class TamiyoService:
         self._last_validation_loss: float | None = None
         self._policy_version = "policy-stub"
         self._signing_context = signature_context or SignatureContext.from_environment(DEFAULT_SECRET_ENV)
+        self._executor = executor
+        self._owns_executor = False
+        if self._executor is None and (step_timeout_ms > 0 or metadata_timeout_ms > 0):
+            self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="tamiyo")
+            self._owns_executor = True
+        self._step_timeout_s = max(step_timeout_ms, 0.0) / 1000.0
+        self._metadata_timeout_s = max(metadata_timeout_ms, 0.0) / 1000.0
+
+    def evaluate_step(self, state: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
+        """Evaluate step state under tight deadlines (ADR-001 3A)."""
+
+        return self._evaluate(state, enforce_timeouts=True)
 
     def evaluate_epoch(self, state: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
-        """Evaluate epoch state and apply risk gating."""
+        """Retained for backwards compatibility (no timeouts)."""
 
-        # Measure inference time for budget guardrails
-        start = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None
-        end = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None
-        if start and end:
-            torch.cuda.synchronize()
-            start.record()
-        wall_start = None if start else datetime.now(tz=UTC)
+        return self._evaluate(state, enforce_timeouts=False)
 
-        command = self._policy.select_action(state)
+    def _evaluate(
+        self,
+        state: leyline_pb2.SystemStatePacket,
+        *,
+        enforce_timeouts: bool,
+    ) -> leyline_pb2.AdaptationCommand:
+        events: list[TelemetryEvent] = []
 
-        if start and end:
-            end.record()
-            torch.cuda.synchronize()
-            inference_ms = float(start.elapsed_time(end))
-        else:
-            inference_ms = float((datetime.now(tz=UTC) - wall_start).total_seconds() * 1000.0)  # type: ignore[arg-type]
-        last_action = self._policy.last_action
-        command.annotations["policy_action"] = str(int(last_action.get("action", 0.0)))
-        command.annotations["policy_param_delta"] = f"{last_action.get('param_delta', 0.0):.6f}"
-        risk_event: list[TelemetryEvent] = []
+        command, inference_ms, timed_out = self._run_policy(state, enforce_timeouts)
+        if timed_out:
+            events.append(
+                TelemetryEvent(
+                    description="timeout_inference",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"budget_ms": f"{self._step_timeout_s * 1000.0:.1f}"},
+                )
+            )
+
         loss_delta = 0.0
         if self._last_validation_loss is not None:
             loss_delta = state.validation_loss - self._last_validation_loss
 
-        blueprint_info = self._resolve_blueprint_info(command)
+        blueprint_info: Optional[dict[str, float | str | bool | int]] = None
+        blueprint_timeout = False
+        if not timed_out:
+            blueprint_info, blueprint_timeout = self._resolve_blueprint_with_timeout(
+                command,
+                enforce_timeouts,
+            )
+        if blueprint_timeout:
+            events.append(
+                TelemetryEvent(
+                    description="timeout_urza",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"budget_ms": f"{self._metadata_timeout_s * 1000.0:.1f}"},
+                )
+            )
+
         if blueprint_info:
             command.annotations["blueprint_tier"] = blueprint_info["tier"]
             command.annotations["blueprint_stage"] = str(blueprint_info["stage"])
@@ -111,7 +144,7 @@ class TamiyoService:
             if blueprint_info["quarantine_only"] or blueprint_info["risk"] >= 0.8:
                 command.command_type = leyline_pb2.COMMAND_PAUSE
                 command.annotations.setdefault("risk_reason", "blueprint_high_risk")
-                risk_event.append(
+                events.append(
                     TelemetryEvent(
                         description="bp_quarantine",
                         level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
@@ -119,16 +152,17 @@ class TamiyoService:
                     )
                 )
 
-        if self._risk.conservative_mode or (
-            self._last_validation_loss is not None
-            and loss_delta > self._risk.max_loss_spike
+        if not timed_out and (
+            self._risk.conservative_mode
+            or (
+                self._last_validation_loss is not None
+                and loss_delta > self._risk.max_loss_spike
+            )
         ):
             command.command_type = leyline_pb2.COMMAND_PAUSE
-            if self._risk.conservative_mode:
-                command.annotations["risk_reason"] = "conservative_mode"
-            else:
-                command.annotations["risk_reason"] = "loss_spike"
-            risk_event.append(
+            reason = "conservative_mode" if self._risk.conservative_mode else "loss_spike"
+            command.annotations["risk_reason"] = reason
+            events.append(
                 TelemetryEvent(
                     description="pause_triggered",
                     level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
@@ -139,6 +173,9 @@ class TamiyoService:
                 )
             )
 
+        if timed_out:
+            command.annotations.setdefault("risk_reason", "timeout_inference")
+
         metrics = [
             TelemetryMetric("tamiyo.validation_loss", state.validation_loss, unit="loss"),
             TelemetryMetric("tamiyo.loss_delta", loss_delta, unit="loss"),
@@ -147,33 +184,116 @@ class TamiyoService:
                 1.0 if self._risk.conservative_mode else 0.0,
                 unit="bool",
             ),
+            TelemetryMetric("tamiyo.inference.latency_ms", inference_ms, unit="ms"),
         ]
-        if inference_ms >= 0.0:
-            metrics.append(
-                TelemetryMetric("tamiyo.inference.latency_ms", inference_ms, unit="ms")
-            )
         if blueprint_info:
             metrics.append(
                 TelemetryMetric(
                     "tamiyo.blueprint.risk",
-                    blueprint_info["risk"],
+                    float(blueprint_info["risk"]),
                     unit="score",
                 )
             )
+
         telemetry = build_telemetry_packet(
             packet_id=state.packet_id or "tamiyo-telemetry",
             source="tamiyo",
             level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
             metrics=metrics,
-            events=risk_event,
-            health_status=self._derive_health_status(command, risk_event),
-            health_summary=self._derive_health_summary(command, risk_event, loss_delta),
-            health_indicators=self._build_health_indicators(loss_delta, blueprint_info),
+            events=events,
+            health_status=self._derive_health_status(command, events),
+            health_summary=self._derive_health_summary(command, events, loss_delta),
+            health_indicators=self._build_health_indicators(state, loss_delta, blueprint_info),
         )
+        priority_value = self._priority_from_events(events)
+        telemetry.system_health.indicators["priority"] = leyline_pb2.MessagePriority.Name(priority_value)
         self._sign_command(command)
         self._telemetry_packets.append(telemetry)
         self._last_validation_loss = state.validation_loss
         return command
+
+    def _run_policy(
+        self,
+        state: leyline_pb2.SystemStatePacket,
+        enforce_timeouts: bool,
+    ) -> tuple[leyline_pb2.AdaptationCommand, float, bool]:
+        start = time.perf_counter()
+        timed_out = False
+
+        if enforce_timeouts and self._step_timeout_s > 0 and self._executor is not None:
+            future = self._executor.submit(self._policy.select_action, state)
+            try:
+                command = future.result(timeout=self._step_timeout_s)
+            except FuturesTimeout:
+                future.cancel()
+                timed_out = True
+                command = self._build_timeout_command("timeout_inference")
+        else:
+            command = self._policy.select_action(state)
+
+        inference_ms = (time.perf_counter() - start) * 1000.0
+
+        if timed_out:
+            command.annotations.setdefault("policy_action", "timeout")
+            command.annotations.setdefault("policy_param_delta", "0.0")
+        else:
+            self._ensure_policy_annotations(command)
+
+        if not command.issued_by:
+            command.issued_by = "tamiyo"
+
+        return command, inference_ms, timed_out
+
+    def _ensure_policy_annotations(self, command: leyline_pb2.AdaptationCommand) -> None:
+        last_action = self._policy.last_action
+        command.annotations.setdefault("policy_action", str(int(last_action.get("action", 0.0))))
+        command.annotations.setdefault(
+            "policy_param_delta",
+            f"{last_action.get('param_delta', 0.0):.6f}",
+        )
+
+    def _build_timeout_command(self, reason: str) -> leyline_pb2.AdaptationCommand:
+        command = leyline_pb2.AdaptationCommand(
+            version=1,
+            command_type=leyline_pb2.COMMAND_PAUSE,
+            issued_by="tamiyo",
+        )
+        command.annotations["policy_action"] = "timeout"
+        command.annotations["policy_param_delta"] = "0.0"
+        command.annotations["risk_reason"] = reason
+        return command
+
+    def _resolve_blueprint_with_timeout(
+        self,
+        command: leyline_pb2.AdaptationCommand,
+        enforce_timeouts: bool,
+    ) -> tuple[Optional[dict[str, float | str | bool | int]], bool]:
+        if self._urza is None:
+            return None, False
+        if command.command_type != leyline_pb2.COMMAND_SEED or not command.HasField("seed_operation"):
+            return None, False
+
+        if enforce_timeouts and self._metadata_timeout_s > 0 and self._executor is not None:
+            future = self._executor.submit(self._resolve_blueprint_info, command)
+            try:
+                return future.result(timeout=self._metadata_timeout_s), False
+            except FuturesTimeout:
+                future.cancel()
+                return None, True
+        return self._resolve_blueprint_info(command), False
+
+    @staticmethod
+    def _priority_from_events(events: Iterable[TelemetryEvent]) -> int:
+        priority = leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
+        for event in events:
+            if event.level == leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL:
+                return leyline_pb2.MessagePriority.MESSAGE_PRIORITY_CRITICAL
+            if event.level in (
+                leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_ERROR,
+            ):
+                priority = leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH
+        return priority
 
     def _sign_command(self, command: leyline_pb2.AdaptationCommand) -> None:
         """Assign identifiers and attach an HMAC signature."""
@@ -217,6 +337,7 @@ class TamiyoService:
 
     def _build_health_indicators(
         self,
+        state: leyline_pb2.SystemStatePacket,
         loss_delta: float,
         blueprint_info: dict[str, float | str | bool | int] | None,
     ) -> dict[str, str]:
@@ -228,6 +349,9 @@ class TamiyoService:
             tier = blueprint_info.get("tier")
             if tier is not None:
                 indicators["tier"] = str(tier)
+        step_index = getattr(state, "global_step", 0)
+        if step_index:
+            indicators["step_index"] = str(step_index)
         return indicators
 
     def generate_field_report(
@@ -289,6 +413,18 @@ class TamiyoService:
         """Return policy updates applied to the service."""
 
         return list(self._policy_updates)
+
+    def close(self) -> None:
+        """Release internal executor resources if owned."""
+
+        if self._owns_executor and self._executor is not None:
+            self._executor.shutdown(wait=False)
+            self._owns_executor = False
+            self._executor = None
+
+    def __del__(self) -> None:  # pragma: no cover - best effort cleanup
+        with contextlib.suppress(Exception):
+            self.close()
 
     async def publish_history(self, oona: OonaClient) -> None:
         """Publish collected field reports and telemetry via Oona."""
