@@ -162,8 +162,9 @@ Replace the feed-forward Tamiyo policy stub with the 4-layer hetero-GNN architec
      - intermediate `graph_embedding` for telemetry.
 
    **Framework Choice (PyTorch Geometric vs Custom)**
-   - **Decision**: adopt PyTorch Geometric (`torch-geometric>=2.5.0`, `torch-scatter>=2.1.2`) as the default implementation path.
-     - Declare optional extra `tamiyo-gnn` in `pyproject.toml` and amend CI to install extras for relevant jobs.
+   - **Decision**: adopt PyTorch Geometric (`torch-geometric>=2.5.0`, plus runtime dependencies `torch-scatter>=2.1.2`, `torch-sparse>=0.6.18`, `torch-cluster>=1.6.3`, `torch-spline-conv>=1.2.2`) as the default implementation path.
+     - Declare optional extra `tamiyo-gnn` in `pyproject.toml` installing the set `{torch-geometric, torch-scatter, torch-sparse, torch-cluster, torch-spline-conv}` pinned to CUDA-compatible builds matching our torch version.
+     - Update CI workflows to install `pip install .[tamiyo-gnn]` for the jobs running GNN tests; document local install instructions in README.
      - Wrap imports in `esper.tamiyo.pyg` so we can substitute deterministic test doubles when GPU kernels aren’t available.
    - **If PyG unavailable at runtime**: raise `TamiyoDependencyError` during policy init, emit telemetry (`tamiyo.policy.degraded=1`), and refuse to evaluate—prevents silently degraded decisions.
    - **Hand-rolled fallback sketch (for future work if PyG is rejected)**:
