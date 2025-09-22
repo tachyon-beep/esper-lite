@@ -14,6 +14,13 @@ from esper.tolaria import KasminaClient, TamiyoClient, TolariaTrainer, TrainingL
 
 
 class _TamiyoStub(TamiyoClient):
+    def __init__(self) -> None:
+        self.step_calls: int = 0
+
+    def evaluate_step(self, state: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
+        self.step_calls += 1
+        return self.evaluate_epoch(state)
+
     def evaluate_epoch(self, state: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
         command = leyline_pb2.AdaptationCommand(
             version=1,
@@ -28,6 +35,9 @@ class _TamiyoStub(TamiyoClient):
 
 
 class _TimeoutTamiyoStub(TamiyoClient):
+    def evaluate_step(self, state: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
+        raise TimeoutError("simulated-step-timeout")
+
     def evaluate_epoch(self, state: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
         raise TimeoutError("simulated-timeout")
 
@@ -119,6 +129,53 @@ def test_tolaria_trainer_emits_state_packets() -> None:
     assert metrics_snapshot["tolaria.epochs.failed"] == 0.0
     assert "tolaria.train.compile_enabled" in metrics_snapshot
     assert "tolaria.train.amp_enabled" in metrics_snapshot
+
+
+def test_tolaria_trainer_uses_step_api() -> None:
+    model = _dummy_model(4, 2)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+    loader = _dummy_loader(8, 4, 2)
+    tamiyo = _TamiyoStub()
+    kasmina = _KasminaStub()
+    trainer = TolariaTrainer(
+        model=model,
+        optimizer=optimizer,
+        dataloader=loader,
+        tamiyo=tamiyo,
+        kasmina=kasmina,
+        config=TrainingLoopConfig(max_epochs=1, gradient_accumulation_steps=1, device=torch.device("cpu")),
+    )
+
+    list(trainer.run())
+    assert tamiyo.step_calls > 0
+
+
+def test_tolaria_handles_tamiyo_step_timeout() -> None:
+    model = _dummy_model(4, 2)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+    loader = _dummy_loader(4, 4, 2)
+    tamiyo = _TimeoutTamiyoStub()
+    kasmina = _KasminaStub()
+    trainer = TolariaTrainer(
+        model=model,
+        optimizer=optimizer,
+        dataloader=loader,
+        tamiyo=tamiyo,
+        kasmina=kasmina,
+        config=TrainingLoopConfig(
+            max_epochs=1,
+            gradient_accumulation_steps=1,
+            device=torch.device("cpu"),
+            tamiyo_timeout_s=0.001,
+        ),
+    )
+
+    list(trainer.run())
+    assert any(
+        event.description == "tolaria.tamiyo_timeout"
+        for packet in trainer.telemetry_packets
+        for event in packet.events
+    )
 
 
 def test_tolaria_advances_alpha_during_blending() -> None:
