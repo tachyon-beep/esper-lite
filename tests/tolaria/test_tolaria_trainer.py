@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+import time
 
 import pytest
 import torch
@@ -176,6 +177,32 @@ def test_tolaria_handles_tamiyo_step_timeout() -> None:
         for packet in trainer.telemetry_packets
         for event in packet.events
     )
+
+
+def test_tolaria_epoch_wall_time_with_step_coupling() -> None:
+    model = _dummy_model(8, 4)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+    loader = _dummy_loader(128, 8, 4)
+    tamiyo = _TamiyoStub()
+    kasmina = _KasminaStub()
+    trainer = TolariaTrainer(
+        model=model,
+        optimizer=optimizer,
+        dataloader=loader,
+        tamiyo=tamiyo,
+        kasmina=kasmina,
+        config=TrainingLoopConfig(
+            max_epochs=1,
+            gradient_accumulation_steps=1,
+            device=torch.device("cpu"),
+            tamiyo_timeout_s=0.05,
+        ),
+    )
+
+    start = time.perf_counter()
+    list(trainer.run())
+    elapsed_ms = (time.perf_counter() - start) * 1000.0
+    assert elapsed_ms < 2000.0
 
 
 def test_tolaria_advances_alpha_during_blending() -> None:

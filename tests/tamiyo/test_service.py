@@ -1,5 +1,6 @@
 from io import BytesIO
 import time
+import statistics
 from types import SimpleNamespace
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -270,6 +271,25 @@ def test_field_report_retention_rewrites(tmp_path) -> None:
     assert all(report.seed_id != "seed-old" for report in remaining)
 
 
+def test_step_evaluate_p95_budget(tmp_path) -> None:
+    config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    service = TamiyoService(store_config=config, signature_context=_SIGNATURE_CONTEXT)
+    durations: list[float] = []
+    for step in range(30):
+        packet = leyline_pb2.SystemStatePacket(
+            version=1,
+            current_epoch=1,
+            global_step=step,
+            training_run_id="run-budget",
+        )
+        start = time.perf_counter()
+        service.evaluate_step(packet)
+        durations.append((time.perf_counter() - start) * 1000.0)
+    durations.sort()
+    p95 = durations[int(len(durations) * 0.95)]
+    assert p95 <= 10.0
+
+
 @pytest.mark.asyncio
 async def test_tamiyo_publish_history_to_oona(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
@@ -297,6 +317,35 @@ async def test_tamiyo_publish_history_to_oona(tmp_path) -> None:
     await service.publish_history(oona)
     assert await oona.stream_length("oona.normal") >= 1
     assert await oona.stream_length("oona.telemetry") >= 1
+    await oona.close()
+
+
+@pytest.mark.asyncio
+async def test_tamiyo_publish_history_routes_priority(tmp_path) -> None:
+    config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    service = TamiyoService(store_config=config, signature_context=_SIGNATURE_CONTEXT)
+    packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-routing")
+    service.evaluate_step(packet)
+    telemetry = service.telemetry_packets[-1]
+    if telemetry.events:
+        telemetry.events[0].level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
+    else:
+        telemetry.events.add(
+            description="timeout_inference",
+            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
+        )
+    telemetry.system_health.indicators["priority"] = "MESSAGE_PRIORITY_CRITICAL"
+
+    config = StreamConfig(
+        normal_stream="oona.normal",
+        emergency_stream="oona.emergency",
+        telemetry_stream="oona.telemetry",
+        group="tamiyo-routing",
+    )
+    oona = OonaClient("redis://localhost", config=config, redis_client=FakeRedis())
+    await oona.ensure_consumer_group()
+    await service.publish_history(oona)
+    assert await oona.stream_length("oona.emergency") >= 1
     await oona.close()
 
 

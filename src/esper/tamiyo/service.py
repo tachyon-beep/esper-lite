@@ -693,7 +693,12 @@ class TamiyoService:
         for report in self._field_reports:
             await oona.publish_field_report(report)
         for telemetry in self._telemetry_packets:
-            await oona.publish_telemetry(telemetry)
+            priority_name = telemetry.system_health.indicators.get("priority")
+            priority_enum = None
+            if priority_name:
+                with contextlib.suppress(ValueError):
+                    priority_enum = leyline_pb2.MessagePriority.Value(priority_name)
+            await oona.publish_telemetry(telemetry, priority=priority_enum)
 
     def ingest_policy_update(self, update: leyline_pb2.PolicyUpdate) -> None:
         """Apply a policy update produced by Simic."""

@@ -177,6 +177,33 @@ async def test_oona_publish_telemetry_routes_by_priority() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tamiyo_high_priority_routes_to_emergency() -> None:
+    redis = FakeRedis()
+    config = StreamConfig(
+        normal_stream="oona.normal",
+        emergency_stream="oona.emergency",
+        telemetry_stream="oona.telemetry",
+        group="tamiyo-routing-test",
+    )
+    client = OonaClient("redis://localhost", config=config, redis_client=redis)
+    await client.ensure_consumer_group()
+
+    packet = leyline_pb2.TelemetryPacket(
+        packet_id="tamiyo-timeout",
+        source_subsystem="tamiyo",
+        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+    )
+    packet.system_health.indicators["priority"] = "MESSAGE_PRIORITY_HIGH"
+    packet.events.add(description="timeout_inference")
+    assert await client.publish_telemetry(
+        packet,
+        priority=leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH,
+    )
+    assert await client.stream_length("oona.emergency") == 1
+    await client.close()
+
+
+@pytest.mark.asyncio
 async def test_oona_publish_policy_update() -> None:
     redis = FakeRedis()
     config = StreamConfig(
