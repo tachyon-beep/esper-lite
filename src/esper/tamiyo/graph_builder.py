@@ -1,0 +1,519 @@
+"""Utilities to translate step-level state into heterogenous graphs for Tamiyo.
+
+This implements the graph construction helpers required by
+`docs/prototype-delta/tamiyo/GNN-WP1.md`. The builder keeps the payload lean and
+falls back to safe defaults when certain metrics are unavailable so the policy
+never crashes mid-run.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable, Iterable, Mapping, Sequence
+import json
+import math
+
+import torch
+import torch.nn.functional as F
+from torch import Tensor
+
+try:  # pragma: no cover - import guarded to allow optional dependency
+    from torch_geometric.data import HeteroData
+except ImportError as exc:  # pragma: no cover - tested via integration path
+    raise ModuleNotFoundError(
+        "PyTorch Geometric is required for Tamiyo GNN support. Install esper-lite[tamiyo-gnn]."
+    ) from exc
+
+from esper.leyline import leyline_pb2
+from esper.simic.registry import EmbeddingRegistry
+
+
+_DEFAULT_NORMALISATION: Mapping[str, tuple[float, float]] = {
+    "loss": (0.8, 0.3),
+    "validation_loss": (0.8, 0.3),
+    "training_loss": (0.8, 0.3),
+    "gradient_norm": (1.0, 0.5),
+    "samples_per_s": (4500.0, 500.0),
+    "hook_latency_ms": (12.0, 6.0),
+    "seed_learning_rate": (0.01, 0.005),
+    "seed_risk": (0.4, 0.2),
+    "seed_age": (10.0, 4.0),
+}
+
+
+class _FeatureNormalizer:
+    """Exponentially-weighted normaliser with persistence."""
+
+    def __init__(self, path: Path | None, alpha: float = 0.1) -> None:
+        self._path = path
+        self._alpha = float(alpha)
+        self._stats: dict[str, dict[str, float]] = {}
+        self._dirty = False
+
+        for key, (mean, std) in _DEFAULT_NORMALISATION.items():
+            var = float(std) ** 2 if std > 0 else 1.0
+            self._stats[key] = {"mean": float(mean), "var": max(var, 1e-6)}
+
+        if path and path.exists():
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                payload = {}
+            if isinstance(payload, dict):
+                for key, value in payload.items():
+                    if not isinstance(value, Mapping):
+                        continue
+                    mean = float(value.get("mean", 0.0))
+                    var = float(value.get("var", value.get("std", 1.0) ** 2))
+                    self._stats[str(key)] = {"mean": mean, "var": max(var, 1e-6)}
+
+    def normalize(self, name: str, raw: float) -> float:
+        self._update(name, raw)
+        stats = self._stats.setdefault(name, {"mean": float(raw), "var": 1.0})
+        mean = stats["mean"]
+        std = math.sqrt(max(stats["var"], 1e-6))
+        if std <= 1e-6:
+            return float(raw - mean)
+        return float((raw - mean) / std)
+
+    def _update(self, name: str, raw: float) -> None:
+        stats = self._stats.setdefault(name, {"mean": float(raw), "var": 1.0})
+        mean = stats["mean"]
+        var = stats["var"]
+        alpha = self._alpha
+        delta = float(raw) - mean
+        mean = mean + alpha * delta
+        var = (1.0 - alpha) * (var + alpha * delta * delta)
+        stats["mean"] = mean
+        stats["var"] = max(var, 1e-6)
+        self._dirty = True
+
+    def flush(self) -> None:
+        if not self._dirty or self._path is None:
+            return
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                key: {"mean": stats["mean"], "var": stats["var"]}
+                for key, stats in self._stats.items()
+            }
+            self._path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            self._dirty = False
+        except Exception:
+            # Persistence failures should not break inference paths
+            pass
+
+
+@dataclass(slots=True)
+class TamiyoGraphBuilderConfig:
+    """Configuration payload for `TamiyoGraphBuilder`."""
+
+    global_feature_dim: int = 16
+    seed_feature_dim: int = 12
+    blueprint_feature_dim: int = 8
+    layer_feature_dim: int = 8
+    activation_feature_dim: int = 6
+    parameter_feature_dim: int = 6
+    edge_feature_dim: int = 3
+    normalizer_path: Path = Path("var/tamiyo/gnn_norms.json")
+    seed_vocab: int = 1024
+    blueprint_vocab: int = 1024
+    max_layers: int = 4
+    max_activations: int = 2
+    max_parameters: int = 2
+    seed_registry: EmbeddingRegistry | None = None
+    blueprint_registry: EmbeddingRegistry | None = None
+    blueprint_metadata_provider: Callable[[str], Mapping[str, float | str | bool | int]] | None = None
+
+
+class TamiyoGraphBuilder:
+    """Build heterogenous graphs from step-level Leyline packets."""
+
+    def __init__(self, config: TamiyoGraphBuilderConfig) -> None:
+        self._cfg = config
+        self._normalizer = _FeatureNormalizer(config.normalizer_path)
+        self._seed_registry = config.seed_registry
+        self._blueprint_registry = config.blueprint_registry
+        self._metadata_provider = config.blueprint_metadata_provider
+
+    def _lookup_blueprint_metadata(self, blueprint_id: str) -> Mapping[str, float | str | bool | int]:
+        if not blueprint_id or self._metadata_provider is None:
+            return {}
+        try:
+            metadata = self._metadata_provider(blueprint_id)
+        except Exception:
+            return {}
+        return metadata or {}
+
+    def build(self, packet: leyline_pb2.SystemStatePacket) -> HeteroData:
+        data = HeteroData()
+        blueprint_id = packet.packet_id or packet.training_run_id or "bp-unknown"
+        metadata = self._lookup_blueprint_metadata(blueprint_id)
+
+        global_features = self._build_global_features(packet)
+        seed_features, seed_ids, seed_caps = self._build_seed_features(packet.seed_states)
+        blueprint_features, blueprint_ids = self._build_blueprint_features(packet, metadata)
+        layer_features, layer_ids = self._build_layer_features(packet, metadata)
+        activation_features, activation_ids = self._build_activation_features(packet, metadata)
+        parameter_features, parameter_ids = self._build_parameter_features(packet, metadata)
+
+        data["global"].x = global_features
+        data["seed"].x = seed_features
+        data["blueprint"].x = blueprint_features
+        data["layer"].x = layer_features
+        data["activation"].x = activation_features
+        data["parameter"].x = parameter_features
+
+        data["seed"].node_ids = seed_ids
+        data["blueprint"].node_ids = blueprint_ids
+        data["layer"].node_ids = layer_ids
+        data["activation"].node_ids = activation_ids
+        data["parameter"].node_ids = parameter_ids
+        data["seed"].capabilities = seed_caps
+
+        self._populate_edges(data, packet, metadata, seed_caps, len(layer_ids), len(activation_ids), len(parameter_ids))
+        self._normalizer.flush()
+        return data
+
+    # ------------------------------------------------------------------
+    # Feature helpers
+    # ------------------------------------------------------------------
+    def _build_global_features(self, packet: leyline_pb2.SystemStatePacket) -> Tensor:
+        feats = torch.zeros((1, self._cfg.global_feature_dim), dtype=torch.float32)
+        metrics = dict(packet.training_metrics)
+        idx = 0
+        for key in ("loss", "validation_loss", "training_loss", "gradient_norm", "samples_per_s", "hook_latency_ms"):
+            value = float(metrics.get(key, 0.0))
+            feats[0, idx] = self._normalizer.normalize(key, value)
+            idx += 1
+        feats[0, idx] = float(packet.current_epoch)
+        idx += 1
+        feats[0, idx] = float(packet.global_step)
+        idx += 1
+        feats[0, idx] = float(len(packet.seed_states))
+        return feats
+
+    def _build_seed_features(
+        self, seeds: Iterable[leyline_pb2.SeedState]
+    ) -> tuple[Tensor, list[str], list[dict[str, float]]]:
+        seed_list = list(seeds)
+        if not seed_list:
+            return (
+                torch.zeros((1, self._cfg.seed_feature_dim), dtype=torch.float32),
+                ["seed-default"],
+                [{"stage": 0.0, "risk": 0.0, "blend_allowed": 0.0}],
+            )
+        features = torch.zeros((len(seed_list), self._cfg.seed_feature_dim), dtype=torch.float32)
+        max_stage = float(max(leyline_pb2.SeedLifecycleStage.values())) or 1.0
+        seed_ids: list[str] = []
+        capabilities: list[dict[str, float]] = []
+        for index, seed in enumerate(seed_list):
+            features[index, 0] = self._normalizer.normalize("seed_learning_rate", seed.learning_rate)
+            features[index, 1] = self._normalizer.normalize("seed_risk", seed.risk_score)
+            features[index, 2] = self._normalizer.normalize("gradient_norm", seed.gradient_norm)
+            features[index, 3] = self._normalizer.normalize("seed_age", float(seed.age_epochs))
+            features[index, 4] = float(seed.stage) / max_stage
+            features[index, 5] = float(seed.layer_depth)
+
+            seed_id = seed.seed_id or f"seed-{index}"
+            seed_ids.append(seed_id)
+            registry = self._seed_registry
+            if registry is not None:
+                idx = registry.get(seed_id)
+                features[index, 6] = float(idx) / max(1.0, float(self._cfg.seed_vocab))
+            blend_allowed = 1.0 if seed.stage >= leyline_pb2.SeedLifecycleStage.SEED_STAGE_BLENDING else 0.0
+            capabilities.append(
+                {
+                    "stage": float(seed.stage) / max_stage,
+                    "risk": seed.risk_score,
+                    "blend_allowed": blend_allowed,
+                }
+            )
+        return features, seed_ids, capabilities
+
+    def _build_blueprint_features(
+        self, packet: leyline_pb2.SystemStatePacket, metadata: Mapping[str, float | str | bool | int]
+    ) -> tuple[Tensor, list[str]]:
+        blueprint_id = packet.packet_id or packet.training_run_id or "bp-unknown"
+        dim = self._cfg.blueprint_feature_dim
+        features = torch.zeros((1, dim), dtype=torch.float32)
+        registry = self._blueprint_registry
+        if registry is not None and dim > 0:
+            idx = registry.get(blueprint_id)
+            features[0, 0] = float(idx) / max(1.0, float(self._cfg.blueprint_vocab))
+
+        def _set(col: int, value: float) -> None:
+            if col < dim:
+                features[0, col] = value
+
+        _set(1, self._normalizer.normalize("validation_loss", float(packet.validation_loss)))
+        _set(2, self._normalizer.normalize("training_loss", float(packet.training_loss)))
+        _set(3, self._normalizer.normalize("loss", float(packet.training_loss)))
+        risk = float(metadata.get("risk", 0.0) or 0.0)
+        stage = float(metadata.get("stage", 0.0) or 0.0)
+        tier_index = float(metadata.get("tier_index", 0))
+        param_count = float(metadata.get("parameter_count", 0.0) or 0.0)
+        quarantine = 1.0 if metadata.get("quarantine_only") else 0.0
+        approval = 1.0 if metadata.get("approval_required") else 0.0
+
+        _set(4, risk)
+        _set(5, stage / 10.0)
+        _set(6, math.tanh(param_count / max(1.0, float(self._cfg.max_parameters))))
+        _set(7, tier_index / 10.0)
+        _set(8, quarantine)
+        _set(9, approval)
+        return features, [blueprint_id]
+
+    def _build_layer_features(
+        self,
+        packet: leyline_pb2.SystemStatePacket,
+        metadata: Mapping[str, float | str | bool | int],
+    ) -> tuple[Tensor, list[str]]:
+        count = max(1, self._cfg.max_layers)
+        dim = self._cfg.layer_feature_dim
+        features = torch.zeros((count, dim), dtype=torch.float32)
+        layer_ids: list[str] = []
+        risk = float(metadata.get("risk", 0.0) or 0.0)
+        stage = float(metadata.get("stage", 0.0) or 0.0)
+        epoch = float(packet.current_epoch or 0.0)
+        global_step = float(packet.global_step or 0.0)
+        quarantine = 1.0 if metadata.get("quarantine_only") else 0.0
+        for idx in range(count):
+            depth_norm = (idx + 1) / count
+            if dim > 0:
+                features[idx, 0] = depth_norm
+            if dim > 1:
+                features[idx, 1] = risk
+            if dim > 2:
+                features[idx, 2] = stage / 10.0
+            if dim > 3:
+                features[idx, 3] = math.tanh(global_step / 1_000.0)
+            if dim > 4:
+                features[idx, 4] = math.sin(epoch + idx)
+            if dim > 5:
+                features[idx, 5] = math.cos(epoch + idx)
+            if dim > 6:
+                features[idx, 6] = quarantine
+            if dim > 7:
+                features[idx, 7] = 1.0
+            layer_ids.append(f"{packet.training_run_id or 'run'}-L{idx}")
+        return features, layer_ids
+
+    def _build_activation_features(
+        self,
+        packet: leyline_pb2.SystemStatePacket,
+        metadata: Mapping[str, float | str | bool | int],
+    ) -> tuple[Tensor, list[str]]:
+        count = max(1, self._cfg.max_activations)
+        dim = self._cfg.activation_feature_dim
+        features = torch.zeros((count, dim), dtype=torch.float32)
+        activation_ids: list[str] = []
+        risk = float(metadata.get("risk", 0.0) or 0.0)
+        stage = float(metadata.get("stage", 0.0) or 0.0)
+        epoch = float(packet.current_epoch or 0.0)
+        global_step = float(packet.global_step or 0.0)
+        for idx in range(count):
+            ratio = (idx + 1) / count
+            if dim > 0:
+                features[idx, 0] = math.sin(0.5 * epoch + idx)
+            if dim > 1:
+                features[idx, 1] = math.cos(0.5 * epoch + idx)
+            if dim > 2:
+                features[idx, 2] = risk
+            if dim > 3:
+                features[idx, 3] = ratio
+            if dim > 4:
+                features[idx, 4] = stage / 10.0
+            if dim > 5:
+                features[idx, 5] = math.tanh(global_step / 500.0)
+            activation_ids.append(f"{packet.training_run_id or 'run'}-A{idx}")
+        return features, activation_ids
+
+    def _build_parameter_features(
+        self,
+        packet: leyline_pb2.SystemStatePacket,
+        metadata: Mapping[str, float | str | bool | int],
+    ) -> tuple[Tensor, list[str]]:
+        allowed = metadata.get("allowed_parameters", {})
+        names = list(allowed.keys())
+        if not names:
+            names = ["alpha"]
+        count = min(self._cfg.max_parameters, max(1, len(names)))
+        dim = self._cfg.parameter_feature_dim
+        features = torch.zeros((count, dim), dtype=torch.float32)
+        parameter_ids: list[str] = []
+        risk = float(metadata.get("risk", 0.0) or 0.0)
+        stage = float(metadata.get("stage", 0.0) or 0.0)
+        for idx in range(count):
+            name = names[idx] if idx < len(names) else names[-1]
+            bounds = allowed.get(name, {}) if isinstance(allowed, Mapping) else {}
+            min_v = float(bounds.get("min", 0.0))
+            max_v = float(bounds.get("max", 0.0))
+            span = float(bounds.get("span", max_v - min_v))
+            center = (min_v + max_v) / 2.0
+            ratio = (idx + 1) / max(1, len(names))
+            if dim > 0:
+                features[idx, 0] = math.tanh(min_v)
+            if dim > 1:
+                features[idx, 1] = math.tanh(max_v)
+            if dim > 2:
+                features[idx, 2] = math.tanh(span)
+            if dim > 3:
+                features[idx, 3] = math.tanh(center)
+            if dim > 4:
+                features[idx, 4] = risk
+            if dim > 5:
+                features[idx, 5] = stage / 10.0
+            if dim > 6:
+                features[idx, 6] = ratio
+            parameter_ids.append(f"{packet.training_run_id or 'run'}-{name}")
+        return features, parameter_ids
+
+    def _populate_edges(
+        self,
+        data: HeteroData,
+        packet: leyline_pb2.SystemStatePacket,
+        metadata: Mapping[str, float | str | bool | int],
+        seed_capabilities: Sequence[dict[str, float]],
+        layer_count: int,
+        activation_count: int,
+        parameter_count: int,
+    ) -> None:
+        edge_dim = self._cfg.edge_feature_dim
+        risk = float(metadata.get("risk", 0.0) or 0.0)
+        seed_count = data["seed"].x.size(0)
+        blueprint_count = data["blueprint"].x.size(0)
+
+        def _set_edge(
+            relation: tuple[str, str, str],
+            src: torch.Tensor,
+            dst: torch.Tensor,
+            attrs: Sequence[Sequence[float]] | None = None,
+        ) -> None:
+            if src.numel() == 0:
+                data[relation].edge_index = torch.zeros((2, 0), dtype=torch.long)
+                data[relation].edge_attr = torch.zeros((0, edge_dim), dtype=torch.float32)
+                return
+            edge_index = torch.stack((src, dst))
+            if attrs is None:
+                edge_attr = torch.zeros((src.numel(), edge_dim), dtype=torch.float32)
+            else:
+                edge_attr = torch.tensor(attrs, dtype=torch.float32)
+                if edge_attr.ndim == 1:
+                    edge_attr = edge_attr.unsqueeze(0)
+                if edge_attr.size(0) != src.numel():
+                    edge_attr = edge_attr.expand(src.numel(), edge_dim)
+            data[relation].edge_index = edge_index
+            data[relation].edge_attr = edge_attr[:, :edge_dim]
+
+        # global ↔ seed edges
+        if seed_count:
+            global_src = torch.zeros(seed_count, dtype=torch.long)
+            seed_dst = torch.arange(seed_count, dtype=torch.long)
+            attrs = [[1.0, cap.get("stage", 0.0), cap.get("risk", 0.0)] for cap in seed_capabilities]
+            _set_edge(("global", "influences", "seed"), global_src, seed_dst, attrs)
+            _set_edge(("seed", "reports", "global"), seed_dst, global_src, attrs)
+        else:
+            _set_edge(("global", "influences", "seed"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+            _set_edge(("seed", "reports", "global"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+
+        # global ↔ blueprint
+        if blueprint_count:
+            blueprint_indices = torch.arange(blueprint_count, dtype=torch.long)
+            attrs = [[1.0, float(metadata.get("stage", 0.0) or 0.0), risk]] * blueprint_count
+            _set_edge(("global", "annotates", "blueprint"), torch.zeros(blueprint_count, dtype=torch.long), blueprint_indices, attrs)
+            _set_edge(("blueprint", "monitored_by", "global"), blueprint_indices, torch.zeros(blueprint_count, dtype=torch.long), attrs)
+        else:
+            _set_edge(("global", "annotates", "blueprint"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+            _set_edge(("blueprint", "monitored_by", "global"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+
+        # seed peer chain
+        if seed_count > 1:
+            src = torch.arange(seed_count - 1, dtype=torch.long)
+            dst = torch.arange(1, seed_count, dtype=torch.long)
+            attrs = [[0.5, 0.0, 0.0] for _ in range(seed_count - 1)]
+            _set_edge(("seed", "peer", "seed"), src, dst, attrs)
+        else:
+            _set_edge(("seed", "peer", "seed"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+
+        # global ↔ layer
+        layer_indices = torch.arange(layer_count, dtype=torch.long)
+        layers_depth = [(idx + 1) / max(1, layer_count) for idx in range(layer_count)]
+        attrs_layers = [[1.0, depth, risk] for depth in layers_depth]
+        _set_edge(("global", "operates", "layer"), torch.zeros(layer_count, dtype=torch.long), layer_indices, attrs_layers)
+        _set_edge(("layer", "feedback", "global"), layer_indices, torch.zeros(layer_count, dtype=torch.long), attrs_layers)
+
+        # layer ↔ activation
+        activation_indices = torch.arange(activation_count, dtype=torch.long)
+        activation_ratio = [(idx + 1) / max(1, activation_count) for idx in range(activation_count)]
+        if layer_count and activation_count:
+            src = layer_indices.repeat_interleave(activation_count)
+            dst = activation_indices.repeat(layer_count)
+            attrs_la = [[layers_depth[i], activation_ratio[j], 1.0] for i in range(layer_count) for j in range(activation_count)]
+            _set_edge(("layer", "activates", "activation"), src, dst, attrs_la)
+            _set_edge(("activation", "affects", "layer"), dst, src, attrs_la)
+        else:
+            _set_edge(("layer", "activates", "activation"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+            _set_edge(("activation", "affects", "layer"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+
+        # activation ↔ parameter
+        parameter_indices = torch.arange(parameter_count, dtype=torch.long)
+        param_ratio = [(idx + 1) / max(1, parameter_count) for idx in range(parameter_count)]
+        if activation_count and parameter_count:
+            src = activation_indices.repeat_interleave(parameter_count)
+            dst = parameter_indices.repeat(activation_count)
+            attrs_ap = [[activation_ratio[i], param_ratio[j], 1.0] for i in range(activation_count) for j in range(parameter_count)]
+            _set_edge(("activation", "configures", "parameter"), src, dst, attrs_ap)
+            _set_edge(("parameter", "modulates", "activation"), dst, src, attrs_ap)
+        else:
+            _set_edge(("activation", "configures", "parameter"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+            _set_edge(("parameter", "modulates", "activation"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+
+        # seed ↔ parameter capability edges
+        if seed_count and parameter_count:
+            src = torch.arange(seed_count, dtype=torch.long).repeat_interleave(parameter_count)
+            dst = torch.arange(parameter_count, dtype=torch.long).repeat(seed_count)
+            attrs_sp = []
+            for cap in seed_capabilities:
+                blend_allowed = cap.get("blend_allowed", 0.0)
+                stage_norm = cap.get("stage", 0.0)
+                for _ in range(parameter_count):
+                    attrs_sp.append([blend_allowed, 1.0, stage_norm])
+            _set_edge(("seed", "allowed", "parameter"), src, dst, attrs_sp)
+            _set_edge(("parameter", "associated", "seed"), dst, src, attrs_sp)
+        else:
+            _set_edge(("seed", "allowed", "parameter"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+            _set_edge(("parameter", "associated", "seed"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+
+        # blueprint ↔ layer
+        if blueprint_count and layer_count:
+            src = torch.zeros(layer_count, dtype=torch.long)
+            dst = layer_indices
+            attrs_bl = [[risk, layers_depth[i], 1.0] for i in range(layer_count)]
+            _set_edge(("blueprint", "composes", "layer"), src, dst, attrs_bl)
+            _set_edge(("layer", "belongs_to", "blueprint"), dst, src, attrs_bl)
+        else:
+            _set_edge(("blueprint", "composes", "layer"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+            _set_edge(("layer", "belongs_to", "blueprint"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+
+        # blueprint ↔ activation
+        if blueprint_count and activation_count:
+            src = torch.zeros(activation_count, dtype=torch.long)
+            dst = activation_indices
+            attrs_ba = [[risk, activation_ratio[i], 1.0] for i in range(activation_count)]
+            _set_edge(("blueprint", "energizes", "activation"), src, dst, attrs_ba)
+        else:
+            _set_edge(("blueprint", "energizes", "activation"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+
+        # parameter -> blueprint
+        if blueprint_count and parameter_count:
+            src = parameter_indices
+            dst = torch.zeros(parameter_count, dtype=torch.long)
+            attrs_pb = [[param_ratio[i], risk, 1.0] for i in range(parameter_count)]
+            _set_edge(("parameter", "targets", "blueprint"), src, dst, attrs_pb)
+        else:
+            _set_edge(("parameter", "targets", "blueprint"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+
+
+__all__ = ["TamiyoGraphBuilder", "TamiyoGraphBuilderConfig"]

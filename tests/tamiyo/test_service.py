@@ -20,6 +20,7 @@ from esper.tamiyo import (
     FieldReportStoreConfig,
     RiskConfig,
     TamiyoPolicy,
+    TamiyoPolicyConfig,
     TamiyoService,
 )
 
@@ -83,14 +84,34 @@ def test_tamiyo_service_generates_command(tmp_path) -> None:
         leyline_pb2.COMMAND_SEED,
         leyline_pb2.COMMAND_OPTIMIZER,
         leyline_pb2.COMMAND_PAUSE,
+        leyline_pb2.COMMAND_CIRCUIT_BREAKER,
     }
     assert "policy_action" in command.annotations
     assert "policy_param_delta" in command.annotations
+    assert "policy_version" in command.annotations
+    assert "blending_method" in command.annotations
+    assert "policy_risk_score" in command.annotations
+    assert "policy_risk_index" in command.annotations
+    assert "selected_seed" in command.annotations
+    if command.command_type == leyline_pb2.COMMAND_SEED:
+        params = command.seed_operation.parameters
+        assert "blending_method_index" in params
+        method_list = TamiyoPolicyConfig().blending_methods
+        expected_index = float(method_list.index(command.annotations["blending_method"]))
+        assert params["blending_method_index"] == pytest.approx(expected_index)
+        assert "blending_schedule_start" in params
+        assert "blending_schedule_end" in params
     assert service.telemetry_packets
     # Budget guardrail: inference latency <= 45 ms
     metrics = {m.name: m.value for m in service.telemetry_packets[-1].metrics}
     assert "tamiyo.inference.latency_ms" in metrics
     assert metrics["tamiyo.inference.latency_ms"] <= 45.0
+    assert "tamiyo.gnn.inference.latency_ms" in metrics
+    assert "tamiyo.gnn.compile_enabled" in metrics
+    assert "tamiyo.policy.value_estimate" in metrics
+    assert "tamiyo.policy.risk_score" in metrics
+    telemetry = service.telemetry_packets[-1]
+    assert "blending_method" in telemetry.system_health.indicators
 
 
 def test_tamiyo_signed_command_accepted_and_replay_rejected(tmp_path) -> None:

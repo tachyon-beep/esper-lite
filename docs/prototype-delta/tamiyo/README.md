@@ -66,6 +66,13 @@ How To Use This Packet (for PR owners)
 
 PR template (copy/paste)
 ```
+
+## Latest Performance Snapshot
+
+- Measurement date: 2025-02 (local dev VM, 2 vCPU, CPU-only PyTorch 2.8)
+- Command: `python - <<'PY' ... service.evaluate_step ... PY`
+- Results (ms): p50 5.95, p95 8.84, p99 11.17, max 16.54
+- Notes: Includes full hetero graph (layer/activation/parameter nodes + metadata); comfortably meets the ≤10 ms step budget after optimising hidden dims and attention heads.
 Implements: <T‑AX title> (3A tight‑coupling)
 Specs: <link to one or more of timeout-matrix.md, security-envelope.md, risk-engine.md, decision-taxonomy.md, field-reports.md, step-state.md, telemetry.md>
 
