@@ -224,6 +224,52 @@ def test_field_report_generation(tmp_path) -> None:
     assert service.field_reports
 
 
+def test_field_report_emitted_for_each_step(tmp_path) -> None:
+    config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    service = TamiyoService(store_config=config, signature_context=_SIGNATURE_CONTEXT)
+    for epoch in range(3):
+        packet = leyline_pb2.SystemStatePacket(
+            version=1,
+            current_epoch=epoch + 1,
+            training_run_id="run-steps",
+            global_step=epoch + 10,
+        )
+        service.evaluate_step(packet)
+    reports = service.field_reports
+    assert len(reports) == 3
+    assert all(report.training_run_id == "run-steps" for report in reports)
+    assert all(report.observation_window_epochs >= 1 for report in reports)
+
+
+def test_field_report_retention_rewrites(tmp_path) -> None:
+    config = FieldReportStoreConfig(
+        path=tmp_path / "field_reports.log",
+        retention=timedelta(minutes=30),
+    )
+    service = TamiyoService(store_config=config, signature_context=_SIGNATURE_CONTEXT)
+    packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-retention")
+    command = service.evaluate_step(packet)
+    old_command = leyline_pb2.AdaptationCommand()
+    old_command.CopyFrom(command)
+    old_command.command_id = str(uuid4())
+    old_command.issued_at.FromDatetime(datetime.now(tz=UTC) - timedelta(minutes=10))
+    service.generate_field_report(
+        command=old_command,
+        outcome=leyline_pb2.FIELD_REPORT_OUTCOME_SUCCESS,
+        metrics_delta={},
+        training_run_id="run-retention",
+        seed_id="seed-old",
+        blueprint_id="",
+        observation_window_epochs=1,
+    )
+    assert len(service.field_reports) == 2
+    future_time = datetime.now(tz=UTC) + timedelta(hours=1)
+    service._field_report_store.enforce_retention(now=future_time)
+    service._field_reports = service._field_report_store.reports()
+    remaining = service.field_reports
+    assert all(report.seed_id != "seed-old" for report in remaining)
+
+
 @pytest.mark.asyncio
 async def test_tamiyo_publish_history_to_oona(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")

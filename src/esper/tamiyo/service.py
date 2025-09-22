@@ -283,8 +283,30 @@ class TamiyoService:
         telemetry.system_health.indicators["priority"] = leyline_pb2.MessagePriority.Name(priority_value)
         self._sign_command(command)
         self._telemetry_packets.append(telemetry)
+        if not timed_out:
+            self._emit_field_report(command, state, loss_delta, events)
         self._last_validation_loss = state.validation_loss
         return command
+
+    def _emit_field_report(
+        self,
+        command: leyline_pb2.AdaptationCommand,
+        state: leyline_pb2.SystemStatePacket,
+        loss_delta: float,
+        events: Iterable[TelemetryEvent],
+    ) -> None:
+        events_list = list(events)
+        metrics_delta = {"loss_delta": loss_delta}
+        self.generate_field_report(
+            command=command,
+            outcome=leyline_pb2.FIELD_REPORT_OUTCOME_SUCCESS,
+            metrics_delta=metrics_delta,
+            training_run_id=state.training_run_id or "run-unknown",
+            seed_id=command.target_seed_id,
+            blueprint_id=command.seed_operation.blueprint_id if command.HasField("seed_operation") else "",
+            observation_window_epochs=max(1, int(state.current_epoch) if state.current_epoch else 1),
+            notes=events_list[-1].description if events_list else None,
+        )
 
     def _run_policy(
         self,
@@ -601,6 +623,7 @@ class TamiyoService:
         training_run_id: str,
         seed_id: str,
         blueprint_id: str,
+        observation_window_epochs: int = 1,
         notes: str | None = None,
     ) -> leyline_pb2.FieldReport:
         """Produce a field report entry for downstream ingestion (Simic)."""
@@ -613,7 +636,7 @@ class TamiyoService:
             seed_id=seed_id,
             blueprint_id=blueprint_id,
             outcome=outcome,
-            observation_window_epochs=1,
+            observation_window_epochs=max(1, observation_window_epochs),
             tamiyo_policy_version=self._policy_version,
             notes=notes or "",
         )
