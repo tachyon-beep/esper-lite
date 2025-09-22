@@ -4,13 +4,73 @@ Esper-Lite is a streamlined morphogenetic control stack centred on a PyTorch 2.8
 
 ## Architecture Summary
 
-For an end-to-end view of subsystems, contracts, flows, telemetry, and operational guardrails, see:
+For an end-to-end view of subsystems, contracts, flows, telemetry, and operational guardrails, see `docs/architecture_summary.md`. Visual diagrams of integrations and flows live in `docs/architecture_diagrams.md`.
 
-- docs/architecture_summary.md
+### Architecture At a Glance
 
-Also see visual diagrams of integrations and flows:
+- Tolaria trains and emits `SystemStatePacket`s; Tamiyo evaluates state and issues `AdaptationCommand`s; Kasmina enforces lifecycle/gates and grafts kernels.
+- Karn defines blueprint descriptors; Tezzeret compiles them into artifacts; Urza stores/serves artifacts and prefetches.
+- Oona is the message fabric (Redis Streams) for commands, telemetry, policy updates, and prefetch; Nissa ingests into Prometheus/Elasticsearch; Weatherlight supervises the above for a runnable prototype.
 
-- docs/architecture_diagrams.md
+### Design Principles
+
+- Contracts first: Leyline protobufs are the source of truth; avoid shadow enums.
+- Safety built-in: circuit breakers, lifecycle gates, latency budgets, readiness/rollback, signature+nonce freshness.
+- Observability by default: structured telemetry with health summary/indicators; important events are explicit.
+- Durability where it matters: WAL/checkpoints for Tolaria/Tezzeret/Urza and Tamiyo field reports.
+- Extensibility: protocols/interfaces keep subsystems loosely coupled.
+
+### Key Leyline Contracts
+
+- `SystemStatePacket` (Tolaria → Tamiyo), `AdaptationCommand` (Tamiyo → Kasmina), `SeedState` (Kasmina export).
+- `TelemetryPacket` (metrics/events/health), `FieldReport` (Tamiyo → Simic).
+- Prefetch: `KernelPrefetchRequest` / `KernelArtifactReady` / `KernelArtifactError`.
+- `KernelCatalogUpdate` (Tezzeret → Urza; optional notify via Oona).
+
+### Core Flows & Diagrams
+
+- System context and integrations: see section 1 in `docs/architecture_diagrams.md`.
+- Epoch sequence (training → decision → execution): see section 2.
+- Kernel prefetch flow: see section 3.
+- Tezzeret compilation pipeline: see section 4.
+- Offline policy improvement (Simic): see section 5.
+- Observability & SLOs: see section 6.
+
+### Observability Model
+
+- Standardized telemetry via `build_telemetry_packet` with metrics and events.
+- Health status/summary/indicators encode synthetic service health.
+- Nissa drains Oona streams to Prometheus/Elasticsearch, applies default alert rules, and tracks SLO burn via `slo.*` metrics.
+
+### System Context (Mermaid)
+
+GitHub renders Mermaid diagrams inline. This minimal context view matches the full diagrams in `docs/architecture_diagrams.md`:
+
+```mermaid
+flowchart TD
+  TLR[Tolaria]
+  TMY[Tamiyo]
+  KSM[Kasmina]
+  URZ[Urza]
+  OON[Oona]
+  NSS[Nissa]
+  WTH[Weatherlight]
+
+  TLR -->|SystemState| TMY
+  TMY -->|AdaptationCommand| KSM
+  KSM -->|fetch_kernel| URZ
+
+  subgraph Telemetry
+    TLR --> OON
+    TMY --> OON
+    KSM --> OON
+    OON --> NSS
+  end
+
+  WTH --- TLR
+  WTH --- KSM
+  WTH --- OON
+```
 
 ### Prototype Delta (Green‑for‑Prototype Scope)
 
@@ -218,3 +278,11 @@ Each subsystem module exposes a narrow public API under `src/esper/<subsystem>/_
 The backlog in `docs/project/backlog.md` decomposes the first implementation sprints. Slice 0 focuses on CI/tooling and Leyline contracts. Slice 1 establishes the control loop with Tolaria, Kasmina, and Tamiyo, followed by blueprint management, observability, and offline learning in subsequent slices.
 
 Refer to `docs/project/implementation_plan.md` for full sequencing and ownership recommendations.
+
+## Gotchas & Best Practices
+
+- Always use Leyline enums/messages; avoid re-defining states or codes.
+- Treat publish/consume paths as potentially lossy; keep handlers idempotent and rely on retries.
+- Keep breakers conservative—prefer safe degradation and explicit telemetry over silent failures.
+- When adding telemetry, include clear descriptions and useful attributes; keep metric naming consistent.
+- Update `docs/` when behavior diverges from the canonical design; keep `.env.example` in sync for new config.

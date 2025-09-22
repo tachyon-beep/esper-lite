@@ -1412,5 +1412,32 @@ class KasminaSeedManager:
             result.append(state)
         return result
 
+    # Optional attribution API used by Tolaria for seed-aware aggregation
+    def attribute_batch(self, inputs, targets) -> dict[str, float]:  # type: ignore[no-untyped-def]
+        """Return per-seed attribution weights for the current batch.
+
+        Prototype heuristic:
+        - If there are active seeds, distribute uniformly across seeds that are
+          in BLENDING or ACTIVE stages; otherwise over all tracked seeds.
+        - Returns an empty dict if no seeds are tracked (trainer falls back).
+        """
+        seeds = list(self._seeds.items())
+        if not seeds:
+            return {}
+        # Prefer BLENDING / TRAINING if present
+        preferred: list[str] = []
+        for sid, ctx in seeds:
+            if ctx.lifecycle.state in (
+                pb.SEED_STAGE_BLENDING,
+                pb.SEED_STAGE_TRAINING,
+                pb.SEED_STAGE_ACTIVE,
+            ):
+                preferred.append(sid)
+        pool = preferred if preferred else [sid for sid, _ in seeds]
+        if not pool:
+            return {}
+        w = 1.0 / float(len(pool))
+        return {sid: w for sid in pool}
+
 
 __all__ = ["KasminaSeedManager", "BlueprintRuntime", "SeedContext"]

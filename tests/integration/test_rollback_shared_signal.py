@@ -64,12 +64,10 @@ async def _start_weatherlight(redis: FakeRedis, signal_name: str) -> Weatherligh
     return svc
 
 
-@pytest.mark.skip(reason="Shared memory integration is environment-dependent; covered by unit tests")
 @pytest.mark.asyncio
 async def test_shared_rollback_signal_weatherlight_bridge(monkeypatch) -> None:
     redis = FakeRedis()
     signal_name = "tolaria-test-shared"
-    svc = await _start_weatherlight(redis, signal_name)
     # Build a trainer that uses the same shared signal name and triggers deadline
     model = nn.Sequential(nn.Linear(8, 4))
     opt = torch.optim.SGD(model.parameters(), lr=0.01)
@@ -94,6 +92,8 @@ async def test_shared_rollback_signal_weatherlight_bridge(monkeypatch) -> None:
         settings=settings,
     )
     trainer.set_shared_rollback_signal(signal_name)
+    # Start Weatherlight after the shared segment exists
+    svc = await _start_weatherlight(redis, signal_name)
     # Prevent fast cache hits; force slow restore via monkeypatch
     import types
     if getattr(trainer, "_fast_cache", None) is not None:
@@ -107,15 +107,20 @@ async def test_shared_rollback_signal_weatherlight_bridge(monkeypatch) -> None:
     # Trigger the shared signal manually to validate Weatherlight bridge
     sig = SharedDeadlineSignal.attach(signal_name)
     sig.trigger()
-    # Weatherlight should have published a critical telemetry packet to the telemetry stream
-    oona = svc._oona  # type: ignore[attr-defined]
-    assert oona is not None
-    # Wait up to 1s for the monitor to publish
+    # Verify Weatherlight detected the signal via internal telemetry snapshot
     ok = False
-    for _ in range(10):
-        if await oona.stream_length(settings.oona_telemetry_stream) >= 1:
+    for _ in range(30):
+        packet = await svc._build_telemetry_packet()  # type: ignore[attr-defined]
+        metrics = {m.name: m.value for m in packet.metrics}
+        if metrics.get("weatherlight.rollback.detections_total", 0.0) >= 1.0:
             ok = True
             break
         await asyncio.sleep(0.1)
     assert ok
+    # Cleanup shared memory
+    try:
+        sig.close()
+        sig.unlink()
+    except Exception:
+        pass
     await svc.shutdown()

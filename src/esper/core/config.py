@@ -129,6 +129,12 @@ class EsperSettings(BaseSettings):
     tolaria_aggregation_conflict_warn: float = Field(
         alias="TOLARIA_AGGREGATION_CONFLICT_WARN", default=0.75
     )
+    tolaria_agg_per_layer_enabled: bool = Field(
+        alias="TOLARIA_AGG_PER_LAYER_ENABLED", default=False
+    )
+    tolaria_agg_per_layer_topk: int = Field(
+        alias="TOLARIA_AGG_PER_LAYER_TOPK", default=5
+    )
 
     # Optimizer rebuild storm guard
     tolaria_opt_rebuild_min_interval_steps: int = Field(

@@ -18,7 +18,8 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass
-from time import perf_counter
+from time import perf_counter, monotonic_ns
+import struct
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 import io
 
@@ -116,9 +117,10 @@ class SharedDeadlineSignal:
             raise RuntimeError("shared_memory unavailable") from exc
         self._name = name
         self._created = create
+        size = 16  # 1 byte flag + 8 byte timestamp (ms) + padding
         if create:
             try:
-                self._shm = shared_memory.SharedMemory(name=name, create=True, size=1)
+                self._shm = shared_memory.SharedMemory(name=name, create=True, size=size)
             except FileExistsError:
                 self._shm = shared_memory.SharedMemory(name=name, create=False)
         else:
@@ -136,13 +138,32 @@ class SharedDeadlineSignal:
         return cls(name, create=False)
 
     def trigger(self) -> None:
+        # Set flag
         self._shm.buf[0] = 1  # type: ignore[attr-defined]
+        # Write current time in ms into bytes [8:16)
+        try:
+            ts_ms = int(monotonic_ns() // 1_000_000)
+            self._shm.buf[8:16] = struct.pack("<Q", ts_ms)  # type: ignore[attr-defined]
+        except Exception:
+            pass
 
     def clear(self) -> None:
         self._shm.buf[0] = 0  # type: ignore[attr-defined]
+        try:
+            self._shm.buf[8:16] = b"\x00" * 8  # type: ignore[attr-defined]
+        except Exception:
+            pass
 
     def is_set(self) -> bool:
         return int(self._shm.buf[0]) == 1  # type: ignore[attr-defined]
+
+    def read_timestamp_ms(self) -> int | None:
+        try:
+            ts_bytes = bytes(self._shm.buf[8:16])  # type: ignore[attr-defined]
+            ts_ms = struct.unpack("<Q", ts_bytes)[0]
+            return int(ts_ms) if ts_ms > 0 else None
+        except Exception:
+            return None
 
     def close(self) -> None:
         try:

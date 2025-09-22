@@ -78,6 +78,9 @@ class WeatherlightService:
         self._tezzeret_telemetry_provider: Callable[[], leyline_pb2.TelemetryPacket | None] | None = None
         self._rollback_signal_name: str | None = self._settings.tolaria_rollback_signal_name
         self._rollback_signal: SharedDeadlineSignal | None = None
+        self._rollback_last_detect_s: float | None = None
+        self._rollback_detections_total: int = 0
+        self._rollback_skipped_total: int = 0
         self._rollback_monitor_task: asyncio.Task | None = None
 
     async def start(self) -> None:
@@ -182,17 +185,35 @@ class WeatherlightService:
                         await asyncio.sleep(0.1)
                         continue
                 if self._rollback_signal.is_set():
+                    now_s = time.monotonic()
+                    # Cooldown: avoid floods (500ms)
+                    if self._rollback_last_detect_s is not None and (now_s - self._rollback_last_detect_s) < 0.5:
+                        self._rollback_skipped_total += 1
+                        self._rollback_signal.clear()
+                        await asyncio.sleep(0.05)
+                        continue
+                    self._rollback_last_detect_s = now_s
+                    # Compute detection latency if timestamp present
+                    latency_ms = 0.0
+                    try:
+                        ts_ms = self._rollback_signal.read_timestamp_ms()
+                        if ts_ms is not None:
+                            now_ms = int(time.monotonic() * 1000)
+                            latency_ms = max(0.0, float(now_ms - ts_ms))
+                    except Exception:
+                        latency_ms = 0.0
                     pkt = build_telemetry_packet(
                         packet_id=f"weatherlight-rollback-signal",
                         source="weatherlight",
                         level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
-                        metrics=[],
+                        metrics=[TelemetryMetric("weatherlight.rollback.deadline_latency_ms", latency_ms, unit="ms")],
                         events=[TelemetryEvent(description="rollback_deadline_triggered", level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL, attributes={})],
                         health_status=leyline_pb2.HealthStatus.HEALTH_STATUS_UNHEALTHY,
                         health_summary="rollback_deadline_triggered",
                         health_indicators={"priority": "MESSAGE_PRIORITY_HIGH"},
                     )
                     await self._oona.publish_telemetry(pkt, priority=leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH)
+                    self._rollback_detections_total += 1
                     # Clear to avoid repeated floods; rely on trainer to set on each deadline
                     self._rollback_signal.clear()
             except Exception:
@@ -415,6 +436,13 @@ class WeatherlightService:
         oona_snapshot = await self._oona.metrics_snapshot()
         for name, value in oona_snapshot.items():
             metrics.append(TelemetryMetric(f"oona.{name}", float(value)))
+        # Append rollback monitor counters
+        if self._rollback_detections_total:
+            metrics.append(TelemetryMetric("weatherlight.rollback.detections_total", float(self._rollback_detections_total), unit="count"))
+        if self._rollback_skipped_total:
+            metrics.append(TelemetryMetric("weatherlight.rollback.skipped_total", float(self._rollback_skipped_total), unit="count"))
+        if self._rollback_last_detect_s is not None:
+            metrics.append(TelemetryMetric("weatherlight.rollback.last_detect_ms_ago", float((time.monotonic() - self._rollback_last_detect_s) * 1000.0), unit="ms"))
         if self._tezzeret_metrics_provider is not None:
             try:
                 tezzeret_metrics = self._tezzeret_metrics_provider()

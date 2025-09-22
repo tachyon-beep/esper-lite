@@ -307,6 +307,11 @@ class TolariaTrainer:
             self._conflict_warn = float(self._settings.tolaria_aggregation_conflict_warn)
         except Exception:
             self._conflict_warn = 0.75
+        self._per_layer_enabled = bool(getattr(self._settings, "tolaria_agg_per_layer_enabled", False))
+        try:
+            self._per_layer_topk = max(1, int(getattr(self._settings, "tolaria_agg_per_layer_topk", 5)))
+        except Exception:
+            self._per_layer_topk = 5
 
         self._emergency: EmergencyController | None = None
         if self._settings.tolaria_emergency_enabled:
@@ -595,6 +600,10 @@ class TolariaTrainer:
         # Attribution accumulators (per microbatch)
         attrib_sums: dict[str, float] = {}
         attrib_uses: int = 0
+        # Per-layer accumulators
+        param_names: list[str] | None = None
+        offsets: list[int] | None = None
+        per_layer_norm_sum: dict[str, dict[int, float]] = {}
 
         def _build_seed_masks_if_needed(param_grads: list[torch.Tensor], flat: torch.Tensor, shp: list[torch.Size]) -> None:
             nonlocal seed_masks, owner_for_param, seed_param_elems, total_elems
@@ -685,6 +694,27 @@ class TolariaTrainer:
                 shapes = shp
                 # Initialize seed masks if kasmina registry is available
                 _build_seed_masks_if_needed(param_grads, flat, shapes)
+                # Capture parameter names and offsets for per-layer summaries
+                if self._per_layer_enabled:
+                    try:
+                        names: list[str] = []
+                        for name, p in self._model.named_parameters():
+                            if p.requires_grad:
+                                names.append(name)
+                        # Fallback to index if mismatch
+                        if len(names) != len(shapes):
+                            names = [f"param_{i}" for i in range(len(shapes))]
+                        param_names = names
+                        offs: list[int] = []
+                        off = 0
+                        for s in shapes:
+                            offs.append(off)
+                            n = int(torch.tensor(s).prod().item()) if s else 1
+                            off += n
+                        offsets = offs
+                    except Exception:
+                        param_names = None
+                        offsets = None
             micro_flats.append(flat)
 
             # Accumulate attribution per microbatch if configured
@@ -827,9 +857,11 @@ class TolariaTrainer:
                         if name in alpha_by_seed:
                             seed_alpha_sum[name] = seed_alpha_sum.get(name, 0.0) + float(alpha_by_seed[name])
                         # Teacher split fraction per seed (approximate): use attribution weight if present
-                        if attrib_uses > 0 and total_w > 0.0:
-                            sid_w = float(attrib_sums.get(name, 0.0)) / float(total_w)
-                            teacher_split_sum[name] = teacher_split_sum.get(name, 0.0) + sid_w
+                        if attrib_uses > 0:
+                            tw = float(sum(attrib_sums.values()))
+                            if tw > 0.0:
+                                sid_w = float(attrib_sums.get(name, 0.0)) / tw
+                                teacher_split_sum[name] = teacher_split_sum.get(name, 0.0) + sid_w
                     # Per-fence share and conflicts (guard for too many seeds)
                     try:
                         norms = [float(torch.norm(g).item()) for g in seed_flats]
@@ -853,6 +885,18 @@ class TolariaTrainer:
                                 except Exception:
                                     continue
                             seed_conflicts_total[name_i] = seed_conflicts_total.get(name_i, 0) + cnt
+                    # Per-layer by-seed summary (accumulate norms per parameter slice)
+                    if self._per_layer_enabled and param_names and offsets is not None:
+                        for seed_name, vec in zip(seed_names, seed_flats):
+                            layer_map = per_layer_norm_sum.setdefault(seed_name, {})
+                            for idx, off in enumerate(offsets):
+                                n = int(torch.tensor(shapes[idx]).prod().item()) if shapes[idx] else 1
+                                try:
+                                    sl = vec[off : off + n]
+                                    nrm = float(torch.norm(sl).item())
+                                except Exception:
+                                    nrm = 0.0
+                                layer_map[idx] = layer_map.get(idx, 0.0) + nrm
                 agg_conflicts_total += int(conflicts)
                 agg_micro_total += len(micro_flats)
                 # Unflatten and assign to param.grad
@@ -998,6 +1042,16 @@ class TolariaTrainer:
             if name in teacher_split_sum and seed_uses.get(name, 0) > 0:
                 avg_tsplit = float(teacher_split_sum[name]) / max(1, attrib_uses)
                 per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.teacher_share", avg_tsplit, unit="ratio", attributes=attrs))
+            # Per-layer top-K summary (average norms across fences)
+            if self._per_layer_enabled and param_names and name in per_layer_norm_sum:
+                layer_map = per_layer_norm_sum.get(name, {})
+                # Average by uses (per-seed)
+                avg_map = {idx: (val / uses if uses > 0 else val) for idx, val in layer_map.items()}
+                top_items = sorted(avg_map.items(), key=lambda kv: kv[1], reverse=True)[: self._per_layer_topk]
+                for idx, val in top_items:
+                    la = dict(attrs)
+                    la["layer"] = param_names[idx] if idx < len(param_names) else f"param_{idx}"
+                    per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.layer_norm", float(val), unit="grad", attributes=la))
         # Include teacher bucket if present
         if teacher_key in seen_seeds:
             uses = max(1, seed_uses.get(teacher_key, 0))

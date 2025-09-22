@@ -1,8 +1,24 @@
 # Esper‑Lite Architecture Diagrams
 
-This document contains Mermaid diagrams that illustrate major integration points and end‑to‑end flows. View directly on GitHub or paste into any Mermaid‑enabled viewer.
+This document contains Mermaid diagrams that illustrate major integration points and end-to-end flows. GitHub renders Mermaid blocks inline; you can also paste into any Mermaid-enabled viewer.
 
+<a id="top"></a>
+
+## Table of Contents
+
+- [1) System Context & Integrations](#diagram-1)
+- [2) Epoch Sequence (Training -> Decision -> Execution)](#diagram-2)
+- [3) Kernel Prefetch Flow](#diagram-3)
+- [4) Tezzeret Compilation Pipeline](#diagram-4)
+- [5) Offline Policy Improvement (Simic)](#diagram-5)
+- [6) Observability & SLOs](#diagram-6)
+- [Notes](#notes)
+
+<a id="diagram-1"></a>
 ## 1) System Context & Integrations
+
+<details>
+<summary>View diagram</summary>
 
 ```mermaid
 flowchart TD
@@ -56,7 +72,15 @@ flowchart TD
   WTH --- TMY
 ```
 
-## 2) Epoch Sequence (Training → Decision → Execution)
+</details>
+
+[Back to top](#top)
+
+<a id="diagram-2"></a>
+## 2) Epoch Sequence (Training -> Decision -> Execution)
+
+<details>
+<summary>View diagram</summary>
 
 ```mermaid
 sequenceDiagram
@@ -84,7 +108,15 @@ sequenceDiagram
   end
 ```
 
+</details>
+
+[Back to top](#top)
+
+<a id="diagram-3"></a>
 ## 3) Kernel Prefetch Flow
+
+<details>
+<summary>View diagram</summary>
 
 ```mermaid
 sequenceDiagram
@@ -106,7 +138,15 @@ sequenceDiagram
   Ksm->>Oon: TelemetryPacket
 ```
 
+</details>
+
+[Back to top](#top)
+
+<a id="diagram-4"></a>
 ## 4) Tezzeret Compilation Pipeline
+
+<details>
+<summary>View diagram</summary>
 
 ```mermaid
 sequenceDiagram
@@ -127,7 +167,15 @@ sequenceDiagram
   Forge->>Forge: telemetry metrics/events
 ```
 
+</details>
+
+[Back to top](#top)
+
+<a id="diagram-5"></a>
 ## 5) Offline Policy Improvement (Simic)
+
+<details>
+<summary>View diagram</summary>
 
 ```mermaid
 sequenceDiagram
@@ -147,7 +195,15 @@ sequenceDiagram
   end
 ```
 
+</details>
+
+[Back to top](#top)
+
+<a id="diagram-6"></a>
 ## 6) Observability & SLOs
+
+<details>
+<summary>View diagram</summary>
 
 ```mermaid
 sequenceDiagram
@@ -164,9 +220,12 @@ sequenceDiagram
   Nissa->>Nissa: AlertEngine rules + SLO tracker
 ```
 
+</details>
+
+[Back to top](#top)
+
 ## Notes
 
 - Edge labels in the context diagram indicate primary message types.
 - All inter‑service payloads are Leyline protobuf messages; avoid shadow enums.
 - Circuit breakers and conservative modes are omitted for clarity in diagrams but are enforced in code paths (see architecture summary).
-
