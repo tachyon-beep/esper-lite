@@ -7,11 +7,13 @@ import pytest
 from esper.karn import BlueprintDescriptor, BlueprintTier, KarnCatalog
 from esper.leyline import leyline_pb2
 from esper.security.signing import SignatureContext
-from esper.tamiyo import TamiyoService
+from esper.tamiyo import TamiyoPolicy, TamiyoService
 from esper.tamiyo.persistence import FieldReportStoreConfig
 from esper.tezzeret import CompileJobConfig, TezzeretCompiler
 from esper.urza import UrzaLibrary
 from esper.urza.pipeline import BlueprintPipeline, BlueprintRequest
+from esper.oona import OonaClient, StreamConfig
+from fakeredis.aioredis import FakeRedis
 
 
 class _StaticPolicy:
@@ -112,3 +114,56 @@ async def test_tamiyo_end_to_end_blueprint_pipeline(tmp_path) -> None:
     metric_names = {metric.name for metric in telemetry.metrics}
     assert "tamiyo.blueprint.risk" in metric_names
     assert any(event.description in {"bp_quarantine", "pause_triggered"} for event in telemetry.events)
+
+
+@pytest.mark.asyncio
+async def test_tamiyo_telemetry_flows_to_oona_emergency(tmp_path) -> None:
+    metadata = BlueprintDescriptor(
+        blueprint_id="bp-route",
+        name="Route",
+        tier=BlueprintTier.BLUEPRINT_TIER_EXPERIMENTAL,
+        description="Emergency routing",
+        risk=0.95,
+        stage=3,
+        quarantine_only=True,
+        approval_required=False,
+    )
+    artifact = tmp_path / "artifact.pt"
+    artifact.write_text("demo")
+    library = UrzaLibrary(root=tmp_path / "urza")
+    library.save(metadata, artifact)
+
+    service = TamiyoService(
+        policy=TamiyoPolicy(),
+        store_config=FieldReportStoreConfig(path=tmp_path / "field_reports.log"),
+        urza=library,
+        signature_context=SignatureContext(secret=b"tamiyo-test-secret"),
+    )
+    packet = leyline_pb2.SystemStatePacket(
+        version=1,
+        current_epoch=1,
+        training_run_id="run-routing",
+    )
+    service.evaluate_step(packet)
+    telemetry = service.telemetry_packets[-1]
+    telemetry.system_health.indicators["priority"] = "MESSAGE_PRIORITY_CRITICAL"
+    if telemetry.events:
+        telemetry.events[0].level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
+    else:
+        telemetry.events.add(
+            description="bp_quarantine",
+            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
+        )
+
+    redis = FakeRedis()
+    stream_config = StreamConfig(
+        normal_stream="oona.normal",
+        emergency_stream="oona.emergency",
+        telemetry_stream="oona.telemetry",
+        group="tamiyo-routing",
+    )
+    oona = OonaClient("redis://localhost", config=stream_config, redis_client=redis)
+    await oona.ensure_consumer_group()
+    await service.publish_history(oona)
+    assert await oona.stream_length("oona.emergency") >= 1
+    await oona.close()
