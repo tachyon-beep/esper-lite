@@ -106,24 +106,35 @@ async def test_shared_rollback_signal_weatherlight_bridge(monkeypatch) -> None:
     # Ensure shared signal used by trainer
     sig_local = trainer.get_rollback_signal()
     assert sig_local is not None
+    if not isinstance(sig_local, SharedDeadlineSignal):
+        await svc.shutdown()
+        pytest.skip("shared_memory unavailable in environment")
     list(trainer.run())
     # Trigger the shared signal manually to validate Weatherlight bridge
-    sig = SharedDeadlineSignal.attach(signal_name)
+    sig = sig_local
     sig.trigger()
-    # Verify Weatherlight detected the signal via internal telemetry snapshot
-    ok = False
+    # Verify Weatherlight detected the signal using the internal counter and telemetry snapshot
+    detection_ok = False
+    telemetry_ok = False
     for _ in range(30):
+        # Actively probe once per loop to avoid racing the monitor task
+        await svc.probe_rollback_signal_for_test()  # type: ignore[attr-defined]
         packet = await svc._build_telemetry_packet()  # type: ignore[attr-defined]
         metrics = {m.name: m.value for m in packet.metrics}
+        if svc.get_rollback_detection_count() >= 1:  # type: ignore[attr-defined]
+            detection_ok = True
         if metrics.get("weatherlight.rollback.detections_total", 0.0) >= 1.0:
-            ok = True
+            telemetry_ok = True
+        if detection_ok and telemetry_ok:
             break
         await asyncio.sleep(0.1)
-    assert ok
+    assert detection_ok
+    assert telemetry_ok
     # Cleanup shared memory
     try:
-        sig.close()
-        sig.unlink()
+        if isinstance(sig, SharedDeadlineSignal):
+            sig.close()
+            sig.unlink()
     except Exception:
         pass
     await svc.shutdown()

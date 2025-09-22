@@ -897,6 +897,15 @@ class TolariaTrainer:
                     samples_per_s = accumulated_samples / step_elapsed
                 accumulated_samples = 0
 
+                # Initial fast-cache snapshot at step 0 (before first increment)
+                if self._fast_cache is not None and self._global_step == 0:
+                    try:
+                        self._fast_cache.put(self._global_step, self._model, self._optimizer)
+                        self._metrics["tolaria.rollback.snapshots_total"] = self._metrics.get("tolaria.rollback.snapshots_total", 0.0) + 1.0
+                        self._metrics["tolaria.rollback.fast_size_bytes"] = float(self._fast_cache.size_bytes)
+                    except Exception:  # pragma: no cover - defensive
+                        pass
+
                 self._global_step += 1
                 step_state = self._build_step_state(
                     loss=float(loss_tensor.detach().item()),

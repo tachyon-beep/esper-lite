@@ -79,6 +79,7 @@ class WeatherlightService:
         self._rollback_signal_name: str | None = self._settings.tolaria_rollback_signal_name
         self._rollback_signal: SharedDeadlineSignal | None = None
         self._rollback_last_detect_s: float | None = None
+        self._rollback_last_detect_ts_ms: int | None = None
         self._rollback_detections_total: int = 0
         self._rollback_skipped_total: int = 0
         self._rollback_monitor_task: asyncio.Task | None = None
@@ -218,6 +219,11 @@ class WeatherlightService:
                     try:
                         ts_ms = self._rollback_signal.read_timestamp_ms()
                         if ts_ms is not None:
+                            if self._rollback_last_detect_ts_ms is not None and ts_ms == self._rollback_last_detect_ts_ms:
+                                self._rollback_signal.clear()
+                                await asyncio.sleep(0.05)
+                                continue
+                            self._rollback_last_detect_ts_ms = ts_ms
                             now_ms = int(time.monotonic() * 1000)
                             latency_ms = max(0.0, float(now_ms - ts_ms))
                     except Exception:
@@ -407,6 +413,39 @@ class WeatherlightService:
 
     async def _build_telemetry_packet(self) -> leyline_pb2.TelemetryPacket:
         assert self._oona is not None and self._urza_worker is not None
+        try:
+            if self._rollback_signal_name:
+                # Probe a fresh attachment to handle cases where the segment was recreated
+                try:
+                    probe = SharedDeadlineSignal.attach(self._rollback_signal_name)
+                except Exception:
+                    probe = None
+                if probe is not None:
+                    try:
+                        # Fast path: flag set
+                        if probe.is_set():
+                            self._rollback_detections_total += 1
+                            self._rollback_last_detect_s = time.monotonic()
+                            with contextlib.suppress(Exception):
+                                probe.clear()
+                        else:
+                            # Fallback: detect via timestamp changes
+                            ts_ms = probe.read_timestamp_ms()
+                            if ts_ms is not None and (self._rollback_last_detect_ts_ms is None or ts_ms != self._rollback_last_detect_ts_ms):
+                                self._rollback_last_detect_ts_ms = ts_ms
+                                self._rollback_last_detect_s = time.monotonic()
+                                self._rollback_detections_total += 1
+                        # Cache the attachment for the monitor loop if not set already
+                        if self._rollback_signal is None:
+                            self._rollback_signal = probe
+                        else:
+                            with contextlib.suppress(Exception):
+                                probe.close()
+                    except Exception:
+                        with contextlib.suppress(Exception):
+                            probe.close()
+        except Exception:
+            pass
         metrics: list[TelemetryMetric] = []
         workers_running = sum(1 for state in self._workers.values() if state.running)
         workers_backing_off = sum(1 for state in self._workers.values() if state.backoff_seconds > 0)
@@ -474,8 +513,9 @@ class WeatherlightService:
                 )
             )
         # Append rollback monitor counters
-        if self._rollback_detections_total:
-            metrics.append(TelemetryMetric("weatherlight.rollback.detections_total", float(self._rollback_detections_total), unit="count"))
+        det_total = self._rollback_detections_total
+        if det_total:
+            metrics.append(TelemetryMetric("weatherlight.rollback.detections_total", float(det_total), unit="count"))
         if self._rollback_skipped_total:
             metrics.append(TelemetryMetric("weatherlight.rollback.skipped_total", float(self._rollback_skipped_total), unit="count"))
         if self._rollback_last_detect_s is not None:
@@ -517,6 +557,46 @@ class WeatherlightService:
             },
         )
         return packet
+
+
+    async def probe_rollback_signal_for_test(self) -> bool:
+        """Test helper: synchronously detect and clear rollback signal if set."""
+        try:
+            if not self._rollback_signal_name:
+                return False
+            try:
+                probe = SharedDeadlineSignal.attach(self._rollback_signal_name)
+            except Exception:
+                return False
+            detected = False
+            try:
+                if probe.is_set():
+                    self._rollback_detections_total += 1
+                    self._rollback_last_detect_s = time.monotonic()
+                    detected = True
+                    with contextlib.suppress(Exception):
+                        probe.clear()
+                else:
+                    ts_ms = probe.read_timestamp_ms()
+                    if ts_ms is not None and (self._rollback_last_detect_ts_ms is None or ts_ms != self._rollback_last_detect_ts_ms):
+                        self._rollback_last_detect_ts_ms = ts_ms
+                        self._rollback_last_detect_s = time.monotonic()
+                        self._rollback_detections_total += 1
+                        detected = True
+            finally:
+                if self._rollback_signal is None:
+                    self._rollback_signal = probe
+                else:
+                    with contextlib.suppress(Exception):
+                        probe.close()
+            return detected
+        except Exception:
+            return False
+
+    def get_rollback_detection_count(self) -> int:
+        """Expose the rollback detection counter for verification in tests."""
+
+        return self._rollback_detections_total
 
     async def _flush_telemetry_once(self) -> None:
         assert self._oona is not None

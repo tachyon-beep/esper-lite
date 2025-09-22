@@ -290,6 +290,30 @@ def test_step_evaluate_p95_budget(tmp_path) -> None:
     assert p95 <= 10.0
 
 
+
+
+def test_field_report_emitted_on_timeout(tmp_path) -> None:
+    config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    service = TamiyoService(
+        policy=_SlowPolicy(),
+        store_config=config,
+        signature_context=_SIGNATURE_CONTEXT,
+        step_timeout_ms=1.0,
+    )
+    packet = leyline_pb2.SystemStatePacket(
+        version=1,
+        current_epoch=1,
+        training_run_id="run-timeout-report",
+        global_step=99,
+    )
+    command = service.evaluate_step(packet)
+    # Last report exists and is neutral due to timeout
+    assert service.field_reports
+    last = service.field_reports[-1]
+    assert last.training_run_id == "run-timeout-report"
+    assert last.outcome == leyline_pb2.FIELD_REPORT_OUTCOME_NEUTRAL
+    # Notes reflect last event (timeout_inference)
+    assert "timeout" in last.notes.lower()
 @pytest.mark.asyncio
 async def test_tamiyo_publish_history_to_oona(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")

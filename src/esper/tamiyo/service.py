@@ -283,8 +283,8 @@ class TamiyoService:
         telemetry.system_health.indicators["priority"] = leyline_pb2.MessagePriority.Name(priority_value)
         self._sign_command(command)
         self._telemetry_packets.append(telemetry)
-        if not timed_out:
-            self._emit_field_report(command, state, loss_delta, events)
+        # Emit a field report for every decision, including timeouts (neutral outcome).
+        self._emit_field_report(command, state, loss_delta, events, timed_out=timed_out)
         self._last_validation_loss = state.validation_loss
         return command
 
@@ -294,18 +294,60 @@ class TamiyoService:
         state: leyline_pb2.SystemStatePacket,
         loss_delta: float,
         events: Iterable[TelemetryEvent],
+        *,
+        timed_out: bool,
     ) -> None:
+        # Build a compact metrics delta. Always include loss_delta. Optionally include
+        # step/timing metrics if present on the packet to aid downstream analysis.
         events_list = list(events)
-        metrics_delta = {"loss_delta": loss_delta}
+        metrics_delta: dict[str, float] = {"loss_delta": float(loss_delta)}
+        # Pull auxiliary timings from the training metrics if available
+        try:
+            tm = dict(state.training_metrics)
+            if "tamiyo_latency_ms" in tm:
+                metrics_delta["tamiyo_latency_ms"] = float(tm["tamiyo_latency_ms"])
+            if "hook_latency_ms" in tm:
+                metrics_delta["hook_latency_ms"] = float(tm["hook_latency_ms"])
+        except Exception:
+            pass
+
+        # Derive a coarse outcome from the risk reason and command type
+        reason = command.annotations.get("risk_reason", "")
+        outcome = leyline_pb2.FIELD_REPORT_OUTCOME_SUCCESS
+        if timed_out or reason in {"timeout_inference", "timeout_urza"}:
+            outcome = leyline_pb2.FIELD_REPORT_OUTCOME_NEUTRAL
+        elif reason in {"bp_quarantine", "loss_spike", "isolation_violation", "hook_budget"}:
+            outcome = leyline_pb2.FIELD_REPORT_OUTCOME_REGRESSION
+        elif command.command_type == leyline_pb2.COMMAND_PAUSE and reason in {"conservative_mode", "policy", ""}:
+            outcome = leyline_pb2.FIELD_REPORT_OUTCOME_NEUTRAL
+
+        # If blueprint risk is annotated, surface it in the metrics delta for Simic
+        try:
+            if "blueprint_risk" in command.annotations:
+                metrics_delta["blueprint_risk"] = float(command.annotations["blueprint_risk"])  # type: ignore[arg-type]
+        except Exception:
+            pass
+
+        # Prefer a timeout-related note if present; otherwise use the last event description
+        note_text = None
+        for ev in events_list:
+            try:
+                if ev.description and ev.description.startswith("timeout"):
+                    note_text = ev.description
+                    break
+            except Exception:
+                pass
+        if note_text is None and events_list:
+            note_text = events_list[-1].description
         self.generate_field_report(
             command=command,
-            outcome=leyline_pb2.FIELD_REPORT_OUTCOME_SUCCESS,
+            outcome=outcome,
             metrics_delta=metrics_delta,
             training_run_id=state.training_run_id or "run-unknown",
             seed_id=command.target_seed_id,
             blueprint_id=command.seed_operation.blueprint_id if command.HasField("seed_operation") else "",
             observation_window_epochs=max(1, int(state.current_epoch) if state.current_epoch else 1),
-            notes=events_list[-1].description if events_list else None,
+            notes=note_text,
         )
 
     def _run_policy(
