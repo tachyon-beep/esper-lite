@@ -175,6 +175,7 @@ def test_graph_builder_schema(tmp_path: pytest.PathLike) -> None:
     assert "parameter_default" in data
     assert "epoch_progress" in data
 
+
 def test_policy_select_action_populates_annotations() -> None:
     policy = TamiyoPolicy(TamiyoPolicyConfig(enable_compile=False))
     command = policy.select_action(_sample_packet())
@@ -190,16 +191,20 @@ def test_policy_select_action_populates_annotations() -> None:
     assert "selected_blueprint_index" in last_action
     assert 0.0 <= float(last_action["blending_schedule_start"]) <= 1.0
     assert 0.0 <= float(last_action["blending_schedule_end"]) <= 1.0
-    assert float(last_action["blending_schedule_start"]) <= float(last_action["blending_schedule_end"])
+    assert float(last_action["blending_schedule_start"]) <= float(
+        last_action["blending_schedule_end"]
+    )
     assert command.annotations["blending_schedule_units"] == "fraction_0_1"
     assert 0.0 <= float(command.annotations["blending_schedule_start"]) <= 1.0
     assert 0.0 <= float(command.annotations["blending_schedule_end"]) <= 1.0
-    assert float(command.annotations["blending_schedule_start"]) <= float(command.annotations["blending_schedule_end"])
+    assert float(command.annotations["blending_schedule_start"]) <= float(
+        command.annotations["blending_schedule_end"]
+    )
     if command.command_type == leyline_pb2.COMMAND_SEED:
         params = command.seed_operation.parameters
         method_list = TamiyoPolicyConfig().blending_methods
         expected_index = float(method_list.index(command.annotations["blending_method"]))
-    assert params["blending_method_index"] == pytest.approx(expected_index)
+        assert params["blending_method_index"] == pytest.approx(expected_index)
 
 
 def test_policy_compile_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -259,7 +264,9 @@ def test_policy_select_action_ranks_candidates(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(policy, "_gnn", _Stub())
     policy._compiled_model = None  # ensure stub is used
 
-    packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=4, training_run_id="run-rank", packet_id="pkt-rank")
+    packet = leyline_pb2.SystemStatePacket(
+        version=1, current_epoch=4, training_run_id="run-rank", packet_id="pkt-rank"
+    )
     for idx in range(3):
         seed = packet.seed_states.add()
         seed.seed_id = f"seed-{idx}"
@@ -276,7 +283,9 @@ def test_policy_select_action_ranks_candidates(monkeypatch: pytest.MonkeyPatch) 
     assert 0.0 <= params["blending_schedule_end"] <= 1.0
     assert params["blending_schedule_start"] <= params["blending_schedule_end"]
     assert command.annotations["blending_schedule_units"] == "fraction_0_1"
-    assert float(command.annotations["blending_schedule_start"]) <= float(command.annotations["blending_schedule_end"])
+    assert float(command.annotations["blending_schedule_start"]) <= float(
+        command.annotations["blending_schedule_end"]
+    )
 
 
 @pytest.mark.perf
