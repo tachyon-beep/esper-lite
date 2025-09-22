@@ -508,9 +508,9 @@ class TolariaTrainer:
                         "tolaria.emergency.halt",
                         attributes={"level": str(int(esc.level)), "reason": "failed_epochs_streak", "streak": str(self._failed_epochs_streak)},
                     )
-                self._halt = True
-                self._metrics["tolaria.emergency.halts_total"] = self._metrics.get("tolaria.emergency.halts_total", 0.0) + 1.0
-                self._metrics["tolaria.emergency.halt"] = 1.0
+                    self._halt = True
+                    self._metrics["tolaria.emergency.halts_total"] = self._metrics.get("tolaria.emergency.halts_total", 0.0) + 1.0
+                    self._metrics["tolaria.emergency.halt"] = 1.0
             if self._halt:
                 break
 
