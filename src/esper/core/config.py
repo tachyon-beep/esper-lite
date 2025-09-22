@@ -142,6 +142,10 @@ class EsperSettings(BaseSettings):
     tolaria_seed_conflict_ratio_warn: float = Field(
         alias="TOLARIA_SEED_CONFLICT_RATIO_WARN", default=0.5
     )
+    # Compact per-seed telemetry (single event per seed)
+    tolaria_seed_health_compact: bool = Field(
+        alias="TOLARIA_SEED_HEALTH_COMPACT", default=False
+    )
 
     # Optimizer rebuild storm guard
     tolaria_opt_rebuild_min_interval_steps: int = Field(

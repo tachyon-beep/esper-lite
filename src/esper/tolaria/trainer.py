@@ -321,6 +321,7 @@ class TolariaTrainer:
         except Exception:
             self._seed_conflict_ratio_warn = 0.5
         self._last_seed_share: dict[str, float] = {}
+        self._seed_health_compact = bool(getattr(self._settings, "tolaria_seed_health_compact", False))
 
         self._emergency: EmergencyController | None = None
         if self._settings.tolaria_emergency_enabled:
@@ -1029,16 +1030,19 @@ class TolariaTrainer:
             stage = stage_by_seed.get(name)
             if stage:
                 attrs["stage"] = stage
-            per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.weight", avg_w, unit="ratio", attributes=attrs))
-            per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.norm", avg_n, unit="grad", attributes=attrs))
+            if not self._seed_health_compact:
+                per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.weight", avg_w, unit="ratio", attributes=attrs))
+                per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.norm", avg_n, unit="grad", attributes=attrs))
             # Average share across fences
             if name in seed_share_sum and seed_uses.get(name, 0) > 0:
                 avg_share = float(seed_share_sum[name]) / max(1, seed_uses.get(name, 0))
-                per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.share", avg_share, unit="ratio", attributes=attrs))
+                if not self._seed_health_compact:
+                    per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.share", avg_share, unit="ratio", attributes=attrs))
                 # Share delta vs last epoch
                 last = float(self._last_seed_share.get(name, 0.0))
                 delta = avg_share - last
-                per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.share_delta", delta, unit="ratio", attributes=attrs))
+                if not self._seed_health_compact:
+                    per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.share_delta", delta, unit="ratio", attributes=attrs))
                 if abs(delta) >= self._seed_share_jump_warn:
                     self._emit_event(
                         "seed_share_jump",
@@ -1049,14 +1053,17 @@ class TolariaTrainer:
             # Average alpha observed
             if name in seed_alpha_sum and seed_uses.get(name, 0) > 0:
                 avg_alpha = float(seed_alpha_sum[name]) / max(1, seed_uses.get(name, 0))
-                per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.alpha", avg_alpha, unit="ratio", attributes=attrs))
+                if not self._seed_health_compact:
+                    per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.alpha", avg_alpha, unit="ratio", attributes=attrs))
             # Conflicts count total
             if name in seed_conflicts_total:
-                per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.conflicts", float(seed_conflicts_total[name]), unit="count", attributes=attrs))
+                if not self._seed_health_compact:
+                    per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.conflicts", float(seed_conflicts_total[name]), unit="count", attributes=attrs))
                 # Conflict ratio per seed (avg conflicts per fence normalized by neighbors)
                 neighbors = max(1, len(seen_seeds) - 1)
                 conf_ratio = (float(seed_conflicts_total[name]) / float(uses)) / float(neighbors)
-                per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.conflict_ratio", conf_ratio, unit="ratio", attributes=attrs))
+                if not self._seed_health_compact:
+                    per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.conflict_ratio", conf_ratio, unit="ratio", attributes=attrs))
                 if conf_ratio >= self._seed_conflict_ratio_warn:
                     self._emit_event(
                         "seed_conflict_high",
@@ -1073,7 +1080,7 @@ class TolariaTrainer:
                 avg_tsplit = float(teacher_split_sum[name]) / max(1, attrib_uses)
                 per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.teacher_share", avg_tsplit, unit="ratio", attributes=attrs))
             # Per-layer top-K summary (average norms across fences)
-            if self._per_layer_enabled and param_names and name in per_layer_norm_sum:
+            if (not self._seed_health_compact) and self._per_layer_enabled and param_names and name in per_layer_norm_sum:
                 layer_map = per_layer_norm_sum.get(name, {})
                 # Average by uses (per-seed)
                 avg_map = {idx: (val / uses if uses > 0 else val) for idx, val in layer_map.items()}
@@ -1365,7 +1372,7 @@ class TolariaTrainer:
             ]
         )
         # Append per-seed aggregation metrics (if computed this epoch)
-        if getattr(self, "_seed_agg_metrics", None):
+        if (not self._seed_health_compact) and getattr(self, "_seed_agg_metrics", None):
             metrics.extend(self._seed_agg_metrics)
         # Teacher overall share (rollup)
         metrics.append(
