@@ -37,6 +37,8 @@ class StreamConfig:
     message_ttl_ms: int | None = None
     kernel_nonce_cache_size: int = 2048
     kernel_freshness_window_ms: int = 120_000
+    # Emergency rate limiting (token bucket: max per minute)
+    emergency_max_per_min: int | None = 120
 
 
 @dataclass(slots=True)
@@ -158,6 +160,8 @@ class OonaClient:
             "consume_latency_ms": 0.0,
             "kernel_stale_dropped": 0.0,
             "kernel_replay_dropped": 0.0,
+            "emergency_published": 0.0,
+            "emergency_rate_dropped": 0.0,
         }
         self._signing_context = signing_context or self._load_signing_context()
         self._publish_breaker = CircuitBreaker()
@@ -165,6 +169,14 @@ class OonaClient:
         self._conservative_mode = False
         self._kernel_requests_seen: OrderedDict[str, float] = OrderedDict()
         self._kernel_responses_seen: OrderedDict[str, float] = OrderedDict()
+        # Emergency rate limiter
+        self._em_tokens: float = float(self._config.emergency_max_per_min or 0)
+        self._em_refill_rate_per_s: float = (
+            float(self._config.emergency_max_per_min) / 60.0
+            if self._config.emergency_max_per_min and self._config.emergency_max_per_min > 0
+            else 0.0
+        )
+        self._em_last_refill: float = time.monotonic()
 
     async def close(self) -> None:
         await self._redis.close()
@@ -491,6 +503,22 @@ class OonaClient:
             self._metrics["publish_dropped"] += 1.0
             self._publish_breaker.record_failure()
             return False
+        # Emergency rate limiter
+        if stream == self._config.emergency_stream and self._config.emergency_max_per_min:
+            now = time.monotonic()
+            # Refill tokens
+            elapsed = max(0.0, now - self._em_last_refill)
+            if self._em_refill_rate_per_s > 0:
+                self._em_tokens = min(
+                    float(self._config.emergency_max_per_min),
+                    self._em_tokens + elapsed * self._em_refill_rate_per_s,
+                )
+            self._em_last_refill = now
+            if self._em_tokens < 1.0:
+                # Drop due to rate limit
+                self._metrics["emergency_rate_dropped"] += 1.0
+                return False
+            self._em_tokens -= 1.0
         if rerouted:
             self._metrics["publish_rerouted"] += 1.0
         envelope = leyline_pb2.BusEnvelope(message_type=message_type, payload=payload)
@@ -520,6 +548,8 @@ class OonaClient:
         self._metrics["publish_total"] += 1.0
         self._publish_breaker.record_success()
         if rerouted or stream == self._config.emergency_stream:
+            if stream == self._config.emergency_stream:
+                self._metrics["emergency_published"] += 1.0
             self._conservative_mode = True
         else:
             self._conservative_mode = False
