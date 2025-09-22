@@ -1,13 +1,18 @@
 from io import BytesIO
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 import pytest
 import torch
+from torch import nn
 from fakeredis.aioredis import FakeRedis
 
 from esper.leyline import leyline_pb2
 from esper.urza import UrzaLibrary
 from esper.karn import BlueprintDescriptor, BlueprintTier
 from esper.oona import OonaClient, StreamConfig
+from esper.kasmina import KasminaSeedManager
+from esper.security.signing import SignatureContext, sign
 from esper.tamiyo import (
     FieldReportStoreConfig,
     RiskConfig,
@@ -16,9 +21,17 @@ from esper.tamiyo import (
 )
 
 
+_SIGNATURE_CONTEXT = SignatureContext(secret=b"tamiyo-test-secret")
+
+
+class _KasminaRuntime:
+    def fetch_kernel(self, blueprint_id: str) -> tuple[nn.Module, float]:
+        return nn.Identity(), 1.0
+
+
 def test_tamiyo_service_generates_command(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
-    service = TamiyoService(policy=TamiyoPolicy(), store_config=config)
+    service = TamiyoService(policy=TamiyoPolicy(), store_config=config, signature_context=_SIGNATURE_CONTEXT)
     packet = leyline_pb2.SystemStatePacket(
         version=1,
         current_epoch=1,
@@ -40,12 +53,38 @@ def test_tamiyo_service_generates_command(tmp_path) -> None:
     assert metrics["tamiyo.inference.latency_ms"] <= 45.0
 
 
+def test_tamiyo_signed_command_accepted_and_replay_rejected(tmp_path) -> None:
+    config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    service = TamiyoService(store_config=config, signature_context=_SIGNATURE_CONTEXT)
+    packet = leyline_pb2.SystemStatePacket(
+        version=1,
+        current_epoch=1,
+        training_run_id="run-1",
+        packet_id="pkt-1",
+    )
+    command = service.evaluate_epoch(packet)
+    assert "signature" in command.annotations
+    manager = KasminaSeedManager(_KasminaRuntime(), signing_context=_SIGNATURE_CONTEXT)
+    manager.register_host_model(nn.Linear(1, 1))
+
+    manager.handle_command(command)
+    manager.finalize_step(step_index=1)
+    packets = manager.drain_telemetry_packets()
+    assert not any(event.description == "command_rejected" for pkt in packets for event in pkt.events)
+
+    manager.handle_command(command)
+    manager.finalize_step(step_index=2)
+    packets = manager.drain_telemetry_packets()
+    assert any(event.description == "command_rejected" for pkt in packets for event in pkt.events)
+
+
 def test_conservative_mode_overrides_directive(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
     service = TamiyoService(
         policy=TamiyoPolicy(),
         risk_config=RiskConfig(conservative_mode=True),
         store_config=config,
+        signature_context=_SIGNATURE_CONTEXT,
     )
     packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1)
     command = service.evaluate_epoch(packet)
@@ -56,7 +95,7 @@ def test_conservative_mode_overrides_directive(tmp_path) -> None:
 
 def test_field_report_generation(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
-    service = TamiyoService(store_config=config)
+    service = TamiyoService(store_config=config, signature_context=_SIGNATURE_CONTEXT)
     packet = leyline_pb2.SystemStatePacket(
         version=1,
         current_epoch=0,
@@ -79,7 +118,7 @@ def test_field_report_generation(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_tamiyo_publish_history_to_oona(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
-    service = TamiyoService(store_config=config)
+    service = TamiyoService(store_config=config, signature_context=_SIGNATURE_CONTEXT)
     packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=0)
     service.evaluate_epoch(packet)
     command = service.evaluate_epoch(packet)
@@ -109,7 +148,7 @@ async def test_tamiyo_publish_history_to_oona(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_tamiyo_consume_policy_updates(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
-    service = TamiyoService(store_config=config)
+    service = TamiyoService(store_config=config, signature_context=_SIGNATURE_CONTEXT)
     redis_config = StreamConfig(
         normal_stream="oona.normal",
         emergency_stream="oona.emergency",
@@ -166,10 +205,44 @@ def test_tamiyo_annotations_include_blueprint_metadata(tmp_path) -> None:
             self._last_action = {"action": 0.0, "param_delta": 0.0}
             return command
 
-    service = TamiyoService(policy=_PolicyStub(), store_config=config, urza=urza)
+    service = TamiyoService(policy=_PolicyStub(), store_config=config, urza=urza, signature_context=_SIGNATURE_CONTEXT)
     packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1)
     command = service.evaluate_epoch(packet)
     assert command.annotations["blueprint_tier"] == leyline_pb2.BlueprintTier.Name(metadata.tier)
     assert command.annotations["blueprint_stage"] == "5"
     assert command.annotations["blueprint_risk"] == "0.85"
     assert command.command_type == leyline_pb2.COMMAND_PAUSE
+
+
+def test_tamiyo_stale_command_rejected(tmp_path) -> None:
+    config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    service = TamiyoService(store_config=config, signature_context=_SIGNATURE_CONTEXT)
+    packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=0, training_run_id="run-1")
+    command = service.evaluate_epoch(packet)
+
+    manager = KasminaSeedManager(_KasminaRuntime(), signing_context=_SIGNATURE_CONTEXT)
+    manager.register_host_model(nn.Linear(1, 1))
+    manager.handle_command(command)
+    manager.finalize_step(step_index=1)
+    manager.drain_telemetry_packets()
+
+    stale_command = leyline_pb2.AdaptationCommand()
+    stale_command.CopyFrom(command)
+    stale_command.command_id = str(uuid4())
+    stale_time = datetime.now(tz=UTC) - timedelta(minutes=10)
+    stale_command.issued_at.FromDatetime(stale_time)
+    if "signature" in stale_command.annotations:
+        del stale_command.annotations["signature"]
+    stale_command.annotations["signature"] = sign(
+        stale_command.SerializeToString(),
+        _SIGNATURE_CONTEXT,
+    )
+
+    manager.handle_command(stale_command)
+    manager.finalize_step(step_index=2)
+    packets = manager.drain_telemetry_packets()
+    assert any(
+        event.description == "command_rejected" and event.attributes.get("reason") == "stale_command"
+        for packet in packets
+        for event in packet.events
+    )

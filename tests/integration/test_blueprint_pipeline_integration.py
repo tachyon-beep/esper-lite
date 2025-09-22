@@ -6,6 +6,7 @@ import pytest
 
 from esper.karn import BlueprintDescriptor, BlueprintTier, KarnCatalog
 from esper.leyline import leyline_pb2
+from esper.security.signing import SignatureContext
 from esper.tamiyo import TamiyoService
 from esper.tamiyo.persistence import FieldReportStoreConfig
 from esper.tezzeret import CompileJobConfig, TezzeretCompiler
@@ -89,6 +90,7 @@ async def test_tamiyo_end_to_end_blueprint_pipeline(tmp_path) -> None:
         policy=policy,
         store_config=FieldReportStoreConfig(path=store_path),
         urza=library,
+        signature_context=SignatureContext(secret=b"tamiyo-test-secret"),
     )
 
     state = leyline_pb2.SystemStatePacket(

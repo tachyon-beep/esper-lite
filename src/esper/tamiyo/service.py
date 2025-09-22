@@ -7,12 +7,14 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from io import BytesIO
 from typing import TYPE_CHECKING, Dict, Tuple
+from uuid import uuid4
 
 import torch
 import logging
 
 from esper.core import EsperSettings, TelemetryEvent, TelemetryMetric, build_telemetry_packet
 from esper.leyline import leyline_pb2
+from esper.security.signing import DEFAULT_SECRET_ENV, SignatureContext, sign
 try:
     from esper.urza import UrzaLibrary
 except ImportError:  # pragma: no cover - optional import in certain test contexts
@@ -48,6 +50,7 @@ class TamiyoService:
         settings: EsperSettings | None = None,
         urza: UrzaLibrary | None = None,
         metadata_cache_ttl: timedelta = timedelta(minutes=5),
+        signature_context: SignatureContext | None = None,
     ) -> None:
         self._policy = policy or TamiyoPolicy(TamiyoPolicyConfig())
         self._risk = risk_config or RiskConfig()
@@ -71,6 +74,7 @@ class TamiyoService:
         self._policy_updates: list[leyline_pb2.PolicyUpdate] = []
         self._last_validation_loss: float | None = None
         self._policy_version = "policy-stub"
+        self._signing_context = signature_context or SignatureContext.from_environment(DEFAULT_SECRET_ENV)
 
     def evaluate_epoch(self, state: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
         """Evaluate epoch state and apply risk gating."""
@@ -166,9 +170,20 @@ class TamiyoService:
             health_summary=self._derive_health_summary(command, risk_event, loss_delta),
             health_indicators=self._build_health_indicators(loss_delta, blueprint_info),
         )
+        self._sign_command(command)
         self._telemetry_packets.append(telemetry)
         self._last_validation_loss = state.validation_loss
         return command
+
+    def _sign_command(self, command: leyline_pb2.AdaptationCommand) -> None:
+        """Assign identifiers and attach an HMAC signature."""
+
+        if "signature" in command.annotations:
+            del command.annotations["signature"]
+        command.command_id = str(uuid4())
+        command.issued_at.GetCurrentTime()
+        payload = command.SerializeToString()
+        command.annotations["signature"] = sign(payload, self._signing_context)
 
     def _derive_health_status(
         self,

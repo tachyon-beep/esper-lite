@@ -25,7 +25,7 @@ from esper.kasmina import KasminaPrefetchCoordinator, KasminaSeedManager
 from esper.leyline import leyline_pb2
 from esper.oona import OonaClient, StreamConfig
 from esper.tolaria.rollback import SharedDeadlineSignal
-from esper.security.signing import DEFAULT_SECRET_ENV
+from esper.security.signing import DEFAULT_SECRET_ENV, SignatureContext
 from esper.tamiyo import TamiyoService
 from esper.urza import UrzaLibrary, UrzaRuntime
 from esper.urza.prefetch import UrzaPrefetchWorker
@@ -111,7 +111,12 @@ class WeatherlightService:
         )
         self._kasmina_coordinator = KasminaPrefetchCoordinator(self._kasmina_manager, self._oona)
         self._kasmina_manager.set_prefetch(self._kasmina_coordinator)
-        self._tamiyo_service = TamiyoService(settings=self._settings, urza=self._urza_library)
+        tamiyo_signature = SignatureContext.from_environment(DEFAULT_SECRET_ENV)
+        self._tamiyo_service = TamiyoService(
+            settings=self._settings,
+            urza=self._urza_library,
+            signature_context=tamiyo_signature,
+        )
 
         self._register_worker(
             WorkerState(

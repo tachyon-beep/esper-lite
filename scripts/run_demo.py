@@ -37,6 +37,7 @@ from esper.leyline import leyline_pb2
 from esper.nissa import NissaIngestor, NissaIngestorConfig
 from esper.oona import OonaClient, StreamConfig
 from esper.simic import FieldReportReplayBuffer, SimicTrainer, SimicTrainerConfig
+from esper.security.signing import DEFAULT_SECRET_ENV, SignatureContext
 from esper.tamiyo import TamiyoService
 from esper.tezzeret import CompileJobConfig, TezzeretCompiler
 from esper.tolaria import KasminaClient, TamiyoClient, TolariaTrainer, TrainingLoopConfig
@@ -221,7 +222,12 @@ async def run_demo() -> None:
         kasmina_manager.set_prefetch(prefetch_coordinator)
         prefetch_coordinator.start()
         kasmina_adapter = DemoKasminaAdapter(kasmina_manager)
-        tamiyo_service = TamiyoService()
+        try:
+            tamiyo_signature = SignatureContext.from_environment(DEFAULT_SECRET_ENV)
+        except RuntimeError:
+            logger.warning("ESPER_LEYLINE_SECRET not set; using demo signing secret")
+            tamiyo_signature = SignatureContext(secret=b"demo-signing-secret")
+        tamiyo_service = TamiyoService(signature_context=tamiyo_signature)
         tamiyo_client = DemoTamiyoClient(tamiyo_service)
 
         model = build_model()
