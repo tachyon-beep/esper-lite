@@ -4,6 +4,7 @@
 
 This register inventories enums and dataclasses that exist outside the generated Leyline protobuf bindings. It will expand subsystem by subsystem to make hidden cross-coupling visible during the prototype delta review.
 
+See also `docs/design/decisions/ADR-006-leyline-shared-contract-consolidation.md` for the consolidation plan.
 ## src/esper/core
 
 **Dataclasses**
@@ -19,6 +20,7 @@ This register inventories enums and dataclasses that exist outside the generated
 
 - `EsperSettings` (`src/esper/core/config.py:15`) derives from `pydantic.BaseSettings` rather than `dataclass`, so it is excluded from this register.
 - Both dataclasses directly wrap `leyline_pb2.TelemetryPacket` primitives and should eventually be replaced by pure protobuf usage once helper ergonomics are addressed.
+- Recommendation: adopt the forthcoming Leyline telemetry builder (ADR-006) and retire these helpers to cut per-packet allocations.
 
 ## src/esper/karn
 
@@ -100,6 +102,7 @@ This register inventories enums and dataclasses that exist outside the generated
 
 - Oona’s `CircuitBreaker` mirrors Kasmina safety semantics but keeps its own implementation; consider consolidating via Leyline abstractions during delta hardening.
 - Signature context defaults to `DEFAULT_SECRET_ENV`; register should cross-link with security package once inventoried.
+- Recommendation: move stream/config/breaker helpers into Leyline BusConfig per ADR-006 so subsystems consume protobuf envelopes directly.
 
 ## src/esper/security
 
@@ -115,6 +118,7 @@ This register inventories enums and dataclasses that exist outside the generated
 
 - `DEFAULT_SECRET_ENV` is a string constant pointing at the shared Leyline secret; multiple subsystems (Kasmina, Oona, Weatherlight) rely on this helper for signature enforcement.
 - Signing helpers currently only support static HMAC; prototype delta may expand to asymmetric keys per detailed design.
+- Recommendation: relocate `SignatureContext` and signing APIs under Leyline security per ADR-006 and cache context creation to avoid redundant env reads.
 
 ## src/esper/simic
 
@@ -135,6 +139,7 @@ This register inventories enums and dataclasses that exist outside the generated
 
 - `EmbeddingRegistry` persists mapping tables to `Path`s; ensure future refactors consider Leyline-based identifier services to reduce bespoke state.
 - `SimicExperience.outcome` stores the Leyline enum name string rather than numeric value, which may require alignment with protobuf schema conventions later.
+- Recommendation: migrate embedding vocab persistence to a Leyline `EmbeddingDictionary` store (ADR-006) so Simic and Tamiyo share a single binary snapshot.
 
 ## src/esper/tamiyo
 
@@ -213,6 +218,7 @@ This register inventories enums and dataclasses that exist outside the generated
 
 - Urza’s record structure duplicates fields found in Leyline `KernelCatalogUpdate`; prototype clean-up should consolidate to the canonical message.
 - Prefetch metrics track counters locally; consider migrating to Leyline telemetry packets directly to avoid bespoke dataclasses.
+- Recommendation: adopt Leyline `KernelCatalogEntry` messages for storage/prefetch per ADR-006 to remove JSON duplication and speed lookups.
 
 ## src/esper/weatherlight
 

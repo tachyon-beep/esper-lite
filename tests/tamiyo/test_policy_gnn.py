@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import statistics
+import time
 
 import pytest
 import torch
@@ -171,6 +173,7 @@ def test_graph_builder_schema(tmp_path: pytest.PathLike) -> None:
     assert "loss" in data
     assert "layer_latency_ms" in data
     assert "parameter_default" in data
+    assert "epoch_progress" in data
 
 def test_policy_select_action_populates_annotations() -> None:
     policy = TamiyoPolicy(TamiyoPolicyConfig(enable_compile=False))
@@ -188,11 +191,15 @@ def test_policy_select_action_populates_annotations() -> None:
     assert 0.0 <= float(last_action["blending_schedule_start"]) <= 1.0
     assert 0.0 <= float(last_action["blending_schedule_end"]) <= 1.0
     assert float(last_action["blending_schedule_start"]) <= float(last_action["blending_schedule_end"])
+    assert command.annotations["blending_schedule_units"] == "fraction_0_1"
+    assert 0.0 <= float(command.annotations["blending_schedule_start"]) <= 1.0
+    assert 0.0 <= float(command.annotations["blending_schedule_end"]) <= 1.0
+    assert float(command.annotations["blending_schedule_start"]) <= float(command.annotations["blending_schedule_end"])
     if command.command_type == leyline_pb2.COMMAND_SEED:
         params = command.seed_operation.parameters
         method_list = TamiyoPolicyConfig().blending_methods
         expected_index = float(method_list.index(command.annotations["blending_method"]))
-        assert params["blending_method_index"] == pytest.approx(expected_index)
+    assert params["blending_method_index"] == pytest.approx(expected_index)
 
 
 def test_policy_compile_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -228,3 +235,71 @@ def test_policy_pause_when_no_seed_candidates() -> None:
     command = policy.select_action(packet)
     assert command.command_type != leyline_pb2.COMMAND_SEED
     assert command.annotations.get("risk_reason", "") == "no_seed_candidates"
+
+
+def test_policy_select_action_ranks_candidates(monkeypatch: pytest.MonkeyPatch) -> None:
+    policy = TamiyoPolicy(TamiyoPolicyConfig(enable_compile=False))
+
+    class _Stub(torch.nn.Module):  # pragma: no cover - deterministic stub
+        def forward(self, _data):
+            seed_scores = torch.tensor([0.1, 2.5, 0.4], dtype=torch.float32)
+            blueprint_scores = torch.tensor([0.3], dtype=torch.float32)
+            return {
+                "policy_logits": torch.tensor([[8.0, -2.0, -3.0, -4.0, -5.0]]),
+                "param_delta": torch.tensor([0.02]),
+                "blending_logits": torch.tensor([[0.1, 0.3, 0.6]]),
+                "risk_logits": torch.tensor([[0.2, 0.3, 0.4, 0.05, 0.05]]),
+                "value": torch.tensor([0.7]),
+                "schedule_params": torch.tensor([[1.5, -2.5]]),
+                "seed_scores": seed_scores,
+                "blueprint_scores": blueprint_scores,
+                "breaker_logits": torch.tensor([[0.0, 0.0]]),
+            }
+
+    monkeypatch.setattr(policy, "_gnn", _Stub())
+    policy._compiled_model = None  # ensure stub is used
+
+    packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=4, training_run_id="run-rank", packet_id="pkt-rank")
+    for idx in range(3):
+        seed = packet.seed_states.add()
+        seed.seed_id = f"seed-{idx}"
+        seed.stage = leyline_pb2.SeedLifecycleStage.SEED_STAGE_BLENDING
+        seed.learning_rate = 0.01 + idx * 0.001
+        seed.layer_depth = 2 + idx
+        seed.risk_score = 0.2 + 0.1 * idx
+
+    command = policy.select_action(packet)
+    assert command.command_type == leyline_pb2.COMMAND_SEED
+    assert command.target_seed_id == "seed-1"
+    params = command.seed_operation.parameters
+    assert 0.0 <= params["blending_schedule_start"] <= 1.0
+    assert 0.0 <= params["blending_schedule_end"] <= 1.0
+    assert params["blending_schedule_start"] <= params["blending_schedule_end"]
+    assert command.annotations["blending_schedule_units"] == "fraction_0_1"
+    assert float(command.annotations["blending_schedule_start"]) <= float(command.annotations["blending_schedule_end"])
+
+
+@pytest.mark.perf
+def test_policy_inference_perf_budget() -> None:
+    policy = TamiyoPolicy(TamiyoPolicyConfig(enable_compile=False))
+    packet = _sample_packet()
+    for idx in range(4):
+        seed = packet.seed_states.add()
+        seed.seed_id = f"seed-extra-{idx}"
+        seed.stage = leyline_pb2.SeedLifecycleStage.SEED_STAGE_BLENDING
+        seed.learning_rate = 0.01 + 0.001 * idx
+        seed.layer_depth = 3 + idx
+        seed.risk_score = 0.25
+
+    # warm-up
+    policy.select_action(packet)
+
+    durations: list[float] = []
+    runs = 100
+    for _ in range(runs):
+        start = time.perf_counter()
+        policy.select_action(packet)
+        durations.append((time.perf_counter() - start) * 1000.0)
+
+    p95 = statistics.quantiles(durations, n=100)[94]
+    assert p95 <= 45.0

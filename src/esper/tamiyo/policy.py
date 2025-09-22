@@ -55,7 +55,13 @@ class TamiyoPolicyConfig:
 
 
 class TamiyoPolicy(nn.Module):
-    """GNN-powered Tamiyo policy."""
+    """GNN-powered Tamiyo policy.
+
+    The schedule head emits fractions of Kasmina's blending window; values are
+    clamped to [0.0, 1.0] and written back into the command alongside
+    `blending_schedule_units=fraction_0_1`. See
+    `docs/prototype-delta/tamiyo/README.md#blending-schedule-semantics`.
+    """
 
     def __init__(self, config: TamiyoPolicyConfig | None = None) -> None:
         super().__init__()
@@ -391,6 +397,10 @@ class TamiyoPolicy(nn.Module):
                 close_score = float(torch.sigmoid(logits[1]))
                 command.annotations.setdefault("breaker_open_score", f"{open_score:.4f}")
                 command.annotations.setdefault("breaker_close_score", f"{close_score:.4f}")
+
+        command.annotations.setdefault("blending_schedule_units", "fraction_0_1")
+        command.annotations.setdefault("blending_schedule_start", f"{schedule_values[0]:.4f}")
+        command.annotations.setdefault("blending_schedule_end", f"{schedule_values[1]:.4f}")
 
         return command
 

@@ -1026,6 +1026,8 @@ class TamiyoService:
             "policy": self._policy_version[:8],
             "mode": "1" if self._risk.conservative_mode else "0",
         }
+        indicators["policy_compile"] = "1" if getattr(self._policy, "compile_enabled", False) else "0"
+        indicators["policy_arch"] = self._policy_version
         last_action = self._policy.last_action
         blending = last_action.get("blending_method")
         if blending:

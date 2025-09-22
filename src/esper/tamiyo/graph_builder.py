@@ -40,6 +40,7 @@ _DEFAULT_NORMALISATION: Mapping[str, tuple[float, float]] = {
     "seed_learning_rate": (0.01, 0.005),
     "seed_risk": (0.4, 0.2),
     "seed_age": (10.0, 4.0),
+    "epoch_progress": (0.5, 0.25),
     "layer_latency_ms": (6.0, 2.0),
     "layer_parameter_count": (1024.0, 512.0),
     "layer_weight_norm": (1.0, 0.4),
@@ -216,6 +217,13 @@ class TamiyoGraphBuilder:
         feats[0, idx] = float(packet.global_step)
         idx += 1
         feats[0, idx] = float(len(packet.seed_states))
+        idx += 1
+        epochs_total = float(metrics.get("epochs_total", 0.0))
+        if epochs_total > 0.0:
+            epoch_progress = float(packet.current_epoch) / max(1.0, epochs_total)
+        else:
+            epoch_progress = 0.0
+        feats[0, idx] = self._normalizer.normalize("epoch_progress", epoch_progress)
         return feats
 
     def _build_seed_features(

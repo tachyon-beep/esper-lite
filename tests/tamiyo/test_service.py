@@ -119,6 +119,8 @@ def test_tamiyo_service_generates_command(tmp_path) -> None:
     assert "tamiyo.policy.risk_score" in metrics
     telemetry = service.telemetry_packets[-1]
     assert "blending_method" in telemetry.system_health.indicators
+    assert telemetry.system_health.indicators.get("policy_compile") in {"0", "1"}
+    assert telemetry.system_health.indicators.get("policy_arch") == service._policy.architecture_version  # pylint: disable=protected-access
 
 
 def test_tamiyo_signed_command_accepted_and_replay_rejected(tmp_path) -> None:
@@ -144,6 +146,33 @@ def test_tamiyo_signed_command_accepted_and_replay_rejected(tmp_path) -> None:
     manager.finalize_step(step_index=2)
     packets = manager.drain_telemetry_packets()
     assert any(event.description == "command_rejected" for pkt in packets for event in pkt.events)
+
+
+def test_service_schedule_parameters_fractional(tmp_path) -> None:
+    config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    service = TamiyoService(policy=TamiyoPolicy(), store_config=config, signature_context=_SIGNATURE_CONTEXT)
+    packet = leyline_pb2.SystemStatePacket(
+        version=1,
+        current_epoch=2,
+        training_run_id="run-seed",
+        packet_id="pkt-seed",
+    )
+    seed = packet.seed_states.add()
+    seed.seed_id = "seed-123"
+    seed.stage = leyline_pb2.SeedLifecycleStage.SEED_STAGE_BLENDING
+    seed.learning_rate = 0.02
+    seed.risk_score = 0.2
+    seed.layer_depth = 3
+
+    command = service.evaluate_epoch(packet)
+    assert command.command_type == leyline_pb2.COMMAND_SEED
+    params = command.seed_operation.parameters
+    assert 0.0 <= params["blending_schedule_start"] <= 1.0
+    assert 0.0 <= params["blending_schedule_end"] <= 1.0
+    assert params["blending_schedule_start"] <= params["blending_schedule_end"]
+    assert command.annotations["blending_schedule_units"] == "fraction_0_1"
+    assert 0.0 <= float(command.annotations["blending_schedule_start"]) <= 1.0
+    assert 0.0 <= float(command.annotations["blending_schedule_end"]) <= 1.0
 
 
 def test_evaluate_step_timeout_inference(tmp_path) -> None:
