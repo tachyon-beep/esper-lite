@@ -136,7 +136,9 @@ class TamiyoPolicy(nn.Module):
         graph = self._graph_builder.build(packet)
         seed_candidates = list(getattr(graph["seed"], "node_ids", []))
         seed_capabilities = list(getattr(graph["seed"], "capabilities", []))
+        seed_fallback_scores = getattr(graph["seed"], "candidate_scores", None)
         blueprint_candidates = list(getattr(graph["blueprint"], "node_ids", []))
+        blueprint_fallback_scores = getattr(graph["blueprint"], "candidate_scores", None)
         graph = graph.to(self._device)
         module: nn.Module = self._compiled_model or self._gnn
 
@@ -180,15 +182,25 @@ class TamiyoPolicy(nn.Module):
         if schedule_params is not None:
             flattened = schedule_params.squeeze()
             if flattened.ndim == 1 and flattened.numel() >= 2:
-                schedule_values = (float(flattened[0]), float(flattened[1]))
+                raw_start = float(flattened[0])
+                raw_end = float(flattened[1])
+                norm_start = 0.5 * (raw_start + 1.0)
+                norm_end = 0.5 * (raw_end + 1.0)
+                norm_start = max(0.0, min(1.0, norm_start))
+                norm_end = max(0.0, min(1.0, norm_end))
+                if norm_end < norm_start:
+                    norm_start, norm_end = norm_end, norm_start
+                schedule_values = (norm_start, norm_end)
 
         selected_seed, selected_seed_idx, selected_seed_score = self._select_seed(
             seed_scores,
+            seed_fallback_scores,
             seed_candidates,
             seed_capabilities,
         )
         selected_blueprint, selected_blueprint_idx = self._select_blueprint(
             blueprint_scores,
+            blueprint_fallback_scores,
             blueprint_candidates,
         )
 
@@ -269,42 +281,64 @@ class TamiyoPolicy(nn.Module):
     def _select_seed(
         self,
         seed_scores: torch.Tensor | None,
+        fallback_scores: torch.Tensor | None,
         candidates: list[str],
         capabilities: list[dict[str, float]],
     ) -> tuple[str, int, float]:
         if not candidates:
-            return "seed-1", -1, 0.0
-        best_index = 0
-        best_score = float("-inf")
+            return "", -1, 0.0
+        score_source: torch.Tensor | None = None
         if seed_scores is not None and seed_scores.numel() >= len(candidates):
-            values = seed_scores.detach().cpu()
-            best_index = int(torch.argmax(values).item())
-            best_score = float(values[best_index])
+            score_source = seed_scores.detach().cpu()
+        elif fallback_scores is not None and fallback_scores.numel() >= len(candidates):
+            score_source = fallback_scores.detach().cpu()
+
+        valid_indices = [idx for idx, cid in enumerate(candidates) if cid]
+        if not valid_indices:
+            return "", -1, 0.0
+
+        best_index = valid_indices[0]
+        best_score = float("-inf")
+
+        if score_source is not None:
+            best_index = max(valid_indices, key=lambda idx: float(score_source[idx]))
+            best_score = float(score_source[best_index])
         elif capabilities:
-            for idx, caps in enumerate(capabilities):
-                score = caps.get("risk", 0.0) + caps.get("blend_allowed", 0.0)
+            for idx in valid_indices:
+                caps = capabilities[idx] if idx < len(capabilities) else {}
+                score = caps.get("blend_allowed", 0.0) * 2.0 + (1.0 - caps.get("risk", 0.0))
                 if score > best_score:
                     best_score = score
                     best_index = idx
-        selected_seed = candidates[min(best_index, len(candidates) - 1)]
+
         if not math.isfinite(best_score):
             best_score = 0.0
+        selected_seed = candidates[best_index]
         return selected_seed, int(best_index), best_score
 
     def _select_blueprint(
         self,
         blueprint_scores: torch.Tensor | None,
+        fallback_scores: torch.Tensor | None,
         candidates: list[str],
     ) -> tuple[str, int]:
         if not candidates:
-            return "bp-demo", -1
-        if len(candidates) == 1:
-            return candidates[0], 0
+            return "", -1
+        score_source: torch.Tensor | None = None
         if blueprint_scores is not None and blueprint_scores.numel() >= len(candidates):
-            values = blueprint_scores.detach().cpu()
-            idx = int(torch.argmax(values).item())
-            return candidates[min(idx, len(candidates) - 1)], idx
-        return candidates[0], 0
+            score_source = blueprint_scores.detach().cpu()
+        elif fallback_scores is not None and fallback_scores.numel() >= len(candidates):
+            score_source = fallback_scores.detach().cpu()
+
+        valid_indices = [idx for idx, cid in enumerate(candidates) if cid]
+        if not valid_indices:
+            return "", -1
+
+        if score_source is not None:
+            idx = max(valid_indices, key=lambda i: float(score_source[i]))
+            return candidates[idx], idx
+
+        return candidates[valid_indices[0]], valid_indices[0]
 
     def _build_command(
         self,
@@ -319,6 +353,9 @@ class TamiyoPolicy(nn.Module):
     ) -> leyline_pb2.AdaptationCommand:
         command = leyline_pb2.AdaptationCommand(version=1, issued_by="tamiyo")
         command.issued_at.GetCurrentTime()
+
+        if action_idx == 0 and not selected_seed:
+            action_idx = 2  # treat as pause fallback
 
         if action_idx == 0:  # seed graft
             command.command_type = leyline_pb2.COMMAND_SEED
@@ -344,6 +381,8 @@ class TamiyoPolicy(nn.Module):
         else:  # pause fallback
             command.command_type = leyline_pb2.COMMAND_PAUSE
             command.annotations["reason"] = "policy"
+            if not selected_seed:
+                command.annotations.setdefault("risk_reason", "no_seed_candidates")
 
         if breaker_logits is not None:
             logits = breaker_logits.detach().cpu().reshape(-1)

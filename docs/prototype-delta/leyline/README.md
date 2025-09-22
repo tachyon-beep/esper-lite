@@ -10,6 +10,7 @@ Documents in this folder:
 Design sources:
 - `docs/design/detailed_design/00-leyline-shared-contracts.md`
 - `docs/design/detailed_design/00-leyline.md`
+- `docs/design/decisions/ADR-006-leyline-shared-contract-consolidation.md`
 
 Implementation evidence (primary):
 - Generated: `src/esper/leyline/_generated/leyline_pb2.py`

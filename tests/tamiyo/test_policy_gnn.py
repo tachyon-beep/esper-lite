@@ -43,7 +43,7 @@ def test_graph_builder_handles_missing_seeds() -> None:
     builder = TamiyoGraphBuilder(TamiyoGraphBuilderConfig())
     data = builder.build(leyline_pb2.SystemStatePacket(version=1))
     assert data["global"].x.shape[1] == 16
-    assert data["seed"].x.shape[0] == 1  # placeholder when no seeds present
+    assert data["seed"].x.shape[0] == 0
     assert data["blueprint"].x.shape[0] == 1
 
 
@@ -61,6 +61,55 @@ def test_graph_builder_schema(tmp_path: pytest.PathLike) -> None:
             "alpha": {"min": 0.1, "max": 0.9, "span": 0.8},
             "beta": {"min": -0.5, "max": 0.5, "span": 1.0},
         },
+    }
+    metadata["graph"] = {
+        "layers": [
+            {
+                "layer_id": f"{blueprint_id}-L0",
+                "type": "linear",
+                "depth": 0,
+                "latency_ms": 5.0,
+                "parameter_count": 2048,
+                "dropout_rate": 0.1,
+                "weight_norm": 1.2,
+                "gradient_norm": 0.8,
+                "activation": "relu",
+            },
+            {
+                "layer_id": f"{blueprint_id}-L1",
+                "type": "layer_norm",
+                "depth": 1,
+                "latency_ms": 4.0,
+                "parameter_count": 1024,
+                "dropout_rate": 0.0,
+                "weight_norm": 0.9,
+                "gradient_norm": 0.6,
+                "activation": "gelu",
+            },
+        ],
+        "activations": [
+            {
+                "activation_id": f"{blueprint_id}-A0",
+                "type": "relu",
+                "saturation_rate": 0.2,
+                "gradient_flow": 0.9,
+                "computational_cost": 256.0,
+                "nonlinearity_strength": 0.6,
+            },
+            {
+                "activation_id": f"{blueprint_id}-A1",
+                "type": "gelu",
+                "saturation_rate": 0.15,
+                "gradient_flow": 0.85,
+                "computational_cost": 192.0,
+                "nonlinearity_strength": 0.5,
+            },
+        ],
+        "parameters": [
+            {"name": "alpha", "min": 0.1, "max": 0.9, "span": 0.8, "default": 0.5},
+            {"name": "beta", "min": -0.5, "max": 0.5, "span": 1.0, "default": 0.0},
+        ],
+        "capabilities": {"allowed_blending_methods": ["linear", "cosine"]},
     }
 
     builder = TamiyoGraphBuilder(
@@ -103,6 +152,12 @@ def test_graph_builder_schema(tmp_path: pytest.PathLike) -> None:
     assert graph["activation"].x.shape == (2, 4)
     assert graph["parameter"].x.shape == (2, 4)
     assert set(graph["parameter"].node_ids) == {"run-graph-alpha", "run-graph-beta"}
+    assert list(graph["layer"].node_ids) == [f"{blueprint_id}-L0", f"{blueprint_id}-L1"]
+    assert list(graph["activation"].node_ids) == [f"{blueprint_id}-A0", f"{blueprint_id}-A1"]
+    assert torch.isfinite(graph["layer"].x).all()
+    assert torch.isfinite(graph["activation"].x).all()
+    assert torch.isfinite(graph["seed"].candidate_scores).all()
+    assert torch.isfinite(graph["blueprint"].candidate_scores).all()
 
     assert graph[("layer", "activates", "activation")].edge_attr.shape == (4, 3)
     assert graph[("seed", "allowed", "parameter")].edge_attr.shape == (4, 3)
@@ -114,6 +169,8 @@ def test_graph_builder_schema(tmp_path: pytest.PathLike) -> None:
     with (tmp_path / "norms.json").open("r", encoding="utf-8") as handle:
         data = json.load(handle)
     assert "loss" in data
+    assert "layer_latency_ms" in data
+    assert "parameter_default" in data
 
 def test_policy_select_action_populates_annotations() -> None:
     policy = TamiyoPolicy(TamiyoPolicyConfig(enable_compile=False))
@@ -128,6 +185,9 @@ def test_policy_select_action_populates_annotations() -> None:
     assert "selected_seed_index" in last_action
     assert "selected_seed_score" in last_action
     assert "selected_blueprint_index" in last_action
+    assert 0.0 <= float(last_action["blending_schedule_start"]) <= 1.0
+    assert 0.0 <= float(last_action["blending_schedule_end"]) <= 1.0
+    assert float(last_action["blending_schedule_start"]) <= float(last_action["blending_schedule_end"])
     if command.command_type == leyline_pb2.COMMAND_SEED:
         params = command.seed_operation.parameters
         method_list = TamiyoPolicyConfig().blending_methods
@@ -142,3 +202,29 @@ def test_policy_compile_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(torch, "compile", _raise_compile)
     policy = TamiyoPolicy(TamiyoPolicyConfig(enable_compile=True))
     assert not policy.compile_enabled
+
+
+def test_policy_seed_selection_uses_fallback_scores() -> None:
+    policy = TamiyoPolicy(TamiyoPolicyConfig(enable_compile=False))
+    fallback = torch.tensor([0.2, 1.4, 0.1], dtype=torch.float32)
+    seed_id, idx, score = policy._select_seed(
+        None,
+        fallback,
+        ["seed-a", "seed-b", "seed-c"],
+        [
+            {"blend_allowed": 0.0, "risk": 0.5},
+            {"blend_allowed": 1.0, "risk": 0.2},
+            {"blend_allowed": 0.0, "risk": 0.3},
+        ],
+    )
+    assert seed_id == "seed-b"
+    assert idx == 1
+    assert pytest.approx(score, rel=1e-6) == fallback[1].item()
+
+
+def test_policy_pause_when_no_seed_candidates() -> None:
+    policy = TamiyoPolicy(TamiyoPolicyConfig(enable_compile=False))
+    packet = leyline_pb2.SystemStatePacket(version=1, training_run_id="run-no-seed")
+    command = policy.select_action(packet)
+    assert command.command_type != leyline_pb2.COMMAND_SEED
+    assert command.annotations.get("risk_reason", "") == "no_seed_candidates"

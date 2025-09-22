@@ -6,7 +6,18 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from io import BytesIO
-from typing import TYPE_CHECKING, Dict, Tuple, Optional, Iterable, Callable, Mapping
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    Iterable,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Callable,
+)
+import json
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from uuid import uuid4
@@ -275,6 +286,45 @@ class TamiyoService:
                     attributes={"method": str(last_action.get("blending_method", ""))},
                 )
             )
+        if "blending_schedule_start" in last_action and "blending_schedule_end" in last_action:
+            metrics.append(
+                TelemetryMetric(
+                    "tamiyo.blending.schedule_start",
+                    float(last_action.get("blending_schedule_start", 0.0)),
+                    unit="fraction",
+                )
+            )
+            metrics.append(
+                TelemetryMetric(
+                    "tamiyo.blending.schedule_end",
+                    float(last_action.get("blending_schedule_end", 0.0)),
+                    unit="fraction",
+                )
+            )
+        if "selected_seed_index" in last_action:
+            metrics.append(
+                TelemetryMetric(
+                    "tamiyo.selection.seed_index",
+                    float(last_action.get("selected_seed_index", -1.0)),
+                    unit="index",
+                )
+            )
+        if "selected_seed_score" in last_action:
+            metrics.append(
+                TelemetryMetric(
+                    "tamiyo.selection.seed_score",
+                    float(last_action.get("selected_seed_score", 0.0)),
+                    unit="score",
+                )
+            )
+        if "selected_blueprint_index" in last_action:
+            metrics.append(
+                TelemetryMetric(
+                    "tamiyo.selection.blueprint_index",
+                    float(last_action.get("selected_blueprint_index", -1.0)),
+                    unit="index",
+                )
+            )
         metrics.append(
             TelemetryMetric(
                 "tamiyo.breaker.inference_state",
@@ -357,6 +407,10 @@ class TamiyoService:
             metrics_delta["risk_score"] = float(last_action.get("risk_score", 0.0))
         if "selected_seed_score" in last_action:
             metrics_delta["selected_seed_score"] = float(last_action.get("selected_seed_score", 0.0))
+        if "blending_schedule_start" in last_action:
+            metrics_delta["blending_schedule_start"] = float(last_action.get("blending_schedule_start", 0.0))
+        if "blending_schedule_end" in last_action:
+            metrics_delta["blending_schedule_end"] = float(last_action.get("blending_schedule_end", 0.0))
         # Pull auxiliary timings from the training metrics if available
         try:
             tm = dict(state.training_metrics)
@@ -544,7 +598,7 @@ class TamiyoService:
                     "max": max_value,
                     "span": float(max_value - min_value),
                 }
-        tier_value = int(getattr(descriptor, "tier", 0))
+        tier_value = int(getattr(descriptor, "tier", 0) or 0)
         try:
             tier_name = leyline_pb2.BlueprintTier.Name(tier_value)
         except ValueError:
@@ -560,6 +614,8 @@ class TamiyoService:
             "parameter_count": int(len(allowed)),
             "allowed_parameters": allowed,
         }
+        candidate_score = (1.0 - float(data["risk"])) + 0.05 * float(data["stage"]) + 0.02 * len(allowed)
+        data["candidate_score"] = max(candidate_score, 0.0)
         compile_ms = getattr(record, "compile_ms", None)
         if compile_ms is not None:
             data["compile_ms"] = float(compile_ms)
@@ -584,7 +640,143 @@ class TamiyoService:
         tags = getattr(record, "tags", ()) or ()
         if tags:
             data["tags"] = list(tags)
+
+        graph_metadata = self._extract_graph_metadata(record)
+        if graph_metadata:
+            data["graph"] = graph_metadata
         return data
+
+    def _extract_graph_metadata(self, record) -> dict[str, Any] | None:
+        extras: Mapping[str, Any] | None = getattr(record, "extras", None)
+        graph_section: Any = None
+        if extras:
+            graph_section = extras.get("graph_metadata")
+            if isinstance(graph_section, str):
+                try:
+                    graph_section = json.loads(graph_section)
+                except json.JSONDecodeError:
+                    graph_section = None
+        if not graph_section:
+            graph_section = self._graph_metadata_from_guard_spec(record)
+        if not graph_section:
+            return None
+        return self._normalise_graph_metadata(graph_section, record)
+
+    def _graph_metadata_from_guard_spec(self, record) -> dict[str, Any] | None:
+        guard_spec: Sequence[Mapping[str, Any]] = tuple(getattr(record, "guard_spec", ()) or ())
+        if not guard_spec:
+            return None
+        latency_ms = float(getattr(record, "prewarm_ms", 0.0) or 0.0)
+        latency_per_entry = latency_ms / max(1, len(guard_spec))
+        layers: list[dict[str, Any]] = []
+        activations: list[dict[str, Any]] = []
+        for idx, spec in enumerate(guard_spec):
+            shape = spec.get("shape") or []
+            dims: list[int] = [int(d) for d in shape if isinstance(d, (int, float))]
+            param_count = 1
+            for dim in dims:
+                param_count *= max(1, dim)
+            input_channels = dims[-2] if len(dims) >= 2 else dims[-1] if dims else 1
+            output_channels = dims[-1] if dims else 1
+            layer_entry = {
+                "layer_id": f"{record.metadata.blueprint_id}-L{idx}",
+                "type": "guard_tensor",
+                "depth": idx,
+                "input_channels": input_channels,
+                "output_channels": output_channels,
+                "parameter_count": param_count,
+                "latency_ms": latency_per_entry,
+                "gradient_norm": 0.0,
+                "weight_norm": 0.0,
+            }
+            layers.append(layer_entry)
+            activations.append(
+                {
+                    "activation_id": f"{record.metadata.blueprint_id}-A{idx}",
+                    "type": spec.get("dtype", "unknown"),
+                    "saturation_rate": 0.0,
+                    "gradient_flow": 1.0,
+                    "computational_cost": float(param_count),
+                }
+            )
+        parameters = []
+        allowed_mapping = getattr(record.metadata, "allowed_parameters", {})
+        for name, bounds in allowed_mapping.items():
+            lower = float(getattr(bounds, "min_value", 0.0))
+            upper = float(getattr(bounds, "max_value", 0.0))
+            parameters.append(
+                {
+                    "name": name,
+                    "min": lower,
+                    "max": upper,
+                    "default": (lower + upper) * 0.5,
+                    "span": upper - lower,
+                }
+            )
+        return {
+            "layers": layers,
+            "activations": activations,
+            "parameters": parameters,
+            "capabilities": {},
+        }
+
+    def _normalise_graph_metadata(
+        self,
+        graph_section: Mapping[str, Any],
+        record,
+    ) -> dict[str, Any]:
+        layers = self._coerce_descriptor_list(graph_section.get("layers"), key_field="layer_id")
+        activations = self._coerce_descriptor_list(
+            graph_section.get("activations"), key_field="activation_id"
+        )
+        parameters = self._coerce_descriptor_list(
+            graph_section.get("parameters"), key_field="name"
+        )
+        if not parameters:
+            allowed_mapping = getattr(record.metadata, "allowed_parameters", {})
+            for name, bounds in allowed_mapping.items():
+                lower = float(getattr(bounds, "min_value", 0.0))
+                upper = float(getattr(bounds, "max_value", 0.0))
+                parameters.append(
+                    {
+                        "name": name,
+                        "min": lower,
+                        "max": upper,
+                        "default": (lower + upper) * 0.5,
+                        "span": upper - lower,
+                    }
+                )
+
+        capabilities = {}
+        raw_capabilities = graph_section.get("capabilities", {})
+        if isinstance(raw_capabilities, Mapping):
+            for key, value in raw_capabilities.items():
+                if isinstance(value, (list, tuple)):
+                    capabilities[str(key)] = [str(item) for item in value]
+                elif isinstance(value, (int, float, str, bool)):
+                    capabilities[str(key)] = value
+
+        return {
+            "layers": layers,
+            "activations": activations,
+            "parameters": parameters,
+            "capabilities": capabilities,
+            "source": graph_section.get("source", "urza"),
+        }
+
+    @staticmethod
+    def _coerce_descriptor_list(value: Any, *, key_field: str) -> list[dict[str, Any]]:
+        if not value:
+            return []
+        result: list[dict[str, Any]] = []
+        for index, entry in enumerate(value):
+            if isinstance(entry, Mapping):
+                converted = {str(k): v for k, v in entry.items()}
+            else:
+                continue
+            converted.setdefault(key_field, f"auto-{index}")
+            result.append(converted)
+        return result
 
     def _apply_risk_engine(
         self,

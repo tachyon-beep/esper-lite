@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Callable, Iterable, Mapping, Sequence
 import json
 import math
+import hashlib
 
 import torch
 import torch.nn.functional as F
@@ -39,6 +40,18 @@ _DEFAULT_NORMALISATION: Mapping[str, tuple[float, float]] = {
     "seed_learning_rate": (0.01, 0.005),
     "seed_risk": (0.4, 0.2),
     "seed_age": (10.0, 4.0),
+    "layer_latency_ms": (6.0, 2.0),
+    "layer_parameter_count": (1024.0, 512.0),
+    "layer_weight_norm": (1.0, 0.4),
+    "layer_gradient_norm": (0.8, 0.4),
+    "activation_saturation": (0.5, 0.2),
+    "activation_gradient_flow": (0.8, 0.2),
+    "activation_cost": (128.0, 64.0),
+    "activation_nonlinearity": (0.5, 0.2),
+    "parameter_min": (0.0, 0.5),
+    "parameter_max": (1.0, 0.5),
+    "parameter_span": (0.5, 0.4),
+    "parameter_default": (0.5, 0.4),
 }
 
 
@@ -150,13 +163,22 @@ class TamiyoGraphBuilder:
         data = HeteroData()
         blueprint_id = packet.packet_id or packet.training_run_id or "bp-unknown"
         metadata = self._lookup_blueprint_metadata(blueprint_id)
+        graph_meta = metadata.get("graph", {}) if isinstance(metadata.get("graph"), Mapping) else {}
 
         global_features = self._build_global_features(packet)
-        seed_features, seed_ids, seed_caps = self._build_seed_features(packet.seed_states)
-        blueprint_features, blueprint_ids = self._build_blueprint_features(packet, metadata)
-        layer_features, layer_ids = self._build_layer_features(packet, metadata)
-        activation_features, activation_ids = self._build_activation_features(packet, metadata)
-        parameter_features, parameter_ids = self._build_parameter_features(packet, metadata)
+        seed_features, seed_ids, seed_caps, seed_scores = self._build_seed_features(
+            packet.seed_states,
+            metadata,
+            graph_meta,
+        )
+        blueprint_features, blueprint_ids, blueprint_scores = self._build_blueprint_features(
+            packet,
+            metadata,
+            graph_meta,
+        )
+        layer_features, layer_ids = self._build_layer_features(packet, metadata, graph_meta)
+        activation_features, activation_ids = self._build_activation_features(packet, metadata, graph_meta)
+        parameter_features, parameter_ids = self._build_parameter_features(packet, metadata, graph_meta)
 
         data["global"].x = global_features
         data["seed"].x = seed_features
@@ -171,6 +193,8 @@ class TamiyoGraphBuilder:
         data["activation"].node_ids = activation_ids
         data["parameter"].node_ids = parameter_ids
         data["seed"].capabilities = seed_caps
+        data["seed"].candidate_scores = seed_scores
+        data["blueprint"].candidate_scores = blueprint_scores
 
         self._populate_edges(data, packet, metadata, seed_caps, len(layer_ids), len(activation_ids), len(parameter_ids))
         self._normalizer.flush()
@@ -195,19 +219,30 @@ class TamiyoGraphBuilder:
         return feats
 
     def _build_seed_features(
-        self, seeds: Iterable[leyline_pb2.SeedState]
-    ) -> tuple[Tensor, list[str], list[dict[str, float]]]:
+        self,
+        seeds: Iterable[leyline_pb2.SeedState],
+        metadata: Mapping[str, float | str | bool | int],
+        graph_meta: Mapping[str, object],
+    ) -> tuple[Tensor, list[str], list[dict[str, float]], Tensor]:
         seed_list = list(seeds)
         if not seed_list:
             return (
-                torch.zeros((1, self._cfg.seed_feature_dim), dtype=torch.float32),
-                ["seed-default"],
-                [{"stage": 0.0, "risk": 0.0, "blend_allowed": 0.0}],
+                torch.zeros((0, self._cfg.seed_feature_dim), dtype=torch.float32),
+                [],
+                [],
+                torch.zeros(0, dtype=torch.float32),
             )
         features = torch.zeros((len(seed_list), self._cfg.seed_feature_dim), dtype=torch.float32)
         max_stage = float(max(leyline_pb2.SeedLifecycleStage.values())) or 1.0
         seed_ids: list[str] = []
         capabilities: list[dict[str, float]] = []
+        fallback_scores: list[float] = []
+        capability_meta = graph_meta.get("capabilities") if isinstance(graph_meta, Mapping) else {}
+        allowed_methods: set[str] = set()
+        if isinstance(capability_meta, Mapping):
+            methods = capability_meta.get("allowed_blending_methods")
+            if isinstance(methods, (list, tuple)):
+                allowed_methods = {str(name) for name in methods}
         for index, seed in enumerate(seed_list):
             features[index, 0] = self._normalizer.normalize("seed_learning_rate", seed.learning_rate)
             features[index, 1] = self._normalizer.normalize("seed_risk", seed.risk_score)
@@ -223,6 +258,8 @@ class TamiyoGraphBuilder:
                 idx = registry.get(seed_id)
                 features[index, 6] = float(idx) / max(1.0, float(self._cfg.seed_vocab))
             blend_allowed = 1.0 if seed.stage >= leyline_pb2.SeedLifecycleStage.SEED_STAGE_BLENDING else 0.0
+            if allowed_methods:
+                blend_allowed = 1.0
             capabilities.append(
                 {
                     "stage": float(seed.stage) / max_stage,
@@ -230,11 +267,21 @@ class TamiyoGraphBuilder:
                     "blend_allowed": blend_allowed,
                 }
             )
-        return features, seed_ids, capabilities
+            fallback_score = (
+                blend_allowed * 2.0
+                + max(0.0, 1.0 - float(seed.risk_score))
+                + (float(seed.stage) / max_stage)
+            )
+            fallback_scores.append(float(fallback_score))
+        scores_tensor = torch.tensor(fallback_scores, dtype=torch.float32)
+        return features, seed_ids, capabilities, scores_tensor
 
     def _build_blueprint_features(
-        self, packet: leyline_pb2.SystemStatePacket, metadata: Mapping[str, float | str | bool | int]
-    ) -> tuple[Tensor, list[str]]:
+        self,
+        packet: leyline_pb2.SystemStatePacket,
+        metadata: Mapping[str, float | str | bool | int],
+        graph_meta: Mapping[str, object],
+    ) -> tuple[Tensor, list[str], Tensor]:
         blueprint_id = packet.packet_id or packet.training_run_id or "bp-unknown"
         dim = self._cfg.blueprint_feature_dim
         features = torch.zeros((1, dim), dtype=torch.float32)
@@ -254,6 +301,10 @@ class TamiyoGraphBuilder:
         stage = float(metadata.get("stage", 0.0) or 0.0)
         tier_index = float(metadata.get("tier_index", 0))
         param_count = float(metadata.get("parameter_count", 0.0) or 0.0)
+        if isinstance(graph_meta, Mapping):
+            parameters = graph_meta.get("parameters")
+            if isinstance(parameters, list) and parameters:
+                param_count = float(len(parameters))
         quarantine = 1.0 if metadata.get("quarantine_only") else 0.0
         approval = 1.0 if metadata.get("approval_required") else 0.0
 
@@ -263,110 +314,151 @@ class TamiyoGraphBuilder:
         _set(7, tier_index / 10.0)
         _set(8, quarantine)
         _set(9, approval)
-        return features, [blueprint_id]
+        candidate_score = float(metadata.get("candidate_score", 0.0))
+        score_tensor = torch.tensor([candidate_score], dtype=torch.float32)
+        return features, [blueprint_id], score_tensor
 
     def _build_layer_features(
         self,
         packet: leyline_pb2.SystemStatePacket,
         metadata: Mapping[str, float | str | bool | int],
+        graph_meta: Mapping[str, object],
     ) -> tuple[Tensor, list[str]]:
-        count = max(1, self._cfg.max_layers)
+        raw_layers = []
+        if isinstance(graph_meta, Mapping):
+            maybe_layers = graph_meta.get("layers")
+            if isinstance(maybe_layers, list):
+                raw_layers = [entry for entry in maybe_layers if isinstance(entry, Mapping)]
+        count = min(self._cfg.max_layers, len(raw_layers)) if raw_layers else self._cfg.max_layers
+        count = max(1, count)
         dim = self._cfg.layer_feature_dim
         features = torch.zeros((count, dim), dtype=torch.float32)
         layer_ids: list[str] = []
         risk = float(metadata.get("risk", 0.0) or 0.0)
         stage = float(metadata.get("stage", 0.0) or 0.0)
-        epoch = float(packet.current_epoch or 0.0)
-        global_step = float(packet.global_step or 0.0)
-        quarantine = 1.0 if metadata.get("quarantine_only") else 0.0
+        total_layers = max(len(raw_layers), count)
         for idx in range(count):
-            depth_norm = (idx + 1) / count
+            descriptor = raw_layers[idx] if idx < len(raw_layers) else {}
+            depth = float(descriptor.get("depth", idx))
+            depth_norm = (depth + 1.0) / max(1.0, float(total_layers))
+            latency = float(descriptor.get("latency_ms", 0.0) or 0.0)
+            param_count = float(descriptor.get("parameter_count", 0.0) or 0.0)
+            dropout = float(descriptor.get("dropout_rate", 0.0) or 0.0)
+            weight_norm = float(descriptor.get("weight_norm", 0.0) or 0.0)
+            gradient_norm = float(descriptor.get("gradient_norm", 0.0) or 0.0)
+            layer_type = str(descriptor.get("type", "unknown"))
+            activation_type = str(descriptor.get("activation", descriptor.get("activation_type", "unknown")))
             if dim > 0:
                 features[idx, 0] = depth_norm
             if dim > 1:
-                features[idx, 1] = risk
+                features[idx, 1] = self._normalizer.normalize("layer_latency_ms", latency)
             if dim > 2:
-                features[idx, 2] = stage / 10.0
+                features[idx, 2] = self._normalizer.normalize("layer_parameter_count", param_count)
             if dim > 3:
-                features[idx, 3] = math.tanh(global_step / 1_000.0)
+                features[idx, 3] = float(max(0.0, min(1.0, dropout)))
             if dim > 4:
-                features[idx, 4] = math.sin(epoch + idx)
+                features[idx, 4] = self._encode_category(layer_type)
             if dim > 5:
-                features[idx, 5] = math.cos(epoch + idx)
+                features[idx, 5] = self._encode_category(activation_type)
             if dim > 6:
-                features[idx, 6] = quarantine
+                features[idx, 6] = self._normalizer.normalize("layer_weight_norm", weight_norm)
             if dim > 7:
-                features[idx, 7] = 1.0
-            layer_ids.append(f"{packet.training_run_id or 'run'}-L{idx}")
+                features[idx, 7] = self._normalizer.normalize("layer_gradient_norm", gradient_norm)
+            layer_id = str(descriptor.get("layer_id", f"{packet.training_run_id or 'run'}-L{idx}"))
+            layer_ids.append(layer_id)
         return features, layer_ids
 
     def _build_activation_features(
         self,
         packet: leyline_pb2.SystemStatePacket,
         metadata: Mapping[str, float | str | bool | int],
+        graph_meta: Mapping[str, object],
     ) -> tuple[Tensor, list[str]]:
-        count = max(1, self._cfg.max_activations)
+        raw_activations = []
+        if isinstance(graph_meta, Mapping):
+            maybe_acts = graph_meta.get("activations")
+            if isinstance(maybe_acts, list):
+                raw_activations = [entry for entry in maybe_acts if isinstance(entry, Mapping)]
+        count = min(self._cfg.max_activations, len(raw_activations)) if raw_activations else self._cfg.max_activations
+        count = max(1, count)
         dim = self._cfg.activation_feature_dim
         features = torch.zeros((count, dim), dtype=torch.float32)
         activation_ids: list[str] = []
-        risk = float(metadata.get("risk", 0.0) or 0.0)
-        stage = float(metadata.get("stage", 0.0) or 0.0)
-        epoch = float(packet.current_epoch or 0.0)
-        global_step = float(packet.global_step or 0.0)
         for idx in range(count):
-            ratio = (idx + 1) / count
+            descriptor = raw_activations[idx] if idx < len(raw_activations) else {}
+            activation_type = str(descriptor.get("type", "unknown"))
+            saturation = float(descriptor.get("saturation_rate", 0.0) or 0.0)
+            gradient_flow = float(descriptor.get("gradient_flow", 0.0) or 0.0)
+            cost = float(descriptor.get("computational_cost", 0.0) or 0.0)
+            dominance = float(descriptor.get("nonlinearity_strength", 0.0) or 0.0)
             if dim > 0:
-                features[idx, 0] = math.sin(0.5 * epoch + idx)
+                features[idx, 0] = self._encode_category(activation_type)
             if dim > 1:
-                features[idx, 1] = math.cos(0.5 * epoch + idx)
+                features[idx, 1] = self._normalizer.normalize("activation_saturation", saturation)
             if dim > 2:
-                features[idx, 2] = risk
+                features[idx, 2] = self._normalizer.normalize("activation_gradient_flow", gradient_flow)
             if dim > 3:
-                features[idx, 3] = ratio
+                features[idx, 3] = self._normalizer.normalize("activation_cost", cost)
             if dim > 4:
-                features[idx, 4] = stage / 10.0
+                features[idx, 4] = self._normalizer.normalize("activation_nonlinearity", dominance)
             if dim > 5:
-                features[idx, 5] = math.tanh(global_step / 500.0)
-            activation_ids.append(f"{packet.training_run_id or 'run'}-A{idx}")
+                features[idx, 5] = float(idx) / max(1.0, float(count - 1 or 1))
+            activation_ids.append(str(descriptor.get("activation_id", f"{packet.training_run_id or 'run'}-A{idx}")))
         return features, activation_ids
 
     def _build_parameter_features(
         self,
         packet: leyline_pb2.SystemStatePacket,
         metadata: Mapping[str, float | str | bool | int],
+        graph_meta: Mapping[str, object],
     ) -> tuple[Tensor, list[str]]:
-        allowed = metadata.get("allowed_parameters", {})
-        names = list(allowed.keys())
-        if not names:
-            names = ["alpha"]
-        count = min(self._cfg.max_parameters, max(1, len(names)))
+        descriptors = []
+        if isinstance(graph_meta, Mapping):
+            maybe_parameters = graph_meta.get("parameters")
+            if isinstance(maybe_parameters, list):
+                descriptors = [entry for entry in maybe_parameters if isinstance(entry, Mapping)]
+        allowed = metadata.get("allowed_parameters", {}) if isinstance(metadata.get("allowed_parameters"), Mapping) else {}
+        if not descriptors and isinstance(allowed, Mapping):
+            for name, bounds in allowed.items():
+                descriptors.append(
+                    {
+                        "name": name,
+                        "min": float(bounds.get("min", 0.0)),
+                        "max": float(bounds.get("max", 0.0)),
+                        "span": float(bounds.get("span", float(bounds.get("max", 0.0)) - float(bounds.get("min", 0.0)))),
+                        "default": 0.5 * (float(bounds.get("min", 0.0)) + float(bounds.get("max", 0.0))),
+                    }
+                )
+        if not descriptors:
+            descriptors.append({"name": "alpha", "min": 0.0, "max": 1.0, "span": 1.0, "default": 0.5})
+
+        count = min(self._cfg.max_parameters, max(1, len(descriptors)))
         dim = self._cfg.parameter_feature_dim
         features = torch.zeros((count, dim), dtype=torch.float32)
         parameter_ids: list[str] = []
         risk = float(metadata.get("risk", 0.0) or 0.0)
         stage = float(metadata.get("stage", 0.0) or 0.0)
         for idx in range(count):
-            name = names[idx] if idx < len(names) else names[-1]
-            bounds = allowed.get(name, {}) if isinstance(allowed, Mapping) else {}
-            min_v = float(bounds.get("min", 0.0))
-            max_v = float(bounds.get("max", 0.0))
-            span = float(bounds.get("span", max_v - min_v))
-            center = (min_v + max_v) / 2.0
-            ratio = (idx + 1) / max(1, len(names))
+            descriptor = descriptors[idx] if idx < len(descriptors) else descriptors[-1]
+            name = str(descriptor.get("name", f"param-{idx}"))
+            min_v = float(descriptor.get("min", 0.0) or 0.0)
+            max_v = float(descriptor.get("max", 0.0) or 0.0)
+            span = float(descriptor.get("span", max_v - min_v))
+            default = float(descriptor.get("default", (min_v + max_v) * 0.5))
             if dim > 0:
-                features[idx, 0] = math.tanh(min_v)
+                features[idx, 0] = self._normalizer.normalize("parameter_min", min_v)
             if dim > 1:
-                features[idx, 1] = math.tanh(max_v)
+                features[idx, 1] = self._normalizer.normalize("parameter_max", max_v)
             if dim > 2:
-                features[idx, 2] = math.tanh(span)
+                features[idx, 2] = self._normalizer.normalize("parameter_span", span)
             if dim > 3:
-                features[idx, 3] = math.tanh(center)
+                features[idx, 3] = self._normalizer.normalize("parameter_default", default)
             if dim > 4:
                 features[idx, 4] = risk
             if dim > 5:
                 features[idx, 5] = stage / 10.0
             if dim > 6:
-                features[idx, 6] = ratio
+                features[idx, 6] = float(idx + 1) / max(1.0, float(len(descriptors)))
             parameter_ids.append(f"{packet.training_run_id or 'run'}-{name}")
         return features, parameter_ids
 
@@ -514,6 +606,15 @@ class TamiyoGraphBuilder:
             _set_edge(("parameter", "targets", "blueprint"), src, dst, attrs_pb)
         else:
             _set_edge(("parameter", "targets", "blueprint"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+
+
+    @staticmethod
+    def _encode_category(value: str) -> float:
+        encoded = value.encode("utf-8", errors="ignore")
+        if not encoded:
+            return 0.0
+        digest = hashlib.blake2s(encoded, digest_size=4).digest()
+        return int.from_bytes(digest, "big") / 0xFFFFFFFF
 
 
 __all__ = ["TamiyoGraphBuilder", "TamiyoGraphBuilderConfig"]

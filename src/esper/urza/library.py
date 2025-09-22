@@ -11,7 +11,7 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Iterator
+from typing import Any, Iterable, Iterator, Mapping
 
 from google.protobuf.json_format import MessageToDict, ParseDict
 from sqlalchemy import Column, MetaData, String, Table, create_engine, select, delete
@@ -38,6 +38,7 @@ class UrzaRecord:
     inductor_cache_dir: str | None = None
     guard_spec_summary: tuple[str, ...] = ()
     tags: tuple[str, ...] = ()
+    extras: Mapping[str, Any] | None = None
 
 
 class UrzaLibrary:
@@ -309,6 +310,7 @@ class UrzaLibrary:
             inductor_cache_dir=extras.get("inductor_cache_dir"),
             guard_spec_summary=tuple(extras.get("guard_spec_summary", [])),
             tags=tuple(extras.get("tags", [])),
+            extras=dict(extras or {}),
         )
         return record
 
@@ -451,6 +453,7 @@ class UrzaLibrary:
             inductor_cache_dir=extras.get("inductor_cache_dir"),
             guard_spec_summary=tuple(extras.get("guard_spec_summary", [])),
             tags=tuple(extras.get("tags", [])),
+            extras=dict(extras or {}),
         )
         self._touch_cache(metadata.blueprint_id, record)
         with self._engine.begin() as conn:
@@ -542,4 +545,5 @@ def _clone_record(record: UrzaRecord) -> UrzaRecord:
         inductor_cache_dir=record.inductor_cache_dir,
         guard_spec_summary=tuple(record.guard_spec_summary),
         tags=tuple(record.tags),
+        extras=dict(record.extras or {}),
     )

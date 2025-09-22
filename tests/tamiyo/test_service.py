@@ -3,6 +3,7 @@ import time
 import statistics
 from types import SimpleNamespace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -92,7 +93,10 @@ def test_tamiyo_service_generates_command(tmp_path) -> None:
     assert "blending_method" in command.annotations
     assert "policy_risk_score" in command.annotations
     assert "policy_risk_index" in command.annotations
-    assert "selected_seed" in command.annotations
+    if command.command_type == leyline_pb2.COMMAND_SEED:
+        assert command.annotations.get("selected_seed")
+    else:
+        assert command.annotations.get("risk_reason") == "no_seed_candidates"
     if command.command_type == leyline_pb2.COMMAND_SEED:
         params = command.seed_operation.parameters
         assert "blending_method_index" in params
@@ -101,6 +105,9 @@ def test_tamiyo_service_generates_command(tmp_path) -> None:
         assert params["blending_method_index"] == pytest.approx(expected_index)
         assert "blending_schedule_start" in params
         assert "blending_schedule_end" in params
+        assert 0.0 <= params["blending_schedule_start"] <= 1.0
+        assert 0.0 <= params["blending_schedule_end"] <= 1.0
+        assert params["blending_schedule_start"] <= params["blending_schedule_end"]
     assert service.telemetry_packets
     # Budget guardrail: inference latency <= 45 ms
     metrics = {m.name: m.value for m in service.telemetry_packets[-1].metrics}
@@ -182,6 +189,111 @@ def test_evaluate_step_timeout_urza(tmp_path) -> None:
     telemetry = service.telemetry_packets[-1]
     assert any(event.description == "timeout_urza" for event in telemetry.events)
     assert "blueprint_tier" not in command.annotations
+
+
+def test_service_urza_graph_metadata_round_trip(tmp_path) -> None:
+    urza_root = tmp_path / "urza"
+    urza_root.mkdir(parents=True, exist_ok=True)
+    artifact_path = tmp_path / "bp.pt"
+    artifact_path.write_bytes(b"dummy")
+
+    descriptor = BlueprintDescriptor(
+        blueprint_id="bp-graph",
+        name="graph-test",
+        tier=BlueprintTier.BLUEPRINT_TIER_SAFE,
+        risk=0.35,
+        stage=2,
+        quarantine_only=False,
+        approval_required=False,
+        description="graph metadata fixture",
+    )
+    bounds = descriptor.allowed_parameters["alpha"]
+    bounds.min_value = 0.05
+    bounds.max_value = 0.95
+
+    graph_metadata = {
+        "source": "urza-cache",
+        "layers": [
+            {
+                "layer_id": "bp-graph-L0",
+                "type": "linear",
+                "depth": 0,
+                "latency_ms": 7.0,
+                "parameter_count": 1024,
+                "dropout_rate": 0.1,
+                "weight_norm": 1.1,
+                "gradient_norm": 0.9,
+                "activation": "relu",
+            }
+        ],
+        "activations": [
+            {
+                "activation_id": "bp-graph-A0",
+                "type": "relu",
+                "saturation_rate": 0.25,
+                "gradient_flow": 0.85,
+                "computational_cost": 128.0,
+                "nonlinearity_strength": 0.55,
+            }
+        ],
+        "parameters": [
+            {
+                "name": "alpha",
+                "min": 0.05,
+                "max": 0.95,
+                "span": 0.9,
+                "default": 0.5,
+            }
+        ],
+        "capabilities": {"allowed_blending_methods": ["cosine"]},
+    }
+
+    library = UrzaLibrary(root=urza_root)
+    library.save(
+        descriptor,
+        artifact_path,
+        extras={"graph_metadata": graph_metadata},
+    )
+
+    local_signature = SignatureContext(secret=b"tamiyo-test-secret")
+    service = TamiyoService(
+        policy=TamiyoPolicy(),
+        store_config=FieldReportStoreConfig(path=tmp_path / "field_reports.log"),
+        urza=library,
+        signature_context=local_signature,
+    )
+
+    packet = leyline_pb2.SystemStatePacket(
+        version=1,
+        current_epoch=1,
+        global_step=5,
+        training_run_id="run-graph",
+        packet_id="bp-graph",
+    )
+    seed = packet.seed_states.add()
+    seed.seed_id = "seed-graph"
+    seed.stage = leyline_pb2.SeedLifecycleStage.SEED_STAGE_BLENDING
+    seed.learning_rate = 0.02
+    seed.layer_depth = 3
+    seed.risk_score = 0.25
+
+    command = service.evaluate_epoch(packet)
+    assert command.annotations.get("blueprint_tier") == "BLUEPRINT_TIER_SAFE"
+    assert command.annotations.get("blueprint_risk") == "0.35"
+
+    cached = service._policy._blueprint_metadata.get("bp-graph")  # pylint: disable=protected-access
+    assert cached is not None
+    graph_block = cached.get("graph")
+    assert graph_block is not None
+    assert graph_block.get("source") == "urza-cache"
+    assert graph_block.get("layers") and graph_block["layers"][0]["layer_id"] == "bp-graph-L0"
+    assert graph_block.get("activations") and graph_block["activations"][0]["activation_id"] == "bp-graph-A0"
+    assert graph_block.get("parameters") and graph_block["parameters"][0]["name"] == "alpha"
+
+    metrics = {metric.name: metric.value for metric in service.telemetry_packets[-1].metrics}
+    assert metrics["tamiyo.blueprint.risk"] == pytest.approx(0.35)
+
+    service.close()
 
 
 def test_inference_breaker_enters_conservative_mode(tmp_path) -> None:
