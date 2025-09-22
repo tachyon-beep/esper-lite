@@ -162,6 +162,31 @@ def test_evaluate_step_timeout_urza(tmp_path) -> None:
     assert "blueprint_tier" not in command.annotations
 
 
+def test_inference_breaker_enters_conservative_mode(tmp_path) -> None:
+    config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    service = TamiyoService(
+        policy=_SlowPolicy(),
+        store_config=config,
+        signature_context=_SIGNATURE_CONTEXT,
+        step_timeout_ms=1.0,
+    )
+    packet = leyline_pb2.SystemStatePacket(
+        version=1,
+        current_epoch=1,
+        training_run_id="run-breaker",
+        global_step=1,
+    )
+    for step in range(3):
+        packet.global_step = step
+        service.evaluate_step(packet)
+    assert service._risk.conservative_mode  # type: ignore[attr-defined]
+    assert any(
+        event.description == "conservative_entered"
+        for pkt in service.telemetry_packets
+        for event in pkt.events
+    )
+
+
 def test_conservative_mode_overrides_directive(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
     service = TamiyoService(
@@ -296,6 +321,30 @@ def test_tamiyo_annotations_include_blueprint_metadata(tmp_path) -> None:
     assert command.annotations["blueprint_stage"] == "5"
     assert command.annotations["blueprint_risk"] == "0.85"
     assert command.command_type == leyline_pb2.COMMAND_PAUSE
+    telemetry = service.telemetry_packets[-1]
+    assert any(
+        event.description == "bp_quarantine"
+        and event.level == leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
+        for event in telemetry.events
+    )
+
+
+def test_loss_spike_triggers_pause(tmp_path) -> None:
+    config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    service = TamiyoService(store_config=config, signature_context=_SIGNATURE_CONTEXT)
+    service._last_validation_loss = 0.1  # type: ignore[attr-defined]
+    packet = leyline_pb2.SystemStatePacket(
+        version=1,
+        current_epoch=1,
+        training_run_id="run-loss",
+        training_metrics={"loss": 0.0},
+    )
+    packet.validation_loss = 0.3
+    command = service.evaluate_step(packet)
+    assert command.command_type == leyline_pb2.COMMAND_PAUSE
+    assert command.annotations["risk_reason"] == "loss_spike"
+    telemetry = service.telemetry_packets[-1]
+    assert any(event.description == "loss_spike" for event in telemetry.events)
 
 
 def test_tamiyo_stale_command_rejected(tmp_path) -> None:

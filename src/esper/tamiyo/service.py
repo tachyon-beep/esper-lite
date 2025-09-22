@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from io import BytesIO
-from typing import TYPE_CHECKING, Dict, Tuple, Optional, Iterable
+from typing import TYPE_CHECKING, Dict, Tuple, Optional, Iterable, Callable
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from uuid import uuid4
@@ -39,6 +39,77 @@ class RiskConfig:
 
 
 _DEFAULT_REPORT_LOG = Path("var/tamiyo/field_reports.log")
+
+
+class TamiyoCircuitBreaker:
+    """Minimal circuit breaker for Tamiyo components."""
+
+    def __init__(
+        self,
+        *,
+        name: str,
+        failure_threshold: int = 3,
+        cooldown_ms: float = 100.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._name = name
+        self._failure_threshold = max(1, failure_threshold)
+        self._cooldown_s = max(cooldown_ms, 0.0) / 1000.0
+        self._clock = clock
+        self._state = leyline_pb2.CircuitBreakerState.CIRCUIT_STATE_CLOSED
+        self._failure_count = 0
+        self._open_until: float | None = None
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def state(self) -> int:
+        return self._state
+
+    @property
+    def failure_count(self) -> int:
+        return self._failure_count
+
+    def record_failure(self, reason: str) -> TelemetryEvent:
+        self._failure_count += 1
+        attributes = {
+            "component": self._name,
+            "reason": reason,
+            "failures": str(self._failure_count),
+        }
+        if (
+            self._state != leyline_pb2.CircuitBreakerState.CIRCUIT_STATE_OPEN
+            and self._failure_count >= self._failure_threshold
+        ):
+            self._state = leyline_pb2.CircuitBreakerState.CIRCUIT_STATE_OPEN
+            self._open_until = self._clock() + self._cooldown_s
+            attributes["action"] = "open"
+            level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
+        else:
+            attributes["action"] = "count"
+            level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING
+        return TelemetryEvent(
+            description="breaker_event",
+            level=level,
+            attributes=attributes,
+        )
+
+    def record_success(self) -> TelemetryEvent | None:
+        if self._state == leyline_pb2.CircuitBreakerState.CIRCUIT_STATE_OPEN:
+            if self._open_until is not None and self._clock() < self._open_until:
+                return None
+            self._state = leyline_pb2.CircuitBreakerState.CIRCUIT_STATE_CLOSED
+            self._failure_count = 0
+            self._open_until = None
+            return TelemetryEvent(
+                description="breaker_event",
+                level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+                attributes={"component": self._name, "action": "close"},
+            )
+        self._failure_count = max(0, self._failure_count - 1)
+        return None
 
 
 class TamiyoService:
@@ -88,6 +159,8 @@ class TamiyoService:
             self._owns_executor = True
         self._step_timeout_s = max(step_timeout_ms, 0.0) / 1000.0
         self._metadata_timeout_s = max(metadata_timeout_ms, 0.0) / 1000.0
+        self._inference_breaker = TamiyoCircuitBreaker(name="inference")
+        self._metadata_breaker = TamiyoCircuitBreaker(name="metadata")
 
     def evaluate_step(self, state: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
         """Evaluate step state under tight deadlines (ADR-001 3A)."""
@@ -137,44 +210,17 @@ class TamiyoService:
                 )
             )
 
-        if blueprint_info:
-            command.annotations["blueprint_tier"] = blueprint_info["tier"]
-            command.annotations["blueprint_stage"] = str(blueprint_info["stage"])
-            command.annotations["blueprint_risk"] = f"{blueprint_info['risk']:.2f}"
-            if blueprint_info["quarantine_only"] or blueprint_info["risk"] >= 0.8:
-                command.command_type = leyline_pb2.COMMAND_PAUSE
-                command.annotations.setdefault("risk_reason", "blueprint_high_risk")
-                events.append(
-                    TelemetryEvent(
-                        description="bp_quarantine",
-                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                        attributes={"tier": blueprint_info["tier"]},
-                    )
-                )
-
-        if not timed_out and (
-            self._risk.conservative_mode
-            or (
-                self._last_validation_loss is not None
-                and loss_delta > self._risk.max_loss_spike
-            )
-        ):
-            command.command_type = leyline_pb2.COMMAND_PAUSE
-            reason = "conservative_mode" if self._risk.conservative_mode else "loss_spike"
-            command.annotations["risk_reason"] = reason
-            events.append(
-                TelemetryEvent(
-                    description="pause_triggered",
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                    attributes={
-                        "loss_delta": f"{loss_delta:.3f}",
-                        "conservative": str(self._risk.conservative_mode).lower(),
-                    },
-                )
-            )
-
-        if timed_out:
-            command.annotations.setdefault("risk_reason", "timeout_inference")
+        training_metrics = dict(state.training_metrics)
+        blueprint_info, risk_events = self._apply_risk_engine(
+            command,
+            state=state,
+            loss_delta=loss_delta,
+            blueprint_info=blueprint_info,
+            blueprint_timeout=blueprint_timeout,
+            timed_out=timed_out,
+            training_metrics=training_metrics,
+        )
+        events.extend(risk_events)
 
         metrics = [
             TelemetryMetric("tamiyo.validation_loss", state.validation_loss, unit="loss"),
@@ -186,6 +232,34 @@ class TamiyoService:
             ),
             TelemetryMetric("tamiyo.inference.latency_ms", inference_ms, unit="ms"),
         ]
+        metrics.append(
+            TelemetryMetric(
+                "tamiyo.breaker.inference_state",
+                float(self._inference_breaker.state),
+                unit="state",
+            )
+        )
+        metrics.append(
+            TelemetryMetric(
+                "tamiyo.breaker.metadata_state",
+                float(self._metadata_breaker.state),
+                unit="state",
+            )
+        )
+        metrics.append(
+            TelemetryMetric(
+                "tamiyo.breaker.inference_failures",
+                float(self._inference_breaker.failure_count),
+                unit="count",
+            )
+        )
+        metrics.append(
+            TelemetryMetric(
+                "tamiyo.breaker.metadata_failures",
+                float(self._metadata_breaker.failure_count),
+                unit="count",
+            )
+        )
         if blueprint_info:
             metrics.append(
                 TelemetryMetric(
@@ -263,6 +337,31 @@ class TamiyoService:
         command.annotations["risk_reason"] = reason
         return command
 
+    def _set_conservative_mode(
+        self,
+        enabled: bool,
+        reason: str,
+        events: list[TelemetryEvent],
+    ) -> None:
+        if enabled and not self._risk.conservative_mode:
+            self._risk.conservative_mode = True
+            events.append(
+                TelemetryEvent(
+                    description="conservative_entered",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"reason": reason},
+                )
+            )
+        elif not enabled and self._risk.conservative_mode:
+            self._risk.conservative_mode = False
+            events.append(
+                TelemetryEvent(
+                    description="conservative_exited",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+                    attributes={"reason": reason},
+                )
+            )
+
     def _resolve_blueprint_with_timeout(
         self,
         command: leyline_pb2.AdaptationCommand,
@@ -281,6 +380,145 @@ class TamiyoService:
                 future.cancel()
                 return None, True
         return self._resolve_blueprint_info(command), False
+
+    def _apply_risk_engine(
+        self,
+        command: leyline_pb2.AdaptationCommand,
+        *,
+        state: leyline_pb2.SystemStatePacket,
+        loss_delta: float,
+        blueprint_info: Optional[dict[str, float | str | bool | int]],
+        blueprint_timeout: bool,
+        timed_out: bool,
+        training_metrics: dict[str, float],
+    ) -> tuple[Optional[dict[str, float | str | bool | int]], list[TelemetryEvent]]:
+        events: list[TelemetryEvent] = []
+        reason = command.annotations.get("risk_reason")
+
+        if self._risk.conservative_mode and not timed_out:
+            reason = reason or "conservative_mode"
+            command.command_type = leyline_pb2.COMMAND_PAUSE
+            events.append(
+                TelemetryEvent(
+                    description="pause_triggered",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"reason": "conservative_mode"},
+                )
+            )
+
+        if timed_out:
+            events.append(self._inference_breaker.record_failure("timeout_inference"))
+            self._set_conservative_mode(True, "timeout_inference", events)
+            reason = reason or "timeout_inference"
+        else:
+            success_event = self._inference_breaker.record_success()
+            if success_event:
+                events.append(success_event)
+
+        if blueprint_timeout:
+            events.append(self._metadata_breaker.record_failure("timeout_urza"))
+            reason = reason or "timeout_urza"
+        else:
+            success_event = self._metadata_breaker.record_success()
+            if success_event:
+                events.append(success_event)
+
+        if blueprint_info:
+            command.annotations.setdefault("blueprint_tier", blueprint_info["tier"])
+            command.annotations.setdefault("blueprint_stage", str(blueprint_info["stage"]))
+            command.annotations.setdefault("blueprint_risk", f"{blueprint_info['risk']:.2f}")
+            risk_score = float(blueprint_info["risk"])
+            if blueprint_info.get("quarantine_only") or risk_score >= 0.8:
+                events.append(
+                    TelemetryEvent(
+                        description="bp_quarantine",
+                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
+                        attributes={"tier": str(blueprint_info["tier"])},
+                    )
+                )
+                reason = "bp_quarantine"
+                command.command_type = leyline_pb2.COMMAND_PAUSE
+                self._set_conservative_mode(True, "bp_quarantine", events)
+            elif risk_score >= 0.5 and command.command_type == leyline_pb2.COMMAND_SEED:
+                reason = reason or "blueprint_risk"
+                command.command_type = leyline_pb2.COMMAND_OPTIMIZER
+                command.optimizer_adjustment.optimizer_id = "sgd"
+                events.append(
+                    TelemetryEvent(
+                        description="blueprint_risk",
+                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                        attributes={"risk": f"{risk_score:.2f}"},
+                    )
+                )
+
+        if not timed_out and loss_delta > self._risk.max_loss_spike:
+            reason = "loss_spike"
+            command.command_type = leyline_pb2.COMMAND_PAUSE
+            events.append(
+                TelemetryEvent(
+                    description="loss_spike",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"delta": f"{loss_delta:.3f}"},
+                )
+            )
+            self._set_conservative_mode(True, "loss_spike", events)
+        elif (
+            not timed_out
+            and loss_delta > self._risk.max_loss_spike * 0.5
+            and command.command_type == leyline_pb2.COMMAND_SEED
+        ):
+            reason = reason or "loss_warning"
+            command.command_type = leyline_pb2.COMMAND_OPTIMIZER
+            command.optimizer_adjustment.optimizer_id = "sgd"
+            events.append(
+                TelemetryEvent(
+                    description="loss_warning",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"delta": f"{loss_delta:.3f}"},
+                )
+            )
+
+        hook_latency = training_metrics.get("hook_latency_ms")
+        if hook_latency and hook_latency > 50.0:
+            reason = "hook_budget"
+            command.command_type = leyline_pb2.COMMAND_PAUSE
+            events.append(
+                TelemetryEvent(
+                    description="hook_budget",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"latency_ms": f"{hook_latency:.2f}"},
+                )
+            )
+
+        isolation = training_metrics.get("kasmina.isolation.violations")
+        if isolation and isolation > 0:
+            reason = reason or "isolation_violation"
+            command.command_type = leyline_pb2.COMMAND_PAUSE
+            events.append(
+                TelemetryEvent(
+                    description="isolation_violations",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"violations": str(int(isolation))},
+                )
+            )
+
+        if not reason and command.command_type == leyline_pb2.COMMAND_PAUSE and self._risk.conservative_mode:
+            reason = "conservative_mode"
+
+        if (
+            not timed_out
+            and not blueprint_timeout
+            and self._inference_breaker.state == leyline_pb2.CircuitBreakerState.CIRCUIT_STATE_CLOSED
+            and self._metadata_breaker.state == leyline_pb2.CircuitBreakerState.CIRCUIT_STATE_CLOSED
+        ):
+            self._set_conservative_mode(False, "stabilised", events)
+
+        if reason:
+            command.annotations["risk_reason"] = reason
+        elif "risk_reason" not in command.annotations:
+            command.annotations["risk_reason"] = "policy"
+
+        return blueprint_info, events
 
     @staticmethod
     def _priority_from_events(events: Iterable[TelemetryEvent]) -> int:
