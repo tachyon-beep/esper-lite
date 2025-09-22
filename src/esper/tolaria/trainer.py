@@ -312,6 +312,15 @@ class TolariaTrainer:
             self._per_layer_topk = max(1, int(getattr(self._settings, "tolaria_agg_per_layer_topk", 5)))
         except Exception:
             self._per_layer_topk = 5
+        try:
+            self._seed_share_jump_warn = float(getattr(self._settings, "tolaria_seed_share_jump_warn", 0.3))
+        except Exception:
+            self._seed_share_jump_warn = 0.3
+        try:
+            self._seed_conflict_ratio_warn = float(getattr(self._settings, "tolaria_seed_conflict_ratio_warn", 0.5))
+        except Exception:
+            self._seed_conflict_ratio_warn = 0.5
+        self._last_seed_share: dict[str, float] = {}
 
         self._emergency: EmergencyController | None = None
         if self._settings.tolaria_emergency_enabled:
@@ -1026,6 +1035,17 @@ class TolariaTrainer:
             if name in seed_share_sum and seed_uses.get(name, 0) > 0:
                 avg_share = float(seed_share_sum[name]) / max(1, seed_uses.get(name, 0))
                 per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.share", avg_share, unit="ratio", attributes=attrs))
+                # Share delta vs last epoch
+                last = float(self._last_seed_share.get(name, 0.0))
+                delta = avg_share - last
+                per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.share_delta", delta, unit="ratio", attributes=attrs))
+                if abs(delta) >= self._seed_share_jump_warn:
+                    self._emit_event(
+                        "seed_share_jump",
+                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                        attributes={**attrs, "delta": f"{delta:.4f}"},
+                    )
+                self._last_seed_share[name] = avg_share
             # Average alpha observed
             if name in seed_alpha_sum and seed_uses.get(name, 0) > 0:
                 avg_alpha = float(seed_alpha_sum[name]) / max(1, seed_uses.get(name, 0))
@@ -1033,6 +1053,16 @@ class TolariaTrainer:
             # Conflicts count total
             if name in seed_conflicts_total:
                 per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.conflicts", float(seed_conflicts_total[name]), unit="count", attributes=attrs))
+                # Conflict ratio per seed (avg conflicts per fence normalized by neighbors)
+                neighbors = max(1, len(seen_seeds) - 1)
+                conf_ratio = (float(seed_conflicts_total[name]) / float(uses)) / float(neighbors)
+                per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.conflict_ratio", conf_ratio, unit="ratio", attributes=attrs))
+                if conf_ratio >= self._seed_conflict_ratio_warn:
+                    self._emit_event(
+                        "seed_conflict_high",
+                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                        attributes={**attrs, "conflict_ratio": f"{conf_ratio:.3f}"},
+                    )
             # Mask size and fraction (if masks computed)
             if seed_param_elems is not None and total_elems:
                 elems = float(seed_param_elems.get(name, 0))
@@ -1390,6 +1420,37 @@ class TolariaTrainer:
         # Conflict warning event
         if self._metrics.get("tolaria.grad_agg.conflict_ratio", 0.0) >= self._conflict_warn:
             events.append(TelemetryEvent(description="grad_conflict_high", level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING, attributes={"conflict_ratio": f"{self._metrics['tolaria.grad_agg.conflict_ratio']:.3f}"}))
+        # Seed health compact events (per seed)
+        try:
+            for m in per_seed_metrics:
+                if m.name == "tolaria.grad_agg.seed.share":
+                    sid = m.attributes.get("seed_id", "")
+                    share = m.value
+                    # Find companion metrics
+                    alpha = 0.0
+                    confs = 0.0
+                    weight = 0.0
+                    for mm in per_seed_metrics:
+                        if mm.attributes.get("seed_id") != sid:
+                            continue
+                        if mm.name == "tolaria.grad_agg.seed.alpha":
+                            alpha = mm.value
+                        elif mm.name == "tolaria.grad_agg.seed.conflicts":
+                            confs = mm.value
+                        elif mm.name == "tolaria.grad_agg.seed.weight":
+                            weight = mm.value
+                    self._emit_event(
+                        "seed_health",
+                        attributes={
+                            "seed_id": sid,
+                            "share": f"{share:.4f}",
+                            "alpha": f"{alpha:.4f}",
+                            "conflicts": f"{confs:.0f}",
+                            "weight": f"{weight:.4f}",
+                        },
+                    )
+        except Exception:
+            pass
 
         if health_status == leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY:
             for event in events:

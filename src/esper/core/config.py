@@ -135,6 +135,13 @@ class EsperSettings(BaseSettings):
     tolaria_agg_per_layer_topk: int = Field(
         alias="TOLARIA_AGG_PER_LAYER_TOPK", default=5
     )
+    # Per-seed telemetry thresholds
+    tolaria_seed_share_jump_warn: float = Field(
+        alias="TOLARIA_SEED_SHARE_JUMP_WARN", default=0.3
+    )
+    tolaria_seed_conflict_ratio_warn: float = Field(
+        alias="TOLARIA_SEED_CONFLICT_RATIO_WARN", default=0.5
+    )
 
     # Optimizer rebuild storm guard
     tolaria_opt_rebuild_min_interval_steps: int = Field(
