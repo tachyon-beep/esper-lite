@@ -6,8 +6,23 @@ Non‑Goals
 - No Weatherlight changes beyond existing supervision/telemetry.
 - No Oona subscriber path for Tamiyo decisions; decisions occur via in‑process calls from Tolaria.
 
+What’s Already In Place
+- Kasmina per‑seed/per‑step telemetry: `finalize_step(step_index)` exists and is called every optimizer step. src/esper/kasmina/seed_manager.py:312
+- Tolaria insertion point: immediately after `_global_step += 1` is the natural call site to invoke Tamiyo, apply the command, advance α, and flush Kasmina. src/esper/tolaria/trainer.py:960
+- Kasmina gate: commands must be signed (HMAC), nonces fresh, and timestamps within window or they are rejected. src/esper/kasmina/security.py, src/esper/kasmina/seed_manager.py:1265
+
 Overview
 - Tolaria calls Tamiyo on every training step (tight coupling; ADR‑001) with a lean `SystemStatePacket`. Tamiyo returns a fully signed `AdaptationCommand` under strict per‑step deadlines. Kasmina applies commands; Kasmina emits per‑seed telemetry via its existing finalize‑step flush.
+
+How To Use (for PR owners)
+- Choose one task (T‑A1..T‑A6) below and reference the relevant companion spec(s) in your PR.
+- Copy the spec’s "Checklist (for PR)" into your PR and tick items.
+- Include:
+  - File:line anchors for main edits (e.g., `src/esper/tamiyo/service.py:123`)
+  - Test commands and expected telemetry/events
+  - Budget observations (step evaluate p95, inference p95)
+  - Confirmation that Weatherlight remains unchanged and no new contracts were introduced
+
 
 Interfaces (no new schemas)
 - Tamiyo
@@ -20,64 +35,87 @@ Interfaces (no new schemas)
 - Kasmina (already present)
   - `src/esper/kasmina/seed_manager.py:312` — `finalize_step(step_index=...)` flushes per‑seed packets.
 
-Work Packages (with acceptance)
-- T‑A1: Command Signing + Freshness (must‑have)
-  - Add HMAC signing in Tamiyo; set `command_id` and `issued_at` before signing. Add nonce/freshness acceptance.
-  - Acceptance: Kasmina accepts commands; no `command_rejected` due to `missing_signature`, `nonce_replayed`, or `stale_command`.
-  - Refs: src/esper/kasmina/security.py:43, src/esper/kasmina/seed_manager.py:1265; src/esper/tamiyo/service.py:75.
+Work Packages vs Current State
+1) T‑A1 — Command signing (Must‑have)
+- Current: Tamiyo emits raw commands without `command_id`, `issued_at`, or HMAC.
+- Change: set fields and sign before return. Inject a `SignatureContext` from `ESPER_LEYLINE_SECRET`.
+- Acceptance: Kasmina accepts; no rejects for `missing_signature`, `nonce_replayed`, `stale_command`.
 
-- T‑A2: Step‑Level Evaluate + Deadlines (must‑have)
-  - Implement `evaluate_step` in Tamiyo; keep inference p95 < 45 ms, per‑step budget 2–5 ms (timeout → no‑op command or defer).
-  - Bound Urza metadata lookup (e.g., 10–20 ms) and skip enrichment on timeout.
-  - Emit telemetry events for `timeout_inference`/`timeout_urza` with priorities.
-  - Refs: src/esper/tamiyo/service.py:75, src/esper/tolaria/trainer.py:960.
+2) T‑A2 — Step‑level evaluate + deadlines (Must‑have)
+- Current: only `evaluate_epoch`; no per‑step API; no timeouts; epoch‑keyed telemetry.
+- Change: add `evaluate_step`; wrap policy inference and Urza lookups with timeouts; on breach → safe no‑op/PAUSE; emit `timeout_*` telemetry.
 
-- T‑A3: Risk Engine + Breakers (must‑have)
-  - Multi‑signal gating: loss deltas, Kasmina isolation/breaker, kernel latency budget, Tolaria hook/epoch budgets, blueprint risk/quarantine, Tamiyo inference timing.
-  - Circuit breakers around inference/Urza/IO; automatic conservative‑mode transitions; clear resume conditions.
-  - Acceptance: Decisions explainable via events; CRITICAL for quarantine/rollback deadline; WARNING for loss spikes/timeouts.
-  - Refs: src/esper/tamiyo/service.py:118, 151; docs/design/decisions/ADR-001-performance-optimized-tight-coupling.md.
+3) T‑A3 — Risk engine/breakers (Must‑have)
+- Current: loss deltas and conservative flag only; no breaker state, no multi‑signal gating, no CRITICAL telemetry for quarantine; no auto transitions.
+- Change: add multi‑signal risk scoring and breakers; auto conservative transitions; CRITICAL/HIGH events.
 
-- T‑A4: Tolaria Step Integration + α Advance + Kasmina Flush (must‑have)
-  - Insert step‑level Tamiyo call at `src/esper/tolaria/trainer.py:960` (after `_global_step += 1`).
-  - Apply returned command with a short timeout; then:
-    - α ramp: use `export_seed_states()` and `advance_alpha(seed_id)` for seeds in BLENDING.
-    - Per‑seed telemetry: call `finalize_step(step_index)` on Kasmina.
-  - Acceptance: No stalls; per‑seed packets emitted each step with up‑to‑date stage/alpha.
-  - Refs: src/esper/tolaria/trainer.py:596, src/esper/kasmina/seed_manager.py:312, src/esper/kasmina/seed_manager.py:777.
+4) T‑A4 — Tolaria integration (Must‑have)
+- Current: α advance and Kasmina flush already occur; epoch‑level Tamiyo call exists.
+- Change: replace epoch‑level call with per‑step `evaluate_step`; enforce timeouts on Tamiyo and Kasmina apply; reuse conservative fallback logic.
 
-- T‑A5: Field Reports Per Decision (should‑have)
-  - Emit a FieldReport for each decision; maintain a small observation window counter; WAL append + retention (existing) and batch publish.
-  - Acceptance: Reports present for every decision; WAL rewrites on retention; consumed in integration tests.
-  - Refs: src/esper/tamiyo/persistence.py:32, src/esper/tamiyo/service.py:232.
+5) T‑A5 — Field reports per decision (Should‑have)
+- Current: WAL store exists; not emitted per decision.
+- Change: serialize every decision to a report; append to WAL; honor retention.
 
-- T‑A6: Performance/Latency Tests (should‑have)
-  - Enforce inference budget and per‑step evaluate budget via tests; assert no stall of the trainer loop; ensure CRITICAL/WARNING priorities route to Oona emergency.
-  - Acceptance: p95 within target; Oona emergency routing observed for high‑priority events.
-  - Refs: src/esper/oona/messaging.py:239, src/esper/weatherlight/service_runner.py:367.
+6) T‑A6 — Performance/latency tests (Should‑have)
+- Current: no targeted step‑budget tests.
+- Change: add tests to enforce per‑step deadline and Oona priority routing.
 
-Deadlines & Timeouts (prototype)
-- Tamiyo per‑step evaluate: 2–5 ms timeout (no stall; safe no‑op on breach).
-- Urza metadata lookup: 10–20 ms timeout (skip enrichment on breach).
-- Policy inference overall: p95 < 45 ms under load; bounded in tests.
-- Kasmina apply_command: same timeout as Tamiyo call path; fallback to conservative if exceeded.
+Implementation Steps (PR‑sized)
+- PR1: T‑A1 signing + unit tests (sign/verify/replay/stale)
+- PR2: T‑A2 deadlines around inference and Urza lookup + unit tests
+- PR3: T‑A4 Tolaria hook: per‑step call → apply → α advance → finalize_step; integration test for step cadence
+- PR4: T‑A4 Tamiyo `evaluate_step`: signing, deadlines, reason annotations
+- PR5: T‑A3 Risk engine v1 + breakers; table‑driven unit tests; conservative automation
+- PR6: T‑A5 Field reports per decision; WAL retention; integration test
+- PR7: T‑A6 Perf/latency tests; telemetry taxonomy check
 
-Telemetry (expectations)
-- Metrics: `tamiyo.validation_loss`, `tamiyo.loss_delta`, `tamiyo.inference.latency_ms`, `tamiyo.conservative_mode`, `tamiyo.blueprint.risk`.
-- Events: `bp_quarantine`, `pause_triggered`, `timeout_inference`, `timeout_urza`, `policy_update_{applied|rejected}`, `conservative_{entered|exited}`.
-- Priority: CRITICAL for quarantine/rollback‑deadline; HIGH for loss spikes/breaker opens/timeouts; NORMAL otherwise.
+Timeout & Degradation Matrix (summary)
+- Tamiyo per‑step evaluate: 2–5 ms timeout → no‑op/PAUSE; never stall trainer
+- Urza metadata lookup: 10–20 ms timeout → skip enrichment; event `timeout_urza`
+- Kasmina apply_command: small timeout (similar to Tamiyo step call) → log `tolaria.kasmina_timeout`
+- Overall policy inference p95: < 45 ms budget (enforced by tests)
 
-Verification Checklist
-- Commands are signed and fresh; Kasmina accepts them.
-- Decisions incorporate blueprint risk/quarantine and isolation/breaker state; conservative mode auto‑transitions.
-- No step stalls; on timeouts, safe no‑op/PAUSE with telemetry.
-- Per‑seed telemetry flushes each step (seed_id, stage, alpha, latency, fallback flags).
-- Field reports present per decision in WAL with retention.
+Telemetry & Events (summary)
+- Metrics: tamiyo.validation_loss, tamiyo.loss_delta, tamiyo.inference.latency_ms, tamiyo.conservative_mode, tamiyo.blueprint.risk
+- Events: bp_quarantine (CRITICAL), pause_triggered (HIGH/WARNING), timeout_inference (HIGH), timeout_urza (HIGH), conservative_entered/exited, policy_update_applied/rejected
+- Indicators: reason, priority, step_index (when applicable), policy version
+
+Acceptance & Test Plan
+- Unit: command signing/freshness/replay; timeout fallbacks; risk mapping; breaker transitions; policy update accept/reject
+- Integration: step‑level call path (no stall); Kasmina receives signed commands; per‑seed finalize_step packets each step; blueprint quarantine → PAUSE; isolation breaker → no SEED actions; Oona routes HIGH/CRITICAL
+- Performance: inference p95 < 45 ms; per‑step evaluate within budget under load
 
 Risks & Mitigations
-- Overhead per step: keep Tamiyo step‑evaluate lean; use tight timeouts and short enrichment path.
-- Telemetry volume: per‑seed packets each step; Kasmina already caps queues (see `MAX_PENDING_EVENTS`).
-- Cross‑process ambiguity: not applicable; 3A mandates in‑process triad for decisions.
+- Step overhead: keep `evaluate_step` minimal; strict timeouts; avoid Urza on hot path if budget is tight
+- Telemetry volume: per‑seed packets each step; Kasmina queues capped; emit only on events
+- State drift: avoid dependence on bus; rely on in‑process step state and seed_states exporter
+
+Interfaces & Pseudocode (Tolaria hook)
+```python
+# src/esper/tolaria/trainer.py (after self._global_step += 1)
+step_state = self._emit_step_state(...)  # reuse SystemStatePacket; lean fields
+command = None
+with ThreadPoolExecutor(max_workers=1) as ex:
+    fut = ex.submit(self._tamiyo.evaluate_step, step_state)
+    try:
+        command = fut.result(timeout=self._config.tamiyo_timeout_s_step)
+    except FuturesTimeout:
+        command = None
+# Apply command quickly, then alpha ramp and flush Kasmina
+if command is not None:
+    with ThreadPoolExecutor(max_workers=1) as ex:
+        fut = ex.submit(self._kasmina.apply_command, command)
+        try: fut.result(timeout=self._config.tamiyo_timeout_s_step)
+        except FuturesTimeout: pass
+# Alpha and flush
+if callable(exporter) and callable(advancer):
+    for st in exporter():
+        if st.stage == leyline_pb2.SEED_STAGE_BLENDING:
+            advancer(st.seed_id)
+if callable(finalize):
+    finalize(step_index=self._global_step)
+```
 
 Design References
 - ADR‑001 Tight Coupling: `docs/design/decisions/ADR-001-performance-optimized-tight-coupling.md`

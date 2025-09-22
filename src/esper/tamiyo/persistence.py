@@ -1,7 +1,7 @@
 """Persistence helpers for Tamiyo field reports.
 
 Implements the WAL-backed storage and retention policy described in
-`docs/design/detailed_design/old/03-tamiyo.md` and the backlog item
+`docs/design/detailed_design/03-tamiyo.md` and the backlog item
 `docs/project/backlog.md` TKT-401.
 """
 

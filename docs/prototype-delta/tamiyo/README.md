@@ -52,3 +52,28 @@ Design sources:
 Implementation evidence (primary):
 - `src/esper/tamiyo/service.py`, `src/esper/tamiyo/policy.py`, `src/esper/tamiyo/persistence.py`
 - Tests: `tests/tamiyo/test_service.py`, `tests/integration/test_blueprint_pipeline_integration.py`
+
+
+How To Use This Packet (for PR owners)
+- Pick the next task (T‑A1..T‑A6) from `3A-step-level-tight-coupling.md` and reference the companion spec(s).
+- In your PR description, include:
+  - The spec doc(s) you are implementing and why now (one sentence).
+  - The checklist from those doc(s) copied and ticked.
+  - File:line anchors for the main edits (e.g., `src/esper/tamiyo/service.py:123`).
+  - Test commands (unit/integration/perf) and expected signals (events/metrics) to verify.
+  - Any budget numbers observed (e.g., step evaluate p95) and whether they meet the timeout matrix.
+  - A note confirming Weatherlight remains unchanged (3A constraint) and no new contracts were introduced.
+
+PR template (copy/paste)
+```
+Implements: <T‑AX title> (3A tight‑coupling)
+Specs: <link to one or more of timeout-matrix.md, security-envelope.md, risk-engine.md, decision-taxonomy.md, field-reports.md, step-state.md, telemetry.md>
+
+Checklist
+- [ ] All acceptance items in the spec(s) ticked
+- [ ] File anchors: <path:line>, <path:line>
+- [ ] Tests run: <commands>; Results: <summary>
+- [ ] Budgets: step-evaluate p95 < N ms; inference p95 < 45 ms; no trainer stall
+- [ ] Telemetry: expected events/metrics observed; priorities correct; Oona routing verified
+- [ ] 3A constraints respected (Weatherlight unchanged; no new contracts)
+```

@@ -1037,6 +1037,7 @@ class TolariaTrainer:
             stage = stage_by_seed.get(name)
             if stage:
                 attrs["stage"] = stage
+            compact_snapshot: dict[str, float] = {"weight": avg_w}
             if not self._seed_health_compact:
                 per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.weight", avg_w, unit="ratio", attributes=attrs))
                 per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.norm", avg_n, unit="grad", attributes=attrs))
@@ -1057,18 +1058,21 @@ class TolariaTrainer:
                         attributes={**attrs, "delta": f"{delta:.4f}"},
                     )
                 self._last_seed_share[name] = avg_share
+                compact_snapshot["share"] = avg_share
             # Average alpha observed
             if name in seed_alpha_sum and seed_uses.get(name, 0) > 0:
                 avg_alpha = float(seed_alpha_sum[name]) / max(1, seed_uses.get(name, 0))
                 if not self._seed_health_compact:
                     per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.alpha", avg_alpha, unit="ratio", attributes=attrs))
+                compact_snapshot["alpha"] = avg_alpha
             # Conflicts count total
             if name in seed_conflicts_total:
+                conflicts_total = float(seed_conflicts_total[name])
                 if not self._seed_health_compact:
-                    per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.conflicts", float(seed_conflicts_total[name]), unit="count", attributes=attrs))
+                    per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.conflicts", conflicts_total, unit="count", attributes=attrs))
                 # Conflict ratio per seed (avg conflicts per fence normalized by neighbors)
                 neighbors = max(1, len(seen_seeds) - 1)
-                conf_ratio = (float(seed_conflicts_total[name]) / float(uses)) / float(neighbors)
+                conf_ratio = (conflicts_total / float(uses)) / float(neighbors)
                 if not self._seed_health_compact:
                     per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.conflict_ratio", conf_ratio, unit="ratio", attributes=attrs))
                 if conf_ratio >= self._seed_conflict_ratio_warn:
@@ -1077,6 +1081,7 @@ class TolariaTrainer:
                         level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
                         attributes={**attrs, "conflict_ratio": f"{conf_ratio:.3f}"},
                     )
+                compact_snapshot["conflicts"] = conflicts_total
             # Mask size and fraction (if masks computed)
             if seed_param_elems is not None and total_elems:
                 elems = float(seed_param_elems.get(name, 0))
@@ -1096,6 +1101,15 @@ class TolariaTrainer:
                     la = dict(attrs)
                     la["layer"] = param_names[idx] if idx < len(param_names) else f"param_{idx}"
                     per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.layer_norm", float(val), unit="grad", attributes=la))
+            if self._seed_health_compact:
+                attribs = {k: f"{v:.4f}" for k, v in compact_snapshot.items() if isinstance(v, float)}
+                attribs.update({k: v for k, v in attrs.items() if isinstance(v, str)})
+                # Ensure required keys are present even if metrics were missing from the snapshot
+                attribs.setdefault("share", "0.0000")
+                attribs.setdefault("alpha", "0.0000")
+                attribs.setdefault("conflicts", "0.0000")
+                attribs.setdefault("weight", "0.0000")
+                self._emit_event("seed_health", attributes=attribs)
         # Include teacher bucket if present
         if teacher_key in seen_seeds:
             uses = max(1, seed_uses.get(teacher_key, 0))
@@ -1465,6 +1479,12 @@ class TolariaTrainer:
                     )
         except Exception:
             pass
+
+        # Drain any events emitted while constructing compact seed metrics so they
+        # are visible in the same telemetry packet. Otherwise they would surface
+        # on the next packet and the compact mode test would fail intermittently.
+        if self._events:
+            events.extend(self.drain_telemetry_events())
 
         if health_status == leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY:
             for event in events:

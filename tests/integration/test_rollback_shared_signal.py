@@ -6,6 +6,9 @@ import pytest
 from fakeredis.aioredis import FakeRedis
 import os
 
+
+pytestmark = pytest.mark.integration
+
 from esper.core import EsperSettings
 from esper.oona import OonaClient, StreamConfig
 from esper.weatherlight.service_runner import WeatherlightService

@@ -69,7 +69,7 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
   - Seeds can register/deregister with Tolaria.
   - Placeholder kernel graft modifies model without breaking training.
   - Gradient isolation check logs violation when host/seed grads overlap.
-  - Eleven-stage lifecycle (Dormant → … → Terminated) implemented as defined in `docs/design/detailed_design/old/02-kasmina.md`.
+  - Eleven-stage lifecycle (Dormant → … → Terminated) implemented as defined in `docs/design/detailed_design/02-kasmina.md`.
 
 ### TKT-103: Tamiyo Stub Policy Inference ✅
 
@@ -78,7 +78,7 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
   - Service accepts `SystemStatePacket`, responds with `AdaptationCommand`.
   - Risk thresholds configurable; conservative mode toggled on demand.
   - Latency ≤45 ms on target hardware.
-  - Risk engine, telemetry aggregation, and field-report generation follow `docs/design/detailed_design/old/03-tamiyo.md`.
+  - Risk engine, telemetry aggregation, and field-report generation follow `docs/design/detailed_design/03-tamiyo.md`.
 
 ### TKT-104: Oona Control Loop Integration ✅
 
@@ -87,7 +87,7 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
   - Telemetry publishes to defined topic; Tamiyo consumes.
   - Commands delivered to Kasmina within expected latency.
   - Retry/backoff handles transient Redis errors.
-  - Message semantics honour at-least-once guarantees from `docs/design/detailed_design/old/09-oona.md`.
+  - Message semantics honour at-least-once guarantees from `docs/design/detailed_design/09-oona.md`.
 
 ### TKT-105: Tamiyo Field Report Stub ✅
 
@@ -96,7 +96,7 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
   - Field report appears on `tamiyo.field_reports` stream.
   - Payload validates against Leyline schema.
   - Tamiyo persists report metadata for at least one epoch.
-  - Field-report content matches lifecycle documented in `docs/design/detailed_design/old/03-tamiyo.md`.
+  - Field-report content matches lifecycle documented in `docs/design/detailed_design/03-tamiyo.md`.
 
 ### TKT-106: Control Loop Integration Test Harness ✅
 
@@ -207,7 +207,7 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
 - **Acceptance Criteria:**
   - Schema documented; payloads pass Leyline validation.
   - Reports stored with WAL guaranteeing recovery after crash.
-  - Retention policy (e.g., 24 h) enforced via cleanup in alignment with `docs/design/detailed_design/old/03-tamiyo.md` and `old/04-simic.md` field-report workflow.
+  - Retention policy (e.g., 24 h) enforced via cleanup in alignment with `docs/design/detailed_design/old/03-tamiyo.md` and `04-simic.md` field-report workflow.
 
 ### TKT-402: Simic Ingestion & PPO+LoRA Training ✅
 
@@ -216,7 +216,7 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
   - Reports ingested into replay buffer with TTL/size bounds.
   - PPO training loop runs on sample data producing updated policy weights.
   - LoRA adapter support toggled via config.
-  - Replay buffer management and validation gating follow `docs/design/detailed_design/old/04-simic.md`.
+  - Replay buffer management and validation gating follow `docs/design/detailed_design/04-simic.md`.
 
 ### TKT-403: Policy Validation Harness ✅
 
@@ -233,7 +233,7 @@ Backlog items are grouped by delivery pillar. Each ticket includes a short descr
   - Policy update message delivered to Tamiyo.
   - Tamiyo performs staged load (verify → activate) with rollback on failure.
   - Hot reload is logged and observable.
-  - Deployment workflow matches `docs/design/detailed_design/old/04-simic.md` (publish) and `old/03-tamiyo.md` (hot reload).
+  - Deployment workflow matches `docs/design/detailed_design/04-simic.md` (publish) and `03-tamiyo.md` (hot reload).
 
 ### TKT-405: End-to-End Learning Demo ✅
 
