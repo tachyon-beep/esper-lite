@@ -422,6 +422,13 @@ class OonaClient:
         snapshot["publish_breaker_state"] = float(self._publish_breaker.snapshot().state)
         snapshot["consume_breaker_state"] = float(self._consume_breaker.snapshot().state)
         snapshot["conservative_mode"] = 1.0 if self._conservative_mode else 0.0
+        # Flatten per-source emergency counters
+        def _san(s: str) -> str:
+            return "".join(ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in s) or "unknown"
+        for src, val in getattr(self, "_em_src_published", {}).items():
+            snapshot[f"emergency_published.src.{_san(src)}"] = float(val)
+        for src, val in getattr(self, "_em_src_dropped", {}).items():
+            snapshot[f"emergency_rate_dropped.src.{_san(src)}"] = float(val)
         return snapshot
 
     async def health_snapshot(self) -> dict[str, float]:

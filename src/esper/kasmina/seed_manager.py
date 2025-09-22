@@ -37,6 +37,8 @@ from esper.leyline import leyline_pb2 as pb
 
 logger = logging.getLogger(__name__)
 
+MAX_PENDING_EVENTS = 64
+
 
 _MATMUL_INITIALISED = False
 
@@ -99,6 +101,11 @@ class SeedContext:
     kernel: nn.Module | None = None
     alpha: float = 0.0
     alpha_steps: int = 0
+    pending_events: list[TelemetryEvent] = field(default_factory=list)
+    pending_priority: int = field(
+        default=leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
+    )
+    last_step_emitted: int | None = None
 
 
 class KasminaSeedManager:
@@ -116,6 +123,7 @@ class KasminaSeedManager:
         nonce_ttl_seconds: float = 300.0,
         freshness_window_seconds: float = 60.0,
         gpu_cache_capacity: int | None = 32,
+        packet_callback: Callable[[leyline_pb2.TelemetryPacket], None] | None = None,
     ) -> None:
         _initialise_pytorch_defaults()
         self._runtime = runtime
@@ -128,6 +136,9 @@ class KasminaSeedManager:
         self._telemetry_packets: list[leyline_pb2.TelemetryPacket] = []
         self._telemetry_counter: int = 0
         self._last_priority: int = leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
+        self._global_events: list[TelemetryEvent] = []
+        self._global_priority: int = leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
+        self._ephemeral_seeds: set[str] = set()
         self._host_param_ids: set[int] = set()
         self._gates = KasminaGates()
         self._clock: Callable[[], float] = clock or time.monotonic
@@ -161,6 +172,7 @@ class KasminaSeedManager:
         self._prefetch: PrefetchCoordinator | None = None
         self._prefetch_requests: dict[str, tuple[str, str]] = {}
         self._request_counter: int = 0
+        self._packet_callback = packet_callback
         if signing_context is None:
             try:
                 signing_context = SignatureContext.from_environment(DEFAULT_SECRET_ENV)
@@ -177,6 +189,441 @@ class KasminaSeedManager:
             else None
         )
 
+    @staticmethod
+    def _priority_from_level(level: int) -> int:
+        if level == leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL:
+            return leyline_pb2.MessagePriority.MESSAGE_PRIORITY_CRITICAL
+        if level in (
+            leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+            leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_ERROR,
+        ):
+            return leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH
+        return leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
+
+    def _priority_from_events(self, events: Iterable[TelemetryEvent]) -> int:
+        priority = leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
+        for event in events:
+            candidate = self._priority_from_level(event.level)
+            if candidate > priority:
+                if candidate == leyline_pb2.MessagePriority.MESSAGE_PRIORITY_CRITICAL:
+                    return candidate
+                priority = candidate
+        return priority
+
+    def _emit_packet(self, packet: leyline_pb2.TelemetryPacket, *, priority: int | None = None) -> None:
+        self._memory.telemetry_cache.set(packet.packet_id, packet)
+        self._telemetry_packets.append(packet)
+        self._telemetry_counter += 1
+        if priority is not None:
+            self._last_priority = priority
+        else:
+            try:
+                self._last_priority = leyline_pb2.MessagePriority.Value(
+                    packet.system_health.indicators.get(
+                        "priority",
+                        leyline_pb2.MessagePriority.Name(
+                            leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
+                        ),
+                    )
+                )
+            except ValueError:
+                self._last_priority = leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
+        if self._packet_callback is not None:
+            try:
+                self._packet_callback(packet)
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.debug("Kasmina packet callback failed: %s", exc)
+
+    def _queue_seed_events(
+        self,
+        seed_id: str,
+        events: Iterable[TelemetryEvent],
+        *,
+        remove_after_flush: bool = False,
+        step_index: int | None = None,
+    ) -> None:
+        events_list = list(events)
+        context = self._seeds.get(seed_id)
+        if context is None:
+            context = SeedContext(seed_id)
+            self._seeds[seed_id] = context
+            self._ephemeral_seeds.add(seed_id)
+
+        if events_list:
+            total_events = len(context.pending_events) + len(events_list)
+            if total_events > MAX_PENDING_EVENTS:
+                dropped = total_events - MAX_PENDING_EVENTS
+                for _ in range(dropped):
+                    if context.pending_events:
+                        context.pending_events.pop(0)
+                drop_event = TelemetryEvent(
+                    description="seed_queue_dropped",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"seed_id": seed_id, "dropped": str(dropped)},
+                )
+                context.pending_events.append(drop_event)
+            context.pending_events.extend(events_list)
+
+        priority = self._priority_from_events(context.pending_events)
+        if priority > context.pending_priority:
+            context.pending_priority = priority
+
+        flush_now = remove_after_flush or priority == leyline_pb2.MessagePriority.MESSAGE_PRIORITY_CRITICAL
+        if flush_now:
+            self._flush_seed_immediately(
+                seed_id,
+                context,
+                step_index=step_index,
+                remove=remove_after_flush,
+            )
+
+    def _flush_seed_immediately(
+        self,
+        seed_id: str,
+        context: SeedContext,
+        *,
+        step_index: int | None,
+        remove: bool,
+    ) -> None:
+        global_metrics = self._global_metrics_snapshot()
+        packet, priority = self._build_seed_packet(
+            seed_id,
+            context,
+            step_index=step_index,
+            global_metrics=global_metrics,
+        )
+        self._emit_packet(packet, priority=priority)
+        context.pending_events.clear()
+        context.pending_priority = leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
+        context.metadata.pop("pending_removal", None)
+        if remove:
+            self._seeds.pop(seed_id, None)
+        self._ephemeral_seeds.discard(seed_id)
+
+    def _queue_global_events(self, events: Iterable[TelemetryEvent]) -> None:
+        events_list = list(events)
+        if not events_list:
+            return
+        self._global_events.extend(events_list)
+        priority = self._priority_from_events(events_list)
+        if priority > self._global_priority:
+            self._global_priority = priority
+
+    def finalize_step(self, *, step_index: int | None = None) -> None:
+        """Flush queued telemetry into per-seed packets for the given step."""
+
+        self._flush_seed_packets(step_index)
+        self._flush_global_packets(step_index)
+
+    def _flush_seed_packets(self, step_index: int | None) -> None:
+        if not self._seeds:
+            return
+
+        global_metrics = self._global_metrics_snapshot()
+        for seed_id, context in list(self._seeds.items()):
+            should_emit = True
+            if step_index is None and not context.pending_events:
+                should_emit = False
+            if (
+                step_index is not None
+                and context.last_step_emitted is not None
+                and context.last_step_emitted == step_index
+                and not context.pending_events
+            ):
+                should_emit = False
+            if not should_emit:
+                continue
+            packet, priority = self._build_seed_packet(
+                seed_id,
+                context,
+                step_index=step_index,
+                global_metrics=global_metrics,
+            )
+            self._emit_packet(packet, priority=priority)
+            context.pending_events.clear()
+            context.pending_priority = leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
+            context.last_step_emitted = step_index
+            if seed_id in self._ephemeral_seeds:
+                self._seeds.pop(seed_id, None)
+                self._ephemeral_seeds.discard(seed_id)
+
+    def _flush_global_packets(self, step_index: int | None) -> None:
+        if not self._global_events:
+            return
+        packet, priority = self._build_global_packet(
+            events_override=self._global_events,
+            packet_id=f"kasmina-global-{self._telemetry_counter}",
+            step_index=step_index,
+            priority_override=self._global_priority,
+        )
+        self._emit_packet(packet, priority=priority)
+        self._global_events.clear()
+        self._global_priority = leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
+
+    def _build_seed_packet(
+        self,
+        seed_id: str,
+        context: SeedContext,
+        *,
+        step_index: int | None,
+        global_metrics: list[TelemetryMetric],
+    ) -> tuple[leyline_pb2.TelemetryPacket, int]:
+        events = list(context.pending_events)
+        stage_name = pb.SeedLifecycleStage.Name(context.lifecycle.state)
+        context.metadata["last_stage_event"] = stage_name
+        events.append(
+            TelemetryEvent(
+                description="seed_stage",
+                attributes={
+                    "seed_id": seed_id,
+                    "stage": stage_name,
+                    "alpha": f"{context.alpha:.4f}",
+                },
+            )
+        )
+
+        metrics = list(global_metrics)
+        metrics.extend(
+            [
+                TelemetryMetric(
+                    "kasmina.seed.stage",
+                    float(context.lifecycle.state),
+                    unit="state",
+                    attributes={"seed_id": seed_id},
+                ),
+                TelemetryMetric(
+                    "kasmina.seed.alpha",
+                    context.alpha,
+                    unit="ratio",
+                    attributes={"seed_id": seed_id},
+                ),
+                TelemetryMetric(
+                    "kasmina.seed.kernel_latency_ms",
+                    context.last_kernel_latency_ms,
+                    unit="ms",
+                    attributes={"seed_id": seed_id},
+                ),
+                TelemetryMetric(
+                    "kasmina.seed.isolation_violations",
+                    float(context.isolation_violations),
+                    unit="count",
+                    attributes={"seed_id": seed_id},
+                ),
+                TelemetryMetric(
+                    "kasmina.seed.fallback_used",
+                    1.0 if context.used_fallback else 0.0,
+                    unit="flag",
+                    attributes={"seed_id": seed_id},
+                ),
+            ]
+        )
+
+        health_status, health_summary = self._determine_seed_health(context)
+        priority = max(
+            context.pending_priority,
+            self._priority_from_events(events),
+        )
+        identifier = f"kasmina-seed-{seed_id}-{self._telemetry_counter}"
+        packet = build_telemetry_packet(
+            packet_id=identifier,
+            source="kasmina",
+            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+            metrics=metrics,
+            events=events,
+            health_status=health_status,
+            health_summary=health_summary,
+            health_indicators={
+                "seed_id": seed_id,
+                "priority": leyline_pb2.MessagePriority.Name(priority),
+                "step_index": str(step_index) if step_index is not None else "",
+            },
+        )
+        return packet, priority
+
+    def _determine_seed_health(self, context: SeedContext) -> tuple[int, str]:
+        if context.isolation_violations:
+            context.metadata["performance_status"] = "violations"
+            return (
+                leyline_pb2.HealthStatus.HEALTH_STATUS_UNHEALTHY,
+                "violations",
+            )
+        if context.used_fallback or context.last_kernel_latency_ms > self._latency_budget_ms:
+            summary = "fallback" if context.used_fallback else "latency_high"
+            context.metadata["performance_status"] = summary
+            return (
+                leyline_pb2.HealthStatus.HEALTH_STATUS_DEGRADED,
+                summary,
+            )
+        context.metadata.setdefault("performance_status", "nominal")
+        return (
+            leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY,
+            "nominal",
+        )
+
+    def _build_global_packet(
+        self,
+        *,
+        events_override: list[TelemetryEvent] | None = None,
+        packet_id: str | None = None,
+        step_index: int | None = None,
+        priority_override: int | None = None,
+    ) -> tuple[leyline_pb2.TelemetryPacket, int]:
+        metrics = self._global_metrics_snapshot()
+        events = list(events_override or [])
+        if self._last_fallback_used:
+            events.append(
+                TelemetryEvent(
+                    description="fallback_applied",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"lat": f"{self._last_latency_ms:.1f}"},
+                )
+            )
+        if self._isolation_violations:
+            events.append(
+                TelemetryEvent(
+                    description="isolation_violations",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"violations": str(self._isolation_violations)},
+                )
+            )
+
+        health_status = leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY
+        health_summary = "nominal"
+        if self._isolation_violations:
+            health_status = leyline_pb2.HealthStatus.HEALTH_STATUS_UNHEALTHY
+            health_summary = "violations"
+        elif self._last_fallback_used or self._last_latency_ms > self._latency_budget_ms:
+            health_status = leyline_pb2.HealthStatus.HEALTH_STATUS_DEGRADED
+            health_summary = "fallback" if self._last_fallback_used else "latency_high"
+
+        priority = priority_override or self._priority_from_events(events)
+        if not priority:
+            priority = leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
+        identifier = packet_id or f"kasmina-telemetry-{self._telemetry_counter}"
+        packet = build_telemetry_packet(
+            packet_id=identifier,
+            source="kasmina",
+            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+            metrics=metrics,
+            events=events,
+            health_status=health_status,
+            health_summary=health_summary,
+            health_indicators={
+                "seeds": str(len(self._seeds)),
+                "priority": leyline_pb2.MessagePriority.Name(priority),
+                "step_index": str(step_index) if step_index is not None else "",
+            },
+        )
+        return packet, priority
+
+    def _global_metrics_snapshot(self) -> list[TelemetryMetric]:
+        metrics: list[TelemetryMetric] = [
+            TelemetryMetric(
+                "kasmina.seeds.active",
+                float(len(self._seeds)),
+                unit="count",
+            ),
+            TelemetryMetric(
+                "kasmina.isolation.violations",
+                float(self._isolation_violations),
+                unit="count",
+            ),
+        ]
+        if not self._last_fallback_used and self._last_latency_ms:
+            metrics.append(
+                TelemetryMetric(
+                    "kasmina.kernel.fetch_latency_ms",
+                    self._last_latency_ms,
+                    unit="ms",
+                )
+            )
+
+        snapshot = self._breaker.snapshot()
+        metrics.append(
+            TelemetryMetric(
+                "kasmina.breaker.state",
+                float(snapshot.state),
+                unit="state",
+            )
+        )
+        metrics.append(
+            TelemetryMetric(
+                "kasmina.breaker.failures",
+                float(snapshot.failure_count),
+                unit="count",
+            )
+        )
+
+        kernel_cache_stats = self._memory.kernel_cache.stats()
+        metrics.append(
+            TelemetryMetric(
+                "kasmina.cache.kernel_size",
+                float(kernel_cache_stats.size),
+                unit="count",
+            )
+        )
+        metrics.append(
+            TelemetryMetric(
+                "kasmina.cache.kernel_hit_rate",
+                kernel_cache_stats.hit_rate,
+                unit="ratio",
+            )
+        )
+        metrics.append(
+            TelemetryMetric(
+                "kasmina.cache.kernel_evictions",
+                float(kernel_cache_stats.evictions),
+                unit="count",
+            )
+        )
+        if self._gpu_cache is not None:
+            gpu_stats = self._gpu_cache.stats()
+            metrics.append(
+                TelemetryMetric(
+                    "kasmina.cache.gpu_size",
+                    float(gpu_stats.size),
+                    unit="count",
+                )
+            )
+            metrics.append(
+                TelemetryMetric(
+                    "kasmina.cache.gpu_capacity",
+                    float(gpu_stats.capacity),
+                    unit="count",
+                )
+            )
+            metrics.append(
+                TelemetryMetric(
+                    "kasmina.cache.gpu_hit_rate",
+                    gpu_stats.hit_rate,
+                    unit="ratio",
+                )
+            )
+            metrics.append(
+                TelemetryMetric(
+                    "kasmina.cache.gpu_evictions",
+                    float(gpu_stats.evictions),
+                    unit="count",
+                )
+            )
+        telemetry_cache_stats = self._memory.telemetry_cache.stats()
+        metrics.append(
+            TelemetryMetric(
+                "kasmina.cache.telemetry_size",
+                float(telemetry_cache_stats.size),
+                unit="count",
+            )
+        )
+        if self._last_rollback_latency_ms > 0.0:
+            metrics.append(
+                TelemetryMetric(
+                    "kasmina.rollback.latency_ms",
+                    self._last_rollback_latency_ms,
+                    unit="ms",
+                )
+            )
+        return metrics
+
     def handle_command(self, command: leyline_pb2.AdaptationCommand) -> None:
         """Dispatch a Tamiyo command to the appropriate lifecycle handler."""
 
@@ -185,9 +632,11 @@ class KasminaSeedManager:
         events: list[TelemetryEvent] = []
         if not self._verify_command(command, events):
             if events:
-                self._emit_telemetry(events=events)
+                self._queue_global_events(events)
             return
         command_label = leyline_pb2.CommandType.Name(command.command_type)
+        seed_event_target: str | None = None
+        remove_after_flush = False
         if command.command_type == leyline_pb2.COMMAND_SEED and command.HasField("seed_operation"):
             raw_seed_id = (
                 command.target_seed_id
@@ -197,6 +646,7 @@ class KasminaSeedManager:
             blueprint_id = command.seed_operation.blueprint_id
             operation = command.seed_operation.operation
             parameters = dict(command.seed_operation.parameters)
+            seed_event_target = seed_id
             events.append(
                 TelemetryEvent(
                     description="seed_operation",
@@ -214,6 +664,7 @@ class KasminaSeedManager:
                 )
             elif operation in (leyline_pb2.SEED_OP_CULL, leyline_pb2.SEED_OP_CANCEL):
                 events.extend(self._retire_seed(seed_id))
+                remove_after_flush = True
         elif command.command_type == leyline_pb2.COMMAND_CIRCUIT_BREAKER and command.HasField(
             "circuit_breaker"
         ):
@@ -235,8 +686,10 @@ class KasminaSeedManager:
         elif command.command_type == leyline_pb2.COMMAND_PAUSE:
             resume_flag = command.annotations.get("resume", "").lower() == "true"
             if resume_flag:
+                seed_event_target = command.target_seed_id
                 events.extend(self._resume_seed(command.target_seed_id))
             else:
+                seed_event_target = command.target_seed_id
                 events.extend(self._pause_seed(command.target_seed_id))
         elif command.command_type == leyline_pb2.COMMAND_EMERGENCY:
             include_teacher = command.annotations.get("include_teacher", "").lower() == "true"
@@ -262,7 +715,14 @@ class KasminaSeedManager:
             )
 
         if events:
-            self._emit_telemetry(events=events)
+            if seed_event_target:
+                self._queue_seed_events(
+                    seed_event_target,
+                    events,
+                    remove_after_flush=remove_after_flush,
+                )
+            else:
+                self._queue_global_events(events)
 
     # Compatibility: satisfy Tolaria's KasminaClient protocol
     def apply_command(self, command: leyline_pb2.AdaptationCommand) -> None:  # pragma: no cover - thin wrapper
@@ -271,7 +731,11 @@ class KasminaSeedManager:
     def seeds(self) -> dict[str, SeedContext]:
         """Return the tracked seed contexts."""
 
-        return dict(self._seeds)
+        return {
+            seed_id: context
+            for seed_id, context in self._seeds.items()
+            if seed_id not in self._ephemeral_seeds
+        }
 
     def isolation_stats(self, seed_id: str) -> IsolationStats | None:
         """Return current isolation statistics for a seed if available."""
@@ -300,8 +764,8 @@ class KasminaSeedManager:
         self._memory.cleanup()
         gc_result = self._memory.periodic_gc(epoch)
         if "gc_counter" in gc_result:
-            self._emit_telemetry(
-                events=[
+            self._queue_global_events(
+                [
                     TelemetryEvent(
                         description="memory_gc",
                         level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
@@ -512,7 +976,7 @@ class KasminaSeedManager:
                 },
             )
         )
-        self._seeds.pop(seed_id, None)
+        context.metadata["pending_removal"] = "true"
         return events
 
     def _apply_breaker_command(
@@ -915,12 +1379,12 @@ class KasminaSeedManager:
                     },
                 )
             )
-            self._emit_telemetry(events=events)
+            self._queue_seed_events(seed_id, events)
             return
         self._attach_kernel(seed_id, kernel)
         context.kernel_attached = True
         self._finalise_kernel_attachment(context, events)
-        self._emit_telemetry(events=events)
+        self._queue_seed_events(seed_id, events)
 
     def process_prefetch_error(self, error: leyline_pb2.KernelArtifactError) -> None:
         entry = self._prefetch_requests.pop(error.request_id, None)
@@ -949,7 +1413,7 @@ class KasminaSeedManager:
             )
         ]
         self._handle_gate_failure(context, failure, events)
-        self._emit_telemetry(events=events)
+        self._queue_seed_events(seed_id, events)
     def register_host_model(self, model: nn.Module) -> None:
         """Register the host model whose params must remain isolated."""
 
@@ -969,8 +1433,8 @@ class KasminaSeedManager:
         level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO
         if self._teacher_memory_estimate_gb > self._teacher_memory_budget_gb:
             level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING
-        self._emit_telemetry(
-            events=[
+        self._queue_global_events(
+            [
                 TelemetryEvent(
                     description="teacher_registered",
                     level=level,
@@ -1103,19 +1567,6 @@ class KasminaSeedManager:
             session.enable_collection()
         return events
 
-    def _emit_telemetry(
-        self,
-        *,
-        events: list[TelemetryEvent] | None = None,
-        packet_id: str | None = None,
-    ) -> None:
-        packet = self.build_telemetry_packet(
-            packet_id=packet_id,
-            events_override=events,
-        )
-        self._memory.telemetry_cache.set(packet.packet_id, packet)
-        self._telemetry_packets.append(packet)
-        self._telemetry_counter += 1
 
     def build_telemetry_packet(
         self,
@@ -1124,185 +1575,14 @@ class KasminaSeedManager:
         events_override: list[TelemetryEvent] | None = None,
         priority: leyline_pb2.MessagePriority = leyline_pb2.MESSAGE_PRIORITY_NORMAL,
     ) -> leyline_pb2.TelemetryPacket:
-        metrics = [
-            TelemetryMetric(
-                "kasmina.seeds.active",
-                float(len(self._seeds)),
-                unit="count",
-            ),
-            TelemetryMetric(
-                "kasmina.isolation.violations",
-                float(self._isolation_violations),
-                unit="count",
-            ),
-        ]
-        if not self._last_fallback_used and self._last_latency_ms:
-            metrics.append(
-                TelemetryMetric(
-                    "kasmina.kernel.fetch_latency_ms",
-                    self._last_latency_ms,
-                    unit="ms",
-                )
-            )
-
-        snapshot = self._breaker.snapshot()
-        metrics.append(
-            TelemetryMetric(
-                "kasmina.breaker.state",
-                float(snapshot.state),
-                unit="state",
-            )
+        packet, computed_priority = self._build_global_packet(
+            events_override=list(events_override or []),
+            packet_id=packet_id,
+            priority_override=priority,
         )
-        metrics.append(
-            TelemetryMetric(
-                "kasmina.breaker.failures",
-                float(snapshot.failure_count),
-                unit="count",
-            )
-        )
-
-        kernel_cache_stats = self._memory.kernel_cache.stats()
-        metrics.append(
-            TelemetryMetric(
-                "kasmina.cache.kernel_size",
-                float(kernel_cache_stats.size),
-                unit="count",
-            )
-        )
-        metrics.append(
-            TelemetryMetric(
-                "kasmina.cache.kernel_hit_rate",
-                kernel_cache_stats.hit_rate,
-                unit="ratio",
-            )
-        )
-        if self._gpu_cache is not None:
-            gpu_stats = self._gpu_cache.stats()
-            metrics.append(
-                TelemetryMetric(
-                    "kasmina.cache.gpu_size",
-                    float(gpu_stats.size),
-                    unit="count",
-                )
-            )
-            metrics.append(
-                TelemetryMetric(
-                    "kasmina.cache.gpu_capacity",
-                    float(gpu_stats.capacity),
-                    unit="count",
-                )
-            )
-            metrics.append(
-                TelemetryMetric(
-                    "kasmina.cache.gpu_hit_rate",
-                    gpu_stats.hit_rate,
-                    unit="ratio",
-                )
-            )
-            metrics.append(
-                TelemetryMetric(
-                    "kasmina.cache.gpu_evictions",
-                    float(gpu_stats.evictions),
-                    unit="count",
-                )
-            )
-        telemetry_cache_stats = self._memory.telemetry_cache.stats()
-        metrics.append(
-            TelemetryMetric(
-                "kasmina.cache.telemetry_size",
-                float(telemetry_cache_stats.size),
-                unit="count",
-            )
-        )
-        if self._last_rollback_latency_ms > 0.0:
-            metrics.append(
-                TelemetryMetric(
-                    "kasmina.rollback.latency_ms",
-                    self._last_rollback_latency_ms,
-                    unit="ms",
-                )
-            )
-
-        events = list(events_override or [])
-        if self._last_fallback_used:
-            events.append(
-                TelemetryEvent(
-                    description="fallback_applied",
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                    attributes={"lat": f"{self._last_latency_ms:.1f}"},
-                )
-            )
-        if self._isolation_violations:
-            events.append(
-                TelemetryEvent(
-                    description="isolation_violations",
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                    attributes={
-                        "violations": str(self._isolation_violations),
-                    },
-                )
-            )
-        # Add per-seed stage events for observability
-        for seed_id, ctx in self._seeds.items():
-            ctx.metadata["last_stage_event"] = pb.SeedLifecycleStage.Name(
-                ctx.lifecycle.state
-            )
-            events.append(
-                TelemetryEvent(
-                    description="seed_stage",
-                    attributes={
-                        "seed_id": seed_id,
-                        "stage": pb.SeedLifecycleStage.Name(ctx.lifecycle.state),
-                        "alpha": f"{ctx.alpha:.4f}",
-                    },
-                )
-            )
-
-        health_status = leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY
-        health_summary = "nominal"
-        if self._isolation_violations:
-            health_status = leyline_pb2.HealthStatus.HEALTH_STATUS_UNHEALTHY
-            health_summary = "violations"
-        elif self._last_fallback_used or self._last_latency_ms > self._latency_budget_ms:
-            health_status = leyline_pb2.HealthStatus.HEALTH_STATUS_DEGRADED
-            health_summary = "fallback" if self._last_fallback_used else "latency_high"
-
-        health_indicators = {"seeds": str(len(self._seeds))}
-
-        for ctx in self._seeds.values():
-            if ctx.metadata.get("performance_status") not in {"violations", "fallback"}:
-                ctx.metadata["performance_status"] = health_summary or "nominal"
-
-        priority = leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
-        if any(
-            event.level == leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
-            for event in events
-        ):
-            priority = leyline_pb2.MessagePriority.MESSAGE_PRIORITY_CRITICAL
-        elif any(
-            event.level
-            in (
-                leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_ERROR,
-            )
-            for event in events
-        ):
-            priority = leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH
-
-        identifier = packet_id or f"kasmina-telemetry-{self._telemetry_counter}"
-        packet = build_telemetry_packet(
-            packet_id=identifier,
-            source="kasmina",
-            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
-            metrics=metrics,
-            events=events,
-            health_status=health_status,
-            health_summary=health_summary,
-            health_indicators=health_indicators,
-        )
-        packet.system_health.indicators["priority"] = leyline_pb2.MessagePriority.Name(priority)
-        self._last_priority = priority
+        self._last_priority = computed_priority
         return packet
+
 
     def advance_alpha(self, seed_id: str, *, steps: int = 1) -> float:
         """Advance the alpha schedule while BLENDING."""
@@ -1338,7 +1618,13 @@ class KasminaSeedManager:
         if seed_id:
             attributes["seed_id"] = seed_id
         context = self._seeds.get(seed_id) if seed_id else None
-        if context:
+        if seed_id and context is None:
+            context = SeedContext(seed_id)
+            context.isolation_violations = 1
+            context.metadata["performance_status"] = "violations"
+            self._seeds[seed_id] = context
+            self._ephemeral_seeds.add(seed_id)
+        elif context:
             context.isolation_violations += 1
             context.metadata["performance_status"] = "violations"
         breaker_event = self._isolation_breaker.record_failure("isolation_violation")
@@ -1360,7 +1646,10 @@ class KasminaSeedManager:
                     breaker_event, seed_id=seed_id
                 )
             )
-        self._emit_telemetry(events=telemetry_events)
+        if seed_id:
+            self._queue_seed_events(seed_id, telemetry_events)
+        else:
+            self._queue_global_events(telemetry_events)
 
     @property
     def last_fetch_latency_ms(self) -> float:

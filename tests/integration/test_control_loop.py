@@ -178,3 +178,62 @@ async def test_control_loop_with_kasmina_manager_exports_seed_states() -> None:
             leyline_pb2.SEED_STAGE_PROBATIONARY,
         )
     )
+
+
+@pytest.mark.integration
+def test_kasmina_emits_one_packet_per_seed_per_step() -> None:
+    model = nn.Linear(4, 2)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+    inputs = torch.randn(6, 4)
+    targets = torch.randint(0, 2, (6,))
+    dataloader = DataLoader(TensorDataset(inputs, targets), batch_size=3)
+
+    class _TamiyoSeed(TamiyoClient):
+        def evaluate_epoch(self, state: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
+            cmd = leyline_pb2.AdaptationCommand(
+                version=1,
+                command_id=f"cmd-step-{state.current_epoch}",
+                command_type=leyline_pb2.COMMAND_SEED,
+                target_seed_id="seed-step",
+            )
+            cmd.issued_at.GetCurrentTime()
+            cmd.seed_operation.operation = leyline_pb2.SEED_OP_GERMINATE
+            cmd.seed_operation.blueprint_id = "bp-step"
+            cmd.annotations["signature"] = sign(cmd.SerializeToString(), SIGNING_CONTEXT)
+            return cmd
+
+    tamiyo = _TamiyoSeed()
+    runtime = type("_R", (), {"fetch_kernel": lambda *_: (nn.Identity(), 1.0)})()
+    kasmina = KasminaSeedManager(runtime=runtime, signing_context=SIGNING_CONTEXT)
+    kasmina.register_host_model(model)
+
+    trainer = TolariaTrainer(
+        model=model,
+        optimizer=optimizer,
+        dataloader=dataloader,
+        tamiyo=tamiyo,
+        kasmina=kasmina,
+        config=TrainingLoopConfig(max_epochs=1, gradient_accumulation_steps=1),
+    )
+
+    list(trainer.run())
+
+    kasmina.finalize_step(step_index=trainer._global_step + 1)
+    packets = kasmina.drain_telemetry_packets()
+    assert packets, "expected kasmina telemetry packets"
+
+    seed_packets = [
+        packet
+        for packet in packets
+        if packet.system_health.indicators.get("seed_id", "")
+    ]
+    assert seed_packets, "expected per-seed telemetry packets"
+
+    seen = set()
+    for packet in seed_packets:
+        seed_id = packet.system_health.indicators["seed_id"]
+        step_index = packet.system_health.indicators.get("step_index", "")
+        assert step_index, "expected step index on per-seed packet"
+        key = (seed_id, step_index)
+        assert key not in seen, f"duplicate telemetry packet for {key}"
+        seen.add(key)

@@ -33,6 +33,25 @@ Notes
 - You can throttle to once every N batches if you use gradient accumulation.
 - Telemetry: Kasmina publishes current α in seed context metadata; expect to see the ramp in telemetry.
 
+Integration guide: per-seed telemetry flush (Tolaria)
+- Goal: Ensure Kasmina emits exactly one telemetry packet per seed per training step.
+- Where to call: immediately after each optimizer step/microbatch, using the same cadence as gradient aggregation.
+- How to invoke: call `finalize_step(step_index=<int>)` on the Kasmina client. The `step_index` should match Tolaria’s global step counter so downstream consumers can correlate packets with steps.
+- Behaviour: `finalize_step` drains buffered seed/global events accumulated since the previous call, emits one packet per active seed, and removes telemetry-only seed contexts. Skipping the call causes telemetry to queue until the next invocation.
+- Example (see `TolariaTrainer._train_single_epoch()` for reference):
+
+```python
+self._global_step += 1
+finalizer = getattr(self._kasmina, "finalize_step", None)
+if callable(finalizer):
+    finalizer(step_index=self._global_step)
+```
+
+Notes
+- Finalization is best-effort: Kasmina guards against failures so the training loop can continue.
+- Telemetry packets still surface seed health summaries, but system-wide events (e.g. emergency cleanup) are emitted via a separate global packet in the same flush.
+- CRITICAL seed events (e.g., isolation breaker open) bypass the per-step cadence: Kasmina emits the per-seed packet immediately and Weatherlight pushes it to Oona without waiting for the periodic drain.
+
 Outstanding Items (for coders)
 
 - Alternate blend modes (executor‑side)
@@ -45,7 +64,7 @@ Outstanding Items (for coders)
 
 - Telemetry priority routing tests
   - Ensure CRITICAL/WARNING events (e.g., isolation breaker open) route to Oona emergency via Weatherlight; add tests.
-  - Pointers: `seed_manager.build_telemetry_packet()`, `weatherlight._kasmina_telemetry_loop()`.
+  - Pointers: `src/esper/core/telemetry.py`, `src/esper/weatherlight/service_runner.py` (Kasmina telemetry forward).
 
 - Distributed coordination (optional)
   - Add epoch barriers/quorum semantics if needed; otherwise document single‑process assumptions.

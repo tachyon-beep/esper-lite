@@ -82,6 +82,8 @@ class WeatherlightService:
         self._rollback_detections_total: int = 0
         self._rollback_skipped_total: int = 0
         self._rollback_monitor_task: asyncio.Task | None = None
+        self._kasmina_packet_queue: asyncio.Queue[leyline_pb2.TelemetryPacket] | None = None
+        self._kasmina_packet_drops: int = 0
 
     async def start(self) -> None:
         """Initialise subsystems and spawn background workers (Slice 1 & 2)."""
@@ -93,7 +95,20 @@ class WeatherlightService:
         self._oona = await self._build_oona_client()
         self._urza_library, self._urza_runtime = self._build_urza_components()
         self._urza_worker = UrzaPrefetchWorker(self._oona, self._urza_library)
-        self._kasmina_manager = KasminaSeedManager(self._urza_runtime)
+        self._kasmina_packet_queue = asyncio.Queue(maxsize=256)
+
+        def _on_kasmina_packet(packet: leyline_pb2.TelemetryPacket) -> None:
+            if self._kasmina_packet_queue is None:
+                return
+            try:
+                self._kasmina_packet_queue.put_nowait(packet)
+            except asyncio.QueueFull:
+                self._kasmina_packet_drops += 1
+
+        self._kasmina_manager = KasminaSeedManager(
+            self._urza_runtime,
+            packet_callback=_on_kasmina_packet,
+        )
         self._kasmina_coordinator = KasminaPrefetchCoordinator(self._kasmina_manager, self._oona)
         self._kasmina_manager.set_prefetch(self._kasmina_coordinator)
         self._tamiyo_service = TamiyoService(settings=self._settings, urza=self._urza_library)
@@ -326,17 +341,26 @@ class WeatherlightService:
 
     async def _kasmina_telemetry_loop(self) -> None:
         assert self._kasmina_manager is not None and self._oona is not None
+        queue = self._kasmina_packet_queue
         while not self._shutdown_requested.is_set():
-            try:
-                await asyncio.wait_for(
-                    self._shutdown_requested.wait(),
-                    timeout=self.TELEMETRY_INTERVAL_SECONDS,
-                )
-            except asyncio.TimeoutError:
-                pass
-            if self._shutdown_requested.is_set():
-                break
-            packets = self._kasmina_manager.drain_telemetry_packets()
+            packets: list[leyline_pb2.TelemetryPacket] = []
+            if queue is not None:
+                try:
+                    packet = await asyncio.wait_for(queue.get(), timeout=0.1)
+                    packets.append(packet)
+                    queue.task_done()
+                    while True:
+                        try:
+                            pkt = queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
+                        packets.append(pkt)
+                        queue.task_done()
+                except asyncio.TimeoutError:
+                    pass
+            else:
+                await asyncio.sleep(0.1)
+            packets.extend(self._kasmina_manager.drain_telemetry_packets())
             if not packets:
                 continue
             for packet in packets:
@@ -436,6 +460,14 @@ class WeatherlightService:
         oona_snapshot = await self._oona.metrics_snapshot()
         for name, value in oona_snapshot.items():
             metrics.append(TelemetryMetric(f"oona.{name}", float(value)))
+        if self._kasmina_packet_drops:
+            metrics.append(
+                TelemetryMetric(
+                    "kasmina.telemetry.dropped_total",
+                    float(self._kasmina_packet_drops),
+                    unit="count",
+                )
+            )
         # Append rollback monitor counters
         if self._rollback_detections_total:
             metrics.append(TelemetryMetric("weatherlight.rollback.detections_total", float(self._rollback_detections_total), unit="count"))

@@ -959,6 +959,13 @@ class TolariaTrainer:
 
             self._global_step += 1
 
+            finalizer = getattr(self._kasmina, "finalize_step", None)
+            if callable(finalizer):
+                try:
+                    finalizer(step_index=self._global_step)
+                except Exception:  # pragma: no cover - Kasmina finalize is best effort
+                    pass
+
             # Optional: optimizer rebuilds on step fences (e.g., every N steps)
             if self._opt_manager is not None:
                 fence = (self._settings.tolaria_opt_rebuild_fence or "epoch").lower()

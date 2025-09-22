@@ -46,6 +46,11 @@ def _sign_command(command: leyline_pb2.AdaptationCommand) -> None:
     command.annotations["signature"] = signature
 
 
+def _finalize(manager: KasminaSeedManager, step_index: int) -> list[leyline_pb2.TelemetryPacket]:
+    manager.finalize_step(step_index=step_index)
+    return manager.telemetry_packets
+
+
 class _PrefetchStub:
     def __init__(self) -> None:
         self.requests: list[tuple[str, str, str]] = []
@@ -118,7 +123,7 @@ def test_seed_manager_emits_telemetry_for_commands() -> None:
     command = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP010")
     manager.handle_command(command)
 
-    packets = manager.telemetry_packets
+    packets = _finalize(manager, step_index=1)
     assert packets, "kasmina should emit telemetry after handling a command"
     packet = packets[-1]
     metric_names = {metric.name for metric in packet.metrics}
@@ -173,7 +178,7 @@ def test_prefetch_error_triggers_gate_failure() -> None:
         reason="not_found",
     )
     manager.process_prefetch_error(error)
-    packet = manager.telemetry_packets[-1]
+    packet = _finalize(manager, step_index=2)[-1]
     assert any(event.description == "prefetch_error" for event in packet.events)
 
 
@@ -181,9 +186,25 @@ def test_record_isolation_violation_updates_health() -> None:
     runtime = _Runtime()
     manager = KasminaSeedManager(runtime, signing_context=_SIGNING_CONTEXT)
     manager.record_isolation_violation("seed-2")
-    packet = manager.telemetry_packets[-1]
+    packet = _finalize(manager, step_index=3)[-1]
     assert any(metric.name == "kasmina.isolation.violations" and metric.value >= 1.0 for metric in packet.metrics)
     assert packet.system_health.status == leyline_pb2.HealthStatus.HEALTH_STATUS_UNHEALTHY
+
+
+def test_critical_violation_flushes_immediately() -> None:
+    runtime = _Runtime()
+    manager = KasminaSeedManager(runtime, signing_context=_SIGNING_CONTEXT)
+    manager.register_host_model(nn.Linear(1, 1))
+    for _ in range(4):
+        manager.record_isolation_violation("seed-critical")
+    packets = manager.telemetry_packets
+    assert packets, "expected immediate telemetry packet"
+    crit_packet = packets[-1]
+    assert crit_packet.system_health.indicators.get("seed_id") == "seed-critical"
+    priority = crit_packet.system_health.indicators.get("priority")
+    assert priority == leyline_pb2.MessagePriority.Name(
+        leyline_pb2.MessagePriority.MESSAGE_PRIORITY_CRITICAL
+    )
 
 
 def test_gradient_isolation_detects_overlap() -> None:
@@ -203,6 +224,7 @@ def test_gradient_isolation_detects_overlap() -> None:
     manager.register_host_model(host)
     command = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP777")
     manager.handle_command(command)
+    _finalize(manager, step_index=4)
     assert manager.isolation_violations >= 1
     pkt = manager.telemetry_packets[-1]
     # Either a violation event or degraded health must be present
@@ -276,7 +298,7 @@ def test_pause_and_resume_cycle() -> None:
     context = manager.seeds()["seed-1"]
     assert context.metadata.get("paused") == "false"
     assert context.kernel_attached
-    event_names = {e.description for e in manager.telemetry_packets[-1].events}
+    event_names = {e.description for e in _finalize(manager, step_index=5)[-1].events}
     assert "seed_resumed" in event_names
 
 
@@ -294,10 +316,12 @@ def test_memory_gc_emits_telemetry_when_due() -> None:
     runtime = _Runtime()
     manager = KasminaSeedManager(runtime, signing_context=_SIGNING_CONTEXT)
     manager.update_epoch(9)  # below frequency
+    _finalize(manager, step_index=7)
     initial_packets = len(manager.telemetry_packets)
     manager.update_epoch(10)
-    assert len(manager.telemetry_packets) > initial_packets
-    assert any(event.description == "memory_gc" for event in manager.telemetry_packets[-1].events)
+    packets_after = _finalize(manager, step_index=8)
+    assert len(packets_after) > initial_packets
+    assert any(event.description == "memory_gc" for event in packets_after[-1].events)
 
 
 def test_emergency_command_triggers_cleanup() -> None:
@@ -306,7 +330,7 @@ def test_emergency_command_triggers_cleanup() -> None:
     manager._memory.kernel_cache.set("seed-x", nn.Identity())  # prime cache
     command = _make_emergency_command()
     manager.handle_command(command)
-    packet = manager.telemetry_packets[-1]
+    packet = _finalize(manager, step_index=9)[-1]
     assert any(event.description == "emergency_cleanup" for event in packet.events)
 
 
@@ -361,6 +385,7 @@ def test_parameter_registry_blocks_duplicate_kernel() -> None:
     manager.register_host_model(host)
     first = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP300")
     manager.handle_command(first)
+    _finalize(manager, step_index=10)
 
     second = leyline_pb2.AdaptationCommand(
         version=1,
@@ -372,6 +397,7 @@ def test_parameter_registry_blocks_duplicate_kernel() -> None:
     second.seed_operation.blueprint_id = "BP301"
     _sign_command(second)
     manager.handle_command(second)
+    packets_after_dup = _finalize(manager, step_index=11)
 
     seeds = manager.seeds()
     conflict_ctx = seeds.get("seed-dup")
@@ -381,7 +407,7 @@ def test_parameter_registry_blocks_duplicate_kernel() -> None:
         leyline_pb2.SEED_STAGE_EMBARGOED,
         leyline_pb2.SEED_STAGE_RESETTING,
     }
-    last_packet = manager.telemetry_packets[-1]
+    last_packet = packets_after_dup[-1]
     assert any(
         event.description == "gate_failure" and event.attributes.get("reason")
         for event in last_packet.events
@@ -405,6 +431,7 @@ def test_manager_rejects_unsigned_command() -> None:
     command.seed_operation.blueprint_id = "BP404"
     command.issued_at.GetCurrentTime()
     manager.handle_command(command)
+    _finalize(manager, step_index=12)
     assert manager.seeds() == {}
     last_packet = manager.telemetry_packets[-1]
     assert any(event.description == "command_rejected" for event in last_packet.events)
