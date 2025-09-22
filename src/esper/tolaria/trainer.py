@@ -205,6 +205,9 @@ class TolariaTrainer:
         self._scaler = torch.cuda.amp.GradScaler() if self._amp_enabled else None
         self._failed_epochs_streak = 0
         self._halt = False
+        self._last_step_failure_reason: str | None = None
+        self._last_hook_latency_ms: float = 0.0
+        self._last_tamiyo_latency_ms: float = 0.0
 
         self._compile_enabled = False
         self._compiled_step = None
@@ -370,61 +373,9 @@ class TolariaTrainer:
                     attributes={"latency_ms": f"{stats.epoch_duration_ms:.2f}"},
                 )
 
-            hook_start = perf_counter()
-            hook_latency_ms = 0.0
-            command: leyline_pb2.AdaptationCommand | None = None
-
-            if self._conservative_mode:
-                failure_reason = failure_reason or "conservative_mode"
-                command = self._build_conservative_command()
-            else:
-                try:
-                    with torch.inference_mode():
-                        with _record_function("tolaria/tamiyo_eval"):
-                            command, hook_latency_ms = self._invoke_tamiyo(state)
-                except TimeoutError as exc:
-                    failure_reason = failure_reason or "tamiyo_timeout"
-                    self._emit_event(
-                        "tolaria.tamiyo_timeout",
-                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                        attributes={"error": str(exc)},
-                    )
-                    command = self._build_conservative_command()
-                except Exception as exc:  # pragma: no cover - defensive
-                    failure_reason = failure_reason or "tamiyo_error"
-                    self._emit_event(
-                        "tolaria.tamiyo_error",
-                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                        attributes={"error": type(exc).__name__},
-                    )
-                    command = self._build_conservative_command()
-
-            if command is None:
-                command = self._build_conservative_command()
-
-            try:
-                with torch.inference_mode():
-                    with _record_function("tolaria/kasmina_apply"):
-                        self._apply_kasmina_command(command)
-            except TimeoutError as exc:
-                failure_reason = failure_reason or "kasmina_timeout"
-                self._emit_event(
-                    "tolaria.kasmina_timeout",
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                    attributes={"error": str(exc)},
-                )
-            except Exception as exc:  # pragma: no cover - defensive
-                failure_reason = failure_reason or "kasmina_error"
-                self._emit_event(
-                    "tolaria.kasmina_error",
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                    attributes={"error": type(exc).__name__},
-                )
-
-            hook_latency_ms = max(
-                hook_latency_ms,
-                (perf_counter() - hook_start) * 1000.0,
-            )
+            hook_latency_ms = self._last_hook_latency_ms
+            if self._last_step_failure_reason and failure_reason is None:
+                failure_reason = self._last_step_failure_reason
 
             if hook_latency_ms > self._config.hook_budget_ms:
                 failure_reason = failure_reason or "hook_budget"
@@ -433,8 +384,6 @@ class TolariaTrainer:
                     level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
                     attributes={"latency_ms": f"{hook_latency_ms:.2f}"},
                 )
-
-            self._metrics["tolaria.hook.latency_ms"] = hook_latency_ms
 
             if failure_reason is not None:
                 self._metrics["tolaria.epochs.failed"] += 1.0
@@ -565,6 +514,8 @@ class TolariaTrainer:
             if self._halt:
                 break
 
+            self._last_step_failure_reason = None
+
         final_stats = EpochStats()
         state = self._emit_state(self._config.max_epochs, final_stats, completion=True)
         telemetry = self._emit_telemetry(state, final_stats, completion=True)
@@ -614,6 +565,9 @@ class TolariaTrainer:
         param_names: list[str] | None = None
         offsets: list[int] | None = None
         per_layer_norm_sum: dict[str, dict[int, float]] = {}
+        step_failure_reason: str | None = None
+        step_timer_start: float | None = None
+        accumulated_samples = 0
 
         def _build_seed_masks_if_needed(param_grads: list[torch.Tensor], flat: torch.Tensor, shp: list[torch.Size]) -> None:
             nonlocal seed_masks, owner_for_param, seed_param_elems, total_elems
@@ -657,6 +611,7 @@ class TolariaTrainer:
             total_elems = total
 
         for step, batch in enumerate(self._dataloader):
+            micro_start = perf_counter()
             # Support dataloader triplet (inputs, targets, seed_ids)
             if isinstance(batch, (list, tuple)) and len(batch) == 3:
                 inputs, targets, seed_ids = batch
@@ -665,6 +620,11 @@ class TolariaTrainer:
                 seed_ids = None
             inputs = inputs.to(self._device, non_blocking=self._non_blocking)
             targets = targets.to(self._device, non_blocking=self._non_blocking)
+
+            if step_timer_start is None:
+                step_timer_start = micro_start
+                accumulated_samples = 0
+            accumulated_samples += targets.size(0)
 
             # Always zero to isolate per-micro gradients we aggregate ourselves
             self._optimizer.zero_grad(set_to_none=True)
@@ -930,41 +890,116 @@ class TolariaTrainer:
                 stats.gradient_norm_sum += grad_norm
                 micro_flats.clear()
 
-            if callable(exporter) and callable(advancer):
-                try:
-                    for seed_state in exporter():
-                        if seed_state.stage == leyline_pb2.SEED_STAGE_BLENDING:
-                            advancer(seed_state.seed_id)
-                except Exception:  # pragma: no cover - defensive
-                    pass
+                step_elapsed = perf_counter() - (step_timer_start or micro_start)
+                step_timer_start = None
+                samples_per_s = 0.0
+                if step_elapsed > 0.0 and accumulated_samples > 0:
+                    samples_per_s = accumulated_samples / step_elapsed
+                accumulated_samples = 0
 
-            # Optional: apply LR policy
-            if self._lr_controller is not None:
-                try:
-                    with _record_function("tolaria/lr_update"):
-                        lr = self._lr_controller.apply(self._global_step, self._current_epoch)
-                    self._metrics["tolaria.lr_controller.current_lr"] = lr
-                except Exception:  # pragma: no cover - defensive
-                    pass
+                self._global_step += 1
+                step_state = self._build_step_state(
+                    loss=float(loss_tensor.detach().item()),
+                    grad_norm=grad_norm,
+                    samples_per_s=samples_per_s,
+                )
 
-            # Optional: snapshot fast rollback state
-            if self._fast_cache is not None:
-                try:
-                    if self._global_step % max(1, self._rollback_snapshot_steps) == 0:
-                        self._fast_cache.put(self._global_step, self._model, self._optimizer)
-                        self._metrics["tolaria.rollback.snapshots_total"] = self._metrics.get("tolaria.rollback.snapshots_total", 0.0) + 1.0
-                    self._metrics["tolaria.rollback.fast_size_bytes"] = float(self._fast_cache.size_bytes)
-                except Exception:  # pragma: no cover - defensive
-                    pass
+                hook_start = perf_counter()
+                tamiyo_latency_ms = 0.0
+                local_failure: str | None = None
 
-            self._global_step += 1
+                if self._conservative_mode:
+                    command = self._build_conservative_command()
+                else:
+                    try:
+                        command, tamiyo_latency_ms = self._invoke_tamiyo_step(step_state)
+                        self._last_tamiyo_latency_ms = tamiyo_latency_ms
+                    except TimeoutError as exc:
+                        local_failure = "tamiyo_timeout"
+                        self._emit_event(
+                            "tolaria.tamiyo_timeout",
+                            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                            attributes={"error": str(exc)},
+                        )
+                        self._enter_conservative_mode(local_failure)
+                        command = self._build_conservative_command()
+                        self._last_tamiyo_latency_ms = 0.0
+                    except Exception as exc:  # pragma: no cover - defensive
+                        local_failure = "tamiyo_error"
+                        self._emit_event(
+                            "tolaria.tamiyo_error",
+                            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                            attributes={"error": type(exc).__name__},
+                        )
+                        command = self._build_conservative_command()
+                        self._enter_conservative_mode(local_failure)
+                        self._last_tamiyo_latency_ms = 0.0
 
-            finalizer = getattr(self._kasmina, "finalize_step", None)
-            if callable(finalizer):
                 try:
-                    finalizer(step_index=self._global_step)
-                except Exception:  # pragma: no cover - Kasmina finalize is best effort
-                    pass
+                    self._apply_kasmina_command(command)
+                except TimeoutError as exc:
+                    reason = "kasmina_timeout"
+                    local_failure = local_failure or reason
+                    self._emit_event(
+                        "tolaria.kasmina_timeout",
+                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                        attributes={"error": str(exc)},
+                    )
+                    self._enter_conservative_mode(reason)
+                except Exception as exc:  # pragma: no cover - defensive
+                    reason = "kasmina_error"
+                    local_failure = local_failure or reason
+                    self._emit_event(
+                        "tolaria.kasmina_error",
+                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                        attributes={"error": type(exc).__name__},
+                    )
+
+                hook_latency_ms = (perf_counter() - hook_start) * 1000.0
+                self._last_hook_latency_ms = hook_latency_ms
+                self._metrics["tolaria.hook.latency_ms"] = hook_latency_ms
+                step_state.training_metrics["hook_latency_ms"] = hook_latency_ms
+                if self._last_tamiyo_latency_ms:
+                    step_state.training_metrics["tamiyo_latency_ms"] = self._last_tamiyo_latency_ms
+
+                if callable(exporter) and callable(advancer):
+                    try:
+                        for seed_state in exporter():
+                            if seed_state.stage == leyline_pb2.SEED_STAGE_BLENDING:
+                                advancer(seed_state.seed_id)
+                    except Exception:  # pragma: no cover - defensive
+                        pass
+
+                finalizer = getattr(self._kasmina, "finalize_step", None)
+                if callable(finalizer):
+                    try:
+                        finalizer(step_index=self._global_step)
+                    except Exception:  # pragma: no cover - Kasmina finalize is best effort
+                        pass
+
+                if self._lr_controller is not None:
+                    try:
+                        with _record_function("tolaria/lr_update"):
+                            lr = self._lr_controller.apply(self._global_step, self._current_epoch)
+                        self._metrics["tolaria.lr_controller.current_lr"] = lr
+                    except Exception:  # pragma: no cover - defensive
+                        pass
+
+                if self._fast_cache is not None:
+                    try:
+                        if self._global_step % max(1, self._rollback_snapshot_steps) == 0:
+                            self._fast_cache.put(self._global_step, self._model, self._optimizer)
+                            self._metrics["tolaria.rollback.snapshots_total"] = self._metrics.get("tolaria.rollback.snapshots_total", 0.0) + 1.0
+                        self._metrics["tolaria.rollback.fast_size_bytes"] = float(self._fast_cache.size_bytes)
+                    except Exception:  # pragma: no cover - defensive
+                        pass
+
+                if local_failure and step_failure_reason is None:
+                    step_failure_reason = local_failure
+
+            else:
+                if step_timer_start is None:
+                    step_timer_start = micro_start
 
             # Optional: optimizer rebuilds on step fences (e.g., every N steps)
             if self._opt_manager is not None:
@@ -990,6 +1025,7 @@ class TolariaTrainer:
                                 if res.error and res.error != "breaker_open":
                                     self._metrics["tolaria.opt.rebuild_failures_total"] += 1.0
 
+        self._last_step_failure_reason = step_failure_reason
         # Publish aggregation telemetry from the epoch
         self._metrics["tolaria.grad_agg.microbatches_total"] = float(agg_micro_total)
         self._metrics["tolaria.grad_agg.conflicts"] = float(agg_conflicts_total)
@@ -1198,7 +1234,40 @@ class TolariaTrainer:
         hardware.utilization_percent = 0.0
         hardware.compute_capability = 0
 
-        # Optionally enrich with Kasmina seed states if supported
+        self._populate_seed_states(packet)
+
+        if completion:
+            packet.validation_accuracy = 1.0
+
+        return packet
+
+    def _build_step_state(
+        self,
+        *,
+        loss: float,
+        grad_norm: float,
+        samples_per_s: float,
+    ) -> leyline_pb2.SystemStatePacket:
+        packet = leyline_pb2.SystemStatePacket(
+            version=1,
+            current_epoch=self._current_epoch,
+            training_run_id=self._run_id,
+            packet_id=f"{self._run_id}-step-{self._global_step}",
+            source_subsystem="tolaria",
+            global_step=self._global_step,
+            training_loss=loss,
+            validation_loss=loss,
+        )
+        packet.timestamp_ns = time_ns()
+        metrics = packet.training_metrics
+        metrics["loss"] = loss
+        metrics["gradient_norm"] = grad_norm
+        if samples_per_s > 0.0:
+            metrics["samples_per_s"] = samples_per_s
+        self._populate_seed_states(packet)
+        return packet
+
+    def _populate_seed_states(self, packet: leyline_pb2.SystemStatePacket) -> None:
         exporter = getattr(self._kasmina, "export_seed_states", None)
         if callable(exporter):
             try:
@@ -1207,11 +1276,6 @@ class TolariaTrainer:
                     slot.CopyFrom(seed)
             except Exception:  # pragma: no cover - defensive
                 pass
-
-        if completion:
-            packet.validation_accuracy = 1.0
-
-        return packet
 
     def _emit_telemetry(
         self,
@@ -1555,9 +1619,22 @@ class TolariaTrainer:
     def _invoke_tamiyo(
         self, state: leyline_pb2.SystemStatePacket
     ) -> tuple[leyline_pb2.AdaptationCommand, float]:
+        return self._invoke_tamiyo_generic(state, use_step=False)
+
+    def _invoke_tamiyo_step(
+        self, state: leyline_pb2.SystemStatePacket
+    ) -> tuple[leyline_pb2.AdaptationCommand, float]:
+        return self._invoke_tamiyo_generic(state, use_step=True)
+
+    def _invoke_tamiyo_generic(
+        self,
+        state: leyline_pb2.SystemStatePacket,
+        *,
+        use_step: bool,
+    ) -> tuple[leyline_pb2.AdaptationCommand, float]:
         start = perf_counter()
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(self._tamiyo.evaluate_epoch, state)
+            future = executor.submit(self._call_tamiyo, state, use_step)
             try:
                 command = future.result(timeout=self._config.tamiyo_timeout_s)
             except FuturesTimeout as exc:
@@ -1565,6 +1642,17 @@ class TolariaTrainer:
                 raise TimeoutError("Tamiyo evaluation timed out") from exc
         latency_ms = (perf_counter() - start) * 1000.0
         return command, latency_ms
+
+    def _call_tamiyo(
+        self,
+        state: leyline_pb2.SystemStatePacket,
+        use_step: bool,
+    ) -> leyline_pb2.AdaptationCommand:
+        if use_step:
+            evaluate_step = getattr(self._tamiyo, "evaluate_step", None)
+            if callable(evaluate_step):
+                return evaluate_step(state)
+        return self._tamiyo.evaluate_epoch(state)
 
     def _apply_kasmina_command(self, command: leyline_pb2.AdaptationCommand) -> None:
         with ThreadPoolExecutor(max_workers=1) as executor:
