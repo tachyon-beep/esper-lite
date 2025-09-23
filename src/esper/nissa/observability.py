@@ -200,10 +200,13 @@ class NissaIngestor:
         if cov is not None:
             self._tamiyo_feature_coverage.set(float(cov))
         for name, value in list(metrics.items()):
+            feature: str | None = None
             if name.startswith("tamiyo.gnn.coverage."):
                 feature = name.split("tamiyo.gnn.coverage.", 1)[1]
-                if feature in self._coverage_feature_keys:
-                    self._tamiyo_feature_coverage_by_type.labels(feature=feature).set(float(value))
+            elif name.startswith("tamiyo.gnn.feature_coverage."):
+                feature = name.split("tamiyo.gnn.feature_coverage.", 1)[1]
+            if feature and feature in self._coverage_feature_keys:
+                self._tamiyo_feature_coverage_by_type.labels(feature=feature).set(float(value))
 
         # Derived BSDS elevated risk flag and quarantine activity gauge
         risk = metrics.get("tamiyo.blueprint.risk")

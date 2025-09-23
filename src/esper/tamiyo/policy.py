@@ -76,7 +76,17 @@ class TamiyoPolicy(nn.Module):
 
     def __init__(self, config: TamiyoPolicyConfig | None = None) -> None:
         super().__init__()
-        cfg = config or TamiyoPolicyConfig()
+        # Dynamic default: enable torch.compile by default on CUDA when no config provided.
+        if config is None:
+            cfg = TamiyoPolicyConfig()
+            try:
+                # Default compile ON only when CUDA is available AND device targets CUDA
+                if torch.cuda.is_available() and str(cfg.device).lower().startswith("cuda"):
+                    cfg.enable_compile = True
+            except Exception:
+                pass
+        else:
+            cfg = config
         self._config = cfg
 
         cfg.registry_path.mkdir(parents=True, exist_ok=True)

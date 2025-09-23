@@ -529,3 +529,10 @@ def test_policy_inference_perf_budget() -> None:
 
     p95 = statistics.quantiles(durations, n=100)[94]
     assert p95 <= 45.0
+
+
+@pytest.mark.skipif(torch.cuda.is_available(), reason="CPU-only check for default compile")
+def test_compile_default_off_on_cpu() -> None:
+    # When no config is provided and CUDA is unavailable, compile should be disabled by default
+    policy = TamiyoPolicy()
+    assert not policy.compile_enabled

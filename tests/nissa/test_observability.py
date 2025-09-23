@@ -93,3 +93,18 @@ def test_config_overrides_thresholds_and_whitelist(monkeypatch: pytest.MonkeyPat
     for _ in range(2):
         ing.ingest_telemetry(_packet_with_metric("tamiyo.gnn.feature_coverage", 0.85))
     assert "tamiyo_coverage_low" in ing.active_alerts
+
+
+def test_ingest_typed_coverage_feature_coverage_prefix() -> None:
+    # Accept per-type metrics under tamiyo.gnn.feature_coverage.*
+    cfg = NissaIngestorConfig(
+        prometheus_gateway="http://localhost:9091",
+        elasticsearch_url="http://localhost:9200",
+        coverage_feature_keys=("node.seed",),
+    )
+    ing = NissaIngestor(cfg, es_client=_fake_es())
+    pkt = _packet_with_metric("tamiyo.gnn.feature_coverage.node.seed", 0.42)
+    ing.ingest_telemetry(pkt)
+    data = generate_latest(ing.registry).decode("utf-8")
+    assert 'tamiyo_gnn_feature_coverage_by_type{feature="node.seed"}' in data
+    assert "0.42" in data

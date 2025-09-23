@@ -51,6 +51,14 @@ Also see:
 - `../speculative/bsds-lite/` — JSON schema + examples (mirror of Leyline BSDS for prototype transport).
 - `metrics.md` — prototype metrics/alerts; `timeout-matrix.md` — budgets.
 
+CLI Usage (Prototype)
+- Produce and attach BSDS:
+  - `PYTHONPATH=src python -m esper.urabrask.cli --urza-root ./var/urza --blueprint-id BP001 [--resource-profile cpu|gpu|memory_heavy|io_heavy|mixed]`
+- Expected stdout JSON fields: `blueprint_id`, `risk_score`, `hazard_band`, `handling_class`, `resource_profile`, `provenance`, `issued_at`.
+- Side effects:
+  - Persists JSON mirror to Urza `extras["bsds"]` (and `hazards` when produced via crucible).
+  - When signing enabled: `extras["bsds_sig"]` attached and WAL updated.
+
 Crucible v1 Hazards & Flags (Prototype)
 - New hazard signals produced by Crucible v1 (extras["bsds"]["hazards"]) in addition to existing ones:
   - `memory_watermark`: "ok" | "high" — derived from process RSS delta across a tiny workload

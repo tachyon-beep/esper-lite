@@ -253,7 +253,40 @@ The generated files are stored in `src/esper/leyline/_generated/` and include
   using a WAL-style binary log. Entries are retained for 24 hours by default
   (override with `TAMIYO_FIELD_REPORT_RETENTION_HOURS`) and are reloaded on
   startup so Simic always has a consistent replay source after a restart.
-  Delete the log file if you need a clean slate for local testing.
+Delete the log file if you need a clean slate for local testing.
+
+### Urabrask — BSDS Producer CLI (Prototype)
+
+Use the Urabrask CLI to compute a BSDS via the Crucible and attach it to an existing Urza blueprint record. The CLI prints a concise JSON summary to stdout.
+
+Run via module (no install needed):
+
+```bash
+PYTHONPATH=src \
+python -m esper.urabrask.cli \
+  --urza-root ./var/urza \
+  --blueprint-id BP001 \
+  --resource-profile gpu
+```
+
+Example output JSON:
+
+```json
+{
+  "blueprint_id": "BP001",
+  "risk_score": 0.62,
+  "hazard_band": "HIGH",
+  "handling_class": "restricted",
+  "resource_profile": "gpu",
+  "provenance": "URABRASK",
+  "issued_at": "2025-09-23T21:30:00Z"
+}
+```
+
+Notes
+- The BSDS JSON mirror is also persisted to Urza `extras["bsds"]` for Tamiyo to consume.
+- Optional signing + WAL: set `ESPER_LEYLINE_SECRET` and `URABRASK_SIGNING_ENABLED=true` to attach `extras["bsds_sig"]` and append to the WAL (`URABRASK_WAL_PATH`).
+- Crucible result bundles: per‑run JSON artifacts are written under `URABRASK_CRUCIBLE_ARTIFACTS_DIR` with retention (`URABRASK_CRUCIBLE_ARTIFACTS_KEEP`).
 
 ## Repository Layout
 
