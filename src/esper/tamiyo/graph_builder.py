@@ -794,12 +794,12 @@ class TamiyoGraphBuilder:
 
 
     @staticmethod
-def _encode_category(value: str) -> float:
-    encoded = value.encode("utf-8", errors="ignore")
-    if not encoded:
-        return 0.0
-    digest = hashlib.blake2s(encoded, digest_size=4).digest()
-    return int.from_bytes(digest, "big") / 0xFFFFFFFF
+    def _encode_category(value: str) -> float:
+        encoded = value.encode("utf-8", errors="ignore")
+        if not encoded:
+            return 0.0
+        digest = hashlib.blake2s(encoded, digest_size=4).digest()
+        return int.from_bytes(digest, "big") / 0xFFFFFFFF
 
 
 class _CoverageTracker:
