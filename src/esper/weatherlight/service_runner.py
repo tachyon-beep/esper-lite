@@ -608,6 +608,15 @@ class WeatherlightService:
         for packet in packets:
             priority = self._telemetry_priority(packet)
             await self._oona.publish_telemetry(packet, priority=priority)
+        # Drain Tamiyo's telemetry/field reports on each Weatherlight flush per
+        # prototype-delta integration (docs/prototype-delta/tamiyo/diff/input-remediation-plan.md §8).
+        # This ensures coverage and BSDS degradation signals leave Tamiyo without
+        # requiring a manual export step.
+        if self._tamiyo_service is not None:
+            try:
+                await self._tamiyo_service.publish_history(self._oona)
+            except Exception as exc:  # pragma: no cover - defensive forwarding
+                LOGGER.debug("Failed to forward Tamiyo history: %s", exc)
         await self._oona.emit_metrics_telemetry(
             source_subsystem="weatherlight.oona",
             level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,

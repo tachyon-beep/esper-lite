@@ -227,6 +227,14 @@ class TamiyoService:
             )
 
         training_metrics = dict(state.training_metrics)
+        # If Tolaria supplied a precomputed loss_delta (WP8.5), prefer it when
+        # we lack a prior validation snapshot. This keeps step-level risk gates
+        # responsive even on the first invocation.
+        if (self._last_validation_loss is None) and ("loss_delta" in training_metrics):
+            try:
+                loss_delta = float(training_metrics.get("loss_delta", loss_delta))
+            except Exception:
+                pass
         blueprint_info, risk_events = self._apply_risk_engine(
             command,
             state=state,
@@ -662,6 +670,20 @@ class TamiyoService:
         graph_metadata = self._extract_graph_metadata(record)
         if graph_metadata:
             data["graph"] = graph_metadata
+        # Optional: attach BSDS-lite payload from Urabrask/Urza extras when present.
+        # This follows the prototype-delta guidance to consume a minimal safety sheet
+        # without introducing new Leyline contracts. When available, the BSDS risk
+        # score supersedes descriptor risk for decision gating.
+        bsds = self._extract_bsds(record)
+        if bsds:
+            try:
+                risk_score = float(bsds.get("risk_score", data.get("risk", 0.0)))
+                if risk_score >= 0.0:
+                    data["risk"] = risk_score
+                    data["risk_provenance"] = "bsds"
+            except Exception:
+                pass
+            data["bsds"] = bsds
         return data
 
     def _extract_graph_metadata(self, record: Any) -> dict[str, Any] | None:
@@ -679,6 +701,39 @@ class TamiyoService:
         if not graph_section:
             return None
         return self._normalise_graph_metadata(graph_section, record)
+
+    def _extract_bsds(self, record: Any) -> dict[str, str | float] | None:
+        """Extract a minimal BSDS-lite block from Urza extras, if available.
+
+        Expected schema (all optional):
+          {
+            "risk_score": 0.0..1.0,
+            "hazard_band": "LOW|MEDIUM|HIGH|CRITICAL",
+            "handling_class": "standard|restricted|quarantine",
+            "resource_profile": "cpu|gpu|memory_heavy|io_heavy|mixed",
+            "provenance": "URABRASK" | "external",
+            "issued_at": "ISO8601"
+          }
+        """
+        extras: Mapping[str, Any] | None = getattr(record, "extras", None)
+        if not extras or "bsds" not in extras:
+            return None
+        raw = extras.get("bsds")
+        block: dict[str, str | float] | None = None
+        if isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, Mapping):
+                block = {str(k): parsed[k] for k in ("hazard_band", "handling_class", "resource_profile", "provenance", "issued_at") if k in parsed}
+                with contextlib.suppress(Exception):
+                    block["risk_score"] = float(parsed.get("risk_score", 0.0))  # type: ignore[index]
+        elif isinstance(raw, Mapping):
+            block = {str(k): raw[k] for k in ("hazard_band", "handling_class", "resource_profile", "provenance", "issued_at") if k in raw}
+            with contextlib.suppress(Exception):
+                block["risk_score"] = float(raw.get("risk_score", 0.0))  # type: ignore[index]
+        return block or None
 
     def _graph_metadata_from_guard_spec(self, record: Any) -> dict[str, Any] | None:
         guard_spec: Sequence[Mapping[str, Any]] = tuple(getattr(record, "guard_spec", ()) or ())
@@ -911,6 +966,56 @@ class TamiyoService:
                         attributes={"risk": f"{risk_score:.2f}"},
                     )
                 )
+            # BSDS-lite (if present in blueprint_info)
+            bsds_block = blueprint_info.get("bsds") if isinstance(blueprint_info, Mapping) else None
+            if isinstance(bsds_block, Mapping):
+                # Surface annotations for downstream consumers
+                for k_src, k_dst in (
+                    ("hazard_band", "bsds_hazard_band"),
+                    ("handling_class", "bsds_handling_class"),
+                    ("resource_profile", "bsds_resource_profile"),
+                    ("provenance", "bsds_provenance"),
+                ):
+                    val = bsds_block.get(k_src)
+                    if isinstance(val, (str, int, float)):
+                        command.annotations.setdefault(k_dst, str(val))
+                if "risk_score" in bsds_block:
+                    with contextlib.suppress(Exception):
+                        command.annotations.setdefault("bsds_risk", f"{float(bsds_block['risk_score']):.2f}")
+                events.append(
+                    TelemetryEvent(
+                        description="bsds_present",
+                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+                        attributes={
+                            "hazard": str(bsds_block.get("hazard_band", "")),
+                            "risk": str(bsds_block.get("risk_score", "")),
+                        },
+                    )
+                )
+                hazard = str(bsds_block.get("hazard_band", "")).upper()
+                # Escalate on high/critical hazards
+                if hazard == "CRITICAL":
+                    reason = "bsds_hazard_critical"
+                    command.command_type = leyline_pb2.COMMAND_PAUSE
+                    events.append(
+                        TelemetryEvent(
+                            description="bsds_hazard_critical",
+                            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
+                            attributes={"hazard": hazard},
+                        )
+                    )
+                    self._set_conservative_mode(True, reason, events)
+                elif hazard == "HIGH" and command.command_type == leyline_pb2.COMMAND_SEED:
+                    reason = reason or "bsds_hazard_high"
+                    command.command_type = leyline_pb2.COMMAND_OPTIMIZER
+                    command.optimizer_adjustment.optimizer_id = "sgd"
+                    events.append(
+                        TelemetryEvent(
+                            description="bsds_hazard_high",
+                            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                            attributes={"hazard": hazard},
+                        )
+                    )
 
         if not timed_out and loss_delta > self._risk.max_loss_spike:
             reason = "loss_spike"
@@ -1275,6 +1380,12 @@ class TamiyoService:
                 with contextlib.suppress(ValueError):
                     priority_enum = leyline_pb2.MessagePriority.Value(priority_name)
             await oona.publish_telemetry(telemetry, priority=priority_enum)
+        # Clear published buffers to avoid duplicate exports when Weatherlight
+        # drains Tamiyo on each flush cycle (prototype-delta Tamiyo §8).
+        if self._field_reports:
+            self._field_reports = []
+        if self._telemetry_packets:
+            self._telemetry_packets = []
 
     def ingest_policy_update(self, update: leyline_pb2.PolicyUpdate) -> None:
         """Apply a policy update produced by Simic."""

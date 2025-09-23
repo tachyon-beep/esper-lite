@@ -126,6 +126,41 @@ class BusMessageType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     BUS_MESSAGE_TYPE_KERNEL_PREFETCH_READY: _ClassVar[BusMessageType]
     BUS_MESSAGE_TYPE_KERNEL_PREFETCH_ERROR: _ClassVar[BusMessageType]
     BUS_MESSAGE_TYPE_KERNEL_CATALOG_UPDATE: _ClassVar[BusMessageType]
+    BUS_MESSAGE_TYPE_BSDS_ISSUED: _ClassVar[BusMessageType]
+    BUS_MESSAGE_TYPE_BSDS_FAILED: _ClassVar[BusMessageType]
+    BUS_MESSAGE_TYPE_BENCHMARK_REPORT: _ClassVar[BusMessageType]
+
+class HazardBand(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    HAZARD_BAND_UNSPECIFIED: _ClassVar[HazardBand]
+    HAZARD_BAND_LOW: _ClassVar[HazardBand]
+    HAZARD_BAND_MEDIUM: _ClassVar[HazardBand]
+    HAZARD_BAND_HIGH: _ClassVar[HazardBand]
+    HAZARD_BAND_CRITICAL: _ClassVar[HazardBand]
+
+class HandlingClass(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    HANDLING_CLASS_UNSPECIFIED: _ClassVar[HandlingClass]
+    HANDLING_CLASS_STANDARD: _ClassVar[HandlingClass]
+    HANDLING_CLASS_RESTRICTED: _ClassVar[HandlingClass]
+    HANDLING_CLASS_QUARANTINE: _ClassVar[HandlingClass]
+
+class ResourceProfile(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    RESOURCE_PROFILE_UNSPECIFIED: _ClassVar[ResourceProfile]
+    RESOURCE_PROFILE_CPU: _ClassVar[ResourceProfile]
+    RESOURCE_PROFILE_GPU: _ClassVar[ResourceProfile]
+    RESOURCE_PROFILE_MEMORY_HEAVY: _ClassVar[ResourceProfile]
+    RESOURCE_PROFILE_IO_HEAVY: _ClassVar[ResourceProfile]
+    RESOURCE_PROFILE_MIXED: _ClassVar[ResourceProfile]
+
+class Provenance(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    PROVENANCE_UNSPECIFIED: _ClassVar[Provenance]
+    PROVENANCE_URABRASK: _ClassVar[Provenance]
+    PROVENANCE_CURATED: _ClassVar[Provenance]
+    PROVENANCE_HEURISTIC: _ClassVar[Provenance]
+    PROVENANCE_EXTERNAL: _ClassVar[Provenance]
 SEED_STAGE_UNKNOWN: SeedLifecycleStage
 SEED_STAGE_DORMANT: SeedLifecycleStage
 SEED_STAGE_GERMINATED: SeedLifecycleStage
@@ -205,6 +240,29 @@ BUS_MESSAGE_TYPE_KERNEL_PREFETCH_REQUEST: BusMessageType
 BUS_MESSAGE_TYPE_KERNEL_PREFETCH_READY: BusMessageType
 BUS_MESSAGE_TYPE_KERNEL_PREFETCH_ERROR: BusMessageType
 BUS_MESSAGE_TYPE_KERNEL_CATALOG_UPDATE: BusMessageType
+BUS_MESSAGE_TYPE_BSDS_ISSUED: BusMessageType
+BUS_MESSAGE_TYPE_BSDS_FAILED: BusMessageType
+BUS_MESSAGE_TYPE_BENCHMARK_REPORT: BusMessageType
+HAZARD_BAND_UNSPECIFIED: HazardBand
+HAZARD_BAND_LOW: HazardBand
+HAZARD_BAND_MEDIUM: HazardBand
+HAZARD_BAND_HIGH: HazardBand
+HAZARD_BAND_CRITICAL: HazardBand
+HANDLING_CLASS_UNSPECIFIED: HandlingClass
+HANDLING_CLASS_STANDARD: HandlingClass
+HANDLING_CLASS_RESTRICTED: HandlingClass
+HANDLING_CLASS_QUARANTINE: HandlingClass
+RESOURCE_PROFILE_UNSPECIFIED: ResourceProfile
+RESOURCE_PROFILE_CPU: ResourceProfile
+RESOURCE_PROFILE_GPU: ResourceProfile
+RESOURCE_PROFILE_MEMORY_HEAVY: ResourceProfile
+RESOURCE_PROFILE_IO_HEAVY: ResourceProfile
+RESOURCE_PROFILE_MIXED: ResourceProfile
+PROVENANCE_UNSPECIFIED: Provenance
+PROVENANCE_URABRASK: Provenance
+PROVENANCE_CURATED: Provenance
+PROVENANCE_HEURISTIC: Provenance
+PROVENANCE_EXTERNAL: Provenance
 
 class HardwareContext(_message.Message):
     __slots__ = ("device_type", "device_id", "total_memory_gb", "available_memory_gb", "temperature_celsius", "utilization_percent", "compute_capability")
@@ -747,3 +805,71 @@ class SystemLimits(_message.Message):
     max_checkpoint_storage_gb: int
     max_importance_history_days: int
     def __init__(self, max_seeds_per_epoch: _Optional[int] = ..., max_message_size_bytes: _Optional[int] = ..., max_queue_depth: _Optional[int] = ..., max_retry_attempts: _Optional[int] = ..., max_pause_quota: _Optional[int] = ..., max_gc_allocations_per_msg: _Optional[int] = ..., max_pruning_ratio_percent: _Optional[int] = ..., max_consecutive_pruning_failures: _Optional[int] = ..., max_checkpoint_storage_gb: _Optional[int] = ..., max_importance_history_days: _Optional[int] = ...) -> None: ...
+
+class BSDS(_message.Message):
+    __slots__ = ("version", "blueprint_id", "risk_score", "hazard_band", "handling_class", "resource_profile", "recommendation", "issued_at", "provenance")
+    VERSION_FIELD_NUMBER: _ClassVar[int]
+    BLUEPRINT_ID_FIELD_NUMBER: _ClassVar[int]
+    RISK_SCORE_FIELD_NUMBER: _ClassVar[int]
+    HAZARD_BAND_FIELD_NUMBER: _ClassVar[int]
+    HANDLING_CLASS_FIELD_NUMBER: _ClassVar[int]
+    RESOURCE_PROFILE_FIELD_NUMBER: _ClassVar[int]
+    RECOMMENDATION_FIELD_NUMBER: _ClassVar[int]
+    ISSUED_AT_FIELD_NUMBER: _ClassVar[int]
+    PROVENANCE_FIELD_NUMBER: _ClassVar[int]
+    version: int
+    blueprint_id: str
+    risk_score: float
+    hazard_band: HazardBand
+    handling_class: HandlingClass
+    resource_profile: ResourceProfile
+    recommendation: str
+    issued_at: _timestamp_pb2.Timestamp
+    provenance: Provenance
+    def __init__(self, version: _Optional[int] = ..., blueprint_id: _Optional[str] = ..., risk_score: _Optional[float] = ..., hazard_band: _Optional[_Union[HazardBand, str]] = ..., handling_class: _Optional[_Union[HandlingClass, str]] = ..., resource_profile: _Optional[_Union[ResourceProfile, str]] = ..., recommendation: _Optional[str] = ..., issued_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., provenance: _Optional[_Union[Provenance, str]] = ...) -> None: ...
+
+class BlueprintBenchmarkProfile(_message.Message):
+    __slots__ = ("name", "p50_latency_ms", "p95_latency_ms", "throughput_samples_per_s")
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    P50_LATENCY_MS_FIELD_NUMBER: _ClassVar[int]
+    P95_LATENCY_MS_FIELD_NUMBER: _ClassVar[int]
+    THROUGHPUT_SAMPLES_PER_S_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    p50_latency_ms: float
+    p95_latency_ms: float
+    throughput_samples_per_s: float
+    def __init__(self, name: _Optional[str] = ..., p50_latency_ms: _Optional[float] = ..., p95_latency_ms: _Optional[float] = ..., throughput_samples_per_s: _Optional[float] = ...) -> None: ...
+
+class BlueprintBenchmark(_message.Message):
+    __slots__ = ("version", "blueprint_id", "profiles", "device", "torch_version")
+    VERSION_FIELD_NUMBER: _ClassVar[int]
+    BLUEPRINT_ID_FIELD_NUMBER: _ClassVar[int]
+    PROFILES_FIELD_NUMBER: _ClassVar[int]
+    DEVICE_FIELD_NUMBER: _ClassVar[int]
+    TORCH_VERSION_FIELD_NUMBER: _ClassVar[int]
+    version: int
+    blueprint_id: str
+    profiles: _containers.RepeatedCompositeFieldContainer[BlueprintBenchmarkProfile]
+    device: str
+    torch_version: str
+    def __init__(self, version: _Optional[int] = ..., blueprint_id: _Optional[str] = ..., profiles: _Optional[_Iterable[_Union[BlueprintBenchmarkProfile, _Mapping]]] = ..., device: _Optional[str] = ..., torch_version: _Optional[str] = ...) -> None: ...
+
+class BSDSIssued(_message.Message):
+    __slots__ = ("bsds",)
+    BSDS_FIELD_NUMBER: _ClassVar[int]
+    bsds: BSDS
+    def __init__(self, bsds: _Optional[_Union[BSDS, _Mapping]] = ...) -> None: ...
+
+class BSDSFailed(_message.Message):
+    __slots__ = ("blueprint_id", "reason")
+    BLUEPRINT_ID_FIELD_NUMBER: _ClassVar[int]
+    REASON_FIELD_NUMBER: _ClassVar[int]
+    blueprint_id: str
+    reason: str
+    def __init__(self, blueprint_id: _Optional[str] = ..., reason: _Optional[str] = ...) -> None: ...
+
+class BenchmarkReport(_message.Message):
+    __slots__ = ("benchmark",)
+    BENCHMARK_FIELD_NUMBER: _ClassVar[int]
+    benchmark: BlueprintBenchmark
+    def __init__(self, benchmark: _Optional[_Union[BlueprintBenchmark, _Mapping]] = ...) -> None: ...

@@ -217,6 +217,10 @@ class TolariaTrainer:
         self._grad_var: float = 0.0
         self._prev_step_end_time: float | None = None
         self._step_total_start: float | None = None
+        # Prototype-delta WP8/8.5: enable per-step metrics enrichment by default
+        # (latency splits, optimizer hints, input wait/copy timings). Guard all
+        # uses with this flag and fail open when disabled.
+        self._step_enrichment: bool = True
 
         self._compile_enabled = False
         self._compiled_step = None

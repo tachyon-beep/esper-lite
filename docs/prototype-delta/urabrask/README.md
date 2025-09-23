@@ -1,6 +1,6 @@
 # Urabrask — Prototype Delta (Evaluation & Benchmarking; Planning Baseline)
 
-Lead note: Urabrask is out of scope to implement in the Esper‑Lite prototype, but it is in scope to define what we will look for. This delta captures the intended behaviours, outputs, and integration points so the team can assess readiness and plan a bring‑up later.
+Lead note: Urabrask has been rescoped to support BSDS for Tamiyo decision‑making in the prototype. We will adopt Leyline contracts from day 1 and land a BSDS‑Lite path via Urza extras as transport. See the completion packages plan for the sequence and acceptance criteria.
 
 Intent
 - Define the evaluation crucible and benchmarking suite that generate Blueprint Safety Data Sheets (BSDS) and performance profiles for blueprints.
@@ -27,11 +27,10 @@ What we’ll be looking for (deliverables)
   - Nissa: dashboards for hazard distributions, benchmark trends; alerts on CRITICAL hazards.
   - Tamiyo/Karn: consume BSDS fields for gating and selection; annotate decisions with provenance.
 
-Planned Leyline contracts (schema RFC)
-- `message BSDS` (Blueprint Safety Data Sheet) with fields aligned to BSDS‑Lite and extended metrics.
-- `message BlueprintBenchmark` with latency/throughput and environment metadata.
-- `enum HazardLevel { LOW, MODERATE, HIGH, CRITICAL }` and `enum Provenance { CURATED, HEURISTIC, URABRASK }`.
-- Evaluation events: `BSDSIssued`, `BSDSFailed`, `BenchmarkReport`.
+Planned Leyline contracts (Day 1)
+- See `leyline-schema-draft.md` for enums/messages to add in `contracts/leyline/leyline.proto`:
+  - Enums: HazardBand, HandlingClass, ResourceProfile, Provenance
+  - Messages: BSDS, BlueprintBenchmark(+Profile), BSDSIssued/Failed, BenchmarkReport
 
 Telemetry & SLOs
 - Metrics: `urabrask.crucible.duration_ms`, `urabrask.benchmark.latency_ms{profile}`, `urabrask.bsds.issued_total`, `urabrask.bsds.failed_total`.
@@ -45,3 +44,9 @@ Files in this folder
 - `delta-matrix.md` — intended capabilities and current status (prototype baseline is “not present”).
 - `traceability-map.md` — design anchors and intended integration points.
 - `implementation-roadmap.md` — phased plan to bring up Urabrask from BSDS‑Lite to full crucible.
+- `URABRASK_COMPLETION_PACKAGES.md` — authoritative work packages with acceptance criteria and estimates (start here).
+- `leyline-schema-draft.md` — Day‑1 Leyline additions for BSDS/benchmarks.
+Also see:
+- `bsds-lite-integration.md` — transport via Urza extras and consumer mapping.
+- `../speculative/bsds-lite/` — JSON schema + examples (mirror of Leyline BSDS for prototype transport).
+- `metrics.md` — prototype metrics/alerts; `timeout-matrix.md` — budgets.
