@@ -73,3 +73,20 @@ Crucible v1 Hazards & Flags (Prototype)
 - Signing + WAL (WP8.0):
   - Enable signing: `URABRASK_SIGNING_ENABLED=true` with `ESPER_LEYLINE_SECRET` set
   - WAL path: `URABRASK_WAL_PATH` (default `./var/urza/urabrask_wal.jsonl`), append‑only hash chain
+
+Signing + WAL Operations
+- Enable signing by exporting a non‑empty `ESPER_LEYLINE_SECRET` and `URABRASK_SIGNING_ENABLED=true`.
+- WAL:
+  - Location: `URABRASK_WAL_PATH` (JSONL; one entry per issuance)
+  - Manual check: `prev_sig` of the latest entry should equal the `sig` of the previous entry for the same blueprint.
+  - Prototype guardrails: signing/WAL are fail‑open (missing secret or write errors do not block BSDS issuance).
+
+Bench Worker Operations
+- Defaults are CPU‑only; CUDA profiles are opt‑in via `BenchmarkConfig.allow_cuda_profiles=True` (application code) and device preference.
+- Cooldown avoids hot loops: set `URABRASK_BENCH_MIN_INTERVAL_S` (default 3600s). Upon successful attach, worker writes `extras["benchmarks_last_run"]`.
+- Telemetry counters (`urabrask.bench.*`) surface processed/attached/failed and cooldown skips when integrated in Weatherlight.
+
+Oona BSDS Events (Prototype)
+- Feature‑gate via `URABRASK_OONA_PUBLISH_ENABLED=true`.
+- On successful BSDS attach: publishes `BSDSIssued` with the canonical proto.
+- On failure: publishes `BSDSFailed` with `blueprint_id` and `reason`.

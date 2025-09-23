@@ -94,6 +94,28 @@ Operational flags:
 - `URABRASK_CRUCIBLE_ALLOW_OOM` — enable OOM probe (default false)
 - `URABRASK_CRUCIBLE_SIMULATE_OOM` — CI‑safe risk flag without real allocation (default false)
 
+## BSDS Events (Prototype)
+
+If Oona eventing is enabled (`URABRASK_OONA_PUBLISH_ENABLED=true`), Urabrask publishes:
+- `BSDSIssued` with the canonical BSDS
+- `BSDSFailed` with `blueprint_id` and `reason`
+
+Suggested panels (ES datasource; requires Oona events indexing):
+- BSDS Issued per 1h (Bar/Line)
+  - Query: type:BSDSIssued (or index-based filter), aggregate count over time buckets.
+- BSDS Failed per 1h (Bar/Line)
+  - Query: type:BSDSFailed; break down by reason where available.
+- Last 20 BSDS Events (Table)
+  - Columns: timestamp, type, blueprint_id, hazard (from bsds), reason (on failure)
+
+## WAL Integrity (Doc‑Only)
+
+If WAL entries are indexed in ES (optional ops script):
+- Append Rate (Time Series)
+  - Count of WAL entries ingested per time bucket.
+- Integrity Check Results (Stat/Table)
+  - Count of integrity errors (hash‑chain mismatches). In prototype, provide via an ops job that parses WAL and emits a heartbeat document.
+
 
 ## Weatherlight Producer Stats (Telemetry)
 - Weatherlight emits `urabrask.*` metrics in its telemetry packet (not Prometheus native unless ingested):

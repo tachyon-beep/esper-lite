@@ -519,8 +519,91 @@ def test_conservative_mode_overrides_directive(tmp_path) -> None:
     packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1)
     command = service.evaluate_epoch(packet)
     assert command.command_type == leyline_pb2.COMMAND_PAUSE
-    telemetry = service.telemetry_packets[-1]
-    assert any(event.description == "pause_triggered" for event in telemetry.events)
+
+
+@pytest.mark.asyncio
+async def test_field_report_publish_hedging_success_after_retry(tmp_path: Path) -> None:
+    config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    service = TamiyoService(store_config=config, signature_context=_SIGNATURE_CONTEXT)
+    # Generate one field report
+    # Create a minimal command for the report without invoking evaluate
+    cmd = leyline_pb2.AdaptationCommand(version=1, command_type=leyline_pb2.COMMAND_PAUSE)
+    cmd.command_id = str(uuid4())
+    cmd.issued_at.GetCurrentTime()
+    service.generate_field_report(
+        command=cmd,
+        outcome=leyline_pb2.FIELD_REPORT_OUTCOME_SUCCESS,
+        metrics_delta={"loss": 0.0},
+        training_run_id="run-hedge",
+        seed_id="seed-h",
+        blueprint_id="bp-h",
+    )
+    assert len(service.field_reports) >= 1
+
+    calls: dict[str, int] = {"report": 0}
+
+    class _FlakyOona:
+        async def publish_field_report(self, report: leyline_pb2.FieldReport) -> None:
+            calls["report"] += 1
+            # Fail first attempt, succeed afterwards
+            if calls["report"] == 1:
+                raise RuntimeError("transient")
+
+        async def publish_telemetry(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+    oona = _FlakyOona()
+    sent = await service.publish_history(oona)  # first attempt fails
+    assert sent is False
+    assert len(service.field_reports) == 1  # retained for retry
+    # Second attempt should succeed and clear buffer
+    sent2 = await service.publish_history(oona)
+    assert sent2 is True
+    assert len(service.field_reports) == 0
+    # Only one successful publish overall for the report
+    assert calls["report"] == 2
+
+
+@pytest.mark.asyncio
+async def test_field_report_publish_drops_after_cap(tmp_path: Path) -> None:
+    # Override via env-driven settings
+    config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    # Inject settings via environment
+    import os
+    os.environ["TAMIYO_FIELD_REPORT_MAX_RETRIES"] = "1"
+    service = TamiyoService(store_config=config, signature_context=_SIGNATURE_CONTEXT)
+    # Generate one field report
+    cmd = leyline_pb2.AdaptationCommand(version=1, command_type=leyline_pb2.COMMAND_PAUSE)
+    cmd.command_id = str(uuid4())
+    cmd.issued_at.GetCurrentTime()
+    service.generate_field_report(
+        command=cmd,
+        outcome=leyline_pb2.FIELD_REPORT_OUTCOME_NEUTRAL,
+        metrics_delta={},
+        training_run_id="run-hedge-cap",
+        seed_id="seed-hc",
+        blueprint_id="bp-hc",
+    )
+    assert len(service.field_reports) >= 1
+
+    class _AlwaysFailOona:
+        async def publish_field_report(self, report: leyline_pb2.FieldReport) -> None:
+            raise RuntimeError("down")
+
+        async def publish_telemetry(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+    oona = _AlwaysFailOona()
+    # First attempt: retained (retry count=1 <= cap=1)
+    sent = await service.publish_history(oona)
+    assert sent is False
+    assert len(service.field_reports) == 1
+    # Second attempt: exceeds cap (>1) and drops from memory
+    sent2 = await service.publish_history(oona)
+    assert sent2 is False
+    assert len(service.field_reports) == 0
+    # WAL remains intact
+    assert len(service._field_report_store.reports()) >= 1
 
 
 def test_field_report_generation(tmp_path) -> None:

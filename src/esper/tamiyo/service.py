@@ -169,6 +169,12 @@ class TamiyoService:
         self._telemetry_packets: list[leyline_pb2.TelemetryPacket] = []
         self._field_reports: list[leyline_pb2.FieldReport] = store.reports()
         self._policy_updates: list[leyline_pb2.PolicyUpdate] = []
+        # Retry hedging for field-report publishing (in-memory only)
+        self._report_retry_count: dict[str, int] = {}
+        try:
+            self._max_report_retries = int(getattr(self._settings, "tamiyo_field_report_max_retries", 3))
+        except Exception:
+            self._max_report_retries = 3
         self._last_validation_loss: float | None = None
         self._policy_version = getattr(self._policy, "architecture_version", "policy-stub")
         self._signing_context = signature_context or SignatureContext.from_environment(DEFAULT_SECRET_ENV)
@@ -1501,24 +1507,59 @@ class TamiyoService:
         with contextlib.suppress(Exception):
             self.close()
 
-    async def publish_history(self, oona: OonaClient) -> None:
-        """Publish collected field reports and telemetry via Oona."""
+    def _field_report_key(self, report: leyline_pb2.FieldReport) -> str:
+        """Compute a stable retry key for a field report."""
+        rid = getattr(report, "report_id", "")
+        if rid:
+            return str(rid)
+        try:
+            import hashlib
 
-        for report in self._field_reports:
-            await oona.publish_field_report(report)
+            return hashlib.sha256(report.SerializeToString()).hexdigest()
+        except Exception:
+            return f"digest-{id(report)}"
+
+    async def publish_history(self, oona: OonaClient) -> bool:
+        """Publish collected field reports and telemetry via Oona with hedging.
+
+        Returns True if all payloads were sent; False if any field reports were
+        retained due to transient failures. WAL is not modified here.
+        """
+
+        all_sent = True
+        failed_reports: list[leyline_pb2.FieldReport] = []
+        for report in list(self._field_reports):
+            key = self._field_report_key(report)
+            try:
+                await oona.publish_field_report(report)
+                self._report_retry_count.pop(key, None)
+            except Exception:  # pragma: no cover - asserted via tests
+                count = int(self._report_retry_count.get(key, 0)) + 1
+                self._report_retry_count[key] = count
+                if count <= self._max_report_retries:
+                    failed_reports.append(report)
+                else:
+                    # Drop from memory after cap; WAL remains intact
+                    self._report_retry_count.pop(key, None)
+                all_sent = False
+
         for telemetry in self._telemetry_packets:
             priority_name = telemetry.system_health.indicators.get("priority")
             priority_enum = None
             if priority_name:
                 with contextlib.suppress(ValueError):
                     priority_enum = leyline_pb2.MessagePriority.Value(priority_name)
-            await oona.publish_telemetry(telemetry, priority=priority_enum)
+            try:
+                await oona.publish_telemetry(telemetry, priority=priority_enum)
+            except Exception:  # pragma: no cover - best effort
+                all_sent = False
         # Clear published buffers to avoid duplicate exports when Weatherlight
         # drains Tamiyo on each flush cycle (prototype-delta Tamiyo §8).
-        if self._field_reports:
-            self._field_reports = []
+        # Retain only unsent reports for next attempt
+        self._field_reports = failed_reports
         if self._telemetry_packets:
             self._telemetry_packets = []
+        return all_sent
 
     def ingest_policy_update(self, update: leyline_pb2.PolicyUpdate) -> None:
         """Apply a policy update produced by Simic."""

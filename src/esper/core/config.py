@@ -59,6 +59,9 @@ class EsperSettings(BaseSettings):
     tamiyo_field_report_retention_hours: int = Field(
         alias="TAMIYO_FIELD_REPORT_RETENTION_HOURS", default=24
     )
+    tamiyo_field_report_max_retries: int = Field(
+        alias="TAMIYO_FIELD_REPORT_MAX_RETRIES", default=3
+    )
     # Tamiyo compile toggle (optional override)
     # None → use TamiyoPolicy defaults (CUDA + device="cuda" → enabled)
     tamiyo_enable_compile: bool | None = Field(

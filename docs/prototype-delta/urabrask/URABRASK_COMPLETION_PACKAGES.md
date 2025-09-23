@@ -149,6 +149,32 @@ Status: Complete (prototype)
   - `tests/urabrask/test_benchmarks_service.py` (Urza extras attachment and schema)
 - Full suite result: 241 passed, 1 skipped.
 
+### URA8 — Signing + WAL (Prototype)
+
+Status: Complete (prototype)
+
+- Implemented HMAC‑SHA256 signing for BSDS mirrors with optional enable via `URABRASK_SIGNING_ENABLED=true` and `ESPER_LEYLINE_SECRET`.
+- Append‑only WAL at `URABRASK_WAL_PATH` with hash‑chain (`prev_sig`), fail‑open if not configured; unit tests cover signature verification and WAL append.
+
+## WP8+ Summary (Prototype)
+
+- 8.0 Signing + WAL — complete; feature‑gated; tests for sign/verify and WAL.
+- 8.1 Crucible Result Bundles — complete; per‑run JSON artifacts with retention.
+- 8.2 Crucible Hazard Additions — complete; guarded `memory_watermark` and `oom_risk` with flags; tests included.
+- 8.3 BSDS‑Lite Schema Validation — complete; examples and producer mirrors validate.
+- 8.4 Producer CLI E2E — complete; subprocess test; extras updated; optional signing path verified.
+- 8.5 Oona BSDS Events — complete; publishes `BSDSIssued/Failed` when enabled; integration tests.
+- 8.6 Bench/Crucible Hardening — complete; bench cooldown + CPU‑only defaults; GPU timing gated.
+- 8.7 Nissa Hazards Enrichment — complete; ES docs enriched with `bsds_hazards` when available.
+
+### Ops Checklist
+
+- Enable signing + WAL: set `ESPER_LEYLINE_SECRET` and `URABRASK_SIGNING_ENABLED=true`; verify WAL at `URABRASK_WAL_PATH`.
+- Crucible artifacts: set `URABRASK_CRUCIBLE_ARTIFACTS_DIR` and `URABRASK_CRUCIBLE_ARTIFACTS_KEEP` as needed.
+- Hazard probes: configure `URABRASK_CRUCIBLE_MEMORY_WATERMARK_MB`; enable OOM probe only when safe (`URABRASK_CRUCIBLE_ALLOW_OOM=true`).
+- Bench worker: set `URABRASK_BENCH_ENABLED=true` and `URABRASK_BENCH_MIN_INTERVAL_S` to avoid hot loops.
+- Oona events: publish `BSDSIssued/Failed` by setting `URABRASK_OONA_PUBLISH_ENABLED=true`.
+
 ## Phase 2 — Hardening (Optional)
 
 ### URA8 — Signing + Immutability + WAL
