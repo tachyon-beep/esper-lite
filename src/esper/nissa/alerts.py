@@ -16,6 +16,7 @@ def _greater_than(value: float, threshold: float) -> bool:
 
 COMPARATORS: dict[str, Comparator] = {
     ">": _greater_than,
+    "<": lambda v, t: v < t,
 }
 
 
@@ -122,6 +123,15 @@ class AlertEngine:
 
 
 DEFAULT_ALERT_RULES: tuple[AlertRule, ...] = (
+    # Coverage low for 3 consecutive packets → Slack
+    AlertRule(
+        name="tamiyo_coverage_low",
+        metric="tamiyo.gnn.feature_coverage",
+        threshold=0.7,
+        comparator="<",
+        for_count=3,
+        routes=("slack",),
+    ),
     AlertRule(
         name="training_latency_high",
         metric="tolaria.training.latency_ms",
@@ -164,6 +174,14 @@ DEFAULT_ALERT_RULES: tuple[AlertRule, ...] = (
         threshold=0.5,
         for_count=3,
         routes=("slack",),
+    ),
+    # Elevated blueprint risk flag (ingested as a boolean gauge) → PagerDuty
+    AlertRule(
+        name="tamiyo_bsds_elevated_risk",
+        metric="tamiyo.bsds.elevated_risk_flag",
+        threshold=0.5,
+        for_count=1,
+        routes=("pagerduty",),
     ),
 )
 

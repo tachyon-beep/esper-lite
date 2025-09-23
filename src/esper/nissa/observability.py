@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from elasticsearch import Elasticsearch
 from google.protobuf.json_format import MessageToDict
-from prometheus_client import CollectorRegistry, Counter
+from prometheus_client import CollectorRegistry, Counter, Gauge
 
 from esper.leyline import leyline_pb2
 from esper.nissa.alerts import AlertEngine, AlertRouter, DEFAULT_ALERT_RULES, AlertEvent
@@ -77,6 +77,34 @@ class NissaIngestor:
             "Number of Simic PPO iterations processed",
             registry=self._registry,
         )
+        # Coverage & BSDS Gauges/Counters
+        self._tamiyo_feature_coverage = Gauge(
+            "tamiyo_gnn_feature_coverage",
+            "Tamiyo average feature coverage",
+            registry=self._registry,
+        )
+        self._tamiyo_feature_coverage_by_type = Gauge(
+            "tamiyo_gnn_feature_coverage_by_type",
+            "Tamiyo per-feature coverage (whitelisted features only)",
+            registry=self._registry,
+            labelnames=("feature",),
+        )
+        # Whitelist (configurable in future)
+        self._coverage_feature_keys: tuple[str, ...] = (
+            "global.loss",
+            "seed.learning_rate",
+            "edges.seed_param_allowed",
+        )
+        self._tamiyo_bsds_quarantine_active = Gauge(
+            "tamiyo_bsds_quarantine_active",
+            "Whether a Tamiyo quarantine was signaled in the latest packet",
+            registry=self._registry,
+        )
+        self._tamiyo_bsds_elevated_risk = Gauge(
+            "tamiyo_bsds_elevated_risk",
+            "Whether Tamiyo blueprint risk is elevated (thresholded)",
+            registry=self._registry,
+        )
         # BSDS (Tamiyo) hazard counters — provenance label best-effort
         self._tamiyo_bsds_high = Counter(
             "esper_tamiyo_bsds_hazard_high_total",
@@ -128,6 +156,31 @@ class NissaIngestor:
                 prov = (event.attributes.get("provenance") or "unknown").lower()
                 self._tamiyo_bsds_high.labels(provenance=prov).inc()
                 signals["tamiyo.bsds.hazard_high_signal"] = 1.0
+        # Coverage gauge from Tamiyo metric; optional per-type coverage if namespaced metrics exist
+        cov = metrics.get("tamiyo.gnn.feature_coverage")
+        if cov is not None:
+            self._tamiyo_feature_coverage.set(float(cov))
+        for name, value in list(metrics.items()):
+            if name.startswith("tamiyo.gnn.coverage."):
+                feature = name.split("tamiyo.gnn.coverage.", 1)[1]
+                if feature in self._coverage_feature_keys:
+                    self._tamiyo_feature_coverage_by_type.labels(feature=feature).set(float(value))
+
+        # Derived BSDS elevated risk flag and quarantine activity gauge
+        risk = metrics.get("tamiyo.blueprint.risk")
+        if risk is not None:
+            elevated = 1.0 if float(risk) >= 0.8 else 0.0
+            self._tamiyo_bsds_elevated_risk.set(elevated)
+            # Expose a boolean flag into metrics for alert engine
+            metrics["tamiyo.bsds.elevated_risk_flag"] = elevated
+
+        quarantine = 0.0
+        for event in packet.events:
+            if event.description == "bp_quarantine":
+                quarantine = 1.0
+                break
+        self._tamiyo_bsds_quarantine_active.set(quarantine)
+
         if signals:
             metrics.update(signals)
         if metrics:
