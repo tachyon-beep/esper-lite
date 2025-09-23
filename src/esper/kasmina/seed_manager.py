@@ -1750,6 +1750,31 @@ class KasminaSeedManager:
                 stage=ctx.lifecycle.state,
                 age_epochs=self._current_epoch,
             )
+            # Minimal enrichment per WP9 (no new contracts):
+            # - alpha and alpha schedule descriptors via metrics map
+            # - blend allowance as a boolean flag (1.0/0.0)
+            # - risk tolerance when available (metadata-derived)
+            try:
+                state.metrics["alpha"] = float(ctx.alpha)
+                state.metrics["alpha_steps"] = float(ctx.alpha_steps)
+            except Exception:
+                pass
+            try:
+                state.metrics["alpha_total_steps"] = float(self._alpha_schedule.total_steps)
+                state.metrics["alpha_temperature"] = float(self._alpha_schedule.temperature)
+            except Exception:
+                pass
+            try:
+                blend_allowed = 1.0 if ctx.lifecycle.state >= pb.SEED_STAGE_BLENDING else 0.0
+                state.metrics["blend_allowed"] = blend_allowed
+            except Exception:
+                pass
+            try:
+                rt = ctx.metadata.get("risk_tolerance")
+                if isinstance(rt, (int, float)):
+                    state.metrics["risk_tolerance"] = float(rt)
+            except Exception:
+                pass
             result.append(state)
         return result
 

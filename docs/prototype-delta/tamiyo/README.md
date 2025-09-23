@@ -134,3 +134,31 @@ Checklist
 - `blending_schedule_start` and `blending_schedule_end` are clamped to [0.0, 1.0] and express the fraction of the blending window to occupy.
 - Tamiyo always orders the pair so `start <= end` before handing the command to Kasmina.
 - Downstream consumers should rescale these fractions into absolute steps if a different unit is required.
+
+## WP9 — Kasmina Seed Exports (Minimal)
+
+Intent: Improve Tamiyo seed feature coverage without changing Leyline contracts by enriching Kasmina's `SeedState` exports via the existing `metrics` map.
+
+What Kasmina now exports (per seed) through `SeedState.metrics`:
+- `alpha`: current blending alpha value (0.0–1.0)
+- `alpha_steps`: steps progressed on the current schedule
+- `alpha_total_steps`: configured schedule span (prototype default: 20)
+- `alpha_temperature`: schedule temperature shaping parameter (prototype default: 2.0)
+- `blend_allowed`: 1.0 if blending allowed for this seed, else 0.0 (falls back to lifecycle stage if not explicitly set)
+- `risk_tolerance`: optional numeric tolerance when available from manager metadata/gates
+
+Tamiyo mapping (graph builder):
+- Consumes `blend_allowed` to drive the seed "blend_allowed" feature (overrides stage‑based inference) and capability.
+- Threads `alpha`, `alpha_steps`, `alpha_total_steps`, `alpha_temperature`, and `risk_tolerance` into the seed capability dict for downstream policy/telemetry use (no change to fixed feature vector shape).
+
+Acceptance and contract posture:
+- No Protobuf changes; all additions live in `SeedState.metrics`.
+- Seed feature coverage improves (explicit blend allowance and optional schedule/risk context available to policy), and existing tests confirm mapping and stability.
+
+Risk tolerance sourcing (prototype):
+- The seed manager will include `risk_tolerance` when present in the seed context metadata (e.g., gate outputs or runtime policy). Until a canonical source is defined by the architect, absence is expected and handled gracefully by Tamiyo (defaults to 0.0 in capabilities).
+
+References:
+- Source: `src/esper/kasmina/seed_manager.py::export_seed_states`
+- Mapping: `src/esper/tamiyo/graph_builder.py::_build_seed_features`
+- Tests: `tests/kasmina/test_seed_manager.py::test_export_seed_states_includes_alpha_schedule_and_blend_allowed`, `tests/tamiyo/test_policy_gnn.py`

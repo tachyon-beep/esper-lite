@@ -39,6 +39,8 @@ def _sample_packet() -> leyline_pb2.SystemStatePacket:
     seed.layer_depth = 3
     seed.age_epochs = 12
     seed.risk_score = 0.3
+    # Seed-level WP9 metrics (blend allowance overrides stage if present)
+    seed.metrics["blend_allowed"] = 1.0
     return packet
 
 

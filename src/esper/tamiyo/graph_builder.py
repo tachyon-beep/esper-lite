@@ -286,6 +286,11 @@ class TamiyoGraphBuilder:
                 allowed_methods = {str(name) for name in methods}
         for index, seed in enumerate(seed_list):
             cursor = 0
+            metrics_map = {}
+            try:
+                metrics_map = dict(getattr(seed, "metrics", {}))
+            except Exception:
+                metrics_map = {}
             # Proto3 scalars don't have presence; treat non-zero as present
             lr_present = bool(getattr(seed, "learning_rate", 0.0))
             features[index, cursor] = self._normalizer.normalize(
@@ -344,7 +349,10 @@ class TamiyoGraphBuilder:
                 features[index, cursor] = float(reg_idx) / max(1.0, float(self._cfg.seed_vocab))
                 coverage.observe("seed.embedding", True)
             cursor += 1
-            blend_allowed = 1.0 if seed.stage >= leyline_pb2.SeedLifecycleStage.SEED_STAGE_BLENDING else 0.0
+            # Blend allowance: prefer explicit seed metric if provided; else stage or blueprint capability
+            blend_allowed = 1.0 if float(metrics_map.get("blend_allowed", 0.0)) > 0.0 else (
+                1.0 if seed.stage >= leyline_pb2.SeedLifecycleStage.SEED_STAGE_BLENDING else 0.0
+            )
             if allowed_methods:
                 blend_allowed = 1.0
             if cursor < features.size(1):
@@ -356,6 +364,12 @@ class TamiyoGraphBuilder:
                     "risk": float(seed.risk_score),
                     "blend_allowed": blend_allowed,
                     "layer_depth": float(seed.layer_depth),
+                    # Expose optional WP9 enrichments as capabilities for downstream use
+                    "alpha": float(metrics_map.get("alpha", 0.0) or 0.0),
+                    "alpha_steps": float(metrics_map.get("alpha_steps", 0.0) or 0.0),
+                    "alpha_total_steps": float(metrics_map.get("alpha_total_steps", 0.0) or 0.0),
+                    "alpha_temperature": float(metrics_map.get("alpha_temperature", 0.0) or 0.0),
+                    "risk_tolerance": float(metrics_map.get("risk_tolerance", 0.0) or 0.0),
                 }
             )
             fallback_score = (

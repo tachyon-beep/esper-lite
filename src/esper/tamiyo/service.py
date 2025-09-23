@@ -993,6 +993,19 @@ class TamiyoService:
                     )
                 )
                 hazard = str(bsds_block.get("hazard_band", "")).upper()
+                handling = str(bsds_block.get("handling_class", "")).lower()
+                # Handling override: quarantine treated as CRITICAL
+                if handling == "quarantine":
+                    reason = "bsds_handling_quarantine"
+                    command.command_type = leyline_pb2.COMMAND_PAUSE
+                    events.append(
+                        TelemetryEvent(
+                            description="bsds_handling_quarantine",
+                            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
+                            attributes={"handling": handling},
+                        )
+                    )
+                    self._set_conservative_mode(True, reason, events)
                 # Escalate on high/critical hazards
                 if hazard == "CRITICAL":
                     reason = "bsds_hazard_critical"
@@ -1005,10 +1018,8 @@ class TamiyoService:
                         )
                     )
                     self._set_conservative_mode(True, reason, events)
-                elif hazard == "HIGH" and command.command_type == leyline_pb2.COMMAND_SEED:
-                    reason = reason or "bsds_hazard_high"
-                    command.command_type = leyline_pb2.COMMAND_OPTIMIZER
-                    command.optimizer_adjustment.optimizer_id = "sgd"
+                elif hazard == "HIGH":
+                    # Always record the event; downgrade action only if still SEED
                     events.append(
                         TelemetryEvent(
                             description="bsds_hazard_high",
@@ -1016,6 +1027,10 @@ class TamiyoService:
                             attributes={"hazard": hazard},
                         )
                     )
+                    if command.command_type == leyline_pb2.COMMAND_SEED:
+                        reason = reason or "bsds_hazard_high"
+                        command.command_type = leyline_pb2.COMMAND_OPTIMIZER
+                        command.optimizer_adjustment.optimizer_id = "sgd"
 
         if not timed_out and loss_delta > self._risk.max_loss_spike:
             reason = "loss_spike"

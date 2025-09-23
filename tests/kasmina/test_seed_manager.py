@@ -180,6 +180,25 @@ def test_seed_telemetry_enrichment_includes_alpha_kernel_and_isolation() -> None
     # but ensure no crash and structure OK when present.
 
 
+def test_export_seed_states_includes_alpha_schedule_and_blend_allowed() -> None:
+    runtime = _Runtime(latency=1.0)
+    manager = KasminaSeedManager(runtime, signing_context=_SIGNING_CONTEXT)
+    manager.register_host_model(nn.Linear(1, 1))
+    # Germinate a seed
+    cmd = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP-Z")
+    manager.handle_command(cmd)
+    states = manager.export_seed_states()
+    assert states, "expected at least one exported seed state"
+    st = states[0]
+    # Alpha metrics present
+    assert "alpha" in st.metrics
+    assert "alpha_steps" in st.metrics
+    assert "alpha_total_steps" in st.metrics
+    assert "alpha_temperature" in st.metrics
+    # Blend allowed is a numeric flag
+    assert "blend_allowed" in st.metrics
+
+
 def test_prefetch_flow_attaches_kernel() -> None:
     runtime = _Runtime()
     prefetch = _PrefetchStub()
