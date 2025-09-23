@@ -657,6 +657,18 @@ class WeatherlightService:
 
     @staticmethod
     def _telemetry_priority(packet: leyline_pb2.TelemetryPacket) -> leyline_pb2.MessagePriority:
+        # Honor explicit priority indicator when present; fallback to level
+        indicator = packet.system_health.indicators.get("priority") if packet.system_health and packet.system_health.indicators else None
+        if indicator:
+            try:
+                enum_val = leyline_pb2.MessagePriority.Value(indicator)
+                if enum_val in (
+                    leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH,
+                    leyline_pb2.MessagePriority.MESSAGE_PRIORITY_CRITICAL,
+                ):
+                    return enum_val
+            except ValueError:
+                pass
         level = packet.level
         if level in (
             leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,

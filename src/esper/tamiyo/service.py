@@ -246,6 +246,35 @@ class TamiyoService:
         )
         events.extend(risk_events)
 
+        # WP12: Degraded-input routing based on feature coverage thresholds
+        try:
+            cov = getattr(self._policy, "feature_coverage", {})
+            if cov:
+                avg_cov = float(sum(float(v) for v in cov.values()) / max(1, len(cov)))
+                warn_th = getattr(self._risk, "degraded_inputs_warn", 0.30) if hasattr(self._risk, "degraded_inputs_warn") else 0.30
+                crit_th = getattr(self._risk, "degraded_inputs_crit", 0.10) if hasattr(self._risk, "degraded_inputs_crit") else 0.10
+                evt_level = None
+                if avg_cov < crit_th:
+                    evt_level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
+                elif avg_cov < warn_th:
+                    evt_level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING
+                if evt_level is not None:
+                    events.append(
+                        TelemetryEvent(
+                            description="degraded_inputs",
+                            level=evt_level,
+                            attributes={
+                                "coverage_avg": f"{avg_cov:.3f}",
+                                "missing_features": str(sum(1 for v in cov.values() if not v)),
+                            },
+                        )
+                    )
+                    # If no prior reason set by risk engine, annotate degraded inputs
+                    if "risk_reason" not in command.annotations:
+                        command.annotations["risk_reason"] = "degraded_inputs"
+        except Exception:
+            pass
+
         last_action = self._policy.last_action
         metrics = [
             TelemetryMetric("tamiyo.validation_loss", state.validation_loss, unit="loss"),

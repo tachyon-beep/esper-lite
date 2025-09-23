@@ -71,6 +71,28 @@ class _SlowUrza:
         return self._record
 
 
+class _CoveragePolicy(TamiyoPolicy):
+    """Policy stub that sets a specific feature_coverage summary."""
+
+    def __init__(self, avg: float = 0.2) -> None:
+        super().__init__(TamiyoPolicyConfig(enable_compile=False))
+        # Create a deterministic coverage map with desired average
+        self._forced_avg = float(avg)
+
+    def select_action(self, packet: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
+        # Build a simple pause command
+        cmd = leyline_pb2.AdaptationCommand(version=1, command_type=leyline_pb2.COMMAND_PAUSE)
+        cmd.issued_by = "tamiyo"
+        cmd.issued_at.GetCurrentTime()
+        # Force coverage summary
+        # 2 keys: one present with value=_forced_avg, one missing with 0 → average ~ _forced_avg / 2
+        # To get exact avg, just use identical values
+        cov_val = max(0.0, min(1.0, self._forced_avg))
+        self._last_feature_coverage = {"global.loss": cov_val, "seed.learning_rate": cov_val}
+        self._last_action = {"action": 2.0, "param_delta": 0.0, "value_estimate": 0.0}
+        return cmd
+
+
 def test_tamiyo_service_generates_command(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
     service = TamiyoService(
@@ -131,6 +153,33 @@ def test_tamiyo_service_generates_command(tmp_path) -> None:
     assert "feature_coverage" in command.annotations
     cov = float(command.annotations["feature_coverage"])  # type: ignore[arg-type]
     assert 0.0 <= cov <= 1.0
+
+
+@pytest.mark.asyncio
+async def test_degraded_inputs_routes_emergency(tmp_path) -> None:
+    # Force very low coverage → CRITICAL degraded_inputs
+    policy = _CoveragePolicy(avg=0.1)
+    service = TamiyoService(
+        policy=policy,
+        store_config=FieldReportStoreConfig(path=tmp_path / "field_reports.log"),
+        signature_context=_SIGNATURE_CONTEXT,
+    )
+    packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-degraded")
+    service.evaluate_step(packet)
+    # Route to Oona and assert emergency
+    redis = FakeRedis()
+    config = StreamConfig(
+        normal_stream="oona.normal",
+        emergency_stream="oona.emergency",
+        telemetry_stream="oona.telemetry",
+        group="tamiyo-degraded",
+    )
+    oona = OonaClient("redis://localhost", config=config, redis_client=redis)
+    await oona.ensure_consumer_group()
+    await service.publish_history(oona)
+    # Emergency stream should have a critical packet from Tamiyo
+    assert await oona.stream_length("oona.emergency") >= 1
+    await oona.close()
 
 
 def test_tamiyo_signed_command_accepted_and_replay_rejected(tmp_path) -> None:
