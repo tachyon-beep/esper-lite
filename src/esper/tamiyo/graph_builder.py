@@ -737,21 +737,103 @@ class TamiyoGraphBuilder:
             _set_edge(("activation", "configures", "parameter"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
             _set_edge(("parameter", "modulates", "activation"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
 
-        # seed ↔ parameter capability edges
+        # seed ↔ parameter capability edges (WP10): build only when allowances present; mask otherwise
         if seed_count and parameter_count:
-            src = torch.arange(seed_count, dtype=torch.long).repeat_interleave(parameter_count)
-            dst = torch.arange(parameter_count, dtype=torch.long).repeat(seed_count)
-            attrs_sp = []
-            for cap in seed_capabilities:
-                blend_allowed = cap.get("blend_allowed", 0.0)
-                stage_norm = cap.get("stage", 0.0)
-                for _ in range(parameter_count):
-                    attrs_sp.append([blend_allowed, 1.0, stage_norm])
-            _set_edge(("seed", "allowed", "parameter"), src, dst, attrs_sp)
-            _set_edge(("parameter", "associated", "seed"), dst, src, attrs_sp)
+            allowed_seed_indices = [
+                idx for idx, cap in enumerate(seed_capabilities)
+                if float(cap.get("blend_allowed", 0.0)) > 0.0
+            ]
+            # Derive per-seed allowed parameter indices (names and/or indices supported via extras)
+            param_node_ids = list(getattr(data["parameter"], "node_ids", []))
+            param_names = [
+                (pid.rsplit("-", 1)[1] if isinstance(pid, str) and "-" in pid else str(pid))
+                for pid in param_node_ids
+            ]
+            capabilities_block = graph_meta.get("capabilities") if isinstance(graph_meta, Mapping) else None
+            allow_by_seed_id: dict[str, set[int]] = {}
+            allow_by_seed_index: dict[int, set[int]] = {}
+            if isinstance(capabilities_block, Mapping):
+                by_id = capabilities_block.get("allowed_parameters_by_seed_id")
+                if isinstance(by_id, Mapping):
+                    for sid, entries in by_id.items():
+                        indices: set[int] = set()
+                        if isinstance(entries, list):
+                            for e in entries:
+                                if isinstance(e, str):
+                                    try:
+                                        idx = param_names.index(e)
+                                        indices.add(idx)
+                                    except ValueError:
+                                        continue
+                                else:
+                                    try:
+                                        ei = int(e)
+                                        if 0 <= ei < parameter_count:
+                                            indices.add(ei)
+                                    except Exception:
+                                        continue
+                        allow_by_seed_id[str(sid)] = indices
+                by_index = capabilities_block.get("allowed_parameters_by_seed_index")
+                if isinstance(by_index, Mapping):
+                    for s, entries in by_index.items():
+                        try:
+                            sidx = int(s)
+                        except Exception:
+                            continue
+                        indices: set[int] = set()
+                        if isinstance(entries, list):
+                            for e in entries:
+                                try:
+                                    ei = int(e)
+                                    if 0 <= ei < parameter_count:
+                                        indices.add(ei)
+                                except Exception:
+                                    continue
+                        allow_by_seed_index[sidx] = indices
+            if allowed_seed_indices:
+                src_list: list[int] = []
+                dst_list: list[int] = []
+                attrs_sp: list[list[float]] = []
+                for sidx in allowed_seed_indices:
+                    cap = seed_capabilities[sidx] if 0 <= sidx < len(seed_capabilities) else {}
+                    blend_allowed = float(cap.get("blend_allowed", 0.0))
+                    stage_norm = float(cap.get("stage", 0.0))
+                    # Determine allowed parameters for this seed
+                    seed_id_list = list(getattr(data["seed"], "node_ids", []))
+                    sid = seed_id_list[sidx] if 0 <= sidx < len(seed_id_list) else None
+                    allowed_indices: set[int] | None = None
+                    if sid is not None and sid in allow_by_seed_id:
+                        allowed_indices = set(allow_by_seed_id[sid])
+                    elif sidx in allow_by_seed_index:
+                        allowed_indices = set(allow_by_seed_index[sidx])
+                    # Default: if no explicit list, all parameters are allowed for an allowed seed
+                    if allowed_indices is None:
+                        allowed_indices = set(range(parameter_count))
+                    # Expose per-parameter allow mask in seed capabilities (0/1 per parameter name)
+                    try:
+                        caps_mut = cap  # same object referenced by data["seed"].capabilities
+                        for pidx, pname in enumerate(param_names):
+                            key = f"allowed_param_{pname}"
+                            caps_mut[key] = 1.0 if pidx in allowed_indices else 0.0
+                    except Exception:
+                        pass
+                    for pidx in sorted(allowed_indices):
+                        src_list.append(sidx)
+                        dst_list.append(pidx)
+                        attrs_sp.append([blend_allowed, 1.0, stage_norm])
+                src = torch.tensor(src_list, dtype=torch.long) if src_list else torch.zeros(0, dtype=torch.long)
+                dst = torch.tensor(dst_list, dtype=torch.long) if dst_list else torch.zeros(0, dtype=torch.long)
+                _set_edge(("seed", "allowed", "parameter"), src, dst, attrs_sp if attrs_sp else None)
+                _set_edge(("parameter", "associated", "seed"), dst, src, attrs_sp if attrs_sp else None)
+                coverage.observe("edges.seed_param_allowed", bool(src_list))
+            else:
+                _set_edge(("seed", "allowed", "parameter"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+                _set_edge(("parameter", "associated", "seed"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+                coverage.observe("edges.seed_param_allowed", False)
         else:
             _set_edge(("seed", "allowed", "parameter"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
             _set_edge(("parameter", "associated", "seed"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+            coverage.observe("edges.seed_param_allowed", False)
 
         # blueprint ↔ layer
         if blueprint_count and layer_count:

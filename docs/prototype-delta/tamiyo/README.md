@@ -151,6 +151,17 @@ Tamiyo mapping (graph builder):
 - Consumes `blend_allowed` to drive the seed "blend_allowed" feature (overrides stage‑based inference) and capability.
 - Threads `alpha`, `alpha_steps`, `alpha_total_steps`, `alpha_temperature`, and `risk_tolerance` into the seed capability dict for downstream policy/telemetry use (no change to fixed feature vector shape).
 
+### Capability Edge Gating (WP10)
+
+- The builder synthesizes capability edges `seed -> parameter (allowed)` only when allowances are present for that seed.
+- Allowance sources (in priority order):
+  - Per‑seed lists in Urza extras: `graph.capabilities.allowed_parameters_by_seed_id` (names) or `..._by_seed_index` (0‑based indices)
+  - Seed’s own allowance flag (`SeedState.metrics["blend_allowed"]`) or lifecycle stage (BLENDING+)
+  - Global allowed methods in `graph.capabilities.allowed_blending_methods` (legacy blanket allow)
+- When explicit per‑seed allowlists exist, the builder connects the seed only to those parameters (by name/index). Otherwise, allowed seeds connect to all parameters; disallowed seeds connect to none.
+- The builder also exposes a per‑parameter mask in seed capabilities as `allowed_param_<name> ∈ {0.0, 1.0}` for downstream consumers.
+- Coverage records `edges.seed_param_allowed` (1.0 iff any capability edges are present) and is included in the graph’s feature_coverage summary and Tamiyo telemetry.
+
 Acceptance and contract posture:
 - No Protobuf changes; all additions live in `SeedState.metrics`.
 - Seed feature coverage improves (explicit blend allowance and optional schedule/risk context available to policy), and existing tests confirm mapping and stability.
