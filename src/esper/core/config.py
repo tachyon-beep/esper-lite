@@ -62,6 +62,9 @@ class EsperSettings(BaseSettings):
     tamiyo_field_report_max_retries: int = Field(
         alias="TAMIYO_FIELD_REPORT_MAX_RETRIES", default=3
     )
+    # Optional device preference for Tamiyo policy: "cpu", "cuda", "cuda:0", etc.
+    # When unset, TamiyoService will auto-detect CUDA and prefer it if available.
+    tamiyo_device: str | None = Field(alias="TAMIYO_DEVICE", default=None)
     # Tamiyo compile toggle (optional override)
     # None → use TamiyoPolicy defaults (CUDA + device="cuda" → enabled)
     tamiyo_enable_compile: bool | None = Field(

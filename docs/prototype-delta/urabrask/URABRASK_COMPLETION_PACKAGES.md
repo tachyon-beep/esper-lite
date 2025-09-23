@@ -19,11 +19,13 @@ Execution order is optimized to deliver highest leverage earliest while minimizi
   - `docs/prototype-delta/speculative/bsds-lite/{README.md,schema.md,examples/minimal.json}`
   - `docs/prototype-delta/urabrask/bsds-lite-integration.md`
   - `docs/prototype-delta/urabrask/decision-taxonomy.md`
+  - Regeneration tooling: `esper-leyline-generate` (console) or `scripts/generate_leyline.py`
 - Tests
   - `scripts/check_shared_types.py` passes; generated code loads.
   - JSON schema validates examples.
 - Acceptance
   - Canonical Leyline contracts exist from day 1; schema/examples published.
+  - Bindings regenerate successfully via `esper-leyline-generate`.
 - Estimate
   - 0.5–1 day; Complexity: Low.
 - Rollback

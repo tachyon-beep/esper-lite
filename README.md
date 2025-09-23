@@ -295,6 +295,21 @@ Notes
 - `docs/` — Design references, implementation plans, and backlog materials.
 - `.codacy/` — Shared linting and CI bootstrap configuration.
 
+## Tooling
+
+- Regenerate Leyline bindings (requires `grpcio-tools` in your environment):
+
+  ```bash
+  # Optional: install tools in your venv
+  pip install grpcio-tools
+  # Generate python stubs into src/esper/leyline/_generated
+  esper-leyline-generate \
+    --proto-dir contracts/leyline \
+    --out-dir src/esper/leyline/_generated
+  ```
+
+  The same logic is also available as a script: `scripts/generate_leyline.py`.
+
 ## Subsystem Overview
 
 Each subsystem module exposes a narrow public API under `src/esper/<subsystem>/__init__.py` and includes placeholder classes that cite the authoritative detailed design section:

@@ -86,6 +86,7 @@ sysmetrics = [
 esper-nissa-service = "esper.nissa.service_runner:main"
 esper-weatherlight-service = "esper.weatherlight.service_runner:main"
 esper-urabrask-produce = "esper.urabrask.cli:main"
+esper-leyline-generate = "esper.leyline.tools:generate_bindings_main"
 
 [project.urls]
 "Homepage" = "https://github.com/esperai/esper-lite"

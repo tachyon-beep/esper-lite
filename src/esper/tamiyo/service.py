@@ -139,19 +139,40 @@ class TamiyoService:
         metadata_timeout_ms: float = 10.0,
         executor: ThreadPoolExecutor | None = None,
     ) -> None:
+        # Resolve settings early for device/compile detection
+        self._settings = settings or EsperSettings()
         if policy is None:
-            # Build policy config honoring settings override for compile when provided
+            # Build policy config with device auto-detect and compile override
             p_cfg = TamiyoPolicyConfig()
+            # Device selection: explicit via settings, else prefer CUDA if available
             try:
-                if hasattr(self._settings, "tamiyo_enable_compile") and self._settings.tamiyo_enable_compile is not None:
-                    p_cfg.enable_compile = bool(self._settings.tamiyo_enable_compile)
+                prefer = getattr(self._settings, "tamiyo_device", None)
+                if prefer:
+                    p_cfg.device = str(prefer)
+                else:
+                    try:
+                        import torch as _torch  # local import to avoid hard dep at import time
+
+                        if _torch.cuda.is_available():
+                            p_cfg.device = "cuda"
+                    except Exception:
+                        pass
+            except Exception:  # pragma: no cover - defensive
+                pass
+            # Compile override: explicit via settings; else default ON when device is CUDA
+            try:
+                enable = getattr(self._settings, "tamiyo_enable_compile", None)
+                if enable is not None:
+                    p_cfg.enable_compile = bool(enable)
+                else:
+                    if str(p_cfg.device).lower().startswith("cuda"):
+                        p_cfg.enable_compile = True
             except Exception:  # pragma: no cover - defensive
                 pass
             self._policy = TamiyoPolicy(p_cfg)
         else:
             self._policy = policy
         self._risk = risk_config or RiskConfig()
-        self._settings = settings or EsperSettings()
         self._urza = urza
         self._metadata_cache_ttl = metadata_cache_ttl
         self._blueprint_cache: dict[str, tuple[datetime, dict[str, float | str | bool | int]]] = {}
@@ -221,6 +242,8 @@ class TamiyoService:
                     attributes={"budget_ms": f"{self._step_timeout_s * 1000.0:.1f}"},
                 )
             )
+            # Ensure downstream consumers have typed coverage field present (even if empty)
+            command.annotations.setdefault("coverage_types", "{}")
 
         loss_delta = 0.0
         if self._last_validation_loss is not None:
@@ -396,6 +419,8 @@ class TamiyoService:
                     for gkey, arr in groups.items():
                         if arr:
                             per_type[gkey] = float(sum(arr) / max(1, len(arr)))
+                # Ensure layer connectivity coverage key is present (defaults to 0.0)
+                per_type.setdefault("edges.layer_connects", 0.0)
                 # Emit telemetry metrics for each type
                 for gkey, ratio in per_type.items():
                     metrics.append(
@@ -415,6 +440,14 @@ class TamiyoService:
                 command.annotations.setdefault("coverage_types", types_json)
             except Exception:  # pragma: no cover - defensive
                 pass
+        # Ensure layer connectivity coverage metric exists for dashboards (defaults to 0 when unavailable)
+        try:
+            names = {m.name for m in metrics}
+            target_name = "tamiyo.gnn.feature_coverage.edges.layer_connects"
+            if target_name not in names:
+                metrics.append(TelemetryMetric(target_name, 0.0, unit="ratio"))
+        except Exception:
+            pass
         if "blending_method" in last_action:
             metrics.append(
                 TelemetryMetric(
