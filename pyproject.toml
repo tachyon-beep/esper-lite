@@ -102,6 +102,7 @@ include = [
   "src/esper",
   "README.md",
   "pyproject.toml",
+  "scripts",
 ]
 
 [tool.ruff]

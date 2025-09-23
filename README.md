@@ -319,3 +319,22 @@ Refer to `docs/project/implementation_plan.md` for full sequencing and ownership
 - Keep breakers conservative—prefer safe degradation and explicit telemetry over silent failures.
 - When adding telemetry, include clear descriptions and useful attributes; keep metric naming consistent.
 - Update `docs/` when behavior diverges from the canonical design; keep `.env.example` in sync for new config.
+### Pre-commit hooks
+
+This repository includes a pre-commit check that prevents introducing local Python Enums that shadow Leyline contracts.
+
+Setup:
+
+1) Install pre-commit
+
+```
+pip install pre-commit
+```
+
+2) Install hooks in your clone
+
+```
+pre-commit install
+```
+
+The hook runs `scripts/check_shared_types.py` to fail commits that add Enums under `src/esper/**` (except the generated Leyline stubs under `src/esper/leyline/_generated`).

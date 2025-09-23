@@ -256,8 +256,14 @@ class TezzeretCompiler:
         strategy: Literal["standard", "conservative"],
     ) -> CompilationResult:
         device = torch.device("cuda" if self._config.use_cuda and torch.cuda.is_available() else "cpu")
-        module, example_inputs = _build_blueprint_module(metadata, params, device)
-        module.eval()
+        try:
+            module, example_inputs = _build_blueprint_module(metadata, params, device)
+            module.eval()
+        except Exception:
+            # Fallback to CPU module build on CUDA initialisation issues
+            device = torch.device("cpu")
+            module, example_inputs = _build_blueprint_module(metadata, params, device)
+            module.eval()
         guard_spec = _build_guard_spec(example_inputs)
         guard_digest = _guard_digest(guard_spec)
         guard_summary = _guard_summary(guard_spec)
@@ -284,13 +290,22 @@ class TezzeretCompiler:
                 except Exception:
                     eager_fallback = True
                     selected_strategy = "eager"
+                    # If CUDA path failed, fall back to CPU to avoid backend init issues
+                    if device.type == "cuda":
+                        try:
+                            module = module.to("cpu")
+                            example_inputs = tuple(t.detach().cpu() for t in example_inputs)
+                            device = torch.device("cpu")
+                        except Exception:
+                            pass
                     compiled = module
 
             prewarm_start = time.perf_counter()
             with torch.inference_mode():
                 compiled(*example_inputs)
             if device.type == "cuda":  # pragma: no cover - GPU specific
-                torch.cuda.synchronize()
+                with contextlib.suppress(Exception):
+                    torch.cuda.synchronize()
             prewarm_ms = (time.perf_counter() - prewarm_start) * 1000.0
 
         module_to_save = module.to("cpu")

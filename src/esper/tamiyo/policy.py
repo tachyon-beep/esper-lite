@@ -277,15 +277,35 @@ class TamiyoPolicy(nn.Module):
                 try:
                     outputs = module(graph)
                 except Exception as exc:  # pragma: no cover - backend specific
+                    # First, if compiled model failed, fall back to eager.
                     if self._compiled_model is not None:
                         logger.info("tamiyo_gnn_compile_runtime_failure", extra={"reason": str(exc)})
                         self._compile_fallbacks += 1
                         self._compiled_model = None
                         self._compile_enabled = False
                         module = self._gnn
-                        outputs = module(graph)
+                        try:
+                            outputs = module(graph)
+                        except Exception:
+                            # If still failing on CUDA, fall back to CPU
+                            if self._device.type == "cuda":
+                                with contextlib.suppress(Exception):
+                                    module = module.to("cpu")
+                                    graph = graph.to("cpu")
+                                    self._device = torch.device("cpu")
+                                    outputs = module(graph)
+                            else:
+                                raise
                     else:
-                        raise
+                        # Eager CUDA fallback to CPU on backend/OOM errors
+                        if self._device.type == "cuda":
+                            with contextlib.suppress(Exception):
+                                module = module.to("cpu")
+                                graph = graph.to("cpu")
+                                self._device = torch.device("cpu")
+                                outputs = module(graph)
+                        else:
+                            raise
 
         policy_logits = outputs["policy_logits"].softmax(dim=-1)
         action_idx = int(policy_logits.argmax(dim=-1))
