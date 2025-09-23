@@ -137,6 +137,11 @@ class TezzeretForge:
                     "eager_fallback": result.eager_fallback,
                     "inductor_cache_dir": result.inductor_cache_dir,
                 }
+                # Build minimal graph metadata for Tamiyo consumers
+                try:
+                    extras["graph_metadata"] = _build_graph_metadata(metadata, result)
+                except Exception as exc:  # pragma: no cover - defensive
+                    LOGGER.debug("Failed to build graph metadata: %s", exc)
                 strategy_used = result.compile_strategy
                 compile_ms = f"{result.compile_ms:.2f}"
                 prewarm_ms = f"{result.prewarm_ms:.2f}"
@@ -346,3 +351,106 @@ class TezzeretForge:
 
 
 __all__ = ["TezzeretForge", "CompilationJob"]
+
+
+def _build_graph_metadata(
+    descriptor: BlueprintDescriptor,
+    result: "TezzeretCompiler.CompilationResult" | object,  # type: ignore[name-defined]
+) -> dict:
+    """Construct a compact graph_metadata block from compile artifacts.
+
+    Heuristic mapping (prototype):
+    - One layer per guard_spec entry (input signature), with parameter_count derived from shape product
+    - Activation list mirrors layers, using dtype as type
+    - Latency distributed evenly from prewarm_ms across layers
+    - Parameters mirrored from allowed_parameters bounds in the descriptor
+    - Adjacency chain (L0->L1->...)
+    """
+
+    try:
+        guard_spec = list(getattr(result, "guard_spec", []) or [])  # type: ignore[attr-defined]
+    except Exception:
+        guard_spec = []
+    try:
+        prewarm_ms = float(getattr(result, "prewarm_ms", 0.0))  # type: ignore[attr-defined]
+    except Exception:
+        prewarm_ms = 0.0
+
+    layer_count = max(1, len(guard_spec))
+    latency_per = prewarm_ms / float(layer_count)
+    layers: list[dict] = []
+    activations: list[dict] = []
+
+    for idx in range(layer_count):
+        spec = guard_spec[idx] if idx < len(guard_spec) else {}
+        try:
+            shape = list(spec.get("shape", [])) if isinstance(spec, dict) else []
+        except Exception:
+            shape = []
+        dims = []
+        for d in shape:
+            try:
+                dims.append(int(d))
+            except Exception:
+                continue
+        param_count = 1
+        for d in dims:
+            param_count *= max(1, d)
+        input_channels = dims[-2] if len(dims) >= 2 else (dims[-1] if dims else 1)
+        output_channels = dims[-1] if dims else 1
+        act_type = str(spec.get("dtype", "unknown")) if isinstance(spec, dict) else "unknown"
+
+        layers.append(
+            {
+                "layer_id": f"{descriptor.blueprint_id}-L{idx}",
+                "type": "guard_tensor",
+                "depth": idx,
+                "input_channels": input_channels,
+                "output_channels": output_channels,
+                "parameter_count": param_count,
+                "latency_ms": latency_per,
+                "gradient_norm": 0.0,
+                "weight_norm": 0.0,
+                "activation": act_type,
+            }
+        )
+        activations.append(
+            {
+                "activation_id": f"{descriptor.blueprint_id}-A{idx}",
+                "type": act_type,
+                "saturation_rate": 0.0,
+                "gradient_flow": 1.0,
+                "computational_cost": float(param_count),
+                "nonlinearity_strength": 0.0,
+            }
+        )
+
+    # Parameters from descriptor bounds
+    parameters: list[dict] = []
+    try:
+        for name, bounds in descriptor.allowed_parameters.items():
+            lower = float(getattr(bounds, "min_value", 0.0))
+            upper = float(getattr(bounds, "max_value", 0.0))
+            parameters.append(
+                {
+                    "name": name,
+                    "min": lower,
+                    "max": upper,
+                    "default": (lower + upper) * 0.5,
+                    "span": upper - lower,
+                }
+            )
+    except Exception:
+        pass
+
+    # Adjacency chain
+    adj_pairs = [[i, i + 1] for i in range(max(0, layer_count - 1))]
+
+    return {
+        "layers": layers,
+        "activations": activations,
+        "parameters": parameters,
+        "adjacency": {"layer": adj_pairs},
+        "capabilities": {},
+        "source": "tezzeret",
+    }
