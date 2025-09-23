@@ -262,6 +262,11 @@ def test_evaluate_step_timeout_urza(tmp_path) -> None:
     telemetry = service.telemetry_packets[-1]
     assert any(event.description == "timeout_urza" for event in telemetry.events)
     assert "blueprint_tier" not in command.annotations
+    # Priority should be mapped to HIGH on timeout to enable emergency routing
+    priority = telemetry.system_health.indicators.get("priority")
+    assert priority == leyline_pb2.MessagePriority.Name(
+        leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH
+    )
 
 
 def test_service_urza_graph_metadata_round_trip(tmp_path) -> None:

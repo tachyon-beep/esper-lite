@@ -582,7 +582,17 @@ class TamiyoService:
             return
         if self._urza is None:
             return
-        record = self._urza.get(blueprint_id)
+        # Bound the pre-warm fetch so we never stall the step path
+        record = None
+        if self._executor is not None and self._metadata_timeout_s > 0:
+            future = self._executor.submit(self._urza.get, blueprint_id)
+            try:
+                record = future.result(timeout=self._metadata_timeout_s)
+            except FuturesTimeout:
+                future.cancel()
+                return
+        else:
+            record = self._urza.get(blueprint_id)
         if record is None:
             return
         data = self._serialize_blueprint_record(record)
