@@ -536,3 +536,49 @@ def test_compile_default_off_on_cpu() -> None:
     # When no config is provided and CUDA is unavailable, compile should be disabled by default
     policy = TamiyoPolicy()
     assert not policy.compile_enabled
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA to validate compile perf")
+def test_policy_inference_perf_budget_cuda_compile() -> None:
+    # Compare eager vs compile-on p95 latency on CUDA; allow small variance
+    cfg_eager = TamiyoPolicyConfig(enable_compile=False, device="cuda")
+    policy_eager = TamiyoPolicy(cfg_eager)
+    cfg_comp = TamiyoPolicyConfig(enable_compile=True, device="cuda")
+    policy_comp = TamiyoPolicy(cfg_comp)
+
+    packet = _sample_packet()
+    for idx in range(3):
+        seed = packet.seed_states.add()
+        seed.seed_id = f"seed-cuda-{idx}"
+        seed.stage = leyline_pb2.SeedLifecycleStage.SEED_STAGE_BLENDING
+        seed.learning_rate = 0.01 + 0.001 * idx
+        seed.layer_depth = 3 + idx
+        seed.risk_score = 0.25
+
+    # Warm-up
+    policy_eager.select_action(packet)
+    try:
+        policy_comp.select_action(packet)
+    except Exception:
+        pytest.skip("compile path raised on backend; skipping CUDA perf assertion")
+    # If compile path fell back (backend not compatible), skip perf assertion
+    if not policy_comp.compile_enabled:
+        pytest.skip("compile path fell back; skipping CUDA perf assertion")
+
+    def _measure(policy: TamiyoPolicy, runs: int = 50) -> float:
+        durations: list[float] = []
+        for _ in range(runs):
+            start = time.perf_counter()
+            policy.select_action(packet)
+            durations.append((time.perf_counter() - start) * 1000.0)
+        durations.sort()
+        # p95
+        return durations[int(len(durations) * 0.95)]
+
+    p95_eager = _measure(policy_eager)
+    try:
+        p95_comp = _measure(policy_comp)
+    except Exception:
+        pytest.skip("compile path raised during measurement; skipping CUDA perf assertion")
+    # Allow minor variance; require compile path not to be significantly slower
+    assert p95_comp <= max(45.0, p95_eager * 1.10)

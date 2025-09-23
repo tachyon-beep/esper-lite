@@ -305,6 +305,21 @@ class TamiyoService:
                 1.0 if getattr(self._policy, "compile_enabled", False) else 0.0,
                 unit="bool",
             ),
+        ]
+        # Append compile fallback counter if any
+        try:
+            fallbacks = int(getattr(self._policy, "compile_fallbacks", 0))
+        except Exception:
+            fallbacks = 0
+        if fallbacks > 0:
+            metrics.append(
+                TelemetryMetric(
+                    "tamiyo.gnn.compile_fallback_total",
+                    float(fallbacks),
+                    unit="count",
+                )
+            )
+        metrics.extend([
             TelemetryMetric(
                 "tamiyo.policy.value_estimate",
                 float(last_action.get("value_estimate", 0.0)),
@@ -320,7 +335,7 @@ class TamiyoService:
                 float(last_action.get("risk_score", 0.0)),
                 unit="score",
             ),
-        ]
+        ])
         coverage = getattr(self._policy, "feature_coverage", {})
         if coverage:
             average_coverage = float(sum(coverage.values()) / max(1, len(coverage)))

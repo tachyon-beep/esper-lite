@@ -867,3 +867,31 @@ def test_tamiyo_stale_command_rejected(tmp_path) -> None:
         for packet in packets
         for event in packet.events
     )
+
+def test_compile_fallback_counter_exposed(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Force compile to raise so policy falls back and records a fallback
+    def _raise_compile(*_args, **_kwargs):  # pragma: no cover - deliberately triggered
+        raise RuntimeError("compile disabled for test")
+
+    monkeypatch.setenv("ESPER_LEYLINE_SECRET", "test-secret")
+    monkeypatch.setattr(torch, "compile", _raise_compile)
+
+    cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    # Enable compile in config to trigger the path even on CPU
+    policy = TamiyoPolicy(TamiyoPolicyConfig(enable_compile=True))
+    service = TamiyoService(policy=policy, store_config=cfg, signature_context=_SIGNATURE_CONTEXT)
+
+    packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-compile")
+    # Provide at least one seed to avoid fast-path pause
+    seed = packet.seed_states.add()
+    seed.seed_id = "seed-compile"
+    seed.stage = leyline_pb2.SeedLifecycleStage.SEED_STAGE_TRAINING
+    seed.learning_rate = 0.01
+    service.evaluate_step(packet)
+
+    telemetry = service.telemetry_packets[-1]
+    metrics = {m.name: m.value for m in telemetry.metrics}
+    # Compile fallback counter present and > 0
+    assert metrics.get("tamiyo.gnn.compile_fallback_total", 0.0) > 0.0
+    # Compile enabled flag should be 0 after fallback
+    assert metrics.get("tamiyo.gnn.compile_enabled", 1.0) == 0.0

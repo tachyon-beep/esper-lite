@@ -174,6 +174,7 @@ class TamiyoPolicy(nn.Module):
         self._autocast_enabled = cfg.enable_autocast
         self._compiled_model: nn.Module | None = None
         self._compile_enabled = False
+        self._compile_fallbacks: int = 0
         self._blueprint_metadata: dict[str, dict[str, float | str | bool | int]] = {}
 
         if cfg.enable_compile:
@@ -182,6 +183,7 @@ class TamiyoPolicy(nn.Module):
                 self._compile_enabled = True
             except Exception as exc:  # pragma: no cover - compile fallback path
                 logger.info("tamiyo_gnn_compile_disabled", extra={"reason": str(exc)})
+                self._compile_fallbacks += 1
                 self._compiled_model = None
 
         try:
@@ -277,6 +279,7 @@ class TamiyoPolicy(nn.Module):
                 except Exception as exc:  # pragma: no cover - backend specific
                     if self._compiled_model is not None:
                         logger.info("tamiyo_gnn_compile_runtime_failure", extra={"reason": str(exc)})
+                        self._compile_fallbacks += 1
                         self._compiled_model = None
                         self._compile_enabled = False
                         module = self._gnn
@@ -387,6 +390,10 @@ class TamiyoPolicy(nn.Module):
     @property
     def compile_enabled(self) -> bool:
         return self._compile_enabled
+
+    @property
+    def compile_fallbacks(self) -> int:
+        return self._compile_fallbacks
 
     @property
     def feature_coverage(self) -> dict[str, float]:
