@@ -114,6 +114,7 @@ def test_tamiyo_service_generates_command(tmp_path) -> None:
     assert "tamiyo.inference.latency_ms" in metrics
     assert metrics["tamiyo.inference.latency_ms"] <= 45.0
     assert "tamiyo.gnn.inference.latency_ms" in metrics
+    assert "tamiyo.gnn.feature_coverage" in metrics
     assert "tamiyo.gnn.compile_enabled" in metrics
     assert "tamiyo.policy.value_estimate" in metrics
     assert "tamiyo.policy.risk_score" in metrics
@@ -121,6 +122,10 @@ def test_tamiyo_service_generates_command(tmp_path) -> None:
     assert "blending_method" in telemetry.system_health.indicators
     assert telemetry.system_health.indicators.get("policy_compile") in {"0", "1"}
     assert telemetry.system_health.indicators.get("policy_arch") == service._policy.architecture_version  # pylint: disable=protected-access
+    # WP1 acceptance: command annotation includes coverage summary
+    assert "feature_coverage" in command.annotations
+    cov = float(command.annotations["feature_coverage"])  # type: ignore[arg-type]
+    assert 0.0 <= cov <= 1.0
 
 
 def test_tamiyo_signed_command_accepted_and_replay_rejected(tmp_path) -> None:

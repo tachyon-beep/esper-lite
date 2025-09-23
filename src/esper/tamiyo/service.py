@@ -2,42 +2,34 @@
 
 from __future__ import annotations
 
+import contextlib
+import json
+import logging
+import math
+import time
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from io import BytesIO
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Dict,
-    Iterable,
-    Mapping,
-    Optional,
-    Sequence,
-    Tuple,
-    Callable,
-)
-import json
-import time
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from uuid import uuid4
-import math
 
 import torch
-import logging
-import contextlib
 
 from esper.core import EsperSettings, TelemetryEvent, TelemetryMetric, build_telemetry_packet
+from esper.karn.catalog import BlueprintDescriptor  # noqa: F401
 from esper.leyline import leyline_pb2
 from esper.security.signing import DEFAULT_SECRET_ENV, SignatureContext, sign
-from esper.karn.catalog import BlueprintDescriptor
+
+from .persistence import FieldReportStore, FieldReportStoreConfig
+from .policy import TamiyoPolicy, TamiyoPolicyConfig
+
 try:
     from esper.urza import UrzaLibrary
 except ImportError:  # pragma: no cover - optional import in certain test contexts
     UrzaLibrary = None  # type: ignore
-
-from .policy import TamiyoPolicy, TamiyoPolicyConfig
-from .persistence import FieldReportStore, FieldReportStoreConfig
 
 if TYPE_CHECKING:
     from esper.oona import OonaClient, OonaMessage
@@ -147,7 +139,7 @@ class TamiyoService:
         self._settings = settings or EsperSettings()
         self._urza = urza
         self._metadata_cache_ttl = metadata_cache_ttl
-        self._blueprint_cache: Dict[str, Tuple[datetime, dict[str, float | str | bool | int]]] = {}
+        self._blueprint_cache: dict[str, tuple[datetime, dict[str, float | str | bool | int]]] = {}
         if store and store_config:
             msg = "Provide either a FieldReportStore instance or a config, not both"
             raise ValueError(msg)
@@ -213,7 +205,7 @@ class TamiyoService:
         if self._last_validation_loss is not None:
             loss_delta = state.validation_loss - self._last_validation_loss
 
-        blueprint_info: Optional[dict[str, float | str | bool | int]] = None
+        blueprint_info: dict[str, float | str | bool | int] | None = None
         blueprint_timeout = False
         if not timed_out:
             blueprint_info, blueprint_timeout = self._resolve_blueprint_with_timeout(
@@ -287,6 +279,7 @@ class TamiyoService:
                     unit="ratio",
                 )
             )
+            command.annotations.setdefault("feature_coverage", f"{average_coverage:.3f}")
         if "blending_method" in last_action:
             metrics.append(
                 TelemetryMetric(
@@ -568,7 +561,7 @@ class TamiyoService:
         self,
         command: leyline_pb2.AdaptationCommand,
         enforce_timeouts: bool,
-    ) -> tuple[Optional[dict[str, float | str | bool | int]], bool]:
+    ) -> tuple[dict[str, float | str | bool | int] | None, bool]:
         if self._urza is None:
             return None, False
         if command.command_type != leyline_pb2.COMMAND_SEED or not command.HasField("seed_operation"):
@@ -595,7 +588,7 @@ class TamiyoService:
         data = self._serialize_blueprint_record(record)
         self._blueprint_cache[blueprint_id] = (datetime.now(tz=UTC), data)
 
-    def _serialize_blueprint_record(self, record) -> dict[str, float | str | bool | int | dict | list]:
+    def _serialize_blueprint_record(self, record: Any) -> dict[str, float | str | bool | int | dict | list]:
         descriptor = record.metadata
         allowed: dict[str, dict[str, float]] = {}
         allowed_mapping = getattr(descriptor, "allowed_parameters", None)
@@ -656,7 +649,7 @@ class TamiyoService:
             data["graph"] = graph_metadata
         return data
 
-    def _extract_graph_metadata(self, record) -> dict[str, Any] | None:
+    def _extract_graph_metadata(self, record: Any) -> dict[str, Any] | None:
         extras: Mapping[str, Any] | None = getattr(record, "extras", None)
         graph_section: Any = None
         if extras:
@@ -672,7 +665,7 @@ class TamiyoService:
             return None
         return self._normalise_graph_metadata(graph_section, record)
 
-    def _graph_metadata_from_guard_spec(self, record) -> dict[str, Any] | None:
+    def _graph_metadata_from_guard_spec(self, record: Any) -> dict[str, Any] | None:
         guard_spec: Sequence[Mapping[str, Any]] = tuple(getattr(record, "guard_spec", ()) or ())
         if not guard_spec:
             return None
@@ -733,7 +726,7 @@ class TamiyoService:
     def _normalise_graph_metadata(
         self,
         graph_section: Mapping[str, Any],
-        record,
+        record: Any,
     ) -> dict[str, Any]:
         layers = self._coerce_descriptor_list(graph_section.get("layers"), key_field="layer_id")
         activations = self._coerce_descriptor_list(
@@ -794,11 +787,11 @@ class TamiyoService:
         *,
         state: leyline_pb2.SystemStatePacket,
         loss_delta: float,
-        blueprint_info: Optional[dict[str, float | str | bool | int]],
+        blueprint_info: dict[str, float | str | bool | int] | None,
         blueprint_timeout: bool,
         timed_out: bool,
         training_metrics: dict[str, float],
-    ) -> tuple[Optional[dict[str, float | str | bool | int]], list[TelemetryEvent]]:
+    ) -> tuple[dict[str, float | str | bool | int] | None, list[TelemetryEvent]]:
         events: list[TelemetryEvent] = []
         reason = command.annotations.get("risk_reason")
 

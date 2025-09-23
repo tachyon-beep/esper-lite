@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import contextlib
+import logging
+import math
 from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-import logging
-import math
-from typing import Mapping
+from collections.abc import Mapping
 
 import torch
 from torch import nn
@@ -16,8 +16,8 @@ from torch import nn
 from esper.leyline import leyline_pb2
 from esper.simic.registry import EmbeddingRegistry, EmbeddingRegistryConfig
 
-from .gnn import TamiyoGNN, TamiyoGNNConfig
 from .graph_builder import TamiyoGraphBuilder, TamiyoGraphBuilderConfig
+from .gnn import TamiyoGNN, TamiyoGNNConfig
 
 
 logger = logging.getLogger(__name__)
@@ -158,6 +158,52 @@ class TamiyoPolicy(nn.Module):
         seed_fallback_scores = getattr(graph["seed"], "candidate_scores", None)
         blueprint_candidates = list(getattr(graph["blueprint"], "node_ids", []))
         blueprint_fallback_scores = getattr(graph["blueprint"], "candidate_scores", None)
+
+        # Fast-path: no seed candidates → construct a pause command without
+        # running the GNN to meet tight step budgets.
+        if not seed_candidates:
+            action_idx = 2  # pause fallback
+            param_delta = 0.0
+            blending_method = self._blending_methods[0] if self._blending_methods else "linear"
+            schedule_values: tuple[float, float] = (0.0, 0.0)
+            command = self._build_command(
+                action_idx,
+                param_delta,
+                blending_method,
+                "",
+                "",
+                packet,
+                schedule_values,
+                None,
+            )
+            # Populate annotations and last_action with safe defaults
+            command.annotations.setdefault("policy_action", str(action_idx))
+            command.annotations.setdefault("policy_param_delta", f"{param_delta:.6f}")
+            command.annotations.setdefault("policy_version", self._architecture_version)
+            command.annotations.setdefault("policy_value_estimate", f"{0.0:.6f}")
+            command.annotations.setdefault("policy_risk_index", "0")
+            command.annotations.setdefault("policy_risk_score", f"{0.0:.6f}")
+
+            self._last_action = {
+                "action": float(action_idx),
+                "param_delta": param_delta,
+                "policy_param_vector": (),
+                "blending_method": blending_method,
+                "blending_index": 0.0,
+                "value_estimate": 0.0,
+                "risk_index": 0.0,
+                "risk_score": 0.0,
+                "compile_enabled": 1.0 if self._compile_enabled else 0.0,
+                "target_seed": "",
+                "blueprint_id": "",
+                "blending_schedule_start": schedule_values[0],
+                "blending_schedule_end": schedule_values[1],
+                "selected_seed_index": -1.0,
+                "selected_seed_score": 0.0,
+                "selected_blueprint_index": -1.0,
+            }
+            self._last_feature_coverage = coverage
+            return command
         if self._device.type == "cuda" and hasattr(graph, "pin_memory"):
             with contextlib.suppress(Exception):
                 graph = graph.pin_memory()
@@ -330,12 +376,12 @@ class TamiyoPolicy(nn.Module):
                 f"{missing}, mismatched={mismatched}"
             )
 
-    def state_dict(self, *args, **kwargs):  # type: ignore[override]
+    def state_dict(self, *args: object, **kwargs: object) -> dict:  # type: ignore[override]
         payload = super().state_dict(*args, **kwargs)
         payload["_metadata"] = {"architecture_version": self._architecture_version}
         return payload
 
-    def load_state_dict(self, state_dict, strict: bool = True):  # type: ignore[override]
+    def load_state_dict(self, state_dict: Mapping[str, object], strict: bool = True) -> object:  # type: ignore[override]
         self.validate_state_dict(state_dict)
         clean_state, _ = self._split_state_dict(state_dict)
         return super().load_state_dict(clean_state, strict=strict)

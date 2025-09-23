@@ -8,16 +8,15 @@ never crashes mid-run.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Callable, Iterable, Mapping, Sequence
+import hashlib
 import json
 import math
-import hashlib
 from collections import Counter
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
 
 import torch
-import torch.nn.functional as F
 from torch import Tensor
 from torch_geometric.data import HeteroData
 
@@ -218,7 +217,7 @@ class TamiyoGraphBuilder:
     def _build_global_features(
         self,
         packet: leyline_pb2.SystemStatePacket,
-        coverage: "_CoverageTracker",
+        coverage: _CoverageTracker,
     ) -> Tensor:
         feats = torch.zeros((1, self._cfg.global_feature_dim), dtype=torch.float32)
         metrics = dict(packet.training_metrics)
@@ -262,7 +261,7 @@ class TamiyoGraphBuilder:
         seeds: Iterable[leyline_pb2.SeedState],
         metadata: Mapping[str, float | str | bool | int],
         graph_meta: Mapping[str, object],
-        coverage: "_CoverageTracker",
+        coverage: _CoverageTracker,
     ) -> tuple[Tensor, list[str], list[dict[str, float]], Tensor]:
         seed_list = list(seeds)
         if not seed_list:
@@ -285,7 +284,8 @@ class TamiyoGraphBuilder:
                 allowed_methods = {str(name) for name in methods}
         for index, seed in enumerate(seed_list):
             cursor = 0
-            lr_present = seed.HasField("learning_rate") or bool(seed.learning_rate)
+            # Proto3 scalars don't have presence; treat non-zero as present
+            lr_present = bool(getattr(seed, "learning_rate", 0.0))
             features[index, cursor] = self._normalizer.normalize(
                 "seed_learning_rate",
                 seed.learning_rate if lr_present else 0.0,
@@ -294,7 +294,7 @@ class TamiyoGraphBuilder:
             coverage.observe("seed.learning_rate", lr_present)
             cursor += 2
 
-            risk_present = seed.HasField("risk_score") or bool(seed.risk_score)
+            risk_present = bool(getattr(seed, "risk_score", 0.0))
             features[index, cursor] = self._normalizer.normalize(
                 "seed_risk",
                 seed.risk_score if risk_present else 0.0,
@@ -303,7 +303,7 @@ class TamiyoGraphBuilder:
             coverage.observe("seed.risk", risk_present)
             cursor += 2
 
-            grad_present = seed.HasField("gradient_norm") or bool(seed.gradient_norm)
+            grad_present = bool(getattr(seed, "gradient_norm", 0.0))
             features[index, cursor] = self._normalizer.normalize(
                 "gradient_norm",
                 seed.gradient_norm if grad_present else 0.0,
@@ -312,7 +312,7 @@ class TamiyoGraphBuilder:
             coverage.observe("seed.gradient_norm", grad_present)
             cursor += 2
 
-            age_present = seed.HasField("age_epochs") or bool(seed.age_epochs)
+            age_present = bool(getattr(seed, "age_epochs", 0))
             features[index, cursor] = self._normalizer.normalize(
                 "seed_age",
                 float(seed.age_epochs) if age_present else 0.0,
@@ -370,7 +370,7 @@ class TamiyoGraphBuilder:
         packet: leyline_pb2.SystemStatePacket,
         metadata: Mapping[str, float | str | bool | int],
         graph_meta: Mapping[str, object],
-        coverage: "_CoverageTracker",
+        coverage: _CoverageTracker,
     ) -> tuple[Tensor, list[str], Tensor]:
         blueprint_id = packet.packet_id or packet.training_run_id or "bp-unknown"
         dim = self._cfg.blueprint_feature_dim
@@ -430,7 +430,7 @@ class TamiyoGraphBuilder:
         packet: leyline_pb2.SystemStatePacket,
         metadata: Mapping[str, float | str | bool | int],
         graph_meta: Mapping[str, object],
-        coverage: "_CoverageTracker",
+        coverage: _CoverageTracker,
     ) -> tuple[Tensor, list[str]]:
         raw_layers = []
         if isinstance(graph_meta, Mapping):
@@ -493,7 +493,7 @@ class TamiyoGraphBuilder:
         packet: leyline_pb2.SystemStatePacket,
         metadata: Mapping[str, float | str | bool | int],
         graph_meta: Mapping[str, object],
-        coverage: "_CoverageTracker",
+        coverage: _CoverageTracker,
     ) -> tuple[Tensor, list[str]]:
         raw_activations = []
         if isinstance(graph_meta, Mapping):
@@ -540,7 +540,7 @@ class TamiyoGraphBuilder:
         packet: leyline_pb2.SystemStatePacket,
         metadata: Mapping[str, float | str | bool | int],
         graph_meta: Mapping[str, object],
-        coverage: "_CoverageTracker",
+        coverage: _CoverageTracker,
     ) -> tuple[Tensor, list[str]]:
         descriptors = []
         if isinstance(graph_meta, Mapping):
@@ -751,7 +751,10 @@ class TamiyoGraphBuilder:
         if layer_count > 1:
             src = torch.arange(layer_count - 1, dtype=torch.long)
             dst = torch.arange(1, layer_count, dtype=torch.long)
-            attrs_ll = [[layers_depth[s], layers_depth[d], risk] for s, d in zip(src.tolist(), dst.tolist())]
+            attrs_ll = [
+                [layers_depth[s], layers_depth[d], risk]
+                for s, d in zip(src.tolist(), dst.tolist(), strict=False)
+            ]
             _set_edge(("layer", "connects", "layer"), src, dst, attrs_ll)
         else:
             _set_edge(("layer", "connects", "layer"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))

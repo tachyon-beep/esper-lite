@@ -4,6 +4,16 @@ This document breaks down the remaining Tamiyo implementation work into small, t
 
 Context: Aligns with `GNN-WP1.md`, `diff/gnn-inputs.md`, `diff/input-remediation-plan.md`, `timeout-matrix.md`, `telemetry.md`, `decision-taxonomy.md`, and `risk-engine.md`. Weatherlight remains unchanged (3A tight coupling); contracts stay Leyline-first.
 
+## Libraries & Dependencies Guidance
+
+- Heavy packages are allowed; prefer the most appropriate library when it materially improves code clarity or performance.
+- Recommendations:
+  - Graph processing: keep using PyTorch Geometric for hetero graphs.
+  - JSON hot paths: prefer `orjson` for Urza extras and high-frequency (de)serialization.
+  - Performance: use `torch.profiler`; optionally add `pytest-benchmark` for latency checks.
+  - Registries: start with JSON; consider `lmdb` if registry size/concurrency grows (WP14 optional).
+- Add dependencies in `pyproject.toml` when first used; pin reasonably.
+
 ## Execution Order (Phases → Packages)
 
 - Pre-flight: WP0 — Leyline contract remediation
@@ -72,7 +82,7 @@ Context: Aligns with `GNN-WP1.md`, `diff/gnn-inputs.md`, `diff/input-remediation
 ## WP5 — Urza Extras: Persist Blueprint Graph Metadata
 
 - Scope: Save blueprint adjacency/metadata as “extras” alongside artifacts; expose at read.
-- Changes: extend Urza save/load to include `extras` (layers, activations, optimizer priors, adjacency, optional BSDS cache pointer).
+- Changes: extend Urza save/load to include `extras` (layers, activations, optimizer priors, adjacency, optional BSDS cache pointer). Use `orjson` for fast (de)serialization.
 - Files: `src/esper/urza/library.py`.
 - Tests: save+get returns extras; degrade to empty extras gracefully.
 - Acceptance: Tamiyo can hydrate structural nodes/edges without bespoke lookups.
@@ -144,7 +154,7 @@ Context: Aligns with `GNN-WP1.md`, `diff/gnn-inputs.md`, `diff/input-remediation
 ## WP14 — Extended Embedding Registries (Parity with Simic)
 
 - Scope: Deterministic registries for `layer_type`, `activation_type`, `optimizer_family`, `hazard_class`; share schema with Simic.
-- Changes: registry helper; persist JSON under `var/tamiyo/`; wire into policy init/load/checkpoint metadata.
+- Changes: registry helper; persist JSON under `var/tamiyo/`; wire into policy init/load/checkpoint metadata. Optionally use `lmdb` if registry scale/concurrency warrants it.
 - Files: `src/esper/tamiyo/policy.py`, `src/esper/tamiyo/graph_builder.py`, `src/esper/simic/registry.py`.
 - Tests: indices stable; mismatch surfaces clear error/telemetry; round-trip with Simic fixtures.
 - Acceptance: online/offline vocabularies aligned; checkpoints portable.
@@ -172,7 +182,7 @@ Context: Aligns with `GNN-WP1.md`, `diff/gnn-inputs.md`, `diff/input-remediation
 - Unit focus per package: `pytest tests/tamiyo -q` (plus targeted subsystem suites).
 - Integration when touching infra paths: `pytest tests/integration -k tamiyo -q`.
 - Lint: `pylint --rcfile .codacy/tools-configs/pylint.rc src/esper`.
-- Perf (where applicable): mark `@pytest.mark.perf`; verify inference p95 ≤ 45 ms (policy-level); step budget 2–5 ms as per `timeout-matrix.md`.
+- Perf (where applicable): mark `@pytest.mark.perf`; verify inference p95 ≤ 45 ms (policy-level); step budget 2–5 ms as per `timeout-matrix.md`. Use `torch.profiler` and optionally `pytest-benchmark` for repeatable latency checks.
 
 ## References
 
@@ -190,14 +200,17 @@ Context: Aligns with `GNN-WP1.md`, `diff/gnn-inputs.md`, `diff/input-remediation
 ## Agent Execution Prompt (Runbook)
 
 Mission
+
 - Implement WP0–WP16 in order, keeping the prototype delta constraints: 3A tight coupling, Leyline-first contracts, no Weatherlight orchestration changes, strict timeouts, and conservative fail-open behavior.
 
 Setup
-- Python 3.11 venv: `python3.11 -m venv .venv && source .venv/bin/activate`.
-- Install deps per `pyproject.toml`. Do not add new heavy deps unless required by a package; prefer standard library.
+
+- Python 3.12 venv: `python3.12 -m venv .venv && source .venv/bin/activate`.
+- Install deps per `pyproject.toml`. Add new deps when used (e.g., `orjson`, `pytest-benchmark`, optional `lmdb`).
 - Test: `pytest tests` (unit first, then selective integration). Lint: `pylint --rcfile .codacy/tools-configs/pylint.rc src/esper`.
 
 Global Constraints
+
 - Contracts: Use `esper.leyline._generated.leyline_pb2` for all shared enums/messages. Do not add local enums; carry strings only as annotations for ops.
 - Deadlines: Do not stall the trainer. Enforce timeouts per `timeout-matrix.md` with degrade paths. Prefer futures/timeouts to bound blocking IO.
 - Telemetry: Follow `telemetry.md` and `decision-taxonomy.md`. Map HIGH/CRITICAL to emergency routing; include `reason`, `priority`, and `step_index` indicators.
@@ -205,6 +218,7 @@ Global Constraints
 - Docs: Update references and checklist ticks in this file and related delta docs when landing a package.
 
 Working Loop (Per Package)
+
 1) Read the package’s Scope/Changes/Files/Tests/Acceptance.
 2) Create or update minimal code to satisfy acceptance; keep changes narrowly scoped to listed files.
 3) Add/adjust tests under `tests/` to assert acceptance items (unit first). Avoid flaky/perf-heavy tests in CI.
@@ -213,6 +227,7 @@ Working Loop (Per Package)
 6) Update delta docs and this plan if behavior/coverage changes.
 
 Validation Gates
+
 - Leyline-first: No shadow enums/messages introduced; telemetry and commands are pure Leyline.
 - Timeouts: Simulate delays to prove deadlines and non-stalling behavior.
 - Coverage: When adding builder features, emit masks and coverage metrics; annotate commands with coverage summary.
@@ -220,6 +235,7 @@ Validation Gates
 - Durability: WAL writes fsync; retention rewrites prune correctly.
 
 Implementation Tips
+
 - Normalization: Use EWMA mean/var persisted to JSON; guard loads with defensive defaults.
 - Masks: For every optional feature, add a mask channel and include in coverage accounting.
 - Extras: For Urza metadata, prefer a single `extras` JSON blob with adjacency and descriptors; keep lookups bounded by deadlines.
@@ -227,17 +243,19 @@ Implementation Tips
 - Annotations: Include `feature_coverage`, `policy_version`, and where applicable `blending_method_index` (numeric) and optional name.
 
 What Not To Do
+
 - Don’t change Leyline `.proto` or introduce new cross-subsystem contracts in this prototype pass.
 - Don’t modify Weatherlight orchestration semantics (3A constraint). Only wire telemetry drain hooks as documented.
-- Don’t add heavyweight dependencies unless absolutely necessary for the package and agreed in review.
 
 Quick Commands
+
 - Unit (Tamiyo): `pytest tests/tamiyo -q`
 - Integration (targeted): `pytest tests/integration -k tamiyo -q`
 - Lint: `pylint --rcfile .codacy/tools-configs/pylint.rc src/esper`
 - Enum guard: `python scripts/check_shared_types.py`
 
 Definition of Done (Each Package)
+
 - All acceptance bullets are demonstrably met via tests/telemetry.
 - No new shadow enums; guard script passes.
 - Lint passes with existing rcfile; CI unit tests green.
