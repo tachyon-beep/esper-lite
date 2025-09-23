@@ -111,6 +111,12 @@ class TamiyoPolicy(nn.Module):
         self._hazard_registry = cfg.hazard_registry or EmbeddingRegistry(
             EmbeddingRegistryConfig(cfg.registry_path / "hazard_class_registry.json", 256)
         )
+        # Pre-seed common optimizer families for deterministic indices
+        for fam in ("sgd", "adam", "adamw", "rmsprop", "adagrad"):
+            try:
+                _ = self._optimizer_registry.get(fam)
+            except Exception:
+                pass
 
         builder_cfg = TamiyoGraphBuilderConfig(
             normalizer_path=cfg.normalizer_path,
@@ -118,6 +124,8 @@ class TamiyoPolicy(nn.Module):
             blueprint_registry=self._blueprint_registry,
             layer_type_registry=self._layer_registry,
             activation_type_registry=self._activation_registry,
+            optimizer_family_registry=self._optimizer_registry,
+            hazard_class_registry=self._hazard_registry,
             seed_vocab=cfg.seed_vocab,
             blueprint_vocab=cfg.blueprint_vocab,
             max_layers=cfg.max_layers,

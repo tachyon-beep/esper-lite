@@ -131,9 +131,13 @@ class TamiyoGraphBuilderConfig:
     # Extended registries for categorical encodings
     layer_type_registry: EmbeddingRegistry | None = None
     activation_type_registry: EmbeddingRegistry | None = None
+    optimizer_family_registry: EmbeddingRegistry | None = None
+    hazard_class_registry: EmbeddingRegistry | None = None
     # Vocab sizes for normalization
     layer_vocab: int = 1024
     activation_vocab: int = 1024
+    optimizer_vocab: int = 256
+    hazard_vocab: int = 256
     normalizer_path: Path = Path("var/tamiyo/gnn_norms.json")
     seed_vocab: int = 1024
     blueprint_vocab: int = 1024
@@ -155,6 +159,8 @@ class TamiyoGraphBuilder:
         self._blueprint_registry = config.blueprint_registry
         self._layer_type_registry = config.layer_type_registry
         self._activation_type_registry = config.activation_type_registry
+        self._optimizer_family_registry = config.optimizer_family_registry
+        self._hazard_class_registry = config.hazard_class_registry
         self._metadata_provider = config.blueprint_metadata_provider
 
     def _lookup_blueprint_metadata(self, blueprint_id: str) -> Mapping[str, float | str | bool | int]:
@@ -229,7 +235,8 @@ class TamiyoGraphBuilder:
         packet: leyline_pb2.SystemStatePacket,
         coverage: _CoverageTracker,
     ) -> Tensor:
-        feats = torch.zeros((1, self._cfg.global_feature_dim), dtype=torch.float32)
+        dim = self._cfg.global_feature_dim
+        feats = torch.zeros((1, dim), dtype=torch.float32)
         metrics = dict(packet.training_metrics)
         idx = 0
         keys = (
@@ -264,6 +271,37 @@ class TamiyoGraphBuilder:
             epoch_progress = 0.0
         feats[0, idx] = self._normalizer.normalize("epoch_progress", epoch_progress)
         coverage.observe("global.epoch_progress", epochs_total > 0.0)
+        idx += 1
+        # Optional optimizer family categorical (requires extra capacity)
+        # Source hint: metadata["optimizer_family"] or metadata["optimizer"]["family"]
+        optimizer_family = None
+        try:
+            # Primary: from blueprint metadata provider
+            md = self._lookup_blueprint_metadata(packet.packet_id or packet.training_run_id or "")
+            if isinstance(md, Mapping):
+                optimizer_family = md.get("optimizer_family")
+                if optimizer_family is None and isinstance(md.get("optimizer"), Mapping):
+                    optimizer_family = md.get("optimizer", {}).get("family")  # type: ignore[index]
+            # Optional mirror via training_metrics (index): if present use directly
+            if optimizer_family is None and "optimizer_family_index" in metrics:
+                val = int(metrics.get("optimizer_family_index", 0.0) or 0.0)
+                if idx < dim:
+                    feats[0, idx] = float(val) / max(1.0, float(self._cfg.optimizer_vocab))
+                    coverage.observe("global.optimizer_family", True)
+                    if idx + 1 < dim:
+                        feats[0, idx + 1] = 1.0
+                    optimizer_family = None  # handled
+        except Exception:
+            optimizer_family = None
+        if optimizer_family and idx < dim and self._optimizer_family_registry is not None:
+            try:
+                ridx = self._optimizer_family_registry.get(str(optimizer_family))
+                feats[0, idx] = float(ridx) / max(1.0, float(self._cfg.optimizer_vocab))
+                coverage.observe("global.optimizer_family", True)
+                if idx + 1 < dim:
+                    feats[0, idx + 1] = 1.0
+            except Exception:
+                pass
         return feats
 
     def _build_seed_features(
@@ -446,6 +484,19 @@ class TamiyoGraphBuilder:
         _set(12, self._normalizer.normalize("blueprint_candidate_score", candidate_score))
         _set(13, 1.0 if metadata.get("candidate_score") is not None else 0.0)
         coverage.observe("blueprint.candidate_score", metadata.get("candidate_score") is not None)
+        # Optional hazard class categorical if capacity allows
+        hazard_class = None
+        if isinstance(metadata, Mapping):
+            hazard_class = metadata.get("hazard_class") or metadata.get("hazard")
+        if hazard_class and dim > 14 and self._hazard_class_registry is not None:
+            try:
+                hidx = self._hazard_class_registry.get(str(hazard_class))
+                _set(14, float(hidx) / max(1.0, float(self._cfg.hazard_vocab)))
+                if dim > 15:
+                    _set(15, 1.0)
+                coverage.observe("blueprint.hazard_class", True)
+            except Exception:
+                pass
         score_tensor = torch.tensor([candidate_score], dtype=torch.float32)
         return features, [blueprint_id], score_tensor
 

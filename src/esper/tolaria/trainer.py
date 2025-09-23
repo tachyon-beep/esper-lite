@@ -1004,6 +1004,25 @@ class TolariaTrainer:
                     step_state.training_metrics["loss_volatility"] = self._loss_var ** 0.5
                     step_state.training_metrics["grad_norm_ewma"] = self._grad_mean
                     step_state.training_metrics["grad_var"] = self._grad_var
+                    # Optimizer family index for Tamiyo encoding (0:sgd,1:adam,2:adamw,3:other)
+                    try:
+                        fam_name = type(self._optimizer).__name__.lower()
+                        if "sgd" in fam_name:
+                            fam_idx = 0
+                        elif "adamw" in fam_name:
+                            fam_idx = 2
+                        elif "adam" in fam_name:
+                            fam_idx = 1
+                        else:
+                            fam_idx = 3
+                        step_state.training_metrics["optimizer_family_index"] = float(fam_idx)
+                        # Emit a lightweight event with resolved optimizer family
+                        self._emit_event(
+                            "optimizer_family",
+                            attributes={"name": fam_name, "index": str(fam_idx)},
+                        )
+                    except Exception:
+                        pass
                     if input_wait_ms:
                         step_state.training_metrics["input_wait_ms"] = input_wait_ms
                     # Expose CUDA H2D copy timing if CUDA available; 0.0 on CPU

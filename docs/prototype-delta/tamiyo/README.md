@@ -162,6 +162,17 @@ Tamiyo mapping (graph builder):
 - The builder also exposes a per‑parameter mask in seed capabilities as `allowed_param_<name> ∈ {0.0, 1.0}` for downstream consumers.
 - Coverage records `edges.seed_param_allowed` (1.0 iff any capability edges are present) and is included in the graph’s feature_coverage summary and Tamiyo telemetry.
 
+## Registry Parity & Checkpoint Portability (WP14)
+
+- Tamiyo and Simic now share deterministic embedding registries for categorical features:
+  - `layer_type_registry.json`, `activation_type_registry.json`, `optimizer_family_registry.json`, `hazard_class_registry.json` under `var/tamiyo/`.
+- TamiyoPolicy checkpoints embed registry digests (SHA‑256 over sorted key→index) in `_metadata.registries`. On load, Tamiyo validates these digests against the current on‑disk registries and rejects mismatches with a clear error. TamiyoService surfaces a `policy_update_rejected` telemetry event when that happens.
+- Graph features use registries when provided:
+  - Layer/activation type: categorical indices normalized into feature columns (falls back to hashed encoding if a registry is not configured).
+  - Optimizer family (global feature) and hazard class (blueprint feature) are included when feature dimensions are extended (global_input_dim > 16; blueprint_input_dim > 14). Defaults remain unchanged for backward compatibility.
+- Portability: Simic and Tamiyo align by sharing registry files; offline training and online inference maintain index parity.
+- Rollback: In environments where registry files are unavailable/corrupt, Tamiyo falls back to the previous hash‑based encodings and logs a warning (no crash).
+
 Acceptance and contract posture:
 - No Protobuf changes; all additions live in `SeedState.metrics`.
 - Seed feature coverage improves (explicit blend allowance and optional schedule/risk context available to policy), and existing tests confirm mapping and stability.
