@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import statistics
 import time
+from pathlib import Path
 
 import pytest
 import torch
@@ -47,6 +48,9 @@ def test_graph_builder_handles_missing_seeds() -> None:
     assert data["global"].x.shape[1] == 16
     assert data["seed"].x.shape[0] == 0
     assert data["blueprint"].x.shape[0] == 1
+    coverage = getattr(data, "feature_coverage", {})
+    assert isinstance(coverage, dict)
+    assert "global.loss" in coverage
 
 
 def test_graph_builder_schema(tmp_path: pytest.PathLike) -> None:
@@ -120,9 +124,9 @@ def test_graph_builder_schema(tmp_path: pytest.PathLike) -> None:
             max_layers=2,
             max_activations=2,
             max_parameters=2,
-            layer_feature_dim=6,
-            activation_feature_dim=4,
-            parameter_feature_dim=4,
+            layer_feature_dim=12,
+            activation_feature_dim=8,
+            parameter_feature_dim=10,
             edge_feature_dim=3,
             blueprint_metadata_provider=lambda bp: metadata if bp == blueprint_id else {},
         )
@@ -150,9 +154,11 @@ def test_graph_builder_schema(tmp_path: pytest.PathLike) -> None:
 
     graph = builder.build(packet)
 
-    assert graph["layer"].x.shape == (2, 6)
-    assert graph["activation"].x.shape == (2, 4)
-    assert graph["parameter"].x.shape == (2, 4)
+    assert graph["seed"].x.shape[1] == 14
+    assert graph["blueprint"].x.shape[1] == 14
+    assert graph["layer"].x.shape == (2, 12)
+    assert graph["activation"].x.shape == (2, 8)
+    assert graph["parameter"].x.shape == (2, 10)
     assert set(graph["parameter"].node_ids) == {"run-graph-alpha", "run-graph-beta"}
     assert list(graph["layer"].node_ids) == [f"{blueprint_id}-L0", f"{blueprint_id}-L1"]
     assert list(graph["activation"].node_ids) == [f"{blueprint_id}-A0", f"{blueprint_id}-A1"]
@@ -162,11 +168,14 @@ def test_graph_builder_schema(tmp_path: pytest.PathLike) -> None:
     assert torch.isfinite(graph["blueprint"].candidate_scores).all()
 
     assert graph[("layer", "activates", "activation")].edge_attr.shape == (4, 3)
+    assert graph[("layer", "feeds", "activation")].edge_attr.shape == (4, 3)
     assert graph[("seed", "allowed", "parameter")].edge_attr.shape == (4, 3)
     assert graph[("global", "annotates", "blueprint")].edge_attr.shape == (1, 3)
+    assert graph[("layer", "connects", "layer")].edge_attr.shape[0] in {0, 1}
+    assert graph[("seed", "monitors", "layer")].edge_attr.shape[1] == 3
 
     blueprint_vec = graph["blueprint"].x[0]
-    assert pytest.approx(float(blueprint_vec[4]), rel=1e-6) == metadata["risk"]
+    assert pytest.approx(float(blueprint_vec[5]), rel=1e-6) == metadata["risk"]
     assert (tmp_path / "norms.json").exists()
     with (tmp_path / "norms.json").open("r", encoding="utf-8") as handle:
         data = json.load(handle)
@@ -174,6 +183,9 @@ def test_graph_builder_schema(tmp_path: pytest.PathLike) -> None:
     assert "layer_latency_ms" in data
     assert "parameter_default" in data
     assert "epoch_progress" in data
+    coverage = getattr(graph, "feature_coverage", {})
+    assert coverage
+    assert coverage["seed.learning_rate"] <= 1.0
 
 
 def test_policy_select_action_populates_annotations() -> None:
@@ -189,6 +201,8 @@ def test_policy_select_action_populates_annotations() -> None:
     assert "selected_seed_index" in last_action
     assert "selected_seed_score" in last_action
     assert "selected_blueprint_index" in last_action
+    assert "policy_param_vector" in last_action
+    assert len(last_action["policy_param_vector"]) == TamiyoPolicyConfig().param_vector_dim
     assert 0.0 <= float(last_action["blending_schedule_start"]) <= 1.0
     assert 0.0 <= float(last_action["blending_schedule_end"]) <= 1.0
     assert float(last_action["blending_schedule_start"]) <= float(
@@ -200,6 +214,9 @@ def test_policy_select_action_populates_annotations() -> None:
     assert float(command.annotations["blending_schedule_start"]) <= float(
         command.annotations["blending_schedule_end"]
     )
+    coverage = policy.feature_coverage
+    assert coverage
+    assert set(coverage) & {"global.loss", "seed.learning_rate"}
     if command.command_type == leyline_pb2.COMMAND_SEED:
         params = command.seed_operation.parameters
         method_list = TamiyoPolicyConfig().blending_methods
@@ -249,9 +266,13 @@ def test_policy_select_action_ranks_candidates(monkeypatch: pytest.MonkeyPatch) 
         def forward(self, _data):
             seed_scores = torch.tensor([0.1, 2.5, 0.4], dtype=torch.float32)
             blueprint_scores = torch.tensor([0.3], dtype=torch.float32)
+            policy_logits = torch.full((1, 32), -4.0)
+            policy_logits[0, 0] = 8.0
+            policy_logits[0, 1] = -2.0
             return {
-                "policy_logits": torch.tensor([[8.0, -2.0, -3.0, -4.0, -5.0]]),
-                "param_delta": torch.tensor([0.02]),
+                "policy_logits": policy_logits,
+                "policy_params": torch.tensor([[0.02, -0.01, 0.0, 0.1]]),
+                "param_delta": torch.tensor([[0.02]]),
                 "blending_logits": torch.tensor([[0.1, 0.3, 0.6]]),
                 "risk_logits": torch.tensor([[0.2, 0.3, 0.4, 0.05, 0.05]]),
                 "value": torch.tensor([0.7]),
@@ -286,6 +307,23 @@ def test_policy_select_action_ranks_candidates(monkeypatch: pytest.MonkeyPatch) 
     assert float(command.annotations["blending_schedule_start"]) <= float(
         command.annotations["blending_schedule_end"]
     )
+    assert "policy_param_vector" in policy.last_action
+
+
+def test_policy_validate_state_dict_rejects_legacy() -> None:
+    policy = TamiyoPolicy(TamiyoPolicyConfig(enable_compile=False))
+    checkpoint = policy.state_dict()
+    checkpoint["_metadata"]["architecture_version"] = "legacy"
+    with pytest.raises(ValueError):
+        policy.validate_state_dict(checkpoint)
+
+
+def test_registry_round_trip(tmp_path: pytest.PathLike) -> None:
+    cfg = TamiyoPolicyConfig(enable_compile=False, registry_path=Path(tmp_path))
+    policy = TamiyoPolicy(cfg)
+    first = policy._seed_registry.get("seed-x")
+    second = policy._seed_registry.get("seed-x")
+    assert first == second
 
 
 @pytest.mark.perf

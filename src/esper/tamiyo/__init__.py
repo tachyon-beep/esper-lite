@@ -9,7 +9,6 @@ from .gnn import TamiyoGNN, TamiyoGNNConfig
 from .graph_builder import TamiyoGraphBuilder, TamiyoGraphBuilderConfig
 from .persistence import FieldReportStore, FieldReportStoreConfig
 from .service import RiskConfig, TamiyoService
-
 __all__ = [
     "TamiyoPolicy",
     "TamiyoPolicyConfig",

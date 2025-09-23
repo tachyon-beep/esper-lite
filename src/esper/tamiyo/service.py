@@ -277,6 +277,16 @@ class TamiyoService:
                 unit="score",
             ),
         ]
+        coverage = getattr(self._policy, "feature_coverage", {})
+        if coverage:
+            average_coverage = float(sum(coverage.values()) / max(1, len(coverage)))
+            metrics.append(
+                TelemetryMetric(
+                    "tamiyo.gnn.feature_coverage",
+                    average_coverage,
+                    unit="ratio",
+                )
+            )
         if "blending_method" in last_action:
             metrics.append(
                 TelemetryMetric(
@@ -1076,7 +1086,16 @@ class TamiyoService:
 
     def update_policy(self, new_policy: TamiyoPolicy) -> None:
         """Hot-swap the in-memory policy."""
-
+        version = getattr(new_policy, "architecture_version", None)
+        expected_version = getattr(self._policy, "architecture_version", None)
+        if expected_version and version != expected_version:
+            raise ValueError(f"Unsupported Tamiyo policy version: {version}")
+        if hasattr(new_policy, "update_blueprint_metadata"):
+            with contextlib.suppress(Exception):
+                metadata_payload = {
+                    bp: info for bp, (_, info) in self._blueprint_cache.items()
+                }
+                new_policy.update_blueprint_metadata(metadata_payload)
         self._policy = new_policy
         self._policy_version = getattr(new_policy, "architecture_version", self._policy_version)
 
@@ -1137,9 +1156,13 @@ class TamiyoService:
             state_buffer = BytesIO(update.payload)
             state_dict = torch.load(state_buffer, map_location="cpu", weights_only=False)
             try:
+                self._policy.validate_state_dict(state_dict)
                 self._policy.load_state_dict(state_dict, strict=False)
             except RuntimeError as exc:  # pragma: no cover - defensive
                 logger.warning("Tamiyo policy update incompatible: %s", exc)
+            except ValueError as exc:
+                logger.warning("Tamiyo policy update rejected: %s", exc)
+                return
         self._policy_updates.append(update)
 
     async def consume_policy_updates(
