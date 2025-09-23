@@ -114,7 +114,12 @@ def attach_signature_and_wal(
         )
     except Exception:
         # Fail-open; WAL append is best-effort in prototype
-        pass
+        try:
+            from . import metrics as _metrics
+
+            _metrics.inc_wal_append_errors()
+        except Exception:
+            pass
 
 
 def verify_bsds_signature_in_extras(extras: dict, *, ctx: SignatureContext) -> bool:
@@ -136,4 +141,3 @@ __all__ = [
     "attach_signature_and_wal",
     "verify_bsds_signature_in_extras",
 ]
-

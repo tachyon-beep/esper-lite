@@ -542,6 +542,14 @@ class WeatherlightService:
         if self._urabrask_bench is not None:
             for name, value in self._urabrask_bench.metrics().items():
                 metrics.append(TelemetryMetric(f"urabrask.{name}", float(value)))
+        # Urabrask process-local metrics (WAL errors, integrity failures)
+        try:
+            from esper.urabrask import metrics as _ura_metrics
+
+            for name, value in _ura_metrics.snapshot().items():
+                metrics.append(TelemetryMetric(f"urabrask.{name}", float(value)))
+        except Exception:
+            pass
         oona_snapshot = await self._oona.metrics_snapshot()
         for name, value in oona_snapshot.items():
             metrics.append(TelemetryMetric(f"oona.{name}", float(value)))

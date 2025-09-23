@@ -1091,6 +1091,21 @@ class TamiyoService:
             # BSDS-lite (if present in blueprint_info)
             bsds_block = blueprint_info.get("bsds") if isinstance(blueprint_info, Mapping) else None
             if isinstance(bsds_block, Mapping):
+                # Optional signature verification (observability only; fail-open)
+                try:
+                    settings = EsperSettings()
+                    if getattr(settings, "urabrask_signing_enabled", False):
+                        from esper.security.signing import SignatureContext, DEFAULT_SECRET_ENV
+                        from esper.urabrask.wal import verify_bsds_signature_in_extras
+                        from esper.urabrask import metrics as _ura_metrics
+
+                        ctx = SignatureContext.from_environment(DEFAULT_SECRET_ENV)
+                        extras_map = blueprint_info if isinstance(blueprint_info, Mapping) else {}
+                        ok = verify_bsds_signature_in_extras(extras_map, ctx=ctx)
+                        if not ok:
+                            _ura_metrics.inc_integrity_failures()
+                except Exception:
+                    pass
                 # Surface annotations for downstream consumers
                 for k_src, k_dst in (
                     ("hazard_band", "bsds_hazard_band"),

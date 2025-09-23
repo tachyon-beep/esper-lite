@@ -116,6 +116,21 @@ If WAL entries are indexed in ES (optional ops script):
 - Integrity Check Results (Stat/Table)
   - Count of integrity errors (hash‑chain mismatches). In prototype, provide via an ops job that parses WAL and emits a heartbeat document.
 
+## Urabrask Integrity & WAL Metrics
+
+Weatherlight telemetry includes process‑local counters under the `urabrask.*` namespace:
+
+- `urabrask.wal.append_errors_total` — WAL append failures (best‑effort; fail‑open)
+- `urabrask.integrity_failures` — signature verification failures observed by Tamiyo
+
+Suggested panels (Prometheus/ES via Weatherlight telemetry ingestion):
+- WAL Append Errors (Rate)
+  - Query: `increase(urabrask.wal.append_errors_total[10m])`
+  - Alert if non‑zero for 3 consecutive intervals.
+- Integrity Failures (Rate)
+  - Query: `increase(urabrask.integrity_failures[10m])`
+  - Alert if non‑zero for 3 consecutive intervals.
+
 
 ## Weatherlight Producer Stats (Telemetry)
 - Weatherlight emits `urabrask.*` metrics in its telemetry packet (not Prometheus native unless ingested):
