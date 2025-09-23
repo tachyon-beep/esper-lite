@@ -227,10 +227,17 @@ class TamiyoGraphBuilder:
         cov_map = coverage.summary()
         data.feature_coverage = cov_map
         # WP15: expose typed per-family coverage
-        def _aggregate(groups: dict[str, list[float]]) -> dict[str, float]:
-            return {k: (sum(v) / max(1, len(v))) for k, v in groups.items() if v}
+        stats = coverage.stats()
+        # Accumulate present/total for weighted ratios
+        present_totals: dict[str, list[int]] = {}
+        totals: dict[str, list[int]] = {}
+        def _accumulate(group_key: str, present: int, total: int) -> None:
+            present_totals.setdefault(group_key, [0, 0])
+            pt = present_totals[group_key]
+            pt[0] += present
+            pt[1] += total
 
-        groups: dict[str, list[float]] = {
+        groups_init: dict[str, None] = {
             "node.seed": [],
             "node.layer": [],
             "node.activation": [],
@@ -250,22 +257,28 @@ class TamiyoGraphBuilder:
             "edges.global_operates": [],
             "edges.layer_feedback": [],
         }
-        for key, val in cov_map.items():
+        for key, (present, total) in stats.items():
+            if total <= 0:
+                continue
             if key.startswith("seed."):
-                groups["node.seed"].append(float(val))
+                _accumulate("node.seed", present, total)
             elif key.startswith("layer."):
-                groups["node.layer"].append(float(val))
+                _accumulate("node.layer", present, total)
             elif key.startswith("activation."):
-                groups["node.activation"].append(float(val))
+                _accumulate("node.activation", present, total)
             elif key.startswith("parameter."):
-                groups["node.parameter"].append(float(val))
+                _accumulate("node.parameter", present, total)
             elif key.startswith("blueprint."):
-                groups["node.blueprint"].append(float(val))
+                _accumulate("node.blueprint", present, total)
             elif key.startswith("global."):
-                groups["node.global"].append(float(val))
-            elif key in groups:
-                groups[key].append(float(val))
-        data.feature_coverage_types = _aggregate(groups)
+                _accumulate("node.global", present, total)
+            elif key in groups_init:
+                _accumulate(key, present, total)
+        types_weighted: dict[str, float] = {}
+        for gkey, (p_sum, t_sum) in present_totals.items():
+            if t_sum > 0:
+                types_weighted[gkey] = float(p_sum) / float(t_sum)
+        data.feature_coverage_types = types_weighted
         return data
 
     # ------------------------------------------------------------------
@@ -1167,6 +1180,10 @@ class _CoverageTracker:
             for key, total in self._counts.items()
             if total > 0
         }
+
+    def stats(self) -> dict[str, tuple[int, int]]:
+        """Return raw (present, total) counts per feature key for weighted aggregation."""
+        return {key: (int(self._present.get(key, 0)), int(total)) for key, total in self._counts.items()}
 
 
 __all__ = ["TamiyoGraphBuilder", "TamiyoGraphBuilderConfig"]

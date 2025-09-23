@@ -179,6 +179,18 @@ Diagnostics & Preseed Notes:
   - Event: `optimizer_family`
   - Attributes: `{"name": "<resolved_class_name>", "index": "<0|1|2|3>"}` where the index maps as: `0:sgd`, `1:adam`, `2:adamw`, `3:other`.
 
+## WP15 — Coverage Accounting Granularity
+
+- Builder now exposes per‑key coverage in the graph (`data.feature_coverage`) and a typed aggregation in `data.feature_coverage_types` for:
+  - Node families: `node.seed`, `node.layer`, `node.activation`, `node.parameter`, `node.blueprint`, `node.global`
+  - Edge families: `edges.layer_connects`, `edges.seed_monitors`, `edges.layer_feeds`, `edges.layer_activates`, `edges.activation_configures`, `edges.parameter_modulates`, `edges.blueprint_composes`, `edges.parameter_targets`, `edges.global_influences`, `edges.seed_reports`, `edges.global_operates`, `edges.layer_feedback`.
+- TamiyoService exports:
+  - Average coverage metric (legacy): `tamiyo.gnn.feature_coverage`
+  - Per‑type coverage metrics: `tamiyo.gnn.feature_coverage.<type>` (e.g., `node.seed`, `edges.layer_connects`)
+  - Command annotations include `coverage_map` (bounded full map) and `coverage_types` (typed aggregation) alongside `feature_coverage`.
+- Ratios are computed as weighted aggregates (sum of present counts over sum of totals) per type; per‑key coverage remains 0..1 ratios.
+- This enables downstream diagnosis of missing inputs without policy introspection; legacy consumers can continue to use the average.
+
 Acceptance and contract posture:
 - No Protobuf changes; all additions live in `SeedState.metrics`.
 - Seed feature coverage improves (explicit blend allowance and optional schedule/risk context available to policy), and existing tests confirm mapping and stability.
