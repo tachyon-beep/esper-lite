@@ -35,6 +35,7 @@ class UrabraskBenchWorker:
         self._failures_total: int = 0
         self._last_duration_ms: float = 0.0
         self._last_processed: int = 0
+        self._skipped_cooldown_total: int = 0
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="urabrask-bench")
 
     async def run_forever(self) -> None:  # pragma: no cover - exercised in integration
@@ -55,6 +56,11 @@ class UrabraskBenchWorker:
         processed = 0
         attached_profiles = 0
         failed = 0
+        skipped_cooldown = 0
+        from esper.core import EsperSettings
+        from datetime import datetime, timezone
+        settings = EsperSettings()
+        min_interval_s = max(0, int(getattr(settings, "urabrask_bench_min_interval_s", 3600)))
         # Snapshot current records
         records = list(self._urza.list_all().values())
         candidates: list[str] = []
@@ -64,6 +70,24 @@ class UrabraskBenchWorker:
                 candidates.append(rec.metadata.blueprint_id)
             elif "benchmarks" not in extras:
                 candidates.append(rec.metadata.blueprint_id)
+            else:
+                # Cooldown check
+                last_run_raw = str(extras.get("benchmarks_last_run") or "")
+                last_ok = True
+                if last_run_raw:
+                    try:
+                        # Accept RFC3339 with Z
+                        if last_run_raw.endswith("Z"):
+                            last_run = datetime.fromisoformat(last_run_raw.replace("Z", "+00:00"))
+                        else:
+                            last_run = datetime.fromisoformat(last_run_raw)
+                        age_s = max(0.0, (datetime.now(timezone.utc) - last_run).total_seconds())
+                        if age_s < min_interval_s:
+                            last_ok = False
+                    except Exception:
+                        last_ok = True
+                if last_ok:
+                    candidates.append(rec.metadata.blueprint_id)
             if len(candidates) >= self._topn:
                 break
         # Attach benchmarks for candidates
@@ -74,6 +98,16 @@ class UrabraskBenchWorker:
                 try:
                     proto = future.result(timeout=self._timeout_s)
                     attached_profiles += len(getattr(proto, "profiles", []))
+                    # Update last_run timestamp
+                    try:
+                        rec = self._urza.get(bp)
+                        if rec is not None:
+                            extras = dict(rec.extras or {})
+                            from datetime import datetime, timezone
+                            extras["benchmarks_last_run"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                            self._urza.save(rec.metadata, rec.artifact_path, extras=extras)
+                    except Exception:
+                        pass
                 except FuturesTimeout:
                     future.cancel()
                     self._failures_total += 1
@@ -85,6 +119,15 @@ class UrabraskBenchWorker:
                 try:
                     proto = produce_benchmarks(self._urza, self._runtime, bp)
                     attached_profiles += len(getattr(proto, "profiles", []))
+                    try:
+                        rec = self._urza.get(bp)
+                        if rec is not None:
+                            extras = dict(rec.extras or {})
+                            from datetime import datetime, timezone
+                            extras["benchmarks_last_run"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                            self._urza.save(rec.metadata, rec.artifact_path, extras=extras)
+                    except Exception:
+                        pass
                 except Exception:
                     self._failures_total += 1
                     failed += 1
@@ -92,11 +135,17 @@ class UrabraskBenchWorker:
         self._last_duration_ms = (time.perf_counter() - start) * 1000.0
         self._last_processed = processed
         self._profiles_total += attached_profiles
+        # Compute skipped via selection pass
+        if processed == 0 and records:
+            # If no candidate chosen due to cooldown, count as skipped
+            skipped_cooldown += 1
+        self._skipped_cooldown_total += float(skipped_cooldown)
         return {
             "processed": float(processed),
             "attached_profiles": float(attached_profiles),
             "failed": float(failed),
             "duration_ms": float(self._last_duration_ms),
+            "skipped_cooldown": float(skipped_cooldown),
         }
 
     def metrics(self) -> Mapping[str, float]:
@@ -105,8 +154,8 @@ class UrabraskBenchWorker:
             "bench.failures_total": float(self._failures_total),
             "bench.last_duration_ms": float(self._last_duration_ms),
             "bench.last_processed": float(self._last_processed),
+            "bench.skipped_cooldown_total": float(self._skipped_cooldown_total),
         }
 
 
 __all__ = ["UrabraskBenchWorker"]
-

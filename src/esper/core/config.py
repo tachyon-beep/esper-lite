@@ -185,6 +185,7 @@ class EsperSettings(BaseSettings):
     urabrask_bench_interval_s: int = Field(alias="URABRASK_BENCH_INTERVAL_S", default=1800)
     urabrask_bench_topn: int = Field(alias="URABRASK_BENCH_TOPN", default=3)
     urabrask_bench_timeout_ms: int = Field(alias="URABRASK_BENCH_TIMEOUT_MS", default=500)
+    urabrask_bench_min_interval_s: int = Field(alias="URABRASK_BENCH_MIN_INTERVAL_S", default=3600)
 
     # -----------------------------
     # Urabrask (Signing + WAL)
@@ -214,6 +215,9 @@ class EsperSettings(BaseSettings):
     # Test/dev helper to avoid real OOM allocations
     urabrask_crucible_simulate_oom: bool = Field(
         alias="URABRASK_CRUCIBLE_SIMULATE_OOM", default=False
+    )
+    urabrask_crucible_gpu_timing_enabled: bool = Field(
+        alias="URABRASK_CRUCIBLE_GPU_TIMING_ENABLED", default=False
     )
 
 __all__ = ["EsperSettings"]

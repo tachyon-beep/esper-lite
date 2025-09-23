@@ -167,8 +167,15 @@ def run_crucible_v1(
         cfg.simulate_oom = bool(settings.urabrask_crucible_simulate_oom)
     except Exception:
         pass
-    _t0 = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None  # type: ignore[attr-defined]
-    _t1 = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None  # type: ignore[attr-defined]
+    # GPU timing is optional; default off for CPU-only safety
+    from esper.core import EsperSettings
+    _gpu_timing_enabled = False
+    try:
+        _gpu_timing_enabled = bool(EsperSettings().urabrask_crucible_gpu_timing_enabled)
+    except Exception:
+        _gpu_timing_enabled = False
+    _t0 = torch.cuda.Event(enable_timing=True) if (_gpu_timing_enabled and torch.cuda.is_available()) else None  # type: ignore[attr-defined]
+    _t1 = torch.cuda.Event(enable_timing=True) if (_gpu_timing_enabled and torch.cuda.is_available()) else None  # type: ignore[attr-defined]
     if _t0 is not None and _t1 is not None:
         try:
             _t0.record()

@@ -48,10 +48,11 @@ class BenchmarkConfig:
     )
     warmup_iters: int = 5
     measure_iters: int = 20
-    device_preference: str = "auto"  # {"auto", "cpu", "cuda"}
+    device_preference: str = "cpu"  # default CPU-only; {"auto", "cpu", "cuda"}
+    allow_cuda_profiles: bool = False
 
 
-def _select_device(preference: str) -> str:
+def _select_device(preference: str, *, allow_cuda: bool) -> str:
     if torch is None:
         return "cpu"
     pref = (preference or "auto").lower()
@@ -59,14 +60,14 @@ def _select_device(preference: str) -> str:
         return "cpu"
     if pref == "cuda":
         try:
-            if torch.cuda.is_available():  # type: ignore[attr-defined]
+            if allow_cuda and torch.cuda.is_available():  # type: ignore[attr-defined]
                 return "cuda:0"
         except Exception:
             return "cpu"
         return "cpu"
     # auto
     try:
-        if torch.cuda.is_available():  # type: ignore[attr-defined]
+        if allow_cuda and torch.cuda.is_available():  # type: ignore[attr-defined]
             return "cuda:0"
     except Exception:
         return "cpu"
@@ -124,7 +125,7 @@ def run_benchmarks(
     """
 
     cfg = config or BenchmarkConfig()
-    device = _select_device(cfg.device_preference)
+    device = _select_device(cfg.device_preference, allow_cuda=cfg.allow_cuda_profiles)
     torch_ver = _torch_version()
 
     proto = leyline_pb2.BlueprintBenchmark(
@@ -150,7 +151,7 @@ def run_benchmarks(
     # Optionally add bf16 profile on CUDA if not already present
     profiles = list(cfg.profiles)
     try:
-        if torch is not None and device.startswith("cuda"):
+        if torch is not None and device.startswith("cuda") and cfg.allow_cuda_profiles:
             if all(p.dtype != "bfloat16" for p in profiles):
                 profiles.append(BenchmarkProfile(name="batch32_bf16", batch_size=32, in_shape=(128,), dtype="bfloat16"))
     except Exception:
