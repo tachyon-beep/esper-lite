@@ -139,7 +139,17 @@ class TamiyoService:
         metadata_timeout_ms: float = 10.0,
         executor: ThreadPoolExecutor | None = None,
     ) -> None:
-        self._policy = policy or TamiyoPolicy(TamiyoPolicyConfig())
+        if policy is None:
+            # Build policy config honoring settings override for compile when provided
+            p_cfg = TamiyoPolicyConfig()
+            try:
+                if hasattr(self._settings, "tamiyo_enable_compile") and self._settings.tamiyo_enable_compile is not None:
+                    p_cfg.enable_compile = bool(self._settings.tamiyo_enable_compile)
+            except Exception:  # pragma: no cover - defensive
+                pass
+            self._policy = TamiyoPolicy(p_cfg)
+        else:
+            self._policy = policy
         self._risk = risk_config or RiskConfig()
         self._settings = settings or EsperSettings()
         self._urza = urza

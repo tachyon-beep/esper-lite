@@ -59,6 +59,11 @@ class EsperSettings(BaseSettings):
     tamiyo_field_report_retention_hours: int = Field(
         alias="TAMIYO_FIELD_REPORT_RETENTION_HOURS", default=24
     )
+    # Tamiyo compile toggle (optional override)
+    # None → use TamiyoPolicy defaults (CUDA + device="cuda" → enabled)
+    tamiyo_enable_compile: bool | None = Field(
+        alias="TAMIYO_ENABLE_COMPILE", default=None
+    )
 
     urza_database_url: str = Field(alias="URZA_DATABASE_URL", default="sqlite:///./var/urza/catalog.db")
     urza_artifact_dir: str = Field(alias="URZA_ARTIFACT_DIR", default="./var/urza/artifacts")

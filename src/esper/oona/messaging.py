@@ -263,6 +263,24 @@ class OonaClient:
             payload=update.SerializeToString(),
         )
 
+    async def publish_bsds_issued(self, report: leyline_pb2.BSDSIssued) -> bool:
+        """Publish a BSDSIssued event to the normal stream."""
+        return await self._publish_proto(
+            preferred_stream=self._config.normal_stream,
+            emergency_flag=False,
+            message_type=leyline_pb2.BusMessageType.BUS_MESSAGE_TYPE_BSDS_ISSUED,
+            payload=report.SerializeToString(),
+        )
+
+    async def publish_bsds_failed(self, report: leyline_pb2.BSDSFailed) -> bool:
+        """Publish a BSDSFailed event to the normal stream."""
+        return await self._publish_proto(
+            preferred_stream=self._config.normal_stream,
+            emergency_flag=False,
+            message_type=leyline_pb2.BusMessageType.BUS_MESSAGE_TYPE_BSDS_FAILED,
+            payload=report.SerializeToString(),
+        )
+
     async def publish_kernel_prefetch_request(
         self, request: leyline_pb2.KernelPrefetchRequest
     ) -> bool:
