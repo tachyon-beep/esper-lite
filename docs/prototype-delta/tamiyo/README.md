@@ -173,6 +173,12 @@ Tamiyo mapping (graph builder):
 - Portability: Simic and Tamiyo align by sharing registry files; offline training and online inference maintain index parity.
 - Rollback: In environments where registry files are unavailable/corrupt, Tamiyo falls back to the previous hash‑based encodings and logs a warning (no crash).
 
+Diagnostics & Preseed Notes:
+- Optimizer families are pre-seeded in Tamiyo to stabilize indices across runs: `sgd`, `adam`, `adamw`, `rmsprop`, `adagrad`.
+- Tolaria now emits a small event each step to aid debugging of optimizer encoding without changing numeric metrics:
+  - Event: `optimizer_family`
+  - Attributes: `{"name": "<resolved_class_name>", "index": "<0|1|2|3>"}` where the index maps as: `0:sgd`, `1:adam`, `2:adamw`, `3:other`.
+
 Acceptance and contract posture:
 - No Protobuf changes; all additions live in `SeedState.metrics`.
 - Seed feature coverage improves (explicit blend allowance and optional schedule/risk context available to policy), and existing tests confirm mapping and stability.

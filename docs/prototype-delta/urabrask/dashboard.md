@@ -35,6 +35,27 @@ This guide outlines suggested Grafana panels and Prometheus metrics to monitor B
     - `tamiyo_bsds_critical` (PagerDuty)
     - `tamiyo_bsds_high` (Slack)
 
+## Benchmarks (Prototype)
+
+Urabrask Bench v1 persists a JSON mirror under `extras["benchmarks"]` as a list of per‑profile dicts:
+`[{name, batch_size, in_shape, dtype, p50_latency_ms, p95_latency_ms, throughput_samples_per_s, provenance}]`.
+
+- Data source: Weatherlight → Elasticsearch (telemetry documents). If ES is unavailable, panels can be doc‑only for now.
+- Suggested panels:
+  - Benchmark p50 by profile (Time Series)
+    - Query ES for latest telemetry where extras contains `benchmarks.name=<profile>` and plot `p50_latency_ms`.
+  - Benchmark p95 by profile (Time Series)
+    - Same as above using `p95_latency_ms`.
+  - Throughput (samples/sec) by profile (Time Series)
+  - Last Benchmark Provenance (Stat)
+    - Extract `provenance` for each profile; display `runtime` vs `fallback`.
+  - Device/Torch Version (Table)
+    - From the `BlueprintBenchmark` proto fields via the ingestion job (optional).
+
+Notes
+- Profiles default to `batch16_f32` and `batch32_f32`; CUDA hosts may include an optional `batch32_bf16` profile.
+- Keep budget small (≤100 ms per profile) and cadence low if later wired into a worker.
+
 ## Weatherlight Producer Stats (Telemetry)
 - Weatherlight emits `urabrask.*` metrics in its telemetry packet (not Prometheus native unless ingested):
   - `urabrask.produced_total` — total BSDS attachments made by the producer

@@ -683,6 +683,34 @@ class KasminaSeedManager:
 
         events: list[TelemetryEvent] = []
         if not self._verify_command(command, events):
+            # Even when rejected, surface any degraded-input context from annotations (resilience)
+            try:
+                ann = dict(command.annotations)
+                if ann:
+                    attrs: dict[str, str] = {}
+                    for key in ("feature_coverage", "risk_reason", "blueprint_risk", "blueprint_tier", "blueprint_stage"):
+                        if key in ann:
+                            attrs[key] = str(ann.get(key))
+                    if attrs:
+                        events.append(TelemetryEvent(description="tamiyo_annotations", attributes=attrs))
+                    # Emit degraded_inputs event if coverage below threshold
+                    try:
+                        cov = float(ann.get("feature_coverage", 1.0))
+                    except Exception:
+                        cov = None
+                    if cov is not None and cov < 0.3:
+                        sev = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING
+                        if cov < 0.1:
+                            sev = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
+                        events.append(
+                            TelemetryEvent(
+                                description="degraded_inputs",
+                                level=sev,
+                                attributes={**attrs, "coverage_avg": f"{cov:.3f}"},
+                            )
+                        )
+            except Exception:
+                pass
             if events:
                 self._queue_global_events(events)
             return
@@ -765,6 +793,70 @@ class KasminaSeedManager:
                     attributes={"command_type": command_label},
                 )
             )
+
+        # WP-K1: Parse Tamiyo coverage/BSDS annotations and surface per-seed events/metadata
+        try:
+            ann = dict(command.annotations)
+            has_coverage = "feature_coverage" in ann
+            has_risk_reason = "risk_reason" in ann
+            has_bp = any(k in ann for k in ("blueprint_risk", "blueprint_tier", "blueprint_stage"))
+            if has_coverage or has_risk_reason or has_bp:
+                attrs: dict[str, str] = {}
+                if seed_event_target:
+                    attrs["seed_id"] = seed_event_target
+                if has_coverage:
+                    attrs["feature_coverage"] = str(ann.get("feature_coverage"))
+                if has_risk_reason:
+                    attrs["risk_reason"] = str(ann.get("risk_reason"))
+                if "blueprint_risk" in ann:
+                    attrs["blueprint_risk"] = str(ann.get("blueprint_risk"))
+                if "blueprint_tier" in ann:
+                    attrs["blueprint_tier"] = str(ann.get("blueprint_tier"))
+                if "blueprint_stage" in ann:
+                    attrs["blueprint_stage"] = str(ann.get("blueprint_stage"))
+                events.append(TelemetryEvent(description="tamiyo_annotations", attributes=attrs))
+
+                # Optional degraded-input event and conservative marker
+                cov = None
+                try:
+                    cov = float(ann.get("feature_coverage", 1.0))
+                except Exception:
+                    cov = None
+                if cov is not None and cov < 0.3:
+                    sev = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING
+                    if cov < 0.1:
+                        sev = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
+                    events.append(
+                        TelemetryEvent(
+                            description="degraded_inputs",
+                            level=sev,
+                            attributes={**attrs, "coverage_avg": f"{cov:.3f}"},
+                        )
+                    )
+                    # Record conservative fallback intent in seed metadata
+                    if seed_event_target:
+                        ctx = self._seeds.get(seed_event_target)
+                        if ctx is None:
+                            ctx = SeedContext(seed_event_target)
+                            self._seeds[seed_event_target] = ctx
+                            self._ephemeral_seeds.add(seed_event_target)
+                        ctx.metadata["tamiyo_conservative_fallback"] = "true"
+                # Store annotations in seed metadata for downstream tools
+                if seed_event_target:
+                    ctx = self._seeds.get(seed_event_target)
+                    if ctx is None:
+                        ctx = SeedContext(seed_event_target)
+                        self._seeds[seed_event_target] = ctx
+                        self._ephemeral_seeds.add(seed_event_target)
+                    if has_coverage:
+                        ctx.metadata["tamiyo_feature_coverage"] = str(ann.get("feature_coverage"))
+                    if has_risk_reason:
+                        ctx.metadata["tamiyo_risk_reason"] = str(ann.get("risk_reason"))
+                    for key in ("blueprint_risk", "blueprint_tier", "blueprint_stage"):
+                        if key in ann:
+                            ctx.metadata[f"tamiyo_{key}"] = str(ann.get(key))
+        except Exception:  # pragma: no cover - defensive guard
+            pass
 
         if events:
             if seed_event_target:

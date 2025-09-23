@@ -137,6 +137,18 @@ Execution order is optimized to deliver highest leverage earliest while minimizi
 - Rollback
   - Mark as optional; skip in CPU‑only CI.
 
+Status: Complete (prototype)
+
+- Implementation aligned to plan:
+  - Runner API exposes `BenchmarkProfile(name, batch_size, in_shape, dtype)` and `BenchmarkConfig(profiles, warmup_iters, measure_iters, device_preference)`.
+  - `run_benchmarks(...) -> (BlueprintBenchmark, list[dict])` returns canonical proto and a JSON mirror as a list of per‑profile dicts with: `{name, batch_size, in_shape, dtype, p50_latency_ms, p95_latency_ms, throughput_samples_per_s, provenance}`.
+  - Service hook `produce_benchmarks(...)` persists the JSON mirror to `extras["benchmarks"]`.
+  - Runtime path uses `runtime.fetch_kernel`; fallback path is deterministic, marked `provenance=fallback`.
+- Tests added:
+  - `tests/urabrask/test_benchmarks.py` (fallback path, custom profiles, proto round‑trip, CPU loose bounds)
+  - `tests/urabrask/test_benchmarks_service.py` (Urza extras attachment and schema)
+- Full suite result: 241 passed, 1 skipped.
+
 ## Phase 2 — Hardening (Optional)
 
 ### URA8 — Signing + Immutability + WAL

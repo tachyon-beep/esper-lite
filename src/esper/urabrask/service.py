@@ -14,7 +14,7 @@ from esper.leyline import leyline_pb2
 from esper.karn import BlueprintDescriptor
 
 from .bsds import compute_bsds
-from .crucible import run_crucible, run_crucible_v1, CrucibleConfigV1
+from .benchmarks import run_benchmarks, BenchmarkConfig
 
 
 def produce_and_attach_bsds(
@@ -54,6 +54,9 @@ def produce_bsds_via_crucible(
     to Urza extras under `bsds` for prototype transport.
     """
 
+    # Lazy import to avoid hard torch dependency at module import time
+    from .crucible import run_crucible_v1, CrucibleConfigV1  # type: ignore
+
     record = urza.get(blueprint_id)
     if record is None:
         raise ValueError(f"Blueprint not found in Urza: {blueprint_id}")
@@ -73,3 +76,27 @@ def produce_bsds_via_crucible(
     extras["bsds"] = bsds_json
     urza.save(record.metadata, record.artifact_path, extras=extras)
     return bsds
+
+
+def produce_benchmarks(
+    urza: UrzaLibrary,
+    runtime: object | None,
+    blueprint_id: str,
+    *,
+    config: BenchmarkConfig | None = None,
+) -> leyline_pb2.BlueprintBenchmark:
+    """Run benchmarks and attach JSON mirror to Urza extras.
+
+    - Returns the canonical `BlueprintBenchmark` proto
+    - Mirrors compact summary to `extras["benchmarks"]`
+    - Does not raise if runtime is unavailable; falls back to synthetic path
+    """
+
+    record = urza.get(blueprint_id)
+    if record is None:
+        raise ValueError(f"Blueprint not found in Urza: {blueprint_id}")
+    proto, mirror = run_benchmarks(blueprint_id, runtime=runtime, config=config)
+    extras = dict(record.extras or {})
+    extras["benchmarks"] = mirror
+    urza.save(record.metadata, record.artifact_path, extras=extras)
+    return proto

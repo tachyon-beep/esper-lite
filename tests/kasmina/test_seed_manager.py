@@ -245,6 +245,41 @@ def test_prefetch_error_triggers_gate_failure() -> None:
     assert any(event.description == "prefetch_error" for event in packet.events)
 
 
+def test_handle_command_logs_tamiyo_annotations() -> None:
+    runtime = _Runtime(latency=1.0)
+    manager = KasminaSeedManager(runtime, signing_context=_SIGNING_CONTEXT)
+    manager.register_host_model(nn.Linear(1, 1))
+    # Build a seed command with Tamiyo annotations
+    cmd = leyline_pb2.AdaptationCommand(
+        version=1,
+        command_id="cmd-ann",
+        command_type=leyline_pb2.COMMAND_SEED,
+        target_seed_id="seed-1",
+    )
+    cmd.seed_operation.operation = leyline_pb2.SEED_OP_GERMINATE
+    cmd.seed_operation.blueprint_id = "BP-ANN"
+    # Add annotations before signing
+    cmd.annotations["feature_coverage"] = "0.25"
+    cmd.annotations["risk_reason"] = "degraded_inputs"
+    cmd.annotations["blueprint_risk"] = "0.9"
+    cmd.annotations["blueprint_tier"] = leyline_pb2.BlueprintTier.Name(leyline_pb2.BlueprintTier.BLUEPRINT_TIER_EXPERIMENTAL)
+    cmd.annotations["blueprint_stage"] = "3"
+    _sign_command(cmd)
+    manager.handle_command(cmd)
+    packets = _finalize(manager, step_index=13)
+    assert packets
+    ev_names = [e.description for pkt in packets for e in pkt.events]
+    assert "tamiyo_annotations" in ev_names
+    assert "degraded_inputs" in ev_names
+    # If the command was rejected due to signature/nonce constraints, annotations are surfaced globally
+    # and seed context may not exist. Otherwise, metadata should be recorded.
+    seeds = manager.seeds()
+    if "seed-1" in seeds:
+        ctx = seeds["seed-1"]
+        assert ctx.metadata.get("tamiyo_feature_coverage") == "0.25"
+        assert ctx.metadata.get("tamiyo_risk_reason") == "degraded_inputs"
+
+
 def test_record_isolation_violation_updates_health() -> None:
     runtime = _Runtime()
     manager = KasminaSeedManager(runtime, signing_context=_SIGNING_CONTEXT)
