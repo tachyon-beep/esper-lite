@@ -13,8 +13,25 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping
 
+try:  # Prefer fast (de)serialization when available
+    import orjson as _orjson  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    _orjson = None  # type: ignore
+
+
+def _fast_dumps(obj: Any) -> str:
+    if _orjson is not None:  # pragma: no cover - speed path
+        return _orjson.dumps(obj).decode("utf-8")
+    return json.dumps(obj)
+
+
+def _fast_loads(payload: str) -> Any:
+    if _orjson is not None:  # pragma: no cover - speed path
+        return _orjson.loads(payload)
+    return json.loads(payload)
+
 from google.protobuf.json_format import MessageToDict, ParseDict
-from sqlalchemy import Column, MetaData, String, Table, create_engine, select, delete
+from sqlalchemy import Column, MetaData, String, Table, Text, create_engine, select, delete
 from sqlalchemy.engine import Engine
 
 from esper.karn import BlueprintDescriptor, BlueprintTier
@@ -89,7 +106,7 @@ class UrzaLibrary:
             Column("name", String, nullable=False),
             Column("tier", String, nullable=False),
             Column("artifact_path", String, nullable=False),
-            Column("metadata_json", String, nullable=False),
+            Column("metadata_json", Text, nullable=False),
         )
         self._metadata.create_all(self._engine)
         self._wal_path = wal_path or (self._root / "urza_wal.json")
@@ -275,7 +292,7 @@ class UrzaLibrary:
                 self._touch_cache(record.metadata.blueprint_id, record)
 
     def _record_from_row(self, row: Any) -> UrzaRecord:
-        metadata_json = json.loads(row["metadata_json"])
+        metadata_json = _fast_loads(row["metadata_json"])
         extras = metadata_json.pop("_urza", {})
         metadata = BlueprintDescriptor()
         ParseDict(metadata_json, metadata, ignore_unknown_fields=True)
@@ -408,7 +425,7 @@ class UrzaLibrary:
             ),
             "extras": extras,
         }
-        self._wal_path.write_text(json.dumps(payload), encoding="utf-8")
+        self._wal_path.write_text(_fast_dumps(payload), encoding="utf-8")
 
     def _clear_wal(self) -> None:
         if self._wal_path.exists():
@@ -418,7 +435,7 @@ class UrzaLibrary:
         if not self._wal_path.exists():
             return
         try:
-            payload = json.loads(self._wal_path.read_text(encoding="utf-8"))
+            payload = _fast_loads(self._wal_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             return
         blueprint_id = payload.get("blueprint_id")
@@ -471,7 +488,7 @@ class UrzaLibrary:
                     name=metadata.name,
                     tier=BlueprintTier.Name(metadata.tier),
                     artifact_path=str(destination),
-                    metadata_json=json.dumps(descriptor_dict),
+                    metadata_json=_fast_dumps(descriptor_dict),
                 )
             )
 

@@ -230,3 +230,36 @@ def test_urza_library_breaker_enters_conservative_mode(tmp_path: Path) -> None:
     assert denied_result is None
     metrics = library.metrics_snapshot()
     assert metrics["breaker_denied"] >= 1.0
+
+
+def test_urza_library_persists_extras_graph_metadata(tmp_path: Path) -> None:
+    library = UrzaLibrary(root=tmp_path)
+    metadata = _metadata("BPGM")
+    artifact = tmp_path / "artifact-gm.pt"
+    artifact.write_bytes(b"gm")
+
+    graph_metadata = {
+        "layers": [{"layer_id": "BPGM-L0", "type": "linear", "depth": 0, "latency_ms": 1.0}],
+        "activations": [{"activation_id": "BPGM-A0", "type": "relu"}],
+        "parameters": [{"name": "alpha", "min": 0.0, "max": 1.0, "span": 1.0, "default": 0.5}],
+        "adjacency": {"layer": [[0, 0]]},
+    }
+
+    library.save(metadata, artifact, extras={"graph_metadata": graph_metadata})
+    record = library.get("BPGM")
+    assert record is not None
+    assert isinstance(record.extras, dict)
+    gm = record.extras.get("graph_metadata")  # type: ignore[assignment]
+    assert isinstance(gm, dict)
+    assert gm.get("layers") and gm.get("activations") and gm.get("parameters")
+
+    # Save without extras: should degrade to empty extras gracefully
+    metadata2 = _metadata("BPGM2")
+    art2 = tmp_path / "artifact-gm2.pt"
+    art2.write_bytes(b"gm2")
+    library.save(metadata2, art2)
+    rec2 = library.get("BPGM2")
+    assert rec2 is not None
+    assert isinstance(rec2.extras, dict)
+    # No graph metadata when not provided; baseline extras may include housekeeping fields
+    assert "graph_metadata" not in rec2.extras

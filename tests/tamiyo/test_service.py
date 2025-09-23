@@ -369,6 +369,58 @@ def test_service_urza_graph_metadata_round_trip(tmp_path) -> None:
     service.close()
 
 
+def test_service_urza_graph_metadata_fallback_via_guard_spec(tmp_path) -> None:
+    urza_root = tmp_path / "urza"
+    urza_root.mkdir(parents=True, exist_ok=True)
+    artifact_path = tmp_path / "bp_guard.pt"
+    artifact_path.write_bytes(b"dummy")
+
+    descriptor = BlueprintDescriptor(
+        blueprint_id="bp-guard",
+        name="guard-test",
+        tier=BlueprintTier.BLUEPRINT_TIER_SAFE,
+        risk=0.2,
+        stage=1,
+        quarantine_only=False,
+        approval_required=False,
+        description="guard metadata fixture",
+    )
+
+    guard_spec = [{"shape": [4, 8], "dtype": "float32"}]
+    library = UrzaLibrary(root=urza_root)
+    library.save(
+        descriptor,
+        artifact_path,
+        extras={"guard_spec": guard_spec, "prewarm_ms": 10.0},
+    )
+
+    service = TamiyoService(
+        policy=TamiyoPolicy(),
+        store_config=FieldReportStoreConfig(path=tmp_path / "field_reports.log"),
+        urza=library,
+        signature_context=_SIGNATURE_CONTEXT,
+    )
+
+    packet = leyline_pb2.SystemStatePacket(
+        version=1,
+        current_epoch=1,
+        training_run_id="run-guard",
+        packet_id="bp-guard",
+    )
+    seed = packet.seed_states.add()
+    seed.seed_id = "seed-guard"
+    seed.stage = leyline_pb2.SeedLifecycleStage.SEED_STAGE_TRAINING
+
+    service.evaluate_epoch(packet)
+    cached = service._policy._blueprint_metadata.get("bp-guard")  # type: ignore[attr-defined]
+    assert cached is not None
+    graph_block = cached.get("graph")
+    assert graph_block is not None
+    assert graph_block.get("layers") and graph_block["layers"][0]["type"] == "guard_tensor"
+    assert graph_block.get("activations") and graph_block["activations"][0]["type"] == "float32"
+    service.close()
+
+
 def test_inference_breaker_enters_conservative_mode(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
     service = TamiyoService(
