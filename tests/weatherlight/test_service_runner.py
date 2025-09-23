@@ -189,6 +189,37 @@ async def test_weatherlight_flushes_tamiyo_history(
 
 
 @pytest.mark.asyncio
+async def test_weatherlight_fans_out_tamiyo_coverage_types(
+    fake_redis: FakeRedis,
+    weatherlight_settings: EsperSettings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Ensure signing secret is present for Tamiyo path
+    monkeypatch.setenv("ESPER_LEYLINE_SECRET", "test-secret")
+    service = WeatherlightService(settings=weatherlight_settings)
+    await service.start()
+    try:
+        # Trigger Tamiyo to generate a telemetry packet with coverage types
+        assert service._tamiyo_service is not None  # type: ignore[attr-defined]
+        pkt = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-fanout")
+        # Provide at least one seed to avoid fast-path pause
+        seed = pkt.seed_states.add()
+        seed.seed_id = "seed-fanout"
+        seed.stage = leyline_pb2.SeedLifecycleStage.SEED_STAGE_TRAINING
+        seed.learning_rate = 0.01
+        service._tamiyo_service.evaluate_epoch(pkt)  # type: ignore[attr-defined]
+
+        # Build Weatherlight telemetry packet and assert fanout metrics present
+        packet = await service._build_telemetry_packet()  # type: ignore[attr-defined]
+        names = {m.name for m in packet.metrics}
+        # Expect at least one node and one edge type coverage metric
+        assert any(n.startswith("weatherlight.tamiyo.coverage.node.") for n in names)
+        assert any(n.startswith("weatherlight.tamiyo.coverage.edges.") for n in names)
+    finally:
+        await service.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_weatherlight_flushes_kasmina_pending(
     fake_redis: FakeRedis,
     weatherlight_settings: EsperSettings,

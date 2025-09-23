@@ -636,6 +636,31 @@ class WeatherlightService:
         except Exception:  # pragma: no cover - defensive
             pass
 
+        # Fanout: mirror Tamiyo per-type coverage into Weatherlight metrics (best-effort)
+        try:
+            if self._tamiyo_service is not None:
+                tpkts = self._tamiyo_service.telemetry_packets
+                if tpkts:
+                    latest = tpkts[-1]
+                    prefix = "tamiyo.gnn.feature_coverage."
+                    for m in latest.metrics:
+                        name = getattr(m, "name", "")
+                        if isinstance(name, str) and name.startswith(prefix):
+                            key = name.split(prefix, 1)[1]
+                            try:
+                                value = float(getattr(m, "value", 0.0))
+                            except Exception:
+                                value = 0.0
+                            metrics.append(
+                                TelemetryMetric(
+                                    f"weatherlight.tamiyo.coverage.{key}",
+                                    value,
+                                    unit="ratio",
+                                )
+                            )
+        except Exception:  # pragma: no cover - defensive
+            pass
+
         packet = build_telemetry_packet(
             packet_id=f"weatherlight-{uuid.uuid4()}",
             source="weatherlight",
