@@ -986,7 +986,7 @@ class TamiyoService:
             del command.annotations["signature"]
         command.command_id = str(uuid4())
         command.issued_at.GetCurrentTime()
-        payload = command.SerializeToString()
+        payload = command.SerializeToString(deterministic=True)
         command.annotations["signature"] = sign(payload, self._signing_context)
 
     def _derive_health_status(

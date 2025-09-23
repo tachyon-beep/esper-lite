@@ -73,7 +73,12 @@ class _SlowUrza:
 
 def test_tamiyo_service_generates_command(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
-    service = TamiyoService(policy=TamiyoPolicy(), store_config=config, signature_context=_SIGNATURE_CONTEXT)
+    service = TamiyoService(
+        policy=TamiyoPolicy(),
+        store_config=config,
+        signature_context=_SIGNATURE_CONTEXT,
+        step_timeout_ms=100.0,
+    )
     packet = leyline_pb2.SystemStatePacket(
         version=1,
         current_epoch=1,
@@ -155,7 +160,12 @@ def test_tamiyo_signed_command_accepted_and_replay_rejected(tmp_path) -> None:
 
 def test_service_schedule_parameters_fractional(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
-    service = TamiyoService(policy=TamiyoPolicy(), store_config=config, signature_context=_SIGNATURE_CONTEXT)
+    service = TamiyoService(
+        policy=TamiyoPolicy(),
+        store_config=config,
+        signature_context=_SIGNATURE_CONTEXT,
+        step_timeout_ms=100.0,
+    )
     packet = leyline_pb2.SystemStatePacket(
         version=1,
         current_epoch=2,
@@ -203,6 +213,35 @@ def test_evaluate_step_timeout_inference(tmp_path) -> None:
     assert priority == leyline_pb2.MessagePriority.Name(
         leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH
     )
+
+
+def test_evaluate_step_includes_coverage_and_policy_version(tmp_path) -> None:
+    config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    service = TamiyoService(
+        policy=TamiyoPolicy(),
+        store_config=config,
+        signature_context=_SIGNATURE_CONTEXT,
+        step_timeout_ms=100.0,
+    )
+    packet = leyline_pb2.SystemStatePacket(
+        version=1,
+        current_epoch=1,
+        training_run_id="run-step",
+        packet_id="pkt-step",
+    )
+    # Provide one seed to avoid fast-path pause
+    seed = packet.seed_states.add()
+    seed.seed_id = "seed-step"
+    seed.stage = leyline_pb2.SeedLifecycleStage.SEED_STAGE_TRAINING
+    seed.learning_rate = 0.01
+    cmd = service.evaluate_step(packet)
+    # Annotations contain coverage and policy metadata
+    assert "feature_coverage" in cmd.annotations
+    assert "policy_version" in cmd.annotations
+    # Priority unchanged (normal) for non-degraded events
+    telemetry = service.telemetry_packets[-1]
+    prio_name = telemetry.system_health.indicators.get("priority")
+    assert prio_name == leyline_pb2.MessagePriority.Name(leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL)
 
 
 def test_evaluate_step_timeout_urza(tmp_path) -> None:
@@ -653,7 +692,7 @@ def test_tamiyo_stale_command_rejected(tmp_path) -> None:
     if "signature" in stale_command.annotations:
         del stale_command.annotations["signature"]
     stale_command.annotations["signature"] = sign(
-        stale_command.SerializeToString(),
+        stale_command.SerializeToString(deterministic=True),
         _SIGNATURE_CONTEXT,
     )
 

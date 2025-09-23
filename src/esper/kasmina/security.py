@@ -55,7 +55,7 @@ class CommandVerifier:
         self._freshness_window = timedelta(seconds=freshness_window_seconds)
 
     def verify(self, command: leyline_pb2.AdaptationCommand, signature: str) -> VerificationResult:
-        payload = command.SerializeToString()
+        payload = command.SerializeToString(deterministic=True)
         if not signature:
             return VerificationResult(False, "missing_signature")
         if not verify(payload, signature, self._ctx):

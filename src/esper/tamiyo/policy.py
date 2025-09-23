@@ -303,6 +303,10 @@ class TamiyoPolicy(nn.Module):
         command.annotations["policy_value_estimate"] = f"{value_estimate:.6f}"
         command.annotations["policy_risk_index"] = str(risk_idx)
         command.annotations["policy_risk_score"] = f"{risk_score:.6f}"
+        # Attach feature coverage summary for downstream degraded-input reactions
+        if coverage:
+            avg_cov = float(sum(coverage.values()) / max(1, len(coverage)))
+            command.annotations.setdefault("feature_coverage", f"{avg_cov:.3f}")
         if selected_seed:
             command.annotations.setdefault("selected_seed", selected_seed)
         if selected_blueprint:
