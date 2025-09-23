@@ -982,6 +982,7 @@ class TamiyoService:
                 if "risk_score" in bsds_block:
                     with contextlib.suppress(Exception):
                         command.annotations.setdefault("bsds_risk", f"{float(bsds_block['risk_score']):.2f}")
+                prov = str(bsds_block.get("provenance", ""))
                 events.append(
                     TelemetryEvent(
                         description="bsds_present",
@@ -989,6 +990,7 @@ class TamiyoService:
                         attributes={
                             "hazard": str(bsds_block.get("hazard_band", "")),
                             "risk": str(bsds_block.get("risk_score", "")),
+                            "provenance": prov,
                         },
                     )
                 )
@@ -1002,7 +1004,7 @@ class TamiyoService:
                         TelemetryEvent(
                             description="bsds_handling_quarantine",
                             level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
-                            attributes={"handling": handling},
+                            attributes={"handling": handling, "provenance": prov},
                         )
                     )
                     self._set_conservative_mode(True, reason, events)
@@ -1014,7 +1016,7 @@ class TamiyoService:
                         TelemetryEvent(
                             description="bsds_hazard_critical",
                             level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
-                            attributes={"hazard": hazard},
+                            attributes={"hazard": hazard, "provenance": prov},
                         )
                     )
                     self._set_conservative_mode(True, reason, events)
@@ -1024,7 +1026,7 @@ class TamiyoService:
                         TelemetryEvent(
                             description="bsds_hazard_high",
                             level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                            attributes={"hazard": hazard},
+                            attributes={"hazard": hazard, "provenance": prov},
                         )
                     )
                     if command.command_type == leyline_pb2.COMMAND_SEED:

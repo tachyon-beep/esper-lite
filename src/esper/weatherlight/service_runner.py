@@ -543,6 +543,30 @@ class WeatherlightService:
                     },
                 )
             )
+        # Health indicators
+        indicators = {
+            "workers_running": str(workers_running),
+            "workers_backing_off": str(workers_backing_off),
+        }
+        # Surface Tamiyo BSDS provenance/hazard (best-effort) for dashboards
+        try:
+            if self._tamiyo_service is not None:
+                tpkts = self._tamiyo_service.telemetry_packets
+                if tpkts:
+                    last = tpkts[-1]
+                    bsds_prov = None
+                    bsds_hazard = None
+                    for ev in last.events:
+                        if ev.description in {"bsds_hazard_critical", "bsds_hazard_high", "bsds_present", "bsds_handling_quarantine"}:
+                            bsds_prov = ev.attributes.get("provenance") or bsds_prov
+                            bsds_hazard = ev.attributes.get("hazard") or bsds_hazard
+                    if bsds_prov:
+                        indicators["bsds_provenance"] = str(bsds_prov).lower()
+                    if bsds_hazard:
+                        indicators["bsds_hazard"] = str(bsds_hazard).upper()
+        except Exception:  # pragma: no cover - defensive
+            pass
+
         packet = build_telemetry_packet(
             packet_id=f"weatherlight-{uuid.uuid4()}",
             source="weatherlight",
@@ -551,10 +575,7 @@ class WeatherlightService:
             events=events,
             health_status=health_status,
             health_summary=health_summary,
-            health_indicators={
-                "workers_running": str(workers_running),
-                "workers_backing_off": str(workers_backing_off),
-            },
+            health_indicators=indicators,
         )
         return packet
 

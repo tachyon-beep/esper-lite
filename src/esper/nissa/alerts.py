@@ -150,6 +150,21 @@ DEFAULT_ALERT_RULES: tuple[AlertRule, ...] = (
         for_count=1,
         routes=("email",),
     ),
+    # BSDS (Tamiyo) — prototype signals
+    AlertRule(
+        name="tamiyo_bsds_critical",
+        metric="tamiyo.bsds.hazard_critical_signal",
+        threshold=0.5,
+        for_count=1,
+        routes=("pagerduty",),
+    ),
+    AlertRule(
+        name="tamiyo_bsds_high",
+        metric="tamiyo.bsds.hazard_high_signal",
+        threshold=0.5,
+        for_count=3,
+        routes=("slack",),
+    ),
 )
 
 

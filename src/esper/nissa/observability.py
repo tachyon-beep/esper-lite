@@ -77,6 +77,19 @@ class NissaIngestor:
             "Number of Simic PPO iterations processed",
             registry=self._registry,
         )
+        # BSDS (Tamiyo) hazard counters — provenance label best-effort
+        self._tamiyo_bsds_high = Counter(
+            "esper_tamiyo_bsds_hazard_high_total",
+            "Count of Tamiyo BSDS high hazard signals",
+            registry=self._registry,
+            labelnames=("provenance",),
+        )
+        self._tamiyo_bsds_critical = Counter(
+            "esper_tamiyo_bsds_hazard_critical_total",
+            "Count of Tamiyo BSDS critical hazard signals",
+            registry=self._registry,
+            labelnames=("provenance",),
+        )
         self._es = es_client or Elasticsearch(hosts=[config.elasticsearch_url])
 
     def ingest_state(self, packet: Mapping[str, object]) -> None:
@@ -104,6 +117,19 @@ class NissaIngestor:
         self._telemetry_counter.labels(source=packet.source_subsystem).inc()
         document = MessageToDict(packet, preserving_proto_field_name=True)
         metrics = {metric.name: metric.value for metric in packet.metrics}
+        # Derive BSDS hazard signals from events; increment counters with provenance label
+        signals: dict[str, float] = {}
+        for event in packet.events:
+            if event.description == "bsds_hazard_critical":
+                prov = (event.attributes.get("provenance") or "unknown").lower()
+                self._tamiyo_bsds_critical.labels(provenance=prov).inc()
+                signals["tamiyo.bsds.hazard_critical_signal"] = 1.0
+            elif event.description == "bsds_hazard_high":
+                prov = (event.attributes.get("provenance") or "unknown").lower()
+                self._tamiyo_bsds_high.labels(provenance=prov).inc()
+                signals["tamiyo.bsds.hazard_high_signal"] = 1.0
+        if signals:
+            metrics.update(signals)
         if metrics:
             self._alert_engine.evaluate(metrics, packet.source_subsystem)
             self._process_slo_metrics(metrics)

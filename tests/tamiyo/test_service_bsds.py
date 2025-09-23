@@ -74,7 +74,10 @@ def test_bsds_critical_triggers_pause_and_annotations(tmp_path: Path) -> None:
     cmd = service.evaluate_epoch(_packet("bp-crit"))
     assert cmd.command_type == leyline_pb2.COMMAND_PAUSE
     telemetry = service.telemetry_packets[-1]
-    assert any(e.description == "bsds_hazard_critical" for e in telemetry.events)
+    crits = [e for e in telemetry.events if e.description == "bsds_hazard_critical"]
+    assert crits
+    # Provenance should be present on the event attributes
+    assert crits[0].attributes.get("provenance", "").upper() == "URABRASK"
     assert cmd.annotations["bsds_hazard_band"].upper() == "CRITICAL"
     assert cmd.annotations["bsds_risk"] == "0.70"
     # blueprint_risk should reflect bsds risk override
@@ -104,8 +107,9 @@ def test_bsds_present_event_and_annotations(tmp_path: Path) -> None:
     service = _service_with_urza(tmp_path, "bp-present", bsds)
     cmd = service.evaluate_epoch(_packet("bp-present"))
     telemetry = service.telemetry_packets[-1]
-    assert any(e.description == "bsds_present" for e in telemetry.events)
+    present = [e for e in telemetry.events if e.description == "bsds_present"]
+    assert present
+    assert present[0].attributes.get("provenance", "").upper() == "HEURISTIC"
     for key in ("bsds_hazard_band", "bsds_handling_class", "bsds_resource_profile", "bsds_provenance", "bsds_risk"):
         assert key in cmd.annotations
     assert cmd.annotations["blueprint_risk"] == "0.42"
-
