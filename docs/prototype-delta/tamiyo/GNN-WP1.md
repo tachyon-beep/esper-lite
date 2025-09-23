@@ -162,11 +162,9 @@ Replace the feed-forward Tamiyo policy stub with the 4-layer hetero-GNN architec
      - intermediate `graph_embedding` for telemetry.
 
    **Framework Choice (PyTorch Geometric vs Custom)**
-   - **Decision**: adopt PyTorch Geometric (`torch-geometric>=2.5.0`, plus runtime dependencies `torch-scatter>=2.1.2`, `torch-sparse>=0.6.18`, `torch-cluster>=1.6.3`, `torch-spline-conv>=1.2.2`) as the default implementation path.
-     - Declare optional extra `tamiyo-gnn` in `pyproject.toml` installing the set `{torch-geometric, torch-scatter, torch-sparse, torch-cluster, torch-spline-conv}` pinned to CUDA-compatible builds matching our torch version.
-     - Update CI workflows to install `pip install .[tamiyo-gnn]` for the jobs running GNN tests; document local install instructions in README.
-     - Wrap imports in `esper.tamiyo.pyg` so we can substitute deterministic test doubles when GPU kernels aren’t available.
-   - **If PyG unavailable at runtime**: raise `TamiyoDependencyError` during policy init, emit telemetry (`tamiyo.policy.degraded=1`), and refuse to evaluate—prevents silently degraded decisions.
+   - **Decision**: adopt PyTorch Geometric (`torch-geometric>=2.5.0`, plus runtime dependencies `torch-scatter>=2.1.2`, `torch-sparse>=0.6.18`, `torch-cluster>=1.6.3`, `torch-spline-conv>=1.2.2`) as the default implementation path and install these packages as core dependencies.
+     - Update CI workflows to install the base project; the Tamiyo policy now assumes PyG is present and will fail fast if imports break.
+     - Document local install instructions in README, noting that PyG wheels matching the pinned torch build are mandatory for any Tamiyo deployment.
    - **Hand-rolled fallback sketch (for future work if PyG is rejected)**:
      - Implement custom hetero convolutions using `torch.mm` over adjacency matrices built via `scatter_add` (node-type specific linear layers + neighbourhood aggregation).
      - Use attention weights computed with per-edge MLP (for GAT equivalent) and normalise with `softmax` over neighbour dimension.
@@ -233,3 +231,26 @@ Replace the feed-forward Tamiyo policy stub with the 4-layer hetero-GNN architec
 - Inference p95 (on dev hardware) ≤45 ms; compile fallback path logged once when disabled.
 - Telemetry includes updated policy version/metadata and continues to expose metrics required by the taxonomy.
 - No production behaviour regressions in Tamiyo service, persistence, or field reports.
+
+## Full WP1 Hetero-GNN Reference
+
+The production Tamiyo policy instantiates the four-stage hetero-GNN defined in `03.1-tamiyo-gnn-architecture.md`. The network encodes each node type with a linear → ReLU → LayerNorm stack that projects raw blueprint and telemetry fields into a shared hidden space before executing the convolution stack.
+
+| Node Type | Raw Feature Budget | Encoder Output | Notable Fields |
+| --- | --- | --- | --- |
+| `layer` | 128 channels (structural telemetry, per-step loss/gradient metrics, adjacency hints) | 256-dim | Includes categorical embeddings for `layer_type`/`activation` plus log-scaled loss, gradient norm, samples/sec, latency, and mask bits for imputed slots. |
+| `seed` | 64 channels (Leyline stage, activity/risk metrics, specialization) | 256-dim | Registry-based embeddings for `seed_id`, lifecycle enums, blending capability masks, and Tolaria-provided success bands. |
+| `activation` | 32 channels (saturation, gradient flow, compute cost) | 128-dim | Derived from blueprint activation metadata with learned fallbacks when Urza omits values. |
+| `parameter` | 16 channels (optimizer statistics, counts, variance) | 256-dim | Log-scaled parameter count, learning rate, momentum, variance, optimizer family embedding, and mask channels. |
+
+The message-passing pipeline applies two GraphSAGE hetero-convolution stages (hidden width 256) followed by two 4-head GAT hetero-convolutions (hidden width 128) with GELU activations, dropout 0.2, residual connections, and per-relation layer norms. Pooling averages the `layer` node embeddings to produce the global summary vector consumed by the output heads.
+
+Output heads match the WP1 contract:
+
+- `policy_logits`: 32-way action distribution over blueprint kernels, paired with `policy_params` tensors that encode per-action continuous deltas (learning-rate shifts, schedule scalars).
+- `risk_logits`: five-class safety gate consistent with the Blueprint Safety Data Sheet taxonomy.
+- `value_estimate`: scalar inference of expected blueprint uplift for downstream planners.
+- `blending_method_logits`: categorical selection over Kasmina-supported blending families, exported alongside per-seed schedule parameters.
+- `telemetry_embedding`: auxiliary 64-dim embedding persisted for observability and health scoring.
+
+For a canonical list of required upstream signals, normalisation constants, and mask semantics, see [`diff/gnn-inputs.md`](diff/gnn-inputs.md).

@@ -14,17 +14,12 @@ from typing import Callable, Iterable, Mapping, Sequence
 import json
 import math
 import hashlib
+from collections import Counter
 
 import torch
 import torch.nn.functional as F
 from torch import Tensor
-
-try:  # pragma: no cover - import guarded to allow optional dependency
-    from torch_geometric.data import HeteroData
-except ImportError as exc:  # pragma: no cover - tested via integration path
-    raise ModuleNotFoundError(
-        "PyTorch Geometric is required for Tamiyo GNN support. Install esper-lite[tamiyo-gnn]."
-    ) from exc
+from torch_geometric.data import HeteroData
 
 from esper.leyline import leyline_pb2
 from esper.simic.registry import EmbeddingRegistry
@@ -53,6 +48,10 @@ _DEFAULT_NORMALISATION: Mapping[str, tuple[float, float]] = {
     "parameter_max": (1.0, 0.5),
     "parameter_span": (0.5, 0.4),
     "parameter_default": (0.5, 0.4),
+    "blueprint_param_log": (math.log1p(2048.0), 1.0),
+    "blueprint_candidate_score": (0.5, 0.25),
+    "global_epoch": (10.0, 5.0),
+    "global_step": (100.0, 40.0),
 }
 
 
@@ -124,11 +123,11 @@ class TamiyoGraphBuilderConfig:
     """Configuration payload for `TamiyoGraphBuilder`."""
 
     global_feature_dim: int = 16
-    seed_feature_dim: int = 12
-    blueprint_feature_dim: int = 8
-    layer_feature_dim: int = 8
-    activation_feature_dim: int = 6
-    parameter_feature_dim: int = 6
+    seed_feature_dim: int = 14
+    blueprint_feature_dim: int = 14
+    layer_feature_dim: int = 12
+    activation_feature_dim: int = 8
+    parameter_feature_dim: int = 10
     edge_feature_dim: int = 3
     normalizer_path: Path = Path("var/tamiyo/gnn_norms.json")
     seed_vocab: int = 1024
@@ -165,21 +164,24 @@ class TamiyoGraphBuilder:
         blueprint_id = packet.packet_id or packet.training_run_id or "bp-unknown"
         metadata = self._lookup_blueprint_metadata(blueprint_id)
         graph_meta = metadata.get("graph", {}) if isinstance(metadata.get("graph"), Mapping) else {}
+        coverage = _CoverageTracker()
 
-        global_features = self._build_global_features(packet)
+        global_features = self._build_global_features(packet, coverage)
         seed_features, seed_ids, seed_caps, seed_scores = self._build_seed_features(
             packet.seed_states,
             metadata,
             graph_meta,
+            coverage,
         )
         blueprint_features, blueprint_ids, blueprint_scores = self._build_blueprint_features(
             packet,
             metadata,
             graph_meta,
+            coverage,
         )
-        layer_features, layer_ids = self._build_layer_features(packet, metadata, graph_meta)
-        activation_features, activation_ids = self._build_activation_features(packet, metadata, graph_meta)
-        parameter_features, parameter_ids = self._build_parameter_features(packet, metadata, graph_meta)
+        layer_features, layer_ids = self._build_layer_features(packet, metadata, graph_meta, coverage)
+        activation_features, activation_ids = self._build_activation_features(packet, metadata, graph_meta, coverage)
+        parameter_features, parameter_ids = self._build_parameter_features(packet, metadata, graph_meta, coverage)
 
         data["global"].x = global_features
         data["seed"].x = seed_features
@@ -197,26 +199,54 @@ class TamiyoGraphBuilder:
         data["seed"].candidate_scores = seed_scores
         data["blueprint"].candidate_scores = blueprint_scores
 
-        self._populate_edges(data, packet, metadata, seed_caps, len(layer_ids), len(activation_ids), len(parameter_ids))
+        self._populate_edges(
+            data,
+            packet,
+            metadata,
+            seed_caps,
+            len(layer_ids),
+            len(activation_ids),
+            len(parameter_ids),
+        )
         self._normalizer.flush()
+        data.feature_coverage = coverage.summary()
         return data
 
     # ------------------------------------------------------------------
     # Feature helpers
     # ------------------------------------------------------------------
-    def _build_global_features(self, packet: leyline_pb2.SystemStatePacket) -> Tensor:
+    def _build_global_features(
+        self,
+        packet: leyline_pb2.SystemStatePacket,
+        coverage: "_CoverageTracker",
+    ) -> Tensor:
         feats = torch.zeros((1, self._cfg.global_feature_dim), dtype=torch.float32)
         metrics = dict(packet.training_metrics)
         idx = 0
-        for key in ("loss", "validation_loss", "training_loss", "gradient_norm", "samples_per_s", "hook_latency_ms"):
-            value = float(metrics.get(key, 0.0))
-            feats[0, idx] = self._normalizer.normalize(key, value)
-            idx += 1
-        feats[0, idx] = float(packet.current_epoch)
+        keys = (
+            "loss",
+            "validation_loss",
+            "training_loss",
+            "gradient_norm",
+            "samples_per_s",
+            "hook_latency_ms",
+        )
+        for key in keys:
+            raw_value = metrics.get(key)
+            present = raw_value is not None
+            value = float(raw_value or 0.0)
+            feats[0, idx] = self._normalizer.normalize(key, value if present else 0.0)
+            feats[0, idx + 1] = 1.0 if present else 0.0
+            coverage.observe(f"global.{key}", present)
+            idx += 2
+        feats[0, idx] = self._normalizer.normalize("global_epoch", float(packet.current_epoch))
+        coverage.observe("global.epoch", True)
         idx += 1
-        feats[0, idx] = float(packet.global_step)
+        feats[0, idx] = self._normalizer.normalize("global_step", math.log1p(float(packet.global_step)))
+        coverage.observe("global.step", True)
         idx += 1
-        feats[0, idx] = float(len(packet.seed_states))
+        feats[0, idx] = math.tanh(float(len(packet.seed_states)))
+        coverage.observe("global.seed_count", True)
         idx += 1
         epochs_total = float(metrics.get("epochs_total", 0.0))
         if epochs_total > 0.0:
@@ -224,6 +254,7 @@ class TamiyoGraphBuilder:
         else:
             epoch_progress = 0.0
         feats[0, idx] = self._normalizer.normalize("epoch_progress", epoch_progress)
+        coverage.observe("global.epoch_progress", epochs_total > 0.0)
         return feats
 
     def _build_seed_features(
@@ -231,6 +262,7 @@ class TamiyoGraphBuilder:
         seeds: Iterable[leyline_pb2.SeedState],
         metadata: Mapping[str, float | str | bool | int],
         graph_meta: Mapping[str, object],
+        coverage: "_CoverageTracker",
     ) -> tuple[Tensor, list[str], list[dict[str, float]], Tensor]:
         seed_list = list(seeds)
         if not seed_list:
@@ -252,27 +284,76 @@ class TamiyoGraphBuilder:
             if isinstance(methods, (list, tuple)):
                 allowed_methods = {str(name) for name in methods}
         for index, seed in enumerate(seed_list):
-            features[index, 0] = self._normalizer.normalize("seed_learning_rate", seed.learning_rate)
-            features[index, 1] = self._normalizer.normalize("seed_risk", seed.risk_score)
-            features[index, 2] = self._normalizer.normalize("gradient_norm", seed.gradient_norm)
-            features[index, 3] = self._normalizer.normalize("seed_age", float(seed.age_epochs))
-            features[index, 4] = float(seed.stage) / max_stage
-            features[index, 5] = float(seed.layer_depth)
+            cursor = 0
+            lr_present = seed.HasField("learning_rate") or bool(seed.learning_rate)
+            features[index, cursor] = self._normalizer.normalize(
+                "seed_learning_rate",
+                seed.learning_rate if lr_present else 0.0,
+            )
+            features[index, cursor + 1] = 1.0 if lr_present else 0.0
+            coverage.observe("seed.learning_rate", lr_present)
+            cursor += 2
+
+            risk_present = seed.HasField("risk_score") or bool(seed.risk_score)
+            features[index, cursor] = self._normalizer.normalize(
+                "seed_risk",
+                seed.risk_score if risk_present else 0.0,
+            )
+            features[index, cursor + 1] = 1.0 if risk_present else 0.0
+            coverage.observe("seed.risk", risk_present)
+            cursor += 2
+
+            grad_present = seed.HasField("gradient_norm") or bool(seed.gradient_norm)
+            features[index, cursor] = self._normalizer.normalize(
+                "gradient_norm",
+                seed.gradient_norm if grad_present else 0.0,
+            )
+            features[index, cursor + 1] = 1.0 if grad_present else 0.0
+            coverage.observe("seed.gradient_norm", grad_present)
+            cursor += 2
+
+            age_present = seed.HasField("age_epochs") or bool(seed.age_epochs)
+            features[index, cursor] = self._normalizer.normalize(
+                "seed_age",
+                float(seed.age_epochs) if age_present else 0.0,
+            )
+            features[index, cursor + 1] = 1.0 if age_present else 0.0
+            coverage.observe("seed.age", age_present)
+            cursor += 2
+
+            stage_norm = float(seed.stage) / max_stage
+            features[index, cursor] = stage_norm
+            features[index, cursor + 1] = 1.0
+            coverage.observe("seed.stage", True)
+            cursor += 2
+
+            depth_present = bool(seed.layer_depth)
+            depth_norm = float(seed.layer_depth) / max(1.0, float(self._cfg.max_layers))
+            features[index, cursor] = depth_norm if depth_present else 0.0
+            features[index, cursor + 1] = 1.0 if depth_present else 0.0
+            coverage.observe("seed.layer_depth", depth_present)
+            cursor += 2
 
             seed_id = seed.seed_id or f"seed-{index}"
             seed_ids.append(seed_id)
             registry = self._seed_registry
-            if registry is not None:
-                idx = registry.get(seed_id)
-                features[index, 6] = float(idx) / max(1.0, float(self._cfg.seed_vocab))
+            if registry is not None and cursor < features.size(1):
+                reg_idx = registry.get(seed_id)
+                features[index, cursor] = float(reg_idx) / max(1.0, float(self._cfg.seed_vocab))
+                coverage.observe("seed.embedding", True)
+            cursor += 1
             blend_allowed = 1.0 if seed.stage >= leyline_pb2.SeedLifecycleStage.SEED_STAGE_BLENDING else 0.0
             if allowed_methods:
                 blend_allowed = 1.0
+            if cursor < features.size(1):
+                features[index, cursor] = blend_allowed
+            coverage.observe("seed.blend_allowed", True)
             capabilities.append(
                 {
-                    "stage": float(seed.stage) / max_stage,
-                    "risk": seed.risk_score,
+                    "stage": stage_norm,
+                    "risk": float(seed.risk_score),
                     "blend_allowed": blend_allowed,
+                    "layer_depth": float(seed.layer_depth),
                 }
             )
             fallback_score = (
@@ -289,6 +370,7 @@ class TamiyoGraphBuilder:
         packet: leyline_pb2.SystemStatePacket,
         metadata: Mapping[str, float | str | bool | int],
         graph_meta: Mapping[str, object],
+        coverage: "_CoverageTracker",
     ) -> tuple[Tensor, list[str], Tensor]:
         blueprint_id = packet.packet_id or packet.training_run_id or "bp-unknown"
         dim = self._cfg.blueprint_feature_dim
@@ -297,14 +379,21 @@ class TamiyoGraphBuilder:
         if registry is not None and dim > 0:
             idx = registry.get(blueprint_id)
             features[0, 0] = float(idx) / max(1.0, float(self._cfg.blueprint_vocab))
+            coverage.observe("blueprint.embedding", True)
 
         def _set(col: int, value: float) -> None:
             if col < dim:
                 features[0, col] = value
 
-        _set(1, self._normalizer.normalize("validation_loss", float(packet.validation_loss)))
-        _set(2, self._normalizer.normalize("training_loss", float(packet.training_loss)))
-        _set(3, self._normalizer.normalize("loss", float(packet.training_loss)))
+        val_present = bool(packet.validation_loss)
+        _set(1, self._normalizer.normalize("validation_loss", float(packet.validation_loss) if val_present else 0.0))
+        _set(2, 1.0 if val_present else 0.0)
+        coverage.observe("blueprint.validation_loss", val_present)
+
+        train_present = bool(packet.training_loss)
+        _set(3, self._normalizer.normalize("training_loss", float(packet.training_loss) if train_present else 0.0))
+        _set(4, 1.0 if train_present else 0.0)
+        coverage.observe("blueprint.training_loss", train_present)
         risk = float(metadata.get("risk", 0.0) or 0.0)
         stage = float(metadata.get("stage", 0.0) or 0.0)
         tier_index = float(metadata.get("tier_index", 0))
@@ -316,13 +405,23 @@ class TamiyoGraphBuilder:
         quarantine = 1.0 if metadata.get("quarantine_only") else 0.0
         approval = 1.0 if metadata.get("approval_required") else 0.0
 
-        _set(4, risk)
-        _set(5, stage / 10.0)
-        _set(6, math.tanh(param_count / max(1.0, float(self._cfg.max_parameters))))
-        _set(7, tier_index / 10.0)
-        _set(8, quarantine)
-        _set(9, approval)
+        _set(5, risk)
+        coverage.observe("blueprint.risk", True)
+        _set(6, stage / 10.0)
+        coverage.observe("blueprint.stage", True)
+        log_param = math.log1p(param_count)
+        _set(7, self._normalizer.normalize("blueprint_param_log", log_param))
+        _set(8, 1.0 if param_count > 0 else 0.0)
+        coverage.observe("blueprint.parameter_count", param_count > 0)
+        _set(9, tier_index / 10.0)
+        coverage.observe("blueprint.tier", True)
+        _set(10, quarantine)
+        _set(11, approval)
+        coverage.observe("blueprint.flags", True)
         candidate_score = float(metadata.get("candidate_score", 0.0))
+        _set(12, self._normalizer.normalize("blueprint_candidate_score", candidate_score))
+        _set(13, 1.0 if metadata.get("candidate_score") is not None else 0.0)
+        coverage.observe("blueprint.candidate_score", metadata.get("candidate_score") is not None)
         score_tensor = torch.tensor([candidate_score], dtype=torch.float32)
         return features, [blueprint_id], score_tensor
 
@@ -331,6 +430,7 @@ class TamiyoGraphBuilder:
         packet: leyline_pb2.SystemStatePacket,
         metadata: Mapping[str, float | str | bool | int],
         graph_meta: Mapping[str, object],
+        coverage: "_CoverageTracker",
     ) -> tuple[Tensor, list[str]]:
         raw_layers = []
         if isinstance(graph_meta, Mapping):
@@ -342,8 +442,6 @@ class TamiyoGraphBuilder:
         dim = self._cfg.layer_feature_dim
         features = torch.zeros((count, dim), dtype=torch.float32)
         layer_ids: list[str] = []
-        risk = float(metadata.get("risk", 0.0) or 0.0)
-        stage = float(metadata.get("stage", 0.0) or 0.0)
         total_layers = max(len(raw_layers), count)
         for idx in range(count):
             descriptor = raw_layers[idx] if idx < len(raw_layers) else {}
@@ -358,20 +456,34 @@ class TamiyoGraphBuilder:
             activation_type = str(descriptor.get("activation", descriptor.get("activation_type", "unknown")))
             if dim > 0:
                 features[idx, 0] = depth_norm
+                coverage.observe("layer.depth", True)
             if dim > 1:
-                features[idx, 1] = self._normalizer.normalize("layer_latency_ms", latency)
+                features[idx, 1] = 1.0 if descriptor.get("depth") is not None else 0.0
             if dim > 2:
-                features[idx, 2] = self._normalizer.normalize("layer_parameter_count", param_count)
+                features[idx, 2] = self._normalizer.normalize("layer_latency_ms", latency)
+                coverage.observe("layer.latency", bool(latency))
             if dim > 3:
-                features[idx, 3] = float(max(0.0, min(1.0, dropout)))
+                features[idx, 3] = 1.0 if descriptor.get("latency_ms") is not None else 0.0
             if dim > 4:
-                features[idx, 4] = self._encode_category(layer_type)
+                features[idx, 4] = self._normalizer.normalize("layer_parameter_count", math.log1p(param_count))
+                coverage.observe("layer.param_count", param_count > 0)
             if dim > 5:
-                features[idx, 5] = self._encode_category(activation_type)
+                features[idx, 5] = 1.0 if descriptor.get("parameter_count") is not None else 0.0
             if dim > 6:
-                features[idx, 6] = self._normalizer.normalize("layer_weight_norm", weight_norm)
+                features[idx, 6] = float(max(0.0, min(1.0, dropout)))
+                coverage.observe("layer.dropout", descriptor.get("dropout_rate") is not None)
             if dim > 7:
-                features[idx, 7] = self._normalizer.normalize("layer_gradient_norm", gradient_norm)
+                features[idx, 7] = self._encode_category(layer_type)
+            if dim > 8:
+                features[idx, 8] = self._encode_category(activation_type)
+            if dim > 9:
+                features[idx, 9] = self._normalizer.normalize("layer_weight_norm", weight_norm)
+                coverage.observe("layer.weight_norm", bool(weight_norm))
+            if dim > 10:
+                features[idx, 10] = self._normalizer.normalize("layer_gradient_norm", gradient_norm)
+                coverage.observe("layer.gradient_norm", bool(gradient_norm))
+            if dim > 11:
+                features[idx, 11] = 1.0 if descriptor else 0.0
             layer_id = str(descriptor.get("layer_id", f"{packet.training_run_id or 'run'}-L{idx}"))
             layer_ids.append(layer_id)
         return features, layer_ids
@@ -381,6 +493,7 @@ class TamiyoGraphBuilder:
         packet: leyline_pb2.SystemStatePacket,
         metadata: Mapping[str, float | str | bool | int],
         graph_meta: Mapping[str, object],
+        coverage: "_CoverageTracker",
     ) -> tuple[Tensor, list[str]]:
         raw_activations = []
         if isinstance(graph_meta, Mapping):
@@ -401,16 +514,24 @@ class TamiyoGraphBuilder:
             dominance = float(descriptor.get("nonlinearity_strength", 0.0) or 0.0)
             if dim > 0:
                 features[idx, 0] = self._encode_category(activation_type)
+                coverage.observe("activation.type", True)
             if dim > 1:
-                features[idx, 1] = self._normalizer.normalize("activation_saturation", saturation)
+                features[idx, 1] = 1.0 if descriptor else 0.0
             if dim > 2:
-                features[idx, 2] = self._normalizer.normalize("activation_gradient_flow", gradient_flow)
+                features[idx, 2] = self._normalizer.normalize("activation_saturation", saturation)
+                coverage.observe("activation.saturation", bool(saturation))
             if dim > 3:
-                features[idx, 3] = self._normalizer.normalize("activation_cost", cost)
+                features[idx, 3] = 1.0 if descriptor.get("saturation_rate") is not None else 0.0
             if dim > 4:
-                features[idx, 4] = self._normalizer.normalize("activation_nonlinearity", dominance)
+                features[idx, 4] = self._normalizer.normalize("activation_gradient_flow", gradient_flow)
+                coverage.observe("activation.gradient_flow", bool(gradient_flow))
             if dim > 5:
-                features[idx, 5] = float(idx) / max(1.0, float(count - 1 or 1))
+                features[idx, 5] = self._normalizer.normalize("activation_cost", math.log1p(cost))
+                coverage.observe("activation.cost", bool(cost))
+            if dim > 6:
+                features[idx, 6] = self._normalizer.normalize("activation_nonlinearity", dominance)
+            if dim > 7:
+                features[idx, 7] = float(idx) / max(1.0, float(count - 1 or 1))
             activation_ids.append(str(descriptor.get("activation_id", f"{packet.training_run_id or 'run'}-A{idx}")))
         return features, activation_ids
 
@@ -419,6 +540,7 @@ class TamiyoGraphBuilder:
         packet: leyline_pb2.SystemStatePacket,
         metadata: Mapping[str, float | str | bool | int],
         graph_meta: Mapping[str, object],
+        coverage: "_CoverageTracker",
     ) -> tuple[Tensor, list[str]]:
         descriptors = []
         if isinstance(graph_meta, Mapping):
@@ -455,18 +577,28 @@ class TamiyoGraphBuilder:
             default = float(descriptor.get("default", (min_v + max_v) * 0.5))
             if dim > 0:
                 features[idx, 0] = self._normalizer.normalize("parameter_min", min_v)
+                coverage.observe("parameter.min", descriptor.get("min") is not None)
             if dim > 1:
-                features[idx, 1] = self._normalizer.normalize("parameter_max", max_v)
+                features[idx, 1] = 1.0 if descriptor.get("min") is not None else 0.0
             if dim > 2:
-                features[idx, 2] = self._normalizer.normalize("parameter_span", span)
+                features[idx, 2] = self._normalizer.normalize("parameter_max", max_v)
+                coverage.observe("parameter.max", descriptor.get("max") is not None)
             if dim > 3:
-                features[idx, 3] = self._normalizer.normalize("parameter_default", default)
+                features[idx, 3] = 1.0 if descriptor.get("max") is not None else 0.0
             if dim > 4:
-                features[idx, 4] = risk
+                features[idx, 4] = self._normalizer.normalize("parameter_span", span)
+                coverage.observe("parameter.span", descriptor.get("span") is not None)
             if dim > 5:
-                features[idx, 5] = stage / 10.0
+                features[idx, 5] = 1.0 if descriptor.get("span") is not None else 0.0
             if dim > 6:
-                features[idx, 6] = float(idx + 1) / max(1.0, float(len(descriptors)))
+                features[idx, 6] = self._normalizer.normalize("parameter_default", default)
+                coverage.observe("parameter.default", descriptor.get("default") is not None)
+            if dim > 7:
+                features[idx, 7] = 1.0 if descriptor.get("default") is not None else 0.0
+            if dim > 8:
+                features[idx, 8] = risk
+            if dim > 9:
+                features[idx, 9] = stage / 10.0
             parameter_ids.append(f"{packet.training_run_id or 'run'}-{name}")
         return features, parameter_ids
 
@@ -615,14 +747,79 @@ class TamiyoGraphBuilder:
         else:
             _set_edge(("parameter", "targets", "blueprint"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
 
+        # layer connectivity chain
+        if layer_count > 1:
+            src = torch.arange(layer_count - 1, dtype=torch.long)
+            dst = torch.arange(1, layer_count, dtype=torch.long)
+            attrs_ll = [[layers_depth[s], layers_depth[d], risk] for s, d in zip(src.tolist(), dst.tolist())]
+            _set_edge(("layer", "connects", "layer"), src, dst, attrs_ll)
+        else:
+            _set_edge(("layer", "connects", "layer"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+
+        # seed monitors layer (approximate by layer depth)
+        if seed_count and layer_count:
+            src_indices = []
+            dst_indices = []
+            attrs_sl = []
+            for idx, cap in enumerate(seed_capabilities):
+                depth_raw = int(round(cap.get("layer_depth", 0.0)))
+                depth = max(0, min(layer_count - 1, depth_raw))
+                src_indices.append(idx)
+                dst_indices.append(depth)
+                attrs_sl.append([
+                    cap.get("stage", 0.0),
+                    cap.get("risk", 0.0),
+                    layers_depth[depth] if layer_count else 0.0,
+                ])
+            if src_indices:
+                seed_tensor = torch.tensor(src_indices, dtype=torch.long)
+                layer_tensor = torch.tensor(dst_indices, dtype=torch.long)
+                _set_edge(("seed", "monitors", "layer"), seed_tensor, layer_tensor, attrs_sl)
+                _set_edge(("layer", "monitored_by", "seed"), layer_tensor, seed_tensor, attrs_sl)
+            else:
+                _set_edge(("seed", "monitors", "layer"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+                _set_edge(("layer", "monitored_by", "seed"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+        else:
+            _set_edge(("seed", "monitors", "layer"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+            _set_edge(("layer", "monitored_by", "seed"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+
+        # layer feeds activation (alias for activates)
+        if layer_count and activation_count:
+            src = layer_indices.repeat_interleave(activation_count)
+            dst = activation_indices.repeat(layer_count)
+            attrs_feed = [[layers_depth[i], activation_ratio[j], 1.0] for i in range(layer_count) for j in range(activation_count)]
+            _set_edge(("layer", "feeds", "activation"), src, dst, attrs_feed)
+        else:
+            _set_edge(("layer", "feeds", "activation"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+
 
     @staticmethod
-    def _encode_category(value: str) -> float:
-        encoded = value.encode("utf-8", errors="ignore")
-        if not encoded:
-            return 0.0
-        digest = hashlib.blake2s(encoded, digest_size=4).digest()
-        return int.from_bytes(digest, "big") / 0xFFFFFFFF
+def _encode_category(value: str) -> float:
+    encoded = value.encode("utf-8", errors="ignore")
+    if not encoded:
+        return 0.0
+    digest = hashlib.blake2s(encoded, digest_size=4).digest()
+    return int.from_bytes(digest, "big") / 0xFFFFFFFF
+
+
+class _CoverageTracker:
+    """Track feature coverage for telemetry purposes."""
+
+    def __init__(self) -> None:
+        self._counts: Counter[str] = Counter()
+        self._present: Counter[str] = Counter()
+
+    def observe(self, key: str, present: bool) -> None:
+        self._counts[key] += 1
+        if present:
+            self._present[key] += 1
+
+    def summary(self) -> dict[str, float]:
+        return {
+            key: float(self._present.get(key, 0)) / float(total)
+            for key, total in self._counts.items()
+            if total > 0
+        }
 
 
 __all__ = ["TamiyoGraphBuilder", "TamiyoGraphBuilderConfig"]

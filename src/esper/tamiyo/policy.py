@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,9 +35,8 @@ class TamiyoPolicyConfig:
     seed_vocab: int = 1024
     blueprint_vocab: int = 1024
     device: str = "cpu"
-    hidden_dim: int = 48
     dropout: float = 0.2
-    attention_heads: int = 1
+    attention_heads: int = 4
     enable_compile: bool = False
     enable_autocast: bool = True
     architecture_version: str = _DEFAULT_ARCH_VERSION
@@ -47,11 +47,16 @@ class TamiyoPolicyConfig:
     max_layers: int = 3
     max_activations: int = 1
     max_parameters: int = 1
-    layer_feature_dim: int = 8
-    activation_feature_dim: int = 6
-    parameter_feature_dim: int = 6
+    layer_feature_dim: int = 12
+    activation_feature_dim: int = 8
+    parameter_feature_dim: int = 10
     edge_feature_dim: int = 3
     schedule_output_dim: int = 2
+    policy_classes: int = 32
+    risk_classes: int = 5
+    sage_hidden_dim: int = 256
+    gat_hidden_dim: int = 128
+    param_vector_dim: int = 4
 
 
 class TamiyoPolicy(nn.Module):
@@ -95,16 +100,22 @@ class TamiyoPolicy(nn.Module):
         self._graph_builder = TamiyoGraphBuilder(builder_cfg)
 
         gnn_cfg = TamiyoGNNConfig(
-            hidden_dim=cfg.hidden_dim,
+            global_input_dim=builder_cfg.global_feature_dim,
+            seed_input_dim=builder_cfg.seed_feature_dim,
+            blueprint_input_dim=builder_cfg.blueprint_feature_dim,
+            layer_input_dim=builder_cfg.layer_feature_dim,
+            activation_input_dim=builder_cfg.activation_feature_dim,
+            parameter_input_dim=builder_cfg.parameter_feature_dim,
+            sage_hidden_dim=cfg.sage_hidden_dim,
+            gat_hidden_dim=cfg.gat_hidden_dim,
             dropout=cfg.dropout,
             attention_heads=cfg.attention_heads,
-            policy_classes=3,
+            policy_classes=cfg.policy_classes,
             blending_classes=len(cfg.blending_methods),
-            layer_input_dim=cfg.layer_feature_dim,
-            activation_input_dim=cfg.activation_feature_dim,
-            parameter_input_dim=cfg.parameter_feature_dim,
             edge_feature_dim=cfg.edge_feature_dim,
             schedule_output_dim=cfg.schedule_output_dim,
+            risk_classes=cfg.risk_classes,
+            param_vector_dim=cfg.param_vector_dim,
         )
         self._gnn = TamiyoGNN(gnn_cfg)
         self._device = torch.device(cfg.device)
@@ -134,18 +145,24 @@ class TamiyoPolicy(nn.Module):
         self._architecture_version = cfg.architecture_version
         self._blending_methods = cfg.blending_methods
         self._last_action: dict[str, float | str] = {}
+        self._last_feature_coverage: dict[str, float] = {}
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
     def select_action(self, packet: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
         graph = self._graph_builder.build(packet)
+        coverage = dict(getattr(graph, "feature_coverage", {}))
         seed_candidates = list(getattr(graph["seed"], "node_ids", []))
         seed_capabilities = list(getattr(graph["seed"], "capabilities", []))
         seed_fallback_scores = getattr(graph["seed"], "candidate_scores", None)
         blueprint_candidates = list(getattr(graph["blueprint"], "node_ids", []))
         blueprint_fallback_scores = getattr(graph["blueprint"], "candidate_scores", None)
-        graph = graph.to(self._device)
+        if self._device.type == "cuda" and hasattr(graph, "pin_memory"):
+            with contextlib.suppress(Exception):
+                graph = graph.pin_memory()
+        non_blocking = self._device.type == "cuda"
+        graph = graph.to(self._device, non_blocking=non_blocking)
         module: nn.Module = self._compiled_model or self._gnn
 
         autocast_ctx = (
@@ -170,6 +187,7 @@ class TamiyoPolicy(nn.Module):
 
         policy_logits = outputs["policy_logits"].softmax(dim=-1)
         action_idx = int(policy_logits.argmax(dim=-1))
+        param_vector = outputs["policy_params"].detach().cpu().view(-1)
         param_delta = float(outputs["param_delta"].squeeze())
 
         seed_scores = outputs.get("seed_scores")
@@ -236,6 +254,7 @@ class TamiyoPolicy(nn.Module):
         self._last_action = {
             "action": float(action_idx),
             "param_delta": param_delta,
+            "policy_param_vector": tuple(float(value) for value in param_vector.tolist()),
             "blending_method": blending_method,
             "blending_index": float(blending_idx),
             "value_estimate": value_estimate,
@@ -250,6 +269,7 @@ class TamiyoPolicy(nn.Module):
             "selected_seed_score": selected_seed_score,
             "selected_blueprint_index": float(selected_blueprint_idx),
         }
+        self._last_feature_coverage = coverage
         return command
 
     @property
@@ -263,6 +283,10 @@ class TamiyoPolicy(nn.Module):
     @property
     def compile_enabled(self) -> bool:
         return self._compile_enabled
+
+    @property
+    def feature_coverage(self) -> dict[str, float]:
+        return dict(self._last_feature_coverage)
 
     def update_blueprint_metadata(
         self, metadata: Mapping[str, Mapping[str, float | str | bool | int]]
@@ -280,6 +304,41 @@ class TamiyoPolicy(nn.Module):
             "run_id": packet.training_run_id,
             "packet_id": packet.packet_id,
         }
+
+    def validate_state_dict(self, state_dict: Mapping[str, object]) -> None:
+        clean_state, metadata = self._split_state_dict(state_dict)
+        version = str(metadata.get("architecture_version", "")) if metadata else ""
+        if version and version != self._architecture_version:
+            msg = (
+                "Tamiyo policy checkpoint version mismatch: "
+                f"expected {self._architecture_version}, got {version}"
+            )
+            raise ValueError(msg)
+
+        reference = super().state_dict()
+        missing = [key for key in reference.keys() if key not in clean_state]
+        mismatched: list[str] = []
+        for key, tensor in reference.items():
+            candidate = clean_state.get(key)
+            if candidate is None:
+                continue
+            if isinstance(candidate, torch.Tensor) and candidate.shape != tensor.shape:
+                mismatched.append(key)
+        if missing or mismatched:
+            raise ValueError(
+                "Tamiyo policy checkpoint incompatible; missing="
+                f"{missing}, mismatched={mismatched}"
+            )
+
+    def state_dict(self, *args, **kwargs):  # type: ignore[override]
+        payload = super().state_dict(*args, **kwargs)
+        payload["_metadata"] = {"architecture_version": self._architecture_version}
+        return payload
+
+    def load_state_dict(self, state_dict, strict: bool = True):  # type: ignore[override]
+        self.validate_state_dict(state_dict)
+        clean_state, _ = self._split_state_dict(state_dict)
+        return super().load_state_dict(clean_state, strict=strict)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -403,6 +462,18 @@ class TamiyoPolicy(nn.Module):
         command.annotations.setdefault("blending_schedule_end", f"{schedule_values[1]:.4f}")
 
         return command
+
+    @staticmethod
+    def _split_state_dict(
+        state_dict: Mapping[str, object]
+    ) -> tuple[Mapping[str, object], dict[str, object]]:
+        if isinstance(state_dict, dict) and "_metadata" in state_dict:
+            metadata = state_dict["_metadata"]
+            cleaned = state_dict.copy() if hasattr(state_dict, "copy") else dict(state_dict)
+            cleaned.pop("_metadata", None)
+            meta_dict = metadata if isinstance(metadata, dict) else {}
+            return cleaned, dict(meta_dict)
+        return state_dict, {}
 
 
 __all__ = ["TamiyoPolicy", "TamiyoPolicyConfig"]
