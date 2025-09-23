@@ -124,3 +124,47 @@ async def test_weatherlight_streams_tezzeret_packets(
         assert "tezzeret.jobs.total" in metric_names
     finally:
         await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_weatherlight_flushes_tamiyo_history(
+    fake_redis: FakeRedis,
+    weatherlight_settings: EsperSettings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = WeatherlightService(settings=weatherlight_settings)
+    await service.start()
+    try:
+        await asyncio.sleep(0.05)
+        # Seed Tamiyo with a telemetry packet by evaluating a minimal state
+        assert service._tamiyo_service is not None  # type: ignore[attr-defined]
+        pkt = leyline_pb2.SystemStatePacket(version=1, current_epoch=0)
+        # One evaluation populates Tamiyo telemetry buffer
+        service._tamiyo_service.evaluate_epoch(pkt)  # type: ignore[attr-defined]
+
+        published: list[leyline_pb2.TelemetryPacket] = []
+
+        async def _capture_publish(
+            packet: leyline_pb2.TelemetryPacket,
+            *,
+            priority: leyline_pb2.MessagePriority = leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL,
+        ) -> None:
+            published.append(packet)
+
+        async def _noop_metrics_telemetry(**_kwargs: object) -> None:
+            return None
+
+        assert service._oona is not None  # type: ignore[attr-defined]
+        monkeypatch.setattr(service._oona, "publish_telemetry", _capture_publish)
+        monkeypatch.setattr(service._oona, "emit_metrics_telemetry", _noop_metrics_telemetry)
+
+        # Flush Weatherlight telemetry once (should drain Tamiyo history as well)
+        await service._flush_telemetry_once()  # type: ignore[attr-defined]
+
+        # Verify at least one published packet originates from Tamiyo and carries coverage metric
+        assert any(
+            (p.source_subsystem == "tamiyo" and any(m.name == "tamiyo.gnn.feature_coverage" for m in p.metrics))
+            for p in published
+        )
+    finally:
+        await service.shutdown()

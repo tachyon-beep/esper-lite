@@ -997,7 +997,8 @@ class TolariaTrainer:
                     step_state.training_metrics["grad_var"] = self._grad_var
                     if input_wait_ms:
                         step_state.training_metrics["input_wait_ms"] = input_wait_ms
-                    if self._device_type == "cuda" and h2d_copy_ms:
+                    # Expose CUDA H2D copy timing if CUDA available; 0.0 on CPU
+                    if torch.cuda.is_available():
                         step_state.training_metrics["h2d_copy_ms"] = h2d_copy_ms
                     # Expose per-fence conflict rate if PCGrad applied
                     try:
