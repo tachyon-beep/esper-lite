@@ -118,19 +118,18 @@ def test_graph_builder_schema(tmp_path: pytest.PathLike) -> None:
         "capabilities": {"allowed_blending_methods": ["linear", "cosine"]},
     }
 
-    builder = TamiyoGraphBuilder(
-        TamiyoGraphBuilderConfig(
-            normalizer_path=tmp_path / "norms.json",
-            max_layers=2,
-            max_activations=2,
-            max_parameters=2,
-            layer_feature_dim=12,
-            activation_feature_dim=8,
-            parameter_feature_dim=10,
-            edge_feature_dim=3,
-            blueprint_metadata_provider=lambda bp: metadata if bp == blueprint_id else {},
-        )
+    cfg = TamiyoGraphBuilderConfig(
+        normalizer_path=tmp_path / "norms.json",
+        max_layers=2,
+        max_activations=2,
+        max_parameters=2,
+        layer_feature_dim=14,  # include extra categorical mask scalars
+        activation_feature_dim=9,  # include activation type mask scalar
+        parameter_feature_dim=10,
+        edge_feature_dim=3,
+        blueprint_metadata_provider=lambda bp: metadata if bp == blueprint_id else {},
     )
+    builder = TamiyoGraphBuilder(cfg)
 
     packet = leyline_pb2.SystemStatePacket(
         version=1,
@@ -156,8 +155,8 @@ def test_graph_builder_schema(tmp_path: pytest.PathLike) -> None:
 
     assert graph["seed"].x.shape[1] == 14
     assert graph["blueprint"].x.shape[1] == 14
-    assert graph["layer"].x.shape == (2, 12)
-    assert graph["activation"].x.shape == (2, 8)
+    assert graph["layer"].x.shape == (2, cfg.layer_feature_dim)
+    assert graph["activation"].x.shape == (2, cfg.activation_feature_dim)
     assert graph["parameter"].x.shape == (2, 10)
     assert set(graph["parameter"].node_ids) == {"run-graph-alpha", "run-graph-beta"}
     assert list(graph["layer"].node_ids) == [f"{blueprint_id}-L0", f"{blueprint_id}-L1"]
@@ -245,7 +244,15 @@ def test_seed_masks_absent_fields() -> None:
 
 
 def test_layer_activation_parameter_masks_when_missing_metadata() -> None:
-    builder = TamiyoGraphBuilder(TamiyoGraphBuilderConfig(max_layers=2, max_activations=2, max_parameters=1))
+    builder = TamiyoGraphBuilder(
+        TamiyoGraphBuilderConfig(
+            max_layers=2,
+            max_activations=2,
+            max_parameters=1,
+            layer_feature_dim=14,
+            activation_feature_dim=9,
+        )
+    )
     packet = leyline_pb2.SystemStatePacket(version=1, training_run_id="run-missing-meta")
     # No graph metadata provided; builder should fallback to zeros/masks and not crash
     graph = builder.build(packet)
@@ -282,7 +289,7 @@ def test_layer_mask_toggles_with_metadata() -> None:
     builder = TamiyoGraphBuilder(
         TamiyoGraphBuilderConfig(
             max_layers=1,
-            layer_feature_dim=12,
+            layer_feature_dim=14,
             blueprint_metadata_provider=lambda bp: meta_with if bp == blueprint_id else {},
         )
     )
@@ -291,13 +298,16 @@ def test_layer_mask_toggles_with_metadata() -> None:
     vec_with = graph_with["layer"].x[0]
     assert float(vec_with[1]) == 1.0  # depth present mask
     assert float(vec_with[3]) == 1.0  # latency present mask
+    # Categorical presence masks at extended indices
+    assert float(vec_with[12]) in {0.0, 1.0}
+    assert float(vec_with[13]) in {0.0, 1.0}
 
     # Without those fields
     meta_without = {"graph": {"layers": [{"layer_id": f"{blueprint_id}-L0"}]}}
     builder2 = TamiyoGraphBuilder(
         TamiyoGraphBuilderConfig(
             max_layers=1,
-            layer_feature_dim=12,
+            layer_feature_dim=14,
             blueprint_metadata_provider=lambda bp: meta_without if bp == blueprint_id else {},
         )
     )
@@ -305,6 +315,37 @@ def test_layer_mask_toggles_with_metadata() -> None:
     vec_without = graph_without["layer"].x[0]
     assert float(vec_without[1]) == 0.0  # depth absent mask
     assert float(vec_without[3]) == 0.0  # latency absent mask
+    # Categorical presence masks unset when not provided
+    assert float(vec_without[12]) == 0.0
+    assert float(vec_without[13]) == 0.0
+
+
+def test_activation_type_mask_scalar() -> None:
+    blueprint_id = "BP-ACT"
+    meta_with = {"graph": {"activations": [{"activation_id": f"{blueprint_id}-A0", "type": "relu"}]}}
+    builder = TamiyoGraphBuilder(
+        TamiyoGraphBuilderConfig(
+            max_activations=1,
+            activation_feature_dim=9,
+            blueprint_metadata_provider=lambda bp: meta_with if bp == blueprint_id else {},
+        )
+    )
+    packet = leyline_pb2.SystemStatePacket(version=1, packet_id=blueprint_id, training_run_id="run-act")
+    graph = builder.build(packet)
+    vec = graph["activation"].x[0]
+    assert float(vec[8]) == 1.0  # type present mask
+    # Now without type
+    meta_without = {"graph": {"activations": [{"activation_id": f"{blueprint_id}-A0"}]}}
+    builder2 = TamiyoGraphBuilder(
+        TamiyoGraphBuilderConfig(
+            max_activations=1,
+            activation_feature_dim=9,
+            blueprint_metadata_provider=lambda bp: meta_without if bp == blueprint_id else {},
+        )
+    )
+    graph2 = builder2.build(packet)
+    vec2 = graph2["activation"].x[0]
+    assert float(vec2[8]) == 0.0
 
 
 def test_policy_compile_fallback(monkeypatch: pytest.MonkeyPatch) -> None:

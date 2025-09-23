@@ -481,6 +481,15 @@ class TamiyoGraphBuilder:
                     "layer.activation",
                     descriptor.get("activation") is not None or descriptor.get("activation_type") is not None,
                 )
+            # Optional categorical presence masks when feature dim is extended
+            if dim > 12:
+                features[idx, 12] = 1.0 if descriptor.get("type") is not None else 0.0
+            if dim > 13:
+                features[idx, 13] = (
+                    1.0
+                    if (descriptor.get("activation") is not None or descriptor.get("activation_type") is not None)
+                    else 0.0
+                )
             if dim > 9:
                 features[idx, 9] = self._normalizer.normalize("layer_weight_norm", weight_norm)
                 coverage.observe("layer.weight_norm", bool(weight_norm))
@@ -537,6 +546,9 @@ class TamiyoGraphBuilder:
                 features[idx, 6] = self._normalizer.normalize("activation_nonlinearity", dominance)
             if dim > 7:
                 features[idx, 7] = float(idx) / max(1.0, float(count - 1 or 1))
+            # Optional explicit activation type presence mask when feature dim is extended
+            if dim > 8:
+                features[idx, 8] = 1.0 if descriptor.get("type") is not None else 0.0
             activation_ids.append(str(descriptor.get("activation_id", f"{packet.training_run_id or 'run'}-A{idx}")))
         return features, activation_ids
 
