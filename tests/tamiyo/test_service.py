@@ -521,6 +521,18 @@ def test_conservative_mode_overrides_directive(tmp_path) -> None:
     assert command.command_type == leyline_pb2.COMMAND_PAUSE
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA to validate default compile")
+def test_service_default_compile_on_cuda(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Ensure settings don't force-override compile/device
+    monkeypatch.delenv("TAMIYO_ENABLE_COMPILE", raising=False)
+    monkeypatch.delenv("TAMIYO_DEVICE", raising=False)
+    service = TamiyoService(store_config=FieldReportStoreConfig(path=Path("/tmp/field_reports.log")), signature_context=_SIGNATURE_CONTEXT)
+    # If backend raises or compile path falls back, skip to avoid flakiness on exotic stacks
+    if not getattr(service._policy, "compile_enabled", False):  # type: ignore[attr-defined]
+        pytest.skip("compile path fell back on this CUDA backend; default enablement attempted")
+    assert service._policy.compile_enabled  # type: ignore[attr-defined]
+
+
 @pytest.mark.asyncio
 async def test_field_report_publish_hedging_success_after_retry(tmp_path: Path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")

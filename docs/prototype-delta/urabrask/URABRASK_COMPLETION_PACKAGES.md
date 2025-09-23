@@ -20,6 +20,8 @@ Execution order is optimized to deliver highest leverage earliest while minimizi
   - `docs/prototype-delta/urabrask/bsds-lite-integration.md`
   - `docs/prototype-delta/urabrask/decision-taxonomy.md`
   - Regeneration tooling: `esper-leyline-generate` (console) or `scripts/generate_leyline.py`
+  - Tooling (one‑liner):
+    - `esper-leyline-generate --proto-dir contracts/leyline --out-dir src/esper/leyline/_generated`
 - Tests
   - `scripts/check_shared_types.py` passes; generated code loads.
   - JSON schema validates examples.
