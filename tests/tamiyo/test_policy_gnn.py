@@ -356,6 +356,21 @@ def test_schedule_registry_stable_indices(tmp_path: pytest.PathLike) -> None:
     assert idx_a == idx_b
 
 
+def test_seed_registry_stable_across_instances(tmp_path: pytest.PathLike) -> None:
+    cfg = TamiyoPolicyConfig(enable_compile=False, registry_path=Path(tmp_path))
+    policy_a = TamiyoPolicy(cfg)
+    idx_a = policy_a._seed_registry.get("seed-stable")
+    # Recreate policy with the same registry path to force reload
+    policy_b = TamiyoPolicy(cfg)
+    idx_b = policy_b._seed_registry.get("seed-stable")
+    assert idx_a == idx_b
+    # Validate persistence content
+    reg_file = Path(tmp_path) / "seed_registry.json"
+    assert reg_file.exists()
+    contents = json.loads(reg_file.read_text(encoding="utf-8"))
+    assert str(idx_a) == str(contents.get("seed-stable") or contents.get("seed-stable"))
+
+
 @pytest.mark.perf
 def test_policy_inference_perf_budget() -> None:
     policy = TamiyoPolicy(TamiyoPolicyConfig(enable_compile=False))

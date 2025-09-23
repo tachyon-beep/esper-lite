@@ -53,6 +53,14 @@ Implementation evidence (primary):
 - `src/esper/tamiyo/service.py`, `src/esper/tamiyo/policy.py`, `src/esper/tamiyo/persistence.py`
 - Tests: `tests/tamiyo/test_service.py`, `tests/integration/test_blueprint_pipeline_integration.py`
 
+Registry & Coverage Notes (prototype)
+
+- Deterministic registries persist to JSON under `var/tamiyo/`:
+  - `seed_registry.json` and `blueprint_registry.json` (categorical indices for embedding stability)
+  - `schedule_registry.json` (pre-seeded with `TamiyoPolicyConfig.blending_methods` for stable schedule/category indices)
+- The GNN normalizer persists EWMA mean/var to `var/tamiyo/gnn_norms.json` and the graph builder emits per-feature coverage masks.
+- `TamiyoService` attaches an aggregate coverage summary to commands as `annotations["feature_coverage"]` and emits `tamiyo.gnn.feature_coverage` telemetry.
+
 
 How To Use This Packet (for PR owners)
 - Pick the next task (T‑A1..T‑A6) from `3A-step-level-tight-coupling.md` and reference the companion spec(s).
