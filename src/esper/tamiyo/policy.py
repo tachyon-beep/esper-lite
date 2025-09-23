@@ -44,6 +44,7 @@ class TamiyoPolicyConfig:
     normalizer_path: Path = Path("var/tamiyo/gnn_norms.json")
     seed_registry: EmbeddingRegistry | None = None
     blueprint_registry: EmbeddingRegistry | None = None
+    schedule_registry: EmbeddingRegistry | None = None
     max_layers: int = 3
     max_activations: int = 1
     max_parameters: int = 1
@@ -81,6 +82,16 @@ class TamiyoPolicy(nn.Module):
         self._blueprint_registry = cfg.blueprint_registry or EmbeddingRegistry(
             EmbeddingRegistryConfig(cfg.registry_path / "blueprint_registry.json", cfg.blueprint_vocab)
         )
+        # Schedule/enum registry for categorical stability (e.g., blending methods)
+        self._schedule_registry = cfg.schedule_registry or EmbeddingRegistry(
+            EmbeddingRegistryConfig(cfg.registry_path / "schedule_registry.json", max(64, len(cfg.blending_methods) + 16))
+        )
+        # Pre-seed known schedules for deterministic indices
+        for name in cfg.blending_methods:
+            try:
+                _ = self._schedule_registry.get(str(name))
+            except Exception:
+                pass
 
         builder_cfg = TamiyoGraphBuilderConfig(
             normalizer_path=cfg.normalizer_path,

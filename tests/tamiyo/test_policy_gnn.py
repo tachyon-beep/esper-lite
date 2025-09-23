@@ -221,7 +221,27 @@ def test_policy_select_action_populates_annotations() -> None:
         params = command.seed_operation.parameters
         method_list = TamiyoPolicyConfig().blending_methods
         expected_index = float(method_list.index(command.annotations["blending_method"]))
-        assert params["blending_method_index"] == pytest.approx(expected_index)
+    assert params["blending_method_index"] == pytest.approx(expected_index)
+
+
+def test_seed_masks_absent_fields() -> None:
+    policy = TamiyoPolicy(TamiyoPolicyConfig(enable_compile=False))
+    packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-masks")
+    seed = packet.seed_states.add()
+    seed.seed_id = "seed-mask"
+    seed.stage = leyline_pb2.SeedLifecycleStage.SEED_STAGE_TRAINING
+    # Intentionally do not set learning_rate, risk_score, gradient_norm, age_epochs, layer_depth
+    graph = policy._graph_builder.build(packet)  # type: ignore[attr-defined]
+    assert graph["seed"].x.shape[1] == TamiyoGraphBuilderConfig().seed_feature_dim
+    vec = graph["seed"].x[0]
+    # Masks for absent fields (positions: lr=1, risk=3, grad=5, age=7, depth=11)
+    assert float(vec[1]) == 0.0
+    assert float(vec[3]) == 0.0
+    assert float(vec[5]) == 0.0
+    assert float(vec[7]) == 0.0
+    assert float(vec[11]) == 0.0
+    # Stage mask (position 9) should be present (1.0)
+    assert float(vec[9]) == 1.0
 
 
 def test_policy_compile_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -324,6 +344,16 @@ def test_registry_round_trip(tmp_path: pytest.PathLike) -> None:
     first = policy._seed_registry.get("seed-x")
     second = policy._seed_registry.get("seed-x")
     assert first == second
+
+
+def test_schedule_registry_stable_indices(tmp_path: pytest.PathLike) -> None:
+    cfg = TamiyoPolicyConfig(enable_compile=False, registry_path=Path(tmp_path))
+    policy_a = TamiyoPolicy(cfg)
+    idx_a = policy_a._schedule_registry.get("linear")  # type: ignore[attr-defined]
+    # New policy same registry path should yield same index
+    policy_b = TamiyoPolicy(cfg)
+    idx_b = policy_b._schedule_registry.get("linear")  # type: ignore[attr-defined]
+    assert idx_a == idx_b
 
 
 @pytest.mark.perf
