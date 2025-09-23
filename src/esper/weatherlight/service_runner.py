@@ -441,6 +441,11 @@ class WeatherlightService:
                 await self._oona.housekeeping()
                 if self._urza_library is not None:
                     self._urza_library.maintenance()
+                # Best-effort: update Urza capabilities from current Kasmina seed states
+                try:
+                    self._update_urza_capabilities_from_kasmina()
+                except Exception as exc:  # pragma: no cover - defensive
+                    LOGGER.debug("WL capability fanout failed: %s", exc)
             except asyncio.CancelledError:  # pragma: no cover - cancellation path
                 raise
             except Exception as exc:  # pragma: no cover - defensive logging
@@ -793,6 +798,68 @@ class WeatherlightService:
         ):
             return leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH
         return leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
+
+    # -----------------------------
+    # Urza capabilities from Kasmina (prototype)
+    # -----------------------------
+    def _update_urza_capabilities_from_kasmina(self) -> None:
+        if self._urza_library is None or self._kasmina_manager is None:
+            return
+        # Collect blueprint -> seeds mapping where lifecycle is BLENDING
+        try:
+            from esper.kasmina.seed_manager import SeedContext  # noqa: F401
+        except Exception:
+            pass
+        seeds = getattr(self._kasmina_manager, "_seeds", {})
+        by_blueprint: dict[str, set[str]] = {}
+        for seed_id, context in list(seeds.items()):
+            try:
+                blueprint_id = context.metadata.get("blueprint_id")
+                state = getattr(context.lifecycle, "state", None)
+            except Exception:
+                blueprint_id = None
+                state = None
+            if not blueprint_id:
+                continue
+            # Allow only BLENDING stage as a proxy for permission
+            if state == leyline_pb2.SeedLifecycleStage.SEED_STAGE_BLENDING:
+                by_blueprint.setdefault(str(blueprint_id), set()).add(str(seed_id))
+        if not by_blueprint:
+            return
+        # For each blueprint, fetch parameter names and allow all for allowed seeds
+        for bp, seed_ids in by_blueprint.items():
+            record = self._urza_library.get(bp)
+            if record is None:
+                continue
+            extras = dict(record.extras or {})
+            gm = extras.get("graph_metadata")
+            if isinstance(gm, str):
+                try:
+                    import json as _json
+
+                    gm = _json.loads(gm)
+                except Exception:
+                    gm = {}
+            if not isinstance(gm, dict):
+                continue
+            params = gm.get("parameters")
+            if not isinstance(params, list) or not params:
+                continue
+            names = [str(p.get("name")) for p in params if isinstance(p, dict) and p.get("name")]
+            if not names:
+                continue
+            mapping: dict[str, list[str]] = {}
+            # Allowed seeds: allow all parameters; others (present seeds) explicit empty list
+            for seed_id in list(getattr(self._kasmina_manager, "_seeds", {}).keys()):
+                if seed_id in seed_ids:
+                    mapping[str(seed_id)] = list(names)
+                else:
+                    mapping[str(seed_id)] = []
+            # Merge into Urza extras
+            self._urza_library.merge_capabilities(
+                bp,
+                allowed_parameters_by_seed_id=mapping,
+            )
 
     def _configure_logging(self) -> None:
         if logging.getLogger().handlers:

@@ -499,6 +499,71 @@ class UrzaLibrary:
         while len(self._records) > self._cache_size:
             self._records.popitem(last=False)
 
+    # -----------------------------
+    # Capabilities merge (prototype)
+    # -----------------------------
+    def merge_capabilities(
+        self,
+        blueprint_id: str,
+        *,
+        allowed_parameters_by_seed_id: dict[str, list[str]] | None = None,
+        allowed_parameters_by_seed_index: dict[int, list[int]] | None = None,
+    ) -> bool:
+        """Merge per-seed parameter allowlists into graph_metadata.capabilities.
+
+        - allowed_parameters_by_seed_id: mapping of seed_id -> list of parameter names
+        - allowed_parameters_by_seed_index: mapping of seed_index -> list of param indices
+
+        Returns True on success; False when the blueprint is missing or graph metadata absent.
+        """
+
+        record = self.get(blueprint_id)
+        if record is None:
+            return False
+        extras = dict(record.extras or {})
+        gm = extras.get("graph_metadata")
+        if isinstance(gm, str):
+            try:
+                gm = _fast_loads(gm)
+            except Exception:
+                gm = {}
+        if not isinstance(gm, dict):
+            return False
+        params = gm.get("parameters")
+        if not isinstance(params, list):
+            params = []
+        capabilities = gm.get("capabilities")
+        if not isinstance(capabilities, dict):
+            capabilities = {}
+
+        if allowed_parameters_by_seed_id:
+            name_set = {str(p.get("name")) for p in params if isinstance(p, dict) and "name" in p}
+            clean: dict[str, list[str]] = {}
+            for seed_id, names in allowed_parameters_by_seed_id.items():
+                filtered = [str(n) for n in names if not name_set or str(n) in name_set]
+                clean[str(seed_id)] = filtered
+            capabilities["allowed_parameters_by_seed_id"] = clean
+
+        if allowed_parameters_by_seed_index:
+            idx_map: dict[str, list[int]] = {}
+            for sidx, ilist in allowed_parameters_by_seed_index.items():
+                try:
+                    key = str(int(sidx))
+                except Exception:
+                    key = str(sidx)
+                idx_map[key] = [int(i) for i in ilist]
+            if idx_map:
+                existing = capabilities.get("allowed_parameters_by_seed_index")
+                if not isinstance(existing, dict):
+                    existing = {}
+                existing.update(idx_map)
+                capabilities["allowed_parameters_by_seed_index"] = existing
+
+        gm["capabilities"] = capabilities
+        extras["graph_metadata"] = gm
+        self.save(record.metadata, record.artifact_path, extras=extras)
+        return True
+
     def _iter_all_records(self) -> Iterator[UrzaRecord]:
         seen: set[str] = set()
         for blueprint_id, record in self._records.items():
