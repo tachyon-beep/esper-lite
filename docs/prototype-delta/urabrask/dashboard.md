@@ -35,6 +35,16 @@ This guide outlines suggested Grafana panels and Prometheus metrics to monitor B
     - `tamiyo_bsds_critical` (PagerDuty)
     - `tamiyo_bsds_high` (Slack)
 
+## Weatherlight Producer Stats (Telemetry)
+- Weatherlight emits `urabrask.*` metrics in its telemetry packet (not Prometheus native unless ingested):
+  - `urabrask.produced_total` — total BSDS attachments made by the producer
+  - `urabrask.failures_total` — total failures/timeouts
+  - `urabrask.last_duration_ms` — duration of the last producer cycle
+  - `urabrask.last_processed` — number of blueprints processed in the last cycle
+- Suggested usage:
+  - Index Weatherlight telemetry to Elasticsearch (via Nissa), and chart these fields as time series in Grafana using the ES datasource.
+  - Correlate `urabrask.produced_total` growth with Tamiyo BSDS hazard events and provenance trends.
+
 ## Operational Notes
 - Counters are cumulative; prefer `increase()` for windowed views.
 - `tamiyo.bsds.*_signal` are transient, suitable for alert engines, not for long‑term graphs.
@@ -43,4 +53,3 @@ This guide outlines suggested Grafana panels and Prometheus metrics to monitor B
 ## Next Steps
 - When direct BSDS protobuf transport is enabled, add panels for Oona event rates (`BSDSIssued`, `BSDSFailed`) and correlate with Tamiyo hazard events.
 - Add a drill‑down linking from Weatherlight indicators to the latest Tamiyo telemetry documents in Elasticsearch.
-

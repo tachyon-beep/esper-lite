@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+import os
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -27,6 +28,11 @@ if TYPE_CHECKING:
 class NissaIngestorConfig:
     prometheus_gateway: str
     elasticsearch_url: str
+    alerts_enabled: bool = True
+    coverage_alert_threshold: float = 0.7
+    coverage_alert_consecutive: int = 3
+    bsds_elevated_risk_threshold: float = 0.8
+    coverage_feature_keys: tuple[str, ...] | None = None
 
 
 class NissaIngestor:
@@ -42,7 +48,37 @@ class NissaIngestor:
         self._config = config
         self._registry = registry or CollectorRegistry()
         self._alert_router = AlertRouter()
-        self._alert_engine = AlertEngine(DEFAULT_ALERT_RULES, router=self._alert_router)
+        # Build alert rules with environment/config overrides
+        if config.alerts_enabled:
+            rules = []
+            for rule in DEFAULT_ALERT_RULES:
+                if rule.name == "tamiyo_coverage_low":
+                    rules.append(
+                        type(rule)(
+                            name=rule.name,
+                            metric=rule.metric,
+                            threshold=float(config.coverage_alert_threshold),
+                            comparator=rule.comparator,
+                            for_count=int(config.coverage_alert_consecutive),
+                            routes=rule.routes,
+                        )
+                    )
+                elif rule.name == "tamiyo_bsds_elevated_risk":
+                    rules.append(
+                        type(rule)(
+                            name=rule.name,
+                            metric=rule.metric,
+                            threshold=float(config.bsds_elevated_risk_threshold),
+                            comparator=rule.comparator,
+                            for_count=rule.for_count,
+                            routes=rule.routes,
+                        )
+                    )
+                else:
+                    rules.append(rule)
+        else:
+            rules = []
+        self._alert_engine = AlertEngine(rules, router=self._alert_router)
         self._slo_tracker = SLOTracker()
         self._run_counter = Counter(
             "esper_training_runs",
@@ -89,12 +125,15 @@ class NissaIngestor:
             registry=self._registry,
             labelnames=("feature",),
         )
-        # Whitelist (configurable in future)
-        self._coverage_feature_keys: tuple[str, ...] = (
-            "global.loss",
-            "seed.learning_rate",
-            "edges.seed_param_allowed",
-        )
+        # Whitelist: from config if provided; else default small set
+        if config.coverage_feature_keys is not None:
+            self._coverage_feature_keys = tuple(config.coverage_feature_keys)
+        else:
+            self._coverage_feature_keys: tuple[str, ...] = (
+                "global.loss",
+                "seed.learning_rate",
+                "edges.seed_param_allowed",
+            )
         self._tamiyo_bsds_quarantine_active = Gauge(
             "tamiyo_bsds_quarantine_active",
             "Whether a Tamiyo quarantine was signaled in the latest packet",
@@ -169,7 +208,8 @@ class NissaIngestor:
         # Derived BSDS elevated risk flag and quarantine activity gauge
         risk = metrics.get("tamiyo.blueprint.risk")
         if risk is not None:
-            elevated = 1.0 if float(risk) >= 0.8 else 0.0
+            threshold = float(self._config.bsds_elevated_risk_threshold)
+            elevated = 1.0 if float(risk) >= threshold else 0.0
             self._tamiyo_bsds_elevated_risk.set(elevated)
             # Expose a boolean flag into metrics for alert engine
             metrics["tamiyo.bsds.elevated_risk_flag"] = elevated

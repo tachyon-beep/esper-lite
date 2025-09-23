@@ -29,6 +29,7 @@ from esper.security.signing import DEFAULT_SECRET_ENV, SignatureContext
 from esper.tamiyo import TamiyoService
 from esper.urza import UrzaLibrary, UrzaRuntime
 from esper.urza.prefetch import UrzaPrefetchWorker
+from esper.urabrask.producer import UrabraskProducer
 
 if TYPE_CHECKING:  # pragma: no cover - typing support only
     from esper.tezzeret import TezzeretForge
@@ -74,6 +75,7 @@ class WeatherlightService:
         self._kasmina_manager: KasminaSeedManager | None = None
         self._kasmina_coordinator: KasminaPrefetchCoordinator | None = None
         self._tamiyo_service: TamiyoService | None = None
+        self._urabrask_producer: UrabraskProducer | None = None
         self._tezzeret_metrics_provider: Callable[[], dict[str, float]] | None = None
         self._tezzeret_telemetry_provider: Callable[[], leyline_pb2.TelemetryPacket | None] | None = None
         self._rollback_signal_name: str | None = self._settings.tolaria_rollback_signal_name
@@ -137,6 +139,21 @@ class WeatherlightService:
                 coroutine_factory=self._tamiyo_policy_loop,
             )
         )
+        # Optional Urabrask producer
+        if self._settings.urabrask_enabled:
+            self._urabrask_producer = UrabraskProducer(
+                self._urza_library,
+                interval_s=self._settings.urabrask_producer_interval_s,
+                topn=self._settings.urabrask_topn_per_cycle,
+                only_safe=self._settings.urabrask_only_safe_tier,
+                timeout_ms=self._settings.urabrask_timeout_ms,
+            )
+            self._register_worker(
+                WorkerState(
+                    name="urabrask.producer",
+                    coroutine_factory=lambda: self._urabrask_producer.run_forever(),
+                )
+            )
 
         for state in self._workers.values():
             state.task = asyncio.create_task(self._worker_wrapper(state), name=f"weatherlight.{state.name}")
@@ -501,6 +518,9 @@ class WeatherlightService:
         if self._urza_library is not None:
             for name, value in self._urza_library.metrics_snapshot().items():
                 metrics.append(TelemetryMetric(f"urza.library.{name}", float(value)))
+        if self._urabrask_producer is not None:
+            for name, value in self._urabrask_producer.metrics().items():
+                metrics.append(TelemetryMetric(f"urabrask.{name}", float(value)))
         oona_snapshot = await self._oona.metrics_snapshot()
         for name, value in oona_snapshot.items():
             metrics.append(TelemetryMetric(f"oona.{name}", float(value)))

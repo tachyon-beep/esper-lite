@@ -65,3 +65,31 @@ def test_metrics_endpoint_serves_prometheus() -> None:
     resp = client.get("/metrics")
     assert resp.status_code == 200
     assert "tamiyo_gnn_feature_coverage" in resp.text
+
+
+def test_config_overrides_thresholds_and_whitelist(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Configure stricter thresholds and custom whitelist
+    cfg = NissaIngestorConfig(
+        prometheus_gateway="http://localhost:9091",
+        elasticsearch_url="http://localhost:9200",
+        alerts_enabled=True,
+        coverage_alert_threshold=0.9,
+        coverage_alert_consecutive=2,
+        bsds_elevated_risk_threshold=0.85,
+        coverage_feature_keys=("custom.feature",),
+    )
+    ing = NissaIngestor(cfg, es_client=_fake_es())
+    # Per-type coverage honored via whitelist
+    pkt = _packet_with_metric("tamiyo.gnn.coverage.custom.feature", 0.4)
+    ing.ingest_telemetry(pkt)
+    data = generate_latest(ing.registry).decode("utf-8")
+    assert 'tamiyo_gnn_feature_coverage_by_type{feature="custom.feature"}' in data
+    # Elevated risk threshold used
+    pkt2 = _packet_with_metric("tamiyo.blueprint.risk", 0.86)
+    ing.ingest_telemetry(pkt2)
+    alerts = ing.active_alerts
+    assert "tamiyo_bsds_elevated_risk" in alerts
+    # Coverage alert threshold stricter: 2 packets < 0.9 should fire
+    for _ in range(2):
+        ing.ingest_telemetry(_packet_with_metric("tamiyo.gnn.feature_coverage", 0.85))
+    assert "tamiyo_coverage_low" in ing.active_alerts

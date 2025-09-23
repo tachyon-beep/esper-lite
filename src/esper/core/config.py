@@ -163,4 +163,14 @@ class EsperSettings(BaseSettings):
         alias="TOLARIA_PROFILER_ACTIVE_STEPS", default=50
     )
 
+    # ----------------------
+    # Urabrask (Producer) CFG
+    # ----------------------
+    urabrask_enabled: bool = Field(alias="URABRASK_ENABLED", default=False)
+    urabrask_producer_interval_s: int = Field(alias="URABRASK_PRODUCER_INTERVAL_S", default=300)
+    urabrask_topn_per_cycle: int = Field(alias="URABRASK_TOPN_PER_CYCLE", default=5)
+    urabrask_only_safe_tier: bool = Field(alias="URABRASK_ONLY_SAFE_TIER", default=True)
+    urabrask_oona_publish_enabled: bool = Field(alias="URABRASK_OONA_PUBLISH_ENABLED", default=False)
+    urabrask_timeout_ms: int = Field(alias="URABRASK_TIMEOUT_MS", default=200)
+
 __all__ = ["EsperSettings"]

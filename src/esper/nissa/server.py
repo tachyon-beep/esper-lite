@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import FastAPI, Response
+import os
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from esper.core.config import EsperSettings
@@ -51,9 +52,39 @@ def create_default_app() -> FastAPI:
     """Factory compatible with uvicorn --factory, using environment settings."""
 
     settings = EsperSettings()
+    # Read NISSA_* environment overrides
+    def _get_bool(name: str, default: bool) -> bool:
+        raw = os.getenv(name)
+        if raw is None:
+            return default
+        return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+    def _get_float(name: str, default: float) -> float:
+        try:
+            return float(os.getenv(name, "")) if os.getenv(name) is not None else default
+        except ValueError:
+            return default
+
+    def _get_int(name: str, default: int) -> int:
+        try:
+            return int(os.getenv(name, "")) if os.getenv(name) is not None else default
+        except ValueError:
+            return default
+
+    def _get_list(name: str) -> tuple[str, ...] | None:
+        raw = os.getenv(name)
+        if not raw:
+            return None
+        return tuple(x.strip() for x in raw.split(",") if x.strip())
+
     config = NissaIngestorConfig(
         prometheus_gateway=settings.prometheus_pushgateway,
         elasticsearch_url=settings.elasticsearch_url,
+        alerts_enabled=_get_bool("NISSA_ALERTS_ENABLED", True),
+        coverage_alert_threshold=_get_float("NISSA_COVERAGE_ALERT_THRESHOLD", 0.7),
+        coverage_alert_consecutive=_get_int("NISSA_COVERAGE_ALERT_CONSECUTIVE", 3),
+        bsds_elevated_risk_threshold=_get_float("NISSA_BSDS_ELEVATED_RISK_THRESHOLD", 0.8),
+        coverage_feature_keys=_get_list("NISSA_COVERAGE_FEATURE_KEYS"),
     )
     ingestor = NissaIngestor(config)
     return create_app(ingestor)
