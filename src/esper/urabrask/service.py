@@ -14,7 +14,7 @@ from esper.leyline import leyline_pb2
 from esper.karn import BlueprintDescriptor
 
 from .bsds import compute_bsds
-from .crucible import run_crucible
+from .crucible import run_crucible, run_crucible_v1, CrucibleConfigV1
 
 
 def produce_and_attach_bsds(
@@ -57,8 +57,8 @@ def produce_bsds_via_crucible(
     record = urza.get(blueprint_id)
     if record is None:
         raise ValueError(f"Blueprint not found in Urza: {blueprint_id}")
-    bsds = run_crucible(record.metadata, artifact_path=record.artifact_path, hints=hints)
-    # Mirror to JSON for extras
+    bsds, hazards = run_crucible_v1(record.metadata, artifact_path=record.artifact_path, hints=hints, config=CrucibleConfigV1())
+    # Mirror to JSON for extras (with hazards)
     bsds_json = {
         "risk_score": float(bsds.risk_score),
         "hazard_band": leyline_pb2.HazardBand.Name(bsds.hazard_band).replace("HAZARD_BAND_", ""),
@@ -67,6 +67,8 @@ def produce_bsds_via_crucible(
         "provenance": leyline_pb2.Provenance.Name(bsds.provenance).replace("PROVENANCE_", ""),
         "issued_at": bsds.issued_at.ToDatetime().replace(tzinfo=UTC).isoformat().replace("+00:00", "Z"),
     }
+    if hazards:
+        bsds_json["hazards"] = dict(hazards)
     extras = dict(record.extras or {})
     extras["bsds"] = bsds_json
     urza.save(record.metadata, record.artifact_path, extras=extras)

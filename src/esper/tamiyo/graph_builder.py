@@ -128,6 +128,12 @@ class TamiyoGraphBuilderConfig:
     activation_feature_dim: int = 8
     parameter_feature_dim: int = 10
     edge_feature_dim: int = 3
+    # Extended registries for categorical encodings
+    layer_type_registry: EmbeddingRegistry | None = None
+    activation_type_registry: EmbeddingRegistry | None = None
+    # Vocab sizes for normalization
+    layer_vocab: int = 1024
+    activation_vocab: int = 1024
     normalizer_path: Path = Path("var/tamiyo/gnn_norms.json")
     seed_vocab: int = 1024
     blueprint_vocab: int = 1024
@@ -147,6 +153,8 @@ class TamiyoGraphBuilder:
         self._normalizer = _FeatureNormalizer(config.normalizer_path)
         self._seed_registry = config.seed_registry
         self._blueprint_registry = config.blueprint_registry
+        self._layer_type_registry = config.layer_type_registry
+        self._activation_type_registry = config.activation_type_registry
         self._metadata_provider = config.blueprint_metadata_provider
 
     def _lookup_blueprint_metadata(self, blueprint_id: str) -> Mapping[str, float | str | bool | int]:
@@ -489,10 +497,18 @@ class TamiyoGraphBuilder:
                 features[idx, 6] = float(max(0.0, min(1.0, dropout)))
                 coverage.observe("layer.dropout", descriptor.get("dropout_rate") is not None)
             if dim > 7:
-                features[idx, 7] = self._encode_category(layer_type)
+                if self._layer_type_registry is not None:
+                    idx_val = self._layer_type_registry.get(layer_type)
+                    features[idx, 7] = float(idx_val) / max(1.0, float(self._cfg.layer_vocab))
+                else:
+                    features[idx, 7] = self._encode_category(layer_type)
                 coverage.observe("layer.type", descriptor.get("type") is not None)
             if dim > 8:
-                features[idx, 8] = self._encode_category(activation_type)
+                if self._activation_type_registry is not None:
+                    aidx = self._activation_type_registry.get(activation_type)
+                    features[idx, 8] = float(aidx) / max(1.0, float(self._cfg.activation_vocab))
+                else:
+                    features[idx, 8] = self._encode_category(activation_type)
                 coverage.observe(
                     "layer.activation",
                     descriptor.get("activation") is not None or descriptor.get("activation_type") is not None,
@@ -543,7 +559,11 @@ class TamiyoGraphBuilder:
             cost = float(descriptor.get("computational_cost", 0.0) or 0.0)
             dominance = float(descriptor.get("nonlinearity_strength", 0.0) or 0.0)
             if dim > 0:
-                features[idx, 0] = self._encode_category(activation_type)
+                if self._activation_type_registry is not None:
+                    aidx = self._activation_type_registry.get(activation_type)
+                    features[idx, 0] = float(aidx) / max(1.0, float(self._cfg.activation_vocab))
+                else:
+                    features[idx, 0] = self._encode_category(activation_type)
                 coverage.observe("activation.type", True)
             if dim > 1:
                 features[idx, 1] = 1.0 if descriptor else 0.0

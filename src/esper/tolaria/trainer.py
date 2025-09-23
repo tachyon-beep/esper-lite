@@ -7,11 +7,17 @@ and extension points for later slices (see `docs/project/implementation_plan.md`
 
 from __future__ import annotations
 
+# Ensure CuBLAS workspace configured early to avoid deterministic errors on some CUDA setups
+import os as _os
+if not _os.getenv("CUBLAS_WORKSPACE_CONFIG"):
+    _os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+
 from collections.abc import Iterable, Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from dataclasses import dataclass, field
 import contextlib
 from time import perf_counter, time_ns
+import os
 from typing import TYPE_CHECKING, Protocol
 from pathlib import Path
 import zlib
@@ -149,6 +155,9 @@ class TolariaTrainer:
         self._tf32_enabled = _initialise_pytorch_defaults(
             config.enable_tf32 and self._device_type == "cuda"
         )
+        # Ensure CuBLAS workspace configured to avoid deterministic errors on some CUDA setups
+        if self._device_type == "cuda" and not os.getenv("CUBLAS_WORKSPACE_CONFIG"):
+            os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
         self._model = model.to(self._device)
 

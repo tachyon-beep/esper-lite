@@ -45,6 +45,11 @@ class TamiyoPolicyConfig:
     seed_registry: EmbeddingRegistry | None = None
     blueprint_registry: EmbeddingRegistry | None = None
     schedule_registry: EmbeddingRegistry | None = None
+    # Extended categorical registries for parity with Simic
+    layer_registry: EmbeddingRegistry | None = None
+    activation_registry: EmbeddingRegistry | None = None
+    optimizer_registry: EmbeddingRegistry | None = None
+    hazard_registry: EmbeddingRegistry | None = None
     max_layers: int = 3
     max_activations: int = 1
     max_parameters: int = 1
@@ -93,10 +98,26 @@ class TamiyoPolicy(nn.Module):
             except Exception:
                 pass
 
+        # Extended registries for categorical stability
+        self._layer_registry = cfg.layer_registry or EmbeddingRegistry(
+            EmbeddingRegistryConfig(cfg.registry_path / "layer_type_registry.json", 1024)
+        )
+        self._activation_registry = cfg.activation_registry or EmbeddingRegistry(
+            EmbeddingRegistryConfig(cfg.registry_path / "activation_type_registry.json", 1024)
+        )
+        self._optimizer_registry = cfg.optimizer_registry or EmbeddingRegistry(
+            EmbeddingRegistryConfig(cfg.registry_path / "optimizer_family_registry.json", 256)
+        )
+        self._hazard_registry = cfg.hazard_registry or EmbeddingRegistry(
+            EmbeddingRegistryConfig(cfg.registry_path / "hazard_class_registry.json", 256)
+        )
+
         builder_cfg = TamiyoGraphBuilderConfig(
             normalizer_path=cfg.normalizer_path,
             seed_registry=self._seed_registry,
             blueprint_registry=self._blueprint_registry,
+            layer_type_registry=self._layer_registry,
+            activation_type_registry=self._activation_registry,
             seed_vocab=cfg.seed_vocab,
             blueprint_vocab=cfg.blueprint_vocab,
             max_layers=cfg.max_layers,
@@ -376,6 +397,35 @@ class TamiyoPolicy(nn.Module):
             )
             raise ValueError(msg)
 
+        # Registry parity check (optional metadata)
+        registries_meta = metadata.get("registries", {}) if metadata else {}
+        if isinstance(registries_meta, dict) and registries_meta:
+            # Compute digests from current on-disk state to catch out-of-band changes
+            def _fresh_digest(reg: EmbeddingRegistry | None) -> str:
+                try:
+                    cfg = getattr(reg, "_config", None)
+                    path = getattr(cfg, "path", None)
+                    if path is None:
+                        return getattr(reg, "digest", lambda: "")()
+                    from esper.simic.registry import EmbeddingRegistry as _ER, EmbeddingRegistryConfig as _ERC
+                    return _ER(_ERC(path, getattr(cfg, "max_size", 1024))).digest()
+                except Exception:
+                    return getattr(reg, "digest", lambda: "")()
+
+            expected = {
+                "layer_type": _fresh_digest(self._layer_registry),
+                "activation_type": _fresh_digest(self._activation_registry),
+                "optimizer_family": _fresh_digest(self._optimizer_registry),
+                "hazard_class": _fresh_digest(self._hazard_registry),
+            }
+            mismatches = [
+                name
+                for name, dig in registries_meta.items()
+                if expected.get(name, "") and dig != expected.get(name, "")
+            ]
+            if mismatches:
+                raise ValueError(f"Tamiyo registry mismatch: {mismatches}")
+
         reference = super().state_dict()
         missing = [key for key in reference.keys() if key not in clean_state]
         mismatched: list[str] = []
@@ -383,8 +433,16 @@ class TamiyoPolicy(nn.Module):
             candidate = clean_state.get(key)
             if candidate is None:
                 continue
-            if isinstance(candidate, torch.Tensor) and candidate.shape != tensor.shape:
-                mismatched.append(key)
+            try:
+                if isinstance(candidate, torch.Tensor) and isinstance(tensor, torch.Tensor):
+                    # Some lazy tensors may not have a defined shape until first forward; skip in that case
+                    cand_shape = getattr(candidate, "shape", None)
+                    ref_shape = getattr(tensor, "shape", None)
+                    if cand_shape is not None and ref_shape is not None and cand_shape != ref_shape:
+                        mismatched.append(key)
+            except RuntimeError:
+                # Skip shape checks for uninitialized parameters/buffers
+                continue
         if missing or mismatched:
             raise ValueError(
                 "Tamiyo policy checkpoint incompatible; missing="
@@ -393,7 +451,15 @@ class TamiyoPolicy(nn.Module):
 
     def state_dict(self, *args: object, **kwargs: object) -> dict:  # type: ignore[override]
         payload = super().state_dict(*args, **kwargs)
-        payload["_metadata"] = {"architecture_version": self._architecture_version}
+        payload["_metadata"] = {
+            "architecture_version": self._architecture_version,
+            "registries": {
+                "layer_type": getattr(self._layer_registry, "digest", lambda: "")(),
+                "activation_type": getattr(self._activation_registry, "digest", lambda: "")(),
+                "optimizer_family": getattr(self._optimizer_registry, "digest", lambda: "")(),
+                "hazard_class": getattr(self._hazard_registry, "digest", lambda: "")(),
+            },
+        }
         return payload
 
     def load_state_dict(self, state_dict: Mapping[str, object], strict: bool = True) -> object:  # type: ignore[override]

@@ -1448,6 +1448,16 @@ class TamiyoService:
                 logger.warning("Tamiyo policy update incompatible: %s", exc)
             except ValueError as exc:
                 logger.warning("Tamiyo policy update rejected: %s", exc)
+                # Surface a registry mismatch or version issue as telemetry
+                self._telemetry_packets.append(
+                    build_telemetry_packet(
+                        packet_id="tamiyo-policy-update-error",
+                        source="tamiyo",
+                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                        metrics=[],
+                        events=[TelemetryEvent(description="policy_update_rejected", level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING, attributes={"reason": str(exc)})],
+                    )
+                )
                 return
         self._policy_updates.append(update)
 

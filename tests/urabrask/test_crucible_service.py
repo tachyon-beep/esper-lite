@@ -36,4 +36,4 @@ def test_produce_bsds_via_crucible_attaches_to_urza(tmp_path: Path) -> None:
     rec = lib.get("bp-crucible")
     assert rec is not None and "bsds" in (rec.extras or {})
     assert rec.extras["bsds"]["resource_profile"] == "gpu"
-
+    assert "hazards" in rec.extras["bsds"]

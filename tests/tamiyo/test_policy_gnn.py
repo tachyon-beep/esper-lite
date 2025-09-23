@@ -127,7 +127,7 @@ def test_graph_builder_schema(tmp_path: pytest.PathLike) -> None:
         max_activations=2,
         max_parameters=2,
         layer_feature_dim=14,  # include extra categorical mask scalars
-        activation_feature_dim=9,  # include activation type mask scalar
+    activation_feature_dim=9,  # include activation type mask scalar
         parameter_feature_dim=10,
         edge_feature_dim=3,
         blueprint_metadata_provider=lambda bp: metadata if bp == blueprint_id else {},
