@@ -136,6 +136,36 @@ def test_seed_manager_emits_telemetry_for_commands() -> None:
     assert any(event.description == "seed_stage" for event in packet.events)
 
 
+def test_seed_telemetry_enrichment_includes_alpha_kernel_and_isolation() -> None:
+    runtime = _Runtime(latency=2.0)
+    manager = KasminaSeedManager(runtime, signing_context=_SIGNING_CONTEXT)
+    manager.register_host_model(nn.Linear(1, 1))
+    # Germinate to attach a kernel and enter BLENDING
+    cmd = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP-X")
+    manager.handle_command(cmd)
+    # Force BLENDING stage for the seed context
+    ctx = manager.seeds()["seed-1"]
+    ctx.lifecycle.state = leyline_pb2.SEED_STAGE_BLENDING
+    manager.advance_alpha("seed-1")
+    # Trigger an isolation violation and flush telemetry
+    manager.record_isolation_violation("seed-1")
+    packets = _finalize(manager, step_index=101)
+    pkt = packets[-1]
+    metrics = {m.name: m for m in pkt.metrics}
+    # Per-seed metrics present with seed_id attributes
+    def _has(name: str) -> bool:
+        metric = metrics.get(name)
+        return metric is not None and metric.attributes.get("seed_id") == "seed-1"
+
+    assert _has("kasmina.seed.alpha")
+    assert _has("kasmina.seed.alpha_steps")
+    assert _has("kasmina.seed.kernel_attached")
+    assert _has("kasmina.seed.last_kernel_latency_ms")
+    assert _has("kasmina.seed.isolation_violations")
+    # Isolation stats may be absent if no gradients collected; tolerate missing values
+    # but ensure no crash and structure OK when present.
+
+
 def test_prefetch_flow_attaches_kernel() -> None:
     runtime = _Runtime()
     prefetch = _PrefetchStub()
@@ -415,6 +445,23 @@ def test_parameter_registry_blocks_duplicate_kernel() -> None:
     payload = manager.rollback_payload("seed-dup")
     assert payload is not None
     assert "parameter" in payload["reason"]
+
+
+def test_isolation_stats_fail_open(monkeypatch) -> None:
+    """Negative path: isolation stats provider may raise; telemetry still emits."""
+    runtime = _Runtime()
+    manager = KasminaSeedManager(runtime, signing_context=_SIGNING_CONTEXT)
+    manager.register_host_model(nn.Linear(1, 1))
+    cmd = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP-iso")
+    manager.handle_command(cmd)
+    # Monkeypatch isolation_stats to raise
+    monkeypatch.setattr(KasminaSeedManager, "isolation_stats", lambda self, sid: (_ for _ in ()).throw(RuntimeError("iso fail")))
+    packets = _finalize(manager, step_index=42)
+    pkt = packets[-1]
+    names = {m.name for m in pkt.metrics}
+    # dot/host_norm/seed_norm should be absent, but other seed metrics should exist
+    assert "kasmina.seed.isolation.dot" not in names
+    assert any(n.startswith("kasmina.seed.") for n in names)
 
 
 def test_manager_rejects_unsigned_command() -> None:

@@ -41,6 +41,11 @@ class RiskConfig:
 
     max_loss_spike: float = 0.15
     conservative_mode: bool = False
+    # Latency/heuristic thresholds (ms) — tune per hardware profile
+    step_latency_high_ms: float = 120.0
+    kasmina_apply_slow_ms: float = 30.0
+    kasmina_finalize_slow_ms: float = 30.0
+    hook_budget_ms: float = 50.0
 
 
 _DEFAULT_REPORT_LOG = Path("var/tamiyo/field_reports.log")
@@ -131,7 +136,7 @@ class TamiyoService:
         metadata_cache_ttl: timedelta = timedelta(minutes=5),
         signature_context: SignatureContext | None = None,
         step_timeout_ms: float = 15.0,
-        metadata_timeout_ms: float = 20.0,
+        metadata_timeout_ms: float = 10.0,
         executor: ThreadPoolExecutor | None = None,
     ) -> None:
         self._policy = policy or TamiyoPolicy(TamiyoPolicyConfig())
@@ -934,8 +939,9 @@ class TamiyoService:
                 )
             )
 
+        # Latency guardrails
         hook_latency = training_metrics.get("hook_latency_ms")
-        if hook_latency and hook_latency > 50.0:
+        if hook_latency and hook_latency > float(self._risk.hook_budget_ms):
             reason = "hook_budget"
             command.command_type = leyline_pb2.COMMAND_PAUSE
             events.append(
@@ -945,6 +951,46 @@ class TamiyoService:
                     attributes={"latency_ms": f"{hook_latency:.2f}"},
                 )
             )
+        step_latency = training_metrics.get("step_latency_ms")
+        if step_latency and step_latency > float(self._risk.step_latency_high_ms):
+            # Treat high step latency as HIGH priority; prefer PAUSE
+            reason = "step_latency_high"
+            command.command_type = leyline_pb2.COMMAND_PAUSE
+            events.append(
+                TelemetryEvent(
+                    description="step_latency_high",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"latency_ms": f"{step_latency:.2f}"},
+                )
+            )
+        apply_ms = training_metrics.get("kasmina.apply_ms")
+        if apply_ms and apply_ms > float(self._risk.kasmina_apply_slow_ms):
+            desc = "kasmina_apply_slow"
+            events.append(
+                TelemetryEvent(
+                    description=desc,
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"latency_ms": f"{apply_ms:.2f}"},
+                )
+            )
+            if command.command_type == leyline_pb2.COMMAND_SEED:
+                reason = "kasmina_apply_slow"
+                command.command_type = leyline_pb2.COMMAND_OPTIMIZER
+                command.optimizer_adjustment.optimizer_id = "sgd"
+        finalize_ms = training_metrics.get("kasmina.finalize_ms")
+        if finalize_ms and finalize_ms > float(self._risk.kasmina_finalize_slow_ms):
+            desc = "kasmina_finalize_slow"
+            events.append(
+                TelemetryEvent(
+                    description=desc,
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"latency_ms": f"{finalize_ms:.2f}"},
+                )
+            )
+            if command.command_type == leyline_pb2.COMMAND_SEED:
+                reason = "kasmina_finalize_slow"
+                command.command_type = leyline_pb2.COMMAND_OPTIMIZER
+                command.optimizer_adjustment.optimizer_id = "sgd"
 
         isolation = training_metrics.get("kasmina.isolation.violations")
         if isolation and isolation > 0:
@@ -957,6 +1003,86 @@ class TamiyoService:
                     attributes={"violations": str(int(isolation))},
                 )
             )
+
+        # Drift/stability signals
+        vol = training_metrics.get("loss_volatility")
+        if vol and vol > (self._risk.max_loss_spike * 0.75):
+            events.append(
+                TelemetryEvent(
+                    description="loss_volatility_high",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"volatility": f"{vol:.3f}"},
+                )
+            )
+            if command.command_type == leyline_pb2.COMMAND_SEED:
+                reason = reason or "loss_volatility_high"
+                command.command_type = leyline_pb2.COMMAND_OPTIMIZER
+                command.optimizer_adjustment.optimizer_id = "sgd"
+        gvar = training_metrics.get("grad_var")
+        if gvar and gvar > 1.0 and command.command_type == leyline_pb2.COMMAND_SEED:
+            events.append(
+                TelemetryEvent(
+                    description="grad_variance_high",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"var": f"{gvar:.3f}"},
+                )
+            )
+            reason = reason or "grad_variance_high"
+            command.command_type = leyline_pb2.COMMAND_OPTIMIZER
+            command.optimizer_adjustment.optimizer_id = "sgd"
+        conflict = training_metrics.get("grad_conflict_rate")
+        if conflict and conflict > 0.5 and command.command_type == leyline_pb2.COMMAND_SEED:
+            events.append(
+                TelemetryEvent(
+                    description="grad_conflict_high",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"rate": f"{conflict:.3f}"},
+                )
+            )
+            reason = reason or "grad_conflict_high"
+            command.command_type = leyline_pb2.COMMAND_OPTIMIZER
+            command.optimizer_adjustment.optimizer_id = "sgd"
+
+        # Optimizer hints
+        lr = training_metrics.get("optimizer_lr")
+        if lr is not None and lr <= 0.0 and loss_delta > (self._risk.max_loss_spike * 0.5):
+            events.append(
+                TelemetryEvent(
+                    description="optimizer_hint",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"lr": f"{lr:.6f}", "loss_delta": f"{loss_delta:.3f}"},
+                )
+            )
+            if command.command_type == leyline_pb2.COMMAND_SEED:
+                reason = "optimizer_hint"
+                command.command_type = leyline_pb2.COMMAND_OPTIMIZER
+                command.optimizer_adjustment.optimizer_id = "sgd"
+
+        # Device pressure (best-effort)
+        gpu_util = training_metrics.get("gpu_util_percent")
+        gpu_free = training_metrics.get("gpu_mem_free_gb")
+        cpu_util = training_metrics.get("cpu_util_percent")
+        if gpu_util and gpu_util >= 95.0 and gpu_free is not None and gpu_free <= 0.2:
+            events.append(
+                TelemetryEvent(
+                    description="device_pressure_high",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"gpu_util": f"{gpu_util:.1f}", "gpu_mem_free_gb": f"{gpu_free:.2f}"},
+                )
+            )
+            if command.command_type == leyline_pb2.COMMAND_SEED:
+                reason = reason or "device_pressure_high"
+                command.command_type = leyline_pb2.COMMAND_PAUSE
+        elif cpu_util and cpu_util >= 95.0 and command.command_type == leyline_pb2.COMMAND_SEED:
+            events.append(
+                TelemetryEvent(
+                    description="cpu_pressure_high",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"cpu_util": f"{cpu_util:.1f}"},
+                )
+            )
+            reason = reason or "cpu_pressure_high"
+            command.command_type = leyline_pb2.COMMAND_OPTIMIZER
 
         if not reason and command.command_type == leyline_pb2.COMMAND_PAUSE and self._risk.conservative_mode:
             reason = "conservative_mode"

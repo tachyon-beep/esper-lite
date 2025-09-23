@@ -17,9 +17,12 @@ from esper.tolaria import KasminaClient, TamiyoClient, TolariaTrainer, TrainingL
 class _TamiyoStub(TamiyoClient):
     def __init__(self) -> None:
         self.step_calls: int = 0
+        self.last_step_state: leyline_pb2.SystemStatePacket | None = None
 
     def evaluate_step(self, state: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
         self.step_calls += 1
+        # Keep a reference to the state for verification after the run
+        self.last_step_state = state
         return self.evaluate_epoch(state)
 
     def evaluate_epoch(self, state: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
@@ -58,6 +61,10 @@ class _KasminaStub(KasminaClient):
     def advance_alpha(self, seed_id: str, *, steps: int = 1) -> float:
         self.alpha_advances.append(seed_id)
         return 0.0
+
+    def finalize_step(self, *, step_index: int | None = None) -> None:  # type: ignore[override]
+        # No-op finalize to allow timing to be recorded in trainer metrics
+        return None
 
 
 def _dummy_model(input_dim: int, output_dim: int) -> nn.Module:
@@ -149,6 +156,49 @@ def test_tolaria_trainer_uses_step_api() -> None:
 
     list(trainer.run())
     assert tamiyo.step_calls > 0
+
+
+def test_tolaria_step_packet_includes_minimal_metrics() -> None:
+    """WP8: Per-step training_metrics must include minimal documented fields.
+
+    Verify that Tolaria provides loss, gradient_norm, samples_per_s, and hook_latency_ms
+    on the SystemStatePacket passed to Tamiyo's evaluate_step.
+    """
+    model = _dummy_model(4, 2)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+    loader = _dummy_loader(8, 4, 2)
+    tamiyo = _TamiyoStub()
+    kasmina = _KasminaStub()
+    trainer = TolariaTrainer(
+        model=model,
+        optimizer=optimizer,
+        dataloader=loader,
+        tamiyo=tamiyo,
+        kasmina=kasmina,
+        config=TrainingLoopConfig(max_epochs=1, gradient_accumulation_steps=1, device=torch.device("cpu")),
+    )
+
+    list(trainer.run())
+    assert tamiyo.step_calls > 0
+    assert tamiyo.last_step_state is not None
+    metrics = tamiyo.last_step_state.training_metrics  # type: ignore[union-attr]
+    # Core metrics should be present
+    assert "loss" in metrics
+    assert "gradient_norm" in metrics
+    assert "samples_per_s" in metrics
+    # Hook latency is attached after the hook; the reference is the same object
+    # that gets enriched post-call, so Tamiyo's captured state should contain it.
+    assert "hook_latency_ms" in metrics
+    # Enriched metrics from WP8
+    assert "step_latency_ms" in metrics
+    assert "loss_delta" in metrics
+    assert "optimizer_lr" in metrics
+    # Kasmina timings
+    assert "kasmina.apply_ms" in metrics
+    assert "kasmina.finalize_ms" in metrics
+    # Optional CUDA copy metric (skip on CPU-only)
+    if torch.cuda.is_available():
+        assert "h2d_copy_ms" in metrics
 
 
 def test_tolaria_handles_tamiyo_step_timeout() -> None:
@@ -440,3 +490,44 @@ def test_tolaria_amp_metrics_disabled_on_cpu() -> None:
     metrics_snapshot = trainer.metrics_snapshot()
     assert metrics_snapshot["tolaria.train.amp_enabled"] == 0.0
     assert metrics_snapshot["tolaria.train.tf32_enabled"] in {0.0, 1.0}
+
+
+def test_tolaria_hardware_metrics_fail_open(monkeypatch) -> None:
+    """Negative path: GPU/CPU metrics collection must not crash when providers fail.
+
+    Force CUDA path and raise from mem_get_info; also make psutil.cpu_percent raise.
+    Ensure the trainer still runs and emits basic telemetry/state without requiring
+    pressure metrics.
+    """
+    # Force the CUDA code path in _emit_state while keeping device=cpu
+    import torch as _torch
+
+    monkeypatch.setattr(_torch.cuda, "is_available", lambda: True, raising=False)
+    def _fail_mem_get_info():  # type: ignore[no-redef]
+        raise RuntimeError("simulated mem_get_info failure")
+
+    monkeypatch.setattr(_torch.cuda, "mem_get_info", _fail_mem_get_info, raising=False)
+    # Make psutil present but failing
+    import psutil as _psutil  # type: ignore
+    monkeypatch.setattr(_psutil, "cpu_percent", lambda interval=0.0: (_ for _ in ()).throw(RuntimeError("cpu fail"))),
+
+    model = _dummy_model(4, 2)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+    loader = _dummy_loader(8, 4, 2)
+    tamiyo = _TamiyoStub()
+    kasmina = _KasminaStub()
+    trainer = TolariaTrainer(
+        model=model,
+        optimizer=optimizer,
+        dataloader=loader,
+        tamiyo=tamiyo,
+        kasmina=kasmina,
+        config=TrainingLoopConfig(max_epochs=1, gradient_accumulation_steps=1, device=torch.device("cpu")),
+    )
+
+    states = list(trainer.run())
+    assert states, "trainer should emit state packets even when metrics providers fail"
+    tm = states[0].training_metrics
+    # GPU metrics should be absent under failure; basic metrics still present
+    assert "loss" in tm and "gradient_norm" in tm
+    assert "gpu_mem_used_gb" not in tm

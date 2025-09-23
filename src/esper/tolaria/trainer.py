@@ -208,6 +208,15 @@ class TolariaTrainer:
         self._last_step_failure_reason: str | None = None
         self._last_hook_latency_ms: float = 0.0
         self._last_tamiyo_latency_ms: float = 0.0
+        # Rolling dynamics (EWMA) and step timers
+        self._ewma_alpha: float = 0.2
+        self._loss_mean: float = 0.0
+        self._loss_var: float = 0.0
+        self._last_loss: float | None = None
+        self._grad_mean: float = 0.0
+        self._grad_var: float = 0.0
+        self._prev_step_end_time: float | None = None
+        self._step_total_start: float | None = None
 
         self._compile_enabled = False
         self._compiled_step = None
@@ -618,12 +627,30 @@ class TolariaTrainer:
             else:
                 inputs, targets = batch
                 seed_ids = None
-            inputs = inputs.to(self._device, non_blocking=self._non_blocking)
-            targets = targets.to(self._device, non_blocking=self._non_blocking)
+            # Approximate dataloader wait time (time since previous step end)
+            if self._prev_step_end_time is not None:
+                try:
+                    input_wait_ms = (micro_start - self._prev_step_end_time) * 1000.0
+                except Exception:
+                    input_wait_ms = 0.0
+            else:
+                input_wait_ms = 0.0
+            # Measure host->device copy time (CUDA only; best-effort)
+            h2d_copy_ms = 0.0
+            if self._device_type == "cuda":
+                t_h2d = perf_counter()
+                inputs = inputs.to(self._device, non_blocking=self._non_blocking)
+                targets = targets.to(self._device, non_blocking=self._non_blocking)
+                h2d_copy_ms = (perf_counter() - t_h2d) * 1000.0
+            else:
+                inputs = inputs.to(self._device, non_blocking=self._non_blocking)
+                targets = targets.to(self._device, non_blocking=self._non_blocking)
 
             if step_timer_start is None:
                 step_timer_start = micro_start
                 accumulated_samples = 0
+                if self._step_total_start is None:
+                    self._step_total_start = micro_start
             accumulated_samples += targets.size(0)
 
             # Always zero to isolate per-micro gradients we aggregate ourselves
@@ -747,6 +774,11 @@ class TolariaTrainer:
                         use_pcgrad=len(micro_flats) > 1,
                         weights=weights,
                     )
+                    try:
+                        sources = max(1, len(micro_flats) - 1)
+                        grad_conflict_rate = float(conflicts) / float(sources) if len(micro_flats) > 1 else 0.0
+                    except Exception:
+                        grad_conflict_rate = 0.0
                 else:
                     # Seed-aware aggregation using masks + PCGrad across seeds
                     # Sum microbatch flats into per-seed flats using masks
@@ -814,6 +846,11 @@ class TolariaTrainer:
                         use_pcgrad=(len(seed_flats) > 1) and self._pcgrad_enabled,
                         weights=weights,
                     )
+                    try:
+                        sources = max(1, len(seed_flats) - 1)
+                        grad_conflict_rate = float(conflicts) / float(sources) if len(seed_flats) > 1 else 0.0
+                    except Exception:
+                        grad_conflict_rate = 0.0
                     # Accumulate per-seed telemetry
                     for name, flat_vec, w in zip(seed_names, seed_flats, weights):
                         try:
@@ -890,6 +927,20 @@ class TolariaTrainer:
                 stats.gradient_norm_sum += grad_norm
                 micro_flats.clear()
 
+                # Optimizer hints (best-effort)
+                try:
+                    lr_values: list[float] = []
+                    mom_values: list[float] = []
+                    for group in self._optimizer.param_groups:
+                        lr_values.append(float(group.get("lr", 0.0)))
+                        if "momentum" in group:
+                            mom_values.append(float(group.get("momentum", 0.0)))
+                    optimizer_lr = float(sum(lr_values) / max(1, len(lr_values))) if lr_values else 0.0
+                    optimizer_momentum = float(sum(mom_values) / max(1, len(mom_values))) if mom_values else 0.0
+                except Exception:
+                    optimizer_lr = 0.0
+                    optimizer_momentum = 0.0
+
                 step_elapsed = perf_counter() - (step_timer_start or micro_start)
                 step_timer_start = None
                 samples_per_s = 0.0
@@ -907,11 +958,51 @@ class TolariaTrainer:
                         pass
 
                 self._global_step += 1
+                current_loss = float(loss_tensor.detach().item())
+                # Update rolling dynamics
+                loss_delta = 0.0
+                try:
+                    if self._last_loss is not None:
+                        loss_delta = current_loss - self._last_loss
+                    old_mean = self._loss_mean
+                    new_mean = self._ewma_alpha * current_loss + (1.0 - self._ewma_alpha) * old_mean
+                    new_var = self._ewma_alpha * (current_loss - old_mean) * (current_loss - new_mean) + (1.0 - self._ewma_alpha) * self._loss_var
+                    self._loss_mean, self._loss_var = new_mean, max(0.0, new_var)
+                    g_old_mean = self._grad_mean
+                    g_new_mean = self._ewma_alpha * grad_norm + (1.0 - self._ewma_alpha) * g_old_mean
+                    g_new_var = self._ewma_alpha * (grad_norm - g_old_mean) * (grad_norm - g_new_mean) + (1.0 - self._ewma_alpha) * self._grad_var
+                    self._grad_mean, self._grad_var = g_new_mean, max(0.0, g_new_var)
+                    self._last_loss = current_loss
+                except Exception:
+                    pass
+
                 step_state = self._build_step_state(
-                    loss=float(loss_tensor.detach().item()),
+                    loss=current_loss,
                     grad_norm=grad_norm,
                     samples_per_s=samples_per_s,
                 )
+                # Attach enrichment metrics (do not stall on failure)
+                try:
+                    step_state.training_metrics["optimizer_lr"] = optimizer_lr
+                    if optimizer_momentum:
+                        step_state.training_metrics["optimizer_momentum"] = optimizer_momentum
+                    step_state.training_metrics["loss_delta"] = loss_delta
+                    step_state.training_metrics["loss_ewma"] = self._loss_mean
+                    step_state.training_metrics["loss_volatility"] = self._loss_var ** 0.5
+                    step_state.training_metrics["grad_norm_ewma"] = self._grad_mean
+                    step_state.training_metrics["grad_var"] = self._grad_var
+                    if input_wait_ms:
+                        step_state.training_metrics["input_wait_ms"] = input_wait_ms
+                    if self._device_type == "cuda" and h2d_copy_ms:
+                        step_state.training_metrics["h2d_copy_ms"] = h2d_copy_ms
+                    # Expose per-fence conflict rate if PCGrad applied
+                    try:
+                        if 'grad_conflict_rate' in locals():
+                            step_state.training_metrics["grad_conflict_rate"] = float(grad_conflict_rate)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
 
                 hook_start = perf_counter()
                 tamiyo_latency_ms = 0.0
@@ -944,8 +1035,11 @@ class TolariaTrainer:
                         self._enter_conservative_mode(local_failure)
                         self._last_tamiyo_latency_ms = 0.0
 
+                apply_ms = 0.0
                 try:
+                    t_apply = perf_counter()
                     self._apply_kasmina_command(command)
+                    apply_ms = (perf_counter() - t_apply) * 1000.0
                 except TimeoutError as exc:
                     reason = "kasmina_timeout"
                     local_failure = local_failure or reason
@@ -968,8 +1062,10 @@ class TolariaTrainer:
                 self._last_hook_latency_ms = hook_latency_ms
                 self._metrics["tolaria.hook.latency_ms"] = hook_latency_ms
                 step_state.training_metrics["hook_latency_ms"] = hook_latency_ms
-                if self._last_tamiyo_latency_ms:
-                    step_state.training_metrics["tamiyo_latency_ms"] = self._last_tamiyo_latency_ms
+                # Always expose Tamiyo timing; other enrichment behind flag
+                step_state.training_metrics["tamiyo_latency_ms"] = self._last_tamiyo_latency_ms or 0.0
+                if self._step_enrichment:
+                    step_state.training_metrics["kasmina.apply_ms"] = apply_ms
 
                 if callable(exporter) and callable(advancer):
                     try:
@@ -981,10 +1077,22 @@ class TolariaTrainer:
 
                 finalizer = getattr(self._kasmina, "finalize_step", None)
                 if callable(finalizer):
+                    finalize_ms = 0.0
                     try:
+                        t_fin = perf_counter()
                         finalizer(step_index=self._global_step)
+                        finalize_ms = (perf_counter() - t_fin) * 1000.0
                     except Exception:  # pragma: no cover - Kasmina finalize is best effort
                         pass
+                    else:
+                        if self._step_enrichment:
+                            step_state.training_metrics["kasmina.finalize_ms"] = finalize_ms
+                # Total step latency (first micro -> post-finalize)
+                if self._step_total_start is not None and self._step_enrichment:
+                    step_state.training_metrics["step_latency_ms"] = (perf_counter() - self._step_total_start) * 1000.0
+                    self._step_total_start = None
+                # Mark end-of-step for input wait approximation
+                self._prev_step_end_time = perf_counter()
 
                 if self._lr_controller is not None:
                     try:
@@ -1234,13 +1342,58 @@ class TolariaTrainer:
             packet.training_metrics["latency_ms"] = stats.epoch_duration_ms
         if stats.throughput_samples_per_s:
             packet.training_metrics["samples_per_s"] = stats.throughput_samples_per_s
+        # Epoch-level dynamics snapshot
+        try:
+            packet.training_metrics["loss_ewma"] = self._loss_mean
+            packet.training_metrics["loss_volatility"] = self._loss_var ** 0.5
+            packet.training_metrics["grad_norm_ewma"] = self._grad_mean
+            packet.training_metrics["grad_var"] = self._grad_var
+            # Reuse aggregate conflict ratio if recorded
+            if "tolaria.grad_agg.conflict_ratio" in self._metrics:
+                packet.training_metrics["grad_conflict_rate"] = float(self._metrics.get("tolaria.grad_agg.conflict_ratio", 0.0))
+        except Exception:
+            pass
         hardware = packet.hardware_context
         hardware.device_type = "cuda" if torch.cuda.is_available() else "cpu"
         hardware.device_id = "0"
-        hardware.total_memory_gb = 0.0
-        hardware.available_memory_gb = 0.0
-        hardware.temperature_celsius = 0.0
-        hardware.utilization_percent = 0.0
+        # Best-effort hardware/pressure metrics (gated by step enrichment)
+        if self._step_enrichment:
+            try:
+                if hardware.device_type == "cuda" and torch.cuda.is_available():
+                    mem_free, mem_total = torch.cuda.mem_get_info()  # type: ignore[attr-defined]
+                    used_gb = (mem_total - mem_free) / (1024**3)
+                    free_gb = mem_free / (1024**3)
+                    hardware.total_memory_gb = float(mem_total / (1024**3))
+                    hardware.available_memory_gb = float(free_gb)
+                    packet.training_metrics["gpu_mem_used_gb"] = float(used_gb)
+                    packet.training_metrics["gpu_mem_free_gb"] = float(free_gb)
+                    # Optional NVML util
+                    try:
+                        import pynvml  # type: ignore
+
+                        pynvml.nvmlInit()
+                        handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+                        util = pynvml.nvmlDeviceGetUtilizationRates(handle)
+                        hardware.utilization_percent = float(util.gpu)
+                        packet.training_metrics["gpu_util_percent"] = float(util.gpu)
+                    except Exception:
+                        hardware.utilization_percent = 0.0
+                else:
+                    hardware.total_memory_gb = 0.0
+                    hardware.available_memory_gb = 0.0
+                    hardware.utilization_percent = 0.0
+                # CPU util (psutil optional)
+                try:
+                    import psutil  # type: ignore
+
+                    packet.training_metrics["cpu_util_percent"] = float(psutil.cpu_percent(interval=0.0))
+                except Exception:
+                    pass
+            except Exception:
+                # Fail open with defaults
+                hardware.total_memory_gb = 0.0
+                hardware.available_memory_gb = 0.0
+                hardware.utilization_percent = 0.0
         hardware.compute_capability = 0
 
         self._populate_seed_states(packet)

@@ -398,7 +398,19 @@ class KasminaSeedManager:
                     attributes={"seed_id": seed_id},
                 ),
                 TelemetryMetric(
+                    "kasmina.seed.kernel_attached",
+                    1.0 if context.kernel_attached else 0.0,
+                    unit="flag",
+                    attributes={"seed_id": seed_id},
+                ),
+                TelemetryMetric(
                     "kasmina.seed.kernel_latency_ms",
+                    context.last_kernel_latency_ms,
+                    unit="ms",
+                    attributes={"seed_id": seed_id},
+                ),
+                TelemetryMetric(
+                    "kasmina.seed.last_kernel_latency_ms",
                     context.last_kernel_latency_ms,
                     unit="ms",
                     attributes={"seed_id": seed_id},
@@ -417,6 +429,46 @@ class KasminaSeedManager:
                 ),
             ]
         )
+        # Alpha steps only when BLENDING
+        if context.lifecycle.state == pb.SEED_STAGE_BLENDING:
+            metrics.append(
+                TelemetryMetric(
+                    "kasmina.seed.alpha_steps",
+                    float(context.alpha_steps),
+                    unit="count",
+                    attributes={"seed_id": seed_id},
+                )
+            )
+        # Isolation stats (best-effort)
+        try:
+            stats = self.isolation_stats(seed_id)
+            if stats is not None:
+                metrics.append(
+                    TelemetryMetric(
+                        "kasmina.seed.isolation.dot",
+                        float(stats.dot_product),
+                        unit="dot",
+                        attributes={"seed_id": seed_id},
+                    )
+                )
+                metrics.append(
+                    TelemetryMetric(
+                        "kasmina.seed.isolation.host_norm",
+                        float(stats.host_norm),
+                        unit="grad",
+                        attributes={"seed_id": seed_id},
+                    )
+                )
+                metrics.append(
+                    TelemetryMetric(
+                        "kasmina.seed.isolation.seed_norm",
+                        float(stats.seed_norm),
+                        unit="grad",
+                        attributes={"seed_id": seed_id},
+                    )
+                )
+        except Exception:  # pragma: no cover - defensive
+            pass
 
         health_status, health_summary = self._determine_seed_health(context)
         priority = max(

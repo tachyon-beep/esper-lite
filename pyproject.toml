@@ -43,7 +43,9 @@ dependencies = [
   "structlog>=24.2.0,<25",
   "python-dotenv>=1.0.1,<2",
   "prometheus-client>=0.20.0,<1",
-  "elasticsearch>=8.14.0,<9"
+  "elasticsearch>=8.14.0,<9",
+  "psutil>=5.9.0,<6",
+  "pynvml>=11.4.1,<12"
 ]
 
 [project.optional-dependencies]
@@ -71,6 +73,12 @@ docs = [
 # Optional performance-focused extras
 perf = [
   "orjson>=3.9.0,<4"
+]
+
+# Optional system metrics deps (fail-open at runtime)
+sysmetrics = [
+  "psutil>=5.9.0,<6",
+  "pynvml>=11.4.1,<12"
 ]
 
 [project.scripts]

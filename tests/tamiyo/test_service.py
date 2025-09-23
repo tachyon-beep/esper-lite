@@ -729,6 +729,55 @@ def test_loss_spike_triggers_pause(tmp_path) -> None:
     assert any(event.description == "loss_spike" for event in telemetry.events)
 
 
+def test_latency_metrics_trigger_actions(tmp_path) -> None:
+    config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    service = TamiyoService(store_config=config, signature_context=_SIGNATURE_CONTEXT)
+    packet = leyline_pb2.SystemStatePacket(
+        version=1,
+        current_epoch=1,
+        training_run_id="run-latency",
+        training_metrics={
+            "loss": 0.2,
+            "step_latency_ms": 250.0,
+            "kasmina.apply_ms": 35.0,
+            "kasmina.finalize_ms": 40.0,
+        },
+    )
+    cmd = service.evaluate_step(packet)
+    # High step latency should trigger PAUSE
+    assert cmd.command_type == leyline_pb2.COMMAND_PAUSE
+    telemetry = service.telemetry_packets[-1]
+    ev = {e.description for e in telemetry.events}
+    assert "step_latency_high" in ev or "kasmina_apply_slow" in ev or "kasmina_finalize_slow" in ev
+
+
+def test_optimizer_hint_drives_optimizer(tmp_path) -> None:
+    # Use a seed-focused policy to ensure baseline command is SEED
+    service = TamiyoService(
+        policy=_SeedPolicy(),
+        store_config=FieldReportStoreConfig(path=tmp_path / "field_reports.log"),
+        signature_context=_SIGNATURE_CONTEXT,
+    )
+    packet = leyline_pb2.SystemStatePacket(
+        version=1,
+        current_epoch=2,
+        training_run_id="run-opt",
+        training_metrics={
+            "loss": 0.3,
+            "loss_delta": 0.1,
+            "optimizer_lr": 0.0,
+        },
+    )
+    # Provide a seed to avoid fast-path pause
+    seed = packet.seed_states.add()
+    seed.seed_id = "seed-opt"
+    seed.stage = leyline_pb2.SeedLifecycleStage.SEED_STAGE_TRAINING
+    cmd = service.evaluate_step(packet)
+    assert cmd.command_type == leyline_pb2.COMMAND_OPTIMIZER
+    telemetry = service.telemetry_packets[-1]
+    assert any(e.description in {"optimizer_hint", "loss_warning"} for e in telemetry.events)
+
+
 def test_tamiyo_stale_command_rejected(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
     service = TamiyoService(store_config=config, signature_context=_SIGNATURE_CONTEXT)

@@ -43,6 +43,41 @@ Documents in this folder:
 - `implementation-roadmap.md` — ordered plan to close gaps without tech debt
 - `pytorch-2.8-upgrades.md` — mandatory hetero‑GNN inference upgrades (compile, inference_mode, TF32, data transfer)
 - `graph_metadata_schema.md` — schema for Urza `extras.graph_metadata` consumed by Tamiyo (layers, activations, parameters, adjacency, monitors)
+ - `metrics.md` — step and per-seed metric schema (prototype)
+
+## Configuration Knobs (Prototype)
+
+RiskConfig thresholds (Tamiyo)
+- `max_loss_spike` (default 0.15): Pause on larger loss deltas; warning at ~50% of this for optimizer downgrade.
+- `step_latency_high_ms` (default 120.0): Step latency considered HIGH; maps to PAUSE.
+- `kasmina_apply_slow_ms` (default 30.0): Kasmina apply timing considered slow; maps to OPTIMIZER when baseline action is SEED.
+- `kasmina_finalize_slow_ms` (default 30.0): Kasmina finalize timing considered slow; maps to OPTIMIZER when baseline action is SEED.
+- `hook_budget_ms` (default 50.0): Hook budget breach; maps to PAUSE.
+
+Service timeouts (TamiyoService)
+- `step_timeout_ms` (default 15.0): Budget for policy inference path.
+- `metadata_timeout_ms` (default 10.0): Deadline for Urza extras/metadata fetch (both enrichment and pre‑warm guard); skips enrichment on timeout.
+
+Trainer enrichment toggle (Tolaria)
+- `EsperSettings.tolaria_step_enrichment_enabled` (default True): Gates optional step‑level enrichments (optimizer hints, dynamics, conflict rate, I/O timings, GPU/CPU pressure). Core metrics and hook/tamiyo timings are always emitted.
+
+Example (tuning for a constrained host)
+```
+from esper.tamiyo.service import TamiyoService, RiskConfig
+
+service = TamiyoService(
+    risk_config=RiskConfig(
+        step_latency_high_ms=100.0,
+        kasmina_apply_slow_ms=25.0,
+        kasmina_finalize_slow_ms=25.0,
+        hook_budget_ms=40.0,
+    ),
+    metadata_timeout_ms=10.0,
+)
+
+# Tolaria: disable extra enrichments if needed
+# settings.tolaria_step_enrichment_enabled = False
+```
 
 Design sources:
 - `docs/design/detailed_design/03-tamiyo-unified-design.md`
