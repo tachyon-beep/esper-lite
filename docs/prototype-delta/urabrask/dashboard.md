@@ -56,6 +56,28 @@ Notes
 - Profiles default to `batch16_f32` and `batch32_f32`; CUDA hosts may include an optional `batch32_bf16` profile.
 - Keep budget small (≤100 ms per profile) and cadence low if later wired into a worker.
 
+### Bench Telemetry (Weatherlight)
+
+Weatherlight exposes Urabrask bench worker counters in its telemetry packet. These are not Prometheus metrics by default; index Weatherlight telemetry into Elasticsearch to chart them.
+
+- Metrics (names as emitted in telemetry)
+  - `urabrask.bench.profiles_total` — cumulative number of profiles attached
+  - `urabrask.bench.failures_total` — cumulative worker failures/timeouts
+  - `urabrask.bench.last_duration_ms` — duration of the last bench cycle
+  - `urabrask.bench.last_processed` — number of blueprints processed in last cycle
+
+- Grafana (ES datasource) example panels
+  - Profiles Attached (Rate)
+    - Query (KQL): `metrics.name: "urabrask.bench.profiles_total" and source: "weatherlight"`
+    - Aggregations: Max per time bucket → Derivative → Positive Only → Moving Avg (optional) → Line
+  - Bench Cycle Duration (ms)
+    - Query (KQL): `metrics.name: "urabrask.bench.last_duration_ms" and source: "weatherlight"`
+    - Aggregation: Avg per time bucket → Line
+  - Blueprints Processed (Last Cycle)
+    - Query (KQL): `metrics.name: "urabrask.bench.last_processed" and source: "weatherlight"`
+    - Aggregation: Max per time bucket → Bar/Line
+
+
 ## Weatherlight Producer Stats (Telemetry)
 - Weatherlight emits `urabrask.*` metrics in its telemetry packet (not Prometheus native unless ingested):
   - `urabrask.produced_total` — total BSDS attachments made by the producer

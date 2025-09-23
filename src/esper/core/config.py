@@ -173,4 +173,12 @@ class EsperSettings(BaseSettings):
     urabrask_oona_publish_enabled: bool = Field(alias="URABRASK_OONA_PUBLISH_ENABLED", default=False)
     urabrask_timeout_ms: int = Field(alias="URABRASK_TIMEOUT_MS", default=200)
 
+    # -----------------------------
+    # Urabrask (Benchmarks) CFG v1
+    # -----------------------------
+    urabrask_bench_enabled: bool = Field(alias="URABRASK_BENCH_ENABLED", default=False)
+    urabrask_bench_interval_s: int = Field(alias="URABRASK_BENCH_INTERVAL_S", default=1800)
+    urabrask_bench_topn: int = Field(alias="URABRASK_BENCH_TOPN", default=3)
+    urabrask_bench_timeout_ms: int = Field(alias="URABRASK_BENCH_TIMEOUT_MS", default=500)
+
 __all__ = ["EsperSettings"]

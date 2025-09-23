@@ -30,6 +30,7 @@ from esper.tamiyo import TamiyoService
 from esper.urza import UrzaLibrary, UrzaRuntime
 from esper.urza.prefetch import UrzaPrefetchWorker
 from esper.urabrask.producer import UrabraskProducer
+from esper.urabrask.bench_worker import UrabraskBenchWorker
 
 if TYPE_CHECKING:  # pragma: no cover - typing support only
     from esper.tezzeret import TezzeretForge
@@ -76,6 +77,7 @@ class WeatherlightService:
         self._kasmina_coordinator: KasminaPrefetchCoordinator | None = None
         self._tamiyo_service: TamiyoService | None = None
         self._urabrask_producer: UrabraskProducer | None = None
+        self._urabrask_bench: UrabraskBenchWorker | None = None
         self._tezzeret_metrics_provider: Callable[[], dict[str, float]] | None = None
         self._tezzeret_telemetry_provider: Callable[[], leyline_pb2.TelemetryPacket | None] | None = None
         self._rollback_signal_name: str | None = self._settings.tolaria_rollback_signal_name
@@ -152,6 +154,22 @@ class WeatherlightService:
                 WorkerState(
                     name="urabrask.producer",
                     coroutine_factory=lambda: self._urabrask_producer.run_forever(),
+                )
+            )
+        # Optional Urabrask benchmarks
+        if self._settings.urabrask_bench_enabled:
+            assert self._urza_runtime is not None
+            self._urabrask_bench = UrabraskBenchWorker(
+                self._urza_library,
+                self._urza_runtime,
+                interval_s=self._settings.urabrask_bench_interval_s,
+                topn=self._settings.urabrask_bench_topn,
+                timeout_ms=self._settings.urabrask_bench_timeout_ms,
+            )
+            self._register_worker(
+                WorkerState(
+                    name="urabrask.bench",
+                    coroutine_factory=lambda: self._urabrask_bench.run_forever(),
                 )
             )
 
@@ -520,6 +538,9 @@ class WeatherlightService:
                 metrics.append(TelemetryMetric(f"urza.library.{name}", float(value)))
         if self._urabrask_producer is not None:
             for name, value in self._urabrask_producer.metrics().items():
+                metrics.append(TelemetryMetric(f"urabrask.{name}", float(value)))
+        if self._urabrask_bench is not None:
+            for name, value in self._urabrask_bench.metrics().items():
                 metrics.append(TelemetryMetric(f"urabrask.{name}", float(value)))
         oona_snapshot = await self._oona.metrics_snapshot()
         for name, value in oona_snapshot.items():
