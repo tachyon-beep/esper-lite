@@ -171,6 +171,7 @@ Context: Aligns with `GNN-WP1.md`, `diff/gnn-inputs.md`, `diff/input-remediation
 
 - Scope: Update `tamiyo` delta docs with implemented inputs, norms location, coverage semantics, and Weatherlight drain behavior.
 - Changes: refresh `README.md`, `GNN-WP1.md`, `diff/gnn-inputs.md`, `diff/input-remediation-plan.md` as needed.
+- Activity: Evaluate default builder feature dimensions (e.g., `layer_feature_dim`, `activation_feature_dim`) to include categorical presence-mask scalars by default. If accepted, update defaults, code comments, and test shape assertions; otherwise, document the rationale for keeping them optional.
 - Files: `docs/prototype-delta/tamiyo/*`.
 - Tests: doc-only.
 - Acceptance: docs reflect current state; PRs reference updated sections.
