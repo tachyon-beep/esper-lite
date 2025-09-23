@@ -44,10 +44,13 @@ class NissaIngestor:
         *,
         es_client: Elasticsearch | None = None,
         registry: CollectorRegistry | None = None,
+        urza: object | None = None,
     ) -> None:
         self._config = config
         self._registry = registry or CollectorRegistry()
         self._alert_router = AlertRouter()
+        # Optional UrzaLibrary for enrichment (duck-typed: must expose get())
+        self._urza = urza
         # Build alert rules with environment/config overrides
         if config.alerts_enabled:
             rules = []
@@ -229,6 +232,27 @@ class NissaIngestor:
         if metrics:
             self._alert_engine.evaluate(metrics, packet.source_subsystem)
             self._process_slo_metrics(metrics)
+
+        # Enrich with BSDS hazards map (from Urza extras) when available
+        try:
+            if (
+                self._urza is not None
+                and packet.source_subsystem == "tamiyo"
+                and (packet.packet_id or "")
+            ):
+                rec = self._urza.get(packet.packet_id)
+                hazards = None
+                if rec is not None and isinstance(getattr(rec, "extras", None), dict):
+                    bsds = rec.extras.get("bsds")
+                    if isinstance(bsds, dict):
+                        h = bsds.get("hazards")
+                        if isinstance(h, dict):
+                            hazards = {str(k): str(v) for k, v in h.items()}
+                if hazards:
+                    document["bsds_hazards"] = hazards
+        except Exception:
+            # Fail-open for enrichment
+            pass
 
         if packet.source_subsystem == "simic":
             reward = metrics.get("simic.training.reward", 0.0)

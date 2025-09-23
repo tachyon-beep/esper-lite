@@ -34,3 +34,18 @@ Optional (if policy training runs in Tamiyo)
 References
 - Tamiyo service: `src/esper/tamiyo/service.py` (evaluate_epoch)
 - Policy stub: `src/esper/tamiyo/policy.py` (replace with hetero‑GNN for the unified design before adopting the compile path)
+
+## Operator/Dev Notes
+
+- Compile fallback counter
+  - Tamiyo exports `tamiyo.gnn.compile_fallback_total` (count) when the compile path is disabled at init or falls back at runtime due to backend issues. `tamiyo.gnn.compile_enabled` reflects the current state (1.0=compiled, 0.0=eager).
+  - Expect occasional fallbacks with some PyG kernels or exotic CUDA stacks; Tamiyo continues in eager mode without crashing.
+
+- Running CUDA perf checks locally
+  - Ensure a CUDA‑capable GPU and drivers are available (`torch.cuda.is_available()` returns True).
+  - Run the CUDA perf test (skipped on CPU or on unsupported backends):
+    - `pytest -q tests/tamiyo/test_policy_gnn.py::test_policy_inference_perf_budget_cuda_compile`
+  - The test compares p95 latency of eager vs compile‑on for a representative graph. It skips if the compile path falls back or raises during warmup/measurement. When it runs, the expectation is compile p95 ≤ max(45 ms, eager p95 × 1.10).
+  - Troubleshooting compile performance:
+    - Set `TORCH_LOGS=recompiles` to diagnose excessive dynamo recompiles.
+    - Verify TF32 is enabled and autocast is on (see policy init). Disable downstream ops that mutate module parameters during inference.

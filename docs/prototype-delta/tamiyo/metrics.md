@@ -50,6 +50,8 @@ Notes
 - tamiyo.gnn.feature_coverage (ratio) — average graph feature coverage (legacy summary)
 - tamiyo.gnn.feature_coverage.<type> (ratio) — per‑type coverage for node/edge families (e.g., `node.seed`, `edges.layer_connects`, `edges.seed_monitors`)
 - degraded_inputs (event) — reason=`degraded_inputs`, severity escalated based on coverage thresholds; routed to emergency when HIGH/CRITICAL
+- tamiyo.gnn.compile_enabled (bool) — 1.0 when torch.compile is active for policy forward; 0.0 when running eager
+- tamiyo.gnn.compile_fallback_total (count) — cumulative compile fallbacks (init/runtime) since process start; absent when zero
 
 Annotations on `AdaptationCommand` (WP15)
 - feature_coverage — average ratio (backward compatible)
