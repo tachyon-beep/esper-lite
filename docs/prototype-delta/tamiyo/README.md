@@ -42,6 +42,7 @@ Documents in this folder:
 - `traceability-map.md` — mapping of design assertions to code/tests
 - `implementation-roadmap.md` — ordered plan to close gaps without tech debt
 - `pytorch-2.8-upgrades.md` — mandatory hetero‑GNN inference upgrades (compile, inference_mode, TF32, data transfer)
+- `graph_metadata_schema.md` — schema for Urza `extras.graph_metadata` consumed by Tamiyo (layers, activations, parameters, adjacency, monitors)
 
 Design sources:
 - `docs/design/detailed_design/03-tamiyo-unified-design.md`

@@ -116,6 +116,7 @@ def test_graph_builder_schema(tmp_path: pytest.PathLike) -> None:
             {"name": "beta", "min": -0.5, "max": 0.5, "span": 1.0, "default": 0.0},
         ],
         "capabilities": {"allowed_blending_methods": ["linear", "cosine"]},
+        "adjacency": {"layer": [[0, 1]]},
     }
 
     cfg = TamiyoGraphBuilderConfig(
@@ -170,7 +171,7 @@ def test_graph_builder_schema(tmp_path: pytest.PathLike) -> None:
     assert graph[("layer", "feeds", "activation")].edge_attr.shape == (4, 3)
     assert graph[("seed", "allowed", "parameter")].edge_attr.shape == (4, 3)
     assert graph[("global", "annotates", "blueprint")].edge_attr.shape == (1, 3)
-    assert graph[("layer", "connects", "layer")].edge_attr.shape[0] in {0, 1}
+    assert graph[("layer", "connects", "layer")].edge_attr.shape[0] == 1
     assert graph[("seed", "monitors", "layer")].edge_attr.shape[1] == 3
 
     blueprint_vec = graph["blueprint"].x[0]
@@ -185,6 +186,9 @@ def test_graph_builder_schema(tmp_path: pytest.PathLike) -> None:
     coverage = getattr(graph, "feature_coverage", {})
     assert coverage
     assert coverage["seed.learning_rate"] <= 1.0
+    # Edge coverage markers included
+    assert "edges.layer_connects" in coverage
+    assert "edges.seed_monitors" in coverage
 
 
 def test_policy_select_action_populates_annotations() -> None:
@@ -241,6 +245,30 @@ def test_seed_masks_absent_fields() -> None:
     assert float(vec[11]) == 0.0
     # Stage mask (position 9) should be present (1.0)
     assert float(vec[9]) == 1.0
+
+
+def test_layer_connects_edges_from_adjacency() -> None:
+    blueprint_id = "BP-ADJ"
+    meta = {
+        "graph": {
+            "layers": [
+                {"layer_id": f"{blueprint_id}-L0", "type": "linear", "depth": 0},
+                {"layer_id": f"{blueprint_id}-L1", "type": "relu", "depth": 1},
+                {"layer_id": f"{blueprint_id}-L2", "type": "relu", "depth": 2},
+            ],
+            "adjacency": {"layer": [[0, 1], [1, 2]]},
+        }
+    }
+    builder = TamiyoGraphBuilder(
+        TamiyoGraphBuilderConfig(
+            max_layers=3,
+            blueprint_metadata_provider=lambda bp: meta if bp == blueprint_id else {},
+        )
+    )
+    packet = leyline_pb2.SystemStatePacket(version=1, packet_id=blueprint_id, training_run_id="run-adj")
+    graph = builder.build(packet)
+    edge_index = graph[("layer", "connects", "layer")].edge_index
+    assert edge_index.shape[1] == 2
 
 
 def test_layer_activation_parameter_masks_when_missing_metadata() -> None:

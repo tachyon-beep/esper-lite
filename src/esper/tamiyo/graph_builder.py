@@ -202,10 +202,12 @@ class TamiyoGraphBuilder:
             data,
             packet,
             metadata,
+            graph_meta,
             seed_caps,
             len(layer_ids),
             len(activation_ids),
             len(parameter_ids),
+            coverage,
         )
         self._normalizer.flush()
         data.feature_coverage = coverage.summary()
@@ -624,10 +626,12 @@ class TamiyoGraphBuilder:
         data: HeteroData,
         packet: leyline_pb2.SystemStatePacket,
         metadata: Mapping[str, float | str | bool | int],
+        graph_meta: Mapping[str, object],
         seed_capabilities: Sequence[dict[str, float]],
         layer_count: int,
         activation_count: int,
         parameter_count: int,
+        coverage: _CoverageTracker,
     ) -> None:
         edge_dim = self._cfg.edge_feature_dim
         risk = float(metadata.get("risk", 0.0) or 0.0)
@@ -764,44 +768,143 @@ class TamiyoGraphBuilder:
         else:
             _set_edge(("parameter", "targets", "blueprint"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
 
-        # layer connectivity chain
-        if layer_count > 1:
+        # layer connectivity from extras adjacency, fallback to simple chain
+        pairs: list[tuple[int, int]] = []
+        if isinstance(graph_meta, Mapping):
+            adj = graph_meta.get("adjacency")
+            layer_pairs = None
+            if isinstance(adj, Mapping):
+                layer_pairs = adj.get("layer")
+            elif isinstance(adj, list):
+                layer_pairs = adj
+            if isinstance(layer_pairs, list):
+                for p in layer_pairs:
+                    if isinstance(p, (list, tuple)) and len(p) >= 2:
+                        s = int(p[0]); d = int(p[1])
+                        if 0 <= s < layer_count and 0 <= d < layer_count:
+                            pairs.append((s, d))
+        if pairs:
+            src = torch.tensor([s for s, _ in pairs], dtype=torch.long)
+            dst = torch.tensor([d for _, d in pairs], dtype=torch.long)
+            attrs_ll = [[layers_depth[s], layers_depth[d], risk] for s, d in pairs]
+            _set_edge(("layer", "connects", "layer"), src, dst, attrs_ll)
+            coverage.observe("edges.layer_connects", True)
+        elif layer_count > 1:
             src = torch.arange(layer_count - 1, dtype=torch.long)
             dst = torch.arange(1, layer_count, dtype=torch.long)
-            attrs_ll = [
-                [layers_depth[s], layers_depth[d], risk]
-                for s, d in zip(src.tolist(), dst.tolist(), strict=False)
-            ]
+            attrs_ll = [[layers_depth[s], layers_depth[d], risk] for s, d in zip(src.tolist(), dst.tolist(), strict=False)]
             _set_edge(("layer", "connects", "layer"), src, dst, attrs_ll)
+            coverage.observe("edges.layer_connects", True)
         else:
             _set_edge(("layer", "connects", "layer"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+            coverage.observe("edges.layer_connects", False)
 
-        # seed monitors layer (approximate by layer depth)
+        # seed monitors layer; prefer explicit extras, fallback to layer_depth heuristic
         if seed_count and layer_count:
-            src_indices = []
-            dst_indices = []
-            attrs_sl = []
-            for idx, cap in enumerate(seed_capabilities):
-                depth_raw = int(round(cap.get("layer_depth", 0.0)))
-                depth = max(0, min(layer_count - 1, depth_raw))
-                src_indices.append(idx)
-                dst_indices.append(depth)
-                attrs_sl.append([
-                    cap.get("stage", 0.0),
-                    cap.get("risk", 0.0),
-                    layers_depth[depth] if layer_count else 0.0,
-                ])
+            src_indices: list[int] = []
+            dst_indices: list[int] = []
+            attrs_sl: list[list[float]] = []
+            # Parse optional explicit monitors from extras
+            explicit_pairs: list[tuple[int, int, float | None]] = []
+            seed_ids_list: list[str] = list(getattr(data["seed"], "node_ids", []))
+            monitors_block = graph_meta.get("monitors") if isinstance(graph_meta, Mapping) else None
+            if isinstance(graph_meta, Mapping):
+                monitored_layers = graph_meta.get("monitored_layers")
+                if isinstance(monitored_layers, list):
+                    for entry in monitored_layers:
+                        if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                            s = int(entry[0]); d = int(entry[1])
+                            w = float(entry[2]) if len(entry) >= 3 else None
+                            if 0 <= s < seed_count and 0 <= d < layer_count:
+                                explicit_pairs.append((s, d, w))
+            if isinstance(monitors_block, Mapping):
+                by_seed_id = monitors_block.get("by_seed_id")
+                if isinstance(by_seed_id, Mapping):
+                    for sid, layers in by_seed_id.items():
+                        try:
+                            sidx = seed_ids_list.index(str(sid))
+                        except ValueError:
+                            continue
+                        if isinstance(layers, list):
+                            for d in layers:
+                                try:
+                                    di = int(d)
+                                except Exception:
+                                    continue
+                                if 0 <= di < layer_count:
+                                    explicit_pairs.append((sidx, di, None))
+                by_seed_index = monitors_block.get("by_seed_index")
+                if isinstance(by_seed_index, Mapping):
+                    for s, layers in by_seed_index.items():
+                        try:
+                            sidx = int(s)
+                        except Exception:
+                            continue
+                        if not (0 <= sidx < seed_count):
+                            continue
+                        if isinstance(layers, list):
+                            for d in layers:
+                                try:
+                                    di = int(d)
+                                except Exception:
+                                    continue
+                                if 0 <= di < layer_count:
+                                    explicit_pairs.append((sidx, di, None))
+            thresholds = {}
+            if isinstance(monitors_block, Mapping):
+                th = monitors_block.get("thresholds") or monitors_block.get("monitors_thresholds")
+                if isinstance(th, Mapping):
+                    thresholds = dict(th)
+            def _passes_threshold(sidx: int) -> bool:
+                cap = seed_capabilities[sidx] if 0 <= sidx < len(seed_capabilities) else {}
+                try:
+                    if "risk_max" in thresholds and float(cap.get("risk", 0.0)) > float(thresholds["risk_max"]):
+                        return False
+                except Exception:
+                    pass
+                try:
+                    if "stage_min" in thresholds and float(cap.get("stage", 0.0)) < float(thresholds["stage_min"]):
+                        return False
+                except Exception:
+                    pass
+                return True
+
+            if explicit_pairs:
+                for sidx, didx, w in explicit_pairs:
+                    if not _passes_threshold(sidx):
+                        continue
+                    cap = seed_capabilities[sidx] if 0 <= sidx < len(seed_capabilities) else {}
+                    src_indices.append(sidx)
+                    dst_indices.append(didx)
+                    last_attr = float(w) if w is not None else (layers_depth[didx] if layer_count else 0.0)
+                    attrs_sl.append([cap.get("stage", 0.0), cap.get("risk", 0.0), last_attr])
+            else:
+                for idx, cap in enumerate(seed_capabilities):
+                    if not _passes_threshold(idx):
+                        continue
+                    depth_raw = int(round(cap.get("layer_depth", 0.0)))
+                    depth = max(0, min(layer_count - 1, depth_raw))
+                    src_indices.append(idx)
+                    dst_indices.append(depth)
+                    attrs_sl.append([
+                        cap.get("stage", 0.0),
+                        cap.get("risk", 0.0),
+                        layers_depth[depth] if layer_count else 0.0,
+                    ])
             if src_indices:
                 seed_tensor = torch.tensor(src_indices, dtype=torch.long)
                 layer_tensor = torch.tensor(dst_indices, dtype=torch.long)
                 _set_edge(("seed", "monitors", "layer"), seed_tensor, layer_tensor, attrs_sl)
                 _set_edge(("layer", "monitored_by", "seed"), layer_tensor, seed_tensor, attrs_sl)
+                coverage.observe("edges.seed_monitors", True)
             else:
                 _set_edge(("seed", "monitors", "layer"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
                 _set_edge(("layer", "monitored_by", "seed"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+                coverage.observe("edges.seed_monitors", False)
         else:
             _set_edge(("seed", "monitors", "layer"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
             _set_edge(("layer", "monitored_by", "seed"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+            coverage.observe("edges.seed_monitors", False)
 
         # layer feeds activation (alias for activates)
         if layer_count and activation_count:
