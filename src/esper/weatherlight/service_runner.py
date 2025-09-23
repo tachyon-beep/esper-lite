@@ -553,17 +553,37 @@ class WeatherlightService:
             if self._tamiyo_service is not None:
                 tpkts = self._tamiyo_service.telemetry_packets
                 if tpkts:
-                    last = tpkts[-1]
                     bsds_prov = None
                     bsds_hazard = None
-                    for ev in last.events:
-                        if ev.description in {"bsds_hazard_critical", "bsds_hazard_high", "bsds_present", "bsds_handling_quarantine"}:
-                            bsds_prov = ev.attributes.get("provenance") or bsds_prov
-                            bsds_hazard = ev.attributes.get("hazard") or bsds_hazard
+                    # Search most-recent-first for any BSDS-related events
+                    for pkt in reversed(tpkts):
+                        for ev in pkt.events:
+                            if ev.description in {"bsds_hazard_critical", "bsds_hazard_high", "bsds_present", "bsds_handling_quarantine"}:
+                                bsds_prov = ev.attributes.get("provenance") or bsds_prov
+                                bsds_hazard = ev.attributes.get("hazard") or bsds_hazard
+                        if bsds_prov and bsds_hazard:
+                            break
                     if bsds_prov:
                         indicators["bsds_provenance"] = str(bsds_prov).lower()
                     if bsds_hazard:
                         indicators["bsds_hazard"] = str(bsds_hazard).upper()
+                    # Fallback: inspect Tamiyo blueprint cache for BSDS mirror
+                    if ("bsds_provenance" not in indicators or "bsds_hazard" not in indicators) and hasattr(self._tamiyo_service, "_blueprint_cache"):
+                        cache = getattr(self._tamiyo_service, "_blueprint_cache", {})
+                        for _ts, payload in cache.values():
+                            try:
+                                bsds_block = payload.get("bsds") if isinstance(payload, dict) else None
+                                if isinstance(bsds_block, dict):
+                                    if "bsds_provenance" not in indicators:
+                                        prov = bsds_block.get("provenance")
+                                        if isinstance(prov, str) and prov:
+                                            indicators["bsds_provenance"] = prov.lower()
+                                    if "bsds_hazard" not in indicators:
+                                        haz = bsds_block.get("hazard_band") or bsds_block.get("hazard")
+                                        if isinstance(haz, str) and haz:
+                                            indicators["bsds_hazard"] = haz.upper()
+                            except Exception:
+                                continue
         except Exception:  # pragma: no cover - defensive
             pass
 
