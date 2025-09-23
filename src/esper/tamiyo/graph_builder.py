@@ -474,8 +474,13 @@ class TamiyoGraphBuilder:
                 coverage.observe("layer.dropout", descriptor.get("dropout_rate") is not None)
             if dim > 7:
                 features[idx, 7] = self._encode_category(layer_type)
+                coverage.observe("layer.type", descriptor.get("type") is not None)
             if dim > 8:
                 features[idx, 8] = self._encode_category(activation_type)
+                coverage.observe(
+                    "layer.activation",
+                    descriptor.get("activation") is not None or descriptor.get("activation_type") is not None,
+                )
             if dim > 9:
                 features[idx, 9] = self._normalizer.normalize("layer_weight_norm", weight_norm)
                 coverage.observe("layer.weight_norm", bool(weight_norm))

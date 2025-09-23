@@ -244,6 +244,69 @@ def test_seed_masks_absent_fields() -> None:
     assert float(vec[9]) == 1.0
 
 
+def test_layer_activation_parameter_masks_when_missing_metadata() -> None:
+    builder = TamiyoGraphBuilder(TamiyoGraphBuilderConfig(max_layers=2, max_activations=2, max_parameters=1))
+    packet = leyline_pb2.SystemStatePacket(version=1, training_run_id="run-missing-meta")
+    # No graph metadata provided; builder should fallback to zeros/masks and not crash
+    graph = builder.build(packet)
+    # Layers present with default count; mask bits indicate missing
+    layer_vec = graph["layer"].x[0]
+    assert graph["layer"].x.shape == (2, builder._cfg.layer_feature_dim)  # type: ignore[attr-defined]
+    assert float(layer_vec[1]) == 0.0  # depth presence mask
+    assert float(layer_vec[3]) == 0.0  # latency presence mask
+    assert float(layer_vec[5]) == 0.0  # param_count presence mask
+    assert float(layer_vec[11]) == 0.0  # descriptor presence sentinel
+    # Activations present with default count; mask indicates descriptor missing
+    act_vec = graph["activation"].x[0]
+    assert graph["activation"].x.shape == (2, builder._cfg.activation_feature_dim)  # type: ignore[attr-defined]
+    assert float(act_vec[1]) == 0.0  # descriptor presence mask
+    # Parameters fallback to allowed/default descriptor; masks indicate presence
+    param_vec = graph["parameter"].x[0]
+    assert graph["parameter"].x.shape == (1, builder._cfg.parameter_feature_dim)  # type: ignore[attr-defined]
+    assert float(param_vec[1]) == 1.0  # min present
+    assert float(param_vec[3]) == 1.0  # max present
+    assert float(param_vec[5]) == 1.0  # span present
+    assert float(param_vec[7]) == 1.0  # default present
+
+
+def test_layer_mask_toggles_with_metadata() -> None:
+    # With metadata present
+    blueprint_id = "BP-META"
+    meta_with = {
+        "graph": {
+            "layers": [
+                {"layer_id": f"{blueprint_id}-L0", "depth": 0, "latency_ms": 4.0, "parameter_count": 16},
+            ]
+        }
+    }
+    builder = TamiyoGraphBuilder(
+        TamiyoGraphBuilderConfig(
+            max_layers=1,
+            layer_feature_dim=12,
+            blueprint_metadata_provider=lambda bp: meta_with if bp == blueprint_id else {},
+        )
+    )
+    packet = leyline_pb2.SystemStatePacket(version=1, packet_id=blueprint_id, training_run_id="run-mask")
+    graph_with = builder.build(packet)
+    vec_with = graph_with["layer"].x[0]
+    assert float(vec_with[1]) == 1.0  # depth present mask
+    assert float(vec_with[3]) == 1.0  # latency present mask
+
+    # Without those fields
+    meta_without = {"graph": {"layers": [{"layer_id": f"{blueprint_id}-L0"}]}}
+    builder2 = TamiyoGraphBuilder(
+        TamiyoGraphBuilderConfig(
+            max_layers=1,
+            layer_feature_dim=12,
+            blueprint_metadata_provider=lambda bp: meta_without if bp == blueprint_id else {},
+        )
+    )
+    graph_without = builder2.build(packet)
+    vec_without = graph_without["layer"].x[0]
+    assert float(vec_without[1]) == 0.0  # depth absent mask
+    assert float(vec_without[3]) == 0.0  # latency absent mask
+
+
 def test_policy_compile_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     def _raise_compile(*_args, **_kwargs):  # pragma: no cover - deliberately triggered
         raise RuntimeError("compile disabled for test")
