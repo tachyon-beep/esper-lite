@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+import contextlib
 
 import pytest
 from fakeredis.aioredis import FakeRedis
@@ -183,5 +184,67 @@ async def test_weatherlight_flushes_tamiyo_history(
             (p.source_subsystem == "tamiyo" and any(m.name == "tamiyo.gnn.feature_coverage" for m in p.metrics))
             for p in published
         )
+    finally:
+        await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_weatherlight_flushes_kasmina_pending(
+    fake_redis: FakeRedis,
+    weatherlight_settings: EsperSettings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = WeatherlightService(settings=weatherlight_settings)
+    await service.start()
+    try:
+        # Stop the background Kasmina telemetry loop to avoid races in this unit test
+        if service._kasmina_telemetry_task is not None:  # type: ignore[attr-defined]
+            service._kasmina_telemetry_task.cancel()  # type: ignore[attr-defined]
+            with contextlib.suppress(Exception):
+                await asyncio.sleep(0)  # yield control for cancellation
+
+        # Provide a stub Kasmina manager with a single buffered packet
+        pkt = build_telemetry_packet(
+            packet_id="kasmina-1",
+            source="kasmina",
+            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+            metrics=[TelemetryMetric("kasmina.test", 1.0)],
+            events=[],
+        )
+
+        class _StubKasmina:
+            def __init__(self, p: leyline_pb2.TelemetryPacket) -> None:
+                self._p = p
+                self._drained = False
+
+            def drain_telemetry_packets(self) -> list[leyline_pb2.TelemetryPacket]:
+                if self._drained:
+                    return []
+                self._drained = True
+                return [self._p]
+
+        # Swap in the stub
+        service._kasmina_manager = _StubKasmina(pkt)  # type: ignore[attr-defined]
+
+        published: list[leyline_pb2.TelemetryPacket] = []
+
+        async def _capture_publish(
+            packet: leyline_pb2.TelemetryPacket,
+            *,
+            priority: leyline_pb2.MessagePriority = leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL,
+        ) -> None:
+            published.append(packet)
+
+        async def _noop_metrics_telemetry(**_kwargs: object) -> None:
+            return None
+
+        assert service._oona is not None  # type: ignore[attr-defined]
+        monkeypatch.setattr(service._oona, "publish_telemetry", _capture_publish)
+        monkeypatch.setattr(service._oona, "emit_metrics_telemetry", _noop_metrics_telemetry)
+
+        # Flush Weatherlight telemetry once (should also forward Kasmina stub packet)
+        await service._flush_telemetry_once()  # type: ignore[attr-defined]
+
+        assert any(p.source_subsystem == "kasmina" for p in published)
     finally:
         await service.shutdown()

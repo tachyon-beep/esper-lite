@@ -77,6 +77,23 @@ Weatherlight exposes Urabrask bench worker counters in its telemetry packet. The
     - Query (KQL): `metrics.name: "urabrask.bench.last_processed" and source: "weatherlight"`
     - Aggregation: Max per time bucket → Bar/Line
 
+## Crucible Hazards (Prototype)
+
+Crucible v1 emits additional hazard keys in the BSDS mirror (extras["bsds"]["hazards"]):
+- `memory_watermark`: ok | high
+- `oom_risk`: ok | risk
+
+Suggested panels (ES datasource; doc‑only until Nissa indexes hazards):
+- Memory Watermark Incidents (Table/Bar)
+  - Count occurrences of `hazards.memory_watermark: "high"` over time windows.
+- OOM Risk Flags (Table/Bar)
+  - Count occurrences of `hazards.oom_risk: "risk"` over time windows.
+
+Operational flags:
+- `URABRASK_CRUCIBLE_MEMORY_WATERMARK_MB` — threshold in MB (default 64.0)
+- `URABRASK_CRUCIBLE_ALLOW_OOM` — enable OOM probe (default false)
+- `URABRASK_CRUCIBLE_SIMULATE_OOM` — CI‑safe risk flag without real allocation (default false)
+
 
 ## Weatherlight Producer Stats (Telemetry)
 - Weatherlight emits `urabrask.*` metrics in its telemetry packet (not Prometheus native unless ingested):

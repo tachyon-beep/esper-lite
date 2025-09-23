@@ -2,7 +2,7 @@
 
 This document breaks down the remaining Tamiyo implementation work into small, testable packages. Each package lists scope, code changes, files, tests, and acceptance criteria so we can land incrementally and keep CI green.
 
-Context: Aligns with `GNN-WP1.md`, `diff/gnn-inputs.md`, `diff/input-remediation-plan.md`, `timeout-matrix.md`, `telemetry.md`, `decision-taxonomy.md`, and `risk-engine.md`. Weatherlight remains unchanged (3A tight coupling); contracts stay Leyline-first.
+Context: Aligns with `GNN-WP1.md`, `diff/gnn-inputs.md`, `diff/input-remediation-plan.md`, `timeout-matrix.md`, `telemetry.md`, `decision-taxonomy.md`, and `risk-engine.md`. No contract changes; Weatherlight includes a small telemetry drain (WP11) to call `TamiyoService.publish_history` each flush (3A tight coupling preserved).
 
 ## Libraries & Dependencies Guidance
 
@@ -20,9 +20,9 @@ Context: Aligns with `GNN-WP1.md`, `diff/gnn-inputs.md`, `diff/input-remediation
 - Phase 1: Tamiyo internals — WP1–WP4
 - Phase 2: Upstream producers & caches — WP5–WP7
 - Phase 3: Tolaria & Kasmina enrichment — WP8–WP10
-- Phase 4: Observability & routing — WP11–WP13
-- Phase 5: Registries & parity — WP14–WP15
-- Phase 6: Docs & hardening — WP16
+- Phase 4: Observability & routing — WP11–WP13 (DELIVERED)
+- Phase 5: Registries & parity — WP14–WP15 (DELIVERED)
+- Phase 6: Docs & hardening — WP16 (THIS PR)
 
 ---
 
@@ -169,9 +169,15 @@ Context: Aligns with `GNN-WP1.md`, `diff/gnn-inputs.md`, `diff/input-remediation
 
 ## WP16 — Docs Sync & Operator Notes
 
-- Scope: Update `tamiyo` delta docs with implemented inputs, norms location, coverage semantics, and Weatherlight drain behavior.
-- Changes: refresh `README.md`, `GNN-WP1.md`, `diff/gnn-inputs.md`, `diff/input-remediation-plan.md` as needed.
+- Scope: Update `tamiyo` delta docs with implemented inputs, norms location, coverage semantics (average + per-type), extended registries (layer/activation/optimizer/hazard), and Weatherlight drain behavior.
+- Changes: refresh `README.md`, `GNN-WP1.md`, `diff/gnn-inputs.md`, `diff/input-remediation-plan.md` to reflect:
+  - WP11 Weatherlight telemetry drain calling `TamiyoService.publish_history` each flush
+  - WP12 degraded-inputs emergency routing via priority mapping
+  - WP13 Nissa ingest of coverage and BSDS-lite metrics + alert rules
+  - WP14 registry parity with Simic and checkpoint digests
+  - WP15 granular (typed) coverage in telemetry and annotations
 - Activity: Evaluate default builder feature dimensions (e.g., `layer_feature_dim`, `activation_feature_dim`) to include categorical presence-mask scalars by default. If accepted, update defaults, code comments, and test shape assertions; otherwise, document the rationale for keeping them optional.
+- Activity: Evaluate default builder feature dimensions (e.g., `layer_feature_dim`, `activation_feature_dim`) to include categorical presence-mask scalars by default. Decision: keep presence masks optional (behind extended dims) to avoid increasing the default tensor footprint in tight step budgets; document rationale in README and tests assert masks only when dims are extended.
 - Files: `docs/prototype-delta/tamiyo/*`.
 - Tests: doc-only.
 - Acceptance: docs reflect current state; PRs reference updated sections.

@@ -1,6 +1,6 @@
 # BSDS‑Lite JSON Schema (Prototype; Mirrors Leyline `BSDS`)
 
-Fields (all optional unless noted). Consumers must ignore unknown fields. Canonical definitions live in Leyline as enums/messages (Day 1); these JSON fields mirror them for Urza extras transport.
+Fields (all optional unless noted). Consumers must ignore unknown fields. Canonical definitions live in Leyline as enums/messages (Day 1); these JSON fields mirror them for Urza extras transport. For automated validation, see the machine‑readable JSON Schema at `docs/prototype-delta/speculative/bsds-lite/schema.json`.
 
 - `risk_score` (number, 0.0–1.0)
   - Overall risk in [0,1]; if present, takes precedence over descriptor `risk`.

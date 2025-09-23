@@ -20,6 +20,9 @@ Replace the feed-forward Tamiyo policy stub with the 4-layer hetero-GNN architec
 2. Updated `TamiyoPolicy` wiring, including graph assembly from `SystemStatePacket`, registry integration, device management, and inference optimisation (`torch.compile`, autocast, TF32).
 3. Performance + correctness test suite proving inference results, regression coverage, and p95 latency ≤45 ms under representative load.
 4. Documentation updates explaining the new architecture, inputs, and deployment notes.
+5. Registry parity and coverage semantics (WP14–WP15):
+   - Persist and share categorical registries (layer/activation/optimizer/hazard) with Simic; embed registry digests in checkpoints for load-time validation.
+   - Emit coverage both as an average and as per-type ratios (node/edge families) to aid downstream diagnosis; attach the full per-key map and per-type map as command annotations.
 
 ## Work Breakdown
 
@@ -38,7 +41,10 @@ Replace the feed-forward Tamiyo policy stub with the 4-layer hetero-GNN architec
 ### 3. Feature & Graph Construction
    - Expand packet encoding: build hetero graph nodes for numeric metrics, seeds, blueprints, and global context; ensure graceful handling of missing data.
    - Normalise numerical features (e.g., z-score or min-max per design); add masks where metrics are absent.
-   - Maintain embedding registries for categorical IDs; persist to the same JSON files expected by Simic.
+   - Maintain embedding registries for categorical IDs; persist to the same JSON files expected by Simic. Pre-seed common optimizer families (sgd/adam/adamw/rmsprop/adagrad) to stabilize indices.
+   - Coverage semantics:
+     - Per-key mask coverage is tracked for every feature; builder exposes `feature_coverage` and the typed aggregation `feature_coverage_types` with counts‑weighted ratios.
+     - Service exports telemetry for average and per-type coverage and attaches both to AdaptationCommand annotations.
 
    **Normalisation Constants & Storage**
    - Metrics (`loss`, `gradient_norm`, `samples_per_s`, `hook_latency_ms`) → maintain exponentially-weighted mean/variance (α=0.1) persisted under `var/tamiyo/gnn_norms.json`; initialise with design-provided priors (`loss`: μ=0.8, σ=0.3; `gradient_norm`: μ=1.0, σ=0.5; `samples_per_s`: μ=4500, σ=500; `hook_latency_ms`: μ=12, σ=6).

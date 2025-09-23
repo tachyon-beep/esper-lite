@@ -42,3 +42,29 @@ Design sources:
 Implementation evidence (primary):
 - `src/esper/nissa/observability.py`, `src/esper/nissa/alerts.py`, `src/esper/nissa/slo.py`, `src/esper/nissa/server.py`, `src/esper/nissa/service_runner.py`
 - Tests: `tests/nissa/test_observability.py`
+
+## Granular Tamiyo Coverage Metrics (WP15)
+
+Nissa ingests Tamiyo’s coverage telemetry and exposes it under Prometheus. Operators and dashboards should expect the following metric names:
+
+- `tamiyo.gnn.feature_coverage` — average coverage ratio (legacy summary)
+- `tamiyo.gnn.feature_coverage.node.seed`
+- `tamiyo.gnn.feature_coverage.node.layer`
+- `tamiyo.gnn.feature_coverage.node.activation`
+- `tamiyo.gnn.feature_coverage.node.parameter`
+- `tamiyo.gnn.feature_coverage.node.blueprint`
+- `tamiyo.gnn.feature_coverage.node.global`
+- `tamiyo.gnn.feature_coverage.edges.layer_connects`
+- `tamiyo.gnn.feature_coverage.edges.seed_monitors`
+- `tamiyo.gnn.feature_coverage.edges.layer_feeds`
+- `tamiyo.gnn.feature_coverage.edges.layer_activates`
+- `tamiyo.gnn.feature_coverage.edges.activation_configures`
+- `tamiyo.gnn.feature_coverage.edges.parameter_modulates`
+- `tamiyo.gnn.feature_coverage.edges.blueprint_composes`
+- `tamiyo.gnn.feature_coverage.edges.parameter_targets`
+- `tamiyo.gnn.feature_coverage.edges.global_influences`
+- `tamiyo.gnn.feature_coverage.edges.seed_reports`
+- `tamiyo.gnn.feature_coverage.edges.global_operates`
+- `tamiyo.gnn.feature_coverage.edges.layer_feedback`
+
+Annotations attached to `AdaptationCommand` include `coverage_map` (bounded) and `coverage_types` (typed aggregation) to aid root cause analysis in dashboards. Weatherlight drains Tamiyo’s telemetry each flush (WP11), so these time series reflect near‑real‑time state.

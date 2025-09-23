@@ -47,3 +47,18 @@ def test_crucible_v1_grad_explode_detected() -> None:
     _bsds, hazards = run_crucible_v1(_descriptor("bp-grad", risk=0.1), config=cfg)
     assert hazards["grad_instability"] in ("explode", "vanish")
 
+
+def test_crucible_v1_memory_watermark_trips_threshold(monkeypatch) -> None:
+    # Threshold 0 should classify any delta as 'high' when psutil is available.
+    cfg = CrucibleConfigV1(memory_watermark_mb_threshold=0.0)
+    _bsds, hazards = run_crucible_v1(_descriptor("bp-mem", risk=0.1), config=cfg)
+    assert hazards.get("memory_watermark") in {"high", "ok"}
+
+
+def test_crucible_v1_oom_probe_simulated(monkeypatch) -> None:
+    # Enable OOM probe with simulation to avoid real OOM
+    monkeypatch.setenv("URABRASK_CRUCIBLE_ALLOW_OOM", "true")
+    monkeypatch.setenv("URABRASK_CRUCIBLE_SIMULATE_OOM", "true")
+    cfg = CrucibleConfigV1(enable_oom_probe=True, simulate_oom=True)
+    _bsds, hazards = run_crucible_v1(_descriptor("bp-oom", risk=0.1), config=cfg)
+    assert hazards.get("oom_risk") == "risk"

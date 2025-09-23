@@ -44,3 +44,17 @@ Feature flag: set `EsperSettings.tolaria_step_enrichment_enabled = False` to sup
 Notes
 - All metrics are emitted under the Leyline contracts; consumers should treat missing values as 0.0/unavailable.
 - Tamiyo risk engine maps latency/drift/pressure signals to WARN/HIGH events and action routing.
+
+## Tamiyo Telemetry (Service → Oona via Weatherlight)
+
+- tamiyo.gnn.feature_coverage (ratio) — average graph feature coverage (legacy summary)
+- tamiyo.gnn.feature_coverage.<type> (ratio) — per‑type coverage for node/edge families (e.g., `node.seed`, `edges.layer_connects`, `edges.seed_monitors`)
+- degraded_inputs (event) — reason=`degraded_inputs`, severity escalated based on coverage thresholds; routed to emergency when HIGH/CRITICAL
+
+Annotations on `AdaptationCommand` (WP15)
+- feature_coverage — average ratio (backward compatible)
+- coverage_map — bounded per‑key coverage map for diagnostics
+- coverage_types — typed aggregation map matching per‑type metrics
+
+Export Path
+- Weatherlight drains Tamiyo’s telemetry buffer every flush by calling `TamiyoService.publish_history()`, ensuring these metrics and events reach Oona/Nissa without manual intervention (WP11).

@@ -7,7 +7,8 @@ battery lands.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
+import contextlib
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Mapping, Tuple
@@ -18,6 +19,7 @@ from torch.nn import functional as F
 
 from esper.karn import BlueprintDescriptor, BlueprintTier
 from esper.leyline import leyline_pb2
+from esper.core import EsperSettings
 
 
 @dataclass(slots=True)
@@ -114,6 +116,11 @@ class CrucibleConfigV1:
     # Internal knobs
     grad_weight_scale: float = 10.0  # larger -> more likely explode
     train_steps: int = 5
+    # WP8.2 additions
+    memory_watermark_mb_threshold: float = 64.0
+    enable_oom_probe: bool = False
+    oom_allocation_mb: int = 2048
+    simulate_oom: bool = False
 
 
 def _set_determinism() -> None:
@@ -151,6 +158,22 @@ def run_crucible_v1(
     config: CrucibleConfigV1 | None = None,
 ) -> Tuple[leyline_pb2.BSDS, dict[str, str]]:
     cfg = config or CrucibleConfigV1()
+    # Fold in environment-driven safety flags
+    try:
+        settings = EsperSettings()
+        if settings.urabrask_crucible_memory_watermark_mb is not None:
+            cfg.memory_watermark_mb_threshold = float(settings.urabrask_crucible_memory_watermark_mb)
+        cfg.enable_oom_probe = bool(settings.urabrask_crucible_allow_oom)
+        cfg.simulate_oom = bool(settings.urabrask_crucible_simulate_oom)
+    except Exception:
+        pass
+    _t0 = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None  # type: ignore[attr-defined]
+    _t1 = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None  # type: ignore[attr-defined]
+    if _t0 is not None and _t1 is not None:
+        try:
+            _t0.record()
+        except Exception:
+            _t0 = _t1 = None
     # Note: avoid setting global deterministic algorithms to not affect CUDA tests elsewhere
 
     # Inputs
@@ -218,6 +241,35 @@ def run_crucible_v1(
     osc_std = statistics.pstdev(losses) if len(losses) > 1 else 0.0
     osc_status = "high" if osc_std > cfg.oscillation_std_threshold else "ok"
 
+    # 5) Memory watermark (process RSS delta)
+    mem_status = "ok"
+    try:
+        import psutil  # type: ignore
+
+        proc = psutil.Process()
+        rss_before = float(proc.memory_info().rss) / (1024.0 * 1024.0)
+        # Light allocation workload to perturb memory slightly
+        _tmp = [torch.randn(16, 16) for _ in range(2)]
+        rss_after = float(proc.memory_info().rss) / (1024.0 * 1024.0)
+        delta = max(0.0, rss_after - rss_before)
+        if delta > max(0.0, float(cfg.memory_watermark_mb_threshold)):
+            mem_status = "high"
+    except Exception:
+        mem_status = "ok"
+
+    # 6) OOM risk probe (guarded)
+    oom_status = "ok"
+    if cfg.enable_oom_probe:
+        try:
+            if cfg.simulate_oom:
+                raise RuntimeError("simulated_oom")
+            # Attempt to allocate a large buffer on CPU; immediately free
+            elements = max(1, int((cfg.oom_allocation_mb * 1024 * 1024) / 4))
+            t = torch.empty(elements, dtype=torch.float32)
+            del t
+        except Exception:
+            oom_status = "risk"
+
     # Aggregate scoring
     score = 0.0
     if nan_status == "present":
@@ -230,6 +282,10 @@ def run_crucible_v1(
         score += 0.2
     if osc_status == "high":
         score += 0.2
+    if mem_status == "high":
+        score += 0.2
+    if oom_status == "risk":
+        score += 0.3
     score = min(1.0, risk_base + score)
 
     # Map to band and handling
@@ -276,6 +332,95 @@ def run_crucible_v1(
         nan_inf=nan_status,
         precision="sensitive" if prec_status == "sensitive" else "ok",
         oscillation=osc_status,
+        memory_watermark=mem_status,
+        oom_risk=oom_status,
     )
+    # Measure duration
+    duration_ms = 0.0
+    if _t0 is not None and _t1 is not None:
+        try:
+            _t1.record()
+            torch.cuda.synchronize()  # type: ignore[attr-defined]
+            duration_ms = float(_t0.elapsed_time(_t1))
+        except Exception:
+            duration_ms = 0.0
+    else:
+        # Fallback: coarse wall time not tracked; leave 0.0 to keep overhead tiny
+        duration_ms = 0.0
+
+    # Persist minimal result bundle per WP8.1
+    try:
+        settings = EsperSettings()
+        _persist_result_bundle(
+            blueprint_id=bsds.blueprint_id,
+            bsds=bsds,
+            hazards=hazards,
+            duration_ms=duration_ms,
+            config_snapshot=asdict(cfg),
+            settings=settings,
+        )
+    except Exception:
+        pass
+
     return bsds, hazards
+
+
+def _persist_result_bundle(
+    *,
+    blueprint_id: str,
+    bsds: leyline_pb2.BSDS,
+    hazards: Mapping[str, str],
+    duration_ms: float,
+    config_snapshot: Mapping[str, object],
+    settings: EsperSettings,
+) -> None:
+    # Build path
+    artifacts_root = Path(settings.urabrask_crucible_artifacts_dir)
+    bundle_dir = artifacts_root / blueprint_id
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    # File name with issued_at timestamp to ensure stable order
+    issued = bsds.issued_at.ToDatetime().replace(tzinfo=UTC).isoformat().replace("+00:00", "Z")
+    safe_issued = issued.replace(":", "-")
+    file_path = bundle_dir / f"{safe_issued}.json"
+    # Prepare minimal JSON bundle
+    bsds_json = {
+        "version": int(bsds.version),
+        "blueprint_id": bsds.blueprint_id,
+        "risk_score": float(bsds.risk_score),
+        "hazard_band": leyline_pb2.HazardBand.Name(bsds.hazard_band).replace("HAZARD_BAND_", ""),
+        "handling_class": leyline_pb2.HandlingClass.Name(bsds.handling_class).replace("HANDLING_CLASS_", "").lower(),
+        "resource_profile": leyline_pb2.ResourceProfile.Name(bsds.resource_profile).replace("RESOURCE_PROFILE_", "").lower(),
+        "provenance": leyline_pb2.Provenance.Name(bsds.provenance).replace("PROVENANCE_", ""),
+        "issued_at": issued,
+    }
+    payload = {
+        "artifact_version": 1,
+        "crucible_version": "v1",
+        "blueprint_id": blueprint_id,
+        "bsds": bsds_json,
+        "hazards": dict(hazards),
+        "timings": {"duration_ms": float(duration_ms)},
+        "config": dict(config_snapshot),
+    }
+    try:
+        import json
+
+        with file_path.open("w", encoding="utf-8") as f:
+            json.dump(payload, f, sort_keys=True, separators=(",", ":"))
+            f.write("\n")
+    except Exception:
+        return
+    # Retention by count (keep newest N)
+    try:
+        keep = max(1, int(settings.urabrask_crucible_artifacts_keep))
+    except Exception:
+        keep = 5
+    try:
+        entries = sorted([p for p in bundle_dir.glob("*.json") if p.is_file()])
+        excess = max(0, len(entries) - keep)
+        for p in entries[:excess]:
+            with contextlib.suppress(Exception):
+                p.unlink()
+    except Exception:
+        pass
     

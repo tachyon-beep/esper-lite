@@ -50,3 +50,18 @@ Also see:
 - `bsds-lite-integration.md` — transport via Urza extras and consumer mapping.
 - `../speculative/bsds-lite/` — JSON schema + examples (mirror of Leyline BSDS for prototype transport).
 - `metrics.md` — prototype metrics/alerts; `timeout-matrix.md` — budgets.
+
+Crucible v1 Hazards & Flags (Prototype)
+- New hazard signals produced by Crucible v1 (extras["bsds"]["hazards"]) in addition to existing ones:
+  - `memory_watermark`: "ok" | "high" — derived from process RSS delta across a tiny workload
+  - `oom_risk`: "ok" | "risk" — guarded probe that flags if an allocation fails (or simulation enabled)
+- Environment flags (all default to safe/off):
+  - `URABRASK_CRUCIBLE_MEMORY_WATERMARK_MB` (float, MB): threshold for `memory_watermark`; defaults to 64.0 MB
+  - `URABRASK_CRUCIBLE_ALLOW_OOM` (bool): enable the OOM risk probe; defaults to false
+  - `URABRASK_CRUCIBLE_SIMULATE_OOM` (bool): force OOM probe to report risk without a real allocation (CI‑safe)
+- Result bundles on disk (WP8.1):
+  - Location: `URABRASK_CRUCIBLE_ARTIFACTS_DIR` (default `./var/urabrask/crucible/<blueprint_id>/<issued_at>.json`)
+  - Retention: keep newest `URABRASK_CRUCIBLE_ARTIFACTS_KEEP` (default 5) per blueprint
+- Signing + WAL (WP8.0):
+  - Enable signing: `URABRASK_SIGNING_ENABLED=true` with `ESPER_LEYLINE_SECRET` set
+  - WAL path: `URABRASK_WAL_PATH` (default `./var/urza/urabrask_wal.jsonl`), append‑only hash chain

@@ -181,4 +181,34 @@ class EsperSettings(BaseSettings):
     urabrask_bench_topn: int = Field(alias="URABRASK_BENCH_TOPN", default=3)
     urabrask_bench_timeout_ms: int = Field(alias="URABRASK_BENCH_TIMEOUT_MS", default=500)
 
+    # -----------------------------
+    # Urabrask (Signing + WAL)
+    # -----------------------------
+    urabrask_signing_enabled: bool = Field(alias="URABRASK_SIGNING_ENABLED", default=False)
+    urabrask_wal_path: str = Field(alias="URABRASK_WAL_PATH", default="./var/urza/urabrask_wal.jsonl")
+
+    # -----------------------------
+    # Urabrask (Crucible artifacts)
+    # -----------------------------
+    urabrask_crucible_artifacts_dir: str = Field(
+        alias="URABRASK_CRUCIBLE_ARTIFACTS_DIR", default="./var/urabrask/crucible"
+    )
+    urabrask_crucible_artifacts_keep: int = Field(
+        alias="URABRASK_CRUCIBLE_ARTIFACTS_KEEP", default=5
+    )
+
+    # -----------------------------
+    # Urabrask (Crucible v1 probes)
+    # -----------------------------
+    urabrask_crucible_allow_oom: bool = Field(
+        alias="URABRASK_CRUCIBLE_ALLOW_OOM", default=False
+    )
+    urabrask_crucible_memory_watermark_mb: float = Field(
+        alias="URABRASK_CRUCIBLE_MEMORY_WATERMARK_MB", default=64.0
+    )
+    # Test/dev helper to avoid real OOM allocations
+    urabrask_crucible_simulate_oom: bool = Field(
+        alias="URABRASK_CRUCIBLE_SIMULATE_OOM", default=False
+    )
+
 __all__ = ["EsperSettings"]

@@ -47,14 +47,16 @@ All categorical values require maintained registries with deterministic indexing
 | Relation | Attributes Needed | Source |
 | --- | --- | --- |
 | `layer` ↔ `layer` (`connects`) | `connection_strength`, `data_flow_volume`, `latency_ms`, optional `residual_flag` | Urza blueprint graph + Tolaria profiler metrics |
-| `layer` → `activation` (`feeds`) | `activation_frequency`, `saturation_events` | Urza blueprint + Tolaria hooks |
-| `activation` → `layer` (`influences`) | `gradient_contribution`, `nonlinearity_strength` | Derived from Tolaria gradient tracing |
-| `parameter` → `layer` (`tunes`) | `update_magnitude`, `convergence_rate`, `optimizer_family` | Tolaria optimizer stats + Urza metadata |
+| `layer` → `activation` (`feeds`/`activates`) | `activation_frequency`, `saturation_events` | Urza blueprint + Tolaria hooks |
+| `activation` → `layer` (`influences`/`affects`) | `gradient_contribution`, `nonlinearity_strength` | Derived from Tolaria gradient tracing |
+| `activation` → `parameter` (`configures`) | link to parameter influence | Blueprint model topology |
+| `parameter` → `activation` (`modulates`) | magnitude, effect | Derived/metadata |
+| `parameter` → `blueprint` (`targets`) | categorical target | Blueprint metadata |
 | `seed` → `layer` (`monitors`) | `monitoring_frequency`, `adaptation_trigger_threshold`, `quarantine_flag` | Kasmina seed exports |
 | `seed` → `parameter` (`allowed`) | Multi-hot compatibility (blending/optimizer) | Kasmina capability registry (future export) |
 | Global edges (`context` → `layer`/`seed`) | broadcast scalars (latency budget utilisation, conservative mode) | Tamiyo service state |
 
-Each edge type must include forward and reverse indices for PyG hetero convolutions. Missing attributes should be zero-filled with matching mask channels and logged via coverage telemetry.
+Each edge type must include forward and reverse indices for PyG hetero convolutions. Missing attributes should be zero-filled with matching mask channels and logged via coverage telemetry. The builder exports per-key coverage and a typed aggregation for node/edge families to support observability.
 
 ## 4. Normalisation & Masking Artefacts
 - Maintain EWMA mean/variance for core metrics (`loss`, `gradient_norm`, `samples_per_s`, `hook_latency_ms`) in `var/tamiyo/gnn_norms.json` with α=0.1 and epsilon=1e-6.
@@ -76,12 +78,12 @@ Each edge type must include forward and reverse indices for PyG hetero convoluti
 - Tolaria currently lacks per-layer `data_flow_volume`, `gradient_contribution`, and activation saturation metrics—needs profiler extensions.
 - Kasmina does not yet export allowed blending/optimizer compatibility; must extend seed capability payloads.
 - Urabrask BSDS feed must be wired into Tamiyo runtime (currently unused) with caching to avoid blocking inference.
-- Telemetry to populate `tamiyo.gnn.feature_coverage` and BSDS degradation flags remains unimplemented.
+- Telemetry to populate `tamiyo.gnn.feature_coverage` and BSDS degradation flags — DELIVERED. Average and per‑type coverage metrics emitted; degraded‑inputs events raised based on thresholds.
 
 ## 8. Telemetry Export Gaps & Integration Tasks
-- **Tamiyo telemetry is trapped locally.** `TamiyoService` already records the feature-coverage ratio (and other GNN metrics) into its telemetry packet cache, but those packets are only flushed when `publish_history` is invoked manually; Weatherlight’s background telemetry loop ignores them and forwards only its own snapshot plus Tezzeret packets. Align the prototype with the telemetry-hub requirement by draining Tamiyo’s queue on each Weatherlight flush (or invoking `publish_history`) so coverage and BSDS degradation signals reach Oona/Nissa without an operator-driven export step.【F:src/esper/tamiyo/service.py†L244-L289】【F:src/esper/tamiyo/service.py†L1137-L1148】【F:src/esper/weatherlight/service_runner.py†L601-L614】【F:docs/prototype-delta/tamiyo/delta-matrix.md†L5-L18】【F:docs/prototype-delta/tamiyo/implementation-roadmap.md†L5-L38】【F:scripts/run_demo.py†L169-L205】
-- **No downstream consumer sees per-feature coverage.** The graph builder tracks per-feature presence and attaches a summary to the PyG `HeteroData`; `TamiyoPolicy` retains that summary in memory but never surfaces it in `AdaptationCommand` annotations. Extend the command payload (or provide an auxiliary telemetry packet) so Kasmina and other consumers can react to missing-signal coverage without scraping Tamiyo-only metrics.【F:src/esper/tamiyo/graph_builder.py†L200-L213】【F:src/esper/tamiyo/graph_builder.py†L805-L821】【F:src/esper/tamiyo/policy.py†L153-L273】【F:src/esper/kasmina/seed_manager.py†L687-L771】
-- **Telemetry hub still missing by design.** The delta matrix and roadmap both call for Tamiyo to aggregate telemetry from Tolaria/Kasmina as part of the WP1 upgrade; today the service emits its own metrics only. Wiring Tamiyo’s telemetry export into Weatherlight should be accompanied by the wider aggregation work (ingesting Kasmina packets from the existing queue, normalising them, and re-emitting a consolidated view) so Kasmina, Tolaria, and Tamiyo stay in lock-step with the documented telemetry taxonomy.【F:docs/prototype-delta/tamiyo/delta-matrix.md†L5-L18】【F:docs/prototype-delta/tamiyo/implementation-roadmap.md†L5-L38】【F:src/esper/weatherlight/service_runner.py†L329-L360】
+- Status: Tamiyo telemetry drain — CLOSED (WP11). Weatherlight now calls `TamiyoService.publish_history()` during each flush so Tamiyo coverage/BSDS signals reach Oona/Nissa automatically (no contract changes). See `src/esper/weatherlight/service_runner.py::_flush_telemetry_once` and `src/esper/tamiyo/service.py::publish_history`.
+- Status: Per-feature coverage export — CLOSED (WP15). The builder exposes per-key and typed coverage; Tamiyo attaches `coverage_map` and `coverage_types` to `AdaptationCommand` annotations and emits `tamiyo.gnn.feature_coverage.<type>` metrics. See `src/esper/tamiyo/graph_builder.py` and `src/esper/tamiyo/service.py`.
+- **Telemetry hub still missing by design.** The delta matrix and roadmap both call for Tamiyo to aggregate telemetry from Tolaria/Kasmina as part of the WP1 upgrade; today the service emits its own metrics only. Wiring Tamiyo’s telemetry export into Weatherlight should be accompanied by the wider aggregation work (ingesting Kasmina packets from the existing queue, normalising them, and re-emitting a consolidated view) so Kasmina, Tolaria, and Tamiyo stay in lock-step with the documented telemetry taxonomy.
 
 ## 9. End-State Hetero-GNN Posture
 

@@ -12,6 +12,8 @@ from datetime import UTC
 from esper.urza import UrzaLibrary
 from esper.leyline import leyline_pb2
 from esper.karn import BlueprintDescriptor
+from esper.core import EsperSettings
+from esper.urabrask.wal import attach_signature_and_wal
 
 from .bsds import compute_bsds
 from .benchmarks import run_benchmarks, BenchmarkConfig
@@ -38,6 +40,14 @@ def produce_and_attach_bsds(
     # Merge extras to preserve existing metadata
     extras = dict(record.extras or {})
     extras["bsds"] = bsds_json
+    # Optional signing + WAL append
+    settings = EsperSettings()
+    attach_signature_and_wal(
+        extras=extras,
+        blueprint_id=record.metadata.blueprint_id,
+        bsds_json=bsds_json,
+        settings=settings,
+    )
     urza.save(record.metadata, record.artifact_path, extras=extras)
     return record.metadata, bsds_json
 
@@ -74,6 +84,14 @@ def produce_bsds_via_crucible(
         bsds_json["hazards"] = dict(hazards)
     extras = dict(record.extras or {})
     extras["bsds"] = bsds_json
+    # Optional signing + WAL append
+    settings = EsperSettings()
+    attach_signature_and_wal(
+        extras=extras,
+        blueprint_id=record.metadata.blueprint_id,
+        bsds_json=bsds_json,
+        settings=settings,
+    )
     urza.save(record.metadata, record.artifact_path, extras=extras)
     return bsds
 

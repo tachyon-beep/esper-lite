@@ -92,10 +92,9 @@ Implementation evidence (primary):
 Registry & Coverage Notes (prototype)
 
 - Deterministic registries persist to JSON under `var/tamiyo/`:
-  - `seed_registry.json` and `blueprint_registry.json` (categorical indices for embedding stability)
-  - `schedule_registry.json` (pre-seeded with `TamiyoPolicyConfig.blending_methods` for stable schedule/category indices)
-- The GNN normalizer persists EWMA mean/var to `var/tamiyo/gnn_norms.json` and the graph builder emits per-feature coverage masks.
-- `TamiyoService` attaches an aggregate coverage summary to commands as `annotations["feature_coverage"]` and emits `tamiyo.gnn.feature_coverage` telemetry.
+  - `layer_type_registry.json`, `activation_type_registry.json`, `optimizer_family_registry.json`, `hazard_class_registry.json` (WP14)
+- The GNN normalizer persists EWMA mean/var to `var/tamiyo/gnn_norms.json`.
+- Coverage: the graph builder emits per-feature coverage and typed aggregates; `TamiyoService` exports the average metric `tamiyo.gnn.feature_coverage`, per‑type metrics `tamiyo.gnn.feature_coverage.<type>`, and attaches `coverage_map` and `coverage_types` annotations (WP15).
 
 
 How To Use This Packet (for PR owners)
@@ -119,7 +118,7 @@ Checklist
 - [ ] Tests run: <commands>; Results: <summary>
 - [ ] Budgets: step-evaluate p95 < N ms; inference p95 < 45 ms; no trainer stall
 - [ ] Telemetry: expected events/metrics observed; priorities correct; Oona routing verified
-- [ ] 3A constraints respected (Weatherlight unchanged; no new contracts)
+ - [ ] 3A constraints respected (no contract changes; Weatherlight telemetry drain per WP11)
 ```
 
 ## Latest Performance Snapshot
@@ -136,6 +135,11 @@ Checklist
 - Downstream consumers should rescale these fractions into absolute steps if a different unit is required.
 
 ## WP9 — Kasmina Seed Exports (Minimal)
+
+## WP11 — Weatherlight Telemetry Drain
+
+- Weatherlight now invokes `TamiyoService.publish_history()` during its periodic flush so Tamiyo telemetry (including coverage and BSDS-lite flags) reaches Oona/Nissa automatically.
+- No contract changes; this satisfies the “telemetry hub” behavior for Tamiyo in the prototype and keeps Kasmina/Tolaria integration unchanged.
 
 Intent: Improve Tamiyo seed feature coverage without changing Leyline contracts by enriching Kasmina's `SeedState` exports via the existing `metrics` map.
 

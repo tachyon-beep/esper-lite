@@ -699,6 +699,28 @@ class WeatherlightService:
                 await self._tamiyo_service.publish_history(self._oona)
             except Exception as exc:  # pragma: no cover - defensive forwarding
                 LOGGER.debug("Failed to forward Tamiyo history: %s", exc)
+        # Opportunistically drain Kasmina's buffered telemetry on each flush as well.
+        # Kasmina also streams via a dedicated loop; this call is a best-effort
+        # additional drain to reduce latency for pending packets.
+        if self._kasmina_manager is not None:
+            try:
+                packets = self._kasmina_manager.drain_telemetry_packets()
+            except Exception as exc:  # pragma: no cover - defensive
+                LOGGER.debug("Failed to drain Kasmina packets: %s", exc)
+                packets = []
+            for packet in packets:
+                try:
+                    priority_name = packet.system_health.indicators.get(
+                        "priority",
+                        "MESSAGE_PRIORITY_NORMAL",
+                    )
+                    try:
+                        priority_enum = leyline_pb2.MessagePriority.Value(priority_name)
+                    except ValueError:
+                        priority_enum = leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
+                    await self._oona.publish_telemetry(packet, priority=priority_enum)
+                except Exception as exc:  # pragma: no cover - defensive forwarding
+                    LOGGER.debug("Failed to forward Kasmina packet: %s", exc)
         await self._oona.emit_metrics_telemetry(
             source_subsystem="weatherlight.oona",
             level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
