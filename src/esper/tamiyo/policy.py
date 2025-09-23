@@ -186,6 +186,7 @@ class TamiyoPolicy(nn.Module):
         self._blending_methods = cfg.blending_methods
         self._last_action: dict[str, float | str] = {}
         self._last_feature_coverage: dict[str, float] = {}
+        self._last_feature_coverage_types: dict[str, float] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -193,6 +194,7 @@ class TamiyoPolicy(nn.Module):
     def select_action(self, packet: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
         graph = self._graph_builder.build(packet)
         coverage = dict(getattr(graph, "feature_coverage", {}))
+        coverage_types = dict(getattr(graph, "feature_coverage_types", {}))
         seed_candidates = list(getattr(graph["seed"], "node_ids", []))
         seed_capabilities = list(getattr(graph["seed"], "capabilities", []))
         seed_fallback_scores = getattr(graph["seed"], "candidate_scores", None)
@@ -243,6 +245,7 @@ class TamiyoPolicy(nn.Module):
                 "selected_blueprint_index": -1.0,
             }
             self._last_feature_coverage = coverage
+            self._last_feature_coverage_types = coverage_types
             return command
         if self._device.type == "cuda" and hasattr(graph, "pin_memory"):
             with contextlib.suppress(Exception):
@@ -360,6 +363,7 @@ class TamiyoPolicy(nn.Module):
             "selected_blueprint_index": float(selected_blueprint_idx),
         }
         self._last_feature_coverage = coverage
+        self._last_feature_coverage_types = coverage_types
         return command
 
     @property
@@ -377,6 +381,10 @@ class TamiyoPolicy(nn.Module):
     @property
     def feature_coverage(self) -> dict[str, float]:
         return dict(self._last_feature_coverage)
+
+    @property
+    def feature_coverage_types(self) -> dict[str, float]:
+        return dict(self._last_feature_coverage_types)
 
     def update_blueprint_metadata(
         self, metadata: Mapping[str, Mapping[str, float | str | bool | int]]

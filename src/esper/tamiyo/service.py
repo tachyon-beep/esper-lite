@@ -322,6 +322,68 @@ class TamiyoService:
                 )
             )
             command.annotations.setdefault("feature_coverage", f"{average_coverage:.3f}")
+            # WP15: emit granular coverage by type and attach full map
+            try:
+                # Group keys by type prefix
+                groups: dict[str, list[float]] = {
+                    "node.seed": [],
+                    "node.layer": [],
+                    "node.activation": [],
+                    "node.parameter": [],
+                    "node.blueprint": [],
+                    "node.global": [],
+                    "edges.layer_connects": [],
+                    "edges.seed_monitors": [],
+                    "edges.layer_feeds": [],
+                }
+                for key, val in coverage.items():
+                    if key.startswith("seed."):
+                        groups["node.seed"].append(float(val))
+                    elif key.startswith("layer."):
+                        groups["node.layer"].append(float(val))
+                    elif key.startswith("activation."):
+                        groups["node.activation"].append(float(val))
+                    elif key.startswith("parameter."):
+                        groups["node.parameter"].append(float(val))
+                    elif key.startswith("blueprint."):
+                        groups["node.blueprint"].append(float(val))
+                    elif key.startswith("global."):
+                        groups["node.global"].append(float(val))
+                    elif key == "edges.layer_connects":
+                        groups["edges.layer_connects"].append(float(val))
+                    elif key == "edges.seed_monitors":
+                        groups["edges.seed_monitors"].append(float(val))
+                    elif key == "edges.layer_feeds":
+                        groups["edges.layer_feeds"].append(float(val))
+                # Prefer builder-provided typed coverage when available
+                per_type: dict[str, float] = {}
+                try:
+                    per_type = dict(getattr(self._policy, "feature_coverage_types", {}) or {})
+                except Exception:
+                    per_type = {}
+                if not per_type:
+                    for gkey, arr in groups.items():
+                        if arr:
+                            per_type[gkey] = float(sum(arr) / max(1, len(arr)))
+                # Emit telemetry metrics for each type
+                for gkey, ratio in per_type.items():
+                    metrics.append(
+                        TelemetryMetric(
+                            f"tamiyo.gnn.feature_coverage.{gkey}",
+                            ratio,
+                            unit="ratio",
+                        )
+                    )
+                # Attach full map + types to command annotations (bounded)
+                import json as _json
+                cov_json = _json.dumps(coverage)
+                types_json = _json.dumps(per_type)
+                # Size guard ~ 1KB per field
+                if len(cov_json) <= 1024:
+                    command.annotations.setdefault("coverage_map", cov_json)
+                command.annotations.setdefault("coverage_types", types_json)
+            except Exception:  # pragma: no cover - defensive
+                pass
         if "blending_method" in last_action:
             metrics.append(
                 TelemetryMetric(

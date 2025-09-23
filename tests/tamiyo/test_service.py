@@ -153,6 +153,14 @@ def test_tamiyo_service_generates_command(tmp_path) -> None:
     assert "feature_coverage" in command.annotations
     cov = float(command.annotations["feature_coverage"])  # type: ignore[arg-type]
     assert 0.0 <= cov <= 1.0
+    # WP15: granular coverage present in annotations and telemetry
+    assert "coverage_types" in command.annotations
+    import json as _json
+    types = _json.loads(command.annotations["coverage_types"])  # type: ignore[arg-type]
+    assert any(k.startswith("node.") or k.startswith("edges.") for k in types.keys())
+    # Telemetry contains per-type metrics
+    metric_names = {m.name for m in telemetry.metrics}
+    assert any(n.startswith("tamiyo.gnn.feature_coverage.node.") for n in metric_names)
 
 
 @pytest.mark.asyncio

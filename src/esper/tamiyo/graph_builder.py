@@ -224,7 +224,48 @@ class TamiyoGraphBuilder:
             coverage,
         )
         self._normalizer.flush()
-        data.feature_coverage = coverage.summary()
+        cov_map = coverage.summary()
+        data.feature_coverage = cov_map
+        # WP15: expose typed per-family coverage
+        def _aggregate(groups: dict[str, list[float]]) -> dict[str, float]:
+            return {k: (sum(v) / max(1, len(v))) for k, v in groups.items() if v}
+
+        groups: dict[str, list[float]] = {
+            "node.seed": [],
+            "node.layer": [],
+            "node.activation": [],
+            "node.parameter": [],
+            "node.blueprint": [],
+            "node.global": [],
+            "edges.layer_connects": [],
+            "edges.seed_monitors": [],
+            "edges.layer_feeds": [],
+            "edges.layer_activates": [],
+            "edges.activation_configures": [],
+            "edges.parameter_modulates": [],
+            "edges.blueprint_composes": [],
+            "edges.parameter_targets": [],
+            "edges.global_influences": [],
+            "edges.seed_reports": [],
+            "edges.global_operates": [],
+            "edges.layer_feedback": [],
+        }
+        for key, val in cov_map.items():
+            if key.startswith("seed."):
+                groups["node.seed"].append(float(val))
+            elif key.startswith("layer."):
+                groups["node.layer"].append(float(val))
+            elif key.startswith("activation."):
+                groups["node.activation"].append(float(val))
+            elif key.startswith("parameter."):
+                groups["node.parameter"].append(float(val))
+            elif key.startswith("blueprint."):
+                groups["node.blueprint"].append(float(val))
+            elif key.startswith("global."):
+                groups["node.global"].append(float(val))
+            elif key in groups:
+                groups[key].append(float(val))
+        data.feature_coverage_types = _aggregate(groups)
         return data
 
     # ------------------------------------------------------------------
@@ -752,9 +793,13 @@ class TamiyoGraphBuilder:
             attrs = [[1.0, cap.get("stage", 0.0), cap.get("risk", 0.0)] for cap in seed_capabilities]
             _set_edge(("global", "influences", "seed"), global_src, seed_dst, attrs)
             _set_edge(("seed", "reports", "global"), seed_dst, global_src, attrs)
+            coverage.observe("edges.global_influences", True)
+            coverage.observe("edges.seed_reports", True)
         else:
             _set_edge(("global", "influences", "seed"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
             _set_edge(("seed", "reports", "global"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+            coverage.observe("edges.global_influences", False)
+            coverage.observe("edges.seed_reports", False)
 
         # global ↔ blueprint
         if blueprint_count:
@@ -781,6 +826,8 @@ class TamiyoGraphBuilder:
         attrs_layers = [[1.0, depth, risk] for depth in layers_depth]
         _set_edge(("global", "operates", "layer"), torch.zeros(layer_count, dtype=torch.long), layer_indices, attrs_layers)
         _set_edge(("layer", "feedback", "global"), layer_indices, torch.zeros(layer_count, dtype=torch.long), attrs_layers)
+        coverage.observe("edges.global_operates", bool(layer_count))
+        coverage.observe("edges.layer_feedback", bool(layer_count))
 
         # layer ↔ activation
         activation_indices = torch.arange(activation_count, dtype=torch.long)
@@ -791,9 +838,11 @@ class TamiyoGraphBuilder:
             attrs_la = [[layers_depth[i], activation_ratio[j], 1.0] for i in range(layer_count) for j in range(activation_count)]
             _set_edge(("layer", "activates", "activation"), src, dst, attrs_la)
             _set_edge(("activation", "affects", "layer"), dst, src, attrs_la)
+            coverage.observe("edges.layer_activates", True)
         else:
             _set_edge(("layer", "activates", "activation"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
             _set_edge(("activation", "affects", "layer"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+            coverage.observe("edges.layer_activates", False)
 
         # activation ↔ parameter
         parameter_indices = torch.arange(parameter_count, dtype=torch.long)
@@ -804,9 +853,13 @@ class TamiyoGraphBuilder:
             attrs_ap = [[activation_ratio[i], param_ratio[j], 1.0] for i in range(activation_count) for j in range(parameter_count)]
             _set_edge(("activation", "configures", "parameter"), src, dst, attrs_ap)
             _set_edge(("parameter", "modulates", "activation"), dst, src, attrs_ap)
+            coverage.observe("edges.activation_configures", True)
+            coverage.observe("edges.parameter_modulates", True)
         else:
             _set_edge(("activation", "configures", "parameter"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
             _set_edge(("parameter", "modulates", "activation"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+            coverage.observe("edges.activation_configures", False)
+            coverage.observe("edges.parameter_modulates", False)
 
         # seed ↔ parameter capability edges (WP10): build only when allowances present; mask otherwise
         if seed_count and parameter_count:
@@ -916,6 +969,7 @@ class TamiyoGraphBuilder:
         else:
             _set_edge(("blueprint", "composes", "layer"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
             _set_edge(("layer", "belongs_to", "blueprint"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+        coverage.observe("edges.blueprint_composes", bool(layer_count and blueprint_count))
 
         # blueprint ↔ activation
         if blueprint_count and activation_count:
@@ -934,6 +988,7 @@ class TamiyoGraphBuilder:
             _set_edge(("parameter", "targets", "blueprint"), src, dst, attrs_pb)
         else:
             _set_edge(("parameter", "targets", "blueprint"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+        coverage.observe("edges.parameter_targets", bool(parameter_count and blueprint_count))
 
         # layer connectivity from extras adjacency, fallback to simple chain
         pairs: list[tuple[int, int]] = []
@@ -1079,8 +1134,10 @@ class TamiyoGraphBuilder:
             dst = activation_indices.repeat(layer_count)
             attrs_feed = [[layers_depth[i], activation_ratio[j], 1.0] for i in range(layer_count) for j in range(activation_count)]
             _set_edge(("layer", "feeds", "activation"), src, dst, attrs_feed)
+            coverage.observe("edges.layer_feeds", True)
         else:
             _set_edge(("layer", "feeds", "activation"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+            coverage.observe("edges.layer_feeds", False)
 
 
     @staticmethod
