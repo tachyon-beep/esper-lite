@@ -11,7 +11,6 @@ Design: docs/prototype-delta/kasmina/blending-upgrade.md
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import IntEnum
 from typing import Iterable, Optional
 
 import torch
@@ -40,18 +39,6 @@ class AlphaBlender:
         return alpha_clamped * seed + (1.0 - alpha_clamped) * host.detach()
 
 
-class BlendMode(IntEnum):
-    """Internal executor-only blend modes.
-
-    These names are intentionally aligned with Tamiyo P8 annotations.
-    """
-
-    CONVEX = 0
-    RESIDUAL = 1
-    CHANNEL = 2
-    CONFIDENCE = 3
-
-
 @dataclass(slots=True)
 class BlenderConfig:
     """Configuration for per-seed blending.
@@ -62,7 +49,7 @@ class BlenderConfig:
     - alpha_lo, alpha_hi: clamp bounds for effective alpha in confidence mode.
     """
 
-    mode: BlendMode = BlendMode.CONVEX
+    mode: str = "CONVEX"
     alpha_vec: Optional[Iterable[float]] = None
     gate_k: float = 4.0
     gate_tau: float = 0.2
@@ -162,18 +149,18 @@ def blend_with_config(
     alpha_base: float,
     config: BlenderConfig,
 ) -> torch.Tensor:
-    mode = BlendMode(config.mode)
-    if mode == BlendMode.CONVEX:
+    mode = (config.mode or "").upper()
+    if mode == "CONVEX":
         return blend_convex(host, seed, alpha_base)
-    if mode == BlendMode.RESIDUAL:
+    if mode == "RESIDUAL":
         return blend_residual(host, seed, alpha_base)
-    if mode == BlendMode.CHANNEL:
+    if mode == "CHANNEL":
         if config.alpha_vec is None:
             # Fallback to convex when vector missing
             return blend_convex(host, seed, alpha_base)
         alpha_vec = torch.as_tensor(list(config.alpha_vec), device=seed.device, dtype=seed.dtype)
         return blend_channelwise(host, seed, alpha_base, alpha_vec)
-    if mode == BlendMode.CONFIDENCE:
+    if mode == "CONFIDENCE":
         # Derive gate from seed logits; if shape unexpected, gate=1
         try:
             gate = compute_confidence_gate(seed, config.gate_k, config.gate_tau)
@@ -191,8 +178,13 @@ def blend_with_config(
     return blend_convex(host, seed, alpha_base)
 
 
-def blend_mode_name(mode: BlendMode | int) -> str:
+def blend_mode_name(mode: str | int) -> str:
+    if isinstance(mode, str):
+        m = mode.strip().upper()
+        return m if m in {"CONVEX", "RESIDUAL", "CHANNEL", "CONFIDENCE"} else "CONVEX"
     try:
-        return BlendMode(int(mode)).name
+        # Backward compatibility if integer sneaks in
+        mapping = {0: "CONVEX", 1: "RESIDUAL", 2: "CHANNEL", 3: "CONFIDENCE"}
+        return mapping.get(int(mode), "CONVEX")
     except Exception:
         return "CONVEX"

@@ -234,6 +234,8 @@ Telemetry helpers live in `src/esper/core/telemetry.py` and are used project‑w
 - Tolaria: `tolaria.training.{loss,accuracy,latency_ms}`, `tolaria.seeds.active`, `tolaria.epoch_hook.latency_ms`.
 - Tamiyo: `tamiyo.validation_loss`, `tamiyo.loss_delta`, `tamiyo.inference.latency_ms`, `tamiyo.conservative_mode`, `tamiyo.blueprint.risk`.
 - Kasmina: seed lifecycle/gates events, `kasmina.isolation.violations`, fetch latency, GPU cache stats; message priority as indicator in packet.
+  - Blend telemetry: event `blend_config` with attributes `{mode, source, alpha_vec_len}`; per-seed metrics `kasmina.seed.{alpha,alpha_steps}`.
+  - Pre-warm telemetry: `kasmina.prewarm.latency_ms` (global); per-seed metadata `prewarm_ms`.
 - Karn: `karn.selection.{safe,experimental,adversarial}`, `karn.selection.latency_ms`, breaker state/open count.
 - Tezzeret: compiler durations, prewarm times, eager fallbacks, forge breaker state and job counts.
 - Urza: `urza.library.{cache_hits,cache_misses,evictions,integrity_failures,slow_queries,breaker_state,conservative_mode}`; prefetch `{hits,misses,errors,latency_ms}`.

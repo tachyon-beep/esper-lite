@@ -4,7 +4,6 @@ import torch
 import pytest
 
 from esper.kasmina.blending import (
-    BlendMode,
     BlenderConfig,
     blend_residual,
     blend_channelwise,
@@ -76,7 +75,7 @@ def test_manager_blend_uses_config_when_present() -> None:
     seed_id = "seed-mode"
     mgr._seeds[seed_id] = SeedContext(seed_id)
     # Set config via helper
-    cfg = BlenderConfig(mode=BlendMode.RESIDUAL)
+    cfg = BlenderConfig(mode="RESIDUAL")
     mgr._set_blend_config_for_test(seed_id, cfg)
     # Also set alpha to a non-trivial value
     mgr._seeds[seed_id].alpha = 0.4  # type: ignore[index]

@@ -271,6 +271,27 @@ references (`docs/design/detailed_design/old/`).
 3. Re-run training with adjusted thresholds or revert to previous policy (Tamiyo
    retains last known-good policy in memory).
 
+### Kasmina Benchmarks
+
+Use `scripts/bench_kasmina.py` to capture quick, non-blocking snapshots for graft/attach latency, isolation overhead, and blend mode micro‑latency.
+
+Example:
+
+```bash
+python scripts/bench_kasmina.py \
+  --iterations 50 --latency-ms 2.0 \
+  --blend-mode RESIDUAL --alpha-base 0.5 --repeat 100
+```
+
+Flags:
+- `--isolation {on,off}`: toggle hook collection to measure overhead
+- `--blend-mode {CONVEX,RESIDUAL,CHANNEL,CONFIDENCE}`
+- `--alpha-base FLOAT`, `--alpha-vec CSV`
+- `--gate-k FLOAT`, `--gate-tau FLOAT`, `--alpha-lo FLOAT`, `--alpha-hi FLOAT`
+- `--repeat INT`, `--feature-shape "N,C"`
+
+Output includes: iterations, configured latency, mean/p95 handle time, GPU cache hit rate, isolation overhead, blend mode, blend latency.
+
 ## 6. Shutdown Procedures
 
 1. Gracefully stop application scripts (`Ctrl+C` for `run_demo.py`,

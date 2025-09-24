@@ -70,6 +70,14 @@ Policy update verification (TamiyoService)
 Inference compile warm-up (optional)
 - When `enable_compile=True` and running on CUDA, Tamiyo performs a best‑effort warm‑up forward on a tiny hetero‑graph at init. Telemetry includes `tamiyo.gnn.compile_warm_ms` when available.
 
+Blend‑Mode Annotations (prototype P8)
+- When enabled via `TAMIYO_ENABLE_BLEND_MODE_ANN=true`, Tamiyo annotates SEED commands to guide Kasmina’s executor‑side blending modes:
+  - `blend_mode`: one of `CONVEX`, `RESIDUAL`, `CHANNEL`, `CONFIDENCE` (default `CONVEX`)
+  - `blend_mode_source`: `override` or `heuristic` (provenance tag)
+  - For CONFIDENCE: `gate_k`, `gate_tau`, `alpha_lo`, `alpha_hi` (see `TAMIYO_BLEND_*` envs)
+  - For CHANNEL (when unambiguous and small): `alpha_vec` (JSON) + `alpha_vec_len`
+- Annotations coexist with existing schedule fields (`blending_method` and `blending_schedule_*`) and are size‑guarded. Kasmina’s executor consumes these hints to select blend kernels and parameters.
+
 Example (tuning for a constrained host)
 ```
 from esper.tamiyo.service import TamiyoService, RiskConfig

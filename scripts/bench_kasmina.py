@@ -16,7 +16,7 @@ import torch
 from torch import nn
 
 from esper.kasmina import KasminaSeedManager
-from esper.kasmina.blending import BlenderConfig, BlendMode, blend_with_config
+from esper.kasmina.blending import BlenderConfig, blend_with_config
 from esper.leyline import leyline_pb2
 
 
@@ -125,18 +125,15 @@ def run(
         cfg = None
         mode_name = (blend_mode or "").upper().strip()
         if mode_name:
-            try:
-                mode = BlendMode[mode_name]
-            except KeyError:
-                mode = BlendMode.CONVEX
+            mode = mode_name if mode_name in {"CONVEX", "RESIDUAL", "CHANNEL", "CONFIDENCE"} else "CONVEX"
             cfg = BlenderConfig(mode=mode)
-            if mode == BlendMode.CHANNEL and alpha_vec:
+            if mode == "CHANNEL" and alpha_vec:
                 try:
                     vec = [float(x) for x in alpha_vec.split(",")]
                     cfg.alpha_vec = vec
                 except Exception:
                     pass
-            if mode == BlendMode.CONFIDENCE:
+            if mode == "CONFIDENCE":
                 cfg.gate_k = gate_k
                 cfg.gate_tau = gate_tau
                 cfg.alpha_lo = alpha_lo

@@ -8,12 +8,13 @@ Baseline
 
 Mandatory changes
 
-1) Pre‑warm only in Kasmina; Tezzeret owns compilation
+1) Pre‑warm only in Kasmina; Tezzeret owns compilation — Implemented
 - What: Kasmina must not call `torch.compile`. Tezzeret pre‑compiles kernels; Kasmina only pre‑warms the loaded artifact to hydrate caches.
 - How:
-  - Kasmina: after attach, optionally run a single forward with a representative batch to pre‑warm (no compile calls).
+  - Kasmina: after attach, optionally runs a single forward with a representative batch to pre‑warm under `torch.inference_mode()` (no compile calls).
   - Tezzeret: see `docs/prototype-delta/tezzeret/pytorch-2.8-upgrades.md` for the mandatory `torch.compile` pipeline.
 - Acceptance: No runtime compilation in Kasmina; first BLENDING/TRAINING iterations do not pay compile latency.
+- Implementation: `KasminaSeedManager._attempt_prewarm()` invoked from `_finalise_kernel_attachment`; metric `kasmina.prewarm.latency_ms`; per-seed metadata `prewarm_ms`.
 
 2) Use `torch.inference_mode()` for SHADOWING/PROBATIONARY probes — Implemented
 - What: Wrap any forward probes during SHADOWING/PROBATIONARY in `torch.inference_mode()` to prevent autograd overhead and reduce memory churn.

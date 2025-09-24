@@ -27,7 +27,6 @@ from .blending import (
     AlphaBlender,
     AlphaSchedule,
     BlenderConfig,
-    BlendMode,
     blend_with_config,
     blend_mode_name,
 )
@@ -168,6 +167,7 @@ class KasminaSeedManager:
         self._nonce_ledger = NonceLedger(ttl_seconds=nonce_ttl_seconds, clock=self._clock)
         self._rollback_records: dict[str, struct_pb2.Struct] = {}
         self._last_rollback_latency_ms: float = 0.0
+        self._last_prewarm_latency_ms: float = 0.0
         self._teacher_model: nn.Module | None = None
         self._teacher_memory_budget_gb: float = 7.0
         self._teacher_memory_estimate_gb: float | None = None
@@ -396,13 +396,29 @@ class KasminaSeedManager:
                 mode_name = blend_mode_name(context.blend_config.mode)
             except Exception:
                 mode_name = "CONVEX"
+            attrs = {
+                "seed_id": seed_id,
+                "mode": mode_name,
+            }
+            source = context.metadata.get("blend_mode_source")
+            if source:
+                attrs["source"] = source
+            length_attr = None
+            try:
+                if context.blend_config.alpha_vec is not None:
+                    length_attr = len(list(context.blend_config.alpha_vec))
+            except Exception:
+                length_attr = None
+            if length_attr is None:
+                meta_len = context.metadata.get("alpha_vec_len")
+                if meta_len is not None:
+                    attrs["alpha_vec_len"] = str(meta_len)
+            else:
+                attrs["alpha_vec_len"] = str(length_attr)
             events.append(
                 TelemetryEvent(
                     description="blend_config",
-                    attributes={
-                        "seed_id": seed_id,
-                        "mode": mode_name,
-                    },
+                    attributes=attrs,
                 )
             )
 
@@ -605,6 +621,14 @@ class KasminaSeedManager:
                 unit="count",
             ),
         ]
+        if self._last_prewarm_latency_ms:
+            metrics.append(
+                TelemetryMetric(
+                    "kasmina.prewarm.latency_ms",
+                    float(self._last_prewarm_latency_ms),
+                    unit="ms",
+                )
+            )
         if not self._last_fallback_used and self._last_latency_ms:
             metrics.append(
                 TelemetryMetric(
@@ -762,6 +786,11 @@ class KasminaSeedManager:
                     },
                 )
             )
+            # Parse optional Tamiyo blend-mode annotations (WP-K7)
+            try:
+                self._apply_blend_annotations(seed_id, dict(command.annotations))
+            except Exception:
+                pass
             if operation == leyline_pb2.SEED_OP_GERMINATE:
                 events.extend(
                     self._graft_seed(seed_id, blueprint_id, parameters)
@@ -1496,11 +1525,107 @@ class KasminaSeedManager:
             self._ephemeral_seeds.add(seed_id)
         context.blend_config = config
 
+    def _apply_blend_annotations(self, seed_id: str, annotations: dict[str, str]) -> None:
+        """Parse Tamiyo P8 blend mode annotations into a per-seed BlenderConfig.
+
+        Safe defaults and clamps are applied; invalid inputs fall back to CONVEX.
+        """
+        mode_str = (annotations.get("blend_mode") or "").strip().upper()
+        if not mode_str:
+            return
+        mode = mode_str if mode_str in {"CONVEX", "RESIDUAL", "CHANNEL", "CONFIDENCE"} else "CONVEX"
+        cfg = BlenderConfig(mode=mode)
+
+        # Optional provenance tag for observability
+        source = annotations.get("blend_mode_source")
+        context = self._seeds.setdefault(seed_id, SeedContext(seed_id))
+        if source:
+            context.metadata["blend_mode_source"] = str(source)
+
+        if mode == "CONFIDENCE":
+            def _f(key: str, default: float) -> float:
+                try:
+                    return float(annotations.get(key, default))
+                except Exception:
+                    return default
+            cfg.gate_k = max(0.0, _f("gate_k", cfg.gate_k))
+            cfg.gate_tau = max(0.0, _f("gate_tau", cfg.gate_tau))
+            lo = max(0.0, min(1.0, _f("alpha_lo", cfg.alpha_lo)))
+            hi = max(0.0, min(1.0, _f("alpha_hi", cfg.alpha_hi)))
+            if hi < lo:
+                lo, hi = hi, lo
+            cfg.alpha_lo = lo
+            cfg.alpha_hi = hi
+        elif mode == "CHANNEL":
+            vec_json = annotations.get("alpha_vec")
+            if vec_json:
+                try:
+                    data = json.loads(vec_json)
+                    if isinstance(data, list):
+                        vec: list[float] = []
+                        for x in data:
+                            try:
+                                vec.append(float(max(0.0, min(1.0, float(x)))))
+                            except Exception:
+                                continue
+                        if vec:
+                            cfg.alpha_vec = vec
+                            context.metadata["alpha_vec_len"] = str(len(vec))
+                except Exception:
+                    # Fallback: permissive CSV-like parsing (strip brackets/spaces)
+                    try:
+                        s = vec_json.strip().lstrip("[").rstrip("]")
+                        parts = [p.strip() for p in s.split(",") if p.strip()]
+                        vec = [float(max(0.0, min(1.0, float(p)))) for p in parts]
+                        if vec:
+                            cfg.alpha_vec = vec
+                            context.metadata["alpha_vec_len"] = str(len(vec))
+                    except Exception:
+                        pass
+        # Store
+        context.blend_config = cfg
+
+    def _attempt_prewarm(self, context: SeedContext, kernel: nn.Module) -> None:
+        """Attempt a best-effort pre-warm forward to hydrate caches.
+
+        Uses a runtime-provided representative batch when available; otherwise noop.
+        Always runs under inference_mode and ignores failures.
+        """
+        getter = getattr(self._runtime, "get_prewarm_batch", None)
+        if not callable(getter):
+            return
+        blueprint_id = context.metadata.get("blueprint_id") or ""
+        try:
+            batch = getter(blueprint_id)
+        except Exception:
+            return
+        if batch is None:
+            return
+        timer = self._timer_factory()
+        with timer.measure() as m:
+            try:
+                with torch.inference_mode():
+                    if isinstance(batch, tuple):
+                        _ = kernel(*batch)
+                    else:
+                        _ = kernel(batch)
+            except Exception:
+                return
+        self._last_prewarm_latency_ms = m.elapsed_ms
+        context.metadata["prewarm_ms"] = f"{self._last_prewarm_latency_ms:.3f}"
+
     def _finalise_kernel_attachment(
         self,
         context: SeedContext,
         events: list[TelemetryEvent],
     ) -> None:
+        # Optional pre-warm to hydrate caches before training gates
+        try:
+            kernel = context.kernel
+            if kernel is not None:
+                self._attempt_prewarm(context, kernel)
+        except Exception:  # pragma: no cover - best-effort only
+            pass
         if not self._ensure_gate(
             context,
             pb.SEED_GATE_G1_GRADIENT_HEALTH,

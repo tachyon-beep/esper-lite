@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import io
 import runpy
-import sys
 
 
 def test_bench_script_run_prints_expected_keys(capsys) -> None:
@@ -17,3 +15,4 @@ def test_bench_script_run_prints_expected_keys(capsys) -> None:
     assert "GPU cache hit rate:" in out
     assert "Blend mode:" in out
     assert "Blend latency ms:" in out
+

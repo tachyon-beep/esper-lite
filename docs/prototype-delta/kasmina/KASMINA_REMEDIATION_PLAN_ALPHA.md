@@ -24,6 +24,36 @@ Status Update
 - K3 Probe/Inference-Mode Hardening: Implemented
   - Code: src/esper/kasmina/seed_manager.py (run_probe)
   - Tests: tests/kasmina/test_probe_inference_mode.py
+- K4 Performance Harness: Implemented
+  - Code: scripts/bench_kasmina.py (new flags; isolation/blend microbenches)
+  - Tests: tests/kasmina/test_kasmina_benchmarks.py
+- K5 Priority Routing E2E: Implemented
+  - Tests: tests/weatherlight/test_service_priority.py (Weatherlight publishes Kasmina packets with correct priority)
+- K7 Tamiyo → Kasmina Parser: Implemented
+  - Code: src/esper/kasmina/seed_manager.py (`_apply_blend_annotations`, event attributes in `_build_seed_packet`)
+  - Tests: tests/kasmina/test_blend_annotations.py
+ - K6 Optional Pre‑Warm on Attach (No Compile): Implemented
+   - Code: src/esper/kasmina/seed_manager.py (`_attempt_prewarm`, call in `_finalise_kernel_attachment`)
+   - Metric: `kasmina.prewarm.latency_ms` (global); per-seed metadata `prewarm_ms`
+   - Tests: tests/kasmina/test_prewarm.py
+
+Tamiyo P8 Integration (Consuming Annotations)
+- Kasmina consumes optional blend-mode annotations on SEED commands (Tamiyo P8):
+  - Keys: `blend_mode`, `blend_mode_source`, `gate_k`, `gate_tau`, `alpha_lo`, `alpha_hi`, `alpha_vec` (JSON list), optional `alpha_vec_len`.
+  - Mapping → BlenderConfig:
+    - `blend_mode` → internal `BlendMode` (CONVEX|RESIDUAL|CHANNEL|CONFIDENCE; unknown → CONVEX).
+    - CONFIDENCE: set `gate_k`, `gate_tau` (≥0), `alpha_lo|alpha_hi` clamped to [0,1] (swap if inverted).
+    - CHANNEL: parse `alpha_vec` JSON (fallback CSV parsing), clamp elements to [0,1]; record `alpha_vec_len` in seed metadata.
+  - Defaults/Fallbacks:
+    - Absent annotations → convex blend (no per-seed config).
+    - Validation failures → convex blend with WARN telemetry planned (telemetry warning optional for alpha).
+  - Telemetry:
+    - Event `blend_config` includes `mode`, `source` (provenance), and `alpha_vec_len` when known.
+  - Implementation:
+    - Parser in `src/esper/kasmina/seed_manager.py::_apply_blend_annotations()`; invoked during SEED_OP_GERMINATE handling.
+    - Mode selection applied transparently by `KasminaSeedManager.blend()` via per-seed `blend_config`.
+  - Tests:
+    - `tests/kasmina/test_blend_annotations.py` validates CONFIDENCE params, CHANNEL vector parsing, fallback, and default behavior.
 
 Out of Scope
 - Major lifecycle changes (already aligned to 11-state model and gates).
@@ -205,8 +235,8 @@ Key Changes
 - On invalid values, warn and fall back to default.
 
 Start Blocker (Actionable Reminder)
-- Do not start WP‑K7 until Tamiyo P8 “Blend Mode Annotations (Tamiyo → Kasmina)” is implemented and merged.
-- If asked to begin WP‑K7 before Tamiyo P8 is done, respond explicitly:
+- Unblocked: Tamiyo P8 is implemented (blend-mode annotations available). Proceed with WP‑K7.
+- Historical reminder (for reference if regressed):
   no we can't start yet because you haven't done Tamiyo 8
 
 Acceptance Criteria
@@ -289,3 +319,13 @@ Appendix: File Touchpoints (for implementers)
 - Pre‑warm hook: src/esper/kasmina/seed_manager.py (post‑attach path)
 - Weatherlight priority routing test: tests/weatherlight/test_service_priority.py
 - Bench harness: scripts/bench_kasmina.py
+
+- K8 Documentation Updates
+  - Status: Partially implemented (this remediation plan + P2.8 upgrades updated). Optional: add short snippet to architecture_summary.md once K6 lands; operator runbook notes for new bench flags and blend telemetry.
+
+Future Migration (Optional)
+- LM1 Promote BlendMode to Leyline (Shared Enum)
+  - Rationale: once the set of executor-side modes stabilizes and multiple subsystems benefit from typed discovery (e.g., dashboards, Simic), migrate from annotations-only to a typed Leyline field.
+  - Approach: add `BlendMode` enum (CONVEX|RESIDUAL|CHANNEL|CONFIDENCE) to Leyline and an optional `BlendConfig` message (gating params, α bounds, and an α vector blob). Regenerate bindings.
+  - Compatibility: keep accepting annotations during a deprecation window; prefer typed field when present; warn on conflicts.
+  - Criteria to promote: modes stable; consumers beyond Tamiyo↔Kasmina; clear operator value in observability.

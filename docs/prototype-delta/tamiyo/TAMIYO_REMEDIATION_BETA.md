@@ -14,6 +14,7 @@ Current Status
 - P1 — Step Budget Alignment: Implemented
 - P2 — GNN Compile Warm‑Up + Telemetry: Implemented (CUDA‑only warm‑up; telemetry `tamiyo.gnn.compile_warm_ms`)
 - P3 — PolicyUpdate Security & Rollback: Implemented (transactional load + version/freshness guards)
+- P8 — Blend Mode Annotations: Implemented (Tamiyo emits optional `blend_mode` + params; Kasmina consumes executor‑side)
 
 References
 - docs/architecture_summary.md
@@ -400,6 +401,9 @@ Validation & Tests
 
 Rollback Strategy
 - Toggle the env/config flag OFF; no behaviour change elsewhere.
+
+Status
+- Implemented — Tamiyo emits optional annotations; Kasmina executor consumes modes
 
 Estimate
 - Effort: S (0.5–1 day)
