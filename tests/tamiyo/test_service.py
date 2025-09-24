@@ -853,6 +853,75 @@ async def test_tamiyo_consume_policy_updates(tmp_path) -> None:
     await client.close()
 
 
+def test_policy_update_rejected_on_version_mismatch(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TAMIYO_VERIFY_UPDATES", "true")
+    cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    service = TamiyoService(store_config=cfg, signature_context=_SIGNATURE_CONTEXT)
+    update = leyline_pb2.PolicyUpdate(version=1, policy_id="p1", training_run_id="run-1", tamiyo_policy_version="wrong-version")
+    buf = BytesIO(); torch.save(service._policy.state_dict(), buf)  # type: ignore[attr-defined]
+    update.payload = buf.getvalue()
+    service.ingest_policy_update(update)
+    # Expect rejection telemetry; no applied updates
+    assert not service.policy_updates
+    assert any(e.description == "policy_update_rejected" and e.attributes.get("reason") == "version_mismatch"
+               for pkt in service.telemetry_packets for e in pkt.events)
+
+
+def test_policy_update_rejected_when_stale(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TAMIYO_VERIFY_UPDATES", "true")
+    monkeypatch.setenv("TAMIYO_UPDATE_FRESHNESS_SEC", "60")
+    cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    service = TamiyoService(store_config=cfg, signature_context=_SIGNATURE_CONTEXT)
+    update = leyline_pb2.PolicyUpdate(version=1, policy_id="p1", training_run_id="run-1", tamiyo_policy_version=service._policy.architecture_version)  # type: ignore[attr-defined]
+    # Make the update appear 1 hour old
+    from datetime import datetime, timedelta, UTC
+    update.issued_at.FromDatetime(datetime.now(tz=UTC) - timedelta(hours=1))
+    buf = BytesIO(); torch.save(service._policy.state_dict(), buf)  # type: ignore[attr-defined]
+    update.payload = buf.getvalue()
+    service.ingest_policy_update(update)
+    assert not service.policy_updates
+    assert any(e.description == "policy_update_rejected" and e.attributes.get("reason") == "stale_update"
+               for pkt in service.telemetry_packets for e in pkt.events)
+
+
+def test_policy_update_applies_transactionally(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Valid, fresh update should apply and be recorded
+    monkeypatch.setenv("TAMIYO_VERIFY_UPDATES", "true")
+    monkeypatch.setenv("TAMIYO_UPDATE_FRESHNESS_SEC", "0")
+    cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    service = TamiyoService(store_config=cfg, signature_context=_SIGNATURE_CONTEXT)
+    update = leyline_pb2.PolicyUpdate(version=1, policy_id="p-ok", training_run_id="run-1", tamiyo_policy_version=service._policy.architecture_version)  # type: ignore[attr-defined]
+    update.issued_at.GetCurrentTime()
+    buf = BytesIO(); torch.save(service._policy.state_dict(), buf)  # type: ignore[attr-defined]
+    update.payload = buf.getvalue()
+    service.ingest_policy_update(update)
+    assert service.policy_updates and service.policy_updates[-1].policy_id == "p-ok"
+
+
+def test_policy_update_rejected_on_registry_mismatch(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Tamper registry digest in metadata to force validate_state_dict rejection
+    monkeypatch.setenv("TAMIYO_VERIFY_UPDATES", "true")
+    cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    service = TamiyoService(store_config=cfg, signature_context=_SIGNATURE_CONTEXT)
+    state = service._policy.state_dict()  # type: ignore[attr-defined]
+    if "_metadata" in state and isinstance(state["_metadata"], dict):
+        meta = dict(state["_metadata"])  # shallow copy
+        regs = dict(meta.get("registries", {}))
+        if regs:
+            # Flip one digest to an invalid value
+            k = next(iter(regs.keys()))
+            regs[k] = "deadbeef"
+            meta["registries"] = regs
+            state = dict(state)
+            state["_metadata"] = meta
+    buf = BytesIO(); torch.save(state, buf)
+    update = leyline_pb2.PolicyUpdate(version=1, policy_id="p-bad", training_run_id="run-1", tamiyo_policy_version=service._policy.architecture_version)  # type: ignore[attr-defined]
+    update.payload = buf.getvalue()
+    service.ingest_policy_update(update)
+    assert not service.policy_updates
+    assert any(e.description == "policy_update_rejected" for pkt in service.telemetry_packets for e in pkt.events)
+
+
 def test_tamiyo_annotations_include_blueprint_metadata(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
     urza = UrzaLibrary(root=tmp_path / "urza")

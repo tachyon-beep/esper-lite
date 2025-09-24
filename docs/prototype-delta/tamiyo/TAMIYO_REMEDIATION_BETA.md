@@ -10,6 +10,11 @@ Context
 Scope
 - No contract changes to Leyline. All additions are internal or additive telemetry/knobs.
 
+Current Status
+- P1 — Step Budget Alignment: Implemented
+- P2 — GNN Compile Warm‑Up + Telemetry: Implemented (CUDA‑only warm‑up; telemetry `tamiyo.gnn.compile_warm_ms`)
+- P3 — PolicyUpdate Security & Rollback: Implemented (transactional load + version/freshness guards)
+
 References
 - docs/architecture_summary.md
 - docs/prototype-delta/tamiyo/{README.md, GNN-WP1.md, metrics.md, timeout-matrix.md, telemetry.md, decision-taxonomy.md, TAMIYO_COMPLETION_PACKAGES.md}

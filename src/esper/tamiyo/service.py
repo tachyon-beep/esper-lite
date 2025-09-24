@@ -1632,32 +1632,92 @@ class TamiyoService:
         return all_sent
 
     def ingest_policy_update(self, update: leyline_pb2.PolicyUpdate) -> None:
-        """Apply a policy update produced by Simic."""
+        """Apply a policy update produced by Simic with transactional validation."""
 
-        if update.tamiyo_policy_version:
-            self._policy_version = update.tamiyo_policy_version
-        if update.payload:
-            state_buffer = BytesIO(update.payload)
-            state_dict = torch.load(state_buffer, map_location="cpu", weights_only=False)
-            try:
-                self._policy.validate_state_dict(state_dict)
-                self._policy.load_state_dict(state_dict, strict=False)
-            except RuntimeError as exc:  # pragma: no cover - defensive
-                logger.warning("Tamiyo policy update incompatible: %s", exc)
-            except ValueError as exc:
-                logger.warning("Tamiyo policy update rejected: %s", exc)
-                # Surface a registry mismatch or version issue as telemetry
-                self._telemetry_packets.append(
-                    build_telemetry_packet(
-                        packet_id="tamiyo-policy-update-error",
-                        source="tamiyo",
-                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                        metrics=[],
-                        events=[TelemetryEvent(description="policy_update_rejected", level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING, attributes={"reason": str(exc)})],
-                    )
+        def _emit_rejection(reason: str) -> None:
+            self._telemetry_packets.append(
+                build_telemetry_packet(
+                    packet_id="tamiyo-policy-update-error",
+                    source="tamiyo",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    metrics=[],
+                    events=[
+                        TelemetryEvent(
+                            description="policy_update_rejected",
+                            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                            attributes={"reason": reason},
+                        )
+                    ],
                 )
+            )
+
+        # Strict version/freshness checks (configurable)
+        if getattr(self._settings, "tamiyo_verify_updates", True):
+            try:
+                incoming_version = (update.tamiyo_policy_version or "").strip()
+            except Exception:
+                incoming_version = ""
+            if incoming_version and incoming_version != getattr(self._policy, "architecture_version", ""):
+                _emit_rejection("version_mismatch")
                 return
-        self._policy_updates.append(update)
+            freshness_sec = max(0, int(getattr(self._settings, "tamiyo_update_freshness_sec", 0)))
+            if freshness_sec > 0:
+                try:
+                    issued = update.issued_at.ToDatetime()  # type: ignore[attr-defined]
+                    # Treat returned time as UTC; compare against now UTC
+                    now = datetime.now(tz=UTC)
+                    # Some protobuf impls return naive dt; coerce to UTC
+                    if issued.tzinfo is None:
+                        from datetime import timezone as _tz
+                        issued = issued.replace(tzinfo=_tz.utc)
+                    age = (now - issued).total_seconds()
+                    if age > float(freshness_sec):
+                        _emit_rejection("stale_update")
+                        return
+                except Exception:
+                    # If parsing failed, proceed (do not block updates solely on timestamp parsing)
+                    pass
+
+        # If no payload, treat as metadata-only update (record and return)
+        if not update.payload:
+            self._policy_updates.append(update)
+            if update.tamiyo_policy_version:
+                self._policy_version = update.tamiyo_policy_version
+            return
+
+        # Transactional load: validate and load into a fresh policy instance first
+        state_buffer = BytesIO(update.payload)
+        try:
+            state_dict = torch.load(state_buffer, map_location="cpu", weights_only=False)
+        except Exception as exc:  # pragma: no cover - invalid payload
+            logger.warning("Tamiyo policy update payload invalid: %s", exc)
+            _emit_rejection("invalid_payload")
+            return
+
+        # Build a new policy using the current config if available
+        cfg = getattr(self._policy, "_config", None)
+        try:
+            candidate = TamiyoPolicy(cfg if cfg is not None else TamiyoPolicyConfig())
+            candidate.validate_state_dict(state_dict)
+            candidate.load_state_dict(state_dict, strict=False)
+        except ValueError as exc:
+            logger.warning("Tamiyo policy update rejected: %s", exc)
+            _emit_rejection("registry_mismatch" if "registry" in str(exc).lower() else "shape_mismatch")
+            return
+        except RuntimeError as exc:  # pragma: no cover - defensive
+            logger.warning("Tamiyo policy update incompatible: %s", exc)
+            _emit_rejection("incompatible_update")
+            return
+
+        # Swap the live policy atomically and record the update
+        try:
+            self.update_policy(candidate)
+            if update.tamiyo_policy_version:
+                self._policy_version = update.tamiyo_policy_version
+            self._policy_updates.append(update)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Tamiyo policy swap failed: %s", exc)
+            _emit_rejection("swap_failed")
 
     async def consume_policy_updates(
         self,

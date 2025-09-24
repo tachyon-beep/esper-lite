@@ -62,6 +62,13 @@ class EsperSettings(BaseSettings):
     tamiyo_field_report_max_retries: int = Field(
         alias="TAMIYO_FIELD_REPORT_MAX_RETRIES", default=3
     )
+    # Policy update verification knobs
+    tamiyo_verify_updates: bool = Field(
+        alias="TAMIYO_VERIFY_UPDATES", default=True
+    )
+    tamiyo_update_freshness_sec: int = Field(
+        alias="TAMIYO_UPDATE_FRESHNESS_SEC", default=0
+    )
     # Step-level evaluation timeout for Tamiyo (ms). Used as the default when
     # TamiyoService is constructed without an explicit override.
     tamiyo_step_timeout_ms: float = Field(
