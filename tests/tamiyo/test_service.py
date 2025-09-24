@@ -336,6 +336,76 @@ def test_evaluate_step_includes_coverage_and_policy_version(tmp_path) -> None:
     assert prio_name == leyline_pb2.MessagePriority.Name(leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL)
 
 
+def test_blend_mode_annotations_disabled_by_default(tmp_path) -> None:
+    cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    service = TamiyoService(store_config=cfg, signature_context=_SIGNATURE_CONTEXT)
+    packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=2, training_run_id="run-blend-off")
+    # Provide a seed so we emit a SEED command
+    seed = packet.seed_states.add(); seed.seed_id = "seed-1"; seed.stage = leyline_pb2.SEED_STAGE_TRAINING
+    cmd = service.evaluate_epoch(packet)
+    assert cmd.command_type in {leyline_pb2.COMMAND_SEED, leyline_pb2.COMMAND_OPTIMIZER, leyline_pb2.COMMAND_PAUSE}
+    # New keys should not be present by default
+    assert "blend_mode" not in cmd.annotations
+
+
+def test_emits_blend_mode_annotations_when_enabled(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TAMIYO_ENABLE_BLEND_MODE_ANN", "true")
+    monkeypatch.setenv("TAMIYO_BLEND_MODE_DEFAULT", "CONFIDENCE")
+    cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    service = TamiyoService(store_config=cfg, signature_context=_SIGNATURE_CONTEXT)
+    packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-blend-on")
+    seed = packet.seed_states.add(); seed.seed_id = "seed-1"; seed.stage = leyline_pb2.SEED_STAGE_TRAINING
+    cmd = service.evaluate_epoch(packet)
+    if cmd.command_type == leyline_pb2.COMMAND_SEED:
+        assert cmd.annotations.get("blend_mode") == "CONFIDENCE"
+        # gating params present
+        assert "gate_k" in cmd.annotations and "gate_tau" in cmd.annotations
+        assert "alpha_lo" in cmd.annotations and "alpha_hi" in cmd.annotations
+
+
+def test_channel_mode_emits_alpha_vec_when_shape_small(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Enable annotations and channel mode
+    monkeypatch.setenv("TAMIYO_ENABLE_BLEND_MODE_ANN", "true")
+    monkeypatch.setenv("TAMIYO_BLEND_MODE_DEFAULT", "CHANNEL")
+    monkeypatch.setenv("TAMIYO_BLEND_ALPHA_VEC_MAX", "8")
+    # Prepare Urza metadata with small output_channels
+    urza_root = tmp_path / "urza"; urza_root.mkdir(parents=True, exist_ok=True)
+    artifact_path = tmp_path / "bp-vec.pt"; artifact_path.write_bytes(b"dummy")
+    descriptor = BlueprintDescriptor(
+        blueprint_id="bp-vec",
+        name="vec",
+        tier=BlueprintTier.BLUEPRINT_TIER_SAFE,
+        risk=0.2,
+        stage=2,
+        quarantine_only=False,
+        approval_required=False,
+        description="vec",
+    )
+    library = UrzaLibrary(root=urza_root)
+    # Include a layer with output_channels = 4
+    extras = {"graph": {"layers": [{"layer_id": "L0", "type": "linear", "depth": 0, "output_channels": 4}]}}
+    library.save(descriptor, artifact_path, extras=extras)
+
+    class _PolicySeed(TamiyoPolicy):
+        def select_action(self, _packet):  # pragma: no cover - deterministic stub
+            cmd = leyline_pb2.AdaptationCommand(version=1, command_type=leyline_pb2.COMMAND_SEED, target_seed_id="seed-1")
+            cmd.seed_operation.operation = leyline_pb2.SEED_OP_GERMINATE
+            cmd.seed_operation.blueprint_id = "bp-vec"
+            self._last_action = {"action": 0.0, "param_delta": 0.0}
+            return cmd
+
+    service = TamiyoService(policy=_PolicySeed(), store_config=FieldReportStoreConfig(path=tmp_path / "field_reports.log"), urza=library, signature_context=_SIGNATURE_CONTEXT)
+    pkt = leyline_pb2.SystemStatePacket(version=1, current_epoch=1)
+    seed = pkt.seed_states.add(); seed.seed_id = "seed-1"; seed.stage = leyline_pb2.SEED_STAGE_TRAINING
+    cmd = service.evaluate_epoch(pkt)
+    if cmd.command_type == leyline_pb2.COMMAND_SEED:
+        # alpha_vec present with small length
+        if "alpha_vec_len" in cmd.annotations:
+            assert int(cmd.annotations["alpha_vec_len"]) == 4
+            assert "alpha_vec" in cmd.annotations
+
+
+
 def test_health_indicators_include_timeouts(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Set explicit budgets to predictable values
     monkeypatch.setenv("TAMIYO_STEP_TIMEOUT_MS", "7.5")

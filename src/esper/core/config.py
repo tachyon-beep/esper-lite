@@ -62,6 +62,28 @@ class EsperSettings(BaseSettings):
     tamiyo_field_report_max_retries: int = Field(
         alias="TAMIYO_FIELD_REPORT_MAX_RETRIES", default=3
     )
+    # Optional blend-mode annotations for Kasmina (P8)
+    tamiyo_enable_blend_mode_ann: bool = Field(
+        alias="TAMIYO_ENABLE_BLEND_MODE_ANN", default=False
+    )
+    tamiyo_blend_mode_default: str = Field(
+        alias="TAMIYO_BLEND_MODE_DEFAULT", default="CONVEX"
+    )
+    tamiyo_blend_conf_gate_k: float = Field(
+        alias="TAMIYO_BLEND_CONF_GATE_K", default=1.0
+    )
+    tamiyo_blend_conf_gate_tau: float = Field(
+        alias="TAMIYO_BLEND_CONF_GATE_TAU", default=1.0
+    )
+    tamiyo_blend_alpha_lo: float = Field(
+        alias="TAMIYO_BLEND_ALPHA_LO", default=0.0
+    )
+    tamiyo_blend_alpha_hi: float = Field(
+        alias="TAMIYO_BLEND_ALPHA_HI", default=1.0
+    )
+    tamiyo_blend_alpha_vec_max: int = Field(
+        alias="TAMIYO_BLEND_ALPHA_VEC_MAX", default=64
+    )
     # Policy update verification knobs
     tamiyo_verify_updates: bool = Field(
         alias="TAMIYO_VERIFY_UPDATES", default=True

@@ -15,6 +15,7 @@ from torch import nn
 
 from esper.leyline import leyline_pb2
 from esper.simic.registry import EmbeddingRegistry, EmbeddingRegistryConfig
+from esper.core import EsperSettings
 
 from .graph_builder import TamiyoGraphBuilder, TamiyoGraphBuilderConfig
 from .gnn import TamiyoGNN, TamiyoGNNConfig
@@ -279,6 +280,7 @@ class TamiyoPolicy(nn.Module):
             else nullcontext()
         )
 
+        outputs = None
         with torch.inference_mode():
             with autocast_ctx:
                 try:
@@ -302,17 +304,63 @@ class TamiyoPolicy(nn.Module):
                                     self._device = torch.device("cpu")
                                     outputs = module(graph)
                             else:
-                                raise
+                                # As a last resort, degrade to a safe pause
+                                outputs = None
+                else:
+                    # Eager CUDA fallback to CPU on backend/OOM errors
+                    if self._device.type == "cuda":
+                        with contextlib.suppress(Exception):
+                            module = module.to("cpu")
+                            graph = graph.to("cpu")
+                            self._device = torch.device("cpu")
+                            outputs = module(graph)
                     else:
-                        # Eager CUDA fallback to CPU on backend/OOM errors
-                        if self._device.type == "cuda":
-                            with contextlib.suppress(Exception):
-                                module = module.to("cpu")
-                                graph = graph.to("cpu")
-                                self._device = torch.device("cpu")
-                                outputs = module(graph)
-                        else:
-                            raise
+                        # As a last resort, degrade to a safe pause
+                        outputs = None
+
+        if outputs is None:
+            # Degrade safely to a pause command
+            action_idx = 2
+            param_delta = 0.0
+            blending_method = self._blending_methods[0] if self._blending_methods else "linear"
+            schedule_values = (0.0, 0.0)
+            command = self._build_command(
+                action_idx,
+                param_delta,
+                blending_method,
+                "",
+                "",
+                packet,
+                schedule_values,
+                None,
+            )
+            command.annotations.setdefault("policy_action", str(action_idx))
+            command.annotations.setdefault("policy_param_delta", f"{param_delta:.6f}")
+            command.annotations.setdefault("policy_version", self._architecture_version)
+            command.annotations.setdefault("policy_value_estimate", f"{0.0:.6f}")
+            command.annotations.setdefault("policy_risk_index", "0")
+            command.annotations.setdefault("policy_risk_score", f"{0.0:.6f}")
+            self._last_action = {
+                "action": float(action_idx),
+                "param_delta": param_delta,
+                "policy_param_vector": (),
+                "blending_method": blending_method,
+                "blending_index": 0.0,
+                "value_estimate": 0.0,
+                "risk_index": 0.0,
+                "risk_score": 0.0,
+                "compile_enabled": 1.0 if self._compile_enabled else 0.0,
+                "target_seed": "",
+                "blueprint_id": "",
+                "blending_schedule_start": schedule_values[0],
+                "blending_schedule_end": schedule_values[1],
+                "selected_seed_index": -1.0,
+                "selected_seed_score": 0.0,
+                "selected_blueprint_index": -1.0,
+            }
+            self._last_feature_coverage = coverage
+            self._last_feature_coverage_types = coverage_types
+            return command
 
         policy_logits = outputs["policy_logits"].softmax(dim=-1)
         action_idx = int(policy_logits.argmax(dim=-1))
@@ -404,6 +452,11 @@ class TamiyoPolicy(nn.Module):
         }
         self._last_feature_coverage = coverage
         self._last_feature_coverage_types = coverage_types
+        # Optional: emit blend-mode annotations for Kasmina (P8)
+        try:
+            self._maybe_emit_blend_mode_annotations(command, packet, selected_seed, selected_blueprint)
+        except Exception:  # pragma: no cover - defensive
+            pass
         return command
 
     @property
@@ -532,6 +585,74 @@ class TamiyoPolicy(nn.Module):
             "run_id": packet.training_run_id,
             "packet_id": packet.packet_id,
         }
+
+    # ------------------------------------------------------------------
+    # Blend-mode annotations (P8)
+    # ------------------------------------------------------------------
+    def _maybe_emit_blend_mode_annotations(
+        self,
+        command: leyline_pb2.AdaptationCommand,
+        packet: leyline_pb2.SystemStatePacket,
+        selected_seed: str,
+        selected_blueprint: str,
+    ) -> None:
+        if command.command_type != leyline_pb2.COMMAND_SEED:
+            return
+        settings = EsperSettings()
+        if not getattr(settings, "tamiyo_enable_blend_mode_ann", False):
+            return
+        # Choose mode from default; keep conservative by default
+        mode = (getattr(settings, "tamiyo_blend_mode_default", "CONVEX") or "CONVEX").upper()
+        if mode not in {"CONVEX", "RESIDUAL", "CHANNEL", "CONFIDENCE"}:
+            mode = "CONVEX"
+        command.annotations.setdefault("blend_mode", mode)
+        command.annotations.setdefault(
+            "blend_mode_source",
+            "override" if mode != "CONVEX" else "heuristic",
+        )
+        # Confidence gating parameters (always emit for CONFIDENCE, optional otherwise)
+        gate_k = float(getattr(settings, "tamiyo_blend_conf_gate_k", 1.0))
+        gate_tau = float(getattr(settings, "tamiyo_blend_conf_gate_tau", 1.0))
+        a_lo = float(getattr(settings, "tamiyo_blend_alpha_lo", 0.0))
+        a_hi = float(getattr(settings, "tamiyo_blend_alpha_hi", 1.0))
+        a_lo = max(0.0, min(1.0, a_lo))
+        a_hi = max(0.0, min(1.0, a_hi))
+        if mode == "CONFIDENCE":
+            command.annotations.setdefault("gate_k", f"{gate_k:.4f}")
+            command.annotations.setdefault("gate_tau", f"{gate_tau:.4f}")
+            command.annotations.setdefault("alpha_lo", f"{a_lo:.4f}")
+            command.annotations.setdefault("alpha_hi", f"{a_hi:.4f}")
+
+        # Channel-wise alpha vector only when unambiguous and small
+        if mode == "CHANNEL":
+            try:
+                max_len = max(1, int(getattr(settings, "tamiyo_blend_alpha_vec_max", 64)))
+            except Exception:
+                max_len = 64
+            # Use blueprint metadata passed via TamiyoService to determine channels
+            bp_id = selected_blueprint or (packet.packet_id or packet.training_run_id or "")
+            meta = self._blueprint_metadata.get(bp_id, {}) if bp_id else {}
+            layers = []
+            graph_block = meta.get("graph") if isinstance(meta, dict) else None
+            if isinstance(graph_block, dict):
+                layers = graph_block.get("layers", [])
+            channels = None
+            if isinstance(layers, list) and layers:
+                # Prefer the first layer's output_channels when present
+                layer0 = layers[0]
+                if isinstance(layer0, dict) and "output_channels" in layer0:
+                    try:
+                        channels = int(layer0.get("output_channels", 0))
+                    except Exception:
+                        channels = None
+            if channels is not None and 0 < channels <= max_len:
+                # Build a uniform alpha_vec of zeros (placeholder semantics)
+                vec = [0.0] * channels
+                import json as _json
+                js = _json.dumps(vec)
+                if len(js) <= 1024:
+                    command.annotations.setdefault("alpha_vec", js)
+                    command.annotations.setdefault("alpha_vec_len", str(channels))
 
     def validate_state_dict(self, state_dict: Mapping[str, object]) -> None:
         clean_state, metadata = self._split_state_dict(state_dict)
