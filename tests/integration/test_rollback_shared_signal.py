@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 import pytest
 from fakeredis.aioredis import FakeRedis
@@ -14,6 +15,7 @@ from esper.oona import OonaClient, StreamConfig
 from esper.weatherlight.service_runner import WeatherlightService
 from esper.tolaria import TolariaTrainer, TrainingLoopConfig
 from esper.tolaria.rollback import SharedDeadlineSignal
+from esper.tolaria.emergency import SharedEmergencySignal
 from esper.leyline import leyline_pb2
 import torch
 from torch import nn
@@ -36,8 +38,16 @@ class _KasminaStub:
         return 0.0
 
 
-async def _start_weatherlight(redis: FakeRedis, signal_name: str) -> WeatherlightService:
-    settings = EsperSettings(tolaria_rollback_signal_name=signal_name)
+async def _start_weatherlight(
+    redis: FakeRedis,
+    *,
+    rollback_signal: str | None = None,
+    emergency_signal: str | None = None,
+) -> WeatherlightService:
+    settings = EsperSettings(
+        tolaria_rollback_signal_name=rollback_signal,
+        tolaria_emergency_signal_name=emergency_signal,
+    )
     svc = WeatherlightService(settings=settings)
     # Inject FakeRedis into OonaClient by patching build method
     async def _build(self):
@@ -77,6 +87,14 @@ async def _start_weatherlight(redis: FakeRedis, signal_name: str) -> Weatherligh
 async def test_shared_rollback_signal_weatherlight_bridge(monkeypatch) -> None:
     redis = FakeRedis()
     signal_name = "tolaria-test-shared"
+    try:
+        probe = SharedDeadlineSignal.create(f"{signal_name}-probe")
+    except (RuntimeError, PermissionError):
+        pytest.skip("shared_memory unavailable in environment")
+    else:
+        with contextlib.suppress(Exception):
+            probe.close()
+            probe.unlink()
     # Build a trainer that uses the same shared signal name and triggers deadline
     model = nn.Sequential(nn.Linear(8, 4))
     opt = torch.optim.SGD(model.parameters(), lr=0.01)
@@ -102,7 +120,7 @@ async def test_shared_rollback_signal_weatherlight_bridge(monkeypatch) -> None:
     )
     trainer.set_shared_rollback_signal(signal_name)
     # Start Weatherlight after the shared segment exists
-    svc = await _start_weatherlight(redis, signal_name)
+    svc = await _start_weatherlight(redis, rollback_signal=signal_name)
     # Give the Weatherlight rollback monitor a moment to attach to the
     # shared signal to reduce attach/clear races in subsequent checks.
     await asyncio.sleep(0.1)
@@ -174,4 +192,78 @@ async def test_shared_rollback_signal_weatherlight_bridge(monkeypatch) -> None:
             sig.unlink()
     except Exception:
         pass
+    await svc.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_emergency_signal_weatherlight_bridge(monkeypatch) -> None:
+    redis = FakeRedis()
+    signal_name = "tolaria-test-emergency"
+    try:
+        probe = SharedEmergencySignal.create(f"{signal_name}-probe")
+    except (RuntimeError, PermissionError):
+        pytest.skip("shared_memory unavailable in environment")
+    else:
+        with contextlib.suppress(Exception):
+            probe.close()
+            probe.unlink()
+    monkeypatch.setenv("TOLARIA_EMERGENCY_ENABLED", "true")
+    settings = EsperSettings(
+        tolaria_emergency_enabled=True,
+        tolaria_emergency_signal_name=signal_name,
+        tolaria_emergency_l4_failed_epochs_threshold=999,
+    )
+    model = nn.Sequential(nn.Linear(8, 4))
+    opt = torch.optim.SGD(model.parameters(), lr=0.01)
+    inputs = torch.randn(8, 8)
+    targets = torch.randint(0, 4, (8,))
+    loader = DataLoader(TensorDataset(inputs, targets), batch_size=4)
+    trainer = TolariaTrainer(
+        model=model,
+        optimizer=opt,
+        dataloader=loader,
+        tamiyo=_TamiyoTimeout(),
+        kasmina=_KasminaStub(),
+        config=TrainingLoopConfig(max_epochs=1, gradient_accumulation_steps=1, device=torch.device("cpu")),
+        settings=settings,
+    )
+    trainer.set_shared_emergency_signal(signal_name)
+    stream_cfg = StreamConfig(
+        normal_stream=settings.oona_normal_stream,
+        emergency_stream=settings.oona_emergency_stream,
+        telemetry_stream=settings.oona_telemetry_stream,
+        policy_stream=settings.oona_policy_stream,
+        group="tolaria-emergency-test",
+        consumer="tolaria-emergency-test",
+        dead_letter_stream="oona.deadletter",
+    )
+    oona = OonaClient("redis://localhost", config=stream_cfg, redis_client=redis)
+    await oona.ensure_consumer_group()
+
+    async def _publisher(signal: leyline_pb2.EmergencySignal) -> None:
+        await oona.publish_emergency_signal(signal, source="tolaria")
+
+    trainer.set_emergency_publisher(_publisher)
+    svc = await _start_weatherlight(redis, emergency_signal=signal_name)
+    await asyncio.sleep(0.1)
+    bridge = trainer.get_emergency_signal()
+    if not isinstance(bridge, SharedEmergencySignal):
+        await oona.close()
+        await svc.shutdown()
+        pytest.skip("shared_memory unavailable in environment")
+    list(trainer.run())
+    await trainer.publish_history(oona)
+    detection_ok = False
+    for _ in range(30):
+        if svc.get_emergency_detection_count() >= 1:
+            detection_ok = True
+            break
+        await asyncio.sleep(0.1)
+    assert detection_ok
+    sig = trainer.get_emergency_signal()
+    if isinstance(sig, SharedEmergencySignal):
+        with contextlib.suppress(Exception):
+            sig.close()
+            sig.unlink()
+    await oona.close()
     await svc.shutdown()

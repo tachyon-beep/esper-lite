@@ -99,6 +99,14 @@ class TelemetryLevel(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     TELEMETRY_LEVEL_ERROR: _ClassVar[TelemetryLevel]
     TELEMETRY_LEVEL_CRITICAL: _ClassVar[TelemetryLevel]
 
+class EmergencyLevel(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    EMERGENCY_LEVEL_UNSPECIFIED: _ClassVar[EmergencyLevel]
+    EMERGENCY_LEVEL_NOTICE: _ClassVar[EmergencyLevel]
+    EMERGENCY_LEVEL_ELEVATED: _ClassVar[EmergencyLevel]
+    EMERGENCY_LEVEL_CONSERVATIVE: _ClassVar[EmergencyLevel]
+    EMERGENCY_LEVEL_HALT: _ClassVar[EmergencyLevel]
+
 class FieldReportOutcome(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     FIELD_REPORT_OUTCOME_UNSPECIFIED: _ClassVar[FieldReportOutcome]
@@ -126,6 +134,7 @@ class BusMessageType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     BUS_MESSAGE_TYPE_KERNEL_PREFETCH_READY: _ClassVar[BusMessageType]
     BUS_MESSAGE_TYPE_KERNEL_PREFETCH_ERROR: _ClassVar[BusMessageType]
     BUS_MESSAGE_TYPE_KERNEL_CATALOG_UPDATE: _ClassVar[BusMessageType]
+    BUS_MESSAGE_TYPE_EMERGENCY_SIGNAL: _ClassVar[BusMessageType]
     BUS_MESSAGE_TYPE_BSDS_ISSUED: _ClassVar[BusMessageType]
     BUS_MESSAGE_TYPE_BSDS_FAILED: _ClassVar[BusMessageType]
     BUS_MESSAGE_TYPE_BENCHMARK_REPORT: _ClassVar[BusMessageType]
@@ -221,6 +230,11 @@ TELEMETRY_LEVEL_INFO: TelemetryLevel
 TELEMETRY_LEVEL_WARNING: TelemetryLevel
 TELEMETRY_LEVEL_ERROR: TelemetryLevel
 TELEMETRY_LEVEL_CRITICAL: TelemetryLevel
+EMERGENCY_LEVEL_UNSPECIFIED: EmergencyLevel
+EMERGENCY_LEVEL_NOTICE: EmergencyLevel
+EMERGENCY_LEVEL_ELEVATED: EmergencyLevel
+EMERGENCY_LEVEL_CONSERVATIVE: EmergencyLevel
+EMERGENCY_LEVEL_HALT: EmergencyLevel
 FIELD_REPORT_OUTCOME_UNSPECIFIED: FieldReportOutcome
 FIELD_REPORT_OUTCOME_SUCCESS: FieldReportOutcome
 FIELD_REPORT_OUTCOME_NEUTRAL: FieldReportOutcome
@@ -240,6 +254,7 @@ BUS_MESSAGE_TYPE_KERNEL_PREFETCH_REQUEST: BusMessageType
 BUS_MESSAGE_TYPE_KERNEL_PREFETCH_READY: BusMessageType
 BUS_MESSAGE_TYPE_KERNEL_PREFETCH_ERROR: BusMessageType
 BUS_MESSAGE_TYPE_KERNEL_CATALOG_UPDATE: BusMessageType
+BUS_MESSAGE_TYPE_EMERGENCY_SIGNAL: BusMessageType
 BUS_MESSAGE_TYPE_BSDS_ISSUED: BusMessageType
 BUS_MESSAGE_TYPE_BSDS_FAILED: BusMessageType
 BUS_MESSAGE_TYPE_BENCHMARK_REPORT: BusMessageType
@@ -387,6 +402,35 @@ class CommandCircuitBreaker(_message.Message):
     desired_state: CircuitBreakerState
     rationale: str
     def __init__(self, desired_state: _Optional[_Union[CircuitBreakerState, str]] = ..., rationale: _Optional[str] = ...) -> None: ...
+
+class EmergencySignal(_message.Message):
+    __slots__ = ("version", "level", "reason", "origin", "triggered_at", "monotonic_time_ms", "run_id", "attributes", "payload_checksum")
+    class AttributesEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    VERSION_FIELD_NUMBER: _ClassVar[int]
+    LEVEL_FIELD_NUMBER: _ClassVar[int]
+    REASON_FIELD_NUMBER: _ClassVar[int]
+    ORIGIN_FIELD_NUMBER: _ClassVar[int]
+    TRIGGERED_AT_FIELD_NUMBER: _ClassVar[int]
+    MONOTONIC_TIME_MS_FIELD_NUMBER: _ClassVar[int]
+    RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    ATTRIBUTES_FIELD_NUMBER: _ClassVar[int]
+    PAYLOAD_CHECKSUM_FIELD_NUMBER: _ClassVar[int]
+    version: int
+    level: EmergencyLevel
+    reason: str
+    origin: str
+    triggered_at: _timestamp_pb2.Timestamp
+    monotonic_time_ms: int
+    run_id: str
+    attributes: _containers.ScalarMap[str, str]
+    payload_checksum: bytes
+    def __init__(self, version: _Optional[int] = ..., level: _Optional[_Union[EmergencyLevel, str]] = ..., reason: _Optional[str] = ..., origin: _Optional[str] = ..., triggered_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., monotonic_time_ms: _Optional[int] = ..., run_id: _Optional[str] = ..., attributes: _Optional[_Mapping[str, str]] = ..., payload_checksum: _Optional[bytes] = ...) -> None: ...
 
 class AdaptationCommand(_message.Message):
     __slots__ = ("version", "command_id", "command_type", "target_seed_id", "execution_deadline_ms", "issued_at", "issued_by", "seed_operation", "optimizer_adjustment", "circuit_breaker", "rollback_payload", "annotations")

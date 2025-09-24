@@ -97,6 +97,14 @@ enum TelemetryLevel {
   TELEMETRY_LEVEL_CRITICAL = 4;
 }
 
+enum EmergencyLevel {
+  EMERGENCY_LEVEL_UNSPECIFIED = 0;
+  EMERGENCY_LEVEL_NOTICE = 1;
+  EMERGENCY_LEVEL_ELEVATED = 2;
+  EMERGENCY_LEVEL_CONSERVATIVE = 3;
+  EMERGENCY_LEVEL_HALT = 4;
+}
+
 enum FieldReportOutcome {
   FIELD_REPORT_OUTCOME_UNSPECIFIED = 0;
   FIELD_REPORT_OUTCOME_SUCCESS = 1;
@@ -123,6 +131,7 @@ enum BusMessageType {
   BUS_MESSAGE_TYPE_KERNEL_PREFETCH_READY = 7;
   BUS_MESSAGE_TYPE_KERNEL_PREFETCH_ERROR = 8;
   BUS_MESSAGE_TYPE_KERNEL_CATALOG_UPDATE = 9;
+  BUS_MESSAGE_TYPE_EMERGENCY_SIGNAL = 10;
   // Urabrask/BSDS additions (prototype)
   BUS_MESSAGE_TYPE_BSDS_ISSUED = 20;
   BUS_MESSAGE_TYPE_BSDS_FAILED = 21;
@@ -190,6 +199,18 @@ message CommandOptimizerAdjustment {
 message CommandCircuitBreaker {
   CircuitBreakerState desired_state = 1;
   string rationale = 2;
+}
+
+message EmergencySignal {
+  uint32 version = 1;
+  EmergencyLevel level = 2;
+  string reason = 3;
+  string origin = 4;
+  google.protobuf.Timestamp triggered_at = 5;
+  uint64 monotonic_time_ms = 6;
+  string run_id = 7;
+  map<string, string> attributes = 8;
+  bytes payload_checksum = 9;
 }
 
 message AdaptationCommand {

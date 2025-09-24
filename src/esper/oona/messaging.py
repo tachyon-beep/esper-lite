@@ -177,6 +177,8 @@ class OonaClient:
             else 0.0
         )
         self._em_last_refill: float = time.monotonic()
+        self._em_src_published: dict[str, float] = {}
+        self._em_src_dropped: dict[str, float] = {}
 
     async def close(self) -> None:
         await self._redis.close()
@@ -262,6 +264,33 @@ class OonaClient:
             message_type=leyline_pb2.BusMessageType.BUS_MESSAGE_TYPE_POLICY_UPDATE,
             payload=update.SerializeToString(),
         )
+
+    async def publish_emergency_signal(
+        self,
+        signal: leyline_pb2.EmergencySignal,
+        *,
+        source: str | None = None,
+    ) -> bool:
+        """Publish an emergency signal via the dedicated emergency stream."""
+
+        attributes = {
+            "origin": signal.origin,
+            "reason": signal.reason,
+            "level": str(int(signal.level)),
+        }
+        result = await self._publish_proto(
+            preferred_stream=self._config.emergency_stream,
+            emergency_flag=True,
+            message_type=leyline_pb2.BusMessageType.BUS_MESSAGE_TYPE_EMERGENCY_SIGNAL,
+            payload=signal.SerializeToString(),
+            attributes=attributes,
+        )
+        key = source or signal.origin or "unknown"
+        if result:
+            self._em_src_published[key] = self._em_src_published.get(key, 0.0) + 1.0
+        else:
+            self._em_src_dropped[key] = self._em_src_dropped.get(key, 0.0) + 1.0
+        return result
 
     async def publish_bsds_issued(self, report: leyline_pb2.BSDSIssued) -> bool:
         """Publish a BSDSIssued event to the normal stream."""
@@ -352,6 +381,15 @@ class OonaClient:
         block_ms: int = 1000,
     ) -> None:
         await self.consume(handler, stream=self._kernel_error_stream, count=count, block_ms=block_ms)
+
+    async def consume_emergency_signals(
+        self,
+        handler: Callable[[OonaMessage], Awaitable[None] | None],
+        *,
+        count: int = 1,
+        block_ms: int = 1000,
+    ) -> None:
+        await self.consume(handler, stream=self._config.emergency_stream, count=count, block_ms=block_ms)
 
     async def consume(
         self,
@@ -473,6 +511,10 @@ class OonaClient:
         return self._config.normal_stream
 
     @property
+    def emergency_stream(self) -> str:
+        return self._config.emergency_stream
+
+    @property
     def kernel_request_stream(self) -> str:
         return self._kernel_request_stream
 
@@ -514,6 +556,7 @@ class OonaClient:
         message_type: leyline_pb2.BusMessageType.ValueType,
         payload: bytes,
         drop_threshold: int | None = None,
+        attributes: dict[str, str] | None = None,
     ) -> bool:
         allow, _ = self._publish_breaker.allow()
         if not allow:
@@ -547,6 +590,8 @@ class OonaClient:
         if rerouted:
             self._metrics["publish_rerouted"] += 1.0
         envelope = leyline_pb2.BusEnvelope(message_type=message_type, payload=payload)
+        if attributes:
+            envelope.attributes.update(attributes)
         envelope_bytes = envelope.SerializeToString()
         fields = {"payload": envelope_bytes}
         signature = self._generate_signature(envelope_bytes)

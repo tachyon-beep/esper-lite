@@ -16,7 +16,7 @@ Mapping of design assertions to implementation artefacts and tests.
 | Telemetry emission and publish to Oona | `01.1`, `01.4` | `trainer._emit_telemetry()`, `publish_history()` | `tests/tolaria/test_tolaria_trainer.py::test_tolaria_publish_history_to_oona` |
 | Unified LR controller with circuit breakers | `01.3` | — | — |
 | Two‑tier rollback (fast + full) | `01.2` | — | — |
-| Emergency escalation protocol | `01.2` | — | — |
+| Emergency escalation protocol | `01.2` | `src/esper/tolaria/emergency.py`, `src/esper/oona/messaging.py`, `src/esper/weatherlight/service_runner.py` | `tests/integration/test_rollback_shared_signal.py::test_emergency_signal_weatherlight_bridge` |
 | Multi‑seed gradient aggregation | `01.1` | `src/esper/tolaria/{aggregation.py,trainer.py}` (registry masks; attribution split; PCGrad) | `tests/tolaria/test_aggregation_attribution.py` |
 
 | PyTorch 2.8 upgrades (compile/AMP/TF32/pinned/foreach) | `01.1` | `trainer.__init__` (compile/AMP/TF32/pin/foreach), `_eager_train_step` | `tests/tolaria/test_tolaria_trainer.py::{test_tolaria_compile_fallback,test_tolaria_amp_metrics_disabled_on_cpu}` |

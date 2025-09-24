@@ -24,7 +24,9 @@ from esper.core import EsperSettings, TelemetryEvent, TelemetryMetric, build_tel
 from esper.kasmina import KasminaPrefetchCoordinator, KasminaSeedManager
 from esper.leyline import leyline_pb2
 from esper.oona import OonaClient, StreamConfig
+from esper.oona.messaging import OonaMessage
 from esper.tolaria.rollback import SharedDeadlineSignal
+from esper.tolaria.emergency import SharedEmergencySignal
 from esper.security.signing import DEFAULT_SECRET_ENV, SignatureContext
 from esper.tamiyo import TamiyoService
 from esper.urza import UrzaLibrary, UrzaRuntime
@@ -89,6 +91,16 @@ class WeatherlightService:
         self._rollback_monitor_task: asyncio.Task | None = None
         self._kasmina_packet_queue: asyncio.Queue[leyline_pb2.TelemetryPacket] | None = None
         self._kasmina_packet_drops: int = 0
+        self._emergency_signal_name: str | None = getattr(self._settings, "tolaria_emergency_signal_name", None)
+        self._emergency_signal: SharedEmergencySignal | None = None
+        self._emergency_monitor_task: asyncio.Task | None = None
+        self._emergency_stream_task: asyncio.Task | None = None
+        self._emergency_detections_total: int = 0
+        self._emergency_last_detect_s: float | None = None
+        self._emergency_last_trigger_ms: int | None = None
+        self._emergency_last_level: int | None = None
+        self._emergency_last_reason: str | None = None
+        self._emergency_skipped_total: int = 0
 
     async def start(self) -> None:
         """Initialise subsystems and spawn background workers (Slice 1 & 2)."""
@@ -186,6 +198,13 @@ class WeatherlightService:
         if self._rollback_signal_name:
             # Always start the monitor; it will attempt to attach when available
             self._rollback_monitor_task = asyncio.create_task(self._rollback_signal_loop(), name="weatherlight.rollback_monitor")
+        if self._emergency_signal_name:
+            self._emergency_monitor_task = asyncio.create_task(self._emergency_signal_loop(), name="weatherlight.emergency_signal")
+        # Emergency stream consumer runs regardless of shared-signal availability
+        self._emergency_stream_task = asyncio.create_task(
+            self._emergency_stream_loop(),
+            name="weatherlight.emergency_stream",
+        )
 
     def initiate_shutdown(self) -> None:
         """Trigger graceful shutdown (idempotent)."""
@@ -277,9 +296,133 @@ class WeatherlightService:
                     self._rollback_detections_total += 1
                     # Clear to avoid repeated floods; rely on trainer to set on each deadline
                     self._rollback_signal.clear()
+            except asyncio.CancelledError:  # pragma: no cover - cancellation path
+                raise
+            except asyncio.CancelledError:  # pragma: no cover - cancellation path
+                raise
             except Exception:
                 pass
             await asyncio.sleep(0.1)
+
+    async def _emergency_signal_loop(self) -> None:
+        """Monitor shared-memory emergency signals for fast-path detection."""
+
+        assert self._oona is not None
+        while not self._shutdown_requested.is_set():
+            try:
+                if self._emergency_signal is None and self._emergency_signal_name:
+                    try:
+                        self._emergency_signal = SharedEmergencySignal.attach(self._emergency_signal_name)
+                    except Exception:
+                        await asyncio.sleep(0.1)
+                        continue
+                if self._emergency_signal is None:
+                    await asyncio.sleep(0.5)
+                    continue
+                if self._emergency_signal.is_set():
+                    now_s = time.monotonic()
+                    if self._emergency_last_detect_s is not None and (now_s - self._emergency_last_detect_s) < 0.2:
+                        self._emergency_skipped_total += 1
+                        self._emergency_signal.clear()
+                        await asyncio.sleep(0.05)
+                        continue
+                    level = self._emergency_signal.read_level()
+                    reason = self._emergency_signal.read_reason() or "shared_signal"
+                    ts_ms = self._emergency_signal.read_timestamp_ms()
+                    self._emergency_signal.clear()
+                    await self._handle_emergency_detection(
+                        level=level,
+                        reason=reason,
+                        origin="shared_signal",
+                        triggered_ms=ts_ms,
+                    )
+            except Exception:
+                pass
+            await asyncio.sleep(0.1)
+
+    async def _emergency_stream_loop(self) -> None:
+        """Drain Oona emergency stream and emit Weatherlight telemetry."""
+
+        assert self._oona is not None
+        while not self._shutdown_requested.is_set():
+            try:
+                await self._oona.consume_emergency_signals(
+                    self._on_emergency_message,
+                    count=5,
+                    block_ms=500,
+                )
+            except asyncio.CancelledError:  # pragma: no cover - cancellation path
+                raise
+            except Exception:
+                await asyncio.sleep(0.2)
+
+    async def _on_emergency_message(self, message: OonaMessage) -> None:
+        if message.message_type != leyline_pb2.BusMessageType.BUS_MESSAGE_TYPE_EMERGENCY_SIGNAL:
+            return
+        signal = leyline_pb2.EmergencySignal()
+        signal.ParseFromString(message.payload)
+        reason = signal.reason or message.attributes.get("reason", "")
+        if not reason:
+            reason = "unspecified"
+        origin = signal.origin or message.attributes.get("origin", "stream")
+        triggered_ms = int(signal.monotonic_time_ms) if getattr(signal, "monotonic_time_ms", 0) else None
+        await self._handle_emergency_detection(
+            level=int(signal.level),
+            reason=reason,
+            origin=f"stream:{origin}",
+            triggered_ms=triggered_ms,
+        )
+
+    async def _handle_emergency_detection(
+        self,
+        *,
+        level: int,
+        reason: str,
+        origin: str,
+        triggered_ms: int | None,
+    ) -> None:
+        assert self._oona is not None
+        now_s = time.monotonic()
+        self._emergency_detections_total += 1
+        self._emergency_last_detect_s = now_s
+        self._emergency_last_trigger_ms = triggered_ms
+        self._emergency_last_level = int(level)
+        self._emergency_last_reason = reason
+        latency_ms = 0.0
+        if triggered_ms is not None:
+            latency_ms = max(0.0, (time.monotonic() * 1000.0) - float(triggered_ms))
+        metrics = [
+            TelemetryMetric("weatherlight.emergency.level", float(level), unit="count"),
+            TelemetryMetric("weatherlight.emergency.latency_ms", float(latency_ms), unit="ms"),
+        ]
+        events = [
+            TelemetryEvent(
+                description="emergency_signal_received",
+                level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
+                attributes={
+                    "reason": reason,
+                    "origin": origin,
+                    "level": str(int(level)),
+                },
+            )
+        ]
+        pkt = build_telemetry_packet(
+            packet_id=f"weatherlight-emergency-{uuid.uuid4()}",
+            source="weatherlight",
+            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
+            metrics=metrics,
+            events=events,
+            health_status=leyline_pb2.HealthStatus.HEALTH_STATUS_CRITICAL,
+            health_summary="emergency_detected",
+            health_indicators={
+                "priority": "MESSAGE_PRIORITY_CRITICAL",
+                "origin": origin,
+            },
+        )
+        await self._oona.publish_telemetry(
+            pkt,
+            priority=leyline_pb2.MessagePriority.MESSAGE_PRIORITY_CRITICAL,
+        )
 
     async def _build_oona_client(self) -> OonaClient:
         hostname = socket.gethostname().replace(" ", "-")
@@ -574,6 +717,20 @@ class WeatherlightService:
             metrics.append(TelemetryMetric("weatherlight.rollback.skipped_total", float(self._rollback_skipped_total), unit="count"))
         if self._rollback_last_detect_s is not None:
             metrics.append(TelemetryMetric("weatherlight.rollback.last_detect_ms_ago", float((time.monotonic() - self._rollback_last_detect_s) * 1000.0), unit="ms"))
+        if self._emergency_detections_total:
+            metrics.append(TelemetryMetric("weatherlight.emergency.detections_total", float(self._emergency_detections_total), unit="count"))
+        if self._emergency_skipped_total:
+            metrics.append(TelemetryMetric("weatherlight.emergency.skipped_total", float(self._emergency_skipped_total), unit="count"))
+        if self._emergency_last_detect_s is not None:
+            metrics.append(
+                TelemetryMetric(
+                    "weatherlight.emergency.last_detect_ms_ago",
+                    float((time.monotonic() - self._emergency_last_detect_s) * 1000.0),
+                    unit="ms",
+                )
+            )
+        if self._emergency_last_level is not None:
+            metrics.append(TelemetryMetric("weatherlight.emergency.last_level", float(self._emergency_last_level), unit="count"))
         if self._tezzeret_metrics_provider is not None:
             try:
                 tezzeret_metrics = self._tezzeret_metrics_provider()
@@ -594,6 +751,16 @@ class WeatherlightService:
                     level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
                     attributes={
                         "last_error_ts": f"{self._last_error_ts:.3f}",
+                    },
+                )
+            )
+        if self._emergency_last_reason:
+            events.append(
+                TelemetryEvent(
+                    description="emergency_last_reason",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+                    attributes={
+                        "reason": self._emergency_last_reason,
                     },
                 )
             )
@@ -717,6 +884,11 @@ class WeatherlightService:
         """Expose the rollback detection counter for verification in tests."""
 
         return self._rollback_detections_total
+
+    def get_emergency_detection_count(self) -> int:
+        """Expose emergency detection counter for verification in tests."""
+
+        return self._emergency_detections_total
 
     async def _flush_telemetry_once(self) -> None:
         assert self._oona is not None
@@ -888,6 +1060,12 @@ class WeatherlightService:
             self._housekeeping_task.cancel()
         if self._kasmina_telemetry_task is not None:
             self._kasmina_telemetry_task.cancel()
+        if self._rollback_monitor_task is not None:
+            self._rollback_monitor_task.cancel()
+        if self._emergency_monitor_task is not None:
+            self._emergency_monitor_task.cancel()
+        if self._emergency_stream_task is not None:
+            self._emergency_stream_task.cancel()
         with contextlib.suppress(Exception):
             await asyncio.gather(
                 *[task for task in tasks if task is not None],
@@ -897,6 +1075,9 @@ class WeatherlightService:
                         self._telemetry_task,
                         self._housekeeping_task,
                         self._kasmina_telemetry_task,
+                        self._rollback_monitor_task,
+                        self._emergency_monitor_task,
+                        self._emergency_stream_task,
                     )
                     if task is not None
                 ],
@@ -908,6 +1089,9 @@ class WeatherlightService:
         with contextlib.suppress(Exception):
             if self._oona is not None:
                 await self._oona.close()
+        with contextlib.suppress(Exception):
+            if self._emergency_signal is not None:
+                self._emergency_signal.close()
         self._shutdown_complete.set()
 
 

@@ -1,5 +1,7 @@
 # Tolaria Emergency Fast-Path Plan
 
+Status: **Implemented** — Leyline contract, Tolaria/Oona/Weatherlight wiring, and shared-memory bridge landed in this change-set.
+
 ## Context
 - Source design: `docs/design/detailed_design/01.2-tolaria-rollback-systems.md` (four-level protocol + <100 ms broadcast requirement).
 - Prototype delta gaps: `docs/prototype-delta/tolaria/README.md` (missing cross-process broadcast) and `delta-matrix.md` (Two-tier rollback / Emergency protocol marked Partially Implemented).

@@ -167,6 +167,9 @@ class EsperSettings(BaseSettings):
     tolaria_rollback_signal_name: str | None = Field(
         alias="TOLARIA_ROLLBACK_SIGNAL_NAME", default=None
     )
+    tolaria_emergency_signal_name: str | None = Field(
+        alias="TOLARIA_EMERGENCY_SIGNAL_NAME", default=None
+    )
 
     # Multi-seed aggregation
     tolaria_aggregation_scheme: str = Field(

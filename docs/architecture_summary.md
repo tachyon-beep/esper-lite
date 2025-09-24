@@ -43,6 +43,7 @@ Key messages used across the system (not exhaustive):
 - `SystemStatePacket`: training snapshot from Tolaria; includes metrics map and seed states.
 - `TelemetryPacket`: metrics + events + system health status/summary/indicators.
 - `AdaptationCommand`: Tamiyo’s decision (SEED/OPTIMIZER/PAUSE/CIRCUIT_BREAKER/EMERGENCY), with annotations.
+- `EmergencySignal`: Tolaria’s high-priority escalation broadcast consumed by Weatherlight/Oona for sub-100 ms incident coordination.
 - `SeedState`: Kasmina lifecycle export (for Tolaria and observability).
 - `FieldReport`: outcome/metrics of control actions (Tamiyo → Simic).
 - `KernelPrefetchRequest` / `KernelArtifactReady` / `KernelArtifactError`: Oona prefetch flow.

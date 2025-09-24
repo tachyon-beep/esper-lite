@@ -16,7 +16,8 @@ from collections.abc import Iterable, Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from dataclasses import dataclass, field
 import contextlib
-from time import perf_counter, time_ns
+from datetime import datetime, timezone
+from time import perf_counter, time_ns, monotonic
 import os
 from typing import TYPE_CHECKING, Protocol
 from pathlib import Path
@@ -31,12 +32,19 @@ from torch.utils.data import DataLoader
 
 from esper.core import EsperSettings, TelemetryEvent, TelemetryMetric, build_telemetry_packet
 from esper.leyline import leyline_pb2
+from google.protobuf.timestamp_pb2 import Timestamp
+
 from esper.oona.messaging import CircuitBreaker, BreakerSnapshot
 from .lr_controller import build_controller, LRController
 from .optimizer_manager import OptimizerManager
 from .rollback import FastRollbackCache, attempt_two_tier_rollback, DeadlineSignal, SharedDeadlineSignal
 from .profiler import maybe_profile
-from .emergency import EmergencyController, Level as EmergencyLevel
+from .emergency import (
+    EmergencyController,
+    Level as EmergencyLevel,
+    SharedEmergencySignal,
+    LocalEmergencySignal,
+)
 from .aggregation import grads_to_flat, flat_to_grads, combine_flat_grads
 
 if TYPE_CHECKING:
@@ -184,8 +192,8 @@ class TolariaTrainer:
         self._run_id = "training-run"
         self._telemetry_packets: list[leyline_pb2.TelemetryPacket] = []
         self._state_packets: list[leyline_pb2.SystemStatePacket] = []
-        self._emergency_packets: list[leyline_pb2.TelemetryPacket] = []
-        self._emergency_publisher: Callable[[leyline_pb2.TelemetryPacket], Awaitable[None]] | None = None
+        self._emergency_signals: list[leyline_pb2.EmergencySignal] = []
+        self._emergency_publisher: Callable[[leyline_pb2.EmergencySignal], Awaitable[None]] | None = None
         self._seed_agg_metrics: list[TelemetryMetric] = []
         # Snapshot cadence and rebuild storm guard
         try:
@@ -349,6 +357,7 @@ class TolariaTrainer:
         self._seed_health_compact = bool(getattr(self._settings, "tolaria_seed_health_compact", False))
 
         self._emergency: EmergencyController | None = None
+        self._emergency_signal_bridge: SharedEmergencySignal | LocalEmergencySignal | None = None
         if self._settings.tolaria_emergency_enabled:
             self._emergency = EmergencyController(
                 bypass_cap_per_min=self._settings.tolaria_emergency_bypass_max_per_min
@@ -357,6 +366,19 @@ class TolariaTrainer:
             self._metrics["tolaria.emergency.bypass_applied_total"] = 0.0
             self._metrics["tolaria.emergency.halts_total"] = 0.0
             self._metrics["tolaria.emergency.halt"] = 0.0
+            signal_name = getattr(self._settings, "tolaria_emergency_signal_name", None)
+            if signal_name:
+                try:
+                    self._emergency_signal_bridge = SharedEmergencySignal.create(signal_name)
+                    self._metrics["tolaria.emergency.shared_signal_mode"] = 1.0
+                except Exception:
+                    self._emergency_signal_bridge = LocalEmergencySignal()
+                    self._metrics["tolaria.emergency.shared_signal_mode"] = 0.0
+            else:
+                self._emergency_signal_bridge = LocalEmergencySignal()
+                self._metrics["tolaria.emergency.shared_signal_mode"] = 0.0
+        else:
+            self._metrics["tolaria.emergency.shared_signal_mode"] = 0.0
 
     def run(self) -> Iterable[leyline_pb2.SystemStatePacket]:
         """Run the training loop, yielding `SystemStatePacket`s each epoch."""
@@ -425,35 +447,11 @@ class TolariaTrainer:
                         "tolaria.emergency.escalated",
                         attributes={"level": str(int(esc.level)), "reason": failure_reason},
                     )
-                    # Build a high-priority telemetry packet for broadcast
-                    pkt = build_telemetry_packet(
-                        packet_id=f"{self._run_id}-emergency-{epoch}",
-                        source="tolaria",
-                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
-                        metrics=[],
-                        events=[TelemetryEvent(
-                            description="emergency_broadcast",
-                            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
-                            attributes={"level": str(int(esc.level)), "reason": failure_reason, "epoch": str(epoch), "run_id": self._run_id},
-                        )],
-                        health_status=leyline_pb2.HealthStatus.HEALTH_STATUS_UNHEALTHY,
-                        health_summary="emergency",
-                        health_indicators={"priority": "MESSAGE_PRIORITY_HIGH"},
+                    self._dispatch_emergency_signal(
+                        level=int(esc.level),
+                        reason=failure_reason,
+                        epoch=epoch,
                     )
-                    # Try immediate non-blocking publish if a publisher is registered; else queue
-                    publisher = self._emergency_publisher
-                    if publisher is not None:
-                        try:
-                            import asyncio
-                            loop = asyncio.get_running_loop()
-                            loop.create_task(publisher(pkt))
-                            self._metrics["tolaria.emergency.broadcasts_total"] = (
-                                self._metrics.get("tolaria.emergency.broadcasts_total", 0.0) + 1.0
-                            )
-                        except Exception:
-                            self._emergency_packets.append(pkt)
-                    else:
-                        self._emergency_packets.append(pkt)
                 # Attempt two-tier rollback on failure
                 if self._fast_cache is not None:
                     with _record_function("tolaria/rollback"):
@@ -483,6 +481,11 @@ class TolariaTrainer:
                             self._emit_event(
                                 "tolaria.emergency.halt",
                                 attributes={"level": str(int(esc.level)), "reason": "rollback_deadline"},
+                            )
+                            self._dispatch_emergency_signal(
+                                level=int(esc.level),
+                                reason="rollback_deadline",
+                                epoch=epoch,
                             )
                             self._halt = True
                             self._metrics["tolaria.emergency.halts_total"] = self._metrics.get("tolaria.emergency.halts_total", 0.0) + 1.0
@@ -1948,6 +1951,47 @@ class TolariaTrainer:
                 attributes={},
             )
 
+    def _dispatch_emergency_signal(self, *, level: int, reason: str, epoch: int) -> None:
+        if self._emergency is None:
+            return
+        ts = Timestamp()
+        ts.FromDatetime(datetime.now(timezone.utc))
+        monotonic_ms = int(monotonic() * 1000.0)
+        signal = leyline_pb2.EmergencySignal(
+            version=1,
+            level=int(level),
+            reason=reason,
+            origin="tolaria",
+            triggered_at=ts,
+            monotonic_time_ms=monotonic_ms,
+            run_id=self._run_id,
+        )
+        signal.attributes["epoch"] = str(epoch)
+        signal.attributes["failure_reason"] = reason
+        signal.attributes["mode"] = "automatic"
+        dispatched = False
+        publisher = self._emergency_publisher
+        if publisher is not None:
+            try:
+                import asyncio
+
+                loop = asyncio.get_running_loop()
+                loop.create_task(publisher(signal))
+                self._metrics["tolaria.emergency.broadcasts_total"] = (
+                    self._metrics.get("tolaria.emergency.broadcasts_total", 0.0) + 1.0
+                )
+                dispatched = True
+            except Exception:
+                dispatched = False
+        if not dispatched:
+            self._emergency_signals.append(signal)
+        bridge = self._emergency_signal_bridge
+        if bridge is not None:
+            try:
+                bridge.trigger(int(level), reason, monotonic_ms=monotonic_ms)
+            except Exception:
+                pass
+
     def _emit_event(
         self,
         description: str,
@@ -1976,48 +2020,45 @@ class TolariaTrainer:
 
         return list(self._state_packets)
 
-    async def publish_history(self, oona: OonaClient) -> None:
+    async def publish_history(self, oona: "OonaClient") -> None:
         """Publish collected state and telemetry packets via Oona."""
 
         for state, telemetry in zip(self._state_packets, self._telemetry_packets, strict=False):
             await oona.publish_state(state)
             await oona.publish_telemetry(telemetry)
 
-        # Publish any queued emergency packets with high priority via telemetry stream
-        # Apply a simple bypass cap per call to avoid flooding (prototype level)
-        if self._emergency_packets:
+        # Publish any queued emergency signals using the dedicated emergency stream.
+        if self._emergency_signals:
             cap = max(1, self._settings.tolaria_emergency_bypass_max_per_min)
             sent = 0
-            while self._emergency_packets and sent < cap:
-                pkt = self._emergency_packets.pop(0)
+            while self._emergency_signals and sent < cap:
+                signal = self._emergency_signals.pop(0)
                 try:
-                    await oona.publish_telemetry(
-                        pkt,
-                        priority=leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH,
-                    )
+                    await oona.publish_emergency_signal(signal, source="tolaria")
                     sent += 1
                 except Exception:
                     # Best-effort; stop on errors
+                    self._emergency_signals.insert(0, signal)
                     break
             self._metrics["tolaria.emergency.broadcasts_total"] = (
                 self._metrics.get("tolaria.emergency.broadcasts_total", 0.0) + float(sent)
             )
-            dropped = len(self._emergency_packets)
+            dropped = len(self._emergency_signals)
             if dropped:
                 self._metrics["tolaria.emergency.bypass_applied_total"] = (
                     self._metrics.get("tolaria.emergency.bypass_applied_total", 0.0) + float(dropped)
                 )
             # Clear any remaining queued packets after applying cap
-            self._emergency_packets.clear()
+            self._emergency_signals.clear()
 
     def set_emergency_publisher(
-        self, publisher: Callable[[leyline_pb2.TelemetryPacket], Awaitable[None]]
+        self, publisher: Callable[[leyline_pb2.EmergencySignal], Awaitable[None]]
     ) -> None:
-        """Register an async publisher used for immediate emergency telemetry.
+        """Register an async publisher used for immediate emergency signal broadcast.
 
-        When set, emergency escalations will attempt to publish a high-priority
-        telemetry packet immediately via the current event loop. Failures fall
-        back to the internal queue that `publish_history` flushes.
+        When set, emergency escalations attempt to publish a `EmergencySignal`
+        immediately via the current event loop. Failures fall back to the
+        internal queue that `publish_history` flushes via Oona.
         """
         self._emergency_publisher = publisher
 
@@ -2031,6 +2072,21 @@ class TolariaTrainer:
             self._rollback_signal = SharedDeadlineSignal.create(name)
         except Exception:
             self._rollback_signal = DeadlineSignal()
+
+    def get_emergency_signal(self) -> SharedEmergencySignal | LocalEmergencySignal | None:
+        """Expose the emergency signal bridge (shared-memory or local)."""
+
+        return self._emergency_signal_bridge
+
+    def set_shared_emergency_signal(self, name: str) -> None:
+        """Force the emergency signal bridge to shared memory (tests/ops)."""
+
+        try:
+            self._emergency_signal_bridge = SharedEmergencySignal.create(name)
+            self._metrics["tolaria.emergency.shared_signal_mode"] = 1.0
+        except Exception:
+            self._emergency_signal_bridge = LocalEmergencySignal()
+            self._metrics["tolaria.emergency.shared_signal_mode"] = 0.0
 
     # ----------------------------
     # Checkpoint & Rollback (WAL)
