@@ -344,6 +344,19 @@ class TamiyoService:
                 unit="bool",
             ),
         ]
+        # Append warm-up latency metric if measured
+        try:
+            warm_ms = float(getattr(self._policy, "compile_warm_ms", 0.0))
+            if warm_ms >= 0.0:
+                metrics.append(
+                    TelemetryMetric(
+                        "tamiyo.gnn.compile_warm_ms",
+                        warm_ms,
+                        unit="ms",
+                    )
+                )
+        except Exception:
+            pass
         # Append compile fallback counter if any
         try:
             fallbacks = int(getattr(self._policy, "compile_fallbacks", 0))

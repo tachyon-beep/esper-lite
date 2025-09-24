@@ -175,12 +175,19 @@ class TamiyoPolicy(nn.Module):
         self._compiled_model: nn.Module | None = None
         self._compile_enabled = False
         self._compile_fallbacks: int = 0
+        self._compile_warm_ms: float = 0.0
         self._blueprint_metadata: dict[str, dict[str, float | str | bool | int]] = {}
 
         if cfg.enable_compile:
             try:  # pragma: no cover - depends on backend support
                 self._compiled_model = torch.compile(self._gnn, dynamic=True, mode="reduce-overhead")
                 self._compile_enabled = True
+                # Best-effort warm-up to reduce first-step variance (CUDA only)
+                if self._device.type == "cuda":
+                    try:
+                        self._compile_warm_ms = self._warmup_compiled_model()
+                    except Exception:  # pragma: no cover - defensive; warm-up is optional
+                        self._compile_warm_ms = 0.0
             except Exception as exc:  # pragma: no cover - compile fallback path
                 logger.info("tamiyo_gnn_compile_disabled", extra={"reason": str(exc)})
                 self._compile_fallbacks += 1
@@ -416,6 +423,10 @@ class TamiyoPolicy(nn.Module):
         return self._compile_fallbacks
 
     @property
+    def compile_warm_ms(self) -> float:
+        return self._compile_warm_ms
+
+    @property
     def feature_coverage(self) -> dict[str, float]:
         return dict(self._last_feature_coverage)
 
@@ -428,6 +439,88 @@ class TamiyoPolicy(nn.Module):
     ) -> None:
         for key, value in metadata.items():
             self._blueprint_metadata[key] = dict(value)
+
+    # ------------------------------------------------------------------
+    # Warm-up Helpers
+    # ------------------------------------------------------------------
+    def _warmup_compiled_model(self) -> float:
+        """Run a minimal forward on the compiled model to warm kernels.
+
+        Returns the elapsed time in milliseconds on success; 0.0 on failure.
+        """
+        if not self._compile_enabled or self._compiled_model is None:
+            return 0.0
+        # Restrict warm-up to CUDA devices to avoid heavy CPU inductor startup in CI
+        if self._device.type != "cuda":
+            return 0.0
+        try:
+            from torch_geometric.data import HeteroData  # local import
+        except Exception:
+            return 0.0
+
+        cfg = getattr(self._gnn, "_cfg", None)
+        if cfg is None:
+            return 0.0
+        # Build a tiny hetero-graph: one node per type, one self-edge per relation
+        data = HeteroData()
+        dims = {
+            "global": cfg.global_input_dim,
+            "seed": cfg.seed_input_dim,
+            "blueprint": cfg.blueprint_input_dim,
+            "layer": cfg.layer_input_dim,
+            "activation": cfg.activation_input_dim,
+            "parameter": cfg.parameter_input_dim,
+        }
+        for ntype, dim in dims.items():
+            data[ntype].x = torch.zeros((1, int(dim)), dtype=torch.float32)
+
+        relations = getattr(self._gnn, "_relations", ())
+        edge_dim = int(getattr(cfg, "edge_feature_dim", 0))
+        for relation in relations:
+            src, rel, dst = relation
+            edge_index = torch.tensor([[0], [0]], dtype=torch.long)
+            data[(src, rel, dst)].edge_index = edge_index
+            if edge_dim > 0:
+                data[(src, rel, dst)].edge_attr = torch.zeros((1, edge_dim), dtype=torch.float32)
+
+        # Move to device
+        non_blocking = self._device.type == "cuda"
+        data = data.to(self._device, non_blocking=non_blocking)
+
+        module: nn.Module = self._compiled_model
+        was_training = module.training
+        module.eval()
+        # Prefer CUDA timing when available
+        t0 = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None
+        t1 = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None
+        import time as _time
+        wall_start = _time.perf_counter()
+        with torch.inference_mode():
+            autocast_ctx = (
+                torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+                if (self._autocast_enabled and self._device.type == "cuda")
+                else nullcontext()
+            )
+            with autocast_ctx:
+                try:
+                    if t0 and t1:
+                        torch.cuda.synchronize()
+                        t0.record()
+                    _ = module(data)
+                    if t0 and t1:
+                        t1.record()
+                        torch.cuda.synchronize()
+                except Exception:
+                    pass
+        wall_ms = (_time.perf_counter() - wall_start) * 1000.0
+        if was_training:
+            module.train()
+        if t0 and t1:
+            try:
+                return float(t0.elapsed_time(t1))
+            except Exception:
+                return float(wall_ms)
+        return float(wall_ms)
 
     def _lookup_blueprint_metadata(self, blueprint_id: str) -> Mapping[str, float | str | bool | int]:
         return self._blueprint_metadata.get(blueprint_id, {})
