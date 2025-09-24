@@ -1198,8 +1198,6 @@ class KasminaSeedManager:
                 allowed_stages = {
                     pb.SEED_STAGE_TRAINING,
                     pb.SEED_STAGE_BLENDING,
-                    pb.SEED_STAGE_SHADOWING,
-                    pb.SEED_STAGE_PROBATIONARY,
                 }
                 current_stage = context.lifecycle.state if context else pb.SEED_STAGE_UNKNOWN
                 if current_stage not in allowed_stages:
@@ -1400,8 +1398,6 @@ class KasminaSeedManager:
             if stage in {
                 pb.SEED_STAGE_TRAINING,
                 pb.SEED_STAGE_BLENDING,
-                pb.SEED_STAGE_SHADOWING,
-                pb.SEED_STAGE_PROBATIONARY,
             }:
                 session.enable_collection()
             else:
@@ -1749,7 +1745,11 @@ class KasminaSeedManager:
                 self._handle_gate_failure(context, result, events)
         session = self._isolation_sessions.get(seed_id)
         if session:
-            session.enable_collection()
+            if context.lifecycle.state in {pb.SEED_STAGE_TRAINING, pb.SEED_STAGE_BLENDING}:
+                session.enable_collection()
+            else:
+                session.disable_collection()
+                session.reset()
         return events
 
 
