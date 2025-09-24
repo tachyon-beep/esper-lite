@@ -84,6 +84,16 @@ class EsperSettings(BaseSettings):
     tamiyo_blend_alpha_vec_max: int = Field(
         alias="TAMIYO_BLEND_ALPHA_VEC_MAX", default=64
     )
+    # P9 — Field Report Lifecycle (observation windows + retry backoff)
+    tamiyo_fr_obs_window_epochs: int = Field(
+        alias="TAMIYO_FR_OBS_WINDOW_EPOCHS", default=3
+    )
+    tamiyo_fr_retry_backoff_ms: int = Field(
+        alias="TAMIYO_FR_RETRY_BACKOFF_MS", default=1000
+    )
+    tamiyo_fr_retry_backoff_mult: float = Field(
+        alias="TAMIYO_FR_RETRY_BACKOFF_MULT", default=2.0
+    )
     # Policy update verification knobs
     tamiyo_verify_updates: bool = Field(
         alias="TAMIYO_VERIFY_UPDATES", default=True

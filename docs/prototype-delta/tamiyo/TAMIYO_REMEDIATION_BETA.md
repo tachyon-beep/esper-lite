@@ -15,6 +15,7 @@ Current Status
 - P2 — GNN Compile Warm‑Up + Telemetry: Implemented (CUDA‑only warm‑up; telemetry `tamiyo.gnn.compile_warm_ms`)
 - P3 — PolicyUpdate Security & Rollback: Implemented (transactional load + version/freshness guards)
 - P8 — Blend Mode Annotations: Implemented (Tamiyo emits optional `blend_mode` + params; Kasmina consumes executor‑side)
+- P9 — Field Report Lifecycle: Implemented (observation windows + durable retry index with backoff)
 
 References
 - docs/architecture_summary.md
@@ -275,6 +276,37 @@ Risks
 - None.
 
 ---
+
+## Package P9 — Field Report Lifecycle (Observation Windows + Ack/Retry)
+
+Objective
+- Aggregate N subsequent epochs/steps per decision into a synthesised FieldReport, and add bounded ack/retry semantics with a durable retry/index.
+
+Changes
+- Add observation window state keyed by `command_id` to accumulate metrics and reasons; synthesise a consolidated report after N epochs.
+- Extend `publish_history` with a durable retry index (JSON sidecar), exponential backoff, and drop threshold; publish metrics/events for visibility.
+
+Files
+- `src/esper/tamiyo/service.py`, `src/esper/tamiyo/persistence.py`
+- Sidecars: `var/tamiyo/field_reports.index.json`, `var/tamiyo/field_reports.windows.json`
+
+Env/Knobs
+- `TAMIYO_FR_OBS_WINDOW_EPOCHS` (default 3)
+- `TAMIYO_FR_RETRY_BACKOFF_MS` (default 1000), `TAMIYO_FR_RETRY_BACKOFF_MULT` (default 2.0)
+- Reuse `TAMIYO_FIELD_REPORT_MAX_RETRIES`
+
+Telemetry
+- Metrics: `tamiyo.field_reports.{pending_total,published_total,retries_total,dropped_total}`
+- Events: `field_report_synthesised` (INFO), `field_report_retry` (WARNING), `field_report_drop` (WARNING)
+
+Acceptance
+- Synthesised reports appear after window completion; retry semantics are bounded and durable; no Tamiyo stalls.
+
+Status
+- Implemented — sidecars `field_reports.windows.json` and `field_reports.index.json`; unit tests added.
+
+Estimate
+- Effort: M (1–1.5 days) including tests
 
 ## Cross‑System Integration Notes
 

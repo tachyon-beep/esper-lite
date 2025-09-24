@@ -23,7 +23,12 @@ from esper.karn.catalog import BlueprintDescriptor  # noqa: F401
 from esper.leyline import leyline_pb2
 from esper.security.signing import DEFAULT_SECRET_ENV, SignatureContext, sign
 
-from .persistence import FieldReportStore, FieldReportStoreConfig
+from .persistence import (
+    FieldReportStore,
+    FieldReportStoreConfig,
+    _atomic_write_json,
+    _load_json,
+)
 from .policy import TamiyoPolicy, TamiyoPolicyConfig
 
 try:
@@ -217,6 +222,21 @@ class TamiyoService:
         self._metadata_timeout_s = max(metadata_timeout_ms, 0.0) / 1000.0
         self._inference_breaker = TamiyoCircuitBreaker(name="inference")
         self._metadata_breaker = TamiyoCircuitBreaker(name="metadata")
+        # P9 — Observation windows and durable retry index sidecars
+        try:
+            self._obs_window_epochs = max(1, int(getattr(self._settings, "tamiyo_fr_obs_window_epochs", 3)))
+        except Exception:
+            self._obs_window_epochs = 3
+        sidecar_dir = self._field_report_store.path.parent
+        self._retry_index_path = sidecar_dir / "field_reports.index.json"
+        self._windows_path = sidecar_dir / "field_reports.windows.json"
+        self._retry_index: dict[str, dict[str, object]] = _load_json(self._retry_index_path)
+        self._windows: dict[str, dict[str, object]] = _load_json(self._windows_path)
+        # Keep sidecars small: ensure shapes are dicts
+        if not isinstance(self._retry_index, dict):
+            self._retry_index = {}
+        if not isinstance(self._windows, dict):
+            self._windows = {}
 
     def evaluate_step(self, state: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
         """Evaluate step state under tight deadlines (ADR-001 3A)."""
@@ -571,6 +591,12 @@ class TamiyoService:
         self._telemetry_packets.append(telemetry)
         # Emit a field report for every decision, including timeouts (neutral outcome).
         self._emit_field_report(command, state, loss_delta, events, timed_out=timed_out)
+        # Update/synthesise observation windows (non-blocking bookkeeping)
+        try:
+            self._update_observation_windows(state, command, events, loss_delta=loss_delta)
+            self._synthesise_due_windows()
+        except Exception:
+            pass
         self._last_validation_loss = state.validation_loss
         return command
 
@@ -651,9 +677,200 @@ class TamiyoService:
             training_run_id=state.training_run_id or "run-unknown",
             seed_id=command.target_seed_id,
             blueprint_id=command.seed_operation.blueprint_id if command.HasField("seed_operation") else "",
-            observation_window_epochs=max(1, int(state.current_epoch) if state.current_epoch else 1),
+            observation_window_epochs=1,
             notes=note_text,
         )
+
+    # -------------------------
+    # P9: Observation windows
+    # -------------------------
+
+    def _update_observation_windows(
+        self,
+        state: leyline_pb2.SystemStatePacket,
+        command: leyline_pb2.AdaptationCommand,
+        events: Iterable[TelemetryEvent],
+        *,
+        loss_delta: float,
+    ) -> None:
+        # Initialise a window for the newly issued command
+        cmd_id = command.command_id or ""
+        if cmd_id and cmd_id not in self._windows and self._obs_window_epochs > 0:
+            # Prepare immutable command metadata for synthesis
+            bp_id = command.seed_operation.blueprint_id if command.HasField("seed_operation") else ""
+            issued_iso = None
+            try:
+                issued_dt = command.issued_at.ToDatetime()  # type: ignore[attr-defined]
+                if issued_dt:
+                    issued_iso = issued_dt.isoformat()
+            except Exception:
+                issued_iso = None
+            self._windows[cmd_id] = {
+                "seed_id": command.target_seed_id,
+                "blueprint_id": bp_id,
+                "training_run_id": state.training_run_id or "run-unknown",
+                "policy_version": self._policy_version,
+                "start_epoch": int(getattr(state, "current_epoch", 0) or 0),
+                "collected": 0,
+                "target": int(self._obs_window_epochs),
+                "sum_loss_delta": 0.0,
+                "min_loss_delta": float("inf"),
+                "max_loss_delta": float("-inf"),
+                "sum_hook_latency_ms": 0.0,
+                "count_hook_latency": 0,
+                "last_reason": "",
+                "has_critical": False,
+                "issued_at_iso": issued_iso or "",
+            }
+        # Aggregate this step across all active windows
+        if not self._windows:
+            return
+        # Gather per-step context
+        try:
+            tm = dict(state.training_metrics)
+            hook_ms = float(tm.get("hook_latency_ms", 0.0))
+        except Exception:
+            hook_ms = 0.0
+        last_reason = None
+        has_critical = False
+        for ev in events:
+            try:
+                last_reason = ev.description or last_reason
+                if ev.level == leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL:
+                    has_critical = True
+            except Exception:
+                continue
+        for key, win in list(self._windows.items()):
+            try:
+                win["collected"] = int(win.get("collected", 0)) + 1
+                # Update aggregates
+                s = float(win.get("sum_loss_delta", 0.0)) + float(loss_delta)
+                win["sum_loss_delta"] = s
+                mn = float(win.get("min_loss_delta", float("inf")))
+                mx = float(win.get("max_loss_delta", float("-inf")))
+                if loss_delta < mn:
+                    win["min_loss_delta"] = float(loss_delta)
+                if loss_delta > mx:
+                    win["max_loss_delta"] = float(loss_delta)
+                if hook_ms > 0.0:
+                    win["sum_hook_latency_ms"] = float(win.get("sum_hook_latency_ms", 0.0)) + hook_ms
+                    win["count_hook_latency"] = int(win.get("count_hook_latency", 0)) + 1
+                if last_reason:
+                    win["last_reason"] = str(last_reason)
+                if has_critical:
+                    win["has_critical"] = True
+            except Exception:
+                continue
+        # Persist windows sidecar
+        _atomic_write_json(self._windows_path, self._windows)
+
+    def _synthesise_due_windows(self) -> None:
+        if not self._windows:
+            return
+        done: list[str] = []
+        synth_telemetry: list[leyline_pb2.TelemetryPacket] = []
+        for cmd_id, win in self._windows.items():
+            try:
+                collected = int(win.get("collected", 0))
+                target = max(1, int(win.get("target", self._obs_window_epochs)))
+            except Exception:
+                continue
+            if collected < target:
+                continue
+            # Derive outcome
+            try:
+                sum_delta = float(win.get("sum_loss_delta", 0.0))
+            except Exception:
+                sum_delta = 0.0
+            has_crit = bool(win.get("has_critical", False))
+            if sum_delta < 0.0 and not has_crit:
+                outcome = leyline_pb2.FIELD_REPORT_OUTCOME_SUCCESS
+            elif sum_delta > 0.0 or has_crit:
+                outcome = leyline_pb2.FIELD_REPORT_OUTCOME_REGRESSION
+            else:
+                outcome = leyline_pb2.FIELD_REPORT_OUTCOME_NEUTRAL
+            # Build metrics
+            mn = win.get("min_loss_delta", 0.0)
+            mx = win.get("max_loss_delta", 0.0)
+            s_hook = float(win.get("sum_hook_latency_ms", 0.0))
+            c_hook = int(win.get("count_hook_latency", 0))
+            metrics = {
+                "loss_delta_total": float(sum_delta),
+                "loss_delta_min": float(mn if mn != float("inf") else 0.0),
+                "loss_delta_max": float(mx if mx != float("-inf") else 0.0),
+            }
+            if c_hook > 0:
+                metrics["avg_hook_latency_ms"] = float(s_hook / max(1, c_hook))
+            last_reason = str(win.get("last_reason", ""))
+            # Compose a minimal command shell to carry IDs/timestamps
+            cmd = leyline_pb2.AdaptationCommand(version=1)
+            cmd.command_id = cmd_id
+            seed_id = str(win.get("seed_id", ""))
+            bp_id = str(win.get("blueprint_id", ""))
+            tr_id = str(win.get("training_run_id", "run-unknown"))
+            issued_iso = str(win.get("issued_at_iso", ""))
+            if issued_iso:
+                with contextlib.suppress(Exception):
+                    # From isoformat to Timestamp
+                    from datetime import datetime as _dt
+                    from datetime import timezone as _tz
+
+                    dt = _dt.fromisoformat(issued_iso)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=_tz.utc)
+                    cmd.issued_at.FromDatetime(dt)
+            # Report ID includes synthesis marker
+            report = self.generate_field_report(
+                command=cmd,
+                outcome=outcome,
+                metrics_delta=metrics,
+                training_run_id=tr_id,
+                seed_id=seed_id,
+                blueprint_id=bp_id,
+                observation_window_epochs=target,
+                notes=last_reason or "",
+            )
+            # Stamp a stable synthesised report_id if needed
+            try:
+                start_epoch = int(win.get("start_epoch", 0))
+                report.report_id = f"fr-synth-{cmd_id}-{start_epoch}+{target}"
+            except Exception:
+                report.report_id = f"fr-synth-{cmd_id}+{target}"
+            # Telemetry event for synthesis
+            try:
+                synth_telemetry.append(
+                    build_telemetry_packet(
+                        packet_id=f"tamiyo-field-report-synth-{cmd_id}",
+                        source="tamiyo",
+                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+                        metrics=[],
+                        events=[
+                            TelemetryEvent(
+                                description="field_report_synthesised",
+                                level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+                                attributes={
+                                    "report_id": report.report_id,
+                                    "command_id": cmd_id,
+                                    "target_epochs": str(target),
+                                },
+                            )
+                        ],
+                        health_status=leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY,
+                        health_summary="field_report_synthesised",
+                        health_indicators={},
+                    )
+                )
+            except Exception:
+                pass
+            done.append(cmd_id)
+        if done:
+            # Persist removal and store append has already updated memory via store.reports()
+            for k in done:
+                self._windows.pop(k, None)
+            _atomic_write_json(self._windows_path, self._windows)
+        # Queue telemetry for publication
+        if synth_telemetry:
+            self._telemetry_packets.extend(synth_telemetry)
 
     def _run_policy(
         self,
@@ -1607,21 +1824,94 @@ class TamiyoService:
 
         all_sent = True
         failed_reports: list[leyline_pb2.FieldReport] = []
+        now_ms = int(time.time() * 1000)
+        retries_total = 0
+        dropped_total = 0
+        published_total = 0
+        new_telemetry: list[leyline_pb2.TelemetryPacket] = []
         for report in list(self._field_reports):
             key = self._field_report_key(report)
+            idx = self._retry_index.get(key) or {}
+            published = bool(idx.get("published", False))
+            if published:
+                continue
+            next_due = int(idx.get("next_attempt_ms", 0))
+            if next_due and now_ms < next_due:
+                failed_reports.append(report)
+                all_sent = False
+                continue
             try:
                 await oona.publish_field_report(report)
+                # Success → mark published
                 self._report_retry_count.pop(key, None)
-            except Exception:  # pragma: no cover - asserted via tests
+                self._retry_index[key] = {
+                    "published": True,
+                    "retry_count": int(idx.get("retry_count", 0)),
+                    "next_attempt_ms": 0,
+                }
+                published_total += 1
+            except Exception as exc:  # pragma: no cover - asserted via tests
                 count = int(self._report_retry_count.get(key, 0)) + 1
                 self._report_retry_count[key] = count
+                retries_total += 1
+                # Compute backoff schedule
+                try:
+                    base = max(0, int(getattr(self._settings, "tamiyo_fr_retry_backoff_ms", 1000)))
+                except Exception:
+                    base = 1000
+                try:
+                    mult = float(getattr(self._settings, "tamiyo_fr_retry_backoff_mult", 2.0))
+                except Exception:
+                    mult = 2.0
+                delay = int(base * (mult ** max(1, count))) if base > 0 else 0
+                next_ms = now_ms + max(0, delay)
+                self._retry_index[key] = {
+                    "published": False,
+                    "retry_count": count,
+                    "next_attempt_ms": next_ms,
+                    "last_error": str(exc),
+                }
                 if count <= self._max_report_retries:
                     failed_reports.append(report)
                 else:
-                    # Drop from memory after cap; WAL remains intact
+                    # Drop from memory after cap; WAL remains intact; mark dropped in index
                     self._report_retry_count.pop(key, None)
+                    dropped_total += 1
+                    self._retry_index[key]["dropped"] = True
+                # Emit retry/drop telemetry
+                try:
+                    evt = "field_report_retry" if count <= self._max_report_retries else "field_report_drop"
+                    lvl = (
+                        leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING
+                        if evt == "field_report_retry"
+                        else leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING
+                    )
+                    new_telemetry.append(
+                        build_telemetry_packet(
+                            packet_id=f"tamiyo-fr-retry-{key}",
+                            source="tamiyo",
+                            level=lvl,
+                            metrics=[],
+                            events=[
+                                TelemetryEvent(
+                                    description=evt,
+                                    level=lvl,
+                                    attributes={
+                                        "report_id": key,
+                                        "retry_count": str(count),
+                                    },
+                                )
+                            ],
+                            health_status=leyline_pb2.HealthStatus.HEALTH_STATUS_DEGRADED,
+                            health_summary=evt,
+                            health_indicators={},
+                        )
+                    )
+                except Exception:
+                    pass
                 all_sent = False
 
+        # Publish pre-existing telemetry first
         for telemetry in self._telemetry_packets:
             priority_name = telemetry.system_health.indicators.get("priority")
             priority_enum = None
@@ -1632,10 +1922,38 @@ class TamiyoService:
                 await oona.publish_telemetry(telemetry, priority=priority_enum)
             except Exception:  # pragma: no cover - best effort
                 all_sent = False
+        # Publish retry/drop + summary telemetry
+        if retries_total or dropped_total or published_total:
+            try:
+                summary = build_telemetry_packet(
+                    packet_id="tamiyo-field-report-summary",
+                    source="tamiyo",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+                    metrics=[
+                        TelemetryMetric("tamiyo.field_reports.published_total", float(published_total), unit="count"),
+                        TelemetryMetric("tamiyo.field_reports.retries_total", float(retries_total), unit="count"),
+                        TelemetryMetric("tamiyo.field_reports.dropped_total", float(dropped_total), unit="count"),
+                        TelemetryMetric("tamiyo.field_reports.pending_total", float(len(failed_reports)), unit="count"),
+                    ],
+                    events=[],
+                    health_status=leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY,
+                    health_summary="field_report_publish_summary",
+                    health_indicators={},
+                )
+                new_telemetry.append(summary)
+            except Exception:
+                pass
+        for telemetry in new_telemetry:
+            try:
+                await oona.publish_telemetry(telemetry)
+            except Exception:  # pragma: no cover - best effort
+                all_sent = False
         # Clear published buffers to avoid duplicate exports when Weatherlight
         # drains Tamiyo on each flush cycle (prototype-delta Tamiyo §8).
         # Retain only unsent reports for next attempt
         self._field_reports = failed_reports
+        # Persist retry index sidecar
+        _atomic_write_json(self._retry_index_path, self._retry_index)
         if self._telemetry_packets:
             self._telemetry_packets = []
         return all_sent

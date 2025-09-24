@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import struct
 from dataclasses import dataclass
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Iterable
@@ -120,4 +121,37 @@ class FieldReportStore:
         return reports
 
 
-__all__ = ["FieldReportStore", "FieldReportStoreConfig"]
+def _atomic_write_json(path: Path, payload: object) -> None:
+    """Atomically write JSON to a file (tmp + fsync + rename)."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    with tmp_path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, separators=(",", ":"))
+        handle.flush()
+        os.fsync(handle.fileno())
+    tmp_path.replace(path)
+
+
+def _load_json(path: Path) -> dict:
+    """Load JSON from a file, returning an empty dict on missing/invalid data."""
+
+    try:
+        if not path.exists():
+            return {}
+        with path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+            if isinstance(data, dict):
+                return data
+            return {}
+    except Exception:
+        # Defensive: return empty on any parse error
+        return {}
+
+
+__all__ = [
+    "FieldReportStore",
+    "FieldReportStoreConfig",
+    "_atomic_write_json",
+    "_load_json",
+]

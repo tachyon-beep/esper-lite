@@ -306,17 +306,6 @@ class TamiyoPolicy(nn.Module):
                             else:
                                 # As a last resort, degrade to a safe pause
                                 outputs = None
-                else:
-                    # Eager CUDA fallback to CPU on backend/OOM errors
-                    if self._device.type == "cuda":
-                        with contextlib.suppress(Exception):
-                            module = module.to("cpu")
-                            graph = graph.to("cpu")
-                            self._device = torch.device("cpu")
-                            outputs = module(graph)
-                    else:
-                        # As a last resort, degrade to a safe pause
-                        outputs = None
 
         if outputs is None:
             # Degrade safely to a pause command
