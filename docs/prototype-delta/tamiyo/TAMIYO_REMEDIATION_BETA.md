@@ -31,6 +31,9 @@ Execution Principles
 Objective
 - Align Tamiyo step evaluation default budget to the timeout matrix (2–5 ms). Maintain existing override behavior via constructor and env.
 
+Status
+- Implemented
+
 Changes
 - Add `TAMIYO_STEP_TIMEOUT_MS` env‑driven default: 5.0 ms.
 - Plumb value into `TamiyoService(step_timeout_ms=...)` when explicit arg omitted.
@@ -54,6 +57,9 @@ Validation & Tests
   - Parametrise `test_evaluate_step_timeout_inference` with ≤5 ms default via env override.
   - Assert packet indicator `priority` equals HIGH on timeout.
 
+Env/Knobs
+- `TAMIYO_STEP_TIMEOUT_MS` (float, ms) — default step evaluate budget when not explicitly passed.
+
 Rollback Strategy
 - Revert env default to prior (15 ms) by unsetting `TAMIYO_STEP_TIMEOUT_MS` or passing constructor arg.
 
@@ -69,6 +75,9 @@ Risks
 
 Objective
 - Reduce first‑step latency variance on CUDA by warming up `torch.compile` and expose compile warm‑up/fallback telemetry.
+
+Status
+- Implemented (warm‑up restricted to CUDA devices)
 
 Changes
 - On CUDA with `enable_compile=True`, run a minimal synthetic HeteroData forward once to warm compilation.
@@ -111,6 +120,9 @@ Risks
 Objective
 - Verify PolicyUpdate payloads (signature and checkpoint metadata) and preserve last‑known‑good policy on failure.
 
+Status
+- Implemented (transactional load + version/freshness guards; signature verification handled by Oona envelope signing)
+
 Changes
 - Verify optional signature on `PolicyUpdate` before applying; reject invalid signatures.
 - Strengthen `ingest_policy_update`:
@@ -127,11 +139,16 @@ Inputs/Outputs
 Acceptance Criteria
 - Valid signed update applies; invalid signature or metadata mismatch is rejected with telemetry event `policy_update_rejected`.
 - No crash; subsequent updates still process.
+ - No partial or silent mutation of the live policy occurs on any failure path.
 
 Validation & Tests
 - tests/tamiyo/test_service.py
   - Add tests for valid/invalid signature paths and registry mismatch.
   - Assert telemetry event is present on rejection and policy version unchanged.
+
+Env/Knobs
+- `TAMIYO_VERIFY_UPDATES` (bool) — enable strict update validation (version/freshness). Default: true.
+- `TAMIYO_UPDATE_FRESHNESS_SEC` (int) — reject updates older than this many seconds (0 disables freshness check). Default: 0.
 
 Rollback Strategy
 - Feature‑flag signature verification for local development via env (e.g., `TAMIYO_VERIFY_UPDATES=false`).

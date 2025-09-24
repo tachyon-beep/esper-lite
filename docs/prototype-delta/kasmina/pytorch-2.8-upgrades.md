@@ -15,10 +15,11 @@ Mandatory changes
   - Tezzeret: see `docs/prototype-delta/tezzeret/pytorch-2.8-upgrades.md` for the mandatory `torch.compile` pipeline.
 - Acceptance: No runtime compilation in Kasmina; first BLENDING/TRAINING iterations do not pay compile latency.
 
-2) Use `torch.inference_mode()` for SHADOWING/PROBATIONARY probes
+2) Use `torch.inference_mode()` for SHADOWING/PROBATIONARY probes — Implemented
 - What: Wrap any forward probes during SHADOWING/PROBATIONARY in `torch.inference_mode()` to prevent autograd overhead and reduce memory churn.
 - How: Wherever probe forwards occur (Kasmina or Tolaria), gate them under `inference_mode()` when `stage in {SHADOWING, PROBATIONARY}`.
 - Acceptance: Probe forwards do not populate autodiff graphs; memory drops during SHADOWING.
+- Implementation: `KasminaSeedManager.run_probe()` wraps SHADOWING/PROBATIONARY calls in `torch.inference_mode()` (src/esper/kasmina/seed_manager.py). Tests in `tests/kasmina/test_probe_inference_mode.py`.
 
 3) Set global matmul precision/TF32 defaults
 - What: Optimise float32 matmul on A100‑class hardware.
@@ -28,12 +29,13 @@ Mandatory changes
   - `torch.backends.cudnn.allow_tf32 = True`
 - Acceptance: Improved throughput with numerics aligned to 2.8 defaults; no regressions in tests.
 
-4) Make isolation monitoring lighter and targeted
+4) Make isolation monitoring lighter and targeted — Scope Correction Implemented
 - What: Keep hooks active only during TRAINING and BLENDING; switch to online projections to avoid storing full gradient tensors.
 - How:
   - In `src/esper/kasmina/isolation.py`, add a “projection” path: pre‑seed random projections per parameter id; accumulate scalar `gᵀr` at hook time; compute dot product from accumulators.
   - Open sessions on attach; close on stage changes away from TRAINING/BLENDING.
 - Acceptance: Isolation stats available with reduced memory and Python overhead; G1 gate continues to enforce health based on violations.
+- Implementation status: Projection path already present. Scope correction applied — hooks collect only during TRAINING/BLENDING via `_handle_post_transition` and `_resume_seed` (src/esper/kasmina/seed_manager.py). Validated by `tests/kasmina/test_isolation_scope.py`.
 
 5) Advance alpha per batch during BLENDING
 - What: Ensure alpha ramps smoothly within BLENDING, not only on transitions.

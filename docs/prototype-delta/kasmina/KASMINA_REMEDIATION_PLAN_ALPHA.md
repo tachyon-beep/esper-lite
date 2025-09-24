@@ -14,6 +14,17 @@ Scope (Alpha)
 - No torch.compile calls in Kasmina (Tezzeret owns compilation). Kasmina may pre-warm attached kernels with a single inference forward when shapes are available.
 - Strengthen isolation, blending ergonomics, telemetry routing, and performance validation.
 
+Status Update
+- K1 Blending Modes: Implemented
+  - Code: src/esper/kasmina/blending.py (BlendMode/BlenderConfig and kernels), src/esper/kasmina/seed_manager.py (selection + telemetry event)
+  - Tests: tests/kasmina/test_blending_modes.py
+- K2 Isolation Hook Scope: Implemented (collection only in TRAINING/BLENDING)
+  - Code: src/esper/kasmina/seed_manager.py (_attach_kernel/_handle_post_transition/_resume_seed)
+  - Tests: tests/kasmina/test_isolation_scope.py
+- K3 Probe/Inference-Mode Hardening: Implemented
+  - Code: src/esper/kasmina/seed_manager.py (run_probe)
+  - Tests: tests/kasmina/test_probe_inference_mode.py
+
 Out of Scope
 - Major lifecycle changes (already aligned to 11-state model and gates).
 - KD losses and distributed coordination (kept optional/stubbed per delta docs).

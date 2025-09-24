@@ -1793,6 +1793,7 @@ class KasminaSeedManager:
         }:
             with torch.inference_mode():
                 return fn()
+        # TRAINING/BLENDING: respect caller context (no forced inference_mode)
         return fn()
 
     def record_isolation_violation(self, seed_id: str | None = None) -> None:
