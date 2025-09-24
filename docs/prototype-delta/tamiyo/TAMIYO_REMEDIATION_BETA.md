@@ -337,3 +337,49 @@ Total (without P7): ~3.5–4.5 days
   - `TAMIYO_VERIFY_UPDATES` (default true in CI, false in dev)
 - Reverting is a matter of toggling env or reverting isolated changes; no cross‑subsystem rollbacks required.
 
+---
+
+## Package P8 — Blend Mode Annotations (Tamiyo → Kasmina)
+
+Objective
+- Emit optional annotations to enable Kasmina’s upgraded blend modes (K1/K7) while keeping the default convex path unchanged when disabled.
+
+Changes
+- TamiyoPolicy:
+  - Add a config/env flag (e.g., `TAMIYO_ENABLE_BLEND_MODE_ANN=true`) to control emission of blend mode annotations.
+  - In `select_action`, attach optional annotations to the `AdaptationCommand`:
+    - `blend_mode`: one of {`CONVEX`, `RESIDUAL`, `CHANNEL`, `CONFIDENCE`} (default `CONVEX` when disabled or not predicted).
+    - `alpha_vec`: optional CSV/JSON list for channel/group‑wise α (only when dimensionality is known from blueprint metadata or policy outputs; otherwise omit).
+    - `gate_k`, `gate_tau`, `alpha_lo`, `alpha_hi`: optional confidence‑gating parameters; defaults to safe pass‑through (`gate_k=1.0`, `gate_tau=1.0`, `alpha_lo=0.0`, `alpha_hi=1.0`) when emitted without head support.
+  - Map from existing policy heads conservatively:
+    - If no dedicated head is available, derive `blend_mode` as `CONVEX` (status‑quo) or gated via a simple rule on drift/variance (prototype: only emit when explicitly enabled via settings to avoid churn).
+    - Consider overloading an unused dimension of `policy_params` for early experiments; keep final mapping documented when Simic parity is added.
+- TamiyoService: pass‑through; no risk‑engine coupling changes required.
+
+Files
+- src/esper/tamiyo/policy.py (annotation emission; config knob)
+- (Optional) src/esper/core/config.py (env plumbing)
+
+Inputs/Outputs
+- Input: policy outputs and optional blueprint metadata (for channel counts).
+- Output: `AdaptationCommand.annotations` includes `blend_mode` and optional params; absence preserves current convex behaviour.
+
+Acceptance Criteria
+- With flag ON, emitted SEED commands include `blend_mode` and any applicable parameters.
+- With flag OFF (default), no new keys are present; existing convex blend remains unchanged.
+- Invalid/insufficient context (e.g., unknown channel count) results in omission of `alpha_vec` without error.
+
+Validation & Tests
+- tests/tamiyo/test_service.py
+  - `test_emits_blend_mode_annotations_when_enabled`: monkeypatch the flag and assert keys present on SEED command.
+  - `test_blend_mode_annotations_disabled_by_default`: assert absence when flag is false/omitted.
+- Cross‑validation with Kasmina tests once K1/K7 land: annotations are parsed and fallback to convex on invalid values (Kasmina‑side tests).
+
+Rollback Strategy
+- Toggle the env/config flag OFF; no behaviour change elsewhere.
+
+Estimate
+- Effort: S (0.5–1 day)
+
+Risks
+- Annotation misuse creating confusion during early adoption; mitigate with conservative default OFF and explicit tests/docs.

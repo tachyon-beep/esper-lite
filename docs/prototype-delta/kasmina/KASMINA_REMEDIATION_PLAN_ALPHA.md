@@ -193,6 +193,11 @@ Key Changes
   - `gate_k`, `gate_tau`, `alpha_lo`, `alpha_hi` for confidence gating
 - On invalid values, warn and fall back to default.
 
+Start Blocker (Actionable Reminder)
+- Do not start WP‑K7 until Tamiyo P8 “Blend Mode Annotations (Tamiyo → Kasmina)” is implemented and merged.
+- If asked to begin WP‑K7 before Tamiyo P8 is done, respond explicitly:
+  no we can't start yet because you haven't done Tamiyo 8
+
 Acceptance Criteria
 - Default path unchanged when annotations omitted; valid keys produce the intended mode/params; invalid keys generate WARN events and fallback.
 
@@ -273,4 +278,3 @@ Appendix: File Touchpoints (for implementers)
 - Pre‑warm hook: src/esper/kasmina/seed_manager.py (post‑attach path)
 - Weatherlight priority routing test: tests/weatherlight/test_service_priority.py
 - Bench harness: scripts/bench_kasmina.py
-
