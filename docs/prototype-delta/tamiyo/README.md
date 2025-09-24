@@ -42,6 +42,7 @@ Documents in this folder:
 - `traceability-map.md` — mapping of design assertions to code/tests
 - `implementation-roadmap.md` — ordered plan to close gaps without tech debt
 - `pytorch-2.8-upgrades.md` — mandatory hetero‑GNN inference upgrades (compile, inference_mode, TF32, data transfer)
+- `sdpa_compatibility.md` — notes on SDPA/CUDA Graphs and PyG GAT compatibility/constraints
 - `graph_metadata_schema.md` — schema for Urza `extras.graph_metadata` consumed by Tamiyo (layers, activations, parameters, adjacency, monitors)
  - `metrics.md` — step and per-seed metric schema (prototype)
 
@@ -55,11 +56,19 @@ RiskConfig thresholds (Tamiyo)
 - `hook_budget_ms` (default 50.0): Hook budget breach; maps to PAUSE.
 
 Service timeouts (TamiyoService)
-- `step_timeout_ms` (default 15.0): Budget for policy inference path.
+- `step_timeout_ms`: Budget for policy inference path. Default derives from env `TAMIYO_STEP_TIMEOUT_MS` (5.0 ms) when not explicitly passed; legacy default was 15.0 ms. Tight budgets are enforced with fail‑open behavior.
 - `metadata_timeout_ms` (default 10.0): Deadline for Urza extras/metadata fetch (both enrichment and pre‑warm guard); skips enrichment on timeout.
 
 Trainer enrichment toggle (Tolaria)
 - `EsperSettings.tolaria_step_enrichment_enabled` (default True): Gates optional step‑level enrichments (optimizer hints, dynamics, conflict rate, I/O timings, GPU/CPU pressure). Core metrics and hook/tamiyo timings are always emitted.
+
+Policy update verification (TamiyoService)
+- `TAMIYO_VERIFY_UPDATES` (default true): Enforce policy version match and optional freshness check.
+- `TAMIYO_UPDATE_FRESHNESS_SEC` (default 0): When > 0, reject updates older than this window based on `issued_at`.
+- Updates are applied transactionally to a fresh policy instance; on failure, the live policy remains unchanged and telemetry `policy_update_rejected` is emitted with a reason.
+
+Inference compile warm-up (optional)
+- When `enable_compile=True` and running on CUDA, Tamiyo performs a best‑effort warm‑up forward on a tiny hetero‑graph at init. Telemetry includes `tamiyo.gnn.compile_warm_ms` when available.
 
 Example (tuning for a constrained host)
 ```

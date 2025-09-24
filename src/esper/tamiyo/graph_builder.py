@@ -781,7 +781,7 @@ class TamiyoGraphBuilder:
             relation: tuple[str, str, str],
             src: torch.Tensor,
             dst: torch.Tensor,
-            attrs: Sequence[Sequence[float]] | None = None,
+            attrs: Sequence[Sequence[float]] | torch.Tensor | None = None,
         ) -> None:
             if src.numel() == 0:
                 data[relation].edge_index = torch.zeros((2, 0), dtype=torch.long)
@@ -791,11 +791,19 @@ class TamiyoGraphBuilder:
             if attrs is None:
                 edge_attr = torch.zeros((src.numel(), edge_dim), dtype=torch.float32)
             else:
-                edge_attr = torch.tensor(attrs, dtype=torch.float32)
+                if isinstance(attrs, torch.Tensor):
+                    edge_attr = attrs.to(dtype=torch.float32)
+                else:
+                    edge_attr = torch.tensor(attrs, dtype=torch.float32)
                 if edge_attr.ndim == 1:
                     edge_attr = edge_attr.unsqueeze(0)
+                # Ensure row count matches number of edges (broadcast if needed)
                 if edge_attr.size(0) != src.numel():
-                    edge_attr = edge_attr.expand(src.numel(), edge_dim)
+                    edge_attr = edge_attr.expand(src.numel(), min(edge_dim, edge_attr.size(1)))
+                # Pad or slice to match configured edge_dim
+                if edge_attr.size(1) < edge_dim:
+                    pad = torch.zeros((edge_attr.size(0), edge_dim - edge_attr.size(1)), dtype=torch.float32)
+                    edge_attr = torch.cat([edge_attr, pad], dim=1)
             data[relation].edge_index = edge_index
             data[relation].edge_attr = edge_attr[:, :edge_dim]
 
@@ -836,21 +844,34 @@ class TamiyoGraphBuilder:
         # global ↔ layer
         layer_indices = torch.arange(layer_count, dtype=torch.long)
         layers_depth = [(idx + 1) / max(1, layer_count) for idx in range(layer_count)]
-        attrs_layers = [[1.0, depth, risk] for depth in layers_depth]
-        _set_edge(("global", "operates", "layer"), torch.zeros(layer_count, dtype=torch.long), layer_indices, attrs_layers)
-        _set_edge(("layer", "feedback", "global"), layer_indices, torch.zeros(layer_count, dtype=torch.long), attrs_layers)
+        if layer_count:
+            depth_t = torch.tensor(layers_depth, dtype=torch.float32)
+            attrs_layers_t = torch.stack([
+                torch.ones(layer_count, dtype=torch.float32),
+                depth_t,
+                torch.full((layer_count,), risk, dtype=torch.float32),
+            ], dim=1)
+            _set_edge(("global", "operates", "layer"), torch.zeros(layer_count, dtype=torch.long), layer_indices, attrs_layers_t)
+            _set_edge(("layer", "feedback", "global"), layer_indices, torch.zeros(layer_count, dtype=torch.long), attrs_layers_t)
+        else:
+            _set_edge(("global", "operates", "layer"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+            _set_edge(("layer", "feedback", "global"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
         coverage.observe("edges.global_operates", bool(layer_count))
         coverage.observe("edges.layer_feedback", bool(layer_count))
 
         # layer ↔ activation
         activation_indices = torch.arange(activation_count, dtype=torch.long)
         activation_ratio = [(idx + 1) / max(1, activation_count) for idx in range(activation_count)]
+        act_ratio_t = torch.tensor(activation_ratio, dtype=torch.float32) if activation_count else torch.zeros(0, dtype=torch.float32)
         if layer_count and activation_count:
             src = layer_indices.repeat_interleave(activation_count)
             dst = activation_indices.repeat(layer_count)
-            attrs_la = [[layers_depth[i], activation_ratio[j], 1.0] for i in range(layer_count) for j in range(activation_count)]
-            _set_edge(("layer", "activates", "activation"), src, dst, attrs_la)
-            _set_edge(("activation", "affects", "layer"), dst, src, attrs_la)
+            depth_t = torch.tensor(layers_depth, dtype=torch.float32)
+            depth_b = depth_t.view(-1, 1).repeat(1, activation_count).reshape(-1)
+            act_b = act_ratio_t.view(1, -1).repeat(layer_count, 1).reshape(-1)
+            attrs_la_t = torch.stack([depth_b, act_b, torch.ones_like(depth_b)], dim=1)
+            _set_edge(("layer", "activates", "activation"), src, dst, attrs_la_t)
+            _set_edge(("activation", "affects", "layer"), dst, src, attrs_la_t)
             coverage.observe("edges.layer_activates", True)
         else:
             _set_edge(("layer", "activates", "activation"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
@@ -860,12 +881,15 @@ class TamiyoGraphBuilder:
         # activation ↔ parameter
         parameter_indices = torch.arange(parameter_count, dtype=torch.long)
         param_ratio = [(idx + 1) / max(1, parameter_count) for idx in range(parameter_count)]
+        param_ratio_t = torch.tensor(param_ratio, dtype=torch.float32) if parameter_count else torch.zeros(0, dtype=torch.float32)
         if activation_count and parameter_count:
             src = activation_indices.repeat_interleave(parameter_count)
             dst = parameter_indices.repeat(activation_count)
-            attrs_ap = [[activation_ratio[i], param_ratio[j], 1.0] for i in range(activation_count) for j in range(parameter_count)]
-            _set_edge(("activation", "configures", "parameter"), src, dst, attrs_ap)
-            _set_edge(("parameter", "modulates", "activation"), dst, src, attrs_ap)
+            act_b = act_ratio_t.view(-1, 1).repeat(1, parameter_count).reshape(-1)
+            par_b = param_ratio_t.view(1, -1).repeat(activation_count, 1).reshape(-1)
+            attrs_ap_t = torch.stack([act_b, par_b, torch.ones_like(act_b)], dim=1)
+            _set_edge(("activation", "configures", "parameter"), src, dst, attrs_ap_t)
+            _set_edge(("parameter", "modulates", "activation"), dst, src, attrs_ap_t)
             coverage.observe("edges.activation_configures", True)
             coverage.observe("edges.parameter_modulates", True)
         else:
@@ -988,8 +1012,12 @@ class TamiyoGraphBuilder:
         if blueprint_count and activation_count:
             src = torch.zeros(activation_count, dtype=torch.long)
             dst = activation_indices
-            attrs_ba = [[risk, activation_ratio[i], 1.0] for i in range(activation_count)]
-            _set_edge(("blueprint", "energizes", "activation"), src, dst, attrs_ba)
+            attrs_ba_t = torch.stack([
+                torch.full((activation_count,), risk, dtype=torch.float32),
+                act_ratio_t,
+                torch.ones(activation_count, dtype=torch.float32),
+            ], dim=1)
+            _set_edge(("blueprint", "energizes", "activation"), src, dst, attrs_ba_t)
         else:
             _set_edge(("blueprint", "energizes", "activation"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
 
@@ -997,8 +1025,12 @@ class TamiyoGraphBuilder:
         if blueprint_count and parameter_count:
             src = parameter_indices
             dst = torch.zeros(parameter_count, dtype=torch.long)
-            attrs_pb = [[param_ratio[i], risk, 1.0] for i in range(parameter_count)]
-            _set_edge(("parameter", "targets", "blueprint"), src, dst, attrs_pb)
+            attrs_pb_t = torch.stack([
+                param_ratio_t,
+                torch.full((parameter_count,), risk, dtype=torch.float32),
+                torch.ones(parameter_count, dtype=torch.float32),
+            ], dim=1)
+            _set_edge(("parameter", "targets", "blueprint"), src, dst, attrs_pb_t)
         else:
             _set_edge(("parameter", "targets", "blueprint"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
         coverage.observe("edges.parameter_targets", bool(parameter_count and blueprint_count))
@@ -1021,14 +1053,24 @@ class TamiyoGraphBuilder:
         if pairs:
             src = torch.tensor([s for s, _ in pairs], dtype=torch.long)
             dst = torch.tensor([d for _, d in pairs], dtype=torch.long)
-            attrs_ll = [[layers_depth[s], layers_depth[d], risk] for s, d in pairs]
-            _set_edge(("layer", "connects", "layer"), src, dst, attrs_ll)
+            depth_t = torch.tensor(layers_depth, dtype=torch.float32)
+            attrs_ll_t = torch.stack([
+                depth_t[src],
+                depth_t[dst],
+                torch.full((src.numel(),), risk, dtype=torch.float32),
+            ], dim=1)
+            _set_edge(("layer", "connects", "layer"), src, dst, attrs_ll_t)
             coverage.observe("edges.layer_connects", True)
         elif layer_count > 1:
             src = torch.arange(layer_count - 1, dtype=torch.long)
             dst = torch.arange(1, layer_count, dtype=torch.long)
-            attrs_ll = [[layers_depth[s], layers_depth[d], risk] for s, d in zip(src.tolist(), dst.tolist(), strict=False)]
-            _set_edge(("layer", "connects", "layer"), src, dst, attrs_ll)
+            depth_t = torch.tensor(layers_depth, dtype=torch.float32)
+            attrs_ll_t = torch.stack([
+                depth_t[src],
+                depth_t[dst],
+                torch.full((src.numel(),), risk, dtype=torch.float32),
+            ], dim=1)
+            _set_edge(("layer", "connects", "layer"), src, dst, attrs_ll_t)
             coverage.observe("edges.layer_connects", True)
         else:
             _set_edge(("layer", "connects", "layer"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
@@ -1145,7 +1187,12 @@ class TamiyoGraphBuilder:
         if layer_count and activation_count:
             src = layer_indices.repeat_interleave(activation_count)
             dst = activation_indices.repeat(layer_count)
-            attrs_feed = [[layers_depth[i], activation_ratio[j], 1.0] for i in range(layer_count) for j in range(activation_count)]
+            # Vectorized attribute construction to reduce Python overhead
+            depth_t = torch.tensor(layers_depth, dtype=torch.float32)
+            act_t = torch.tensor(activation_ratio, dtype=torch.float32)
+            depth_b = depth_t.view(-1, 1).repeat(1, activation_count).reshape(-1)
+            act_b = act_t.view(1, -1).repeat(layer_count, 1).reshape(-1)
+            attrs_feed = torch.stack([depth_b, act_b, torch.ones_like(depth_b)], dim=1).tolist()
             _set_edge(("layer", "feeds", "activation"), src, dst, attrs_feed)
             coverage.observe("edges.layer_feeds", True)
         else:

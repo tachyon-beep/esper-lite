@@ -52,6 +52,7 @@ Notes
 - degraded_inputs (event) — reason=`degraded_inputs`, severity escalated based on coverage thresholds; routed to emergency when HIGH/CRITICAL
 - tamiyo.gnn.compile_enabled (bool) — 1.0 when torch.compile is active for policy forward; 0.0 when running eager
 - tamiyo.gnn.compile_fallback_total (count) — cumulative compile fallbacks (init/runtime) since process start; absent when zero
+- tamiyo.gnn.compile_warm_ms (ms) — CUDA compile warm-up latency (best-effort; present when compile active)
 
 Annotations on `AdaptationCommand` (WP15)
 - feature_coverage — average ratio (backward compatible)

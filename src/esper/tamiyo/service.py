@@ -1481,6 +1481,15 @@ class TamiyoService:
         }
         indicators["policy_compile"] = "1" if getattr(self._policy, "compile_enabled", False) else "0"
         indicators["policy_arch"] = self._policy_version
+        # Timeout budgets (ms)
+        try:
+            indicators["timeout_budget_ms"] = f"{self._step_timeout_s * 1000.0:.1f}"
+        except Exception:
+            pass
+        try:
+            indicators["metadata_timeout_budget_ms"] = f"{self._metadata_timeout_s * 1000.0:.1f}"
+        except Exception:
+            pass
         last_action = self._policy.last_action
         blending = last_action.get("blending_method")
         if blending:

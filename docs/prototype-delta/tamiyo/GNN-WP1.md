@@ -55,6 +55,7 @@ Replace the feed-forward Tamiyo policy stub with the 4-layer hetero-GNN architec
 ### 4. Inference Optimisation (PyTorch 2.8)
 - Wrap forward passes with `torch.inference_mode()` and device-aware autocast (bfloat16 for CUDA, float32 otherwise).
 - Attempt `torch.compile(..., dynamic=True, mode="reduce-overhead")`; log once on failure and fall back to eager.
+- On CUDA, perform a best‑effort warm‑up forward on a tiny hetero‑graph at init to reduce first‑step variance; expose `tamiyo.gnn.compile_warm_ms` when available.
 - Enable TF32 globally when CUDA is available (`torch.set_float32_matmul_precision('high')`, `allow_tf32=True`).
 - Provide hooks to preload weights onto GPU and pin host memory buffers if needed.
 
@@ -66,7 +67,7 @@ Replace the feed-forward Tamiyo policy stub with the 4-layer hetero-GNN architec
 ### 6. Testing & Validation
 - **Unit tests**: graph assembly fixtures, deterministic forward outputs, compile fallback when unsupported.
 - **Property tests**: round-trip registry indices, ensure missing metrics degrade to padding without crashes.
-- **Performance tests**: measure inference latency on CPU (and GPU if available) with representative packets; assert p95 ≤45 ms.
+- **Performance tests**: measure inference latency on CPU (and GPU if available) with representative packets; assert p95 ≤45 ms. Add an opt‑in small builder p95 check to guard regressions.
 - **Integration tests**: run `TamiyoService.evaluate_step` end-to-end using the new policy to confirm command emission, telemetry, and field reports remain valid.
 
 ### 7. Documentation & Migration

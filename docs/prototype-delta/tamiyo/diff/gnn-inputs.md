@@ -40,7 +40,7 @@ This note captures the concrete inputs Tamiyo needs in order to field the full W
 - System summarizers: rolling mean loss, throughput, GPU/CPU utilisation, Tamiyo conservative-mode flag.
 - External: Weatherlight health indicators, SLA breach counters to bias policy decisions.
 
-All categorical values require maintained registries with deterministic indexing (layer types, activation types, optimizer families, blending schedules, hazard classes). Each registry must persist alongside checkpoints so Simic can reproduce embeddings offline.
+All categorical values require maintained registries with deterministic indexing (layer types, activation types, optimizer families, blending schedules, hazard classes). Each registry must persist alongside checkpoints so Simic can reproduce embeddings offline. Status: Delivered — registries live under `var/tamiyo/` and checkpoint metadata embeds digests for load‑time validation.
 
 ## 3. Edge Relations and Attributes
 

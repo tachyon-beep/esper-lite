@@ -259,9 +259,10 @@ Objective
 - Capture feasibility/constraints for adopting PyTorch 2.8 SDPA and CUDA graphs with GATConv and hetero graphs.
 
 Changes
-- Add a short note under `docs/prototype-delta/tamiyo/` discussing:
-  - PyG GATConv kernel paths and edge attributes compatibility
-  - Potential migration points to SDPA, and when not to (hetero edges, edge_dim)
+- Implemented — Added `sdpa_compatibility.md` under `docs/prototype-delta/tamiyo/` covering:
+  - PyG GATConv vs SDPA, edge attribute constraints, and ragged neighbourhood batching costs
+  - CUDA Graphs capture constraints for dynamic hetero graphs
+  - Recommended posture (compile + TF32/autocast + builder perf), and re‑evaluation criteria
 
 Acceptance Criteria
 - Note present; serves as a decision record for future performance work.

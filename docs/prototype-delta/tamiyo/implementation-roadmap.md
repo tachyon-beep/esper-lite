@@ -29,10 +29,11 @@ Acceptance Criteria
 - Telemetry aggregation and security envelopes function as specified.
 
 Status update
-- Steps 1–2: Partially implemented — FFN policy stub with basic loss/blueprint risk gating; latency budget asserted; GNN/risk engine pending.
-- Step 3: Missing — no breaker framework; conservative mode is a manual flag only.
-- Step 4: Partially implemented — inference measured; strict deadline enforcement pending.
+- Step 1: Implemented — hetero‑GNN (GraphSAGE→GAT) with compile + CUDA warm‑up; p95 budget asserted; Leyline I/O.
+- Step 2: Partially implemented — multi‑signal gating (loss delta, latency, device pressure, optimizer hints, blueprint risk, degraded inputs); room to expand grad/memory stability.
+- Step 3: Partially implemented — inference/metadata breakers and conservative mode with telemetry; training/IO breakers remain future work.
+- Step 4: Implemented — strict step/metadata timeouts with fail‑open; budgets exposed in telemetry indicators.
 - Steps 5–7: Missing — no in‑process learning/replay/IMPALA (handled by Simic in prototype).
 - Step 8: Partially implemented — WAL + retention present; ack/retry and observation windows pending.
-- Step 9: Missing — no aggregation hub; emits own telemetry only.
-- Step 10: Missing — no signing/verification on commands/updates.
+- Step 9: Partially implemented — Weatherlight drains Tamiyo via `publish_history()` and routes priorities; full aggregation hub across subsystems remains future work.
+- Step 10: Partially implemented — commands signed; Oona envelope verification on consume; transactional policy updates with version/freshness/registry validation.

@@ -336,6 +336,22 @@ def test_evaluate_step_includes_coverage_and_policy_version(tmp_path) -> None:
     assert prio_name == leyline_pb2.MessagePriority.Name(leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL)
 
 
+def test_health_indicators_include_timeouts(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Set explicit budgets to predictable values
+    monkeypatch.setenv("TAMIYO_STEP_TIMEOUT_MS", "7.5")
+    cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    service = TamiyoService(store_config=cfg, signature_context=_SIGNATURE_CONTEXT, metadata_timeout_ms=12.0)
+    packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-hi")
+    service.evaluate_step(packet)
+    telemetry = service.telemetry_packets[-1]
+    ind = telemetry.system_health.indicators
+    assert "timeout_budget_ms" in ind
+    assert "metadata_timeout_budget_ms" in ind
+    # Values are strings but must be parseable as floats
+    float(ind["timeout_budget_ms"])  # type: ignore[arg-type]
+    float(ind["metadata_timeout_budget_ms"])  # type: ignore[arg-type]
+
+
 def test_evaluate_step_timeout_urza(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
     service = TamiyoService(
