@@ -62,6 +62,11 @@ class EsperSettings(BaseSettings):
     tamiyo_field_report_max_retries: int = Field(
         alias="TAMIYO_FIELD_REPORT_MAX_RETRIES", default=3
     )
+    # Step-level evaluation timeout for Tamiyo (ms). Used as the default when
+    # TamiyoService is constructed without an explicit override.
+    tamiyo_step_timeout_ms: float = Field(
+        alias="TAMIYO_STEP_TIMEOUT_MS", default=5.0
+    )
     # Optional device preference for Tamiyo policy: "cpu", "cuda", "cuda:0", etc.
     # When unset, TamiyoService will auto-detect CUDA and prefer it if available.
     tamiyo_device: str | None = Field(alias="TAMIYO_DEVICE", default=None)

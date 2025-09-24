@@ -272,6 +272,41 @@ def test_evaluate_step_timeout_inference(tmp_path) -> None:
     )
 
 
+def test_default_step_timeout_uses_env_when_no_override(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # With no explicit constructor override and env default at 5 ms, a slow policy (>20 ms)
+    # should trigger a timeout.
+    monkeypatch.setenv("TAMIYO_STEP_TIMEOUT_MS", "5")
+    cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    service = TamiyoService(policy=_SlowPolicy(), store_config=cfg, signature_context=_SIGNATURE_CONTEXT)
+    pkt = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-timeout-env")
+    cmd = service.evaluate_step(pkt)
+    assert cmd.command_type == leyline_pb2.COMMAND_PAUSE
+    telemetry = service.telemetry_packets[-1]
+    # Timeout event present and mapped to HIGH priority
+    assert any(e.description == "timeout_inference" for e in telemetry.events)
+    prio = telemetry.system_health.indicators.get("priority")
+    assert prio == leyline_pb2.MessagePriority.Name(
+        leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH
+    )
+
+
+def test_explicit_step_timeout_overrides_env(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Env default is tight (5 ms), but an explicit constructor override (100 ms)
+    # should prevent the timeout even with a slow policy.
+    monkeypatch.setenv("TAMIYO_STEP_TIMEOUT_MS", "5")
+    cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    service = TamiyoService(
+        policy=_SlowPolicy(),
+        store_config=cfg,
+        signature_context=_SIGNATURE_CONTEXT,
+        step_timeout_ms=100.0,
+    )
+    pkt = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-timeout-override")
+    _ = service.evaluate_step(pkt)
+    telemetry = service.telemetry_packets[-1]
+    assert not any(e.description == "timeout_inference" for e in telemetry.events)
+
+
 def test_evaluate_step_includes_coverage_and_policy_version(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
     service = TamiyoService(

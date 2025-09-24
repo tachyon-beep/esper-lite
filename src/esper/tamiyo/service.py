@@ -204,6 +204,15 @@ class TamiyoService:
         if self._executor is None and (step_timeout_ms > 0 or metadata_timeout_ms > 0):
             self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="tamiyo")
             self._owns_executor = True
+        # Step timeout defaulting: if caller did not explicitly override the legacy
+        # default (15.0 ms), prefer the settings-driven default to align with the
+        # timeout matrix (2–5 ms). Explicit non-default values always take precedence.
+        try:
+            settings_default_ms = float(self._settings.tamiyo_step_timeout_ms)
+        except Exception:
+            settings_default_ms = 5.0
+        if step_timeout_ms == 15.0:
+            step_timeout_ms = settings_default_ms
         self._step_timeout_s = max(step_timeout_ms, 0.0) / 1000.0
         self._metadata_timeout_s = max(metadata_timeout_ms, 0.0) / 1000.0
         self._inference_breaker = TamiyoCircuitBreaker(name="inference")

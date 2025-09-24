@@ -23,7 +23,14 @@ from esper.leyline import leyline_pb2 as pb
 from google.protobuf import struct_pb2
 from esper.security.signing import DEFAULT_SECRET_ENV, SignatureContext
 
-from .blending import AlphaBlender, AlphaSchedule
+from .blending import (
+    AlphaBlender,
+    AlphaSchedule,
+    BlenderConfig,
+    BlendMode,
+    blend_with_config,
+    blend_mode_name,
+)
 from .gates import GateInputs, GateResult, KasminaGates
 from .isolation import GradientIsolationMonitor, IsolationSession, IsolationStats
 from .memory import KasminaMemoryManager
@@ -101,6 +108,7 @@ class SeedContext:
     kernel: nn.Module | None = None
     alpha: float = 0.0
     alpha_steps: int = 0
+    blend_config: BlenderConfig | None = None
     pending_events: list[TelemetryEvent] = field(default_factory=list)
     pending_priority: int = field(
         default=leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
@@ -381,6 +389,22 @@ class KasminaSeedManager:
                 },
             )
         )
+
+        # Optional: include current blend mode in events when configured
+        if context.blend_config is not None:
+            try:
+                mode_name = blend_mode_name(context.blend_config.mode)
+            except Exception:
+                mode_name = "CONVEX"
+            events.append(
+                TelemetryEvent(
+                    description="blend_config",
+                    attributes={
+                        "seed_id": seed_id,
+                        "mode": mode_name,
+                    },
+                )
+            )
 
         metrics = list(global_metrics)
         metrics.extend(
@@ -922,10 +946,18 @@ class KasminaSeedManager:
         """Blend host and seed activations using the configured alpha schedule."""
 
         alpha = 1.0
+        cfg: BlenderConfig | None = None
         if seed_id is not None:
             context = self._seeds.get(seed_id)
             if context:
                 alpha = context.alpha
+                cfg = context.blend_config
+        if cfg is not None:
+            try:
+                return blend_with_config(host_tensor, seed_tensor, alpha, cfg)
+            except Exception:
+                # Defensive fallback on unexpected config issues
+                return self._alpha_blender.blend(host_tensor, seed_tensor, alpha)
         return self._alpha_blender.blend(host_tensor, seed_tensor, alpha)
 
     def _graft_seed(
@@ -1458,6 +1490,15 @@ class KasminaSeedManager:
 
     def set_prefetch(self, coordinator: PrefetchCoordinator) -> None:
         self._prefetch = coordinator
+
+    # Internal helper for tests and prototyping until Tamiyo P8 lands.
+    def _set_blend_config_for_test(self, seed_id: str, config: BlenderConfig) -> None:
+        context = self._seeds.get(seed_id)
+        if context is None:
+            context = SeedContext(seed_id)
+            self._seeds[seed_id] = context
+            self._ephemeral_seeds.add(seed_id)
+        context.blend_config = config
 
     def _finalise_kernel_attachment(
         self,
