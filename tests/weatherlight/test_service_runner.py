@@ -5,6 +5,7 @@ from pathlib import Path
 import contextlib
 
 import pytest
+import pytest_asyncio
 from fakeredis.aioredis import FakeRedis
 
 from esper.core import EsperSettings, TelemetryMetric, build_telemetry_packet
@@ -17,7 +18,7 @@ def _ensure_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ESPER_LEYLINE_SECRET", "test-secret")
 
 
-@pytest.fixture()
+@pytest_asyncio.fixture()
 async def fake_redis(monkeypatch: pytest.MonkeyPatch) -> FakeRedis:
     client = FakeRedis(decode_responses=False)
     monkeypatch.setattr("esper.oona.messaging.aioredis.from_url", lambda url: client)

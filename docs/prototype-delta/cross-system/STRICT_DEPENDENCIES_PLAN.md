@@ -18,7 +18,7 @@ Mandated Dependencies
 - Core ML stack: `torch`, `torch-geometric`, `torch-scatter`, `torch-sparse`, `torch-cluster`, `torch-spline-conv`.
 - Serialization: `orjson`.
 - Observability: `elasticsearch` (service reachable and responsive).
-- System metrics: `psutil` (always), `pynvml` (GPU present only).
+- System metrics: `psutil` (always), `nvidia-ml-py` (GPU present only; exposes the `pynvml` module).
 - Internal modules: Urza must import cleanly where used.
 
 Design Principles
@@ -39,7 +39,7 @@ Next Changes (by subsystem)
 1) Weatherlight — Strict Preflight Guard [Implemented]
    - Add a `check_mandatory_dependencies()` called in `WeatherlightService.start()` that verifies:
      - Imports: `torch`, `torch_geometric`, `torch_scatter`, `torch_sparse`, `torch_cluster`, `torch_spline_conv`, `psutil`.
-     - If CUDA available: `pynvml` import + `pynvml.nvmlInit()`.
+     - If CUDA available: `pynvml` import (provided by `nvidia-ml-py`) + `pynvml.nvmlInit()`.
      - Elasticsearch: delegate to Nissa runner if managed separately, or perform a quick ping if Weatherlight launches Nissa co‑resident.
    - Behavior: Raise a clear `RuntimeError` with actionable remediation text on failure.
    - File: `src/esper/weatherlight/service_runner.py`
@@ -50,7 +50,7 @@ Next Changes (by subsystem)
 
 3) Tolaria — Tighten system metrics imports [Implemented]
    - Treat `psutil` as mandatory: import directly; remove try/except. Always export CPU utilisation when step enrichment is enabled.
-   - NVML: When CUDA present, require `pynvml` (init once; reuse handle); if init fails, raise at startup instead of silently continuing.
+   - NVML: When CUDA present, require `pynvml` (module installed via `nvidia-ml-py`; init once and reuse); if init fails, raise at startup instead of silently continuing.
    - File: `src/esper/tolaria/trainer.py`
 
 4) Urabrask — Bench coherence [Implemented]

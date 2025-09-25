@@ -45,7 +45,7 @@ dependencies = [
   "prometheus-client>=0.20.0,<1",
   "elasticsearch>=8.14.0,<9",
   "psutil>=5.9.0,<6",
-  "pynvml>=11.4.1,<12"
+  "nvidia-ml-py>=12.555.43,<13"
 ]
 
 [project.optional-dependencies]
@@ -79,7 +79,7 @@ perf = [
 # Optional system metrics deps (fail-open at runtime)
 sysmetrics = [
   "psutil>=5.9.0,<6",
-  "pynvml>=11.4.1,<12"
+  "nvidia-ml-py>=12.555.43,<13"
 ]
 
 [project.scripts]

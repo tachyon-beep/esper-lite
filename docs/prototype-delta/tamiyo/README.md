@@ -45,6 +45,11 @@ Defaults & Testing Notes (Prototype)
   - Emit `tamiyo.validation_loss`, `tamiyo.loss_delta`, risk scores, blueprint risk metrics, and breaker states; escalate severity appropriately.
   - Pointers: `src/esper/tamiyo/service.py` (telemetry builder).
 
+## Test Notes (Performance / Timeouts)
+
+- Performance-focused tests are marked with `@pytest.mark.perf` and are skipped unless `RUN_PERF_TESTS=1` is set. This keeps CI stable while allowing targeted perf runs (`pytest -m perf`).
+- Metadata-oriented service tests (e.g., `test_evaluate_step_includes_coverage_and_policy_version`) use generous step timeouts to avoid flaky `timeout_inference` events on shared runners.
+
 Documents in this folder:
 - `delta-matrix.md` — requirement‑by‑requirement status with evidence
 - `traceability-map.md` — mapping of design assertions to code/tests

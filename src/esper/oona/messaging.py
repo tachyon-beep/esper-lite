@@ -181,7 +181,16 @@ class OonaClient:
         self._em_src_dropped: dict[str, float] = {}
 
     async def close(self) -> None:
-        await self._redis.close()
+        close = getattr(self._redis, "aclose", None)
+        if close is not None:
+            await close()
+            return
+        legacy_close = getattr(self._redis, "close", None)
+        if legacy_close is None:
+            return
+        result = legacy_close()
+        if inspect.isawaitable(result):
+            await result
 
     async def ensure_consumer_group(self) -> None:
         """Create consumer groups for configured streams if needed."""

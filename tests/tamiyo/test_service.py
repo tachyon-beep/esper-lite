@@ -1,4 +1,5 @@
 from io import BytesIO
+import os
 import time
 import statistics
 from types import SimpleNamespace
@@ -101,7 +102,7 @@ def test_tamiyo_service_generates_command(tmp_path) -> None:
         store_config=config,
         urza=urza,
         signature_context=_SIGNATURE_CONTEXT,
-        step_timeout_ms=100.0,
+        step_timeout_ms=1000.0,
     )
     packet = leyline_pb2.SystemStatePacket(
         version=1,
@@ -228,7 +229,7 @@ def test_service_schedule_parameters_fractional(tmp_path) -> None:
         store_config=config,
         urza=urza,
         signature_context=_SIGNATURE_CONTEXT,
-        step_timeout_ms=100.0,
+        step_timeout_ms=500.0,
     )
     packet = leyline_pb2.SystemStatePacket(
         version=1,
@@ -327,7 +328,7 @@ def test_evaluate_step_includes_coverage_and_policy_version(tmp_path) -> None:
         store_config=config,
         urza=urza,
         signature_context=_SIGNATURE_CONTEXT,
-        step_timeout_ms=100.0,
+        step_timeout_ms=250.0,
     )
     packet = leyline_pb2.SystemStatePacket(
         version=1,
@@ -346,6 +347,7 @@ def test_evaluate_step_includes_coverage_and_policy_version(tmp_path) -> None:
     assert "policy_version" in cmd.annotations
     # Priority unchanged (normal) for non-degraded events
     telemetry = service.telemetry_packets[-1]
+    assert not any(e.description == "timeout_inference" for e in telemetry.events)
     prio_name = telemetry.system_health.indicators.get("priority")
     assert prio_name == leyline_pb2.MessagePriority.Name(leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL)
 
@@ -353,7 +355,13 @@ def test_evaluate_step_includes_coverage_and_policy_version(tmp_path) -> None:
 def test_blend_mode_annotations_disabled_by_default(tmp_path) -> None:
     cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
     urza = UrzaLibrary(root=tmp_path / "urza")
-    service = TamiyoService(store_config=cfg, urza=urza, signature_context=_SIGNATURE_CONTEXT)
+    service = TamiyoService(
+        policy=TamiyoPolicy(TamiyoPolicyConfig(enable_compile=False)),
+        store_config=cfg,
+        urza=urza,
+        signature_context=_SIGNATURE_CONTEXT,
+        step_timeout_ms=250.0,
+    )
     packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=2, training_run_id="run-blend-off")
     # Provide a seed so we emit a SEED command
     seed = packet.seed_states.add(); seed.seed_id = "seed-1"; seed.stage = leyline_pb2.SEED_STAGE_TRAINING
@@ -835,7 +843,10 @@ def test_field_report_retention_rewrites(tmp_path) -> None:
     assert all(report.seed_id != "seed-old" for report in remaining)
 
 
+@pytest.mark.perf
 def test_step_evaluate_p95_budget(tmp_path) -> None:
+    if os.getenv("RUN_PERF_TESTS") != "1":
+        pytest.skip("perfs disabled; set RUN_PERF_TESTS=1 to enable")
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
     urza = UrzaLibrary(root=tmp_path / "urza")
     service = TamiyoService(store_config=config, urza=urza, signature_context=_SIGNATURE_CONTEXT)

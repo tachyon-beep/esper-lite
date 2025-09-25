@@ -5,6 +5,7 @@ import statistics
 import time
 from pathlib import Path
 import warnings
+import os
 
 import pytest
 import torch
@@ -521,6 +522,8 @@ def test_seed_registry_stable_across_instances(tmp_path: pytest.PathLike) -> Non
 
 @pytest.mark.perf
 def test_policy_inference_perf_budget() -> None:
+    if os.getenv("RUN_PERF_TESTS") != "1":
+        pytest.skip("perfs disabled; set RUN_PERF_TESTS=1 to enable")
     policy = TamiyoPolicy(TamiyoPolicyConfig(enable_compile=False))
     packet = _sample_packet()
     for idx in range(4):

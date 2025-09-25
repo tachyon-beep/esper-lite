@@ -44,8 +44,8 @@
 ### 3. NVML Dependency Refresh
 - **Design choice:** replace `pynvml` with `nvidia-ml-py` per PyTorch deprecation notice; keep strict dependency contract.
 - **Implementation steps:**
-  1. Update `pyproject.toml` (core deps and optional `sysmetrics`) to depend on `nvidia-ml-py` instead of `pynvml`.
-  2. Adjust import sites (`esper.core.hw` or wherever NVML is touched) to prefer `nvidia_ml_py` module names (if needed) and fail fast when missing.
+  1. Update `pyproject.toml` (core deps and optional `sysmetrics`) to depend on `nvidia-ml-py` instead of `pynvml` while retaining the `import pynvml` call (module name remains).
+  2. Adjust import sites (`esper.core.hw` or wherever NVML is touched) only if upstream renames the import; otherwise document the package transition and keep strict start-up failure on missing NVML.
   3. Regenerate lockfiles/constraints if maintained; document change in `docs/prototype-delta/cross-system/STRICT_DEPENDENCIES_PLAN.md`.
 - **Validation:** `pip freeze | rg nvidia-ml-py`, run `pytest tests/nissa tests/weatherlight` (NVML stubs), confirm no FutureWarning on `torch.cuda` import.
 

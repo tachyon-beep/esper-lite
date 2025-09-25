@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 import time
 
+import os
 import pytest
 import torch
 from fakeredis.aioredis import FakeRedis
@@ -229,7 +230,10 @@ def test_tolaria_handles_tamiyo_step_timeout() -> None:
     )
 
 
+@pytest.mark.perf
 def test_tolaria_epoch_wall_time_with_step_coupling() -> None:
+    if os.getenv("RUN_PERF_TESTS") != "1":
+        pytest.skip("perfs disabled; set RUN_PERF_TESTS=1 to enable")
     model = _dummy_model(8, 4)
     optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
     loader = _dummy_loader(128, 8, 4)

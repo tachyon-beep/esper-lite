@@ -1,3 +1,4 @@
+import inspect
 import os
 
 import pytest
@@ -5,6 +6,16 @@ import redis.asyncio as aioredis
 
 from esper.leyline import leyline_pb2
 from esper.oona import OonaClient, OonaMessage, StreamConfig
+
+
+async def _shutdown_redis(redis: aioredis.Redis) -> None:
+    close = getattr(redis, "aclose", None)
+    if close is not None:
+        await close()
+        return
+    result = redis.close()
+    if inspect.isawaitable(result):
+        await result
 
 
 @pytest.mark.asyncio
@@ -20,7 +31,7 @@ async def test_oona_docker_compose_redis_round_trip() -> None:
     try:
         await redis.ping()
     except Exception:  # pragma: no cover - environment dependent
-        await redis.close()
+        await _shutdown_redis(redis)
         if os.getenv("REQUIRE_REDIS"):
             pytest.fail("REQUIRE_REDIS=1 set but Redis is not available at REDIS_URL")
         pytest.skip("Redis instance not available at REDIS_URL")
@@ -63,4 +74,4 @@ async def test_oona_docker_compose_redis_round_trip() -> None:
     await client.close()
     await redis.delete(config.normal_stream)
     await redis.delete(config.emergency_stream)
-    await redis.close()
+    await _shutdown_redis(redis)

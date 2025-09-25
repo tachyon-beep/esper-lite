@@ -33,3 +33,4 @@ Optional next (post-upgrade)
 References
 - Training loop: `src/esper/tolaria/trainer.py`
 - Device selection / matmul precision are typically set at process start
+- Performance tests (e.g., `test_tolaria_epoch_wall_time_with_step_coupling`) are tagged `@pytest.mark.perf` and require `RUN_PERF_TESTS=1` so noisy CI environments skip them by default.
