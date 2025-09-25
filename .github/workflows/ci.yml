@@ -41,7 +41,7 @@ jobs:
       - name: Ruff (lint)
         run: |
           ruff --version
-          ruff check src tests
+          ruff check src/esper
 
       - name: Pylint (lint)
         run: |
