@@ -4,6 +4,16 @@ Summary
 - This branch hardens multiple subsystems in concert: Tamiyo, Kasmina, Tolaria, Oona, Weatherlight, and Leyline contracts. It delivers Tamiyo P1–P9, introduces emergency signal routing across Tolaria/Oona/Weatherlight, and brings executor/manager enhancements in Kasmina.
 - Focus areas: deadline alignment and inference stability, compile warm‑up + telemetry, transactional policy updates, builder vectorization, telemetry completeness, SDPA/CUDA graphs decision record, blend‑mode annotations (Tamiyo→Kasmina), field‑report lifecycle completion, and emergency signal handling end‑to‑end.
 
+Recent Updates (2025-09-25)
+- P9: Restored strict durable retry backoff (next_attempt_ms) and updated tests to set `TAMIYO_FR_RETRY_BACKOFF_MS=0` where immediate retry is desired. Default observation window epochs set to 1 (no synthesis) to preserve last-packet semantics.
+- Weatherlight integration tests: disabled the background emergency stream loop during tests to avoid FakeRedis XREAD blocking; behavior verified via direct Oona calls.
+- Test reliability: global per-test timeout set to 60s (thread method); added `scripts/test_fast.sh` runner to enforce timeouts and disable torch.compile/torchdynamo in tests.
+- Tezzeret: added `TEZZERET_ENABLE_COMPILE` knob; corrected strategy labelling so conservative builds report `compile_strategy="conservative"`; compile disabled path forces CPU to avoid GPU graph capture on CI.
+- Tolaria: hardware metrics (CUDA/psutil) are fail-open; negative-path tests no longer crash the trainer.
+- Nissa: prototype flush after ingest so stub Elasticsearch clients see documents immediately.
+- TamiyoService/doc sync: telemetry/annotation consistency fixes; demo now passes a required `UrzaLibrary`; P9 docs updated for default N=1.
+
+
 Changes Summary
 - Tamiyo: P1–P9 implemented (timeouts, compile warm‑up/telemetry, secure policy updates, builder vectorization, telemetry completeness, SDPA/CUDA graphs note, blend‑mode annotations, field‑report lifecycle), plus CPU inference fallback fix.
 - Kasmina: Blend‑mode consumption (K1/K7), isolation scope tests, export enrichments.

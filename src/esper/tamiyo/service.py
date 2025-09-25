@@ -273,6 +273,7 @@ class TamiyoService:
             )
             # Ensure downstream consumers have typed coverage field present (even if empty)
             command.annotations.setdefault("coverage_types", "{}")
+            command.annotations.setdefault("feature_coverage", "0.0")
 
         loss_delta = 0.0
         if self._last_validation_loss is not None:
