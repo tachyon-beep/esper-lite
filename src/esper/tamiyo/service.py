@@ -319,15 +319,24 @@ class TamiyoService:
         try:
             cov = getattr(self._policy, "feature_coverage", {})
             if cov:
-                avg_cov = float(sum(float(v) for v in cov.values()) / max(1, len(cov)))
+                vals = []
+                for v in cov.values():
+                    try:
+                        fv = float(v)
+                    except Exception:
+                        continue
+                    if fv > 0.0:
+                        vals.append(fv)
+                if vals:
+                    avg_cov = float(sum(vals) / max(1, len(vals)))
                 warn_th = getattr(self._risk, "degraded_inputs_warn", 0.30) if hasattr(self._risk, "degraded_inputs_warn") else 0.30
                 crit_th = getattr(self._risk, "degraded_inputs_crit", 0.10) if hasattr(self._risk, "degraded_inputs_crit") else 0.10
                 evt_level = None
-                if avg_cov < crit_th:
+                if avg_cov <= crit_th:
                     evt_level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
                 elif avg_cov < warn_th:
                     evt_level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO
-                if evt_level is not None:
+                if vals and evt_level is not None:
                     events.append(
                         TelemetryEvent(
                             description="degraded_inputs",
