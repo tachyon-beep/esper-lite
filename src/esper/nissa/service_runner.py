@@ -29,30 +29,21 @@ from esper.oona import OonaClient, StreamConfig
 logger = logging.getLogger(__name__)
 
 
-class MemoryElasticsearch:
-    """In-memory Elasticsearch stub for local development."""
-
-    def __init__(self) -> None:
-        self.documents: list[tuple[str, dict[str, Any]]] = []
-
-    def index(self, index: str, document: dict[str, Any]) -> None:
-        self.documents.append((index, document))
-
-
 def _build_es_client(url: str) -> Any:
-    """Return a working Elasticsearch client or the stub."""
+    """Return a working Elasticsearch client or raise on failure.
 
-    try:
-        from elasticsearch import Elasticsearch
+    Pre-production prototype posture: dependencies are mandatory; fail fast when
+    Elasticsearch client is unavailable or unreachable.
+    """
 
-        client = Elasticsearch(hosts=[url])
-        if client.ping():  # pragma: no cover - integration behaviour
-            logger.info("Connected to Elasticsearch at %s", url)
-            return client
-        logger.warning("Elasticsearch ping to %s failed, using in-memory stub", url)
-    except Exception as exc:  # pragma: no cover - optional dependency
-        logger.warning("Unable to initialise Elasticsearch client: %s", exc)
-    return MemoryElasticsearch()
+    from elasticsearch import Elasticsearch
+
+    client = Elasticsearch(hosts=[url])
+    # Best-effort ping to validate connectivity early; raise if unhealthy
+    if not client.ping():  # pragma: no cover - integration behaviour
+        raise RuntimeError(f"Elasticsearch ping to {url} failed")
+    logger.info("Connected to Elasticsearch at %s", url)
+    return client
 
 
 async def _ensure_oona_group(oona: OonaClient, *, retries: int = 5) -> None:

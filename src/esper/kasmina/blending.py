@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
+import math
 import torch
 
 
@@ -28,7 +29,7 @@ class AlphaSchedule:
             return 1.0
         midpoint = self.total_steps / 2
         scaled = (step - midpoint) / max(self.temperature, 1e-6)
-        return torch.sigmoid(torch.tensor(scaled, dtype=torch.float32)).item()
+        return 0.5 * (1.0 + math.tanh(scaled * 0.5))
 
 
 class AlphaBlender:

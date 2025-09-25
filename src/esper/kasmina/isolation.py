@@ -51,11 +51,15 @@ class IsolationSession:
             return
         for param in _iter_parameters(self._host):
             self._prepare_projection(param)
-            handle = param.register_hook(self._make_host_hook(id(param)))
+            handle = param.register_hook(
+                self._make_projection_hook(id(param), owner="host")
+            )
             self._handles.append(handle)
         for param in _iter_parameters(self._seed):
             self._prepare_projection(param)
-            handle = param.register_hook(self._make_seed_hook(id(param)))
+            handle = param.register_hook(
+                self._make_projection_hook(id(param), owner="seed")
+            )
             self._handles.append(handle)
         self._active = True
 
@@ -96,58 +100,50 @@ class IsolationSession:
         stats = self.stats()
         return abs(stats.dot_product) <= self._threshold
 
-    def _make_host_hook(self, param_id: int) -> Callable[[torch.Tensor], torch.Tensor]:
+    def _make_projection_hook(
+        self,
+        param_id: int,
+        *,
+        owner: str,
+    ) -> Callable[[torch.Tensor], torch.Tensor]:
+        if owner not in {"host", "seed"}:
+            raise ValueError(f"Unsupported hook owner: {owner}")
+
+        norm_attr = "_host_norm_sq" if owner == "host" else "_seed_norm_sq"
+        primary_buffer = self._host_buffer if owner == "host" else self._seed_buffer
+        counterpart_buffer = self._seed_buffer if owner == "host" else self._host_buffer
+        primary_samples = self._host_samples if owner == "host" else self._seed_samples
+        counterpart_samples = self._seed_samples if owner == "host" else self._host_samples
+
         def hook(grad: torch.Tensor) -> torch.Tensor:
             if not self._collecting:
                 return grad
+
             detached = grad.detach()
-            self._host_norm_sq += float(torch.sum(detached * detached))
+            setattr(
+                self,
+                norm_attr,
+                getattr(self, norm_attr) + float(torch.sum(detached * detached)),
+            )
+
             indices = self._projection_indices.get(param_id)
             if indices is not None and indices.numel() > 0:
                 selected = torch.take(detached.reshape(-1), indices.to(detached.device))
                 selected_cpu = selected.to(dtype=torch.float32).cpu()
-                seed_samples = self._seed_samples.pop(param_id, None)
-                if seed_samples is not None:
+                counterpart_sample = counterpart_samples.pop(param_id, None)
+                if counterpart_sample is not None:
                     scale = self._projection_scales[param_id]
                     self._dot_product += float(
-                        (seed_samples * selected_cpu).sum().item() * scale
+                        (counterpart_sample * selected_cpu).sum().item() * scale
                     )
                 else:
-                    self._host_samples[param_id] = selected_cpu
+                    primary_samples[param_id] = selected_cpu
             else:
-                seed_grad = self._seed_buffer.pop(param_id, None)
-                if seed_grad is not None:
-                    self._dot_product += float(torch.sum(detached * seed_grad))
+                counterpart_grad = counterpart_buffer.pop(param_id, None)
+                if counterpart_grad is not None:
+                    self._dot_product += float(torch.sum(counterpart_grad * detached))
                 else:
-                    self._host_buffer[param_id] = detached.clone()
-            return grad
-
-        return hook
-
-    def _make_seed_hook(self, param_id: int) -> Callable[[torch.Tensor], torch.Tensor]:
-        def hook(grad: torch.Tensor) -> torch.Tensor:
-            if not self._collecting:
-                return grad
-            detached = grad.detach()
-            self._seed_norm_sq += float(torch.sum(detached * detached))
-            indices = self._projection_indices.get(param_id)
-            if indices is not None and indices.numel() > 0:
-                selected = torch.take(detached.reshape(-1), indices.to(detached.device))
-                selected_cpu = selected.to(dtype=torch.float32).cpu()
-                host_samples = self._host_samples.pop(param_id, None)
-                if host_samples is not None:
-                    scale = self._projection_scales[param_id]
-                    self._dot_product += float(
-                        (host_samples * selected_cpu).sum().item() * scale
-                    )
-                else:
-                    self._seed_samples[param_id] = selected_cpu
-            else:
-                host_grad = self._host_buffer.pop(param_id, None)
-                if host_grad is not None:
-                    self._dot_product += float(torch.sum(host_grad * detached))
-                else:
-                    self._seed_buffer[param_id] = detached.clone()
+                    primary_buffer[param_id] = detached.clone()
             return grad
 
         return hook

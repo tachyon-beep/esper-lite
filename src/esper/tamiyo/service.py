@@ -31,10 +31,7 @@ from .persistence import (
 )
 from .policy import TamiyoPolicy, TamiyoPolicyConfig
 
-try:
-    from esper.urza import UrzaLibrary
-except ImportError:  # pragma: no cover - optional import in certain test contexts
-    UrzaLibrary = None  # type: ignore
+from esper.urza import UrzaLibrary
 
 if TYPE_CHECKING:
     from esper.oona import OonaClient, OonaMessage

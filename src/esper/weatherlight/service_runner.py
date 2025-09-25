@@ -17,6 +17,7 @@ import socket
 import time
 import uuid
 from dataclasses import dataclass, field
+import importlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Awaitable, Callable, Dict
 
@@ -107,6 +108,7 @@ class WeatherlightService:
 
         self._configure_logging()
         self._ensure_secret_present()
+        self._preflight_mandatory_dependencies()
         LOGGER.info("Starting Weatherlight supervisor")
 
         self._oona = await self._build_oona_client()
@@ -205,6 +207,59 @@ class WeatherlightService:
             self._emergency_stream_loop(),
             name="weatherlight.emergency_stream",
         )
+
+    def _preflight_mandatory_dependencies(self) -> None:
+        """Fail fast if mandatory dependencies are unavailable.
+
+        Prototype posture: we do not carry optional fallbacks for core deps.
+        This check validates imports that are required across the control plane
+        and will raise with actionable remediation on failure.
+        """
+
+        failures: list[str] = []
+
+        def _require(module: str, *, name: str | None = None) -> None:
+            try:
+                importlib.import_module(module)
+            except Exception as exc:  # pragma: no cover - environment specific
+                failures.append(f"{name or module}: {exc}")
+
+        # Core ML + Graph deps
+        _require("torch")
+        _require("torch_geometric", name="torch-geometric")
+        _require("torch_geometric.data")
+        _require("torch_geometric.nn")
+        _require("torch_scatter", name="torch-scatter")
+        _require("torch_sparse", name="torch-sparse")
+        _require("torch_cluster", name="torch-cluster")
+        _require("torch_spline_conv", name="torch-spline-conv")
+        # System metrics
+        _require("psutil")
+        # Observability client (service-level reachability is validated in Nissa)
+        _require("elasticsearch")
+
+        # GPU-only NVML requirement
+        try:
+            import torch as _torch  # type: ignore
+
+            if getattr(_torch, "cuda", None) and _torch.cuda.is_available():  # type: ignore[attr-defined]
+                try:
+                    import pynvml  # type: ignore
+
+                    pynvml.nvmlInit()
+                except Exception as exc:  # pragma: no cover - hardware dependent
+                    failures.append(f"pynvml: {exc}")
+        except Exception:
+            # torch import failure already recorded above
+            pass
+
+        if failures:
+            details = "; ".join(failures)
+            msg = (
+                "Mandatory dependency preflight failed: "
+                f"{details}. Please install required packages and ensure GPU/ES availability."
+            )
+            raise RuntimeError(msg)
 
     def initiate_shutdown(self) -> None:
         """Trigger graceful shutdown (idempotent)."""

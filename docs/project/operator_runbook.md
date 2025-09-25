@@ -20,7 +20,8 @@ references (`docs/design/detailed_design/old/`).
    ```
 
 2. Start shared infrastructure. Redis is mandatory for Oona; Prometheus,
-   Grafana, and Elasticsearch back the observability stack.
+   Grafana, and Elasticsearch back the observability stack (mandatory; no stub
+   fallbacks in services).
 
    ```bash
    docker compose -f infra/docker-compose.redis.yml up -d
@@ -131,7 +132,8 @@ references (`docs/design/detailed_design/old/`).
 
 ### 3.3 Nissa Observability Stack
 
-1. With infrastructure running, start the service runner:
+1. With infrastructure running, start the service runner (Elasticsearch must be
+   reachable; service fails fast otherwise):
 
    ```bash
    esper-nissa-service

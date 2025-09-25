@@ -13,22 +13,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping
 
-try:  # Prefer fast (de)serialization when available
-    import orjson as _orjson  # type: ignore
-except Exception:  # pragma: no cover - optional dependency
-    _orjson = None  # type: ignore
+# Mandatory high-performance JSON; fail fast if unavailable
+import orjson as _orjson  # type: ignore
 
 
 def _fast_dumps(obj: Any) -> str:
-    if _orjson is not None:  # pragma: no cover - speed path
-        return _orjson.dumps(obj).decode("utf-8")
-    return json.dumps(obj)
+    return _orjson.dumps(obj).decode("utf-8")
 
 
 def _fast_loads(payload: str) -> Any:
-    if _orjson is not None:  # pragma: no cover - speed path
-        return _orjson.loads(payload)
-    return json.loads(payload)
+    return _orjson.loads(payload)
 
 from google.protobuf.json_format import MessageToDict, ParseDict
 from sqlalchemy import Column, MetaData, String, Table, Text, create_engine, select, delete

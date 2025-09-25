@@ -4,6 +4,15 @@ Summary
 - This branch hardens multiple subsystems in concert: Tamiyo, Kasmina, Tolaria, Oona, Weatherlight, and Leyline contracts. It delivers Tamiyo P1–P9, introduces emergency signal routing across Tolaria/Oona/Weatherlight, and brings executor/manager enhancements in Kasmina.
 - Focus areas: deadline alignment and inference stability, compile warm‑up + telemetry, transactional policy updates, builder vectorization, telemetry completeness, SDPA/CUDA graphs decision record, blend‑mode annotations (Tamiyo→Kasmina), field‑report lifecycle completion, and emergency signal handling end‑to‑end.
 
+Changes Summary
+- Tamiyo: P1–P9 implemented (timeouts, compile warm‑up/telemetry, secure policy updates, builder vectorization, telemetry completeness, SDPA/CUDA graphs note, blend‑mode annotations, field‑report lifecycle), plus CPU inference fallback fix.
+- Kasmina: Blend‑mode consumption (K1/K7), isolation scope tests, export enrichments.
+- Tolaria: Emergency signal primitives and shared‑memory integration; smoke tests added.
+- Oona: Emergency signal publish/consume path integrated with breakers and rate control.
+- Weatherlight: Monitors emergency signals and bridges shared‑memory signals.
+- Leyline: Added EmergencySignal/EmergencyLevel (additive contract change); Python stubs regenerated.
+- Docs: Updated metrics, workplans, SDPA note, README resolved issues; added PR draft.
+
 Overall
 - System state: “green for prototype” across Tamiyo and companion subsystems. Tamiyo WP1–WP3 and WP7–WP9 are implemented and validated; Kasmina consumes P8 annotations; Tolaria publishes emergency signals; Weatherlight monitors and bridges; Oona exposes new emergency hooks; Leyline contracts include EmergencySignal.
 - Key wins: tighter step budgets, steady‑state inference stability, safer policy updates, faster graph build, completed field‑report lifecycle, emergency signal broadcast/consume path, and improved CPU‑only determinism in policy.
