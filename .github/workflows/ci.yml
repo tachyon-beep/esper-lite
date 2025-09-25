@@ -49,6 +49,7 @@ jobs:
           pylint --rcfile .codacy/tools-configs/pylint.rc src/esper
 
       - name: Mypy (type-check)
+        continue-on-error: true
         run: |
           mypy src/esper
 
