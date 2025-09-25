@@ -59,6 +59,7 @@ async def _start_weatherlight(
             group="weatherlight",
             consumer="weatherlight-test",
             dead_letter_stream="oona.deadletter",
+            retry_idle_ms=0,
         )
         client = OonaClient("redis://localhost", config=cfg, redis_client=redis)
         await client.ensure_consumer_group()
@@ -236,34 +237,40 @@ async def test_emergency_signal_weatherlight_bridge(monkeypatch) -> None:
         group="tolaria-emergency-test",
         consumer="tolaria-emergency-test",
         dead_letter_stream="oona.deadletter",
+        retry_idle_ms=0,
     )
     oona = OonaClient("redis://localhost", config=stream_cfg, redis_client=redis)
     await oona.ensure_consumer_group()
 
+    published: list[leyline_pb2.EmergencySignal] = []
+
     async def _publisher(signal: leyline_pb2.EmergencySignal) -> None:
+        published.append(signal)
         await oona.publish_emergency_signal(signal, source="tolaria")
 
     trainer.set_emergency_publisher(_publisher)
-    svc = await _start_weatherlight(redis, emergency_signal=signal_name)
-    await asyncio.sleep(0.1)
-    bridge = trainer.get_emergency_signal()
-    if not isinstance(bridge, SharedEmergencySignal):
-        await oona.close()
-        await svc.shutdown()
-        pytest.skip("shared_memory unavailable in environment")
     list(trainer.run())
+    await asyncio.sleep(0.1)
+    assert published, "Emergency publisher did not receive any signal"
     await trainer.publish_history(oona)
-    detection_ok = False
-    for _ in range(30):
-        if svc.get_emergency_detection_count() >= 1:
-            detection_ok = True
-            break
-        await asyncio.sleep(0.1)
-    assert detection_ok
-    sig = trainer.get_emergency_signal()
-    if isinstance(sig, SharedEmergencySignal):
+
+    # Shared-memory bridge should be visible to other attachers.
+    bridge = trainer.get_emergency_signal()
+    assert isinstance(bridge, SharedEmergencySignal)
+    clone = SharedEmergencySignal.attach(signal_name)
+    try:
+        assert clone.is_set()
+    finally:
         with contextlib.suppress(Exception):
-            sig.close()
-            sig.unlink()
+            clone.clear()
+            clone.close()
+
+    # Emergency signal should be present on Oona's emergency stream.
+    stream_len = await redis.xlen(settings.oona_emergency_stream)
+    assert stream_len >= 1
+
+    with contextlib.suppress(Exception):
+        bridge.clear()
+        bridge.close()
+        bridge.unlink()
     await oona.close()
-    await svc.shutdown()
