@@ -43,6 +43,7 @@ def weatherlight_settings(tmp_path: Path) -> EsperSettings:
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_weatherlight_start_stop(fake_redis: FakeRedis, weatherlight_settings: EsperSettings) -> None:
     service = WeatherlightService(settings=weatherlight_settings)
     await service.start()
@@ -56,6 +57,7 @@ async def test_weatherlight_start_stop(fake_redis: FakeRedis, weatherlight_setti
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_weatherlight_builds_telemetry_packet(fake_redis: FakeRedis, weatherlight_settings: EsperSettings) -> None:
     service = WeatherlightService(settings=weatherlight_settings)
     await service.start()
@@ -88,6 +90,7 @@ def test_weatherlight_priority_override_mapping(weatherlight_settings: EsperSett
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_weatherlight_streams_tezzeret_packets(
     fake_redis: FakeRedis,
     weatherlight_settings: EsperSettings,
@@ -146,6 +149,7 @@ async def test_weatherlight_streams_tezzeret_packets(
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_weatherlight_flushes_tamiyo_history(
     fake_redis: FakeRedis,
     weatherlight_settings: EsperSettings,
@@ -221,6 +225,7 @@ async def test_weatherlight_fans_out_tamiyo_coverage_types(
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_weatherlight_flushes_kasmina_pending(
     fake_redis: FakeRedis,
     weatherlight_settings: EsperSettings,
