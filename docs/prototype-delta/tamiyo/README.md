@@ -30,6 +30,7 @@ Outstanding Items (for coders)
   - Pointers: `src/esper/tamiyo/persistence.py` (WAL), `src/esper/tamiyo/service.py::generate_field_report/publish_history`.
   - New env knobs: `TAMIYO_FR_OBS_WINDOW_EPOCHS` (default 3), `TAMIYO_FR_RETRY_BACKOFF_MS` (default 1000), `TAMIYO_FR_RETRY_BACKOFF_MULT` (default 2.0).
   - Semantics: per-step reports are still emitted with `observation_window_epochs=1`; synthesised reports after N steps carry `observation_window_epochs=N` and `report_id` prefixed with `fr-synth-`.
+  - Urza is required: `TamiyoService` initialises a default `UrzaLibrary` from settings when none is provided.
 
 - Security envelope
   - Sign emitted AdaptationCommands (HMAC/nonce/freshness) and verify signed PolicyUpdate payloads.

@@ -175,7 +175,16 @@ class TamiyoService:
         else:
             self._policy = policy
         self._risk = risk_config or RiskConfig()
-        self._urza = urza
+        # Ensure Urza is always available: construct default library when not provided
+        if urza is None:
+            try:
+                urza_root = Path(getattr(self._settings, "urza_artifact_dir", "./var/urza/artifacts"))
+                urza_db = getattr(self._settings, "urza_database_url", None)
+                self._urza = UrzaLibrary(root=urza_root, database_url=urza_db)
+            except Exception as exc:  # pragma: no cover - environment dependent
+                raise RuntimeError(f"Urza library initialisation failed: {exc}")
+        else:
+            self._urza = urza
         self._metadata_cache_ttl = metadata_cache_ttl
         self._blueprint_cache: dict[str, tuple[datetime, dict[str, float | str | bool | int]]] = {}
         if store and store_config:
@@ -966,8 +975,6 @@ class TamiyoService:
         command: leyline_pb2.AdaptationCommand,
         enforce_timeouts: bool,
     ) -> tuple[dict[str, float | str | bool | int] | None, bool]:
-        if self._urza is None:
-            return None, False
         if command.command_type != leyline_pb2.COMMAND_SEED or not command.HasField("seed_operation"):
             return None, False
 
@@ -983,8 +990,6 @@ class TamiyoService:
     def _ensure_blueprint_metadata_for_packet(self, state: leyline_pb2.SystemStatePacket) -> None:
         blueprint_id = state.packet_id or state.training_run_id
         if not blueprint_id or blueprint_id in self._blueprint_cache:
-            return
-        if self._urza is None:
             return
         # Bound the pre-warm fetch so we never stall the step path
         record = None
@@ -2068,8 +2073,6 @@ class TamiyoService:
     def _resolve_blueprint_info(
         self, command: leyline_pb2.AdaptationCommand
     ) -> dict[str, float | str | bool | int] | None:
-        if not self._urza:
-            return None
         if command.command_type != leyline_pb2.COMMAND_SEED or not command.HasField("seed_operation"):
             return None
         blueprint_id = command.seed_operation.blueprint_id
