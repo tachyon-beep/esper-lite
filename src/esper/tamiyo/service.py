@@ -897,6 +897,8 @@ class TamiyoService:
         if timed_out:
             command.annotations.setdefault("policy_action", "timeout")
             command.annotations.setdefault("policy_param_delta", "0.0")
+            if "policy_version" not in command.annotations:
+                command.annotations["policy_version"] = self._policy_version
         else:
             self._ensure_policy_annotations(command)
 
