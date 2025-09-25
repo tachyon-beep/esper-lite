@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from esper.karn import BlueprintDescriptor, BlueprintTier
-from esper.urza import UrzaLibrary
 from esper.urabrask.bench_worker import UrabraskBenchWorker
+from esper.urza import UrzaLibrary
 
 
 def _descriptor(bp_id: str) -> BlueprintDescriptor:
@@ -42,4 +42,3 @@ def test_bench_worker_respects_cooldown(tmp_path: Path, monkeypatch) -> None:
     # Second run should skip due to cooldown
     stats2 = worker.run_once()
     assert stats2.get("skipped_cooldown", 0.0) >= 0.0  # metric increments when nothing processed
-

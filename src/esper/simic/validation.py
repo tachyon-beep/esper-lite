@@ -56,37 +56,26 @@ class PolicyValidator:
 
         reward = metrics.get("average_reward", 0.0)
         if reward < cfg.min_average_reward:
-            reasons.append(
-                f"average_reward {reward:.4f} below min {cfg.min_average_reward:.4f}"
-            )
+            reasons.append(f"average_reward {reward:.4f} below min {cfg.min_average_reward:.4f}")
 
         policy_loss = metrics.get("policy_loss", 0.0)
         if policy_loss > cfg.max_policy_loss:
-            reasons.append(
-                f"policy_loss {policy_loss:.4f} above max {cfg.max_policy_loss:.4f}"
-            )
+            reasons.append(f"policy_loss {policy_loss:.4f} above max {cfg.max_policy_loss:.4f}")
 
         value_loss = metrics.get("value_loss", 0.0)
         if value_loss > cfg.max_value_loss:
-            reasons.append(
-                f"value_loss {value_loss:.4f} above max {cfg.max_value_loss:.4f}"
-            )
+            reasons.append(f"value_loss {value_loss:.4f} above max {cfg.max_value_loss:.4f}")
 
         param_loss = metrics.get("param_loss", 0.0)
         if param_loss > cfg.max_param_loss:
-            reasons.append(
-                f"param_loss {param_loss:.4f} above max {cfg.max_param_loss:.4f}"
-            )
+            reasons.append(f"param_loss {param_loss:.4f} above max {cfg.max_param_loss:.4f}")
 
         entropy = metrics.get("policy_entropy", 0.0)
         if entropy < cfg.min_entropy:
-            reasons.append(
-                f"policy_entropy {entropy:.4f} below min {cfg.min_entropy:.4f}"
-            )
+            reasons.append(f"policy_entropy {entropy:.4f} below min {cfg.min_entropy:.4f}")
 
         passed = not reasons
         return ValidationResult(passed=passed, reasons=reasons, metrics=metrics)
 
 
 __all__ = ["ValidationConfig", "ValidationResult", "PolicyValidator"]
-

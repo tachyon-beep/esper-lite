@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from esper.urabrask.benchmarks import run_benchmarks, BenchmarkConfig, BenchmarkProfile
 from esper.leyline import leyline_pb2
+from esper.urabrask.benchmarks import BenchmarkConfig, BenchmarkProfile, run_benchmarks
 
 
 def test_run_benchmarks_fallback_basic_shape() -> None:

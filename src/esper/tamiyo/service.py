@@ -8,12 +8,13 @@ import logging
 import math
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from uuid import uuid4
 
 import torch
@@ -21,16 +22,10 @@ import torch
 from esper.core import EsperSettings, TelemetryEvent, TelemetryMetric, build_telemetry_packet
 from esper.leyline import leyline_pb2
 from esper.security.signing import DEFAULT_SECRET_ENV, SignatureContext, sign
-
-from .persistence import (
-    FieldReportStore,
-    FieldReportStoreConfig,
-    _atomic_write_json,
-    _load_json,
-)
-from .policy import TamiyoPolicy, TamiyoPolicyConfig
-
 from esper.urza import UrzaLibrary
+
+from .persistence import FieldReportStore, FieldReportStoreConfig, _atomic_write_json, _load_json
+from .policy import TamiyoPolicy, TamiyoPolicyConfig
 
 if TYPE_CHECKING:
     from esper.oona import OonaClient, OonaMessage
@@ -174,7 +169,9 @@ class TamiyoService:
         self._risk = risk_config or RiskConfig()
         # Urza is required for prototype operation; do not mask its absence.
         if urza is None:
-            raise RuntimeError("TamiyoService requires an UrzaLibrary instance (urza=...) to operate")
+            raise RuntimeError(
+                "TamiyoService requires an UrzaLibrary instance (urza=...) to operate"
+            )
         self._urza = urza
         self._metadata_cache_ttl = metadata_cache_ttl
         self._blueprint_cache: dict[str, tuple[datetime, dict[str, float | str | bool | int]]] = {}
@@ -195,12 +192,16 @@ class TamiyoService:
         # Retry hedging for field-report publishing (in-memory only)
         self._report_retry_count: dict[str, int] = {}
         try:
-            self._max_report_retries = int(getattr(self._settings, "tamiyo_field_report_max_retries", 3))
+            self._max_report_retries = int(
+                getattr(self._settings, "tamiyo_field_report_max_retries", 3)
+            )
         except Exception:
             self._max_report_retries = 3
         self._last_validation_loss: float | None = None
         self._policy_version = getattr(self._policy, "architecture_version", "policy-stub")
-        self._signing_context = signature_context or SignatureContext.from_environment(DEFAULT_SECRET_ENV)
+        self._signing_context = signature_context or SignatureContext.from_environment(
+            DEFAULT_SECRET_ENV
+        )
         self._executor = executor
         self._owns_executor = False
         if self._executor is None and (step_timeout_ms > 0 or metadata_timeout_ms > 0):
@@ -221,7 +222,9 @@ class TamiyoService:
         self._metadata_breaker = TamiyoCircuitBreaker(name="metadata")
         # P9 — Observation windows and durable retry index sidecars
         try:
-            self._obs_window_epochs = max(1, int(getattr(self._settings, "tamiyo_fr_obs_window_epochs", 1)))
+            self._obs_window_epochs = max(
+                1, int(getattr(self._settings, "tamiyo_fr_obs_window_epochs", 1))
+            )
         except Exception:
             self._obs_window_epochs = 1
         sidecar_dir = self._field_report_store.path.parent
@@ -326,8 +329,16 @@ class TamiyoService:
                         vals.append(fv)
                 if vals:
                     avg_cov = float(sum(vals) / max(1, len(vals)))
-                warn_th = getattr(self._risk, "degraded_inputs_warn", 0.30) if hasattr(self._risk, "degraded_inputs_warn") else 0.30
-                crit_th = getattr(self._risk, "degraded_inputs_crit", 0.10) if hasattr(self._risk, "degraded_inputs_crit") else 0.10
+                warn_th = (
+                    getattr(self._risk, "degraded_inputs_warn", 0.30)
+                    if hasattr(self._risk, "degraded_inputs_warn")
+                    else 0.30
+                )
+                crit_th = (
+                    getattr(self._risk, "degraded_inputs_crit", 0.10)
+                    if hasattr(self._risk, "degraded_inputs_crit")
+                    else 0.10
+                )
                 evt_level = None
                 if avg_cov <= crit_th:
                     evt_level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
@@ -345,14 +356,21 @@ class TamiyoService:
                         )
                     )
                     # If no prior reason set by risk engine, annotate degraded inputs
-                    if evt_level == leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL and "risk_reason" not in command.annotations:
+                    if (
+                        evt_level == leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
+                        and "risk_reason" not in command.annotations
+                    ):
                         command.annotations["risk_reason"] = "degraded_inputs"
         except Exception:
             pass
 
         compile_reason = getattr(self._policy, "compile_disabled_reason", None)
         if compile_reason:
-            desc = "compile_disabled_cpu" if compile_reason == "device_not_cuda" else "compile_disabled"
+            desc = (
+                "compile_disabled_cpu"
+                if compile_reason == "device_not_cuda"
+                else "compile_disabled"
+            )
             level = (
                 leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO
                 if compile_reason in {"device_not_cuda", "cuda_unavailable"}
@@ -360,7 +378,9 @@ class TamiyoService:
             )
             device_str = "cpu"
             try:
-                device_str = str(getattr(self._policy, "device", getattr(self._policy, "_device", "unknown")))
+                device_str = str(
+                    getattr(self._policy, "device", getattr(self._policy, "_device", "unknown"))
+                )
             except Exception:
                 device_str = "unknown"
             events.append(
@@ -422,23 +442,25 @@ class TamiyoService:
                     unit="count",
                 )
             )
-        metrics.extend([
-            TelemetryMetric(
-                "tamiyo.policy.value_estimate",
-                float(last_action.get("value_estimate", 0.0)),
-                unit="score",
-            ),
-            TelemetryMetric(
-                "tamiyo.policy.risk_index",
-                float(last_action.get("risk_index", 0.0)),
-                unit="index",
-            ),
-            TelemetryMetric(
-                "tamiyo.policy.risk_score",
-                float(last_action.get("risk_score", 0.0)),
-                unit="score",
-            ),
-        ])
+        metrics.extend(
+            [
+                TelemetryMetric(
+                    "tamiyo.policy.value_estimate",
+                    float(last_action.get("value_estimate", 0.0)),
+                    unit="score",
+                ),
+                TelemetryMetric(
+                    "tamiyo.policy.risk_index",
+                    float(last_action.get("risk_index", 0.0)),
+                    unit="index",
+                ),
+                TelemetryMetric(
+                    "tamiyo.policy.risk_score",
+                    float(last_action.get("risk_score", 0.0)),
+                    unit="score",
+                ),
+            ]
+        )
         coverage = getattr(self._policy, "feature_coverage", {})
         if coverage:
             average_coverage = float(sum(coverage.values()) / max(1, len(coverage)))
@@ -617,7 +639,9 @@ class TamiyoService:
             health_indicators=self._build_health_indicators(state, loss_delta, blueprint_info),
         )
         priority_value = self._priority_from_events(events)
-        telemetry.system_health.indicators["priority"] = leyline_pb2.MessagePriority.Name(priority_value)
+        telemetry.system_health.indicators["priority"] = leyline_pb2.MessagePriority.Name(
+            priority_value
+        )
         self._sign_command(command)
         self._telemetry_packets.append(telemetry)
         # Emit a field report for every decision, including timeouts (neutral outcome).
@@ -656,11 +680,17 @@ class TamiyoService:
         if "risk_score" in last_action:
             metrics_delta["risk_score"] = float(last_action.get("risk_score", 0.0))
         if "selected_seed_score" in last_action:
-            metrics_delta["selected_seed_score"] = float(last_action.get("selected_seed_score", 0.0))
+            metrics_delta["selected_seed_score"] = float(
+                last_action.get("selected_seed_score", 0.0)
+            )
         if "blending_schedule_start" in last_action:
-            metrics_delta["blending_schedule_start"] = float(last_action.get("blending_schedule_start", 0.0))
+            metrics_delta["blending_schedule_start"] = float(
+                last_action.get("blending_schedule_start", 0.0)
+            )
         if "blending_schedule_end" in last_action:
-            metrics_delta["blending_schedule_end"] = float(last_action.get("blending_schedule_end", 0.0))
+            metrics_delta["blending_schedule_end"] = float(
+                last_action.get("blending_schedule_end", 0.0)
+            )
         # Pull auxiliary timings from the training metrics if available
         try:
             tm = dict(state.training_metrics)
@@ -678,7 +708,11 @@ class TamiyoService:
             outcome = leyline_pb2.FIELD_REPORT_OUTCOME_NEUTRAL
         elif reason in {"bp_quarantine", "loss_spike", "isolation_violation", "hook_budget"}:
             outcome = leyline_pb2.FIELD_REPORT_OUTCOME_REGRESSION
-        elif command.command_type == leyline_pb2.COMMAND_PAUSE and reason in {"conservative_mode", "policy", ""}:
+        elif command.command_type == leyline_pb2.COMMAND_PAUSE and reason in {
+            "conservative_mode",
+            "policy",
+            "",
+        }:
             outcome = leyline_pb2.FIELD_REPORT_OUTCOME_NEUTRAL
 
         # If blueprint risk is annotated, surface it in the metrics delta for Simic
@@ -707,7 +741,9 @@ class TamiyoService:
             metrics_delta=metrics_delta,
             training_run_id=state.training_run_id or "run-unknown",
             seed_id=command.target_seed_id,
-            blueprint_id=command.seed_operation.blueprint_id if command.HasField("seed_operation") else "",
+            blueprint_id=(
+                command.seed_operation.blueprint_id if command.HasField("seed_operation") else ""
+            ),
             observation_window_epochs=1,
             notes=note_text,
         )
@@ -728,7 +764,9 @@ class TamiyoService:
         cmd_id = command.command_id or ""
         if cmd_id and cmd_id not in self._windows and self._obs_window_epochs > 1:
             # Prepare immutable command metadata for synthesis
-            bp_id = command.seed_operation.blueprint_id if command.HasField("seed_operation") else ""
+            bp_id = (
+                command.seed_operation.blueprint_id if command.HasField("seed_operation") else ""
+            )
             issued_iso = None
             try:
                 issued_dt = command.issued_at.ToDatetime()  # type: ignore[attr-defined]
@@ -784,7 +822,9 @@ class TamiyoService:
                 if loss_delta > mx:
                     win["max_loss_delta"] = float(loss_delta)
                 if hook_ms > 0.0:
-                    win["sum_hook_latency_ms"] = float(win.get("sum_hook_latency_ms", 0.0)) + hook_ms
+                    win["sum_hook_latency_ms"] = (
+                        float(win.get("sum_hook_latency_ms", 0.0)) + hook_ms
+                    )
                     win["count_hook_latency"] = int(win.get("count_hook_latency", 0)) + 1
                 if last_reason:
                     win["last_reason"] = str(last_reason)
@@ -999,7 +1039,9 @@ class TamiyoService:
         command: leyline_pb2.AdaptationCommand,
         enforce_timeouts: bool,
     ) -> tuple[dict[str, float | str | bool | int] | None, bool]:
-        if command.command_type != leyline_pb2.COMMAND_SEED or not command.HasField("seed_operation"):
+        if command.command_type != leyline_pb2.COMMAND_SEED or not command.HasField(
+            "seed_operation"
+        ):
             return None, False
 
         if enforce_timeouts and self._metadata_timeout_s > 0 and self._executor is not None:
@@ -1031,7 +1073,9 @@ class TamiyoService:
         data = self._serialize_blueprint_record(record)
         self._blueprint_cache[blueprint_id] = (datetime.now(tz=UTC), data)
 
-    def _serialize_blueprint_record(self, record: Any) -> dict[str, float | str | bool | int | dict | list]:
+    def _serialize_blueprint_record(
+        self, record: Any
+    ) -> dict[str, float | str | bool | int | dict | list]:
         descriptor = record.metadata
         allowed: dict[str, dict[str, float]] = {}
         allowed_mapping = getattr(descriptor, "allowed_parameters", None)
@@ -1060,7 +1104,9 @@ class TamiyoService:
             "parameter_count": int(len(allowed)),
             "allowed_parameters": allowed,
         }
-        candidate_score = (1.0 - float(data["risk"])) + 0.05 * float(data["stage"]) + 0.02 * len(allowed)
+        candidate_score = (
+            (1.0 - float(data["risk"])) + 0.05 * float(data["stage"]) + 0.02 * len(allowed)
+        )
         data["candidate_score"] = max(candidate_score, 0.0)
         compile_ms = getattr(record, "compile_ms", None)
         if compile_ms is not None:
@@ -1146,11 +1192,31 @@ class TamiyoService:
             except json.JSONDecodeError:
                 parsed = None
             if isinstance(parsed, Mapping):
-                block = {str(k): parsed[k] for k in ("hazard_band", "handling_class", "resource_profile", "provenance", "issued_at") if k in parsed}
+                block = {
+                    str(k): parsed[k]
+                    for k in (
+                        "hazard_band",
+                        "handling_class",
+                        "resource_profile",
+                        "provenance",
+                        "issued_at",
+                    )
+                    if k in parsed
+                }
                 with contextlib.suppress(Exception):
                     block["risk_score"] = float(parsed.get("risk_score", 0.0))  # type: ignore[index]
         elif isinstance(raw, Mapping):
-            block = {str(k): raw[k] for k in ("hazard_band", "handling_class", "resource_profile", "provenance", "issued_at") if k in raw}
+            block = {
+                str(k): raw[k]
+                for k in (
+                    "hazard_band",
+                    "handling_class",
+                    "resource_profile",
+                    "provenance",
+                    "issued_at",
+                )
+                if k in raw
+            }
             with contextlib.suppress(Exception):
                 block["risk_score"] = float(raw.get("risk_score", 0.0))  # type: ignore[index]
         return block or None
@@ -1222,9 +1288,7 @@ class TamiyoService:
         activations = self._coerce_descriptor_list(
             graph_section.get("activations"), key_field="activation_id"
         )
-        parameters = self._coerce_descriptor_list(
-            graph_section.get("parameters"), key_field="name"
-        )
+        parameters = self._coerce_descriptor_list(graph_section.get("parameters"), key_field="name")
         if not parameters:
             allowed_mapping = getattr(record.metadata, "allowed_parameters", {})
             for name, bounds in allowed_mapping.items():
@@ -1316,10 +1380,7 @@ class TamiyoService:
                     )
                 )
                 self._set_conservative_mode(True, "policy_risk_critical", events)
-            elif (
-                policy_risk_score >= 0.85
-                and command.command_type == leyline_pb2.COMMAND_SEED
-            ):
+            elif policy_risk_score >= 0.85 and command.command_type == leyline_pb2.COMMAND_SEED:
                 reason = reason or "policy_risk_elevated"
                 command.command_type = leyline_pb2.COMMAND_OPTIMIZER
                 command.optimizer_adjustment.optimizer_id = "sgd"
@@ -1393,8 +1454,8 @@ class TamiyoService:
                 try:
                     settings = EsperSettings()
                     if getattr(settings, "urabrask_signing_enabled", False):
-                        from esper.urabrask.wal import verify_bsds_signature_in_extras
                         from esper.urabrask import metrics as _ura_metrics
+                        from esper.urabrask.wal import verify_bsds_signature_in_extras
 
                         ctx = SignatureContext.from_environment(DEFAULT_SECRET_ENV)
                         extras_map = blueprint_info if isinstance(blueprint_info, Mapping) else {}
@@ -1415,7 +1476,9 @@ class TamiyoService:
                         command.annotations.setdefault(k_dst, str(val))
                 if "risk_score" in bsds_block:
                     with contextlib.suppress(Exception):
-                        command.annotations.setdefault("bsds_risk", f"{float(bsds_block['risk_score']):.2f}")
+                        command.annotations.setdefault(
+                            "bsds_risk", f"{float(bsds_block['risk_score']):.2f}"
+                        )
                 prov = str(bsds_block.get("provenance", ""))
                 events.append(
                     TelemetryEvent(
@@ -1623,7 +1686,10 @@ class TamiyoService:
                 TelemetryEvent(
                     description="device_pressure_high",
                     level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                    attributes={"gpu_util": f"{gpu_util:.1f}", "gpu_mem_free_gb": f"{gpu_free:.2f}"},
+                    attributes={
+                        "gpu_util": f"{gpu_util:.1f}",
+                        "gpu_mem_free_gb": f"{gpu_free:.2f}",
+                    },
                 )
             )
             if command.command_type == leyline_pb2.COMMAND_SEED:
@@ -1640,13 +1706,18 @@ class TamiyoService:
             reason = reason or "cpu_pressure_high"
             command.command_type = leyline_pb2.COMMAND_OPTIMIZER
 
-        if not reason and command.command_type == leyline_pb2.COMMAND_PAUSE and self._risk.conservative_mode:
+        if (
+            not reason
+            and command.command_type == leyline_pb2.COMMAND_PAUSE
+            and self._risk.conservative_mode
+        ):
             reason = "conservative_mode"
 
         if (
             not timed_out
             and not blueprint_timeout
-            and self._inference_breaker.state == leyline_pb2.CircuitBreakerState.CIRCUIT_STATE_CLOSED
+            and self._inference_breaker.state
+            == leyline_pb2.CircuitBreakerState.CIRCUIT_STATE_CLOSED
             and self._metadata_breaker.state == leyline_pb2.CircuitBreakerState.CIRCUIT_STATE_CLOSED
         ):
             self._set_conservative_mode(False, "stabilised", events)
@@ -1679,7 +1750,8 @@ class TamiyoService:
             if event.level == leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL:
                 return leyline_pb2.MessagePriority.MESSAGE_PRIORITY_CRITICAL
             if (
-                event.level in (
+                event.level
+                in (
                     leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
                     leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_ERROR,
                 )
@@ -1707,11 +1779,15 @@ class TamiyoService:
         command: leyline_pb2.AdaptationCommand,
         events: list[TelemetryEvent],
     ) -> leyline_pb2.HealthStatus:
-        if any(event.level == leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL for event in events):
+        if any(
+            event.level == leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL for event in events
+        ):
             return leyline_pb2.HealthStatus.HEALTH_STATUS_CRITICAL
         if command.command_type == leyline_pb2.COMMAND_PAUSE:
             return leyline_pb2.HealthStatus.HEALTH_STATUS_DEGRADED
-        if any(event.level == leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING for event in events):
+        if any(
+            event.level == leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING for event in events
+        ):
             return leyline_pb2.HealthStatus.HEALTH_STATUS_DEGRADED
         return leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY
 
@@ -1742,7 +1818,9 @@ class TamiyoService:
             "policy": self._policy_version[:8],
             "mode": "1" if self._risk.conservative_mode else "0",
         }
-        indicators["policy_compile"] = "1" if getattr(self._policy, "compile_enabled", False) else "0"
+        indicators["policy_compile"] = (
+            "1" if getattr(self._policy, "compile_enabled", False) else "0"
+        )
         indicators["policy_arch"] = self._policy_version
         # Timeout budgets (ms)
         try:
@@ -1807,9 +1885,7 @@ class TamiyoService:
             raise ValueError(f"Unsupported Tamiyo policy version: {version}")
         if hasattr(new_policy, "update_blueprint_metadata"):
             with contextlib.suppress(Exception):
-                metadata_payload = {
-                    bp: info for bp, (_, info) in self._blueprint_cache.items()
-                }
+                metadata_payload = {bp: info for bp, (_, info) in self._blueprint_cache.items()}
                 new_policy.update_blueprint_metadata(metadata_payload)
         self._policy = new_policy
         self._policy_version = getattr(new_policy, "architecture_version", self._policy_version)
@@ -1925,7 +2001,11 @@ class TamiyoService:
                     self._retry_index[key]["dropped"] = True
                 # Emit retry/drop telemetry
                 try:
-                    evt = "field_report_retry" if count <= self._max_report_retries else "field_report_drop"
+                    evt = (
+                        "field_report_retry"
+                        if count <= self._max_report_retries
+                        else "field_report_drop"
+                    )
                     lvl = (
                         leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING
                         if evt == "field_report_retry"
@@ -1975,10 +2055,22 @@ class TamiyoService:
                     source="tamiyo",
                     level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
                     metrics=[
-                        TelemetryMetric("tamiyo.field_reports.published_total", float(published_total), unit="count"),
-                        TelemetryMetric("tamiyo.field_reports.retries_total", float(retries_total), unit="count"),
-                        TelemetryMetric("tamiyo.field_reports.dropped_total", float(dropped_total), unit="count"),
-                        TelemetryMetric("tamiyo.field_reports.pending_total", float(len(failed_reports)), unit="count"),
+                        TelemetryMetric(
+                            "tamiyo.field_reports.published_total",
+                            float(published_total),
+                            unit="count",
+                        ),
+                        TelemetryMetric(
+                            "tamiyo.field_reports.retries_total", float(retries_total), unit="count"
+                        ),
+                        TelemetryMetric(
+                            "tamiyo.field_reports.dropped_total", float(dropped_total), unit="count"
+                        ),
+                        TelemetryMetric(
+                            "tamiyo.field_reports.pending_total",
+                            float(len(failed_reports)),
+                            unit="count",
+                        ),
                     ],
                     events=[],
                     health_status=leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY,
@@ -2029,7 +2121,9 @@ class TamiyoService:
                 incoming_version = (update.tamiyo_policy_version or "").strip()
             except Exception:
                 incoming_version = ""
-            if incoming_version and incoming_version != getattr(self._policy, "architecture_version", ""):
+            if incoming_version and incoming_version != getattr(
+                self._policy, "architecture_version", ""
+            ):
                 _emit_rejection("version_mismatch")
                 return
             freshness_sec = max(0, int(getattr(self._settings, "tamiyo_update_freshness_sec", 0)))
@@ -2041,6 +2135,7 @@ class TamiyoService:
                     # Some protobuf impls return naive dt; coerce to UTC
                     if issued.tzinfo is None:
                         from datetime import timezone as _tz
+
                         issued = issued.replace(tzinfo=_tz.utc)
                     age = (now - issued).total_seconds()
                     if age > float(freshness_sec):
@@ -2074,7 +2169,9 @@ class TamiyoService:
             candidate.load_state_dict(state_dict, strict=False)
         except ValueError as exc:
             logger.warning("Tamiyo policy update rejected: %s", exc)
-            _emit_rejection("registry_mismatch" if "registry" in str(exc).lower() else "shape_mismatch")
+            _emit_rejection(
+                "registry_mismatch" if "registry" in str(exc).lower() else "shape_mismatch"
+            )
             return
         except RuntimeError as exc:  # pragma: no cover - defensive
             logger.warning("Tamiyo policy update incompatible: %s", exc)
@@ -2116,7 +2213,9 @@ class TamiyoService:
     def _resolve_blueprint_info(
         self, command: leyline_pb2.AdaptationCommand
     ) -> dict[str, float | str | bool | int] | None:
-        if command.command_type != leyline_pb2.COMMAND_SEED or not command.HasField("seed_operation"):
+        if command.command_type != leyline_pb2.COMMAND_SEED or not command.HasField(
+            "seed_operation"
+        ):
             return None
         blueprint_id = command.seed_operation.blueprint_id
         if not blueprint_id:

@@ -14,7 +14,9 @@ def test_graph_builder_small_graph_p95_budget():
         pytest.skip("perf test disabled; set RUN_PERF_TESTS=1 to enable")
 
     # Minimal builder with defaults; no metadata provider to exercise fallbacks
-    builder = TamiyoGraphBuilder(TamiyoGraphBuilderConfig(max_layers=4, max_activations=1, max_parameters=1))
+    builder = TamiyoGraphBuilder(
+        TamiyoGraphBuilderConfig(max_layers=4, max_activations=1, max_parameters=1)
+    )
     packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-perf")
     # Add a couple of seeds to exercise seed edges
     for i in range(2):
@@ -39,4 +41,3 @@ def test_graph_builder_small_graph_p95_budget():
     p95 = durations[int(len(durations) * 0.95)]
     # Soft budget for CPU small graphs; adjust if host variance requires
     assert p95 <= 5.0
-

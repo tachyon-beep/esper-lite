@@ -1,13 +1,7 @@
 import pytest
 
+from esper.karn import BlueprintDescriptor, BlueprintQuery, BlueprintTier, KarnCatalog
 from esper.leyline import leyline_pb2
-
-from esper.karn import (
-    BlueprintDescriptor,
-    BlueprintTier,
-    BlueprintQuery,
-    KarnCatalog,
-)
 
 
 def _descriptor() -> BlueprintDescriptor:
@@ -38,12 +32,8 @@ def test_default_catalog_contains_expected_counts() -> None:
     catalog = KarnCatalog()
     assert len(catalog) == 50
     safe = list(catalog.list_by_tier(BlueprintTier.BLUEPRINT_TIER_SAFE))
-    experimental = list(
-        catalog.list_by_tier(BlueprintTier.BLUEPRINT_TIER_EXPERIMENTAL)
-    )
-    adversarial = list(
-        catalog.list_by_tier(BlueprintTier.BLUEPRINT_TIER_HIGH_RISK)
-    )
+    experimental = list(catalog.list_by_tier(BlueprintTier.BLUEPRINT_TIER_EXPERIMENTAL))
+    adversarial = list(catalog.list_by_tier(BlueprintTier.BLUEPRINT_TIER_HIGH_RISK))
     assert len(safe) == 35
     assert len(experimental) == 7
     assert len(adversarial) == 8
@@ -87,9 +77,7 @@ def test_handle_query_rejects_out_of_bounds() -> None:
     catalog.register(descriptor)
 
     with pytest.raises(ValueError):
-        catalog.handle_query(
-            BlueprintQuery(blueprint_id="bp-1", parameters={"alpha": 2.0})
-        )
+        catalog.handle_query(BlueprintQuery(blueprint_id="bp-1", parameters={"alpha": 2.0}))
 
     metrics = catalog.metrics_snapshot()
     assert metrics["karn.requests.failed"] == 1.0

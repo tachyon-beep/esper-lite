@@ -2,14 +2,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from esper.leyline import leyline_pb2
 from esper.karn import BlueprintDescriptor, BlueprintTier
-from esper.urza import UrzaLibrary
+from esper.leyline import leyline_pb2
 from esper.urabrask import BsdsHeuristicConfig, compute_bsds, produce_and_attach_bsds
+from esper.urza import UrzaLibrary
 
 
-def _descriptor(bp_id: str, *, tier: int = BlueprintTier.BLUEPRINT_TIER_SAFE, risk: float = 0.2,
-                quarantine_only: bool = False) -> BlueprintDescriptor:
+def _descriptor(
+    bp_id: str,
+    *,
+    tier: int = BlueprintTier.BLUEPRINT_TIER_SAFE,
+    risk: float = 0.2,
+    quarantine_only: bool = False,
+) -> BlueprintDescriptor:
     d = BlueprintDescriptor(
         blueprint_id=bp_id,
         name=f"name-{bp_id}",
@@ -35,7 +40,9 @@ def test_compute_bsds_safe_descriptor() -> None:
 
 
 def test_compute_bsds_experimental_high() -> None:
-    proto, js = compute_bsds(_descriptor("bp-exp", tier=BlueprintTier.BLUEPRINT_TIER_EXPERIMENTAL, risk=0.55))
+    proto, js = compute_bsds(
+        _descriptor("bp-exp", tier=BlueprintTier.BLUEPRINT_TIER_EXPERIMENTAL, risk=0.55)
+    )
     assert proto.hazard_band in (leyline_pb2.HAZARD_BAND_HIGH, leyline_pb2.HAZARD_BAND_MEDIUM)
     # With default priors, 0.55 + 0.05 -> 0.60 => HIGH
     assert proto.hazard_band == leyline_pb2.HAZARD_BAND_HIGH
@@ -62,10 +69,11 @@ def test_produce_and_attach_bsds_in_urza(tmp_path: Path) -> None:
     d = _descriptor("bp-attach", risk=0.4)
     lib.save(d, artifact, extras={})
 
-    descriptor, bsds_json = produce_and_attach_bsds(lib, "bp-attach", hints={"resource_profile": "gpu"})
+    descriptor, bsds_json = produce_and_attach_bsds(
+        lib, "bp-attach", hints={"resource_profile": "gpu"}
+    )
     rec = lib.get("bp-attach")
     assert rec is not None
     assert rec.extras and "bsds" in rec.extras
     assert rec.extras["bsds"]["resource_profile"] == "gpu"
     assert descriptor.blueprint_id == "bp-attach"
-

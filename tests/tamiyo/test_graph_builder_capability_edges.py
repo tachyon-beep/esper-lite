@@ -6,15 +6,25 @@ from esper.leyline import leyline_pb2
 from esper.tamiyo import TamiyoGraphBuilder, TamiyoGraphBuilderConfig
 
 
-def _packet_with_seeds_two_params(*, allow_a: bool, allow_b: bool) -> tuple[leyline_pb2.SystemStatePacket, dict]:
+def _packet_with_seeds_two_params(
+    *, allow_a: bool, allow_b: bool
+) -> tuple[leyline_pb2.SystemStatePacket, dict]:
     packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-cap")
     seed_a = packet.seed_states.add()
     seed_a.seed_id = "seed-A"
-    seed_a.stage = leyline_pb2.SeedLifecycleStage.SEED_STAGE_BLENDING if allow_a else leyline_pb2.SeedLifecycleStage.SEED_STAGE_TRAINING
+    seed_a.stage = (
+        leyline_pb2.SeedLifecycleStage.SEED_STAGE_BLENDING
+        if allow_a
+        else leyline_pb2.SeedLifecycleStage.SEED_STAGE_TRAINING
+    )
     seed_a.learning_rate = 0.01
     seed_b = packet.seed_states.add()
     seed_b.seed_id = "seed-B"
-    seed_b.stage = leyline_pb2.SeedLifecycleStage.SEED_STAGE_BLENDING if allow_b else leyline_pb2.SeedLifecycleStage.SEED_STAGE_TRAINING
+    seed_b.stage = (
+        leyline_pb2.SeedLifecycleStage.SEED_STAGE_BLENDING
+        if allow_b
+        else leyline_pb2.SeedLifecycleStage.SEED_STAGE_TRAINING
+    )
     seed_b.learning_rate = 0.02
     # Blueprint extras: two parameters
     metadata = {
@@ -31,9 +41,11 @@ def _packet_with_seeds_two_params(*, allow_a: bool, allow_b: bool) -> tuple[leyl
 def test_capability_edges_masked_when_no_allowances() -> None:
     builder = TamiyoGraphBuilder(TamiyoGraphBuilderConfig())
     packet, metadata = _packet_with_seeds_two_params(allow_a=False, allow_b=False)
+
     # No global allowed methods; rely solely on stages (both not blending)
     def provider(_bp: str) -> dict:  # pragma: no cover - simple mapping
         return metadata
+
     builder._metadata_provider = provider  # type: ignore[attr-defined]
     graph = builder.build(packet)
     edge = graph[("seed", "allowed", "parameter")]
@@ -47,8 +59,10 @@ def test_capability_edges_present_only_for_allowed() -> None:
     builder = TamiyoGraphBuilder(TamiyoGraphBuilderConfig())
     # Only seed-A allowed (BLENDING)
     packet, metadata = _packet_with_seeds_two_params(allow_a=True, allow_b=False)
+
     def provider(_bp: str) -> dict:
         return metadata
+
     builder._metadata_provider = provider  # type: ignore[attr-defined]
     graph = builder.build(packet)
     edge = graph[("seed", "allowed", "parameter")]
@@ -74,8 +88,10 @@ def test_capability_edges_filter_by_per_seed_allowed_names_and_capabilities_mask
             "seed-B": [],
         }
     }
+
     def provider(_bp: str) -> dict:
         return metadata
+
     builder._metadata_provider = provider  # type: ignore[attr-defined]
     graph = builder.build(packet)
     edge = graph[("seed", "allowed", "parameter")]
@@ -95,13 +111,11 @@ def test_capability_edges_filter_by_seed_index() -> None:
     builder = TamiyoGraphBuilder(TamiyoGraphBuilderConfig())
     packet, metadata = _packet_with_seeds_two_params(allow_a=True, allow_b=True)
     # Restrict seed index 1 (seed-B) to only parameter index 1 (beta); seed-A defaults to all
-    metadata["graph"]["capabilities"] = {
-        "allowed_parameters_by_seed_index": {
-            "1": [1]
-        }
-    }
+    metadata["graph"]["capabilities"] = {"allowed_parameters_by_seed_index": {"1": [1]}}
+
     def provider(_bp: str) -> dict:
         return metadata
+
     builder._metadata_provider = provider  # type: ignore[attr-defined]
     graph = builder.build(packet)
     edge = graph[("seed", "allowed", "parameter")]

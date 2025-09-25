@@ -1,22 +1,21 @@
-from io import BytesIO
 import os
-import time
 import statistics
-from types import SimpleNamespace
+import time
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 import torch
-from torch import nn
 from fakeredis.aioredis import FakeRedis
+from torch import nn
 
-from esper.leyline import leyline_pb2
-from esper.urza import UrzaLibrary
 from esper.karn import BlueprintDescriptor, BlueprintTier
-from esper.oona import OonaClient, StreamConfig
 from esper.kasmina import KasminaSeedManager
+from esper.leyline import leyline_pb2
+from esper.oona import OonaClient, StreamConfig
 from esper.security.signing import SignatureContext, sign
 from esper.tamiyo import (
     FieldReportStoreConfig,
@@ -25,7 +24,7 @@ from esper.tamiyo import (
     TamiyoPolicyConfig,
     TamiyoService,
 )
-
+from esper.urza import UrzaLibrary
 
 _SIGNATURE_CONTEXT = SignatureContext(secret=b"tamiyo-test-secret")
 
@@ -151,7 +150,10 @@ def test_tamiyo_service_generates_command(tmp_path) -> None:
     telemetry = service.telemetry_packets[-1]
     assert "blending_method" in telemetry.system_health.indicators
     assert telemetry.system_health.indicators.get("policy_compile") in {"0", "1"}
-    assert telemetry.system_health.indicators.get("policy_arch") == service._policy.architecture_version  # pylint: disable=protected-access
+    assert (
+        telemetry.system_health.indicators.get("policy_arch")
+        == service._policy.architecture_version
+    )  # pylint: disable=protected-access
     # WP1 acceptance: command annotation includes coverage summary
     assert "feature_coverage" in command.annotations
     cov = float(command.annotations["feature_coverage"])  # type: ignore[arg-type]
@@ -159,6 +161,7 @@ def test_tamiyo_service_generates_command(tmp_path) -> None:
     # WP15: granular coverage present in annotations and telemetry
     assert "coverage_types" in command.annotations
     import json as _json
+
     types = _json.loads(command.annotations["coverage_types"])  # type: ignore[arg-type]
     assert any(k.startswith("node.") or k.startswith("edges.") for k in types.keys())
     # Telemetry contains per-type metrics
@@ -177,7 +180,9 @@ async def test_degraded_inputs_routes_emergency(tmp_path) -> None:
         urza=urza,
         signature_context=_SIGNATURE_CONTEXT,
     )
-    packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-degraded")
+    packet = leyline_pb2.SystemStatePacket(
+        version=1, current_epoch=1, training_run_id="run-degraded"
+    )
     command = service.evaluate_step(packet)
     # Route to Oona and assert emergency
     redis = FakeRedis()
@@ -213,7 +218,9 @@ def test_tamiyo_signed_command_accepted_and_replay_rejected(tmp_path) -> None:
     manager.handle_command(command)
     manager.finalize_step(step_index=1)
     packets = manager.drain_telemetry_packets()
-    assert not any(event.description == "command_rejected" for pkt in packets for event in pkt.events)
+    assert not any(
+        event.description == "command_rejected" for pkt in packets for event in pkt.events
+    )
 
     manager.handle_command(command)
     manager.finalize_step(step_index=2)
@@ -282,14 +289,20 @@ def test_evaluate_step_timeout_inference(tmp_path) -> None:
     )
 
 
-def test_default_step_timeout_uses_env_when_no_override(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_step_timeout_uses_env_when_no_override(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # With no explicit constructor override and env default at 5 ms, a slow policy (>20 ms)
     # should trigger a timeout.
     monkeypatch.setenv("TAMIYO_STEP_TIMEOUT_MS", "5")
     cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
     urza = UrzaLibrary(root=tmp_path / "urza")
-    service = TamiyoService(policy=_SlowPolicy(), store_config=cfg, urza=urza, signature_context=_SIGNATURE_CONTEXT)
-    pkt = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-timeout-env")
+    service = TamiyoService(
+        policy=_SlowPolicy(), store_config=cfg, urza=urza, signature_context=_SIGNATURE_CONTEXT
+    )
+    pkt = leyline_pb2.SystemStatePacket(
+        version=1, current_epoch=1, training_run_id="run-timeout-env"
+    )
     cmd = service.evaluate_step(pkt)
     assert cmd.command_type == leyline_pb2.COMMAND_PAUSE
     telemetry = service.telemetry_packets[-1]
@@ -314,7 +327,9 @@ def test_explicit_step_timeout_overrides_env(tmp_path, monkeypatch: pytest.Monke
         signature_context=_SIGNATURE_CONTEXT,
         step_timeout_ms=100.0,
     )
-    pkt = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-timeout-override")
+    pkt = leyline_pb2.SystemStatePacket(
+        version=1, current_epoch=1, training_run_id="run-timeout-override"
+    )
     _ = service.evaluate_step(pkt)
     telemetry = service.telemetry_packets[-1]
     assert not any(e.description == "timeout_inference" for e in telemetry.events)
@@ -349,7 +364,9 @@ def test_evaluate_step_includes_coverage_and_policy_version(tmp_path) -> None:
     telemetry = service.telemetry_packets[-1]
     assert not any(e.description == "timeout_inference" for e in telemetry.events)
     prio_name = telemetry.system_health.indicators.get("priority")
-    assert prio_name == leyline_pb2.MessagePriority.Name(leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL)
+    assert prio_name == leyline_pb2.MessagePriority.Name(
+        leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
+    )
 
 
 def test_blend_mode_annotations_disabled_by_default(tmp_path) -> None:
@@ -362,23 +379,37 @@ def test_blend_mode_annotations_disabled_by_default(tmp_path) -> None:
         signature_context=_SIGNATURE_CONTEXT,
         step_timeout_ms=250.0,
     )
-    packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=2, training_run_id="run-blend-off")
+    packet = leyline_pb2.SystemStatePacket(
+        version=1, current_epoch=2, training_run_id="run-blend-off"
+    )
     # Provide a seed so we emit a SEED command
-    seed = packet.seed_states.add(); seed.seed_id = "seed-1"; seed.stage = leyline_pb2.SEED_STAGE_TRAINING
+    seed = packet.seed_states.add()
+    seed.seed_id = "seed-1"
+    seed.stage = leyline_pb2.SEED_STAGE_TRAINING
     cmd = service.evaluate_epoch(packet)
-    assert cmd.command_type in {leyline_pb2.COMMAND_SEED, leyline_pb2.COMMAND_OPTIMIZER, leyline_pb2.COMMAND_PAUSE}
+    assert cmd.command_type in {
+        leyline_pb2.COMMAND_SEED,
+        leyline_pb2.COMMAND_OPTIMIZER,
+        leyline_pb2.COMMAND_PAUSE,
+    }
     # New keys should not be present by default
     assert "blend_mode" not in cmd.annotations
 
 
-def test_emits_blend_mode_annotations_when_enabled(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_emits_blend_mode_annotations_when_enabled(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("TAMIYO_ENABLE_BLEND_MODE_ANN", "true")
     monkeypatch.setenv("TAMIYO_BLEND_MODE_DEFAULT", "CONFIDENCE")
     cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
     urza = UrzaLibrary(root=tmp_path / "urza")
     service = TamiyoService(store_config=cfg, urza=urza, signature_context=_SIGNATURE_CONTEXT)
-    packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-blend-on")
-    seed = packet.seed_states.add(); seed.seed_id = "seed-1"; seed.stage = leyline_pb2.SEED_STAGE_TRAINING
+    packet = leyline_pb2.SystemStatePacket(
+        version=1, current_epoch=1, training_run_id="run-blend-on"
+    )
+    seed = packet.seed_states.add()
+    seed.seed_id = "seed-1"
+    seed.stage = leyline_pb2.SEED_STAGE_TRAINING
     cmd = service.evaluate_epoch(packet)
     if cmd.command_type == leyline_pb2.COMMAND_SEED:
         assert cmd.annotations.get("blend_mode") == "CONFIDENCE"
@@ -387,14 +418,18 @@ def test_emits_blend_mode_annotations_when_enabled(tmp_path, monkeypatch: pytest
         assert "alpha_lo" in cmd.annotations and "alpha_hi" in cmd.annotations
 
 
-def test_channel_mode_emits_alpha_vec_when_shape_small(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_channel_mode_emits_alpha_vec_when_shape_small(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # Enable annotations and channel mode
     monkeypatch.setenv("TAMIYO_ENABLE_BLEND_MODE_ANN", "true")
     monkeypatch.setenv("TAMIYO_BLEND_MODE_DEFAULT", "CHANNEL")
     monkeypatch.setenv("TAMIYO_BLEND_ALPHA_VEC_MAX", "8")
     # Prepare Urza metadata with small output_channels
-    urza_root = tmp_path / "urza"; urza_root.mkdir(parents=True, exist_ok=True)
-    artifact_path = tmp_path / "bp-vec.pt"; artifact_path.write_bytes(b"dummy")
+    urza_root = tmp_path / "urza"
+    urza_root.mkdir(parents=True, exist_ok=True)
+    artifact_path = tmp_path / "bp-vec.pt"
+    artifact_path.write_bytes(b"dummy")
     descriptor = BlueprintDescriptor(
         blueprint_id="bp-vec",
         name="vec",
@@ -407,20 +442,33 @@ def test_channel_mode_emits_alpha_vec_when_shape_small(tmp_path, monkeypatch: py
     )
     library = UrzaLibrary(root=urza_root)
     # Include a layer with output_channels = 4
-    extras = {"graph": {"layers": [{"layer_id": "L0", "type": "linear", "depth": 0, "output_channels": 4}]}}
+    extras = {
+        "graph": {
+            "layers": [{"layer_id": "L0", "type": "linear", "depth": 0, "output_channels": 4}]
+        }
+    }
     library.save(descriptor, artifact_path, extras=extras)
 
     class _PolicySeed(TamiyoPolicy):
         def select_action(self, _packet):  # pragma: no cover - deterministic stub
-            cmd = leyline_pb2.AdaptationCommand(version=1, command_type=leyline_pb2.COMMAND_SEED, target_seed_id="seed-1")
+            cmd = leyline_pb2.AdaptationCommand(
+                version=1, command_type=leyline_pb2.COMMAND_SEED, target_seed_id="seed-1"
+            )
             cmd.seed_operation.operation = leyline_pb2.SEED_OP_GERMINATE
             cmd.seed_operation.blueprint_id = "bp-vec"
             self._last_action = {"action": 0.0, "param_delta": 0.0}
             return cmd
 
-    service = TamiyoService(policy=_PolicySeed(), store_config=FieldReportStoreConfig(path=tmp_path / "field_reports.log"), urza=library, signature_context=_SIGNATURE_CONTEXT)
+    service = TamiyoService(
+        policy=_PolicySeed(),
+        store_config=FieldReportStoreConfig(path=tmp_path / "field_reports.log"),
+        urza=library,
+        signature_context=_SIGNATURE_CONTEXT,
+    )
     pkt = leyline_pb2.SystemStatePacket(version=1, current_epoch=1)
-    seed = pkt.seed_states.add(); seed.seed_id = "seed-1"; seed.stage = leyline_pb2.SEED_STAGE_TRAINING
+    seed = pkt.seed_states.add()
+    seed.seed_id = "seed-1"
+    seed.stage = leyline_pb2.SEED_STAGE_TRAINING
     cmd = service.evaluate_epoch(pkt)
     if cmd.command_type == leyline_pb2.COMMAND_SEED:
         # alpha_vec present with small length
@@ -429,13 +477,14 @@ def test_channel_mode_emits_alpha_vec_when_shape_small(tmp_path, monkeypatch: py
             assert "alpha_vec" in cmd.annotations
 
 
-
 def test_health_indicators_include_timeouts(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Set explicit budgets to predictable values
     monkeypatch.setenv("TAMIYO_STEP_TIMEOUT_MS", "7.5")
     cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
     urza = UrzaLibrary(root=tmp_path / "urza")
-    service = TamiyoService(store_config=cfg, urza=urza, signature_context=_SIGNATURE_CONTEXT, metadata_timeout_ms=12.0)
+    service = TamiyoService(
+        store_config=cfg, urza=urza, signature_context=_SIGNATURE_CONTEXT, metadata_timeout_ms=12.0
+    )
     packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-hi")
     command = service.evaluate_step(packet)
     telemetry = service.telemetry_packets[-1]
@@ -568,7 +617,10 @@ def test_service_urza_graph_metadata_round_trip(tmp_path) -> None:
     assert graph_block is not None
     assert graph_block.get("source") == "urza-cache"
     assert graph_block.get("layers") and graph_block["layers"][0]["layer_id"] == "bp-graph-L0"
-    assert graph_block.get("activations") and graph_block["activations"][0]["activation_id"] == "bp-graph-A0"
+    assert (
+        graph_block.get("activations")
+        and graph_block["activations"][0]["activation_id"] == "bp-graph-A0"
+    )
     assert graph_block.get("parameters") and graph_block["parameters"][0]["name"] == "alpha"
 
     metrics = {metric.name: metric.value for metric in service.telemetry_packets[-1].metrics}
@@ -669,12 +721,18 @@ def test_conservative_mode_overrides_directive(tmp_path) -> None:
     assert command.command_type == leyline_pb2.COMMAND_PAUSE
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA to validate default compile")
+@pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="requires CUDA to validate default compile"
+)
 def test_service_default_compile_on_cuda(monkeypatch: pytest.MonkeyPatch) -> None:
     # Ensure settings don't force-override compile/device
     monkeypatch.delenv("TAMIYO_ENABLE_COMPILE", raising=False)
     monkeypatch.delenv("TAMIYO_DEVICE", raising=False)
-    service = TamiyoService(store_config=FieldReportStoreConfig(path=Path("/tmp/field_reports.log")), urza=UrzaLibrary(root=Path("/tmp/urza")), signature_context=_SIGNATURE_CONTEXT)
+    service = TamiyoService(
+        store_config=FieldReportStoreConfig(path=Path("/tmp/field_reports.log")),
+        urza=UrzaLibrary(root=Path("/tmp/urza")),
+        signature_context=_SIGNATURE_CONTEXT,
+    )
     # If backend raises or compile path falls back, skip to avoid flakiness on exotic stacks
     if not getattr(service._policy, "compile_enabled", False):  # type: ignore[attr-defined]
         pytest.skip("compile path fell back on this CUDA backend; default enablement attempted")
@@ -685,6 +743,7 @@ def test_service_default_compile_on_cuda(monkeypatch: pytest.MonkeyPatch) -> Non
 async def test_field_report_publish_hedging_success_after_retry(tmp_path: Path) -> None:
     # Use zero backoff to attempt retry immediately on next publish cycle
     import os
+
     os.environ["TAMIYO_FR_RETRY_BACKOFF_MS"] = "0"
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
     urza = UrzaLibrary(root=tmp_path / "urza")
@@ -734,6 +793,7 @@ async def test_field_report_publish_drops_after_cap(tmp_path: Path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
     # Inject settings via environment
     import os
+
     os.environ["TAMIYO_FIELD_REPORT_MAX_RETRIES"] = "1"
     os.environ["TAMIYO_FR_RETRY_BACKOFF_MS"] = "0"
     urza = UrzaLibrary(root=tmp_path / "urza")
@@ -820,7 +880,9 @@ def test_field_report_retention_rewrites(tmp_path) -> None:
     )
     urza = UrzaLibrary(root=tmp_path / "urza")
     service = TamiyoService(store_config=config, urza=urza, signature_context=_SIGNATURE_CONTEXT)
-    packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-retention")
+    packet = leyline_pb2.SystemStatePacket(
+        version=1, current_epoch=1, training_run_id="run-retention"
+    )
     command = service.evaluate_step(packet)
     old_command = leyline_pb2.AdaptationCommand()
     old_command.CopyFrom(command)
@@ -866,8 +928,6 @@ def test_step_evaluate_p95_budget(tmp_path) -> None:
     assert p95 <= 10.0
 
 
-
-
 def test_field_report_emitted_on_timeout(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
     service = TamiyoService(
@@ -891,6 +951,8 @@ def test_field_report_emitted_on_timeout(tmp_path) -> None:
     assert last.outcome == leyline_pb2.FIELD_REPORT_OUTCOME_NEUTRAL
     # Notes reflect last event (timeout_inference)
     assert "timeout" in last.notes.lower()
+
+
 @pytest.mark.asyncio
 async def test_tamiyo_publish_history_to_oona(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
@@ -927,7 +989,9 @@ async def test_tamiyo_publish_history_routes_priority(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
     urza = UrzaLibrary(root=tmp_path / "urza")
     service = TamiyoService(store_config=config, urza=urza, signature_context=_SIGNATURE_CONTEXT)
-    packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-routing")
+    packet = leyline_pb2.SystemStatePacket(
+        version=1, current_epoch=1, training_run_id="run-routing"
+    )
     command = service.evaluate_step(packet)
     telemetry = service.telemetry_packets[-1]
     if telemetry.events:
@@ -983,35 +1047,57 @@ async def test_tamiyo_consume_policy_updates(tmp_path) -> None:
     await client.close()
 
 
-def test_policy_update_rejected_on_version_mismatch(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_policy_update_rejected_on_version_mismatch(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("TAMIYO_VERIFY_UPDATES", "true")
     cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
-    service = TamiyoService(store_config=cfg, urza=UrzaLibrary(root=tmp_path / "urza"), signature_context=_SIGNATURE_CONTEXT)
-    update = leyline_pb2.PolicyUpdate(version=1, policy_id="p1", training_run_id="run-1", tamiyo_policy_version="wrong-version")
-    buf = BytesIO(); torch.save(service._policy.state_dict(), buf)  # type: ignore[attr-defined]
+    service = TamiyoService(
+        store_config=cfg,
+        urza=UrzaLibrary(root=tmp_path / "urza"),
+        signature_context=_SIGNATURE_CONTEXT,
+    )
+    update = leyline_pb2.PolicyUpdate(
+        version=1, policy_id="p1", training_run_id="run-1", tamiyo_policy_version="wrong-version"
+    )
+    buf = BytesIO()
+    torch.save(service._policy.state_dict(), buf)  # type: ignore[attr-defined]
     update.payload = buf.getvalue()
     service.ingest_policy_update(update)
     # Expect rejection telemetry; no applied updates
     assert not service.policy_updates
-    assert any(e.description == "policy_update_rejected" and e.attributes.get("reason") == "version_mismatch"
-               for pkt in service.telemetry_packets for e in pkt.events)
+    assert any(
+        e.description == "policy_update_rejected"
+        and e.attributes.get("reason") == "version_mismatch"
+        for pkt in service.telemetry_packets
+        for e in pkt.events
+    )
 
 
 def test_policy_update_rejected_when_stale(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TAMIYO_VERIFY_UPDATES", "true")
     monkeypatch.setenv("TAMIYO_UPDATE_FRESHNESS_SEC", "60")
     cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
-    service = TamiyoService(store_config=cfg, urza=UrzaLibrary(root=tmp_path / "urza"), signature_context=_SIGNATURE_CONTEXT)
+    service = TamiyoService(
+        store_config=cfg,
+        urza=UrzaLibrary(root=tmp_path / "urza"),
+        signature_context=_SIGNATURE_CONTEXT,
+    )
     update = leyline_pb2.PolicyUpdate(version=1, policy_id="p1", training_run_id="run-1", tamiyo_policy_version=service._policy.architecture_version)  # type: ignore[attr-defined]
     # Make the update appear 1 hour old
-    from datetime import datetime, timedelta, UTC
+    from datetime import UTC, datetime, timedelta
+
     update.issued_at.FromDatetime(datetime.now(tz=UTC) - timedelta(hours=1))
-    buf = BytesIO(); torch.save(service._policy.state_dict(), buf)  # type: ignore[attr-defined]
+    buf = BytesIO()
+    torch.save(service._policy.state_dict(), buf)  # type: ignore[attr-defined]
     update.payload = buf.getvalue()
     service.ingest_policy_update(update)
     assert not service.policy_updates
-    assert any(e.description == "policy_update_rejected" and e.attributes.get("reason") == "stale_update"
-               for pkt in service.telemetry_packets for e in pkt.events)
+    assert any(
+        e.description == "policy_update_rejected" and e.attributes.get("reason") == "stale_update"
+        for pkt in service.telemetry_packets
+        for e in pkt.events
+    )
 
 
 def test_policy_update_applies_transactionally(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1019,20 +1105,31 @@ def test_policy_update_applies_transactionally(tmp_path, monkeypatch: pytest.Mon
     monkeypatch.setenv("TAMIYO_VERIFY_UPDATES", "true")
     monkeypatch.setenv("TAMIYO_UPDATE_FRESHNESS_SEC", "0")
     cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
-    service = TamiyoService(store_config=cfg, urza=UrzaLibrary(root=tmp_path / "urza"), signature_context=_SIGNATURE_CONTEXT)
+    service = TamiyoService(
+        store_config=cfg,
+        urza=UrzaLibrary(root=tmp_path / "urza"),
+        signature_context=_SIGNATURE_CONTEXT,
+    )
     update = leyline_pb2.PolicyUpdate(version=1, policy_id="p-ok", training_run_id="run-1", tamiyo_policy_version=service._policy.architecture_version)  # type: ignore[attr-defined]
     update.issued_at.GetCurrentTime()
-    buf = BytesIO(); torch.save(service._policy.state_dict(), buf)  # type: ignore[attr-defined]
+    buf = BytesIO()
+    torch.save(service._policy.state_dict(), buf)  # type: ignore[attr-defined]
     update.payload = buf.getvalue()
     service.ingest_policy_update(update)
     assert service.policy_updates and service.policy_updates[-1].policy_id == "p-ok"
 
 
-def test_policy_update_rejected_on_registry_mismatch(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_policy_update_rejected_on_registry_mismatch(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # Tamper registry digest in metadata to force validate_state_dict rejection
     monkeypatch.setenv("TAMIYO_VERIFY_UPDATES", "true")
     cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
-    service = TamiyoService(store_config=cfg, urza=UrzaLibrary(root=tmp_path / "urza"), signature_context=_SIGNATURE_CONTEXT)
+    service = TamiyoService(
+        store_config=cfg,
+        urza=UrzaLibrary(root=tmp_path / "urza"),
+        signature_context=_SIGNATURE_CONTEXT,
+    )
     state = service._policy.state_dict()  # type: ignore[attr-defined]
     if "_metadata" in state and isinstance(state["_metadata"], dict):
         meta = dict(state["_metadata"])  # shallow copy
@@ -1044,12 +1141,17 @@ def test_policy_update_rejected_on_registry_mismatch(tmp_path, monkeypatch: pyte
             meta["registries"] = regs
             state = dict(state)
             state["_metadata"] = meta
-    buf = BytesIO(); torch.save(state, buf)
+    buf = BytesIO()
+    torch.save(state, buf)
     update = leyline_pb2.PolicyUpdate(version=1, policy_id="p-bad", training_run_id="run-1", tamiyo_policy_version=service._policy.architecture_version)  # type: ignore[attr-defined]
     update.payload = buf.getvalue()
     service.ingest_policy_update(update)
     assert not service.policy_updates
-    assert any(e.description == "policy_update_rejected" for pkt in service.telemetry_packets for e in pkt.events)
+    assert any(
+        e.description == "policy_update_rejected"
+        for pkt in service.telemetry_packets
+        for e in pkt.events
+    )
 
 
 def test_tamiyo_annotations_include_blueprint_metadata(tmp_path) -> None:
@@ -1070,7 +1172,9 @@ def test_tamiyo_annotations_include_blueprint_metadata(tmp_path) -> None:
     urza.save(metadata, artifact)
 
     class _PolicyStub(TamiyoPolicy):
-        def select_action(self, packet: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
+        def select_action(
+            self, packet: leyline_pb2.SystemStatePacket
+        ) -> leyline_pb2.AdaptationCommand:
             command = leyline_pb2.AdaptationCommand(
                 version=1,
                 command_id="cmd",
@@ -1082,7 +1186,9 @@ def test_tamiyo_annotations_include_blueprint_metadata(tmp_path) -> None:
             self._last_action = {"action": 0.0, "param_delta": 0.0}
             return command
 
-    service = TamiyoService(policy=_PolicyStub(), store_config=config, urza=urza, signature_context=_SIGNATURE_CONTEXT)
+    service = TamiyoService(
+        policy=_PolicyStub(), store_config=config, urza=urza, signature_context=_SIGNATURE_CONTEXT
+    )
     packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1)
     command = service.evaluate_epoch(packet)
     assert command.annotations["blueprint_tier"] == leyline_pb2.BlueprintTier.Name(metadata.tier)
@@ -1197,10 +1303,12 @@ def test_tamiyo_stale_command_rejected(tmp_path) -> None:
     manager.finalize_step(step_index=2)
     packets = manager.drain_telemetry_packets()
     assert any(
-        event.description == "command_rejected" and event.attributes.get("reason") == "stale_command"
+        event.description == "command_rejected"
+        and event.attributes.get("reason") == "stale_command"
         for packet in packets
         for event in packet.events
     )
+
 
 def test_compile_fallback_counter_exposed(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Force compile to raise so policy falls back and records a fallback
@@ -1214,9 +1322,13 @@ def test_compile_fallback_counter_exposed(tmp_path, monkeypatch: pytest.MonkeyPa
     # Enable compile in config to trigger the path even on CPU
     policy = TamiyoPolicy(TamiyoPolicyConfig(enable_compile=True))
     urza = UrzaLibrary(root=tmp_path / "urza")
-    service = TamiyoService(policy=policy, store_config=cfg, urza=urza, signature_context=_SIGNATURE_CONTEXT)
+    service = TamiyoService(
+        policy=policy, store_config=cfg, urza=urza, signature_context=_SIGNATURE_CONTEXT
+    )
 
-    packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-compile")
+    packet = leyline_pb2.SystemStatePacket(
+        version=1, current_epoch=1, training_run_id="run-compile"
+    )
     # Provide at least one seed to avoid fast-path pause
     seed = packet.seed_states.add()
     seed.seed_id = "seed-compile"
@@ -1234,4 +1346,7 @@ def test_compile_fallback_counter_exposed(tmp_path, monkeypatch: pytest.MonkeyPa
     assert any(event.description == "compile_disabled_cpu" for event in telemetry.events)
     event = next(event for event in telemetry.events if event.description == "compile_disabled_cpu")
     assert event.attributes.get("reason") in {"device_not_cuda", "cuda_unavailable"}
-    assert command.annotations.get("policy_compile_reason") in {"device_not_cuda", "cuda_unavailable"}
+    assert command.annotations.get("policy_compile_reason") in {
+        "device_not_cuda",
+        "cuda_unavailable",
+    }

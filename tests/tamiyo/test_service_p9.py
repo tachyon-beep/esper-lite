@@ -9,11 +9,12 @@ from esper.security.signing import SignatureContext
 from esper.tamiyo import FieldReportStore, FieldReportStoreConfig, TamiyoPolicy, TamiyoService
 from esper.urza import UrzaLibrary
 
-
 _SIGN = SignatureContext(secret=b"tamiyo-p9-test")
 
 
-def _packet(epoch: int, run_id: str = "run-p9", *, loss_delta: float = -0.1) -> leyline_pb2.SystemStatePacket:
+def _packet(
+    epoch: int, run_id: str = "run-p9", *, loss_delta: float = -0.1
+) -> leyline_pb2.SystemStatePacket:
     pkt = leyline_pb2.SystemStatePacket(
         version=1,
         current_epoch=epoch,
@@ -27,11 +28,15 @@ def _packet(epoch: int, run_id: str = "run-p9", *, loss_delta: float = -0.1) -> 
     return pkt
 
 
-def test_observation_window_synthesises_after_n_epochs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_observation_window_synthesises_after_n_epochs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("TAMIYO_FR_OBS_WINDOW_EPOCHS", "2")
     store_cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
     urza = UrzaLibrary(root=tmp_path / "urza")
-    service = TamiyoService(policy=TamiyoPolicy(), store_config=store_cfg, urza=urza, signature_context=_SIGN)
+    service = TamiyoService(
+        policy=TamiyoPolicy(), store_config=store_cfg, urza=urza, signature_context=_SIGN
+    )
 
     service.evaluate_step(_packet(1))
     # After first step: only per-step report should exist; no synthesis yet
@@ -57,16 +62,22 @@ class _FlakyOona:
             raise RuntimeError("temporary failure")
         return True
 
-    async def publish_telemetry(self, _pkt: leyline_pb2.TelemetryPacket, *, priority=None) -> bool:  # noqa: ARG002
+    async def publish_telemetry(
+        self, _pkt: leyline_pb2.TelemetryPacket, *, priority=None
+    ) -> bool:  # noqa: ARG002
         return True
 
 
 @pytest.mark.asyncio
-async def test_publish_history_ack_retry_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_publish_history_ack_retry_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("TAMIYO_FR_RETRY_BACKOFF_MS", "0")
     store_cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
     urza = UrzaLibrary(root=tmp_path / "urza")
-    service = TamiyoService(policy=TamiyoPolicy(), store_config=store_cfg, urza=urza, signature_context=_SIGN)
+    service = TamiyoService(
+        policy=TamiyoPolicy(), store_config=store_cfg, urza=urza, signature_context=_SIGN
+    )
     service.evaluate_step(_packet(1))
 
     oona = _FlakyOona()
@@ -83,24 +94,30 @@ async def test_publish_history_ack_retry_success(tmp_path: Path, monkeypatch: py
     # Field reports drained from memory; index marks published
     assert service.field_reports == []
     idx = index_path.read_text(encoding="utf-8")
-    assert "\"published\":true" in idx.replace(" ", "").lower()
+    assert '"published":true' in idx.replace(" ", "").lower()
 
 
 class _AlwaysFailOona:
     async def publish_field_report(self, _report: leyline_pb2.FieldReport) -> bool:  # noqa: ARG002
         raise RuntimeError("fail")
 
-    async def publish_telemetry(self, _pkt: leyline_pb2.TelemetryPacket, *, priority=None) -> bool:  # noqa: ARG002
+    async def publish_telemetry(
+        self, _pkt: leyline_pb2.TelemetryPacket, *, priority=None
+    ) -> bool:  # noqa: ARG002
         return True
 
 
 @pytest.mark.asyncio
-async def test_retry_cap_drops_from_memory_preserves_wal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_retry_cap_drops_from_memory_preserves_wal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("TAMIYO_FIELD_REPORT_MAX_RETRIES", "1")
     monkeypatch.setenv("TAMIYO_FR_RETRY_BACKOFF_MS", "0")
     store_cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
     urza = UrzaLibrary(root=tmp_path / "urza")
-    service = TamiyoService(policy=TamiyoPolicy(), store_config=store_cfg, urza=urza, signature_context=_SIGN)
+    service = TamiyoService(
+        policy=TamiyoPolicy(), store_config=store_cfg, urza=urza, signature_context=_SIGN
+    )
     service.evaluate_step(_packet(1))
     oona = _AlwaysFailOona()
     # Two attempts → should drop from memory
@@ -116,18 +133,24 @@ async def test_retry_cap_drops_from_memory_preserves_wal(tmp_path: Path, monkeyp
     assert "dropped" in idx_path.read_text(encoding="utf-8").lower()
 
 
-def test_restart_restores_window_and_retry_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_restart_restores_window_and_retry_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("TAMIYO_FR_OBS_WINDOW_EPOCHS", "2")
     store_cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
     urza = UrzaLibrary(root=tmp_path / "urza")
-    service = TamiyoService(policy=TamiyoPolicy(), store_config=store_cfg, urza=urza, signature_context=_SIGN)
+    service = TamiyoService(
+        policy=TamiyoPolicy(), store_config=store_cfg, urza=urza, signature_context=_SIGN
+    )
     service.evaluate_step(_packet(1))
     # Ensure a window file is present
     win_path = store_cfg.path.parent / "field_reports.windows.json"
     assert win_path.exists()
 
     # Simulate restart: new instance should load prior window
-    service2 = TamiyoService(policy=TamiyoPolicy(), store_config=store_cfg, urza=urza, signature_context=_SIGN)
+    service2 = TamiyoService(
+        policy=TamiyoPolicy(), store_config=store_cfg, urza=urza, signature_context=_SIGN
+    )
     service2.evaluate_step(_packet(2))
     # Synthesised report should be present
     synth = [r for r in service2.field_reports if r.report_id.startswith("fr-synth-")]

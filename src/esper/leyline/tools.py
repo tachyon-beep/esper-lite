@@ -62,4 +62,3 @@ def generate_bindings_main(argv: list[str] | None = None) -> int:
 
 
 __all__ = ["generate_bindings_main"]
-

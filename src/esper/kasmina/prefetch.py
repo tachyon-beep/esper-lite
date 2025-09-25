@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-
 from typing import TYPE_CHECKING
 
 from esper.leyline import leyline_pb2

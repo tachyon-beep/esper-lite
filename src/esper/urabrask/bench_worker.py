@@ -9,12 +9,13 @@ Feature-gated by settings; bounded work per cycle; safe failure handling.
 from __future__ import annotations
 
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
 from datetime import datetime, timezone
 from typing import Mapping
 
-from esper.urza import UrzaLibrary, UrzaRuntime
 from esper.urabrask.service import produce_benchmarks
+from esper.urza import UrzaLibrary, UrzaRuntime
 
 
 class UrabraskBenchWorker:
@@ -59,6 +60,7 @@ class UrabraskBenchWorker:
         failed = 0
         skipped_cooldown = 0
         from esper.core import EsperSettings
+
         settings = EsperSettings()
         min_interval_s = max(0, int(getattr(settings, "urabrask_bench_min_interval_s", 3600)))
         # Snapshot current records
@@ -103,7 +105,9 @@ class UrabraskBenchWorker:
                         rec = self._urza.get(bp)
                         if rec is not None:
                             extras = dict(rec.extras or {})
-                            extras["benchmarks_last_run"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                            extras["benchmarks_last_run"] = (
+                                datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                            )
                             self._urza.save(rec.metadata, rec.artifact_path, extras=extras)
                     except Exception:
                         pass
@@ -122,7 +126,9 @@ class UrabraskBenchWorker:
                         rec = self._urza.get(bp)
                         if rec is not None:
                             extras = dict(rec.extras or {})
-                            extras["benchmarks_last_run"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                            extras["benchmarks_last_run"] = (
+                                datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                            )
                             self._urza.save(rec.metadata, rec.artifact_path, extras=extras)
                     except Exception:
                         pass

@@ -6,8 +6,8 @@ from collections.abc import Iterable
 
 from esper.core.telemetry import TelemetryMetric, build_telemetry_packet
 from esper.leyline import leyline_pb2
-from .observability import NissaIngestor
 
+from .observability import NissaIngestor
 
 DrillResult = dict[str, object]
 

@@ -10,7 +10,9 @@ from esper.weatherlight.service_runner import WeatherlightService
 
 
 @pytest.mark.asyncio
-async def test_weatherlight_updates_urza_capabilities(tmp_path: pytest.PathLike, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_weatherlight_updates_urza_capabilities(
+    tmp_path: pytest.PathLike, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("ESPER_LEYLINE_SECRET", "test-secret")
     settings = EsperSettings(
         redis_url="redis://localhost:6379/0",
@@ -43,6 +45,7 @@ async def test_weatherlight_updates_urza_capabilities(tmp_path: pytest.PathLike,
         # Inject a Kasmina seed in BLENDING for this blueprint
         mgr = service._kasmina_manager  # type: ignore[attr-defined]
         from esper.kasmina.seed_manager import SeedContext
+
         ctx = SeedContext(seed_id="seed-A")
         # Transition lifecycle to BLENDING via allowed path
         ctx.lifecycle.transition(leyline_pb2.SEED_STAGE_GERMINATED)

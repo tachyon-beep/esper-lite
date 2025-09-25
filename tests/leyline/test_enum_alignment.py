@@ -29,7 +29,9 @@ def test_seed_state_export_uses_leyline_enum() -> None:
     # Create a seed path to a known state (germinated → training → blending)
     from esper.leyline import leyline_pb2 as pb
 
-    cmd = pb.AdaptationCommand(version=1, command_id="c", command_type=pb.COMMAND_SEED, target_seed_id="seed-a")
+    cmd = pb.AdaptationCommand(
+        version=1, command_id="c", command_type=pb.COMMAND_SEED, target_seed_id="seed-a"
+    )
     cmd.seed_operation.operation = pb.SEED_OP_GERMINATE
     cmd.seed_operation.blueprint_id = "bp-1"
     cmd.issued_at.GetCurrentTime()

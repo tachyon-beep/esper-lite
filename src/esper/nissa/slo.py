@@ -44,7 +44,9 @@ class SLOTracker:
     def config(self) -> SLOConfig:
         return self._config
 
-    def record(self, metric: str, *, objective: float, actual: float, timestamp: datetime | None = None) -> SLOStatus:
+    def record(
+        self, metric: str, *, objective: float, actual: float, timestamp: datetime | None = None
+    ) -> SLOStatus:
         ts = timestamp or datetime.now(tz=UTC)
         bucket = self._samples.setdefault(metric, deque())
         bucket.append(SLOSample(metric, objective, actual, ts))
@@ -65,7 +67,11 @@ class SLOTracker:
 
     def breached(self) -> dict[str, SLOStatus]:
         threshold = self._config.burn_alert_threshold
-        return {metric: status for metric, status in self.summary().items() if status.burn_rate >= threshold}
+        return {
+            metric: status
+            for metric, status in self.summary().items()
+            if status.burn_rate >= threshold
+        }
 
     def _prune(self, metric: str, *, reference: datetime) -> None:
         window = timedelta(hours=self._config.window_hours)

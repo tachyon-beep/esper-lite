@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from esper.security.signing import SignatureContext, DEFAULT_SECRET_ENV, sign
+from esper.security.signing import DEFAULT_SECRET_ENV, SignatureContext, sign
 
 
 def _canonical_dumps(payload: Any) -> str:
@@ -104,6 +104,7 @@ def bsds_verify(urza: Any, blueprint_id: str, *, secret: bytes | None = None) ->
         return False
     try:
         from esper.urabrask.wal import verify_bsds_signature_in_extras
+
         if secret is not None:
             ctx = SignatureContext(secret=secret)
         else:

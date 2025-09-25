@@ -7,8 +7,8 @@ Holds blueprint metadata definitions as per
 from .catalog import (
     BlueprintDescriptor,
     BlueprintParameterBounds,
-    BlueprintTier,
     BlueprintQuery,
+    BlueprintTier,
     KarnCatalog,
     KarnSelection,
 )

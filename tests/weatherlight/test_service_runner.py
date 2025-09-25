@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 import contextlib
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -44,7 +44,9 @@ def weatherlight_settings(tmp_path: Path) -> EsperSettings:
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_weatherlight_start_stop(fake_redis: FakeRedis, weatherlight_settings: EsperSettings) -> None:
+async def test_weatherlight_start_stop(
+    fake_redis: FakeRedis, weatherlight_settings: EsperSettings
+) -> None:
     service = WeatherlightService(settings=weatherlight_settings)
     await service.start()
     run_task = asyncio.create_task(service.run())
@@ -58,7 +60,9 @@ async def test_weatherlight_start_stop(fake_redis: FakeRedis, weatherlight_setti
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_weatherlight_builds_telemetry_packet(fake_redis: FakeRedis, weatherlight_settings: EsperSettings) -> None:
+async def test_weatherlight_builds_telemetry_packet(
+    fake_redis: FakeRedis, weatherlight_settings: EsperSettings
+) -> None:
     service = WeatherlightService(settings=weatherlight_settings)
     await service.start()
     try:
@@ -186,7 +190,10 @@ async def test_weatherlight_flushes_tamiyo_history(
 
         # Verify at least one published packet originates from Tamiyo and carries coverage metric
         assert any(
-            (p.source_subsystem == "tamiyo" and any(m.name == "tamiyo.gnn.feature_coverage" for m in p.metrics))
+            (
+                p.source_subsystem == "tamiyo"
+                and any(m.name == "tamiyo.gnn.feature_coverage" for m in p.metrics)
+            )
             for p in published
         )
     finally:
@@ -206,7 +213,9 @@ async def test_weatherlight_fans_out_tamiyo_coverage_types(
     try:
         # Trigger Tamiyo to generate a telemetry packet with coverage types
         assert service._tamiyo_service is not None  # type: ignore[attr-defined]
-        pkt = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-fanout")
+        pkt = leyline_pb2.SystemStatePacket(
+            version=1, current_epoch=1, training_run_id="run-fanout"
+        )
         # Provide at least one seed to avoid fast-path pause
         seed = pkt.seed_states.add()
         seed.seed_id = "seed-fanout"

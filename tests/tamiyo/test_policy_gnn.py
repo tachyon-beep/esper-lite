@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import statistics
 import time
-from pathlib import Path
 import warnings
-import os
+from pathlib import Path
 
 import pytest
 import torch
@@ -129,7 +129,7 @@ def test_graph_builder_schema(tmp_path: pytest.PathLike) -> None:
         max_activations=2,
         max_parameters=2,
         layer_feature_dim=14,  # include extra categorical mask scalars
-    activation_feature_dim=9,  # include activation type mask scalar
+        activation_feature_dim=9,  # include activation type mask scalar
         parameter_feature_dim=10,
         edge_feature_dim=3,
         blueprint_metadata_provider=lambda bp: metadata if bp == blueprint_id else {},
@@ -269,7 +269,9 @@ def test_layer_connects_edges_from_adjacency() -> None:
             blueprint_metadata_provider=lambda bp: meta if bp == blueprint_id else {},
         )
     )
-    packet = leyline_pb2.SystemStatePacket(version=1, packet_id=blueprint_id, training_run_id="run-adj")
+    packet = leyline_pb2.SystemStatePacket(
+        version=1, packet_id=blueprint_id, training_run_id="run-adj"
+    )
     graph = builder.build(packet)
     edge_index = graph[("layer", "connects", "layer")].edge_index
     assert edge_index.shape[1] == 2
@@ -314,7 +316,12 @@ def test_layer_mask_toggles_with_metadata() -> None:
     meta_with = {
         "graph": {
             "layers": [
-                {"layer_id": f"{blueprint_id}-L0", "depth": 0, "latency_ms": 4.0, "parameter_count": 16},
+                {
+                    "layer_id": f"{blueprint_id}-L0",
+                    "depth": 0,
+                    "latency_ms": 4.0,
+                    "parameter_count": 16,
+                },
             ]
         }
     }
@@ -325,7 +332,9 @@ def test_layer_mask_toggles_with_metadata() -> None:
             blueprint_metadata_provider=lambda bp: meta_with if bp == blueprint_id else {},
         )
     )
-    packet = leyline_pb2.SystemStatePacket(version=1, packet_id=blueprint_id, training_run_id="run-mask")
+    packet = leyline_pb2.SystemStatePacket(
+        version=1, packet_id=blueprint_id, training_run_id="run-mask"
+    )
     graph_with = builder.build(packet)
     vec_with = graph_with["layer"].x[0]
     assert float(vec_with[1]) == 1.0  # depth present mask
@@ -354,7 +363,9 @@ def test_layer_mask_toggles_with_metadata() -> None:
 
 def test_activation_type_mask_scalar() -> None:
     blueprint_id = "BP-ACT"
-    meta_with = {"graph": {"activations": [{"activation_id": f"{blueprint_id}-A0", "type": "relu"}]}}
+    meta_with = {
+        "graph": {"activations": [{"activation_id": f"{blueprint_id}-A0", "type": "relu"}]}
+    }
     builder = TamiyoGraphBuilder(
         TamiyoGraphBuilderConfig(
             max_activations=1,
@@ -362,7 +373,9 @@ def test_activation_type_mask_scalar() -> None:
             blueprint_metadata_provider=lambda bp: meta_with if bp == blueprint_id else {},
         )
     )
-    packet = leyline_pb2.SystemStatePacket(version=1, packet_id=blueprint_id, training_run_id="run-act")
+    packet = leyline_pb2.SystemStatePacket(
+        version=1, packet_id=blueprint_id, training_run_id="run-act"
+    )
     graph = builder.build(packet)
     vec = graph["activation"].x[0]
     assert float(vec[8]) == 1.0  # type present mask
@@ -574,6 +587,7 @@ def test_policy_inference_perf_budget_cuda_compile() -> None:
 
     # Warm-up; skip if backend raises (e.g., OOM)
     import os
+
     if os.getenv("ESPER_RUN_CUDA_TESTS") != "1":
         pytest.skip("CUDA perf test disabled; set ESPER_RUN_CUDA_TESTS=1 to enable")
     try:

@@ -9,7 +9,7 @@ from typing import Mapping, Sequence
 
 from esper.core import TelemetryEvent
 from esper.leyline import leyline_pb2
-from esper.oona.messaging import CircuitBreaker, BreakerSnapshot
+from esper.oona.messaging import BreakerSnapshot, CircuitBreaker
 
 BlueprintDescriptor = leyline_pb2.BlueprintDescriptor
 BlueprintTier = leyline_pb2.BlueprintTier
@@ -57,9 +57,7 @@ def _validate_parameters(descriptor: BlueprintDescriptor, parameters: dict[str, 
         lower = bounds.min_value
         upper = bounds.max_value
         if not (lower <= float(value) <= upper):
-            raise ValueError(
-                f"Parameter '{key}'={value} outside bounds [{lower}, {upper}]"
-            )
+            raise ValueError(f"Parameter '{key}'={value} outside bounds [{lower}, {upper}]")
 
 
 class KarnCatalog:

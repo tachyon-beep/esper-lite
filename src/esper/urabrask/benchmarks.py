@@ -144,7 +144,11 @@ def run_benchmarks(
     try:
         if device.startswith("cuda") and cfg.allow_cuda_profiles:
             if all(p.dtype != "bfloat16" for p in profiles):
-                profiles.append(BenchmarkProfile(name="batch32_bf16", batch_size=32, in_shape=(128,), dtype="bfloat16"))
+                profiles.append(
+                    BenchmarkProfile(
+                        name="batch32_bf16", batch_size=32, in_shape=(128,), dtype="bfloat16"
+                    )
+                )
     except Exception:
         pass
 
@@ -170,7 +174,9 @@ def run_benchmarks(
                     forward = module  # callable
 
                 # Context managers
-                use_autocast = device.startswith("cuda") and (dtype is not None and str(dtype).endswith("bfloat16"))
+                use_autocast = device.startswith("cuda") and (
+                    dtype is not None and str(dtype).endswith("bfloat16")
+                )
 
                 # Warmup
                 warm = max(0, cfg.warmup_iters)
@@ -206,7 +212,7 @@ def run_benchmarks(
             # Deterministic synthetic timings scaled by problem size
             base = 0.05  # ms baseline
             scale = max(1, profile.batch_size) * max(1, int(sum(profile.in_shape)))
-            p50_ms = base * (1.0 + 0.0005 * (scale ** 0.5))
+            p50_ms = base * (1.0 + 0.0005 * (scale**0.5))
             p95_ms = p50_ms * 1.50
             thr = float(profile.batch_size) / max(p50_ms / 1000.0, 1e-6)
 

@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Literal
-
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
-import logging
 
 from esper.core import TelemetryEvent, TelemetryMetric, build_telemetry_packet
 from esper.karn import BlueprintDescriptor, KarnCatalog
@@ -303,16 +303,15 @@ class TezzeretForge:
         level_override: leyline_pb2.TelemetryLevel | None = None,
     ) -> leyline_pb2.TelemetryPacket:
         snapshot = self.metrics_snapshot()
-        metrics = [
-            TelemetryMetric(name, float(value))
-            for name, value in snapshot.items()
-        ]
+        metrics = [TelemetryMetric(name, float(value)) for name, value in snapshot.items()]
         events = self.drain_telemetry_events()
         level = level_override
         if level is None:
             if self._metrics.breaker_state >= 2 or self._conservative_mode:
                 level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING
-            elif any(event.level == leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_ERROR for event in events):
+            elif any(
+                event.level == leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_ERROR for event in events
+            ):
                 level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_ERROR
             else:
                 level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO

@@ -10,7 +10,6 @@ from esper.kasmina import KasminaSeedManager
 from esper.leyline import leyline_pb2
 from esper.security.signing import SignatureContext, sign
 
-
 _SIGNING_CONTEXT = SignatureContext(secret=b"kasmina-test-secret")
 
 
@@ -98,7 +97,9 @@ def _make_emergency_command(*, include_teacher: bool = False) -> leyline_pb2.Ada
 
 def test_seed_manager_uses_fallback_on_failure() -> None:
     runtime = _Runtime(fail=True)
-    manager = KasminaSeedManager(runtime, fallback_blueprint_id="BP001", signing_context=_SIGNING_CONTEXT)
+    manager = KasminaSeedManager(
+        runtime, fallback_blueprint_id="BP001", signing_context=_SIGNING_CONTEXT
+    )
     manager.register_host_model(nn.Linear(1, 1))
     command = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP999")
     manager.handle_command(command)
@@ -108,7 +109,12 @@ def test_seed_manager_uses_fallback_on_failure() -> None:
 
 def test_seed_manager_warns_on_latency() -> None:
     runtime = _Runtime(latency=25.0)
-    manager = KasminaSeedManager(runtime, latency_budget_ms=10.0, fallback_blueprint_id="BP001", signing_context=_SIGNING_CONTEXT)
+    manager = KasminaSeedManager(
+        runtime,
+        latency_budget_ms=10.0,
+        fallback_blueprint_id="BP001",
+        signing_context=_SIGNING_CONTEXT,
+    )
     manager.register_host_model(nn.Linear(1, 1))
     command = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP002")
     manager.handle_command(command)
@@ -118,7 +124,12 @@ def test_seed_manager_warns_on_latency() -> None:
 
 def test_seed_manager_emits_telemetry_for_commands() -> None:
     runtime = _Runtime(latency=5.0)
-    manager = KasminaSeedManager(runtime, latency_budget_ms=10.0, fallback_blueprint_id="BP001", signing_context=_SIGNING_CONTEXT)
+    manager = KasminaSeedManager(
+        runtime,
+        latency_budget_ms=10.0,
+        fallback_blueprint_id="BP001",
+        signing_context=_SIGNING_CONTEXT,
+    )
     manager.register_host_model(nn.Linear(1, 1))
     command = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP010")
     manager.handle_command(command)
@@ -164,6 +175,7 @@ def test_seed_telemetry_enrichment_includes_alpha_kernel_and_isolation() -> None
     packets = _finalize(manager, step_index=101)
     pkt = packets[-1]
     metrics = {m.name: m for m in pkt.metrics}
+
     # Per-seed metrics present with seed_id attributes
     def _has(name: str) -> bool:
         metric = metrics.get(name)
@@ -262,7 +274,9 @@ def test_handle_command_logs_tamiyo_annotations() -> None:
     cmd.annotations["feature_coverage"] = "0.25"
     cmd.annotations["risk_reason"] = "degraded_inputs"
     cmd.annotations["blueprint_risk"] = "0.9"
-    cmd.annotations["blueprint_tier"] = leyline_pb2.BlueprintTier.Name(leyline_pb2.BlueprintTier.BLUEPRINT_TIER_EXPERIMENTAL)
+    cmd.annotations["blueprint_tier"] = leyline_pb2.BlueprintTier.Name(
+        leyline_pb2.BlueprintTier.BLUEPRINT_TIER_EXPERIMENTAL
+    )
     cmd.annotations["blueprint_stage"] = "3"
     _sign_command(cmd)
     manager.handle_command(cmd)
@@ -285,7 +299,10 @@ def test_record_isolation_violation_updates_health() -> None:
     manager = KasminaSeedManager(runtime, signing_context=_SIGNING_CONTEXT)
     manager.record_isolation_violation("seed-2")
     packet = _finalize(manager, step_index=3)[-1]
-    assert any(metric.name == "kasmina.isolation.violations" and metric.value >= 1.0 for metric in packet.metrics)
+    assert any(
+        metric.name == "kasmina.isolation.violations" and metric.value >= 1.0
+        for metric in packet.metrics
+    )
     assert packet.system_health.status == leyline_pb2.HealthStatus.HEALTH_STATUS_UNHEALTHY
 
 
@@ -328,7 +345,8 @@ def test_gradient_isolation_detects_overlap() -> None:
     # Either a violation event or degraded health must be present
     event_names = {e.description for e in pkt.events}
     assert ("violation_recorded" in event_names) or (
-        pkt.system_health.status in {
+        pkt.system_health.status
+        in {
             leyline_pb2.HealthStatus.HEALTH_STATUS_UNHEALTHY,
             leyline_pb2.HealthStatus.HEALTH_STATUS_DEGRADED,
         }
@@ -380,7 +398,9 @@ def test_gpu_cache_enables_reuse_between_seeds() -> None:
 
 def test_pause_and_resume_cycle() -> None:
     runtime = _Runtime(latency=1.0)
-    manager = KasminaSeedManager(runtime, fallback_blueprint_id=None, signing_context=_SIGNING_CONTEXT)
+    manager = KasminaSeedManager(
+        runtime, fallback_blueprint_id=None, signing_context=_SIGNING_CONTEXT
+    )
     manager.register_host_model(nn.Linear(1, 1))
 
     germinate = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP808")
@@ -523,7 +543,11 @@ def test_isolation_stats_fail_open(monkeypatch) -> None:
     cmd = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP-iso")
     manager.handle_command(cmd)
     # Monkeypatch isolation_stats to raise
-    monkeypatch.setattr(KasminaSeedManager, "isolation_stats", lambda self, sid: (_ for _ in ()).throw(RuntimeError("iso fail")))
+    monkeypatch.setattr(
+        KasminaSeedManager,
+        "isolation_stats",
+        lambda self, sid: (_ for _ in ()).throw(RuntimeError("iso fail")),
+    )
     packets = _finalize(manager, step_index=42)
     pkt = packets[-1]
     names = {m.name for m in pkt.metrics}
@@ -550,9 +574,8 @@ def test_manager_rejects_unsigned_command() -> None:
     assert manager.seeds() == {}
     last_packet = manager.telemetry_packets[-1]
     assert any(event.description == "command_rejected" for event in last_packet.events)
-    assert (
-        last_packet.system_health.indicators["priority"]
-        == leyline_pb2.MessagePriority.Name(leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH)
+    assert last_packet.system_health.indicators["priority"] == leyline_pb2.MessagePriority.Name(
+        leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH
     )
 
 

@@ -8,8 +8,8 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from esper.tolaria import TolariaTrainer, TrainingLoopConfig
 from esper.leyline import leyline_pb2
+from esper.tolaria import TolariaTrainer, TrainingLoopConfig
 
 
 class _TamiyoStub:
@@ -55,7 +55,9 @@ def test_profiler_emits_chrome_trace(tmp_path, monkeypatch) -> None:
         dataloader=loader,
         tamiyo=_TamiyoStub(),
         kasmina=_KasminaStub(),
-        config=TrainingLoopConfig(max_epochs=1, gradient_accumulation_steps=2, device=torch.device("cpu")),
+        config=TrainingLoopConfig(
+            max_epochs=1, gradient_accumulation_steps=2, device=torch.device("cpu")
+        ),
     )
 
     list(trainer.run())
@@ -72,4 +74,3 @@ def test_profiler_emits_chrome_trace(tmp_path, monkeypatch) -> None:
             emitted = m.value
             break
     assert emitted is not None and emitted >= 1.0
-

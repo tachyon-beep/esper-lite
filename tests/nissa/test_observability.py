@@ -4,11 +4,11 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 from prometheus_client import generate_latest
+from prometheus_client import generate_latest as _prom_latest
 
 from esper.leyline import leyline_pb2
 from esper.nissa.observability import NissaIngestor, NissaIngestorConfig
 from esper.nissa.server import create_app
-from prometheus_client import generate_latest as _prom_latest
 
 
 def _fake_es():
@@ -28,7 +28,9 @@ def _packet_with_metric(name: str, value: float) -> leyline_pb2.TelemetryPacket:
 
 
 def test_ingest_coverage_exposes_metrics() -> None:
-    cfg = NissaIngestorConfig(prometheus_gateway="http://localhost:9091", elasticsearch_url="http://localhost:9200")
+    cfg = NissaIngestorConfig(
+        prometheus_gateway="http://localhost:9091", elasticsearch_url="http://localhost:9200"
+    )
     ing = NissaIngestor(cfg, es_client=_fake_es())
     pkt = _packet_with_metric("tamiyo.gnn.feature_coverage", 0.55)
     ing.ingest_telemetry(pkt)
@@ -38,7 +40,9 @@ def test_ingest_coverage_exposes_metrics() -> None:
 
 
 def test_coverage_alert_fires_after_3_packets() -> None:
-    cfg = NissaIngestorConfig(prometheus_gateway="http://localhost:9091", elasticsearch_url="http://localhost:9200")
+    cfg = NissaIngestorConfig(
+        prometheus_gateway="http://localhost:9091", elasticsearch_url="http://localhost:9200"
+    )
     ing = NissaIngestor(cfg, es_client=_fake_es())
     for _ in range(3):
         pkt = _packet_with_metric("tamiyo.gnn.feature_coverage", 0.65)  # < 0.7 threshold
@@ -48,7 +52,9 @@ def test_coverage_alert_fires_after_3_packets() -> None:
 
 
 def test_bsds_elevated_risk_alert() -> None:
-    cfg = NissaIngestorConfig(prometheus_gateway="http://localhost:9091", elasticsearch_url="http://localhost:9200")
+    cfg = NissaIngestorConfig(
+        prometheus_gateway="http://localhost:9091", elasticsearch_url="http://localhost:9200"
+    )
     ing = NissaIngestor(cfg, es_client=_fake_es())
     pkt = _packet_with_metric("tamiyo.blueprint.risk", 0.85)
     ing.ingest_telemetry(pkt)
@@ -57,7 +63,9 @@ def test_bsds_elevated_risk_alert() -> None:
 
 
 def test_metrics_endpoint_serves_prometheus() -> None:
-    cfg = NissaIngestorConfig(prometheus_gateway="http://localhost:9091", elasticsearch_url="http://localhost:9200")
+    cfg = NissaIngestorConfig(
+        prometheus_gateway="http://localhost:9091", elasticsearch_url="http://localhost:9200"
+    )
     ing = NissaIngestor(cfg, es_client=_fake_es())
     pkt = _packet_with_metric("tamiyo.gnn.feature_coverage", 0.75)
     ing.ingest_telemetry(pkt)
@@ -112,7 +120,9 @@ def test_ingest_typed_coverage_feature_coverage_prefix() -> None:
 
 
 def test_bulk_flush_metrics_increment() -> None:
-    cfg = NissaIngestorConfig(prometheus_gateway="http://localhost:9091", elasticsearch_url="http://localhost:9200")
+    cfg = NissaIngestorConfig(
+        prometheus_gateway="http://localhost:9091", elasticsearch_url="http://localhost:9200"
+    )
     ing = NissaIngestor(cfg, es_client=_fake_es())
     # Build three packets and use consume_packets to trigger a flush
     packets = [

@@ -5,21 +5,20 @@ from __future__ import annotations
 import contextlib
 import logging
 import math
+from collections.abc import Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import Mapping
 
 import torch
 from torch import nn
 
+from esper.core import EsperSettings
 from esper.leyline import leyline_pb2
 from esper.simic.registry import EmbeddingRegistry, EmbeddingRegistryConfig
-from esper.core import EsperSettings
 
-from .graph_builder import TamiyoGraphBuilder, TamiyoGraphBuilderConfig
 from .gnn import TamiyoGNN, TamiyoGNNConfig
-
+from .graph_builder import TamiyoGraphBuilder, TamiyoGraphBuilderConfig
 
 logger = logging.getLogger(__name__)
 
@@ -96,11 +95,16 @@ class TamiyoPolicy(nn.Module):
             EmbeddingRegistryConfig(cfg.registry_path / "seed_registry.json", cfg.seed_vocab)
         )
         self._blueprint_registry = cfg.blueprint_registry or EmbeddingRegistry(
-            EmbeddingRegistryConfig(cfg.registry_path / "blueprint_registry.json", cfg.blueprint_vocab)
+            EmbeddingRegistryConfig(
+                cfg.registry_path / "blueprint_registry.json", cfg.blueprint_vocab
+            )
         )
         # Schedule/enum registry for categorical stability (e.g., blending methods)
         self._schedule_registry = cfg.schedule_registry or EmbeddingRegistry(
-            EmbeddingRegistryConfig(cfg.registry_path / "schedule_registry.json", max(64, len(cfg.blending_methods) + 16))
+            EmbeddingRegistryConfig(
+                cfg.registry_path / "schedule_registry.json",
+                max(64, len(cfg.blending_methods) + 16),
+            )
         )
         # Pre-seed known schedules for deterministic indices
         for name in cfg.blending_methods:
@@ -176,6 +180,7 @@ class TamiyoPolicy(nn.Module):
         try:
             if self._device.type == "cpu":
                 import os as _os
+
                 threads = int(_os.getenv("TAMIYO_CPU_THREADS", "1"))
                 if threads > 0:
                     torch.set_num_threads(threads)
@@ -222,7 +227,9 @@ class TamiyoPolicy(nn.Module):
             self._compile_fallbacks += 1
         elif requested_compile:
             try:  # pragma: no cover - depends on backend support
-                self._compiled_model = torch.compile(self._gnn, dynamic=True, mode="reduce-overhead")
+                self._compiled_model = torch.compile(
+                    self._gnn, dynamic=True, mode="reduce-overhead"
+                )
                 self._compile_enabled = True
                 # Best-effort warm-up to reduce first-step variance (CUDA only)
                 if self._device.type == "cuda":
@@ -330,7 +337,9 @@ class TamiyoPolicy(nn.Module):
                 except Exception as exc:  # pragma: no cover - backend specific
                     # First, if compiled model failed, fall back to eager.
                     if self._compiled_model is not None:
-                        logger.info("tamiyo_gnn_compile_runtime_failure", extra={"reason": str(exc)})
+                        logger.info(
+                            "tamiyo_gnn_compile_runtime_failure", extra={"reason": str(exc)}
+                        )
                         self._compile_fallbacks += 1
                         self._compiled_model = None
                         self._compile_enabled = False
@@ -477,7 +486,9 @@ class TamiyoPolicy(nn.Module):
             "risk_score": risk_score,
             "compile_enabled": 1.0 if self._compile_enabled else 0.0,
             "target_seed": command.target_seed_id,
-            "blueprint_id": command.seed_operation.blueprint_id if command.HasField("seed_operation") else "",
+            "blueprint_id": (
+                command.seed_operation.blueprint_id if command.HasField("seed_operation") else ""
+            ),
             "blending_schedule_start": schedule_values[0],
             "blending_schedule_end": schedule_values[1],
             "selected_seed_index": float(selected_seed_idx),
@@ -488,7 +499,9 @@ class TamiyoPolicy(nn.Module):
         self._last_feature_coverage_types = coverage_types
         # Optional: emit blend-mode annotations for Kasmina (P8)
         try:
-            self._maybe_emit_blend_mode_annotations(command, packet, selected_seed, selected_blueprint)
+            self._maybe_emit_blend_mode_annotations(
+                command, packet, selected_seed, selected_blueprint
+            )
         except Exception:  # pragma: no cover - defensive
             pass
         return command
@@ -589,6 +602,7 @@ class TamiyoPolicy(nn.Module):
         t0 = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None
         t1 = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None
         import time as _time
+
         wall_start = _time.perf_counter()
         with torch.inference_mode():
             autocast_ctx = (
@@ -617,7 +631,9 @@ class TamiyoPolicy(nn.Module):
                 return float(wall_ms)
         return float(wall_ms)
 
-    def _lookup_blueprint_metadata(self, blueprint_id: str) -> Mapping[str, float | str | bool | int]:
+    def _lookup_blueprint_metadata(
+        self, blueprint_id: str
+    ) -> Mapping[str, float | str | bool | int]:
         return self._blueprint_metadata.get(blueprint_id, {})
 
     @staticmethod
@@ -691,6 +707,7 @@ class TamiyoPolicy(nn.Module):
                 # Build a uniform alpha_vec of zeros (placeholder semantics)
                 vec = [0.0] * channels
                 import json as _json
+
                 js = _json.dumps(vec)
                 if len(js) <= 1024:
                     command.annotations.setdefault("alpha_vec", js)
@@ -869,9 +886,13 @@ class TamiyoPolicy(nn.Module):
             command.command_type = leyline_pb2.COMMAND_SEED
             command.target_seed_id = selected_seed or "seed-1"
             command.seed_operation.operation = leyline_pb2.SEED_OP_GERMINATE
-            command.seed_operation.blueprint_id = selected_blueprint or (packet.packet_id or packet.training_run_id or "bp-demo")
+            command.seed_operation.blueprint_id = selected_blueprint or (
+                packet.packet_id or packet.training_run_id or "bp-demo"
+            )
             command.seed_operation.parameters["alpha"] = max(0.0, 0.1 + param_delta)
-            command.seed_operation.parameters["blending_method_index"] = float(self._blending_methods.index(blending_method))
+            command.seed_operation.parameters["blending_method_index"] = float(
+                self._blending_methods.index(blending_method)
+            )
             command.seed_operation.parameters["blending_schedule_start"] = schedule_values[0]
             command.seed_operation.parameters["blending_schedule_end"] = schedule_values[1]
         elif action_idx == 1:  # optimizer tweak
@@ -880,11 +901,15 @@ class TamiyoPolicy(nn.Module):
             command.optimizer_adjustment.hyperparameters["lr_delta"] = param_delta
         elif action_idx == 3:  # breaker open
             command.command_type = leyline_pb2.COMMAND_CIRCUIT_BREAKER
-            command.circuit_breaker.desired_state = leyline_pb2.CircuitBreakerState.CIRCUIT_STATE_OPEN
+            command.circuit_breaker.desired_state = (
+                leyline_pb2.CircuitBreakerState.CIRCUIT_STATE_OPEN
+            )
             command.circuit_breaker.rationale = "policy_action"
         elif action_idx == 4:  # breaker close
             command.command_type = leyline_pb2.COMMAND_CIRCUIT_BREAKER
-            command.circuit_breaker.desired_state = leyline_pb2.CircuitBreakerState.CIRCUIT_STATE_CLOSED
+            command.circuit_breaker.desired_state = (
+                leyline_pb2.CircuitBreakerState.CIRCUIT_STATE_CLOSED
+            )
             command.circuit_breaker.rationale = "policy_action"
         else:  # pause fallback
             command.command_type = leyline_pb2.COMMAND_PAUSE

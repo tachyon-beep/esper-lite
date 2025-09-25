@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from esper.core import EsperSettings
-from esper.security.signing import SignatureContext, sign, verify, DEFAULT_SECRET_ENV
+from esper.security.signing import DEFAULT_SECRET_ENV, SignatureContext, sign, verify
 
 
 def _canonical_dumps(payload: Any) -> str:
@@ -40,7 +40,9 @@ def compute_signature(bsds_json: dict, *, prev_sig: str, ctx: SignatureContext) 
     payload = _canonical_dumps(bsds_json).encode("utf-8")
     signature = sign(payload, ctx)
     issued_at = str(bsds_json.get("issued_at") or _iso_now())
-    return BsdsSignature(algo="HMAC-SHA256", sig=signature, prev_sig=str(prev_sig or ""), issued_at=issued_at)
+    return BsdsSignature(
+        algo="HMAC-SHA256", sig=signature, prev_sig=str(prev_sig or ""), issued_at=issued_at
+    )
 
 
 def verify_signature(bsds_json: dict, signature_block: dict, *, ctx: SignatureContext) -> bool:

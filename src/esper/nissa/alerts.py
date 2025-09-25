@@ -6,7 +6,6 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Callable, Iterable
 
-
 Comparator = Callable[[float, float], bool]
 
 

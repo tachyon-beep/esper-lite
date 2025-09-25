@@ -6,10 +6,10 @@ events. Broadcast integration is left to the caller.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from time import perf_counter, monotonic
-from typing import Callable
 import struct
+from dataclasses import dataclass
+from time import monotonic, perf_counter
+from typing import Callable
 
 try:
     from multiprocessing import shared_memory  # type: ignore
@@ -72,7 +72,12 @@ class EmergencyController:
                     broadcasted = True
                 except Exception:
                     broadcasted = False
-        return Escalation(level=int(level), reason=reason, broadcasted=broadcasted, latency_ms=(perf_counter() - start) * 1000.0)
+        return Escalation(
+            level=int(level),
+            reason=reason,
+            broadcasted=broadcasted,
+            latency_ms=(perf_counter() - start) * 1000.0,
+        )
 
     def telemetry_events(self) -> list[TelemetryEvent]:
         return [

@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
+from esper.karn import BlueprintDescriptor, BlueprintTier
 from esper.leyline import leyline_pb2
 from esper.tamiyo import FieldReportStoreConfig, TamiyoPolicy, TamiyoService
 from esper.urza import UrzaLibrary
-from esper.karn import BlueprintDescriptor, BlueprintTier
 from esper.weatherlight.service_runner import WeatherlightService
 
 
@@ -62,7 +62,9 @@ def _urza_with_bsds(tmp_path: Path, bp_id: str) -> UrzaLibrary:
 
 
 @pytest.mark.asyncio
-async def test_weatherlight_surfaces_bsds_indicators(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_weatherlight_surfaces_bsds_indicators(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("ESPER_LEYLINE_SECRET", "test-secret")
 
     urza = _urza_with_bsds(tmp_path, "bp-wl")
@@ -89,4 +91,3 @@ async def test_weatherlight_surfaces_bsds_indicators(tmp_path: Path, monkeypatch
     indicators = pkt.system_health.indicators
     assert indicators.get("bsds_provenance") == "urabrask"
     assert indicators.get("bsds_hazard") == "CRITICAL"
-

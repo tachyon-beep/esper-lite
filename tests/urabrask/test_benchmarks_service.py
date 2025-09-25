@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from esper.karn import BlueprintDescriptor, BlueprintTier
-from esper.urza import UrzaLibrary
 from esper.urabrask.service import produce_benchmarks
+from esper.urza import UrzaLibrary
 
 
 def _descriptor(bp_id: str) -> BlueprintDescriptor:

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
-import time
-
 import os
+import time
+from collections.abc import Iterable
+
 import pytest
 import torch
 from fakeredis.aioredis import FakeRedis
@@ -152,7 +152,9 @@ def test_tolaria_trainer_uses_step_api() -> None:
         dataloader=loader,
         tamiyo=tamiyo,
         kasmina=kasmina,
-        config=TrainingLoopConfig(max_epochs=1, gradient_accumulation_steps=1, device=torch.device("cpu")),
+        config=TrainingLoopConfig(
+            max_epochs=1, gradient_accumulation_steps=1, device=torch.device("cpu")
+        ),
     )
 
     list(trainer.run())
@@ -176,7 +178,9 @@ def test_tolaria_step_packet_includes_minimal_metrics() -> None:
         dataloader=loader,
         tamiyo=tamiyo,
         kasmina=kasmina,
-        config=TrainingLoopConfig(max_epochs=1, gradient_accumulation_steps=1, device=torch.device("cpu")),
+        config=TrainingLoopConfig(
+            max_epochs=1, gradient_accumulation_steps=1, device=torch.device("cpu")
+        ),
     )
 
     list(trainer.run())
@@ -489,7 +493,9 @@ def test_tolaria_amp_metrics_disabled_on_cpu() -> None:
         dataloader=loader,
         tamiyo=_TamiyoStub(),
         kasmina=_KasminaStub(),
-        config=TrainingLoopConfig(max_epochs=1, gradient_accumulation_steps=1, device=torch.device("cpu")),
+        config=TrainingLoopConfig(
+            max_epochs=1, gradient_accumulation_steps=1, device=torch.device("cpu")
+        ),
     )
     metrics_snapshot = trainer.metrics_snapshot()
     assert metrics_snapshot["tolaria.train.amp_enabled"] == 0.0
@@ -507,13 +513,17 @@ def test_tolaria_hardware_metrics_fail_open(monkeypatch) -> None:
     import torch as _torch
 
     monkeypatch.setattr(_torch.cuda, "is_available", lambda: True, raising=False)
+
     def _fail_mem_get_info():  # type: ignore[no-redef]
         raise RuntimeError("simulated mem_get_info failure")
 
     monkeypatch.setattr(_torch.cuda, "mem_get_info", _fail_mem_get_info, raising=False)
     # Make psutil present but failing
     import psutil as _psutil  # type: ignore
-    monkeypatch.setattr(_psutil, "cpu_percent", lambda interval=0.0: (_ for _ in ()).throw(RuntimeError("cpu fail"))),
+
+    monkeypatch.setattr(
+        _psutil, "cpu_percent", lambda interval=0.0: (_ for _ in ()).throw(RuntimeError("cpu fail"))
+    ),
 
     model = _dummy_model(4, 2)
     optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
@@ -526,7 +536,9 @@ def test_tolaria_hardware_metrics_fail_open(monkeypatch) -> None:
         dataloader=loader,
         tamiyo=tamiyo,
         kasmina=kasmina,
-        config=TrainingLoopConfig(max_epochs=1, gradient_accumulation_steps=1, device=torch.device("cpu")),
+        config=TrainingLoopConfig(
+            max_epochs=1, gradient_accumulation_steps=1, device=torch.device("cpu")
+        ),
     )
 
     states = list(trainer.run())

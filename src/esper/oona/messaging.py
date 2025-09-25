@@ -138,15 +138,9 @@ class OonaClient:
         self._redis = redis_client or aioredis.from_url(redis_url)
         self._telemetry_stream = config.telemetry_stream or config.normal_stream
         self._policy_stream = config.policy_stream or config.normal_stream
-        self._kernel_request_stream = (
-            config.kernel_request_stream or "oona.kernels.requests"
-        )
-        self._kernel_ready_stream = (
-            config.kernel_ready_stream or "oona.kernels.ready"
-        )
-        self._kernel_error_stream = (
-            config.kernel_error_stream or "oona.kernels.errors"
-        )
+        self._kernel_request_stream = config.kernel_request_stream or "oona.kernels.requests"
+        self._kernel_ready_stream = config.kernel_ready_stream or "oona.kernels.ready"
+        self._kernel_error_stream = config.kernel_error_stream or "oona.kernels.errors"
         self._metrics: dict[str, float] = {
             "publish_total": 0.0,
             "publish_rerouted": 0.0,
@@ -331,9 +325,7 @@ class OonaClient:
             drop_threshold=self._config.backpressure_drop_threshold,
         )
 
-    async def publish_kernel_artifact_ready(
-        self, ready: leyline_pb2.KernelArtifactReady
-    ) -> bool:
+    async def publish_kernel_artifact_ready(self, ready: leyline_pb2.KernelArtifactReady) -> bool:
         serialized = ready.SerializeToString()
         return await self._publish_proto(
             preferred_stream=self._kernel_ready_stream,
@@ -342,9 +334,7 @@ class OonaClient:
             payload=serialized,
         )
 
-    async def publish_kernel_artifact_error(
-        self, error: leyline_pb2.KernelArtifactError
-    ) -> bool:
+    async def publish_kernel_artifact_error(self, error: leyline_pb2.KernelArtifactError) -> bool:
         serialized = error.SerializeToString()
         return await self._publish_proto(
             preferred_stream=self._kernel_error_stream,
@@ -353,9 +343,7 @@ class OonaClient:
             payload=serialized,
         )
 
-    async def publish_kernel_catalog_update(
-        self, update: leyline_pb2.KernelCatalogUpdate
-    ) -> bool:
+    async def publish_kernel_catalog_update(self, update: leyline_pb2.KernelCatalogUpdate) -> bool:
         serialized = update.SerializeToString()
         return await self._publish_proto(
             preferred_stream=self._kernel_ready_stream,
@@ -371,7 +359,9 @@ class OonaClient:
         count: int = 1,
         block_ms: int = 1000,
     ) -> None:
-        await self.consume(handler, stream=self._kernel_request_stream, count=count, block_ms=block_ms)
+        await self.consume(
+            handler, stream=self._kernel_request_stream, count=count, block_ms=block_ms
+        )
 
     async def consume_kernel_ready(
         self,
@@ -380,7 +370,9 @@ class OonaClient:
         count: int = 1,
         block_ms: int = 1000,
     ) -> None:
-        await self.consume(handler, stream=self._kernel_ready_stream, count=count, block_ms=block_ms)
+        await self.consume(
+            handler, stream=self._kernel_ready_stream, count=count, block_ms=block_ms
+        )
 
     async def consume_kernel_errors(
         self,
@@ -389,7 +381,9 @@ class OonaClient:
         count: int = 1,
         block_ms: int = 1000,
     ) -> None:
-        await self.consume(handler, stream=self._kernel_error_stream, count=count, block_ms=block_ms)
+        await self.consume(
+            handler, stream=self._kernel_error_stream, count=count, block_ms=block_ms
+        )
 
     async def consume_emergency_signals(
         self,
@@ -398,7 +392,9 @@ class OonaClient:
         count: int = 1,
         block_ms: int = 1000,
     ) -> None:
-        await self.consume(handler, stream=self._config.emergency_stream, count=count, block_ms=block_ms)
+        await self.consume(
+            handler, stream=self._config.emergency_stream, count=count, block_ms=block_ms
+        )
 
     async def consume(
         self,
@@ -474,7 +470,9 @@ class OonaClient:
     async def metrics_snapshot(self) -> dict[str, float]:
         snapshot = dict(self._metrics)
         snapshot["queue_depth_normal"] = float(await self._redis.xlen(self._config.normal_stream))
-        snapshot["queue_depth_emergency"] = float(await self._redis.xlen(self._config.emergency_stream))
+        snapshot["queue_depth_emergency"] = float(
+            await self._redis.xlen(self._config.emergency_stream)
+        )
         snapshot["queue_depth_kernel_requests"] = float(
             await self._redis.xlen(self._kernel_request_stream)
         )
@@ -487,9 +485,11 @@ class OonaClient:
         snapshot["publish_breaker_state"] = float(self._publish_breaker.snapshot().state)
         snapshot["consume_breaker_state"] = float(self._consume_breaker.snapshot().state)
         snapshot["conservative_mode"] = 1.0 if self._conservative_mode else 0.0
+
         # Flatten per-source emergency counters
         def _san(s: str) -> str:
             return "".join(ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in s) or "unknown"
+
         for src, val in getattr(self, "_em_src_published", {}).items():
             snapshot[f"emergency_published.src.{_san(src)}"] = float(val)
         for src, val in getattr(self, "_em_src_dropped", {}).items():
@@ -552,9 +552,7 @@ class OonaClient:
             self._kernel_ready_stream,
             self._kernel_error_stream,
         }:
-            trimmed[stream] = float(
-                await self._redis.xtrim(stream, minid=min_id, approximate=True)
-            )
+            trimmed[stream] = float(await self._redis.xtrim(stream, minid=min_id, approximate=True))
         return trimmed
 
     async def _publish_proto(
@@ -623,7 +621,9 @@ class OonaClient:
             self._conservative_mode = True
             return False
         self._metrics["publish_latency_ms"] = (time.perf_counter() - start) * 1000.0
-        self._metrics["queue_depth_max"] = max(self._metrics["queue_depth_max"], float(length_after))
+        self._metrics["queue_depth_max"] = max(
+            self._metrics["queue_depth_max"], float(length_after)
+        )
         self._metrics["publish_total"] += 1.0
         self._publish_breaker.record_success()
         if rerouted or stream == self._config.emergency_stream:
@@ -676,7 +676,11 @@ class OonaClient:
             return preferred, False, True, int(backlog)
 
         threshold = self._config.emergency_threshold
-        if threshold is not None and preferred == self._config.normal_stream and backlog >= threshold:
+        if (
+            threshold is not None
+            and preferred == self._config.normal_stream
+            and backlog >= threshold
+        ):
             return self._config.emergency_stream, True, False, int(backlog)
 
         return preferred, False, False, int(backlog)

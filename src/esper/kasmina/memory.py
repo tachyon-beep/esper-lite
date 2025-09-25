@@ -19,7 +19,9 @@ class CacheStats:
 class TTLMemoryCache(Generic[T]):
     """Simple TTL cache with eviction statistics."""
 
-    def __init__(self, *, ttl_seconds: float = 300.0, clock: Callable[[], float] | None = None) -> None:
+    def __init__(
+        self, *, ttl_seconds: float = 300.0, clock: Callable[[], float] | None = None
+    ) -> None:
         self._ttl = ttl_seconds
         self._clock = clock or time.monotonic
         self._store: MutableMapping[str, tuple[float, T]] = {}

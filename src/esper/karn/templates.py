@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-from .catalog import (
-    BlueprintDescriptor,
-    BlueprintParameterBounds,
-    BlueprintTier,
-)
+from .catalog import BlueprintDescriptor, BlueprintParameterBounds, BlueprintTier
 
 
 def _bp(

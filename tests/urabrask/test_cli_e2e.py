@@ -26,7 +26,9 @@ def _descriptor(bp_id: str, *, risk: float = 0.4) -> BlueprintDescriptor:
     return d
 
 
-def _run_cli(urza_root: Path, blueprint_id: str, *, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+def _run_cli(
+    urza_root: Path, blueprint_id: str, *, extra_env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     # Ensure the src/ path is importable for `python -m ...`
     repo_root = Path(__file__).resolve().parents[2]

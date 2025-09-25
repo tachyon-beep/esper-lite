@@ -7,8 +7,8 @@ battery lands.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
 import contextlib
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Mapping, Tuple
@@ -17,9 +17,9 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from esper.core import EsperSettings
 from esper.karn import BlueprintDescriptor, BlueprintTier
 from esper.leyline import leyline_pb2
-from esper.core import EsperSettings
 
 
 @dataclass(slots=True)
@@ -104,6 +104,7 @@ __all__ = ["CrucibleConfig", "run_crucible"]
 # Crucible v1 (hazard battery)
 # -----------------------------
 
+
 @dataclass(slots=True)
 class CrucibleConfigV1:
     high_threshold: float = 0.60
@@ -131,7 +132,9 @@ def _set_determinism() -> None:
         pass
 
 
-def _build_tiny_mlp(in_dim: int = 8, hidden: int = 16, out_dim: int = 4, scale: float = 1.0) -> nn.Module:
+def _build_tiny_mlp(
+    in_dim: int = 8, hidden: int = 16, out_dim: int = 4, scale: float = 1.0
+) -> nn.Module:
     model = nn.Sequential(
         nn.Linear(in_dim, hidden),
         nn.Tanh(),
@@ -162,7 +165,9 @@ def run_crucible_v1(
     try:
         settings = EsperSettings()
         if settings.urabrask_crucible_memory_watermark_mb is not None:
-            cfg.memory_watermark_mb_threshold = float(settings.urabrask_crucible_memory_watermark_mb)
+            cfg.memory_watermark_mb_threshold = float(
+                settings.urabrask_crucible_memory_watermark_mb
+            )
         cfg.enable_oom_probe = bool(settings.urabrask_crucible_allow_oom)
         cfg.simulate_oom = bool(settings.urabrask_crucible_simulate_oom)
     except Exception:
@@ -394,8 +399,12 @@ def _persist_result_bundle(
         "blueprint_id": bsds.blueprint_id,
         "risk_score": float(bsds.risk_score),
         "hazard_band": leyline_pb2.HazardBand.Name(bsds.hazard_band).replace("HAZARD_BAND_", ""),
-        "handling_class": leyline_pb2.HandlingClass.Name(bsds.handling_class).replace("HANDLING_CLASS_", "").lower(),
-        "resource_profile": leyline_pb2.ResourceProfile.Name(bsds.resource_profile).replace("RESOURCE_PROFILE_", "").lower(),
+        "handling_class": leyline_pb2.HandlingClass.Name(bsds.handling_class)
+        .replace("HANDLING_CLASS_", "")
+        .lower(),
+        "resource_profile": leyline_pb2.ResourceProfile.Name(bsds.resource_profile)
+        .replace("RESOURCE_PROFILE_", "")
+        .lower(),
         "provenance": leyline_pb2.Provenance.Name(bsds.provenance).replace("PROVENANCE_", ""),
         "issued_at": issued,
     }

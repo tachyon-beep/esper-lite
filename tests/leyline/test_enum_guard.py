@@ -22,4 +22,3 @@ def test_shared_enum_guard_passes() -> None:
         raise AssertionError(
             f"Enum guard failed with code {result.returncode}.\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
         )
-

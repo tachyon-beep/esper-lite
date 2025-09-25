@@ -13,30 +13,22 @@ from dataclasses import dataclass, field
 from typing import Callable, Iterable, Protocol
 
 import torch
-
+from google.protobuf import struct_pb2
 from torch import nn
 
 from esper.core import TelemetryEvent, TelemetryMetric, build_telemetry_packet
 from esper.leyline import leyline_pb2 as pb
-from google.protobuf import struct_pb2
 from esper.security.signing import DEFAULT_SECRET_ENV, SignatureContext
 
-from .blending import (
-    AlphaBlender,
-    AlphaSchedule,
-    BlenderConfig,
-    blend_with_config,
-    blend_mode_name,
-)
+from .blending import AlphaBlender, AlphaSchedule, BlenderConfig, blend_mode_name, blend_with_config
 from .gates import GateInputs, GateResult, KasminaGates
 from .isolation import GradientIsolationMonitor, IsolationSession, IsolationStats
+from .kernel_cache import KasminaKernelCache
+from .lifecycle import KasminaLifecycle
 from .memory import KasminaMemoryManager
 from .registry import SeedParameterRegistry
-from .security import CommandVerifier, NonceLedger
 from .safety import BreakerEvent, KasminaCircuitBreaker, MonotonicTimer
-from .lifecycle import KasminaLifecycle
-from .kernel_cache import KasminaKernelCache
-
+from .security import CommandVerifier, NonceLedger
 
 logger = logging.getLogger(__name__)
 
@@ -106,9 +98,7 @@ class SeedContext:
     alpha_steps: int = 0
     blend_config: BlenderConfig | None = None
     pending_events: list[TelemetryEvent] = field(default_factory=list)
-    pending_priority: int = field(
-        default=pb.MessagePriority.MESSAGE_PRIORITY_NORMAL
-    )
+    pending_priority: int = field(default=pb.MessagePriority.MESSAGE_PRIORITY_NORMAL)
     last_step_emitted: int | None = None
 
 
@@ -225,9 +215,7 @@ class KasminaSeedManager:
                 self._last_priority = pb.MessagePriority.Value(
                     packet.system_health.indicators.get(
                         "priority",
-                        pb.MessagePriority.Name(
-                            pb.MessagePriority.MESSAGE_PRIORITY_NORMAL
-                        ),
+                        pb.MessagePriority.Name(pb.MessagePriority.MESSAGE_PRIORITY_NORMAL),
                     )
                 )
             except ValueError:
@@ -738,11 +726,19 @@ class KasminaSeedManager:
                 ann = dict(command.annotations)
                 if ann:
                     attrs: dict[str, str] = {}
-                    for key in ("feature_coverage", "risk_reason", "blueprint_risk", "blueprint_tier", "blueprint_stage"):
+                    for key in (
+                        "feature_coverage",
+                        "risk_reason",
+                        "blueprint_risk",
+                        "blueprint_tier",
+                        "blueprint_stage",
+                    ):
                         if key in ann:
                             attrs[key] = str(ann.get(key))
                     if attrs:
-                        events.append(TelemetryEvent(description="tamiyo_annotations", attributes=attrs))
+                        events.append(
+                            TelemetryEvent(description="tamiyo_annotations", attributes=attrs)
+                        )
                     # Emit degraded_inputs event if coverage below threshold
                     try:
                         cov = float(ann.get("feature_coverage", 1.0))
@@ -768,9 +764,8 @@ class KasminaSeedManager:
         seed_event_target: str | None = None
         remove_after_flush = False
         if command.command_type == pb.COMMAND_SEED and command.HasField("seed_operation"):
-            raw_seed_id = (
-                command.target_seed_id
-                or command.seed_operation.parameters.get("seed_id", "")
+            raw_seed_id = command.target_seed_id or command.seed_operation.parameters.get(
+                "seed_id", ""
             )
             seed_id = str(raw_seed_id)
             blueprint_id = command.seed_operation.blueprint_id
@@ -794,9 +789,7 @@ class KasminaSeedManager:
             except Exception:
                 pass
             if operation == pb.SEED_OP_GERMINATE:
-                events.extend(
-                    self._graft_seed(seed_id, blueprint_id, parameters)
-                )
+                events.extend(self._graft_seed(seed_id, blueprint_id, parameters))
             elif operation in (pb.SEED_OP_CULL, pb.SEED_OP_CANCEL):
                 events.extend(self._retire_seed(seed_id))
                 remove_after_flush = True
@@ -924,7 +917,9 @@ class KasminaSeedManager:
                 self._queue_global_events(events)
 
     # Compatibility: satisfy Tolaria's KasminaClient protocol
-    def apply_command(self, command: pb.AdaptationCommand) -> None:  # pragma: no cover - thin wrapper
+    def apply_command(
+        self, command: pb.AdaptationCommand
+    ) -> None:  # pragma: no cover - thin wrapper
         self.handle_command(command)
 
     def seeds(self) -> dict[str, SeedContext]:
@@ -973,7 +968,9 @@ class KasminaSeedManager:
                 ]
             )
 
-    def blend(self, host_tensor: torch.Tensor, seed_tensor: torch.Tensor, *, seed_id: str | None = None) -> torch.Tensor:
+    def blend(
+        self, host_tensor: torch.Tensor, seed_tensor: torch.Tensor, *, seed_id: str | None = None
+    ) -> torch.Tensor:
         """Blend host and seed activations using the configured alpha schedule."""
 
         alpha = 1.0
@@ -1186,9 +1183,7 @@ class KasminaSeedManager:
         context.metadata["pending_removal"] = "true"
         return events
 
-    def _apply_breaker_command(
-        self, command: pb.CommandCircuitBreaker
-    ) -> list[TelemetryEvent]:
+    def _apply_breaker_command(self, command: pb.CommandCircuitBreaker) -> list[TelemetryEvent]:
         events: list[TelemetryEvent] = []
         try:
             breaker_event = self._breaker.force_state(
@@ -1342,7 +1337,9 @@ class KasminaSeedManager:
         context.kernel_attached = False
         context.used_fallback = False
         context.isolation_violations = max(context.isolation_violations, 1)
-        context.embargo_until = self._now() + self._embargo_seconds if self._embargo_seconds else None
+        context.embargo_until = (
+            self._now() + self._embargo_seconds if self._embargo_seconds else None
+        )
         context.kernel = None
 
         self._transition(context, pb.SEED_STAGE_CULLED)
@@ -1385,9 +1382,7 @@ class KasminaSeedManager:
     def _now(self) -> float:
         return self._clock()
 
-    def _breaker_event_to_telemetry(
-        self, seed_id: str, event: BreakerEvent
-    ) -> TelemetryEvent:
+    def _breaker_event_to_telemetry(self, seed_id: str, event: BreakerEvent) -> TelemetryEvent:
         attributes = {
             "seed_id": seed_id,
             "breaker_state": pb.CircuitBreakerState.Name(event.state),
@@ -1405,7 +1400,9 @@ class KasminaSeedManager:
             attributes=attributes,
         )
 
-    def _isolation_breaker_event_to_telemetry(self, event: BreakerEvent, *, seed_id: str | None = None) -> TelemetryEvent:
+    def _isolation_breaker_event_to_telemetry(
+        self, event: BreakerEvent, *, seed_id: str | None = None
+    ) -> TelemetryEvent:
         attributes = {
             "component": "isolation",
             "breaker_state": pb.CircuitBreakerState.Name(event.state),
@@ -1465,9 +1462,7 @@ class KasminaSeedManager:
         self._last_rollback_latency_ms = latency_ms
         return latency_ms
 
-    def _verify_command(
-        self, command: pb.AdaptationCommand, events: list[TelemetryEvent]
-    ) -> bool:
+    def _verify_command(self, command: pb.AdaptationCommand, events: list[TelemetryEvent]) -> bool:
         if self._command_verifier is None:
             events.append(
                 TelemetryEvent(
@@ -1544,11 +1539,13 @@ class KasminaSeedManager:
             context.metadata["blend_mode_source"] = str(source)
 
         if mode == "CONFIDENCE":
+
             def _f(key: str, default: float) -> float:
                 try:
                     return float(annotations.get(key, default))
                 except Exception:
                     return default
+
             cfg.gate_k = max(0.0, _f("gate_k", cfg.gate_k))
             cfg.gate_tau = max(0.0, _f("gate_tau", cfg.gate_tau))
             lo = max(0.0, min(1.0, _f("alpha_lo", cfg.alpha_lo)))
@@ -1721,6 +1718,7 @@ class KasminaSeedManager:
         ]
         self._handle_gate_failure(context, failure, events)
         self._queue_seed_events(seed_id, events)
+
     def register_host_model(self, model: nn.Module) -> None:
         """Register the host model whose params must remain isolated."""
 
@@ -1769,7 +1767,9 @@ class KasminaSeedManager:
                 )
                 return kernel
             except Exception as exc:  # pragma: no cover - defensive guard
-                logger.error("Fallback blueprint %s unavailable: %s", self._fallback_blueprint_id, exc)
+                logger.error(
+                    "Fallback blueprint %s unavailable: %s", self._fallback_blueprint_id, exc
+                )
         return nn.Identity()
 
     def _estimate_model_memory_gb(self, model: nn.Module) -> float:
@@ -1863,9 +1863,7 @@ class KasminaSeedManager:
                 breaker_event = self._isolation_breaker.record_success()
                 if breaker_event:
                     events.append(
-                        self._isolation_breaker_event_to_telemetry(
-                            breaker_event, seed_id=seed_id
-                        )
+                        self._isolation_breaker_event_to_telemetry(breaker_event, seed_id=seed_id)
                     )
             else:
                 self._handle_gate_failure(context, result, events)
@@ -1877,7 +1875,6 @@ class KasminaSeedManager:
                 session.disable_collection()
                 session.reset()
         return events
-
 
     def build_telemetry_packet(
         self,
@@ -1893,7 +1890,6 @@ class KasminaSeedManager:
         )
         self._last_priority = computed_priority
         return packet
-
 
     def advance_alpha(self, seed_id: str, *, steps: int = 1) -> float:
         """Advance the alpha schedule while BLENDING."""
@@ -1954,9 +1950,7 @@ class KasminaSeedManager:
         ]
         if breaker_event:
             telemetry_events.append(
-                self._isolation_breaker_event_to_telemetry(
-                    breaker_event, seed_id=seed_id
-                )
+                self._isolation_breaker_event_to_telemetry(breaker_event, seed_id=seed_id)
             )
         if seed_id:
             self._queue_seed_events(seed_id, telemetry_events)

@@ -7,8 +7,8 @@ import pytest
 
 from esper.karn import BlueprintDescriptor, BlueprintTier
 from esper.urabrask.bsds import compute_bsds
-from esper.urza import UrzaLibrary
 from esper.urabrask.service import produce_bsds_via_crucible
+from esper.urza import UrzaLibrary
 
 
 def _load_schema() -> dict:
@@ -71,4 +71,3 @@ def test_producer_mirrors_validate_schema(tmp_path: Path) -> None:
     mirror2 = rec.extras.get("bsds")
     assert isinstance(mirror2, dict)
     jsonschema.validate(instance=mirror2, schema=schema)
-

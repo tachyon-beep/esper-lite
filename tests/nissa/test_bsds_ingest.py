@@ -64,4 +64,3 @@ def test_bsds_high_alert_after_three_packets() -> None:
     assert "tamiyo_bsds_high" in ingest.active_alerts
     event = ingest.active_alerts["tamiyo_bsds_high"]
     assert event.routes == ("slack",)
-

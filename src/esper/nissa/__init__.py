@@ -1,6 +1,6 @@
 """Nissa observability stack helpers."""
 
-from .alerts import AlertEngine, AlertEvent, AlertRouter, AlertRule, DEFAULT_ALERT_RULES
+from .alerts import DEFAULT_ALERT_RULES, AlertEngine, AlertEvent, AlertRouter, AlertRule
 from .drills import (
     run_all_drills,
     simulate_kasmina_isolation_breach,

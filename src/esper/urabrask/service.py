@@ -6,17 +6,17 @@ existing Urza record via `extras["bsds"]` for Tamiyo to consume.
 
 from __future__ import annotations
 
-from typing import Mapping, Any
-
 from datetime import UTC
-from esper.urza import UrzaLibrary
-from esper.leyline import leyline_pb2
-from esper.karn import BlueprintDescriptor
-from esper.core import EsperSettings
-from esper.urabrask.wal import attach_signature_and_wal
+from typing import Any, Mapping
 
+from esper.core import EsperSettings
+from esper.karn import BlueprintDescriptor
+from esper.leyline import leyline_pb2
+from esper.urabrask.wal import attach_signature_and_wal
+from esper.urza import UrzaLibrary
+
+from .benchmarks import BenchmarkConfig, run_benchmarks
 from .bsds import compute_bsds
-from .benchmarks import run_benchmarks, BenchmarkConfig
 
 
 def _maybe_publish_oona(oona: Any, method: str, payload: Any) -> None:
@@ -28,7 +28,8 @@ def _maybe_publish_oona(oona: Any, method: str, payload: Any) -> None:
             return
         result = fn(payload)
         # Support async publishers
-        import inspect, asyncio
+        import asyncio
+        import inspect
 
         if inspect.isawaitable(result):
             try:
@@ -64,7 +65,9 @@ def produce_and_attach_bsds(
         if record is None:
             raise ValueError(f"Blueprint not found in Urza: {blueprint_id}")
 
-        bsds_proto, bsds_json = compute_bsds(record.metadata, artifact_path=record.artifact_path, hints=hints)
+        bsds_proto, bsds_json = compute_bsds(
+            record.metadata, artifact_path=record.artifact_path, hints=hints
+        )
         # Merge extras to preserve existing metadata
         extras = dict(record.extras or {})
         extras["bsds"] = bsds_json
@@ -102,22 +105,36 @@ def produce_bsds_via_crucible(
     """
 
     # Lazy import to avoid hard torch dependency at module import time
-    from .crucible import run_crucible_v1, CrucibleConfigV1  # type: ignore
+    from .crucible import CrucibleConfigV1, run_crucible_v1  # type: ignore
 
     settings = EsperSettings()
     try:
         record = urza.get(blueprint_id)
         if record is None:
             raise ValueError(f"Blueprint not found in Urza: {blueprint_id}")
-        bsds, hazards = run_crucible_v1(record.metadata, artifact_path=record.artifact_path, hints=hints, config=CrucibleConfigV1())
+        bsds, hazards = run_crucible_v1(
+            record.metadata,
+            artifact_path=record.artifact_path,
+            hints=hints,
+            config=CrucibleConfigV1(),
+        )
         # Mirror to JSON for extras (with hazards)
         bsds_json = {
             "risk_score": float(bsds.risk_score),
-            "hazard_band": leyline_pb2.HazardBand.Name(bsds.hazard_band).replace("HAZARD_BAND_", ""),
-            "handling_class": leyline_pb2.HandlingClass.Name(bsds.handling_class).replace("HANDLING_CLASS_", "").lower(),
-            "resource_profile": leyline_pb2.ResourceProfile.Name(bsds.resource_profile).replace("RESOURCE_PROFILE_", "").lower(),
+            "hazard_band": leyline_pb2.HazardBand.Name(bsds.hazard_band).replace(
+                "HAZARD_BAND_", ""
+            ),
+            "handling_class": leyline_pb2.HandlingClass.Name(bsds.handling_class)
+            .replace("HANDLING_CLASS_", "")
+            .lower(),
+            "resource_profile": leyline_pb2.ResourceProfile.Name(bsds.resource_profile)
+            .replace("RESOURCE_PROFILE_", "")
+            .lower(),
             "provenance": leyline_pb2.Provenance.Name(bsds.provenance).replace("PROVENANCE_", ""),
-            "issued_at": bsds.issued_at.ToDatetime().replace(tzinfo=UTC).isoformat().replace("+00:00", "Z"),
+            "issued_at": bsds.issued_at.ToDatetime()
+            .replace(tzinfo=UTC)
+            .isoformat()
+            .replace("+00:00", "Z"),
         }
         if hazards:
             bsds_json["hazards"] = dict(hazards)

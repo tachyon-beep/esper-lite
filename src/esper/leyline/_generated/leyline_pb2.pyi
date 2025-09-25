@@ -1,14 +1,17 @@
 import datetime
+from collections.abc import Iterable as _Iterable
+from collections.abc import Mapping as _Mapping
+from typing import ClassVar as _ClassVar
+from typing import Optional as _Optional
+from typing import Union as _Union
 
+from google.protobuf import descriptor as _descriptor
 from google.protobuf import duration_pb2 as _duration_pb2
+from google.protobuf import message as _message
 from google.protobuf import struct_pb2 as _struct_pb2
 from google.protobuf import timestamp_pb2 as _timestamp_pb2
 from google.protobuf.internal import containers as _containers
 from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
-from google.protobuf import descriptor as _descriptor
-from google.protobuf import message as _message
-from collections.abc import Iterable as _Iterable, Mapping as _Mapping
-from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
@@ -170,6 +173,7 @@ class Provenance(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     PROVENANCE_CURATED: _ClassVar[Provenance]
     PROVENANCE_HEURISTIC: _ClassVar[Provenance]
     PROVENANCE_EXTERNAL: _ClassVar[Provenance]
+
 SEED_STAGE_UNKNOWN: SeedLifecycleStage
 SEED_STAGE_DORMANT: SeedLifecycleStage
 SEED_STAGE_GERMINATED: SeedLifecycleStage
@@ -280,7 +284,15 @@ PROVENANCE_HEURISTIC: Provenance
 PROVENANCE_EXTERNAL: Provenance
 
 class HardwareContext(_message.Message):
-    __slots__ = ("device_type", "device_id", "total_memory_gb", "available_memory_gb", "temperature_celsius", "utilization_percent", "compute_capability")
+    __slots__ = (
+        "device_type",
+        "device_id",
+        "total_memory_gb",
+        "available_memory_gb",
+        "temperature_celsius",
+        "utilization_percent",
+        "compute_capability",
+    )
     DEVICE_TYPE_FIELD_NUMBER: _ClassVar[int]
     DEVICE_ID_FIELD_NUMBER: _ClassVar[int]
     TOTAL_MEMORY_GB_FIELD_NUMBER: _ClassVar[int]
@@ -295,10 +307,29 @@ class HardwareContext(_message.Message):
     temperature_celsius: float
     utilization_percent: float
     compute_capability: int
-    def __init__(self, device_type: _Optional[str] = ..., device_id: _Optional[str] = ..., total_memory_gb: _Optional[float] = ..., available_memory_gb: _Optional[float] = ..., temperature_celsius: _Optional[float] = ..., utilization_percent: _Optional[float] = ..., compute_capability: _Optional[int] = ...) -> None: ...
+    def __init__(
+        self,
+        device_type: _Optional[str] = ...,
+        device_id: _Optional[str] = ...,
+        total_memory_gb: _Optional[float] = ...,
+        available_memory_gb: _Optional[float] = ...,
+        temperature_celsius: _Optional[float] = ...,
+        utilization_percent: _Optional[float] = ...,
+        compute_capability: _Optional[int] = ...,
+    ) -> None: ...
 
 class SeedState(_message.Message):
-    __slots__ = ("seed_id", "stage", "gradient_norm", "learning_rate", "layer_depth", "metrics", "age_epochs", "risk_score")
+    __slots__ = (
+        "seed_id",
+        "stage",
+        "gradient_norm",
+        "learning_rate",
+        "layer_depth",
+        "metrics",
+        "age_epochs",
+        "risk_score",
+    )
+
     class MetricsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -306,6 +337,7 @@ class SeedState(_message.Message):
         key: str
         value: float
         def __init__(self, key: _Optional[str] = ..., value: _Optional[float] = ...) -> None: ...
+
     SEED_ID_FIELD_NUMBER: _ClassVar[int]
     STAGE_FIELD_NUMBER: _ClassVar[int]
     GRADIENT_NORM_FIELD_NUMBER: _ClassVar[int]
@@ -322,10 +354,36 @@ class SeedState(_message.Message):
     metrics: _containers.ScalarMap[str, float]
     age_epochs: int
     risk_score: float
-    def __init__(self, seed_id: _Optional[str] = ..., stage: _Optional[_Union[SeedLifecycleStage, str]] = ..., gradient_norm: _Optional[float] = ..., learning_rate: _Optional[float] = ..., layer_depth: _Optional[int] = ..., metrics: _Optional[_Mapping[str, float]] = ..., age_epochs: _Optional[int] = ..., risk_score: _Optional[float] = ...) -> None: ...
+    def __init__(
+        self,
+        seed_id: _Optional[str] = ...,
+        stage: _Optional[_Union[SeedLifecycleStage, str]] = ...,
+        gradient_norm: _Optional[float] = ...,
+        learning_rate: _Optional[float] = ...,
+        layer_depth: _Optional[int] = ...,
+        metrics: _Optional[_Mapping[str, float]] = ...,
+        age_epochs: _Optional[int] = ...,
+        risk_score: _Optional[float] = ...,
+    ) -> None: ...
 
 class SystemStatePacket(_message.Message):
-    __slots__ = ("version", "current_epoch", "validation_accuracy", "validation_loss", "timestamp_ns", "hardware_context", "training_metrics", "seed_states", "packet_id", "global_step", "training_loss", "source_subsystem", "training_run_id", "experiment_name")
+    __slots__ = (
+        "version",
+        "current_epoch",
+        "validation_accuracy",
+        "validation_loss",
+        "timestamp_ns",
+        "hardware_context",
+        "training_metrics",
+        "seed_states",
+        "packet_id",
+        "global_step",
+        "training_loss",
+        "source_subsystem",
+        "training_run_id",
+        "experiment_name",
+    )
+
     class TrainingMetricsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -333,6 +391,7 @@ class SystemStatePacket(_message.Message):
         key: str
         value: float
         def __init__(self, key: _Optional[str] = ..., value: _Optional[float] = ...) -> None: ...
+
     VERSION_FIELD_NUMBER: _ClassVar[int]
     CURRENT_EPOCH_FIELD_NUMBER: _ClassVar[int]
     VALIDATION_ACCURACY_FIELD_NUMBER: _ClassVar[int]
@@ -361,10 +420,27 @@ class SystemStatePacket(_message.Message):
     source_subsystem: str
     training_run_id: str
     experiment_name: str
-    def __init__(self, version: _Optional[int] = ..., current_epoch: _Optional[int] = ..., validation_accuracy: _Optional[float] = ..., validation_loss: _Optional[float] = ..., timestamp_ns: _Optional[int] = ..., hardware_context: _Optional[_Union[HardwareContext, _Mapping]] = ..., training_metrics: _Optional[_Mapping[str, float]] = ..., seed_states: _Optional[_Iterable[_Union[SeedState, _Mapping]]] = ..., packet_id: _Optional[str] = ..., global_step: _Optional[int] = ..., training_loss: _Optional[float] = ..., source_subsystem: _Optional[str] = ..., training_run_id: _Optional[str] = ..., experiment_name: _Optional[str] = ...) -> None: ...
+    def __init__(
+        self,
+        version: _Optional[int] = ...,
+        current_epoch: _Optional[int] = ...,
+        validation_accuracy: _Optional[float] = ...,
+        validation_loss: _Optional[float] = ...,
+        timestamp_ns: _Optional[int] = ...,
+        hardware_context: _Optional[_Union[HardwareContext, _Mapping]] = ...,
+        training_metrics: _Optional[_Mapping[str, float]] = ...,
+        seed_states: _Optional[_Iterable[_Union[SeedState, _Mapping]]] = ...,
+        packet_id: _Optional[str] = ...,
+        global_step: _Optional[int] = ...,
+        training_loss: _Optional[float] = ...,
+        source_subsystem: _Optional[str] = ...,
+        training_run_id: _Optional[str] = ...,
+        experiment_name: _Optional[str] = ...,
+    ) -> None: ...
 
 class CommandSeedOperation(_message.Message):
     __slots__ = ("operation", "blueprint_id", "parameters")
+
     class ParametersEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -372,16 +448,23 @@ class CommandSeedOperation(_message.Message):
         key: str
         value: float
         def __init__(self, key: _Optional[str] = ..., value: _Optional[float] = ...) -> None: ...
+
     OPERATION_FIELD_NUMBER: _ClassVar[int]
     BLUEPRINT_ID_FIELD_NUMBER: _ClassVar[int]
     PARAMETERS_FIELD_NUMBER: _ClassVar[int]
     operation: SeedOperation
     blueprint_id: str
     parameters: _containers.ScalarMap[str, float]
-    def __init__(self, operation: _Optional[_Union[SeedOperation, str]] = ..., blueprint_id: _Optional[str] = ..., parameters: _Optional[_Mapping[str, float]] = ...) -> None: ...
+    def __init__(
+        self,
+        operation: _Optional[_Union[SeedOperation, str]] = ...,
+        blueprint_id: _Optional[str] = ...,
+        parameters: _Optional[_Mapping[str, float]] = ...,
+    ) -> None: ...
 
 class CommandOptimizerAdjustment(_message.Message):
     __slots__ = ("optimizer_id", "hyperparameters")
+
     class HyperparametersEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -389,11 +472,16 @@ class CommandOptimizerAdjustment(_message.Message):
         key: str
         value: float
         def __init__(self, key: _Optional[str] = ..., value: _Optional[float] = ...) -> None: ...
+
     OPTIMIZER_ID_FIELD_NUMBER: _ClassVar[int]
     HYPERPARAMETERS_FIELD_NUMBER: _ClassVar[int]
     optimizer_id: str
     hyperparameters: _containers.ScalarMap[str, float]
-    def __init__(self, optimizer_id: _Optional[str] = ..., hyperparameters: _Optional[_Mapping[str, float]] = ...) -> None: ...
+    def __init__(
+        self,
+        optimizer_id: _Optional[str] = ...,
+        hyperparameters: _Optional[_Mapping[str, float]] = ...,
+    ) -> None: ...
 
 class CommandCircuitBreaker(_message.Message):
     __slots__ = ("desired_state", "rationale")
@@ -401,10 +489,25 @@ class CommandCircuitBreaker(_message.Message):
     RATIONALE_FIELD_NUMBER: _ClassVar[int]
     desired_state: CircuitBreakerState
     rationale: str
-    def __init__(self, desired_state: _Optional[_Union[CircuitBreakerState, str]] = ..., rationale: _Optional[str] = ...) -> None: ...
+    def __init__(
+        self,
+        desired_state: _Optional[_Union[CircuitBreakerState, str]] = ...,
+        rationale: _Optional[str] = ...,
+    ) -> None: ...
 
 class EmergencySignal(_message.Message):
-    __slots__ = ("version", "level", "reason", "origin", "triggered_at", "monotonic_time_ms", "run_id", "attributes", "payload_checksum")
+    __slots__ = (
+        "version",
+        "level",
+        "reason",
+        "origin",
+        "triggered_at",
+        "monotonic_time_ms",
+        "run_id",
+        "attributes",
+        "payload_checksum",
+    )
+
     class AttributesEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -412,6 +515,7 @@ class EmergencySignal(_message.Message):
         key: str
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+
     VERSION_FIELD_NUMBER: _ClassVar[int]
     LEVEL_FIELD_NUMBER: _ClassVar[int]
     REASON_FIELD_NUMBER: _ClassVar[int]
@@ -430,10 +534,37 @@ class EmergencySignal(_message.Message):
     run_id: str
     attributes: _containers.ScalarMap[str, str]
     payload_checksum: bytes
-    def __init__(self, version: _Optional[int] = ..., level: _Optional[_Union[EmergencyLevel, str]] = ..., reason: _Optional[str] = ..., origin: _Optional[str] = ..., triggered_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., monotonic_time_ms: _Optional[int] = ..., run_id: _Optional[str] = ..., attributes: _Optional[_Mapping[str, str]] = ..., payload_checksum: _Optional[bytes] = ...) -> None: ...
+    def __init__(
+        self,
+        version: _Optional[int] = ...,
+        level: _Optional[_Union[EmergencyLevel, str]] = ...,
+        reason: _Optional[str] = ...,
+        origin: _Optional[str] = ...,
+        triggered_at: _Optional[
+            _Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]
+        ] = ...,
+        monotonic_time_ms: _Optional[int] = ...,
+        run_id: _Optional[str] = ...,
+        attributes: _Optional[_Mapping[str, str]] = ...,
+        payload_checksum: _Optional[bytes] = ...,
+    ) -> None: ...
 
 class AdaptationCommand(_message.Message):
-    __slots__ = ("version", "command_id", "command_type", "target_seed_id", "execution_deadline_ms", "issued_at", "issued_by", "seed_operation", "optimizer_adjustment", "circuit_breaker", "rollback_payload", "annotations")
+    __slots__ = (
+        "version",
+        "command_id",
+        "command_type",
+        "target_seed_id",
+        "execution_deadline_ms",
+        "issued_at",
+        "issued_by",
+        "seed_operation",
+        "optimizer_adjustment",
+        "circuit_breaker",
+        "rollback_payload",
+        "annotations",
+    )
+
     class AnnotationsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -441,6 +572,7 @@ class AdaptationCommand(_message.Message):
         key: str
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+
     VERSION_FIELD_NUMBER: _ClassVar[int]
     COMMAND_ID_FIELD_NUMBER: _ClassVar[int]
     COMMAND_TYPE_FIELD_NUMBER: _ClassVar[int]
@@ -465,7 +597,21 @@ class AdaptationCommand(_message.Message):
     circuit_breaker: CommandCircuitBreaker
     rollback_payload: _struct_pb2.Struct
     annotations: _containers.ScalarMap[str, str]
-    def __init__(self, version: _Optional[int] = ..., command_id: _Optional[str] = ..., command_type: _Optional[_Union[CommandType, str]] = ..., target_seed_id: _Optional[str] = ..., execution_deadline_ms: _Optional[int] = ..., issued_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., issued_by: _Optional[str] = ..., seed_operation: _Optional[_Union[CommandSeedOperation, _Mapping]] = ..., optimizer_adjustment: _Optional[_Union[CommandOptimizerAdjustment, _Mapping]] = ..., circuit_breaker: _Optional[_Union[CommandCircuitBreaker, _Mapping]] = ..., rollback_payload: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., annotations: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    def __init__(
+        self,
+        version: _Optional[int] = ...,
+        command_id: _Optional[str] = ...,
+        command_type: _Optional[_Union[CommandType, str]] = ...,
+        target_seed_id: _Optional[str] = ...,
+        execution_deadline_ms: _Optional[int] = ...,
+        issued_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...,
+        issued_by: _Optional[str] = ...,
+        seed_operation: _Optional[_Union[CommandSeedOperation, _Mapping]] = ...,
+        optimizer_adjustment: _Optional[_Union[CommandOptimizerAdjustment, _Mapping]] = ...,
+        circuit_breaker: _Optional[_Union[CommandCircuitBreaker, _Mapping]] = ...,
+        rollback_payload: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ...,
+        annotations: _Optional[_Mapping[str, str]] = ...,
+    ) -> None: ...
 
 class KernelPrefetchRequest(_message.Message):
     __slots__ = ("request_id", "blueprint_id", "training_run_id", "issued_at")
@@ -477,10 +623,24 @@ class KernelPrefetchRequest(_message.Message):
     blueprint_id: str
     training_run_id: str
     issued_at: _timestamp_pb2.Timestamp
-    def __init__(self, request_id: _Optional[str] = ..., blueprint_id: _Optional[str] = ..., training_run_id: _Optional[str] = ..., issued_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self,
+        request_id: _Optional[str] = ...,
+        blueprint_id: _Optional[str] = ...,
+        training_run_id: _Optional[str] = ...,
+        issued_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...,
+    ) -> None: ...
 
 class KernelArtifactReady(_message.Message):
-    __slots__ = ("request_id", "blueprint_id", "artifact_ref", "checksum", "guard_digest", "prewarm_p50_ms", "prewarm_p95_ms")
+    __slots__ = (
+        "request_id",
+        "blueprint_id",
+        "artifact_ref",
+        "checksum",
+        "guard_digest",
+        "prewarm_p50_ms",
+        "prewarm_p95_ms",
+    )
     REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
     BLUEPRINT_ID_FIELD_NUMBER: _ClassVar[int]
     ARTIFACT_REF_FIELD_NUMBER: _ClassVar[int]
@@ -495,7 +655,16 @@ class KernelArtifactReady(_message.Message):
     guard_digest: str
     prewarm_p50_ms: float
     prewarm_p95_ms: float
-    def __init__(self, request_id: _Optional[str] = ..., blueprint_id: _Optional[str] = ..., artifact_ref: _Optional[str] = ..., checksum: _Optional[str] = ..., guard_digest: _Optional[str] = ..., prewarm_p50_ms: _Optional[float] = ..., prewarm_p95_ms: _Optional[float] = ...) -> None: ...
+    def __init__(
+        self,
+        request_id: _Optional[str] = ...,
+        blueprint_id: _Optional[str] = ...,
+        artifact_ref: _Optional[str] = ...,
+        checksum: _Optional[str] = ...,
+        guard_digest: _Optional[str] = ...,
+        prewarm_p50_ms: _Optional[float] = ...,
+        prewarm_p95_ms: _Optional[float] = ...,
+    ) -> None: ...
 
 class KernelArtifactError(_message.Message):
     __slots__ = ("request_id", "blueprint_id", "reason")
@@ -505,10 +674,22 @@ class KernelArtifactError(_message.Message):
     request_id: str
     blueprint_id: str
     reason: str
-    def __init__(self, request_id: _Optional[str] = ..., blueprint_id: _Optional[str] = ..., reason: _Optional[str] = ...) -> None: ...
+    def __init__(
+        self,
+        request_id: _Optional[str] = ...,
+        blueprint_id: _Optional[str] = ...,
+        reason: _Optional[str] = ...,
+    ) -> None: ...
 
 class KernelCatalogUpdate(_message.Message):
-    __slots__ = ("blueprint_id", "artifact_ref", "checksum", "guard_digest", "compile_ms", "prewarm_ms")
+    __slots__ = (
+        "blueprint_id",
+        "artifact_ref",
+        "checksum",
+        "guard_digest",
+        "compile_ms",
+        "prewarm_ms",
+    )
     BLUEPRINT_ID_FIELD_NUMBER: _ClassVar[int]
     ARTIFACT_REF_FIELD_NUMBER: _ClassVar[int]
     CHECKSUM_FIELD_NUMBER: _ClassVar[int]
@@ -521,7 +702,15 @@ class KernelCatalogUpdate(_message.Message):
     guard_digest: str
     compile_ms: float
     prewarm_ms: float
-    def __init__(self, blueprint_id: _Optional[str] = ..., artifact_ref: _Optional[str] = ..., checksum: _Optional[str] = ..., guard_digest: _Optional[str] = ..., compile_ms: _Optional[float] = ..., prewarm_ms: _Optional[float] = ...) -> None: ...
+    def __init__(
+        self,
+        blueprint_id: _Optional[str] = ...,
+        artifact_ref: _Optional[str] = ...,
+        checksum: _Optional[str] = ...,
+        guard_digest: _Optional[str] = ...,
+        compile_ms: _Optional[float] = ...,
+        prewarm_ms: _Optional[float] = ...,
+    ) -> None: ...
 
 class MitigationAction(_message.Message):
     __slots__ = ("action_type", "rationale")
@@ -529,10 +718,27 @@ class MitigationAction(_message.Message):
     RATIONALE_FIELD_NUMBER: _ClassVar[int]
     action_type: str
     rationale: str
-    def __init__(self, action_type: _Optional[str] = ..., rationale: _Optional[str] = ...) -> None: ...
+    def __init__(
+        self, action_type: _Optional[str] = ..., rationale: _Optional[str] = ...
+    ) -> None: ...
 
 class FieldReport(_message.Message):
-    __slots__ = ("version", "report_id", "command_id", "training_run_id", "seed_id", "blueprint_id", "outcome", "metrics", "observation_window_epochs", "issued_at", "tamiyo_policy_version", "follow_up_actions", "notes")
+    __slots__ = (
+        "version",
+        "report_id",
+        "command_id",
+        "training_run_id",
+        "seed_id",
+        "blueprint_id",
+        "outcome",
+        "metrics",
+        "observation_window_epochs",
+        "issued_at",
+        "tamiyo_policy_version",
+        "follow_up_actions",
+        "notes",
+    )
+
     class MetricsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -540,6 +746,7 @@ class FieldReport(_message.Message):
         key: str
         value: float
         def __init__(self, key: _Optional[str] = ..., value: _Optional[float] = ...) -> None: ...
+
     VERSION_FIELD_NUMBER: _ClassVar[int]
     REPORT_ID_FIELD_NUMBER: _ClassVar[int]
     COMMAND_ID_FIELD_NUMBER: _ClassVar[int]
@@ -566,7 +773,22 @@ class FieldReport(_message.Message):
     tamiyo_policy_version: str
     follow_up_actions: _containers.RepeatedCompositeFieldContainer[MitigationAction]
     notes: str
-    def __init__(self, version: _Optional[int] = ..., report_id: _Optional[str] = ..., command_id: _Optional[str] = ..., training_run_id: _Optional[str] = ..., seed_id: _Optional[str] = ..., blueprint_id: _Optional[str] = ..., outcome: _Optional[_Union[FieldReportOutcome, str]] = ..., metrics: _Optional[_Mapping[str, float]] = ..., observation_window_epochs: _Optional[int] = ..., issued_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., tamiyo_policy_version: _Optional[str] = ..., follow_up_actions: _Optional[_Iterable[_Union[MitigationAction, _Mapping]]] = ..., notes: _Optional[str] = ...) -> None: ...
+    def __init__(
+        self,
+        version: _Optional[int] = ...,
+        report_id: _Optional[str] = ...,
+        command_id: _Optional[str] = ...,
+        training_run_id: _Optional[str] = ...,
+        seed_id: _Optional[str] = ...,
+        blueprint_id: _Optional[str] = ...,
+        outcome: _Optional[_Union[FieldReportOutcome, str]] = ...,
+        metrics: _Optional[_Mapping[str, float]] = ...,
+        observation_window_epochs: _Optional[int] = ...,
+        issued_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...,
+        tamiyo_policy_version: _Optional[str] = ...,
+        follow_up_actions: _Optional[_Iterable[_Union[MitigationAction, _Mapping]]] = ...,
+        notes: _Optional[str] = ...,
+    ) -> None: ...
 
 class BlueprintParameterBounds(_message.Message):
     __slots__ = ("min_value", "max_value")
@@ -574,17 +796,35 @@ class BlueprintParameterBounds(_message.Message):
     MAX_VALUE_FIELD_NUMBER: _ClassVar[int]
     min_value: float
     max_value: float
-    def __init__(self, min_value: _Optional[float] = ..., max_value: _Optional[float] = ...) -> None: ...
+    def __init__(
+        self, min_value: _Optional[float] = ..., max_value: _Optional[float] = ...
+    ) -> None: ...
 
 class BlueprintDescriptor(_message.Message):
-    __slots__ = ("blueprint_id", "name", "tier", "allowed_parameters", "risk", "stage", "quarantine_only", "approval_required", "description")
+    __slots__ = (
+        "blueprint_id",
+        "name",
+        "tier",
+        "allowed_parameters",
+        "risk",
+        "stage",
+        "quarantine_only",
+        "approval_required",
+        "description",
+    )
+
     class AllowedParametersEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
         VALUE_FIELD_NUMBER: _ClassVar[int]
         key: str
         value: BlueprintParameterBounds
-        def __init__(self, key: _Optional[str] = ..., value: _Optional[_Union[BlueprintParameterBounds, _Mapping]] = ...) -> None: ...
+        def __init__(
+            self,
+            key: _Optional[str] = ...,
+            value: _Optional[_Union[BlueprintParameterBounds, _Mapping]] = ...,
+        ) -> None: ...
+
     BLUEPRINT_ID_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     TIER_FIELD_NUMBER: _ClassVar[int]
@@ -603,10 +843,22 @@ class BlueprintDescriptor(_message.Message):
     quarantine_only: bool
     approval_required: bool
     description: str
-    def __init__(self, blueprint_id: _Optional[str] = ..., name: _Optional[str] = ..., tier: _Optional[_Union[BlueprintTier, str]] = ..., allowed_parameters: _Optional[_Mapping[str, BlueprintParameterBounds]] = ..., risk: _Optional[float] = ..., stage: _Optional[int] = ..., quarantine_only: bool = ..., approval_required: bool = ..., description: _Optional[str] = ...) -> None: ...
+    def __init__(
+        self,
+        blueprint_id: _Optional[str] = ...,
+        name: _Optional[str] = ...,
+        tier: _Optional[_Union[BlueprintTier, str]] = ...,
+        allowed_parameters: _Optional[_Mapping[str, BlueprintParameterBounds]] = ...,
+        risk: _Optional[float] = ...,
+        stage: _Optional[int] = ...,
+        quarantine_only: bool = ...,
+        approval_required: bool = ...,
+        description: _Optional[str] = ...,
+    ) -> None: ...
 
 class BusEnvelope(_message.Message):
     __slots__ = ("message_type", "payload", "attributes")
+
     class AttributesEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -614,16 +866,29 @@ class BusEnvelope(_message.Message):
         key: str
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+
     MESSAGE_TYPE_FIELD_NUMBER: _ClassVar[int]
     PAYLOAD_FIELD_NUMBER: _ClassVar[int]
     ATTRIBUTES_FIELD_NUMBER: _ClassVar[int]
     message_type: BusMessageType
     payload: bytes
     attributes: _containers.ScalarMap[str, str]
-    def __init__(self, message_type: _Optional[_Union[BusMessageType, str]] = ..., payload: _Optional[bytes] = ..., attributes: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    def __init__(
+        self,
+        message_type: _Optional[_Union[BusMessageType, str]] = ...,
+        payload: _Optional[bytes] = ...,
+        attributes: _Optional[_Mapping[str, str]] = ...,
+    ) -> None: ...
 
 class PolicyUpdate(_message.Message):
-    __slots__ = ("version", "policy_id", "training_run_id", "issued_at", "tamiyo_policy_version", "payload")
+    __slots__ = (
+        "version",
+        "policy_id",
+        "training_run_id",
+        "issued_at",
+        "tamiyo_policy_version",
+        "payload",
+    )
     VERSION_FIELD_NUMBER: _ClassVar[int]
     POLICY_ID_FIELD_NUMBER: _ClassVar[int]
     TRAINING_RUN_ID_FIELD_NUMBER: _ClassVar[int]
@@ -636,10 +901,19 @@ class PolicyUpdate(_message.Message):
     issued_at: _timestamp_pb2.Timestamp
     tamiyo_policy_version: str
     payload: bytes
-    def __init__(self, version: _Optional[int] = ..., policy_id: _Optional[str] = ..., training_run_id: _Optional[str] = ..., issued_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., tamiyo_policy_version: _Optional[str] = ..., payload: _Optional[bytes] = ...) -> None: ...
+    def __init__(
+        self,
+        version: _Optional[int] = ...,
+        policy_id: _Optional[str] = ...,
+        training_run_id: _Optional[str] = ...,
+        issued_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...,
+        tamiyo_policy_version: _Optional[str] = ...,
+        payload: _Optional[bytes] = ...,
+    ) -> None: ...
 
 class MetricPoint(_message.Message):
     __slots__ = ("name", "value", "unit", "attributes")
+
     class AttributesEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -647,6 +921,7 @@ class MetricPoint(_message.Message):
         key: str
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+
     NAME_FIELD_NUMBER: _ClassVar[int]
     VALUE_FIELD_NUMBER: _ClassVar[int]
     UNIT_FIELD_NUMBER: _ClassVar[int]
@@ -655,10 +930,17 @@ class MetricPoint(_message.Message):
     value: float
     unit: str
     attributes: _containers.ScalarMap[str, str]
-    def __init__(self, name: _Optional[str] = ..., value: _Optional[float] = ..., unit: _Optional[str] = ..., attributes: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    def __init__(
+        self,
+        name: _Optional[str] = ...,
+        value: _Optional[float] = ...,
+        unit: _Optional[str] = ...,
+        attributes: _Optional[_Mapping[str, str]] = ...,
+    ) -> None: ...
 
 class TelemetryEvent(_message.Message):
     __slots__ = ("event_id", "description", "level", "attributes")
+
     class AttributesEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -666,6 +948,7 @@ class TelemetryEvent(_message.Message):
         key: str
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+
     EVENT_ID_FIELD_NUMBER: _ClassVar[int]
     DESCRIPTION_FIELD_NUMBER: _ClassVar[int]
     LEVEL_FIELD_NUMBER: _ClassVar[int]
@@ -674,10 +957,17 @@ class TelemetryEvent(_message.Message):
     description: str
     level: TelemetryLevel
     attributes: _containers.ScalarMap[str, str]
-    def __init__(self, event_id: _Optional[str] = ..., description: _Optional[str] = ..., level: _Optional[_Union[TelemetryLevel, str]] = ..., attributes: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    def __init__(
+        self,
+        event_id: _Optional[str] = ...,
+        description: _Optional[str] = ...,
+        level: _Optional[_Union[TelemetryLevel, str]] = ...,
+        attributes: _Optional[_Mapping[str, str]] = ...,
+    ) -> None: ...
 
 class TraceSpan(_message.Message):
     __slots__ = ("span_id", "parent_span_id", "name", "start_time", "end_time", "attributes")
+
     class AttributesEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -685,6 +975,7 @@ class TraceSpan(_message.Message):
         key: str
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+
     SPAN_ID_FIELD_NUMBER: _ClassVar[int]
     PARENT_SPAN_ID_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
@@ -697,10 +988,19 @@ class TraceSpan(_message.Message):
     start_time: _timestamp_pb2.Timestamp
     end_time: _timestamp_pb2.Timestamp
     attributes: _containers.ScalarMap[str, str]
-    def __init__(self, span_id: _Optional[str] = ..., parent_span_id: _Optional[str] = ..., name: _Optional[str] = ..., start_time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., end_time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., attributes: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    def __init__(
+        self,
+        span_id: _Optional[str] = ...,
+        parent_span_id: _Optional[str] = ...,
+        name: _Optional[str] = ...,
+        start_time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...,
+        end_time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...,
+        attributes: _Optional[_Mapping[str, str]] = ...,
+    ) -> None: ...
 
 class SystemHealth(_message.Message):
     __slots__ = ("status", "summary", "indicators")
+
     class IndicatorsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -708,16 +1008,31 @@ class SystemHealth(_message.Message):
         key: str
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+
     STATUS_FIELD_NUMBER: _ClassVar[int]
     SUMMARY_FIELD_NUMBER: _ClassVar[int]
     INDICATORS_FIELD_NUMBER: _ClassVar[int]
     status: HealthStatus
     summary: str
     indicators: _containers.ScalarMap[str, str]
-    def __init__(self, status: _Optional[_Union[HealthStatus, str]] = ..., summary: _Optional[str] = ..., indicators: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    def __init__(
+        self,
+        status: _Optional[_Union[HealthStatus, str]] = ...,
+        summary: _Optional[str] = ...,
+        indicators: _Optional[_Mapping[str, str]] = ...,
+    ) -> None: ...
 
 class TelemetryPacket(_message.Message):
-    __slots__ = ("packet_id", "timestamp", "source_subsystem", "level", "metrics", "events", "spans", "system_health")
+    __slots__ = (
+        "packet_id",
+        "timestamp",
+        "source_subsystem",
+        "level",
+        "metrics",
+        "events",
+        "spans",
+        "system_health",
+    )
     PACKET_ID_FIELD_NUMBER: _ClassVar[int]
     TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
     SOURCE_SUBSYSTEM_FIELD_NUMBER: _ClassVar[int]
@@ -734,10 +1049,36 @@ class TelemetryPacket(_message.Message):
     events: _containers.RepeatedCompositeFieldContainer[TelemetryEvent]
     spans: _containers.RepeatedCompositeFieldContainer[TraceSpan]
     system_health: SystemHealth
-    def __init__(self, packet_id: _Optional[str] = ..., timestamp: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., source_subsystem: _Optional[str] = ..., level: _Optional[_Union[TelemetryLevel, str]] = ..., metrics: _Optional[_Iterable[_Union[MetricPoint, _Mapping]]] = ..., events: _Optional[_Iterable[_Union[TelemetryEvent, _Mapping]]] = ..., spans: _Optional[_Iterable[_Union[TraceSpan, _Mapping]]] = ..., system_health: _Optional[_Union[SystemHealth, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self,
+        packet_id: _Optional[str] = ...,
+        timestamp: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...,
+        source_subsystem: _Optional[str] = ...,
+        level: _Optional[_Union[TelemetryLevel, str]] = ...,
+        metrics: _Optional[_Iterable[_Union[MetricPoint, _Mapping]]] = ...,
+        events: _Optional[_Iterable[_Union[TelemetryEvent, _Mapping]]] = ...,
+        spans: _Optional[_Iterable[_Union[TraceSpan, _Mapping]]] = ...,
+        system_health: _Optional[_Union[SystemHealth, _Mapping]] = ...,
+    ) -> None: ...
 
 class EventEnvelope(_message.Message):
-    __slots__ = ("event_id", "event_type", "source_subsystem", "created_at", "processing_deadline", "ttl", "payload", "payload_type", "content_encoding", "priority", "routing_keys", "correlation_id", "delivery_guarantee", "max_attempts", "current_attempt")
+    __slots__ = (
+        "event_id",
+        "event_type",
+        "source_subsystem",
+        "created_at",
+        "processing_deadline",
+        "ttl",
+        "payload",
+        "payload_type",
+        "content_encoding",
+        "priority",
+        "routing_keys",
+        "correlation_id",
+        "delivery_guarantee",
+        "max_attempts",
+        "current_attempt",
+    )
     EVENT_ID_FIELD_NUMBER: _ClassVar[int]
     EVENT_TYPE_FIELD_NUMBER: _ClassVar[int]
     SOURCE_SUBSYSTEM_FIELD_NUMBER: _ClassVar[int]
@@ -768,10 +1109,45 @@ class EventEnvelope(_message.Message):
     delivery_guarantee: DeliveryGuarantee
     max_attempts: int
     current_attempt: int
-    def __init__(self, event_id: _Optional[str] = ..., event_type: _Optional[str] = ..., source_subsystem: _Optional[str] = ..., created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., processing_deadline: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., ttl: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., payload: _Optional[bytes] = ..., payload_type: _Optional[str] = ..., content_encoding: _Optional[str] = ..., priority: _Optional[_Union[MessagePriority, str]] = ..., routing_keys: _Optional[_Iterable[str]] = ..., correlation_id: _Optional[str] = ..., delivery_guarantee: _Optional[_Union[DeliveryGuarantee, str]] = ..., max_attempts: _Optional[int] = ..., current_attempt: _Optional[int] = ...) -> None: ...
+    def __init__(
+        self,
+        event_id: _Optional[str] = ...,
+        event_type: _Optional[str] = ...,
+        source_subsystem: _Optional[str] = ...,
+        created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...,
+        processing_deadline: _Optional[
+            _Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]
+        ] = ...,
+        ttl: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ...,
+        payload: _Optional[bytes] = ...,
+        payload_type: _Optional[str] = ...,
+        content_encoding: _Optional[str] = ...,
+        priority: _Optional[_Union[MessagePriority, str]] = ...,
+        routing_keys: _Optional[_Iterable[str]] = ...,
+        correlation_id: _Optional[str] = ...,
+        delivery_guarantee: _Optional[_Union[DeliveryGuarantee, str]] = ...,
+        max_attempts: _Optional[int] = ...,
+        current_attempt: _Optional[int] = ...,
+    ) -> None: ...
 
 class PerformanceBudgets(_message.Message):
-    __slots__ = ("epoch_boundary_ms", "tamiyo_inference_ms", "systemstate_assembly_ms", "adaptation_processing_ms", "fast_rollback_ms", "full_rollback_seconds", "protobuf_serialization_us", "message_validation_us", "breaker_timeout_ms", "breaker_reset_seconds", "importance_tracking_overhead_percent", "checkpoint_analysis_minutes_min", "checkpoint_analysis_minutes_max", "structured_validation_seconds", "rollback_coordination_seconds")
+    __slots__ = (
+        "epoch_boundary_ms",
+        "tamiyo_inference_ms",
+        "systemstate_assembly_ms",
+        "adaptation_processing_ms",
+        "fast_rollback_ms",
+        "full_rollback_seconds",
+        "protobuf_serialization_us",
+        "message_validation_us",
+        "breaker_timeout_ms",
+        "breaker_reset_seconds",
+        "importance_tracking_overhead_percent",
+        "checkpoint_analysis_minutes_min",
+        "checkpoint_analysis_minutes_max",
+        "structured_validation_seconds",
+        "rollback_coordination_seconds",
+    )
     EPOCH_BOUNDARY_MS_FIELD_NUMBER: _ClassVar[int]
     TAMIYO_INFERENCE_MS_FIELD_NUMBER: _ClassVar[int]
     SYSTEMSTATE_ASSEMBLY_MS_FIELD_NUMBER: _ClassVar[int]
@@ -802,10 +1178,37 @@ class PerformanceBudgets(_message.Message):
     checkpoint_analysis_minutes_max: int
     structured_validation_seconds: int
     rollback_coordination_seconds: int
-    def __init__(self, epoch_boundary_ms: _Optional[int] = ..., tamiyo_inference_ms: _Optional[int] = ..., systemstate_assembly_ms: _Optional[int] = ..., adaptation_processing_ms: _Optional[int] = ..., fast_rollback_ms: _Optional[int] = ..., full_rollback_seconds: _Optional[int] = ..., protobuf_serialization_us: _Optional[int] = ..., message_validation_us: _Optional[int] = ..., breaker_timeout_ms: _Optional[int] = ..., breaker_reset_seconds: _Optional[int] = ..., importance_tracking_overhead_percent: _Optional[int] = ..., checkpoint_analysis_minutes_min: _Optional[int] = ..., checkpoint_analysis_minutes_max: _Optional[int] = ..., structured_validation_seconds: _Optional[int] = ..., rollback_coordination_seconds: _Optional[int] = ...) -> None: ...
+    def __init__(
+        self,
+        epoch_boundary_ms: _Optional[int] = ...,
+        tamiyo_inference_ms: _Optional[int] = ...,
+        systemstate_assembly_ms: _Optional[int] = ...,
+        adaptation_processing_ms: _Optional[int] = ...,
+        fast_rollback_ms: _Optional[int] = ...,
+        full_rollback_seconds: _Optional[int] = ...,
+        protobuf_serialization_us: _Optional[int] = ...,
+        message_validation_us: _Optional[int] = ...,
+        breaker_timeout_ms: _Optional[int] = ...,
+        breaker_reset_seconds: _Optional[int] = ...,
+        importance_tracking_overhead_percent: _Optional[int] = ...,
+        checkpoint_analysis_minutes_min: _Optional[int] = ...,
+        checkpoint_analysis_minutes_max: _Optional[int] = ...,
+        structured_validation_seconds: _Optional[int] = ...,
+        rollback_coordination_seconds: _Optional[int] = ...,
+    ) -> None: ...
 
 class MemoryBudgets(_message.Message):
-    __slots__ = ("model_percent", "optimizer_percent", "gradients_percent", "checkpoints_percent", "telemetry_percent", "morphogenetic_percent", "emergency_percent", "importance_statistics_percent", "pruning_metadata_percent")
+    __slots__ = (
+        "model_percent",
+        "optimizer_percent",
+        "gradients_percent",
+        "checkpoints_percent",
+        "telemetry_percent",
+        "morphogenetic_percent",
+        "emergency_percent",
+        "importance_statistics_percent",
+        "pruning_metadata_percent",
+    )
     MODEL_PERCENT_FIELD_NUMBER: _ClassVar[int]
     OPTIMIZER_PERCENT_FIELD_NUMBER: _ClassVar[int]
     GRADIENTS_PERCENT_FIELD_NUMBER: _ClassVar[int]
@@ -824,10 +1227,32 @@ class MemoryBudgets(_message.Message):
     emergency_percent: float
     importance_statistics_percent: float
     pruning_metadata_percent: float
-    def __init__(self, model_percent: _Optional[float] = ..., optimizer_percent: _Optional[float] = ..., gradients_percent: _Optional[float] = ..., checkpoints_percent: _Optional[float] = ..., telemetry_percent: _Optional[float] = ..., morphogenetic_percent: _Optional[float] = ..., emergency_percent: _Optional[float] = ..., importance_statistics_percent: _Optional[float] = ..., pruning_metadata_percent: _Optional[float] = ...) -> None: ...
+    def __init__(
+        self,
+        model_percent: _Optional[float] = ...,
+        optimizer_percent: _Optional[float] = ...,
+        gradients_percent: _Optional[float] = ...,
+        checkpoints_percent: _Optional[float] = ...,
+        telemetry_percent: _Optional[float] = ...,
+        morphogenetic_percent: _Optional[float] = ...,
+        emergency_percent: _Optional[float] = ...,
+        importance_statistics_percent: _Optional[float] = ...,
+        pruning_metadata_percent: _Optional[float] = ...,
+    ) -> None: ...
 
 class SystemLimits(_message.Message):
-    __slots__ = ("max_seeds_per_epoch", "max_message_size_bytes", "max_queue_depth", "max_retry_attempts", "max_pause_quota", "max_gc_allocations_per_msg", "max_pruning_ratio_percent", "max_consecutive_pruning_failures", "max_checkpoint_storage_gb", "max_importance_history_days")
+    __slots__ = (
+        "max_seeds_per_epoch",
+        "max_message_size_bytes",
+        "max_queue_depth",
+        "max_retry_attempts",
+        "max_pause_quota",
+        "max_gc_allocations_per_msg",
+        "max_pruning_ratio_percent",
+        "max_consecutive_pruning_failures",
+        "max_checkpoint_storage_gb",
+        "max_importance_history_days",
+    )
     MAX_SEEDS_PER_EPOCH_FIELD_NUMBER: _ClassVar[int]
     MAX_MESSAGE_SIZE_BYTES_FIELD_NUMBER: _ClassVar[int]
     MAX_QUEUE_DEPTH_FIELD_NUMBER: _ClassVar[int]
@@ -848,10 +1273,32 @@ class SystemLimits(_message.Message):
     max_consecutive_pruning_failures: int
     max_checkpoint_storage_gb: int
     max_importance_history_days: int
-    def __init__(self, max_seeds_per_epoch: _Optional[int] = ..., max_message_size_bytes: _Optional[int] = ..., max_queue_depth: _Optional[int] = ..., max_retry_attempts: _Optional[int] = ..., max_pause_quota: _Optional[int] = ..., max_gc_allocations_per_msg: _Optional[int] = ..., max_pruning_ratio_percent: _Optional[int] = ..., max_consecutive_pruning_failures: _Optional[int] = ..., max_checkpoint_storage_gb: _Optional[int] = ..., max_importance_history_days: _Optional[int] = ...) -> None: ...
+    def __init__(
+        self,
+        max_seeds_per_epoch: _Optional[int] = ...,
+        max_message_size_bytes: _Optional[int] = ...,
+        max_queue_depth: _Optional[int] = ...,
+        max_retry_attempts: _Optional[int] = ...,
+        max_pause_quota: _Optional[int] = ...,
+        max_gc_allocations_per_msg: _Optional[int] = ...,
+        max_pruning_ratio_percent: _Optional[int] = ...,
+        max_consecutive_pruning_failures: _Optional[int] = ...,
+        max_checkpoint_storage_gb: _Optional[int] = ...,
+        max_importance_history_days: _Optional[int] = ...,
+    ) -> None: ...
 
 class BSDS(_message.Message):
-    __slots__ = ("version", "blueprint_id", "risk_score", "hazard_band", "handling_class", "resource_profile", "recommendation", "issued_at", "provenance")
+    __slots__ = (
+        "version",
+        "blueprint_id",
+        "risk_score",
+        "hazard_band",
+        "handling_class",
+        "resource_profile",
+        "recommendation",
+        "issued_at",
+        "provenance",
+    )
     VERSION_FIELD_NUMBER: _ClassVar[int]
     BLUEPRINT_ID_FIELD_NUMBER: _ClassVar[int]
     RISK_SCORE_FIELD_NUMBER: _ClassVar[int]
@@ -870,7 +1317,18 @@ class BSDS(_message.Message):
     recommendation: str
     issued_at: _timestamp_pb2.Timestamp
     provenance: Provenance
-    def __init__(self, version: _Optional[int] = ..., blueprint_id: _Optional[str] = ..., risk_score: _Optional[float] = ..., hazard_band: _Optional[_Union[HazardBand, str]] = ..., handling_class: _Optional[_Union[HandlingClass, str]] = ..., resource_profile: _Optional[_Union[ResourceProfile, str]] = ..., recommendation: _Optional[str] = ..., issued_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., provenance: _Optional[_Union[Provenance, str]] = ...) -> None: ...
+    def __init__(
+        self,
+        version: _Optional[int] = ...,
+        blueprint_id: _Optional[str] = ...,
+        risk_score: _Optional[float] = ...,
+        hazard_band: _Optional[_Union[HazardBand, str]] = ...,
+        handling_class: _Optional[_Union[HandlingClass, str]] = ...,
+        resource_profile: _Optional[_Union[ResourceProfile, str]] = ...,
+        recommendation: _Optional[str] = ...,
+        issued_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...,
+        provenance: _Optional[_Union[Provenance, str]] = ...,
+    ) -> None: ...
 
 class BlueprintBenchmarkProfile(_message.Message):
     __slots__ = ("name", "p50_latency_ms", "p95_latency_ms", "throughput_samples_per_s")
@@ -882,7 +1340,13 @@ class BlueprintBenchmarkProfile(_message.Message):
     p50_latency_ms: float
     p95_latency_ms: float
     throughput_samples_per_s: float
-    def __init__(self, name: _Optional[str] = ..., p50_latency_ms: _Optional[float] = ..., p95_latency_ms: _Optional[float] = ..., throughput_samples_per_s: _Optional[float] = ...) -> None: ...
+    def __init__(
+        self,
+        name: _Optional[str] = ...,
+        p50_latency_ms: _Optional[float] = ...,
+        p95_latency_ms: _Optional[float] = ...,
+        throughput_samples_per_s: _Optional[float] = ...,
+    ) -> None: ...
 
 class BlueprintBenchmark(_message.Message):
     __slots__ = ("version", "blueprint_id", "profiles", "device", "torch_version")
@@ -896,7 +1360,14 @@ class BlueprintBenchmark(_message.Message):
     profiles: _containers.RepeatedCompositeFieldContainer[BlueprintBenchmarkProfile]
     device: str
     torch_version: str
-    def __init__(self, version: _Optional[int] = ..., blueprint_id: _Optional[str] = ..., profiles: _Optional[_Iterable[_Union[BlueprintBenchmarkProfile, _Mapping]]] = ..., device: _Optional[str] = ..., torch_version: _Optional[str] = ...) -> None: ...
+    def __init__(
+        self,
+        version: _Optional[int] = ...,
+        blueprint_id: _Optional[str] = ...,
+        profiles: _Optional[_Iterable[_Union[BlueprintBenchmarkProfile, _Mapping]]] = ...,
+        device: _Optional[str] = ...,
+        torch_version: _Optional[str] = ...,
+    ) -> None: ...
 
 class BSDSIssued(_message.Message):
     __slots__ = ("bsds",)
@@ -910,10 +1381,14 @@ class BSDSFailed(_message.Message):
     REASON_FIELD_NUMBER: _ClassVar[int]
     blueprint_id: str
     reason: str
-    def __init__(self, blueprint_id: _Optional[str] = ..., reason: _Optional[str] = ...) -> None: ...
+    def __init__(
+        self, blueprint_id: _Optional[str] = ..., reason: _Optional[str] = ...
+    ) -> None: ...
 
 class BenchmarkReport(_message.Message):
     __slots__ = ("benchmark",)
     BENCHMARK_FIELD_NUMBER: _ClassVar[int]
     benchmark: BlueprintBenchmark
-    def __init__(self, benchmark: _Optional[_Union[BlueprintBenchmark, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self, benchmark: _Optional[_Union[BlueprintBenchmark, _Mapping]] = ...
+    ) -> None: ...

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Callable
+from typing import Callable, Iterable
 
 import torch
 from torch import nn
@@ -51,15 +51,11 @@ class IsolationSession:
             return
         for param in _iter_parameters(self._host):
             self._prepare_projection(param)
-            handle = param.register_hook(
-                self._make_projection_hook(id(param), owner="host")
-            )
+            handle = param.register_hook(self._make_projection_hook(id(param), owner="host"))
             self._handles.append(handle)
         for param in _iter_parameters(self._seed):
             self._prepare_projection(param)
-            handle = param.register_hook(
-                self._make_projection_hook(id(param), owner="seed")
-            )
+            handle = param.register_hook(self._make_projection_hook(id(param), owner="seed"))
             self._handles.append(handle)
         self._active = True
 

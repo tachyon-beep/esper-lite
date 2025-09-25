@@ -17,7 +17,9 @@ _COUNTERS: dict[str, float] = {
 
 def inc_wal_append_errors(delta: float = 1.0) -> None:
     with _LOCK:
-        _COUNTERS["wal.append_errors_total"] = _COUNTERS.get("wal.append_errors_total", 0.0) + float(delta)
+        _COUNTERS["wal.append_errors_total"] = _COUNTERS.get(
+            "wal.append_errors_total", 0.0
+        ) + float(delta)
 
 
 def inc_integrity_failures(delta: float = 1.0) -> None:
@@ -35,4 +37,3 @@ __all__ = [
     "inc_integrity_failures",
     "snapshot",
 ]
-

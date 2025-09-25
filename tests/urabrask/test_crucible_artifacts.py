@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from esper.karn import BlueprintDescriptor, BlueprintTier
-from esper.urabrask.crucible import run_crucible_v1, CrucibleConfigV1
+from esper.urabrask.crucible import CrucibleConfigV1, run_crucible_v1
 
 
 def _descriptor(bp_id: str, *, risk: float = 0.2) -> BlueprintDescriptor:
@@ -31,7 +31,9 @@ def test_crucible_artifact_written_and_retained(tmp_path: Path, monkeypatch) -> 
 
     # Run three times to trigger retention trimming
     for i in range(3):
-        bsds, hazards = run_crucible_v1(_descriptor("bp-art", risk=0.1 * (i + 1)), config=CrucibleConfigV1())
+        bsds, hazards = run_crucible_v1(
+            _descriptor("bp-art", risk=0.1 * (i + 1)), config=CrucibleConfigV1()
+        )
         assert bsds.blueprint_id == "bp-art"
 
     bundle_dir = art_dir / "bp-art"
@@ -41,9 +43,23 @@ def test_crucible_artifact_written_and_retained(tmp_path: Path, monkeypatch) -> 
     # Validate content shape of the latest
     latest = files[-1]
     payload = json.loads(latest.read_text(encoding="utf-8"))
-    for key in ("artifact_version", "crucible_version", "blueprint_id", "bsds", "hazards", "timings", "config"):
+    for key in (
+        "artifact_version",
+        "crucible_version",
+        "blueprint_id",
+        "bsds",
+        "hazards",
+        "timings",
+        "config",
+    ):
         assert key in payload
     bsds_block = payload["bsds"]
-    for key in ("risk_score", "hazard_band", "handling_class", "resource_profile", "provenance", "issued_at"):
+    for key in (
+        "risk_score",
+        "hazard_band",
+        "handling_class",
+        "resource_profile",
+        "provenance",
+        "issued_at",
+    ):
         assert key in bsds_block
-

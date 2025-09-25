@@ -50,7 +50,9 @@ def _urza_without_benchmarks(tmp_path: Path, count: int = 3) -> UrzaLibrary:
 
 
 @pytest.mark.asyncio
-async def test_weatherlight_urabrask_bench_worker_attaches_benchmarks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_weatherlight_urabrask_bench_worker_attaches_benchmarks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # Enable bench worker with fast interval
     monkeypatch.setenv("ESPER_LEYLINE_SECRET", "test-secret")
     monkeypatch.setenv("URABRASK_BENCH_ENABLED", "true")
@@ -89,4 +91,3 @@ async def test_weatherlight_urabrask_bench_worker_attaches_benchmarks(tmp_path: 
     names = {m.name for m in pkt.metrics}
     assert "urabrask.bench.profiles_total" in names
     assert "urabrask.bench.last_processed" in names
-

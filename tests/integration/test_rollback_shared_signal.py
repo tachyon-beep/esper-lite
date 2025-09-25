@@ -2,24 +2,24 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 
 import pytest
 from fakeredis.aioredis import FakeRedis
-import os
-
 
 pytestmark = pytest.mark.integration
 
-from esper.core import EsperSettings
-from esper.oona import OonaClient, StreamConfig
-from esper.weatherlight.service_runner import WeatherlightService
-from esper.tolaria import TolariaTrainer, TrainingLoopConfig
-from esper.tolaria.rollback import SharedDeadlineSignal
-from esper.tolaria.emergency import SharedEmergencySignal
-from esper.leyline import leyline_pb2
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
+
+from esper.core import EsperSettings
+from esper.leyline import leyline_pb2
+from esper.oona import OonaClient, StreamConfig
+from esper.tolaria import TolariaTrainer, TrainingLoopConfig
+from esper.tolaria.emergency import SharedEmergencySignal
+from esper.tolaria.rollback import SharedDeadlineSignal
+from esper.weatherlight.service_runner import WeatherlightService
 
 
 class _TamiyoTimeout:
@@ -49,6 +49,7 @@ async def _start_weatherlight(
         tolaria_emergency_signal_name=emergency_signal,
     )
     svc = WeatherlightService(settings=settings)
+
     # Inject FakeRedis into OonaClient by patching build method
     async def _build(self):
         cfg = StreamConfig(
@@ -68,11 +69,13 @@ async def _start_weatherlight(
     WeatherlightService._build_oona_client = _build  # type: ignore[assignment]
     # Prevent worker registration to avoid consuming streams in tests
     WeatherlightService._register_worker = lambda self, state: None  # type: ignore[assignment]
+
     # Disable the background rollback monitor for this test to avoid races with
     # the synchronous probe helper; the probe still validates the bridge logic.
     async def _noop_monitor(self) -> None:  # type: ignore[no-redef]
         while not self._shutdown_requested.is_set():
             await asyncio.sleep(0.05)
+
     WeatherlightService._rollback_signal_loop = _noop_monitor  # type: ignore[assignment]
     WeatherlightService._emergency_stream_loop = _noop_monitor  # type: ignore[assignment]
     # Weatherlight requires a secret; provide a dummy one for tests
@@ -117,7 +120,9 @@ async def test_shared_rollback_signal_weatherlight_bridge(monkeypatch) -> None:
         dataloader=loader,
         tamiyo=_TamiyoTimeout(),
         kasmina=_KasminaStub(),
-        config=TrainingLoopConfig(max_epochs=1, gradient_accumulation_steps=1, device=torch.device("cpu")),
+        config=TrainingLoopConfig(
+            max_epochs=1, gradient_accumulation_steps=1, device=torch.device("cpu")
+        ),
         settings=settings,
     )
     trainer.set_shared_rollback_signal(signal_name)
@@ -128,10 +133,17 @@ async def test_shared_rollback_signal_weatherlight_bridge(monkeypatch) -> None:
     await asyncio.sleep(0.1)
     # Prevent fast cache hits; force slow restore via monkeypatch
     import types
+
     if getattr(trainer, "_fast_cache", None) is not None:
         trainer._fast_cache.get_nearest = types.MethodType(lambda self, step: None, trainer._fast_cache)  # type: ignore[attr-defined]
     import time
-    monkeypatch.setattr(TolariaTrainer, "rollback_to_last_checkpoint", lambda self: (time.sleep(0.05) or False), raising=True)
+
+    monkeypatch.setattr(
+        TolariaTrainer,
+        "rollback_to_last_checkpoint",
+        lambda self: (time.sleep(0.05) or False),
+        raising=True,
+    )
     # Ensure shared signal used by trainer
     sig_local = trainer.get_rollback_signal()
     assert sig_local is not None
@@ -146,6 +158,7 @@ async def test_shared_rollback_signal_weatherlight_bridge(monkeypatch) -> None:
     detection_ok = False
     telemetry_ok = False
     from esper.tolaria.rollback import SharedDeadlineSignal as _SDS  # local import for test
+
     for i in range(30):
         # Actively probe once per loop to avoid racing the monitor task; if the
         # monitor already cleared the flag, the timestamp path still increments.
@@ -166,13 +179,14 @@ async def test_shared_rollback_signal_weatherlight_bridge(monkeypatch) -> None:
         probed = await svc.probe_rollback_signal_for_test()  # type: ignore[attr-defined]
         packet = await svc._build_telemetry_packet()  # type: ignore[attr-defined]
         metrics = {m.name: m.value for m in packet.metrics}
-        if (probed or svc.get_rollback_detection_count() >= 1):  # type: ignore[attr-defined]
+        if probed or svc.get_rollback_detection_count() >= 1:  # type: ignore[attr-defined]
             detection_ok = True
         # If the shared-memory flag is confirmed set but the service counter
         # hasn't observed it (due to monitor being disabled in this test), bump
         # the counter to emulate the bridge behavior and validate telemetry.
         if shm_set and not detection_ok:
             import time as _time
+
             svc._rollback_detections_total += 1  # type: ignore[attr-defined]
             svc._rollback_last_detect_s = _time.monotonic()  # type: ignore[attr-defined]
             detection_ok = True
@@ -226,7 +240,9 @@ async def test_emergency_signal_weatherlight_bridge(monkeypatch) -> None:
         dataloader=loader,
         tamiyo=_TamiyoTimeout(),
         kasmina=_KasminaStub(),
-        config=TrainingLoopConfig(max_epochs=1, gradient_accumulation_steps=1, device=torch.device("cpu")),
+        config=TrainingLoopConfig(
+            max_epochs=1, gradient_accumulation_steps=1, device=torch.device("cpu")
+        ),
         settings=settings,
     )
     trainer.set_shared_emergency_signal(signal_name)

@@ -24,13 +24,14 @@ def _fast_dumps(obj: Any) -> str:
 def _fast_loads(payload: str) -> Any:
     return _orjson.loads(payload)
 
+
 from google.protobuf.json_format import MessageToDict, ParseDict
-from sqlalchemy import Column, MetaData, String, Table, Text, create_engine, select, delete
+from sqlalchemy import Column, MetaData, String, Table, Text, create_engine, delete, select
 from sqlalchemy.engine import Engine
 
 from esper.karn import BlueprintDescriptor, BlueprintTier
 from esper.leyline import leyline_pb2
-from esper.oona.messaging import CircuitBreaker, BreakerSnapshot
+from esper.oona.messaging import BreakerSnapshot, CircuitBreaker
 
 
 @dataclass(slots=True)
@@ -168,9 +169,13 @@ class UrzaLibrary:
                 return None
 
             with self._engine.begin() as conn:
-                result = conn.execute(
-                    select(self._table).where(self._table.c.blueprint_id == blueprint_id)
-                ).mappings().first()
+                result = (
+                    conn.execute(
+                        select(self._table).where(self._table.c.blueprint_id == blueprint_id)
+                    )
+                    .mappings()
+                    .first()
+                )
             if not result:
                 self._metrics["cache_misses"] += 1.0
                 latency_ms = (time.perf_counter() - start) * 1000.0
@@ -200,8 +205,7 @@ class UrzaLibrary:
 
     def list_all(self) -> dict[str, UrzaRecord]:
         return {
-            blueprint_id: _clone_record(record)
-            for blueprint_id, record in self._records.items()
+            blueprint_id: _clone_record(record) for blueprint_id, record in self._records.items()
         }
 
     def fetch_by_tier(self, tier: BlueprintTier) -> Iterable[UrzaRecord]:
@@ -265,9 +269,13 @@ class UrzaLibrary:
         record = self._records.get(blueprint_id)
         if record is None:
             with self._engine.begin() as conn:
-                row = conn.execute(
-                    select(self._table).where(self._table.c.blueprint_id == blueprint_id)
-                ).mappings().first()
+                row = (
+                    conn.execute(
+                        select(self._table).where(self._table.c.blueprint_id == blueprint_id)
+                    )
+                    .mappings()
+                    .first()
+                )
             if not row:
                 return False
             record = self._record_from_row(row)
@@ -313,8 +321,16 @@ class UrzaLibrary:
             prewarm_samples=samples,
             artifact_mtime=extras.get("artifact_mtime"),
             checksum=extras.get("checksum"),
-            compile_ms=float(extras.get("compile_ms", 0.0)) if extras.get("compile_ms") is not None else None,
-            prewarm_ms=float(extras.get("prewarm_ms", 0.0)) if extras.get("prewarm_ms") is not None else None,
+            compile_ms=(
+                float(extras.get("compile_ms", 0.0))
+                if extras.get("compile_ms") is not None
+                else None
+            ),
+            prewarm_ms=(
+                float(extras.get("prewarm_ms", 0.0))
+                if extras.get("prewarm_ms") is not None
+                else None
+            ),
             compile_strategy=extras.get("compile_strategy"),
             eager_fallback=bool(extras.get("eager_fallback", False)),
             guard_spec=tuple(extras.get("guard_spec", [])),
@@ -400,9 +416,7 @@ class UrzaLibrary:
                 pass
         self._metrics["evictions"] += 1.0
         with self._engine.begin() as conn:
-            conn.execute(
-                delete(self._table).where(self._table.c.blueprint_id == blueprint_id)
-            )
+            conn.execute(delete(self._table).where(self._table.c.blueprint_id == blueprint_id))
 
     def _persist_wal(
         self,
@@ -448,7 +462,9 @@ class UrzaLibrary:
             self._upsert(metadata, artifact, extras)
             self._clear_wal()
 
-    def _upsert(self, metadata: BlueprintDescriptor, destination: Path, extras: dict[str, Any]) -> None:
+    def _upsert(
+        self, metadata: BlueprintDescriptor, destination: Path, extras: dict[str, Any]
+    ) -> None:
         record = UrzaRecord(
             metadata=_clone_descriptor(metadata),
             artifact_path=destination,
@@ -456,8 +472,16 @@ class UrzaLibrary:
             prewarm_samples=tuple(float(x) for x in extras.get("prewarm_samples", [])),
             artifact_mtime=extras.get("artifact_mtime"),
             checksum=extras.get("checksum"),
-            compile_ms=float(extras.get("compile_ms", 0.0)) if extras.get("compile_ms") is not None else None,
-            prewarm_ms=float(extras.get("prewarm_ms", 0.0)) if extras.get("prewarm_ms") is not None else None,
+            compile_ms=(
+                float(extras.get("compile_ms", 0.0))
+                if extras.get("compile_ms") is not None
+                else None
+            ),
+            prewarm_ms=(
+                float(extras.get("prewarm_ms", 0.0))
+                if extras.get("prewarm_ms") is not None
+                else None
+            ),
             compile_strategy=extras.get("compile_strategy"),
             eager_fallback=bool(extras.get("eager_fallback", False)),
             guard_spec=tuple(extras.get("guard_spec", [])),

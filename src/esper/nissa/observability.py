@@ -17,8 +17,8 @@ from google.protobuf.json_format import MessageToDict
 from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
 
 from esper.leyline import leyline_pb2
-from esper.nissa.alerts import AlertEngine, AlertRouter, DEFAULT_ALERT_RULES, AlertEvent
-from esper.nissa.slo import SLOTracker, SLOStatus
+from esper.nissa.alerts import DEFAULT_ALERT_RULES, AlertEngine, AlertEvent, AlertRouter
+from esper.nissa.slo import SLOStatus, SLOTracker
 
 if TYPE_CHECKING:
     from esper.oona import OonaClient, OonaMessage
@@ -201,6 +201,7 @@ class NissaIngestor:
     def ingest_state(self, packet: Mapping[str, object]) -> None:
         """Ingest a system state packet from a mapping payload."""
         import time as _time
+
         t0 = _time.perf_counter()
 
         document = dict(packet)
@@ -211,11 +212,14 @@ class NissaIngestor:
         self._run_counter.inc()
         self._state_counter.labels(phase=phase).inc()
         self._index_document("system_state", document)
-        self._ingest_latency_ms.labels(type="system_state").observe((_time.perf_counter() - t0) * 1000.0)
+        self._ingest_latency_ms.labels(type="system_state").observe(
+            (_time.perf_counter() - t0) * 1000.0
+        )
 
     def ingest_field_report(self, report: Mapping[str, object]) -> None:
         """Ingest a field report packet from a mapping payload."""
         import time as _time
+
         t0 = _time.perf_counter()
 
         document = dict(report)
@@ -223,10 +227,13 @@ class NissaIngestor:
         outcome = _normalise_enum_label(raw_outcome, prefix="FIELD_REPORT_OUTCOME_")
         self._field_report_counter.labels(outcome=outcome).inc()
         self._index_document("field_report", document)
-        self._ingest_latency_ms.labels(type="field_report").observe((_time.perf_counter() - t0) * 1000.0)
+        self._ingest_latency_ms.labels(type="field_report").observe(
+            (_time.perf_counter() - t0) * 1000.0
+        )
 
     def ingest_telemetry(self, packet: leyline_pb2.TelemetryPacket) -> None:
         import time as _time
+
         t0 = _time.perf_counter()
         self._telemetry_counter.labels(source=packet.source_subsystem).inc()
         document = MessageToDict(packet, preserving_proto_field_name=True)
@@ -306,7 +313,9 @@ class NissaIngestor:
             self._index_document("simic_metrics", document)
         else:
             self._index_document("telemetry", document)
-        self._ingest_latency_ms.labels(type="telemetry").observe((_time.perf_counter() - t0) * 1000.0)
+        self._ingest_latency_ms.labels(type="telemetry").observe(
+            (_time.perf_counter() - t0) * 1000.0
+        )
         self._flush_bulk()
 
     def metrics(self) -> dict[str, str]:
@@ -328,6 +337,7 @@ class NissaIngestor:
         try:
             # Prefer helpers.bulk when the client supports it (real Elasticsearch)
             import time as _time
+
             t0 = _time.perf_counter()
             ok, failed = es_helpers.bulk(self._es, actions, stats_only=True)
             self._bulk_flush_latency_ms.observe((_time.perf_counter() - t0) * 1000.0)  # type: ignore[arg-type]
@@ -337,6 +347,7 @@ class NissaIngestor:
         except Exception:
             # Fallback: iterate using index() for fake/test clients
             import time as _time
+
             t0 = _time.perf_counter()
             successes = 0
             failures = 0
@@ -443,7 +454,6 @@ class NissaIngestor:
             if objective is None:
                 continue
             self._slo_tracker.record(key, objective=objective, actual=actual, timestamp=reference)
-
 
 
 __all__ = ["NissaIngestor", "NissaIngestorConfig"]

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import FastAPI, Response
 import os
+
+from fastapi import FastAPI, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from esper.core.config import EsperSettings
@@ -52,6 +53,7 @@ def create_default_app() -> FastAPI:
     """Factory compatible with uvicorn --factory, using environment settings."""
 
     settings = EsperSettings()
+
     # Read NISSA_* environment overrides
     def _get_bool(name: str, default: bool) -> bool:
         raw = os.getenv(name)

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-import time
 from typing import Callable
 
 from esper.leyline import leyline_pb2
@@ -20,7 +20,9 @@ class VerificationResult:
 class NonceLedger:
     """Tracks recently seen nonces to prevent replay."""
 
-    def __init__(self, *, ttl_seconds: float = 300.0, clock: Callable[[], float] | None = None) -> None:
+    def __init__(
+        self, *, ttl_seconds: float = 300.0, clock: Callable[[], float] | None = None
+    ) -> None:
         self._ttl = ttl_seconds
         self._clock = clock or time.monotonic
         self._entries: dict[str, float] = {}

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import pytest
 from pathlib import Path
 
+import pytest
+
 from esper.karn import BlueprintDescriptor, BlueprintTier
-from esper.urza import UrzaLibrary
-from esper.urabrask.service import produce_and_attach_bsds, produce_bsds_via_crucible
 from esper.leyline import leyline_pb2
+from esper.urabrask.service import produce_and_attach_bsds, produce_bsds_via_crucible
+from esper.urza import UrzaLibrary
 
 
 class _OonaStub:
@@ -38,7 +39,9 @@ def _descriptor(bp_id: str) -> BlueprintDescriptor:
     return d
 
 
-def test_bsds_issued_event_published_on_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_bsds_issued_event_published_on_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("URABRASK_OONA_PUBLISH_ENABLED", "true")
     root = tmp_path / "urza"
     lib = UrzaLibrary(root=root)
@@ -56,7 +59,9 @@ def test_bsds_issued_event_published_on_success(tmp_path: Path, monkeypatch: pyt
     assert kinds[-1][1].bsds.blueprint_id == "bp-oona"
 
 
-def test_bsds_failed_event_published_on_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_bsds_failed_event_published_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("URABRASK_OONA_PUBLISH_ENABLED", "true")
     root = tmp_path / "urza"
     UrzaLibrary(root=root)  # empty library
@@ -79,4 +84,3 @@ def test_oona_events_gated_by_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     stub = _OonaStub()
     _ = produce_bsds_via_crucible(lib, "bp-oona-gated", oona=stub)
     assert not stub.events
-

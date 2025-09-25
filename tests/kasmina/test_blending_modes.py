@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-import torch
 import pytest
+import torch
 
+from esper.kasmina import KasminaSeedManager, SeedContext
 from esper.kasmina.blending import (
     BlenderConfig,
-    blend_residual,
     blend_channelwise,
-    compute_confidence_gate,
     blend_confidence,
+    blend_residual,
+    compute_confidence_gate,
 )
-from esper.kasmina import KasminaSeedManager, SeedContext
 
 
 def test_residual_blend_detaches_host_branch() -> None:
@@ -41,7 +41,9 @@ def test_channelwise_blend_broadcasts_over_channels() -> None:
     out.sum().backward()
     assert host.grad is None or torch.allclose(host.grad, torch.zeros_like(host.grad))
     for c in range(3):
-        assert pytest.approx(seed.grad[:, c].mean().item(), rel=1e-5) == pytest.approx(a_eff[c].item(), rel=1e-5)
+        assert pytest.approx(seed.grad[:, c].mean().item(), rel=1e-5) == pytest.approx(
+            a_eff[c].item(), rel=1e-5
+        )
 
 
 def test_confidence_gate_blend_clamps_alpha() -> None:

@@ -16,12 +16,13 @@ Scope note (prototype):
 
 from __future__ import annotations
 
-from collections import OrderedDict
-from dataclasses import dataclass
-from time import perf_counter, monotonic_ns
-import struct
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 import io
+import struct
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
+from dataclasses import dataclass
+from time import monotonic_ns, perf_counter
 
 import torch
 

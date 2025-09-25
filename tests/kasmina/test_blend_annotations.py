@@ -8,7 +8,6 @@ from esper.kasmina import KasminaSeedManager
 from esper.leyline import leyline_pb2
 from esper.security.signing import SignatureContext, sign
 
-
 _SIGNING_CONTEXT = SignatureContext(secret=b"kasmina-test-secret")
 
 
@@ -26,7 +25,10 @@ def _make_seed_command(seed_id: str, blueprint_id: str) -> leyline_pb2.Adaptatio
 
 
 def test_confidence_mode_annotations_parsed_and_emitted() -> None:
-    mgr = KasminaSeedManager(runtime=type("R", (), {"fetch_kernel": lambda *_: (nn.Identity(), 0.0)})(), signing_context=_SIGNING_CONTEXT)
+    mgr = KasminaSeedManager(
+        runtime=type("R", (), {"fetch_kernel": lambda *_: (nn.Identity(), 0.0)})(),
+        signing_context=_SIGNING_CONTEXT,
+    )
     mgr.register_host_model(nn.Linear(1, 1))
     cmd = _make_seed_command("seed-conf", "BP-ANN")
     cmd.annotations["blend_mode"] = "CONFIDENCE"
@@ -61,7 +63,10 @@ def test_confidence_mode_annotations_parsed_and_emitted() -> None:
 
 
 def test_channel_mode_annotations_parse_alpha_vec() -> None:
-    mgr = KasminaSeedManager(runtime=type("R", (), {"fetch_kernel": lambda *_: (nn.Identity(), 0.0)})(), signing_context=_SIGNING_CONTEXT)
+    mgr = KasminaSeedManager(
+        runtime=type("R", (), {"fetch_kernel": lambda *_: (nn.Identity(), 0.0)})(),
+        signing_context=_SIGNING_CONTEXT,
+    )
     mgr.register_host_model(nn.Linear(1, 1))
     cmd = _make_seed_command("seed-chan", "BP-ANN")
     vec = [0.2, 0.6, 1.0]
@@ -88,7 +93,10 @@ def test_channel_mode_annotations_parse_alpha_vec() -> None:
 
 
 def test_unknown_mode_falls_back_to_convex() -> None:
-    mgr = KasminaSeedManager(runtime=type("R", (), {"fetch_kernel": lambda *_: (nn.Identity(), 0.0)})(), signing_context=_SIGNING_CONTEXT)
+    mgr = KasminaSeedManager(
+        runtime=type("R", (), {"fetch_kernel": lambda *_: (nn.Identity(), 0.0)})(),
+        signing_context=_SIGNING_CONTEXT,
+    )
     mgr.register_host_model(nn.Linear(1, 1))
     cmd = _make_seed_command("seed-unk", "BP-ANN")
     cmd.annotations["blend_mode"] = "FOO"
@@ -103,7 +111,10 @@ def test_unknown_mode_falls_back_to_convex() -> None:
 
 
 def test_absent_annotations_keeps_default() -> None:
-    mgr = KasminaSeedManager(runtime=type("R", (), {"fetch_kernel": lambda *_: (nn.Identity(), 0.0)})(), signing_context=_SIGNING_CONTEXT)
+    mgr = KasminaSeedManager(
+        runtime=type("R", (), {"fetch_kernel": lambda *_: (nn.Identity(), 0.0)})(),
+        signing_context=_SIGNING_CONTEXT,
+    )
     mgr.register_host_model(nn.Linear(1, 1))
     cmd = _make_seed_command("seed-none", "BP-ANN")
     # No blend annotations added — sign deterministically

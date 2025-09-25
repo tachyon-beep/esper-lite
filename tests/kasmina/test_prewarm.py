@@ -7,7 +7,6 @@ from esper.kasmina import KasminaSeedManager
 from esper.leyline import leyline_pb2
 from esper.security.signing import SignatureContext, sign
 
-
 SIGN = SignatureContext(secret=b"kasmina-prewarm-test")
 
 
@@ -48,4 +47,3 @@ def test_prewarm_emits_latency_metric_and_metadata() -> None:
     ctx = mgr.seeds().get("seed-prewarm")
     assert ctx is not None
     assert "prewarm_ms" in ctx.metadata
-

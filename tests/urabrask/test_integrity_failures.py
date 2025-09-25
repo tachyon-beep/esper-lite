@@ -3,17 +3,21 @@ from __future__ import annotations
 from pathlib import Path
 
 from esper.karn import BlueprintDescriptor, BlueprintTier
-from esper.urza import UrzaLibrary
-from esper.tamiyo import FieldReportStoreConfig, TamiyoPolicy, TamiyoService
 from esper.leyline import leyline_pb2
 from esper.security.signing import SignatureContext
+from esper.tamiyo import FieldReportStoreConfig, TamiyoPolicy, TamiyoService
 from esper.urabrask import metrics as ura_metrics
 from esper.urabrask.service import produce_and_attach_bsds
+from esper.urza import UrzaLibrary
 
 
 class _Policy(TamiyoPolicy):
-    def select_action(self, packet: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:  # pragma: no cover - stub
-        cmd = leyline_pb2.AdaptationCommand(version=1, command_type=leyline_pb2.COMMAND_SEED, target_seed_id="seed-int")
+    def select_action(
+        self, packet: leyline_pb2.SystemStatePacket
+    ) -> leyline_pb2.AdaptationCommand:  # pragma: no cover - stub
+        cmd = leyline_pb2.AdaptationCommand(
+            version=1, command_type=leyline_pb2.COMMAND_SEED, target_seed_id="seed-int"
+        )
         cmd.seed_operation.operation = leyline_pb2.SEED_OP_GERMINATE
         cmd.seed_operation.blueprint_id = packet.packet_id or "bp-int"
         return cmd
@@ -65,9 +69,13 @@ def test_tamiyo_verification_increments_integrity_failures(tmp_path: Path, monke
 
     before = ura_metrics.snapshot().get("integrity_failures", 0.0)
 
-    service = TamiyoService(policy=_Policy(), store_config=FieldReportStoreConfig(path=tmp_path / "fr.log"), urza=lib, signature_context=SignatureContext(secret=b"t"))
+    service = TamiyoService(
+        policy=_Policy(),
+        store_config=FieldReportStoreConfig(path=tmp_path / "fr.log"),
+        urza=lib,
+        signature_context=SignatureContext(secret=b"t"),
+    )
     _ = service.evaluate_epoch(_packet("bp-int"))
 
     after = ura_metrics.snapshot().get("integrity_failures", 0.0)
     assert after >= before + 1.0
-

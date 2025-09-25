@@ -11,15 +11,24 @@ import json
 import sys
 from pathlib import Path
 
-from esper.urza import UrzaLibrary
 from esper.urabrask.service import produce_bsds_via_crucible
+from esper.urza import UrzaLibrary
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Produce BSDS via Crucible and attach to Urza extras")
-    p.add_argument("--urza-root", type=Path, default=Path("./var/urza"), help="Urza root directory (catalog.db, artifacts/)")
+    p.add_argument(
+        "--urza-root",
+        type=Path,
+        default=Path("./var/urza"),
+        help="Urza root directory (catalog.db, artifacts/)",
+    )
     p.add_argument("--blueprint-id", required=True, help="Blueprint identifier to process")
-    p.add_argument("--resource-profile", choices=["cpu", "gpu", "memory_heavy", "io_heavy", "mixed"], default=None)
+    p.add_argument(
+        "--resource-profile",
+        choices=["cpu", "gpu", "memory_heavy", "io_heavy", "mixed"],
+        default=None,
+    )
     return p.parse_args(argv)
 
 
@@ -31,10 +40,28 @@ def main(argv: list[str] | None = None) -> None:
     payload = {
         "blueprint_id": bsds.blueprint_id,
         "risk_score": float(bsds.risk_score),
-        "hazard_band": bsds.HazardBand.Name(bsds.hazard_band).replace("HAZARD_BAND_", "") if hasattr(bsds, "HazardBand") else "",
-        "handling_class": bsds.HandlingClass.Name(bsds.handling_class).replace("HANDLING_CLASS_", "").lower() if hasattr(bsds, "HandlingClass") else "",
-        "resource_profile": bsds.ResourceProfile.Name(bsds.resource_profile).replace("RESOURCE_PROFILE_", "").lower() if hasattr(bsds, "ResourceProfile") else "",
-        "provenance": bsds.Provenance.Name(bsds.provenance).replace("PROVENANCE_", "") if hasattr(bsds, "Provenance") else "",
+        "hazard_band": (
+            bsds.HazardBand.Name(bsds.hazard_band).replace("HAZARD_BAND_", "")
+            if hasattr(bsds, "HazardBand")
+            else ""
+        ),
+        "handling_class": (
+            bsds.HandlingClass.Name(bsds.handling_class).replace("HANDLING_CLASS_", "").lower()
+            if hasattr(bsds, "HandlingClass")
+            else ""
+        ),
+        "resource_profile": (
+            bsds.ResourceProfile.Name(bsds.resource_profile)
+            .replace("RESOURCE_PROFILE_", "")
+            .lower()
+            if hasattr(bsds, "ResourceProfile")
+            else ""
+        ),
+        "provenance": (
+            bsds.Provenance.Name(bsds.provenance).replace("PROVENANCE_", "")
+            if hasattr(bsds, "Provenance")
+            else ""
+        ),
         "issued_at": bsds.issued_at.ToDatetime().isoformat(),
     }
     print(json.dumps(payload, indent=2))
@@ -42,4 +69,3 @@ def main(argv: list[str] | None = None) -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     main()
-

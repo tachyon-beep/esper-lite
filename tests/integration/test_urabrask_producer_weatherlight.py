@@ -50,7 +50,9 @@ def _urza_without_bsds(tmp_path: Path, count: int = 3) -> UrzaLibrary:
 
 
 @pytest.mark.asyncio
-async def test_weatherlight_urabrask_producer_attaches_bsds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_weatherlight_urabrask_producer_attaches_bsds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # Enable producer with fast interval
     monkeypatch.setenv("ESPER_LEYLINE_SECRET", "test-secret")
     monkeypatch.setenv("URABRASK_ENABLED", "true")
@@ -90,4 +92,3 @@ async def test_weatherlight_urabrask_producer_attaches_bsds(tmp_path: Path, monk
     names = {m.name for m in pkt.metrics}
     assert "urabrask.produced_total" in names
     assert "urabrask.last_processed" in names
-

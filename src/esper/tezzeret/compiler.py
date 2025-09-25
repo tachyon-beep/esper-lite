@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
-from dataclasses import dataclass, field
-import hashlib
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Literal
 
 import torch
 from torch import nn
-
 from torch.serialization import add_safe_globals
 
 from esper.karn import BlueprintDescriptor
@@ -35,9 +34,8 @@ class CompileJobConfig:
         if self.wal_path is not None:
             self.wal_path = Path(self.wal_path)
         if self.inductor_cache_dir is None:
-            env_value = (
-                os.environ.get("TEZZERET_INDUCTOR_CACHE_DIR")
-                or os.environ.get("TORCHINDUCTOR_CACHE_DIR")
+            env_value = os.environ.get("TEZZERET_INDUCTOR_CACHE_DIR") or os.environ.get(
+                "TORCHINDUCTOR_CACHE_DIR"
             )
             if env_value:
                 self.inductor_cache_dir = Path(env_value)
@@ -68,7 +66,9 @@ class CompiledBlueprint(nn.Module):
         self.compile_strategy = compile_strategy or "standard"
         self.eager_fallback = eager_fallback
 
-    def forward(self, *inputs: torch.Tensor) -> torch.Tensor:  # pragma: no cover - exercised downstream
+    def forward(
+        self, *inputs: torch.Tensor
+    ) -> torch.Tensor:  # pragma: no cover - exercised downstream
         return self._module(*inputs)
 
 
@@ -255,7 +255,9 @@ class TezzeretCompiler:
         *,
         strategy: Literal["standard", "conservative"],
     ) -> CompilationResult:
-        device = torch.device("cuda" if self._config.use_cuda and torch.cuda.is_available() else "cpu")
+        device = torch.device(
+            "cuda" if self._config.use_cuda and torch.cuda.is_available() else "cpu"
+        )
         try:
             module, example_inputs = _build_blueprint_module(metadata, params, device)
             module.eval()
@@ -370,9 +372,8 @@ class TezzeretCompiler:
     def _resolve_inductor_cache_dir(self) -> Path | None:
         if self._config.inductor_cache_dir is not None:
             return self._config.inductor_cache_dir
-        env_value = (
-            os.environ.get("TEZZERET_INDUCTOR_CACHE_DIR")
-            or os.environ.get("TORCHINDUCTOR_CACHE_DIR")
+        env_value = os.environ.get("TEZZERET_INDUCTOR_CACHE_DIR") or os.environ.get(
+            "TORCHINDUCTOR_CACHE_DIR"
         )
         return Path(env_value) if env_value else None
 

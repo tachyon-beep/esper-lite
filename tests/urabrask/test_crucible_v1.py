@@ -1,12 +1,17 @@
 from __future__ import annotations
 
-from esper.leyline import leyline_pb2
 from esper.karn import BlueprintDescriptor, BlueprintTier
-from esper.urabrask.crucible import run_crucible_v1, CrucibleConfigV1
+from esper.leyline import leyline_pb2
+from esper.urabrask.crucible import CrucibleConfigV1, run_crucible_v1
 
 
-def _descriptor(bp_id: str, *, tier: int = BlueprintTier.BLUEPRINT_TIER_SAFE, risk: float = 0.2,
-                quarantine_only: bool = False) -> BlueprintDescriptor:
+def _descriptor(
+    bp_id: str,
+    *,
+    tier: int = BlueprintTier.BLUEPRINT_TIER_SAFE,
+    risk: float = 0.2,
+    quarantine_only: bool = False,
+) -> BlueprintDescriptor:
     d = BlueprintDescriptor(
         blueprint_id=bp_id,
         name=f"name-{bp_id}",

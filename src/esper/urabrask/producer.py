@@ -7,12 +7,13 @@ via the Crucible v0. Bounded work per cycle; safe failure handling.
 from __future__ import annotations
 
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
 from typing import Mapping
 
 from esper.leyline import leyline_pb2
-from esper.urza import UrzaLibrary
 from esper.urabrask.service import produce_bsds_via_crucible
+from esper.urza import UrzaLibrary
 
 
 class UrabraskProducer:
@@ -67,7 +68,9 @@ class UrabraskProducer:
                 prov = str(bsds.get("provenance") or "").upper()
             if prov == "URABRASK":
                 continue
-            if self._only_safe and rec.metadata.tier != getattr(leyline_pb2, "BLUEPRINT_TIER_SAFE", 1):
+            if self._only_safe and rec.metadata.tier != getattr(
+                leyline_pb2, "BLUEPRINT_TIER_SAFE", 1
+            ):
                 continue
             candidates.append(rec.metadata.blueprint_id)
             if len(candidates) >= self._topn:
@@ -113,4 +116,3 @@ class UrabraskProducer:
             "last_duration_ms": float(self._last_duration_ms),
             "last_processed": float(self._last_processed),
         }
-

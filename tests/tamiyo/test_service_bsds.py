@@ -5,18 +5,19 @@ from pathlib import Path
 import pytest
 from torch import nn
 
-from esper.leyline import leyline_pb2
 from esper.karn import BlueprintDescriptor, BlueprintTier
-from esper.urza import UrzaLibrary
-from esper.tamiyo import FieldReportStoreConfig, TamiyoPolicy, TamiyoService
+from esper.leyline import leyline_pb2
 from esper.security.signing import SignatureContext
-
+from esper.tamiyo import FieldReportStoreConfig, TamiyoPolicy, TamiyoService
+from esper.urza import UrzaLibrary
 
 _SIG = SignatureContext(secret=b"tamiyo-test-secret")
 
 
 class _SeedPolicy(TamiyoPolicy):
-    def select_action(self, packet: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:  # pragma: no cover - simple stub
+    def select_action(
+        self, packet: leyline_pb2.SystemStatePacket
+    ) -> leyline_pb2.AdaptationCommand:  # pragma: no cover - simple stub
         cmd = leyline_pb2.AdaptationCommand(
             version=1,
             command_type=leyline_pb2.COMMAND_SEED,
@@ -61,7 +62,9 @@ def _service_with_urza(tmp_path: Path, bp_id: str, bsds: dict) -> TamiyoService:
 
 
 def _packet(bp_id: str) -> leyline_pb2.SystemStatePacket:
-    pkt = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-bsds", packet_id=bp_id)
+    pkt = leyline_pb2.SystemStatePacket(
+        version=1, current_epoch=1, training_run_id="run-bsds", packet_id=bp_id
+    )
     seed = pkt.seed_states.add()
     seed.seed_id = "seed-bsds"
     seed.stage = leyline_pb2.SeedLifecycleStage.SEED_STAGE_TRAINING
@@ -69,7 +72,12 @@ def _packet(bp_id: str) -> leyline_pb2.SystemStatePacket:
 
 
 def test_bsds_critical_triggers_pause_and_annotations(tmp_path: Path) -> None:
-    bsds = {"hazard_band": "CRITICAL", "risk_score": 0.7, "provenance": "URABRASK", "handling_class": "standard"}
+    bsds = {
+        "hazard_band": "CRITICAL",
+        "risk_score": 0.7,
+        "provenance": "URABRASK",
+        "handling_class": "standard",
+    }
     service = _service_with_urza(tmp_path, "bp-crit", bsds)
     cmd = service.evaluate_epoch(_packet("bp-crit"))
     assert cmd.command_type == leyline_pb2.COMMAND_PAUSE
@@ -103,13 +111,25 @@ def test_bsds_handling_quarantine_treated_critical(tmp_path: Path) -> None:
 
 
 def test_bsds_present_event_and_annotations(tmp_path: Path) -> None:
-    bsds = {"hazard_band": "MEDIUM", "risk_score": 0.42, "handling_class": "restricted", "provenance": "HEURISTIC", "resource_profile": "gpu"}
+    bsds = {
+        "hazard_band": "MEDIUM",
+        "risk_score": 0.42,
+        "handling_class": "restricted",
+        "provenance": "HEURISTIC",
+        "resource_profile": "gpu",
+    }
     service = _service_with_urza(tmp_path, "bp-present", bsds)
     cmd = service.evaluate_epoch(_packet("bp-present"))
     telemetry = service.telemetry_packets[-1]
     present = [e for e in telemetry.events if e.description == "bsds_present"]
     assert present
     assert present[0].attributes.get("provenance", "").upper() == "HEURISTIC"
-    for key in ("bsds_hazard_band", "bsds_handling_class", "bsds_resource_profile", "bsds_provenance", "bsds_risk"):
+    for key in (
+        "bsds_hazard_band",
+        "bsds_handling_class",
+        "bsds_resource_profile",
+        "bsds_provenance",
+        "bsds_risk",
+    ):
         assert key in cmd.annotations
     assert cmd.annotations["blueprint_risk"] == "0.42"

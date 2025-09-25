@@ -13,9 +13,8 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, Mapping
 
 import torch
-from torch import Tensor, nn
 import torch.nn.functional as F
-
+from torch import Tensor, nn
 from torch_geometric.nn import GATConv, HeteroConv, SAGEConv
 
 
@@ -97,8 +96,18 @@ class TamiyoGNN(nn.Module):
 
         self._gat_layers = nn.ModuleList(
             [
-                self._build_gat_layer(config.gat_hidden_dim, relations, config.attention_heads, config.edge_feature_dim),
-                self._build_gat_layer(config.gat_hidden_dim, relations, config.attention_heads, config.edge_feature_dim),
+                self._build_gat_layer(
+                    config.gat_hidden_dim,
+                    relations,
+                    config.attention_heads,
+                    config.edge_feature_dim,
+                ),
+                self._build_gat_layer(
+                    config.gat_hidden_dim,
+                    relations,
+                    config.attention_heads,
+                    config.edge_feature_dim,
+                ),
             ]
         )
 
@@ -142,7 +151,11 @@ class TamiyoGNN(nn.Module):
             if edge_attr is not None:
                 edge_attr_dict[relation] = edge_attr.to(next(iter(x_dict.values())).device)
 
-        encoded = {key: self._node_encoders[key](x) for key, x in x_dict.items() if key in self._node_encoders}
+        encoded = {
+            key: self._node_encoders[key](x)
+            for key, x in x_dict.items()
+            if key in self._node_encoders
+        }
         for layer in self._sage_layers:
             residual = {key: tensor for key, tensor in encoded.items()}
             encoded = layer(encoded, edge_index_dict)
@@ -172,7 +185,9 @@ class TamiyoGNN(nn.Module):
         if "seed" in encoded:
             outputs["seed_scores"] = self._seed_score_head(encoded["seed"]).squeeze(-1)
         if "blueprint" in encoded:
-            outputs["blueprint_scores"] = self._blueprint_score_head(encoded["blueprint"]).squeeze(-1)
+            outputs["blueprint_scores"] = self._blueprint_score_head(encoded["blueprint"]).squeeze(
+                -1
+            )
         outputs["breaker_logits"] = self._breaker_head(graph_embedding)
         return outputs
 

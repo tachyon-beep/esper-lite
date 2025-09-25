@@ -12,8 +12,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Mapping, Tuple
 
-from esper.leyline import leyline_pb2
 from esper.karn import BlueprintDescriptor, BlueprintTier
+from esper.leyline import leyline_pb2
 
 
 @dataclass(slots=True)
@@ -78,9 +78,7 @@ def _stringify_handling(handling: int) -> str:
 
 
 def _stringify_resource(profile: int) -> str:
-    return (
-        leyline_pb2.ResourceProfile.Name(profile).replace("RESOURCE_PROFILE_", "").lower()
-    )
+    return leyline_pb2.ResourceProfile.Name(profile).replace("RESOURCE_PROFILE_", "").lower()
 
 
 def compute_bsds(
@@ -135,10 +133,12 @@ def compute_bsds(
         "handling_class": _stringify_handling(bsds.handling_class),
         "resource_profile": _stringify_resource(bsds.resource_profile),
         "provenance": leyline_pb2.Provenance.Name(bsds.provenance).replace("PROVENANCE_", ""),
-        "issued_at": bsds.issued_at.ToDatetime().replace(tzinfo=UTC).isoformat().replace("+00:00", "Z"),
+        "issued_at": bsds.issued_at.ToDatetime()
+        .replace(tzinfo=UTC)
+        .isoformat()
+        .replace("+00:00", "Z"),
     }
     if bsds.recommendation:
         json_block["mitigation"] = {"recommendation": bsds.recommendation}
 
     return bsds, json_block
-

@@ -64,4 +64,3 @@ def test_run_probe_respects_grad_in_training() -> None:
 
     out = mgr.run_probe(seed_id, fn)
     assert out.requires_grad is True
-

@@ -1,24 +1,20 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
 
 import pytest
+import torch
 from google.protobuf.json_format import MessageToDict
+from torch import nn
 
-from esper.karn import (
-    BlueprintDescriptor,
-    BlueprintTier,
-)
-from esper.urza import UrzaLibrary
-from esper.urza.runtime import UrzaRuntime
+from esper.karn import BlueprintDescriptor, BlueprintTier
 from esper.leyline import leyline_pb2
 from esper.tezzeret.compiler import CompiledBlueprint
-
-import hashlib
-import torch
-from torch import nn
+from esper.urza import UrzaLibrary
+from esper.urza.runtime import UrzaRuntime
 
 
 def _metadata(blueprint_id: str, *, risk: float = 0.2, stage: int = 1) -> BlueprintDescriptor:
@@ -112,7 +108,7 @@ def test_urza_library_cache_ttl_enforces_expiry(tmp_path: Path) -> None:
     record = library.get("BPTTL")
     assert record is not None
     stored_path = record.artifact_path
-    old = (os.path.getmtime(stored_path) - 10)
+    old = os.path.getmtime(stored_path) - 10
     os.utime(stored_path, (old, old))
 
     expired = library.get("BPTTL")

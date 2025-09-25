@@ -10,10 +10,10 @@ Design: docs/prototype-delta/kasmina/blending-upgrade.md
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
-import math
 import torch
 
 
@@ -118,10 +118,17 @@ def compute_confidence_gate(seed_logits: torch.Tensor, k: float, tau: float) -> 
 
     if seed_logits.dim() < 2:
         # Degenerate case: treat as single-class outputs; gate=1
-        return torch.ones((seed_logits.shape[0] if seed_logits.dim() > 0 else 1,), device=seed_logits.device, dtype=seed_logits.dtype)
+        return torch.ones(
+            (seed_logits.shape[0] if seed_logits.dim() > 0 else 1,),
+            device=seed_logits.device,
+            dtype=seed_logits.dtype,
+        )
     top2 = torch.topk(seed_logits, k=2, dim=1).values  # [N, 2]
     margin = top2[:, 0] - top2[:, 1]  # [N]
-    return torch.sigmoid(torch.as_tensor(k, device=margin.device, dtype=margin.dtype) * (margin - torch.as_tensor(tau, device=margin.device, dtype=margin.dtype)))
+    return torch.sigmoid(
+        torch.as_tensor(k, device=margin.device, dtype=margin.dtype)
+        * (margin - torch.as_tensor(tau, device=margin.device, dtype=margin.dtype))
+    )
 
 
 def blend_confidence(
@@ -166,7 +173,9 @@ def blend_with_config(
         try:
             gate = compute_confidence_gate(seed, config.gate_k, config.gate_tau)
         except Exception:
-            gate = torch.ones((seed.shape[0] if seed.dim() > 0 else 1,), device=seed.device, dtype=seed.dtype)
+            gate = torch.ones(
+                (seed.shape[0] if seed.dim() > 0 else 1,), device=seed.device, dtype=seed.dtype
+            )
         return blend_confidence(
             host,
             seed,

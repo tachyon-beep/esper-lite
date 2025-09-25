@@ -6,8 +6,8 @@ production controls described in the Kasmina detailed design.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import time
+from dataclasses import dataclass
 from typing import Callable
 
 from esper.leyline import leyline_pb2

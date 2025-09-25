@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from esper.karn import BlueprintDescriptor, BlueprintTier
 from esper.leyline import leyline_pb2
 from esper.nissa import NissaIngestor, NissaIngestorConfig
 from esper.urza import UrzaLibrary
-from esper.karn import BlueprintDescriptor, BlueprintTier
 
 
 class _ElasticsearchStub:
@@ -73,4 +73,3 @@ def test_nissa_enriches_es_doc_with_bsds_hazards(tmp_path: Path) -> None:
     assert isinstance(hazards, dict)
     assert hazards.get("grad_instability") == "explode"
     assert hazards.get("precision") == "sensitive"
-

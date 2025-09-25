@@ -8,13 +8,18 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from esper.tolaria import TolariaTrainer, TrainingLoopConfig
 from esper.leyline import leyline_pb2
+from esper.tolaria import TolariaTrainer, TrainingLoopConfig
 
 
 class _TamiyoStub:
     def evaluate_epoch(self, state: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
-        cmd = leyline_pb2.AdaptationCommand(version=1, command_id=f"cmd-{state.current_epoch}", command_type=leyline_pb2.COMMAND_SEED, target_seed_id="seed-1")
+        cmd = leyline_pb2.AdaptationCommand(
+            version=1,
+            command_id=f"cmd-{state.current_epoch}",
+            command_type=leyline_pb2.COMMAND_SEED,
+            target_seed_id="seed-1",
+        )
         cmd.seed_operation.operation = leyline_pb2.SEED_OP_GERMINATE
         return cmd
 
@@ -42,13 +47,17 @@ def _trainer(tmp_path: Path) -> TolariaTrainer:
         dataloader=loader,
         tamiyo=_TamiyoStub(),
         kasmina=_KasminaStub(),
-        config=TrainingLoopConfig(max_epochs=1, gradient_accumulation_steps=1, device=torch.device("cpu")),
+        config=TrainingLoopConfig(
+            max_epochs=1, gradient_accumulation_steps=1, device=torch.device("cpu")
+        ),
     )
+
     # Redirect checkpoint root
     def _root(self):
         root = tmp_path / "tolaria"
         (root / "checkpoints").mkdir(parents=True, exist_ok=True)
         return root
+
     t._checkpoint_root = _root.__get__(t, TolariaTrainer)  # type: ignore[attr-defined]
     return t
 
@@ -68,6 +77,7 @@ def test_corrupted_checkpoint_detected(tmp_path) -> None:
     wal = root / "wal.json"
     data = wal.read_text(encoding="utf-8")
     import json
+
     info = json.loads(data)
     ckpt = Path(info["last_checkpoint"])  # type: ignore[index]
     # Corrupt the checkpoint by appending bytes
@@ -76,4 +86,3 @@ def test_corrupted_checkpoint_detected(tmp_path) -> None:
         fh.flush()
         os.fsync(fh.fileno())
     assert t.rollback_to_last_checkpoint() is False
-

@@ -7,16 +7,15 @@ Implements the WAL-backed storage and retention policy described in
 
 from __future__ import annotations
 
+import json
 import os
 import struct
 from dataclasses import dataclass
-import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Iterable
 
 from esper.leyline import leyline_pb2
-
 
 _LENGTH_STRUCT = struct.Struct("<I")
 

@@ -66,10 +66,7 @@ async def test_oona_docker_compose_redis_round_trip() -> None:
 
     await client.consume(handler, stream="oona.int.emergency")
     assert collected
-    assert (
-        collected[0].message_type
-        == leyline_pb2.BusMessageType.BUS_MESSAGE_TYPE_SYSTEM_STATE
-    )
+    assert collected[0].message_type == leyline_pb2.BusMessageType.BUS_MESSAGE_TYPE_SYSTEM_STATE
 
     await client.close()
     await redis.delete(config.normal_stream)

@@ -4,10 +4,10 @@ import json
 from pathlib import Path
 
 from esper.karn import BlueprintDescriptor, BlueprintTier
-from esper.urza import UrzaLibrary
-from esper.urabrask.service import produce_and_attach_bsds
 from esper.security.signing import SignatureContext
+from esper.urabrask.service import produce_and_attach_bsds
 from esper.urabrask.wal import verify_bsds_signature_in_extras
+from esper.urza import UrzaLibrary
 
 
 def _descriptor(bp_id: str, *, risk: float = 0.4) -> BlueprintDescriptor:
@@ -73,4 +73,3 @@ def test_bsds_signing_and_wal_append(tmp_path: Path, monkeypatch) -> None:
     bsds["hazard_band"] = "LOW" if str(bsds.get("hazard_band", "")).upper() != "LOW" else "HIGH"
     extras["bsds"] = bsds
     assert not verify_bsds_signature_in_extras(extras, ctx=ctx)
-

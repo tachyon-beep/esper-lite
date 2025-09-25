@@ -10,10 +10,10 @@ from torch import nn
 from esper.karn import BlueprintDescriptor, BlueprintTier, KarnCatalog
 from esper.kasmina import KasminaLifecycle, KasminaSeedManager
 from esper.leyline import leyline_pb2
+from esper.security.signing import SignatureContext, sign
 from esper.tezzeret import CompileJobConfig, TezzeretCompiler
 from esper.urza import UrzaLibrary, UrzaRuntime
 from esper.urza.pipeline import BlueprintPipeline, BlueprintRequest
-from esper.security.signing import SignatureContext, sign
 
 
 class _RuntimeStub:
@@ -154,6 +154,8 @@ def test_cull_path_returns_to_dormant() -> None:
     lc.transition(leyline_pb2.SEED_STAGE_RESETTING)
     lc.transition(leyline_pb2.SEED_STAGE_DORMANT)
     assert lc.state == leyline_pb2.SEED_STAGE_DORMANT
+
+
 _SIGNING_CONTEXT = SignatureContext(secret=b"kasmina-test-secret")
 
 

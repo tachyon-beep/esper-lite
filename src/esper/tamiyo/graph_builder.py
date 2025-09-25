@@ -23,7 +23,6 @@ from torch_geometric.data import HeteroData
 from esper.leyline import leyline_pb2
 from esper.simic.registry import EmbeddingRegistry
 
-
 _DEFAULT_NORMALISATION: Mapping[str, tuple[float, float]] = {
     "loss": (0.8, 0.3),
     "validation_loss": (0.8, 0.3),
@@ -146,7 +145,9 @@ class TamiyoGraphBuilderConfig:
     max_parameters: int = 2
     seed_registry: EmbeddingRegistry | None = None
     blueprint_registry: EmbeddingRegistry | None = None
-    blueprint_metadata_provider: Callable[[str], Mapping[str, float | str | bool | int]] | None = None
+    blueprint_metadata_provider: Callable[[str], Mapping[str, float | str | bool | int]] | None = (
+        None
+    )
 
 
 class TamiyoGraphBuilder:
@@ -163,7 +164,9 @@ class TamiyoGraphBuilder:
         self._hazard_class_registry = config.hazard_class_registry
         self._metadata_provider = config.blueprint_metadata_provider
 
-    def _lookup_blueprint_metadata(self, blueprint_id: str) -> Mapping[str, float | str | bool | int]:
+    def _lookup_blueprint_metadata(
+        self, blueprint_id: str
+    ) -> Mapping[str, float | str | bool | int]:
         if not blueprint_id or self._metadata_provider is None:
             return {}
         try:
@@ -192,9 +195,15 @@ class TamiyoGraphBuilder:
             graph_meta,
             coverage,
         )
-        layer_features, layer_ids = self._build_layer_features(packet, metadata, graph_meta, coverage)
-        activation_features, activation_ids = self._build_activation_features(packet, metadata, graph_meta, coverage)
-        parameter_features, parameter_ids = self._build_parameter_features(packet, metadata, graph_meta, coverage)
+        layer_features, layer_ids = self._build_layer_features(
+            packet, metadata, graph_meta, coverage
+        )
+        activation_features, activation_ids = self._build_activation_features(
+            packet, metadata, graph_meta, coverage
+        )
+        parameter_features, parameter_ids = self._build_parameter_features(
+            packet, metadata, graph_meta, coverage
+        )
 
         data["global"].x = global_features
         data["seed"].x = seed_features
@@ -230,6 +239,7 @@ class TamiyoGraphBuilder:
         stats = coverage.stats()
         # Accumulate present/total for weighted ratios
         present_totals: dict[str, list[int]] = {}
+
         def _accumulate(group_key: str, present: int, total: int) -> None:
             present_totals.setdefault(group_key, [0, 0])
             pt = present_totals[group_key]
@@ -311,7 +321,9 @@ class TamiyoGraphBuilder:
         feats[0, idx] = self._normalizer.normalize("global_epoch", float(packet.current_epoch))
         coverage.observe("global.epoch", True)
         idx += 1
-        feats[0, idx] = self._normalizer.normalize("global_step", math.log1p(float(packet.global_step)))
+        feats[0, idx] = self._normalizer.normalize(
+            "global_step", math.log1p(float(packet.global_step))
+        )
         coverage.observe("global.step", True)
         idx += 1
         feats[0, idx] = math.tanh(float(len(packet.seed_states)))
@@ -449,8 +461,12 @@ class TamiyoGraphBuilder:
                 coverage.observe("seed.embedding", True)
             cursor += 1
             # Blend allowance: prefer explicit seed metric if provided; else stage or blueprint capability
-            blend_allowed = 1.0 if float(metrics_map.get("blend_allowed", 0.0)) > 0.0 else (
-                1.0 if seed.stage >= leyline_pb2.SeedLifecycleStage.SEED_STAGE_BLENDING else 0.0
+            blend_allowed = (
+                1.0
+                if float(metrics_map.get("blend_allowed", 0.0)) > 0.0
+                else (
+                    1.0 if seed.stage >= leyline_pb2.SeedLifecycleStage.SEED_STAGE_BLENDING else 0.0
+                )
             )
             if allowed_methods:
                 blend_allowed = 1.0
@@ -501,12 +517,22 @@ class TamiyoGraphBuilder:
                 features[0, col] = value
 
         val_present = bool(packet.validation_loss)
-        _set(1, self._normalizer.normalize("validation_loss", float(packet.validation_loss) if val_present else 0.0))
+        _set(
+            1,
+            self._normalizer.normalize(
+                "validation_loss", float(packet.validation_loss) if val_present else 0.0
+            ),
+        )
         _set(2, 1.0 if val_present else 0.0)
         coverage.observe("blueprint.validation_loss", val_present)
 
         train_present = bool(packet.training_loss)
-        _set(3, self._normalizer.normalize("training_loss", float(packet.training_loss) if train_present else 0.0))
+        _set(
+            3,
+            self._normalizer.normalize(
+                "training_loss", float(packet.training_loss) if train_present else 0.0
+            ),
+        )
         _set(4, 1.0 if train_present else 0.0)
         coverage.observe("blueprint.training_loss", train_present)
         risk = float(metadata.get("risk", 0.0) or 0.0)
@@ -581,7 +607,9 @@ class TamiyoGraphBuilder:
             weight_norm = float(descriptor.get("weight_norm", 0.0) or 0.0)
             gradient_norm = float(descriptor.get("gradient_norm", 0.0) or 0.0)
             layer_type = str(descriptor.get("type", "unknown"))
-            activation_type = str(descriptor.get("activation", descriptor.get("activation_type", "unknown")))
+            activation_type = str(
+                descriptor.get("activation", descriptor.get("activation_type", "unknown"))
+            )
             if dim > 0:
                 features[idx, 0] = depth_norm
                 coverage.observe("layer.depth", True)
@@ -593,7 +621,9 @@ class TamiyoGraphBuilder:
             if dim > 3:
                 features[idx, 3] = 1.0 if descriptor.get("latency_ms") is not None else 0.0
             if dim > 4:
-                features[idx, 4] = self._normalizer.normalize("layer_parameter_count", math.log1p(param_count))
+                features[idx, 4] = self._normalizer.normalize(
+                    "layer_parameter_count", math.log1p(param_count)
+                )
                 coverage.observe("layer.param_count", param_count > 0)
             if dim > 5:
                 features[idx, 5] = 1.0 if descriptor.get("parameter_count") is not None else 0.0
@@ -615,7 +645,8 @@ class TamiyoGraphBuilder:
                     features[idx, 8] = self._encode_category(activation_type)
                 coverage.observe(
                     "layer.activation",
-                    descriptor.get("activation") is not None or descriptor.get("activation_type") is not None,
+                    descriptor.get("activation") is not None
+                    or descriptor.get("activation_type") is not None,
                 )
             # Optional categorical presence masks when feature dim is extended
             if dim > 12:
@@ -623,7 +654,10 @@ class TamiyoGraphBuilder:
             if dim > 13:
                 features[idx, 13] = (
                     1.0
-                    if (descriptor.get("activation") is not None or descriptor.get("activation_type") is not None)
+                    if (
+                        descriptor.get("activation") is not None
+                        or descriptor.get("activation_type") is not None
+                    )
                     else 0.0
                 )
             if dim > 9:
@@ -650,7 +684,11 @@ class TamiyoGraphBuilder:
             maybe_acts = graph_meta.get("activations")
             if isinstance(maybe_acts, list):
                 raw_activations = [entry for entry in maybe_acts if isinstance(entry, Mapping)]
-        count = min(self._cfg.max_activations, len(raw_activations)) if raw_activations else self._cfg.max_activations
+        count = (
+            min(self._cfg.max_activations, len(raw_activations))
+            if raw_activations
+            else self._cfg.max_activations
+        )
         count = max(1, count)
         dim = self._cfg.activation_feature_dim
         features = torch.zeros((count, dim), dtype=torch.float32)
@@ -677,7 +715,9 @@ class TamiyoGraphBuilder:
             if dim > 3:
                 features[idx, 3] = 1.0 if descriptor.get("saturation_rate") is not None else 0.0
             if dim > 4:
-                features[idx, 4] = self._normalizer.normalize("activation_gradient_flow", gradient_flow)
+                features[idx, 4] = self._normalizer.normalize(
+                    "activation_gradient_flow", gradient_flow
+                )
                 coverage.observe("activation.gradient_flow", bool(gradient_flow))
             if dim > 5:
                 features[idx, 5] = self._normalizer.normalize("activation_cost", math.log1p(cost))
@@ -689,7 +729,9 @@ class TamiyoGraphBuilder:
             # Optional explicit activation type presence mask when feature dim is extended
             if dim > 8:
                 features[idx, 8] = 1.0 if descriptor.get("type") is not None else 0.0
-            activation_ids.append(str(descriptor.get("activation_id", f"{packet.training_run_id or 'run'}-A{idx}")))
+            activation_ids.append(
+                str(descriptor.get("activation_id", f"{packet.training_run_id or 'run'}-A{idx}"))
+            )
         return features, activation_ids
 
     def _build_parameter_features(
@@ -704,7 +746,11 @@ class TamiyoGraphBuilder:
             maybe_parameters = graph_meta.get("parameters")
             if isinstance(maybe_parameters, list):
                 descriptors = [entry for entry in maybe_parameters if isinstance(entry, Mapping)]
-        allowed = metadata.get("allowed_parameters", {}) if isinstance(metadata.get("allowed_parameters"), Mapping) else {}
+        allowed = (
+            metadata.get("allowed_parameters", {})
+            if isinstance(metadata.get("allowed_parameters"), Mapping)
+            else {}
+        )
         if not descriptors and isinstance(allowed, Mapping):
             for name, bounds in allowed.items():
                 descriptors.append(
@@ -712,12 +758,20 @@ class TamiyoGraphBuilder:
                         "name": name,
                         "min": float(bounds.get("min", 0.0)),
                         "max": float(bounds.get("max", 0.0)),
-                        "span": float(bounds.get("span", float(bounds.get("max", 0.0)) - float(bounds.get("min", 0.0)))),
-                        "default": 0.5 * (float(bounds.get("min", 0.0)) + float(bounds.get("max", 0.0))),
+                        "span": float(
+                            bounds.get(
+                                "span",
+                                float(bounds.get("max", 0.0)) - float(bounds.get("min", 0.0)),
+                            )
+                        ),
+                        "default": 0.5
+                        * (float(bounds.get("min", 0.0)) + float(bounds.get("max", 0.0))),
                     }
                 )
         if not descriptors:
-            descriptors.append({"name": "alpha", "min": 0.0, "max": 1.0, "span": 1.0, "default": 0.5})
+            descriptors.append(
+                {"name": "alpha", "min": 0.0, "max": 1.0, "span": 1.0, "default": 0.5}
+            )
 
         count = min(self._cfg.max_parameters, max(1, len(descriptors)))
         dim = self._cfg.parameter_feature_dim
@@ -801,7 +855,9 @@ class TamiyoGraphBuilder:
                     edge_attr = edge_attr.expand(src.numel(), min(edge_dim, edge_attr.size(1)))
                 # Pad or slice to match configured edge_dim
                 if edge_attr.size(1) < edge_dim:
-                    pad = torch.zeros((edge_attr.size(0), edge_dim - edge_attr.size(1)), dtype=torch.float32)
+                    pad = torch.zeros(
+                        (edge_attr.size(0), edge_dim - edge_attr.size(1)), dtype=torch.float32
+                    )
                     edge_attr = torch.cat([edge_attr, pad], dim=1)
             data[relation].edge_index = edge_index
             data[relation].edge_attr = edge_attr[:, :edge_dim]
@@ -810,14 +866,24 @@ class TamiyoGraphBuilder:
         if seed_count:
             global_src = torch.zeros(seed_count, dtype=torch.long)
             seed_dst = torch.arange(seed_count, dtype=torch.long)
-            attrs = [[1.0, cap.get("stage", 0.0), cap.get("risk", 0.0)] for cap in seed_capabilities]
+            attrs = [
+                [1.0, cap.get("stage", 0.0), cap.get("risk", 0.0)] for cap in seed_capabilities
+            ]
             _set_edge(("global", "influences", "seed"), global_src, seed_dst, attrs)
             _set_edge(("seed", "reports", "global"), seed_dst, global_src, attrs)
             coverage.observe("edges.global_influences", True)
             coverage.observe("edges.seed_reports", True)
         else:
-            _set_edge(("global", "influences", "seed"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
-            _set_edge(("seed", "reports", "global"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+            _set_edge(
+                ("global", "influences", "seed"),
+                torch.zeros(0, dtype=torch.long),
+                torch.zeros(0, dtype=torch.long),
+            )
+            _set_edge(
+                ("seed", "reports", "global"),
+                torch.zeros(0, dtype=torch.long),
+                torch.zeros(0, dtype=torch.long),
+            )
             coverage.observe("edges.global_influences", False)
             coverage.observe("edges.seed_reports", False)
 
@@ -825,11 +891,29 @@ class TamiyoGraphBuilder:
         if blueprint_count:
             blueprint_indices = torch.arange(blueprint_count, dtype=torch.long)
             attrs = [[1.0, float(metadata.get("stage", 0.0) or 0.0), risk]] * blueprint_count
-            _set_edge(("global", "annotates", "blueprint"), torch.zeros(blueprint_count, dtype=torch.long), blueprint_indices, attrs)
-            _set_edge(("blueprint", "monitored_by", "global"), blueprint_indices, torch.zeros(blueprint_count, dtype=torch.long), attrs)
+            _set_edge(
+                ("global", "annotates", "blueprint"),
+                torch.zeros(blueprint_count, dtype=torch.long),
+                blueprint_indices,
+                attrs,
+            )
+            _set_edge(
+                ("blueprint", "monitored_by", "global"),
+                blueprint_indices,
+                torch.zeros(blueprint_count, dtype=torch.long),
+                attrs,
+            )
         else:
-            _set_edge(("global", "annotates", "blueprint"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
-            _set_edge(("blueprint", "monitored_by", "global"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+            _set_edge(
+                ("global", "annotates", "blueprint"),
+                torch.zeros(0, dtype=torch.long),
+                torch.zeros(0, dtype=torch.long),
+            )
+            _set_edge(
+                ("blueprint", "monitored_by", "global"),
+                torch.zeros(0, dtype=torch.long),
+                torch.zeros(0, dtype=torch.long),
+            )
 
         # seed peer chain
         if seed_count > 1:
@@ -838,30 +922,59 @@ class TamiyoGraphBuilder:
             attrs = [[0.5, 0.0, 0.0] for _ in range(seed_count - 1)]
             _set_edge(("seed", "peer", "seed"), src, dst, attrs)
         else:
-            _set_edge(("seed", "peer", "seed"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+            _set_edge(
+                ("seed", "peer", "seed"),
+                torch.zeros(0, dtype=torch.long),
+                torch.zeros(0, dtype=torch.long),
+            )
 
         # global ↔ layer
         layer_indices = torch.arange(layer_count, dtype=torch.long)
         layers_depth = [(idx + 1) / max(1, layer_count) for idx in range(layer_count)]
         if layer_count:
             depth_t = torch.tensor(layers_depth, dtype=torch.float32)
-            attrs_layers_t = torch.stack([
-                torch.ones(layer_count, dtype=torch.float32),
-                depth_t,
-                torch.full((layer_count,), risk, dtype=torch.float32),
-            ], dim=1)
-            _set_edge(("global", "operates", "layer"), torch.zeros(layer_count, dtype=torch.long), layer_indices, attrs_layers_t)
-            _set_edge(("layer", "feedback", "global"), layer_indices, torch.zeros(layer_count, dtype=torch.long), attrs_layers_t)
+            attrs_layers_t = torch.stack(
+                [
+                    torch.ones(layer_count, dtype=torch.float32),
+                    depth_t,
+                    torch.full((layer_count,), risk, dtype=torch.float32),
+                ],
+                dim=1,
+            )
+            _set_edge(
+                ("global", "operates", "layer"),
+                torch.zeros(layer_count, dtype=torch.long),
+                layer_indices,
+                attrs_layers_t,
+            )
+            _set_edge(
+                ("layer", "feedback", "global"),
+                layer_indices,
+                torch.zeros(layer_count, dtype=torch.long),
+                attrs_layers_t,
+            )
         else:
-            _set_edge(("global", "operates", "layer"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
-            _set_edge(("layer", "feedback", "global"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+            _set_edge(
+                ("global", "operates", "layer"),
+                torch.zeros(0, dtype=torch.long),
+                torch.zeros(0, dtype=torch.long),
+            )
+            _set_edge(
+                ("layer", "feedback", "global"),
+                torch.zeros(0, dtype=torch.long),
+                torch.zeros(0, dtype=torch.long),
+            )
         coverage.observe("edges.global_operates", bool(layer_count))
         coverage.observe("edges.layer_feedback", bool(layer_count))
 
         # layer ↔ activation
         activation_indices = torch.arange(activation_count, dtype=torch.long)
         activation_ratio = [(idx + 1) / max(1, activation_count) for idx in range(activation_count)]
-        act_ratio_t = torch.tensor(activation_ratio, dtype=torch.float32) if activation_count else torch.zeros(0, dtype=torch.float32)
+        act_ratio_t = (
+            torch.tensor(activation_ratio, dtype=torch.float32)
+            if activation_count
+            else torch.zeros(0, dtype=torch.float32)
+        )
         if layer_count and activation_count:
             src = layer_indices.repeat_interleave(activation_count)
             dst = activation_indices.repeat(layer_count)
@@ -873,14 +986,26 @@ class TamiyoGraphBuilder:
             _set_edge(("activation", "affects", "layer"), dst, src, attrs_la_t)
             coverage.observe("edges.layer_activates", True)
         else:
-            _set_edge(("layer", "activates", "activation"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
-            _set_edge(("activation", "affects", "layer"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+            _set_edge(
+                ("layer", "activates", "activation"),
+                torch.zeros(0, dtype=torch.long),
+                torch.zeros(0, dtype=torch.long),
+            )
+            _set_edge(
+                ("activation", "affects", "layer"),
+                torch.zeros(0, dtype=torch.long),
+                torch.zeros(0, dtype=torch.long),
+            )
             coverage.observe("edges.layer_activates", False)
 
         # activation ↔ parameter
         parameter_indices = torch.arange(parameter_count, dtype=torch.long)
         param_ratio = [(idx + 1) / max(1, parameter_count) for idx in range(parameter_count)]
-        param_ratio_t = torch.tensor(param_ratio, dtype=torch.float32) if parameter_count else torch.zeros(0, dtype=torch.float32)
+        param_ratio_t = (
+            torch.tensor(param_ratio, dtype=torch.float32)
+            if parameter_count
+            else torch.zeros(0, dtype=torch.float32)
+        )
         if activation_count and parameter_count:
             src = activation_indices.repeat_interleave(parameter_count)
             dst = parameter_indices.repeat(activation_count)
@@ -892,15 +1017,24 @@ class TamiyoGraphBuilder:
             coverage.observe("edges.activation_configures", True)
             coverage.observe("edges.parameter_modulates", True)
         else:
-            _set_edge(("activation", "configures", "parameter"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
-            _set_edge(("parameter", "modulates", "activation"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+            _set_edge(
+                ("activation", "configures", "parameter"),
+                torch.zeros(0, dtype=torch.long),
+                torch.zeros(0, dtype=torch.long),
+            )
+            _set_edge(
+                ("parameter", "modulates", "activation"),
+                torch.zeros(0, dtype=torch.long),
+                torch.zeros(0, dtype=torch.long),
+            )
             coverage.observe("edges.activation_configures", False)
             coverage.observe("edges.parameter_modulates", False)
 
         # seed ↔ parameter capability edges (WP10): build only when allowances present; mask otherwise
         if seed_count and parameter_count:
             allowed_seed_indices = [
-                idx for idx, cap in enumerate(seed_capabilities)
+                idx
+                for idx, cap in enumerate(seed_capabilities)
                 if float(cap.get("blend_allowed", 0.0)) > 0.0
             ]
             # Derive per-seed allowed parameter indices (names and/or indices supported via extras)
@@ -909,7 +1043,9 @@ class TamiyoGraphBuilder:
                 (pid.rsplit("-", 1)[1] if isinstance(pid, str) and "-" in pid else str(pid))
                 for pid in param_node_ids
             ]
-            capabilities_block = graph_meta.get("capabilities") if isinstance(graph_meta, Mapping) else None
+            capabilities_block = (
+                graph_meta.get("capabilities") if isinstance(graph_meta, Mapping) else None
+            )
             allow_by_seed_id: dict[str, set[int]] = {}
             allow_by_seed_index: dict[int, set[int]] = {}
             if isinstance(capabilities_block, Mapping):
@@ -981,18 +1117,46 @@ class TamiyoGraphBuilder:
                         src_list.append(sidx)
                         dst_list.append(pidx)
                         attrs_sp.append([blend_allowed, 1.0, stage_norm])
-                src = torch.tensor(src_list, dtype=torch.long) if src_list else torch.zeros(0, dtype=torch.long)
-                dst = torch.tensor(dst_list, dtype=torch.long) if dst_list else torch.zeros(0, dtype=torch.long)
-                _set_edge(("seed", "allowed", "parameter"), src, dst, attrs_sp if attrs_sp else None)
-                _set_edge(("parameter", "associated", "seed"), dst, src, attrs_sp if attrs_sp else None)
+                src = (
+                    torch.tensor(src_list, dtype=torch.long)
+                    if src_list
+                    else torch.zeros(0, dtype=torch.long)
+                )
+                dst = (
+                    torch.tensor(dst_list, dtype=torch.long)
+                    if dst_list
+                    else torch.zeros(0, dtype=torch.long)
+                )
+                _set_edge(
+                    ("seed", "allowed", "parameter"), src, dst, attrs_sp if attrs_sp else None
+                )
+                _set_edge(
+                    ("parameter", "associated", "seed"), dst, src, attrs_sp if attrs_sp else None
+                )
                 coverage.observe("edges.seed_param_allowed", bool(src_list))
             else:
-                _set_edge(("seed", "allowed", "parameter"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
-                _set_edge(("parameter", "associated", "seed"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+                _set_edge(
+                    ("seed", "allowed", "parameter"),
+                    torch.zeros(0, dtype=torch.long),
+                    torch.zeros(0, dtype=torch.long),
+                )
+                _set_edge(
+                    ("parameter", "associated", "seed"),
+                    torch.zeros(0, dtype=torch.long),
+                    torch.zeros(0, dtype=torch.long),
+                )
                 coverage.observe("edges.seed_param_allowed", False)
         else:
-            _set_edge(("seed", "allowed", "parameter"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
-            _set_edge(("parameter", "associated", "seed"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+            _set_edge(
+                ("seed", "allowed", "parameter"),
+                torch.zeros(0, dtype=torch.long),
+                torch.zeros(0, dtype=torch.long),
+            )
+            _set_edge(
+                ("parameter", "associated", "seed"),
+                torch.zeros(0, dtype=torch.long),
+                torch.zeros(0, dtype=torch.long),
+            )
             coverage.observe("edges.seed_param_allowed", False)
 
         # blueprint ↔ layer
@@ -1003,35 +1167,57 @@ class TamiyoGraphBuilder:
             _set_edge(("blueprint", "composes", "layer"), src, dst, attrs_bl)
             _set_edge(("layer", "belongs_to", "blueprint"), dst, src, attrs_bl)
         else:
-            _set_edge(("blueprint", "composes", "layer"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
-            _set_edge(("layer", "belongs_to", "blueprint"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+            _set_edge(
+                ("blueprint", "composes", "layer"),
+                torch.zeros(0, dtype=torch.long),
+                torch.zeros(0, dtype=torch.long),
+            )
+            _set_edge(
+                ("layer", "belongs_to", "blueprint"),
+                torch.zeros(0, dtype=torch.long),
+                torch.zeros(0, dtype=torch.long),
+            )
         coverage.observe("edges.blueprint_composes", bool(layer_count and blueprint_count))
 
         # blueprint ↔ activation
         if blueprint_count and activation_count:
             src = torch.zeros(activation_count, dtype=torch.long)
             dst = activation_indices
-            attrs_ba_t = torch.stack([
-                torch.full((activation_count,), risk, dtype=torch.float32),
-                act_ratio_t,
-                torch.ones(activation_count, dtype=torch.float32),
-            ], dim=1)
+            attrs_ba_t = torch.stack(
+                [
+                    torch.full((activation_count,), risk, dtype=torch.float32),
+                    act_ratio_t,
+                    torch.ones(activation_count, dtype=torch.float32),
+                ],
+                dim=1,
+            )
             _set_edge(("blueprint", "energizes", "activation"), src, dst, attrs_ba_t)
         else:
-            _set_edge(("blueprint", "energizes", "activation"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+            _set_edge(
+                ("blueprint", "energizes", "activation"),
+                torch.zeros(0, dtype=torch.long),
+                torch.zeros(0, dtype=torch.long),
+            )
 
         # parameter -> blueprint
         if blueprint_count and parameter_count:
             src = parameter_indices
             dst = torch.zeros(parameter_count, dtype=torch.long)
-            attrs_pb_t = torch.stack([
-                param_ratio_t,
-                torch.full((parameter_count,), risk, dtype=torch.float32),
-                torch.ones(parameter_count, dtype=torch.float32),
-            ], dim=1)
+            attrs_pb_t = torch.stack(
+                [
+                    param_ratio_t,
+                    torch.full((parameter_count,), risk, dtype=torch.float32),
+                    torch.ones(parameter_count, dtype=torch.float32),
+                ],
+                dim=1,
+            )
             _set_edge(("parameter", "targets", "blueprint"), src, dst, attrs_pb_t)
         else:
-            _set_edge(("parameter", "targets", "blueprint"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+            _set_edge(
+                ("parameter", "targets", "blueprint"),
+                torch.zeros(0, dtype=torch.long),
+                torch.zeros(0, dtype=torch.long),
+            )
         coverage.observe("edges.parameter_targets", bool(parameter_count and blueprint_count))
 
         # layer connectivity from extras adjacency, fallback to simple chain
@@ -1046,33 +1232,44 @@ class TamiyoGraphBuilder:
             if isinstance(layer_pairs, list):
                 for p in layer_pairs:
                     if isinstance(p, (list, tuple)) and len(p) >= 2:
-                        s = int(p[0]); d = int(p[1])
+                        s = int(p[0])
+                        d = int(p[1])
                         if 0 <= s < layer_count and 0 <= d < layer_count:
                             pairs.append((s, d))
         if pairs:
             src = torch.tensor([s for s, _ in pairs], dtype=torch.long)
             dst = torch.tensor([d for _, d in pairs], dtype=torch.long)
             depth_t = torch.tensor(layers_depth, dtype=torch.float32)
-            attrs_ll_t = torch.stack([
-                depth_t[src],
-                depth_t[dst],
-                torch.full((src.numel(),), risk, dtype=torch.float32),
-            ], dim=1)
+            attrs_ll_t = torch.stack(
+                [
+                    depth_t[src],
+                    depth_t[dst],
+                    torch.full((src.numel(),), risk, dtype=torch.float32),
+                ],
+                dim=1,
+            )
             _set_edge(("layer", "connects", "layer"), src, dst, attrs_ll_t)
             coverage.observe("edges.layer_connects", True)
         elif layer_count > 1:
             src = torch.arange(layer_count - 1, dtype=torch.long)
             dst = torch.arange(1, layer_count, dtype=torch.long)
             depth_t = torch.tensor(layers_depth, dtype=torch.float32)
-            attrs_ll_t = torch.stack([
-                depth_t[src],
-                depth_t[dst],
-                torch.full((src.numel(),), risk, dtype=torch.float32),
-            ], dim=1)
+            attrs_ll_t = torch.stack(
+                [
+                    depth_t[src],
+                    depth_t[dst],
+                    torch.full((src.numel(),), risk, dtype=torch.float32),
+                ],
+                dim=1,
+            )
             _set_edge(("layer", "connects", "layer"), src, dst, attrs_ll_t)
             coverage.observe("edges.layer_connects", True)
         else:
-            _set_edge(("layer", "connects", "layer"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+            _set_edge(
+                ("layer", "connects", "layer"),
+                torch.zeros(0, dtype=torch.long),
+                torch.zeros(0, dtype=torch.long),
+            )
             coverage.observe("edges.layer_connects", False)
 
         # seed monitors layer; prefer explicit extras, fallback to layer_depth heuristic
@@ -1089,7 +1286,8 @@ class TamiyoGraphBuilder:
                 if isinstance(monitored_layers, list):
                     for entry in monitored_layers:
                         if isinstance(entry, (list, tuple)) and len(entry) >= 2:
-                            s = int(entry[0]); d = int(entry[1])
+                            s = int(entry[0])
+                            d = int(entry[1])
                             w = float(entry[2]) if len(entry) >= 3 else None
                             if 0 <= s < seed_count and 0 <= d < layer_count:
                                 explicit_pairs.append((s, d, w))
@@ -1131,15 +1329,20 @@ class TamiyoGraphBuilder:
                 th = monitors_block.get("thresholds") or monitors_block.get("monitors_thresholds")
                 if isinstance(th, Mapping):
                     thresholds = dict(th)
+
             def _passes_threshold(sidx: int) -> bool:
                 cap = seed_capabilities[sidx] if 0 <= sidx < len(seed_capabilities) else {}
                 try:
-                    if "risk_max" in thresholds and float(cap.get("risk", 0.0)) > float(thresholds["risk_max"]):
+                    if "risk_max" in thresholds and float(cap.get("risk", 0.0)) > float(
+                        thresholds["risk_max"]
+                    ):
                         return False
                 except Exception:
                     pass
                 try:
-                    if "stage_min" in thresholds and float(cap.get("stage", 0.0)) < float(thresholds["stage_min"]):
+                    if "stage_min" in thresholds and float(cap.get("stage", 0.0)) < float(
+                        thresholds["stage_min"]
+                    ):
                         return False
                 except Exception:
                     pass
@@ -1152,7 +1355,9 @@ class TamiyoGraphBuilder:
                     cap = seed_capabilities[sidx] if 0 <= sidx < len(seed_capabilities) else {}
                     src_indices.append(sidx)
                     dst_indices.append(didx)
-                    last_attr = float(w) if w is not None else (layers_depth[didx] if layer_count else 0.0)
+                    last_attr = (
+                        float(w) if w is not None else (layers_depth[didx] if layer_count else 0.0)
+                    )
                     attrs_sl.append([cap.get("stage", 0.0), cap.get("risk", 0.0), last_attr])
             else:
                 for idx, cap in enumerate(seed_capabilities):
@@ -1162,11 +1367,13 @@ class TamiyoGraphBuilder:
                     depth = max(0, min(layer_count - 1, depth_raw))
                     src_indices.append(idx)
                     dst_indices.append(depth)
-                    attrs_sl.append([
-                        cap.get("stage", 0.0),
-                        cap.get("risk", 0.0),
-                        layers_depth[depth] if layer_count else 0.0,
-                    ])
+                    attrs_sl.append(
+                        [
+                            cap.get("stage", 0.0),
+                            cap.get("risk", 0.0),
+                            layers_depth[depth] if layer_count else 0.0,
+                        ]
+                    )
             if src_indices:
                 seed_tensor = torch.tensor(src_indices, dtype=torch.long)
                 layer_tensor = torch.tensor(dst_indices, dtype=torch.long)
@@ -1174,12 +1381,28 @@ class TamiyoGraphBuilder:
                 _set_edge(("layer", "monitored_by", "seed"), layer_tensor, seed_tensor, attrs_sl)
                 coverage.observe("edges.seed_monitors", True)
             else:
-                _set_edge(("seed", "monitors", "layer"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
-                _set_edge(("layer", "monitored_by", "seed"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+                _set_edge(
+                    ("seed", "monitors", "layer"),
+                    torch.zeros(0, dtype=torch.long),
+                    torch.zeros(0, dtype=torch.long),
+                )
+                _set_edge(
+                    ("layer", "monitored_by", "seed"),
+                    torch.zeros(0, dtype=torch.long),
+                    torch.zeros(0, dtype=torch.long),
+                )
                 coverage.observe("edges.seed_monitors", False)
         else:
-            _set_edge(("seed", "monitors", "layer"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
-            _set_edge(("layer", "monitored_by", "seed"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+            _set_edge(
+                ("seed", "monitors", "layer"),
+                torch.zeros(0, dtype=torch.long),
+                torch.zeros(0, dtype=torch.long),
+            )
+            _set_edge(
+                ("layer", "monitored_by", "seed"),
+                torch.zeros(0, dtype=torch.long),
+                torch.zeros(0, dtype=torch.long),
+            )
             coverage.observe("edges.seed_monitors", False)
 
         # layer feeds activation (alias for activates)
@@ -1195,9 +1418,12 @@ class TamiyoGraphBuilder:
             _set_edge(("layer", "feeds", "activation"), src, dst, attrs_feed)
             coverage.observe("edges.layer_feeds", True)
         else:
-            _set_edge(("layer", "feeds", "activation"), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long))
+            _set_edge(
+                ("layer", "feeds", "activation"),
+                torch.zeros(0, dtype=torch.long),
+                torch.zeros(0, dtype=torch.long),
+            )
             coverage.observe("edges.layer_feeds", False)
-
 
     @staticmethod
     def _encode_category(value: str) -> float:
@@ -1229,7 +1455,9 @@ class _CoverageTracker:
 
     def stats(self) -> dict[str, tuple[int, int]]:
         """Return raw (present, total) counts per feature key for weighted aggregation."""
-        return {key: (int(self._present.get(key, 0)), int(total)) for key, total in self._counts.items()}
+        return {
+            key: (int(self._present.get(key, 0)), int(total)) for key, total in self._counts.items()
+        }
 
 
 __all__ = ["TamiyoGraphBuilder", "TamiyoGraphBuilderConfig"]

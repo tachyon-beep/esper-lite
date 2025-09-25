@@ -71,4 +71,3 @@ def test_urza_bsds_extras_ttl_eviction(tmp_path: Path) -> None:
     # After eviction the record is removed (DB row deleted), list_all is empty
     all_now = lib.list_all()
     assert "bp-expire" not in all_now
-

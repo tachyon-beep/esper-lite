@@ -6,11 +6,11 @@ from fakeredis.aioredis import FakeRedis
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
+from esper.kasmina import KasminaSeedManager
 from esper.leyline import leyline_pb2
 from esper.oona import OonaClient, StreamConfig
-from esper.tolaria import KasminaClient, TamiyoClient, TolariaTrainer, TrainingLoopConfig
-from esper.kasmina import KasminaSeedManager
 from esper.security.signing import SignatureContext, sign
+from esper.tolaria import KasminaClient, TamiyoClient, TolariaTrainer, TrainingLoopConfig
 
 SIGNING_CONTEXT = SignatureContext(secret=b"kasmina-integration-secret")
 
@@ -135,7 +135,9 @@ async def test_control_loop_with_kasmina_manager_exports_seed_states() -> None:
     dataloader = DataLoader(TensorDataset(inputs, targets), batch_size=2)
 
     class _TamiyoSeed(TamiyoClient):
-        def evaluate_epoch(self, state: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
+        def evaluate_epoch(
+            self, state: leyline_pb2.SystemStatePacket
+        ) -> leyline_pb2.AdaptationCommand:
             cmd = leyline_pb2.AdaptationCommand(
                 version=1,
                 command_id="cmd-seed",
@@ -189,7 +191,9 @@ def test_kasmina_emits_one_packet_per_seed_per_step() -> None:
     dataloader = DataLoader(TensorDataset(inputs, targets), batch_size=3)
 
     class _TamiyoSeed(TamiyoClient):
-        def evaluate_epoch(self, state: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
+        def evaluate_epoch(
+            self, state: leyline_pb2.SystemStatePacket
+        ) -> leyline_pb2.AdaptationCommand:
             cmd = leyline_pb2.AdaptationCommand(
                 version=1,
                 command_id=f"cmd-step-{state.current_epoch}",
@@ -223,9 +227,7 @@ def test_kasmina_emits_one_packet_per_seed_per_step() -> None:
     assert packets, "expected kasmina telemetry packets"
 
     seed_packets = [
-        packet
-        for packet in packets
-        if packet.system_health.indicators.get("seed_id", "")
+        packet for packet in packets if packet.system_health.indicators.get("seed_id", "")
     ]
     assert seed_packets, "expected per-seed telemetry packets"
 

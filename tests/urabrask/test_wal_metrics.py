@@ -3,9 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from esper.karn import BlueprintDescriptor, BlueprintTier
-from esper.urza import UrzaLibrary
-from esper.urabrask.service import produce_and_attach_bsds
 from esper.urabrask import metrics as ura_metrics
+from esper.urabrask.service import produce_and_attach_bsds
+from esper.urza import UrzaLibrary
 
 
 def _descriptor(bp_id: str) -> BlueprintDescriptor:
@@ -43,4 +43,3 @@ def test_wal_append_error_increments_counter(tmp_path: Path, monkeypatch) -> Non
     _desc, _bsds = produce_and_attach_bsds(lib, "bp-walerr")
     after = ura_metrics.snapshot().get("wal.append_errors_total", 0.0)
     assert after >= before + 1.0
-

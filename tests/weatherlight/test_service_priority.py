@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from esper.core import TelemetryMetric, TelemetryEvent, build_telemetry_packet
+from esper.core import TelemetryEvent, TelemetryMetric, build_telemetry_packet
 from esper.leyline import leyline_pb2
 from esper.weatherlight.service_runner import WeatherlightService
 
@@ -41,7 +41,11 @@ def _kasmina_packet(packet_id: str, level: int, *, priority_indicator: str | Non
         events=[TelemetryEvent("evt")],
         health_status=leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY,
         health_summary="nominal",
-        health_indicators={"seed_id": "seed-x"} if priority_indicator is None else {"seed_id": "seed-x", "priority": priority_indicator},
+        health_indicators=(
+            {"seed_id": "seed-x"}
+            if priority_indicator is None
+            else {"seed_id": "seed-x", "priority": priority_indicator}
+        ),
     )
     return pkt
 
@@ -51,6 +55,7 @@ async def test_weatherlight_routes_kasmina_by_priority() -> None:
     service = WeatherlightService()
     fake = _FakeOona()
     service._oona = fake  # type: ignore[attr-defined]
+
     # Provide a minimal Urza worker metrics stub
     class _UrzaWorker:
         def __init__(self) -> None:
