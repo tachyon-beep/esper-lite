@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Protocol
 
 from elasticsearch import Elasticsearch
 from elasticsearch import helpers as es_helpers
@@ -19,6 +19,12 @@ from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
 from esper.leyline import leyline_pb2
 from esper.nissa.alerts import DEFAULT_ALERT_RULES, AlertEngine, AlertEvent, AlertRouter
 from esper.nissa.slo import SLOStatus, SLOTracker
+
+
+class UrzaLike(Protocol):
+    def get(self, blueprint_id: str) -> Any:  # pragma: no cover - protocol hint
+        ...
+
 
 if TYPE_CHECKING:
     from esper.oona import OonaClient, OonaMessage
@@ -50,7 +56,7 @@ class NissaIngestor:
         self._registry = registry or CollectorRegistry()
         self._alert_router = AlertRouter()
         # Optional UrzaLibrary for enrichment (duck-typed: must expose get())
-        self._urza = urza
+        self._urza: UrzaLike | None = urza
         # Build alert rules with environment/config overrides
         if config.alerts_enabled:
             rules = []
@@ -130,9 +136,9 @@ class NissaIngestor:
         )
         # Whitelist: from config if provided; else default small set
         if config.coverage_feature_keys is not None:
-            self._coverage_feature_keys = tuple(config.coverage_feature_keys)
+            self._coverage_feature_keys: tuple[str, ...] = tuple(config.coverage_feature_keys)
         else:
-            self._coverage_feature_keys: tuple[str, ...] = (
+            self._coverage_feature_keys = (
                 "global.loss",
                 "seed.learning_rate",
                 "edges.seed_param_allowed",
@@ -178,9 +184,6 @@ class NissaIngestor:
             registry=self._registry,
             buckets=(0.5, 1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0),
         )
-        # Bulk indexing buffer for higher throughput; flushed after batch drains
-        self._bulk_actions: list[dict] = []
-        self._bulk_max_actions: int = 200
         # Self-telemetry for ingestion/export
         self._bulk_batches_total = Counter(
             "nissa_bulk_batches_total",
@@ -252,7 +255,7 @@ class NissaIngestor:
         # Coverage gauge from Tamiyo metric; optional per-type coverage if namespaced metrics exist
         cov = metrics.get("tamiyo.gnn.feature_coverage")
         if cov is not None:
-            self._tamiyo_feature_coverage.set(float(cov))
+            self._tamiyo_feature_coverage.set(_coerce_float(cov))
         for name, value in list(metrics.items()):
             feature: str | None = None
             if name.startswith("tamiyo.gnn.coverage."):
@@ -260,13 +263,13 @@ class NissaIngestor:
             elif name.startswith("tamiyo.gnn.feature_coverage."):
                 feature = name.split("tamiyo.gnn.feature_coverage.", 1)[1]
             if feature and feature in self._coverage_feature_keys:
-                self._tamiyo_feature_coverage_by_type.labels(feature=feature).set(float(value))
+                self._tamiyo_feature_coverage_by_type.labels(feature=feature).set(_coerce_float(value))
 
         # Derived BSDS elevated risk flag and quarantine activity gauge
         risk = metrics.get("tamiyo.blueprint.risk")
         if risk is not None:
             threshold = float(self._config.bsds_elevated_risk_threshold)
-            elevated = 1.0 if float(risk) >= threshold else 0.0
+            elevated = 1.0 if _coerce_float(risk) >= threshold else 0.0
             self._tamiyo_bsds_elevated_risk.set(elevated)
             # Expose a boolean flag into metrics for alert engine
             metrics["tamiyo.bsds.elevated_risk_flag"] = elevated
@@ -306,8 +309,8 @@ class NissaIngestor:
             pass
 
         if packet.source_subsystem == "simic":
-            reward = metrics.get("simic.training.reward", 0.0)
-            iterations = metrics.get("simic.training.iterations", 0.0)
+            reward = _coerce_float(metrics.get("simic.training.reward", 0.0))
+            iterations = _coerce_float(metrics.get("simic.training.iterations", 0.0), default=1.0)
             self._simic_reward_counter.inc(reward)
             self._simic_iterations_counter.inc(iterations if iterations else 1.0)
             self._index_document("simic_metrics", document)
@@ -332,18 +335,18 @@ class NissaIngestor:
     def _flush_bulk(self) -> None:
         if not self._bulk_actions:
             return
-        actions = self._bulk_actions
-        self._bulk_actions = []
+        actions = list(self._bulk_actions)
+        self._bulk_actions.clear()
         try:
             # Prefer helpers.bulk when the client supports it (real Elasticsearch)
             import time as _time
 
             t0 = _time.perf_counter()
             ok, failed = es_helpers.bulk(self._es, actions, stats_only=True)
-            self._bulk_flush_latency_ms.observe((_time.perf_counter() - t0) * 1000.0)  # type: ignore[arg-type]
+            self._bulk_flush_latency_ms.observe((_time.perf_counter() - t0) * 1000.0)
             self._bulk_batches_total.inc()
-            self._bulk_indexed_total.inc(float(ok))
-            self._bulk_failed_total.inc(float(failed))
+            self._bulk_indexed_total.inc(_coerce_float(ok))
+            self._bulk_failed_total.inc(_coerce_float(failed))
         except Exception:
             # Fallback: iterate using index() for fake/test clients
             import time as _time
@@ -353,8 +356,13 @@ class NissaIngestor:
             failures = 0
             for action in actions:
                 try:
-                    self._es.index(index=action.get("_index"), document=action.get("_source"))  # type: ignore[arg-type]
-                    successes += 1
+                    index_name = action.get("_index")
+                    document = action.get("_source")
+                    if isinstance(index_name, str) and isinstance(document, dict):
+                        self._es.index(index=index_name, document=document)
+                        successes += 1
+                    else:
+                        failures += 1
                 except Exception:
                     failures += 1
             self._bulk_flush_latency_ms.observe((_time.perf_counter() - t0) * 1000.0)
@@ -386,13 +394,13 @@ class NissaIngestor:
 
         async def handler(message: OonaMessage) -> None:
             if message.message_type == leyline_pb2.BusMessageType.BUS_MESSAGE_TYPE_TELEMETRY:
-                packet = leyline_pb2.TelemetryPacket()
-                packet.ParseFromString(message.payload)
-                self.ingest_telemetry(packet)
+                telemetry_packet = leyline_pb2.TelemetryPacket()
+                telemetry_packet.ParseFromString(message.payload)
+                self.ingest_telemetry(telemetry_packet)
             elif message.message_type == leyline_pb2.BusMessageType.BUS_MESSAGE_TYPE_SYSTEM_STATE:
-                packet = leyline_pb2.SystemStatePacket()
-                packet.ParseFromString(message.payload)
-                payload = MessageToDict(packet, preserving_proto_field_name=True)
+                state_packet = leyline_pb2.SystemStatePacket()
+                state_packet.ParseFromString(message.payload)
+                payload = MessageToDict(state_packet, preserving_proto_field_name=True)
                 self.ingest_state(payload)
             elif message.message_type == leyline_pb2.BusMessageType.BUS_MESSAGE_TYPE_FIELD_REPORT:
                 field_report = leyline_pb2.FieldReport()
@@ -454,6 +462,15 @@ class NissaIngestor:
             if objective is None:
                 continue
             self._slo_tracker.record(key, objective=objective, actual=actual, timestamp=reference)
+
+
+def _coerce_float(value: object, default: float = 0.0) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(str(value))
+    except (TypeError, ValueError):
+        return default
 
 
 __all__ = ["NissaIngestor", "NissaIngestorConfig"]
