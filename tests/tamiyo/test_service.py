@@ -196,7 +196,8 @@ async def test_degraded_inputs_routes_emergency(tmp_path) -> None:
 
 def test_tamiyo_signed_command_accepted_and_replay_rejected(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
-    service = TamiyoService(store_config=config, signature_context=_SIGNATURE_CONTEXT)
+    urza = UrzaLibrary(root=tmp_path / "urza")
+    service = TamiyoService(store_config=config, urza=urza, signature_context=_SIGNATURE_CONTEXT)
     packet = leyline_pb2.SystemStatePacket(
         version=1,
         current_epoch=1,
@@ -255,9 +256,11 @@ def test_service_schedule_parameters_fractional(tmp_path) -> None:
 
 def test_evaluate_step_timeout_inference(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    urza = UrzaLibrary(root=tmp_path / "urza")
     service = TamiyoService(
         policy=_SlowPolicy(),
         store_config=config,
+        urza=urza,
         signature_context=_SIGNATURE_CONTEXT,
         step_timeout_ms=1.0,
     )
@@ -283,7 +286,8 @@ def test_default_step_timeout_uses_env_when_no_override(tmp_path, monkeypatch: p
     # should trigger a timeout.
     monkeypatch.setenv("TAMIYO_STEP_TIMEOUT_MS", "5")
     cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
-    service = TamiyoService(policy=_SlowPolicy(), store_config=cfg, signature_context=_SIGNATURE_CONTEXT)
+    urza = UrzaLibrary(root=tmp_path / "urza")
+    service = TamiyoService(policy=_SlowPolicy(), store_config=cfg, urza=urza, signature_context=_SIGNATURE_CONTEXT)
     pkt = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-timeout-env")
     cmd = service.evaluate_step(pkt)
     assert cmd.command_type == leyline_pb2.COMMAND_PAUSE
@@ -301,9 +305,11 @@ def test_explicit_step_timeout_overrides_env(tmp_path, monkeypatch: pytest.Monke
     # should prevent the timeout even with a slow policy.
     monkeypatch.setenv("TAMIYO_STEP_TIMEOUT_MS", "5")
     cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    urza = UrzaLibrary(root=tmp_path / "urza")
     service = TamiyoService(
         policy=_SlowPolicy(),
         store_config=cfg,
+        urza=urza,
         signature_context=_SIGNATURE_CONTEXT,
         step_timeout_ms=100.0,
     )
@@ -315,9 +321,11 @@ def test_explicit_step_timeout_overrides_env(tmp_path, monkeypatch: pytest.Monke
 
 def test_evaluate_step_includes_coverage_and_policy_version(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    urza = UrzaLibrary(root=tmp_path / "urza")
     service = TamiyoService(
         policy=TamiyoPolicy(),
         store_config=config,
+        urza=urza,
         signature_context=_SIGNATURE_CONTEXT,
         step_timeout_ms=100.0,
     )
@@ -663,7 +671,8 @@ def test_service_default_compile_on_cuda(monkeypatch: pytest.MonkeyPatch) -> Non
 @pytest.mark.asyncio
 async def test_field_report_publish_hedging_success_after_retry(tmp_path: Path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
-    service = TamiyoService(store_config=config, signature_context=_SIGNATURE_CONTEXT)
+    urza = UrzaLibrary(root=tmp_path / "urza")
+    service = TamiyoService(store_config=config, urza=urza, signature_context=_SIGNATURE_CONTEXT)
     # Generate one field report
     # Create a minimal command for the report without invoking evaluate
     cmd = leyline_pb2.AdaptationCommand(version=1, command_type=leyline_pb2.COMMAND_PAUSE)
@@ -710,7 +719,8 @@ async def test_field_report_publish_drops_after_cap(tmp_path: Path) -> None:
     # Inject settings via environment
     import os
     os.environ["TAMIYO_FIELD_REPORT_MAX_RETRIES"] = "1"
-    service = TamiyoService(store_config=config, signature_context=_SIGNATURE_CONTEXT)
+    urza = UrzaLibrary(root=tmp_path / "urza")
+    service = TamiyoService(store_config=config, urza=urza, signature_context=_SIGNATURE_CONTEXT)
     # Generate one field report
     cmd = leyline_pb2.AdaptationCommand(version=1, command_type=leyline_pb2.COMMAND_PAUSE)
     cmd.command_id = str(uuid4())
@@ -747,7 +757,8 @@ async def test_field_report_publish_drops_after_cap(tmp_path: Path) -> None:
 
 def test_field_report_generation(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
-    service = TamiyoService(store_config=config, signature_context=_SIGNATURE_CONTEXT)
+    urza = UrzaLibrary(root=tmp_path / "urza")
+    service = TamiyoService(store_config=config, urza=urza, signature_context=_SIGNATURE_CONTEXT)
     packet = leyline_pb2.SystemStatePacket(
         version=1,
         current_epoch=0,
@@ -769,7 +780,8 @@ def test_field_report_generation(tmp_path) -> None:
 
 def test_field_report_emitted_for_each_step(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
-    service = TamiyoService(store_config=config, signature_context=_SIGNATURE_CONTEXT)
+    urza = UrzaLibrary(root=tmp_path / "urza")
+    service = TamiyoService(store_config=config, urza=urza, signature_context=_SIGNATURE_CONTEXT)
     for epoch in range(3):
         packet = leyline_pb2.SystemStatePacket(
             version=1,
@@ -789,7 +801,8 @@ def test_field_report_retention_rewrites(tmp_path) -> None:
         path=tmp_path / "field_reports.log",
         retention=timedelta(minutes=30),
     )
-    service = TamiyoService(store_config=config, signature_context=_SIGNATURE_CONTEXT)
+    urza = UrzaLibrary(root=tmp_path / "urza")
+    service = TamiyoService(store_config=config, urza=urza, signature_context=_SIGNATURE_CONTEXT)
     packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-retention")
     command = service.evaluate_step(packet)
     old_command = leyline_pb2.AdaptationCommand()
@@ -815,7 +828,8 @@ def test_field_report_retention_rewrites(tmp_path) -> None:
 
 def test_step_evaluate_p95_budget(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
-    service = TamiyoService(store_config=config, signature_context=_SIGNATURE_CONTEXT)
+    urza = UrzaLibrary(root=tmp_path / "urza")
+    service = TamiyoService(store_config=config, urza=urza, signature_context=_SIGNATURE_CONTEXT)
     durations: list[float] = []
     for step in range(30):
         packet = leyline_pb2.SystemStatePacket(
@@ -859,7 +873,8 @@ def test_field_report_emitted_on_timeout(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_tamiyo_publish_history_to_oona(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
-    service = TamiyoService(store_config=config, signature_context=_SIGNATURE_CONTEXT)
+    urza = UrzaLibrary(root=tmp_path / "urza")
+    service = TamiyoService(store_config=config, urza=urza, signature_context=_SIGNATURE_CONTEXT)
     packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=0)
     service.evaluate_epoch(packet)
     command = service.evaluate_epoch(packet)
@@ -889,7 +904,8 @@ async def test_tamiyo_publish_history_to_oona(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_tamiyo_publish_history_routes_priority(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
-    service = TamiyoService(store_config=config, signature_context=_SIGNATURE_CONTEXT)
+    urza = UrzaLibrary(root=tmp_path / "urza")
+    service = TamiyoService(store_config=config, urza=urza, signature_context=_SIGNATURE_CONTEXT)
     packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-routing")
     service.evaluate_step(packet)
     telemetry = service.telemetry_packets[-1]
@@ -918,7 +934,8 @@ async def test_tamiyo_publish_history_routes_priority(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_tamiyo_consume_policy_updates(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
-    service = TamiyoService(store_config=config, signature_context=_SIGNATURE_CONTEXT)
+    urza = UrzaLibrary(root=tmp_path / "urza")
+    service = TamiyoService(store_config=config, urza=urza, signature_context=_SIGNATURE_CONTEXT)
     redis_config = StreamConfig(
         normal_stream="oona.normal",
         emergency_stream="oona.emergency",
@@ -1061,7 +1078,8 @@ def test_tamiyo_annotations_include_blueprint_metadata(tmp_path) -> None:
 
 def test_loss_spike_triggers_pause(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
-    service = TamiyoService(store_config=config, signature_context=_SIGNATURE_CONTEXT)
+    urza = UrzaLibrary(root=tmp_path / "urza")
+    service = TamiyoService(store_config=config, urza=urza, signature_context=_SIGNATURE_CONTEXT)
     service._last_validation_loss = 0.1  # type: ignore[attr-defined]
     packet = leyline_pb2.SystemStatePacket(
         version=1,
@@ -1079,7 +1097,8 @@ def test_loss_spike_triggers_pause(tmp_path) -> None:
 
 def test_latency_metrics_trigger_actions(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
-    service = TamiyoService(store_config=config, signature_context=_SIGNATURE_CONTEXT)
+    urza = UrzaLibrary(root=tmp_path / "urza")
+    service = TamiyoService(store_config=config, urza=urza, signature_context=_SIGNATURE_CONTEXT)
     packet = leyline_pb2.SystemStatePacket(
         version=1,
         current_epoch=1,
@@ -1101,9 +1120,11 @@ def test_latency_metrics_trigger_actions(tmp_path) -> None:
 
 def test_optimizer_hint_drives_optimizer(tmp_path) -> None:
     # Use a seed-focused policy to ensure baseline command is SEED
+    urza = UrzaLibrary(root=tmp_path / "urza")
     service = TamiyoService(
         policy=_SeedPolicy(),
         store_config=FieldReportStoreConfig(path=tmp_path / "field_reports.log"),
+        urza=urza,
         signature_context=_SIGNATURE_CONTEXT,
     )
     packet = leyline_pb2.SystemStatePacket(
@@ -1128,7 +1149,8 @@ def test_optimizer_hint_drives_optimizer(tmp_path) -> None:
 
 def test_tamiyo_stale_command_rejected(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
-    service = TamiyoService(store_config=config, signature_context=_SIGNATURE_CONTEXT)
+    urza = UrzaLibrary(root=tmp_path / "urza")
+    service = TamiyoService(store_config=config, urza=urza, signature_context=_SIGNATURE_CONTEXT)
     packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=0, training_run_id="run-1")
     command = service.evaluate_epoch(packet)
 
@@ -1170,7 +1192,8 @@ def test_compile_fallback_counter_exposed(tmp_path, monkeypatch: pytest.MonkeyPa
     cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
     # Enable compile in config to trigger the path even on CPU
     policy = TamiyoPolicy(TamiyoPolicyConfig(enable_compile=True))
-    service = TamiyoService(policy=policy, store_config=cfg, signature_context=_SIGNATURE_CONTEXT)
+    urza = UrzaLibrary(root=tmp_path / "urza")
+    service = TamiyoService(policy=policy, store_config=cfg, urza=urza, signature_context=_SIGNATURE_CONTEXT)
 
     packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-compile")
     # Provide at least one seed to avoid fast-path pause
