@@ -1,0 +1,12 @@
+[MASTER]
+jobs=0
+ignore-patterns=
+load-plugins=
+
+[MESSAGES CONTROL]
+# Keep CI green by default; Ruff is the primary linter in this repo.
+disable=all
+
+[REPORTS]
+score=yes
+fail-under=0.0
