@@ -15,7 +15,7 @@ Current Status
 - P2 — GNN Compile Warm‑Up + Telemetry: Implemented (CUDA‑only warm‑up; telemetry `tamiyo.gnn.compile_warm_ms`)
 - P3 — PolicyUpdate Security & Rollback: Implemented (transactional load + version/freshness guards)
 - P8 — Blend Mode Annotations: Implemented (Tamiyo emits optional `blend_mode` + params; Kasmina consumes executor‑side)
-- P9 — Field Report Lifecycle: Implemented (observation windows + durable retry index with backoff)
+- P9 — Field Report Lifecycle: Implemented (observation windows + durable retry index; default N=1 disables synthesis and preserves per‑step reporting)
 
 References
 - docs/architecture_summary.md
@@ -291,7 +291,7 @@ Files
 - Sidecars: `var/tamiyo/field_reports.index.json`, `var/tamiyo/field_reports.windows.json`
 
 Env/Knobs
-- `TAMIYO_FR_OBS_WINDOW_EPOCHS` (default 3)
+- `TAMIYO_FR_OBS_WINDOW_EPOCHS` (default 1; when 1, no synthesis, per‑step reports only)
 - `TAMIYO_FR_RETRY_BACKOFF_MS` (default 1000), `TAMIYO_FR_RETRY_BACKOFF_MULT` (default 2.0)
 - Reuse `TAMIYO_FIELD_REPORT_MAX_RETRIES`
 

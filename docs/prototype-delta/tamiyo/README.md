@@ -26,11 +26,16 @@ Outstanding Items (for coders)
   - Pointers: `src/esper/tamiyo/service.py::ingest_policy_update`.
 
 - Field report lifecycle (ack/retry + observation windows)
-  - Add ack/retry semantics for publishes, observation windows (≥3 epochs) before synthesis, WAL index, and bounded retries.
+  - Add ack/retry semantics for publishes, observation windows (≥1 epoch) before synthesis, WAL index, and bounded retries.
   - Pointers: `src/esper/tamiyo/persistence.py` (WAL), `src/esper/tamiyo/service.py::generate_field_report/publish_history`.
-  - New env knobs: `TAMIYO_FR_OBS_WINDOW_EPOCHS` (default 3), `TAMIYO_FR_RETRY_BACKOFF_MS` (default 1000), `TAMIYO_FR_RETRY_BACKOFF_MULT` (default 2.0).
+  - New env knobs: `TAMIYO_FR_OBS_WINDOW_EPOCHS` (default 1), `TAMIYO_FR_RETRY_BACKOFF_MS` (default 1000), `TAMIYO_FR_RETRY_BACKOFF_MULT` (default 2.0).
   - Semantics: per-step reports are still emitted with `observation_window_epochs=1`; synthesised reports after N steps carry `observation_window_epochs=N` and `report_id` prefixed with `fr-synth-`.
-  - Urza is required: `TamiyoService` initialises a default `UrzaLibrary` from settings when none is provided.
+  - Urza is required: callers must pass an `UrzaLibrary` instance to `TamiyoService`; the service fails fast if absent (no implicit defaults).
+
+Defaults & Testing Notes (Prototype)
+------------------------------------
+- Observation windows default to 1 epoch (no synthesis). This preserves “last packet is the decision packet” expectations for dashboards and tests.
+- Nissa’s ingestor flushes its bulk buffer after each telemetry ingest in prototype mode so stub Elasticsearch clients that only implement `index()` can observe documents immediately.
 
 - Security envelope
   - Sign emitted AdaptationCommands (HMAC/nonce/freshness) and verify signed PolicyUpdate payloads.

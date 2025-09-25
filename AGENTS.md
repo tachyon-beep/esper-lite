@@ -3,6 +3,7 @@
 ## Agent Crib Sheet
 
 - When starting any task, skim docs/architecture_summary.md first. It summarizes subsystem responsibilities, Leyline contracts, safety/telemetry patterns, and key integration points. Treat it as the canonical quick reference when navigating code or adding features.
+- If a task requires network access or any other sandbox-breaking action, pause and obtain explicit authorization from the user before proceeding.
 
 ## Project Structure & Module Organization
 

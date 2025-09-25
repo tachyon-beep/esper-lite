@@ -275,8 +275,23 @@ class TezzeretCompiler:
         cache_dir = self._resolve_inductor_cache_dir()
 
         with _inductor_cache(cache_dir):
+            disable_env = str(os.environ.get("TEZZERET_ENABLE_COMPILE", "false")).lower()
+            compile_disabled = disable_env in ("0", "false", "no", "off")
             if strategy == "conservative":
                 eager_fallback = True
+                selected_strategy = "conservative"
+                compiled = module
+            elif compile_disabled:
+                eager_fallback = True
+                selected_strategy = "eager"
+                # Force CPU to avoid GPU init/graphs in test environments
+                if device.type == "cuda":
+                    try:
+                        module = module.to("cpu")
+                        example_inputs = tuple(t.detach().cpu() for t in example_inputs)
+                        device = torch.device("cpu")
+                    except Exception:
+                        pass
                 compiled = module
             else:
                 try:

@@ -1,3 +1,10 @@
+engines:
+    pylintpython3:
+        base_sub_dir: .
+        exclude_paths:
+            - src/**/_generated/**
+            - '**/*_pb2.py'
+            - '**/*_pb2_grpc.py'
 exclude_paths:
     - src/**/_generated/**
     - '**/*_pb2.py'
@@ -6,9 +13,9 @@ paths:
     - src
     - tests
 runtimes:
-    - python@3.11.11
+    - python@3.12.9
 tools:
     - lizard@1.17.31
-    - pylint@3.3.7
-    - semgrep@1.78.0
+    - pylint@3.3.8
+    - semgrep@1.137.1
     - trivy@0.66.0

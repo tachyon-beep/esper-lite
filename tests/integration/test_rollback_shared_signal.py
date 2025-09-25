@@ -74,6 +74,7 @@ async def _start_weatherlight(
         while not self._shutdown_requested.is_set():
             await asyncio.sleep(0.05)
     WeatherlightService._rollback_signal_loop = _noop_monitor  # type: ignore[assignment]
+    WeatherlightService._emergency_stream_loop = _noop_monitor  # type: ignore[assignment]
     # Weatherlight requires a secret; provide a dummy one for tests
     monkey_secret = os.environ.get("ESPER_LEYLINE_SECRET")
     os.environ["ESPER_LEYLINE_SECRET"] = "test-secret"

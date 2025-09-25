@@ -11,12 +11,12 @@ Design Principles
 - Non‑blocking: synthesis and publish steps must not stall Tamiyo decisions.
 
 Scope (Prototype)
-- Implement per‑decision observation windows; default N=3 epochs (configurable).
+- Implement per‑decision observation windows; default N=1 epoch (configurable).
 - Add a durable retry/index sidecar for field reports; bounded retries with backoff.
 - Keep report content minimal (as per docs): outcome, observation_window_epochs, metrics delta.
 
 Configuration (Env → EsperSettings)
-- `TAMIYO_FR_OBS_WINDOW_EPOCHS` (int, default 3) — number of epochs/steps to aggregate per decision before synthesis. Use 1 to retain current per‑decision emit.
+- `TAMIYO_FR_OBS_WINDOW_EPOCHS` (int, default 1) — number of epochs/steps to aggregate per decision before synthesis. Use 1 to retain current per‑decision emit (no synthesis).
 - `TAMIYO_FIELD_REPORT_MAX_RETRIES` (int, default existing value 3) — reuse current knob.
 - `TAMIYO_FR_RETRY_BACKOFF_MS` (int, default 1000) — initial backoff for retries.
 - `TAMIYO_FR_RETRY_BACKOFF_MULT` (float, default 2.0) — multiplier for exponential backoff.

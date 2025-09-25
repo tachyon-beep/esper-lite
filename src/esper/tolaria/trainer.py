@@ -1444,13 +1444,17 @@ class TolariaTrainer:
         # Best-effort hardware/pressure metrics (gated by step enrichment)
         if self._step_enrichment:
             if hardware.device_type == "cuda" and torch.cuda.is_available():
-                mem_free, mem_total = torch.cuda.mem_get_info()  # type: ignore[attr-defined]
-                used_gb = (mem_total - mem_free) / (1024**3)
-                free_gb = mem_free / (1024**3)
-                hardware.total_memory_gb = float(mem_total / (1024**3))
-                hardware.available_memory_gb = float(free_gb)
-                packet.training_metrics["gpu_mem_used_gb"] = float(used_gb)
-                packet.training_metrics["gpu_mem_free_gb"] = float(free_gb)
+                try:
+                    mem_free, mem_total = torch.cuda.mem_get_info()  # type: ignore[attr-defined]
+                    used_gb = (mem_total - mem_free) / (1024**3)
+                    free_gb = mem_free / (1024**3)
+                    hardware.total_memory_gb = float(mem_total / (1024**3))
+                    hardware.available_memory_gb = float(free_gb)
+                    packet.training_metrics["gpu_mem_used_gb"] = float(used_gb)
+                    packet.training_metrics["gpu_mem_free_gb"] = float(free_gb)
+                except Exception:
+                    hardware.total_memory_gb = 0.0
+                    hardware.available_memory_gb = 0.0
                 # NVML utilisation (handle initialised at startup)
                 if self._pynvml is not None and self._nvml_handle is not None:
                     util = self._pynvml.nvmlDeviceGetUtilizationRates(self._nvml_handle)
@@ -1463,7 +1467,10 @@ class TolariaTrainer:
                 hardware.available_memory_gb = 0.0
                 hardware.utilization_percent = 0.0
             # CPU util (mandatory psutil)
-            packet.training_metrics["cpu_util_percent"] = float(psutil.cpu_percent(interval=0.0))
+            try:
+                packet.training_metrics["cpu_util_percent"] = float(psutil.cpu_percent(interval=0.0))
+            except Exception:
+                pass
         hardware.compute_capability = 0
 
         self._populate_seed_states(packet)

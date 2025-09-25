@@ -352,7 +352,8 @@ def test_evaluate_step_includes_coverage_and_policy_version(tmp_path) -> None:
 
 def test_blend_mode_annotations_disabled_by_default(tmp_path) -> None:
     cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
-    service = TamiyoService(store_config=cfg, signature_context=_SIGNATURE_CONTEXT)
+    urza = UrzaLibrary(root=tmp_path / "urza")
+    service = TamiyoService(store_config=cfg, urza=urza, signature_context=_SIGNATURE_CONTEXT)
     packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=2, training_run_id="run-blend-off")
     # Provide a seed so we emit a SEED command
     seed = packet.seed_states.add(); seed.seed_id = "seed-1"; seed.stage = leyline_pb2.SEED_STAGE_TRAINING
@@ -366,7 +367,8 @@ def test_emits_blend_mode_annotations_when_enabled(tmp_path, monkeypatch: pytest
     monkeypatch.setenv("TAMIYO_ENABLE_BLEND_MODE_ANN", "true")
     monkeypatch.setenv("TAMIYO_BLEND_MODE_DEFAULT", "CONFIDENCE")
     cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
-    service = TamiyoService(store_config=cfg, signature_context=_SIGNATURE_CONTEXT)
+    urza = UrzaLibrary(root=tmp_path / "urza")
+    service = TamiyoService(store_config=cfg, urza=urza, signature_context=_SIGNATURE_CONTEXT)
     packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-blend-on")
     seed = packet.seed_states.add(); seed.seed_id = "seed-1"; seed.stage = leyline_pb2.SEED_STAGE_TRAINING
     cmd = service.evaluate_epoch(packet)
@@ -424,7 +426,8 @@ def test_health_indicators_include_timeouts(tmp_path, monkeypatch: pytest.Monkey
     # Set explicit budgets to predictable values
     monkeypatch.setenv("TAMIYO_STEP_TIMEOUT_MS", "7.5")
     cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
-    service = TamiyoService(store_config=cfg, signature_context=_SIGNATURE_CONTEXT, metadata_timeout_ms=12.0)
+    urza = UrzaLibrary(root=tmp_path / "urza")
+    service = TamiyoService(store_config=cfg, urza=urza, signature_context=_SIGNATURE_CONTEXT, metadata_timeout_ms=12.0)
     packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-hi")
     service.evaluate_step(packet)
     telemetry = service.telemetry_packets[-1]
@@ -623,6 +626,7 @@ def test_inference_breaker_enters_conservative_mode(tmp_path) -> None:
     service = TamiyoService(
         policy=_SlowPolicy(),
         store_config=config,
+        urza=UrzaLibrary(root=tmp_path / "urza"),
         signature_context=_SIGNATURE_CONTEXT,
         step_timeout_ms=1.0,
     )
@@ -649,6 +653,7 @@ def test_conservative_mode_overrides_directive(tmp_path) -> None:
         policy=TamiyoPolicy(),
         risk_config=RiskConfig(conservative_mode=True),
         store_config=config,
+        urza=UrzaLibrary(root=tmp_path / "urza"),
         signature_context=_SIGNATURE_CONTEXT,
     )
     packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1)
@@ -661,7 +666,7 @@ def test_service_default_compile_on_cuda(monkeypatch: pytest.MonkeyPatch) -> Non
     # Ensure settings don't force-override compile/device
     monkeypatch.delenv("TAMIYO_ENABLE_COMPILE", raising=False)
     monkeypatch.delenv("TAMIYO_DEVICE", raising=False)
-    service = TamiyoService(store_config=FieldReportStoreConfig(path=Path("/tmp/field_reports.log")), signature_context=_SIGNATURE_CONTEXT)
+    service = TamiyoService(store_config=FieldReportStoreConfig(path=Path("/tmp/field_reports.log")), urza=UrzaLibrary(root=Path("/tmp/urza")), signature_context=_SIGNATURE_CONTEXT)
     # If backend raises or compile path falls back, skip to avoid flakiness on exotic stacks
     if not getattr(service._policy, "compile_enabled", False):  # type: ignore[attr-defined]
         pytest.skip("compile path fell back on this CUDA backend; default enablement attempted")
@@ -670,6 +675,9 @@ def test_service_default_compile_on_cuda(monkeypatch: pytest.MonkeyPatch) -> Non
 
 @pytest.mark.asyncio
 async def test_field_report_publish_hedging_success_after_retry(tmp_path: Path) -> None:
+    # Use zero backoff to attempt retry immediately on next publish cycle
+    import os
+    os.environ["TAMIYO_FR_RETRY_BACKOFF_MS"] = "0"
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
     urza = UrzaLibrary(root=tmp_path / "urza")
     service = TamiyoService(store_config=config, urza=urza, signature_context=_SIGNATURE_CONTEXT)
@@ -719,6 +727,7 @@ async def test_field_report_publish_drops_after_cap(tmp_path: Path) -> None:
     # Inject settings via environment
     import os
     os.environ["TAMIYO_FIELD_REPORT_MAX_RETRIES"] = "1"
+    os.environ["TAMIYO_FR_RETRY_BACKOFF_MS"] = "0"
     urza = UrzaLibrary(root=tmp_path / "urza")
     service = TamiyoService(store_config=config, urza=urza, signature_context=_SIGNATURE_CONTEXT)
     # Generate one field report
@@ -853,6 +862,7 @@ def test_field_report_emitted_on_timeout(tmp_path) -> None:
     service = TamiyoService(
         policy=_SlowPolicy(),
         store_config=config,
+        urza=UrzaLibrary(root=tmp_path / "urza"),
         signature_context=_SIGNATURE_CONTEXT,
         step_timeout_ms=1.0,
     )
@@ -965,7 +975,7 @@ async def test_tamiyo_consume_policy_updates(tmp_path) -> None:
 def test_policy_update_rejected_on_version_mismatch(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TAMIYO_VERIFY_UPDATES", "true")
     cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
-    service = TamiyoService(store_config=cfg, signature_context=_SIGNATURE_CONTEXT)
+    service = TamiyoService(store_config=cfg, urza=UrzaLibrary(root=tmp_path / "urza"), signature_context=_SIGNATURE_CONTEXT)
     update = leyline_pb2.PolicyUpdate(version=1, policy_id="p1", training_run_id="run-1", tamiyo_policy_version="wrong-version")
     buf = BytesIO(); torch.save(service._policy.state_dict(), buf)  # type: ignore[attr-defined]
     update.payload = buf.getvalue()
@@ -980,7 +990,7 @@ def test_policy_update_rejected_when_stale(tmp_path, monkeypatch: pytest.MonkeyP
     monkeypatch.setenv("TAMIYO_VERIFY_UPDATES", "true")
     monkeypatch.setenv("TAMIYO_UPDATE_FRESHNESS_SEC", "60")
     cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
-    service = TamiyoService(store_config=cfg, signature_context=_SIGNATURE_CONTEXT)
+    service = TamiyoService(store_config=cfg, urza=UrzaLibrary(root=tmp_path / "urza"), signature_context=_SIGNATURE_CONTEXT)
     update = leyline_pb2.PolicyUpdate(version=1, policy_id="p1", training_run_id="run-1", tamiyo_policy_version=service._policy.architecture_version)  # type: ignore[attr-defined]
     # Make the update appear 1 hour old
     from datetime import datetime, timedelta, UTC
@@ -998,7 +1008,7 @@ def test_policy_update_applies_transactionally(tmp_path, monkeypatch: pytest.Mon
     monkeypatch.setenv("TAMIYO_VERIFY_UPDATES", "true")
     monkeypatch.setenv("TAMIYO_UPDATE_FRESHNESS_SEC", "0")
     cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
-    service = TamiyoService(store_config=cfg, signature_context=_SIGNATURE_CONTEXT)
+    service = TamiyoService(store_config=cfg, urza=UrzaLibrary(root=tmp_path / "urza"), signature_context=_SIGNATURE_CONTEXT)
     update = leyline_pb2.PolicyUpdate(version=1, policy_id="p-ok", training_run_id="run-1", tamiyo_policy_version=service._policy.architecture_version)  # type: ignore[attr-defined]
     update.issued_at.GetCurrentTime()
     buf = BytesIO(); torch.save(service._policy.state_dict(), buf)  # type: ignore[attr-defined]
@@ -1011,7 +1021,7 @@ def test_policy_update_rejected_on_registry_mismatch(tmp_path, monkeypatch: pyte
     # Tamper registry digest in metadata to force validate_state_dict rejection
     monkeypatch.setenv("TAMIYO_VERIFY_UPDATES", "true")
     cfg = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
-    service = TamiyoService(store_config=cfg, signature_context=_SIGNATURE_CONTEXT)
+    service = TamiyoService(store_config=cfg, urza=UrzaLibrary(root=tmp_path / "urza"), signature_context=_SIGNATURE_CONTEXT)
     state = service._policy.state_dict()  # type: ignore[attr-defined]
     if "_metadata" in state and isinstance(state["_metadata"], dict):
         meta = dict(state["_metadata"])  # shallow copy

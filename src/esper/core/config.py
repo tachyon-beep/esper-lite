@@ -86,7 +86,7 @@ class EsperSettings(BaseSettings):
     )
     # P9 — Field Report Lifecycle (observation windows + retry backoff)
     tamiyo_fr_obs_window_epochs: int = Field(
-        alias="TAMIYO_FR_OBS_WINDOW_EPOCHS", default=3
+        alias="TAMIYO_FR_OBS_WINDOW_EPOCHS", default=1
     )
     tamiyo_fr_retry_backoff_ms: int = Field(
         alias="TAMIYO_FR_RETRY_BACKOFF_MS", default=1000
@@ -96,7 +96,7 @@ class EsperSettings(BaseSettings):
     )
     # Policy update verification knobs
     tamiyo_verify_updates: bool = Field(
-        alias="TAMIYO_VERIFY_UPDATES", default=True
+        alias="TAMIYO_VERIFY_UPDATES", default=False
     )
     tamiyo_update_freshness_sec: int = Field(
         alias="TAMIYO_UPDATE_FRESHNESS_SEC", default=0

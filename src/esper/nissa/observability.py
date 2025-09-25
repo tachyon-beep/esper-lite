@@ -308,6 +308,7 @@ class NissaIngestor:
         else:
             self._index_document("telemetry", document)
         self._ingest_latency_ms.labels(type="telemetry").observe((_time.perf_counter() - t0) * 1000.0)
+        self._flush_bulk()
 
     def metrics(self) -> dict[str, str]:
         """Return the Prometheus metrics exposition text."""

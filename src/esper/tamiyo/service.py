@@ -224,9 +224,9 @@ class TamiyoService:
         self._metadata_breaker = TamiyoCircuitBreaker(name="metadata")
         # P9 — Observation windows and durable retry index sidecars
         try:
-            self._obs_window_epochs = max(1, int(getattr(self._settings, "tamiyo_fr_obs_window_epochs", 3)))
+            self._obs_window_epochs = max(1, int(getattr(self._settings, "tamiyo_fr_obs_window_epochs", 1)))
         except Exception:
-            self._obs_window_epochs = 3
+            self._obs_window_epochs = 1
         sidecar_dir = self._field_report_store.path.parent
         self._retry_index_path = sidecar_dir / "field_reports.index.json"
         self._windows_path = sidecar_dir / "field_reports.windows.json"
@@ -695,7 +695,7 @@ class TamiyoService:
     ) -> None:
         # Initialise a window for the newly issued command
         cmd_id = command.command_id or ""
-        if cmd_id and cmd_id not in self._windows and self._obs_window_epochs > 0:
+        if cmd_id and cmd_id not in self._windows and self._obs_window_epochs > 1:
             # Prepare immutable command metadata for synthesis
             bp_id = command.seed_operation.blueprint_id if command.HasField("seed_operation") else ""
             issued_iso = None
@@ -1838,7 +1838,6 @@ class TamiyoService:
                 continue
             try:
                 await oona.publish_field_report(report)
-                # Success → mark published
                 self._report_retry_count.pop(key, None)
                 self._retry_index[key] = {
                     "published": True,

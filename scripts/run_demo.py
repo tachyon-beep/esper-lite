@@ -212,7 +212,7 @@ async def run_demo() -> None:
 
     with TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
-        _, _, urza_runtime = await initialise_blueprint_pipeline(
+        catalog, urza_library, urza_runtime = await initialise_blueprint_pipeline(
             root,
             catalog_notifier=lambda update: oona.publish_kernel_catalog_update(update),
         )
@@ -227,7 +227,7 @@ async def run_demo() -> None:
         except RuntimeError:
             logger.warning("ESPER_LEYLINE_SECRET not set; using demo signing secret")
             tamiyo_signature = SignatureContext(secret=b"demo-signing-secret")
-        tamiyo_service = TamiyoService(signature_context=tamiyo_signature)
+        tamiyo_service = TamiyoService(urza=urza_library, signature_context=tamiyo_signature)
         tamiyo_client = DemoTamiyoClient(tamiyo_service)
 
         model = build_model()
