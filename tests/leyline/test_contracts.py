@@ -111,11 +111,5 @@ def test_contract_bundle_path_relative() -> None:
     bundle = registry.get(DEFAULT_BUNDLE_NAME)
     assert bundle is not None
     assert bundle.schema_dir.is_dir()
-    expected = (
-        Path(__file__).resolve().parents[2]
-        / "src"
-        / "esper"
-        / "leyline"
-        / "_generated"
-    )
+    expected = Path(__file__).resolve().parents[2] / "src" / "esper" / "leyline" / "_generated"
     assert bundle.schema_dir == expected

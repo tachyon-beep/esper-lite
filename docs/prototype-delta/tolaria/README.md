@@ -4,13 +4,12 @@ Executive summary: the prototype provides a training loop with epoch boundary st
 
 Outstanding Items (for coders)
 
-- Cross‑process signaling/broadcast (rollback/emergency)
-  - Shared memory primitive exists; wire it into Weatherlight broadcast and exercise end-to-end.
-  - Pointers: `src/esper/tolaria/rollback.py:106` (`SharedDeadlineSignal`), `src/esper/tolaria/trainer.py:1661` (`set_shared_rollback_signal`), `src/esper/tolaria/emergency.py:38`.
+- (none) — cross-process signaling/broadcast now implemented via shared rollback and emergency signals bridged through Weatherlight.
 
 - Optional: per‑layer by‑seed summaries
   - Emit compact per‑layer summaries by seed to aid Tamiyo diagnostics.
-  - Keep disabled by default to avoid telemetry bloat.
+  - Enable via `TOLARIA_SEED_LAYER_SUMMARIES_ENABLED=true`; cap metrics with `TOLARIA_SEED_LAYER_TOPK` (default 3).
+  - Keep disabled by default to avoid telemetry bloat; compact seed telemetry (`TOLARIA_SEED_HEALTH_COMPACT=true`) also suppresses layer metrics.
 
 - Tests & telemetry enrichment
   - Property tests for LR schedules; rollback deadline edge cases; emergency escalate/resume; add per‑feature metrics if helpful.

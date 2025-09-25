@@ -47,5 +47,23 @@ class EmbeddingRegistry:
     def _save(self) -> None:
         self._path.write_text(json.dumps(self._table), encoding="utf-8")
 
+    # --- Extensions for parity/validation ---
+    def snapshot(self) -> Dict[str, int]:
+        """Return a copy of the registry mapping."""
+        return dict(self._table)
+
+    def digest(self) -> str:
+        """Stable content digest for checkpoint parity.
+
+        Computes a SHA-256 over the sorted JSON representation of key→index.
+        """
+        try:
+            import hashlib
+        except Exception:
+            return ""
+        items = sorted(self._table.items(), key=lambda kv: kv[0])
+        payload = json.dumps(items, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
 
 __all__ = ["EmbeddingRegistry", "EmbeddingRegistryConfig"]

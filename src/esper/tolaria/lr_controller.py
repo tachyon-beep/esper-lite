@@ -11,7 +11,9 @@ from typing import Protocol
 
 
 class _Schedule(Protocol):
-    def lr(self, step: int, epoch: int, base_lr: float, metric: float | None = None) -> float:  # pragma: no cover - Protocol
+    def lr(
+        self, step: int, epoch: int, base_lr: float, metric: float | None = None
+    ) -> float:  # pragma: no cover - Protocol
         ...
 
 
@@ -114,4 +116,3 @@ def build_controller(
 
 
 __all__ = ["LRController", "build_controller"]
-

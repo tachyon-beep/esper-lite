@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-
 from typing import TYPE_CHECKING
 
 from esper.leyline import leyline_pb2
@@ -89,10 +88,14 @@ class KasminaPrefetchCoordinator:
             if not task.done():
                 continue
             if task.cancelled():
-                return RuntimeError("Kasmina prefetch task cancelled unexpectedly")
+                if self._running:
+                    return RuntimeError("Kasmina prefetch task cancelled unexpectedly")
+                continue
             exception = task.exception()
             if exception is None:
-                return RuntimeError("Kasmina prefetch task exited unexpectedly")
+                if self._running:
+                    return RuntimeError("Kasmina prefetch task exited unexpectedly")
+                continue
             return exception
         return None
 

@@ -2,22 +2,23 @@
 
 from __future__ import annotations
 
+import contextlib
+import logging
+import math
+from collections.abc import Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-import logging
-import math
-from typing import Mapping
 
 import torch
 from torch import nn
 
+from esper.core import EsperSettings
 from esper.leyline import leyline_pb2
 from esper.simic.registry import EmbeddingRegistry, EmbeddingRegistryConfig
 
 from .gnn import TamiyoGNN, TamiyoGNNConfig
 from .graph_builder import TamiyoGraphBuilder, TamiyoGraphBuilderConfig
-
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +35,8 @@ class TamiyoPolicyConfig:
     seed_vocab: int = 1024
     blueprint_vocab: int = 1024
     device: str = "cpu"
-    hidden_dim: int = 48
     dropout: float = 0.2
-    attention_heads: int = 1
+    attention_heads: int = 4
     enable_compile: bool = False
     enable_autocast: bool = True
     architecture_version: str = _DEFAULT_ARCH_VERSION
@@ -44,14 +44,25 @@ class TamiyoPolicyConfig:
     normalizer_path: Path = Path("var/tamiyo/gnn_norms.json")
     seed_registry: EmbeddingRegistry | None = None
     blueprint_registry: EmbeddingRegistry | None = None
+    schedule_registry: EmbeddingRegistry | None = None
+    # Extended categorical registries for parity with Simic
+    layer_registry: EmbeddingRegistry | None = None
+    activation_registry: EmbeddingRegistry | None = None
+    optimizer_registry: EmbeddingRegistry | None = None
+    hazard_registry: EmbeddingRegistry | None = None
     max_layers: int = 3
     max_activations: int = 1
     max_parameters: int = 1
-    layer_feature_dim: int = 8
-    activation_feature_dim: int = 6
-    parameter_feature_dim: int = 6
+    layer_feature_dim: int = 12
+    activation_feature_dim: int = 8
+    parameter_feature_dim: int = 10
     edge_feature_dim: int = 3
     schedule_output_dim: int = 2
+    policy_classes: int = 32
+    risk_classes: int = 5
+    sage_hidden_dim: int = 256
+    gat_hidden_dim: int = 128
+    param_vector_dim: int = 4
 
 
 class TamiyoPolicy(nn.Module):
@@ -65,7 +76,17 @@ class TamiyoPolicy(nn.Module):
 
     def __init__(self, config: TamiyoPolicyConfig | None = None) -> None:
         super().__init__()
-        cfg = config or TamiyoPolicyConfig()
+        # Dynamic default: enable torch.compile by default on CUDA when no config provided.
+        if config is None:
+            cfg = TamiyoPolicyConfig()
+            try:
+                # Default compile ON only when CUDA is available AND device targets CUDA
+                if torch.cuda.is_available() and str(cfg.device).lower().startswith("cuda"):
+                    cfg.enable_compile = True
+            except Exception:
+                pass
+        else:
+            cfg = config
         self._config = cfg
 
         cfg.registry_path.mkdir(parents=True, exist_ok=True)
@@ -74,13 +95,52 @@ class TamiyoPolicy(nn.Module):
             EmbeddingRegistryConfig(cfg.registry_path / "seed_registry.json", cfg.seed_vocab)
         )
         self._blueprint_registry = cfg.blueprint_registry or EmbeddingRegistry(
-            EmbeddingRegistryConfig(cfg.registry_path / "blueprint_registry.json", cfg.blueprint_vocab)
+            EmbeddingRegistryConfig(
+                cfg.registry_path / "blueprint_registry.json", cfg.blueprint_vocab
+            )
         )
+        # Schedule/enum registry for categorical stability (e.g., blending methods)
+        self._schedule_registry = cfg.schedule_registry or EmbeddingRegistry(
+            EmbeddingRegistryConfig(
+                cfg.registry_path / "schedule_registry.json",
+                max(64, len(cfg.blending_methods) + 16),
+            )
+        )
+        # Pre-seed known schedules for deterministic indices
+        for name in cfg.blending_methods:
+            try:
+                _ = self._schedule_registry.get(str(name))
+            except Exception:
+                pass
+
+        # Extended registries for categorical stability
+        self._layer_registry = cfg.layer_registry or EmbeddingRegistry(
+            EmbeddingRegistryConfig(cfg.registry_path / "layer_type_registry.json", 1024)
+        )
+        self._activation_registry = cfg.activation_registry or EmbeddingRegistry(
+            EmbeddingRegistryConfig(cfg.registry_path / "activation_type_registry.json", 1024)
+        )
+        self._optimizer_registry = cfg.optimizer_registry or EmbeddingRegistry(
+            EmbeddingRegistryConfig(cfg.registry_path / "optimizer_family_registry.json", 256)
+        )
+        self._hazard_registry = cfg.hazard_registry or EmbeddingRegistry(
+            EmbeddingRegistryConfig(cfg.registry_path / "hazard_class_registry.json", 256)
+        )
+        # Pre-seed common optimizer families for deterministic indices
+        for fam in ("sgd", "adam", "adamw", "rmsprop", "adagrad"):
+            try:
+                _ = self._optimizer_registry.get(fam)
+            except Exception:
+                pass
 
         builder_cfg = TamiyoGraphBuilderConfig(
             normalizer_path=cfg.normalizer_path,
             seed_registry=self._seed_registry,
             blueprint_registry=self._blueprint_registry,
+            layer_type_registry=self._layer_registry,
+            activation_type_registry=self._activation_registry,
+            optimizer_family_registry=self._optimizer_registry,
+            hazard_class_registry=self._hazard_registry,
             seed_vocab=cfg.seed_vocab,
             blueprint_vocab=cfg.blueprint_vocab,
             max_layers=cfg.max_layers,
@@ -95,33 +155,93 @@ class TamiyoPolicy(nn.Module):
         self._graph_builder = TamiyoGraphBuilder(builder_cfg)
 
         gnn_cfg = TamiyoGNNConfig(
-            hidden_dim=cfg.hidden_dim,
+            global_input_dim=builder_cfg.global_feature_dim,
+            seed_input_dim=builder_cfg.seed_feature_dim,
+            blueprint_input_dim=builder_cfg.blueprint_feature_dim,
+            layer_input_dim=builder_cfg.layer_feature_dim,
+            activation_input_dim=builder_cfg.activation_feature_dim,
+            parameter_input_dim=builder_cfg.parameter_feature_dim,
+            sage_hidden_dim=cfg.sage_hidden_dim,
+            gat_hidden_dim=cfg.gat_hidden_dim,
             dropout=cfg.dropout,
             attention_heads=cfg.attention_heads,
-            policy_classes=3,
+            policy_classes=cfg.policy_classes,
             blending_classes=len(cfg.blending_methods),
-            layer_input_dim=cfg.layer_feature_dim,
-            activation_input_dim=cfg.activation_feature_dim,
-            parameter_input_dim=cfg.parameter_feature_dim,
             edge_feature_dim=cfg.edge_feature_dim,
             schedule_output_dim=cfg.schedule_output_dim,
+            risk_classes=cfg.risk_classes,
+            param_vector_dim=cfg.param_vector_dim,
         )
         self._gnn = TamiyoGNN(gnn_cfg)
         self._device = torch.device(cfg.device)
         self._gnn.to(self._device)
 
+        # Reduce CPU inference overhead by constraining intra-op threads when on CPU
+        try:
+            if self._device.type == "cpu":
+                import os as _os
+
+                threads = int(_os.getenv("TAMIYO_CPU_THREADS", "1"))
+                if threads > 0:
+                    torch.set_num_threads(threads)
+        except Exception:
+            pass
+
         self._autocast_enabled = cfg.enable_autocast
         self._compiled_model: nn.Module | None = None
         self._compile_enabled = False
+        self._compile_fallbacks: int = 0
+        self._compile_warm_ms: float = 0.0
+        self._compile_disabled_reason: str | None = None
         self._blueprint_metadata: dict[str, dict[str, float | str | bool | int]] = {}
 
-        if cfg.enable_compile:
+        requested_compile = bool(cfg.enable_compile)
+        device_type = self._device.type
+        try:
+            cuda_available = torch.cuda.is_available()
+        except Exception:  # pragma: no cover - defensive; treat as unavailable
+            cuda_available = False
+
+        if requested_compile:
+            if device_type != "cuda":
+                self._compile_disabled_reason = "device_not_cuda"
+            elif not cuda_available:
+                self._compile_disabled_reason = "cuda_unavailable"
+
+        if self._compile_disabled_reason is not None:
+            self._compile_enabled = False
+            self._compiled_model = None
+            # Surface once via telemetry/logging so operators see why compile is off.
+            log_event = (
+                "tamiyo_gnn_compile_disabled_cpu"
+                if self._compile_disabled_reason == "device_not_cuda"
+                else "tamiyo_gnn_compile_disabled"
+            )
+            logger.info(
+                log_event,
+                extra={
+                    "device": str(self._device),
+                    "reason": self._compile_disabled_reason,
+                },
+            )
+            self._compile_fallbacks += 1
+        elif requested_compile:
             try:  # pragma: no cover - depends on backend support
-                self._compiled_model = torch.compile(self._gnn, dynamic=True, mode="reduce-overhead")
+                self._compiled_model = torch.compile(
+                    self._gnn, dynamic=True, mode="reduce-overhead"
+                )
                 self._compile_enabled = True
+                # Best-effort warm-up to reduce first-step variance (CUDA only)
+                if self._device.type == "cuda":
+                    try:
+                        self._compile_warm_ms = self._warmup_compiled_model()
+                    except Exception:  # pragma: no cover - defensive; warm-up is optional
+                        self._compile_warm_ms = 0.0
             except Exception as exc:  # pragma: no cover - compile fallback path
                 logger.info("tamiyo_gnn_compile_disabled", extra={"reason": str(exc)})
+                self._compile_fallbacks += 1
                 self._compiled_model = None
+                self._compile_disabled_reason = "compile_error"
 
         try:
             torch.set_float32_matmul_precision("high")
@@ -134,18 +254,73 @@ class TamiyoPolicy(nn.Module):
         self._architecture_version = cfg.architecture_version
         self._blending_methods = cfg.blending_methods
         self._last_action: dict[str, float | str] = {}
+        self._last_feature_coverage: dict[str, float] = {}
+        self._last_feature_coverage_types: dict[str, float] = {}
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
     def select_action(self, packet: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
         graph = self._graph_builder.build(packet)
+        coverage = dict(getattr(graph, "feature_coverage", {}))
+        coverage_types = dict(getattr(graph, "feature_coverage_types", {}))
         seed_candidates = list(getattr(graph["seed"], "node_ids", []))
         seed_capabilities = list(getattr(graph["seed"], "capabilities", []))
         seed_fallback_scores = getattr(graph["seed"], "candidate_scores", None)
         blueprint_candidates = list(getattr(graph["blueprint"], "node_ids", []))
         blueprint_fallback_scores = getattr(graph["blueprint"], "candidate_scores", None)
-        graph = graph.to(self._device)
+
+        # Fast-path: no seed candidates → construct a pause command without
+        # running the GNN to meet tight step budgets.
+        if not seed_candidates:
+            action_idx = 2  # pause fallback
+            param_delta = 0.0
+            blending_method = self._blending_methods[0] if self._blending_methods else "linear"
+            schedule_values: tuple[float, float] = (0.0, 0.0)
+            command = self._build_command(
+                action_idx,
+                param_delta,
+                blending_method,
+                "",
+                "",
+                packet,
+                schedule_values,
+                None,
+            )
+            # Populate annotations and last_action with safe defaults
+            command.annotations.setdefault("policy_action", str(action_idx))
+            command.annotations.setdefault("policy_param_delta", f"{param_delta:.6f}")
+            command.annotations.setdefault("policy_version", self._architecture_version)
+            command.annotations.setdefault("policy_value_estimate", f"{0.0:.6f}")
+            command.annotations.setdefault("policy_risk_index", "0")
+            command.annotations.setdefault("policy_risk_score", f"{0.0:.6f}")
+
+            self._last_action = {
+                "action": float(action_idx),
+                "param_delta": param_delta,
+                "policy_param_vector": (),
+                "blending_method": blending_method,
+                "blending_index": 0.0,
+                "value_estimate": 0.0,
+                "risk_index": 0.0,
+                "risk_score": 0.0,
+                "compile_enabled": 1.0 if self._compile_enabled else 0.0,
+                "target_seed": "",
+                "blueprint_id": "",
+                "blending_schedule_start": schedule_values[0],
+                "blending_schedule_end": schedule_values[1],
+                "selected_seed_index": -1.0,
+                "selected_seed_score": 0.0,
+                "selected_blueprint_index": -1.0,
+            }
+            self._last_feature_coverage = coverage
+            self._last_feature_coverage_types = coverage_types
+            return command
+        if self._device.type == "cuda" and hasattr(graph, "pin_memory"):
+            with contextlib.suppress(Exception):
+                graph = graph.pin_memory()
+        non_blocking = self._device.type == "cuda"
+        graph = graph.to(self._device, non_blocking=non_blocking)
         module: nn.Module = self._compiled_model or self._gnn
 
         autocast_ctx = (
@@ -154,22 +329,85 @@ class TamiyoPolicy(nn.Module):
             else nullcontext()
         )
 
+        outputs = None
         with torch.inference_mode():
             with autocast_ctx:
                 try:
                     outputs = module(graph)
                 except Exception as exc:  # pragma: no cover - backend specific
+                    # First, if compiled model failed, fall back to eager.
                     if self._compiled_model is not None:
-                        logger.info("tamiyo_gnn_compile_runtime_failure", extra={"reason": str(exc)})
+                        logger.info(
+                            "tamiyo_gnn_compile_runtime_failure", extra={"reason": str(exc)}
+                        )
+                        self._compile_fallbacks += 1
                         self._compiled_model = None
                         self._compile_enabled = False
+                        # Track the most recent disablement reason for telemetry.
+                        if self._compile_disabled_reason is None:
+                            self._compile_disabled_reason = "runtime_failure"
                         module = self._gnn
-                        outputs = module(graph)
-                    else:
-                        raise
+                        try:
+                            outputs = module(graph)
+                        except Exception:
+                            # If still failing on CUDA, fall back to CPU
+                            if self._device.type == "cuda":
+                                with contextlib.suppress(Exception):
+                                    module = module.to("cpu")
+                                    graph = graph.to("cpu")
+                                    self._device = torch.device("cpu")
+                                    outputs = module(graph)
+                            else:
+                                # As a last resort, degrade to a safe pause
+                                outputs = None
+
+        if outputs is None:
+            # Degrade safely to a pause command
+            action_idx = 2
+            param_delta = 0.0
+            blending_method = self._blending_methods[0] if self._blending_methods else "linear"
+            schedule_values = (0.0, 0.0)
+            command = self._build_command(
+                action_idx,
+                param_delta,
+                blending_method,
+                "",
+                "",
+                packet,
+                schedule_values,
+                None,
+            )
+            command.annotations.setdefault("policy_action", str(action_idx))
+            command.annotations.setdefault("policy_param_delta", f"{param_delta:.6f}")
+            command.annotations.setdefault("policy_version", self._architecture_version)
+            command.annotations.setdefault("policy_value_estimate", f"{0.0:.6f}")
+            command.annotations.setdefault("policy_risk_index", "0")
+            command.annotations.setdefault("policy_risk_score", f"{0.0:.6f}")
+            self._last_action = {
+                "action": float(action_idx),
+                "param_delta": param_delta,
+                "policy_param_vector": (),
+                "blending_method": blending_method,
+                "blending_index": 0.0,
+                "value_estimate": 0.0,
+                "risk_index": 0.0,
+                "risk_score": 0.0,
+                "compile_enabled": 1.0 if self._compile_enabled else 0.0,
+                "target_seed": "",
+                "blueprint_id": "",
+                "blending_schedule_start": schedule_values[0],
+                "blending_schedule_end": schedule_values[1],
+                "selected_seed_index": -1.0,
+                "selected_seed_score": 0.0,
+                "selected_blueprint_index": -1.0,
+            }
+            self._last_feature_coverage = coverage
+            self._last_feature_coverage_types = coverage_types
+            return command
 
         policy_logits = outputs["policy_logits"].softmax(dim=-1)
         action_idx = int(policy_logits.argmax(dim=-1))
+        param_vector = outputs["policy_params"].detach().cpu().view(-1)
         param_delta = float(outputs["param_delta"].squeeze())
 
         seed_scores = outputs.get("seed_scores")
@@ -228,6 +466,10 @@ class TamiyoPolicy(nn.Module):
         command.annotations["policy_value_estimate"] = f"{value_estimate:.6f}"
         command.annotations["policy_risk_index"] = str(risk_idx)
         command.annotations["policy_risk_score"] = f"{risk_score:.6f}"
+        # Attach feature coverage summary for downstream degraded-input reactions
+        if coverage:
+            avg_cov = float(sum(coverage.values()) / max(1, len(coverage)))
+            command.annotations.setdefault("feature_coverage", f"{avg_cov:.3f}")
         if selected_seed:
             command.annotations.setdefault("selected_seed", selected_seed)
         if selected_blueprint:
@@ -236,6 +478,7 @@ class TamiyoPolicy(nn.Module):
         self._last_action = {
             "action": float(action_idx),
             "param_delta": param_delta,
+            "policy_param_vector": tuple(float(value) for value in param_vector.tolist()),
             "blending_method": blending_method,
             "blending_index": float(blending_idx),
             "value_estimate": value_estimate,
@@ -243,13 +486,24 @@ class TamiyoPolicy(nn.Module):
             "risk_score": risk_score,
             "compile_enabled": 1.0 if self._compile_enabled else 0.0,
             "target_seed": command.target_seed_id,
-            "blueprint_id": command.seed_operation.blueprint_id if command.HasField("seed_operation") else "",
+            "blueprint_id": (
+                command.seed_operation.blueprint_id if command.HasField("seed_operation") else ""
+            ),
             "blending_schedule_start": schedule_values[0],
             "blending_schedule_end": schedule_values[1],
             "selected_seed_index": float(selected_seed_idx),
             "selected_seed_score": selected_seed_score,
             "selected_blueprint_index": float(selected_blueprint_idx),
         }
+        self._last_feature_coverage = coverage
+        self._last_feature_coverage_types = coverage_types
+        # Optional: emit blend-mode annotations for Kasmina (P8)
+        try:
+            self._maybe_emit_blend_mode_annotations(
+                command, packet, selected_seed, selected_blueprint
+            )
+        except Exception:  # pragma: no cover - defensive
+            pass
         return command
 
     @property
@@ -264,13 +518,122 @@ class TamiyoPolicy(nn.Module):
     def compile_enabled(self) -> bool:
         return self._compile_enabled
 
+    @property
+    def compile_fallbacks(self) -> int:
+        return self._compile_fallbacks
+
+    @property
+    def compile_warm_ms(self) -> float:
+        return self._compile_warm_ms
+
+    @property
+    def compile_disabled_reason(self) -> str | None:
+        return self._compile_disabled_reason
+
+    @property
+    def device(self) -> torch.device:
+        return self._device
+
+    @property
+    def feature_coverage(self) -> dict[str, float]:
+        return dict(self._last_feature_coverage)
+
+    @property
+    def feature_coverage_types(self) -> dict[str, float]:
+        return dict(self._last_feature_coverage_types)
+
     def update_blueprint_metadata(
         self, metadata: Mapping[str, Mapping[str, float | str | bool | int]]
     ) -> None:
         for key, value in metadata.items():
             self._blueprint_metadata[key] = dict(value)
 
-    def _lookup_blueprint_metadata(self, blueprint_id: str) -> Mapping[str, float | str | bool | int]:
+    # ------------------------------------------------------------------
+    # Warm-up Helpers
+    # ------------------------------------------------------------------
+    def _warmup_compiled_model(self) -> float:
+        """Run a minimal forward on the compiled model to warm kernels.
+
+        Returns the elapsed time in milliseconds on success; 0.0 on failure.
+        """
+        if not self._compile_enabled or self._compiled_model is None:
+            return 0.0
+        # Restrict warm-up to CUDA devices to avoid heavy CPU inductor startup in CI
+        if self._device.type != "cuda":
+            return 0.0
+        try:
+            from torch_geometric.data import HeteroData  # local import
+        except Exception:
+            return 0.0
+
+        cfg = getattr(self._gnn, "_cfg", None)
+        if cfg is None:
+            return 0.0
+        # Build a tiny hetero-graph: one node per type, one self-edge per relation
+        data = HeteroData()
+        dims = {
+            "global": cfg.global_input_dim,
+            "seed": cfg.seed_input_dim,
+            "blueprint": cfg.blueprint_input_dim,
+            "layer": cfg.layer_input_dim,
+            "activation": cfg.activation_input_dim,
+            "parameter": cfg.parameter_input_dim,
+        }
+        for ntype, dim in dims.items():
+            data[ntype].x = torch.zeros((1, int(dim)), dtype=torch.float32)
+
+        relations = getattr(self._gnn, "_relations", ())
+        edge_dim = int(getattr(cfg, "edge_feature_dim", 0))
+        for relation in relations:
+            src, rel, dst = relation
+            edge_index = torch.tensor([[0], [0]], dtype=torch.long)
+            data[(src, rel, dst)].edge_index = edge_index
+            if edge_dim > 0:
+                data[(src, rel, dst)].edge_attr = torch.zeros((1, edge_dim), dtype=torch.float32)
+
+        # Move to device
+        non_blocking = self._device.type == "cuda"
+        data = data.to(self._device, non_blocking=non_blocking)
+
+        module: nn.Module = self._compiled_model
+        was_training = module.training
+        module.eval()
+        # Prefer CUDA timing when available
+        t0 = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None
+        t1 = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None
+        import time as _time
+
+        wall_start = _time.perf_counter()
+        with torch.inference_mode():
+            autocast_ctx = (
+                torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+                if (self._autocast_enabled and self._device.type == "cuda")
+                else nullcontext()
+            )
+            with autocast_ctx:
+                try:
+                    if t0 and t1:
+                        torch.cuda.synchronize()
+                        t0.record()
+                    _ = module(data)
+                    if t0 and t1:
+                        t1.record()
+                        torch.cuda.synchronize()
+                except Exception:
+                    pass
+        wall_ms = (_time.perf_counter() - wall_start) * 1000.0
+        if was_training:
+            module.train()
+        if t0 and t1:
+            try:
+                return float(t0.elapsed_time(t1))
+            except Exception:
+                return float(wall_ms)
+        return float(wall_ms)
+
+    def _lookup_blueprint_metadata(
+        self, blueprint_id: str
+    ) -> Mapping[str, float | str | bool | int]:
         return self._blueprint_metadata.get(blueprint_id, {})
 
     @staticmethod
@@ -280,6 +643,162 @@ class TamiyoPolicy(nn.Module):
             "run_id": packet.training_run_id,
             "packet_id": packet.packet_id,
         }
+
+    # ------------------------------------------------------------------
+    # Blend-mode annotations (P8)
+    # ------------------------------------------------------------------
+    def _maybe_emit_blend_mode_annotations(
+        self,
+        command: leyline_pb2.AdaptationCommand,
+        packet: leyline_pb2.SystemStatePacket,
+        selected_seed: str,
+        selected_blueprint: str,
+    ) -> None:
+        if command.command_type != leyline_pb2.COMMAND_SEED:
+            return
+        settings = EsperSettings()
+        if not getattr(settings, "tamiyo_enable_blend_mode_ann", False):
+            return
+        # Choose mode from default; keep conservative by default
+        mode = (getattr(settings, "tamiyo_blend_mode_default", "CONVEX") or "CONVEX").upper()
+        if mode not in {"CONVEX", "RESIDUAL", "CHANNEL", "CONFIDENCE"}:
+            mode = "CONVEX"
+        command.annotations.setdefault("blend_mode", mode)
+        command.annotations.setdefault(
+            "blend_mode_source",
+            "override" if mode != "CONVEX" else "heuristic",
+        )
+        # Confidence gating parameters (always emit for CONFIDENCE, optional otherwise)
+        gate_k = float(getattr(settings, "tamiyo_blend_conf_gate_k", 1.0))
+        gate_tau = float(getattr(settings, "tamiyo_blend_conf_gate_tau", 1.0))
+        a_lo = float(getattr(settings, "tamiyo_blend_alpha_lo", 0.0))
+        a_hi = float(getattr(settings, "tamiyo_blend_alpha_hi", 1.0))
+        a_lo = max(0.0, min(1.0, a_lo))
+        a_hi = max(0.0, min(1.0, a_hi))
+        if mode == "CONFIDENCE":
+            command.annotations.setdefault("gate_k", f"{gate_k:.4f}")
+            command.annotations.setdefault("gate_tau", f"{gate_tau:.4f}")
+            command.annotations.setdefault("alpha_lo", f"{a_lo:.4f}")
+            command.annotations.setdefault("alpha_hi", f"{a_hi:.4f}")
+
+        # Channel-wise alpha vector only when unambiguous and small
+        if mode == "CHANNEL":
+            try:
+                max_len = max(1, int(getattr(settings, "tamiyo_blend_alpha_vec_max", 64)))
+            except Exception:
+                max_len = 64
+            # Use blueprint metadata passed via TamiyoService to determine channels
+            bp_id = selected_blueprint or (packet.packet_id or packet.training_run_id or "")
+            meta = self._blueprint_metadata.get(bp_id, {}) if bp_id else {}
+            layers = []
+            graph_block = meta.get("graph") if isinstance(meta, dict) else None
+            if isinstance(graph_block, dict):
+                layers = graph_block.get("layers", [])
+            channels = None
+            if isinstance(layers, list) and layers:
+                # Prefer the first layer's output_channels when present
+                layer0 = layers[0]
+                if isinstance(layer0, dict) and "output_channels" in layer0:
+                    try:
+                        channels = int(layer0.get("output_channels", 0))
+                    except Exception:
+                        channels = None
+            if channels is not None and 0 < channels <= max_len:
+                # Build a uniform alpha_vec of zeros (placeholder semantics)
+                vec = [0.0] * channels
+                import json as _json
+
+                js = _json.dumps(vec)
+                if len(js) <= 1024:
+                    command.annotations.setdefault("alpha_vec", js)
+                    command.annotations.setdefault("alpha_vec_len", str(channels))
+
+    def validate_state_dict(self, state_dict: Mapping[str, object]) -> None:
+        clean_state, metadata = self._split_state_dict(state_dict)
+        version = str(metadata.get("architecture_version", "")) if metadata else ""
+        if version and version != self._architecture_version:
+            msg = (
+                "Tamiyo policy checkpoint version mismatch: "
+                f"expected {self._architecture_version}, got {version}"
+            )
+            raise ValueError(msg)
+
+        # Registry parity check (optional metadata)
+        registries_meta = metadata.get("registries", {}) if metadata else {}
+        if isinstance(registries_meta, dict) and registries_meta:
+            # Compute digests from current on-disk state to catch out-of-band changes
+            def _fresh_digest(reg: EmbeddingRegistry | None) -> str:
+                try:
+                    cfg = getattr(reg, "_config", None)
+                    path = getattr(cfg, "path", None)
+                    if path is None:
+                        return getattr(reg, "digest", lambda: "")()
+                    temp_registry = EmbeddingRegistry(
+                        EmbeddingRegistryConfig(path, getattr(cfg, "max_size", 1024))
+                    )
+                    return temp_registry.digest()
+                except Exception:
+                    return getattr(reg, "digest", lambda: "")()
+
+            expected = {
+                "layer_type": _fresh_digest(self._layer_registry),
+                "activation_type": _fresh_digest(self._activation_registry),
+                "optimizer_family": _fresh_digest(self._optimizer_registry),
+                "hazard_class": _fresh_digest(self._hazard_registry),
+            }
+            mismatches = [
+                name
+                for name, dig in registries_meta.items()
+                if expected.get(name, "") and dig != expected.get(name, "")
+            ]
+            if mismatches:
+                raise ValueError(f"Tamiyo registry mismatch: {mismatches}")
+
+        reference = super().state_dict()
+        missing = [key for key in reference.keys() if key not in clean_state]
+        mismatched: list[str] = []
+        for key, tensor in reference.items():
+            candidate = clean_state.get(key)
+            if candidate is None:
+                continue
+            try:
+                if isinstance(candidate, torch.Tensor) and isinstance(tensor, torch.Tensor):
+                    # Some lazy tensors may not have a defined shape until first forward; skip in that case
+                    cand_shape = getattr(candidate, "shape", None)
+                    ref_shape = getattr(tensor, "shape", None)
+                    if cand_shape is not None and ref_shape is not None and cand_shape != ref_shape:
+                        mismatched.append(key)
+            except RuntimeError:
+                # Skip shape checks for uninitialized parameters/buffers
+                continue
+        if missing or mismatched:
+            raise ValueError(
+                "Tamiyo policy checkpoint incompatible; missing="
+                f"{missing}, mismatched={mismatched}"
+            )
+
+    def state_dict(self, *args: object, **kwargs: object) -> dict:  # type: ignore[override]
+        payload = super().state_dict(*args, **kwargs)
+        payload["_metadata"] = {
+            "architecture_version": self._architecture_version,
+            "registries": {
+                "layer_type": getattr(self._layer_registry, "digest", lambda: "")(),
+                "activation_type": getattr(self._activation_registry, "digest", lambda: "")(),
+                "optimizer_family": getattr(self._optimizer_registry, "digest", lambda: "")(),
+                "hazard_class": getattr(self._hazard_registry, "digest", lambda: "")(),
+            },
+        }
+        return payload
+
+    def load_state_dict(
+        self,
+        state_dict: Mapping[str, object],
+        strict: bool = True,
+        assign: bool = False,
+    ) -> object:  # type: ignore[override]
+        self.validate_state_dict(state_dict)
+        clean_state, _ = self._split_state_dict(state_dict)
+        return super().load_state_dict(clean_state, strict=strict, assign=assign)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -367,9 +886,13 @@ class TamiyoPolicy(nn.Module):
             command.command_type = leyline_pb2.COMMAND_SEED
             command.target_seed_id = selected_seed or "seed-1"
             command.seed_operation.operation = leyline_pb2.SEED_OP_GERMINATE
-            command.seed_operation.blueprint_id = selected_blueprint or (packet.packet_id or packet.training_run_id or "bp-demo")
+            command.seed_operation.blueprint_id = selected_blueprint or (
+                packet.packet_id or packet.training_run_id or "bp-demo"
+            )
             command.seed_operation.parameters["alpha"] = max(0.0, 0.1 + param_delta)
-            command.seed_operation.parameters["blending_method_index"] = float(self._blending_methods.index(blending_method))
+            command.seed_operation.parameters["blending_method_index"] = float(
+                self._blending_methods.index(blending_method)
+            )
             command.seed_operation.parameters["blending_schedule_start"] = schedule_values[0]
             command.seed_operation.parameters["blending_schedule_end"] = schedule_values[1]
         elif action_idx == 1:  # optimizer tweak
@@ -378,11 +901,15 @@ class TamiyoPolicy(nn.Module):
             command.optimizer_adjustment.hyperparameters["lr_delta"] = param_delta
         elif action_idx == 3:  # breaker open
             command.command_type = leyline_pb2.COMMAND_CIRCUIT_BREAKER
-            command.circuit_breaker.desired_state = leyline_pb2.CircuitBreakerState.CIRCUIT_STATE_OPEN
+            command.circuit_breaker.desired_state = (
+                leyline_pb2.CircuitBreakerState.CIRCUIT_STATE_OPEN
+            )
             command.circuit_breaker.rationale = "policy_action"
         elif action_idx == 4:  # breaker close
             command.command_type = leyline_pb2.COMMAND_CIRCUIT_BREAKER
-            command.circuit_breaker.desired_state = leyline_pb2.CircuitBreakerState.CIRCUIT_STATE_CLOSED
+            command.circuit_breaker.desired_state = (
+                leyline_pb2.CircuitBreakerState.CIRCUIT_STATE_CLOSED
+            )
             command.circuit_breaker.rationale = "policy_action"
         else:  # pause fallback
             command.command_type = leyline_pb2.COMMAND_PAUSE
@@ -403,6 +930,18 @@ class TamiyoPolicy(nn.Module):
         command.annotations.setdefault("blending_schedule_end", f"{schedule_values[1]:.4f}")
 
         return command
+
+    @staticmethod
+    def _split_state_dict(
+        state_dict: Mapping[str, object]
+    ) -> tuple[Mapping[str, object], dict[str, object]]:
+        if isinstance(state_dict, dict) and "_metadata" in state_dict:
+            metadata = state_dict["_metadata"]
+            cleaned = state_dict.copy() if hasattr(state_dict, "copy") else dict(state_dict)
+            cleaned.pop("_metadata", None)
+            meta_dict = metadata if isinstance(metadata, dict) else {}
+            return cleaned, dict(meta_dict)
+        return state_dict, {}
 
 
 __all__ = ["TamiyoPolicy", "TamiyoPolicyConfig"]

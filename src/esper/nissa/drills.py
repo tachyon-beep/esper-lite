@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
-from typing import Callable
 
 from esper.core.telemetry import TelemetryMetric, build_telemetry_packet
 from esper.leyline import leyline_pb2
-from .observability import NissaIngestor
 
+from .observability import NissaIngestor
 
 DrillResult = dict[str, object]
 

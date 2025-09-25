@@ -65,4 +65,3 @@ class OptimizerManager:
 
 
 __all__ = ["OptimizerManager", "RebuildResult"]
-

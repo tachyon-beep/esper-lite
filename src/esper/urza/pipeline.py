@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from typing import Awaitable, Callable
 
 from esper.karn import BlueprintDescriptor, KarnCatalog
-from esper.tezzeret import TezzeretCompiler
 from esper.leyline import leyline_pb2
+from esper.tezzeret import TezzeretCompiler
 from esper.urza import UrzaLibrary
 
 
@@ -34,7 +34,9 @@ class BlueprintPipeline:
         compiler: TezzeretCompiler,
         library: UrzaLibrary,
         *,
-        catalog_notifier: Callable[[leyline_pb2.KernelCatalogUpdate], Awaitable[None]] | None = None,
+        catalog_notifier: (
+            Callable[[leyline_pb2.KernelCatalogUpdate], Awaitable[None]] | None
+        ) = None,
     ) -> None:
         self._catalog = catalog
         self._compiler = compiler

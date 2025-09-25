@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import importlib
 import logging
 import os
 import random
@@ -16,7 +17,8 @@ import signal
 import socket
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Awaitable, Callable, Dict
 
@@ -24,9 +26,13 @@ from esper.core import EsperSettings, TelemetryEvent, TelemetryMetric, build_tel
 from esper.kasmina import KasminaPrefetchCoordinator, KasminaSeedManager
 from esper.leyline import leyline_pb2
 from esper.oona import OonaClient, StreamConfig
-from esper.tolaria.rollback import SharedDeadlineSignal
+from esper.oona.messaging import OonaMessage
 from esper.security.signing import DEFAULT_SECRET_ENV, SignatureContext
 from esper.tamiyo import TamiyoService
+from esper.tolaria.emergency import SharedEmergencySignal
+from esper.tolaria.rollback import SharedDeadlineSignal
+from esper.urabrask.bench_worker import UrabraskBenchWorker
+from esper.urabrask.producer import UrabraskProducer
 from esper.urza import UrzaLibrary, UrzaRuntime
 from esper.urza.prefetch import UrzaPrefetchWorker
 
@@ -74,8 +80,12 @@ class WeatherlightService:
         self._kasmina_manager: KasminaSeedManager | None = None
         self._kasmina_coordinator: KasminaPrefetchCoordinator | None = None
         self._tamiyo_service: TamiyoService | None = None
+        self._urabrask_producer: UrabraskProducer | None = None
+        self._urabrask_bench: UrabraskBenchWorker | None = None
         self._tezzeret_metrics_provider: Callable[[], dict[str, float]] | None = None
-        self._tezzeret_telemetry_provider: Callable[[], leyline_pb2.TelemetryPacket | None] | None = None
+        self._tezzeret_telemetry_provider: (
+            Callable[[], leyline_pb2.TelemetryPacket | None] | None
+        ) = None
         self._rollback_signal_name: str | None = self._settings.tolaria_rollback_signal_name
         self._rollback_signal: SharedDeadlineSignal | None = None
         self._rollback_last_detect_s: float | None = None
@@ -85,12 +95,25 @@ class WeatherlightService:
         self._rollback_monitor_task: asyncio.Task | None = None
         self._kasmina_packet_queue: asyncio.Queue[leyline_pb2.TelemetryPacket] | None = None
         self._kasmina_packet_drops: int = 0
+        self._emergency_signal_name: str | None = getattr(
+            self._settings, "tolaria_emergency_signal_name", None
+        )
+        self._emergency_signal: SharedEmergencySignal | None = None
+        self._emergency_monitor_task: asyncio.Task | None = None
+        self._emergency_stream_task: asyncio.Task | None = None
+        self._emergency_detections_total: int = 0
+        self._emergency_last_detect_s: float | None = None
+        self._emergency_last_trigger_ms: int | None = None
+        self._emergency_last_level: int | None = None
+        self._emergency_last_reason: str | None = None
+        self._emergency_skipped_total: int = 0
 
     async def start(self) -> None:
         """Initialise subsystems and spawn background workers (Slice 1 & 2)."""
 
         self._configure_logging()
         self._ensure_secret_present()
+        self._preflight_mandatory_dependencies()
         LOGGER.info("Starting Weatherlight supervisor")
 
         self._oona = await self._build_oona_client()
@@ -122,7 +145,7 @@ class WeatherlightService:
         self._register_worker(
             WorkerState(
                 name="urza_prefetch",
-                coroutine_factory=lambda: self._urza_worker.run_forever(interval_ms=200),
+                coroutine_factory=partial(self._urza_worker.run_forever, interval_ms=200),
             )
         )
         self._register_worker(
@@ -137,12 +160,49 @@ class WeatherlightService:
                 coroutine_factory=self._tamiyo_policy_loop,
             )
         )
+        # Optional Urabrask producer
+        if self._settings.urabrask_enabled:
+            self._urabrask_producer = UrabraskProducer(
+                self._urza_library,
+                interval_s=self._settings.urabrask_producer_interval_s,
+                topn=self._settings.urabrask_topn_per_cycle,
+                only_safe=self._settings.urabrask_only_safe_tier,
+                timeout_ms=self._settings.urabrask_timeout_ms,
+            )
+            self._register_worker(
+                WorkerState(
+                    name="urabrask.producer",
+                    coroutine_factory=self._urabrask_producer.run_forever,
+                )
+            )
+        # Optional Urabrask benchmarks
+        if self._settings.urabrask_bench_enabled:
+            assert self._urza_runtime is not None
+            self._urabrask_bench = UrabraskBenchWorker(
+                self._urza_library,
+                self._urza_runtime,
+                interval_s=self._settings.urabrask_bench_interval_s,
+                topn=self._settings.urabrask_bench_topn,
+                timeout_ms=self._settings.urabrask_bench_timeout_ms,
+            )
+            self._register_worker(
+                WorkerState(
+                    name="urabrask.bench",
+                    coroutine_factory=self._urabrask_bench.run_forever,
+                )
+            )
 
         for state in self._workers.values():
-            state.task = asyncio.create_task(self._worker_wrapper(state), name=f"weatherlight.{state.name}")
+            state.task = asyncio.create_task(
+                self._worker_wrapper(state), name=f"weatherlight.{state.name}"
+            )
 
-        self._telemetry_task = asyncio.create_task(self._telemetry_loop(), name="weatherlight.telemetry")
-        self._housekeeping_task = asyncio.create_task(self._housekeeping_loop(), name="weatherlight.housekeeping")
+        self._telemetry_task = asyncio.create_task(
+            self._telemetry_loop(), name="weatherlight.telemetry"
+        )
+        self._housekeeping_task = asyncio.create_task(
+            self._housekeeping_loop(), name="weatherlight.housekeeping"
+        )
         self._kasmina_telemetry_task = asyncio.create_task(
             self._kasmina_telemetry_loop(),
             name="weatherlight.kasmina_telemetry",
@@ -150,7 +210,71 @@ class WeatherlightService:
         # Rollback signal monitor (slice 2)
         if self._rollback_signal_name:
             # Always start the monitor; it will attempt to attach when available
-            self._rollback_monitor_task = asyncio.create_task(self._rollback_signal_loop(), name="weatherlight.rollback_monitor")
+            self._rollback_monitor_task = asyncio.create_task(
+                self._rollback_signal_loop(), name="weatherlight.rollback_monitor"
+            )
+        if self._emergency_signal_name:
+            self._emergency_monitor_task = asyncio.create_task(
+                self._emergency_signal_loop(), name="weatherlight.emergency_signal"
+            )
+        # Emergency stream consumer runs regardless of shared-signal availability
+        self._emergency_stream_task = asyncio.create_task(
+            self._emergency_stream_loop(),
+            name="weatherlight.emergency_stream",
+        )
+
+    def _preflight_mandatory_dependencies(self) -> None:
+        """Fail fast if mandatory dependencies are unavailable.
+
+        Prototype posture: we do not carry optional fallbacks for core deps.
+        This check validates imports that are required across the control plane
+        and will raise with actionable remediation on failure.
+        """
+
+        failures: list[str] = []
+
+        def _require(module: str, *, name: str | None = None) -> None:
+            try:
+                importlib.import_module(module)
+            except Exception as exc:  # pragma: no cover - environment specific
+                failures.append(f"{name or module}: {exc}")
+
+        # Core ML + Graph deps
+        _require("torch")
+        _require("torch_geometric", name="torch-geometric")
+        _require("torch_geometric.data")
+        _require("torch_geometric.nn")
+        _require("torch_scatter", name="torch-scatter")
+        _require("torch_sparse", name="torch-sparse")
+        _require("torch_cluster", name="torch-cluster")
+        _require("torch_spline_conv", name="torch-spline-conv")
+        # System metrics
+        _require("psutil")
+        # Observability client (service-level reachability is validated in Nissa)
+        _require("elasticsearch")
+
+        # GPU-only NVML requirement
+        try:
+            import torch as _torch  # type: ignore
+
+            if getattr(_torch, "cuda", None) and _torch.cuda.is_available():  # type: ignore[attr-defined]
+                try:
+                    import pynvml  # type: ignore
+
+                    pynvml.nvmlInit()
+                except Exception as exc:  # pragma: no cover - hardware dependent
+                    failures.append(f"pynvml: {exc}")
+        except Exception:
+            # torch import failure already recorded above
+            pass
+
+        if failures:
+            details = "; ".join(failures)
+            msg = (
+                "Mandatory dependency preflight failed: "
+                f"{details}. Please install required packages and ensure GPU/ES availability."
+            )
+            raise RuntimeError(msg)
 
     def initiate_shutdown(self) -> None:
         """Trigger graceful shutdown (idempotent)."""
@@ -201,14 +325,19 @@ class WeatherlightService:
                 # Lazy attach if signal not yet available
                 if self._rollback_signal is None and self._rollback_signal_name:
                     try:
-                        self._rollback_signal = SharedDeadlineSignal.attach(self._rollback_signal_name)
+                        self._rollback_signal = SharedDeadlineSignal.attach(
+                            self._rollback_signal_name
+                        )
                     except Exception:
                         await asyncio.sleep(0.1)
                         continue
                 if self._rollback_signal.is_set():
                     now_s = time.monotonic()
                     # Cooldown: avoid floods (500ms)
-                    if self._rollback_last_detect_s is not None and (now_s - self._rollback_last_detect_s) < 0.5:
+                    if (
+                        self._rollback_last_detect_s is not None
+                        and (now_s - self._rollback_last_detect_s) < 0.5
+                    ):
                         self._rollback_skipped_total += 1
                         self._rollback_signal.clear()
                         await asyncio.sleep(0.05)
@@ -219,7 +348,10 @@ class WeatherlightService:
                     try:
                         ts_ms = self._rollback_signal.read_timestamp_ms()
                         if ts_ms is not None:
-                            if self._rollback_last_detect_ts_ms is not None and ts_ms == self._rollback_last_detect_ts_ms:
+                            if (
+                                self._rollback_last_detect_ts_ms is not None
+                                and ts_ms == self._rollback_last_detect_ts_ms
+                            ):
                                 self._rollback_signal.clear()
                                 await asyncio.sleep(0.05)
                                 continue
@@ -232,19 +364,160 @@ class WeatherlightService:
                         packet_id=f"weatherlight-rollback-signal",
                         source="weatherlight",
                         level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
-                        metrics=[TelemetryMetric("weatherlight.rollback.deadline_latency_ms", latency_ms, unit="ms")],
-                        events=[TelemetryEvent(description="rollback_deadline_triggered", level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL, attributes={})],
+                        metrics=[
+                            TelemetryMetric(
+                                "weatherlight.rollback.deadline_latency_ms", latency_ms, unit="ms"
+                            )
+                        ],
+                        events=[
+                            TelemetryEvent(
+                                description="rollback_deadline_triggered",
+                                level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
+                                attributes={},
+                            )
+                        ],
                         health_status=leyline_pb2.HealthStatus.HEALTH_STATUS_UNHEALTHY,
                         health_summary="rollback_deadline_triggered",
                         health_indicators={"priority": "MESSAGE_PRIORITY_HIGH"},
                     )
-                    await self._oona.publish_telemetry(pkt, priority=leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH)
+                    await self._oona.publish_telemetry(
+                        pkt, priority=leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH
+                    )
                     self._rollback_detections_total += 1
                     # Clear to avoid repeated floods; rely on trainer to set on each deadline
                     self._rollback_signal.clear()
+            except asyncio.CancelledError:  # pragma: no cover - cancellation path
+                raise
             except Exception:
                 pass
             await asyncio.sleep(0.1)
+
+    async def _emergency_signal_loop(self) -> None:
+        """Monitor shared-memory emergency signals for fast-path detection."""
+
+        assert self._oona is not None
+        while not self._shutdown_requested.is_set():
+            try:
+                if self._emergency_signal is None and self._emergency_signal_name:
+                    try:
+                        self._emergency_signal = SharedEmergencySignal.attach(
+                            self._emergency_signal_name
+                        )
+                    except Exception:
+                        await asyncio.sleep(0.1)
+                        continue
+                if self._emergency_signal is None:
+                    await asyncio.sleep(0.5)
+                    continue
+                if self._emergency_signal.is_set():
+                    now_s = time.monotonic()
+                    if (
+                        self._emergency_last_detect_s is not None
+                        and (now_s - self._emergency_last_detect_s) < 0.2
+                    ):
+                        self._emergency_skipped_total += 1
+                        self._emergency_signal.clear()
+                        await asyncio.sleep(0.05)
+                        continue
+                    level = self._emergency_signal.read_level()
+                    reason = self._emergency_signal.read_reason() or "shared_signal"
+                    ts_ms = self._emergency_signal.read_timestamp_ms()
+                    self._emergency_signal.clear()
+                    await self._handle_emergency_detection(
+                        level=level,
+                        reason=reason,
+                        origin="shared_signal",
+                        triggered_ms=ts_ms,
+                    )
+            except Exception:
+                pass
+            await asyncio.sleep(0.1)
+
+    async def _emergency_stream_loop(self) -> None:
+        """Drain Oona emergency stream and emit Weatherlight telemetry."""
+
+        assert self._oona is not None
+        while not self._shutdown_requested.is_set():
+            try:
+                await self._oona.consume_emergency_signals(
+                    self._on_emergency_message,
+                    count=5,
+                    block_ms=500,
+                )
+            except asyncio.CancelledError:  # pragma: no cover - cancellation path
+                raise
+            except Exception:
+                await asyncio.sleep(0.2)
+
+    async def _on_emergency_message(self, message: OonaMessage) -> None:
+        if message.message_type != leyline_pb2.BusMessageType.BUS_MESSAGE_TYPE_EMERGENCY_SIGNAL:
+            return
+        signal = leyline_pb2.EmergencySignal()
+        signal.ParseFromString(message.payload)
+        reason = signal.reason or message.attributes.get("reason", "")
+        if not reason:
+            reason = "unspecified"
+        origin = signal.origin or message.attributes.get("origin", "stream")
+        triggered_ms = (
+            int(signal.monotonic_time_ms) if getattr(signal, "monotonic_time_ms", 0) else None
+        )
+        await self._handle_emergency_detection(
+            level=int(signal.level),
+            reason=reason,
+            origin=f"stream:{origin}",
+            triggered_ms=triggered_ms,
+        )
+
+    async def _handle_emergency_detection(
+        self,
+        *,
+        level: int,
+        reason: str,
+        origin: str,
+        triggered_ms: int | None,
+    ) -> None:
+        assert self._oona is not None
+        now_s = time.monotonic()
+        self._emergency_detections_total += 1
+        self._emergency_last_detect_s = now_s
+        self._emergency_last_trigger_ms = triggered_ms
+        self._emergency_last_level = int(level)
+        self._emergency_last_reason = reason
+        latency_ms = 0.0
+        if triggered_ms is not None:
+            latency_ms = max(0.0, (time.monotonic() * 1000.0) - float(triggered_ms))
+        metrics = [
+            TelemetryMetric("weatherlight.emergency.level", float(level), unit="count"),
+            TelemetryMetric("weatherlight.emergency.latency_ms", float(latency_ms), unit="ms"),
+        ]
+        events = [
+            TelemetryEvent(
+                description="emergency_signal_received",
+                level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
+                attributes={
+                    "reason": reason,
+                    "origin": origin,
+                    "level": str(int(level)),
+                },
+            )
+        ]
+        pkt = build_telemetry_packet(
+            packet_id=f"weatherlight-emergency-{uuid.uuid4()}",
+            source="weatherlight",
+            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
+            metrics=metrics,
+            events=events,
+            health_status=leyline_pb2.HealthStatus.HEALTH_STATUS_CRITICAL,
+            health_summary="emergency_detected",
+            health_indicators={
+                "priority": "MESSAGE_PRIORITY_CRITICAL",
+                "origin": origin,
+            },
+        )
+        await self._oona.publish_telemetry(
+            pkt,
+            priority=leyline_pb2.MessagePriority.MESSAGE_PRIORITY_CRITICAL,
+        )
 
     async def _build_oona_client(self) -> OonaClient:
         hostname = socket.gethostname().replace(" ", "-")
@@ -406,6 +679,11 @@ class WeatherlightService:
                 await self._oona.housekeeping()
                 if self._urza_library is not None:
                     self._urza_library.maintenance()
+                # Best-effort: update Urza capabilities from current Kasmina seed states
+                try:
+                    self._update_urza_capabilities_from_kasmina()
+                except Exception as exc:  # pragma: no cover - defensive
+                    LOGGER.debug("WL capability fanout failed: %s", exc)
             except asyncio.CancelledError:  # pragma: no cover - cancellation path
                 raise
             except Exception as exc:  # pragma: no cover - defensive logging
@@ -431,7 +709,10 @@ class WeatherlightService:
                         else:
                             # Fallback: detect via timestamp changes
                             ts_ms = probe.read_timestamp_ms()
-                            if ts_ms is not None and (self._rollback_last_detect_ts_ms is None or ts_ms != self._rollback_last_detect_ts_ms):
+                            if ts_ms is not None and (
+                                self._rollback_last_detect_ts_ms is None
+                                or ts_ms != self._rollback_last_detect_ts_ms
+                            ):
                                 self._rollback_last_detect_ts_ms = ts_ms
                                 self._rollback_last_detect_s = time.monotonic()
                                 self._rollback_detections_total += 1
@@ -448,11 +729,17 @@ class WeatherlightService:
             pass
         metrics: list[TelemetryMetric] = []
         workers_running = sum(1 for state in self._workers.values() if state.running)
-        workers_backing_off = sum(1 for state in self._workers.values() if state.backoff_seconds > 0)
+        workers_backing_off = sum(
+            1 for state in self._workers.values() if state.backoff_seconds > 0
+        )
         uptime = time.monotonic() - self._start_time
-        metrics.append(TelemetryMetric("weatherlight.tasks.running", float(workers_running), unit="count"))
         metrics.append(
-            TelemetryMetric("weatherlight.tasks.backing_off", float(workers_backing_off), unit="count")
+            TelemetryMetric("weatherlight.tasks.running", float(workers_running), unit="count")
+        )
+        metrics.append(
+            TelemetryMetric(
+                "weatherlight.tasks.backing_off", float(workers_backing_off), unit="count"
+            )
         )
         metrics.append(TelemetryMetric("weatherlight.uptime_s", uptime, unit="seconds"))
         metrics.append(
@@ -495,12 +782,28 @@ class WeatherlightService:
                 TelemetryMetric("urza.prefetch.hits", float(urza_metrics.hits), unit="count"),
                 TelemetryMetric("urza.prefetch.misses", float(urza_metrics.misses), unit="count"),
                 TelemetryMetric("urza.prefetch.errors", float(urza_metrics.errors), unit="count"),
-                TelemetryMetric("urza.prefetch.latency_ms", float(urza_metrics.latency_ms), unit="ms"),
+                TelemetryMetric(
+                    "urza.prefetch.latency_ms", float(urza_metrics.latency_ms), unit="ms"
+                ),
             )
         )
         if self._urza_library is not None:
             for name, value in self._urza_library.metrics_snapshot().items():
                 metrics.append(TelemetryMetric(f"urza.library.{name}", float(value)))
+        if self._urabrask_producer is not None:
+            for name, value in self._urabrask_producer.metrics().items():
+                metrics.append(TelemetryMetric(f"urabrask.{name}", float(value)))
+        if self._urabrask_bench is not None:
+            for name, value in self._urabrask_bench.metrics().items():
+                metrics.append(TelemetryMetric(f"urabrask.{name}", float(value)))
+        # Urabrask process-local metrics (WAL errors, integrity failures)
+        try:
+            from esper.urabrask import metrics as _ura_metrics
+
+            for name, value in _ura_metrics.snapshot().items():
+                metrics.append(TelemetryMetric(f"urabrask.{name}", float(value)))
+        except Exception:
+            pass
         oona_snapshot = await self._oona.metrics_snapshot()
         for name, value in oona_snapshot.items():
             metrics.append(TelemetryMetric(f"oona.{name}", float(value)))
@@ -515,11 +818,59 @@ class WeatherlightService:
         # Append rollback monitor counters
         det_total = self._rollback_detections_total
         if det_total:
-            metrics.append(TelemetryMetric("weatherlight.rollback.detections_total", float(det_total), unit="count"))
+            metrics.append(
+                TelemetryMetric(
+                    "weatherlight.rollback.detections_total", float(det_total), unit="count"
+                )
+            )
         if self._rollback_skipped_total:
-            metrics.append(TelemetryMetric("weatherlight.rollback.skipped_total", float(self._rollback_skipped_total), unit="count"))
+            metrics.append(
+                TelemetryMetric(
+                    "weatherlight.rollback.skipped_total",
+                    float(self._rollback_skipped_total),
+                    unit="count",
+                )
+            )
         if self._rollback_last_detect_s is not None:
-            metrics.append(TelemetryMetric("weatherlight.rollback.last_detect_ms_ago", float((time.monotonic() - self._rollback_last_detect_s) * 1000.0), unit="ms"))
+            metrics.append(
+                TelemetryMetric(
+                    "weatherlight.rollback.last_detect_ms_ago",
+                    float((time.monotonic() - self._rollback_last_detect_s) * 1000.0),
+                    unit="ms",
+                )
+            )
+        if self._emergency_detections_total:
+            metrics.append(
+                TelemetryMetric(
+                    "weatherlight.emergency.detections_total",
+                    float(self._emergency_detections_total),
+                    unit="count",
+                )
+            )
+        if self._emergency_skipped_total:
+            metrics.append(
+                TelemetryMetric(
+                    "weatherlight.emergency.skipped_total",
+                    float(self._emergency_skipped_total),
+                    unit="count",
+                )
+            )
+        if self._emergency_last_detect_s is not None:
+            metrics.append(
+                TelemetryMetric(
+                    "weatherlight.emergency.last_detect_ms_ago",
+                    float((time.monotonic() - self._emergency_last_detect_s) * 1000.0),
+                    unit="ms",
+                )
+            )
+        if self._emergency_last_level is not None:
+            metrics.append(
+                TelemetryMetric(
+                    "weatherlight.emergency.last_level",
+                    float(self._emergency_last_level),
+                    unit="count",
+                )
+            )
         if self._tezzeret_metrics_provider is not None:
             try:
                 tezzeret_metrics = self._tezzeret_metrics_provider()
@@ -543,6 +894,105 @@ class WeatherlightService:
                     },
                 )
             )
+        if self._emergency_last_reason:
+            events.append(
+                TelemetryEvent(
+                    description="emergency_last_reason",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+                    attributes={
+                        "reason": self._emergency_last_reason,
+                    },
+                )
+            )
+        # Health indicators
+        indicators = {
+            "workers_running": str(workers_running),
+            "workers_backing_off": str(workers_backing_off),
+        }
+        # System mode: operational when all workers are healthy; degraded otherwise
+        try:
+            any_backoff = workers_backing_off > 0
+            any_stopped = any(not s.running for s in self._workers.values())
+            indicators["system_mode"] = (
+                "degraded" if (any_backoff or any_stopped) else "operational"
+            )
+        except Exception:
+            indicators["system_mode"] = "degraded"
+        # Surface Tamiyo BSDS provenance/hazard (best-effort) for dashboards
+        try:
+            if self._tamiyo_service is not None:
+                tpkts = self._tamiyo_service.telemetry_packets
+                if tpkts:
+                    bsds_prov = None
+                    bsds_hazard = None
+                    # Search most-recent-first for any BSDS-related events
+                    for pkt in reversed(tpkts):
+                        for ev in pkt.events:
+                            if ev.description in {
+                                "bsds_hazard_critical",
+                                "bsds_hazard_high",
+                                "bsds_present",
+                                "bsds_handling_quarantine",
+                            }:
+                                bsds_prov = ev.attributes.get("provenance") or bsds_prov
+                                bsds_hazard = ev.attributes.get("hazard") or bsds_hazard
+                        if bsds_prov and bsds_hazard:
+                            break
+                    if bsds_prov:
+                        indicators["bsds_provenance"] = str(bsds_prov).lower()
+                    if bsds_hazard:
+                        indicators["bsds_hazard"] = str(bsds_hazard).upper()
+                    # Fallback: inspect Tamiyo blueprint cache for BSDS mirror
+                    if (
+                        "bsds_provenance" not in indicators or "bsds_hazard" not in indicators
+                    ) and hasattr(self._tamiyo_service, "_blueprint_cache"):
+                        cache = getattr(self._tamiyo_service, "_blueprint_cache", {})
+                        for _ts, payload in cache.values():
+                            try:
+                                bsds_block = (
+                                    payload.get("bsds") if isinstance(payload, dict) else None
+                                )
+                                if isinstance(bsds_block, dict):
+                                    if "bsds_provenance" not in indicators:
+                                        prov = bsds_block.get("provenance")
+                                        if isinstance(prov, str) and prov:
+                                            indicators["bsds_provenance"] = prov.lower()
+                                    if "bsds_hazard" not in indicators:
+                                        haz = bsds_block.get("hazard_band") or bsds_block.get(
+                                            "hazard"
+                                        )
+                                        if isinstance(haz, str) and haz:
+                                            indicators["bsds_hazard"] = haz.upper()
+                            except Exception:
+                                continue
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+        # Fanout: mirror Tamiyo per-type coverage into Weatherlight metrics (best-effort)
+        try:
+            if self._tamiyo_service is not None:
+                tpkts = self._tamiyo_service.telemetry_packets
+                if tpkts:
+                    latest = tpkts[-1]
+                    prefix = "tamiyo.gnn.feature_coverage."
+                    for m in latest.metrics:
+                        name = getattr(m, "name", "")
+                        if isinstance(name, str) and name.startswith(prefix):
+                            key = name.split(prefix, 1)[1]
+                            try:
+                                value = float(getattr(m, "value", 0.0))
+                            except Exception:
+                                value = 0.0
+                            metrics.append(
+                                TelemetryMetric(
+                                    f"weatherlight.tamiyo.coverage.{key}",
+                                    value,
+                                    unit="ratio",
+                                )
+                            )
+        except Exception:  # pragma: no cover - defensive
+            pass
+
         packet = build_telemetry_packet(
             packet_id=f"weatherlight-{uuid.uuid4()}",
             source="weatherlight",
@@ -551,13 +1001,9 @@ class WeatherlightService:
             events=events,
             health_status=health_status,
             health_summary=health_summary,
-            health_indicators={
-                "workers_running": str(workers_running),
-                "workers_backing_off": str(workers_backing_off),
-            },
+            health_indicators=indicators,
         )
         return packet
-
 
     async def probe_rollback_signal_for_test(self) -> bool:
         """Test helper: synchronously detect and clear rollback signal if set."""
@@ -578,7 +1024,10 @@ class WeatherlightService:
                         probe.clear()
                 else:
                     ts_ms = probe.read_timestamp_ms()
-                    if ts_ms is not None and (self._rollback_last_detect_ts_ms is None or ts_ms != self._rollback_last_detect_ts_ms):
+                    if ts_ms is not None and (
+                        self._rollback_last_detect_ts_ms is None
+                        or ts_ms != self._rollback_last_detect_ts_ms
+                    ):
                         self._rollback_last_detect_ts_ms = ts_ms
                         self._rollback_last_detect_s = time.monotonic()
                         self._rollback_detections_total += 1
@@ -598,6 +1047,11 @@ class WeatherlightService:
 
         return self._rollback_detections_total
 
+    def get_emergency_detection_count(self) -> int:
+        """Expose emergency detection counter for verification in tests."""
+
+        return self._emergency_detections_total
+
     async def _flush_telemetry_once(self) -> None:
         assert self._oona is not None
         packets: list[leyline_pb2.TelemetryPacket] = []
@@ -608,6 +1062,37 @@ class WeatherlightService:
         for packet in packets:
             priority = self._telemetry_priority(packet)
             await self._oona.publish_telemetry(packet, priority=priority)
+        # Drain Tamiyo's telemetry/field reports on each Weatherlight flush per
+        # prototype-delta integration (docs/prototype-delta/tamiyo/diff/input-remediation-plan.md §8).
+        # This ensures coverage and BSDS degradation signals leave Tamiyo without
+        # requiring a manual export step.
+        if self._tamiyo_service is not None:
+            try:
+                await self._tamiyo_service.publish_history(self._oona)
+            except Exception as exc:  # pragma: no cover - defensive forwarding
+                LOGGER.debug("Failed to forward Tamiyo history: %s", exc)
+        # Opportunistically drain Kasmina's buffered telemetry on each flush as well.
+        # Kasmina also streams via a dedicated loop; this call is a best-effort
+        # additional drain to reduce latency for pending packets.
+        if self._kasmina_manager is not None:
+            try:
+                packets = self._kasmina_manager.drain_telemetry_packets()
+            except Exception as exc:  # pragma: no cover - defensive
+                LOGGER.debug("Failed to drain Kasmina packets: %s", exc)
+                packets = []
+            for packet in packets:
+                try:
+                    priority_name = packet.system_health.indicators.get(
+                        "priority",
+                        "MESSAGE_PRIORITY_NORMAL",
+                    )
+                    try:
+                        priority_enum = leyline_pb2.MessagePriority.Value(priority_name)
+                    except ValueError:
+                        priority_enum = leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
+                    await self._oona.publish_telemetry(packet, priority=priority_enum)
+                except Exception as exc:  # pragma: no cover - defensive forwarding
+                    LOGGER.debug("Failed to forward Kasmina packet: %s", exc)
         await self._oona.emit_metrics_telemetry(
             source_subsystem="weatherlight.oona",
             level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
@@ -627,6 +1112,22 @@ class WeatherlightService:
 
     @staticmethod
     def _telemetry_priority(packet: leyline_pb2.TelemetryPacket) -> leyline_pb2.MessagePriority:
+        # Honor explicit priority indicator when present; fallback to level
+        indicator = (
+            packet.system_health.indicators.get("priority")
+            if packet.system_health and packet.system_health.indicators
+            else None
+        )
+        if indicator:
+            try:
+                enum_val = leyline_pb2.MessagePriority.Value(indicator)
+                if enum_val in (
+                    leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH,
+                    leyline_pb2.MessagePriority.MESSAGE_PRIORITY_CRITICAL,
+                ):
+                    return enum_val
+            except ValueError:
+                pass
         level = packet.level
         if level in (
             leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
@@ -635,6 +1136,64 @@ class WeatherlightService:
         ):
             return leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH
         return leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
+
+    # -----------------------------
+    # Urza capabilities from Kasmina (prototype)
+    # -----------------------------
+    def _update_urza_capabilities_from_kasmina(self) -> None:
+        if self._urza_library is None or self._kasmina_manager is None:
+            return
+        # Collect blueprint -> seeds mapping where lifecycle is BLENDING
+        seeds = getattr(self._kasmina_manager, "_seeds", {})
+        by_blueprint: dict[str, set[str]] = {}
+        for seed_id, context in list(seeds.items()):
+            try:
+                blueprint_id = context.metadata.get("blueprint_id")
+                state = getattr(context.lifecycle, "state", None)
+            except Exception:
+                blueprint_id = None
+                state = None
+            if not blueprint_id:
+                continue
+            # Allow only BLENDING stage as a proxy for permission
+            if state == leyline_pb2.SeedLifecycleStage.SEED_STAGE_BLENDING:
+                by_blueprint.setdefault(str(blueprint_id), set()).add(str(seed_id))
+        if not by_blueprint:
+            return
+        # For each blueprint, fetch parameter names and allow all for allowed seeds
+        for bp, seed_ids in by_blueprint.items():
+            record = self._urza_library.get(bp)
+            if record is None:
+                continue
+            extras = dict(record.extras or {})
+            gm = extras.get("graph_metadata")
+            if isinstance(gm, str):
+                try:
+                    import json as _json
+
+                    gm = _json.loads(gm)
+                except Exception:
+                    gm = {}
+            if not isinstance(gm, dict):
+                continue
+            params = gm.get("parameters")
+            if not isinstance(params, list) or not params:
+                continue
+            names = [str(p.get("name")) for p in params if isinstance(p, dict) and p.get("name")]
+            if not names:
+                continue
+            mapping: dict[str, list[str]] = {}
+            # Allowed seeds: allow all parameters; others (present seeds) explicit empty list
+            for seed_id in list(getattr(self._kasmina_manager, "_seeds", {}).keys()):
+                if seed_id in seed_ids:
+                    mapping[str(seed_id)] = list(names)
+                else:
+                    mapping[str(seed_id)] = []
+            # Merge into Urza extras
+            self._urza_library.merge_capabilities(
+                bp,
+                allowed_parameters_by_seed_id=mapping,
+            )
 
     def _configure_logging(self) -> None:
         if logging.getLogger().handlers:
@@ -645,9 +1204,7 @@ class WeatherlightService:
     def _ensure_secret_present(self) -> None:
         secret = os.getenv(DEFAULT_SECRET_ENV, "").strip()
         if not secret:
-            raise RuntimeError(
-                "Weatherlight requires ESPER_LEYLINE_SECRET for HMAC signing"
-            )
+            raise RuntimeError("Weatherlight requires ESPER_LEYLINE_SECRET for HMAC signing")
 
     async def _shutdown(self) -> None:
         if self._shutdown_started:
@@ -663,6 +1220,12 @@ class WeatherlightService:
             self._housekeeping_task.cancel()
         if self._kasmina_telemetry_task is not None:
             self._kasmina_telemetry_task.cancel()
+        if self._rollback_monitor_task is not None:
+            self._rollback_monitor_task.cancel()
+        if self._emergency_monitor_task is not None:
+            self._emergency_monitor_task.cancel()
+        if self._emergency_stream_task is not None:
+            self._emergency_stream_task.cancel()
         with contextlib.suppress(Exception):
             await asyncio.gather(
                 *[task for task in tasks if task is not None],
@@ -672,6 +1235,9 @@ class WeatherlightService:
                         self._telemetry_task,
                         self._housekeeping_task,
                         self._kasmina_telemetry_task,
+                        self._rollback_monitor_task,
+                        self._emergency_monitor_task,
+                        self._emergency_stream_task,
                     )
                     if task is not None
                 ],
@@ -683,6 +1249,9 @@ class WeatherlightService:
         with contextlib.suppress(Exception):
             if self._oona is not None:
                 await self._oona.close()
+        with contextlib.suppress(Exception):
+            if self._emergency_signal is not None:
+                self._emergency_signal.close()
         self._shutdown_complete.set()
 
 

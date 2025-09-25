@@ -2,26 +2,23 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import torch
 from torch import nn, optim
 from torch.nn import functional as F
 
-from pathlib import Path
-
-from esper.leyline import leyline_pb2
-
-from esper.core.telemetry import TelemetryMetric, build_telemetry_packet
 from esper.core import TelemetryEvent
+from esper.core.telemetry import TelemetryMetric, build_telemetry_packet
+from esper.leyline import leyline_pb2
 from esper.simic.registry import EmbeddingRegistry, EmbeddingRegistryConfig
 from esper.simic.validation import PolicyValidator, ValidationConfig, ValidationResult
 
-from .replay import FieldReportReplayBuffer, SimicExperience
+from .replay import FieldReportReplayBuffer
 
 if TYPE_CHECKING:
     from esper.oona import OonaClient
@@ -81,11 +78,16 @@ class SimicTrainer:
         self._buffer.ttl = timedelta(hours=self._config.replay_ttl_hours)
         if self._buffer.seed_registry is None:
             self._buffer.seed_registry = EmbeddingRegistry(
-                EmbeddingRegistryConfig(self._config.embedding_dir / "seed_registry.json", self._config.seed_vocab)
+                EmbeddingRegistryConfig(
+                    self._config.embedding_dir / "seed_registry.json", self._config.seed_vocab
+                )
             )
         if self._buffer.blueprint_registry is None:
             self._buffer.blueprint_registry = EmbeddingRegistry(
-                EmbeddingRegistryConfig(self._config.embedding_dir / "blueprint_registry.json", self._config.blueprint_vocab)
+                EmbeddingRegistryConfig(
+                    self._config.embedding_dir / "blueprint_registry.json",
+                    self._config.blueprint_vocab,
+                )
             )
         (self._config.embedding_dir).mkdir(parents=True, exist_ok=True)
         self._policy = policy or _build_policy_network(self._config)
@@ -345,10 +347,10 @@ class _LoRALinear(nn.Linear):
             self.register_parameter("lora_B", None)
             self.scaling = 0.0
 
-    def forward(self, input: torch.Tensor) -> torch.Tensor:  # type: ignore[override]
-        result = super().forward(input)
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:  # type: ignore[override]
+        result = super().forward(inputs)
         if self.lora_A is not None and self.lora_B is not None:
-            lora_update = (input @ self.lora_A.t()) @ self.lora_B.t()
+            lora_update = (inputs @ self.lora_A.t()) @ self.lora_B.t()
             result = result + self.scaling * lora_update
         return result
 
@@ -376,7 +378,9 @@ class _PolicyNetwork(nn.Module):
         self.metric_window = metric_window
         self.embedding_dim = embedding_dim
         self.seed_embedding = nn.Embedding(seed_vocab, embedding_dim) if seed_vocab > 0 else None
-        self.blueprint_embedding = nn.Embedding(blueprint_vocab, embedding_dim) if blueprint_vocab > 0 else None
+        self.blueprint_embedding = (
+            nn.Embedding(blueprint_vocab, embedding_dim) if blueprint_vocab > 0 else None
+        )
         if use_metric_attention:
             self.metric_encoder = nn.Linear(1, embedding_dim)
             self.metric_attention = nn.MultiheadAttention(
@@ -398,15 +402,25 @@ class _PolicyNetwork(nn.Module):
         total_input_dim += metric_context_dim
 
         self.backbone = nn.Sequential(
-            _LoRALinear(total_input_dim, hidden_size, enable_lora=use_lora, rank=lora_rank, alpha=lora_alpha),
+            _LoRALinear(
+                total_input_dim, hidden_size, enable_lora=use_lora, rank=lora_rank, alpha=lora_alpha
+            ),
             nn.Tanh(),
             nn.Dropout(dropout),
-            _LoRALinear(hidden_size, hidden_size, enable_lora=use_lora, rank=lora_rank, alpha=lora_alpha),
+            _LoRALinear(
+                hidden_size, hidden_size, enable_lora=use_lora, rank=lora_rank, alpha=lora_alpha
+            ),
             nn.Tanh(),
         )
-        self.policy_head = _LoRALinear(hidden_size, action_classes, enable_lora=use_lora, rank=lora_rank, alpha=lora_alpha)
-        self.param_head = _LoRALinear(hidden_size, 1, enable_lora=use_lora, rank=lora_rank, alpha=lora_alpha)
-        self.value_head = _LoRALinear(hidden_size, 1, enable_lora=use_lora, rank=lora_rank, alpha=lora_alpha)
+        self.policy_head = _LoRALinear(
+            hidden_size, action_classes, enable_lora=use_lora, rank=lora_rank, alpha=lora_alpha
+        )
+        self.param_head = _LoRALinear(
+            hidden_size, 1, enable_lora=use_lora, rank=lora_rank, alpha=lora_alpha
+        )
+        self.value_head = _LoRALinear(
+            hidden_size, 1, enable_lora=use_lora, rank=lora_rank, alpha=lora_alpha
+        )
 
     def forward(
         self,

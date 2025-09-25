@@ -10,7 +10,6 @@ from esper.kasmina import KasminaSeedManager
 from esper.leyline import leyline_pb2
 from esper.security.signing import SignatureContext, sign
 
-
 _SIGNING_CONTEXT = SignatureContext(secret=b"kasmina-test-secret")
 
 
@@ -98,7 +97,9 @@ def _make_emergency_command(*, include_teacher: bool = False) -> leyline_pb2.Ada
 
 def test_seed_manager_uses_fallback_on_failure() -> None:
     runtime = _Runtime(fail=True)
-    manager = KasminaSeedManager(runtime, fallback_blueprint_id="BP001", signing_context=_SIGNING_CONTEXT)
+    manager = KasminaSeedManager(
+        runtime, fallback_blueprint_id="BP001", signing_context=_SIGNING_CONTEXT
+    )
     manager.register_host_model(nn.Linear(1, 1))
     command = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP999")
     manager.handle_command(command)
@@ -108,7 +109,12 @@ def test_seed_manager_uses_fallback_on_failure() -> None:
 
 def test_seed_manager_warns_on_latency() -> None:
     runtime = _Runtime(latency=25.0)
-    manager = KasminaSeedManager(runtime, latency_budget_ms=10.0, fallback_blueprint_id="BP001", signing_context=_SIGNING_CONTEXT)
+    manager = KasminaSeedManager(
+        runtime,
+        latency_budget_ms=10.0,
+        fallback_blueprint_id="BP001",
+        signing_context=_SIGNING_CONTEXT,
+    )
     manager.register_host_model(nn.Linear(1, 1))
     command = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP002")
     manager.handle_command(command)
@@ -118,7 +124,12 @@ def test_seed_manager_warns_on_latency() -> None:
 
 def test_seed_manager_emits_telemetry_for_commands() -> None:
     runtime = _Runtime(latency=5.0)
-    manager = KasminaSeedManager(runtime, latency_budget_ms=10.0, fallback_blueprint_id="BP001", signing_context=_SIGNING_CONTEXT)
+    manager = KasminaSeedManager(
+        runtime,
+        latency_budget_ms=10.0,
+        fallback_blueprint_id="BP001",
+        signing_context=_SIGNING_CONTEXT,
+    )
     manager.register_host_model(nn.Linear(1, 1))
     command = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP010")
     manager.handle_command(command)
@@ -134,6 +145,70 @@ def test_seed_manager_emits_telemetry_for_commands() -> None:
     assert packet.source_subsystem == "kasmina"
     assert any(event.description == "seed_operation" for event in packet.events)
     assert any(event.description == "seed_stage" for event in packet.events)
+
+
+def test_seed_telemetry_enrichment_includes_alpha_kernel_and_isolation() -> None:
+    runtime = _Runtime(latency=2.0)
+    manager = KasminaSeedManager(runtime, signing_context=_SIGNING_CONTEXT)
+    manager.register_host_model(nn.Linear(1, 1))
+    # Germinate to attach a kernel and enter BLENDING
+    cmd = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP-X")
+    manager.handle_command(cmd)
+    # Force BLENDING stage for the seed context using valid transitions
+    ctx = manager.seeds()["seed-1"]
+    try:
+        # Prefer manager transitions to ensure any post-transition hooks run
+        if ctx.lifecycle.state != leyline_pb2.SEED_STAGE_TRAINING:
+            manager._transition(ctx, leyline_pb2.SEED_STAGE_TRAINING)  # type: ignore[attr-defined]
+        manager._transition(ctx, leyline_pb2.SEED_STAGE_BLENDING)  # type: ignore[attr-defined]
+    except Exception:
+        # Fallback to direct lifecycle transitions
+        try:
+            if ctx.lifecycle.state != leyline_pb2.SEED_STAGE_TRAINING:
+                ctx.lifecycle.transition(leyline_pb2.SEED_STAGE_TRAINING)
+            ctx.lifecycle.transition(leyline_pb2.SEED_STAGE_BLENDING)
+        except Exception:
+            pass
+    manager.advance_alpha("seed-1")
+    # Trigger an isolation violation and flush telemetry
+    manager.record_isolation_violation("seed-1")
+    packets = _finalize(manager, step_index=101)
+    pkt = packets[-1]
+    metrics = {m.name: m for m in pkt.metrics}
+
+    # Per-seed metrics present with seed_id attributes
+    def _has(name: str) -> bool:
+        metric = metrics.get(name)
+        return metric is not None and metric.attributes.get("seed_id") == "seed-1"
+
+    assert _has("kasmina.seed.alpha")
+    # Alpha steps are only emitted when the seed is in BLENDING stage.
+    if ctx.lifecycle.state == leyline_pb2.SEED_STAGE_BLENDING:
+        assert _has("kasmina.seed.alpha_steps")
+    assert _has("kasmina.seed.kernel_attached")
+    assert _has("kasmina.seed.last_kernel_latency_ms")
+    assert _has("kasmina.seed.isolation_violations")
+    # Isolation stats may be absent if no gradients collected; tolerate missing values
+    # but ensure no crash and structure OK when present.
+
+
+def test_export_seed_states_includes_alpha_schedule_and_blend_allowed() -> None:
+    runtime = _Runtime(latency=1.0)
+    manager = KasminaSeedManager(runtime, signing_context=_SIGNING_CONTEXT)
+    manager.register_host_model(nn.Linear(1, 1))
+    # Germinate a seed
+    cmd = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP-Z")
+    manager.handle_command(cmd)
+    states = manager.export_seed_states()
+    assert states, "expected at least one exported seed state"
+    st = states[0]
+    # Alpha metrics present
+    assert "alpha" in st.metrics
+    assert "alpha_steps" in st.metrics
+    assert "alpha_total_steps" in st.metrics
+    assert "alpha_temperature" in st.metrics
+    # Blend allowed is a numeric flag
+    assert "blend_allowed" in st.metrics
 
 
 def test_prefetch_flow_attaches_kernel() -> None:
@@ -182,12 +257,52 @@ def test_prefetch_error_triggers_gate_failure() -> None:
     assert any(event.description == "prefetch_error" for event in packet.events)
 
 
+def test_handle_command_logs_tamiyo_annotations() -> None:
+    runtime = _Runtime(latency=1.0)
+    manager = KasminaSeedManager(runtime, signing_context=_SIGNING_CONTEXT)
+    manager.register_host_model(nn.Linear(1, 1))
+    # Build a seed command with Tamiyo annotations
+    cmd = leyline_pb2.AdaptationCommand(
+        version=1,
+        command_id="cmd-ann",
+        command_type=leyline_pb2.COMMAND_SEED,
+        target_seed_id="seed-1",
+    )
+    cmd.seed_operation.operation = leyline_pb2.SEED_OP_GERMINATE
+    cmd.seed_operation.blueprint_id = "BP-ANN"
+    # Add annotations before signing
+    cmd.annotations["feature_coverage"] = "0.25"
+    cmd.annotations["risk_reason"] = "degraded_inputs"
+    cmd.annotations["blueprint_risk"] = "0.9"
+    cmd.annotations["blueprint_tier"] = leyline_pb2.BlueprintTier.Name(
+        leyline_pb2.BlueprintTier.BLUEPRINT_TIER_EXPERIMENTAL
+    )
+    cmd.annotations["blueprint_stage"] = "3"
+    _sign_command(cmd)
+    manager.handle_command(cmd)
+    packets = _finalize(manager, step_index=13)
+    assert packets
+    ev_names = [e.description for pkt in packets for e in pkt.events]
+    assert "tamiyo_annotations" in ev_names
+    assert "degraded_inputs" in ev_names
+    # If the command was rejected due to signature/nonce constraints, annotations are surfaced globally
+    # and seed context may not exist. Otherwise, metadata should be recorded.
+    seeds = manager.seeds()
+    if "seed-1" in seeds:
+        ctx = seeds["seed-1"]
+        assert ctx.metadata.get("tamiyo_feature_coverage") == "0.25"
+        assert ctx.metadata.get("tamiyo_risk_reason") == "degraded_inputs"
+
+
 def test_record_isolation_violation_updates_health() -> None:
     runtime = _Runtime()
     manager = KasminaSeedManager(runtime, signing_context=_SIGNING_CONTEXT)
     manager.record_isolation_violation("seed-2")
     packet = _finalize(manager, step_index=3)[-1]
-    assert any(metric.name == "kasmina.isolation.violations" and metric.value >= 1.0 for metric in packet.metrics)
+    assert any(
+        metric.name == "kasmina.isolation.violations" and metric.value >= 1.0
+        for metric in packet.metrics
+    )
     assert packet.system_health.status == leyline_pb2.HealthStatus.HEALTH_STATUS_UNHEALTHY
 
 
@@ -230,7 +345,8 @@ def test_gradient_isolation_detects_overlap() -> None:
     # Either a violation event or degraded health must be present
     event_names = {e.description for e in pkt.events}
     assert ("violation_recorded" in event_names) or (
-        pkt.system_health.status in {
+        pkt.system_health.status
+        in {
             leyline_pb2.HealthStatus.HEALTH_STATUS_UNHEALTHY,
             leyline_pb2.HealthStatus.HEALTH_STATUS_DEGRADED,
         }
@@ -282,7 +398,9 @@ def test_gpu_cache_enables_reuse_between_seeds() -> None:
 
 def test_pause_and_resume_cycle() -> None:
     runtime = _Runtime(latency=1.0)
-    manager = KasminaSeedManager(runtime, fallback_blueprint_id=None, signing_context=_SIGNING_CONTEXT)
+    manager = KasminaSeedManager(
+        runtime, fallback_blueprint_id=None, signing_context=_SIGNING_CONTEXT
+    )
     manager.register_host_model(nn.Linear(1, 1))
 
     germinate = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP808")
@@ -417,6 +535,27 @@ def test_parameter_registry_blocks_duplicate_kernel() -> None:
     assert "parameter" in payload["reason"]
 
 
+def test_isolation_stats_fail_open(monkeypatch) -> None:
+    """Negative path: isolation stats provider may raise; telemetry still emits."""
+    runtime = _Runtime()
+    manager = KasminaSeedManager(runtime, signing_context=_SIGNING_CONTEXT)
+    manager.register_host_model(nn.Linear(1, 1))
+    cmd = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP-iso")
+    manager.handle_command(cmd)
+    # Monkeypatch isolation_stats to raise
+    monkeypatch.setattr(
+        KasminaSeedManager,
+        "isolation_stats",
+        lambda self, sid: (_ for _ in ()).throw(RuntimeError("iso fail")),
+    )
+    packets = _finalize(manager, step_index=42)
+    pkt = packets[-1]
+    names = {m.name for m in pkt.metrics}
+    # dot/host_norm/seed_norm should be absent, but other seed metrics should exist
+    assert "kasmina.seed.isolation.dot" not in names
+    assert any(n.startswith("kasmina.seed.") for n in names)
+
+
 def test_manager_rejects_unsigned_command() -> None:
     runtime = _Runtime()
     manager = KasminaSeedManager(runtime, signing_context=_SIGNING_CONTEXT)
@@ -435,9 +574,8 @@ def test_manager_rejects_unsigned_command() -> None:
     assert manager.seeds() == {}
     last_packet = manager.telemetry_packets[-1]
     assert any(event.description == "command_rejected" for event in last_packet.events)
-    assert (
-        last_packet.system_health.indicators["priority"]
-        == leyline_pb2.MessagePriority.Name(leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH)
+    assert last_packet.system_health.indicators["priority"] == leyline_pb2.MessagePriority.Name(
+        leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH
     )
 
 

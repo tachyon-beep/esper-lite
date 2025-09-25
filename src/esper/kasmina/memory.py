@@ -19,7 +19,9 @@ class CacheStats:
 class TTLMemoryCache(Generic[T]):
     """Simple TTL cache with eviction statistics."""
 
-    def __init__(self, *, ttl_seconds: float = 300.0, clock: Callable[[], float] | None = None) -> None:
+    def __init__(
+        self, *, ttl_seconds: float = 300.0, clock: Callable[[], float] | None = None
+    ) -> None:
         self._ttl = ttl_seconds
         self._clock = clock or time.monotonic
         self._store: MutableMapping[str, tuple[float, T]] = {}
@@ -44,12 +46,14 @@ class TTLMemoryCache(Generic[T]):
         self._hits += 1
         return value
 
-    def cleanup(self) -> None:
+    def cleanup(self) -> int:
         now = self._clock()
         keys_to_remove = [key for key, (expiry, _) in self._store.items() if expiry < now]
         for key in keys_to_remove:
             del self._store[key]
             self._evictions += 1
+
+        return len(keys_to_remove)
 
     def stats(self) -> CacheStats:
         total = self._hits + self._misses

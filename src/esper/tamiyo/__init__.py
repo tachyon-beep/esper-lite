@@ -4,10 +4,10 @@ Tamiyo consumes telemetry, runs the policy network, and emits adaptation command
 in accordance with `docs/design/detailed_design/03-tamiyo.md`.
 """
 
-from .policy import TamiyoPolicy, TamiyoPolicyConfig
 from .gnn import TamiyoGNN, TamiyoGNNConfig
 from .graph_builder import TamiyoGraphBuilder, TamiyoGraphBuilderConfig
 from .persistence import FieldReportStore, FieldReportStoreConfig
+from .policy import TamiyoPolicy, TamiyoPolicyConfig
 from .service import RiskConfig, TamiyoService
 
 __all__ = [

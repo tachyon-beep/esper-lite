@@ -22,4 +22,3 @@ def test_lr_controller_warmup_and_cosine() -> None:
     lr2 = ctrl.apply(2, 0)
     lr3 = ctrl.apply(3, 0)
     assert lr3 <= lr2
-

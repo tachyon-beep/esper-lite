@@ -26,4 +26,3 @@ def test_no_custom_enums_outside_allowed_whitelist() -> None:
             violations.append(str(path))
 
     assert not violations, f"Custom Enum definitions found outside whitelist: {violations}"
-

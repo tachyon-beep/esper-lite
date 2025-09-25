@@ -12,7 +12,7 @@ Scope and invariants
 Policy selection boundary
 - Blending applies to seed integration phases only (grafting: TRAINING → BLENDING → SHADOWING/PROBATIONARY), not general training.
 - Tamiyo selects the blending mechanism from a small, approved set based on policy/risk. Kasmina executes the requested mode safely; it does not choose the mode.
-- The selection signal should be conveyed by Tamiyo via `AdaptationCommand` annotations or parameters. If omitted, Kasmina uses its safe default (convex blend with host.detach()).
+- The selection signal is conveyed by Tamiyo via `AdaptationCommand` annotations or parameters (P8 implemented). If omitted, Kasmina uses its safe default (convex blend with host.detach()).
 
 Safety rails and budgets
 - α bounds: clamp α to [0, 1]. For maps: cap fraction of elements > τ (e.g., τ=0.8) to ≤ p% (e.g., 20%).
@@ -113,6 +113,11 @@ Defaults & prototype behaviour
 - Default mode: convex blend `α·seed + (1−α)·host.detach()` (implemented by `AlphaBlender`).
 - Advanced modes above are design‑complete and intended to be selected by Tamiyo; prototype keeps default unless explicitly requested.
 - Ensure host logits come from a detached forward.
+
+Contracts & Future Promotion
+- Current contract: annotations (string `blend_mode` + optional params) convey intent; Kasmina validates and applies per‑seed `BlenderConfig` internally.
+- Enum guard: no shared, non‑Leyline enums are introduced; `blend_mode` is executor‑local and not a Leyline contract in the prototype.
+- Promotion path (optional, when modes stabilize): add a Leyline `BlendMode` enum and (optional) `BlendConfig` message; consume in Kasmina with backward compatibility for annotations during a deprecation window.
 
 C) Two‑Expert Soft Gate (seed vs host)
 - out = w_seed·seed + w_host·host, with [w_seed, w_host] = softmax(g(x)) from a tiny MLP.

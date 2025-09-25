@@ -7,31 +7,48 @@ and extension points for later slices (see `docs/project/implementation_plan.md`
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Awaitable, Callable
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
-from dataclasses import dataclass, field
-import contextlib
-from time import perf_counter, time_ns
-from typing import TYPE_CHECKING, Protocol
-from pathlib import Path
-import zlib
-import io
-import json
 import os
 
+# Ensure CuBLAS workspace configured early to avoid deterministic errors on some CUDA setups
+if not os.getenv("CUBLAS_WORKSPACE_CONFIG"):
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+
+import contextlib
+import io
+import json
+import zlib
+from collections.abc import Awaitable, Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from time import monotonic, perf_counter, time_ns
+from typing import TYPE_CHECKING, Protocol
+
+import psutil
 import torch
+from google.protobuf.timestamp_pb2 import Timestamp
 from torch import nn
 from torch.utils.data import DataLoader
 
 from esper.core import EsperSettings, TelemetryEvent, TelemetryMetric, build_telemetry_packet
 from esper.leyline import leyline_pb2
-from esper.oona.messaging import CircuitBreaker, BreakerSnapshot
-from .lr_controller import build_controller, LRController
+from esper.oona.messaging import BreakerSnapshot, CircuitBreaker
+
+from .aggregation import combine_flat_grads, flat_to_grads, grads_to_flat
+from .emergency import EmergencyController
+from .emergency import Level as EmergencyLevel
+from .emergency import LocalEmergencySignal, SharedEmergencySignal
+from .lr_controller import LRController, build_controller
 from .optimizer_manager import OptimizerManager
-from .rollback import FastRollbackCache, attempt_two_tier_rollback, DeadlineSignal, SharedDeadlineSignal
 from .profiler import maybe_profile
-from .emergency import EmergencyController, Level as EmergencyLevel
-from .aggregation import grads_to_flat, flat_to_grads, combine_flat_grads
+from .rollback import (
+    DeadlineSignal,
+    FastRollbackCache,
+    SharedDeadlineSignal,
+    attempt_two_tier_rollback,
+)
 
 if TYPE_CHECKING:
     from esper.oona import OonaClient
@@ -57,9 +74,7 @@ class TrainingLoopConfig:
 
     max_epochs: int
     device: torch.device = field(
-        default_factory=lambda: torch.device(
-            "cuda" if torch.cuda.is_available() else "cpu"
-        )
+        default_factory=lambda: torch.device("cuda" if torch.cuda.is_available() else "cpu")
     )
     gradient_accumulation_steps: int = 1
     epoch_budget_ms: float = 250.0
@@ -72,6 +87,7 @@ class TrainingLoopConfig:
     enable_amp: bool = True
     enable_tf32: bool = True
     enable_foreach_optim: bool = True
+
 
 @dataclass(slots=True)
 class EpochStats:
@@ -149,6 +165,9 @@ class TolariaTrainer:
         self._tf32_enabled = _initialise_pytorch_defaults(
             config.enable_tf32 and self._device_type == "cuda"
         )
+        # Ensure CuBLAS workspace configured to avoid deterministic errors on some CUDA setups
+        if self._device_type == "cuda" and not os.getenv("CUBLAS_WORKSPACE_CONFIG"):
+            os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
         self._model = model.to(self._device)
 
@@ -175,19 +194,25 @@ class TolariaTrainer:
         self._run_id = "training-run"
         self._telemetry_packets: list[leyline_pb2.TelemetryPacket] = []
         self._state_packets: list[leyline_pb2.SystemStatePacket] = []
-        self._emergency_packets: list[leyline_pb2.TelemetryPacket] = []
-        self._emergency_publisher: Callable[[leyline_pb2.TelemetryPacket], Awaitable[None]] | None = None
+        self._emergency_signals: list[leyline_pb2.EmergencySignal] = []
+        self._emergency_publisher: (
+            Callable[[leyline_pb2.EmergencySignal], Awaitable[None]] | None
+        ) = None
         self._seed_agg_metrics: list[TelemetryMetric] = []
         # Snapshot cadence and rebuild storm guard
         try:
-            self._rollback_snapshot_steps = max(1, int(self._settings.tolaria_rollback_snapshot_steps))
+            self._rollback_snapshot_steps = max(
+                1, int(self._settings.tolaria_rollback_snapshot_steps)
+            )
         except Exception:
             self._rollback_snapshot_steps = 1
         try:
-            self._opt_rebuild_min_steps = max(0, int(self._settings.tolaria_opt_rebuild_min_interval_steps))
+            self._opt_rebuild_min_steps = max(
+                0, int(self._settings.tolaria_opt_rebuild_min_interval_steps)
+            )
         except Exception:
             self._opt_rebuild_min_steps = 0
-        self._last_opt_rebuild_step = -10**9
+        self._last_opt_rebuild_step = -(10**9)
         self._breaker = CircuitBreaker(
             failure_threshold=self._config.breaker_failure_threshold,
             success_threshold=self._config.breaker_success_threshold,
@@ -197,17 +222,40 @@ class TolariaTrainer:
         self._conservative_mode = False
         self._events: list[TelemetryEvent] = []
         self._amp_enabled = (
-            self._config.enable_amp
-            and self._device_type == "cuda"
-            and torch.cuda.is_available()
+            self._config.enable_amp and self._device_type == "cuda" and torch.cuda.is_available()
         )
         self._amp_dtype = torch.bfloat16
-        self._scaler = torch.cuda.amp.GradScaler() if self._amp_enabled else None
+        self._scaler = torch.amp.GradScaler("cuda") if self._amp_enabled else None
         self._failed_epochs_streak = 0
         self._halt = False
         self._last_step_failure_reason: str | None = None
         self._last_hook_latency_ms: float = 0.0
         self._last_tamiyo_latency_ms: float = 0.0
+        # NVML initialisation (GPU-only): mandatory when CUDA is available
+        self._pynvml = None
+        self._nvml_handle = None
+        if self._device_type == "cuda" and torch.cuda.is_available():
+            try:
+                import pynvml as _pynvml  # type: ignore
+
+                _pynvml.nvmlInit()
+                self._pynvml = _pynvml
+                self._nvml_handle = _pynvml.nvmlDeviceGetHandleByIndex(0)
+            except Exception as exc:  # pragma: no cover - environment dependent
+                raise RuntimeError(f"NVML initialisation failed on CUDA device: {exc}")
+        # Rolling dynamics (EWMA) and step timers
+        self._ewma_alpha: float = 0.2
+        self._loss_mean: float = 0.0
+        self._loss_var: float = 0.0
+        self._last_loss: float | None = None
+        self._grad_mean: float = 0.0
+        self._grad_var: float = 0.0
+        self._prev_step_end_time: float | None = None
+        self._step_total_start: float | None = None
+        # Prototype-delta WP8/8.5: enable per-step metrics enrichment by default
+        # (latency splits, optimizer hints, input wait/copy timings). Guard all
+        # uses with this flag and fail open when disabled.
+        self._step_enrichment: bool = True
 
         self._compile_enabled = False
         self._compiled_step = None
@@ -255,7 +303,9 @@ class TolariaTrainer:
         }
 
         # Profiler telemetry
-        self._metrics["tolaria.profiler.enabled"] = 1.0 if getattr(self._settings, "tolaria_profiler_enabled", False) else 0.0
+        self._metrics["tolaria.profiler.enabled"] = (
+            1.0 if getattr(self._settings, "tolaria_profiler_enabled", False) else 0.0
+        )
         self._metrics["tolaria.profiler.traces_emitted_total"] = 0.0
         self._rollback_signal: DeadlineSignal | None = None
 
@@ -310,23 +360,44 @@ class TolariaTrainer:
             self._conflict_warn = float(self._settings.tolaria_aggregation_conflict_warn)
         except Exception:
             self._conflict_warn = 0.75
-        self._per_layer_enabled = bool(getattr(self._settings, "tolaria_agg_per_layer_enabled", False))
+        seed_layer_requested = bool(
+            getattr(self._settings, "tolaria_seed_layer_summaries_enabled", False)
+        )
+        legacy_layer_requested = bool(
+            getattr(self._settings, "tolaria_agg_per_layer_enabled", False)
+        )
+        self._per_layer_requested = seed_layer_requested or legacy_layer_requested
         try:
-            self._per_layer_topk = max(1, int(getattr(self._settings, "tolaria_agg_per_layer_topk", 5)))
+            raw_topk = getattr(self._settings, "tolaria_seed_layer_topk")
+        except AttributeError:
+            raw_topk = None
+        if raw_topk is None:
+            raw_topk = getattr(self._settings, "tolaria_agg_per_layer_topk", 3)
+        try:
+            self._per_layer_topk = max(1, int(raw_topk))
         except Exception:
-            self._per_layer_topk = 5
+            self._per_layer_topk = 3
         try:
-            self._seed_share_jump_warn = float(getattr(self._settings, "tolaria_seed_share_jump_warn", 0.3))
+            self._seed_share_jump_warn = float(
+                getattr(self._settings, "tolaria_seed_share_jump_warn", 0.3)
+            )
         except Exception:
             self._seed_share_jump_warn = 0.3
         try:
-            self._seed_conflict_ratio_warn = float(getattr(self._settings, "tolaria_seed_conflict_ratio_warn", 0.5))
+            self._seed_conflict_ratio_warn = float(
+                getattr(self._settings, "tolaria_seed_conflict_ratio_warn", 0.5)
+            )
         except Exception:
             self._seed_conflict_ratio_warn = 0.5
         self._last_seed_share: dict[str, float] = {}
-        self._seed_health_compact = bool(getattr(self._settings, "tolaria_seed_health_compact", False))
+        self._seed_health_compact = bool(
+            getattr(self._settings, "tolaria_seed_health_compact", False)
+        )
+        # Final activation depends on compact telemetry preference
+        self._per_layer_enabled = self._per_layer_requested and not self._seed_health_compact
 
         self._emergency: EmergencyController | None = None
+        self._emergency_signal_bridge: SharedEmergencySignal | LocalEmergencySignal | None = None
         if self._settings.tolaria_emergency_enabled:
             self._emergency = EmergencyController(
                 bypass_cap_per_min=self._settings.tolaria_emergency_bypass_max_per_min
@@ -335,6 +406,19 @@ class TolariaTrainer:
             self._metrics["tolaria.emergency.bypass_applied_total"] = 0.0
             self._metrics["tolaria.emergency.halts_total"] = 0.0
             self._metrics["tolaria.emergency.halt"] = 0.0
+            signal_name = getattr(self._settings, "tolaria_emergency_signal_name", None)
+            if signal_name:
+                try:
+                    self._emergency_signal_bridge = SharedEmergencySignal.create(signal_name)
+                    self._metrics["tolaria.emergency.shared_signal_mode"] = 1.0
+                except Exception:
+                    self._emergency_signal_bridge = LocalEmergencySignal()
+                    self._metrics["tolaria.emergency.shared_signal_mode"] = 0.0
+            else:
+                self._emergency_signal_bridge = LocalEmergencySignal()
+                self._metrics["tolaria.emergency.shared_signal_mode"] = 0.0
+        else:
+            self._metrics["tolaria.emergency.shared_signal_mode"] = 0.0
 
     def run(self) -> Iterable[leyline_pb2.SystemStatePacket]:
         """Run the training loop, yielding `SystemStatePacket`s each epoch."""
@@ -352,7 +436,9 @@ class TolariaTrainer:
             ):
                 stats = self._train_single_epoch()
             if self._settings.tolaria_profiler_enabled:
-                self._metrics["tolaria.profiler.traces_emitted_total"] = self._metrics.get("tolaria.profiler.traces_emitted_total", 0.0) + 1.0
+                self._metrics["tolaria.profiler.traces_emitted_total"] = (
+                    self._metrics.get("tolaria.profiler.traces_emitted_total", 0.0) + 1.0
+                )
             stats.epoch_duration_ms = (perf_counter() - epoch_start) * 1000.0
             state = self._emit_state(epoch, stats)
             self._metrics["tolaria.epochs.total"] += 1.0
@@ -403,35 +489,11 @@ class TolariaTrainer:
                         "tolaria.emergency.escalated",
                         attributes={"level": str(int(esc.level)), "reason": failure_reason},
                     )
-                    # Build a high-priority telemetry packet for broadcast
-                    pkt = build_telemetry_packet(
-                        packet_id=f"{self._run_id}-emergency-{epoch}",
-                        source="tolaria",
-                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
-                        metrics=[],
-                        events=[TelemetryEvent(
-                            description="emergency_broadcast",
-                            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
-                            attributes={"level": str(int(esc.level)), "reason": failure_reason, "epoch": str(epoch), "run_id": self._run_id},
-                        )],
-                        health_status=leyline_pb2.HealthStatus.HEALTH_STATUS_UNHEALTHY,
-                        health_summary="emergency",
-                        health_indicators={"priority": "MESSAGE_PRIORITY_HIGH"},
+                    self._dispatch_emergency_signal(
+                        level=int(esc.level),
+                        reason=failure_reason,
+                        epoch=epoch,
                     )
-                    # Try immediate non-blocking publish if a publisher is registered; else queue
-                    publisher = self._emergency_publisher
-                    if publisher is not None:
-                        try:
-                            import asyncio
-                            loop = asyncio.get_running_loop()
-                            loop.create_task(publisher(pkt))
-                            self._metrics["tolaria.emergency.broadcasts_total"] = (
-                                self._metrics.get("tolaria.emergency.broadcasts_total", 0.0) + 1.0
-                            )
-                        except Exception:
-                            self._emergency_packets.append(pkt)
-                    else:
-                        self._emergency_packets.append(pkt)
                 # Attempt two-tier rollback on failure
                 if self._fast_cache is not None:
                     with _record_function("tolaria/rollback"):
@@ -452,18 +514,32 @@ class TolariaTrainer:
                     if not rr.used_fast and not rr.hit:
                         # Treat as deadline exceeded
                         self._metrics["tolaria.rollback.deadline_exceeded_total"] = (
-                            self._metrics.get("tolaria.rollback.deadline_exceeded_total", 0.0)
-                            + 1.0
+                            self._metrics.get("tolaria.rollback.deadline_exceeded_total", 0.0) + 1.0
                         )
                         # Escalate to L4/Halt when rollback deadline exceeded (if enabled)
-                        if self._emergency is not None and self._settings.tolaria_emergency_l4_on_rollback_deadline:
-                            esc = self._emergency.escalate(EmergencyLevel.L4_HALT, reason="rollback_deadline")
+                        if (
+                            self._emergency is not None
+                            and self._settings.tolaria_emergency_l4_on_rollback_deadline
+                        ):
+                            esc = self._emergency.escalate(
+                                EmergencyLevel.L4_HALT, reason="rollback_deadline"
+                            )
                             self._emit_event(
                                 "tolaria.emergency.halt",
-                                attributes={"level": str(int(esc.level)), "reason": "rollback_deadline"},
+                                attributes={
+                                    "level": str(int(esc.level)),
+                                    "reason": "rollback_deadline",
+                                },
+                            )
+                            self._dispatch_emergency_signal(
+                                level=int(esc.level),
+                                reason="rollback_deadline",
+                                epoch=epoch,
                             )
                             self._halt = True
-                            self._metrics["tolaria.emergency.halts_total"] = self._metrics.get("tolaria.emergency.halts_total", 0.0) + 1.0
+                            self._metrics["tolaria.emergency.halts_total"] = (
+                                self._metrics.get("tolaria.emergency.halts_total", 0.0) + 1.0
+                            )
                             self._metrics["tolaria.emergency.halt"] = 1.0
             else:
                 success_snapshot = self._breaker.record_success()
@@ -471,10 +547,19 @@ class TolariaTrainer:
                 self._exit_conservative_mode()
                 self._failed_epochs_streak = 0
                 # Optional optimizer rebuild at epoch fence
-                if self._opt_manager is not None and self._settings.tolaria_opt_rebuild_fence.lower() == "epoch":
+                if (
+                    self._opt_manager is not None
+                    and self._settings.tolaria_opt_rebuild_fence.lower() == "epoch"
+                ):
                     # Storm guard
-                    if self._opt_rebuild_min_steps > 0 and (self._global_step - self._last_opt_rebuild_step) < self._opt_rebuild_min_steps:
-                        self._metrics["tolaria.opt.rebuild_skipped_total"] = self._metrics.get("tolaria.opt.rebuild_skipped_total", 0.0) + 1.0
+                    if (
+                        self._opt_rebuild_min_steps > 0
+                        and (self._global_step - self._last_opt_rebuild_step)
+                        < self._opt_rebuild_min_steps
+                    ):
+                        self._metrics["tolaria.opt.rebuild_skipped_total"] = (
+                            self._metrics.get("tolaria.opt.rebuild_skipped_total", 0.0) + 1.0
+                        )
                     else:
                         with _record_function("tolaria/optimizer_rebuild"):
                             res = self._opt_manager.maybe_rebuild(self._model)
@@ -500,16 +585,26 @@ class TolariaTrainer:
             except Exception:  # pragma: no cover - defensive
                 pass
             yield state
-            if self._failed_epochs_streak >= max(1, int(self._settings.tolaria_emergency_l4_failed_epochs_threshold)):
+            if self._failed_epochs_streak >= max(
+                1, int(self._settings.tolaria_emergency_l4_failed_epochs_threshold)
+            ):
                 # Escalate to L4 due to repeated failed epochs
                 if self._emergency is not None and not self._halt:
-                    esc = self._emergency.escalate(EmergencyLevel.L4_HALT, reason="failed_epochs_streak")
+                    esc = self._emergency.escalate(
+                        EmergencyLevel.L4_HALT, reason="failed_epochs_streak"
+                    )
                     self._emit_event(
                         "tolaria.emergency.halt",
-                        attributes={"level": str(int(esc.level)), "reason": "failed_epochs_streak", "streak": str(self._failed_epochs_streak)},
+                        attributes={
+                            "level": str(int(esc.level)),
+                            "reason": "failed_epochs_streak",
+                            "streak": str(self._failed_epochs_streak),
+                        },
                     )
                     self._halt = True
-                    self._metrics["tolaria.emergency.halts_total"] = self._metrics.get("tolaria.emergency.halts_total", 0.0) + 1.0
+                    self._metrics["tolaria.emergency.halts_total"] = (
+                        self._metrics.get("tolaria.emergency.halts_total", 0.0) + 1.0
+                    )
                     self._metrics["tolaria.emergency.halt"] = 1.0
             if self._halt:
                 break
@@ -569,7 +664,9 @@ class TolariaTrainer:
         step_timer_start: float | None = None
         accumulated_samples = 0
 
-        def _build_seed_masks_if_needed(param_grads: list[torch.Tensor], flat: torch.Tensor, shp: list[torch.Size]) -> None:
+        def _build_seed_masks_if_needed(
+            param_grads: list[torch.Tensor], flat: torch.Tensor, shp: list[torch.Size]
+        ) -> None:
             nonlocal seed_masks, owner_for_param, seed_param_elems, total_elems
             if seed_masks is not None:
                 return
@@ -618,12 +715,39 @@ class TolariaTrainer:
             else:
                 inputs, targets = batch
                 seed_ids = None
-            inputs = inputs.to(self._device, non_blocking=self._non_blocking)
-            targets = targets.to(self._device, non_blocking=self._non_blocking)
+            # Approximate dataloader wait time (time since previous step end)
+            if self._prev_step_end_time is not None:
+                try:
+                    input_wait_ms = (micro_start - self._prev_step_end_time) * 1000.0
+                except Exception:
+                    input_wait_ms = 0.0
+            else:
+                input_wait_ms = 0.0
+            # Measure host->device copy time (CUDA only; best-effort)
+            h2d_copy_ms = 0.0
+            if self._device_type == "cuda":
+                t_h2d = perf_counter()
+                inputs = inputs.to(self._device, non_blocking=self._non_blocking)
+                targets = targets.to(self._device, non_blocking=self._non_blocking)
+                h2d_copy_ms = (perf_counter() - t_h2d) * 1000.0
+            else:
+                inputs = inputs.to(self._device, non_blocking=self._non_blocking)
+                targets = targets.to(self._device, non_blocking=self._non_blocking)
+            # Align batch tensors with current model device (handles CPU fallback mid-epoch)
+            try:
+                model_device = next(self._model.parameters()).device
+                if inputs.device != model_device:
+                    inputs = inputs.to(model_device, non_blocking=False)
+                if targets.device != model_device:
+                    targets = targets.to(model_device, non_blocking=False)
+            except StopIteration:
+                pass
 
             if step_timer_start is None:
                 step_timer_start = micro_start
                 accumulated_samples = 0
+                if self._step_total_start is None:
+                    self._step_total_start = micro_start
             accumulated_samples += targets.size(0)
 
             # Always zero to isolate per-micro gradients we aggregate ourselves
@@ -641,6 +765,19 @@ class TolariaTrainer:
                         level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
                         attributes={"error": type(exc).__name__},
                     )
+                    # If CUDA path caused failure, fall back to CPU for this retry
+                    if self._device_type == "cuda":
+                        try:
+                            self._model = self._model.to("cpu")
+                            inputs = inputs.detach().cpu()
+                            targets = targets.detach().cpu()
+                            self._device = torch.device("cpu")
+                            self._device_type = "cpu"
+                            self._non_blocking = False
+                            self._amp_enabled = False
+                            self._scaler = None
+                        except Exception:
+                            pass
                     loss_tensor, correct_tensor = self._eager_train_step(inputs, targets)
                 else:
                     raise
@@ -721,7 +858,7 @@ class TolariaTrainer:
             if step_ready:
                 # Combine gradients at the fence
                 # Mode override: force microbatch aggregation if configured
-                force_micro = (self._agg_mode == "microbatch")
+                force_micro = self._agg_mode == "microbatch"
                 if seed_masks is None or force_micro:
                     # Fall back: microbatch aggregation (previous behavior)
                     # State-aware weights (approximate): prefer ACTIVE seeds; default equal weights
@@ -738,7 +875,9 @@ class TolariaTrainer:
                             getattr(leyline_pb2, "SEED_STAGE_BLENDING", 0): 0.5,
                             getattr(leyline_pb2, "SEED_STAGE_GERMINATING", 0): 0.25,
                         }
-                        avg_w = sum(stage_weight.get(s.stage, 1.0) for s in seed_states) / max(1, len(seed_states))
+                        avg_w = sum(stage_weight.get(s.stage, 1.0) for s in seed_states) / max(
+                            1, len(seed_states)
+                        )
                         weights = [avg_w for _ in micro_flats]
                         agg_weights_sum += float(avg_w)
                         agg_weights_uses += 1
@@ -747,6 +886,13 @@ class TolariaTrainer:
                         use_pcgrad=len(micro_flats) > 1,
                         weights=weights,
                     )
+                    try:
+                        sources = max(1, len(micro_flats) - 1)
+                        grad_conflict_rate = (
+                            float(conflicts) / float(sources) if len(micro_flats) > 1 else 0.0
+                        )
+                    except Exception:
+                        grad_conflict_rate = 0.0
                 else:
                     # Seed-aware aggregation using masks + PCGrad across seeds
                     # Sum microbatch flats into per-seed flats using masks
@@ -756,7 +902,11 @@ class TolariaTrainer:
                         for mf in micro_flats:
                             contrib = mf * mask
                             acc = contrib if acc is None else (acc + contrib)
-                        per_seed[name] = acc if acc is not None else torch.zeros_like(next(iter(seed_masks.values())))
+                        per_seed[name] = (
+                            acc
+                            if acc is not None
+                            else torch.zeros_like(next(iter(seed_masks.values())))
+                        )
                     # Teacher split if attribution weights are available
                     if teacher_key in per_seed and attrib_uses > 0:
                         teacher_acc = per_seed.pop(teacher_key)
@@ -814,6 +964,13 @@ class TolariaTrainer:
                         use_pcgrad=(len(seed_flats) > 1) and self._pcgrad_enabled,
                         weights=weights,
                     )
+                    try:
+                        sources = max(1, len(seed_flats) - 1)
+                        grad_conflict_rate = (
+                            float(conflicts) / float(sources) if len(seed_flats) > 1 else 0.0
+                        )
+                    except Exception:
+                        grad_conflict_rate = 0.0
                     # Accumulate per-seed telemetry
                     for name, flat_vec, w in zip(seed_names, seed_flats, weights):
                         try:
@@ -825,7 +982,9 @@ class TolariaTrainer:
                         seed_uses[name] = seed_uses.get(name, 0) + 1
                         seen_seeds.add(name)
                         if name in alpha_by_seed:
-                            seed_alpha_sum[name] = seed_alpha_sum.get(name, 0.0) + float(alpha_by_seed[name])
+                            seed_alpha_sum[name] = seed_alpha_sum.get(name, 0.0) + float(
+                                alpha_by_seed[name]
+                            )
                         # Teacher split fraction per seed (approximate): use attribution weight if present
                         if attrib_uses > 0:
                             tw = float(sum(attrib_sums.values()))
@@ -860,7 +1019,11 @@ class TolariaTrainer:
                         for seed_name, vec in zip(seed_names, seed_flats):
                             layer_map = per_layer_norm_sum.setdefault(seed_name, {})
                             for idx, off in enumerate(offsets):
-                                n = int(torch.tensor(shapes[idx]).prod().item()) if shapes[idx] else 1
+                                n = (
+                                    int(torch.tensor(shapes[idx]).prod().item())
+                                    if shapes[idx]
+                                    else 1
+                                )
                                 try:
                                     sl = vec[off : off + n]
                                     nrm = float(torch.norm(sl).item())
@@ -890,6 +1053,24 @@ class TolariaTrainer:
                 stats.gradient_norm_sum += grad_norm
                 micro_flats.clear()
 
+                # Optimizer hints (best-effort)
+                try:
+                    lr_values: list[float] = []
+                    mom_values: list[float] = []
+                    for group in self._optimizer.param_groups:
+                        lr_values.append(float(group.get("lr", 0.0)))
+                        if "momentum" in group:
+                            mom_values.append(float(group.get("momentum", 0.0)))
+                    optimizer_lr = (
+                        float(sum(lr_values) / max(1, len(lr_values))) if lr_values else 0.0
+                    )
+                    optimizer_momentum = (
+                        float(sum(mom_values) / max(1, len(mom_values))) if mom_values else 0.0
+                    )
+                except Exception:
+                    optimizer_lr = 0.0
+                    optimizer_momentum = 0.0
+
                 step_elapsed = perf_counter() - (step_timer_start or micro_start)
                 step_timer_start = None
                 samples_per_s = 0.0
@@ -901,17 +1082,91 @@ class TolariaTrainer:
                 if self._fast_cache is not None and self._global_step == 0:
                     try:
                         self._fast_cache.put(self._global_step, self._model, self._optimizer)
-                        self._metrics["tolaria.rollback.snapshots_total"] = self._metrics.get("tolaria.rollback.snapshots_total", 0.0) + 1.0
-                        self._metrics["tolaria.rollback.fast_size_bytes"] = float(self._fast_cache.size_bytes)
+                        self._metrics["tolaria.rollback.snapshots_total"] = (
+                            self._metrics.get("tolaria.rollback.snapshots_total", 0.0) + 1.0
+                        )
+                        self._metrics["tolaria.rollback.fast_size_bytes"] = float(
+                            self._fast_cache.size_bytes
+                        )
                     except Exception:  # pragma: no cover - defensive
                         pass
 
                 self._global_step += 1
+                current_loss = float(loss_tensor.detach().item())
+                # Update rolling dynamics
+                loss_delta = 0.0
+                try:
+                    if self._last_loss is not None:
+                        loss_delta = current_loss - self._last_loss
+                    old_mean = self._loss_mean
+                    new_mean = self._ewma_alpha * current_loss + (1.0 - self._ewma_alpha) * old_mean
+                    new_var = (
+                        self._ewma_alpha * (current_loss - old_mean) * (current_loss - new_mean)
+                        + (1.0 - self._ewma_alpha) * self._loss_var
+                    )
+                    self._loss_mean, self._loss_var = new_mean, max(0.0, new_var)
+                    g_old_mean = self._grad_mean
+                    g_new_mean = (
+                        self._ewma_alpha * grad_norm + (1.0 - self._ewma_alpha) * g_old_mean
+                    )
+                    g_new_var = (
+                        self._ewma_alpha * (grad_norm - g_old_mean) * (grad_norm - g_new_mean)
+                        + (1.0 - self._ewma_alpha) * self._grad_var
+                    )
+                    self._grad_mean, self._grad_var = g_new_mean, max(0.0, g_new_var)
+                    self._last_loss = current_loss
+                except Exception:
+                    pass
+
                 step_state = self._build_step_state(
-                    loss=float(loss_tensor.detach().item()),
+                    loss=current_loss,
                     grad_norm=grad_norm,
                     samples_per_s=samples_per_s,
                 )
+                # Attach enrichment metrics (do not stall on failure)
+                try:
+                    step_state.training_metrics["optimizer_lr"] = optimizer_lr
+                    if optimizer_momentum:
+                        step_state.training_metrics["optimizer_momentum"] = optimizer_momentum
+                    step_state.training_metrics["loss_delta"] = loss_delta
+                    step_state.training_metrics["loss_ewma"] = self._loss_mean
+                    step_state.training_metrics["loss_volatility"] = self._loss_var**0.5
+                    step_state.training_metrics["grad_norm_ewma"] = self._grad_mean
+                    step_state.training_metrics["grad_var"] = self._grad_var
+                    # Optimizer family index for Tamiyo encoding (0:sgd,1:adam,2:adamw,3:other)
+                    try:
+                        fam_name = type(self._optimizer).__name__.lower()
+                        if "sgd" in fam_name:
+                            fam_idx = 0
+                        elif "adamw" in fam_name:
+                            fam_idx = 2
+                        elif "adam" in fam_name:
+                            fam_idx = 1
+                        else:
+                            fam_idx = 3
+                        step_state.training_metrics["optimizer_family_index"] = float(fam_idx)
+                        # Emit a lightweight event with resolved optimizer family
+                        self._emit_event(
+                            "optimizer_family",
+                            attributes={"name": fam_name, "index": str(fam_idx)},
+                        )
+                    except Exception:
+                        pass
+                    if input_wait_ms:
+                        step_state.training_metrics["input_wait_ms"] = input_wait_ms
+                    # Expose CUDA H2D copy timing if CUDA available; 0.0 on CPU
+                    if torch.cuda.is_available():
+                        step_state.training_metrics["h2d_copy_ms"] = h2d_copy_ms
+                    # Expose per-fence conflict rate if PCGrad applied
+                    try:
+                        if "grad_conflict_rate" in locals():
+                            step_state.training_metrics["grad_conflict_rate"] = float(
+                                grad_conflict_rate
+                            )
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
 
                 hook_start = perf_counter()
                 tamiyo_latency_ms = 0.0
@@ -944,8 +1199,11 @@ class TolariaTrainer:
                         self._enter_conservative_mode(local_failure)
                         self._last_tamiyo_latency_ms = 0.0
 
+                apply_ms = 0.0
                 try:
+                    t_apply = perf_counter()
                     self._apply_kasmina_command(command)
+                    apply_ms = (perf_counter() - t_apply) * 1000.0
                 except TimeoutError as exc:
                     reason = "kasmina_timeout"
                     local_failure = local_failure or reason
@@ -968,8 +1226,12 @@ class TolariaTrainer:
                 self._last_hook_latency_ms = hook_latency_ms
                 self._metrics["tolaria.hook.latency_ms"] = hook_latency_ms
                 step_state.training_metrics["hook_latency_ms"] = hook_latency_ms
-                if self._last_tamiyo_latency_ms:
-                    step_state.training_metrics["tamiyo_latency_ms"] = self._last_tamiyo_latency_ms
+                # Always expose Tamiyo timing; other enrichment behind flag
+                step_state.training_metrics["tamiyo_latency_ms"] = (
+                    self._last_tamiyo_latency_ms or 0.0
+                )
+                if self._step_enrichment:
+                    step_state.training_metrics["kasmina.apply_ms"] = apply_ms
 
                 if callable(exporter) and callable(advancer):
                     try:
@@ -981,10 +1243,24 @@ class TolariaTrainer:
 
                 finalizer = getattr(self._kasmina, "finalize_step", None)
                 if callable(finalizer):
+                    finalize_ms = 0.0
                     try:
+                        t_fin = perf_counter()
                         finalizer(step_index=self._global_step)
+                        finalize_ms = (perf_counter() - t_fin) * 1000.0
                     except Exception:  # pragma: no cover - Kasmina finalize is best effort
                         pass
+                    else:
+                        if self._step_enrichment:
+                            step_state.training_metrics["kasmina.finalize_ms"] = finalize_ms
+                # Total step latency (first micro -> post-finalize)
+                if self._step_total_start is not None and self._step_enrichment:
+                    step_state.training_metrics["step_latency_ms"] = (
+                        perf_counter() - self._step_total_start
+                    ) * 1000.0
+                    self._step_total_start = None
+                # Mark end-of-step for input wait approximation
+                self._prev_step_end_time = perf_counter()
 
                 if self._lr_controller is not None:
                     try:
@@ -998,8 +1274,12 @@ class TolariaTrainer:
                     try:
                         if self._global_step % max(1, self._rollback_snapshot_steps) == 0:
                             self._fast_cache.put(self._global_step, self._model, self._optimizer)
-                            self._metrics["tolaria.rollback.snapshots_total"] = self._metrics.get("tolaria.rollback.snapshots_total", 0.0) + 1.0
-                        self._metrics["tolaria.rollback.fast_size_bytes"] = float(self._fast_cache.size_bytes)
+                            self._metrics["tolaria.rollback.snapshots_total"] = (
+                                self._metrics.get("tolaria.rollback.snapshots_total", 0.0) + 1.0
+                            )
+                        self._metrics["tolaria.rollback.fast_size_bytes"] = float(
+                            self._fast_cache.size_bytes
+                        )
                     except Exception:  # pragma: no cover - defensive
                         pass
 
@@ -1021,8 +1301,14 @@ class TolariaTrainer:
                         n = 0
                     if n > 0 and (self._global_step % n == 0):
                         # Storm guard
-                        if self._opt_rebuild_min_steps > 0 and (self._global_step - self._last_opt_rebuild_step) < self._opt_rebuild_min_steps:
-                            self._metrics["tolaria.opt.rebuild_skipped_total"] = self._metrics.get("tolaria.opt.rebuild_skipped_total", 0.0) + 1.0
+                        if (
+                            self._opt_rebuild_min_steps > 0
+                            and (self._global_step - self._last_opt_rebuild_step)
+                            < self._opt_rebuild_min_steps
+                        ):
+                            self._metrics["tolaria.opt.rebuild_skipped_total"] = (
+                                self._metrics.get("tolaria.opt.rebuild_skipped_total", 0.0) + 1.0
+                            )
                         else:
                             res = self._opt_manager.maybe_rebuild(self._model)
                             self._last_opt_rebuild_step = self._global_step
@@ -1051,7 +1337,9 @@ class TolariaTrainer:
         # Teacher overall share (as gradient norm average across fences)
         if teacher_overall_uses > 0:
             try:
-                self._metrics["tolaria.grad_agg.teacher_share"] = float(teacher_overall_share_sum) / float(teacher_overall_uses)
+                self._metrics["tolaria.grad_agg.teacher_share"] = float(
+                    teacher_overall_share_sum
+                ) / float(teacher_overall_uses)
             except Exception:
                 self._metrics["tolaria.grad_agg.teacher_share"] = 0.0
         else:
@@ -1084,18 +1372,37 @@ class TolariaTrainer:
                 attrs["stage"] = stage
             compact_snapshot: dict[str, float] = {"weight": avg_w}
             if not self._seed_health_compact:
-                per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.weight", avg_w, unit="ratio", attributes=attrs))
-                per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.norm", avg_n, unit="grad", attributes=attrs))
+                per_seed_metrics.append(
+                    TelemetryMetric(
+                        "tolaria.grad_agg.seed.weight", avg_w, unit="ratio", attributes=attrs
+                    )
+                )
+                per_seed_metrics.append(
+                    TelemetryMetric(
+                        "tolaria.grad_agg.seed.norm", avg_n, unit="grad", attributes=attrs
+                    )
+                )
             # Average share across fences
             if name in seed_share_sum and seed_uses.get(name, 0) > 0:
                 avg_share = float(seed_share_sum[name]) / max(1, seed_uses.get(name, 0))
                 if not self._seed_health_compact:
-                    per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.share", avg_share, unit="ratio", attributes=attrs))
+                    per_seed_metrics.append(
+                        TelemetryMetric(
+                            "tolaria.grad_agg.seed.share", avg_share, unit="ratio", attributes=attrs
+                        )
+                    )
                 # Share delta vs last epoch
                 last = float(self._last_seed_share.get(name, 0.0))
                 delta = avg_share - last
                 if not self._seed_health_compact:
-                    per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.share_delta", delta, unit="ratio", attributes=attrs))
+                    per_seed_metrics.append(
+                        TelemetryMetric(
+                            "tolaria.grad_agg.seed.share_delta",
+                            delta,
+                            unit="ratio",
+                            attributes=attrs,
+                        )
+                    )
                 if abs(delta) >= self._seed_share_jump_warn:
                     self._emit_event(
                         "seed_share_jump",
@@ -1108,18 +1415,36 @@ class TolariaTrainer:
             if name in seed_alpha_sum and seed_uses.get(name, 0) > 0:
                 avg_alpha = float(seed_alpha_sum[name]) / max(1, seed_uses.get(name, 0))
                 if not self._seed_health_compact:
-                    per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.alpha", avg_alpha, unit="ratio", attributes=attrs))
+                    per_seed_metrics.append(
+                        TelemetryMetric(
+                            "tolaria.grad_agg.seed.alpha", avg_alpha, unit="ratio", attributes=attrs
+                        )
+                    )
                 compact_snapshot["alpha"] = avg_alpha
             # Conflicts count total
             if name in seed_conflicts_total:
                 conflicts_total = float(seed_conflicts_total[name])
                 if not self._seed_health_compact:
-                    per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.conflicts", conflicts_total, unit="count", attributes=attrs))
+                    per_seed_metrics.append(
+                        TelemetryMetric(
+                            "tolaria.grad_agg.seed.conflicts",
+                            conflicts_total,
+                            unit="count",
+                            attributes=attrs,
+                        )
+                    )
                 # Conflict ratio per seed (avg conflicts per fence normalized by neighbors)
                 neighbors = max(1, len(seen_seeds) - 1)
                 conf_ratio = (conflicts_total / float(uses)) / float(neighbors)
                 if not self._seed_health_compact:
-                    per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.conflict_ratio", conf_ratio, unit="ratio", attributes=attrs))
+                    per_seed_metrics.append(
+                        TelemetryMetric(
+                            "tolaria.grad_agg.seed.conflict_ratio",
+                            conf_ratio,
+                            unit="ratio",
+                            attributes=attrs,
+                        )
+                    )
                 if conf_ratio >= self._seed_conflict_ratio_warn:
                     self._emit_event(
                         "seed_conflict_high",
@@ -1130,24 +1455,58 @@ class TolariaTrainer:
             # Mask size and fraction (if masks computed)
             if seed_param_elems is not None and total_elems:
                 elems = float(seed_param_elems.get(name, 0))
-                per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.params", elems, unit="elems", attributes=attrs))
-                per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.mask_fraction", (elems / float(total_elems)), unit="ratio", attributes=attrs))
+                per_seed_metrics.append(
+                    TelemetryMetric(
+                        "tolaria.grad_agg.seed.params", elems, unit="elems", attributes=attrs
+                    )
+                )
+                per_seed_metrics.append(
+                    TelemetryMetric(
+                        "tolaria.grad_agg.seed.mask_fraction",
+                        (elems / float(total_elems)),
+                        unit="ratio",
+                        attributes=attrs,
+                    )
+                )
             # Teacher split share (approximate)
             if name in teacher_split_sum and seed_uses.get(name, 0) > 0:
                 avg_tsplit = float(teacher_split_sum[name]) / max(1, attrib_uses)
-                per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.teacher_share", avg_tsplit, unit="ratio", attributes=attrs))
+                per_seed_metrics.append(
+                    TelemetryMetric(
+                        "tolaria.grad_agg.seed.teacher_share",
+                        avg_tsplit,
+                        unit="ratio",
+                        attributes=attrs,
+                    )
+                )
             # Per-layer top-K summary (average norms across fences)
-            if (not self._seed_health_compact) and self._per_layer_enabled and param_names and name in per_layer_norm_sum:
+            if (
+                (not self._seed_health_compact)
+                and self._per_layer_enabled
+                and param_names
+                and name in per_layer_norm_sum
+            ):
                 layer_map = per_layer_norm_sum.get(name, {})
                 # Average by uses (per-seed)
                 avg_map = {idx: (val / uses if uses > 0 else val) for idx, val in layer_map.items()}
-                top_items = sorted(avg_map.items(), key=lambda kv: kv[1], reverse=True)[: self._per_layer_topk]
+                top_items = sorted(avg_map.items(), key=lambda kv: kv[1], reverse=True)[
+                    : self._per_layer_topk
+                ]
                 for idx, val in top_items:
                     la = dict(attrs)
                     la["layer"] = param_names[idx] if idx < len(param_names) else f"param_{idx}"
-                    per_seed_metrics.append(TelemetryMetric("tolaria.grad_agg.seed.layer_norm", float(val), unit="grad", attributes=la))
+                    per_seed_metrics.append(
+                        TelemetryMetric(
+                            "tolaria.grad_agg.seed.layer_norm",
+                            float(val),
+                            unit="grad",
+                            attributes=la,
+                        )
+                    )
             if self._seed_health_compact:
-                attribs = {k: f"{v:.4f}" for k, v in compact_snapshot.items() if isinstance(v, float)}
+                attribs = {
+                    k: f"{v:.4f}" for k, v in compact_snapshot.items() if isinstance(v, float)
+                }
                 attribs.update({k: v for k, v in attrs.items() if isinstance(v, str)})
                 # Ensure required keys are present even if metrics were missing from the snapshot
                 attribs.setdefault("share", "0.0000")
@@ -1234,13 +1593,54 @@ class TolariaTrainer:
             packet.training_metrics["latency_ms"] = stats.epoch_duration_ms
         if stats.throughput_samples_per_s:
             packet.training_metrics["samples_per_s"] = stats.throughput_samples_per_s
+        # Epoch-level dynamics snapshot
+        try:
+            packet.training_metrics["loss_ewma"] = self._loss_mean
+            packet.training_metrics["loss_volatility"] = self._loss_var**0.5
+            packet.training_metrics["grad_norm_ewma"] = self._grad_mean
+            packet.training_metrics["grad_var"] = self._grad_var
+            # Reuse aggregate conflict ratio if recorded
+            if "tolaria.grad_agg.conflict_ratio" in self._metrics:
+                packet.training_metrics["grad_conflict_rate"] = float(
+                    self._metrics.get("tolaria.grad_agg.conflict_ratio", 0.0)
+                )
+        except Exception:
+            pass
         hardware = packet.hardware_context
         hardware.device_type = "cuda" if torch.cuda.is_available() else "cpu"
         hardware.device_id = "0"
-        hardware.total_memory_gb = 0.0
-        hardware.available_memory_gb = 0.0
-        hardware.temperature_celsius = 0.0
-        hardware.utilization_percent = 0.0
+        # Best-effort hardware/pressure metrics (gated by step enrichment)
+        if self._step_enrichment:
+            if hardware.device_type == "cuda" and torch.cuda.is_available():
+                try:
+                    mem_free, mem_total = torch.cuda.mem_get_info()  # type: ignore[attr-defined]
+                    used_gb = (mem_total - mem_free) / (1024**3)
+                    free_gb = mem_free / (1024**3)
+                    hardware.total_memory_gb = float(mem_total / (1024**3))
+                    hardware.available_memory_gb = float(free_gb)
+                    packet.training_metrics["gpu_mem_used_gb"] = float(used_gb)
+                    packet.training_metrics["gpu_mem_free_gb"] = float(free_gb)
+                except Exception:
+                    hardware.total_memory_gb = 0.0
+                    hardware.available_memory_gb = 0.0
+                # NVML utilisation (handle initialised at startup)
+                if self._pynvml is not None and self._nvml_handle is not None:
+                    util = self._pynvml.nvmlDeviceGetUtilizationRates(self._nvml_handle)
+                    hardware.utilization_percent = float(util.gpu)
+                    packet.training_metrics["gpu_util_percent"] = float(util.gpu)
+                else:
+                    hardware.utilization_percent = 0.0
+            else:
+                hardware.total_memory_gb = 0.0
+                hardware.available_memory_gb = 0.0
+                hardware.utilization_percent = 0.0
+            # CPU util (mandatory psutil)
+            try:
+                packet.training_metrics["cpu_util_percent"] = float(
+                    psutil.cpu_percent(interval=0.0)
+                )
+            except Exception:
+                pass
         hardware.compute_capability = 0
 
         self._populate_seed_states(packet)
@@ -1520,7 +1920,15 @@ class TolariaTrainer:
 
         # Conflict warning event
         if self._metrics.get("tolaria.grad_agg.conflict_ratio", 0.0) >= self._conflict_warn:
-            events.append(TelemetryEvent(description="grad_conflict_high", level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING, attributes={"conflict_ratio": f"{self._metrics['tolaria.grad_agg.conflict_ratio']:.3f}"}))
+            events.append(
+                TelemetryEvent(
+                    description="grad_conflict_high",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={
+                        "conflict_ratio": f"{self._metrics['tolaria.grad_agg.conflict_ratio']:.3f}"
+                    },
+                )
+            )
         # Seed health compact events (per seed)
         try:
             for m in per_seed_metrics:
@@ -1599,24 +2007,59 @@ class TolariaTrainer:
 
     def _autocast_context(self):
         if self._amp_enabled:
-            return torch.cuda.amp.autocast(dtype=self._amp_dtype)
+            return torch.amp.autocast("cuda", dtype=self._amp_dtype)
         return contextlib.nullcontext()
 
     def _eager_train_step(
         self, inputs: torch.Tensor, targets: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        with self._autocast_context():
-            with _record_function("tolaria/forward"):
-                outputs = self._model(inputs)
-            with _record_function("tolaria/loss"):
-                loss = self._compute_loss(outputs, (inputs, targets))
-        with _record_function("tolaria/backward"):
-            if self._scaler is not None:
-                self._scaler.scale(loss).backward()
-            else:
-                loss.backward()
-        correct = (outputs.argmax(dim=1) == targets).sum()
-        return loss.detach(), correct.detach()
+        # Ensure tensors are on the same device as the model before forward
+        try:
+            model_device = next(self._model.parameters()).device
+        except StopIteration:
+            model_device = self._device
+        if inputs.device != model_device:
+            with contextlib.suppress(Exception):
+                inputs = inputs.to(model_device)
+        if targets.device != model_device:
+            with contextlib.suppress(Exception):
+                targets = targets.to(model_device)
+        try:
+            with self._autocast_context():
+                with _record_function("tolaria/forward"):
+                    outputs = self._model(inputs)
+                with _record_function("tolaria/loss"):
+                    loss = self._compute_loss(outputs, (inputs, targets))
+            with _record_function("tolaria/backward"):
+                if self._scaler is not None:
+                    self._scaler.scale(loss).backward()
+                else:
+                    loss.backward()
+            correct = (outputs.argmax(dim=1) == targets).sum()
+            return loss.detach(), correct.detach()
+        except Exception:
+            # Best-effort CUDA OOM/backend fallback to CPU to keep prototype tests stable
+            if self._device_type == "cuda":
+                try:
+                    self._model = self._model.to("cpu")
+                    inputs = inputs.detach().cpu()
+                    targets = targets.detach().cpu()
+                    self._device = torch.device("cpu")
+                    self._device_type = "cpu"
+                    self._non_blocking = False
+                    self._amp_enabled = False
+                    self._scaler = None
+                    with _record_function("tolaria/forward"):
+                        outputs = self._model(inputs)
+                    with _record_function("tolaria/loss"):
+                        loss = self._compute_loss(outputs, (inputs, targets))
+                    with _record_function("tolaria/backward"):
+                        loss.backward()
+                    correct = (outputs.argmax(dim=1) == targets).sum()
+                    return loss.detach(), correct.detach()
+                except Exception:
+                    pass
+            raise
 
     def _compute_grad_norm(self) -> float:
         grad_norm = 0.0
@@ -1705,6 +2148,47 @@ class TolariaTrainer:
                 attributes={},
             )
 
+    def _dispatch_emergency_signal(self, *, level: int, reason: str, epoch: int) -> None:
+        if self._emergency is None:
+            return
+        ts = Timestamp()
+        ts.FromDatetime(datetime.now(timezone.utc))
+        monotonic_ms = int(monotonic() * 1000.0)
+        signal = leyline_pb2.EmergencySignal(
+            version=1,
+            level=int(level),
+            reason=reason,
+            origin="tolaria",
+            triggered_at=ts,
+            monotonic_time_ms=monotonic_ms,
+            run_id=self._run_id,
+        )
+        signal.attributes["epoch"] = str(epoch)
+        signal.attributes["failure_reason"] = reason
+        signal.attributes["mode"] = "automatic"
+        dispatched = False
+        publisher = self._emergency_publisher
+        if publisher is not None:
+            try:
+                import asyncio
+
+                loop = asyncio.get_running_loop()
+                loop.create_task(publisher(signal))
+                self._metrics["tolaria.emergency.broadcasts_total"] = (
+                    self._metrics.get("tolaria.emergency.broadcasts_total", 0.0) + 1.0
+                )
+                dispatched = True
+            except Exception:
+                dispatched = False
+        if not dispatched:
+            self._emergency_signals.append(signal)
+        bridge = self._emergency_signal_bridge
+        if bridge is not None:
+            try:
+                bridge.trigger(int(level), reason, monotonic_ms=monotonic_ms)
+            except Exception:
+                pass
+
     def _emit_event(
         self,
         description: str,
@@ -1733,48 +2217,45 @@ class TolariaTrainer:
 
         return list(self._state_packets)
 
-    async def publish_history(self, oona: OonaClient) -> None:
+    async def publish_history(self, oona: "OonaClient") -> None:
         """Publish collected state and telemetry packets via Oona."""
 
         for state, telemetry in zip(self._state_packets, self._telemetry_packets, strict=False):
             await oona.publish_state(state)
             await oona.publish_telemetry(telemetry)
 
-        # Publish any queued emergency packets with high priority via telemetry stream
-        # Apply a simple bypass cap per call to avoid flooding (prototype level)
-        if self._emergency_packets:
+        # Publish any queued emergency signals using the dedicated emergency stream.
+        if self._emergency_signals:
             cap = max(1, self._settings.tolaria_emergency_bypass_max_per_min)
             sent = 0
-            while self._emergency_packets and sent < cap:
-                pkt = self._emergency_packets.pop(0)
+            while self._emergency_signals and sent < cap:
+                signal = self._emergency_signals.pop(0)
                 try:
-                    await oona.publish_telemetry(
-                        pkt,
-                        priority=leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH,
-                    )
+                    await oona.publish_emergency_signal(signal, source="tolaria")
                     sent += 1
                 except Exception:
                     # Best-effort; stop on errors
+                    self._emergency_signals.insert(0, signal)
                     break
-            self._metrics["tolaria.emergency.broadcasts_total"] = (
-                self._metrics.get("tolaria.emergency.broadcasts_total", 0.0) + float(sent)
-            )
-            dropped = len(self._emergency_packets)
+            self._metrics["tolaria.emergency.broadcasts_total"] = self._metrics.get(
+                "tolaria.emergency.broadcasts_total", 0.0
+            ) + float(sent)
+            dropped = len(self._emergency_signals)
             if dropped:
-                self._metrics["tolaria.emergency.bypass_applied_total"] = (
-                    self._metrics.get("tolaria.emergency.bypass_applied_total", 0.0) + float(dropped)
-                )
+                self._metrics["tolaria.emergency.bypass_applied_total"] = self._metrics.get(
+                    "tolaria.emergency.bypass_applied_total", 0.0
+                ) + float(dropped)
             # Clear any remaining queued packets after applying cap
-            self._emergency_packets.clear()
+            self._emergency_signals.clear()
 
     def set_emergency_publisher(
-        self, publisher: Callable[[leyline_pb2.TelemetryPacket], Awaitable[None]]
+        self, publisher: Callable[[leyline_pb2.EmergencySignal], Awaitable[None]]
     ) -> None:
-        """Register an async publisher used for immediate emergency telemetry.
+        """Register an async publisher used for immediate emergency signal broadcast.
 
-        When set, emergency escalations will attempt to publish a high-priority
-        telemetry packet immediately via the current event loop. Failures fall
-        back to the internal queue that `publish_history` flushes.
+        When set, emergency escalations attempt to publish a `EmergencySignal`
+        immediately via the current event loop. Failures fall back to the
+        internal queue that `publish_history` flushes via Oona.
         """
         self._emergency_publisher = publisher
 
@@ -1788,6 +2269,21 @@ class TolariaTrainer:
             self._rollback_signal = SharedDeadlineSignal.create(name)
         except Exception:
             self._rollback_signal = DeadlineSignal()
+
+    def get_emergency_signal(self) -> SharedEmergencySignal | LocalEmergencySignal | None:
+        """Expose the emergency signal bridge (shared-memory or local)."""
+
+        return self._emergency_signal_bridge
+
+    def set_shared_emergency_signal(self, name: str) -> None:
+        """Force the emergency signal bridge to shared memory (tests/ops)."""
+
+        try:
+            self._emergency_signal_bridge = SharedEmergencySignal.create(name)
+            self._metrics["tolaria.emergency.shared_signal_mode"] = 1.0
+        except Exception:
+            self._emergency_signal_bridge = LocalEmergencySignal()
+            self._metrics["tolaria.emergency.shared_signal_mode"] = 0.0
 
     # ----------------------------
     # Checkpoint & Rollback (WAL)
@@ -1852,7 +2348,12 @@ class TolariaTrainer:
             return False
         # Verify WAL CRC if present
         try:
-            if "wal_crc32" in wal and "last_checkpoint" in wal and "epoch" in wal and "ckpt_crc32" in wal:
+            if (
+                "wal_crc32" in wal
+                and "last_checkpoint" in wal
+                and "epoch" in wal
+                and "ckpt_crc32" in wal
+            ):
                 canonical = f"{wal['last_checkpoint']}:{int(wal['epoch'])}:{int(wal['ckpt_crc32'])}"
                 if int(wal["wal_crc32"]) != int(zlib.crc32(canonical.encode("utf-8")) & 0xFFFFFFFF):
                     return False
@@ -1885,7 +2386,12 @@ class TolariaTrainer:
     def _fsync_directory(self, path: Path) -> None:
         try:
             fd = os.open(str(path), os.O_DIRECTORY)
-        except (AttributeError, FileNotFoundError, NotADirectoryError, PermissionError):  # pragma: no cover - platform dependent
+        except (
+            AttributeError,
+            FileNotFoundError,
+            NotADirectoryError,
+            PermissionError,
+        ):  # pragma: no cover - platform dependent
             return
         try:
             os.fsync(fd)

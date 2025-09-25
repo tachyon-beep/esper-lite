@@ -6,7 +6,6 @@ Actual kernel grafting logic will land in Slice 1 (see backlog TKT-102).
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import logging
 import time
@@ -14,26 +13,22 @@ from dataclasses import dataclass, field
 from typing import Callable, Iterable, Protocol
 
 import torch
-
+from google.protobuf import struct_pb2
 from torch import nn
 
 from esper.core import TelemetryEvent, TelemetryMetric, build_telemetry_packet
-from esper.leyline import leyline_pb2
 from esper.leyline import leyline_pb2 as pb
-from google.protobuf import struct_pb2
 from esper.security.signing import DEFAULT_SECRET_ENV, SignatureContext
 
-from .blending import AlphaBlender, AlphaSchedule
+from .blending import AlphaBlender, AlphaSchedule, BlenderConfig, blend_mode_name, blend_with_config
 from .gates import GateInputs, GateResult, KasminaGates
 from .isolation import GradientIsolationMonitor, IsolationSession, IsolationStats
+from .kernel_cache import KasminaKernelCache
+from .lifecycle import KasminaLifecycle
 from .memory import KasminaMemoryManager
 from .registry import SeedParameterRegistry
-from .security import CommandVerifier, NonceLedger
 from .safety import BreakerEvent, KasminaCircuitBreaker, MonotonicTimer
-from .lifecycle import KasminaLifecycle
-from .kernel_cache import KasminaKernelCache
-from esper.leyline import leyline_pb2 as pb
-
+from .security import CommandVerifier, NonceLedger
 
 logger = logging.getLogger(__name__)
 
@@ -101,10 +96,9 @@ class SeedContext:
     kernel: nn.Module | None = None
     alpha: float = 0.0
     alpha_steps: int = 0
+    blend_config: BlenderConfig | None = None
     pending_events: list[TelemetryEvent] = field(default_factory=list)
-    pending_priority: int = field(
-        default=leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
-    )
+    pending_priority: int = field(default=pb.MessagePriority.MESSAGE_PRIORITY_NORMAL)
     last_step_emitted: int | None = None
 
 
@@ -123,7 +117,7 @@ class KasminaSeedManager:
         nonce_ttl_seconds: float = 300.0,
         freshness_window_seconds: float = 60.0,
         gpu_cache_capacity: int | None = 32,
-        packet_callback: Callable[[leyline_pb2.TelemetryPacket], None] | None = None,
+        packet_callback: Callable[[pb.TelemetryPacket], None] | None = None,
     ) -> None:
         _initialise_pytorch_defaults()
         self._runtime = runtime
@@ -133,11 +127,11 @@ class KasminaSeedManager:
         self._last_latency_ms: float = 0.0
         self._last_fallback_used: bool = False
         self._isolation_violations: int = 0
-        self._telemetry_packets: list[leyline_pb2.TelemetryPacket] = []
+        self._telemetry_packets: list[pb.TelemetryPacket] = []
         self._telemetry_counter: int = 0
-        self._last_priority: int = leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
+        self._last_priority: int = pb.MessagePriority.MESSAGE_PRIORITY_NORMAL
         self._global_events: list[TelemetryEvent] = []
-        self._global_priority: int = leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
+        self._global_priority: int = pb.MessagePriority.MESSAGE_PRIORITY_NORMAL
         self._ephemeral_seeds: set[str] = set()
         self._host_param_ids: set[int] = set()
         self._gates = KasminaGates()
@@ -160,6 +154,7 @@ class KasminaSeedManager:
         self._nonce_ledger = NonceLedger(ttl_seconds=nonce_ttl_seconds, clock=self._clock)
         self._rollback_records: dict[str, struct_pb2.Struct] = {}
         self._last_rollback_latency_ms: float = 0.0
+        self._last_prewarm_latency_ms: float = 0.0
         self._teacher_model: nn.Module | None = None
         self._teacher_memory_budget_gb: float = 7.0
         self._teacher_memory_estimate_gb: float | None = None
@@ -171,7 +166,6 @@ class KasminaSeedManager:
         )
         self._prefetch: PrefetchCoordinator | None = None
         self._prefetch_requests: dict[str, tuple[str, str]] = {}
-        self._request_counter: int = 0
         self._packet_callback = packet_callback
         if signing_context is None:
             try:
@@ -191,26 +185,26 @@ class KasminaSeedManager:
 
     @staticmethod
     def _priority_from_level(level: int) -> int:
-        if level == leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL:
-            return leyline_pb2.MessagePriority.MESSAGE_PRIORITY_CRITICAL
+        if level == pb.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL:
+            return pb.MessagePriority.MESSAGE_PRIORITY_CRITICAL
         if level in (
-            leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-            leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_ERROR,
+            pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+            pb.TelemetryLevel.TELEMETRY_LEVEL_ERROR,
         ):
-            return leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH
-        return leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
+            return pb.MessagePriority.MESSAGE_PRIORITY_HIGH
+        return pb.MessagePriority.MESSAGE_PRIORITY_NORMAL
 
     def _priority_from_events(self, events: Iterable[TelemetryEvent]) -> int:
-        priority = leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
+        priority = pb.MessagePriority.MESSAGE_PRIORITY_NORMAL
         for event in events:
             candidate = self._priority_from_level(event.level)
             if candidate > priority:
-                if candidate == leyline_pb2.MessagePriority.MESSAGE_PRIORITY_CRITICAL:
+                if candidate == pb.MessagePriority.MESSAGE_PRIORITY_CRITICAL:
                     return candidate
                 priority = candidate
         return priority
 
-    def _emit_packet(self, packet: leyline_pb2.TelemetryPacket, *, priority: int | None = None) -> None:
+    def _emit_packet(self, packet: pb.TelemetryPacket, *, priority: int | None = None) -> None:
         self._memory.telemetry_cache.set(packet.packet_id, packet)
         self._telemetry_packets.append(packet)
         self._telemetry_counter += 1
@@ -218,16 +212,14 @@ class KasminaSeedManager:
             self._last_priority = priority
         else:
             try:
-                self._last_priority = leyline_pb2.MessagePriority.Value(
+                self._last_priority = pb.MessagePriority.Value(
                     packet.system_health.indicators.get(
                         "priority",
-                        leyline_pb2.MessagePriority.Name(
-                            leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
-                        ),
+                        pb.MessagePriority.Name(pb.MessagePriority.MESSAGE_PRIORITY_NORMAL),
                     )
                 )
             except ValueError:
-                self._last_priority = leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
+                self._last_priority = pb.MessagePriority.MESSAGE_PRIORITY_NORMAL
         if self._packet_callback is not None:
             try:
                 self._packet_callback(packet)
@@ -252,23 +244,29 @@ class KasminaSeedManager:
         if events_list:
             total_events = len(context.pending_events) + len(events_list)
             if total_events > MAX_PENDING_EVENTS:
-                dropped = total_events - MAX_PENDING_EVENTS
-                for _ in range(dropped):
-                    if context.pending_events:
-                        context.pending_events.pop(0)
-                drop_event = TelemetryEvent(
-                    description="seed_queue_dropped",
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                    attributes={"seed_id": seed_id, "dropped": str(dropped)},
-                )
-                context.pending_events.append(drop_event)
-            context.pending_events.extend(events_list)
+                target_capacity = max(MAX_PENDING_EVENTS - 1, 0)
+                overflow = total_events - target_capacity
+                kept_events: list[TelemetryEvent] = []
+                if target_capacity > 0:
+                    combined = context.pending_events + events_list
+                    kept_events = combined[-target_capacity:]
+                context.pending_events = [
+                    TelemetryEvent(
+                        description="seed_queue_dropped",
+                        level=pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                        attributes={"seed_id": seed_id, "dropped": str(overflow)},
+                    )
+                ]
+                if kept_events:
+                    context.pending_events.extend(kept_events)
+            else:
+                context.pending_events.extend(events_list)
 
         priority = self._priority_from_events(context.pending_events)
         if priority > context.pending_priority:
             context.pending_priority = priority
 
-        flush_now = remove_after_flush or priority == leyline_pb2.MessagePriority.MESSAGE_PRIORITY_CRITICAL
+        flush_now = remove_after_flush or priority == pb.MessagePriority.MESSAGE_PRIORITY_CRITICAL
         if flush_now:
             self._flush_seed_immediately(
                 seed_id,
@@ -294,7 +292,7 @@ class KasminaSeedManager:
         )
         self._emit_packet(packet, priority=priority)
         context.pending_events.clear()
-        context.pending_priority = leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
+        context.pending_priority = pb.MessagePriority.MESSAGE_PRIORITY_NORMAL
         context.metadata.pop("pending_removal", None)
         if remove:
             self._seeds.pop(seed_id, None)
@@ -341,7 +339,7 @@ class KasminaSeedManager:
             )
             self._emit_packet(packet, priority=priority)
             context.pending_events.clear()
-            context.pending_priority = leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
+            context.pending_priority = pb.MessagePriority.MESSAGE_PRIORITY_NORMAL
             context.last_step_emitted = step_index
             if seed_id in self._ephemeral_seeds:
                 self._seeds.pop(seed_id, None)
@@ -358,7 +356,7 @@ class KasminaSeedManager:
         )
         self._emit_packet(packet, priority=priority)
         self._global_events.clear()
-        self._global_priority = leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
+        self._global_priority = pb.MessagePriority.MESSAGE_PRIORITY_NORMAL
 
     def _build_seed_packet(
         self,
@@ -367,7 +365,7 @@ class KasminaSeedManager:
         *,
         step_index: int | None,
         global_metrics: list[TelemetryMetric],
-    ) -> tuple[leyline_pb2.TelemetryPacket, int]:
+    ) -> tuple[pb.TelemetryPacket, int]:
         events = list(context.pending_events)
         stage_name = pb.SeedLifecycleStage.Name(context.lifecycle.state)
         context.metadata["last_stage_event"] = stage_name
@@ -381,6 +379,38 @@ class KasminaSeedManager:
                 },
             )
         )
+
+        # Optional: include current blend mode in events when configured
+        if context.blend_config is not None:
+            try:
+                mode_name = blend_mode_name(context.blend_config.mode)
+            except Exception:
+                mode_name = "CONVEX"
+            attrs = {
+                "seed_id": seed_id,
+                "mode": mode_name,
+            }
+            source = context.metadata.get("blend_mode_source")
+            if source:
+                attrs["source"] = source
+            length_attr = None
+            try:
+                if context.blend_config.alpha_vec is not None:
+                    length_attr = len(list(context.blend_config.alpha_vec))
+            except Exception:
+                length_attr = None
+            if length_attr is None:
+                meta_len = context.metadata.get("alpha_vec_len")
+                if meta_len is not None:
+                    attrs["alpha_vec_len"] = str(meta_len)
+            else:
+                attrs["alpha_vec_len"] = str(length_attr)
+            events.append(
+                TelemetryEvent(
+                    description="blend_config",
+                    attributes=attrs,
+                )
+            )
 
         metrics = list(global_metrics)
         metrics.extend(
@@ -398,7 +428,19 @@ class KasminaSeedManager:
                     attributes={"seed_id": seed_id},
                 ),
                 TelemetryMetric(
+                    "kasmina.seed.kernel_attached",
+                    1.0 if context.kernel_attached else 0.0,
+                    unit="flag",
+                    attributes={"seed_id": seed_id},
+                ),
+                TelemetryMetric(
                     "kasmina.seed.kernel_latency_ms",
+                    context.last_kernel_latency_ms,
+                    unit="ms",
+                    attributes={"seed_id": seed_id},
+                ),
+                TelemetryMetric(
+                    "kasmina.seed.last_kernel_latency_ms",
                     context.last_kernel_latency_ms,
                     unit="ms",
                     attributes={"seed_id": seed_id},
@@ -417,6 +459,46 @@ class KasminaSeedManager:
                 ),
             ]
         )
+        # Alpha steps only when BLENDING
+        if context.lifecycle.state == pb.SEED_STAGE_BLENDING:
+            metrics.append(
+                TelemetryMetric(
+                    "kasmina.seed.alpha_steps",
+                    float(context.alpha_steps),
+                    unit="count",
+                    attributes={"seed_id": seed_id},
+                )
+            )
+        # Isolation stats (best-effort)
+        try:
+            stats = self.isolation_stats(seed_id)
+            if stats is not None:
+                metrics.append(
+                    TelemetryMetric(
+                        "kasmina.seed.isolation.dot",
+                        float(stats.dot_product),
+                        unit="dot",
+                        attributes={"seed_id": seed_id},
+                    )
+                )
+                metrics.append(
+                    TelemetryMetric(
+                        "kasmina.seed.isolation.host_norm",
+                        float(stats.host_norm),
+                        unit="grad",
+                        attributes={"seed_id": seed_id},
+                    )
+                )
+                metrics.append(
+                    TelemetryMetric(
+                        "kasmina.seed.isolation.seed_norm",
+                        float(stats.seed_norm),
+                        unit="grad",
+                        attributes={"seed_id": seed_id},
+                    )
+                )
+        except Exception:  # pragma: no cover - defensive
+            pass
 
         health_status, health_summary = self._determine_seed_health(context)
         priority = max(
@@ -427,14 +509,14 @@ class KasminaSeedManager:
         packet = build_telemetry_packet(
             packet_id=identifier,
             source="kasmina",
-            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+            level=pb.TelemetryLevel.TELEMETRY_LEVEL_INFO,
             metrics=metrics,
             events=events,
             health_status=health_status,
             health_summary=health_summary,
             health_indicators={
                 "seed_id": seed_id,
-                "priority": leyline_pb2.MessagePriority.Name(priority),
+                "priority": pb.MessagePriority.Name(priority),
                 "step_index": str(step_index) if step_index is not None else "",
             },
         )
@@ -444,19 +526,19 @@ class KasminaSeedManager:
         if context.isolation_violations:
             context.metadata["performance_status"] = "violations"
             return (
-                leyline_pb2.HealthStatus.HEALTH_STATUS_UNHEALTHY,
+                pb.HealthStatus.HEALTH_STATUS_UNHEALTHY,
                 "violations",
             )
         if context.used_fallback or context.last_kernel_latency_ms > self._latency_budget_ms:
             summary = "fallback" if context.used_fallback else "latency_high"
             context.metadata["performance_status"] = summary
             return (
-                leyline_pb2.HealthStatus.HEALTH_STATUS_DEGRADED,
+                pb.HealthStatus.HEALTH_STATUS_DEGRADED,
                 summary,
             )
         context.metadata.setdefault("performance_status", "nominal")
         return (
-            leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY,
+            pb.HealthStatus.HEALTH_STATUS_HEALTHY,
             "nominal",
         )
 
@@ -467,14 +549,14 @@ class KasminaSeedManager:
         packet_id: str | None = None,
         step_index: int | None = None,
         priority_override: int | None = None,
-    ) -> tuple[leyline_pb2.TelemetryPacket, int]:
+    ) -> tuple[pb.TelemetryPacket, int]:
         metrics = self._global_metrics_snapshot()
         events = list(events_override or [])
         if self._last_fallback_used:
             events.append(
                 TelemetryEvent(
                     description="fallback_applied",
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    level=pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
                     attributes={"lat": f"{self._last_latency_ms:.1f}"},
                 )
             )
@@ -482,35 +564,35 @@ class KasminaSeedManager:
             events.append(
                 TelemetryEvent(
                     description="isolation_violations",
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    level=pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
                     attributes={"violations": str(self._isolation_violations)},
                 )
             )
 
-        health_status = leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY
+        health_status = pb.HealthStatus.HEALTH_STATUS_HEALTHY
         health_summary = "nominal"
         if self._isolation_violations:
-            health_status = leyline_pb2.HealthStatus.HEALTH_STATUS_UNHEALTHY
+            health_status = pb.HealthStatus.HEALTH_STATUS_UNHEALTHY
             health_summary = "violations"
         elif self._last_fallback_used or self._last_latency_ms > self._latency_budget_ms:
-            health_status = leyline_pb2.HealthStatus.HEALTH_STATUS_DEGRADED
+            health_status = pb.HealthStatus.HEALTH_STATUS_DEGRADED
             health_summary = "fallback" if self._last_fallback_used else "latency_high"
 
         priority = priority_override or self._priority_from_events(events)
         if not priority:
-            priority = leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
+            priority = pb.MessagePriority.MESSAGE_PRIORITY_NORMAL
         identifier = packet_id or f"kasmina-telemetry-{self._telemetry_counter}"
         packet = build_telemetry_packet(
             packet_id=identifier,
             source="kasmina",
-            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+            level=pb.TelemetryLevel.TELEMETRY_LEVEL_INFO,
             metrics=metrics,
             events=events,
             health_status=health_status,
             health_summary=health_summary,
             health_indicators={
                 "seeds": str(len(self._seeds)),
-                "priority": leyline_pb2.MessagePriority.Name(priority),
+                "priority": pb.MessagePriority.Name(priority),
                 "step_index": str(step_index) if step_index is not None else "",
             },
         )
@@ -529,6 +611,14 @@ class KasminaSeedManager:
                 unit="count",
             ),
         ]
+        if self._last_prewarm_latency_ms:
+            metrics.append(
+                TelemetryMetric(
+                    "kasmina.prewarm.latency_ms",
+                    float(self._last_prewarm_latency_ms),
+                    unit="ms",
+                )
+            )
         if not self._last_fallback_used and self._last_latency_ms:
             metrics.append(
                 TelemetryMetric(
@@ -624,23 +714,58 @@ class KasminaSeedManager:
             )
         return metrics
 
-    def handle_command(self, command: leyline_pb2.AdaptationCommand) -> None:
+    def handle_command(self, command: pb.AdaptationCommand) -> None:
         """Dispatch a Tamiyo command to the appropriate lifecycle handler."""
 
         self._memory.cleanup()
 
         events: list[TelemetryEvent] = []
         if not self._verify_command(command, events):
+            # Even when rejected, surface any degraded-input context from annotations (resilience)
+            try:
+                ann = dict(command.annotations)
+                if ann:
+                    attrs: dict[str, str] = {}
+                    for key in (
+                        "feature_coverage",
+                        "risk_reason",
+                        "blueprint_risk",
+                        "blueprint_tier",
+                        "blueprint_stage",
+                    ):
+                        if key in ann:
+                            attrs[key] = str(ann.get(key))
+                    if attrs:
+                        events.append(
+                            TelemetryEvent(description="tamiyo_annotations", attributes=attrs)
+                        )
+                    # Emit degraded_inputs event if coverage below threshold
+                    try:
+                        cov = float(ann.get("feature_coverage", 1.0))
+                    except Exception:
+                        cov = None
+                    if cov is not None and cov < 0.3:
+                        sev = pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING
+                        if cov < 0.1:
+                            sev = pb.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
+                        events.append(
+                            TelemetryEvent(
+                                description="degraded_inputs",
+                                level=sev,
+                                attributes={**attrs, "coverage_avg": f"{cov:.3f}"},
+                            )
+                        )
+            except Exception:
+                pass
             if events:
                 self._queue_global_events(events)
             return
-        command_label = leyline_pb2.CommandType.Name(command.command_type)
+        command_label = pb.CommandType.Name(command.command_type)
         seed_event_target: str | None = None
         remove_after_flush = False
-        if command.command_type == leyline_pb2.COMMAND_SEED and command.HasField("seed_operation"):
-            raw_seed_id = (
-                command.target_seed_id
-                or command.seed_operation.parameters.get("seed_id", "")
+        if command.command_type == pb.COMMAND_SEED and command.HasField("seed_operation"):
+            raw_seed_id = command.target_seed_id or command.seed_operation.parameters.get(
+                "seed_id", ""
             )
             seed_id = str(raw_seed_id)
             blueprint_id = command.seed_operation.blueprint_id
@@ -652,24 +777,27 @@ class KasminaSeedManager:
                     description="seed_operation",
                     attributes={
                         "command_type": command_label,
-                        "operation": leyline_pb2.SeedOperation.Name(operation),
+                        "operation": pb.SeedOperation.Name(operation),
                         "seed_id": seed_id,
                         "blueprint_id": blueprint_id,
                     },
                 )
             )
-            if operation == leyline_pb2.SEED_OP_GERMINATE:
-                events.extend(
-                    self._graft_seed(seed_id, blueprint_id, parameters)
-                )
-            elif operation in (leyline_pb2.SEED_OP_CULL, leyline_pb2.SEED_OP_CANCEL):
+            # Parse optional Tamiyo blend-mode annotations (WP-K7)
+            try:
+                self._apply_blend_annotations(seed_id, dict(command.annotations))
+            except Exception:
+                pass
+            if operation == pb.SEED_OP_GERMINATE:
+                events.extend(self._graft_seed(seed_id, blueprint_id, parameters))
+            elif operation in (pb.SEED_OP_CULL, pb.SEED_OP_CANCEL):
                 events.extend(self._retire_seed(seed_id))
                 remove_after_flush = True
-        elif command.command_type == leyline_pb2.COMMAND_CIRCUIT_BREAKER and command.HasField(
+        elif command.command_type == pb.COMMAND_CIRCUIT_BREAKER and command.HasField(
             "circuit_breaker"
         ):
             events.extend(self._apply_breaker_command(command.circuit_breaker))
-        elif command.command_type == leyline_pb2.COMMAND_OPTIMIZER:
+        elif command.command_type == pb.COMMAND_OPTIMIZER:
             self._log_adjustment(command)
             optimizer_id = ""
             if command.HasField("optimizer_adjustment"):
@@ -683,7 +811,7 @@ class KasminaSeedManager:
                     },
                 )
             )
-        elif command.command_type == leyline_pb2.COMMAND_PAUSE:
+        elif command.command_type == pb.COMMAND_PAUSE:
             resume_flag = command.annotations.get("resume", "").lower() == "true"
             if resume_flag:
                 seed_event_target = command.target_seed_id
@@ -691,13 +819,13 @@ class KasminaSeedManager:
             else:
                 seed_event_target = command.target_seed_id
                 events.extend(self._pause_seed(command.target_seed_id))
-        elif command.command_type == leyline_pb2.COMMAND_EMERGENCY:
+        elif command.command_type == pb.COMMAND_EMERGENCY:
             include_teacher = command.annotations.get("include_teacher", "").lower() == "true"
             cleanup_stats = self._memory.emergency_cleanup(include_teacher=include_teacher)
             events.append(
                 TelemetryEvent(
                     description="emergency_cleanup",
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
+                    level=pb.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
                     attributes={
                         "include_teacher": str(include_teacher).lower(),
                         **{k: str(v) for k, v in cleanup_stats.items()},
@@ -709,10 +837,74 @@ class KasminaSeedManager:
             events.append(
                 TelemetryEvent(
                     description="unsupported_command",
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    level=pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
                     attributes={"command_type": command_label},
                 )
             )
+
+        # WP-K1: Parse Tamiyo coverage/BSDS annotations and surface per-seed events/metadata
+        try:
+            ann = dict(command.annotations)
+            has_coverage = "feature_coverage" in ann
+            has_risk_reason = "risk_reason" in ann
+            has_bp = any(k in ann for k in ("blueprint_risk", "blueprint_tier", "blueprint_stage"))
+            if has_coverage or has_risk_reason or has_bp:
+                attrs: dict[str, str] = {}
+                if seed_event_target:
+                    attrs["seed_id"] = seed_event_target
+                if has_coverage:
+                    attrs["feature_coverage"] = str(ann.get("feature_coverage"))
+                if has_risk_reason:
+                    attrs["risk_reason"] = str(ann.get("risk_reason"))
+                if "blueprint_risk" in ann:
+                    attrs["blueprint_risk"] = str(ann.get("blueprint_risk"))
+                if "blueprint_tier" in ann:
+                    attrs["blueprint_tier"] = str(ann.get("blueprint_tier"))
+                if "blueprint_stage" in ann:
+                    attrs["blueprint_stage"] = str(ann.get("blueprint_stage"))
+                events.append(TelemetryEvent(description="tamiyo_annotations", attributes=attrs))
+
+                # Optional degraded-input event and conservative marker
+                cov = None
+                try:
+                    cov = float(ann.get("feature_coverage", 1.0))
+                except Exception:
+                    cov = None
+                if cov is not None and cov < 0.3:
+                    sev = pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING
+                    if cov < 0.1:
+                        sev = pb.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
+                    events.append(
+                        TelemetryEvent(
+                            description="degraded_inputs",
+                            level=sev,
+                            attributes={**attrs, "coverage_avg": f"{cov:.3f}"},
+                        )
+                    )
+                    # Record conservative fallback intent in seed metadata
+                    if seed_event_target:
+                        ctx = self._seeds.get(seed_event_target)
+                        if ctx is None:
+                            ctx = SeedContext(seed_event_target)
+                            self._seeds[seed_event_target] = ctx
+                            self._ephemeral_seeds.add(seed_event_target)
+                        ctx.metadata["tamiyo_conservative_fallback"] = "true"
+                # Store annotations in seed metadata for downstream tools
+                if seed_event_target:
+                    ctx = self._seeds.get(seed_event_target)
+                    if ctx is None:
+                        ctx = SeedContext(seed_event_target)
+                        self._seeds[seed_event_target] = ctx
+                        self._ephemeral_seeds.add(seed_event_target)
+                    if has_coverage:
+                        ctx.metadata["tamiyo_feature_coverage"] = str(ann.get("feature_coverage"))
+                    if has_risk_reason:
+                        ctx.metadata["tamiyo_risk_reason"] = str(ann.get("risk_reason"))
+                    for key in ("blueprint_risk", "blueprint_tier", "blueprint_stage"):
+                        if key in ann:
+                            ctx.metadata[f"tamiyo_{key}"] = str(ann.get(key))
+        except Exception:  # pragma: no cover - defensive guard
+            pass
 
         if events:
             if seed_event_target:
@@ -725,7 +917,9 @@ class KasminaSeedManager:
                 self._queue_global_events(events)
 
     # Compatibility: satisfy Tolaria's KasminaClient protocol
-    def apply_command(self, command: leyline_pb2.AdaptationCommand) -> None:  # pragma: no cover - thin wrapper
+    def apply_command(
+        self, command: pb.AdaptationCommand
+    ) -> None:  # pragma: no cover - thin wrapper
         self.handle_command(command)
 
     def seeds(self) -> dict[str, SeedContext]:
@@ -768,20 +962,30 @@ class KasminaSeedManager:
                 [
                     TelemetryEvent(
                         description="memory_gc",
-                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+                        level=pb.TelemetryLevel.TELEMETRY_LEVEL_INFO,
                         attributes={k: str(v) for k, v in gc_result.items()},
                     )
                 ]
             )
 
-    def blend(self, host_tensor: torch.Tensor, seed_tensor: torch.Tensor, *, seed_id: str | None = None) -> torch.Tensor:
+    def blend(
+        self, host_tensor: torch.Tensor, seed_tensor: torch.Tensor, *, seed_id: str | None = None
+    ) -> torch.Tensor:
         """Blend host and seed activations using the configured alpha schedule."""
 
         alpha = 1.0
+        cfg: BlenderConfig | None = None
         if seed_id is not None:
             context = self._seeds.get(seed_id)
             if context:
                 alpha = context.alpha
+                cfg = context.blend_config
+        if cfg is not None:
+            try:
+                return blend_with_config(host_tensor, seed_tensor, alpha, cfg)
+            except Exception:
+                # Defensive fallback on unexpected config issues
+                return self._alpha_blender.blend(host_tensor, seed_tensor, alpha)
         return self._alpha_blender.blend(host_tensor, seed_tensor, alpha)
 
     def _graft_seed(
@@ -834,7 +1038,7 @@ class KasminaSeedManager:
                 gate=pb.SEED_GATE_G1_GRADIENT_HEALTH,
                 passed=False,
                 reason="breaker_denied",
-                attributes={"state": leyline_pb2.CircuitBreakerState.Name(self._breaker.snapshot().state)},
+                attributes={"state": pb.CircuitBreakerState.Name(self._breaker.snapshot().state)},
             )
             self._handle_gate_failure(context, synthetic, events)
             return events
@@ -969,7 +1173,7 @@ class KasminaSeedManager:
         events.append(
             TelemetryEvent(
                 description="rollback_ready",
-                level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+                level=pb.TelemetryLevel.TELEMETRY_LEVEL_INFO,
                 attributes={
                     "seed_id": seed_id,
                     "stage": pb.SeedLifecycleStage.Name(context.lifecycle.state),
@@ -979,9 +1183,7 @@ class KasminaSeedManager:
         context.metadata["pending_removal"] = "true"
         return events
 
-    def _apply_breaker_command(
-        self, command: leyline_pb2.CommandCircuitBreaker
-    ) -> list[TelemetryEvent]:
+    def _apply_breaker_command(self, command: pb.CommandCircuitBreaker) -> list[TelemetryEvent]:
         events: list[TelemetryEvent] = []
         try:
             breaker_event = self._breaker.force_state(
@@ -992,7 +1194,7 @@ class KasminaSeedManager:
             events.append(
                 TelemetryEvent(
                     description="breaker_command_invalid",
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    level=pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
                     attributes={
                         "desired_state": str(command.desired_state),
                         "error": str(exc),
@@ -1022,8 +1224,6 @@ class KasminaSeedManager:
                 allowed_stages = {
                     pb.SEED_STAGE_TRAINING,
                     pb.SEED_STAGE_BLENDING,
-                    pb.SEED_STAGE_SHADOWING,
-                    pb.SEED_STAGE_PROBATIONARY,
                 }
                 current_stage = context.lifecycle.state if context else pb.SEED_STAGE_UNKNOWN
                 if current_stage not in allowed_stages:
@@ -1086,7 +1286,7 @@ class KasminaSeedManager:
         return False
 
     def _stage_name(self, stage: int) -> str:
-        return leyline_pb2.SeedLifecycleStage.Name(stage)
+        return pb.SeedLifecycleStage.Name(stage)
 
     def _transition(self, context: SeedContext, stage: int) -> None:
         if context.lifecycle.state == stage:
@@ -1103,7 +1303,7 @@ class KasminaSeedManager:
     ) -> None:
         attributes = {
             "seed_id": seed_id,
-            "gate": leyline_pb2.SeedLifecycleGate.Name(result.gate),
+            "gate": pb.SeedLifecycleGate.Name(result.gate),
             "passed": str(result.passed).lower(),
         }
         attributes.update({key: str(value) for key, value in result.attributes.items()})
@@ -1113,9 +1313,9 @@ class KasminaSeedManager:
             TelemetryEvent(
                 description="gate_event",
                 level=(
-                    leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO
+                    pb.TelemetryLevel.TELEMETRY_LEVEL_INFO
                     if result.passed
-                    else leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING
+                    else pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING
                 ),
                 attributes=attributes,
             )
@@ -1137,7 +1337,9 @@ class KasminaSeedManager:
         context.kernel_attached = False
         context.used_fallback = False
         context.isolation_violations = max(context.isolation_violations, 1)
-        context.embargo_until = self._now() + self._embargo_seconds if self._embargo_seconds else None
+        context.embargo_until = (
+            self._now() + self._embargo_seconds if self._embargo_seconds else None
+        )
         context.kernel = None
 
         self._transition(context, pb.SEED_STAGE_CULLED)
@@ -1147,10 +1349,10 @@ class KasminaSeedManager:
         events.append(
             TelemetryEvent(
                 description="gate_failure",
-                level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                level=pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
                 attributes={
                     "seed_id": context.seed_id,
-                    "gate": leyline_pb2.SeedLifecycleGate.Name(result.gate),
+                    "gate": pb.SeedLifecycleGate.Name(result.gate),
                     "reason": result.reason or "unknown",
                 },
             )
@@ -1163,7 +1365,7 @@ class KasminaSeedManager:
         events.append(
             TelemetryEvent(
                 description="rollback_ready",
-                level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                level=pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
                 attributes={
                     "seed_id": context.seed_id,
                     "stage": pb.SeedLifecycleStage.Name(context.lifecycle.state),
@@ -1180,19 +1382,17 @@ class KasminaSeedManager:
     def _now(self) -> float:
         return self._clock()
 
-    def _breaker_event_to_telemetry(
-        self, seed_id: str, event: BreakerEvent
-    ) -> TelemetryEvent:
+    def _breaker_event_to_telemetry(self, seed_id: str, event: BreakerEvent) -> TelemetryEvent:
         attributes = {
             "seed_id": seed_id,
-            "breaker_state": leyline_pb2.CircuitBreakerState.Name(event.state),
+            "breaker_state": pb.CircuitBreakerState.Name(event.state),
             "action": event.action,
             "reason": event.reason,
         }
         level = (
-            leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING
+            pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING
             if event.action in {"denied", "transition", "forced", "extend"}
-            else leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO
+            else pb.TelemetryLevel.TELEMETRY_LEVEL_INFO
         )
         return TelemetryEvent(
             description="breaker_event",
@@ -1200,18 +1400,20 @@ class KasminaSeedManager:
             attributes=attributes,
         )
 
-    def _isolation_breaker_event_to_telemetry(self, event: BreakerEvent, *, seed_id: str | None = None) -> TelemetryEvent:
+    def _isolation_breaker_event_to_telemetry(
+        self, event: BreakerEvent, *, seed_id: str | None = None
+    ) -> TelemetryEvent:
         attributes = {
             "component": "isolation",
-            "breaker_state": leyline_pb2.CircuitBreakerState.Name(event.state),
+            "breaker_state": pb.CircuitBreakerState.Name(event.state),
             "action": event.action,
             "reason": event.reason,
         }
         if seed_id:
             attributes["seed_id"] = seed_id
-        level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING
-        if event.state == leyline_pb2.CIRCUIT_STATE_OPEN:
-            level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
+        level = pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING
+        if event.state == pb.CIRCUIT_STATE_OPEN:
+            level = pb.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
         return TelemetryEvent(
             description="isolation_breaker",
             level=level,
@@ -1224,8 +1426,6 @@ class KasminaSeedManager:
             if stage in {
                 pb.SEED_STAGE_TRAINING,
                 pb.SEED_STAGE_BLENDING,
-                pb.SEED_STAGE_SHADOWING,
-                pb.SEED_STAGE_PROBATIONARY,
             }:
                 session.enable_collection()
             else:
@@ -1262,14 +1462,12 @@ class KasminaSeedManager:
         self._last_rollback_latency_ms = latency_ms
         return latency_ms
 
-    def _verify_command(
-        self, command: leyline_pb2.AdaptationCommand, events: list[TelemetryEvent]
-    ) -> bool:
+    def _verify_command(self, command: pb.AdaptationCommand, events: list[TelemetryEvent]) -> bool:
         if self._command_verifier is None:
             events.append(
                 TelemetryEvent(
                     description="command_rejected",
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_ERROR,
+                    level=pb.TelemetryLevel.TELEMETRY_LEVEL_ERROR,
                     attributes={"reason": "verifier_unavailable"},
                 )
             )
@@ -1288,7 +1486,7 @@ class KasminaSeedManager:
         events.append(
             TelemetryEvent(
                 description="command_rejected",
-                level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_ERROR,
+                level=pb.TelemetryLevel.TELEMETRY_LEVEL_ERROR,
                 attributes={
                     "reason": result.reason,
                     "command_id": command.command_id,
@@ -1300,7 +1498,6 @@ class KasminaSeedManager:
     def _register_prefetch(self, context: SeedContext, blueprint_id: str) -> str:
         if self._prefetch is None:
             raise RuntimeError("Prefetch coordinator not configured")
-        self._request_counter += 1
         training_run_id = context.metadata.get("training_run_id", "prototype")
         request_id = self._prefetch.request_kernel(
             context.seed_id,
@@ -1315,11 +1512,118 @@ class KasminaSeedManager:
     def set_prefetch(self, coordinator: PrefetchCoordinator) -> None:
         self._prefetch = coordinator
 
+    # Internal helper for tests and prototyping until Tamiyo P8 lands.
+    def _set_blend_config_for_test(self, seed_id: str, config: BlenderConfig) -> None:
+        context = self._seeds.get(seed_id)
+        if context is None:
+            context = SeedContext(seed_id)
+            self._seeds[seed_id] = context
+            self._ephemeral_seeds.add(seed_id)
+        context.blend_config = config
+
+    def _apply_blend_annotations(self, seed_id: str, annotations: dict[str, str]) -> None:
+        """Parse Tamiyo P8 blend mode annotations into a per-seed BlenderConfig.
+
+        Safe defaults and clamps are applied; invalid inputs fall back to CONVEX.
+        """
+        mode_str = (annotations.get("blend_mode") or "").strip().upper()
+        if not mode_str:
+            return
+        mode = mode_str if mode_str in {"CONVEX", "RESIDUAL", "CHANNEL", "CONFIDENCE"} else "CONVEX"
+        cfg = BlenderConfig(mode=mode)
+
+        # Optional provenance tag for observability
+        source = annotations.get("blend_mode_source")
+        context = self._seeds.setdefault(seed_id, SeedContext(seed_id))
+        if source:
+            context.metadata["blend_mode_source"] = str(source)
+
+        if mode == "CONFIDENCE":
+
+            def _f(key: str, default: float) -> float:
+                try:
+                    return float(annotations.get(key, default))
+                except Exception:
+                    return default
+
+            cfg.gate_k = max(0.0, _f("gate_k", cfg.gate_k))
+            cfg.gate_tau = max(0.0, _f("gate_tau", cfg.gate_tau))
+            lo = max(0.0, min(1.0, _f("alpha_lo", cfg.alpha_lo)))
+            hi = max(0.0, min(1.0, _f("alpha_hi", cfg.alpha_hi)))
+            if hi < lo:
+                lo, hi = hi, lo
+            cfg.alpha_lo = lo
+            cfg.alpha_hi = hi
+        elif mode == "CHANNEL":
+            vec_json = annotations.get("alpha_vec")
+            if vec_json:
+                try:
+                    data = json.loads(vec_json)
+                    if isinstance(data, list):
+                        vec: list[float] = []
+                        for x in data:
+                            try:
+                                vec.append(float(max(0.0, min(1.0, float(x)))))
+                            except Exception:
+                                continue
+                        if vec:
+                            cfg.alpha_vec = vec
+                            context.metadata["alpha_vec_len"] = str(len(vec))
+                except Exception:
+                    # Fallback: permissive CSV-like parsing (strip brackets/spaces)
+                    try:
+                        s = vec_json.strip().lstrip("[").rstrip("]")
+                        parts = [p.strip() for p in s.split(",") if p.strip()]
+                        vec = [float(max(0.0, min(1.0, float(p)))) for p in parts]
+                        if vec:
+                            cfg.alpha_vec = vec
+                            context.metadata["alpha_vec_len"] = str(len(vec))
+                    except Exception:
+                        pass
+        # Store
+        context.blend_config = cfg
+
+    def _attempt_prewarm(self, context: SeedContext, kernel: nn.Module) -> None:
+        """Attempt a best-effort pre-warm forward to hydrate caches.
+
+        Uses a runtime-provided representative batch when available; otherwise noop.
+        Always runs under inference_mode and ignores failures.
+        """
+        getter = getattr(self._runtime, "get_prewarm_batch", None)
+        if not callable(getter):
+            return
+        blueprint_id = context.metadata.get("blueprint_id") or ""
+        try:
+            batch = getter(blueprint_id)
+        except Exception:
+            return
+        if batch is None:
+            return
+        timer = self._timer_factory()
+        with timer.measure() as m:
+            try:
+                with torch.inference_mode():
+                    if isinstance(batch, tuple):
+                        _ = kernel(*batch)
+                    else:
+                        _ = kernel(batch)
+            except Exception:
+                return
+        self._last_prewarm_latency_ms = m.elapsed_ms
+        context.metadata["prewarm_ms"] = f"{self._last_prewarm_latency_ms:.3f}"
+
     def _finalise_kernel_attachment(
         self,
         context: SeedContext,
         events: list[TelemetryEvent],
     ) -> None:
+        # Optional pre-warm to hydrate caches before training gates
+        try:
+            kernel = context.kernel
+            if kernel is not None:
+                self._attempt_prewarm(context, kernel)
+        except Exception:  # pragma: no cover - best-effort only
+            pass
         if not self._ensure_gate(
             context,
             pb.SEED_GATE_G1_GRADIENT_HEALTH,
@@ -1347,7 +1651,7 @@ class KasminaSeedManager:
                 break
             self._transition(context, stage)
 
-    def process_prefetch_ready(self, ready: leyline_pb2.KernelArtifactReady) -> None:
+    def process_prefetch_ready(self, ready: pb.KernelArtifactReady) -> None:
         entry = self._prefetch_requests.pop(ready.request_id, None)
         if not entry:
             return
@@ -1372,7 +1676,7 @@ class KasminaSeedManager:
             events.append(
                 TelemetryEvent(
                     description="prefetch_attach_failed",
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    level=pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
                     attributes={
                         "seed_id": seed_id,
                         "reason": str(exc),
@@ -1386,7 +1690,7 @@ class KasminaSeedManager:
         self._finalise_kernel_attachment(context, events)
         self._queue_seed_events(seed_id, events)
 
-    def process_prefetch_error(self, error: leyline_pb2.KernelArtifactError) -> None:
+    def process_prefetch_error(self, error: pb.KernelArtifactError) -> None:
         entry = self._prefetch_requests.pop(error.request_id, None)
         if not entry:
             return
@@ -1404,7 +1708,7 @@ class KasminaSeedManager:
         events: list[TelemetryEvent] = [
             TelemetryEvent(
                 description="prefetch_error",
-                level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                level=pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
                 attributes={
                     "seed_id": seed_id,
                     "blueprint_id": blueprint_id,
@@ -1414,6 +1718,7 @@ class KasminaSeedManager:
         ]
         self._handle_gate_failure(context, failure, events)
         self._queue_seed_events(seed_id, events)
+
     def register_host_model(self, model: nn.Module) -> None:
         """Register the host model whose params must remain isolated."""
 
@@ -1430,9 +1735,9 @@ class KasminaSeedManager:
         self._teacher_model = model
         self._memory.kernel_cache.set("teacher", model)
         self._teacher_memory_estimate_gb = self._estimate_model_memory_gb(model)
-        level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO
+        level = pb.TelemetryLevel.TELEMETRY_LEVEL_INFO
         if self._teacher_memory_estimate_gb > self._teacher_memory_budget_gb:
-            level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING
+            level = pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING
         self._queue_global_events(
             [
                 TelemetryEvent(
@@ -1462,7 +1767,9 @@ class KasminaSeedManager:
                 )
                 return kernel
             except Exception as exc:  # pragma: no cover - defensive guard
-                logger.error("Fallback blueprint %s unavailable: %s", self._fallback_blueprint_id, exc)
+                logger.error(
+                    "Fallback blueprint %s unavailable: %s", self._fallback_blueprint_id, exc
+                )
         return nn.Identity()
 
     def _estimate_model_memory_gb(self, model: nn.Module) -> float:
@@ -1473,10 +1780,10 @@ class KasminaSeedManager:
             total_bytes += buffer.numel() * buffer.element_size()
         return total_bytes / (1024**3)
 
-    def _log_adjustment(self, command: leyline_pb2.AdaptationCommand) -> None:
+    def _log_adjustment(self, command: pb.AdaptationCommand) -> None:
         _ = command
 
-    def _noop(self, command: leyline_pb2.AdaptationCommand) -> None:
+    def _noop(self, command: pb.AdaptationCommand) -> None:
         _ = command
 
     def _pause_seed(self, seed_id: str) -> list[TelemetryEvent]:
@@ -1495,7 +1802,7 @@ class KasminaSeedManager:
         events.append(
             TelemetryEvent(
                 description="seed_paused",
-                level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                level=pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
                 attributes={"seed_id": seed_id},
             )
         )
@@ -1531,7 +1838,7 @@ class KasminaSeedManager:
         events.append(
             TelemetryEvent(
                 description="seed_resumed",
-                level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+                level=pb.TelemetryLevel.TELEMETRY_LEVEL_INFO,
                 attributes={
                     "seed_id": seed_id,
                     "blueprint_id": blueprint_id or "",
@@ -1556,25 +1863,26 @@ class KasminaSeedManager:
                 breaker_event = self._isolation_breaker.record_success()
                 if breaker_event:
                     events.append(
-                        self._isolation_breaker_event_to_telemetry(
-                            breaker_event, seed_id=seed_id
-                        )
+                        self._isolation_breaker_event_to_telemetry(breaker_event, seed_id=seed_id)
                     )
             else:
                 self._handle_gate_failure(context, result, events)
         session = self._isolation_sessions.get(seed_id)
         if session:
-            session.enable_collection()
+            if context.lifecycle.state in {pb.SEED_STAGE_TRAINING, pb.SEED_STAGE_BLENDING}:
+                session.enable_collection()
+            else:
+                session.disable_collection()
+                session.reset()
         return events
-
 
     def build_telemetry_packet(
         self,
         *,
         packet_id: str | None = None,
         events_override: list[TelemetryEvent] | None = None,
-        priority: leyline_pb2.MessagePriority = leyline_pb2.MESSAGE_PRIORITY_NORMAL,
-    ) -> leyline_pb2.TelemetryPacket:
+        priority: pb.MessagePriority = pb.MESSAGE_PRIORITY_NORMAL,
+    ) -> pb.TelemetryPacket:
         packet, computed_priority = self._build_global_packet(
             events_override=list(events_override or []),
             packet_id=packet_id,
@@ -1582,7 +1890,6 @@ class KasminaSeedManager:
         )
         self._last_priority = computed_priority
         return packet
-
 
     def advance_alpha(self, seed_id: str, *, steps: int = 1) -> float:
         """Advance the alpha schedule while BLENDING."""
@@ -1608,6 +1915,7 @@ class KasminaSeedManager:
         }:
             with torch.inference_mode():
                 return fn()
+        # TRAINING/BLENDING: respect caller context (no forced inference_mode)
         return fn()
 
     def record_isolation_violation(self, seed_id: str | None = None) -> None:
@@ -1628,10 +1936,10 @@ class KasminaSeedManager:
             context.isolation_violations += 1
             context.metadata["performance_status"] = "violations"
         breaker_event = self._isolation_breaker.record_failure("isolation_violation")
-        level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING
+        level = pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING
         snapshot = self._isolation_breaker.snapshot()
-        if snapshot.state == leyline_pb2.CIRCUIT_STATE_OPEN:
-            level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
+        if snapshot.state == pb.CIRCUIT_STATE_OPEN:
+            level = pb.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
 
         telemetry_events = [
             TelemetryEvent(
@@ -1642,9 +1950,7 @@ class KasminaSeedManager:
         ]
         if breaker_event:
             telemetry_events.append(
-                self._isolation_breaker_event_to_telemetry(
-                    breaker_event, seed_id=seed_id
-                )
+                self._isolation_breaker_event_to_telemetry(breaker_event, seed_id=seed_id)
             )
         if seed_id:
             self._queue_seed_events(seed_id, telemetry_events)
@@ -1660,12 +1966,12 @@ class KasminaSeedManager:
         return self._last_fallback_used
 
     @property
-    def telemetry_packets(self) -> list[leyline_pb2.TelemetryPacket]:
+    def telemetry_packets(self) -> list[pb.TelemetryPacket]:
         """Return buffered telemetry packets for inspection/testing."""
 
         return list(self._telemetry_packets)
 
-    def drain_telemetry_packets(self) -> list[leyline_pb2.TelemetryPacket]:
+    def drain_telemetry_packets(self) -> list[pb.TelemetryPacket]:
         """Return and clear buffered telemetry packets (runtime consumption)."""
 
         packets = list(self._telemetry_packets)
@@ -1688,16 +1994,41 @@ class KasminaSeedManager:
     # Export to Leyline SeedState
     # -----------------------------
 
-    def export_seed_states(self) -> list[leyline_pb2.SeedState]:
+    def export_seed_states(self) -> list[pb.SeedState]:
         """Export internal lifecycle into Leyline SeedState messages."""
 
-        result: list[leyline_pb2.SeedState] = []
+        result: list[pb.SeedState] = []
         for seed_id, ctx in self._seeds.items():
-            state = leyline_pb2.SeedState(
+            state = pb.SeedState(
                 seed_id=seed_id,
                 stage=ctx.lifecycle.state,
                 age_epochs=self._current_epoch,
             )
+            # Minimal enrichment per WP9 (no new contracts):
+            # - alpha and alpha schedule descriptors via metrics map
+            # - blend allowance as a boolean flag (1.0/0.0)
+            # - risk tolerance when available (metadata-derived)
+            try:
+                state.metrics["alpha"] = float(ctx.alpha)
+                state.metrics["alpha_steps"] = float(ctx.alpha_steps)
+            except Exception:
+                pass
+            try:
+                state.metrics["alpha_total_steps"] = float(self._alpha_schedule.total_steps)
+                state.metrics["alpha_temperature"] = float(self._alpha_schedule.temperature)
+            except Exception:
+                pass
+            try:
+                blend_allowed = 1.0 if ctx.lifecycle.state >= pb.SEED_STAGE_BLENDING else 0.0
+                state.metrics["blend_allowed"] = blend_allowed
+            except Exception:
+                pass
+            try:
+                rt = ctx.metadata.get("risk_tolerance")
+                if isinstance(rt, (int, float)):
+                    state.metrics["risk_tolerance"] = float(rt)
+            except Exception:
+                pass
             result.append(state)
         return result
 

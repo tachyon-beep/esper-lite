@@ -81,7 +81,9 @@ def test_forge_resumes_from_wal(tmp_path) -> None:
             return True
         return False
 
-    forge, library, compiler, wal_path = _setup(tmp_path, catalog, error_sampler=sampler, max_retries=0)
+    forge, library, compiler, wal_path = _setup(
+        tmp_path, catalog, error_sampler=sampler, max_retries=0
+    )
     first_meta = next(iter(catalog.all()))
 
     with pytest.raises(RuntimeError):

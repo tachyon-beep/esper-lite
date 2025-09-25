@@ -24,10 +24,16 @@ dependencies = [
   "torch==2.8.0",
   "torchvision==0.23.0",
   "torchaudio==2.8.0",
+  "torch-geometric==2.6.1",
+  "torch-scatter==2.1.2",
+  "torch-sparse==0.6.18",
+  "torch-cluster==1.6.3",
+  "torch-spline-conv==1.2.2",
   "ruff>=0.5.6",
   "pydantic>=2.8.2,<3",
   "pydantic-settings>=2.6.0,<3",
   "protobuf>=5.28.0,<7",
+  "orjson>=3.9.0,<4",
   "redis>=5.2.0,<6",
   "sqlalchemy>=2.0.31,<3",
   "fastapi>=0.115.2,<0.116",
@@ -37,7 +43,9 @@ dependencies = [
   "structlog>=24.2.0,<25",
   "python-dotenv>=1.0.1,<2",
   "prometheus-client>=0.20.0,<1",
-  "elasticsearch>=8.14.0,<9"
+  "elasticsearch>=8.14.0,<9",
+  "psutil>=5.9.0,<6",
+  "nvidia-ml-py>=12.555.43,<13"
 ]
 
 [project.optional-dependencies]
@@ -54,15 +62,8 @@ dev = [
   "types-aiofiles>=23.2.0.20240311",
   "ipykernel>=6.29.5,<7",
   "pylint>=3.3.1,<4",
-  "black>=24.8.0,<25"
-]
-
-tamiyo-gnn = [
-  "torch-geometric==2.6.1",
-  "torch-scatter==2.1.2",
-  "torch-sparse==0.6.18",
-  "torch-cluster==1.6.3",
-  "torch-spline-conv==1.2.2"
+  "black>=24.8.0,<25",
+  "jsonschema>=4.23.0,<5"
 ]
 
 docs = [
@@ -70,9 +71,22 @@ docs = [
   "mkdocs-material>=9.5.20,<10"
 ]
 
+# Optional performance-focused extras
+perf = [
+  "orjson>=3.9.0,<4"
+]
+
+# Optional system metrics deps (fail-open at runtime)
+sysmetrics = [
+  "psutil>=5.9.0,<6",
+  "nvidia-ml-py>=12.555.43,<13"
+]
+
 [project.scripts]
 esper-nissa-service = "esper.nissa.service_runner:main"
 esper-weatherlight-service = "esper.weatherlight.service_runner:main"
+esper-urabrask-produce = "esper.urabrask.cli:main"
+esper-leyline-generate = "esper.leyline.tools:generate_bindings_main"
 
 [project.urls]
 "Homepage" = "https://github.com/esperai/esper-lite"
@@ -89,6 +103,7 @@ include = [
   "src/esper",
   "README.md",
   "pyproject.toml",
+  "scripts",
 ]
 
 [tool.ruff]
@@ -115,8 +130,8 @@ markers = [
   "performance: performance-sensitive benchmarks",
   "perf: lightweight performance smoke tests",
 ]
-timeout = 120
-timeout_method = "signal"
+timeout = 60
+timeout_method = "thread"
 timeout_func_only = false
 
 [tool.coverage.run]

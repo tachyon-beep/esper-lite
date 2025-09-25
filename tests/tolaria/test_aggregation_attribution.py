@@ -4,9 +4,9 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
-from esper.tolaria import TolariaTrainer, TrainingLoopConfig
-from esper.leyline import leyline_pb2
 from esper.kasmina.registry import SeedParameterRegistry
+from esper.leyline import leyline_pb2
+from esper.tolaria import TolariaTrainer, TrainingLoopConfig
 
 
 class _TripletDataset(Dataset):
@@ -26,7 +26,12 @@ class _TripletDataset(Dataset):
 
 class _TamiyoStub:
     def evaluate_epoch(self, state: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
-        cmd = leyline_pb2.AdaptationCommand(version=1, command_id=f"cmd-{state.current_epoch}", command_type=leyline_pb2.COMMAND_SEED, target_seed_id="seedA")
+        cmd = leyline_pb2.AdaptationCommand(
+            version=1,
+            command_id=f"cmd-{state.current_epoch}",
+            command_type=leyline_pb2.COMMAND_SEED,
+            target_seed_id="seedA",
+        )
         cmd.seed_operation.operation = leyline_pb2.SEED_OP_GERMINATE
         return cmd
 
@@ -63,7 +68,9 @@ def test_dataloader_attribution_splits_teacher_gradients(monkeypatch) -> None:
         dataloader=loader,
         tamiyo=_TamiyoStub(),
         kasmina=_KasminaWithRegistry(),
-        config=TrainingLoopConfig(max_epochs=1, gradient_accumulation_steps=1, device=torch.device("cpu")),
+        config=TrainingLoopConfig(
+            max_epochs=1, gradient_accumulation_steps=1, device=torch.device("cpu")
+        ),
     )
     list(trainer.run())
     # Use the first epoch packet (completion packet may not include per-seed metrics)

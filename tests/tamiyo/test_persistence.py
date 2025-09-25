@@ -48,4 +48,3 @@ def test_store_retention_prunes_expired_entries(tmp_path) -> None:
 
     reloaded = FieldReportStore(config)
     assert [report.report_id for report in reloaded.reports()] == ["fresh"]
-

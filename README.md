@@ -80,6 +80,42 @@ This repo tracks a pragmatic prototype scope distinct from the full detailed des
 
 Use the prototype‑delta docs and rubric to judge readiness for the “green for prototype” build. Only adopt full detailed‑design features when explicitly called out by the delta.
 
+## Prototype Policies for Human Developers
+
+To keep the prototype simple, deterministic, and easy to reason about, we apply these cross‑cutting policies across the repo. These mirror the agent guidelines but are phrased for human contributors.
+
+- Strict dependencies (no pseudo‑optional deps)
+  - If a package is needed for normal operation, declare it in `pyproject.toml` and import it directly. Do not wrap imports in `try/except` unless the feature is truly optional and fully gated.
+  - Service startup performs a “preflight” to validate core imports and basic connectivity (e.g., Elasticsearch ping), and GPU prerequisites (NVML when CUDA is available). Fail fast on missing deps rather than limping along.
+  - Tests must provide mandatory collaborators explicitly (e.g., pass an `UrzaLibrary` to `TamiyoService`). Avoid hidden defaults.
+
+- No backwards compatibility pre‑1.0
+  - As a prototype, we prioritise removing complexity over maintaining compatibility shims. Prefer breaking changes that simplify code and remove dead paths.
+  - When changing behaviour, update tests and docs in the same PR so the repo stays “green for prototype”.
+
+- No “helpful masking” of failures
+  - Do not auto‑construct or silently substitute critical components (e.g., defaulting to a stub Urza or in‑memory ES) in live codepaths. These mask real system faults and complicate diagnosis.
+  - Emit clear, actionable errors and telemetry, and stop early when preconditions are not met.
+
+- No partial degradation
+  - Assume all subsystems are available and healthy; otherwise treat the system as fully degraded. Avoid threading “partial availability” branches through core paths.
+  - Weatherlight emits a `system_mode` indicator (`operational`/`degraded`) based on worker health/backoff; startup preflight rejects missing deps outright.
+
+- Code hygiene (remove dead code)
+  - Delete unused toggles and fallback code once a feature is in place. Prefer one authoritative implementation over multiple conditional paths.
+
+- Testing & CI posture
+  - Unit tests: assert both success paths and guard‑rail failures; don’t depend on masked defaults. Use explicit fakes (FakeRedis) and minimal real collaborators (e.g., `UrzaLibrary` rooted under `tmp_path`).
+  - Integration tests: exercise cross‑subsystem flows with real contracts (Leyline) under strict preflight. CI disables `torch.compile` to avoid spurious timeouts.
+
+- Documentation duties
+  - When enforcing strictness (e.g., ES mandatory, Tamiyo requires Urza), update the relevant subsystem README under `docs/prototype-delta/*/` and the operator runbook. Keep the cross‑system plan (`docs/prototype-delta/cross-system/STRICT_DEPENDENCIES_PLAN.md`) up to date.
+
+Pointers
+- Cross‑system plan: `docs/prototype-delta/cross-system/STRICT_DEPENDENCIES_PLAN.md`
+- Agent guidelines (deeper detail for AI devs): `AGENTS.md`
+
+
 ## Getting Started
 
 1. **Create a virtual environment**
@@ -253,7 +289,40 @@ The generated files are stored in `src/esper/leyline/_generated/` and include
   using a WAL-style binary log. Entries are retained for 24 hours by default
   (override with `TAMIYO_FIELD_REPORT_RETENTION_HOURS`) and are reloaded on
   startup so Simic always has a consistent replay source after a restart.
-  Delete the log file if you need a clean slate for local testing.
+Delete the log file if you need a clean slate for local testing.
+
+### Urabrask — BSDS Producer CLI (Prototype)
+
+Use the Urabrask CLI to compute a BSDS via the Crucible and attach it to an existing Urza blueprint record. The CLI prints a concise JSON summary to stdout.
+
+Run via module (no install needed):
+
+```bash
+PYTHONPATH=src \
+python -m esper.urabrask.cli \
+  --urza-root ./var/urza \
+  --blueprint-id BP001 \
+  --resource-profile gpu
+```
+
+Example output JSON:
+
+```json
+{
+  "blueprint_id": "BP001",
+  "risk_score": 0.62,
+  "hazard_band": "HIGH",
+  "handling_class": "restricted",
+  "resource_profile": "gpu",
+  "provenance": "URABRASK",
+  "issued_at": "2025-09-23T21:30:00Z"
+}
+```
+
+Notes
+- The BSDS JSON mirror is also persisted to Urza `extras["bsds"]` for Tamiyo to consume.
+- Optional signing + WAL: set `ESPER_LEYLINE_SECRET` and `URABRASK_SIGNING_ENABLED=true` to attach `extras["bsds_sig"]` and append to the WAL (`URABRASK_WAL_PATH`).
+- Crucible result bundles: per‑run JSON artifacts are written under `URABRASK_CRUCIBLE_ARTIFACTS_DIR` with retention (`URABRASK_CRUCIBLE_ARTIFACTS_KEEP`).
 
 ## Repository Layout
 
@@ -261,6 +330,21 @@ The generated files are stored in `src/esper/leyline/_generated/` and include
 - `tests/` — Pytest suites mirroring the source tree (`tests/tolaria`, `tests/kasmina`, etc.).
 - `docs/` — Design references, implementation plans, and backlog materials.
 - `.codacy/` — Shared linting and CI bootstrap configuration.
+
+## Tooling
+
+- Regenerate Leyline bindings (requires `grpcio-tools` in your environment):
+
+  ```bash
+  # Optional: install tools in your venv
+  pip install grpcio-tools
+  # Generate python stubs into src/esper/leyline/_generated
+  esper-leyline-generate \
+    --proto-dir contracts/leyline \
+    --out-dir src/esper/leyline/_generated
+  ```
+
+  The same logic is also available as a script: `scripts/generate_leyline.py`.
 
 ## Subsystem Overview
 
@@ -286,3 +370,22 @@ Refer to `docs/project/implementation_plan.md` for full sequencing and ownership
 - Keep breakers conservative—prefer safe degradation and explicit telemetry over silent failures.
 - When adding telemetry, include clear descriptions and useful attributes; keep metric naming consistent.
 - Update `docs/` when behavior diverges from the canonical design; keep `.env.example` in sync for new config.
+### Pre-commit hooks
+
+This repository includes a pre-commit check that prevents introducing local Python Enums that shadow Leyline contracts.
+
+Setup:
+
+1) Install pre-commit
+
+```
+pip install pre-commit
+```
+
+2) Install hooks in your clone
+
+```
+pre-commit install
+```
+
+The hook runs `scripts/check_shared_types.py` to fail commits that add Enums under `src/esper/**` (except the generated Leyline stubs under `src/esper/leyline/_generated`).

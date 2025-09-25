@@ -10,6 +10,7 @@ Mandatory changes (inference)
 - How:
   - In the policy module (e.g., `TamiyoGNN.forward()`): at service init, try `self._compiled = torch.compile(self.forward, dynamic=True, mode='reduce-overhead')` and route inference through it.
   - On exception, log once and fall back to eager.
+- Guardrails: Only attempt `torch.compile` when the configured device is CUDA and `torch.cuda.is_available()`; CPU builds fail fast to eager, emit a `compile_disabled_cpu` telemetry event, and increment the fallback counter for observability.
 - Acceptance: Per‑inference latency drops; failure path uses eager and emits a single WARNING.
 
 2) Use `torch.inference_mode()` and autocast
@@ -34,3 +35,19 @@ Optional (if policy training runs in Tamiyo)
 References
 - Tamiyo service: `src/esper/tamiyo/service.py` (evaluate_epoch)
 - Policy stub: `src/esper/tamiyo/policy.py` (replace with hetero‑GNN for the unified design before adopting the compile path)
+
+## Operator/Dev Notes
+
+- Compile fallback counter
+  - Tamiyo exports `tamiyo.gnn.compile_fallback_total` (count) when the compile path is disabled at init or falls back at runtime due to backend issues. `tamiyo.gnn.compile_enabled` reflects the current state (1.0=compiled, 0.0=eager).
+  - CPU-only deployments automatically disable compile (reason=`device_not_cuda`) and surface the demotion via telemetry/logging without spamming CUDA Graph warnings.
+  - Expect occasional fallbacks with some PyG kernels or exotic CUDA stacks; Tamiyo continues in eager mode without crashing.
+
+- Running CUDA perf checks locally
+  - Ensure a CUDA‑capable GPU and drivers are available (`torch.cuda.is_available()` returns True).
+  - Run the CUDA perf test (skipped on CPU or on unsupported backends):
+    - `pytest -q tests/tamiyo/test_policy_gnn.py::test_policy_inference_perf_budget_cuda_compile`
+  - The test compares p95 latency of eager vs compile‑on for a representative graph. It skips if the compile path falls back or raises during warmup/measurement. When it runs, the expectation is compile p95 ≤ max(45 ms, eager p95 × 1.10).
+  - Troubleshooting compile performance:
+    - Set `TORCH_LOGS=recompiles` to diagnose excessive dynamo recompiles.
+    - Verify TF32 is enabled and autocast is on (see policy init). Disable downstream ops that mutate module parameters during inference.

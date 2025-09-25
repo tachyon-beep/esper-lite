@@ -7,11 +7,11 @@ specified in `docs/project/implementation_plan.md` (Slice 4) and
 
 from __future__ import annotations
 
+import random
 from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-import random
 from typing import TYPE_CHECKING, Mapping
 
 import torch
@@ -165,7 +165,9 @@ class FieldReportReplayBuffer:
         feature_stack = torch.stack([exp.features_numeric for exp in experiences])
         metric_stack = torch.stack([exp.metric_sequence for exp in experiences])
         seed_indices = torch.tensor([exp.seed_index for exp in experiences], dtype=torch.long)
-        blueprint_indices = torch.tensor([exp.blueprint_index for exp in experiences], dtype=torch.long)
+        blueprint_indices = torch.tensor(
+            [exp.blueprint_index for exp in experiences], dtype=torch.long
+        )
         return {
             "reward": rewards,
             "loss_delta": loss_deltas,
@@ -270,7 +272,9 @@ def _populate_features(
 
     seq_limit = min(len(metrics), metric_sequence.numel())
     if seq_limit:
-        metric_sequence[:seq_limit] = torch.tensor(list(metrics.values())[:seq_limit], dtype=torch.float32)
+        metric_sequence[:seq_limit] = torch.tensor(
+            list(metrics.values())[:seq_limit], dtype=torch.float32
+        )
 
     if idx < features.numel():
         features[idx] = _hash_to_unit_interval(report.seed_id)

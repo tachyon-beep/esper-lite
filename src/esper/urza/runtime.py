@@ -10,12 +10,10 @@ from typing import Tuple
 
 import torch
 from torch import nn
-
 from torch.serialization import add_safe_globals
 
 from esper.tezzeret.compiler import CompiledBlueprint
 from esper.urza.library import UrzaLibrary
-
 
 LOGGER = logging.getLogger("esper.urza.runtime")
 
@@ -43,9 +41,7 @@ class UrzaRuntime:
                     record.checksum,
                     actual,
                 )
-                raise ValueError(
-                    f"Checksum mismatch for blueprint '{blueprint_id}'"
-                )
+                raise ValueError(f"Checksum mismatch for blueprint '{blueprint_id}'")
         add_safe_globals([CompiledBlueprint])
         module = torch.load(artifact_path, weights_only=False)
         latency_ms = (perf_counter() - start) * 1000.0

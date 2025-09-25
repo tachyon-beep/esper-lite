@@ -1,10 +1,6 @@
 from prometheus_client import CollectorRegistry
 
-from esper.nissa import (
-    NissaIngestor,
-    NissaIngestorConfig,
-    run_all_drills,
-)
+from esper.nissa import NissaIngestor, NissaIngestorConfig, run_all_drills
 
 
 class _ElasticsearchStub:

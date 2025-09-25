@@ -6,11 +6,13 @@ from datetime import UTC, datetime, timedelta
 import pytest
 import torch
 
-from esper.simic import FieldReportReplayBuffer, SimicTrainer, SimicTrainerConfig
 from esper.leyline import leyline_pb2
+from esper.simic import FieldReportReplayBuffer, SimicTrainer, SimicTrainerConfig
 
 
-def _make_report(loss_delta: float, outcome: int = leyline_pb2.FIELD_REPORT_OUTCOME_SUCCESS) -> leyline_pb2.FieldReport:
+def _make_report(
+    loss_delta: float, outcome: int = leyline_pb2.FIELD_REPORT_OUTCOME_SUCCESS
+) -> leyline_pb2.FieldReport:
     report = leyline_pb2.FieldReport(
         version=1,
         report_id="fr",
@@ -38,10 +40,7 @@ def test_trainer_updates_policy_parameters() -> None:
     trainer.run_training()
 
     updated_state = trainer._policy.state_dict()
-    assert any(
-        not torch.equal(initial_state[key], updated_state[key])
-        for key in initial_state
-    )
+    assert any(not torch.equal(initial_state[key], updated_state[key]) for key in initial_state)
     assert trainer.last_loss != 0.0
 
     update = trainer.create_policy_update(

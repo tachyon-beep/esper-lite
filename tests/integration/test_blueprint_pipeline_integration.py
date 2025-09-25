@@ -3,17 +3,17 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from fakeredis.aioredis import FakeRedis
 
 from esper.karn import BlueprintDescriptor, BlueprintTier, KarnCatalog
 from esper.leyline import leyline_pb2
+from esper.oona import OonaClient, StreamConfig
 from esper.security.signing import SignatureContext
 from esper.tamiyo import TamiyoPolicy, TamiyoService
 from esper.tamiyo.persistence import FieldReportStoreConfig
 from esper.tezzeret import CompileJobConfig, TezzeretCompiler
 from esper.urza import UrzaLibrary
 from esper.urza.pipeline import BlueprintPipeline, BlueprintRequest
-from esper.oona import OonaClient, StreamConfig
-from fakeredis.aioredis import FakeRedis
 
 
 class _StaticPolicy:
@@ -113,7 +113,9 @@ async def test_tamiyo_end_to_end_blueprint_pipeline(tmp_path) -> None:
     telemetry = service.telemetry_packets[-1]
     metric_names = {metric.name for metric in telemetry.metrics}
     assert "tamiyo.blueprint.risk" in metric_names
-    assert any(event.description in {"bp_quarantine", "pause_triggered"} for event in telemetry.events)
+    assert any(
+        event.description in {"bp_quarantine", "pause_triggered"} for event in telemetry.events
+    )
 
 
 @pytest.mark.asyncio

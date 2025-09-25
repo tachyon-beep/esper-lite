@@ -8,7 +8,6 @@ import os
 from dataclasses import dataclass
 from hashlib import sha256
 
-
 DEFAULT_SECRET_ENV = "ESPER_LEYLINE_SECRET"
 
 

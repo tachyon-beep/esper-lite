@@ -1,0 +1,13 @@
+{
+  "risk_score": 0.82,
+  "hazard_band": "HIGH",
+  "handling_class": "restricted",
+  "resource_profile": "gpu",
+  "provenance": "HEURISTIC",
+  "issued_at": "2025-09-23T21:30:00Z",
+  "mitigation": {
+    "recommendation": "Prefer optimizer downgrade; avoid aggressive grafting",
+    "cooldown_ms": 60000,
+    "notes": "High variance under mixed precision"
+  }
+}

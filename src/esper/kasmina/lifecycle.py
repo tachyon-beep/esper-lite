@@ -11,7 +11,6 @@ from dataclasses import dataclass
 
 from esper.leyline import leyline_pb2
 
-
 SeedStage = int
 
 
@@ -50,9 +49,7 @@ class KasminaLifecycle:
 
         s = stage if stage is not None else self._stage
         m: dict[SeedStage, tuple[SeedStage, ...]] = {
-            leyline_pb2.SEED_STAGE_UNKNOWN: (
-                leyline_pb2.SEED_STAGE_DORMANT,
-            ),
+            leyline_pb2.SEED_STAGE_UNKNOWN: (leyline_pb2.SEED_STAGE_DORMANT,),
             leyline_pb2.SEED_STAGE_DORMANT: (
                 leyline_pb2.SEED_STAGE_GERMINATED,
                 leyline_pb2.SEED_STAGE_TERMINATED,
@@ -77,18 +74,10 @@ class KasminaLifecycle:
                 leyline_pb2.SEED_STAGE_FOSSILIZED,
                 leyline_pb2.SEED_STAGE_CULLED,
             ),
-            leyline_pb2.SEED_STAGE_FOSSILIZED: (
-                leyline_pb2.SEED_STAGE_TERMINATED,
-            ),
-            leyline_pb2.SEED_STAGE_CULLED: (
-                leyline_pb2.SEED_STAGE_EMBARGOED,
-            ),
-            leyline_pb2.SEED_STAGE_EMBARGOED: (
-                leyline_pb2.SEED_STAGE_RESETTING,
-            ),
-            leyline_pb2.SEED_STAGE_RESETTING: (
-                leyline_pb2.SEED_STAGE_DORMANT,
-            ),
+            leyline_pb2.SEED_STAGE_FOSSILIZED: (leyline_pb2.SEED_STAGE_TERMINATED,),
+            leyline_pb2.SEED_STAGE_CULLED: (leyline_pb2.SEED_STAGE_EMBARGOED,),
+            leyline_pb2.SEED_STAGE_EMBARGOED: (leyline_pb2.SEED_STAGE_RESETTING,),
+            leyline_pb2.SEED_STAGE_RESETTING: (leyline_pb2.SEED_STAGE_DORMANT,),
             leyline_pb2.SEED_STAGE_TERMINATED: (),
         }
         return m.get(s, ())

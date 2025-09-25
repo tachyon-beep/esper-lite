@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Iterable
 
 
 @dataclass(slots=True)
@@ -45,7 +44,9 @@ class SLOTracker:
     def config(self) -> SLOConfig:
         return self._config
 
-    def record(self, metric: str, *, objective: float, actual: float, timestamp: datetime | None = None) -> SLOStatus:
+    def record(
+        self, metric: str, *, objective: float, actual: float, timestamp: datetime | None = None
+    ) -> SLOStatus:
         ts = timestamp or datetime.now(tz=UTC)
         bucket = self._samples.setdefault(metric, deque())
         bucket.append(SLOSample(metric, objective, actual, ts))
@@ -66,7 +67,11 @@ class SLOTracker:
 
     def breached(self) -> dict[str, SLOStatus]:
         threshold = self._config.burn_alert_threshold
-        return {metric: status for metric, status in self.summary().items() if status.burn_rate >= threshold}
+        return {
+            metric: status
+            for metric, status in self.summary().items()
+            if status.burn_rate >= threshold
+        }
 
     def _prune(self, metric: str, *, reference: datetime) -> None:
         window = timedelta(hours=self._config.window_hours)
@@ -79,4 +84,3 @@ class SLOTracker:
 
 
 __all__ = ["SLOTracker", "SLOConfig", "SLOStatus", "SLOSample"]
-

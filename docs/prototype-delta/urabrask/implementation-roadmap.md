@@ -3,7 +3,7 @@
 Goal: bring up Urabrask in phases, starting from the BSDS‑Lite groundwork to a minimal, repeatable evaluation harness and benchmark suite.
 
 Phases
-- Phase 0 (now): BSDS‑Lite on descriptors (see speculative/bsds-lite). Consumers wired; dashboards live.
+- Phase 0 (now): Leyline contracts for BSDS/benchmarks + BSDS‑Lite on descriptors (see speculative/bsds-lite). Consumers wired; dashboards live.
 - Phase 0.5: Heuristic micro‑benchmarks during Tezzeret compile in CI; populate perf fields with CURATED/HEURISTIC provenance.
 - Phase 1: Minimal crucible service (single‑host) that runs the hazard battery and emits BSDS + Benchmark artefacts (provenance=URABRASK) for top N templates.
 - Phase 2: Expand hazard coverage, add signatures/immutability/WAL, integrate Oona topics and Nissa dashboards; deprecate CURATED entries.

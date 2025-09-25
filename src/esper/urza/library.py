@@ -13,13 +13,25 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping
 
+# Mandatory high-performance JSON; fail fast if unavailable
+import orjson as _orjson  # type: ignore
+
+
+def _fast_dumps(obj: Any) -> str:
+    return _orjson.dumps(obj).decode("utf-8")
+
+
+def _fast_loads(payload: str) -> Any:
+    return _orjson.loads(payload)
+
+
 from google.protobuf.json_format import MessageToDict, ParseDict
-from sqlalchemy import Column, MetaData, String, Table, create_engine, select, delete
+from sqlalchemy import Column, MetaData, String, Table, Text, create_engine, delete, select
 from sqlalchemy.engine import Engine
 
 from esper.karn import BlueprintDescriptor, BlueprintTier
 from esper.leyline import leyline_pb2
-from esper.oona.messaging import CircuitBreaker, BreakerSnapshot
+from esper.oona.messaging import BreakerSnapshot, CircuitBreaker
 
 
 @dataclass(slots=True)
@@ -89,7 +101,7 @@ class UrzaLibrary:
             Column("name", String, nullable=False),
             Column("tier", String, nullable=False),
             Column("artifact_path", String, nullable=False),
-            Column("metadata_json", String, nullable=False),
+            Column("metadata_json", Text, nullable=False),
         )
         self._metadata.create_all(self._engine)
         self._wal_path = wal_path or (self._root / "urza_wal.json")
@@ -157,9 +169,13 @@ class UrzaLibrary:
                 return None
 
             with self._engine.begin() as conn:
-                result = conn.execute(
-                    select(self._table).where(self._table.c.blueprint_id == blueprint_id)
-                ).mappings().first()
+                result = (
+                    conn.execute(
+                        select(self._table).where(self._table.c.blueprint_id == blueprint_id)
+                    )
+                    .mappings()
+                    .first()
+                )
             if not result:
                 self._metrics["cache_misses"] += 1.0
                 latency_ms = (time.perf_counter() - start) * 1000.0
@@ -189,8 +205,7 @@ class UrzaLibrary:
 
     def list_all(self) -> dict[str, UrzaRecord]:
         return {
-            blueprint_id: _clone_record(record)
-            for blueprint_id, record in self._records.items()
+            blueprint_id: _clone_record(record) for blueprint_id, record in self._records.items()
         }
 
     def fetch_by_tier(self, tier: BlueprintTier) -> Iterable[UrzaRecord]:
@@ -254,9 +269,13 @@ class UrzaLibrary:
         record = self._records.get(blueprint_id)
         if record is None:
             with self._engine.begin() as conn:
-                row = conn.execute(
-                    select(self._table).where(self._table.c.blueprint_id == blueprint_id)
-                ).mappings().first()
+                row = (
+                    conn.execute(
+                        select(self._table).where(self._table.c.blueprint_id == blueprint_id)
+                    )
+                    .mappings()
+                    .first()
+                )
             if not row:
                 return False
             record = self._record_from_row(row)
@@ -275,7 +294,7 @@ class UrzaLibrary:
                 self._touch_cache(record.metadata.blueprint_id, record)
 
     def _record_from_row(self, row: Any) -> UrzaRecord:
-        metadata_json = json.loads(row["metadata_json"])
+        metadata_json = _fast_loads(row["metadata_json"])
         extras = metadata_json.pop("_urza", {})
         metadata = BlueprintDescriptor()
         ParseDict(metadata_json, metadata, ignore_unknown_fields=True)
@@ -302,8 +321,16 @@ class UrzaLibrary:
             prewarm_samples=samples,
             artifact_mtime=extras.get("artifact_mtime"),
             checksum=extras.get("checksum"),
-            compile_ms=float(extras.get("compile_ms", 0.0)) if extras.get("compile_ms") is not None else None,
-            prewarm_ms=float(extras.get("prewarm_ms", 0.0)) if extras.get("prewarm_ms") is not None else None,
+            compile_ms=(
+                float(extras.get("compile_ms", 0.0))
+                if extras.get("compile_ms") is not None
+                else None
+            ),
+            prewarm_ms=(
+                float(extras.get("prewarm_ms", 0.0))
+                if extras.get("prewarm_ms") is not None
+                else None
+            ),
             compile_strategy=extras.get("compile_strategy"),
             eager_fallback=bool(extras.get("eager_fallback", False)),
             guard_spec=tuple(extras.get("guard_spec", [])),
@@ -389,9 +416,7 @@ class UrzaLibrary:
                 pass
         self._metrics["evictions"] += 1.0
         with self._engine.begin() as conn:
-            conn.execute(
-                delete(self._table).where(self._table.c.blueprint_id == blueprint_id)
-            )
+            conn.execute(delete(self._table).where(self._table.c.blueprint_id == blueprint_id))
 
     def _persist_wal(
         self,
@@ -408,7 +433,7 @@ class UrzaLibrary:
             ),
             "extras": extras,
         }
-        self._wal_path.write_text(json.dumps(payload), encoding="utf-8")
+        self._wal_path.write_text(_fast_dumps(payload), encoding="utf-8")
 
     def _clear_wal(self) -> None:
         if self._wal_path.exists():
@@ -418,7 +443,7 @@ class UrzaLibrary:
         if not self._wal_path.exists():
             return
         try:
-            payload = json.loads(self._wal_path.read_text(encoding="utf-8"))
+            payload = _fast_loads(self._wal_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             return
         blueprint_id = payload.get("blueprint_id")
@@ -437,7 +462,9 @@ class UrzaLibrary:
             self._upsert(metadata, artifact, extras)
             self._clear_wal()
 
-    def _upsert(self, metadata: BlueprintDescriptor, destination: Path, extras: dict[str, Any]) -> None:
+    def _upsert(
+        self, metadata: BlueprintDescriptor, destination: Path, extras: dict[str, Any]
+    ) -> None:
         record = UrzaRecord(
             metadata=_clone_descriptor(metadata),
             artifact_path=destination,
@@ -445,8 +472,16 @@ class UrzaLibrary:
             prewarm_samples=tuple(float(x) for x in extras.get("prewarm_samples", [])),
             artifact_mtime=extras.get("artifact_mtime"),
             checksum=extras.get("checksum"),
-            compile_ms=float(extras.get("compile_ms", 0.0)) if extras.get("compile_ms") is not None else None,
-            prewarm_ms=float(extras.get("prewarm_ms", 0.0)) if extras.get("prewarm_ms") is not None else None,
+            compile_ms=(
+                float(extras.get("compile_ms", 0.0))
+                if extras.get("compile_ms") is not None
+                else None
+            ),
+            prewarm_ms=(
+                float(extras.get("prewarm_ms", 0.0))
+                if extras.get("prewarm_ms") is not None
+                else None
+            ),
             compile_strategy=extras.get("compile_strategy"),
             eager_fallback=bool(extras.get("eager_fallback", False)),
             guard_spec=tuple(extras.get("guard_spec", [])),
@@ -471,7 +506,7 @@ class UrzaLibrary:
                     name=metadata.name,
                     tier=BlueprintTier.Name(metadata.tier),
                     artifact_path=str(destination),
-                    metadata_json=json.dumps(descriptor_dict),
+                    metadata_json=_fast_dumps(descriptor_dict),
                 )
             )
 
@@ -481,6 +516,71 @@ class UrzaLibrary:
         self._records[blueprint_id] = _clone_record(record)
         while len(self._records) > self._cache_size:
             self._records.popitem(last=False)
+
+    # -----------------------------
+    # Capabilities merge (prototype)
+    # -----------------------------
+    def merge_capabilities(
+        self,
+        blueprint_id: str,
+        *,
+        allowed_parameters_by_seed_id: dict[str, list[str]] | None = None,
+        allowed_parameters_by_seed_index: dict[int, list[int]] | None = None,
+    ) -> bool:
+        """Merge per-seed parameter allowlists into graph_metadata.capabilities.
+
+        - allowed_parameters_by_seed_id: mapping of seed_id -> list of parameter names
+        - allowed_parameters_by_seed_index: mapping of seed_index -> list of param indices
+
+        Returns True on success; False when the blueprint is missing or graph metadata absent.
+        """
+
+        record = self.get(blueprint_id)
+        if record is None:
+            return False
+        extras = dict(record.extras or {})
+        gm = extras.get("graph_metadata")
+        if isinstance(gm, str):
+            try:
+                gm = _fast_loads(gm)
+            except Exception:
+                gm = {}
+        if not isinstance(gm, dict):
+            return False
+        params = gm.get("parameters")
+        if not isinstance(params, list):
+            params = []
+        capabilities = gm.get("capabilities")
+        if not isinstance(capabilities, dict):
+            capabilities = {}
+
+        if allowed_parameters_by_seed_id:
+            name_set = {str(p.get("name")) for p in params if isinstance(p, dict) and "name" in p}
+            clean: dict[str, list[str]] = {}
+            for seed_id, names in allowed_parameters_by_seed_id.items():
+                filtered = [str(n) for n in names if not name_set or str(n) in name_set]
+                clean[str(seed_id)] = filtered
+            capabilities["allowed_parameters_by_seed_id"] = clean
+
+        if allowed_parameters_by_seed_index:
+            idx_map: dict[str, list[int]] = {}
+            for sidx, ilist in allowed_parameters_by_seed_index.items():
+                try:
+                    key = str(int(sidx))
+                except Exception:
+                    key = str(sidx)
+                idx_map[key] = [int(i) for i in ilist]
+            if idx_map:
+                existing = capabilities.get("allowed_parameters_by_seed_index")
+                if not isinstance(existing, dict):
+                    existing = {}
+                existing.update(idx_map)
+                capabilities["allowed_parameters_by_seed_index"] = existing
+
+        gm["capabilities"] = capabilities
+        extras["graph_metadata"] = gm
+        self.save(record.metadata, record.artifact_path, extras=extras)
+        return True
 
     def _iter_all_records(self) -> Iterator[UrzaRecord]:
         seen: set[str] = set()

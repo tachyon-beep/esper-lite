@@ -5,13 +5,18 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from esper.tolaria import TolariaTrainer, TrainingLoopConfig
 from esper.leyline import leyline_pb2
+from esper.tolaria import TolariaTrainer, TrainingLoopConfig
 
 
 class _TamiyoStub:
     def evaluate_epoch(self, state: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
-        cmd = leyline_pb2.AdaptationCommand(version=1, command_id=f"cmd-{state.current_epoch}", command_type=leyline_pb2.COMMAND_SEED, target_seed_id="s")
+        cmd = leyline_pb2.AdaptationCommand(
+            version=1,
+            command_id=f"cmd-{state.current_epoch}",
+            command_type=leyline_pb2.COMMAND_SEED,
+            target_seed_id="s",
+        )
         cmd.seed_operation.operation = leyline_pb2.SEED_OP_GERMINATE
         return cmd
 
@@ -49,7 +54,9 @@ def test_seed_health_compact_emits_single_event_per_seed(monkeypatch) -> None:
         dataloader=loader,
         tamiyo=_TamiyoStub(),
         kasmina=_KasminaStub(),
-        config=TrainingLoopConfig(max_epochs=1, gradient_accumulation_steps=1, device=torch.device("cpu")),
+        config=TrainingLoopConfig(
+            max_epochs=1, gradient_accumulation_steps=1, device=torch.device("cpu")
+        ),
     )
     list(trainer.run())
     # Check latest packet for seed_health events and absence of per-seed metrics
@@ -68,4 +75,3 @@ def test_seed_health_compact_emits_single_event_per_seed(monkeypatch) -> None:
     present = {m.name for m in pkt.metrics}
     assert has_seed_health
     assert not (per_seed_metric_names & present)
-

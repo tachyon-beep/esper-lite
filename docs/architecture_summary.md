@@ -43,6 +43,7 @@ Key messages used across the system (not exhaustive):
 - `SystemStatePacket`: training snapshot from Tolaria; includes metrics map and seed states.
 - `TelemetryPacket`: metrics + events + system health status/summary/indicators.
 - `AdaptationCommand`: Tamiyo’s decision (SEED/OPTIMIZER/PAUSE/CIRCUIT_BREAKER/EMERGENCY), with annotations.
+- `EmergencySignal`: Tolaria’s high-priority escalation broadcast consumed by Weatherlight/Oona for sub-100 ms incident coordination.
 - `SeedState`: Kasmina lifecycle export (for Tolaria and observability).
 - `FieldReport`: outcome/metrics of control actions (Tamiyo → Simic).
 - `KernelPrefetchRequest` / `KernelArtifactReady` / `KernelArtifactError`: Oona prefetch flow.
@@ -67,6 +68,7 @@ Telemetry helpers live in `src/esper/core/telemetry.py` and are used project‑w
   - `TolariaTrainer`: epoch loop with CE loss by default; exports `SystemStatePacket` per epoch; invokes Tamiyo → Kasmina; checkpoints to `var/tolaria/checkpoints/` + WAL (`wal.json`).
   - `TrainingLoopConfig`: device, epochs, grad accumulation.
   - `EpochStats`: running aggregates (loss, accuracy, gradient norm, throughput, latency).
+  - Optional per-seed, per-layer telemetry is gated by `TOLARIA_SEED_LAYER_SUMMARIES_ENABLED` (top‑K via `TOLARIA_SEED_LAYER_TOPK`, default 3).
 - Integration:
   - Tamiyo via `evaluate_epoch(SystemStatePacket) → AdaptationCommand`.
   - Kasmina via `apply_command(AdaptationCommand)` and opt‑in seed state export + alpha advancement during BLENDING.
@@ -234,6 +236,8 @@ Telemetry helpers live in `src/esper/core/telemetry.py` and are used project‑w
 - Tolaria: `tolaria.training.{loss,accuracy,latency_ms}`, `tolaria.seeds.active`, `tolaria.epoch_hook.latency_ms`.
 - Tamiyo: `tamiyo.validation_loss`, `tamiyo.loss_delta`, `tamiyo.inference.latency_ms`, `tamiyo.conservative_mode`, `tamiyo.blueprint.risk`.
 - Kasmina: seed lifecycle/gates events, `kasmina.isolation.violations`, fetch latency, GPU cache stats; message priority as indicator in packet.
+  - Blend telemetry: event `blend_config` with attributes `{mode, source, alpha_vec_len}`; per-seed metrics `kasmina.seed.{alpha,alpha_steps}`.
+  - Pre-warm telemetry: `kasmina.prewarm.latency_ms` (global); per-seed metadata `prewarm_ms`.
 - Karn: `karn.selection.{safe,experimental,adversarial}`, `karn.selection.latency_ms`, breaker state/open count.
 - Tezzeret: compiler durations, prewarm times, eager fallbacks, forge breaker state and job counts.
 - Urza: `urza.library.{cache_hits,cache_misses,evictions,integrity_failures,slow_queries,breaker_state,conservative_mode}`; prefetch `{hits,misses,errors,latency_ms}`.

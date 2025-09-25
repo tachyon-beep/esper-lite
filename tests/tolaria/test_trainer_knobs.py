@@ -6,8 +6,8 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from esper.tolaria import TolariaTrainer, TrainingLoopConfig
 from esper.leyline import leyline_pb2
+from esper.tolaria import TolariaTrainer, TrainingLoopConfig
 
 
 class _TamiyoStub:
@@ -45,7 +45,9 @@ def _build_trainer(num_samples: int, batch_size: int = 1) -> TolariaTrainer:
         dataloader=loader,
         tamiyo=_TamiyoStub(),
         kasmina=_KasminaStub(),
-        config=TrainingLoopConfig(max_epochs=1, gradient_accumulation_steps=1, device=torch.device("cpu")),
+        config=TrainingLoopConfig(
+            max_epochs=1, gradient_accumulation_steps=1, device=torch.device("cpu")
+        ),
     )
     return trainer
 
@@ -73,4 +75,3 @@ def test_optimizer_rebuild_storm_guard_steps(monkeypatch) -> None:
     # With 3 steps and min interval 2, we expect ~2 rebuilds and ~1 skip
     assert metrics.get("tolaria.opt.rebuilds_total", 0.0) >= 1.0
     assert metrics.get("tolaria.opt.rebuild_skipped_total", 0.0) >= 1.0
-

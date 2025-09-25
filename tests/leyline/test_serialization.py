@@ -5,11 +5,10 @@ import time
 import uuid
 
 import pytest
-
 from hypothesis import given
 from hypothesis import strategies as st
 
-from esper.core.telemetry import TelemetryMetric, TelemetryEvent, build_telemetry_packet
+from esper.core.telemetry import TelemetryEvent, TelemetryMetric, build_telemetry_packet
 from esper.leyline import leyline_pb2
 
 
@@ -205,7 +204,9 @@ _metric_names = (
         st.builds(
             TelemetryMetric,
             name=st.sampled_from(_metric_names),
-            value=st.floats(min_value=-10_000, max_value=10_000, allow_nan=False, allow_infinity=False),
+            value=st.floats(
+                min_value=-10_000, max_value=10_000, allow_nan=False, allow_infinity=False
+            ),
             unit=st.sampled_from(["loss", "ms", "count", "ratio", "bool", "delta"]),
         ),
         min_size=1,
