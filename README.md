@@ -2,6 +2,9 @@
 
 Esper-Lite is a streamlined morphogenetic control stack centred on a PyTorch 2.8 runtime. This scaffold establishes the shared tooling, package layout, and subsystem contracts needed to begin feature development across Tolaria, Kasmina, Tamiyo, Simic, and the blueprint and infrastructure services.
 
+[![Codacy Badge](https://app.codacy.com/project/badge/Grade/465d6f1dd48242a2990d31de1298d6f3)](https://app.codacy.com/gh/tachyon-beep/esper-lite/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
+[![Codacy Badge](https://app.codacy.com/project/badge/Coverage/465d6f1dd48242a2990d31de1298d6f3)](https://app.codacy.com/gh/tachyon-beep/esper-lite/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_coverage)
+
 ## Architecture Summary
 
 For an end-to-end view of subsystems, contracts, flows, telemetry, and operational guardrails, see `docs/architecture_summary.md`. Visual diagrams of integrations and flows live in `docs/architecture_diagrams.md`.
@@ -112,9 +115,9 @@ To keep the prototype simple, deterministic, and easy to reason about, we apply 
   - When enforcing strictness (e.g., ES mandatory, Tamiyo requires Urza), update the relevant subsystem README under `docs/prototype-delta/*/` and the operator runbook. Keep the cross‑system plan (`docs/prototype-delta/cross-system/STRICT_DEPENDENCIES_PLAN.md`) up to date.
 
 Pointers
+
 - Cross‑system plan: `docs/prototype-delta/cross-system/STRICT_DEPENDENCIES_PLAN.md`
 - Agent guidelines (deeper detail for AI devs): `AGENTS.md`
-
 
 ## Getting Started
 
@@ -320,6 +323,7 @@ Example output JSON:
 ```
 
 Notes
+
 - The BSDS JSON mirror is also persisted to Urza `extras["bsds"]` for Tamiyo to consume.
 - Optional signing + WAL: set `ESPER_LEYLINE_SECRET` and `URABRASK_SIGNING_ENABLED=true` to attach `extras["bsds_sig"]` and append to the WAL (`URABRASK_WAL_PATH`).
 - Crucible result bundles: per‑run JSON artifacts are written under `URABRASK_CRUCIBLE_ARTIFACTS_DIR` with retention (`URABRASK_CRUCIBLE_ARTIFACTS_KEEP`).
@@ -370,6 +374,7 @@ Refer to `docs/project/implementation_plan.md` for full sequencing and ownership
 - Keep breakers conservative—prefer safe degradation and explicit telemetry over silent failures.
 - When adding telemetry, include clear descriptions and useful attributes; keep metric naming consistent.
 - Update `docs/` when behavior diverges from the canonical design; keep `.env.example` in sync for new config.
+
 ### Pre-commit hooks
 
 This repository includes a pre-commit check that prevents introducing local Python Enums that shadow Leyline contracts.
