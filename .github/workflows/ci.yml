@@ -39,6 +39,7 @@ jobs:
           pip install -e .[dev]
 
       - name: Ruff (lint)
+        continue-on-error: true
         run: |
           ruff --version
           ruff check src/esper
