@@ -15,12 +15,8 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import Tuple
 
-try:  # optional torch dependency at runtime path; fallback path works without
-    import torch  # type: ignore
-    from torch import nn  # type: ignore
-except Exception:  # pragma: no cover - fallback path in environments without torch
-    torch = None  # type: ignore
-    nn = None  # type: ignore
+import torch
+from torch import nn
 
 from esper.leyline import leyline_pb2
 
@@ -53,8 +49,6 @@ class BenchmarkConfig:
 
 
 def _select_device(preference: str, *, allow_cuda: bool) -> str:
-    if torch is None:
-        return "cpu"
     pref = (preference or "auto").lower()
     if pref == "cpu":
         return "cpu"
@@ -76,15 +70,12 @@ def _select_device(preference: str, *, allow_cuda: bool) -> str:
 
 def _torch_version() -> str:
     try:
-        # mypy: ignore if torch is None
-        return getattr(torch, "__version__", "n/a") if torch is not None else "n/a"
+        return getattr(torch, "__version__", "n/a")
     except Exception:
         return "n/a"
 
 
 def _to_dtype(name: str):  # type: ignore[no-untyped-def]
-    if torch is None:
-        return None
     key = (name or "float32").lower()
     if key in {"fp32", "float32", "f32"}:
         return torch.float32  # type: ignore[attr-defined]
@@ -136,7 +127,7 @@ def run_benchmarks(
     )
 
     # Attempt runtime path
-    provenance = "runtime" if (runtime is not None and torch is not None) else "fallback"
+    provenance = "runtime" if (runtime is not None) else "fallback"
     module = None
     if provenance == "runtime":
         try:
@@ -151,7 +142,7 @@ def run_benchmarks(
     # Optionally add bf16 profile on CUDA if not already present
     profiles = list(cfg.profiles)
     try:
-        if torch is not None and device.startswith("cuda") and cfg.allow_cuda_profiles:
+        if device.startswith("cuda") and cfg.allow_cuda_profiles:
             if all(p.dtype != "bfloat16" for p in profiles):
                 profiles.append(BenchmarkProfile(name="batch32_bf16", batch_size=32, in_shape=(128,), dtype="bfloat16"))
     except Exception:
@@ -162,7 +153,7 @@ def run_benchmarks(
         p95_ms = 0.0
         thr = 0.0
         used_prov = provenance
-        if used_prov == "runtime" and torch is not None and module is not None:
+        if used_prov == "runtime" and module is not None:
             try:
                 # Build input tensor
                 dtype = _to_dtype(profile.dtype)
@@ -173,43 +164,35 @@ def run_benchmarks(
                     x = torch.randn((profile.batch_size, *profile.in_shape), device=dev, dtype=torch.float32)  # type: ignore[attr-defined]
 
                 # Prepare forward callable
-                if nn is not None and isinstance(module, nn.Module):  # type: ignore[arg-type]
+                if isinstance(module, nn.Module):  # type: ignore[arg-type]
                     forward = module.forward  # type: ignore[attr-defined]
                 else:
                     forward = module  # callable
 
                 # Context managers
-                ctx = torch.inference_mode if torch is not None else None  # type: ignore[attr-defined]
                 use_autocast = device.startswith("cuda") and (dtype is not None and str(dtype).endswith("bfloat16"))
 
                 # Warmup
                 warm = max(0, cfg.warmup_iters)
                 meas = max(1, cfg.measure_iters)
-                if ctx is not None:
-                    with torch.inference_mode():  # type: ignore[attr-defined]
-                        if use_autocast:
-                            try:
-                                with torch.autocast(device_type="cuda", dtype=torch.bfloat16):  # type: ignore[attr-defined]
-                                    for _ in range(warm):
-                                        _ = forward(x)
-                            except Exception:
+                with torch.inference_mode():  # type: ignore[attr-defined]
+                    if use_autocast:
+                        try:
+                            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):  # type: ignore[attr-defined]
                                 for _ in range(warm):
                                     _ = forward(x)
-                        else:
+                        except Exception:
                             for _ in range(warm):
                                 _ = forward(x)
-                        samples: list[float] = []
-                        for _ in range(meas):
-                            t0 = perf_counter()
+                    else:
+                        for _ in range(warm):
                             _ = forward(x)
-                            dt_ms = (perf_counter() - t0) * 1000.0
-                            samples.append(dt_ms)
-                else:
-                    samples = []
-                    for _ in range(max(1, cfg.measure_iters)):
+                    samples: list[float] = []
+                    for _ in range(meas):
                         t0 = perf_counter()
                         _ = forward(x)
-                        samples.append((perf_counter() - t0) * 1000.0)
+                        dt_ms = (perf_counter() - t0) * 1000.0
+                        samples.append(dt_ms)
 
                 samples.sort()
                 p50_ms = samples[len(samples) // 2]

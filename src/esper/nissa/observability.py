@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from elasticsearch import Elasticsearch
+from elasticsearch import helpers as es_helpers
 from google.protobuf.json_format import MessageToDict
 from prometheus_client import CollectorRegistry, Counter, Gauge
 
@@ -161,6 +162,9 @@ class NissaIngestor:
             labelnames=("provenance",),
         )
         self._es = es_client or Elasticsearch(hosts=[config.elasticsearch_url])
+        # Bulk indexing buffer for higher throughput; flushed after batch drains
+        self._bulk_actions: list[dict] = []
+        self._bulk_max_actions: int = 200
 
     def ingest_state(self, packet: Mapping[str, object]) -> None:
         """Ingest a system state packet from a mapping payload."""
@@ -269,7 +273,26 @@ class NissaIngestor:
         return {"metrics": "# Prometheus metrics placeholder"}
 
     def _index_document(self, index: str, document: dict[str, object]) -> None:
-        self._es.index(index=index, document=document)
+        action = {"_index": index, "_source": document}
+        self._bulk_actions.append(action)
+        if len(self._bulk_actions) >= self._bulk_max_actions:
+            self._flush_bulk()
+
+    def _flush_bulk(self) -> None:
+        if not self._bulk_actions:
+            return
+        actions = self._bulk_actions
+        self._bulk_actions = []
+        try:
+            # Prefer helpers.bulk when the client supports it (real Elasticsearch)
+            es_helpers.bulk(self._es, actions)  # type: ignore[arg-type]
+        except Exception:
+            # Fallback: iterate using index() for fake/test clients
+            for action in actions:
+                try:
+                    self._es.index(index=action.get("_index"), document=action.get("_source"))  # type: ignore[arg-type]
+                except Exception:
+                    continue
 
     def consume_packets(
         self,
@@ -279,6 +302,7 @@ class NissaIngestor:
 
         for packet in packets:
             self.ingest_telemetry(packet)
+        self._flush_bulk()
 
     async def consume_from_oona(
         self,
@@ -312,6 +336,8 @@ class NissaIngestor:
             count=count,
             block_ms=block_ms,
         )
+        # Flush any buffered index actions after each drain cycle
+        self._flush_bulk()
 
     @property
     def registry(self) -> CollectorRegistry:

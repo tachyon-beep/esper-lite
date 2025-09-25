@@ -28,6 +28,7 @@ import os
 
 import torch
 from torch import nn
+import psutil
 from torch.utils.data import DataLoader
 
 from esper.core import EsperSettings, TelemetryEvent, TelemetryMetric, build_telemetry_packet
@@ -225,6 +226,18 @@ class TolariaTrainer:
         self._last_step_failure_reason: str | None = None
         self._last_hook_latency_ms: float = 0.0
         self._last_tamiyo_latency_ms: float = 0.0
+        # NVML initialisation (GPU-only): mandatory when CUDA is available
+        self._pynvml = None
+        self._nvml_handle = None
+        if self._device_type == "cuda" and torch.cuda.is_available():
+            try:
+                import pynvml as _pynvml  # type: ignore
+
+                _pynvml.nvmlInit()
+                self._pynvml = _pynvml
+                self._nvml_handle = _pynvml.nvmlDeviceGetHandleByIndex(0)
+            except Exception as exc:  # pragma: no cover - environment dependent
+                raise RuntimeError(f"NVML initialisation failed on CUDA device: {exc}")
         # Rolling dynamics (EWMA) and step timers
         self._ewma_alpha: float = 0.2
         self._loss_mean: float = 0.0
@@ -1430,42 +1443,27 @@ class TolariaTrainer:
         hardware.device_id = "0"
         # Best-effort hardware/pressure metrics (gated by step enrichment)
         if self._step_enrichment:
-            try:
-                if hardware.device_type == "cuda" and torch.cuda.is_available():
-                    mem_free, mem_total = torch.cuda.mem_get_info()  # type: ignore[attr-defined]
-                    used_gb = (mem_total - mem_free) / (1024**3)
-                    free_gb = mem_free / (1024**3)
-                    hardware.total_memory_gb = float(mem_total / (1024**3))
-                    hardware.available_memory_gb = float(free_gb)
-                    packet.training_metrics["gpu_mem_used_gb"] = float(used_gb)
-                    packet.training_metrics["gpu_mem_free_gb"] = float(free_gb)
-                    # Optional NVML util
-                    try:
-                        import pynvml  # type: ignore
-
-                        pynvml.nvmlInit()
-                        handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-                        util = pynvml.nvmlDeviceGetUtilizationRates(handle)
-                        hardware.utilization_percent = float(util.gpu)
-                        packet.training_metrics["gpu_util_percent"] = float(util.gpu)
-                    except Exception:
-                        hardware.utilization_percent = 0.0
+            if hardware.device_type == "cuda" and torch.cuda.is_available():
+                mem_free, mem_total = torch.cuda.mem_get_info()  # type: ignore[attr-defined]
+                used_gb = (mem_total - mem_free) / (1024**3)
+                free_gb = mem_free / (1024**3)
+                hardware.total_memory_gb = float(mem_total / (1024**3))
+                hardware.available_memory_gb = float(free_gb)
+                packet.training_metrics["gpu_mem_used_gb"] = float(used_gb)
+                packet.training_metrics["gpu_mem_free_gb"] = float(free_gb)
+                # NVML utilisation (handle initialised at startup)
+                if self._pynvml is not None and self._nvml_handle is not None:
+                    util = self._pynvml.nvmlDeviceGetUtilizationRates(self._nvml_handle)
+                    hardware.utilization_percent = float(util.gpu)
+                    packet.training_metrics["gpu_util_percent"] = float(util.gpu)
                 else:
-                    hardware.total_memory_gb = 0.0
-                    hardware.available_memory_gb = 0.0
                     hardware.utilization_percent = 0.0
-                # CPU util (psutil optional)
-                try:
-                    import psutil  # type: ignore
-
-                    packet.training_metrics["cpu_util_percent"] = float(psutil.cpu_percent(interval=0.0))
-                except Exception:
-                    pass
-            except Exception:
-                # Fail open with defaults
+            else:
                 hardware.total_memory_gb = 0.0
                 hardware.available_memory_gb = 0.0
                 hardware.utilization_percent = 0.0
+            # CPU util (mandatory psutil)
+            packet.training_metrics["cpu_util_percent"] = float(psutil.cpu_percent(interval=0.0))
         hardware.compute_capability = 0
 
         self._populate_seed_states(packet)

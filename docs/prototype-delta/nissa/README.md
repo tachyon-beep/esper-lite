@@ -1,6 +1,6 @@
 # Nissa — Prototype Delta (Observability)
 
-Executive summary: the prototype implements a Nissa ingestor that consumes telemetry via Oona, increments Prometheus counters, indexes structured documents to Elasticsearch (or a local stub), evaluates basic alert rules, tracks SLO samples/burn rate, exposes `/metrics`, `/healthz`, and a metrics summary API, and includes a long‑running service runner. The full design specifies circuit breakers and conservative mode in ingestion/output, TTL housekeeping for logs/metrics, richer telemetry (ingest/export latency, dropped counts), alert routing stubs, and a broader mission‑control surface. Leyline remains canonical for telemetry and envelope contracts.
+Executive summary: the prototype implements a Nissa ingestor that consumes telemetry via Oona, increments Prometheus counters, indexes structured documents to Elasticsearch (bulk ingestion), evaluates basic alert rules, tracks SLO samples/burn rate, exposes `/metrics`, `/healthz`, and a metrics summary API, and includes a long‑running service runner. The full design specifies circuit breakers and conservative mode in ingestion/output, TTL housekeeping for logs/metrics, richer telemetry (ingest/export latency, dropped counts), alert routing stubs, and a broader mission‑control surface. Leyline remains canonical for telemetry and envelope contracts.
 
 Outstanding Items (for coders)
 
@@ -21,8 +21,8 @@ Outstanding Items (for coders)
   - Pointers: `src/esper/nissa/alerts.py` (router/engine).
 
 - TTL housekeeping
-  - Add retention/TTL cleanup for the in‑memory ES stub and any local buffers to prevent growth in long runs.
-  - Pointers: `src/esper/nissa/service_runner.py::MemoryElasticsearch` and ingestion buffers.
+  - Add retention/TTL cleanup for any local ingestion buffers to prevent growth in long runs.
+  - Pointers: ingestion buffers in `src/esper/nissa/observability.py`.
 
 - Telemetry publishing
   - Periodically publish Nissa health/metrics to Oona (for central dashboards) using a small packet builder with severity derived from alert/burn state.
