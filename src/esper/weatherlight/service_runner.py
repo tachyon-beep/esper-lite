@@ -824,6 +824,13 @@ class WeatherlightService:
             "workers_running": str(workers_running),
             "workers_backing_off": str(workers_backing_off),
         }
+        # System mode: operational when all workers are healthy; degraded otherwise
+        try:
+            any_backoff = workers_backing_off > 0
+            any_stopped = any(not s.running for s in self._workers.values())
+            indicators["system_mode"] = "degraded" if (any_backoff or any_stopped) else "operational"
+        except Exception:
+            indicators["system_mode"] = "degraded"
         # Surface Tamiyo BSDS provenance/hazard (best-effort) for dashboards
         try:
             if self._tamiyo_service is not None:

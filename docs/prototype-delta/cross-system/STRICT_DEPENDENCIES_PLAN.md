@@ -25,6 +25,7 @@ Design Principles
 - Preflight once, fail fast: Validate presence and basic health at service start (Weatherlight/Nissa). Do not propagate optionality into live code.
 - Prototype posture: Prefer simplicity and determinism over compatibility toggles. Avoid growing “optional paths” unless tied to a clear prototype delta.
 - Explicit GPU gating: Require NVML only when CUDA is available (or when a GPU probe is configured).
+- No partial degradation: Assume all subsystems are available; otherwise treat the system as fully degraded. Weatherlight exposes `system_mode ∈ {operational, degraded}` in telemetry.
 
 What’s Already Implemented
 - Nissa: Removed in‑memory Elasticsearch stub. Runner now imports ES and requires a successful `ping()` at startup.
