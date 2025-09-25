@@ -11,7 +11,7 @@ Mandatory changes
    - CPU environments skip compilation to avoid toolchain dependencies; metrics expose whether compilation is active.
 
 2) AMP with bfloat16 (or float16) and GradScaler — **Implemented**
-   - CUDA runs now wrap forward/loss in `torch.cuda.amp.autocast` and use `GradScaler` for scaled updates.
+   - CUDA runs now wrap forward/loss in `torch.amp.autocast('cuda', dtype=bfloat16)` and use `torch.amp.GradScaler(device_type='cuda')` for scaled updates.
    - CPU paths remain eager; telemetry reports `tolaria.train.amp_enabled` for observability.
 
 3) Set global matmul precision / TF32 — **Implemented**

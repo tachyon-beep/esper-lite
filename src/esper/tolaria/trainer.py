@@ -220,7 +220,7 @@ class TolariaTrainer:
             and torch.cuda.is_available()
         )
         self._amp_dtype = torch.bfloat16
-        self._scaler = torch.cuda.amp.GradScaler() if self._amp_enabled else None
+        self._scaler = torch.amp.GradScaler("cuda") if self._amp_enabled else None
         self._failed_epochs_streak = 0
         self._halt = False
         self._last_step_failure_reason: str | None = None
@@ -1829,7 +1829,7 @@ class TolariaTrainer:
 
     def _autocast_context(self):
         if self._amp_enabled:
-            return torch.cuda.amp.autocast(dtype=self._amp_dtype)
+            return torch.amp.autocast("cuda", dtype=self._amp_dtype)
         return contextlib.nullcontext()
 
     def _eager_train_step(
