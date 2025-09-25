@@ -326,7 +326,7 @@ class TamiyoService:
                 if avg_cov < crit_th:
                     evt_level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
                 elif avg_cov < warn_th:
-                    evt_level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING
+                    evt_level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO
                 if evt_level is not None:
                     events.append(
                         TelemetryEvent(
@@ -339,7 +339,7 @@ class TamiyoService:
                         )
                     )
                     # If no prior reason set by risk engine, annotate degraded inputs
-                    if "risk_reason" not in command.annotations:
+                    if evt_level == leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL and "risk_reason" not in command.annotations:
                         command.annotations["risk_reason"] = "degraded_inputs"
         except Exception:
             pass
