@@ -37,7 +37,7 @@ class TamiyoPolicyConfig:
     blueprint_vocab: int = 1024
     device: str = "cpu"
     dropout: float = 0.2
-    attention_heads: int = 2
+    attention_heads: int = 4
     enable_compile: bool = False
     enable_autocast: bool = True
     architecture_version: str = _DEFAULT_ARCH_VERSION
@@ -61,8 +61,8 @@ class TamiyoPolicyConfig:
     schedule_output_dim: int = 2
     policy_classes: int = 32
     risk_classes: int = 5
-    sage_hidden_dim: int = 128
-    gat_hidden_dim: int = 64
+    sage_hidden_dim: int = 256
+    gat_hidden_dim: int = 128
     param_vector_dim: int = 4
 
 
@@ -171,6 +171,16 @@ class TamiyoPolicy(nn.Module):
         self._gnn = TamiyoGNN(gnn_cfg)
         self._device = torch.device(cfg.device)
         self._gnn.to(self._device)
+
+        # Reduce CPU inference overhead by constraining intra-op threads when on CPU
+        try:
+            if self._device.type == "cpu":
+                import os as _os
+                threads = int(_os.getenv("TAMIYO_CPU_THREADS", "1"))
+                if threads > 0:
+                    torch.set_num_threads(threads)
+        except Exception:
+            pass
 
         self._autocast_enabled = cfg.enable_autocast
         self._compiled_model: nn.Module | None = None
