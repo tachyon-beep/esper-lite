@@ -54,6 +54,15 @@ Notes
 - tamiyo.gnn.compile_fallback_total (count) — cumulative compile fallbacks (init/runtime) since process start; absent when zero
 - tamiyo.gnn.compile_warm_ms (ms) — CUDA compile warm-up latency (best-effort; present when compile active)
 
+Field Reports Lifecycle (P9)
+- tamiyo.field_reports.pending_total (count) — count of reports kept in-memory for retry after a publish cycle
+- tamiyo.field_reports.published_total (count) — reports successfully published in the last cycle
+- tamiyo.field_reports.retries_total (count) — publish attempts that failed in the last cycle
+- tamiyo.field_reports.dropped_total (count) — reports dropped from memory after retry cap (WAL remains intact)
+- field_report_synthesised (event, INFO) — attributes: report_id, command_id, target_epochs
+- field_report_retry (event, WARNING) — attributes: report_id, retry_count
+- field_report_drop (event, WARNING) — attributes: report_id, retry_count
+
 Annotations on `AdaptationCommand` (WP15)
 - feature_coverage — average ratio (backward compatible)
 - coverage_map — bounded per‑key coverage map for diagnostics

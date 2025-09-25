@@ -28,6 +28,8 @@ Outstanding Items (for coders)
 - Field report lifecycle (ack/retry + observation windows)
   - Add ack/retry semantics for publishes, observation windows (≥3 epochs) before synthesis, WAL index, and bounded retries.
   - Pointers: `src/esper/tamiyo/persistence.py` (WAL), `src/esper/tamiyo/service.py::generate_field_report/publish_history`.
+  - New env knobs: `TAMIYO_FR_OBS_WINDOW_EPOCHS` (default 3), `TAMIYO_FR_RETRY_BACKOFF_MS` (default 1000), `TAMIYO_FR_RETRY_BACKOFF_MULT` (default 2.0).
+  - Semantics: per-step reports are still emitted with `observation_window_epochs=1`; synthesised reports after N steps carry `observation_window_epochs=N` and `report_id` prefixed with `fr-synth-`.
 
 - Security envelope
   - Sign emitted AdaptationCommands (HMAC/nonce/freshness) and verify signed PolicyUpdate payloads.
@@ -223,3 +225,15 @@ References:
 - Source: `src/esper/kasmina/seed_manager.py::export_seed_states`
 - Mapping: `src/esper/tamiyo/graph_builder.py::_build_seed_features`
 - Tests: `tests/kasmina/test_seed_manager.py::test_export_seed_states_includes_alpha_schedule_and_blend_allowed`, `tests/tamiyo/test_policy_gnn.py`
+
+## Resolved Issues
+
+- CPU inference fallback degrading to pause
+  - Fixed a policy path that incorrectly nulled a successful CPU forward when running without CUDA. The policy now retains CPU outputs and continues with SEED/OPTIMIZER decisions as appropriate. This improves determinism on CPU‑only environments and unblocks schedule parameter tests.
+  - Files: `src/esper/tamiyo/policy.py` (runtime fallback logic)
+  - Tests: `tests/tamiyo/test_service.py::test_service_schedule_parameters_fractional` now passes on CPU.
+
+- Field reports lifecycle completion (P9)
+  - Implemented observation windows and a durable retry index with exponential backoff. Sidecars live beside the report WAL: `field_reports.windows.json`, `field_reports.index.json`. Added telemetry events for synthesis and retries/drops and summary metrics for publish cycles.
+  - Files: `src/esper/tamiyo/service.py`, `src/esper/tamiyo/persistence.py`
+  - Tests: `tests/tamiyo/test_service_p9.py` covers synthesis, retry, drop, and restart.
