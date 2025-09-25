@@ -340,11 +340,23 @@ class TolariaTrainer:
             self._conflict_warn = float(self._settings.tolaria_aggregation_conflict_warn)
         except Exception:
             self._conflict_warn = 0.75
-        self._per_layer_enabled = bool(getattr(self._settings, "tolaria_agg_per_layer_enabled", False))
+        seed_layer_requested = bool(
+            getattr(self._settings, "tolaria_seed_layer_summaries_enabled", False)
+        )
+        legacy_layer_requested = bool(
+            getattr(self._settings, "tolaria_agg_per_layer_enabled", False)
+        )
+        self._per_layer_requested = seed_layer_requested or legacy_layer_requested
         try:
-            self._per_layer_topk = max(1, int(getattr(self._settings, "tolaria_agg_per_layer_topk", 5)))
+            raw_topk = getattr(self._settings, "tolaria_seed_layer_topk")
+        except AttributeError:
+            raw_topk = None
+        if raw_topk is None:
+            raw_topk = getattr(self._settings, "tolaria_agg_per_layer_topk", 3)
+        try:
+            self._per_layer_topk = max(1, int(raw_topk))
         except Exception:
-            self._per_layer_topk = 5
+            self._per_layer_topk = 3
         try:
             self._seed_share_jump_warn = float(getattr(self._settings, "tolaria_seed_share_jump_warn", 0.3))
         except Exception:
@@ -355,6 +367,8 @@ class TolariaTrainer:
             self._seed_conflict_ratio_warn = 0.5
         self._last_seed_share: dict[str, float] = {}
         self._seed_health_compact = bool(getattr(self._settings, "tolaria_seed_health_compact", False))
+        # Final activation depends on compact telemetry preference
+        self._per_layer_enabled = self._per_layer_requested and not self._seed_health_compact
 
         self._emergency: EmergencyController | None = None
         self._emergency_signal_bridge: SharedEmergencySignal | LocalEmergencySignal | None = None

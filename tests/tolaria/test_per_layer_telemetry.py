@@ -39,9 +39,9 @@ class _KasminaStub:
 
 
 def test_per_layer_by_seed_telemetry_enabled(monkeypatch) -> None:
-    # Enable per-layer telemetry via env
-    monkeypatch.setenv("TOLARIA_AGG_PER_LAYER_ENABLED", "true")
-    monkeypatch.setenv("TOLARIA_AGG_PER_LAYER_TOPK", "3")
+    # Enable per-layer telemetry via new env knobs
+    monkeypatch.setenv("TOLARIA_SEED_LAYER_SUMMARIES_ENABLED", "true")
+    monkeypatch.setenv("TOLARIA_SEED_LAYER_TOPK", "3")
     model = nn.Sequential(nn.Linear(6, 4), nn.ReLU(), nn.Linear(4, 2))
     opt = torch.optim.SGD(model.parameters(), lr=0.01)
     inputs = torch.randn(10, 6)
@@ -66,3 +66,24 @@ def test_per_layer_by_seed_telemetry_enabled(monkeypatch) -> None:
         if found:
             break
     assert found
+
+
+def test_per_layer_by_seed_telemetry_disabled(monkeypatch) -> None:
+    monkeypatch.delenv("TOLARIA_SEED_LAYER_SUMMARIES_ENABLED", raising=False)
+    monkeypatch.delenv("TOLARIA_SEED_LAYER_TOPK", raising=False)
+    model = nn.Sequential(nn.Linear(6, 4), nn.ReLU(), nn.Linear(4, 2))
+    opt = torch.optim.SGD(model.parameters(), lr=0.01)
+    inputs = torch.randn(10, 6)
+    targets = torch.randint(0, 2, (10,))
+    loader = DataLoader(TensorDataset(inputs, targets), batch_size=5)
+    trainer = TolariaTrainer(
+        model=model,
+        optimizer=opt,
+        dataloader=loader,
+        tamiyo=_TamiyoStub(),
+        kasmina=_KasminaStub(),
+        config=TrainingLoopConfig(max_epochs=1, gradient_accumulation_steps=1, device=torch.device("cpu")),
+    )
+    list(trainer.run())
+    for pkt in trainer.telemetry_packets:
+        assert all(m.name != "tolaria.grad_agg.seed.layer_norm" for m in pkt.metrics)

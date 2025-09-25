@@ -68,6 +68,7 @@ Telemetry helpers live in `src/esper/core/telemetry.py` and are used project‑w
   - `TolariaTrainer`: epoch loop with CE loss by default; exports `SystemStatePacket` per epoch; invokes Tamiyo → Kasmina; checkpoints to `var/tolaria/checkpoints/` + WAL (`wal.json`).
   - `TrainingLoopConfig`: device, epochs, grad accumulation.
   - `EpochStats`: running aggregates (loss, accuracy, gradient norm, throughput, latency).
+  - Optional per-seed, per-layer telemetry is gated by `TOLARIA_SEED_LAYER_SUMMARIES_ENABLED` (top‑K via `TOLARIA_SEED_LAYER_TOPK`, default 3).
 - Integration:
   - Tamiyo via `evaluate_epoch(SystemStatePacket) → AdaptationCommand`.
   - Kasmina via `apply_command(AdaptationCommand)` and opt‑in seed state export + alpha advancement during BLENDING.

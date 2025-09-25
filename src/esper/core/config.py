@@ -193,6 +193,12 @@ class EsperSettings(BaseSettings):
     tolaria_agg_per_layer_topk: int = Field(
         alias="TOLARIA_AGG_PER_LAYER_TOPK", default=5
     )
+    tolaria_seed_layer_summaries_enabled: bool = Field(
+        alias="TOLARIA_SEED_LAYER_SUMMARIES_ENABLED", default=False
+    )
+    tolaria_seed_layer_topk: int = Field(
+        alias="TOLARIA_SEED_LAYER_TOPK", default=3
+    )
     # Per-seed telemetry thresholds
     tolaria_seed_share_jump_warn: float = Field(
         alias="TOLARIA_SEED_SHARE_JUMP_WARN", default=0.3

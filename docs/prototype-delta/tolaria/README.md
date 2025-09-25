@@ -8,7 +8,8 @@ Outstanding Items (for coders)
 
 - Optional: per‑layer by‑seed summaries
   - Emit compact per‑layer summaries by seed to aid Tamiyo diagnostics.
-  - Keep disabled by default to avoid telemetry bloat.
+  - Enable via `TOLARIA_SEED_LAYER_SUMMARIES_ENABLED=true`; cap metrics with `TOLARIA_SEED_LAYER_TOPK` (default 3).
+  - Keep disabled by default to avoid telemetry bloat; compact seed telemetry (`TOLARIA_SEED_HEALTH_COMPACT=true`) also suppresses layer metrics.
 
 - Tests & telemetry enrichment
   - Property tests for LR schedules; rollback deadline edge cases; emergency escalate/resume; add per‑feature metrics if helpful.
