@@ -314,6 +314,7 @@ Helpers will emit structured telemetry for migration telemetry (e.g., `telemetry
   - The new `FieldReportDelta` must expose the explicit scalar slots above while providing a bounded, ordered list for “extra” metrics to preserve Simic’s feature stacking behaviour.
   - Migration helpers should warn when legacy keys outside the canonical set are encountered and decide whether to drop them, map them into generic extension slots, or extend the schema.
   - `MAX_METRIC_FEATURES`/`METRIC_SEQUENCE_LENGTH` should inform the size of any repeated field to avoid silently truncating important signals.
+  - `FieldReport` persistence uses protobuf binary records (`field_reports.log`) with no additional JSON schema (`src/esper/tamiyo/persistence.py:10-122`); changing the proto structure simply updates the serialized payload. Scripts/tests call `TamiyoService.generate_field_report` rather than parsing the log, so no extra consumers need migration.
 
 ##### Planned Simic/Tamiyo Refactor (no adapters, prototype scope)
 - **Proto change prerequisite**: Once `FieldReport.delta` replaces the metrics map, Simic must consume the structured fields directly.
@@ -339,6 +340,16 @@ Helpers will emit structured telemetry for migration telemetry (e.g., `telemetry
   - Tamiyo `_emit_field_report` reuses `tamiyo_latency_ms` and `hook_latency_ms` when emitting field-report deltas (`src/esper/tamiyo/service.py:698-704`).
   - Kasmina does not read the map today; it relies on annotations/telemetry instead.
 - **Struct plan**: the proposed `SystemStatePacket.TrainingMetrics` message (above) mirrors the keys the consumers require. When we switch, Tolaria will populate the structured fields instead of the free-form map, Tamiyo will read from the struct, and remaining metrics can be expressed via a bounded `extra_metrics` repeated field if we need to retain long-tail instrumentation.
+
+##### Telemetry & Alert Consumers
+- **Nissa ingestion** (`src/esper/nissa/observability.py:232-296`): expects the following Tamiyo metrics/events for downstream gauges/alerts:
+  - Coverage gauges: `tamiyo.gnn.feature_coverage` plus per-type metrics prefixed with `tamiyo.gnn.coverage.*` or `tamiyo.gnn.feature_coverage.*`.
+  - Blueprint risk gauge: `tamiyo.blueprint.risk`, used to derive `tamiyo.bsds.elevated_risk_flag`.
+  - BSDS hazard events converted into metrics: `tamiyo.bsds.hazard_critical_signal`, `tamiyo.bsds.hazard_high_signal` (built from telemetry events `bsds_hazard_*`).
+- **Alert engine** (`src/esper/nissa/alerts.py:128-180`): rules fire on `tamiyo.gnn.feature_coverage`, `tamiyo.bsds.hazard_*`, and `tamiyo.bsds.elevated_risk_flag`.
+- **Docs / operator runbooks** (`docs/architecture_summary.md`, `docs/project/operator_runbook.md`, `docs/project/observability_runbook.md`) enumerate canonical Tamiyo metrics: `tamiyo.validation_loss`, `tamiyo.loss_delta`, `tamiyo.conservative_mode`, `tamiyo.blueprint.risk`, plus the BSDS coverage gauges.
+- **Implication**: when migrating to structured telemetry/metadata, ensure these metric names continue to be emitted exactly as-is (even if sourced from the new `DecisionMetadata` or coverage structs). Any additional telemetry derived from annotations (e.g., degraded-input events) must persist through the new representation so existing dashboards/alerts stay green.
+- **Grafana dashboards** (`infra/grafana/dashboards/nissa_overview.json`) visualise `esper_field_reports_total` (summed and per-outcome rate); field-report ingestion must remain intact so these charts and Prometheus counters continue to reflect reality.
 
 #### Migration Approach
 - Implement proto extensions with backwards-compatible field numbers, regenerate bindings, and introduce struct-based helper classes in `esper.core.contracts` to hydrate/extract the new messages.
