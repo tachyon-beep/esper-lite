@@ -3,6 +3,9 @@
 
 set -e +o pipefail
 
+# Force ESLint to honor the flat config shipped under .codacy/tools-configs
+export ESLINT_USE_FLAT_CONFIG=1
+
 # Set up paths first
 bin_name="codacy-cli-v2"
 
