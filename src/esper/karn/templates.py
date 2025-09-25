@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from esper.leyline import leyline_pb2
-
 from .catalog import (
     BlueprintDescriptor,
     BlueprintParameterBounds,

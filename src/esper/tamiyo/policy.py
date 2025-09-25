@@ -716,8 +716,10 @@ class TamiyoPolicy(nn.Module):
                     path = getattr(cfg, "path", None)
                     if path is None:
                         return getattr(reg, "digest", lambda: "")()
-                    from esper.simic.registry import EmbeddingRegistry as _ER, EmbeddingRegistryConfig as _ERC
-                    return _ER(_ERC(path, getattr(cfg, "max_size", 1024))).digest()
+                    temp_registry = EmbeddingRegistry(
+                        EmbeddingRegistryConfig(path, getattr(cfg, "max_size", 1024))
+                    )
+                    return temp_registry.digest()
                 except Exception:
                     return getattr(reg, "digest", lambda: "")()
 
@@ -771,10 +773,15 @@ class TamiyoPolicy(nn.Module):
         }
         return payload
 
-    def load_state_dict(self, state_dict: Mapping[str, object], strict: bool = True) -> object:  # type: ignore[override]
+    def load_state_dict(
+        self,
+        state_dict: Mapping[str, object],
+        strict: bool = True,
+        assign: bool = False,
+    ) -> object:  # type: ignore[override]
         self.validate_state_dict(state_dict)
         clean_state, _ = self._split_state_dict(state_dict)
-        return super().load_state_dict(clean_state, strict=strict)
+        return super().load_state_dict(clean_state, strict=strict, assign=assign)
 
     # ------------------------------------------------------------------
     # Helpers

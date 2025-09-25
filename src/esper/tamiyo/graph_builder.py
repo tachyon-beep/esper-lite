@@ -230,7 +230,6 @@ class TamiyoGraphBuilder:
         stats = coverage.stats()
         # Accumulate present/total for weighted ratios
         present_totals: dict[str, list[int]] = {}
-        totals: dict[str, list[int]] = {}
         def _accumulate(group_key: str, present: int, total: int) -> None:
             present_totals.setdefault(group_key, [0, 0])
             pt = present_totals[group_key]

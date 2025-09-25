@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
@@ -21,7 +20,7 @@ from esper.core import TelemetryEvent
 from esper.simic.registry import EmbeddingRegistry, EmbeddingRegistryConfig
 from esper.simic.validation import PolicyValidator, ValidationConfig, ValidationResult
 
-from .replay import FieldReportReplayBuffer, SimicExperience
+from .replay import FieldReportReplayBuffer
 
 if TYPE_CHECKING:
     from esper.oona import OonaClient
@@ -345,10 +344,10 @@ class _LoRALinear(nn.Linear):
             self.register_parameter("lora_B", None)
             self.scaling = 0.0
 
-    def forward(self, input: torch.Tensor) -> torch.Tensor:  # type: ignore[override]
-        result = super().forward(input)
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:  # type: ignore[override]
+        result = super().forward(inputs)
         if self.lora_A is not None and self.lora_B is not None:
-            lora_update = (input @ self.lora_A.t()) @ self.lora_B.t()
+            lora_update = (inputs @ self.lora_A.t()) @ self.lora_B.t()
             result = result + self.scaling * lora_update
         return result
 

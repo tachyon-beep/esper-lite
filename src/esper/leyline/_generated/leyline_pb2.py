@@ -3,6 +3,7 @@
 # NO CHECKED-IN PROTOBUF GENCODE
 # source: leyline.proto
 # Protobuf Python Version: 6.31.1
+# pylint: skip-file
 """Generated protocol buffer code."""
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import descriptor_pool as _descriptor_pool

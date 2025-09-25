@@ -161,4 +161,4 @@ def main() -> None:
         logger.info("Nissa service interrupted")
 
 
-__all__ = ["run_service", "main", "MemoryElasticsearch"]
+__all__ = ["run_service", "main"]

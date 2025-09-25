@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+from datetime import datetime, timezone
 from typing import Mapping
 
 from esper.urza import UrzaLibrary, UrzaRuntime
@@ -58,7 +59,6 @@ class UrabraskBenchWorker:
         failed = 0
         skipped_cooldown = 0
         from esper.core import EsperSettings
-        from datetime import datetime, timezone
         settings = EsperSettings()
         min_interval_s = max(0, int(getattr(settings, "urabrask_bench_min_interval_s", 3600)))
         # Snapshot current records
@@ -103,7 +103,6 @@ class UrabraskBenchWorker:
                         rec = self._urza.get(bp)
                         if rec is not None:
                             extras = dict(rec.extras or {})
-                            from datetime import datetime, timezone
                             extras["benchmarks_last_run"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
                             self._urza.save(rec.metadata, rec.artifact_path, extras=extras)
                     except Exception:
@@ -123,7 +122,6 @@ class UrabraskBenchWorker:
                         rec = self._urza.get(bp)
                         if rec is not None:
                             extras = dict(rec.extras or {})
-                            from datetime import datetime, timezone
                             extras["benchmarks_last_run"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
                             self._urza.save(rec.metadata, rec.artifact_path, extras=extras)
                     except Exception:

@@ -63,7 +63,7 @@ def wal_verify(
             sig = str(entry.get("sig", ""))
             prev_sig = str(entry.get("prev_sig", ""))
             payload = entry.get("payload")
-        except Exception as exc:  # malformed line
+        except Exception:  # malformed line
             errors += 1
             continue
         bprec = by_bp.setdefault(bp or "", {"ok": True, "length": 0, "errors": []})
@@ -114,4 +114,3 @@ def bsds_verify(urza: Any, blueprint_id: str, *, secret: bytes | None = None) ->
 
 
 __all__ = ["wal_verify", "bsds_verify", "WalVerificationResult"]
-

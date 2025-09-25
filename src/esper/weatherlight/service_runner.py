@@ -16,7 +16,8 @@ import signal
 import socket
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from functools import partial
 import importlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Awaitable, Callable, Dict
@@ -140,7 +141,7 @@ class WeatherlightService:
         self._register_worker(
             WorkerState(
                 name="urza_prefetch",
-                coroutine_factory=lambda: self._urza_worker.run_forever(interval_ms=200),
+                coroutine_factory=partial(self._urza_worker.run_forever, interval_ms=200),
             )
         )
         self._register_worker(
@@ -167,7 +168,7 @@ class WeatherlightService:
             self._register_worker(
                 WorkerState(
                     name="urabrask.producer",
-                    coroutine_factory=lambda: self._urabrask_producer.run_forever(),
+                    coroutine_factory=self._urabrask_producer.run_forever,
                 )
             )
         # Optional Urabrask benchmarks
@@ -183,7 +184,7 @@ class WeatherlightService:
             self._register_worker(
                 WorkerState(
                     name="urabrask.bench",
-                    coroutine_factory=lambda: self._urabrask_bench.run_forever(),
+                    coroutine_factory=self._urabrask_bench.run_forever,
                 )
             )
 
@@ -351,8 +352,6 @@ class WeatherlightService:
                     self._rollback_detections_total += 1
                     # Clear to avoid repeated floods; rely on trainer to set on each deadline
                     self._rollback_signal.clear()
-            except asyncio.CancelledError:  # pragma: no cover - cancellation path
-                raise
             except asyncio.CancelledError:  # pragma: no cover - cancellation path
                 raise
             except Exception:
@@ -1040,10 +1039,6 @@ class WeatherlightService:
         if self._urza_library is None or self._kasmina_manager is None:
             return
         # Collect blueprint -> seeds mapping where lifecycle is BLENDING
-        try:
-            from esper.kasmina.seed_manager import SeedContext  # noqa: F401
-        except Exception:
-            pass
         seeds = getattr(self._kasmina_manager, "_seeds", {})
         by_blueprint: dict[str, set[str]] = {}
         for seed_id, context in list(seeds.items()):

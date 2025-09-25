@@ -14,7 +14,7 @@ from typing import Dict, Iterable, Mapping
 
 import torch
 from torch import Tensor, nn
-from torch.nn import functional as F
+import torch.nn.functional as F
 
 from torch_geometric.nn import GATConv, HeteroConv, SAGEConv
 
@@ -183,7 +183,7 @@ class TamiyoGNN(nn.Module):
     ) -> Dict[str, Tensor]:
         activated: Dict[str, Tensor] = {}
         for key, tensor in encoded.items():
-            out = F.gelu(tensor)
+            out = torch.nn.functional.gelu(tensor)  # pylint: disable=not-callable
             skip = residual.get(key)
             if skip is not None and skip.shape == out.shape:
                 out = out + skip

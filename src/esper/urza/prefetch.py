@@ -8,7 +8,7 @@ import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Awaitable, Callable, Sequence
+from typing import Callable, Sequence
 
 from esper.leyline import leyline_pb2
 from esper.oona import OonaClient

@@ -6,7 +6,6 @@ Actual kernel grafting logic will land in Slice 1 (see backlog TKT-102).
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import logging
 import time

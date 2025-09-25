@@ -168,7 +168,6 @@ def run_crucible_v1(
     except Exception:
         pass
     # GPU timing is optional; default off for CPU-only safety
-    from esper.core import EsperSettings
     _gpu_timing_enabled = False
     try:
         _gpu_timing_enabled = bool(EsperSettings().urabrask_crucible_gpu_timing_enabled)
@@ -430,4 +429,3 @@ def _persist_result_bundle(
                 p.unlink()
     except Exception:
         pass
-    

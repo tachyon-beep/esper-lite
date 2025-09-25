@@ -19,7 +19,6 @@ from uuid import uuid4
 import torch
 
 from esper.core import EsperSettings, TelemetryEvent, TelemetryMetric, build_telemetry_packet
-from esper.karn.catalog import BlueprintDescriptor  # noqa: F401
 from esper.leyline import leyline_pb2
 from esper.security.signing import DEFAULT_SECRET_ENV, SignatureContext, sign
 
@@ -153,9 +152,7 @@ class TamiyoService:
                     p_cfg.device = str(prefer)
                 else:
                     try:
-                        import torch as _torch  # local import to avoid hard dep at import time
-
-                        if _torch.cuda.is_available():
+                        if torch.cuda.is_available():
                             p_cfg.device = "cuda"
                     except Exception:
                         pass
@@ -508,9 +505,8 @@ class TamiyoService:
                         )
                     )
                 # Attach full map + types to command annotations (bounded)
-                import json as _json
-                cov_json = _json.dumps(coverage)
-                types_json = _json.dumps(per_type)
+                cov_json = json.dumps(coverage)
+                types_json = json.dumps(per_type)
                 # Size guard ~ 1KB per field
                 if len(cov_json) <= 1024:
                     command.annotations.setdefault("coverage_map", cov_json)
@@ -775,7 +771,7 @@ class TamiyoService:
                     has_critical = True
             except Exception:
                 continue
-        for key, win in list(self._windows.items()):
+        for _, win in list(self._windows.items()):
             try:
                 win["collected"] = int(win.get("collected", 0)) + 1
                 # Update aggregates
@@ -847,12 +843,9 @@ class TamiyoService:
             if issued_iso:
                 with contextlib.suppress(Exception):
                     # From isoformat to Timestamp
-                    from datetime import datetime as _dt
-                    from datetime import timezone as _tz
-
-                    dt = _dt.fromisoformat(issued_iso)
+                    dt = datetime.fromisoformat(issued_iso)
                     if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=_tz.utc)
+                        dt = dt.replace(tzinfo=UTC)
                     cmd.issued_at.FromDatetime(dt)
             # Report ID includes synthesis marker
             report = self.generate_field_report(
@@ -1400,7 +1393,6 @@ class TamiyoService:
                 try:
                     settings = EsperSettings()
                     if getattr(settings, "urabrask_signing_enabled", False):
-                        from esper.security.signing import SignatureContext, DEFAULT_SECRET_ENV
                         from esper.urabrask.wal import verify_bsds_signature_in_extras
                         from esper.urabrask import metrics as _ura_metrics
 

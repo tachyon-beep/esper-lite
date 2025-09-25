@@ -7,10 +7,11 @@ and extension points for later slices (see `docs/project/implementation_plan.md`
 
 from __future__ import annotations
 
+import os
+
 # Ensure CuBLAS workspace configured early to avoid deterministic errors on some CUDA setups
-import os as _os
-if not _os.getenv("CUBLAS_WORKSPACE_CONFIG"):
-    _os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+if not os.getenv("CUBLAS_WORKSPACE_CONFIG"):
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
 from collections.abc import Iterable, Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
@@ -18,13 +19,11 @@ from dataclasses import dataclass, field
 import contextlib
 from datetime import datetime, timezone
 from time import perf_counter, time_ns, monotonic
-import os
 from typing import TYPE_CHECKING, Protocol
 from pathlib import Path
 import zlib
 import io
 import json
-import os
 
 import torch
 from torch import nn

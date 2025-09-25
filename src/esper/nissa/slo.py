@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Iterable
 
 
 @dataclass(slots=True)
@@ -79,4 +78,3 @@ class SLOTracker:
 
 
 __all__ = ["SLOTracker", "SLOConfig", "SLOStatus", "SLOSample"]
-
