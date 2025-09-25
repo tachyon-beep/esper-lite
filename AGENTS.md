@@ -47,3 +47,39 @@
 - We maintain a prototype scope that differs from the full detailed design; see `docs/prototype-delta/README.md` and its per‑subsystem deltas.
 - When implementing changes, optimise for the “green for prototype” acceptance (prototype‑delta) rather than the full design unless the delta calls for a full feature.
 - Use `docs/prototype-delta/rubric.md` when assessing completeness; reference delta docs in PRs where appropriate.
+
+## Strict Dependencies & Failure Policy (Prototype)
+
+The prototype optimises for simplicity and determinism over compatibility layers. Apply these principles across all subsystems and PRs:
+
+- Strict dependencies (no pseudo-optional deps)
+  - Do not label a dependency “optional” unless it is truly install-time optional and fully guarded behind feature gates. Otherwise, treat it as mandatory and declare it in `pyproject.toml`.
+  - Avoid `try/except ImportError` patterns in live code for mandatory deps. Fail fast on import or at service preflight.
+  - Validate core deps at service startup (preflight): imports, basic connectivity (e.g., Elasticsearch ping), and GPU prerequisites (NVML when CUDA is available).
+  - Tests must provide mandatory dependencies explicitly (e.g., pass an `UrzaLibrary` to `TamiyoService`). Do not rely on hidden defaults.
+
+- No backwards compatibility pre‑1.0
+  - We are a pre‑1.0 prototype. Prefer breaking changes that simplify the code and remove dead paths; deprecation layers are not required.
+  - When breaking behaviour, update tests and docs in the same PR. Keep the repo “green for prototype”.
+
+- No “helpful masking” of failures
+  - Do not silently create defaults or fallbacks that hide serious configuration/infrastructure errors (e.g., auto‑constructing Urza, falling back to stub datastores). Such masking leads to fragile systems.
+  - Emit clear, actionable errors and, where appropriate, telemetry explaining the failure. Fail early rather than operating in an undefined state.
+
+- No partial degradation
+  - Assume all subsystems are available and healthy; otherwise treat the system as fully degraded. Do not add “partial availability” branches inside core paths.
+  - Weatherlight emits a `system_mode` indicator (`operational` or `degraded`) derived from worker health/backoff to help operators. Startup preflight rejects missing deps outright.
+
+- Code hygiene and dead code
+  - Remove unused toggles, stale fallbacks, and “just in case” branches when finalising a feature. Keep code paths minimal and explicit.
+  - Prefer one authoritative implementation over multiple conditional paths.
+
+- Testing & CI posture
+  - Unit tests: cover success paths and guard‑rail failures; don’t depend on masked defaults. Provide test doubles/fakes explicitly (e.g., FakeRedis, minimal UrzaLibrary roots).
+  - Integration tests: exercise cross‑subsystem flows with real contracts (Leyline) and the strict preflight on.
+
+- Documentation duties
+  - When enforcing strictness (e.g., making ES mandatory, requiring Urza), update the relevant `docs/prototype-delta/*/README.md` and the operator runbook.
+  - Record cross‑system policy and execution status under `docs/prototype-delta/cross-system/` (e.g., STRICT_DEPENDENCIES_PLAN.md).
+
+These policies are intended to keep the prototype tight, remove ambiguity, and avoid hidden states that slow iteration. When in doubt: make the dependency explicit, fail fast, and document the requirement.
