@@ -80,6 +80,42 @@ This repo tracks a pragmatic prototype scope distinct from the full detailed des
 
 Use the prototype‑delta docs and rubric to judge readiness for the “green for prototype” build. Only adopt full detailed‑design features when explicitly called out by the delta.
 
+## Prototype Policies for Human Developers
+
+To keep the prototype simple, deterministic, and easy to reason about, we apply these cross‑cutting policies across the repo. These mirror the agent guidelines but are phrased for human contributors.
+
+- Strict dependencies (no pseudo‑optional deps)
+  - If a package is needed for normal operation, declare it in `pyproject.toml` and import it directly. Do not wrap imports in `try/except` unless the feature is truly optional and fully gated.
+  - Service startup performs a “preflight” to validate core imports and basic connectivity (e.g., Elasticsearch ping), and GPU prerequisites (NVML when CUDA is available). Fail fast on missing deps rather than limping along.
+  - Tests must provide mandatory collaborators explicitly (e.g., pass an `UrzaLibrary` to `TamiyoService`). Avoid hidden defaults.
+
+- No backwards compatibility pre‑1.0
+  - As a prototype, we prioritise removing complexity over maintaining compatibility shims. Prefer breaking changes that simplify code and remove dead paths.
+  - When changing behaviour, update tests and docs in the same PR so the repo stays “green for prototype”.
+
+- No “helpful masking” of failures
+  - Do not auto‑construct or silently substitute critical components (e.g., defaulting to a stub Urza or in‑memory ES) in live codepaths. These mask real system faults and complicate diagnosis.
+  - Emit clear, actionable errors and telemetry, and stop early when preconditions are not met.
+
+- No partial degradation
+  - Assume all subsystems are available and healthy; otherwise treat the system as fully degraded. Avoid threading “partial availability” branches through core paths.
+  - Weatherlight emits a `system_mode` indicator (`operational`/`degraded`) based on worker health/backoff; startup preflight rejects missing deps outright.
+
+- Code hygiene (remove dead code)
+  - Delete unused toggles and fallback code once a feature is in place. Prefer one authoritative implementation over multiple conditional paths.
+
+- Testing & CI posture
+  - Unit tests: assert both success paths and guard‑rail failures; don’t depend on masked defaults. Use explicit fakes (FakeRedis) and minimal real collaborators (e.g., `UrzaLibrary` rooted under `tmp_path`).
+  - Integration tests: exercise cross‑subsystem flows with real contracts (Leyline) under strict preflight. CI disables `torch.compile` to avoid spurious timeouts.
+
+- Documentation duties
+  - When enforcing strictness (e.g., ES mandatory, Tamiyo requires Urza), update the relevant subsystem README under `docs/prototype-delta/*/` and the operator runbook. Keep the cross‑system plan (`docs/prototype-delta/cross-system/STRICT_DEPENDENCIES_PLAN.md`) up to date.
+
+Pointers
+- Cross‑system plan: `docs/prototype-delta/cross-system/STRICT_DEPENDENCIES_PLAN.md`
+- Agent guidelines (deeper detail for AI devs): `AGENTS.md`
+
+
 ## Getting Started
 
 1. **Create a virtual environment**
