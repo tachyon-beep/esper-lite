@@ -133,7 +133,6 @@ async def run_service(settings: EsperSettings | None = None) -> None:
         loop="asyncio",
     )
     server = uvicorn.Server(uvicorn_config)
-    server.install_signal_handlers = False
 
     stop_event = asyncio.Event()
     ingest_task = asyncio.create_task(_ingest_loop(ingestor, oona, stop_event))
