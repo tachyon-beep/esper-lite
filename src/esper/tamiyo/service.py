@@ -1643,16 +1643,37 @@ class TamiyoService:
 
     @staticmethod
     def _priority_from_events(events: Iterable[TelemetryEvent]) -> int:
-        priority = leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
+        # Promote to CRITICAL on any critical event. Promote to HIGH only for
+        # specific HIGH-severity operational reasons; otherwise keep NORMAL.
+        escalate_high = {
+            "timeout_inference",
+            "timeout_urza",
+            "step_latency_high",
+            "loss_spike",
+            "isolation_violations",
+            "hook_budget",
+            "policy_risk_critical",
+            "bp_quarantine",
+            "device_pressure_high",
+            "cpu_pressure_high",
+        }
+        saw_high = False
         for event in events:
             if event.level == leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL:
                 return leyline_pb2.MessagePriority.MESSAGE_PRIORITY_CRITICAL
-            if event.level in (
-                leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_ERROR,
+            if (
+                event.level in (
+                    leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_ERROR,
+                )
+                and (event.description or "") in escalate_high
             ):
-                priority = leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH
-        return priority
+                saw_high = True
+        return (
+            leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH
+            if saw_high
+            else leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
+        )
 
     def _sign_command(self, command: leyline_pb2.AdaptationCommand) -> None:
         """Assign identifiers and attach an HMAC signature."""
