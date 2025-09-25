@@ -353,6 +353,31 @@ class TamiyoService:
         except Exception:
             pass
 
+        compile_reason = getattr(self._policy, "compile_disabled_reason", None)
+        if compile_reason:
+            desc = "compile_disabled_cpu" if compile_reason == "device_not_cuda" else "compile_disabled"
+            level = (
+                leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO
+                if compile_reason in {"device_not_cuda", "cuda_unavailable"}
+                else leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING
+            )
+            device_str = "cpu"
+            try:
+                device_str = str(getattr(self._policy, "device", getattr(self._policy, "_device", "unknown")))
+            except Exception:
+                device_str = "unknown"
+            events.append(
+                TelemetryEvent(
+                    description=desc,
+                    level=level,
+                    attributes={
+                        "reason": compile_reason,
+                        "device": device_str,
+                    },
+                )
+            )
+            command.annotations.setdefault("policy_compile_reason", compile_reason)
+
         last_action = self._policy.last_action
         metrics = [
             TelemetryMetric("tamiyo.validation_loss", state.validation_loss, unit="loss"),

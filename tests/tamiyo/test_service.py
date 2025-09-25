@@ -177,7 +177,7 @@ async def test_degraded_inputs_routes_emergency(tmp_path) -> None:
         signature_context=_SIGNATURE_CONTEXT,
     )
     packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-degraded")
-    service.evaluate_step(packet)
+    command = service.evaluate_step(packet)
     # Route to Oona and assert emergency
     redis = FakeRedis()
     config = StreamConfig(
@@ -429,7 +429,7 @@ def test_health_indicators_include_timeouts(tmp_path, monkeypatch: pytest.Monkey
     urza = UrzaLibrary(root=tmp_path / "urza")
     service = TamiyoService(store_config=cfg, urza=urza, signature_context=_SIGNATURE_CONTEXT, metadata_timeout_ms=12.0)
     packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-hi")
-    service.evaluate_step(packet)
+    command = service.evaluate_step(packet)
     telemetry = service.telemetry_packets[-1]
     ind = telemetry.system_health.indicators
     assert "timeout_budget_ms" in ind
@@ -917,7 +917,7 @@ async def test_tamiyo_publish_history_routes_priority(tmp_path) -> None:
     urza = UrzaLibrary(root=tmp_path / "urza")
     service = TamiyoService(store_config=config, urza=urza, signature_context=_SIGNATURE_CONTEXT)
     packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-routing")
-    service.evaluate_step(packet)
+    command = service.evaluate_step(packet)
     telemetry = service.telemetry_packets[-1]
     if telemetry.events:
         telemetry.events[0].level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
@@ -1211,7 +1211,7 @@ def test_compile_fallback_counter_exposed(tmp_path, monkeypatch: pytest.MonkeyPa
     seed.seed_id = "seed-compile"
     seed.stage = leyline_pb2.SeedLifecycleStage.SEED_STAGE_TRAINING
     seed.learning_rate = 0.01
-    service.evaluate_step(packet)
+    command = service.evaluate_step(packet)
 
     telemetry = service.telemetry_packets[-1]
     metrics = {m.name: m.value for m in telemetry.metrics}
@@ -1219,3 +1219,8 @@ def test_compile_fallback_counter_exposed(tmp_path, monkeypatch: pytest.MonkeyPa
     assert metrics.get("tamiyo.gnn.compile_fallback_total", 0.0) > 0.0
     # Compile enabled flag should be 0 after fallback
     assert metrics.get("tamiyo.gnn.compile_enabled", 1.0) == 0.0
+    # Telemetry event should record the CPU demotion reason
+    assert any(event.description == "compile_disabled_cpu" for event in telemetry.events)
+    event = next(event for event in telemetry.events if event.description == "compile_disabled_cpu")
+    assert event.attributes.get("reason") in {"device_not_cuda", "cuda_unavailable"}
+    assert command.annotations.get("policy_compile_reason") in {"device_not_cuda", "cuda_unavailable"}

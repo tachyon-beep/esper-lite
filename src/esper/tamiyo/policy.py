@@ -187,9 +187,40 @@ class TamiyoPolicy(nn.Module):
         self._compile_enabled = False
         self._compile_fallbacks: int = 0
         self._compile_warm_ms: float = 0.0
+        self._compile_disabled_reason: str | None = None
         self._blueprint_metadata: dict[str, dict[str, float | str | bool | int]] = {}
 
-        if cfg.enable_compile:
+        requested_compile = bool(cfg.enable_compile)
+        device_type = self._device.type
+        try:
+            cuda_available = torch.cuda.is_available()
+        except Exception:  # pragma: no cover - defensive; treat as unavailable
+            cuda_available = False
+
+        if requested_compile:
+            if device_type != "cuda":
+                self._compile_disabled_reason = "device_not_cuda"
+            elif not cuda_available:
+                self._compile_disabled_reason = "cuda_unavailable"
+
+        if self._compile_disabled_reason is not None:
+            self._compile_enabled = False
+            self._compiled_model = None
+            # Surface once via telemetry/logging so operators see why compile is off.
+            log_event = (
+                "tamiyo_gnn_compile_disabled_cpu"
+                if self._compile_disabled_reason == "device_not_cuda"
+                else "tamiyo_gnn_compile_disabled"
+            )
+            logger.info(
+                log_event,
+                extra={
+                    "device": str(self._device),
+                    "reason": self._compile_disabled_reason,
+                },
+            )
+            self._compile_fallbacks += 1
+        elif requested_compile:
             try:  # pragma: no cover - depends on backend support
                 self._compiled_model = torch.compile(self._gnn, dynamic=True, mode="reduce-overhead")
                 self._compile_enabled = True
@@ -203,6 +234,7 @@ class TamiyoPolicy(nn.Module):
                 logger.info("tamiyo_gnn_compile_disabled", extra={"reason": str(exc)})
                 self._compile_fallbacks += 1
                 self._compiled_model = None
+                self._compile_disabled_reason = "compile_error"
 
         try:
             torch.set_float32_matmul_precision("high")
@@ -302,6 +334,9 @@ class TamiyoPolicy(nn.Module):
                         self._compile_fallbacks += 1
                         self._compiled_model = None
                         self._compile_enabled = False
+                        # Track the most recent disablement reason for telemetry.
+                        if self._compile_disabled_reason is None:
+                            self._compile_disabled_reason = "runtime_failure"
                         module = self._gnn
                         try:
                             outputs = module(graph)
@@ -477,6 +512,14 @@ class TamiyoPolicy(nn.Module):
     @property
     def compile_warm_ms(self) -> float:
         return self._compile_warm_ms
+
+    @property
+    def compile_disabled_reason(self) -> str | None:
+        return self._compile_disabled_reason
+
+    @property
+    def device(self) -> torch.device:
+        return self._device
 
     @property
     def feature_coverage(self) -> dict[str, float]:

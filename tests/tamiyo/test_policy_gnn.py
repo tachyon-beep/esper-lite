@@ -4,6 +4,7 @@ import json
 import statistics
 import time
 from pathlib import Path
+import warnings
 
 import pytest
 import torch
@@ -385,6 +386,19 @@ def test_policy_compile_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(torch, "compile", _raise_compile)
     policy = TamiyoPolicy(TamiyoPolicyConfig(enable_compile=True))
     assert not policy.compile_enabled
+
+
+def test_policy_compile_disabled_on_cpu_emits_no_cuda_graph_warning() -> None:
+    cfg = TamiyoPolicyConfig(enable_compile=True, device="cpu")
+    policy = TamiyoPolicy(cfg)
+    packet = _sample_packet()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        policy.select_action(packet)
+    assert not policy.compile_enabled
+    assert policy.compile_disabled_reason in {"device_not_cuda", "cuda_unavailable"}
+    assert policy.compile_fallbacks >= 1
+    assert not any("CUDA Graph is empty" in str(record.message) for record in caught)
 
 
 def test_policy_seed_selection_uses_fallback_scores() -> None:
