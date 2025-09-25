@@ -68,3 +68,13 @@ Nissa ingests Tamiyo’s coverage telemetry and exposes it under Prometheus. Ope
 - `tamiyo.gnn.feature_coverage.edges.layer_feedback`
 
 Annotations attached to `AdaptationCommand` include `coverage_map` (bounded) and `coverage_types` (typed aggregation) to aid root cause analysis in dashboards. Weatherlight drains Tamiyo’s telemetry each flush (WP11), so these time series reflect near‑real‑time state.
+
+## Nissa Self‑Telemetry (Ingest/Index)
+
+Nissa now reports bulk indexing activity to Prometheus:
+
+- `nissa_bulk_batches_total` — number of bulk flushes performed
+- `nissa_bulk_indexed_total` — total documents indexed via bulk
+- `nissa_bulk_failed_total` — total documents that failed during bulk
+
+Flushes occur after each Oona drain cycle and when the internal buffer reaches a threshold.

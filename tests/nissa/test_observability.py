@@ -8,6 +8,7 @@ from prometheus_client import generate_latest
 from esper.leyline import leyline_pb2
 from esper.nissa.observability import NissaIngestor, NissaIngestorConfig
 from esper.nissa.server import create_app
+from prometheus_client import generate_latest as _prom_latest
 
 
 def _fake_es():
@@ -108,3 +109,19 @@ def test_ingest_typed_coverage_feature_coverage_prefix() -> None:
     data = generate_latest(ing.registry).decode("utf-8")
     assert 'tamiyo_gnn_feature_coverage_by_type{feature="node.seed"}' in data
     assert "0.42" in data
+
+
+def test_bulk_flush_metrics_increment() -> None:
+    cfg = NissaIngestorConfig(prometheus_gateway="http://localhost:9091", elasticsearch_url="http://localhost:9200")
+    ing = NissaIngestor(cfg, es_client=_fake_es())
+    # Build three packets and use consume_packets to trigger a flush
+    packets = [
+        _packet_with_metric("tamiyo.gnn.feature_coverage", 0.1),
+        _packet_with_metric("tamiyo.gnn.feature_coverage", 0.2),
+        _packet_with_metric("tamiyo.gnn.feature_coverage", 0.3),
+    ]
+    ing.consume_packets(packets)
+    text = _prom_latest(ing.registry).decode("utf-8")
+    assert "nissa_bulk_batches_total" in text
+    assert "nissa_bulk_indexed_total" in text
+    assert "nissa_bulk_failed_total" in text

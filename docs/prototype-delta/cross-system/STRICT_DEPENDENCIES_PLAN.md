@@ -47,12 +47,12 @@ Next Changes (by subsystem)
    - Optionally, add bulk ingestion via `elasticsearch.helpers.bulk` to reduce per‑packet `index()` overhead.
    - Files: `src/esper/nissa/observability.py`
 
-3) Tolaria — Tighten system metrics imports
+3) Tolaria — Tighten system metrics imports [Implemented]
    - Treat `psutil` as mandatory: import directly; remove try/except. Always export CPU utilisation when step enrichment is enabled.
    - NVML: When CUDA present, require `pynvml` (init once; reuse handle); if init fails, raise at startup instead of silently continuing.
    - File: `src/esper/tolaria/trainer.py`
 
-4) Urabrask — Bench coherence
+4) Urabrask — Bench coherence [Implemented]
    - Retain runtime vs fallback provenance (runtime kernel vs synthetic), but remove the codepath that assumes `torch` is not importable. Given `torch` is required project‑wide, fallback should only mean “runtime not available”, not “torch missing”.
    - File: `src/esper/urabrask/benchmarks.py`
 

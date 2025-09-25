@@ -165,6 +165,22 @@ class NissaIngestor:
         # Bulk indexing buffer for higher throughput; flushed after batch drains
         self._bulk_actions: list[dict] = []
         self._bulk_max_actions: int = 200
+        # Self-telemetry for ingestion/export
+        self._bulk_batches_total = Counter(
+            "nissa_bulk_batches_total",
+            "Number of bulk indexing batches flushed",
+            registry=self._registry,
+        )
+        self._bulk_indexed_total = Counter(
+            "nissa_bulk_indexed_total",
+            "Total documents indexed via bulk ingestion",
+            registry=self._registry,
+        )
+        self._bulk_failed_total = Counter(
+            "nissa_bulk_failed_total",
+            "Total documents failed during bulk ingestion",
+            registry=self._registry,
+        )
 
     def ingest_state(self, packet: Mapping[str, object]) -> None:
         """Ingest a system state packet from a mapping payload."""
@@ -285,14 +301,25 @@ class NissaIngestor:
         self._bulk_actions = []
         try:
             # Prefer helpers.bulk when the client supports it (real Elasticsearch)
-            es_helpers.bulk(self._es, actions)  # type: ignore[arg-type]
+            ok, failed = es_helpers.bulk(self._es, actions, stats_only=True)  # type: ignore[arg-type]
+            self._bulk_batches_total.inc()
+            self._bulk_indexed_total.inc(float(ok))
+            self._bulk_failed_total.inc(float(failed))
         except Exception:
             # Fallback: iterate using index() for fake/test clients
+            successes = 0
+            failures = 0
             for action in actions:
                 try:
                     self._es.index(index=action.get("_index"), document=action.get("_source"))  # type: ignore[arg-type]
+                    successes += 1
                 except Exception:
-                    continue
+                    failures += 1
+            self._bulk_batches_total.inc()
+            if successes:
+                self._bulk_indexed_total.inc(float(successes))
+            if failures:
+                self._bulk_failed_total.inc(float(failures))
 
     def consume_packets(
         self,
