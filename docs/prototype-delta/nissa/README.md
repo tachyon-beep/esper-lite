@@ -78,3 +78,9 @@ Nissa now reports bulk indexing activity to Prometheus:
 - `nissa_bulk_failed_total` — total documents that failed during bulk
 
 Flushes occur after each Oona drain cycle and when the internal buffer reaches a threshold.
+
+Latency histograms:
+
+- `nissa_ingest_latency_ms` (by type: telemetry/system_state/field_report)
+- `nissa_bulk_flush_latency_ms`
+

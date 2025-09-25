@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 from elasticsearch import Elasticsearch
 from elasticsearch import helpers as es_helpers
 from google.protobuf.json_format import MessageToDict
-from prometheus_client import CollectorRegistry, Counter, Gauge
+from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
 
 from esper.leyline import leyline_pb2
 from esper.nissa.alerts import AlertEngine, AlertRouter, DEFAULT_ALERT_RULES, AlertEvent
@@ -165,6 +165,23 @@ class NissaIngestor:
         # Bulk indexing buffer for higher throughput; flushed after batch drains
         self._bulk_actions: list[dict] = []
         self._bulk_max_actions: int = 200
+        # Latency histograms
+        self._ingest_latency_ms = Histogram(
+            "nissa_ingest_latency_ms",
+            "Latency to ingest packets (deserialize + process)",
+            registry=self._registry,
+            labelnames=("type",),
+            buckets=(0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0),
+        )
+        self._bulk_flush_latency_ms = Histogram(
+            "nissa_bulk_flush_latency_ms",
+            "Latency of Elasticsearch bulk flush",
+            registry=self._registry,
+            buckets=(0.5, 1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0),
+        )
+        # Bulk indexing buffer for higher throughput; flushed after batch drains
+        self._bulk_actions: list[dict] = []
+        self._bulk_max_actions: int = 200
         # Self-telemetry for ingestion/export
         self._bulk_batches_total = Counter(
             "nissa_bulk_batches_total",
@@ -184,6 +201,8 @@ class NissaIngestor:
 
     def ingest_state(self, packet: Mapping[str, object]) -> None:
         """Ingest a system state packet from a mapping payload."""
+        import time as _time
+        t0 = _time.perf_counter()
 
         document = dict(packet)
         raw_phase = document.get("phase")
@@ -193,17 +212,23 @@ class NissaIngestor:
         self._run_counter.inc()
         self._state_counter.labels(phase=phase).inc()
         self._index_document("system_state", document)
+        self._ingest_latency_ms.labels(type="system_state").observe((_time.perf_counter() - t0) * 1000.0)
 
     def ingest_field_report(self, report: Mapping[str, object]) -> None:
         """Ingest a field report packet from a mapping payload."""
+        import time as _time
+        t0 = _time.perf_counter()
 
         document = dict(report)
         raw_outcome = str(document.get("outcome", "unknown"))
         outcome = _normalise_enum_label(raw_outcome, prefix="FIELD_REPORT_OUTCOME_")
         self._field_report_counter.labels(outcome=outcome).inc()
         self._index_document("field_report", document)
+        self._ingest_latency_ms.labels(type="field_report").observe((_time.perf_counter() - t0) * 1000.0)
 
     def ingest_telemetry(self, packet: leyline_pb2.TelemetryPacket) -> None:
+        import time as _time
+        t0 = _time.perf_counter()
         self._telemetry_counter.labels(source=packet.source_subsystem).inc()
         document = MessageToDict(packet, preserving_proto_field_name=True)
         metrics = {metric.name: metric.value for metric in packet.metrics}
@@ -282,6 +307,7 @@ class NissaIngestor:
             self._index_document("simic_metrics", document)
         else:
             self._index_document("telemetry", document)
+        self._ingest_latency_ms.labels(type="telemetry").observe((_time.perf_counter() - t0) * 1000.0)
 
     def metrics(self) -> dict[str, str]:
         """Return the Prometheus metrics exposition text."""
@@ -301,12 +327,17 @@ class NissaIngestor:
         self._bulk_actions = []
         try:
             # Prefer helpers.bulk when the client supports it (real Elasticsearch)
-            ok, failed = es_helpers.bulk(self._es, actions, stats_only=True)  # type: ignore[arg-type]
+            import time as _time
+            t0 = _time.perf_counter()
+            ok, failed = es_helpers.bulk(self._es, actions, stats_only=True)
+            self._bulk_flush_latency_ms.observe((_time.perf_counter() - t0) * 1000.0)  # type: ignore[arg-type]
             self._bulk_batches_total.inc()
             self._bulk_indexed_total.inc(float(ok))
             self._bulk_failed_total.inc(float(failed))
         except Exception:
             # Fallback: iterate using index() for fake/test clients
+            import time as _time
+            t0 = _time.perf_counter()
             successes = 0
             failures = 0
             for action in actions:
@@ -315,6 +346,7 @@ class NissaIngestor:
                     successes += 1
                 except Exception:
                     failures += 1
+            self._bulk_flush_latency_ms.observe((_time.perf_counter() - t0) * 1000.0)
             self._bulk_batches_total.inc()
             if successes:
                 self._bulk_indexed_total.inc(float(successes))
