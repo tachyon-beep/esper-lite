@@ -175,16 +175,10 @@ class TamiyoService:
         else:
             self._policy = policy
         self._risk = risk_config or RiskConfig()
-        # Ensure Urza is always available: construct default library when not provided
+        # Urza is required for prototype operation; do not mask its absence.
         if urza is None:
-            try:
-                urza_root = Path(getattr(self._settings, "urza_artifact_dir", "./var/urza/artifacts"))
-                urza_db = getattr(self._settings, "urza_database_url", None)
-                self._urza = UrzaLibrary(root=urza_root, database_url=urza_db)
-            except Exception as exc:  # pragma: no cover - environment dependent
-                raise RuntimeError(f"Urza library initialisation failed: {exc}")
-        else:
-            self._urza = urza
+            raise RuntimeError("TamiyoService requires an UrzaLibrary instance (urza=...) to operate")
+        self._urza = urza
         self._metadata_cache_ttl = metadata_cache_ttl
         self._blueprint_cache: dict[str, tuple[datetime, dict[str, float | str | bool | int]]] = {}
         if store and store_config:

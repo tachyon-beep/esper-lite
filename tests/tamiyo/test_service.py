@@ -95,9 +95,11 @@ class _CoveragePolicy(TamiyoPolicy):
 
 def test_tamiyo_service_generates_command(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    urza = UrzaLibrary(root=tmp_path / "urza")
     service = TamiyoService(
         policy=TamiyoPolicy(),
         store_config=config,
+        urza=urza,
         signature_context=_SIGNATURE_CONTEXT,
         step_timeout_ms=100.0,
     )
@@ -167,9 +169,11 @@ def test_tamiyo_service_generates_command(tmp_path) -> None:
 async def test_degraded_inputs_routes_emergency(tmp_path) -> None:
     # Force very low coverage → CRITICAL degraded_inputs
     policy = _CoveragePolicy(avg=0.1)
+    urza = UrzaLibrary(root=tmp_path / "urza")
     service = TamiyoService(
         policy=policy,
         store_config=FieldReportStoreConfig(path=tmp_path / "field_reports.log"),
+        urza=urza,
         signature_context=_SIGNATURE_CONTEXT,
     )
     packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-degraded")
@@ -217,9 +221,11 @@ def test_tamiyo_signed_command_accepted_and_replay_rejected(tmp_path) -> None:
 
 def test_service_schedule_parameters_fractional(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    urza = UrzaLibrary(root=tmp_path / "urza")
     service = TamiyoService(
         policy=TamiyoPolicy(),
         store_config=config,
+        urza=urza,
         signature_context=_SIGNATURE_CONTEXT,
         step_timeout_ms=100.0,
     )
