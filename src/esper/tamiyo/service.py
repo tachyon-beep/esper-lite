@@ -138,7 +138,7 @@ class TamiyoService:
         metadata_cache_ttl: timedelta = timedelta(minutes=5),
         signature_context: SignatureContext | None = None,
         step_timeout_ms: float = 15.0,
-        metadata_timeout_ms: float = 10.0,
+        metadata_timeout_ms: float = 25.0,
         executor: ThreadPoolExecutor | None = None,
     ) -> None:
         # Resolve settings early for device/compile detection

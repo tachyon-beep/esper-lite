@@ -37,7 +37,7 @@ class TamiyoPolicyConfig:
     blueprint_vocab: int = 1024
     device: str = "cpu"
     dropout: float = 0.2
-    attention_heads: int = 4
+    attention_heads: int = 2
     enable_compile: bool = False
     enable_autocast: bool = True
     architecture_version: str = _DEFAULT_ARCH_VERSION
@@ -61,8 +61,8 @@ class TamiyoPolicyConfig:
     schedule_output_dim: int = 2
     policy_classes: int = 32
     risk_classes: int = 5
-    sage_hidden_dim: int = 256
-    gat_hidden_dim: int = 128
+    sage_hidden_dim: int = 128
+    gat_hidden_dim: int = 64
     param_vector_dim: int = 4
 
 
