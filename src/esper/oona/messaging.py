@@ -494,6 +494,12 @@ class OonaClient:
             snapshot[f"emergency_published.src.{_san(src)}"] = float(val)
         for src, val in getattr(self, "_em_src_dropped", {}).items():
             snapshot[f"emergency_rate_dropped.src.{_san(src)}"] = float(val)
+        snapshot["emergency_tokens_remaining"] = float(self._em_tokens)
+        snapshot["emergency_refill_rate_per_s"] = float(self._em_refill_rate_per_s)
+        if self._config.emergency_max_per_min is not None:
+            snapshot["emergency_bucket_capacity_per_min"] = float(
+                self._config.emergency_max_per_min
+            )
         return snapshot
 
     async def health_snapshot(self) -> dict[str, float]:

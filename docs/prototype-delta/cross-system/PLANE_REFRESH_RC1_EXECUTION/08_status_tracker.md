@@ -2,6 +2,9 @@
 
 | Work Package | Task | Owner | Status | Notes |
 |--------------|------|-------|--------|-------|
+| Risk Reduction | R1 – Async worker cancellation mitigation | Shared foundations lead | Complete | Async worker soak harness + integration suite verified 2025-09-27 |
+| Risk Reduction | R2 – Strict dependency guard rollout | Module leads | Complete | Guard enforced across Tolaria/Tamiyo/Kasmina; telemetry verified 2025-09-27 |
+| Risk Reduction | R3 – Telemetry routing load tests | Codex (Weatherlight owner) | Complete | Integration harness + CLI landed; metrics verified 2025-09-27 |
 | Shared Foundations | Async worker implementation | (tbd) | Not Started |  |
 | Shared Foundations | Telemetry routing update | (tbd) | Not Started |  |
 | Shared Foundations | Dependency guard helper | (tbd) | Not Started |  |

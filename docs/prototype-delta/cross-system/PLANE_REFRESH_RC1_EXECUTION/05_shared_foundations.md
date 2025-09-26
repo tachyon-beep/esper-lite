@@ -9,7 +9,7 @@
 | Component | Description |
 |-----------|-------------|
 | Async Worker | Shared cancellable task runner used for Tamiyo inference, Kasmina metadata/prefetch, Tolaria service calls. |
-| Telemetry Router | Defines priority mapping (INFO/NORMAL vs WARNING/HIGH vs CRITICAL/EMERGENCY) and Weatherlight routing rules. |
+| Telemetry Router | Defines priority mapping (INFO/NORMAL vs WARNING/HIGH vs CRITICAL/EMERGENCY) and Weatherlight routing rules; load tested via integration harness + CLI. |
 | Strict Dependency Guard | Shared helper raising errors for missing IDs, fallback requests, invalid configurations. |
 | Shared Config Schema | Defines PT2.8 assumptions, worker settings, fallback disabling. |
 | Telemetry Schema | Common fields for timeout/gate/blend/command verifications across subsystems. |
@@ -23,7 +23,7 @@
 - No subsystem uses a shared dependency guard; ID validation and fallback handling remain ad-hoc (e.g., Tamiyo policy defaults, Kasmina fallback kernels).
 
 ### Telemetry Routing Baseline
-- `OonaClient.publish_telemetry` inspects the optional `MessagePriority` argument and only sets the emergency flag when the caller passes `HIGH`/`CRITICAL`; otherwise packets are enqueued on the normal telemetry stream (`src/esper/oona/messaging.py:244` and `src/esper/oona/messaging.py:558`).
+- `OonaClient.publish_telemetry` inspects the optional `MessagePriority` argument and only sets the emergency flag when the caller passes `HIGH`/`CRITICAL`; otherwise packets are enqueued on the normal telemetry stream (`src/esper/oona/messaging.py:244` and `src/esper/oona/messaging.py:558`). Token bucket telemetry and CLI harness landed 2025-09-27 to prove behaviour under load.
 - Tolaria’s `publish_history` sends telemetry packets without supplying a priority enum, so even packets marked as degraded in their indicators stay on the normal stream (`src/esper/tolaria/trainer.py:2220`).
 - Weatherlight recomputes priority via `_telemetry_priority`, converting the string indicator back into a `MessagePriority` enum and defaulting warnings to `HIGH` before publishing (`src/esper/weatherlight/service_runner.py:1055`). Kasmina packets drained through Weatherlight follow the same path.
 - Tamiyo’s `publish_history` also converts the indicator string to an enum before calling Oona, but only for packets buffered inside the service; ad-hoc telemetry appended during retries still omits explicit priority (`src/esper/tamiyo/service.py:2039`).
@@ -385,7 +385,14 @@ Helpers will emit structured telemetry for migration telemetry (e.g., `telemetry
   - INFO → normal stream.
 - Weatherlight integration: route based on `TelemetryPacket.system_health.indicators["priority"]`.
 - Provide helper for subsystems to set priority consistent with risk engine.
-- Verification: telemetry tests after WP-A3/WP-K3.
+- Verification: telemetry tests after WP-A3/WP-K3 plus automated load harness (`tests/integration/test_telemetry_emergency_load.py`) and CLI (`scripts/run_telemetry_routing_load.py`).
+
+### 2025-09-27 Update
+- Weatherlight now tracks publish counts per priority and failed submissions, surfaced via `telemetry_priority_counters()` for observability.
+- `OonaClient.metrics_snapshot` exposes emergency token-bucket state (`emergency_tokens_remaining`, `emergency_refill_rate_per_s`, bucket capacity) so automated tests can assert routing health.
+- `EsperSettings` gained `OONA_EMERGENCY_MAX_PER_MIN` and `OONA_EMERGENCY_THRESHOLD` switches to tune throttling without a code change.
+- Load harness covers burst limits and backlog control with `FakeRedis` (`tests/integration/test_telemetry_emergency_load.py`); `scripts/run_telemetry_routing_load.py` drives manual experiments against live Redis deployments.
+- Operators can trim telemetry queues when Weatherlight is offline via `scripts/drain_telemetry_streams.py`, which issues Redis `XTRIM` calls to reset `oona.normal` / `oona.emergency` and logs resulting depths.
 
 ## Strict Dependency Guard
 - Create `esper.core.dependency_guard` with checks:

@@ -6,6 +6,8 @@ Environment variables (via EsperSettings)
 - `OONA_EMERGENCY_STREAM` — default `oona.emergency`
 - `OONA_TELEMETRY_STREAM` — default `oona.telemetry`
 - `OONA_POLICY_STREAM` — default `oona.policy`
+- `OONA_EMERGENCY_MAX_PER_MIN` — optional; set the emergency token bucket capacity for telemetry (default unlimited)
+- `OONA_EMERGENCY_THRESHOLD` — optional; backlog threshold for rerouting to the emergency stream
 - `OONA_MESSAGE_TTL_MS` — default `900000` (15 minutes); TTL for trimming streams
 - `KERNEL_FRESHNESS_WINDOW_MS` — default `60000`; drop stale kernel requests
 - `KERNEL_NONCE_CACHE_SIZE` — default `4096`; replay/nonce cache for kernel messages
@@ -24,6 +26,7 @@ Runbook
 - Local: `esper-weatherlight-service`.
 - Compose (optional): start Redis + Weatherlight (and optionally Nissa) with `docker compose -f infra/docker-compose.weatherlight.yml up -d`.
 - Shutdown: Ctrl‑C → supervisor cancels tasks and drains consumers; check logs for “shutdown complete”.
+- Manual queue reset: use `scripts/drain_telemetry_streams.py` to trim `oona.normal` / `oona.emergency` when Weatherlight is offline (dry-run support available).
 
 Health and telemetry
 - Periodic summary TelemetryPacket published to Oona telemetry stream:

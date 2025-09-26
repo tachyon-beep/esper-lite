@@ -1,6 +1,6 @@
 {
     "sonarlint.connectedMode.project": {
-        "connectionId": "",
-        "projectKey": ""
+        "connectionId": "tachyon-beep",
+        "projectKey": "tachyon-beep_esper-lite"
     }
 }

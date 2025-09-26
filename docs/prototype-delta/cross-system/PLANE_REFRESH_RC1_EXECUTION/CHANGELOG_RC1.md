@@ -24,3 +24,13 @@
   - Targeted: `pytest tests/integration/test_control_loop.py::test_control_loop_integration_round_trip`
 - **Telemetry Verification**: N/A (harness-focused change).
 - **Notes**: Weatherlight and the demo script now share a single `AsyncWorker` across Tamiyo, Tolaria, and Kasmina prefetch; soak harness remains gated behind `RUN_SOAK_TESTS` for opt-in execution.
+
+## 2025-09-27 — Telemetry Routing Load Harness (Risk R3)
+- **Summary**: Exposed emergency token-bucket/threshold settings via `EsperSettings`, instrumented Weatherlight publish counters, added Oona token metrics, and landed a repeatable load harness (integration test + CLI script) to exercise telemetry routing under burst conditions.
+- **Tests Run**:
+  - Targeted: `/home/john/esper-lite/.venv/bin/pytest tests/weatherlight/test_service_priority.py`
+  - Targeted: `/home/john/esper-lite/.venv/bin/pytest tests/oona/test_emergency_burst_limit.py`
+  - Integration: `/home/john/esper-lite/.venv/bin/pytest tests/integration/test_telemetry_emergency_load.py`
+- **Telemetry Verification**: Harness asserts emergency queue depth, drop counters, and token bucket metrics via `OonaClient.metrics_snapshot`; Weatherlight counters expose high/critical publish counts with zero failures.
+- **Notes**: Added `scripts/run_telemetry_routing_load.py` for manual load generation; new settings `OONA_EMERGENCY_MAX_PER_MIN`/`OONA_EMERGENCY_THRESHOLD` allow tuning without code changes.
+  Manual run on staging Redis (`--count 120 --rate 20`) produced 120 routed CRITICAL packets with 0 drops; Oona metrics recorded `publish_latency_ms≈0.26`, `queue_depth_emergency=120`, breakers closed.

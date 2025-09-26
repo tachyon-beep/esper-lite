@@ -13,8 +13,9 @@ class _FakeOona:
     def __init__(self) -> None:
         self.calls: list[tuple[str, int]] = []
 
-    async def publish_telemetry(self, packet, priority: int) -> None:  # type: ignore[no-untyped-def]
+    async def publish_telemetry(self, packet, priority: int) -> bool:  # type: ignore[no-untyped-def]
         self.calls.append((getattr(packet, "packet_id", ""), int(priority)))
+        return True
 
     async def emit_metrics_telemetry(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
         return None
@@ -92,3 +93,9 @@ async def test_weatherlight_routes_kasmina_by_priority() -> None:
     assert priorities.get("kas-critical") == leyline_pb2.MessagePriority.MESSAGE_PRIORITY_CRITICAL
     assert priorities.get("kas-warning") == leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH
     assert priorities.get("kas-info") == leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
+
+    counters = service.telemetry_priority_counters()
+    assert counters["critical"] >= 1
+    assert counters["high"] >= 1
+    assert counters["normal"] >= 1
+    assert service.telemetry_publish_failures == 0

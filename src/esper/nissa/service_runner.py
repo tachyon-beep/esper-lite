@@ -111,6 +111,8 @@ async def run_service(settings: EsperSettings | None = None) -> None:
         telemetry_stream=settings.oona_telemetry_stream,
         policy_stream=settings.oona_policy_stream,
         group="nissa-service",
+        emergency_max_per_min=settings.oona_emergency_max_per_min,
+        emergency_threshold=settings.oona_emergency_threshold,
     )
     oona = OonaClient(settings.redis_url, config=stream_config)
     await _ensure_oona_group(oona)

@@ -118,6 +118,12 @@ class WeatherlightService:
         self._emergency_last_level: int | None = None
         self._emergency_last_reason: str | None = None
         self._emergency_skipped_total: int = 0
+        self._telemetry_priority_counts: dict[str, int] = {
+            "normal": 0,
+            "high": 0,
+            "critical": 0,
+        }
+        self._telemetry_publish_failures: int = 0
 
     async def start(self) -> None:
         """Initialise subsystems and spawn background workers (Slice 1 & 2)."""
@@ -558,6 +564,8 @@ class WeatherlightService:
             message_ttl_ms=self._settings.oona_message_ttl_ms,
             kernel_freshness_window_ms=self._settings.kernel_freshness_window_ms,
             kernel_nonce_cache_size=self._settings.kernel_nonce_cache_size,
+            emergency_max_per_min=self._settings.oona_emergency_max_per_min,
+            emergency_threshold=self._settings.oona_emergency_threshold,
         )
         client = OonaClient(redis_url=self._settings.redis_url, config=stream_config)
         await client.ensure_consumer_group()
@@ -1086,7 +1094,10 @@ class WeatherlightService:
             packets.append(tezzeret_packet)
         for packet in packets:
             priority = self._telemetry_priority(packet)
-            await self._oona.publish_telemetry(packet, priority=priority)
+            self._record_telemetry_priority(priority)
+            ok = await self._oona.publish_telemetry(packet, priority=priority)
+            if not ok:
+                self._telemetry_publish_failures += 1
         # Drain Tamiyo's telemetry/field reports on each Weatherlight flush per
         # prototype-delta integration (docs/prototype-delta/tamiyo/diff/input-remediation-plan.md §8).
         # This ensures coverage and BSDS degradation signals leave Tamiyo without
@@ -1115,7 +1126,12 @@ class WeatherlightService:
                         priority_enum = leyline_pb2.MessagePriority.Value(priority_name)
                     except ValueError:
                         priority_enum = leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
-                    await self._oona.publish_telemetry(packet, priority=priority_enum)
+                    self._record_telemetry_priority(priority_enum)
+                    ok = await self._oona.publish_telemetry(
+                        packet, priority=priority_enum
+                    )
+                    if not ok:
+                        self._telemetry_publish_failures += 1
                 except Exception as exc:  # pragma: no cover - defensive forwarding
                     LOGGER.debug("Failed to forward Kasmina packet: %s", exc)
         await self._oona.emit_metrics_telemetry(
@@ -1161,6 +1177,27 @@ class WeatherlightService:
         ):
             return leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH
         return leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
+
+    def telemetry_priority_counters(self) -> dict[str, int]:
+        """Return a snapshot of telemetry priority publish counts."""
+
+        return dict(self._telemetry_priority_counts)
+
+    @property
+    def telemetry_publish_failures(self) -> int:
+        """Number of telemetry publishes rejected by Oona."""
+
+        return self._telemetry_publish_failures
+
+    def _record_telemetry_priority(
+        self, priority: leyline_pb2.MessagePriority.ValueType
+    ) -> None:
+        if priority == leyline_pb2.MessagePriority.MESSAGE_PRIORITY_CRITICAL:
+            self._telemetry_priority_counts["critical"] += 1
+        elif priority == leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH:
+            self._telemetry_priority_counts["high"] += 1
+        else:
+            self._telemetry_priority_counts["normal"] += 1
 
     # -----------------------------
     # Urza capabilities from Kasmina (prototype)
