@@ -22,6 +22,7 @@ Tasks:
 2. Enforce expected stage in gate inputs; fail when telemetry stage mismatch.
 3. Update G2/G4 to react to fallback_used/performance_status.
 4. Add tests for gate failures and fallback handling.
+5. Land the command dispatcher scaffolding (see `kasmina_command_dispatcher_refactor_plan.md`) so seed handling routes through explicit helpers with strict-failure semantics.
 Acceptance:
 - Gate tests confirm fallback seeds are culled/embargoed.
 - Telemetry shows gate_failure events with reason.

@@ -89,3 +89,15 @@ message CommandSecurity { string signature = 1; string nonce = 2; google.protobu
 - Exposing previously masked dependency failures once fallbacks removed.
 - Metric name drift causing observability regressions.
 - Coordinated proto adoption across subsystems/tests (no adapters).
+
+## Kasmina R4c Baseline (2025-09-27)
+- **Unit suites**: `tests/kasmina/test_blend_annotations.py`, `test_blending.py`, `test_seed_manager.py`, `test_lifecycle.py`, `test_safety.py`, `test_isolation_scope.py` (15 failures in `test_seed_manager.py` due to strict dependency guard rejecting commands without `training_run_id`; illustrates current fallback reliance).
+- **Integration**: `tests/integration/test_control_loop.py::test_kasmina_emits_one_packet_per_seed_per_step` fails (no per-seed telemetry packets emitted when fallback identity kernels are used).
+- **Complexity snapshot**:
+  - `KasminaSeedManager.handle_command` — F (58)
+  - `_graft_seed` — D (22)
+  - `_apply_blend_annotations` — C (20)
+  - `_resume_seed` — C (19)
+  - `KasminaGates.evaluate` — B (7)
+- **Telemetry observations**: Seed-manager tests expect fallback kernels to keep commands alive; telemetry lacks CRITICAL gate failure events when fallbacks engaged. Command annotations omit `training_run_id`, triggering dependency violations.
+- **Action items**: R4c must supply seed commands with real IDs (or enforce preflight), ensure gate failures emit telemetry, and remove fallback identity usage.

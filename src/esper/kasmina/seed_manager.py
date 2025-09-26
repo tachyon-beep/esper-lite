@@ -94,6 +94,9 @@ class PrefetchCoordinator(Protocol):
 
 DEFAULT_EMBARGO_SECONDS = 30.0
 
+# Experimental dispatcher toggle for R4c scaffolding
+_DISPATCHER_EXPERIMENTAL = False
+
 
 @dataclass(slots=True)
 class SeedContext:
@@ -117,8 +120,156 @@ class SeedContext:
     last_step_emitted: int | None = None
 
 
+@dataclass(slots=True)
+class KasminaCommandContext:
+    """Scaffolding context for the Kasmina command dispatcher."""
+
+    command: pb.AdaptationCommand
+    seed_id: str = ""
+    blueprint_id: str = ""
+    training_run_id: str = ""
+    annotations: dict[str, str] = field(default_factory=dict)
+    legacy_mode: bool = True
+
+
+@dataclass(slots=True)
+class KasminaCommandOutcome:
+    """Scaffolding outcome container for dispatcher results."""
+
+    events: list[TelemetryEvent] = field(default_factory=list)
+    handled: bool = False
+    seed_id: str | None = None
+
+
+class _BlendManager:
+    """Helper for parsing Tamiyo blend annotations into BlenderConfig objects."""
+
+    def apply(
+        self,
+        manager: "KasminaSeedManager",
+        seed_id: str,
+        annotations: dict[str, str],
+    ) -> None:
+        mode_str = (annotations.get("blend_mode") or "").strip().upper()
+        if not mode_str:
+            return
+        mode = (
+            mode_str
+            if mode_str in {"CONVEX", "RESIDUAL", "CHANNEL", "CONFIDENCE"}
+            else "CONVEX"
+        )
+        cfg = BlenderConfig(mode=mode)
+
+        context = manager._seeds.setdefault(seed_id, SeedContext(seed_id))
+
+        source = annotations.get("blend_mode_source")
+        if source:
+            context.metadata["blend_mode_source"] = str(source)
+
+        if mode == "CONFIDENCE":
+
+            def _f(key: str, default: float) -> float:
+                try:
+                    return float(annotations.get(key, default))
+                except Exception:
+                    return default
+
+            cfg.gate_k = max(0.0, _f("gate_k", cfg.gate_k))
+            cfg.gate_tau = max(0.0, _f("gate_tau", cfg.gate_tau))
+            lo = max(0.0, min(1.0, _f("alpha_lo", cfg.alpha_lo)))
+            hi = max(0.0, min(1.0, _f("alpha_hi", cfg.alpha_hi)))
+            if hi < lo:
+                lo, hi = hi, lo
+            cfg.alpha_lo = lo
+            cfg.alpha_hi = hi
+            if annotations.get("confidence_logits_required", "").lower() == "true":
+                context.metadata["confidence_logits_required"] = "true"
+            else:
+                context.metadata.pop("confidence_logits_required", None)
+        elif mode == "CHANNEL":
+            vec_json = annotations.get("alpha_vec")
+            if vec_json:
+                try:
+                    data = json.loads(vec_json)
+                    if isinstance(data, list):
+                        vec: list[float] = []
+                        for x in data:
+                            try:
+                                vec.append(float(max(0.0, min(1.0, float(x)))))
+                            except Exception:
+                                continue
+                        if vec:
+                            cfg.alpha_vec = vec
+                            context.metadata["alpha_vec_len"] = str(len(vec))
+                except Exception:
+                    try:
+                        s = vec_json.strip().lstrip("[").rstrip("]")
+                        parts = [p.strip() for p in s.split(",") if p.strip()]
+                        vec = [float(max(0.0, min(1.0, float(p)))) for p in parts]
+                        if vec:
+                            cfg.alpha_vec = vec
+                            context.metadata["alpha_vec_len"] = str(len(vec))
+                    except Exception:
+                        pass
+
+        context.metadata["blend_mode"] = mode
+        context.blend_config = cfg
+
+
+class _GateEvaluator:
+    """Helper for evaluating Kasmina lifecycle gates."""
+
+    def __init__(self, manager: "KasminaSeedManager") -> None:
+        self._manager = manager
+
+    def ensure_gate(
+        self,
+        context: SeedContext,
+        gate: int,
+        events: list[TelemetryEvent],
+        *,
+        blueprint_id: str | None = None,
+        parameters: dict[str, float] | None = None,
+        expected_stage: str | None = None,
+    ) -> bool:
+        inputs = GateInputs(
+            blueprint_id=blueprint_id,
+            parameters=parameters,
+            isolation_violations=context.isolation_violations,
+            kernel_attached=context.kernel_attached,
+            last_latency_ms=context.last_kernel_latency_ms,
+            latency_budget_ms=self._manager._latency_budget_ms,
+            fallback_used=context.used_fallback,
+            host_params_registered=bool(self._manager._host_param_ids),
+            interface_checks_ok=context.metadata.get("interface_checks") == "ok",
+            performance_status=context.metadata.get("performance_status", "nominal"),
+            telemetry_stage=context.metadata.get("last_stage_event"),
+            expected_stage=expected_stage,
+            reset_clean=self._manager._reset_clean(context),
+        )
+        result = self._manager._gates.evaluate(gate, inputs)
+        context.last_gate_results[gate] = result
+        self._manager._append_gate_event(events, context.seed_id, result)
+        if result.passed:
+            if gate == pb.SEED_GATE_G1_GRADIENT_HEALTH:
+                breaker_event = self._manager._isolation_breaker.record_success()
+                if breaker_event:
+                    events.append(
+                        self._manager._isolation_breaker_event_to_telemetry(
+                            breaker_event,
+                            seed_id=context.seed_id,
+                        )
+                    )
+            return True
+        self._manager._handle_gate_failure(context, result, events)
+        return False
+
+
 class KasminaSeedManager:
     """Skeleton seed manager handling Tamiyo adaptation commands."""
+
+    CommandContext = KasminaCommandContext
+    CommandOutcome = KasminaCommandOutcome
 
     def __init__(
         self,
@@ -197,6 +348,8 @@ class KasminaSeedManager:
             if signing_context is not None
             else None
         )
+        self._blend_manager = _BlendManager()
+        self._gate_evaluator = _GateEvaluator(self)
 
     @staticmethod
     def _priority_from_level(level: int) -> int:
@@ -732,6 +885,13 @@ class KasminaSeedManager:
     def handle_command(self, command: pb.AdaptationCommand) -> None:
         """Dispatch a Tamiyo command to the appropriate lifecycle handler."""
 
+        if self._dispatcher_enabled():
+            context = self._build_command_context(command)
+            outcome = self._dispatch_command(context)
+            if outcome.events:
+                self._queue_global_events(outcome.events)
+            return
+
         self._memory.cleanup()
 
         events: list[TelemetryEvent] = []
@@ -965,6 +1125,26 @@ class KasminaSeedManager:
         self, command: pb.AdaptationCommand
     ) -> None:  # pragma: no cover - thin wrapper
         self.handle_command(command)
+
+    @staticmethod
+    def _dispatcher_enabled() -> bool:
+        return _DISPATCHER_EXPERIMENTAL
+
+    def _build_command_context(
+        self, command: pb.AdaptationCommand
+    ) -> KasminaCommandContext:
+        return KasminaCommandContext(
+            command=command,
+            annotations=dict(command.annotations),
+            legacy_mode=not self._dispatcher_enabled(),
+        )
+
+    def _dispatch_command(
+        self, context: KasminaCommandContext
+    ) -> KasminaCommandOutcome:
+        """Placeholder dispatcher; legacy path still authoritative."""
+
+        return KasminaCommandOutcome()
 
     def seeds(self) -> dict[str, SeedContext]:
         """Return the tracked seed contexts."""
@@ -1386,36 +1566,14 @@ class KasminaSeedManager:
         parameters: dict[str, float] | None = None,
         expected_stage: str | None = None,
     ) -> bool:
-        inputs = GateInputs(
+        return self._gate_evaluator.ensure_gate(
+            context,
+            gate,
+            events,
             blueprint_id=blueprint_id,
             parameters=parameters,
-            isolation_violations=context.isolation_violations,
-            kernel_attached=context.kernel_attached,
-            last_latency_ms=context.last_kernel_latency_ms,
-            latency_budget_ms=self._latency_budget_ms,
-            fallback_used=context.used_fallback,
-            host_params_registered=bool(self._host_param_ids),
-            interface_checks_ok=context.metadata.get("interface_checks") == "ok",
-            performance_status=context.metadata.get("performance_status", "nominal"),
-            telemetry_stage=context.metadata.get("last_stage_event"),
             expected_stage=expected_stage,
-            reset_clean=self._reset_clean(context),
         )
-        result = self._gates.evaluate(gate, inputs)
-        context.last_gate_results[gate] = result
-        self._append_gate_event(events, context.seed_id, result)
-        if result.passed:
-            if gate == pb.SEED_GATE_G1_GRADIENT_HEALTH:
-                breaker_event = self._isolation_breaker.record_success()
-                if breaker_event:
-                    events.append(
-                        self._isolation_breaker_event_to_telemetry(
-                            breaker_event, seed_id=context.seed_id
-                        )
-                    )
-            return True
-        self._handle_gate_failure(context, result, events)
-        return False
 
     def _stage_name(self, stage: int) -> str:
         return pb.SeedLifecycleStage.Name(stage)
@@ -1664,71 +1822,7 @@ class KasminaSeedManager:
         context.blend_config = config
 
     def _apply_blend_annotations(self, seed_id: str, annotations: dict[str, str]) -> None:
-        """Parse Tamiyo P8 blend mode annotations into a per-seed BlenderConfig.
-
-        Safe defaults and clamps are applied; invalid inputs fall back to CONVEX.
-        """
-        mode_str = (annotations.get("blend_mode") or "").strip().upper()
-        if not mode_str:
-            return
-        mode = mode_str if mode_str in {"CONVEX", "RESIDUAL", "CHANNEL", "CONFIDENCE"} else "CONVEX"
-        cfg = BlenderConfig(mode=mode)
-
-        # Optional provenance tag for observability
-        source = annotations.get("blend_mode_source")
-        context = self._seeds.setdefault(seed_id, SeedContext(seed_id))
-        if source:
-            context.metadata["blend_mode_source"] = str(source)
-
-        if mode == "CONFIDENCE":
-
-            def _f(key: str, default: float) -> float:
-                try:
-                    return float(annotations.get(key, default))
-                except Exception:
-                    return default
-
-            cfg.gate_k = max(0.0, _f("gate_k", cfg.gate_k))
-            cfg.gate_tau = max(0.0, _f("gate_tau", cfg.gate_tau))
-            lo = max(0.0, min(1.0, _f("alpha_lo", cfg.alpha_lo)))
-            hi = max(0.0, min(1.0, _f("alpha_hi", cfg.alpha_hi)))
-            if hi < lo:
-                lo, hi = hi, lo
-            cfg.alpha_lo = lo
-            cfg.alpha_hi = hi
-            if annotations.get("confidence_logits_required", "").lower() == "true":
-                context.metadata["confidence_logits_required"] = "true"
-            else:
-                context.metadata.pop("confidence_logits_required", None)
-        elif mode == "CHANNEL":
-            vec_json = annotations.get("alpha_vec")
-            if vec_json:
-                try:
-                    data = json.loads(vec_json)
-                    if isinstance(data, list):
-                        vec: list[float] = []
-                        for x in data:
-                            try:
-                                vec.append(float(max(0.0, min(1.0, float(x)))))
-                            except Exception:
-                                continue
-                        if vec:
-                            cfg.alpha_vec = vec
-                            context.metadata["alpha_vec_len"] = str(len(vec))
-                except Exception:
-                    # Fallback: permissive CSV-like parsing (strip brackets/spaces)
-                    try:
-                        s = vec_json.strip().lstrip("[").rstrip("]")
-                        parts = [p.strip() for p in s.split(",") if p.strip()]
-                        vec = [float(max(0.0, min(1.0, float(p)))) for p in parts]
-                        if vec:
-                            cfg.alpha_vec = vec
-                            context.metadata["alpha_vec_len"] = str(len(vec))
-                    except Exception:
-                        pass
-        # Store
-        context.metadata["blend_mode"] = mode
-        context.blend_config = cfg
+        self._blend_manager.apply(self, seed_id, annotations)
 
     def _attempt_prewarm(self, context: SeedContext, kernel: nn.Module) -> None:
         """Attempt a best-effort pre-warm forward to hydrate caches.
