@@ -50,3 +50,13 @@
   - Fixture: `/home/john/esper-lite/.venv/bin/python scripts/capture_tolaria_epoch_fixture.py`
 - **Telemetry Verification**: `tests/tolaria/test_tolaria_trainer.py::test_tolaria_epoch_fixture_parity` compares live state/telemetry snapshots to the fixture to detect behavioural drift.
 - **Notes**: Legacy `_train_single_epoch_legacy` has been removed; docs and status tracker updated to reflect the parity guard. Remaining R4a work focuses on lint/complexity follow-ups.
+
+## 2025-09-27 — Tamiyo Risk Engine Evaluator Cutover (Risk R4b Phase 3E)
+- **Summary**: Completed the evaluator refactor for Tamiyo’s risk engine, removing the `_RISK_REFACTOR_ENABLED` feature flag and migrating the legacy `_apply_risk_engine` logic into dedicated evaluators (policy risk, conservative mode, timeouts, blueprint/BSDS, loss/latency/isolation/device, optimizer hints, stabilisation). Complexity drops from `F (92)` to `A (3)` while preserving telemetry and command annotations.
+- **Tests Run**:
+  - Unit: `/home/john/esper-lite/.venv/bin/pytest tests/tamiyo/test_risk_engine.py`
+  - Service: `TAMIYO_ENABLE_COMPILE=0 /home/john/esper-lite/.venv/bin/pytest tests/tamiyo/test_service.py`
+  - Static: `/home/john/esper-lite/.venv/bin/pylint --rcfile .codacy/tools-configs/pylint.rc src/esper/tamiyo/service.py`
+  - Complexity: `/home/john/esper-lite/.venv/bin/radon cc -s -n A src/esper/tamiyo/service.py`
+- **Telemetry Verification**: Fixture-backed tests compare command mutations and telemetry digests against the captured scenarios; conservative-mode enter/exit events observed with no ordering drift.
+- **Notes**: `TamiyoRiskOutcome` now records `risk_reason` assignment precedence, ensuring helper parity. Remaining Tamiyo debt focuses on `_evaluate` (`F (70)`) and conservative-mode recovery telemetry (Phase 4/5 scope).

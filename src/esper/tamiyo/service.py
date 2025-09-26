@@ -84,6 +84,7 @@ class TamiyoRiskOutcome:
     events: list[TelemetryEvent] = field(default_factory=list)
     blueprint_info: dict[str, float | str | bool | int] | None = None
     conservative_mode: bool | None = None
+    risk_reason: str | None = None
 
     def append_event(self, event: TelemetryEvent) -> None:
         self.events.append(event)
@@ -91,12 +92,41 @@ class TamiyoRiskOutcome:
     def extend_events(self, new_events: Iterable[TelemetryEvent]) -> None:
         self.events.extend(new_events)
 
+    def assign_reason(self, reason: str, *, overwrite: bool = False) -> None:
+        """Record a risk reason, optionally preserving existing values."""
+
+        if overwrite or self.risk_reason is None:
+            self.risk_reason = reason
+
 
 RiskEvaluator = Callable[[TamiyoRiskContext, TamiyoRiskOutcome], TamiyoRiskOutcome]
 
 
+@dataclass(slots=True)
+class TamiyoEvaluationContext:
+    """Shared state passed between evaluation helpers (Phase 4 scaffolding)."""
+
+    state: leyline_pb2.SystemStatePacket
+    enforce_timeouts: bool
+    timed_out: bool = False
+    blueprint_timeout: bool = False
+    loss_delta: float = 0.0
+    inference_latency_ms: float | None = None
+    blueprint_info: dict[str, float | str | bool | int] | None = None
+    training_metrics: dict[str, float] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class TamiyoEvaluationResult:
+    """Container for evaluation side effects prior to response assembly."""
+
+    command: leyline_pb2.AdaptationCommand
+    events: list[TelemetryEvent] = field(default_factory=list)
+    metrics: list[TelemetryMetric] = field(default_factory=list)
+    telemetry_packet: leyline_pb2.TelemetryPacket | None = None
+
+
 _DEFAULT_REPORT_LOG = Path("var/tamiyo/field_reports.log")
-_RISK_REFACTOR_ENABLED = True
 
 
 class TamiyoCircuitBreaker:
@@ -307,27 +337,501 @@ class TamiyoService:
             self._windows = {}
 
     def _build_risk_evaluators(self) -> list[tuple[str, RiskEvaluator]]:
-        """Return ordered registry of risk evaluators (Phase 2 scaffolding)."""
+        """Return ordered registry of risk evaluators."""
 
-        evaluators: list[tuple[str, RiskEvaluator]] = []
-        for name in self._RISK_EVALUATOR_SEQUENCE:
-            evaluators.append((name, self._noop_risk_evaluator))
-        return evaluators
+        registry: dict[str, RiskEvaluator] = {
+            "policy_risk": self._risk_evaluator_policy_risk,
+            "conservative_mode": self._risk_evaluator_conservative_mode,
+            "timeouts": self._risk_evaluator_timeouts,
+            "blueprint_risk": self._risk_evaluator_blueprint_risk,
+            "bsds": self._risk_evaluator_bsds,
+            "loss_metrics": self._risk_evaluator_loss_metrics,
+            "latency_metrics": self._risk_evaluator_latency_metrics,
+            "isolation_and_device": self._risk_evaluator_isolation_and_device,
+            "optimizer_hints": self._risk_evaluator_optimizer_hints,
+            "stabilisation": self._risk_evaluator_stabilisation,
+        }
+        return [(name, registry[name]) for name in self._RISK_EVALUATOR_SEQUENCE]
 
     def _risk_evaluator_names(self) -> tuple[str, ...]:
         """Expose evaluator order for regression tests/documentation."""
 
         return self._RISK_EVALUATOR_SEQUENCE
 
-    @staticmethod
-    def _noop_risk_evaluator(
+    def _risk_evaluator_policy_risk(
+        self,
         _context: TamiyoRiskContext,
         outcome: TamiyoRiskOutcome,
     ) -> TamiyoRiskOutcome:
-        """Placeholder evaluator until dedicated logic lands."""
+        command = outcome.command
+        policy_risk_score: float | None = None
+        risk_score_raw = command.annotations.get("policy_risk_score")
+        if risk_score_raw:
+            try:
+                policy_risk_score = float(risk_score_raw)
+                if not math.isfinite(policy_risk_score):
+                    policy_risk_score = None
+            except (TypeError, ValueError):
+                policy_risk_score = None
+
+        if policy_risk_score is not None:
+            outcome.append_event(
+                TelemetryEvent(
+                    description="policy_risk_signal",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+                    attributes={
+                        "score": f"{policy_risk_score:.3f}",
+                        "index": command.annotations.get("policy_risk_index", "0"),
+                    },
+                )
+            )
+            if policy_risk_score >= 0.98:
+                outcome.assign_reason("policy_risk_critical", overwrite=True)
+                command.command_type = leyline_pb2.COMMAND_PAUSE
+                outcome.append_event(
+                    TelemetryEvent(
+                        description="policy_risk_critical",
+                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
+                        attributes={"score": f"{policy_risk_score:.3f}"},
+                    )
+                )
+                self._set_conservative_mode(True, "policy_risk_critical", outcome.events)
+            elif (
+                policy_risk_score >= 0.85
+                and command.command_type == leyline_pb2.COMMAND_SEED
+            ):
+                outcome.assign_reason("policy_risk_elevated", overwrite=False)
+                self._ensure_optimizer_adjustment(command, "sgd")
+                outcome.append_event(
+                    TelemetryEvent(
+                        description="policy_risk_elevated",
+                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                        attributes={"score": f"{policy_risk_score:.3f}"},
+                    )
+                )
+        return outcome
+
+    def _risk_evaluator_conservative_mode(
+        self,
+        context: TamiyoRiskContext,
+        outcome: TamiyoRiskOutcome,
+    ) -> TamiyoRiskOutcome:
+        if self._risk.conservative_mode and not context.timed_out:
+            outcome.assign_reason("conservative_mode", overwrite=False)
+            outcome.command.command_type = leyline_pb2.COMMAND_PAUSE
+            outcome.append_event(
+                TelemetryEvent(
+                    description="pause_triggered",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"reason": "conservative_mode"},
+                )
+            )
+        return outcome
+
+    def _risk_evaluator_timeouts(
+        self,
+        context: TamiyoRiskContext,
+        outcome: TamiyoRiskOutcome,
+    ) -> TamiyoRiskOutcome:
+        if context.timed_out:
+            outcome.append_event(
+                self._inference_breaker.record_failure("timeout_inference")
+            )
+            self._set_conservative_mode(True, "timeout_inference", outcome.events)
+            outcome.assign_reason("timeout_inference", overwrite=False)
+        else:
+            success_event = self._inference_breaker.record_success()
+            if success_event:
+                outcome.append_event(success_event)
+
+        if context.blueprint_timeout:
+            outcome.append_event(
+                self._metadata_breaker.record_failure("timeout_urza")
+            )
+            outcome.assign_reason("timeout_urza", overwrite=False)
+        else:
+            success_event = self._metadata_breaker.record_success()
+            if success_event:
+                outcome.append_event(success_event)
 
         return outcome
 
+    def _risk_evaluator_blueprint_risk(
+        self,
+        context: TamiyoRiskContext,
+        outcome: TamiyoRiskOutcome,
+    ) -> TamiyoRiskOutcome:
+        blueprint_info = context.blueprint_info
+        if not blueprint_info:
+            return outcome
+
+        outcome.blueprint_info = blueprint_info
+        command = outcome.command
+        self._apply_blueprint_annotations(command, blueprint_info)
+        risk_score = float(blueprint_info["risk"])
+        if blueprint_info.get("quarantine_only") or risk_score >= 0.8:
+            outcome.append_event(
+                TelemetryEvent(
+                    description="bp_quarantine",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
+                    attributes={"tier": str(blueprint_info["tier"])},
+                )
+            )
+            outcome.assign_reason("bp_quarantine", overwrite=True)
+            command.command_type = leyline_pb2.COMMAND_PAUSE
+            self._set_conservative_mode(True, "bp_quarantine", outcome.events)
+        elif risk_score >= 0.5 and command.command_type == leyline_pb2.COMMAND_SEED:
+            outcome.assign_reason("blueprint_risk", overwrite=False)
+            self._ensure_optimizer_adjustment(command, "sgd")
+            outcome.append_event(
+                TelemetryEvent(
+                    description="blueprint_risk",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"risk": f"{risk_score:.2f}"},
+                )
+            )
+
+        return outcome
+
+    def _risk_evaluator_bsds(
+        self,
+        context: TamiyoRiskContext,
+        outcome: TamiyoRiskOutcome,
+    ) -> TamiyoRiskOutcome:
+        blueprint_info = outcome.blueprint_info or context.blueprint_info
+        if not isinstance(blueprint_info, Mapping):
+            return outcome
+
+        bsds_block = blueprint_info.get("bsds")
+        if not isinstance(bsds_block, Mapping):
+            return outcome
+
+        try:
+            settings = EsperSettings()
+            if getattr(settings, "urabrask_signing_enabled", False):
+                from esper.urabrask import metrics as _ura_metrics
+                from esper.urabrask.wal import verify_bsds_signature_in_extras
+
+                ctx = SignatureContext.from_environment(DEFAULT_SECRET_ENV)
+                extras_map = blueprint_info if isinstance(blueprint_info, Mapping) else {}
+                ok = verify_bsds_signature_in_extras(extras_map, ctx=ctx)
+                if not ok:
+                    _ura_metrics.inc_integrity_failures()
+        except Exception:
+            pass
+
+        command = outcome.command
+        for k_src, k_dst in (
+            ("hazard_band", "bsds_hazard_band"),
+            ("handling_class", "bsds_handling_class"),
+            ("resource_profile", "bsds_resource_profile"),
+            ("provenance", "bsds_provenance"),
+        ):
+            val = bsds_block.get(k_src)
+            if isinstance(val, (str, int, float)):
+                command.annotations.setdefault(k_dst, str(val))
+        if "risk_score" in bsds_block:
+            with contextlib.suppress(Exception):
+                command.annotations.setdefault(
+                    "bsds_risk", f"{float(bsds_block['risk_score']):.2f}"
+                )
+
+        prov = str(bsds_block.get("provenance", ""))
+        outcome.append_event(
+            TelemetryEvent(
+                description="bsds_present",
+                level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+                attributes={
+                    "hazard": str(bsds_block.get("hazard_band", "")),
+                    "risk": str(bsds_block.get("risk_score", "")),
+                    "provenance": prov,
+                },
+            )
+        )
+
+        hazard = str(bsds_block.get("hazard_band", "")).upper()
+        handling = str(bsds_block.get("handling_class", "")).lower()
+        if handling == "quarantine":
+            outcome.assign_reason("bsds_handling_quarantine", overwrite=True)
+            command.command_type = leyline_pb2.COMMAND_PAUSE
+            outcome.append_event(
+                TelemetryEvent(
+                    description="bsds_handling_quarantine",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
+                    attributes={"handling": handling, "provenance": prov},
+                )
+            )
+            self._set_conservative_mode(True, "bsds_handling_quarantine", outcome.events)
+
+        if hazard == "CRITICAL":
+            outcome.assign_reason("bsds_hazard_critical", overwrite=True)
+            command.command_type = leyline_pb2.COMMAND_PAUSE
+            outcome.append_event(
+                TelemetryEvent(
+                    description="bsds_hazard_critical",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
+                    attributes={"hazard": hazard, "provenance": prov},
+                )
+            )
+            self._set_conservative_mode(True, "bsds_hazard_critical", outcome.events)
+        elif hazard == "HIGH":
+            outcome.append_event(
+                TelemetryEvent(
+                    description="bsds_hazard_high",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"hazard": hazard, "provenance": prov},
+                )
+            )
+            if command.command_type == leyline_pb2.COMMAND_SEED:
+                outcome.assign_reason("bsds_hazard_high", overwrite=False)
+                self._ensure_optimizer_adjustment(command, "sgd")
+
+        return outcome
+
+    def _risk_evaluator_loss_metrics(
+        self,
+        context: TamiyoRiskContext,
+        outcome: TamiyoRiskOutcome,
+    ) -> TamiyoRiskOutcome:
+        command = outcome.command
+        loss_delta = context.loss_delta
+        if not context.timed_out and loss_delta > self._risk.max_loss_spike:
+            outcome.assign_reason("loss_spike", overwrite=True)
+            command.command_type = leyline_pb2.COMMAND_PAUSE
+            outcome.append_event(
+                TelemetryEvent(
+                    description="loss_spike",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"delta": f"{loss_delta:.3f}"},
+                )
+            )
+            self._set_conservative_mode(True, "loss_spike", outcome.events)
+        elif (
+            not context.timed_out
+            and loss_delta > (self._risk.max_loss_spike * 0.5)
+            and command.command_type == leyline_pb2.COMMAND_SEED
+        ):
+            outcome.assign_reason("loss_warning", overwrite=False)
+            self._ensure_optimizer_adjustment(command, "sgd")
+            outcome.append_event(
+                TelemetryEvent(
+                    description="loss_warning",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"delta": f"{loss_delta:.3f}"},
+                )
+            )
+        return outcome
+
+    def _risk_evaluator_latency_metrics(
+        self,
+        context: TamiyoRiskContext,
+        outcome: TamiyoRiskOutcome,
+    ) -> TamiyoRiskOutcome:
+        command = outcome.command
+        training_metrics = context.training_metrics
+
+        hook_latency = training_metrics.get("hook_latency_ms")
+        if hook_latency and hook_latency > float(self._risk.hook_budget_ms):
+            outcome.assign_reason("hook_budget", overwrite=True)
+            command.command_type = leyline_pb2.COMMAND_PAUSE
+            outcome.append_event(
+                TelemetryEvent(
+                    description="hook_budget",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"latency_ms": f"{hook_latency:.2f}"},
+                )
+            )
+
+        step_latency = training_metrics.get("step_latency_ms")
+        if step_latency and step_latency > float(self._risk.step_latency_high_ms):
+            outcome.assign_reason("step_latency_high", overwrite=True)
+            command.command_type = leyline_pb2.COMMAND_PAUSE
+            outcome.append_event(
+                TelemetryEvent(
+                    description="step_latency_high",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"latency_ms": f"{step_latency:.2f}"},
+                )
+            )
+
+        apply_ms = training_metrics.get("kasmina.apply_ms")
+        if apply_ms and apply_ms > float(self._risk.kasmina_apply_slow_ms):
+            outcome.append_event(
+                TelemetryEvent(
+                    description="kasmina_apply_slow",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"latency_ms": f"{apply_ms:.2f}"},
+                )
+            )
+            if command.command_type == leyline_pb2.COMMAND_SEED:
+                outcome.assign_reason("kasmina_apply_slow", overwrite=True)
+                self._ensure_optimizer_adjustment(command, "sgd")
+
+        finalize_ms = training_metrics.get("kasmina.finalize_ms")
+        if finalize_ms and finalize_ms > float(self._risk.kasmina_finalize_slow_ms):
+            outcome.append_event(
+                TelemetryEvent(
+                    description="kasmina_finalize_slow",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"latency_ms": f"{finalize_ms:.2f}"},
+                )
+            )
+            if command.command_type == leyline_pb2.COMMAND_SEED:
+                outcome.assign_reason("kasmina_finalize_slow", overwrite=True)
+                self._ensure_optimizer_adjustment(command, "sgd")
+
+        return outcome
+
+    def _risk_evaluator_isolation_and_device(
+        self,
+        context: TamiyoRiskContext,
+        outcome: TamiyoRiskOutcome,
+    ) -> TamiyoRiskOutcome:
+        command = outcome.command
+        training_metrics = context.training_metrics
+
+        isolation = training_metrics.get("kasmina.isolation.violations")
+        if isolation and isolation > 0:
+            outcome.assign_reason("isolation_violation", overwrite=False)
+            command.command_type = leyline_pb2.COMMAND_PAUSE
+            outcome.append_event(
+                TelemetryEvent(
+                    description="isolation_violations",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"violations": str(int(isolation))},
+                )
+            )
+
+        gpu_util = training_metrics.get("gpu_util_percent")
+        gpu_free = training_metrics.get("gpu_mem_free_gb")
+        cpu_util = training_metrics.get("cpu_util_percent")
+        if (
+            gpu_util
+            and gpu_util >= 95.0
+            and gpu_free is not None
+            and gpu_free <= 0.2
+        ):
+            outcome.append_event(
+                TelemetryEvent(
+                    description="device_pressure_high",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={
+                        "gpu_util": f"{gpu_util:.1f}",
+                        "gpu_mem_free_gb": f"{float(gpu_free):.2f}",
+                    },
+                )
+            )
+            if command.command_type == leyline_pb2.COMMAND_SEED:
+                outcome.assign_reason("device_pressure_high", overwrite=False)
+                command.command_type = leyline_pb2.COMMAND_PAUSE
+        elif cpu_util and cpu_util >= 95.0 and command.command_type == leyline_pb2.COMMAND_SEED:
+            outcome.append_event(
+                TelemetryEvent(
+                    description="cpu_pressure_high",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"cpu_util": f"{cpu_util:.1f}"},
+                )
+            )
+            outcome.assign_reason("cpu_pressure_high", overwrite=False)
+            self._ensure_optimizer_adjustment(command, "sgd")
+
+        return outcome
+
+    def _risk_evaluator_optimizer_hints(
+        self,
+        context: TamiyoRiskContext,
+        outcome: TamiyoRiskOutcome,
+    ) -> TamiyoRiskOutcome:
+        command = outcome.command
+        training_metrics = context.training_metrics
+
+        vol = training_metrics.get("loss_volatility")
+        if vol and vol > (self._risk.max_loss_spike * 0.75):
+            outcome.append_event(
+                TelemetryEvent(
+                    description="loss_volatility_high",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"volatility": f"{vol:.3f}"},
+                )
+            )
+            if command.command_type == leyline_pb2.COMMAND_SEED:
+                outcome.assign_reason("loss_volatility_high", overwrite=False)
+                self._ensure_optimizer_adjustment(command, "sgd")
+
+        gvar = training_metrics.get("grad_var")
+        if gvar and gvar > 1.0 and command.command_type == leyline_pb2.COMMAND_SEED:
+            outcome.append_event(
+                TelemetryEvent(
+                    description="grad_variance_high",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"var": f"{gvar:.3f}"},
+                )
+            )
+            outcome.assign_reason("grad_variance_high", overwrite=False)
+            self._ensure_optimizer_adjustment(command, "sgd")
+
+        conflict = training_metrics.get("grad_conflict_rate")
+        if (
+            conflict
+            and conflict > 0.5
+            and command.command_type == leyline_pb2.COMMAND_SEED
+        ):
+            outcome.append_event(
+                TelemetryEvent(
+                    description="grad_conflict_high",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"rate": f"{conflict:.3f}"},
+                )
+            )
+            outcome.assign_reason("grad_conflict_high", overwrite=False)
+            self._ensure_optimizer_adjustment(command, "sgd")
+
+        lr = training_metrics.get("optimizer_lr")
+        if (
+            lr is not None
+            and lr <= 0.0
+            and context.loss_delta > (self._risk.max_loss_spike * 0.5)
+        ):
+            outcome.append_event(
+                TelemetryEvent(
+                    description="optimizer_hint",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={
+                        "lr": f"{float(lr):.6f}",
+                        "loss_delta": f"{context.loss_delta:.3f}",
+                    },
+                )
+            )
+            if command.command_type == leyline_pb2.COMMAND_SEED:
+                outcome.assign_reason("optimizer_hint", overwrite=True)
+                self._ensure_optimizer_adjustment(command, "sgd")
+
+        return outcome
+
+    def _risk_evaluator_stabilisation(
+        self,
+        context: TamiyoRiskContext,
+        outcome: TamiyoRiskOutcome,
+    ) -> TamiyoRiskOutcome:
+        command = outcome.command
+        if (
+            outcome.risk_reason is None
+            and command.command_type == leyline_pb2.COMMAND_PAUSE
+            and self._risk.conservative_mode
+        ):
+            outcome.assign_reason("conservative_mode", overwrite=True)
+
+        if (
+            not context.timed_out
+            and not context.blueprint_timeout
+            and self._inference_breaker.state
+            == leyline_pb2.CircuitBreakerState.CIRCUIT_STATE_CLOSED
+            and self._metadata_breaker.state
+            == leyline_pb2.CircuitBreakerState.CIRCUIT_STATE_CLOSED
+        ):
+            self._set_conservative_mode(False, "stabilised", outcome.events)
+
+        return outcome
     @staticmethod
     def _set_risk_reason(
         command: leyline_pb2.AdaptationCommand,
@@ -392,8 +896,7 @@ class TamiyoService:
         *,
         enforce_timeouts: bool,
     ) -> leyline_pb2.AdaptationCommand:
-        events: list[TelemetryEvent] = []
-
+        context = TamiyoEvaluationContext(state=state, enforce_timeouts=enforce_timeouts)
         self._ensure_blueprint_metadata_for_packet(state)
         if hasattr(self._policy, "update_blueprint_metadata") and self._blueprint_cache:
             metadata_payload = {bp: info for bp, (_, info) in self._blueprint_cache.items()}
@@ -401,6 +904,11 @@ class TamiyoService:
                 self._policy.update_blueprint_metadata(metadata_payload)
 
         command, inference_ms, timed_out = self._run_policy(state, enforce_timeouts)
+        result = TamiyoEvaluationResult(command=command)
+        events = result.events
+        metrics = result.metrics
+        context.timed_out = timed_out
+        context.inference_latency_ms = float(inference_ms)
         if state.training_run_id:
             command.annotations["training_run_id"] = state.training_run_id
         if timed_out:
@@ -418,6 +926,7 @@ class TamiyoService:
         loss_delta = 0.0
         if self._last_validation_loss is not None:
             loss_delta = state.validation_loss - self._last_validation_loss
+        context.loss_delta = loss_delta
 
         blueprint_info: dict[str, float | str | bool | int] | None = None
         blueprint_timeout = False
@@ -426,6 +935,7 @@ class TamiyoService:
                 command,
                 enforce_timeouts,
             )
+        context.blueprint_timeout = blueprint_timeout
         if blueprint_timeout:
             events.append(
                 TelemetryEvent(
@@ -436,6 +946,7 @@ class TamiyoService:
             )
 
         training_metrics = dict(state.training_metrics)
+        context.training_metrics = training_metrics
         # If Tolaria supplied a precomputed loss_delta (WP8.5), prefer it when
         # we lack a prior validation snapshot. This keeps step-level risk gates
         # responsive even on the first invocation.
@@ -444,6 +955,7 @@ class TamiyoService:
                 loss_delta = float(training_metrics.get("loss_delta", loss_delta))
             except Exception:
                 pass
+        context.loss_delta = loss_delta
         blueprint_info, risk_events = self._apply_risk_engine(
             command,
             state=state,
@@ -453,6 +965,7 @@ class TamiyoService:
             timed_out=timed_out,
             training_metrics=training_metrics,
         )
+        context.blueprint_info = blueprint_info
         events.extend(risk_events)
 
         if not timed_out:
@@ -539,26 +1052,28 @@ class TamiyoService:
             command.annotations.setdefault("policy_compile_reason", compile_reason)
 
         last_action = self._policy.last_action
-        metrics = [
-            TelemetryMetric("tamiyo.validation_loss", state.validation_loss, unit="loss"),
-            TelemetryMetric("tamiyo.loss_delta", loss_delta, unit="loss"),
-            TelemetryMetric(
-                "tamiyo.conservative_mode",
-                1.0 if self._risk.conservative_mode else 0.0,
-                unit="bool",
-            ),
-            TelemetryMetric("tamiyo.inference.latency_ms", inference_ms, unit="ms"),
-            TelemetryMetric(
-                "tamiyo.gnn.inference.latency_ms",
-                inference_ms,
-                unit="ms",
-            ),
-            TelemetryMetric(
-                "tamiyo.gnn.compile_enabled",
-                1.0 if getattr(self._policy, "compile_enabled", False) else 0.0,
-                unit="bool",
-            ),
-        ]
+        metrics.extend(
+            [
+                TelemetryMetric("tamiyo.validation_loss", state.validation_loss, unit="loss"),
+                TelemetryMetric("tamiyo.loss_delta", loss_delta, unit="loss"),
+                TelemetryMetric(
+                    "tamiyo.conservative_mode",
+                    1.0 if self._risk.conservative_mode else 0.0,
+                    unit="bool",
+                ),
+                TelemetryMetric("tamiyo.inference.latency_ms", inference_ms, unit="ms"),
+                TelemetryMetric(
+                    "tamiyo.gnn.inference.latency_ms",
+                    inference_ms,
+                    unit="ms",
+                ),
+                TelemetryMetric(
+                    "tamiyo.gnn.compile_enabled",
+                    1.0 if getattr(self._policy, "compile_enabled", False) else 0.0,
+                    unit="bool",
+                ),
+            ]
+        )
         # Append warm-up latency metric if measured
         try:
             warm_ms = float(getattr(self._policy, "compile_warm_ms", 0.0))
@@ -781,6 +1296,7 @@ class TamiyoService:
             health_summary=self._derive_health_summary(command, events, loss_delta),
             health_indicators=self._build_health_indicators(state, loss_delta, blueprint_info),
         )
+        result.telemetry_packet = telemetry
         priority_value = self._priority_from_events(events)
         telemetry.system_health.indicators["priority"] = leyline_pb2.MessagePriority.Name(
             priority_value
@@ -1498,9 +2014,6 @@ class TamiyoService:
         timed_out: bool,
         training_metrics: dict[str, float],
     ) -> tuple[dict[str, float | str | bool | int] | None, list[TelemetryEvent]]:
-        events: list[TelemetryEvent] = []
-        reason = command.annotations.get("risk_reason")
-
         context = TamiyoRiskContext(
             command_before=command,
             state=state,
@@ -1514,380 +2027,21 @@ class TamiyoService:
             conservative_mode=self._risk.conservative_mode,
             policy_version=self._policy_version,
         )
-        outcome = TamiyoRiskOutcome(command=command)
+        outcome = TamiyoRiskOutcome(
+            command=command,
+            blueprint_info=blueprint_info,
+            risk_reason=command.annotations.get("risk_reason"),
+        )
 
-        if _RISK_REFACTOR_ENABLED:
-            for _name, evaluator in self._build_risk_evaluators():
-                outcome = evaluator(context, outcome)
-            # Legacy block continues to run; future steps will migrate logic into evaluators.
+        for _name, evaluator in self._build_risk_evaluators():
+            outcome = evaluator(context, outcome)
 
-        policy_risk_score: float | None = None
-        risk_score_raw = command.annotations.get("policy_risk_score")
-        if risk_score_raw:
-            try:
-                policy_risk_score = float(risk_score_raw)
-                if not math.isfinite(policy_risk_score):
-                    policy_risk_score = None
-            except (TypeError, ValueError):
-                policy_risk_score = None
-        if policy_risk_score is not None:
-            events.append(
-                TelemetryEvent(
-                    description="policy_risk_signal",
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
-                    attributes={
-                        "score": f"{policy_risk_score:.3f}",
-                        "index": command.annotations.get("policy_risk_index", "0"),
-                    },
-                )
-            )
-            if policy_risk_score >= 0.98:
-                reason = "policy_risk_critical"
-                command.command_type = leyline_pb2.COMMAND_PAUSE
-                events.append(
-                    TelemetryEvent(
-                        description="policy_risk_critical",
-                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
-                        attributes={"score": f"{policy_risk_score:.3f}"},
-                    )
-                )
-                self._set_conservative_mode(True, "policy_risk_critical", events)
-            elif policy_risk_score >= 0.85 and command.command_type == leyline_pb2.COMMAND_SEED:
-                reason = reason or "policy_risk_elevated"
-                self._ensure_optimizer_adjustment(command, "sgd")
-                events.append(
-                    TelemetryEvent(
-                        description="policy_risk_elevated",
-                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                        attributes={"score": f"{policy_risk_score:.3f}"},
-                    )
-                )
-
-        if self._risk.conservative_mode and not timed_out:
-            reason = reason or "conservative_mode"
-            command.command_type = leyline_pb2.COMMAND_PAUSE
-            events.append(
-                TelemetryEvent(
-                    description="pause_triggered",
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                    attributes={"reason": "conservative_mode"},
-                )
-            )
-
-        if timed_out:
-            events.append(self._inference_breaker.record_failure("timeout_inference"))
-            self._set_conservative_mode(True, "timeout_inference", events)
-            reason = reason or "timeout_inference"
-        else:
-            success_event = self._inference_breaker.record_success()
-            if success_event:
-                events.append(success_event)
-
-        if blueprint_timeout:
-            events.append(self._metadata_breaker.record_failure("timeout_urza"))
-            reason = reason or "timeout_urza"
-        else:
-            success_event = self._metadata_breaker.record_success()
-            if success_event:
-                events.append(success_event)
-
-        if blueprint_info:
-            self._apply_blueprint_annotations(command, blueprint_info)
-            risk_score = float(blueprint_info["risk"])
-            if blueprint_info.get("quarantine_only") or risk_score >= 0.8:
-                events.append(
-                    TelemetryEvent(
-                        description="bp_quarantine",
-                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
-                        attributes={"tier": str(blueprint_info["tier"])},
-                    )
-                )
-                reason = "bp_quarantine"
-                command.command_type = leyline_pb2.COMMAND_PAUSE
-                self._set_conservative_mode(True, "bp_quarantine", events)
-            elif risk_score >= 0.5 and command.command_type == leyline_pb2.COMMAND_SEED:
-                reason = reason or "blueprint_risk"
-                self._ensure_optimizer_adjustment(command, "sgd")
-                events.append(
-                    TelemetryEvent(
-                        description="blueprint_risk",
-                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                        attributes={"risk": f"{risk_score:.2f}"},
-                    )
-                )
-            # BSDS-lite (if present in blueprint_info)
-            bsds_block = blueprint_info.get("bsds") if isinstance(blueprint_info, Mapping) else None
-            if isinstance(bsds_block, Mapping):
-                # Optional signature verification (observability only; fail-open)
-                try:
-                    settings = EsperSettings()
-                    if getattr(settings, "urabrask_signing_enabled", False):
-                        from esper.urabrask import metrics as _ura_metrics
-                        from esper.urabrask.wal import verify_bsds_signature_in_extras
-
-                        ctx = SignatureContext.from_environment(DEFAULT_SECRET_ENV)
-                        extras_map = blueprint_info if isinstance(blueprint_info, Mapping) else {}
-                        ok = verify_bsds_signature_in_extras(extras_map, ctx=ctx)
-                        if not ok:
-                            _ura_metrics.inc_integrity_failures()
-                except Exception:
-                    pass
-                # Surface annotations for downstream consumers
-                for k_src, k_dst in (
-                    ("hazard_band", "bsds_hazard_band"),
-                    ("handling_class", "bsds_handling_class"),
-                    ("resource_profile", "bsds_resource_profile"),
-                    ("provenance", "bsds_provenance"),
-                ):
-                    val = bsds_block.get(k_src)
-                    if isinstance(val, (str, int, float)):
-                        command.annotations.setdefault(k_dst, str(val))
-                if "risk_score" in bsds_block:
-                    with contextlib.suppress(Exception):
-                        command.annotations.setdefault(
-                            "bsds_risk", f"{float(bsds_block['risk_score']):.2f}"
-                        )
-                prov = str(bsds_block.get("provenance", ""))
-                events.append(
-                    TelemetryEvent(
-                        description="bsds_present",
-                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
-                        attributes={
-                            "hazard": str(bsds_block.get("hazard_band", "")),
-                            "risk": str(bsds_block.get("risk_score", "")),
-                            "provenance": prov,
-                        },
-                    )
-                )
-                hazard = str(bsds_block.get("hazard_band", "")).upper()
-                handling = str(bsds_block.get("handling_class", "")).lower()
-                # Handling override: quarantine treated as CRITICAL
-                if handling == "quarantine":
-                    reason = "bsds_handling_quarantine"
-                    command.command_type = leyline_pb2.COMMAND_PAUSE
-                    events.append(
-                        TelemetryEvent(
-                            description="bsds_handling_quarantine",
-                            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
-                            attributes={"handling": handling, "provenance": prov},
-                        )
-                    )
-                    self._set_conservative_mode(True, reason, events)
-                # Escalate on high/critical hazards
-                if hazard == "CRITICAL":
-                    reason = "bsds_hazard_critical"
-                    command.command_type = leyline_pb2.COMMAND_PAUSE
-                    events.append(
-                        TelemetryEvent(
-                            description="bsds_hazard_critical",
-                            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
-                            attributes={"hazard": hazard, "provenance": prov},
-                        )
-                    )
-                    self._set_conservative_mode(True, reason, events)
-                elif hazard == "HIGH":
-                    # Always record the event; downgrade action only if still SEED
-                    events.append(
-                        TelemetryEvent(
-                            description="bsds_hazard_high",
-                            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                            attributes={"hazard": hazard, "provenance": prov},
-                        )
-                    )
-                    if command.command_type == leyline_pb2.COMMAND_SEED:
-                        reason = reason or "bsds_hazard_high"
-                        self._ensure_optimizer_adjustment(command, "sgd")
-
-        if not timed_out and loss_delta > self._risk.max_loss_spike:
-            reason = "loss_spike"
-            command.command_type = leyline_pb2.COMMAND_PAUSE
-            events.append(
-                TelemetryEvent(
-                    description="loss_spike",
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                    attributes={"delta": f"{loss_delta:.3f}"},
-                )
-            )
-            self._set_conservative_mode(True, "loss_spike", events)
-        elif (
-            not timed_out
-            and loss_delta > self._risk.max_loss_spike * 0.5
-            and command.command_type == leyline_pb2.COMMAND_SEED
-        ):
-            reason = reason or "loss_warning"
-            self._ensure_optimizer_adjustment(command, "sgd")
-            events.append(
-                TelemetryEvent(
-                    description="loss_warning",
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                    attributes={"delta": f"{loss_delta:.3f}"},
-                )
-            )
-
-        # Latency guardrails
-        hook_latency = training_metrics.get("hook_latency_ms")
-        if hook_latency and hook_latency > float(self._risk.hook_budget_ms):
-            reason = "hook_budget"
-            command.command_type = leyline_pb2.COMMAND_PAUSE
-            events.append(
-                TelemetryEvent(
-                    description="hook_budget",
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                    attributes={"latency_ms": f"{hook_latency:.2f}"},
-                )
-            )
-        step_latency = training_metrics.get("step_latency_ms")
-        if step_latency and step_latency > float(self._risk.step_latency_high_ms):
-            # Treat high step latency as HIGH priority; prefer PAUSE
-            reason = "step_latency_high"
-            command.command_type = leyline_pb2.COMMAND_PAUSE
-            events.append(
-                TelemetryEvent(
-                    description="step_latency_high",
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                    attributes={"latency_ms": f"{step_latency:.2f}"},
-                )
-            )
-        apply_ms = training_metrics.get("kasmina.apply_ms")
-        if apply_ms and apply_ms > float(self._risk.kasmina_apply_slow_ms):
-            desc = "kasmina_apply_slow"
-            events.append(
-                TelemetryEvent(
-                    description=desc,
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                    attributes={"latency_ms": f"{apply_ms:.2f}"},
-                )
-            )
-            if command.command_type == leyline_pb2.COMMAND_SEED:
-                reason = "kasmina_apply_slow"
-                self._ensure_optimizer_adjustment(command, "sgd")
-        finalize_ms = training_metrics.get("kasmina.finalize_ms")
-        if finalize_ms and finalize_ms > float(self._risk.kasmina_finalize_slow_ms):
-            desc = "kasmina_finalize_slow"
-            events.append(
-                TelemetryEvent(
-                    description=desc,
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                    attributes={"latency_ms": f"{finalize_ms:.2f}"},
-                )
-            )
-            if command.command_type == leyline_pb2.COMMAND_SEED:
-                reason = "kasmina_finalize_slow"
-                self._ensure_optimizer_adjustment(command, "sgd")
-
-        isolation = training_metrics.get("kasmina.isolation.violations")
-        if isolation and isolation > 0:
-            reason = reason or "isolation_violation"
-            command.command_type = leyline_pb2.COMMAND_PAUSE
-            events.append(
-                TelemetryEvent(
-                    description="isolation_violations",
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                    attributes={"violations": str(int(isolation))},
-                )
-            )
-
-        # Drift/stability signals
-        vol = training_metrics.get("loss_volatility")
-        if vol and vol > (self._risk.max_loss_spike * 0.75):
-            events.append(
-                TelemetryEvent(
-                    description="loss_volatility_high",
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                    attributes={"volatility": f"{vol:.3f}"},
-                )
-            )
-            if command.command_type == leyline_pb2.COMMAND_SEED:
-                reason = reason or "loss_volatility_high"
-                self._ensure_optimizer_adjustment(command, "sgd")
-        gvar = training_metrics.get("grad_var")
-        if gvar and gvar > 1.0 and command.command_type == leyline_pb2.COMMAND_SEED:
-            events.append(
-                TelemetryEvent(
-                    description="grad_variance_high",
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                    attributes={"var": f"{gvar:.3f}"},
-                )
-            )
-            reason = reason or "grad_variance_high"
-            self._ensure_optimizer_adjustment(command, "sgd")
-        conflict = training_metrics.get("grad_conflict_rate")
-        if conflict and conflict > 0.5 and command.command_type == leyline_pb2.COMMAND_SEED:
-            events.append(
-                TelemetryEvent(
-                    description="grad_conflict_high",
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                    attributes={"rate": f"{conflict:.3f}"},
-                )
-            )
-            reason = reason or "grad_conflict_high"
-            self._ensure_optimizer_adjustment(command, "sgd")
-
-        # Optimizer hints
-        lr = training_metrics.get("optimizer_lr")
-        if lr is not None and lr <= 0.0 and loss_delta > (self._risk.max_loss_spike * 0.5):
-            events.append(
-                TelemetryEvent(
-                    description="optimizer_hint",
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                    attributes={"lr": f"{lr:.6f}", "loss_delta": f"{loss_delta:.3f}"},
-                )
-            )
-            if command.command_type == leyline_pb2.COMMAND_SEED:
-                reason = "optimizer_hint"
-                self._ensure_optimizer_adjustment(command, "sgd")
-
-        # Device pressure (best-effort)
-        gpu_util = training_metrics.get("gpu_util_percent")
-        gpu_free = training_metrics.get("gpu_mem_free_gb")
-        cpu_util = training_metrics.get("cpu_util_percent")
-        if gpu_util and gpu_util >= 95.0 and gpu_free is not None and gpu_free <= 0.2:
-            events.append(
-                TelemetryEvent(
-                    description="device_pressure_high",
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                    attributes={
-                        "gpu_util": f"{gpu_util:.1f}",
-                        "gpu_mem_free_gb": f"{gpu_free:.2f}",
-                    },
-                )
-            )
-            if command.command_type == leyline_pb2.COMMAND_SEED:
-                reason = reason or "device_pressure_high"
-                command.command_type = leyline_pb2.COMMAND_PAUSE
-        elif cpu_util and cpu_util >= 95.0 and command.command_type == leyline_pb2.COMMAND_SEED:
-            events.append(
-                TelemetryEvent(
-                    description="cpu_pressure_high",
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                    attributes={"cpu_util": f"{cpu_util:.1f}"},
-                )
-            )
-            reason = reason or "cpu_pressure_high"
-            self._ensure_optimizer_adjustment(command, "sgd")
-
-        if (
-            not reason
-            and command.command_type == leyline_pb2.COMMAND_PAUSE
-            and self._risk.conservative_mode
-        ):
-            reason = "conservative_mode"
-
-        if (
-            not timed_out
-            and not blueprint_timeout
-            and self._inference_breaker.state
-            == leyline_pb2.CircuitBreakerState.CIRCUIT_STATE_CLOSED
-            and self._metadata_breaker.state == leyline_pb2.CircuitBreakerState.CIRCUIT_STATE_CLOSED
-        ):
-            self._set_conservative_mode(False, "stabilised", events)
-
-        if reason:
-            self._set_risk_reason(command, reason)
+        if outcome.risk_reason:
+            self._set_risk_reason(command, outcome.risk_reason)
         else:
             self._ensure_default_risk_reason(command)
 
-        return blueprint_info, events
+        return outcome.blueprint_info, outcome.events
 
     @staticmethod
     def _priority_from_events(events: Iterable[TelemetryEvent]) -> int:

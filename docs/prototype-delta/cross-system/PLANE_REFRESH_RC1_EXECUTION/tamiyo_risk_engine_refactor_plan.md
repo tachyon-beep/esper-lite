@@ -31,6 +31,7 @@
 ### Phase 3 — Signal Evaluator Extraction
 - Implement granular evaluators: policy risk, conservative mode, timeout handling, blueprint risk, BSDS payload, loss metrics, latency metrics, isolation/device pressure, optimizer hints.
 - Ensure evaluators operate purely on `RiskContext`/`RiskOutcome`, eliminating direct `command.annotations.setdefault` usage.
+- Status (2025-09-27): Steps 3A–3D landed previously; Step 3E is now complete — all evaluators own their legacy logic, `_RISK_REFACTOR_ENABLED` was deleted, and fixtures/lint/radon confirm parity (10/10 pylint, `_apply_risk_engine` complexity `A (3)`).
 
 ### Phase 4 — Orchestrator Refactor
 - Rewrite `_apply_risk_engine` to construct context, invoke evaluators in order, aggregate outcomes, and finalise risk_reason annotations.

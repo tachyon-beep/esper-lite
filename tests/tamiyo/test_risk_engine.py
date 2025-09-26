@@ -99,27 +99,6 @@ def test_risk_engine_matches_fixtures(
     _run_risk_engine_fixture(fixture_name, risk_fixture_loader, tamiyo_service)
 
 
-@pytest.mark.parametrize(
-    "fixture_name",
-    [
-        "baseline",
-        "policy_risk_critical",
-        "blueprint_quarantine",
-        "bsds_hazard_high",
-        "loss_spike_pause",
-        "latency_hook_pause",
-        "isolation_violation",
-    ],
-)
-def test_risk_engine_matches_fixtures_with_legacy_flag(
-    fixture_name: str,
-    risk_fixture_loader,
-    tamiyo_service: TamiyoService,
-    monkeypatch,
-) -> None:
-    monkeypatch.setattr("esper.tamiyo.service._RISK_REFACTOR_ENABLED", False)
-    _run_risk_engine_fixture(fixture_name, risk_fixture_loader, tamiyo_service)
-
 
 def test_risk_context_metric_helper() -> None:
     command = leyline_pb2.AdaptationCommand()
