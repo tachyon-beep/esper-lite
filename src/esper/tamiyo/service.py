@@ -880,35 +880,27 @@ class TamiyoService:
         command.command_type = leyline_pb2.COMMAND_OPTIMIZER
         command.optimizer_adjustment.optimizer_id = optimizer_id
 
-    def evaluate_step(self, state: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
-        """Evaluate step state under tight deadlines (ADR-001 3A)."""
-
-        return self._evaluate(state, enforce_timeouts=True)
-
-    def evaluate_epoch(self, state: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
-        """Retained for backwards compatibility (no timeouts)."""
-
-        return self._evaluate(state, enforce_timeouts=False)
-
-    def _evaluate(
+    def _prepare_policy_run(
         self,
-        state: leyline_pb2.SystemStatePacket,
-        *,
-        enforce_timeouts: bool,
-    ) -> leyline_pb2.AdaptationCommand:
-        context = TamiyoEvaluationContext(state=state, enforce_timeouts=enforce_timeouts)
+        context: TamiyoEvaluationContext,
+    ) -> tuple[leyline_pb2.AdaptationCommand, float, list[TelemetryEvent]]:
+        """Run the Tamiyo policy and capture timeout annotations."""
+
+        state = context.state
         self._ensure_blueprint_metadata_for_packet(state)
         if hasattr(self._policy, "update_blueprint_metadata") and self._blueprint_cache:
             metadata_payload = {bp: info for bp, (_, info) in self._blueprint_cache.items()}
             with contextlib.suppress(Exception):
                 self._policy.update_blueprint_metadata(metadata_payload)
 
-        command, inference_ms, timed_out = self._run_policy(state, enforce_timeouts)
-        result = TamiyoEvaluationResult(command=command)
-        events = result.events
-        metrics = result.metrics
+        command, inference_ms, timed_out = self._run_policy(
+            state,
+            context.enforce_timeouts,
+        )
         context.timed_out = timed_out
         context.inference_latency_ms = float(inference_ms)
+
+        events: list[TelemetryEvent] = []
         if state.training_run_id:
             command.annotations["training_run_id"] = state.training_run_id
         if timed_out:
@@ -923,102 +915,108 @@ class TamiyoService:
             command.annotations.setdefault("coverage_types", "{}")
             command.annotations.setdefault("feature_coverage", "0.0")
 
-        loss_delta = 0.0
-        if self._last_validation_loss is not None:
-            loss_delta = state.validation_loss - self._last_validation_loss
-        context.loss_delta = loss_delta
+        return command, context.inference_latency_ms or 0.0, events
 
-        blueprint_info: dict[str, float | str | bool | int] | None = None
-        blueprint_timeout = False
-        if not timed_out:
-            blueprint_info, blueprint_timeout = self._resolve_blueprint_with_timeout(
-                command,
-                enforce_timeouts,
-            )
+    def _resolve_blueprint(
+        self,
+        context: TamiyoEvaluationContext,
+        result: TamiyoEvaluationResult,
+    ) -> dict[str, float | str | bool | int] | None:
+        """Fetch blueprint metadata, recording timeout telemetry when needed."""
+
+        if context.timed_out:
+            context.blueprint_timeout = False
+            return None
+
+        blueprint_info, blueprint_timeout = self._resolve_blueprint_with_timeout(
+            result.command,
+            context.enforce_timeouts,
+        )
         context.blueprint_timeout = blueprint_timeout
         if blueprint_timeout:
-            events.append(
+            result.events.append(
                 TelemetryEvent(
                     description="timeout_urza",
                     level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
                     attributes={"budget_ms": f"{self._metadata_timeout_s * 1000.0:.1f}"},
                 )
             )
+        return blueprint_info
 
-        training_metrics = dict(state.training_metrics)
-        context.training_metrics = training_metrics
-        # If Tolaria supplied a precomputed loss_delta (WP8.5), prefer it when
-        # we lack a prior validation snapshot. This keeps step-level risk gates
-        # responsive even on the first invocation.
-        if (self._last_validation_loss is None) and ("loss_delta" in training_metrics):
-            try:
-                loss_delta = float(training_metrics.get("loss_delta", loss_delta))
-            except Exception:
-                pass
-        context.loss_delta = loss_delta
-        blueprint_info, risk_events = self._apply_risk_engine(
-            command,
-            state=state,
-            loss_delta=loss_delta,
-            blueprint_info=blueprint_info,
-            blueprint_timeout=blueprint_timeout,
-            timed_out=timed_out,
-            training_metrics=training_metrics,
-        )
-        context.blueprint_info = blueprint_info
-        events.extend(risk_events)
+    def _apply_risk_and_dependencies(
+        self,
+        context: TamiyoEvaluationContext,
+        result: TamiyoEvaluationResult,
+    ) -> None:
+        """Apply risk engine results, dependency guards, and degraded-input routing."""
 
-        if not timed_out:
-            self._validate_command_dependencies(command)
+        if not context.timed_out:
+            self._validate_command_dependencies(result.command)
 
         # WP12: Degraded-input routing based on feature coverage thresholds
         try:
             cov = getattr(self._policy, "feature_coverage", {})
-            if cov:
-                vals = []
-                for v in cov.values():
-                    try:
-                        fv = float(v)
-                    except Exception:
-                        continue
-                    if fv > 0.0:
-                        vals.append(fv)
-                if vals:
-                    avg_cov = float(sum(vals) / max(1, len(vals)))
-                warn_th = (
-                    getattr(self._risk, "degraded_inputs_warn", 0.30)
-                    if hasattr(self._risk, "degraded_inputs_warn")
-                    else 0.30
+            if not cov:
+                return
+            vals: list[float] = []
+            for value in cov.values():
+                try:
+                    fv = float(value)
+                except Exception:
+                    continue
+                if fv > 0.0:
+                    vals.append(fv)
+            if not vals:
+                return
+            avg_cov = float(sum(vals) / max(1, len(vals)))
+            warn_th = (
+                getattr(self._risk, "degraded_inputs_warn", 0.30)
+                if hasattr(self._risk, "degraded_inputs_warn")
+                else 0.30
+            )
+            crit_th = (
+                getattr(self._risk, "degraded_inputs_crit", 0.10)
+                if hasattr(self._risk, "degraded_inputs_crit")
+                else 0.10
+            )
+            evt_level: int | None = None
+            if avg_cov <= crit_th:
+                evt_level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
+            elif avg_cov < warn_th:
+                evt_level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO
+            if evt_level is None:
+                return
+            result.events.append(
+                TelemetryEvent(
+                    description="degraded_inputs",
+                    level=evt_level,
+                    attributes={
+                        "coverage_avg": f"{avg_cov:.3f}",
+                        "missing_features": str(sum(1 for v in cov.values() if not v)),
+                    },
                 )
-                crit_th = (
-                    getattr(self._risk, "degraded_inputs_crit", 0.10)
-                    if hasattr(self._risk, "degraded_inputs_crit")
-                    else 0.10
-                )
-                evt_level = None
-                if avg_cov <= crit_th:
-                    evt_level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
-                elif avg_cov < warn_th:
-                    evt_level = leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO
-                if vals and evt_level is not None:
-                    events.append(
-                        TelemetryEvent(
-                            description="degraded_inputs",
-                            level=evt_level,
-                            attributes={
-                                "coverage_avg": f"{avg_cov:.3f}",
-                                "missing_features": str(sum(1 for v in cov.values() if not v)),
-                            },
-                        )
-                    )
-                    # If no prior reason set by risk engine, annotate degraded inputs
-                    if (
-                        evt_level == leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
-                        and "risk_reason" not in command.annotations
-                    ):
-                        command.annotations["risk_reason"] = "degraded_inputs"
+            )
+            if (
+                evt_level == leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
+                and "risk_reason" not in result.command.annotations
+            ):
+                result.command.annotations["risk_reason"] = "degraded_inputs"
         except Exception:
             pass
+
+    def _collect_policy_metrics(
+        self,
+        context: TamiyoEvaluationContext,
+        result: TamiyoEvaluationResult,
+    ) -> None:
+        """Populate telemetry metrics and annotations from policy state."""
+
+        command = result.command
+        metrics = result.metrics
+        state = context.state
+        loss_delta = context.loss_delta
+        inference_ms = context.inference_latency_ms or 0.0
+        blueprint_info = context.blueprint_info
 
         compile_reason = getattr(self._policy, "compile_disabled_reason", None)
         if compile_reason:
@@ -1032,14 +1030,13 @@ class TamiyoService:
                 if compile_reason in {"device_not_cuda", "cuda_unavailable"}
                 else leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING
             )
-            device_str = "cpu"
             try:
                 device_str = str(
                     getattr(self._policy, "device", getattr(self._policy, "_device", "unknown"))
                 )
             except Exception:
                 device_str = "unknown"
-            events.append(
+            result.events.append(
                 TelemetryEvent(
                     description=desc,
                     level=level,
@@ -1054,8 +1051,8 @@ class TamiyoService:
         last_action = self._policy.last_action
         metrics.extend(
             [
-                TelemetryMetric("tamiyo.validation_loss", state.validation_loss, unit="loss"),
-                TelemetryMetric("tamiyo.loss_delta", loss_delta, unit="loss"),
+                TelemetryMetric("tamiyo.validation_loss", float(state.validation_loss), unit="loss"),
+                TelemetryMetric("tamiyo.loss_delta", float(loss_delta), unit="loss"),
                 TelemetryMetric(
                     "tamiyo.conservative_mode",
                     1.0 if self._risk.conservative_mode else 0.0,
@@ -1074,7 +1071,7 @@ class TamiyoService:
                 ),
             ]
         )
-        # Append warm-up latency metric if measured
+
         try:
             warm_ms = float(getattr(self._policy, "compile_warm_ms", 0.0))
             if warm_ms >= 0.0:
@@ -1087,7 +1084,7 @@ class TamiyoService:
                 )
         except Exception:
             pass
-        # Append compile fallback counter if any
+
         try:
             fallbacks = int(getattr(self._policy, "compile_fallbacks", 0))
         except Exception:
@@ -1100,6 +1097,7 @@ class TamiyoService:
                     unit="count",
                 )
             )
+
         metrics.extend(
             [
                 TelemetryMetric(
@@ -1119,9 +1117,13 @@ class TamiyoService:
                 ),
             ]
         )
+
         coverage = getattr(self._policy, "feature_coverage", {})
         if coverage:
-            average_coverage = float(sum(coverage.values()) / max(1, len(coverage)))
+            try:
+                average_coverage = float(sum(coverage.values()) / max(1, len(coverage)))
+            except Exception:
+                average_coverage = 0.0
             metrics.append(
                 TelemetryMetric(
                     "tamiyo.gnn.feature_coverage",
@@ -1130,9 +1132,7 @@ class TamiyoService:
                 )
             )
             command.annotations.setdefault("feature_coverage", f"{average_coverage:.3f}")
-            # WP15: emit granular coverage by type and attach full map
             try:
-                # Group keys by type prefix
                 groups: dict[str, list[float]] = {
                     "node.seed": [],
                     "node.layer": [],
@@ -1145,26 +1145,29 @@ class TamiyoService:
                     "edges.layer_feeds": [],
                 }
                 for key, val in coverage.items():
+                    try:
+                        fv = float(val)
+                    except Exception:
+                        continue
                     if key.startswith("seed."):
-                        groups["node.seed"].append(float(val))
+                        groups["node.seed"].append(fv)
                     elif key.startswith("layer."):
-                        groups["node.layer"].append(float(val))
+                        groups["node.layer"].append(fv)
                     elif key.startswith("activation."):
-                        groups["node.activation"].append(float(val))
+                        groups["node.activation"].append(fv)
                     elif key.startswith("parameter."):
-                        groups["node.parameter"].append(float(val))
+                        groups["node.parameter"].append(fv)
                     elif key.startswith("blueprint."):
-                        groups["node.blueprint"].append(float(val))
+                        groups["node.blueprint"].append(fv)
                     elif key.startswith("global."):
-                        groups["node.global"].append(float(val))
+                        groups["node.global"].append(fv)
                     elif key == "edges.layer_connects":
-                        groups["edges.layer_connects"].append(float(val))
+                        groups["edges.layer_connects"].append(fv)
                     elif key == "edges.seed_monitors":
-                        groups["edges.seed_monitors"].append(float(val))
+                        groups["edges.seed_monitors"].append(fv)
                     elif key == "edges.layer_feeds":
-                        groups["edges.layer_feeds"].append(float(val))
-                # Prefer builder-provided typed coverage when available
-                per_type: dict[str, float] = {}
+                        groups["edges.layer_feeds"].append(fv)
+
                 try:
                     per_type = dict(getattr(self._policy, "feature_coverage_types", {}) or {})
                 except Exception:
@@ -1173,34 +1176,30 @@ class TamiyoService:
                     for gkey, arr in groups.items():
                         if arr:
                             per_type[gkey] = float(sum(arr) / max(1, len(arr)))
-                # Ensure layer connectivity coverage key is present (defaults to 0.0)
                 per_type.setdefault("edges.layer_connects", 0.0)
-                # Emit telemetry metrics for each type
                 for gkey, ratio in per_type.items():
                     metrics.append(
                         TelemetryMetric(
                             f"tamiyo.gnn.feature_coverage.{gkey}",
-                            ratio,
+                            float(ratio),
                             unit="ratio",
                         )
                     )
-                # Attach full map + types to command annotations (bounded)
                 cov_json = json.dumps(coverage)
                 types_json = json.dumps(per_type)
-                # Size guard ~ 1KB per field
                 if len(cov_json) <= 1024:
                     command.annotations.setdefault("coverage_map", cov_json)
                 command.annotations.setdefault("coverage_types", types_json)
-            except Exception:  # pragma: no cover - defensive
+            except Exception:
                 pass
-        # Ensure layer connectivity coverage metric exists for dashboards (defaults to 0 when unavailable)
-        try:
-            names = {m.name for m in metrics}
-            target_name = "tamiyo.gnn.feature_coverage.edges.layer_connects"
-            if target_name not in names:
-                metrics.append(TelemetryMetric(target_name, 0.0, unit="ratio"))
-        except Exception:
-            pass
+            try:
+                names = {m.name for m in metrics}
+                target_name = "tamiyo.gnn.feature_coverage.edges.layer_connects"
+                if target_name not in names:
+                    metrics.append(TelemetryMetric(target_name, 0.0, unit="ratio"))
+            except Exception:
+                pass
+
         if "blending_method" in last_action:
             metrics.append(
                 TelemetryMetric(
@@ -1249,6 +1248,7 @@ class TamiyoService:
                     unit="index",
                 )
             )
+
         metrics.append(
             TelemetryMetric(
                 "tamiyo.breaker.inference_state",
@@ -1278,13 +1278,73 @@ class TamiyoService:
             )
         )
         if blueprint_info:
-            metrics.append(
-                TelemetryMetric(
-                    "tamiyo.blueprint.risk",
-                    float(blueprint_info["risk"]),
-                    unit="score",
+            try:
+                metrics.append(
+                    TelemetryMetric(
+                        "tamiyo.blueprint.risk",
+                        float(blueprint_info["risk"]),
+                        unit="score",
+                    )
                 )
-            )
+            except Exception:
+                pass
+
+    def evaluate_step(self, state: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
+        """Evaluate step state under tight deadlines (ADR-001 3A)."""
+
+        return self._evaluate(state, enforce_timeouts=True)
+
+    def evaluate_epoch(self, state: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
+        """Retained for backwards compatibility (no timeouts)."""
+
+        return self._evaluate(state, enforce_timeouts=False)
+
+    def _evaluate(
+        self,
+        state: leyline_pb2.SystemStatePacket,
+        *,
+        enforce_timeouts: bool,
+    ) -> leyline_pb2.AdaptationCommand:
+        context = TamiyoEvaluationContext(state=state, enforce_timeouts=enforce_timeouts)
+        command, inference_ms, prep_events = self._prepare_policy_run(context)
+        result = TamiyoEvaluationResult(command=command, events=prep_events)
+        events = result.events
+        metrics = result.metrics
+        timed_out = context.timed_out
+
+        loss_delta = 0.0
+        if self._last_validation_loss is not None:
+            loss_delta = state.validation_loss - self._last_validation_loss
+        context.loss_delta = loss_delta
+
+        blueprint_info = self._resolve_blueprint(context, result)
+        context.blueprint_info = blueprint_info
+
+        training_metrics = dict(state.training_metrics)
+        context.training_metrics = training_metrics
+        # If Tolaria supplied a precomputed loss_delta (WP8.5), prefer it when
+        # we lack a prior validation snapshot. This keeps step-level risk gates
+        # responsive even on the first invocation.
+        if (self._last_validation_loss is None) and ("loss_delta" in training_metrics):
+            try:
+                loss_delta = float(training_metrics.get("loss_delta", loss_delta))
+            except Exception:
+                pass
+        context.loss_delta = loss_delta
+        blueprint_info, risk_events = self._apply_risk_engine(
+            command,
+            state=state,
+            loss_delta=loss_delta,
+            blueprint_info=blueprint_info,
+            blueprint_timeout=context.blueprint_timeout,
+            timed_out=timed_out,
+            training_metrics=training_metrics,
+        )
+        context.blueprint_info = blueprint_info
+        events.extend(risk_events)
+
+        self._apply_risk_and_dependencies(context, result)
+        self._collect_policy_metrics(context, result)
 
         telemetry = build_telemetry_packet(
             packet_id=state.packet_id or "tamiyo-telemetry",
