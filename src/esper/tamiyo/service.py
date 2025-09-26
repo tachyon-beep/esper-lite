@@ -8,8 +8,6 @@ import logging
 import math
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FuturesTimeout
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
@@ -19,7 +17,17 @@ from uuid import uuid4
 
 import torch
 
-from esper.core import EsperSettings, TelemetryEvent, TelemetryMetric, build_telemetry_packet
+from esper.core import (
+    AsyncTimeoutError,
+    AsyncWorker,
+    DependencyContext,
+    DependencyViolationError,
+    EsperSettings,
+    TelemetryEvent,
+    TelemetryMetric,
+    build_telemetry_packet,
+    ensure_present,
+)
 from esper.leyline import leyline_pb2
 from esper.security.signing import DEFAULT_SECRET_ENV, SignatureContext, sign
 from esper.urza import UrzaLibrary
@@ -133,7 +141,7 @@ class TamiyoService:
         signature_context: SignatureContext | None = None,
         step_timeout_ms: float = 15.0,
         metadata_timeout_ms: float = 25.0,
-        executor: ThreadPoolExecutor | None = None,
+        async_worker: AsyncWorker | None = None,
     ) -> None:
         # Resolve settings early for device/compile detection
         self._settings = settings or EsperSettings()
@@ -202,11 +210,11 @@ class TamiyoService:
         self._signing_context = signature_context or SignatureContext.from_environment(
             DEFAULT_SECRET_ENV
         )
-        self._executor = executor
-        self._owns_executor = False
-        if self._executor is None and (step_timeout_ms > 0 or metadata_timeout_ms > 0):
-            self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="tamiyo")
-            self._owns_executor = True
+        self._worker = async_worker
+        self._owns_worker = False
+        if self._worker is None and (step_timeout_ms > 0 or metadata_timeout_ms > 0):
+            self._worker = AsyncWorker(max_concurrency=4, name="tamiyo-worker")
+            self._owns_worker = True
         # Step timeout defaulting: if caller did not explicitly override the legacy
         # default (15.0 ms), prefer the settings-driven default to align with the
         # timeout matrix (2–5 ms). Explicit non-default values always take precedence.
@@ -314,6 +322,9 @@ class TamiyoService:
             training_metrics=training_metrics,
         )
         events.extend(risk_events)
+
+        if not timed_out:
+            self._validate_command_dependencies(command)
 
         # WP12: Degraded-input routing based on feature coverage thresholds
         try:
@@ -948,12 +959,15 @@ class TamiyoService:
         start = time.perf_counter()
         timed_out = False
 
-        if enforce_timeouts and self._step_timeout_s > 0 and self._executor is not None:
-            future = self._executor.submit(self._policy.select_action, state)
+        if enforce_timeouts and self._step_timeout_s > 0 and self._worker is not None:
+            handle = self._worker.submit(
+                self._policy.select_action,
+                state,
+                timeout=self._step_timeout_s,
+            )
             try:
-                command = future.result(timeout=self._step_timeout_s)
-            except FuturesTimeout:
-                future.cancel()
+                command = handle.result()
+            except AsyncTimeoutError:
                 timed_out = True
                 command = self._build_timeout_command("timeout_inference")
         else:
@@ -1044,12 +1058,15 @@ class TamiyoService:
         ):
             return None, False
 
-        if enforce_timeouts and self._metadata_timeout_s > 0 and self._executor is not None:
-            future = self._executor.submit(self._resolve_blueprint_info, command)
+        if enforce_timeouts and self._metadata_timeout_s > 0 and self._worker is not None:
+            handle = self._worker.submit(
+                self._resolve_blueprint_info,
+                command,
+                timeout=self._metadata_timeout_s,
+            )
             try:
-                return future.result(timeout=self._metadata_timeout_s), False
-            except FuturesTimeout:
-                future.cancel()
+                return handle.result(), False
+            except AsyncTimeoutError:
                 return None, True
         return self._resolve_blueprint_info(command), False
 
@@ -1059,12 +1076,15 @@ class TamiyoService:
             return
         # Bound the pre-warm fetch so we never stall the step path
         record = None
-        if self._executor is not None and self._metadata_timeout_s > 0:
-            future = self._executor.submit(self._urza.get, blueprint_id)
+        if self._worker is not None and self._metadata_timeout_s > 0:
+            handle = self._worker.submit(
+                self._urza.get,
+                blueprint_id,
+                timeout=self._metadata_timeout_s,
+            )
             try:
-                record = future.result(timeout=self._metadata_timeout_s)
-            except FuturesTimeout:
-                future.cancel()
+                record = handle.result()
+            except AsyncTimeoutError:
                 return
         else:
             record = self._urza.get(blueprint_id)
@@ -1916,10 +1936,36 @@ class TamiyoService:
     def close(self) -> None:
         """Release internal executor resources if owned."""
 
-        if self._owns_executor and self._executor is not None:
-            self._executor.shutdown(wait=False)
-            self._owns_executor = False
-            self._executor = None
+        if self._owns_worker and self._worker is not None:
+            self._worker.shutdown(cancel_pending=True)
+            self._owns_worker = False
+            self._worker = None
+
+    def _validate_command_dependencies(self, command: leyline_pb2.AdaptationCommand) -> None:
+        if command.command_type != leyline_pb2.COMMAND_SEED:
+            return
+        command_id = command.command_id or "<unset>"
+        ensure_present(
+            command.HasField("seed_operation"),
+            DependencyContext(
+                subsystem="tamiyo",
+                dependency_type="seed_operation",
+                identifier=command_id,
+                details={"command_type": leyline_pb2.CommandType.Name(command.command_type)},
+            ),
+            reason="seed command missing seed_operation",
+        )
+        blueprint_id = (command.seed_operation.blueprint_id or "").strip()
+        ensure_present(
+            bool(blueprint_id),
+            DependencyContext(
+                subsystem="tamiyo",
+                dependency_type="blueprint",
+                identifier=blueprint_id or "<empty>",
+                details={"command_id": command_id},
+            ),
+            reason="seed operation missing blueprint_id",
+        )
 
     def __del__(self) -> None:  # pragma: no cover - best effort cleanup
         with contextlib.suppress(Exception):

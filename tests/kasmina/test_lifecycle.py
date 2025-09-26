@@ -79,6 +79,7 @@ def test_seed_manager_grafts_and_retires_seed() -> None:
         target_seed_id="seed-1",
     )
     retire.seed_operation.operation = leyline_pb2.SEED_OP_CULL
+    retire.seed_operation.blueprint_id = "bp-1"
     _sign_command(retire)
     manager.handle_command(retire)
     assert "seed-1" not in manager.seeds()

@@ -129,6 +129,7 @@ markers = [
   "integration: tests that require external infrastructure",
   "performance: performance-sensitive benchmarks",
   "perf: lightweight performance smoke tests",
+  "soak: long-running soak tests that require explicit opt-in",
 ]
 timeout = 60
 timeout_method = "thread"

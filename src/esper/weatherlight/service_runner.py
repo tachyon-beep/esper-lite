@@ -22,7 +22,16 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Awaitable, Callable, Dict
 
-from esper.core import EsperSettings, TelemetryEvent, TelemetryMetric, build_telemetry_packet
+from esper.core import (
+    AsyncWorker,
+    DependencyContext,
+    DependencyViolationError,
+    ensure_present,
+    EsperSettings,
+    TelemetryEvent,
+    TelemetryMetric,
+    build_telemetry_packet,
+)
 from esper.kasmina import KasminaPrefetchCoordinator, KasminaSeedManager
 from esper.leyline import leyline_pb2
 from esper.oona import OonaClient, StreamConfig
@@ -79,6 +88,8 @@ class WeatherlightService:
         self._urza_worker: UrzaPrefetchWorker | None = None
         self._kasmina_manager: KasminaSeedManager | None = None
         self._kasmina_coordinator: KasminaPrefetchCoordinator | None = None
+        self._async_worker: AsyncWorker | None = None
+        self._owns_async_worker = False
         self._tamiyo_service: TamiyoService | None = None
         self._urabrask_producer: UrabraskProducer | None = None
         self._urabrask_bench: UrabraskBenchWorker | None = None
@@ -129,17 +140,26 @@ class WeatherlightService:
             except asyncio.QueueFull:
                 self._kasmina_packet_drops += 1
 
+        if self._async_worker is None:
+            self._async_worker = AsyncWorker(max_concurrency=8, name="weatherlight-worker")
+            self._owns_async_worker = True
+
         self._kasmina_manager = KasminaSeedManager(
             self._urza_runtime,
             packet_callback=_on_kasmina_packet,
         )
-        self._kasmina_coordinator = KasminaPrefetchCoordinator(self._kasmina_manager, self._oona)
+        self._kasmina_coordinator = KasminaPrefetchCoordinator(
+            self._kasmina_manager,
+            self._oona,
+            async_worker=self._async_worker,
+        )
         self._kasmina_manager.set_prefetch(self._kasmina_coordinator)
         tamiyo_signature = SignatureContext.from_environment(DEFAULT_SECRET_ENV)
         self._tamiyo_service = TamiyoService(
             settings=self._settings,
             urza=self._urza_library,
             signature_context=tamiyo_signature,
+            async_worker=self._async_worker,
         )
 
         self._register_worker(
@@ -231,13 +251,22 @@ class WeatherlightService:
         and will raise with actionable remediation on failure.
         """
 
-        failures: list[str] = []
-
         def _require(module: str, *, name: str | None = None) -> None:
+            canonical = name or module
+            ctx = DependencyContext(
+                subsystem="weatherlight",
+                dependency_type="python_module",
+                identifier=canonical,
+                details={"module": module},
+            )
             try:
                 importlib.import_module(module)
             except Exception as exc:  # pragma: no cover - environment specific
-                failures.append(f"{name or module}: {exc}")
+                raise DependencyViolationError(
+                    "weatherlight",
+                    f"missing python module {canonical}: {exc}",
+                    context=ctx.details,
+                ) from exc
 
         # Core ML + Graph deps
         _require("torch")
@@ -263,18 +292,14 @@ class WeatherlightService:
 
                     pynvml.nvmlInit()
                 except Exception as exc:  # pragma: no cover - hardware dependent
-                    failures.append(f"pynvml: {exc}")
+                    raise DependencyViolationError(
+                        "weatherlight",
+                        f"pynvml initialisation failed: {exc}",
+                        context={"dependency_type": "pynvml"},
+                    ) from exc
         except Exception:
             # torch import failure already recorded above
             pass
-
-        if failures:
-            details = "; ".join(failures)
-            msg = (
-                "Mandatory dependency preflight failed: "
-                f"{details}. Please install required packages and ensure GPU/ES availability."
-            )
-            raise RuntimeError(msg)
 
     def initiate_shutdown(self) -> None:
         """Trigger graceful shutdown (idempotent)."""
@@ -1252,6 +1277,10 @@ class WeatherlightService:
         with contextlib.suppress(Exception):
             if self._emergency_signal is not None:
                 self._emergency_signal.close()
+        if self._owns_async_worker and self._async_worker is not None:
+            self._async_worker.shutdown(cancel_pending=True)
+            self._async_worker = None
+            self._owns_async_worker = False
         self._shutdown_complete.set()
 
 

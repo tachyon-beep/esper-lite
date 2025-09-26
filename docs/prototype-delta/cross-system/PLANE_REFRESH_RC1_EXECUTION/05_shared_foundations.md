@@ -351,6 +351,16 @@ Helpers will emit structured telemetry for migration telemetry (e.g., `telemetry
 - **Implication**: when migrating to structured telemetry/metadata, ensure these metric names continue to be emitted exactly as-is (even if sourced from the new `DecisionMetadata` or coverage structs). Any additional telemetry derived from annotations (e.g., degraded-input events) must persist through the new representation so existing dashboards/alerts stay green.
 - **Grafana dashboards** (`infra/grafana/dashboards/nissa_overview.json`) visualise `esper_field_reports_total` (summed and per-outcome rate); field-report ingestion must remain intact so these charts and Prometheus counters continue to reflect reality.
 
+##### Integration Touchpoints (Tolaria ↔ Tamiyo ↔ Kasmina ↔ externals)
+- **Tolaria → Tamiyo**: synchronous calls into `TamiyoService.evaluate_step/evaluate_epoch` produce `AdaptationCommand` and latency metrics; RC1 changes affect the `AdaptationCommand` schema and telemetry priority, so both sides must adopt the structured metadata simultaneously (`src/esper/tolaria/trainer.py:2048-2145`, `src/esper/tamiyo/service.py:557-742`).
+- **Tolaria → Kasmina**: `KasminaSeedManager.apply_command` consumes Tamiyo’s command inside the training loop; enforcing structured command fields (seed/blend/security) is mandatory to keep Kasmina gate logic strict (`src/esper/kasmina/seed_manager.py:720-919`).
+- **Tamiyo ↔ Urza**: blueprint metadata fetch via `_urza.get` powers risk/blend decisions and telemetry (`src/esper/tamiyo/service.py:1025-1104`); no schema change, but strict dependency guard must ensure Urza is available at startup.
+- **Tamiyo → Oona/Nissa**: telemetry/field reports published via Oona (`src/esper/tamiyo/service.py:1938-2078`) feed Nissa dashboards/alerts. Priority routing, structured telemetry, and `FieldReportDelta` must remain compatible with Weatherlight/Nissa ingestion once updated.
+- **Kasmina ↔ Urza/Oona**: Kasmina fetches kernels from Urza and emits telemetry via Weatherlight’s Oona client (`src/esper/kasmina/seed_manager.py:1688-1739`, `src/esper/weatherlight/service_runner.py:1055-1100`). Structured command security and priority propagation ensure Kasmina’s verifier + telemetry loop continue to operate correctly.
+- **Weatherlight orchestration**: Weatherlight mediates telemetry, policy updates, and command routing. After adding `TelemetryPacket.priority`/`BusEnvelope.priority`, Weatherlight’s loops must forward the structured priority without re-deriving (`src/esper/weatherlight/service_runner.py:618-1138`).
+- **Simic replay/trainer**: consumes field reports via Oona and Tamiyo WAL (`src/esper/simic/replay.py:56-118`, `scripts/run_demo.py:140-214`). The `FieldReportDelta` switch and WAL compatibility plan avoid surprises for offline training.
+- **Observability stack**: Prometheus/Grafana rely on Nissa exposing counters derived from telemetry + field reports; the structured telemetry work must keep metric names stable to prevent dashboard regressions (`docs/project/observability_runbook.md`, `infra/grafana/dashboards`).
+
 #### Migration Approach
 - Implement proto extensions with backwards-compatible field numbers, regenerate bindings, and introduce struct-based helper classes in `esper.core.contracts` to hydrate/extract the new messages.
 - Add validation gates: once both producer and consumer understand the structured fields, log/telemetry warnings when legacy maps are used; eventually flip to hard failures per strict-dependency policy.
@@ -366,6 +376,7 @@ Helpers will emit structured telemetry for migration telemetry (e.g., `telemetry
   2. Replace Tamiyo per-call executors (WP-A1) and Kasmina prefetch loops (WP-K4).
   3. Provide synchronous adapter for contexts without running loop.
 - Risks: ensure cancellation stops underlying coroutine; guard exceptions.
+- **Implementation status**: Tolaria trainer and Tamiyo service now share `AsyncWorker` instances for timeout handling, and `KasminaPrefetchCoordinator` falls back to the worker when no loop is running (Weatherlight + demo wire a single worker across subsystems). Legacy executor fallbacks were removed to enforce immediate adoption.
 
 ## Telemetry Router Plan
 - Define priority mapping:

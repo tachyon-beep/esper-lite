@@ -30,7 +30,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from esper.core import EsperSettings
+from esper.core import AsyncWorker, DependencyViolationError, EsperSettings
 from esper.karn import KarnCatalog
 from esper.kasmina import KasminaPrefetchCoordinator, KasminaSeedManager
 from esper.leyline import leyline_pb2
@@ -105,7 +105,11 @@ async def initialise_blueprint_pipeline(
     blueprint_id = "BP001"
     blueprint = catalog.get(blueprint_id)
     if blueprint is None:
-        raise RuntimeError("Default blueprint catalog missing BP001")
+        raise DependencyViolationError(
+            "demo",
+            f"default blueprint {blueprint_id} missing",
+            context={"dependency_type": "blueprint", "blueprint_id": blueprint_id},
+        )
 
     settings = EsperSettings()
     artifact_dir = root / "artifacts"
@@ -217,86 +221,112 @@ async def run_demo() -> None:
             catalog_notifier=lambda update: oona.publish_kernel_catalog_update(update),
         )
 
-        kasmina_manager = KasminaSeedManager(runtime=urza_runtime)
-        prefetch_coordinator = KasminaPrefetchCoordinator(kasmina_manager, oona)
-        kasmina_manager.set_prefetch(prefetch_coordinator)
-        prefetch_coordinator.start()
-        kasmina_adapter = DemoKasminaAdapter(kasmina_manager)
+        async_worker = AsyncWorker(max_concurrency=6, name="demo-worker")
+        tamiyo_service: TamiyoService | None = None
+        trainer: TolariaTrainer | None = None
+        prefetch_coordinator: KasminaPrefetchCoordinator | None = None
+        kasmina_adapter: DemoKasminaAdapter | None = None
         try:
-            tamiyo_signature = SignatureContext.from_environment(DEFAULT_SECRET_ENV)
-        except RuntimeError:
-            logger.warning("ESPER_LEYLINE_SECRET not set; using demo signing secret")
-            tamiyo_signature = SignatureContext(secret=b"demo-signing-secret")
-        tamiyo_service = TamiyoService(urza=urza_library, signature_context=tamiyo_signature)
-        tamiyo_client = DemoTamiyoClient(tamiyo_service)
+            kasmina_manager = KasminaSeedManager(runtime=urza_runtime)
+            prefetch_coordinator = KasminaPrefetchCoordinator(
+                kasmina_manager,
+                oona,
+                async_worker=async_worker,
+            )
+            kasmina_manager.set_prefetch(prefetch_coordinator)
+            prefetch_coordinator.start()
+            kasmina_adapter = DemoKasminaAdapter(kasmina_manager)
+            try:
+                tamiyo_signature = SignatureContext.from_environment(DEFAULT_SECRET_ENV)
+            except RuntimeError:
+                logger.warning("ESPER_LEYLINE_SECRET not set; using demo signing secret")
+                tamiyo_signature = SignatureContext(secret=b"demo-signing-secret")
+            tamiyo_service = TamiyoService(
+                urza=urza_library,
+                signature_context=tamiyo_signature,
+                async_worker=async_worker,
+            )
+            tamiyo_client = DemoTamiyoClient(tamiyo_service)
 
-        model = build_model()
-        optimizer = torch.optim.SGD(model.parameters(), lr=0.05)
-        dataloader = build_dataloader()
-        trainer = TolariaTrainer(
-            model=model,
-            optimizer=optimizer,
-            dataloader=dataloader,
-            tamiyo=tamiyo_client,
-            kasmina=kasmina_adapter,
-            config=TrainingLoopConfig(max_epochs=MAX_EPOCHS),
-        )
+            model = build_model()
+            optimizer = torch.optim.SGD(model.parameters(), lr=0.05)
+            dataloader = build_dataloader()
+            trainer = TolariaTrainer(
+                model=model,
+                optimizer=optimizer,
+                dataloader=dataloader,
+                tamiyo=tamiyo_client,
+                kasmina=kasmina_adapter,
+                config=TrainingLoopConfig(max_epochs=MAX_EPOCHS),
+                async_worker=async_worker,
+            )
 
-        logger.info("Running initial training loop (%s epochs)", MAX_EPOCHS)
-        list(trainer.run())
-        generate_field_reports(tamiyo_service, kasmina_adapter.commands, trainer.state_packets)
-        await publish_history(trainer, tamiyo_service, oona, nissa, settings)
+            logger.info("Running initial training loop (%s epochs)", MAX_EPOCHS)
+            list(trainer.run())
+            generate_field_reports(
+                tamiyo_service,
+                kasmina_adapter.commands,
+                trainer.state_packets,
+            )
+            await publish_history(trainer, tamiyo_service, oona, nissa, settings)
 
-        buffer = FieldReportReplayBuffer(capacity=256)
-        buffer.extend(tamiyo_service.field_reports)
-        simic_trainer = SimicTrainer(
-            policy=None,
-            buffer=buffer,
-            config=SimicTrainerConfig(
-                epochs=2,
-                batch_size=16,
-                hidden_size=32,
-                use_lora=True,
-                lora_rank=4,
-            ),
-        )
-        logger.info("Running Simic offline training")
-        simic_trainer.run_training()
-        simic_trainer.create_policy_update(
-            policy_id="policy-demo",
-            training_run_id="run-demo",
-            policy_version="policy-updated",
-        )
-        await simic_trainer.publish_metrics(oona, training_run_id="run-demo")
-        await simic_trainer.publish_policy_updates(oona)
-        await consume_policy_updates(tamiyo_service, oona)
-        logger.info(
-            "Simic training complete: loss=%.4f, policy updates=%s",
-            simic_trainer.last_loss,
-            len(simic_trainer.policy_updates),
-        )
-        logger.info("Tamiyo applied %s policy updates", len(tamiyo_service.policy_updates))
+            buffer = FieldReportReplayBuffer(capacity=256)
+            buffer.extend(tamiyo_service.field_reports)
+            simic_trainer = SimicTrainer(
+                policy=None,
+                buffer=buffer,
+                config=SimicTrainerConfig(
+                    epochs=2,
+                    batch_size=16,
+                    hidden_size=32,
+                    use_lora=True,
+                    lora_rank=4,
+                ),
+            )
+            logger.info("Running Simic offline training")
+            simic_trainer.run_training()
+            simic_trainer.create_policy_update(
+                policy_id="policy-demo",
+                training_run_id="run-demo",
+                policy_version="policy-updated",
+            )
+            await simic_trainer.publish_metrics(oona, training_run_id="run-demo")
+            await simic_trainer.publish_policy_updates(oona)
+            await consume_policy_updates(tamiyo_service, oona)
+            logger.info(
+                "Simic training complete: loss=%.4f, policy updates=%s",
+                simic_trainer.last_loss,
+                len(simic_trainer.policy_updates),
+            )
+            logger.info("Tamiyo applied %s policy updates", len(tamiyo_service.policy_updates))
 
-        command_offset = len(kasmina_adapter.commands)
-        state_offset = len(trainer.state_packets)
+            command_offset = len(kasmina_adapter.commands)
+            state_offset = len(trainer.state_packets)
 
-        logger.info("Running training loop after policy update")
-        list(trainer.run())
-        generate_field_reports(
-            tamiyo_service,
-            kasmina_adapter.commands[command_offset:],
-            trainer.state_packets[state_offset:],
-        )
-        await publish_history(trainer, tamiyo_service, oona, nissa, settings)
+            logger.info("Running training loop after policy update")
+            list(trainer.run())
+            generate_field_reports(
+                tamiyo_service,
+                kasmina_adapter.commands[command_offset:],
+                trainer.state_packets[state_offset:],
+            )
+            await publish_history(trainer, tamiyo_service, oona, nissa, settings)
 
-        logger.info(
-            "Demo complete: %s telemetry packets, %s field reports, %s policy updates",
-            len(trainer.telemetry_packets),
-            len(tamiyo_service.field_reports),
-            len(tamiyo_service.policy_updates),
-        )
+            logger.info(
+                "Demo complete: %s telemetry packets, %s field reports, %s policy updates",
+                len(trainer.telemetry_packets),
+                len(tamiyo_service.field_reports),
+                len(simic_trainer.policy_updates),
+            )
 
-        await prefetch_coordinator.close()
+        finally:
+            if prefetch_coordinator is not None:
+                await prefetch_coordinator.close()
+            if tamiyo_service is not None:
+                tamiyo_service.close()
+            if trainer is not None:
+                trainer.close()
+            async_worker.shutdown(cancel_pending=True)
     await oona.close()
 
 

@@ -16,7 +16,14 @@ import torch
 from google.protobuf import struct_pb2
 from torch import nn
 
-from esper.core import TelemetryEvent, TelemetryMetric, build_telemetry_packet
+from esper.core import (
+    DependencyContext,
+    DependencyViolationError,
+    TelemetryEvent,
+    TelemetryMetric,
+    build_telemetry_packet,
+    ensure_present,
+)
 from esper.leyline import leyline_pb2 as pb
 from esper.security.signing import DEFAULT_SECRET_ENV, SignatureContext
 
@@ -769,6 +776,16 @@ class KasminaSeedManager:
             )
             seed_id = str(raw_seed_id)
             blueprint_id = command.seed_operation.blueprint_id
+            ensure_present(
+                bool(blueprint_id.strip()),
+                DependencyContext(
+                    subsystem="kasmina",
+                    dependency_type="blueprint",
+                    identifier=blueprint_id or "<empty>",
+                    details={"command_id": command.command_id or ""},
+                ),
+                reason="seed operation missing blueprint_id",
+            )
             operation = command.seed_operation.operation
             parameters = dict(command.seed_operation.parameters)
             seed_event_target = seed_id
@@ -793,6 +810,12 @@ class KasminaSeedManager:
             elif operation in (pb.SEED_OP_CULL, pb.SEED_OP_CANCEL):
                 events.extend(self._retire_seed(seed_id))
                 remove_after_flush = True
+        elif command.command_type == pb.COMMAND_SEED:
+            raise DependencyViolationError(
+                "kasmina",
+                "seed command missing seed_operation",
+                context={"dependency_type": "seed_operation", "command_id": command.command_id or ""},
+            )
         elif command.command_type == pb.COMMAND_CIRCUIT_BREAKER and command.HasField(
             "circuit_breaker"
         ):

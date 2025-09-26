@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from esper.leyline import leyline_pb2
 from esper.oona import OonaClient, OonaMessage
+from esper.core import AsyncWorker
 
 if TYPE_CHECKING:  # pragma: no cover - type checking only
     from .seed_manager import KasminaSeedManager
@@ -16,11 +17,18 @@ if TYPE_CHECKING:  # pragma: no cover - type checking only
 class KasminaPrefetchCoordinator:
     """Bridges KasminaSeedManager with Oona kernel prefetch streams."""
 
-    def __init__(self, manager: "KasminaSeedManager", oona: OonaClient) -> None:
+    def __init__(
+        self,
+        manager: "KasminaSeedManager",
+        oona: OonaClient,
+        *,
+        async_worker: AsyncWorker | None = None,
+    ) -> None:
         self._manager = manager
         self._oona = oona
         self._tasks: list[asyncio.Task] = []
         self._running = False
+        self._worker = async_worker
 
     def request_kernel(
         self,
@@ -59,7 +67,10 @@ class KasminaPrefetchCoordinator:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            asyncio.run(coro)
+            if self._worker is not None:
+                self._worker.submit(coro)
+            else:
+                asyncio.run(coro)
         else:
             loop.create_task(coro)
 

@@ -8,6 +8,10 @@ Plane Refresh RC1 consolidates remediation for Tolaria, Tamiyo, and Kasmina so t
 - Harden timeout handling, cancellation, and telemetry routing end-to-end.
 - Surface complete telemetry for blends, gates, command verification, and emergency signals.
 
+### Working Notes
+- See `KNOWLEDGE_DUMP.md` for a consolidated execution briefing (scope, planned schema changes, helper modules, integration touchpoints, testing/doc updates).
+- `09_strict_dependency_plan.md` captures the detailed execution plan for Risk R2 (strict dependency guard).
+
 This work package unifies the subsystem review findings into a single remediation plan while preserving the per-component master lists.
 
 ## Scope
@@ -39,7 +43,7 @@ This work package unifies the subsystem review findings into a single remediatio
 
 1. Review the per-subsystem master lists copied into this folder.
 2. Plan remediation tasks that cut across Tolaria, Tamiyo, and Kasmina to address the shared issues above.
-3. Define common infrastructure (async worker, telemetry emitter, config objects) before tackling subsystem-specific fixes.
+3. Shared async worker/telemetry infrastructure landed on 2025-09-26; next focus is strict dependency enforcement (guards, diagnostics, preflight) ahead of removing synthetic fallbacks — see `09_strict_dependency_plan.md`.
 
 
 ## Module Work Packages and Sequencing

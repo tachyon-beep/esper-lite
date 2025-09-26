@@ -12,6 +12,7 @@ import torch
 from fakeredis.aioredis import FakeRedis
 from torch import nn
 
+from esper.core import DependencyViolationError
 from esper.karn import BlueprintDescriptor, BlueprintTier
 from esper.kasmina import KasminaSeedManager
 from esper.leyline import leyline_pb2
@@ -50,6 +51,18 @@ class _SeedPolicy(TamiyoPolicy):
         command.seed_operation.operation = leyline_pb2.SEED_OP_GERMINATE
         command.seed_operation.blueprint_id = "bp-timeout"
         self._last_action = {"action": 0.0, "param_delta": 0.0}
+        return command
+
+
+class _MissingBlueprintPolicy(TamiyoPolicy):
+    def select_action(self, packet: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
+        command = leyline_pb2.AdaptationCommand(
+            version=1,
+            command_type=leyline_pb2.COMMAND_SEED,
+            target_seed_id="seed-missing",
+        )
+        command.seed_operation.operation = leyline_pb2.SEED_OP_GERMINATE
+        command.seed_operation.blueprint_id = ""
         return command
 
 
@@ -198,6 +211,20 @@ async def test_degraded_inputs_routes_emergency(tmp_path) -> None:
     # Emergency stream should have a critical packet from Tamiyo
     assert await oona.stream_length("oona.emergency") >= 1
     await oona.close()
+
+
+def test_seed_command_without_blueprint_fails_fast(tmp_path) -> None:
+    config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    urza = UrzaLibrary(root=tmp_path / "urza")
+    service = TamiyoService(
+        policy=_MissingBlueprintPolicy(),
+        store_config=config,
+        urza=urza,
+        signature_context=_SIGNATURE_CONTEXT,
+    )
+    packet = leyline_pb2.SystemStatePacket(version=1, current_epoch=1, training_run_id="run-1")
+    with pytest.raises(DependencyViolationError):
+        service.evaluate_step(packet)
 
 
 def test_tamiyo_signed_command_accepted_and_replay_rejected(tmp_path) -> None:

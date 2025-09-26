@@ -18,8 +18,6 @@ import io
 import json
 import zlib
 from collections.abc import Awaitable, Callable, Iterable
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FuturesTimeout
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,7 +30,16 @@ from google.protobuf.timestamp_pb2 import Timestamp
 from torch import nn
 from torch.utils.data import DataLoader
 
-from esper.core import EsperSettings, TelemetryEvent, TelemetryMetric, build_telemetry_packet
+from esper.core import (
+    AsyncTimeoutError,
+    AsyncWorker,
+    DependencyContext,
+    EsperSettings,
+    TelemetryEvent,
+    TelemetryMetric,
+    build_telemetry_packet,
+    ensure_present,
+)
 from esper.leyline import leyline_pb2
 from esper.oona.messaging import BreakerSnapshot, CircuitBreaker
 
@@ -157,6 +164,7 @@ class TolariaTrainer:
         kasmina: KasminaClient,
         config: TrainingLoopConfig,
         settings: EsperSettings | None = None,
+        async_worker: AsyncWorker | None = None,
     ) -> None:
         self._device = config.device
         self._device_type = self._device.type
@@ -199,6 +207,11 @@ class TolariaTrainer:
             Callable[[leyline_pb2.EmergencySignal], Awaitable[None]] | None
         ) = None
         self._seed_agg_metrics: list[TelemetryMetric] = []
+        self._async_worker = async_worker
+        self._owns_async_worker = False
+        if self._async_worker is None:
+            self._async_worker = AsyncWorker(max_concurrency=4, name="tolaria-worker")
+            self._owns_async_worker = True
         # Snapshot cadence and rebuild storm guard
         try:
             self._rollback_snapshot_steps = max(
@@ -2085,13 +2098,20 @@ class TolariaTrainer:
         use_step: bool,
     ) -> tuple[leyline_pb2.AdaptationCommand, float]:
         start = perf_counter()
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(self._call_tamiyo, state, use_step)
+        if self._async_worker is not None and self._config.tamiyo_timeout_s > 0:
+            handle = self._async_worker.submit(
+                self._call_tamiyo,
+                state,
+                use_step=use_step,
+                timeout=self._config.tamiyo_timeout_s,
+            )
             try:
-                command = future.result(timeout=self._config.tamiyo_timeout_s)
-            except FuturesTimeout as exc:
-                future.cancel()
+                command = handle.result()
+            except AsyncTimeoutError as exc:
                 raise TimeoutError("Tamiyo evaluation timed out") from exc
+        else:
+            command = self._call_tamiyo(state, use_step)
+        self._validate_command_dependencies(command)
         latency_ms = (perf_counter() - start) * 1000.0
         return command, latency_ms
 
@@ -2107,13 +2127,18 @@ class TolariaTrainer:
         return self._tamiyo.evaluate_epoch(state)
 
     def _apply_kasmina_command(self, command: leyline_pb2.AdaptationCommand) -> None:
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(self._kasmina.apply_command, command)
+        if self._async_worker is not None and self._config.tamiyo_timeout_s > 0:
+            handle = self._async_worker.submit(
+                self._kasmina.apply_command,
+                command,
+                timeout=self._config.tamiyo_timeout_s,
+            )
             try:
-                future.result(timeout=self._config.tamiyo_timeout_s)
-            except FuturesTimeout as exc:
-                future.cancel()
+                handle.result()
+            except AsyncTimeoutError as exc:
                 raise TimeoutError("Kasmina command application timed out") from exc
+        else:
+            self._kasmina.apply_command(command)
 
     def _build_conservative_command(self) -> leyline_pb2.AdaptationCommand:
         cmd = leyline_pb2.AdaptationCommand()
@@ -2247,6 +2272,44 @@ class TolariaTrainer:
                 ) + float(dropped)
             # Clear any remaining queued packets after applying cap
             self._emergency_signals.clear()
+
+    def close(self) -> None:
+        """Release worker resources if owned by this trainer."""
+
+        if self._owns_async_worker and self._async_worker is not None:
+            self._async_worker.shutdown(cancel_pending=True)
+            self._async_worker = None
+            self._owns_async_worker = False
+
+    def __del__(self) -> None:  # pragma: no cover - best effort cleanup
+        with contextlib.suppress(Exception):
+            self.close()
+
+    def _validate_command_dependencies(self, command: leyline_pb2.AdaptationCommand) -> None:
+        if command.command_type != leyline_pb2.COMMAND_SEED:
+            return
+        context = DependencyContext(
+            subsystem="tolaria",
+            dependency_type="seed_operation",
+            identifier=command.command_id or "<unset>",
+            details={"command_type": leyline_pb2.CommandType.Name(command.command_type)},
+        )
+        ensure_present(
+            command.HasField("seed_operation"),
+            context,
+            reason="seed command missing seed_operation",
+        )
+        blueprint_id = (command.seed_operation.blueprint_id or "").strip()
+        ensure_present(
+            bool(blueprint_id),
+            DependencyContext(
+                subsystem="tolaria",
+                dependency_type="blueprint",
+                identifier=blueprint_id or "<empty>",
+                details={"command_id": command.command_id or ""},
+            ),
+            reason="seed operation missing blueprint_id",
+        )
 
     def set_emergency_publisher(
         self, publisher: Callable[[leyline_pb2.EmergencySignal], Awaitable[None]]
