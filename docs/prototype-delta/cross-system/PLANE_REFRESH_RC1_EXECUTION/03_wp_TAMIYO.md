@@ -16,7 +16,7 @@ Key issues from `TAMIYO_REVIEW_FINDINGS.md`, delta docs, and `lint_static_analys
 | WP-A3 | Telemetry completeness & routing |
 | WP-A4 | Persistence & registry hardening |
 
-### WP-A1 — Strict Decision Path
+### WP-A1 — Strict Decision Path *(Status: Complete 2025-09-27)*
 Tasks:
 1. Use shared async worker for policy inference and metadata; remove per-call executors.
 2. Fail fast on inference/metadata timeout (no synthetic pause); surface CRITICAL telemetry.
@@ -28,6 +28,11 @@ Acceptance:
 Risks:
 - Policy pipeline depends on Tolaria updates; coordinate worker rollout.
 - Risk engine refactor may change thresholds; add regression tests.
+
+**Status Notes**
+- Shared async worker adopted; timeout paths now emit `timeout_inference` telemetry with no synthetic pause fallback.
+- `_apply_risk_engine` and `_evaluate` refactored into evaluator/orchestrator helpers and now grade at radon **A (3)** and **A (1)** respectively.
+- Regression coverage: `tests/tamiyo/test_risk_engine.py` fixtures and `tests/tamiyo/test_service.py` confirm parity; docs/lint updated (see `CHANGELOG_RC1.md`, `lint_static_analysis.md`).
 
 ### WP-A2 — Policy & Blending Validation
 Tasks:

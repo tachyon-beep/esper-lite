@@ -1000,9 +1000,53 @@ class TamiyoService:
                 evt_level == leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
                 and "risk_reason" not in result.command.annotations
             ):
-                result.command.annotations["risk_reason"] = "degraded_inputs"
+                    result.command.annotations["risk_reason"] = "degraded_inputs"
         except Exception:
             pass
+
+    def _update_loss_delta(self, context: TamiyoEvaluationContext) -> float:
+        """Compute loss_delta using the last validation history."""
+
+        loss_delta = 0.0
+        if self._last_validation_loss is not None:
+            loss_delta = context.state.validation_loss - self._last_validation_loss
+        context.loss_delta = loss_delta
+        return loss_delta
+
+    def _prepare_training_metrics(
+        self,
+        context: TamiyoEvaluationContext,
+        loss_delta: float,
+    ) -> None:
+        """Populate training metrics on the evaluation context."""
+
+        training_metrics = dict(context.state.training_metrics)
+        if self._last_validation_loss is None and "loss_delta" in training_metrics:
+            try:
+                loss_delta = float(training_metrics.get("loss_delta", loss_delta))
+            except Exception:
+                pass
+        context.loss_delta = loss_delta
+        context.training_metrics = training_metrics
+
+    def _run_risk_engine_with_context(
+        self,
+        context: TamiyoEvaluationContext,
+        result: TamiyoEvaluationResult,
+    ) -> None:
+        """Invoke the risk engine and update evaluation state."""
+
+        blueprint_info, risk_events = self._apply_risk_engine(
+            result.command,
+            state=context.state,
+            loss_delta=context.loss_delta,
+            blueprint_info=context.blueprint_info,
+            blueprint_timeout=context.blueprint_timeout,
+            timed_out=context.timed_out,
+            training_metrics=context.training_metrics,
+        )
+        context.blueprint_info = blueprint_info
+        result.events.extend(risk_events)
 
     def _collect_policy_metrics(
         self,
@@ -1289,6 +1333,57 @@ class TamiyoService:
             except Exception:
                 pass
 
+    def _finalize_evaluation(
+        self,
+        context: TamiyoEvaluationContext,
+        result: TamiyoEvaluationResult,
+    ) -> None:
+        """Build telemetry, sign the command, and emit field reports."""
+
+        command = result.command
+        events = result.events
+        metrics = result.metrics
+        state = context.state
+        blueprint_info = context.blueprint_info
+        telemetry = build_telemetry_packet(
+            packet_id=state.packet_id or "tamiyo-telemetry",
+            source="tamiyo",
+            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
+            metrics=metrics,
+            events=events,
+            health_status=self._derive_health_status(command, events),
+            health_summary=self._derive_health_summary(command, events, context.loss_delta),
+            health_indicators=self._build_health_indicators(
+                state,
+                context.loss_delta,
+                blueprint_info,
+            ),
+        )
+        result.telemetry_packet = telemetry
+        telemetry.system_health.indicators["priority"] = leyline_pb2.MessagePriority.Name(
+            self._priority_from_events(events)
+        )
+        self._sign_command(command)
+        self._telemetry_packets.append(telemetry)
+        self._emit_field_report(
+            command,
+            state,
+            context.loss_delta,
+            events,
+            timed_out=context.timed_out,
+        )
+        try:
+            self._update_observation_windows(
+                state,
+                command,
+                events,
+                loss_delta=context.loss_delta,
+            )
+            self._synthesise_due_windows()
+        except Exception:
+            pass
+        self._last_validation_loss = state.validation_loss
+
     def evaluate_step(self, state: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
         """Evaluate step state under tight deadlines (ADR-001 3A)."""
 
@@ -1312,67 +1407,17 @@ class TamiyoService:
         metrics = result.metrics
         timed_out = context.timed_out
 
-        loss_delta = 0.0
-        if self._last_validation_loss is not None:
-            loss_delta = state.validation_loss - self._last_validation_loss
-        context.loss_delta = loss_delta
+        loss_delta = self._update_loss_delta(context)
+        self._prepare_training_metrics(context, loss_delta)
 
         blueprint_info = self._resolve_blueprint(context, result)
         context.blueprint_info = blueprint_info
 
-        training_metrics = dict(state.training_metrics)
-        context.training_metrics = training_metrics
-        # If Tolaria supplied a precomputed loss_delta (WP8.5), prefer it when
-        # we lack a prior validation snapshot. This keeps step-level risk gates
-        # responsive even on the first invocation.
-        if (self._last_validation_loss is None) and ("loss_delta" in training_metrics):
-            try:
-                loss_delta = float(training_metrics.get("loss_delta", loss_delta))
-            except Exception:
-                pass
-        context.loss_delta = loss_delta
-        blueprint_info, risk_events = self._apply_risk_engine(
-            command,
-            state=state,
-            loss_delta=loss_delta,
-            blueprint_info=blueprint_info,
-            blueprint_timeout=context.blueprint_timeout,
-            timed_out=timed_out,
-            training_metrics=training_metrics,
-        )
-        context.blueprint_info = blueprint_info
-        events.extend(risk_events)
-
+        self._run_risk_engine_with_context(context, result)
         self._apply_risk_and_dependencies(context, result)
         self._collect_policy_metrics(context, result)
-
-        telemetry = build_telemetry_packet(
-            packet_id=state.packet_id or "tamiyo-telemetry",
-            source="tamiyo",
-            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
-            metrics=metrics,
-            events=events,
-            health_status=self._derive_health_status(command, events),
-            health_summary=self._derive_health_summary(command, events, loss_delta),
-            health_indicators=self._build_health_indicators(state, loss_delta, blueprint_info),
-        )
-        result.telemetry_packet = telemetry
-        priority_value = self._priority_from_events(events)
-        telemetry.system_health.indicators["priority"] = leyline_pb2.MessagePriority.Name(
-            priority_value
-        )
-        self._sign_command(command)
-        self._telemetry_packets.append(telemetry)
-        # Emit a field report for every decision, including timeouts (neutral outcome).
-        self._emit_field_report(command, state, loss_delta, events, timed_out=timed_out)
-        # Update/synthesise observation windows (non-blocking bookkeeping)
-        try:
-            self._update_observation_windows(state, command, events, loss_delta=loss_delta)
-            self._synthesise_due_windows()
-        except Exception:
-            pass
-        self._last_validation_loss = state.validation_loss
-        return command
+        self._finalize_evaluation(context, result)
+        return result.command
 
     def _emit_field_report(
         self,

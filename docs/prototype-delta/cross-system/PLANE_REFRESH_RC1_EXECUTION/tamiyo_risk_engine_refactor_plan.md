@@ -36,6 +36,7 @@
 ### Phase 4 — Orchestrator Refactor
 - Rewrite `_apply_risk_engine` to construct context, invoke evaluators in order, aggregate outcomes, and finalise risk_reason annotations.
 - Centralise annotation formatting and conservative-mode transitions to avoid duplicated logic.
+- Status (2025-09-27): Steps 4.1–4.5 complete — `_evaluate` now delegates to helpers for policy prep, blueprint fetch, risk enforcement, metrics assembly, and telemetry finalisation. Complexity improved from **F (70)** to **A (1)** with Tamiyo service and integration suites green.
 
 ### Phase 5 — Conservative Mode & Breaker Coordination
 - Audit `_set_conservative_mode` paths to emit telemetry exactly once per transition and clear conservative mode when breakers recover.

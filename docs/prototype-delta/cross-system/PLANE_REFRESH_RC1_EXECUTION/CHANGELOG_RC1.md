@@ -60,3 +60,12 @@
   - Complexity: `/home/john/esper-lite/.venv/bin/radon cc -s -n A src/esper/tamiyo/service.py`
 - **Telemetry Verification**: Fixture-backed tests compare command mutations and telemetry digests against the captured scenarios; conservative-mode enter/exit events observed with no ordering drift.
 - **Notes**: `TamiyoRiskOutcome` now records `risk_reason` assignment precedence, ensuring helper parity. Remaining Tamiyo debt focuses on `_evaluate` (`F (70)`) and conservative-mode recovery telemetry (Phase 4/5 scope).
+
+## 2025-09-27 — Tamiyo Evaluation Orchestrator Refactor (Risk R4b Phase 4)
+- **Summary**: Reduced `TamiyoService._evaluate` to a high-level orchestration sequence backed by dedicated helpers for policy execution, blueprint lookup, risk enforcement, dependency checks, metric collection, and telemetry finalisation. Complexity improved from `F (70)` to `A (1)` without altering telemetry ordering or command annotations.
+- **Tests Run**:
+  - Unit: `/home/john/esper-lite/.venv/bin/pytest tests/tamiyo/test_risk_engine.py`
+  - Service: `TAMIYO_ENABLE_COMPILE=0 /home/john/esper-lite/.venv/bin/pytest tests/tamiyo/test_service.py`
+  - Complexity: `/home/john/esper-lite/.venv/bin/radon cc -s src/esper/tamiyo/service.py`
+- **Telemetry Verification**: Fixture comparisons confirm `timeout_inference`, `bp_quarantine`, and coverage/degraded-input events retain ordering; priority indicator still reflects highest emitted level.
+- **Notes**: `_prepare_training_metrics`, `_run_risk_engine_with_context`, and `_finalize_evaluation` now own the side effects that previously leaked through `_evaluate`. Sets the stage for Phase 5 conservative-mode cleanup and R4c coordination.
