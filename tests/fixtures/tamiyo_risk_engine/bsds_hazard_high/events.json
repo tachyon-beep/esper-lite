@@ -1,0 +1,27 @@
+[
+  {
+    "attributes": {
+      "index": "0",
+      "score": "0.100"
+    },
+    "description": "policy_risk_signal",
+    "level": 1
+  },
+  {
+    "attributes": {
+      "hazard": "HIGH",
+      "provenance": "urabrask",
+      "risk": "0.7"
+    },
+    "description": "bsds_present",
+    "level": 1
+  },
+  {
+    "attributes": {
+      "hazard": "HIGH",
+      "provenance": "urabrask"
+    },
+    "description": "bsds_hazard_high",
+    "level": 2
+  }
+]

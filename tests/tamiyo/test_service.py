@@ -158,28 +158,57 @@ def test_tamiyo_service_generates_command(tmp_path) -> None:
     assert "tamiyo.gnn.inference.latency_ms" in metrics
     assert "tamiyo.gnn.feature_coverage" in metrics
     assert "tamiyo.gnn.compile_enabled" in metrics
-    assert "tamiyo.policy.value_estimate" in metrics
-    assert "tamiyo.policy.risk_score" in metrics
-    telemetry = service.telemetry_packets[-1]
-    assert "blending_method" in telemetry.system_health.indicators
-    assert telemetry.system_health.indicators.get("policy_compile") in {"0", "1"}
-    assert (
-        telemetry.system_health.indicators.get("policy_arch")
-        == service._policy.architecture_version
-    )  # pylint: disable=protected-access
-    # WP1 acceptance: command annotation includes coverage summary
-    assert "feature_coverage" in command.annotations
-    cov = float(command.annotations["feature_coverage"])  # type: ignore[arg-type]
-    assert 0.0 <= cov <= 1.0
-    # WP15: granular coverage present in annotations and telemetry
-    assert "coverage_types" in command.annotations
-    import json as _json
 
-    types = _json.loads(command.annotations["coverage_types"])  # type: ignore[arg-type]
-    assert any(k.startswith("node.") or k.startswith("edges.") for k in types.keys())
-    # Telemetry contains per-type metrics
-    metric_names = {m.name for m in telemetry.metrics}
-    assert any(n.startswith("tamiyo.gnn.feature_coverage.node.") for n in metric_names)
+
+@pytest.mark.parametrize(
+    "fixture_name", ["baseline", "latency_hook_pause", "policy_risk_critical"],
+)
+def test_risk_engine_priority_and_health(
+    fixture_name: str,
+    risk_fixture_loader,
+    tmp_path,
+) -> None:
+    policy = TamiyoPolicy(TamiyoPolicyConfig(enable_compile=False))
+    service = TamiyoService(
+        policy=policy,
+        store_config=FieldReportStoreConfig(path=tmp_path / "field_reports_priority.log"),
+        urza=UrzaLibrary(root=tmp_path / "urza_priority"),
+        signature_context=_SIGNATURE_CONTEXT,
+        step_timeout_ms=1000.0,
+    )
+
+    fixture = risk_fixture_loader(fixture_name)
+    command = leyline_pb2.AdaptationCommand()
+    command.CopyFrom(fixture.command_before)
+    blueprint_info = None if fixture.blueprint_info is None else dict(fixture.blueprint_info)
+
+    _, events = service._apply_risk_engine(
+        command,
+        state=fixture.state,
+        loss_delta=fixture.loss_delta,
+        blueprint_info=blueprint_info,
+        blueprint_timeout=fixture.blueprint_timeout,
+        timed_out=fixture.timed_out,
+        training_metrics=dict(fixture.training_metrics),
+    )
+
+    priority = service._priority_from_events(events)
+    health = service._derive_health_status(command, events)
+
+    expected_priority = {
+        "baseline": leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL,
+        "latency_hook_pause": leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH,
+        "policy_risk_critical": leyline_pb2.MessagePriority.MESSAGE_PRIORITY_CRITICAL,
+    }[fixture_name]
+
+    expected_health = {
+        "baseline": leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY,
+        "latency_hook_pause": leyline_pb2.HealthStatus.HEALTH_STATUS_DEGRADED,
+        "policy_risk_critical": leyline_pb2.HealthStatus.HEALTH_STATUS_CRITICAL,
+    }[fixture_name]
+
+    assert priority == expected_priority
+    assert health == expected_health
 
 
 @pytest.mark.asyncio

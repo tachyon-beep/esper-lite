@@ -9,7 +9,7 @@
 | Module | Work Packages | Key Tests |
 |--------|---------------|-----------|
 | Tolaria | WP-T1..T4 | `tests/tolaria/test_aggregation.py`, `tests/tolaria/test_timeout.py`, `tests/tolaria/test_rollback.py`, `tests/integration/test_control_loop.py`, perf benchmark script |
-| Tamiyo | WP-A1..A4 | `tests/tamiyo/test_policy.py`, `tests/tamiyo/test_service.py`, `tests/tamiyo/test_wal.py`, integration control loop, perf policy benchmark |
+| Tamiyo | WP-A1..A4 | `tests/tamiyo/test_policy.py`, `tests/tamiyo/test_service.py`, `tests/tamiyo/test_risk_engine.py`, `tests/tamiyo/test_wal.py`, integration control loop, perf policy benchmark |
 | Kasmina | WP-K1..K4 | `tests/kasmina/test_gates.py`, `tests/kasmina/test_blending.py`, `tests/kasmina/test_prefetch.py`, `tests/kasmina/test_security.py`, integration control loop |
 | Shared | Foundations | New async worker tests, telemetry routing tests, dependency guard unit tests |
 

@@ -8,7 +8,7 @@ import logging
 import math
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
@@ -51,7 +51,52 @@ class RiskConfig:
     hook_budget_ms: float = 50.0
 
 
+@dataclass(slots=True)
+class TamiyoRiskContext:
+    """Immutable snapshot of the inputs used by the risk engine.
+
+    This is a Phase 2 scaffolding structure; evaluators will consume it starting in
+    Phase 3 to avoid passing long positional argument lists around.
+    """
+
+    command_before: leyline_pb2.AdaptationCommand
+    state: leyline_pb2.SystemStatePacket
+    loss_delta: float
+    blueprint_info: dict[str, float | str | bool | int] | None
+    blueprint_timeout: bool
+    timed_out: bool
+    training_metrics: dict[str, float]
+    inference_breaker_state: int
+    metadata_breaker_state: int
+    conservative_mode: bool
+    policy_version: str
+
+    def metric(self, name: str, default: float | None = None) -> float | None:
+        value = self.training_metrics.get(name)
+        return float(value) if value is not None else default
+
+
+@dataclass(slots=True)
+class TamiyoRiskOutcome:
+    """Accumulator for mutations produced by the risk evaluators."""
+
+    command: leyline_pb2.AdaptationCommand
+    events: list[TelemetryEvent] = field(default_factory=list)
+    blueprint_info: dict[str, float | str | bool | int] | None = None
+    conservative_mode: bool | None = None
+
+    def append_event(self, event: TelemetryEvent) -> None:
+        self.events.append(event)
+
+    def extend_events(self, new_events: Iterable[TelemetryEvent]) -> None:
+        self.events.extend(new_events)
+
+
+RiskEvaluator = Callable[[TamiyoRiskContext, TamiyoRiskOutcome], TamiyoRiskOutcome]
+
+
 _DEFAULT_REPORT_LOG = Path("var/tamiyo/field_reports.log")
+_RISK_REFACTOR_ENABLED = True
 
 
 class TamiyoCircuitBreaker:
@@ -127,6 +172,22 @@ class TamiyoCircuitBreaker:
 
 class TamiyoService:
     """High-level Tamiyo orchestration component."""
+
+    # Ordered list of evaluator identifiers. Concrete implementations are wired in
+    # Phase 3; for now we provide no-op placeholders so the registry structure can
+    # solidify without changing behaviour.
+    _RISK_EVALUATOR_SEQUENCE: tuple[str, ...] = (
+        "policy_risk",
+        "conservative_mode",
+        "timeouts",
+        "blueprint_risk",
+        "bsds",
+        "loss_metrics",
+        "latency_metrics",
+        "isolation_and_device",
+        "optimizer_hints",
+        "stabilisation",
+    )
 
     def __init__(
         self,
@@ -244,6 +305,76 @@ class TamiyoService:
             self._retry_index = {}
         if not isinstance(self._windows, dict):
             self._windows = {}
+
+    def _build_risk_evaluators(self) -> list[tuple[str, RiskEvaluator]]:
+        """Return ordered registry of risk evaluators (Phase 2 scaffolding)."""
+
+        evaluators: list[tuple[str, RiskEvaluator]] = []
+        for name in self._RISK_EVALUATOR_SEQUENCE:
+            evaluators.append((name, self._noop_risk_evaluator))
+        return evaluators
+
+    def _risk_evaluator_names(self) -> tuple[str, ...]:
+        """Expose evaluator order for regression tests/documentation."""
+
+        return self._RISK_EVALUATOR_SEQUENCE
+
+    @staticmethod
+    def _noop_risk_evaluator(
+        _context: TamiyoRiskContext,
+        outcome: TamiyoRiskOutcome,
+    ) -> TamiyoRiskOutcome:
+        """Placeholder evaluator until dedicated logic lands."""
+
+        return outcome
+
+    @staticmethod
+    def _set_risk_reason(
+        command: leyline_pb2.AdaptationCommand,
+        reason: str | None,
+    ) -> None:
+        """Assign the risk_reason annotation when a reason is provided."""
+
+        if reason:
+            command.annotations["risk_reason"] = reason
+
+    @staticmethod
+    def _ensure_default_risk_reason(
+        command: leyline_pb2.AdaptationCommand,
+        default: str = "policy",
+    ) -> None:
+        """Ensure a fallback risk_reason annotation is present."""
+
+        command.annotations.setdefault("risk_reason", default)
+
+    @staticmethod
+    def _apply_blueprint_annotations(
+        command: leyline_pb2.AdaptationCommand,
+        blueprint_info: Mapping[str, float | str | bool | int] | None,
+    ) -> None:
+        """Attach blueprint metadata to command annotations if not already set."""
+
+        if not blueprint_info:
+            return
+        tier = blueprint_info.get("tier")
+        stage = blueprint_info.get("stage")
+        risk = blueprint_info.get("risk")
+        if tier is not None:
+            command.annotations.setdefault("blueprint_tier", str(tier))
+        if stage is not None:
+            command.annotations.setdefault("blueprint_stage", str(stage))
+        if risk is not None:
+            command.annotations.setdefault("blueprint_risk", f"{float(risk):.2f}")
+
+    @staticmethod
+    def _ensure_optimizer_adjustment(
+        command: leyline_pb2.AdaptationCommand,
+        optimizer_id: str,
+    ) -> None:
+        """Force the command into optimizer mode with the provided optimizer ID."""
+
+        command.command_type = leyline_pb2.COMMAND_OPTIMIZER
+        command.optimizer_adjustment.optimizer_id = optimizer_id
 
     def evaluate_step(self, state: leyline_pb2.SystemStatePacket) -> leyline_pb2.AdaptationCommand:
         """Evaluate step state under tight deadlines (ADR-001 3A)."""
@@ -1370,6 +1501,26 @@ class TamiyoService:
         events: list[TelemetryEvent] = []
         reason = command.annotations.get("risk_reason")
 
+        context = TamiyoRiskContext(
+            command_before=command,
+            state=state,
+            loss_delta=loss_delta,
+            blueprint_info=blueprint_info,
+            blueprint_timeout=blueprint_timeout,
+            timed_out=timed_out,
+            training_metrics=training_metrics,
+            inference_breaker_state=self._inference_breaker.state,
+            metadata_breaker_state=self._metadata_breaker.state,
+            conservative_mode=self._risk.conservative_mode,
+            policy_version=self._policy_version,
+        )
+        outcome = TamiyoRiskOutcome(command=command)
+
+        if _RISK_REFACTOR_ENABLED:
+            for _name, evaluator in self._build_risk_evaluators():
+                outcome = evaluator(context, outcome)
+            # Legacy block continues to run; future steps will migrate logic into evaluators.
+
         policy_risk_score: float | None = None
         risk_score_raw = command.annotations.get("policy_risk_score")
         if risk_score_raw:
@@ -1403,8 +1554,7 @@ class TamiyoService:
                 self._set_conservative_mode(True, "policy_risk_critical", events)
             elif policy_risk_score >= 0.85 and command.command_type == leyline_pb2.COMMAND_SEED:
                 reason = reason or "policy_risk_elevated"
-                command.command_type = leyline_pb2.COMMAND_OPTIMIZER
-                command.optimizer_adjustment.optimizer_id = "sgd"
+                self._ensure_optimizer_adjustment(command, "sgd")
                 events.append(
                     TelemetryEvent(
                         description="policy_risk_elevated",
@@ -1442,9 +1592,7 @@ class TamiyoService:
                 events.append(success_event)
 
         if blueprint_info:
-            command.annotations.setdefault("blueprint_tier", blueprint_info["tier"])
-            command.annotations.setdefault("blueprint_stage", str(blueprint_info["stage"]))
-            command.annotations.setdefault("blueprint_risk", f"{blueprint_info['risk']:.2f}")
+            self._apply_blueprint_annotations(command, blueprint_info)
             risk_score = float(blueprint_info["risk"])
             if blueprint_info.get("quarantine_only") or risk_score >= 0.8:
                 events.append(
@@ -1459,8 +1607,7 @@ class TamiyoService:
                 self._set_conservative_mode(True, "bp_quarantine", events)
             elif risk_score >= 0.5 and command.command_type == leyline_pb2.COMMAND_SEED:
                 reason = reason or "blueprint_risk"
-                command.command_type = leyline_pb2.COMMAND_OPTIMIZER
-                command.optimizer_adjustment.optimizer_id = "sgd"
+                self._ensure_optimizer_adjustment(command, "sgd")
                 events.append(
                     TelemetryEvent(
                         description="blueprint_risk",
@@ -1549,8 +1696,7 @@ class TamiyoService:
                     )
                     if command.command_type == leyline_pb2.COMMAND_SEED:
                         reason = reason or "bsds_hazard_high"
-                        command.command_type = leyline_pb2.COMMAND_OPTIMIZER
-                        command.optimizer_adjustment.optimizer_id = "sgd"
+                        self._ensure_optimizer_adjustment(command, "sgd")
 
         if not timed_out and loss_delta > self._risk.max_loss_spike:
             reason = "loss_spike"
@@ -1569,8 +1715,7 @@ class TamiyoService:
             and command.command_type == leyline_pb2.COMMAND_SEED
         ):
             reason = reason or "loss_warning"
-            command.command_type = leyline_pb2.COMMAND_OPTIMIZER
-            command.optimizer_adjustment.optimizer_id = "sgd"
+            self._ensure_optimizer_adjustment(command, "sgd")
             events.append(
                 TelemetryEvent(
                     description="loss_warning",
@@ -1615,8 +1760,7 @@ class TamiyoService:
             )
             if command.command_type == leyline_pb2.COMMAND_SEED:
                 reason = "kasmina_apply_slow"
-                command.command_type = leyline_pb2.COMMAND_OPTIMIZER
-                command.optimizer_adjustment.optimizer_id = "sgd"
+                self._ensure_optimizer_adjustment(command, "sgd")
         finalize_ms = training_metrics.get("kasmina.finalize_ms")
         if finalize_ms and finalize_ms > float(self._risk.kasmina_finalize_slow_ms):
             desc = "kasmina_finalize_slow"
@@ -1629,8 +1773,7 @@ class TamiyoService:
             )
             if command.command_type == leyline_pb2.COMMAND_SEED:
                 reason = "kasmina_finalize_slow"
-                command.command_type = leyline_pb2.COMMAND_OPTIMIZER
-                command.optimizer_adjustment.optimizer_id = "sgd"
+                self._ensure_optimizer_adjustment(command, "sgd")
 
         isolation = training_metrics.get("kasmina.isolation.violations")
         if isolation and isolation > 0:
@@ -1656,8 +1799,7 @@ class TamiyoService:
             )
             if command.command_type == leyline_pb2.COMMAND_SEED:
                 reason = reason or "loss_volatility_high"
-                command.command_type = leyline_pb2.COMMAND_OPTIMIZER
-                command.optimizer_adjustment.optimizer_id = "sgd"
+                self._ensure_optimizer_adjustment(command, "sgd")
         gvar = training_metrics.get("grad_var")
         if gvar and gvar > 1.0 and command.command_type == leyline_pb2.COMMAND_SEED:
             events.append(
@@ -1668,8 +1810,7 @@ class TamiyoService:
                 )
             )
             reason = reason or "grad_variance_high"
-            command.command_type = leyline_pb2.COMMAND_OPTIMIZER
-            command.optimizer_adjustment.optimizer_id = "sgd"
+            self._ensure_optimizer_adjustment(command, "sgd")
         conflict = training_metrics.get("grad_conflict_rate")
         if conflict and conflict > 0.5 and command.command_type == leyline_pb2.COMMAND_SEED:
             events.append(
@@ -1680,8 +1821,7 @@ class TamiyoService:
                 )
             )
             reason = reason or "grad_conflict_high"
-            command.command_type = leyline_pb2.COMMAND_OPTIMIZER
-            command.optimizer_adjustment.optimizer_id = "sgd"
+            self._ensure_optimizer_adjustment(command, "sgd")
 
         # Optimizer hints
         lr = training_metrics.get("optimizer_lr")
@@ -1695,8 +1835,7 @@ class TamiyoService:
             )
             if command.command_type == leyline_pb2.COMMAND_SEED:
                 reason = "optimizer_hint"
-                command.command_type = leyline_pb2.COMMAND_OPTIMIZER
-                command.optimizer_adjustment.optimizer_id = "sgd"
+                self._ensure_optimizer_adjustment(command, "sgd")
 
         # Device pressure (best-effort)
         gpu_util = training_metrics.get("gpu_util_percent")
@@ -1725,7 +1864,7 @@ class TamiyoService:
                 )
             )
             reason = reason or "cpu_pressure_high"
-            command.command_type = leyline_pb2.COMMAND_OPTIMIZER
+            self._ensure_optimizer_adjustment(command, "sgd")
 
         if (
             not reason
@@ -1744,9 +1883,9 @@ class TamiyoService:
             self._set_conservative_mode(False, "stabilised", events)
 
         if reason:
-            command.annotations["risk_reason"] = reason
-        elif "risk_reason" not in command.annotations:
-            command.annotations["risk_reason"] = "policy"
+            self._set_risk_reason(command, reason)
+        else:
+            self._ensure_default_risk_reason(command)
 
         return blueprint_info, events
 

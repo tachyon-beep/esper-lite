@@ -11,7 +11,7 @@ This document captures the lint/static-analysis signals that must be addressed d
 - `LRController.build_controller` — **B (8)**; ensure dead code paths removed once strict dependency plan lands.
 
 ## Tamiyo
-- `TamiyoService._apply_risk_engine` — **F (92)** complexity. Break into per-signal evaluators (policy risk, blueprint risk, telemetry) plus clear return contract.
+- `TamiyoService._apply_risk_engine` — **F (92)** complexity. Break into per-signal evaluators (policy risk, blueprint risk, telemetry) plus clear return contract. Baseline reconfirmed 2025-09-27 prior to R4b execution.
 - `TamiyoService._evaluate` — **F (68)** complexity; factor timeout handling, metadata enrichment, and telemetry emission into dedicated utilities.
 - `TamiyoService.__init__`, `_emit_field_report`, `_update_observation_windows`, `_serialize_blueprint_record`, `_synthesise_due_windows`, `publish_history` — **D (21–29)** complexity each; create subcomponents (field-report manager, metadata cache, telemetry router).
 - `TamiyoGraphBuilder` functions:
