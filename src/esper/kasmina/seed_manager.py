@@ -776,6 +776,7 @@ class KasminaSeedManager:
             )
             seed_id = str(raw_seed_id)
             blueprint_id = command.seed_operation.blueprint_id
+            training_run_id = (command.annotations.get("training_run_id", "") if hasattr(command, "annotations") else "").strip()
             ensure_present(
                 bool(blueprint_id.strip()),
                 DependencyContext(
@@ -786,6 +787,18 @@ class KasminaSeedManager:
                 ),
                 reason="seed operation missing blueprint_id",
             )
+            ensure_present(
+                bool(training_run_id),
+                DependencyContext(
+                    subsystem="kasmina",
+                    dependency_type="training_run_id",
+                    identifier=training_run_id or "<empty>",
+                    details={"command_id": command.command_id or ""},
+                ),
+                reason="seed command missing training_run_id",
+            )
+            context = self._seeds.setdefault(seed_id, SeedContext(seed_id))
+            context.metadata["training_run_id"] = training_run_id
             operation = command.seed_operation.operation
             parameters = dict(command.seed_operation.parameters)
             seed_event_target = seed_id
@@ -1521,7 +1534,17 @@ class KasminaSeedManager:
     def _register_prefetch(self, context: SeedContext, blueprint_id: str) -> str:
         if self._prefetch is None:
             raise RuntimeError("Prefetch coordinator not configured")
-        training_run_id = context.metadata.get("training_run_id", "prototype")
+        training_run_id = (context.metadata.get("training_run_id") or "").strip()
+        ensure_present(
+            bool(training_run_id),
+            DependencyContext(
+                subsystem="kasmina",
+                dependency_type="training_run_id",
+                identifier=training_run_id or "<empty>",
+                details={"seed_id": context.seed_id, "blueprint_id": blueprint_id},
+            ),
+            reason="prefetch registration missing training_run_id",
+        )
         request_id = self._prefetch.request_kernel(
             context.seed_id,
             blueprint_id,

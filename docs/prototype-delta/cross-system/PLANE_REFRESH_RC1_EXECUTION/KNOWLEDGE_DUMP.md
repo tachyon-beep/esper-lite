@@ -33,11 +33,11 @@ message CommandSecurity { string signature = 1; string nonce = 2; google.protobu
 ```
 (See `05_shared_foundations.md` for full draft definitions.)
 
-## Helper Modules (planned)
+## Helper Modules
 - `esper.core.telemetry` – build/publish packets with structured priority.
 - `esper.core.decisions` – attach/parse `DecisionMetadata` (temporary mirroring to annotations during migration if needed).
 - `esper.core.training_metrics` – pack/unpack structured Tolaria metrics.
-- `esper.core.dependency_guard` – shared strict dependency checks (IDs, fallbacks, training-run IDs).
+- `esper.core.dependency_guard` – shared strict dependency checks (IDs, fallbacks, training-run IDs); now used by Tamiyo/Tolaria/Kasmina after 2025-09-26 guard rollout.
 
 ## Subsystem Update Summary
 - **Tolaria**: adopt shared async worker, populate structured `TrainingMetrics`, set `TelemetryPacket.priority`, include `DecisionMetadata`. Simplify aggregator per WP.
@@ -78,8 +78,8 @@ message CommandSecurity { string signature = 1; string nonce = 2; google.protobu
 ## Suggested Execution Order
 1. Finalize proto/schema updates + regenerate leyline bindings.
 2. Implement shared helpers and dependency guard.
-3. Update Tolaria/Tamiyo/Kasmina to produce/consume structured messages + priority.
-4. Adapt Weatherlight/Oona for priority field.
+3. Update Tolaria/Tamiyo/Kasmina to produce/consume structured messages + priority. ✅
+4. Adapt Weatherlight/Oona for priority field. ✅ (priority guard in Weatherlight preflight pending telemetry load tests).
 5. Refactor Simic replay/trainer to `FieldReportDelta`.
 6. Update tests/docs/dashboards.
 7. Run full test suite + targeted integration checks.
@@ -89,4 +89,3 @@ message CommandSecurity { string signature = 1; string nonce = 2; google.protobu
 - Exposing previously masked dependency failures once fallbacks removed.
 - Metric name drift causing observability regressions.
 - Coordinated proto adoption across subsystems/tests (no adapters).
-

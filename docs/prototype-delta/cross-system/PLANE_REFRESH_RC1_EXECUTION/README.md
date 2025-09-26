@@ -43,7 +43,7 @@ This work package unifies the subsystem review findings into a single remediatio
 
 1. Review the per-subsystem master lists copied into this folder.
 2. Plan remediation tasks that cut across Tolaria, Tamiyo, and Kasmina to address the shared issues above.
-3. Shared async worker/telemetry infrastructure landed on 2025-09-26; next focus is strict dependency enforcement (guards, diagnostics, preflight) ahead of removing synthetic fallbacks — see `09_strict_dependency_plan.md`.
+3. Shared async worker/telemetry infrastructure landed on 2025-09-26; strict dependency guard (blueprint + training run IDs) is now in place across Tamiyo/Tolaria/Kasmina — see `09_strict_dependency_plan.md`. Next risk: telemetry routing load tests (R3).
 
 
 ## Module Work Packages and Sequencing

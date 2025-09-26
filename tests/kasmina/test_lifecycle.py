@@ -8,7 +8,8 @@ import torch
 from torch import nn
 
 from esper.karn import BlueprintDescriptor, BlueprintTier, KarnCatalog
-from esper.kasmina import KasminaLifecycle, KasminaSeedManager
+from esper.core import DependencyViolationError
+from esper.kasmina import KasminaLifecycle, KasminaPrefetchCoordinator, KasminaSeedManager, SeedContext
 from esper.leyline import leyline_pb2
 from esper.security.signing import SignatureContext, sign
 from esper.tezzeret import CompileJobConfig, TezzeretCompiler
@@ -157,9 +158,65 @@ def test_cull_path_returns_to_dormant() -> None:
     assert lc.state == leyline_pb2.SEED_STAGE_DORMANT
 
 
+def test_register_prefetch_requires_training_run_id() -> None:
+    runtime = _RuntimeStub()
+    manager = KasminaSeedManager(runtime=runtime, signing_context=_SIGNING_CONTEXT)
+    manager.register_host_model(nn.Linear(1, 1))
+    manager._seeds["seed-guard"] = SeedContext("seed-guard")
+    manager.set_prefetch(_PrefetchStub())
+
+    with pytest.raises(DependencyViolationError):
+        manager._register_prefetch(manager._seeds["seed-guard"], "bp-guard")
+
+    manager._seeds["seed-guard"].metadata["training_run_id"] = "run-123"
+    request_id = manager._register_prefetch(manager._seeds["seed-guard"], "bp-guard")
+    assert request_id == "prefetch-req"
+
+
+def test_prefetch_coordinator_requires_training_run_id() -> None:
+    manager = _ManagerStub()
+    coordinator = KasminaPrefetchCoordinator(manager, _OonaStub())
+
+    with pytest.raises(DependencyViolationError):
+        coordinator.request_kernel("seed-guard", "bp-guard")
+
+    coordinator.request_kernel(
+        "seed-guard",
+        "bp-guard",
+        training_run_id="run-123",
+    )
+    assert manager.events == []  # scheduler shouldn't run in synchronous path
+
+
 _SIGNING_CONTEXT = SignatureContext(secret=b"kasmina-test-secret")
 
 
 def _sign_command(command: leyline_pb2.AdaptationCommand) -> None:
+    command.annotations.setdefault("training_run_id", "test-run")
     command.issued_at.GetCurrentTime()
     command.annotations["signature"] = sign(command.SerializeToString(), _SIGNING_CONTEXT)
+
+
+class _PrefetchStub:
+    def __init__(self) -> None:
+        self.last = None
+
+    def request_kernel(self, seed_id: str, blueprint_id: str, *, training_run_id: str) -> str:
+        self.last = (seed_id, blueprint_id, training_run_id)
+        return "prefetch-req"
+
+
+class _ManagerStub:
+    def __init__(self) -> None:
+        self.events: list[str] = []
+
+    def process_prefetch_ready(self, ready):  # pragma: no cover - unused stub
+        self.events.append("ready")
+
+    def process_prefetch_error(self, error):  # pragma: no cover - unused stub
+        self.events.append("error")
+
+
+class _OonaStub:
+    async def publish_kernel_prefetch_request(self, _request):
+        return None

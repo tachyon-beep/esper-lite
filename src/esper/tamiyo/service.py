@@ -271,6 +271,8 @@ class TamiyoService:
                 self._policy.update_blueprint_metadata(metadata_payload)
 
         command, inference_ms, timed_out = self._run_policy(state, enforce_timeouts)
+        if state.training_run_id:
+            command.annotations["training_run_id"] = state.training_run_id
         if timed_out:
             events.append(
                 TelemetryEvent(

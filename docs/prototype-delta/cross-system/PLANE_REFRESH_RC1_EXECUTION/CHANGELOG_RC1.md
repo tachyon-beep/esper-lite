@@ -14,7 +14,7 @@
 (append entries chronologically as work packages complete)
 
 ## 2025-09-26 — Shared Foundations
-- **Summary**: Added the shared `AsyncWorker`, replaced Tolaria/Tamiyo timeout `ThreadPoolExecutor` usage, plumbed Kasmina prefetch through the common worker, shipped the strict dependency guard primitives, and delivered the soak harness plus developer script for cancellation stress runs.
+- **Summary**: Added the shared `AsyncWorker`, replaced Tolaria/Tamiyo timeout `ThreadPoolExecutor` usage, plumbed Kasmina prefetch through the common worker, shipped the strict dependency guard primitives (blueprint/training-run IDs), and delivered the soak harness plus developer script for cancellation stress runs.
 - **Tests Run**:
   - Unit: `python -m py_compile src/esper/core/async_runner.py tests/helpers/async_worker_harness.py`
   - Integration: `RUN_SOAK_TESTS=1 python -m pytest tests/integration/test_async_worker_soak.py -m soak`

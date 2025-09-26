@@ -6,6 +6,7 @@ import asyncio
 import uuid
 from typing import TYPE_CHECKING
 
+from esper.core import DependencyViolationError
 from esper.leyline import leyline_pb2
 from esper.oona import OonaClient, OonaMessage
 from esper.core import AsyncWorker
@@ -37,10 +38,20 @@ class KasminaPrefetchCoordinator:
         *,
         training_run_id: str | None = None,
     ) -> str:
+        if not (training_run_id or "").strip():
+            raise DependencyViolationError(
+                "kasmina",
+                "prefetch request missing training_run_id",
+                context={
+                    "dependency_type": "training_run_id",
+                    "seed_id": seed_id,
+                    "blueprint_id": blueprint_id,
+                },
+            )
         request = leyline_pb2.KernelPrefetchRequest(
             request_id=f"prefetch-{uuid.uuid4()}",
             blueprint_id=blueprint_id,
-            training_run_id=training_run_id or "prototype",
+            training_run_id=training_run_id,
         )
         request.issued_at.GetCurrentTime()
         self._schedule(self._oona.publish_kernel_prefetch_request(request))

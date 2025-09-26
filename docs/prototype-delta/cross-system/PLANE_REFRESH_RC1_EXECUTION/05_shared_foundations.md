@@ -80,7 +80,7 @@
 - **Standardisation actions**:
   1. Consume the proposed `DecisionMetadata`/`SeedOperation` fields instead of parsing arbitrary maps; implement strict schema validation and reject commands lacking the structured payload.
   2. When `TelemetryPacket.priority` exists, emit priority via the dedicated field and reserve `indicators` for human-readable summaries (e.g., seed id, lifecycle stage).
-  3. Update kernel prefetch to require typed identifiers (`training_run_id`, `seed_id`) and remove the fallback strings once dependency guard is in place.
+3. Update kernel prefetch to require typed identifiers (`training_run_id`, `seed_id`) and remove the fallback strings once dependency guard is in place. ✅
 
   _Annotation usage mapping_
   - Blend configuration: `blend_mode`, `blend_mode_source`, `alpha_vec`, `gate_k`, `gate_tau`, `alpha_lo`, `alpha_hi` → feed `_apply_blend_annotations` and populate `SeedContext.blend_config` (`src/esper/kasmina/seed_manager.py:1524-1584`).
