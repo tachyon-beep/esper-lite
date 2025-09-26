@@ -443,6 +443,7 @@ def test_emits_blend_mode_annotations_when_enabled(
         # gating params present
         assert "gate_k" in cmd.annotations and "gate_tau" in cmd.annotations
         assert "alpha_lo" in cmd.annotations and "alpha_hi" in cmd.annotations
+        assert cmd.annotations.get("confidence_logits_required") == "true"
 
 
 def test_channel_mode_emits_alpha_vec_when_shape_small(

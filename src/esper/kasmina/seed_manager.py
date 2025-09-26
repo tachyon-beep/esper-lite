@@ -27,7 +27,15 @@ from esper.core import (
 from esper.leyline import leyline_pb2 as pb
 from esper.security.signing import DEFAULT_SECRET_ENV, SignatureContext
 
-from .blending import AlphaBlender, AlphaSchedule, BlenderConfig, blend_mode_name, blend_with_config
+from .blending import (
+    AlphaBlender,
+    AlphaSchedule,
+    BlenderConfig,
+    blend_confidence,
+    blend_mode_name,
+    blend_with_config,
+    compute_confidence_gate,
+)
 from .gates import GateInputs, GateResult, KasminaGates
 from .isolation import GradientIsolationMonitor, IsolationSession, IsolationStats
 from .kernel_cache import KasminaKernelCache
@@ -1011,18 +1019,106 @@ class KasminaSeedManager:
 
         alpha = 1.0
         cfg: BlenderConfig | None = None
+        requires_logits = False
         if seed_id is not None:
             context = self._seeds.get(seed_id)
             if context:
                 alpha = context.alpha
                 cfg = context.blend_config
+                requires_logits = (
+                    context.metadata.get("confidence_logits_required", "").lower() == "true"
+                )
         if cfg is not None:
             try:
-                return blend_with_config(host_tensor, seed_tensor, alpha, cfg)
+                return self._blend_with_config(
+                    host_tensor,
+                    seed_tensor,
+                    alpha,
+                    cfg,
+                    requires_logits=requires_logits,
+                    seed_id=seed_id,
+                )
             except Exception:
                 # Defensive fallback on unexpected config issues
                 return self._alpha_blender.blend(host_tensor, seed_tensor, alpha)
         return self._alpha_blender.blend(host_tensor, seed_tensor, alpha)
+
+    def _blend_with_config(
+        self,
+        host_tensor: torch.Tensor,
+        seed_tensor: torch.Tensor,
+        alpha: float,
+        cfg: BlenderConfig,
+        *,
+        requires_logits: bool,
+        seed_id: str | None,
+    ) -> torch.Tensor:
+        if cfg.mode == "CONFIDENCE":
+            seed_for_gate = seed_tensor
+            if requires_logits and (
+                seed_for_gate.dim() < 2 or seed_for_gate.shape[-1] < 2
+            ):
+                if seed_id is not None:
+                    context = self._seeds.get(seed_id)
+                    if context is not None:
+                        context.pending_events.append(
+                            TelemetryEvent(
+                                description="confidence_gate_missing_logits",
+                                level=pb.TelemetryLevel.TELEMETRY_LEVEL_ERROR,
+                                attributes={
+                                    "seed_id": seed_id,
+                                    "reason": "insufficient_rank",
+                                },
+                            )
+                        )
+                gate = torch.ones(
+                    (seed_tensor.shape[0] if seed_tensor.dim() > 0 else 1,),
+                    device=seed_tensor.device,
+                    dtype=seed_tensor.dtype,
+                )
+                return blend_confidence(
+                    host_tensor,
+                    seed_tensor,
+                    alpha,
+                    gate,
+                    alpha_lo=cfg.alpha_lo,
+                    alpha_hi=cfg.alpha_hi,
+                )
+            try:
+                gate = compute_confidence_gate(seed_for_gate, cfg.gate_k, cfg.gate_tau)
+            except Exception as exc:
+                if requires_logits:
+                    raise RuntimeError(
+                        "Failed to compute confidence gate from seed logits"
+                    ) from exc
+                gate = torch.ones(
+                    (seed_tensor.shape[0] if seed_tensor.dim() > 0 else 1,),
+                    device=seed_tensor.device,
+                    dtype=seed_tensor.dtype,
+                )
+                if seed_id is not None:
+                    context = self._seeds.get(seed_id)
+                    if context is not None:
+                        context.pending_events.append(
+                            TelemetryEvent(
+                                description="confidence_gate_fallback",
+                                level=pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                                attributes={
+                                    "reason": "gate_compute_failed",
+                                    "requires_logits": str(requires_logits).lower(),
+                                    "seed_id": seed_id or "",
+                                },
+                            )
+                        )
+            return blend_confidence(
+                host_tensor,
+                seed_tensor,
+                alpha,
+                gate,
+                alpha_lo=cfg.alpha_lo,
+                alpha_hi=cfg.alpha_hi,
+            )
+        return blend_with_config(host_tensor, seed_tensor, alpha, cfg)
 
     def _graft_seed(
         self,
@@ -1600,6 +1696,10 @@ class KasminaSeedManager:
                 lo, hi = hi, lo
             cfg.alpha_lo = lo
             cfg.alpha_hi = hi
+            if annotations.get("confidence_logits_required", "").lower() == "true":
+                context.metadata["confidence_logits_required"] = "true"
+            else:
+                context.metadata.pop("confidence_logits_required", None)
         elif mode == "CHANNEL":
             vec_json = annotations.get("alpha_vec")
             if vec_json:
@@ -1627,6 +1727,7 @@ class KasminaSeedManager:
                     except Exception:
                         pass
         # Store
+        context.metadata["blend_mode"] = mode
         context.blend_config = cfg
 
     def _attempt_prewarm(self, context: SeedContext, kernel: nn.Module) -> None:

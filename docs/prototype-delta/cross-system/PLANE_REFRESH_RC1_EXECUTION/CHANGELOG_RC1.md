@@ -34,3 +34,19 @@
 - **Telemetry Verification**: Harness asserts emergency queue depth, drop counters, and token bucket metrics via `OonaClient.metrics_snapshot`; Weatherlight counters expose high/critical publish counts with zero failures.
 - **Notes**: Added `scripts/run_telemetry_routing_load.py` for manual load generation; new settings `OONA_EMERGENCY_MAX_PER_MIN`/`OONA_EMERGENCY_THRESHOLD` allow tuning without code changes.
   Manual run on staging Redis (`--count 120 --rate 20`) produced 120 routed CRITICAL packets with 0 drops; Oona metrics recorded `publish_latency_ms≈0.26`, `queue_depth_emergency=120`, breakers closed.
+
+## 2025-09-27 — Confidence Gating Logits (Risk R5)
+- **Summary**: Tamiyo now annotates seed commands with the policy-selected blend mode, confidence gate hyperparameters, and a `confidence_logits_required` flag; Kasmina persists the metadata, enforces the logits requirement, and emits telemetry when confidence mode falls back.
+- **Tests Run**:
+  - Targeted: `/home/john/esper-lite/.venv/bin/pytest tests/tamiyo/test_service.py::test_emits_blend_mode_annotations_when_enabled`
+  - Targeted: `/home/john/esper-lite/.venv/bin/pytest tests/kasmina/test_blend_annotations.py`
+- **Telemetry Verification**: Kasmina emits `confidence_gate_missing_logits` events when Tamiyo requests confidence mode without logits, ensuring operators see gating degradations; blend telemetry continues to include mode/source tags.
+- **Notes**: Confidence mode now fails fast into telemetry when logits are absent instead of silently gating on activations; channel and residual modes unchanged.
+
+## 2025-09-27 — Tolaria Epoch Runner Refactor (Risk R4a)
+- **Summary**: `_EpochRunner` now drives the entire Tolaria training loop, replacing `_train_single_epoch_legacy` with helper-driven orchestration and locking behaviour against a refreshed golden fixture. Seed aggregation, optimizer fences, control-loop hand-offs, and epoch finalization all live in runner helpers to keep complexity in check.
+- **Tests Run**:
+  - Targeted: `/home/john/esper-lite/.venv/bin/pytest tests/tolaria/test_tolaria_trainer.py`
+  - Fixture: `/home/john/esper-lite/.venv/bin/python scripts/capture_tolaria_epoch_fixture.py`
+- **Telemetry Verification**: `tests/tolaria/test_tolaria_trainer.py::test_tolaria_epoch_fixture_parity` compares live state/telemetry snapshots to the fixture to detect behavioural drift.
+- **Notes**: Legacy `_train_single_epoch_legacy` has been removed; docs and status tracker updated to reflect the parity guard. Remaining R4a work focuses on lint/complexity follow-ups.

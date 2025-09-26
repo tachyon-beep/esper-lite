@@ -5,6 +5,10 @@
 | Risk Reduction | R1 – Async worker cancellation mitigation | Shared foundations lead | Complete | Async worker soak harness + integration suite verified 2025-09-27 |
 | Risk Reduction | R2 – Strict dependency guard rollout | Module leads | Complete | Guard enforced across Tolaria/Tamiyo/Kasmina; telemetry verified 2025-09-27 |
 | Risk Reduction | R3 – Telemetry routing load tests | Codex (Weatherlight owner) | Complete | Integration harness + CLI landed; metrics verified 2025-09-27 |
+| Risk Reduction | R5 – Confidence gating logits export | Tamiyo lead | Complete | Tamiyo annotates blend mode; Kasmina enforces logits + telemetry (2025-09-27) |
+| Risk Reduction | R4a – Tolaria complexity refactor | Tolaria lead | Complete | `_EpochRunner` runs the full training loop, legacy code removed, fixture parity guard in place, lint/static analysis green (2025-09-27). |
+| Risk Reduction | R4b – Tamiyo risk engine refactor | Tamiyo lead | Not Started | Split `_apply_risk_engine` into per-signal evaluators with golden packets + coverage gates |
+| Risk Reduction | R4c – Kasmina command dispatcher refactor | Kasmina lead | Not Started | Introduce command dispatcher, enforce blend gating with telemetry comparisons, re-run perf baselines |
 | Shared Foundations | Async worker implementation | (tbd) | Not Started |  |
 | Shared Foundations | Telemetry routing update | (tbd) | Not Started |  |
 | Shared Foundations | Dependency guard helper | (tbd) | Not Started |  |

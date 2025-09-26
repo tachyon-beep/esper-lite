@@ -393,6 +393,7 @@ Helpers will emit structured telemetry for migration telemetry (e.g., `telemetry
 - `EsperSettings` gained `OONA_EMERGENCY_MAX_PER_MIN` and `OONA_EMERGENCY_THRESHOLD` switches to tune throttling without a code change.
 - Load harness covers burst limits and backlog control with `FakeRedis` (`tests/integration/test_telemetry_emergency_load.py`); `scripts/run_telemetry_routing_load.py` drives manual experiments against live Redis deployments.
 - Operators can trim telemetry queues when Weatherlight is offline via `scripts/drain_telemetry_streams.py`, which issues Redis `XTRIM` calls to reset `oona.normal` / `oona.emergency` and logs resulting depths.
+- Tamiyo blend annotations now carry the policy-selected mode plus confidence gate parameters; Kasmina stores the metadata, enforces logits availability, and emits `confidence_gate_missing_logits` telemetry when Tamiyo requests confidence mode without sufficient logits.
 
 ## Strict Dependency Guard
 - Create `esper.core.dependency_guard` with checks:

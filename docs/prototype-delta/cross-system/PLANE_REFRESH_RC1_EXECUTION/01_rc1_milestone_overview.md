@@ -43,3 +43,14 @@ Bring Tolaria, Tamiyo, and Kasmina to the prototype-delta standard by removing m
 - Mid-iteration syncs: weekly status review using `08_status_tracker.md`.
 - Telemetry validation checkpoint post WP-A3/WP-K3.
 - Final sign-off: all success criteria met; change log updated.
+
+## Progress Snapshot (2025-09-27)
+- Risk reductions R1–R3 are closed; the shared async worker, strict dependency guard, and telemetry routing harness are in production and documented.
+- R5 (confidence gating logits) shipped; Kasmina now enforces Tamiyo’s `confidence_logits_required` metadata and emits guardrail telemetry.
+- Tolaria R4a is deep into execution: `_EpochRunner` drives the entire epoch flow, the legacy loop has been removed, and `test_tolaria_epoch_fixture_parity` protects the refreshed golden fixture.
+- Tamiyo, Kasmina, and Tolaria targeted suites are green with the latest changes (`tests/tamiyo/test_service.py`, `tests/kasmina/test_blend_annotations.py`, `tests/tolaria/test_tolaria_trainer.py`).
+
+## Next Focus (Q4 Ramp)
+- Complete R4a cleanup (lint/static-analysis updates) and kick R4b/R4c refactors for Tamiyo and Kasmina control planes.
+- Proceed with Tamiyo WP-A3 (telemetry completeness) and Kasmina WP-K2/K3 once the remaining risk items move to execution.
+- Prepare the performance/rollback checkpoint (WP-T3/WP-T4) after the remaining risk items are retired, ensuring metrics flow into `06_testing_validation_plan.md`.

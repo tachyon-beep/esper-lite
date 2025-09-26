@@ -21,7 +21,6 @@ from esper.core import (
     AsyncTimeoutError,
     AsyncWorker,
     DependencyContext,
-    DependencyViolationError,
     EsperSettings,
     TelemetryEvent,
     TelemetryMetric,

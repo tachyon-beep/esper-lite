@@ -500,7 +500,7 @@ class TamiyoPolicy(nn.Module):
         # Optional: emit blend-mode annotations for Kasmina (P8)
         try:
             self._maybe_emit_blend_mode_annotations(
-                command, packet, selected_seed, selected_blueprint
+                command, packet, selected_seed, selected_blueprint, blending_method
             )
         except Exception:  # pragma: no cover - defensive
             pass
@@ -653,36 +653,60 @@ class TamiyoPolicy(nn.Module):
         packet: leyline_pb2.SystemStatePacket,
         selected_seed: str,
         selected_blueprint: str,
+        blending_method: str | None,
     ) -> None:
         if command.command_type != leyline_pb2.COMMAND_SEED:
             return
         settings = EsperSettings()
-        if not getattr(settings, "tamiyo_enable_blend_mode_ann", False):
+        enable_ann = getattr(settings, "tamiyo_enable_blend_mode_ann", False)
+
+        allowed_methods = {"CONVEX", "RESIDUAL", "CHANNEL", "CONFIDENCE"}
+        default_method = (
+            getattr(settings, "tamiyo_blend_mode_default", "CONVEX") or "CONVEX"
+        ).upper()
+
+        raw_method = (blending_method or "").strip().upper()
+        if not raw_method and enable_ann:
+            raw_method = default_method
+
+        if raw_method not in allowed_methods:
+            raw_method = default_method if enable_ann else "CONVEX"
+            if raw_method not in allowed_methods:
+                raw_method = "CONVEX"
+
+        # We always emit annotations when the policy explicitly chose CONFIDENCE so Kasmina can
+        # enforce the logits requirement. For other modes we honour the feature flag to avoid
+        # surprising existing deployments.
+        if raw_method != "CONFIDENCE" and not enable_ann:
             return
-        # Choose mode from default; keep conservative by default
-        mode = (getattr(settings, "tamiyo_blend_mode_default", "CONVEX") or "CONVEX").upper()
-        if mode not in {"CONVEX", "RESIDUAL", "CHANNEL", "CONFIDENCE"}:
-            mode = "CONVEX"
-        command.annotations.setdefault("blend_mode", mode)
-        command.annotations.setdefault(
-            "blend_mode_source",
-            "override" if mode != "CONVEX" else "heuristic",
-        )
-        # Confidence gating parameters (always emit for CONFIDENCE, optional otherwise)
+
+        source = "policy"
+        if not blending_method:
+            source = "override" if enable_ann else "heuristic"
+
+        command.annotations["blend_mode"] = raw_method
+        command.annotations["blend_mode_source"] = source
+
+        # Confidence gating parameters (always emit for CONFIDENCE)
         gate_k = float(getattr(settings, "tamiyo_blend_conf_gate_k", 1.0))
         gate_tau = float(getattr(settings, "tamiyo_blend_conf_gate_tau", 1.0))
         a_lo = float(getattr(settings, "tamiyo_blend_alpha_lo", 0.0))
         a_hi = float(getattr(settings, "tamiyo_blend_alpha_hi", 1.0))
         a_lo = max(0.0, min(1.0, a_lo))
         a_hi = max(0.0, min(1.0, a_hi))
-        if mode == "CONFIDENCE":
-            command.annotations.setdefault("gate_k", f"{gate_k:.4f}")
-            command.annotations.setdefault("gate_tau", f"{gate_tau:.4f}")
-            command.annotations.setdefault("alpha_lo", f"{a_lo:.4f}")
-            command.annotations.setdefault("alpha_hi", f"{a_hi:.4f}")
+        if raw_method == "CONFIDENCE":
+            command.annotations["gate_k"] = f"{gate_k:.4f}"
+            command.annotations["gate_tau"] = f"{gate_tau:.4f}"
+            command.annotations["alpha_lo"] = f"{a_lo:.4f}"
+            command.annotations["alpha_hi"] = f"{a_hi:.4f}"
+            command.annotations["confidence_logits_required"] = "true"
+        else:
+            # Remove remnants if the policy previously set confidence mode but switched away.
+            for key in ("gate_k", "gate_tau", "alpha_lo", "alpha_hi", "confidence_logits_required"):
+                command.annotations.pop(key, None)
 
         # Channel-wise alpha vector only when unambiguous and small
-        if mode == "CHANNEL":
+        if raw_method == "CHANNEL":
             try:
                 max_len = max(1, int(getattr(settings, "tamiyo_blend_alpha_vec_max", 64)))
             except Exception:

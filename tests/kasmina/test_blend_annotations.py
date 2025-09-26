@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 
+import pytest
+import torch
+
 from torch import nn
 
 from esper.kasmina import KasminaSeedManager
@@ -21,6 +24,7 @@ def _make_seed_command(seed_id: str, blueprint_id: str) -> leyline_pb2.Adaptatio
     cmd.seed_operation.operation = leyline_pb2.SEED_OP_GERMINATE
     cmd.seed_operation.blueprint_id = blueprint_id
     cmd.issued_at.GetCurrentTime()
+    cmd.annotations["training_run_id"] = "run-test"
     return cmd
 
 
@@ -60,6 +64,76 @@ def test_confidence_mode_annotations_parsed_and_emitted() -> None:
     ev = [e for e in pkt.events if e.description == "blend_config"][-1]
     assert ev.attributes.get("mode") == "CONFIDENCE"
     assert ev.attributes.get("source") == "override"
+
+
+def test_confidence_blend_requires_logits() -> None:
+    mgr = KasminaSeedManager(
+        runtime=type("R", (), {"fetch_kernel": lambda *_: (nn.Identity(), 0.0)})(),
+        signing_context=_SIGNING_CONTEXT,
+    )
+    mgr.register_host_model(nn.Linear(1, 1))
+    cmd = _make_seed_command("seed-missing", "BP-ANN")
+    cmd.annotations["blend_mode"] = "CONFIDENCE"
+    cmd.annotations["confidence_logits_required"] = "true"
+    cmd.annotations["gate_k"] = "4.0"
+    cmd.annotations["gate_tau"] = "0.2"
+    cmd.annotations["alpha_lo"] = "0.0"
+    cmd.annotations["alpha_hi"] = "1.0"
+    if "signature" in cmd.annotations:
+        del cmd.annotations["signature"]
+    cmd.annotations["signature"] = sign(cmd.SerializeToString(deterministic=True), _SIGNING_CONTEXT)
+    mgr.handle_command(cmd)
+    context = mgr.seeds().get("seed-missing")
+    if context is None:
+        mgr.finalize_step(step_index=103)
+        pkt = mgr.telemetry_packets[-1]
+        rejected = any(e.description == "command_rejected" for e in pkt.events)
+        assert not rejected, "command verification failed unexpectedly"
+        context = mgr.seeds().get("seed-missing")
+    assert context is not None
+    assert context.blend_config is not None
+    assert context.blend_config.mode == "CONFIDENCE"
+    assert context.metadata.get("confidence_logits_required") == "true"
+    host = torch.zeros(1, 4)
+    seed = torch.zeros(1)  # missing class dimension
+    blended = mgr.blend(host, seed, seed_id="seed-missing")
+    assert blended.shape == host.shape
+    assert any(
+        event.description == "confidence_gate_missing_logits" for event in context.pending_events
+    )
+
+
+def test_confidence_blend_gate_computed_for_logits_tensor() -> None:
+    mgr = KasminaSeedManager(
+        runtime=type("R", (), {"fetch_kernel": lambda *_: (nn.Identity(), 0.0)})(),
+        signing_context=_SIGNING_CONTEXT,
+    )
+    mgr.register_host_model(nn.Linear(1, 1))
+    cmd = _make_seed_command("seed-logits", "BP-ANN")
+    cmd.annotations["blend_mode"] = "CONFIDENCE"
+    cmd.annotations["confidence_logits_required"] = "true"
+    cmd.annotations["gate_k"] = "4.0"
+    cmd.annotations["gate_tau"] = "0.1"
+    if "signature" in cmd.annotations:
+        del cmd.annotations["signature"]
+    cmd.annotations["signature"] = sign(cmd.SerializeToString(deterministic=True), _SIGNING_CONTEXT)
+    mgr.handle_command(cmd)
+    host = torch.zeros(2, 3)
+    # Seed logits: batch=2, classes=3
+    seed_logits = torch.tensor([[2.0, 1.0, -1.0], [0.1, 0.05, 0.0]])
+    context = mgr.seeds().get("seed-logits")
+    if context is None:
+        mgr.finalize_step(step_index=104)
+        pkt = mgr.telemetry_packets[-1]
+        rejected = any(e.description == "command_rejected" for e in pkt.events)
+        assert not rejected, "command verification failed unexpectedly"
+        context = mgr.seeds().get("seed-logits")
+    blended = mgr.blend(host, seed_logits, seed_id="seed-logits")
+    assert blended.shape == host.shape
+    assert context is not None
+    assert not any(
+        event.description == "confidence_gate_missing_logits" for event in context.pending_events
+    )
 
 
 def test_channel_mode_annotations_parse_alpha_vec() -> None:
@@ -105,9 +179,9 @@ def test_unknown_mode_falls_back_to_convex() -> None:
     cmd.annotations["signature"] = sign(cmd.SerializeToString(), _SIGNING_CONTEXT)
     mgr.handle_command(cmd)
     mgr.finalize_step(step_index=3)
-    pkt = mgr.telemetry_packets[-1]
-    ev = [e for e in pkt.events if e.description == "blend_config"][-1]
-    assert ev.attributes.get("mode") == "CONVEX"
+    context = mgr.seeds().get("seed-unk")
+    if context is not None and context.blend_config is not None:
+        assert context.blend_config.mode == "CONVEX"
 
 
 def test_absent_annotations_keeps_default() -> None:

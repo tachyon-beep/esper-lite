@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from time import monotonic, perf_counter, time_ns
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, Any
 
 import psutil
 import torch
@@ -125,6 +125,47 @@ class EpochStats:
         return self.sample_count / (self.epoch_duration_ms / 1000.0)
 
 
+@dataclass(slots=True)
+class MicrobatchState:
+    """Prepared microbatch payload used by the epoch runner."""
+
+    inputs: torch.Tensor
+    targets: torch.Tensor
+    seed_ids: Any
+    input_wait_ms: float
+    h2d_copy_ms: float
+    micro_start: float
+
+
+@dataclass(slots=True)
+class EpochContext:
+    """Mutable epoch-level state shared across runner helpers."""
+
+    agg_micro_total: int = 0
+    agg_conflicts_total: int = 0
+    agg_weights_sum: float = 0.0
+    agg_weights_uses: int = 0
+    seed_weight_sum: dict[str, float] = field(default_factory=dict)
+    seed_norm_sum: dict[str, float] = field(default_factory=dict)
+    seed_uses: dict[str, int] = field(default_factory=dict)
+    seen_seeds: set[str] = field(default_factory=set)
+    seen_seeds: set[str] = field(default_factory=set)
+    seed_share_sum: dict[str, float] = field(default_factory=dict)
+    seed_alpha_sum: dict[str, float] = field(default_factory=dict)
+    seed_conflicts_total: dict[str, int] = field(default_factory=dict)
+    teacher_split_sum: dict[str, float] = field(default_factory=dict)
+    teacher_overall_share_sum: float = 0.0
+    teacher_overall_uses: int = 0
+    attrib_sums: dict[str, float] = field(default_factory=dict)
+    attrib_uses: int = 0
+    per_layer_norm_sum: dict[str, dict[int, float]] = field(default_factory=dict)
+    seed_state_cache: list[leyline_pb2.SeedState] | None = None
+    step_failure_reason: str | None = None
+    accumulated_samples: int = 0
+    samples_per_s: float = 0.0
+    grad_conflict_rate: float = 0.0
+
+
 _MATMUL_INITIALISED = False
 
 
@@ -151,6 +192,1182 @@ def _record_function(name: str):
     except Exception:  # pragma: no cover - profiler optional
         return contextlib.nullcontext()
 
+
+class _EpochRunner:
+    """Wrapper around Tolaria's epoch execution logic.
+
+    Helper methods enumerate the major phases (microbatch prep, optimizer
+    fence, control-loop invocation, epoch finalization) so we can keep
+    `_train_single_epoch` focused and testable.
+    """
+
+    TEACHER_KEY = "__teacher__"
+
+    def __init__(self, trainer: "TolariaTrainer") -> None:
+        self._trainer = trainer
+
+    # Helper placeholders (to be populated during refactor)
+    # - _prepare_epoch_context()
+    # - _iter_microbatches()
+    # - _forward_backward()
+    # - _accumulate_microbatch()
+    # - _optimizer_step()
+    # - _invoke_control_loop()
+    # - _update_step_metrics()
+    # - _finalize_epoch()
+
+    def run(self) -> EpochStats:
+        trainer = self._trainer
+
+        stats = EpochStats()
+        ctx = EpochContext()
+        exporter = getattr(trainer._kasmina, "export_seed_states", None)
+        advancer = getattr(trainer._kasmina, "advance_alpha", None)
+        _registry = getattr(trainer._kasmina, "_registry", None)
+        accumulation_steps = max(1, trainer._config.gradient_accumulation_steps)
+
+        micro_flats: list[torch.Tensor] = []
+        shapes: list[torch.Size] | None = None
+        seed_masks: dict[str, torch.Tensor] | None = None
+        owner_for_param: list[str] | None = None
+        seed_param_elems: dict[str, int] | None = None
+        total_elems: int | None = None
+        attrib_sums = ctx.attrib_sums
+        attrib_uses = ctx.attrib_uses
+        param_names: list[str] | None = None
+        offsets: list[int] | None = None
+        per_layer_norm_sum = ctx.per_layer_norm_sum
+        step_failure_reason = ctx.step_failure_reason
+        step_timer_start: float | None = None
+        accumulated_samples = ctx.accumulated_samples
+        per_layer_active = trainer._per_layer_enabled and not trainer._seed_health_compact
+
+        for step, batch in enumerate(trainer._dataloader):
+            micro_state = self._prepare_microbatch(batch)
+            inputs = micro_state.inputs
+            targets = micro_state.targets
+            seed_ids = micro_state.seed_ids
+            input_wait_ms = micro_state.input_wait_ms
+            h2d_copy_ms = micro_state.h2d_copy_ms
+            micro_start = micro_state.micro_start
+
+            if step_timer_start is None:
+                step_timer_start = micro_start
+                accumulated_samples = 0
+                if trainer._step_total_start is None:
+                    trainer._step_total_start = micro_start
+            accumulated_samples += targets.size(0)
+
+            trainer._optimizer.zero_grad(set_to_none=True)
+
+            loss_tensor, correct_tensor = self._forward_backward(inputs, targets)
+            stats.loss_sum += float(loss_tensor.item())
+            stats.sample_count += targets.size(0)
+            stats.correct += int(correct_tensor.item())
+
+            step_ready = self._should_step_optimizer(step, accumulation_steps)
+            if trainer._scaler is not None:
+                trainer._scaler.unscale_(trainer._optimizer)
+
+            param_grads: list[torch.Tensor] = []
+            for parameter in trainer._model.parameters():
+                if parameter.grad is None:
+                    param_grads.append(torch.zeros_like(parameter))
+                else:
+                    param_grads.append(parameter.grad.detach().clone())
+            flat, shapelist = grads_to_flat(param_grads)
+            (
+                shapes,
+                seed_masks,
+                owner_for_param,
+                seed_param_elems,
+                total_elems,
+                param_names,
+                offsets,
+            ) = self._initialize_fence_metadata(
+                shapes=shapes,
+                new_shapes=shapelist,
+                param_grads=param_grads,
+                flat=flat,
+                registry=_registry,
+                seed_masks=seed_masks,
+                owner_for_param=owner_for_param,
+                seed_param_elems=seed_param_elems,
+                total_elems=total_elems,
+                per_layer_enabled=trainer._per_layer_enabled,
+                model=trainer._model,
+                param_names=param_names,
+                offsets=offsets,
+            )
+            attrib_uses = self._accumulate_microbatch(
+                flat_grad=flat,
+                shapes=shapes,
+                micro_flats=micro_flats,
+                attrib_sums=attrib_sums,
+                attrib_uses=attrib_uses,
+                seed_ids=seed_ids,
+                inputs=inputs,
+                targets=targets,
+                per_layer_enabled=per_layer_active,
+                param_names=param_names,
+                per_layer_norm_sum=per_layer_norm_sum,
+            )
+
+            if step_ready:
+                if shapes is None:
+                    raise RuntimeError("optimizer step requires flattened gradient shapes")
+                _, grad_norm = self._optimizer_step(
+                    micro_flats=micro_flats,
+                    shapes=shapes,
+                    seed_masks=seed_masks,
+                    exporter=exporter,
+                    ctx=ctx,
+                    per_layer_enabled=per_layer_active,
+                    param_names=param_names,
+                    offsets=offsets,
+                )
+                stats.gradient_norm_sum += grad_norm
+
+                step_state, step_timer_start, accumulated_samples = self._update_step_metrics(
+                    loss_tensor=loss_tensor,
+                    grad_norm=grad_norm,
+                    input_wait_ms=input_wait_ms,
+                    h2d_copy_ms=h2d_copy_ms,
+                    step_timer_start=step_timer_start,
+                    micro_start=micro_start,
+                    accumulated_samples=accumulated_samples,
+                    ctx=ctx,
+                )
+
+                local_failure = self._invoke_control_loop(
+                    step_state=step_state,
+                    exporter=exporter,
+                    advancer=advancer,
+                )
+                if local_failure and step_failure_reason is None:
+                    step_failure_reason = local_failure
+
+            else:
+                if step_timer_start is None:
+                    step_timer_start = micro_start
+
+            ctx.attrib_uses = attrib_uses
+            ctx.accumulated_samples = accumulated_samples
+            ctx.step_failure_reason = step_failure_reason
+
+            if trainer._opt_manager is not None:
+                fence = (trainer._settings.tolaria_opt_rebuild_fence or "epoch").lower()
+                if fence.startswith("n_steps") or fence.startswith("steps"):
+                    try:
+                        n_steps = int(fence.split(":", 1)[1])
+                    except Exception:
+                        n_steps = 0
+                    if n_steps > 0 and (trainer._global_step % n_steps == 0):
+                        if (
+                            trainer._opt_rebuild_min_steps > 0
+                            and (trainer._global_step - trainer._last_opt_rebuild_step)
+                            < trainer._opt_rebuild_min_steps
+                        ):
+                            trainer._metrics["tolaria.opt.rebuild_skipped_total"] = (
+                                trainer._metrics.get("tolaria.opt.rebuild_skipped_total", 0.0) + 1.0
+                            )
+                        else:
+                            result = trainer._opt_manager.maybe_rebuild(trainer._model)
+                            trainer._last_opt_rebuild_step = trainer._global_step
+                            trainer._metrics["tolaria.opt.rebuild_latency_ms"] = result.latency_ms
+                            if result.success:
+                                trainer._optimizer = trainer._opt_manager.optimizer
+                                trainer._metrics["tolaria.opt.rebuilds_total"] += 1.0
+                            elif result.error and result.error != "breaker_open":
+                                trainer._metrics["tolaria.opt.rebuild_failures_total"] += 1.0
+
+        return self._finalize_epoch(
+            stats=stats,
+            ctx=ctx,
+            exporter=exporter,
+            seed_masks=seed_masks,
+            seed_param_elems=seed_param_elems,
+            total_elems=total_elems,
+            param_names=param_names,
+        )
+
+    def _forward_backward(
+        self,
+        inputs: torch.Tensor,
+        targets: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        trainer = self._trainer
+        try:
+            loss_tensor, correct_tensor = trainer._train_step_fn(inputs, targets)
+        except Exception as exc:
+            if trainer._compile_enabled:
+                trainer._compile_enabled = False
+                trainer._train_step_fn = trainer._eager_train_step
+                trainer._metrics["tolaria.train.compile_enabled"] = 0.0
+                trainer._emit_event(
+                    "tolaria.compile_runtime_fallback",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"error": type(exc).__name__},
+                )
+                if trainer._device_type == "cuda":
+                    try:
+                        trainer._model = trainer._model.to("cpu")
+                        inputs = inputs.detach().cpu()
+                        targets = targets.detach().cpu()
+                        trainer._device = torch.device("cpu")
+                        trainer._device_type = "cpu"
+                        trainer._non_blocking = False
+                        trainer._amp_enabled = False
+                        trainer._scaler = None
+                    except Exception:
+                        pass
+                loss_tensor, correct_tensor = trainer._eager_train_step(inputs, targets)
+            else:
+                raise
+        return loss_tensor, correct_tensor
+
+    def _build_seed_masks_if_needed(
+        self,
+        param_grads: list[torch.Tensor],
+        flat: torch.Tensor,
+        shapes: list[torch.Size],
+        *,
+        registry: Any,
+        seed_masks: dict[str, torch.Tensor] | None,
+        owner_for_param: list[str] | None,
+        seed_param_elems: dict[str, int] | None,
+        total_elems: int | None,
+    ) -> tuple[
+        dict[str, torch.Tensor] | None,
+        list[str] | None,
+        dict[str, int] | None,
+        int | None,
+    ]:
+        """Ensure seed masks exist for seed-aware aggregation.
+
+        Returns possibly updated `(seed_masks, owner_for_param, seed_param_elems, total_elems)`.
+        """
+
+        if seed_masks is not None:
+            return seed_masks, owner_for_param, seed_param_elems, total_elems
+
+        owners: list[str] = []
+        if registry is not None and hasattr(registry, "owner_of"):
+            try:
+                for parameter in self._trainer._model.parameters():
+                    owner = registry.owner_of(parameter)  # type: ignore[attr-defined]
+                    owners.append(owner if owner is not None else self.TEACHER_KEY)
+            except Exception:
+                owners = []
+
+        if not owners:
+            return None, None, seed_param_elems, total_elems
+
+        owner_for_param = owners
+        total = int(flat.numel())
+        masks: dict[str, torch.Tensor] = {
+            name: torch.zeros(total, dtype=flat.dtype, device=flat.device)
+            for name in set(owners)
+        }
+
+        offset = 0
+        for param_owner, shape in zip(owners, shapes):
+            numel = int(torch.tensor(shape).prod().item()) if shape else 1
+            masks[param_owner][offset : offset + numel] = 1.0
+            offset += numel
+
+        elements: dict[str, int] = {}
+        for name, mask in masks.items():
+            try:
+                elements[name] = int(float(mask.sum().item()))
+            except Exception:
+                elements[name] = 0
+
+        return masks, owner_for_param, elements, total
+
+    def _prepare_microbatch(self, batch: Any) -> MicrobatchState:
+        trainer = self._trainer
+        micro_start = perf_counter()
+
+        prev_end = trainer._prev_step_end_time
+        if prev_end is not None:
+            try:
+                input_wait_ms = (micro_start - prev_end) * 1000.0
+            except Exception:
+                input_wait_ms = 0.0
+        else:
+            input_wait_ms = 0.0
+
+        if isinstance(batch, (list, tuple)) and len(batch) == 3:
+            inputs, targets, seed_ids = batch
+        else:
+            inputs, targets = batch
+            seed_ids = None
+
+        h2d_copy_ms = 0.0
+        device = trainer._device
+        non_blocking = trainer._non_blocking
+
+        if trainer._device_type == "cuda":
+            t_start = perf_counter()
+            inputs = inputs.to(device, non_blocking=non_blocking)
+            targets = targets.to(device, non_blocking=non_blocking)
+            h2d_copy_ms = (perf_counter() - t_start) * 1000.0
+        else:
+            inputs = inputs.to(device, non_blocking=non_blocking)
+            targets = targets.to(device, non_blocking=non_blocking)
+
+        try:
+            model_device = next(trainer._model.parameters()).device
+            if inputs.device != model_device:
+                inputs = inputs.to(model_device, non_blocking=False)
+            if targets.device != model_device:
+                targets = targets.to(model_device, non_blocking=False)
+        except StopIteration:
+            pass
+
+        return MicrobatchState(
+            inputs=inputs,
+            targets=targets,
+            seed_ids=seed_ids,
+            input_wait_ms=input_wait_ms,
+            h2d_copy_ms=h2d_copy_ms,
+            micro_start=micro_start,
+        )
+
+    def _initialize_fence_metadata(
+        self,
+        *,
+        shapes: list[torch.Size] | None,
+        new_shapes: list[torch.Size],
+        param_grads: list[torch.Tensor],
+        flat: torch.Tensor,
+        registry: Any,
+        seed_masks: dict[str, torch.Tensor] | None,
+        owner_for_param: list[str] | None,
+        seed_param_elems: dict[str, int] | None,
+        total_elems: int | None,
+        per_layer_enabled: bool,
+        model: nn.Module,
+        param_names: list[str] | None,
+        offsets: list[int] | None,
+    ) -> tuple[
+        list[torch.Size] | None,
+        dict[str, torch.Tensor] | None,
+        list[str] | None,
+        dict[str, int] | None,
+        int | None,
+        list[str] | None,
+        list[int] | None,
+    ]:
+        if shapes is not None:
+            return (
+                shapes,
+                seed_masks,
+                owner_for_param,
+                seed_param_elems,
+                total_elems,
+                param_names,
+                offsets,
+            )
+
+        shapes = new_shapes
+        seed_masks, owner_for_param, seed_param_elems, total_elems = self._build_seed_masks_if_needed(
+            param_grads,
+            flat,
+            shapes,
+            registry=registry,
+            seed_masks=seed_masks,
+            owner_for_param=owner_for_param,
+            seed_param_elems=seed_param_elems,
+            total_elems=total_elems,
+        )
+
+        if not per_layer_enabled:
+            return shapes, seed_masks, owner_for_param, seed_param_elems, total_elems, param_names, offsets
+
+        try:
+            names: list[str] = []
+            for name, parameter in model.named_parameters():
+                if parameter.requires_grad:
+                    names.append(name)
+            if len(names) != len(shapes):
+                names = [f"param_{idx}" for idx in range(len(shapes))]
+            offs: list[int] = []
+            offset = 0
+            for size in shapes:
+                offs.append(offset)
+                elements = int(torch.tensor(size).prod().item()) if size else 1
+                offset += elements
+            param_names = names
+            offsets = offs
+        except Exception:
+            param_names = None
+            offsets = None
+
+        return shapes, seed_masks, owner_for_param, seed_param_elems, total_elems, param_names, offsets
+
+    def _accumulate_microbatch(
+        self,
+        *,
+        flat_grad: torch.Tensor,
+        shapes: list[torch.Size] | None,
+        micro_flats: list[torch.Tensor],
+        attrib_sums: dict[str, float],
+        attrib_uses: int,
+        seed_ids: Any,
+        inputs: torch.Tensor,
+        targets: torch.Tensor,
+        per_layer_enabled: bool,
+        param_names: list[str] | None,
+        per_layer_norm_sum: dict[str, dict[int, float]],
+    ) -> int:
+        trainer = self._trainer
+        micro_flats.append(flat_grad)
+
+        try:
+            weights_mb: dict[str, float] | None = None
+            mode = getattr(trainer, "_attr_mode", None)
+            if mode == "dataloader" and seed_ids is not None:
+                try:
+                    ids = [str(x) for x in seed_ids]
+                except Exception:
+                    try:
+                        ids = [str(int(x)) for x in seed_ids.tolist()]
+                    except Exception:
+                        ids = []
+                if ids:
+                    total = float(len(ids))
+                    weights_mb = {}
+                    for sid in ids:
+                        weights_mb[sid] = weights_mb.get(sid, 0.0) + 1.0 / total
+            elif mode in {"approx", "probe"}:
+                attribute_batch = getattr(trainer._kasmina, "attribute_batch", None)
+                if callable(attribute_batch):
+                    try:
+                        weights_mb = dict(attribute_batch(inputs, targets))
+                    except Exception:
+                        weights_mb = None
+            if weights_mb:
+                for sid, value in weights_mb.items():
+                    attrib_sums[sid] = attrib_sums.get(sid, 0.0) + float(value)
+                attrib_uses += 1
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+        if per_layer_enabled:
+            current_shapes = shapes or [p.shape for p in trainer._model.parameters()]
+            for idx, (param, _shape) in enumerate(zip(trainer._model.parameters(), current_shapes)):
+                grad = param.grad
+                if grad is None:
+                    continue
+                try:
+                    norm = float(grad.norm().item())
+                except Exception:
+                    norm = 0.0
+                key = param_names[idx] if param_names and idx < len(param_names) else str(idx)
+                bucket = per_layer_norm_sum.setdefault(key, {})
+                bucket[idx] = bucket.get(idx, 0.0) + norm
+
+        return attrib_uses
+
+    @staticmethod
+    def _should_step_optimizer(step_index: int, accumulation_steps: int) -> bool:
+        return (step_index + 1) % accumulation_steps == 0
+
+    def _optimizer_step(
+        self,
+        *,
+        micro_flats: list[torch.Tensor],
+        shapes: list[torch.Size],
+        seed_masks: dict[str, torch.Tensor] | None,
+        exporter: Callable[[], list[leyline_pb2.SeedState]] | None,
+        ctx: EpochContext,
+        per_layer_enabled: bool,
+        param_names: list[str] | None,
+        offsets: list[int] | None,
+    ) -> tuple[torch.Tensor, float]:
+        trainer = self._trainer
+        if shapes is None:
+            raise ValueError("optimizer step requires known parameter shapes")
+
+        force_micro = trainer._agg_mode == "microbatch"
+
+        attrib_sums = ctx.attrib_sums
+        attrib_uses = ctx.attrib_uses
+        per_layer_norm_sum = ctx.per_layer_norm_sum
+
+        combined: torch.Tensor
+        conflicts: int
+
+        if seed_masks is None or force_micro:
+            weights: list[float] | None = None
+            seed_states = []
+            if callable(exporter):
+                try:
+                    seed_states = list(exporter())
+                except Exception:
+                    seed_states = []
+            if seed_states:
+                stage_weight = {
+                    getattr(leyline_pb2, "SEED_STAGE_ACTIVE", 0): 1.0,
+                    getattr(leyline_pb2, "SEED_STAGE_BLENDING", 0): 0.5,
+                    getattr(leyline_pb2, "SEED_STAGE_GERMINATING", 0): 0.25,
+                }
+                avg_w = sum(stage_weight.get(s.stage, 1.0) for s in seed_states) / max(
+                    1, len(seed_states)
+                )
+                weights = [avg_w for _ in micro_flats]
+                ctx.agg_weights_sum += float(avg_w)
+                ctx.agg_weights_uses += 1
+            combined, conflicts = combine_flat_grads(
+                micro_flats,
+                use_pcgrad=len(micro_flats) > 1,
+                weights=weights,
+            )
+            try:
+                sources = max(1, len(micro_flats) - 1)
+                ctx.grad_conflict_rate = (
+                    float(conflicts) / float(sources) if len(micro_flats) > 1 else 0.0
+                )
+            except Exception:
+                ctx.grad_conflict_rate = 0.0
+        else:
+            assert seed_masks is not None
+            per_seed: dict[str, torch.Tensor] = {}
+            for name, mask in seed_masks.items():
+                acc: torch.Tensor | None = None
+                for mf in micro_flats:
+                    contrib = mf * mask
+                    acc = contrib if acc is None else (acc + contrib)
+                per_seed[name] = (
+                    acc
+                    if acc is not None
+                    else torch.zeros_like(next(iter(seed_masks.values())))
+                )
+
+            if self.TEACHER_KEY in per_seed and attrib_uses > 0:
+                teacher_acc = per_seed.pop(self.TEACHER_KEY)
+                total_w = sum(attrib_sums.values())
+                if total_w > 0.0:
+                    for seed_id, wsum in attrib_sums.items():
+                        w = float(wsum) / float(total_w)
+                        addition = teacher_acc * w
+                        if seed_id in per_seed:
+                            per_seed[seed_id] = per_seed[seed_id] + addition
+                        else:
+                            per_seed[seed_id] = addition.clone()
+                    try:
+                        ctx.teacher_overall_share_sum += float(torch.norm(teacher_acc).item())
+                    except Exception:
+                        pass
+                    ctx.teacher_overall_uses += 1
+
+            weights_by_seed: dict[str, float] = {}
+            alpha_by_seed: dict[str, float] = {}
+            seed_states = []
+            if callable(exporter):
+                try:
+                    seed_states = list(exporter())
+                except Exception:
+                    seed_states = []
+            stage_weight = {
+                getattr(leyline_pb2, "SEED_STAGE_ACTIVE", 0): 1.0,
+                getattr(leyline_pb2, "SEED_STAGE_BLENDING", 0): 0.5,
+                getattr(leyline_pb2, "SEED_STAGE_GERMINATING", 0): 0.25,
+            }
+            for state in seed_states:
+                alpha = 0.0
+                try:
+                    alpha = float(state.metrics.get("alpha", 0.0))  # type: ignore[attr-defined]
+                except Exception:
+                    alpha = 0.0
+                base = stage_weight.get(state.stage, 1.0)
+                weights_by_seed[state.seed_id] = max(0.1, base * (0.5 + 0.5 * alpha))
+                alpha_by_seed[state.seed_id] = alpha
+
+            if self.TEACHER_KEY in per_seed:
+                weights_by_seed.setdefault(self.TEACHER_KEY, 1.0)
+
+            seed_names = list(per_seed.keys())
+            seed_flats = [per_seed[name] for name in seed_names]
+            weights = [weights_by_seed.get(name, 1.0) for name in seed_names]
+
+            if weights:
+                avg = float(sum(weights) / max(1, len(weights)))
+                ctx.agg_weights_sum += avg
+                ctx.agg_weights_uses += 1
+
+            for name, flat_vec, weight in zip(seed_names, seed_flats, weights):
+                try:
+                    norm_val = float(torch.norm(flat_vec).item())
+                except Exception:
+                    norm_val = 0.0
+                ctx.seed_weight_sum[name] = ctx.seed_weight_sum.get(name, 0.0) + float(weight)
+                ctx.seed_norm_sum[name] = ctx.seed_norm_sum.get(name, 0.0) + norm_val
+                ctx.seed_uses[name] = ctx.seed_uses.get(name, 0) + 1
+                ctx.seen_seeds.add(name)
+                if name in alpha_by_seed:
+                    ctx.seed_alpha_sum[name] = ctx.seed_alpha_sum.get(name, 0.0) + float(alpha_by_seed[name])
+                if attrib_uses > 0:
+                    total_w = float(sum(attrib_sums.values()))
+                    if total_w > 0.0:
+                        sid_w = float(attrib_sums.get(name, 0.0)) / total_w
+                        ctx.teacher_split_sum[name] = ctx.teacher_split_sum.get(name, 0.0) + sid_w
+
+            try:
+                norms = [float(torch.norm(vec).item()) for vec in seed_flats]
+                total_norm = sum(norms)
+            except Exception:
+                norms = []
+                total_norm = 0.0
+            if total_norm > 0.0 and norms:
+                for name, norm_val in zip(seed_names, norms):
+                    ctx.seed_share_sum[name] = ctx.seed_share_sum.get(name, 0.0) + (norm_val / total_norm)
+
+            if 2 <= len(seed_flats) <= 16:
+                for idx, name_i in enumerate(seed_names):
+                    cnt = 0
+                    grad_i = seed_flats[idx]
+                    for jdx, _unused in enumerate(seed_names):
+                        if idx == jdx:
+                            continue
+                        try:
+                            if torch.dot(grad_i, seed_flats[jdx]) < 0:
+                                cnt += 1
+                        except Exception:
+                            continue
+                    ctx.seed_conflicts_total[name_i] = ctx.seed_conflicts_total.get(name_i, 0) + cnt
+
+            if per_layer_enabled and param_names and offsets is not None:
+                for seed_name, vec in zip(seed_names, seed_flats):
+                    layer_map = per_layer_norm_sum.setdefault(seed_name, {})
+                    for idx, off in enumerate(offsets):
+                        num_elems = (
+                            int(torch.tensor(shapes[idx]).prod().item())
+                            if shapes[idx]
+                            else 1
+                        )
+                        try:
+                            slice_vec = vec[off : off + num_elems]
+                            layer_norm = float(torch.norm(slice_vec).item())
+                        except Exception:
+                            layer_norm = 0.0
+                        layer_map[idx] = layer_map.get(idx, 0.0) + layer_norm
+
+            combined, conflicts = combine_flat_grads(
+                seed_flats,
+                use_pcgrad=(len(seed_flats) > 1) and trainer._pcgrad_enabled,
+                weights=weights,
+            )
+            try:
+                sources = max(1, len(seed_flats) - 1)
+                ctx.grad_conflict_rate = (
+                    float(conflicts) / float(sources) if len(seed_flats) > 1 else 0.0
+                )
+            except Exception:
+                ctx.grad_conflict_rate = 0.0
+
+        ctx.agg_conflicts_total += int(conflicts)
+        ctx.agg_micro_total += len(micro_flats)
+
+        agg_grads = flat_to_grads(combined, shapes)
+        for parameter, grad in zip(trainer._model.parameters(), agg_grads):
+            if parameter.grad is None:
+                parameter.grad = grad.clone()
+            else:
+                parameter.grad.detach().copy_(grad)
+
+        grad_norm = trainer._compute_grad_norm()
+
+        with _record_function("tolaria/optimizer_step"):
+            if trainer._scaler is not None:
+                trainer._scaler.step(trainer._optimizer)
+                trainer._scaler.update()
+            else:
+                trainer._optimizer.step()
+        trainer._optimizer.zero_grad(set_to_none=True)
+        micro_flats.clear()
+
+        return combined, grad_norm
+
+    def _update_step_metrics(
+        self,
+        *,
+        loss_tensor: torch.Tensor,
+        grad_norm: float,
+        input_wait_ms: float,
+        h2d_copy_ms: float,
+        step_timer_start: float | None,
+        micro_start: float,
+        accumulated_samples: int,
+        ctx: EpochContext,
+    ) -> tuple[leyline_pb2.SystemStatePacket, float | None, int]:
+        trainer = self._trainer
+
+        try:
+            lr_values: list[float] = []
+            mom_values: list[float] = []
+            for group in trainer._optimizer.param_groups:
+                lr_values.append(float(group.get("lr", 0.0)))
+                if "momentum" in group:
+                    mom_values.append(float(group.get("momentum", 0.0)))
+            optimizer_lr = (
+                float(sum(lr_values) / max(1, len(lr_values))) if lr_values else 0.0
+            )
+            optimizer_momentum = (
+                float(sum(mom_values) / max(1, len(mom_values))) if mom_values else 0.0
+            )
+        except Exception:
+            optimizer_lr = 0.0
+            optimizer_momentum = 0.0
+
+        step_elapsed = perf_counter() - (step_timer_start or micro_start)
+        samples_per_s = 0.0
+        if step_elapsed > 0.0 and accumulated_samples > 0:
+            samples_per_s = accumulated_samples / step_elapsed
+        accumulated_samples = 0
+        new_step_timer_start: float | None = None
+
+        if trainer._fast_cache is not None and trainer._global_step == 0:
+            try:
+                trainer._fast_cache.put(trainer._global_step, trainer._model, trainer._optimizer)
+                trainer._metrics["tolaria.rollback.snapshots_total"] = (
+                    trainer._metrics.get("tolaria.rollback.snapshots_total", 0.0) + 1.0
+                )
+                trainer._metrics["tolaria.rollback.fast_size_bytes"] = float(
+                    trainer._fast_cache.size_bytes
+                )
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+        trainer._global_step += 1
+        current_loss = float(loss_tensor.detach().item())
+        loss_delta = 0.0
+        try:
+            if trainer._last_loss is not None:
+                loss_delta = current_loss - trainer._last_loss
+            old_mean = trainer._loss_mean
+            new_mean = trainer._ewma_alpha * current_loss + (1.0 - trainer._ewma_alpha) * old_mean
+            new_var = (
+                trainer._ewma_alpha * (current_loss - old_mean) * (current_loss - new_mean)
+                + (1.0 - trainer._ewma_alpha) * trainer._loss_var
+            )
+            trainer._loss_mean, trainer._loss_var = new_mean, max(0.0, new_var)
+            g_old_mean = trainer._grad_mean
+            g_new_mean = trainer._ewma_alpha * grad_norm + (1.0 - trainer._ewma_alpha) * g_old_mean
+            g_new_var = (
+                trainer._ewma_alpha * (grad_norm - g_old_mean) * (grad_norm - g_new_mean)
+                + (1.0 - trainer._ewma_alpha) * trainer._grad_var
+            )
+            trainer._grad_mean, trainer._grad_var = g_new_mean, max(0.0, g_new_var)
+            trainer._last_loss = current_loss
+        except Exception:
+            pass
+
+        step_state = trainer._build_step_state(
+            loss=current_loss,
+            grad_norm=grad_norm,
+            samples_per_s=samples_per_s,
+        )
+
+        try:
+            metrics = step_state.training_metrics
+            metrics["optimizer_lr"] = optimizer_lr
+            if optimizer_momentum:
+                metrics["optimizer_momentum"] = optimizer_momentum
+            metrics["loss_delta"] = loss_delta
+            metrics["loss_ewma"] = trainer._loss_mean
+            metrics["loss_volatility"] = trainer._loss_var**0.5
+            metrics["grad_norm_ewma"] = trainer._grad_mean
+            metrics["grad_var"] = trainer._grad_var
+            try:
+                fam_name = type(trainer._optimizer).__name__.lower()
+                if "sgd" in fam_name:
+                    fam_idx = 0
+                elif "adamw" in fam_name:
+                    fam_idx = 2
+                elif "adam" in fam_name:
+                    fam_idx = 1
+                else:
+                    fam_idx = 3
+                metrics["optimizer_family_index"] = float(fam_idx)
+                trainer._emit_event(
+                    "optimizer_family",
+                    attributes={"name": fam_name, "index": str(fam_idx)},
+                )
+            except Exception:
+                pass
+            if input_wait_ms:
+                metrics["input_wait_ms"] = input_wait_ms
+            if torch.cuda.is_available():
+                metrics["h2d_copy_ms"] = h2d_copy_ms
+            metrics["grad_conflict_rate"] = float(ctx.grad_conflict_rate)
+        except Exception:
+            pass
+
+        return step_state, new_step_timer_start, accumulated_samples
+
+    def _invoke_control_loop(
+        self,
+        *,
+        step_state: leyline_pb2.SystemStatePacket,
+        exporter: Callable[[], list[leyline_pb2.SeedState]] | None,
+        advancer: Callable[[str], None] | None,
+    ) -> str | None:
+        trainer = self._trainer
+
+        hook_start = perf_counter()
+        tamiyo_latency_ms = 0.0
+        local_failure: str | None = None
+
+        if trainer._conservative_mode:
+            command = trainer._build_conservative_command()
+        else:
+            try:
+                command, tamiyo_latency_ms = trainer._invoke_tamiyo_step(step_state)
+                trainer._last_tamiyo_latency_ms = tamiyo_latency_ms
+            except TimeoutError as exc:
+                local_failure = "tamiyo_timeout"
+                trainer._emit_event(
+                    "tolaria.tamiyo_timeout",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"error": str(exc)},
+                )
+                trainer._enter_conservative_mode(local_failure)
+                command = trainer._build_conservative_command()
+                trainer._last_tamiyo_latency_ms = 0.0
+            except Exception as exc:  # pragma: no cover - defensive
+                local_failure = "tamiyo_error"
+                trainer._emit_event(
+                    "tolaria.tamiyo_error",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={"error": type(exc).__name__},
+                )
+                command = trainer._build_conservative_command()
+                trainer._enter_conservative_mode(local_failure)
+                trainer._last_tamiyo_latency_ms = 0.0
+
+        apply_ms = 0.0
+        try:
+            t_apply = perf_counter()
+            trainer._apply_kasmina_command(command)
+            apply_ms = (perf_counter() - t_apply) * 1000.0
+        except TimeoutError as exc:
+            reason = "kasmina_timeout"
+            local_failure = local_failure or reason
+            trainer._emit_event(
+                "tolaria.kasmina_timeout",
+                level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                attributes={"error": str(exc)},
+            )
+            trainer._enter_conservative_mode(reason)
+        except Exception as exc:  # pragma: no cover - defensive
+            reason = "kasmina_error"
+            local_failure = local_failure or reason
+            trainer._emit_event(
+                "tolaria.kasmina_error",
+                level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                attributes={"error": type(exc).__name__},
+            )
+
+        hook_latency_ms = (perf_counter() - hook_start) * 1000.0
+        trainer._last_hook_latency_ms = hook_latency_ms
+        trainer._metrics["tolaria.hook.latency_ms"] = hook_latency_ms
+        step_state.training_metrics["hook_latency_ms"] = hook_latency_ms
+        step_state.training_metrics["tamiyo_latency_ms"] = trainer._last_tamiyo_latency_ms or 0.0
+        if trainer._step_enrichment:
+            step_state.training_metrics["kasmina.apply_ms"] = apply_ms
+
+        if callable(exporter) and callable(advancer):
+            try:
+                for seed_state in exporter():
+                    if seed_state.stage == leyline_pb2.SEED_STAGE_BLENDING:
+                        advancer(seed_state.seed_id)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+        finalizer = getattr(trainer._kasmina, "finalize_step", None)
+        if callable(finalizer):
+            finalize_ms = 0.0
+            try:
+                t_fin = perf_counter()
+                finalizer(step_index=trainer._global_step)
+                finalize_ms = (perf_counter() - t_fin) * 1000.0
+            except Exception:  # pragma: no cover - Kasmina finalize is best effort
+                pass
+            else:
+                if trainer._step_enrichment:
+                    step_state.training_metrics["kasmina.finalize_ms"] = finalize_ms
+
+        if trainer._step_total_start is not None and trainer._step_enrichment:
+            step_state.training_metrics["step_latency_ms"] = (
+                perf_counter() - trainer._step_total_start
+            ) * 1000.0
+            trainer._step_total_start = None
+        trainer._prev_step_end_time = perf_counter()
+
+        if trainer._lr_controller is not None:
+            try:
+                with _record_function("tolaria/lr_update"):
+                    lr = trainer._lr_controller.apply(trainer._global_step, trainer._current_epoch)
+                trainer._metrics["tolaria.lr_controller.current_lr"] = lr
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+        if trainer._fast_cache is not None:
+            try:
+                if trainer._global_step % max(1, trainer._rollback_snapshot_steps) == 0:
+                    trainer._fast_cache.put(trainer._global_step, trainer._model, trainer._optimizer)
+                    trainer._metrics["tolaria.rollback.snapshots_total"] = (
+                        trainer._metrics.get("tolaria.rollback.snapshots_total", 0.0) + 1.0
+                    )
+                trainer._metrics["tolaria.rollback.fast_size_bytes"] = float(
+                    trainer._fast_cache.size_bytes
+                )
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+        return local_failure
+
+    def _finalize_epoch(
+        self,
+        *,
+        stats: EpochStats,
+        ctx: EpochContext,
+        exporter: Callable[[], list[leyline_pb2.SeedState]] | None,
+        seed_masks: dict[str, torch.Tensor] | None,
+        seed_param_elems: dict[str, int] | None,
+        total_elems: int | None,
+        param_names: list[str] | None,
+    ) -> EpochStats:
+        trainer = self._trainer
+
+        trainer._last_step_failure_reason = ctx.step_failure_reason
+        trainer._metrics["tolaria.grad_agg.microbatches_total"] = float(ctx.agg_micro_total)
+        trainer._metrics["tolaria.grad_agg.conflicts"] = float(ctx.agg_conflicts_total)
+        trainer._metrics["tolaria.grad_agg.weights_mean"] = (
+            float(ctx.agg_weights_sum / ctx.agg_weights_uses) if ctx.agg_weights_uses > 0 else 0.0
+        )
+        trainer._metrics["tolaria.grad_agg.pcgrad_applied"] = (
+            1.0 if ctx.agg_conflicts_total > 0 else 0.0
+        )
+        try:
+            denom = max(1.0, float(len(ctx.seed_weight_sum) - 1))
+            trainer._metrics["tolaria.grad_agg.conflict_ratio"] = float(ctx.agg_conflicts_total) / denom
+        except Exception:
+            trainer._metrics["tolaria.grad_agg.conflict_ratio"] = 0.0
+
+        if ctx.teacher_overall_uses > 0:
+            try:
+                trainer._metrics["tolaria.grad_agg.teacher_share"] = float(
+                    ctx.teacher_overall_share_sum
+                ) / float(ctx.teacher_overall_uses)
+            except Exception:
+                trainer._metrics["tolaria.grad_agg.teacher_share"] = 0.0
+        else:
+            trainer._metrics["tolaria.grad_agg.teacher_share"] = 0.0
+
+        per_seed_metrics: list[TelemetryMetric] = []
+        stage_by_seed: dict[str, str] = {}
+        if callable(exporter):
+            try:
+                for seed_state in exporter():
+                    try:
+                        stage_name = leyline_pb2.SeedLifecycleStage.Name(seed_state.stage)
+                    except Exception:
+                        stage_name = str(int(seed_state.stage))
+                    stage_by_seed[seed_state.seed_id] = stage_name
+            except Exception:
+                stage_by_seed = {}
+
+        ctx.seen_seeds = set(ctx.seen_seeds)
+        if seed_masks is not None:
+            ctx.seen_seeds.update(seed_masks.keys())
+
+        per_layer_enabled = trainer._per_layer_enabled
+        seed_health_compact = trainer._seed_health_compact
+        per_layer_topk = trainer._per_layer_topk
+        seed_share_jump_warn = trainer._seed_share_jump_warn
+        seed_conflict_ratio_warn = trainer._seed_conflict_ratio_warn
+        last_seed_share = trainer._last_seed_share
+
+        for name in sorted(ctx.seen_seeds):
+            uses = max(1, ctx.seed_uses.get(name, 0))
+            avg_w = float(ctx.seed_weight_sum.get(name, 0.0)) / uses
+            avg_n = float(ctx.seed_norm_sum.get(name, 0.0)) / uses
+            attrs = {"seed_id": name}
+            stage = stage_by_seed.get(name)
+            if stage:
+                attrs["stage"] = stage
+            compact_snapshot: dict[str, float] = {"weight": avg_w}
+
+            if not seed_health_compact:
+                per_seed_metrics.append(
+                    TelemetryMetric("tolaria.grad_agg.seed.weight", avg_w, unit="ratio", attributes=attrs)
+                )
+                per_seed_metrics.append(
+                    TelemetryMetric("tolaria.grad_agg.seed.norm", avg_n, unit="grad", attributes=attrs)
+                )
+
+            if name in ctx.seed_share_sum and ctx.seed_uses.get(name, 0) > 0:
+                avg_share = float(ctx.seed_share_sum[name]) / max(1, ctx.seed_uses.get(name, 0))
+                if not seed_health_compact:
+                    per_seed_metrics.append(
+                        TelemetryMetric(
+                            "tolaria.grad_agg.seed.share", avg_share, unit="ratio", attributes=attrs
+                        )
+                    )
+                delta = avg_share - float(last_seed_share.get(name, 0.0))
+                if not seed_health_compact:
+                    per_seed_metrics.append(
+                        TelemetryMetric(
+                            "tolaria.grad_agg.seed.share_delta", delta, unit="ratio", attributes=attrs
+                        )
+                    )
+                if abs(delta) >= seed_share_jump_warn:
+                    trainer._emit_event(
+                        "seed_share_jump",
+                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                        attributes={**attrs, "delta": f"{delta:.4f}"},
+                    )
+                last_seed_share[name] = avg_share
+                compact_snapshot["share"] = avg_share
+
+            if name in ctx.seed_alpha_sum and ctx.seed_uses.get(name, 0) > 0:
+                avg_alpha = float(ctx.seed_alpha_sum[name]) / max(1, ctx.seed_uses.get(name, 0))
+                if not seed_health_compact:
+                    per_seed_metrics.append(
+                        TelemetryMetric(
+                            "tolaria.grad_agg.seed.alpha", avg_alpha, unit="ratio", attributes=attrs
+                        )
+                    )
+                compact_snapshot["alpha"] = avg_alpha
+
+            if name in ctx.seed_conflicts_total:
+                conflicts_total = float(ctx.seed_conflicts_total[name])
+                if not seed_health_compact:
+                    per_seed_metrics.append(
+                        TelemetryMetric(
+                            "tolaria.grad_agg.seed.conflicts", conflicts_total, unit="count", attributes=attrs
+                        )
+                    )
+                neighbors = max(1, len(ctx.seen_seeds) - 1)
+                conf_ratio = (conflicts_total / float(uses)) / float(neighbors)
+                if not seed_health_compact:
+                    per_seed_metrics.append(
+                        TelemetryMetric(
+                            "tolaria.grad_agg.seed.conflict_ratio",
+                            conf_ratio,
+                            unit="ratio",
+                            attributes=attrs,
+                        )
+                    )
+                if conf_ratio >= seed_conflict_ratio_warn:
+                    trainer._emit_event(
+                        "seed_conflict_high",
+                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                        attributes={**attrs, "conflict_ratio": f"{conf_ratio:.3f}"},
+                    )
+                compact_snapshot["conflicts"] = conflicts_total
+
+            if seed_param_elems is not None and total_elems:
+                elems = float(seed_param_elems.get(name, 0))
+                per_seed_metrics.append(
+                    TelemetryMetric(
+                        "tolaria.grad_agg.seed.params", elems, unit="elems", attributes=attrs
+                    )
+                )
+                per_seed_metrics.append(
+                    TelemetryMetric(
+                        "tolaria.grad_agg.seed.mask_fraction",
+                        (elems / float(total_elems)),
+                        unit="ratio",
+                        attributes=attrs,
+                    )
+                )
+
+            if name in ctx.teacher_split_sum and ctx.attrib_uses > 0:
+                avg_tsplit = float(ctx.teacher_split_sum[name]) / max(1, ctx.attrib_uses)
+                per_seed_metrics.append(
+                    TelemetryMetric(
+                        "tolaria.grad_agg.seed.teacher_share", avg_tsplit, unit="ratio", attributes=attrs
+                    )
+                )
+
+            if (
+                (not seed_health_compact)
+                and per_layer_enabled
+                and param_names
+                and name in ctx.per_layer_norm_sum
+            ):
+                layer_map = ctx.per_layer_norm_sum.get(name, {})
+                avg_map = {
+                    idx: (val / uses if uses > 0 else val) for idx, val in layer_map.items()
+                }
+                top_items = sorted(avg_map.items(), key=lambda kv: kv[1], reverse=True)[:per_layer_topk]
+                for idx, val in top_items:
+                    la = dict(attrs)
+                    la["layer"] = param_names[idx] if idx < len(param_names) else f"param_{idx}"
+                    per_seed_metrics.append(
+                        TelemetryMetric(
+                            "tolaria.grad_agg.seed.layer_norm",
+                            float(val),
+                            unit="grad",
+                            attributes=la,
+                        )
+                    )
+
+            if seed_health_compact:
+                attribs = {
+                    k: f"{v:.4f}" for k, v in compact_snapshot.items() if isinstance(v, float)
+                }
+                attribs.update({k: v for k, v in attrs.items() if isinstance(v, str)})
+                attribs.setdefault("share", "0.0000")
+                attribs.setdefault("alpha", "0.0000")
+                attribs.setdefault("conflicts", "0.0000")
+                attribs.setdefault("weight", "0.0000")
+                trainer._emit_event("seed_health", attributes=attribs)
+
+        if self.TEACHER_KEY in ctx.seen_seeds:
+            uses = max(1, ctx.seed_uses.get(self.TEACHER_KEY, 0))
+            per_seed_metrics.append(
+                TelemetryMetric(
+                    "tolaria.grad_agg.seed.weight",
+                    float(ctx.seed_weight_sum.get(self.TEACHER_KEY, 0.0)) / uses,
+                    unit="ratio",
+                    attributes={"seed_id": self.TEACHER_KEY, "stage": "TEACHER"},
+                )
+            )
+            per_seed_metrics.append(
+                TelemetryMetric(
+                    "tolaria.grad_agg.seed.norm",
+                    float(ctx.seed_norm_sum.get(self.TEACHER_KEY, 0.0)) / uses,
+                    unit="grad",
+                    attributes={"seed_id": self.TEACHER_KEY, "stage": "TEACHER"},
+                )
+            )
+            if seed_param_elems is not None and total_elems:
+                elems = float(seed_param_elems.get(self.TEACHER_KEY, 0))
+                per_seed_metrics.append(
+                    TelemetryMetric(
+                        "tolaria.grad_agg.seed.params",
+                        elems,
+                        unit="elems",
+                        attributes={"seed_id": self.TEACHER_KEY, "stage": "TEACHER"},
+                    )
+                )
+                per_seed_metrics.append(
+                    TelemetryMetric(
+                        "tolaria.grad_agg.seed.mask_fraction",
+                        (elems / float(total_elems)),
+                        unit="ratio",
+                        attributes={"seed_id": self.TEACHER_KEY, "stage": "TEACHER"},
+                    )
+                )
+
+        trainer._seed_agg_metrics = per_seed_metrics
+        return stats
 
 class TolariaTrainer:
     """Minimal training-loop coordinator for PyTorch 2.8 models."""
@@ -632,940 +1849,8 @@ class TolariaTrainer:
         yield state
 
     def _train_single_epoch(self) -> EpochStats:
-        """Execute the forward/backward passes for one epoch."""
+        return _EpochRunner(self).run()
 
-        stats = EpochStats()
-        # Aggregation telemetry accumulators for the epoch
-        agg_micro_total = 0
-        agg_conflicts_total = 0
-        agg_weights_sum = 0.0
-        agg_weights_uses = 0
-        # Per-seed aggregation telemetry accumulators
-        seed_weight_sum: dict[str, float] = {}
-        seed_norm_sum: dict[str, float] = {}
-        seed_uses: dict[str, int] = {}
-        seen_seeds: set[str] = set()
-        seed_share_sum: dict[str, float] = {}
-        seed_alpha_sum: dict[str, float] = {}
-        seed_conflicts_total: dict[str, int] = {}
-        # Teacher split accumulators
-        teacher_split_sum: dict[str, float] = {}
-        teacher_overall_share_sum: float = 0.0
-        teacher_overall_uses: int = 0
-        exporter = getattr(self._kasmina, "export_seed_states", None)
-        advancer = getattr(self._kasmina, "advance_alpha", None)
-        # Optional tight-coupling: access Kasmina's registry for per-parameter ownership
-        _registry = getattr(self._kasmina, "_registry", None)
-        accumulation_steps = max(1, self._config.gradient_accumulation_steps)
-
-        micro_flats: list[torch.Tensor] = []
-        shapes: list[torch.Size] | None = None
-        # Lazily-built seed masks over the flattened gradient vector
-        seed_masks: dict[str, torch.Tensor] | None = None
-        owner_for_param: list[str] | None = None
-        teacher_key = "__teacher__"
-        seed_param_elems: dict[str, int] | None = None
-        total_elems: int | None = None
-        # Attribution accumulators (per microbatch)
-        attrib_sums: dict[str, float] = {}
-        attrib_uses: int = 0
-        # Per-layer accumulators
-        param_names: list[str] | None = None
-        offsets: list[int] | None = None
-        per_layer_norm_sum: dict[str, dict[int, float]] = {}
-        step_failure_reason: str | None = None
-        step_timer_start: float | None = None
-        accumulated_samples = 0
-
-        def _build_seed_masks_if_needed(
-            param_grads: list[torch.Tensor], flat: torch.Tensor, shp: list[torch.Size]
-        ) -> None:
-            nonlocal seed_masks, owner_for_param, seed_param_elems, total_elems
-            if seed_masks is not None:
-                return
-            # Build owner map aligned with parameter order
-            owners: list[str] = []
-            if _registry is not None and hasattr(_registry, "owner_of"):
-                try:
-                    for p in self._model.parameters():
-                        owner = _registry.owner_of(p)  # type: ignore[attr-defined]
-                        owners.append(owner if owner is not None else teacher_key)
-                except Exception:
-                    owners = []
-            if not owners:
-                # No registry available; leave seed_masks as None to fall back to microbatch aggregation
-                seed_masks = None
-                owner_for_param = None
-                return
-            owner_for_param = owners
-            total = int(flat.numel())
-            masks: dict[str, torch.Tensor] = {}
-            # Pre-create zero masks for all owners seen (including teacher)
-            for name in set(owners):
-                masks[name] = torch.zeros(total, dtype=flat.dtype, device=flat.device)
-            # Fill segment ranges per parameter
-            offset = 0
-            for param_owner, s in zip(owners, shp):
-                n = int(torch.tensor(s).prod().item()) if s else 1
-                masks[param_owner][offset : offset + n] = 1.0
-                offset += n
-            seed_masks = masks
-            # Count mask elements
-            elems: dict[str, int] = {}
-            for name, m in masks.items():
-                try:
-                    elems[name] = int(float(m.sum().item()))
-                except Exception:
-                    elems[name] = 0
-            seed_param_elems = elems
-            total_elems = total
-
-        for step, batch in enumerate(self._dataloader):
-            micro_start = perf_counter()
-            # Support dataloader triplet (inputs, targets, seed_ids)
-            if isinstance(batch, (list, tuple)) and len(batch) == 3:
-                inputs, targets, seed_ids = batch
-            else:
-                inputs, targets = batch
-                seed_ids = None
-            # Approximate dataloader wait time (time since previous step end)
-            if self._prev_step_end_time is not None:
-                try:
-                    input_wait_ms = (micro_start - self._prev_step_end_time) * 1000.0
-                except Exception:
-                    input_wait_ms = 0.0
-            else:
-                input_wait_ms = 0.0
-            # Measure host->device copy time (CUDA only; best-effort)
-            h2d_copy_ms = 0.0
-            if self._device_type == "cuda":
-                t_h2d = perf_counter()
-                inputs = inputs.to(self._device, non_blocking=self._non_blocking)
-                targets = targets.to(self._device, non_blocking=self._non_blocking)
-                h2d_copy_ms = (perf_counter() - t_h2d) * 1000.0
-            else:
-                inputs = inputs.to(self._device, non_blocking=self._non_blocking)
-                targets = targets.to(self._device, non_blocking=self._non_blocking)
-            # Align batch tensors with current model device (handles CPU fallback mid-epoch)
-            try:
-                model_device = next(self._model.parameters()).device
-                if inputs.device != model_device:
-                    inputs = inputs.to(model_device, non_blocking=False)
-                if targets.device != model_device:
-                    targets = targets.to(model_device, non_blocking=False)
-            except StopIteration:
-                pass
-
-            if step_timer_start is None:
-                step_timer_start = micro_start
-                accumulated_samples = 0
-                if self._step_total_start is None:
-                    self._step_total_start = micro_start
-            accumulated_samples += targets.size(0)
-
-            # Always zero to isolate per-micro gradients we aggregate ourselves
-            self._optimizer.zero_grad(set_to_none=True)
-
-            try:
-                loss_tensor, correct_tensor = self._train_step_fn(inputs, targets)
-            except Exception as exc:
-                if self._compile_enabled:
-                    self._compile_enabled = False
-                    self._train_step_fn = self._eager_train_step
-                    self._metrics["tolaria.train.compile_enabled"] = 0.0
-                    self._emit_event(
-                        "tolaria.compile_runtime_fallback",
-                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                        attributes={"error": type(exc).__name__},
-                    )
-                    # If CUDA path caused failure, fall back to CPU for this retry
-                    if self._device_type == "cuda":
-                        try:
-                            self._model = self._model.to("cpu")
-                            inputs = inputs.detach().cpu()
-                            targets = targets.detach().cpu()
-                            self._device = torch.device("cpu")
-                            self._device_type = "cpu"
-                            self._non_blocking = False
-                            self._amp_enabled = False
-                            self._scaler = None
-                        except Exception:
-                            pass
-                    loss_tensor, correct_tensor = self._eager_train_step(inputs, targets)
-                else:
-                    raise
-            stats.loss_sum += float(loss_tensor.item())
-            stats.sample_count += targets.size(0)
-            stats.correct += int(correct_tensor.item())
-
-            step_ready = (step + 1) % accumulation_steps == 0
-            # Capture per-micro gradients
-            if self._scaler is not None:
-                self._scaler.unscale_(self._optimizer)
-            # Build flat gradient snapshot in a stable param order
-            param_grads: list[torch.Tensor] = []
-            for p in self._model.parameters():
-                if p.grad is None:
-                    param_grads.append(torch.zeros_like(p))
-                else:
-                    param_grads.append(p.grad.detach().clone())
-            flat, shp = grads_to_flat(param_grads)
-            if shapes is None:
-                shapes = shp
-                # Initialize seed masks if kasmina registry is available
-                _build_seed_masks_if_needed(param_grads, flat, shapes)
-                # Capture parameter names and offsets for per-layer summaries
-                if self._per_layer_enabled:
-                    try:
-                        names: list[str] = []
-                        for name, p in self._model.named_parameters():
-                            if p.requires_grad:
-                                names.append(name)
-                        # Fallback to index if mismatch
-                        if len(names) != len(shapes):
-                            names = [f"param_{i}" for i in range(len(shapes))]
-                        param_names = names
-                        offs: list[int] = []
-                        off = 0
-                        for s in shapes:
-                            offs.append(off)
-                            n = int(torch.tensor(s).prod().item()) if s else 1
-                            off += n
-                        offsets = offs
-                    except Exception:
-                        param_names = None
-                        offsets = None
-            micro_flats.append(flat)
-
-            # Accumulate attribution per microbatch if configured
-            try:
-                weights_mb: dict[str, float] | None = None
-                if self._attr_mode == "dataloader" and seed_ids is not None:
-                    # seed_ids may be list[str] or tensor/array
-                    try:
-                        ids = [str(x) for x in seed_ids]
-                    except Exception:
-                        try:
-                            ids = [str(int(x)) for x in seed_ids.tolist()]
-                        except Exception:
-                            ids = []
-                    if ids:
-                        total = float(len(ids))
-                        weights_mb = {}
-                        for sid in ids:
-                            weights_mb[sid] = weights_mb.get(sid, 0.0) + 1.0 / total
-                elif self._attr_mode in {"approx", "probe"}:
-                    attribute_batch = getattr(self._kasmina, "attribute_batch", None)
-                    if callable(attribute_batch):
-                        try:
-                            weights_mb = dict(attribute_batch(inputs, targets))
-                        except Exception:
-                            weights_mb = None
-                if weights_mb:
-                    for k, v in weights_mb.items():
-                        attrib_sums[k] = attrib_sums.get(k, 0.0) + float(v)
-                    attrib_uses += 1
-            except Exception:  # pragma: no cover - defensive
-                pass
-
-            if step_ready:
-                # Combine gradients at the fence
-                # Mode override: force microbatch aggregation if configured
-                force_micro = self._agg_mode == "microbatch"
-                if seed_masks is None or force_micro:
-                    # Fall back: microbatch aggregation (previous behavior)
-                    # State-aware weights (approximate): prefer ACTIVE seeds; default equal weights
-                    weights: list[float] | None = None
-                    seed_states = []
-                    if callable(exporter):
-                        try:
-                            seed_states = list(exporter())
-                        except Exception:
-                            seed_states = []
-                    if seed_states:
-                        stage_weight = {
-                            getattr(leyline_pb2, "SEED_STAGE_ACTIVE", 0): 1.0,
-                            getattr(leyline_pb2, "SEED_STAGE_BLENDING", 0): 0.5,
-                            getattr(leyline_pb2, "SEED_STAGE_GERMINATING", 0): 0.25,
-                        }
-                        avg_w = sum(stage_weight.get(s.stage, 1.0) for s in seed_states) / max(
-                            1, len(seed_states)
-                        )
-                        weights = [avg_w for _ in micro_flats]
-                        agg_weights_sum += float(avg_w)
-                        agg_weights_uses += 1
-                    combined, conflicts = combine_flat_grads(
-                        micro_flats,
-                        use_pcgrad=len(micro_flats) > 1,
-                        weights=weights,
-                    )
-                    try:
-                        sources = max(1, len(micro_flats) - 1)
-                        grad_conflict_rate = (
-                            float(conflicts) / float(sources) if len(micro_flats) > 1 else 0.0
-                        )
-                    except Exception:
-                        grad_conflict_rate = 0.0
-                else:
-                    # Seed-aware aggregation using masks + PCGrad across seeds
-                    # Sum microbatch flats into per-seed flats using masks
-                    per_seed: dict[str, torch.Tensor] = {}
-                    for name, mask in seed_masks.items():
-                        acc = None
-                        for mf in micro_flats:
-                            contrib = mf * mask
-                            acc = contrib if acc is None else (acc + contrib)
-                        per_seed[name] = (
-                            acc
-                            if acc is not None
-                            else torch.zeros_like(next(iter(seed_masks.values())))
-                        )
-                    # Teacher split if attribution weights are available
-                    if teacher_key in per_seed and attrib_uses > 0:
-                        teacher_acc = per_seed.pop(teacher_key)
-                        # Normalized weights
-                        total_w = sum(attrib_sums.values())
-                        if total_w > 0.0:
-                            for sid, wsum in attrib_sums.items():
-                                w = float(wsum) / float(total_w)
-                                addition = teacher_acc * w
-                                if sid in per_seed:
-                                    per_seed[sid] = per_seed[sid] + addition
-                                else:
-                                    per_seed[sid] = addition.clone()
-                            # Telemetry: teacher overall share
-                            try:
-                                teacher_overall_share_sum += float(torch.norm(teacher_acc).item())
-                            except Exception:
-                                pass
-                            teacher_overall_uses += 1
-                    # Build weights by seed stage (+alpha heuristic if published in metrics)
-                    weights_by_seed: dict[str, float] = {}
-                    alpha_by_seed: dict[str, float] = {}
-                    seed_states = []
-                    if callable(exporter):
-                        try:
-                            seed_states = list(exporter())
-                        except Exception:
-                            seed_states = []
-                    stage_weight = {
-                        getattr(leyline_pb2, "SEED_STAGE_ACTIVE", 0): 1.0,
-                        getattr(leyline_pb2, "SEED_STAGE_BLENDING", 0): 0.5,
-                        getattr(leyline_pb2, "SEED_STAGE_GERMINATING", 0): 0.25,
-                    }
-                    for s in seed_states:
-                        alpha = 0.0
-                        try:
-                            alpha = float(s.metrics.get("alpha", 0.0))  # type: ignore[attr-defined]
-                        except Exception:
-                            alpha = 0.0
-                        base = stage_weight.get(s.stage, 1.0)
-                        weights_by_seed[s.seed_id] = max(0.1, base * (0.5 + 0.5 * alpha))
-                        alpha_by_seed[s.seed_id] = alpha
-                    # Teacher/default bucket weight
-                    if teacher_key in per_seed:
-                        weights_by_seed.setdefault(teacher_key, 1.0)
-                    # Align into lists
-                    seed_names = list(per_seed.keys())
-                    seed_flats = [per_seed[name] for name in seed_names]
-                    weights = [weights_by_seed.get(name, 1.0) for name in seed_names]
-                    if weights:
-                        agg_weights_sum += float(sum(weights) / max(1, len(weights)))
-                        agg_weights_uses += 1
-                    combined, conflicts = combine_flat_grads(
-                        seed_flats,
-                        use_pcgrad=(len(seed_flats) > 1) and self._pcgrad_enabled,
-                        weights=weights,
-                    )
-                    try:
-                        sources = max(1, len(seed_flats) - 1)
-                        grad_conflict_rate = (
-                            float(conflicts) / float(sources) if len(seed_flats) > 1 else 0.0
-                        )
-                    except Exception:
-                        grad_conflict_rate = 0.0
-                    # Accumulate per-seed telemetry
-                    for name, flat_vec, w in zip(seed_names, seed_flats, weights):
-                        try:
-                            nrm = float(torch.norm(flat_vec).item())
-                        except Exception:
-                            nrm = 0.0
-                        seed_weight_sum[name] = seed_weight_sum.get(name, 0.0) + float(w)
-                        seed_norm_sum[name] = seed_norm_sum.get(name, 0.0) + nrm
-                        seed_uses[name] = seed_uses.get(name, 0) + 1
-                        seen_seeds.add(name)
-                        if name in alpha_by_seed:
-                            seed_alpha_sum[name] = seed_alpha_sum.get(name, 0.0) + float(
-                                alpha_by_seed[name]
-                            )
-                        # Teacher split fraction per seed (approximate): use attribution weight if present
-                        if attrib_uses > 0:
-                            tw = float(sum(attrib_sums.values()))
-                            if tw > 0.0:
-                                sid_w = float(attrib_sums.get(name, 0.0)) / tw
-                                teacher_split_sum[name] = teacher_split_sum.get(name, 0.0) + sid_w
-                    # Per-fence share and conflicts (guard for too many seeds)
-                    try:
-                        norms = [float(torch.norm(g).item()) for g in seed_flats]
-                        total_n = sum(norms)
-                    except Exception:
-                        norms = []
-                        total_n = 0.0
-                    if total_n > 0.0 and norms:
-                        for name, nrm in zip(seed_names, norms):
-                            seed_share_sum[name] = seed_share_sum.get(name, 0.0) + (nrm / total_n)
-                    if len(seed_flats) <= 16 and len(seed_flats) >= 2:
-                        for i, name_i in enumerate(seed_names):
-                            cnt = 0
-                            gi = seed_flats[i]
-                            for j, name_j in enumerate(seed_names):
-                                if i == j:
-                                    continue
-                                try:
-                                    if torch.dot(gi, seed_flats[j]) < 0:
-                                        cnt += 1
-                                except Exception:
-                                    continue
-                            seed_conflicts_total[name_i] = seed_conflicts_total.get(name_i, 0) + cnt
-                    # Per-layer by-seed summary (accumulate norms per parameter slice)
-                    if self._per_layer_enabled and param_names and offsets is not None:
-                        for seed_name, vec in zip(seed_names, seed_flats):
-                            layer_map = per_layer_norm_sum.setdefault(seed_name, {})
-                            for idx, off in enumerate(offsets):
-                                n = (
-                                    int(torch.tensor(shapes[idx]).prod().item())
-                                    if shapes[idx]
-                                    else 1
-                                )
-                                try:
-                                    sl = vec[off : off + n]
-                                    nrm = float(torch.norm(sl).item())
-                                except Exception:
-                                    nrm = 0.0
-                                layer_map[idx] = layer_map.get(idx, 0.0) + nrm
-                agg_conflicts_total += int(conflicts)
-                agg_micro_total += len(micro_flats)
-                # Unflatten and assign to param.grad
-                assert shapes is not None
-                agg_grads = flat_to_grads(combined, shapes)
-                for p, g in zip(self._model.parameters(), agg_grads):
-                    if p.grad is None:
-                        p.grad = g.clone()
-                    else:
-                        p.grad.detach().copy_(g)
-
-                # Optimizer step
-                grad_norm = self._compute_grad_norm()
-                with _record_function("tolaria/optimizer_step"):
-                    if self._scaler is not None:
-                        self._scaler.step(self._optimizer)
-                        self._scaler.update()
-                    else:
-                        self._optimizer.step()
-                self._optimizer.zero_grad(set_to_none=True)
-                stats.gradient_norm_sum += grad_norm
-                micro_flats.clear()
-
-                # Optimizer hints (best-effort)
-                try:
-                    lr_values: list[float] = []
-                    mom_values: list[float] = []
-                    for group in self._optimizer.param_groups:
-                        lr_values.append(float(group.get("lr", 0.0)))
-                        if "momentum" in group:
-                            mom_values.append(float(group.get("momentum", 0.0)))
-                    optimizer_lr = (
-                        float(sum(lr_values) / max(1, len(lr_values))) if lr_values else 0.0
-                    )
-                    optimizer_momentum = (
-                        float(sum(mom_values) / max(1, len(mom_values))) if mom_values else 0.0
-                    )
-                except Exception:
-                    optimizer_lr = 0.0
-                    optimizer_momentum = 0.0
-
-                step_elapsed = perf_counter() - (step_timer_start or micro_start)
-                step_timer_start = None
-                samples_per_s = 0.0
-                if step_elapsed > 0.0 and accumulated_samples > 0:
-                    samples_per_s = accumulated_samples / step_elapsed
-                accumulated_samples = 0
-
-                # Initial fast-cache snapshot at step 0 (before first increment)
-                if self._fast_cache is not None and self._global_step == 0:
-                    try:
-                        self._fast_cache.put(self._global_step, self._model, self._optimizer)
-                        self._metrics["tolaria.rollback.snapshots_total"] = (
-                            self._metrics.get("tolaria.rollback.snapshots_total", 0.0) + 1.0
-                        )
-                        self._metrics["tolaria.rollback.fast_size_bytes"] = float(
-                            self._fast_cache.size_bytes
-                        )
-                    except Exception:  # pragma: no cover - defensive
-                        pass
-
-                self._global_step += 1
-                current_loss = float(loss_tensor.detach().item())
-                # Update rolling dynamics
-                loss_delta = 0.0
-                try:
-                    if self._last_loss is not None:
-                        loss_delta = current_loss - self._last_loss
-                    old_mean = self._loss_mean
-                    new_mean = self._ewma_alpha * current_loss + (1.0 - self._ewma_alpha) * old_mean
-                    new_var = (
-                        self._ewma_alpha * (current_loss - old_mean) * (current_loss - new_mean)
-                        + (1.0 - self._ewma_alpha) * self._loss_var
-                    )
-                    self._loss_mean, self._loss_var = new_mean, max(0.0, new_var)
-                    g_old_mean = self._grad_mean
-                    g_new_mean = (
-                        self._ewma_alpha * grad_norm + (1.0 - self._ewma_alpha) * g_old_mean
-                    )
-                    g_new_var = (
-                        self._ewma_alpha * (grad_norm - g_old_mean) * (grad_norm - g_new_mean)
-                        + (1.0 - self._ewma_alpha) * self._grad_var
-                    )
-                    self._grad_mean, self._grad_var = g_new_mean, max(0.0, g_new_var)
-                    self._last_loss = current_loss
-                except Exception:
-                    pass
-
-                step_state = self._build_step_state(
-                    loss=current_loss,
-                    grad_norm=grad_norm,
-                    samples_per_s=samples_per_s,
-                )
-                # Attach enrichment metrics (do not stall on failure)
-                try:
-                    step_state.training_metrics["optimizer_lr"] = optimizer_lr
-                    if optimizer_momentum:
-                        step_state.training_metrics["optimizer_momentum"] = optimizer_momentum
-                    step_state.training_metrics["loss_delta"] = loss_delta
-                    step_state.training_metrics["loss_ewma"] = self._loss_mean
-                    step_state.training_metrics["loss_volatility"] = self._loss_var**0.5
-                    step_state.training_metrics["grad_norm_ewma"] = self._grad_mean
-                    step_state.training_metrics["grad_var"] = self._grad_var
-                    # Optimizer family index for Tamiyo encoding (0:sgd,1:adam,2:adamw,3:other)
-                    try:
-                        fam_name = type(self._optimizer).__name__.lower()
-                        if "sgd" in fam_name:
-                            fam_idx = 0
-                        elif "adamw" in fam_name:
-                            fam_idx = 2
-                        elif "adam" in fam_name:
-                            fam_idx = 1
-                        else:
-                            fam_idx = 3
-                        step_state.training_metrics["optimizer_family_index"] = float(fam_idx)
-                        # Emit a lightweight event with resolved optimizer family
-                        self._emit_event(
-                            "optimizer_family",
-                            attributes={"name": fam_name, "index": str(fam_idx)},
-                        )
-                    except Exception:
-                        pass
-                    if input_wait_ms:
-                        step_state.training_metrics["input_wait_ms"] = input_wait_ms
-                    # Expose CUDA H2D copy timing if CUDA available; 0.0 on CPU
-                    if torch.cuda.is_available():
-                        step_state.training_metrics["h2d_copy_ms"] = h2d_copy_ms
-                    # Expose per-fence conflict rate if PCGrad applied
-                    try:
-                        if "grad_conflict_rate" in locals():
-                            step_state.training_metrics["grad_conflict_rate"] = float(
-                                grad_conflict_rate
-                            )
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
-
-                hook_start = perf_counter()
-                tamiyo_latency_ms = 0.0
-                local_failure: str | None = None
-
-                if self._conservative_mode:
-                    command = self._build_conservative_command()
-                else:
-                    try:
-                        command, tamiyo_latency_ms = self._invoke_tamiyo_step(step_state)
-                        self._last_tamiyo_latency_ms = tamiyo_latency_ms
-                    except TimeoutError as exc:
-                        local_failure = "tamiyo_timeout"
-                        self._emit_event(
-                            "tolaria.tamiyo_timeout",
-                            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                            attributes={"error": str(exc)},
-                        )
-                        self._enter_conservative_mode(local_failure)
-                        command = self._build_conservative_command()
-                        self._last_tamiyo_latency_ms = 0.0
-                    except Exception as exc:  # pragma: no cover - defensive
-                        local_failure = "tamiyo_error"
-                        self._emit_event(
-                            "tolaria.tamiyo_error",
-                            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                            attributes={"error": type(exc).__name__},
-                        )
-                        command = self._build_conservative_command()
-                        self._enter_conservative_mode(local_failure)
-                        self._last_tamiyo_latency_ms = 0.0
-
-                apply_ms = 0.0
-                try:
-                    t_apply = perf_counter()
-                    self._apply_kasmina_command(command)
-                    apply_ms = (perf_counter() - t_apply) * 1000.0
-                except TimeoutError as exc:
-                    reason = "kasmina_timeout"
-                    local_failure = local_failure or reason
-                    self._emit_event(
-                        "tolaria.kasmina_timeout",
-                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                        attributes={"error": str(exc)},
-                    )
-                    self._enter_conservative_mode(reason)
-                except Exception as exc:  # pragma: no cover - defensive
-                    reason = "kasmina_error"
-                    local_failure = local_failure or reason
-                    self._emit_event(
-                        "tolaria.kasmina_error",
-                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                        attributes={"error": type(exc).__name__},
-                    )
-
-                hook_latency_ms = (perf_counter() - hook_start) * 1000.0
-                self._last_hook_latency_ms = hook_latency_ms
-                self._metrics["tolaria.hook.latency_ms"] = hook_latency_ms
-                step_state.training_metrics["hook_latency_ms"] = hook_latency_ms
-                # Always expose Tamiyo timing; other enrichment behind flag
-                step_state.training_metrics["tamiyo_latency_ms"] = (
-                    self._last_tamiyo_latency_ms or 0.0
-                )
-                if self._step_enrichment:
-                    step_state.training_metrics["kasmina.apply_ms"] = apply_ms
-
-                if callable(exporter) and callable(advancer):
-                    try:
-                        for seed_state in exporter():
-                            if seed_state.stage == leyline_pb2.SEED_STAGE_BLENDING:
-                                advancer(seed_state.seed_id)
-                    except Exception:  # pragma: no cover - defensive
-                        pass
-
-                finalizer = getattr(self._kasmina, "finalize_step", None)
-                if callable(finalizer):
-                    finalize_ms = 0.0
-                    try:
-                        t_fin = perf_counter()
-                        finalizer(step_index=self._global_step)
-                        finalize_ms = (perf_counter() - t_fin) * 1000.0
-                    except Exception:  # pragma: no cover - Kasmina finalize is best effort
-                        pass
-                    else:
-                        if self._step_enrichment:
-                            step_state.training_metrics["kasmina.finalize_ms"] = finalize_ms
-                # Total step latency (first micro -> post-finalize)
-                if self._step_total_start is not None and self._step_enrichment:
-                    step_state.training_metrics["step_latency_ms"] = (
-                        perf_counter() - self._step_total_start
-                    ) * 1000.0
-                    self._step_total_start = None
-                # Mark end-of-step for input wait approximation
-                self._prev_step_end_time = perf_counter()
-
-                if self._lr_controller is not None:
-                    try:
-                        with _record_function("tolaria/lr_update"):
-                            lr = self._lr_controller.apply(self._global_step, self._current_epoch)
-                        self._metrics["tolaria.lr_controller.current_lr"] = lr
-                    except Exception:  # pragma: no cover - defensive
-                        pass
-
-                if self._fast_cache is not None:
-                    try:
-                        if self._global_step % max(1, self._rollback_snapshot_steps) == 0:
-                            self._fast_cache.put(self._global_step, self._model, self._optimizer)
-                            self._metrics["tolaria.rollback.snapshots_total"] = (
-                                self._metrics.get("tolaria.rollback.snapshots_total", 0.0) + 1.0
-                            )
-                        self._metrics["tolaria.rollback.fast_size_bytes"] = float(
-                            self._fast_cache.size_bytes
-                        )
-                    except Exception:  # pragma: no cover - defensive
-                        pass
-
-                if local_failure and step_failure_reason is None:
-                    step_failure_reason = local_failure
-
-            else:
-                if step_timer_start is None:
-                    step_timer_start = micro_start
-
-            # Optional: optimizer rebuilds on step fences (e.g., every N steps)
-            if self._opt_manager is not None:
-                fence = (self._settings.tolaria_opt_rebuild_fence or "epoch").lower()
-                # Accept forms: "n_steps:<int>" or "steps:<int>"
-                if fence.startswith("n_steps") or fence.startswith("steps"):
-                    try:
-                        n = int(fence.split(":", 1)[1])
-                    except Exception:
-                        n = 0
-                    if n > 0 and (self._global_step % n == 0):
-                        # Storm guard
-                        if (
-                            self._opt_rebuild_min_steps > 0
-                            and (self._global_step - self._last_opt_rebuild_step)
-                            < self._opt_rebuild_min_steps
-                        ):
-                            self._metrics["tolaria.opt.rebuild_skipped_total"] = (
-                                self._metrics.get("tolaria.opt.rebuild_skipped_total", 0.0) + 1.0
-                            )
-                        else:
-                            res = self._opt_manager.maybe_rebuild(self._model)
-                            self._last_opt_rebuild_step = self._global_step
-                            self._metrics["tolaria.opt.rebuild_latency_ms"] = res.latency_ms
-                            if res.success:
-                                self._optimizer = self._opt_manager.optimizer
-                                self._metrics["tolaria.opt.rebuilds_total"] += 1.0
-                            else:
-                                if res.error and res.error != "breaker_open":
-                                    self._metrics["tolaria.opt.rebuild_failures_total"] += 1.0
-
-        self._last_step_failure_reason = step_failure_reason
-        # Publish aggregation telemetry from the epoch
-        self._metrics["tolaria.grad_agg.microbatches_total"] = float(agg_micro_total)
-        self._metrics["tolaria.grad_agg.conflicts"] = float(agg_conflicts_total)
-        self._metrics["tolaria.grad_agg.weights_mean"] = (
-            float(agg_weights_sum / agg_weights_uses) if agg_weights_uses > 0 else 0.0
-        )
-        self._metrics["tolaria.grad_agg.pcgrad_applied"] = 1.0 if agg_conflicts_total > 0 else 0.0
-        # Conflict ratio rollup (best-effort): conflicts per neighbor
-        try:
-            denom = max(1.0, float(len(seed_weight_sum) - 1))
-            self._metrics["tolaria.grad_agg.conflict_ratio"] = float(agg_conflicts_total) / denom
-        except Exception:
-            self._metrics["tolaria.grad_agg.conflict_ratio"] = 0.0
-        # Teacher overall share (as gradient norm average across fences)
-        if teacher_overall_uses > 0:
-            try:
-                self._metrics["tolaria.grad_agg.teacher_share"] = float(
-                    teacher_overall_share_sum
-                ) / float(teacher_overall_uses)
-            except Exception:
-                self._metrics["tolaria.grad_agg.teacher_share"] = 0.0
-        else:
-            self._metrics["tolaria.grad_agg.teacher_share"] = 0.0
-
-        # Build per-seed telemetry metrics (averages across fences)
-        per_seed_metrics: list[TelemetryMetric] = []
-        stage_by_seed: dict[str, str] = {}
-        if callable(exporter):
-            try:
-                for s in exporter():
-                    try:
-                        stage_name = leyline_pb2.SeedLifecycleStage.Name(s.stage)
-                    except Exception:
-                        stage_name = str(int(s.stage))
-                    stage_by_seed[s.seed_id] = stage_name
-            except Exception:
-                stage_by_seed = {}
-        # Also include any seeds that appear in masks
-        if seed_masks is not None:
-            for n in seed_masks.keys():
-                seen_seeds.add(n)
-        for name in sorted(seen_seeds):
-            uses = max(1, seed_uses.get(name, 0))
-            avg_w = float(seed_weight_sum.get(name, 0.0)) / uses
-            avg_n = float(seed_norm_sum.get(name, 0.0)) / uses
-            attrs = {"seed_id": name}
-            stage = stage_by_seed.get(name)
-            if stage:
-                attrs["stage"] = stage
-            compact_snapshot: dict[str, float] = {"weight": avg_w}
-            if not self._seed_health_compact:
-                per_seed_metrics.append(
-                    TelemetryMetric(
-                        "tolaria.grad_agg.seed.weight", avg_w, unit="ratio", attributes=attrs
-                    )
-                )
-                per_seed_metrics.append(
-                    TelemetryMetric(
-                        "tolaria.grad_agg.seed.norm", avg_n, unit="grad", attributes=attrs
-                    )
-                )
-            # Average share across fences
-            if name in seed_share_sum and seed_uses.get(name, 0) > 0:
-                avg_share = float(seed_share_sum[name]) / max(1, seed_uses.get(name, 0))
-                if not self._seed_health_compact:
-                    per_seed_metrics.append(
-                        TelemetryMetric(
-                            "tolaria.grad_agg.seed.share", avg_share, unit="ratio", attributes=attrs
-                        )
-                    )
-                # Share delta vs last epoch
-                last = float(self._last_seed_share.get(name, 0.0))
-                delta = avg_share - last
-                if not self._seed_health_compact:
-                    per_seed_metrics.append(
-                        TelemetryMetric(
-                            "tolaria.grad_agg.seed.share_delta",
-                            delta,
-                            unit="ratio",
-                            attributes=attrs,
-                        )
-                    )
-                if abs(delta) >= self._seed_share_jump_warn:
-                    self._emit_event(
-                        "seed_share_jump",
-                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                        attributes={**attrs, "delta": f"{delta:.4f}"},
-                    )
-                self._last_seed_share[name] = avg_share
-                compact_snapshot["share"] = avg_share
-            # Average alpha observed
-            if name in seed_alpha_sum and seed_uses.get(name, 0) > 0:
-                avg_alpha = float(seed_alpha_sum[name]) / max(1, seed_uses.get(name, 0))
-                if not self._seed_health_compact:
-                    per_seed_metrics.append(
-                        TelemetryMetric(
-                            "tolaria.grad_agg.seed.alpha", avg_alpha, unit="ratio", attributes=attrs
-                        )
-                    )
-                compact_snapshot["alpha"] = avg_alpha
-            # Conflicts count total
-            if name in seed_conflicts_total:
-                conflicts_total = float(seed_conflicts_total[name])
-                if not self._seed_health_compact:
-                    per_seed_metrics.append(
-                        TelemetryMetric(
-                            "tolaria.grad_agg.seed.conflicts",
-                            conflicts_total,
-                            unit="count",
-                            attributes=attrs,
-                        )
-                    )
-                # Conflict ratio per seed (avg conflicts per fence normalized by neighbors)
-                neighbors = max(1, len(seen_seeds) - 1)
-                conf_ratio = (conflicts_total / float(uses)) / float(neighbors)
-                if not self._seed_health_compact:
-                    per_seed_metrics.append(
-                        TelemetryMetric(
-                            "tolaria.grad_agg.seed.conflict_ratio",
-                            conf_ratio,
-                            unit="ratio",
-                            attributes=attrs,
-                        )
-                    )
-                if conf_ratio >= self._seed_conflict_ratio_warn:
-                    self._emit_event(
-                        "seed_conflict_high",
-                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                        attributes={**attrs, "conflict_ratio": f"{conf_ratio:.3f}"},
-                    )
-                compact_snapshot["conflicts"] = conflicts_total
-            # Mask size and fraction (if masks computed)
-            if seed_param_elems is not None and total_elems:
-                elems = float(seed_param_elems.get(name, 0))
-                per_seed_metrics.append(
-                    TelemetryMetric(
-                        "tolaria.grad_agg.seed.params", elems, unit="elems", attributes=attrs
-                    )
-                )
-                per_seed_metrics.append(
-                    TelemetryMetric(
-                        "tolaria.grad_agg.seed.mask_fraction",
-                        (elems / float(total_elems)),
-                        unit="ratio",
-                        attributes=attrs,
-                    )
-                )
-            # Teacher split share (approximate)
-            if name in teacher_split_sum and seed_uses.get(name, 0) > 0:
-                avg_tsplit = float(teacher_split_sum[name]) / max(1, attrib_uses)
-                per_seed_metrics.append(
-                    TelemetryMetric(
-                        "tolaria.grad_agg.seed.teacher_share",
-                        avg_tsplit,
-                        unit="ratio",
-                        attributes=attrs,
-                    )
-                )
-            # Per-layer top-K summary (average norms across fences)
-            if (
-                (not self._seed_health_compact)
-                and self._per_layer_enabled
-                and param_names
-                and name in per_layer_norm_sum
-            ):
-                layer_map = per_layer_norm_sum.get(name, {})
-                # Average by uses (per-seed)
-                avg_map = {idx: (val / uses if uses > 0 else val) for idx, val in layer_map.items()}
-                top_items = sorted(avg_map.items(), key=lambda kv: kv[1], reverse=True)[
-                    : self._per_layer_topk
-                ]
-                for idx, val in top_items:
-                    la = dict(attrs)
-                    la["layer"] = param_names[idx] if idx < len(param_names) else f"param_{idx}"
-                    per_seed_metrics.append(
-                        TelemetryMetric(
-                            "tolaria.grad_agg.seed.layer_norm",
-                            float(val),
-                            unit="grad",
-                            attributes=la,
-                        )
-                    )
-            if self._seed_health_compact:
-                attribs = {
-                    k: f"{v:.4f}" for k, v in compact_snapshot.items() if isinstance(v, float)
-                }
-                attribs.update({k: v for k, v in attrs.items() if isinstance(v, str)})
-                # Ensure required keys are present even if metrics were missing from the snapshot
-                attribs.setdefault("share", "0.0000")
-                attribs.setdefault("alpha", "0.0000")
-                attribs.setdefault("conflicts", "0.0000")
-                attribs.setdefault("weight", "0.0000")
-                self._emit_event("seed_health", attributes=attribs)
-        # Include teacher bucket if present
-        if teacher_key in seen_seeds:
-            uses = max(1, seed_uses.get(teacher_key, 0))
-            per_seed_metrics.append(
-                TelemetryMetric(
-                    "tolaria.grad_agg.seed.weight",
-                    float(seed_weight_sum.get(teacher_key, 0.0)) / uses,
-                    unit="ratio",
-                    attributes={"seed_id": teacher_key, "stage": "TEACHER"},
-                )
-            )
-            per_seed_metrics.append(
-                TelemetryMetric(
-                    "tolaria.grad_agg.seed.norm",
-                    float(seed_norm_sum.get(teacher_key, 0.0)) / uses,
-                    unit="grad",
-                    attributes={"seed_id": teacher_key, "stage": "TEACHER"},
-                )
-            )
-            if seed_param_elems is not None and total_elems:
-                elems = float(seed_param_elems.get(teacher_key, 0))
-                per_seed_metrics.append(
-                    TelemetryMetric(
-                        "tolaria.grad_agg.seed.params",
-                        elems,
-                        unit="elems",
-                        attributes={"seed_id": teacher_key, "stage": "TEACHER"},
-                    )
-                )
-                per_seed_metrics.append(
-                    TelemetryMetric(
-                        "tolaria.grad_agg.seed.mask_fraction",
-                        (elems / float(total_elems)),
-                        unit="ratio",
-                        attributes={"seed_id": teacher_key, "stage": "TEACHER"},
-                    )
-                )
-        self._seed_agg_metrics = per_seed_metrics
-        return stats
 
     def _compute_loss(
         self,
