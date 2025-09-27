@@ -129,3 +129,66 @@ message CommandSecurity { string signature = 1; string nonce = 2; google.protobu
 - **Benchmark**: `scripts/bench_kasmina_prefetch.py --requests 300 --ready-latency-ms 40 --jitter-ms 8 --concurrency 6` produced 40.1 ms mean / 39.9 ms p50 / 53.4 ms p95 (0 errors). Results and alert thresholds are recorded in the observability runbook.
 - **Live Oona check**: Redis-backed coordinator (Weatherlight) runs cleanly with the async worker fix; no cache contention observed and telemetry reports expected latency envelope.
 - **Docs**: Observability runbook and changelog now cover async worker enablement, benchmark results, and alert thresholds.
+
+
+## Next Line of Effort — Tamiyo WP-A3 (Telemetry & Routing)
+- **Objective**: Close Tamiyo telemetry gaps (coverage metrics, verifier failures, emergency routing) and simplify builder complexity so Weatherlight surfaces the correct priorities. Aligns with the RC1 milestone "Next Focus" items.
+- **Dependencies**: Shared async worker already rolled out; Weatherlight consumes Tamiyo telemetry for emergency routing; Kasmina expects richer Tamiyo coverage metadata.
+- **Risks Mitigated**: Addresses open telemetry/routing gaps ahead of WP-A4 (persistence). Monitor Oona queue depth to ensure added metrics remain within thresholds.
+
+### Tamiyo WP-A3 Execution Plan (2025-09-28)
+
+**Phase 0 status (complete)**
+- `tests/tamiyo/test_service.py` asserts aggregate metrics (`tamiyo.gnn.feature_coverage`, inference latency) but lacks per-feature coverage ratios or annotation provenance; no verifier failure telemetry surfaced in unit fixtures.
+- Weatherlight smoke run (`timeout 20s … esper-weatherlight-service`) starts/stops cleanly; current logs show no Tamiyo CRITICAL events on the emergency stream.
+- Tamiyo telemetry currently sets a `priority` indicator after packet build but message priority remains implicit; need explicit routing audit.
+- Downstream expectations: Kasmina blend manager consumes `policy_risk_*` annotations; observability runbook still missing Tamiyo coverage thresholds.
+- Added WP-A3 test targets to `06_testing_validation_plan.md` (Weatherlight smoke + unit coverage).
+
+**Phase 0 – Baseline & Safeguards**
+- *Step 0.1 – Capture Current Behaviour*
+  - Task: Review telemetry emitted by `tests/tamiyo/test_service.py` and `tests/integration/test_control_loop.py` to document missing coverage/priorities.
+  - Task: Run Weatherlight locally (shared async worker) to observe current routing/log output for Tamiyo packets.
+- *Step 0.2 – Dependency & Contract Audit*
+  - Task: Inspect Tamiyo → Oona priority mapping and signature context to ensure new telemetry attributes align with Weatherlight expectations.
+  - Task: Note downstream consumers (Kasmina blend manager, observability dashboards) that rely on Tamiyo annotations/coverage.
+- *Step 0.3 – Acceptance Checklist Stub*
+  - Task: Update the scratch section in `06_testing_validation_plan.md` with required unit/integration/Weatherlight tests for WP-A3.
+
+**Phase 1 – Coverage & Annotation Metrics (complete)**
+- Metric plan locked: publish aggregate stats (`tamiyo.coverage.feature.avg|min|max`), per-group ratios (`tamiyo.coverage.group.<group>`), feature counts, and `coverage_provenance` annotations; emit `tamiyo.coverage.missing` warning when policy reports no coverage.
+- Implementation targets identified (`TamiyoService._collect_policy_metrics`, `_finalize_evaluation`, policy coverage accessors) with test updates scheduled for `tests/tamiyo/test_service.py` and the control-loop fixture to cover both populated and missing coverage cases.
+
+**Phase 2 – Command Verifier Telemetry Wiring**
+- *Step 2.1 – Failure Catalogue*
+  - Task: Enumerate verifier failure reasons (missing signature, stale timestamp, nonce replay, digest mismatch) and map to telemetry attributes/priority.
+- *Step 2.2 – Hook Implementation*
+  - Task: Wire events + counters into verifier paths ensuring idempotency for repeated failures.
+  - Task: Add unit coverage for each failure mode (new tests in `tests/tamiyo/test_service.py` or dedicated verifier module).
+
+**Phase 3 – Priority & Routing Integration**
+- *Step 3.1 – Packet Priority Audit (complete)*
+  - `_ensure_priority_indicator` now standardises priority indicators for evaluation telemetry, field-report retry/summary packets, and policy-update rejections; unit coverage asserts the indicator exists on evaluation packets.
+- *Step 3.2 – Weatherlight Validation (pending)*
+  - Next: rerun `timeout 20s … esper-weatherlight-service` while forcing a verifier failure to capture CRITICAL Tamiyo telemetry on the emergency stream; document results for observability.
+- *Step 3.3 – Back-pressure Assessment (pending)*
+  - Once CRITICAL routing is exercised, sample `oona.queue.depth.max` / `oona.publish.dropped` to confirm no backpressure and add notes to WP-A3.
+
+
+**Phase 4 – Complexity Reduction & Refactor**
+- *Step 4.1 – Hotspot Targeting*
+  - Task: Profile `_emit_field_report` and `_build_health_indicators`, extract helpers, and drive radon grades toward ≤ C.
+
+**Phase 5 – Validation & Documentation**
+- *Step 5.1 – Test Sweep*
+  - Task: Execute targeted unit suites, integration control loop, and Weatherlight smoke tests; archive outputs for changelog.
+- *Step 5.2 – Documentation Updates*
+  - Task: Update observability runbook with new metrics/priorities and routing notes; prepare `CHANGELOG_RC1.md` + status tracker entries.
+- *Step 5.3 – Status & Sign-off*
+  - Task: Mark WP-A3 progress in `08_status_tracker.md` and milestone overview; capture follow-ups feeding WP-A4 (persistence/wal).
+
+**Phase 2 – Command Verifier Telemetry Wiring (complete)**
+- *Step 2.1 – Failure Catalogue*
+  - Failure modes covered via Kasmina verifier telemetry: missing signature, stale timestamp, nonce replay, digest mismatch (tested through Tamiyo-generated commands).
+- *Step 2.2 – Hook Implementation*
+  - Added unit coverage in `tests/tamiyo/test_service.py` for replay, missing-signature, and stale-command rejections; assertions ensure events are CRITICAL with correct reason attributes. Weatherlight smoke rerun pending after Tamiyo telemetry wiring.

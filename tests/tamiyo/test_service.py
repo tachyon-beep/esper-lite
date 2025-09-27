@@ -1,5 +1,7 @@
 import os
 import statistics
+
+os.environ.setdefault("TORCH_COMPILE_DISABLE", "1")
 import time
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
@@ -151,8 +153,10 @@ def test_tamiyo_service_generates_command(tmp_path) -> None:
         assert 0.0 <= params["blending_schedule_end"] <= 1.0
         assert params["blending_schedule_start"] <= params["blending_schedule_end"]
     assert service.telemetry_packets
+    telemetry = service.telemetry_packets[-1]
+    assert telemetry.system_health.indicators.get("priority")
     # Budget guardrail: inference latency <= 45 ms
-    metrics = {m.name: m.value for m in service.telemetry_packets[-1].metrics}
+    metrics = {m.name: m.value for m in telemetry.metrics}
     assert "tamiyo.inference.latency_ms" in metrics
     assert metrics["tamiyo.inference.latency_ms"] <= 45.0
     assert "tamiyo.gnn.inference.latency_ms" in metrics
@@ -259,7 +263,12 @@ def test_seed_command_without_blueprint_fails_fast(tmp_path) -> None:
 def test_tamiyo_signed_command_accepted_and_replay_rejected(tmp_path) -> None:
     config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
     urza = UrzaLibrary(root=tmp_path / "urza")
-    service = TamiyoService(store_config=config, urza=urza, signature_context=_SIGNATURE_CONTEXT)
+    service = TamiyoService(
+        policy=TamiyoPolicy(TamiyoPolicyConfig(enable_compile=False)),
+        store_config=config,
+        urza=urza,
+        signature_context=_SIGNATURE_CONTEXT,
+    )
     packet = leyline_pb2.SystemStatePacket(
         version=1,
         current_epoch=1,
@@ -281,7 +290,51 @@ def test_tamiyo_signed_command_accepted_and_replay_rejected(tmp_path) -> None:
     manager.handle_command(command)
     manager.finalize_step(step_index=2)
     packets = manager.drain_telemetry_packets()
-    assert any(event.description == "command_rejected" for pkt in packets for event in pkt.events)
+    rejected = [
+        event
+        for packet in packets
+        for event in packet.events
+        if event.description == "command_rejected"
+    ]
+    assert rejected
+    assert all(
+        event.level == leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
+        for event in rejected
+    )
+
+
+def test_tamiyo_missing_signature_rejected(tmp_path) -> None:
+    config = FieldReportStoreConfig(path=tmp_path / "field_reports.log")
+    urza = UrzaLibrary(root=tmp_path / "urza")
+    service = TamiyoService(store_config=config, urza=urza, signature_context=_SIGNATURE_CONTEXT)
+    packet = leyline_pb2.SystemStatePacket(
+        version=1,
+        current_epoch=1,
+        training_run_id="run-1",
+        packet_id="pkt-1",
+    )
+    command = service.evaluate_epoch(packet)
+    assert "signature" in command.annotations
+
+    # Strip signature to simulate tampering/missing credentials
+    del command.annotations["signature"]
+
+    manager = KasminaSeedManager(_KasminaRuntime(), signing_context=_SIGNATURE_CONTEXT)
+    manager.register_host_model(nn.Linear(1, 1))
+    manager.handle_command(command)
+    manager.finalize_step(step_index=1)
+    packets = manager.drain_telemetry_packets()
+    rejected = [
+        event
+        for packet in packets
+        for event in packet.events
+        if event.description == "command_rejected"
+    ]
+    assert rejected
+    assert any(evt.attributes.get("reason") == "missing_signature" for evt in rejected)
+    assert all(
+        evt.level == leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL for evt in rejected
+    )
 
 
 def test_service_schedule_parameters_fractional(tmp_path) -> None:
@@ -1359,11 +1412,15 @@ def test_tamiyo_stale_command_rejected(tmp_path) -> None:
     manager.handle_command(stale_command)
     manager.finalize_step(step_index=2)
     packets = manager.drain_telemetry_packets()
-    assert any(
-        event.description == "command_rejected"
-        and event.attributes.get("reason") == "stale_command"
+    rejected = [
+        event
         for packet in packets
         for event in packet.events
+        if event.description == "command_rejected"
+    ]
+    assert any(evt.attributes.get("reason") == "stale_command" for evt in rejected)
+    assert all(
+        evt.level == leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL for evt in rejected
     )
 
 

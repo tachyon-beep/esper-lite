@@ -1360,8 +1360,9 @@ class TamiyoService:
             ),
         )
         result.telemetry_packet = telemetry
-        telemetry.system_health.indicators["priority"] = leyline_pb2.MessagePriority.Name(
-            self._priority_from_events(events)
+        self._ensure_priority_indicator(
+            telemetry,
+            priority=self._priority_from_events(events),
         )
         self._sign_command(command)
         self._telemetry_packets.append(telemetry)
@@ -2183,6 +2184,18 @@ class TamiyoService:
             else leyline_pb2.MessagePriority.MESSAGE_PRIORITY_NORMAL
         )
 
+    def _ensure_priority_indicator(
+        self,
+        packet: leyline_pb2.TelemetryPacket,
+        *,
+        priority: int | None = None,
+    ) -> None:
+        """Ensure telemetry packets include a MessagePriority indicator."""
+
+        chosen = priority if priority is not None else self._priority_from_events(packet.events)
+        packet.system_health.indicators["priority"] = leyline_pb2.MessagePriority.Name(chosen)
+
+
     def _sign_command(self, command: leyline_pb2.AdaptationCommand) -> None:
         """Assign identifiers and attach an HMAC signature."""
 
@@ -2456,33 +2469,34 @@ class TamiyoService:
                         if evt == "field_report_retry"
                         else leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING
                     )
-                    new_telemetry.append(
-                        build_telemetry_packet(
-                            packet_id=f"tamiyo-fr-retry-{key}",
-                            source="tamiyo",
-                            level=lvl,
-                            metrics=[],
-                            events=[
-                                TelemetryEvent(
-                                    description=evt,
-                                    level=lvl,
-                                    attributes={
-                                        "report_id": key,
-                                        "retry_count": str(count),
-                                    },
-                                )
-                            ],
-                            health_status=leyline_pb2.HealthStatus.HEALTH_STATUS_DEGRADED,
-                            health_summary=evt,
-                            health_indicators={},
-                        )
+                    packet = build_telemetry_packet(
+                        packet_id=f"tamiyo-fr-retry-{key}",
+                        source="tamiyo",
+                        level=lvl,
+                        metrics=[],
+                        events=[
+                            TelemetryEvent(
+                                description=evt,
+                                level=lvl,
+                                attributes={
+                                    "report_id": key,
+                                    "retry_count": str(count),
+                                },
+                            )
+                        ],
+                        health_status=leyline_pb2.HealthStatus.HEALTH_STATUS_DEGRADED,
+                        health_summary=evt,
+                        health_indicators={},
                     )
+                    self._ensure_priority_indicator(packet)
+                    new_telemetry.append(packet)
                 except Exception:
                     pass
                 all_sent = False
 
         # Publish pre-existing telemetry first
         for telemetry in self._telemetry_packets:
+            self._ensure_priority_indicator(telemetry)
             priority_name = telemetry.system_health.indicators.get("priority")
             priority_enum = None
             if priority_name:
@@ -2518,10 +2532,13 @@ class TamiyoService:
                         ),
                     ],
                     events=[],
-                    health_status=leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY,
+                    health_status=leyline_pb2.HealthStatus.HEALTH_STATUS_HEALTHY
+                    if not failed_reports
+                    else leyline_pb2.HealthStatus.HEALTH_STATUS_DEGRADED,
                     health_summary="field_report_publish_summary",
                     health_indicators={},
                 )
+                self._ensure_priority_indicator(summary)
                 new_telemetry.append(summary)
             except Exception:
                 pass
@@ -2544,21 +2561,21 @@ class TamiyoService:
         """Apply a policy update produced by Simic with transactional validation."""
 
         def _emit_rejection(reason: str) -> None:
-            self._telemetry_packets.append(
-                build_telemetry_packet(
-                    packet_id="tamiyo-policy-update-error",
-                    source="tamiyo",
-                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                    metrics=[],
-                    events=[
-                        TelemetryEvent(
-                            description="policy_update_rejected",
-                            level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                            attributes={"reason": reason},
-                        )
-                    ],
-                )
+            packet = build_telemetry_packet(
+                packet_id="tamiyo-policy-update-error",
+                source="tamiyo",
+                level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                metrics=[],
+                events=[
+                    TelemetryEvent(
+                        description="policy_update_rejected",
+                        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                        attributes={"reason": reason},
+                    )
+                ],
             )
+            self._ensure_priority_indicator(packet)
+            self._telemetry_packets.append(packet)
 
         # Strict version/freshness checks (configurable)
         if getattr(self._settings, "tamiyo_verify_updates", True):

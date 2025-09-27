@@ -20,6 +20,7 @@
 - Command verification telemetry (all subsystems). ✅ Kasmina WP-K3 suites cover verifier metrics; Tamiyo WP-A3 will extend coverage to policy updates.
 - Rollback SLA measurement tests (500 ms / 12 s) for Tolaria/Kasmina. ◻️ deferred to post-R4c.
 - Prefetch cancellation/regression tests with Oona fakes. ✅ covered via Kasmina prefetch worker tests (WP-K4).
+- Tamiyo WP-A3 telemetry routing smoke tests (Weatherlight + unit coverage). ◻️ capture coverage/priority metrics and emergency stream delivery.
 
 ## Performance Validation
 - Tolaria: step latency benchmark before/after aggregator refactor.
