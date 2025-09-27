@@ -107,20 +107,18 @@ process. The service will log a warning when the stub is activated.
   synthetic telemetry into Nissa and verifies the alerts clear once normal
   metrics resume. Use this before major showcases to confirm breaker coverage
   remains intact.
-- Kasmina prefetch telemetry now exposes `kasmina.prefetch.requests_total{status}`,
-  `kasmina.prefetch.inflight`, and latency gauges. Benchmarks (200 seed grafts
-  with simulated 2 ms kernel fetch and 0–6 ms scheduler jitter) produced
-  ~0.56 s mean latency (max 1.09 s). Configure alerts at >1.2 s (warning)
-  and >1.5 s (critical) on `kasmina.prefetch.latency_ms`, and monitor
+- Kasmina prefetch telemetry exposes `kasmina.prefetch.requests_total{status}`,
+  `kasmina.prefetch.inflight`, and latency gauges. `scripts/bench_kasmina_prefetch.py
+  --requests 300 --ready-latency-ms 40 --jitter-ms 8 --concurrency 6` reports
+  40.1 ms mean / 53.4 ms p95 (0 errors). Set alerts at >120 ms (warning)
+  and >180 ms (critical) on `kasmina.prefetch.latency_ms`, and monitor
   `kasmina.prefetch.requests_total{status="timeout"}` for rapid detection of
   stalled coordinators. `kasmina.cache.lock_wait_ms` should remain ~0; values
-  above 100 ms indicate GPU cache contention that warrants investigation.
-- Live Redis/Oona smoke test (single-loop coordinator) delivered 0.30 s mean /
-  0.45 s max latency across 300 prefetches with no lock contention. Telemetry
-  still reported ~1.1 s averages because measurements include queueing+broadcast
-  delay—retain alert thresholds above 1.2 s and validate with production loads.
-- When enabling the shared async worker for Kasmina prefetch (`ASYNC_WORKER_MAX_CONCURRENCY`,
-  optional Tolaria overrides), ensure the worker-side Oona clients run with dedicated
-  Redis connections. The coordinator now auto-spawns per-task clients; no additional
-  configuration is required beyond setting the concurrency/timeout knobs and
+  above 100 ms indicate GPU cache contention worth investigating.
+- Weatherlight smoke test (redis-backed coordinator) now runs cleanly with the async worker spawn fix;
+  latency falls within the 35–60 ms envelope and no cache contention was observed. Keep the
+  120/180 ms alert thresholds and validate against production telemetry.
+- Shared async worker settings (`ASYNC_WORKER_MAX_CONCURRENCY`, shutdown timeout, Tolaria overrides)
+  remain the control point. Kasmina auto-spawns per-task Oona clients with stale-claim scans disabled,
+  so no manual Redis tuning is required beyond setting concurrency/timeout knobs and
   `TOLARIA_EMERGENCY_DISPATCH_TIMEOUT_S` for Tolaria emergency telemetry.

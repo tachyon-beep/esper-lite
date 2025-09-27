@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import uuid
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from esper.core import AsyncWorker, AsyncWorkerHandle, DependencyViolationError
@@ -247,6 +248,14 @@ class KasminaPrefetchCoordinator:
             return self._oona, False
         suffix = f"{role}-{uuid.uuid4().hex[:6]}"
         client = spawner(consumer_suffix=suffix)
+        # Worker-managed clients run on the shared AsyncWorker loop; disable
+        # stale-claim scans that rely on redis futures bound to the creator loop.
+        config = getattr(client, "_config", None)
+        if config is not None and getattr(config, "retry_idle_ms", 0) > 0:
+            try:
+                client._config = replace(config, retry_idle_ms=0)
+            except Exception:  # pragma: no cover - defensive, keep original config
+                pass
         with self._lock:
             self._managed_worker_clients.append(client)
         return client, True

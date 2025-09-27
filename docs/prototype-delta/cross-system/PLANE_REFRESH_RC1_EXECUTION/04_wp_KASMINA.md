@@ -79,12 +79,12 @@ Risks:
 - Additional locks may impact throughput; benchmark.
 
 Status:
-- 🚧 In Progress — Shared async worker integration, timeout/telemetry metrics, cache locking, and administrative resets implemented. Remaining actions: finalize observability/benchmark documentation and incorporate the integration test slice into the validation plan.
+- ✅ Completed 2025-09-28 — Async worker spawn path disables stale-claim scans to avoid cross-loop futures, prefetch integration test (`tests/integration/test_kasmina_prefetch_async.py`) verifies ready flow and shutdown cancellation, and the new `scripts/bench_kasmina_prefetch.py` harness records prefetch latency (300 requests → 40.1 ms mean / 53.4 ms p95). Observability runbook + changelog updated with benchmark results.
 
 ## Testing
 - Unit: `pytest tests/kasmina` (seed manager, blending, dispatcher, prewarm suites), `radon cc -s src/esper/kasmina/seed_manager.py` (complexity snapshot).
 - Integration: `pytest tests/integration/test_control_loop.py` (round trip, Kasmina telemetry uniqueness).
-- Performance: Prefetch/cache benchmarks deferred alongside WP-K4.
+- Performance: `scripts/bench_kasmina_prefetch.py --requests 300 --ready-latency-ms 40 --jitter-ms 8 --concurrency 6` → 40.1 ms mean / 53.4 ms p95 (0 errors).
 
 ## Rollback Plan
 - Guard new fallback behaviour behind config until validated.
@@ -95,5 +95,5 @@ Status:
 - Emergency telemetry routes via Weatherlight per shared foundations.
 
 ## Sign-off
-- WP-K1/WP-K2 complete (dispatcher, strict failures, blend telemetry); WP-K3/WP-K4 remain open items for telemetry/registry and prefetch/cache reliability in subsequent phases.
-- `CHANGELOG_RC1.md` updated with Kasmina R4c entry summarising strict-dependency enforcement, async worker fix, and test coverage.
+- WP-K1–WP-K4 complete; Kasmina command security and prefetch/cache reliability now meet RC1 acceptance criteria.
+- `CHANGELOG_RC1.md` includes WP-K4 async worker/prefetch benchmark summary and observability updates.

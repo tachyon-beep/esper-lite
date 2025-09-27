@@ -10,21 +10,21 @@
 |--------|---------------|-----------|
 | Tolaria | WP-T1..T4 | `tests/tolaria/test_aggregation.py`, `tests/tolaria/test_timeout.py`, `tests/tolaria/test_rollback.py`, `tests/integration/test_control_loop.py`, perf benchmark script |
 | Tamiyo | WP-A1..A4 | `tests/tamiyo/test_policy.py`, `tests/tamiyo/test_service.py`, `tests/tamiyo/test_risk_engine.py`, `tests/tamiyo/test_wal.py`, integration control loop, perf policy benchmark |
-| Kasmina | WP-K1..K4 | `pytest tests/kasmina` (dispatcher/blend suites), `pytest tests/integration/test_control_loop.py` (round trip, per-seed telemetry) |
+| Kasmina | WP-K1..K4 | `pytest tests/kasmina`, `pytest tests/integration/test_kasmina_prefetch_async.py`, `pytest tests/integration/test_control_loop.py`, `scripts/bench_kasmina_prefetch.py --requests 300 --ready-latency-ms 40 --jitter-ms 8 --concurrency 6` |
 | Shared | Foundations | New async worker tests, telemetry routing tests, dependency guard unit tests |
 
 ## New/Updated Tests Required
 - Async worker cancellation & timeout propagation. ✅ (shared foundations soak harness + integration control loop)
 - Telemetry routing: ensure CRITICAL events reach emergency stream; verify via Weatherlight harness.
 - Blend telemetry metrics (alpha, sparsity) in Kasmina/Tamiyo. ✅ (Kasmina/Tamiyo suites)
-- Command verification telemetry (all subsystems). ◻️ pending WP-K3 / WP-A3 follow-up.
+- Command verification telemetry (all subsystems). ✅ Kasmina WP-K3 suites cover verifier metrics; Tamiyo WP-A3 will extend coverage to policy updates.
 - Rollback SLA measurement tests (500 ms / 12 s) for Tolaria/Kasmina. ◻️ deferred to post-R4c.
 - Prefetch cancellation/regression tests with Oona fakes. ✅ covered via Kasmina prefetch worker tests (WP-K4).
 
 ## Performance Validation
 - Tolaria: step latency benchmark before/after aggregator refactor.
 - Tamiyo: inference benchmark (<45 ms p95) with new async worker.
-- Kasmina: kernel fetch/prefetch throughput; memory footprint under projection changes.
+- Kasmina: kernel fetch/prefetch throughput benchmarked via `scripts/bench_kasmina_prefetch.py`; memory footprint under projection changes remains part of ongoing optimisation.
 - Document results in `CHANGELOG_RC1.md`.
 
 ## Telemetry Verification Checklist

@@ -48,10 +48,11 @@ Bring Tolaria, Tamiyo, and Kasmina to the prototype-delta standard by removing m
 - Shared foundations complete: strict dependency guard, async worker adoption, and telemetry routing harness shipped; Weatherlight/Tolaria now share worker settings.
 - Tolaria WP-T1 and WP-T2 are complete (PCGrad/aggregation fixes, timeout/emergency telemetry, shared worker wiring). WP-T3/T4 remain queued.
 - Tamiyo WP-A1/A2 delivered; A3/A4 outstanding.
-- Kasmina WP-K1–K3 complete (dispatcher, blend telemetry, verifier/nonce ledger); WP-K4 prefetch/cache reliability still in progress.
+- Kasmina WP-K1–K4 complete (dispatcher, blend telemetry, verifier/nonce ledger, async prefetch/cache fixes + benchmark harness).
 - Targeted suites remain green (`tests/tolaria/test_tolaria_trainer.py`, `tests/tamiyo/test_service.py`, `tests/kasmina/test_seed_manager.py`, integration control loop).
 
 ## Next Focus (RC1 Close-out)
-- Finish Kasmina WP-K4 prefetch/cache benchmarking and observability follow-ups.
+- Operationalise Kasmina prefetch benchmarks/alerts while moving to Tamiyo WP-A3/A4.
 - Deliver Tamiyo WP-A3 (telemetry completeness) and WP-A4 (persistence hardening).
 - Execute Tolaria WP-T3/T4 (rollback and complexity refactors) alongside performance harness/rollback SLA validation.
+- Plan the post-RC1 performance reporting framework once reliability fixes stay green.

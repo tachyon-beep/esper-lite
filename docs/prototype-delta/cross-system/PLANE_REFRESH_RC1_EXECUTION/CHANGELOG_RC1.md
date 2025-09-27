@@ -88,14 +88,15 @@
 - **Telemetry Verification**: `tests/kasmina/test_seed_manager.py::test_nonce_replay_emits_critical_and_metrics` confirms CRITICAL routing and verifier counters; `::test_nonce_ledger_truncation_emits_warning` asserts truncation warnings and ledger gauges. Reset helpers emit `registry_reset`/`teacher_deregistered` events with zeroed metrics.
 - **Notes**: WP-K3 now covers telemetry, metrics, and registry hooks. Prefetch/cache work (WP-K4) remains outstanding and will extend ledger settings into async prefetch flows.
 
-## 2025-09-29 — Kasmina Prefetch & Cache Reliability (Risk R4c / WP-K4)
-- **Summary**: Prefetch coordinator now runs on the shared `AsyncWorker`, ensuring cancellable publish/consume loops with failure surfacing. Seed manager tracks per-status prefetch counters/latency, enforces timeouts, and emits CRITICAL `prefetch_timeout` telemetry. Kernel attachment uses per-blueprint locks with contention telemetry, and administrative resets cancel outstanding requests cleanly.
+## 2025-09-28 — Kasmina Prefetch & Cache Reliability (Risk R4c / WP-K4)
+- **Summary**: Completed WP-K4 with the async worker spawn fix (disables stale-claim polling on worker clones), stable integration coverage, and a reproducible benchmark harness. Weatherlight now runs Kasmina prefetch without cross-loop crashes, seed manager telemetry captures counters/latency, and observability docs carry alert thresholds.
 - **Tests Run**:
   - Unit: `/home/john/esper-lite/.venv/bin/pytest tests/kasmina/test_seed_manager.py --disable-warnings`
   - Unit: `/home/john/esper-lite/.venv/bin/pytest tests/kasmina --disable-warnings`
+  - Integration: `/home/john/esper-lite/.venv/bin/pytest tests/integration/test_kasmina_prefetch_async.py --disable-warnings`
   - Integration: `/home/john/esper-lite/.venv/bin/pytest tests/integration/test_control_loop.py::test_kasmina_emits_one_packet_per_seed_per_step --disable-warnings`
-- **Telemetry Verification**: `tests/kasmina/test_seed_manager.py::test_nonce_replay_emits_critical_and_metrics` (latency + counters), `::test_nonce_ledger_truncation_emits_warning` (inflight + truncations), and new prefetch tests assert `prefetch_timeout`, `prefetch_canceled`, and cache lock contention behaviour. Average and last-latency gauges now appear in Kasmina global packets.
-- **Notes**: Outstanding follow-up: benchmark prefetch throughput under contention and integrate metrics into observability runbooks. WP-K4 remains open for performance validation but functional reliability changes (async worker clients, telemetry, locking) are in place.
+- **Telemetry / Benchmark Verification**: Prefetch metrics (`kasmina.prefetch.requests_total{status}`, `kasmina.prefetch.latency_ms`, `kasmina.cache.lock_wait_ms`) asserted in unit/integration suites. `scripts/bench_kasmina_prefetch.py --requests 300 --ready-latency-ms 40 --jitter-ms 8 --concurrency 6` reports 40.1 ms mean / 53.4 ms p95 (0 errors); observability runbook documents thresholds.
+- **Notes**: WP-K4 closed; remaining Kasmina follow-ups move under future optimization/alerting tasks.
 
 ## 2025-09-28 — Tolaria WP-T1/T2 Aggregation & Emergency Hardening
 - **Summary**: Completed WP-T1 gradient aggregation fixes (pairwise PCGrad, weighted broadcast safeguards) with new unit coverage, and advanced WP-T2 through timeout telemetry and emergency dispatch hardening. Tolaria now sources shared async worker settings from `EsperSettings`, emits `tolaria.timeout.*` and emergency metrics, and Weatherlight honours the same configuration knobs.

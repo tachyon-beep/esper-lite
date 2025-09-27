@@ -24,7 +24,8 @@
 | Kasmina WP-K1 | Gate fallback enforcement | (tbd) | Not Started |  |
 | Kasmina WP-K2 | Blend telemetry/logits | (tbd) | Not Started |  |
 | Kasmina WP-K3 | Command verifier telemetry, nonce ledger | Codex | Complete | Telemetry, nonce ledger metrics, and registry resets landed; remaining work tracked under WP-K4 |
-| Kasmina WP-K4 | Prefetch worker & cache locking | Codex | In Progress | Async worker integration, telemetry/metrics, and cache locking implemented; finalize observability docs and throughput benchmark sign-off |
+| Kasmina WP-K4 | Prefetch worker & cache locking | Codex | Complete | Async worker spawn fix, integration suite stable, prefetch benchmark + docs landed 2025-09-28 |
 | Testing & Validation | Performance harness execution | (tbd) | Not Started |  |
 | Testing & Validation | Telemetry verification runbook | (tbd) | Not Started |  |
 | Documentation | Update lint & change log | (tbd) | Not Started |  |
+| Cross-System | Performance reporting framework | (tbd) | Not Started | Rebuild performance reporting/monitoring once reliability fixes stay green |
