@@ -107,3 +107,13 @@
   - Integration: `pytest tests/tolaria/test_aggregation_attribution.py`
 - **Telemetry Verification**: Timeout counters/latencies appear in telemetry packets; emergency dispatch metrics log successful publishes and CRITICAL failures with error context. Fixture parity tests assert the new metrics are a superset of the recorded baseline.
 - **Notes**: Async worker defaults now include `ASYNC_WORKER_MAX_CONCURRENCY`, `ASYNC_WORKER_SHUTDOWN_TIMEOUT_S`, and optional Tolaria overrides; emergency controller resets after successful epochs. Remaining WP-T2 work covers telemetry summaries in observability docs and rollback/emergency integration tests.
+
+## 2025-09-28 — Tamiyo WP-A3 Priority & Routing Wrap-Up
+- **Summary**: Finalised WP-A3 by teaching Weatherlight to classify CRITICAL telemetry sources, exposing `weatherlight.emergency.telemetry_total` / `weatherlight.emergency.tamiyo_total`, and adding deterministic harnesses for Tamiyo emergency routing plus shared async-worker back-pressure. Observability docs and status reports now reference the new metrics and drill procedure.
+- **Tests Run**:
+  - Unit: `pytest tests/weatherlight/test_service_priority.py`
+  - Integration: `PYTHONPATH=. pytest tests/integration -k "not async_worker_soak"`
+  - Targeted: `pytest tests/integration/test_weatherlight_tamiyo_emergency.py`
+  - Targeted: `pytest tests/integration/test_async_worker_backpressure.py`
+- **Telemetry Verification**: Weatherlight counters confirm Tamiyo low-coverage events increment emergency telemetry totals; Oona metrics snapshot reports `emergency_published > 0` with `publish_dropped == 0`. Back-pressure harness asserts `publish_total` growth while `queue_depth_max` stays below the configured drop threshold.
+- **Notes**: Observability runbook documents the drill, and Phase 3 knowledge/status entries are marked complete. Async worker soak remains opt-in via `RUN_SOAK_TESTS=1`.

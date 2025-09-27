@@ -7,6 +7,7 @@ import pytest
 from esper.core import TelemetryEvent, TelemetryMetric, build_telemetry_packet
 from esper.leyline import leyline_pb2
 from esper.weatherlight.service_runner import WeatherlightService
+from esper.oona import OonaMessage
 
 
 class _FakeOona:
@@ -51,18 +52,22 @@ def _kasmina_packet(packet_id: str, level: int, *, priority_indicator: str | Non
     return pkt
 
 
+def _make_urza_worker():
+    class _UrzaWorker:
+        def __init__(self) -> None:
+            self.metrics = type(
+                "M", (), {"hits": 0, "misses": 0, "errors": 0, "latency_ms": 0.0}
+            )()
+
+    return _UrzaWorker()
+
+
 @pytest.mark.asyncio
 async def test_weatherlight_routes_kasmina_by_priority() -> None:
     service = WeatherlightService()
     fake = _FakeOona()
     service._oona = fake  # type: ignore[attr-defined]
-
-    # Provide a minimal Urza worker metrics stub
-    class _UrzaWorker:
-        def __init__(self) -> None:
-            self.metrics = type("M", (), {"hits": 0, "misses": 0, "errors": 0, "latency_ms": 0.0})()
-
-    service._urza_worker = _UrzaWorker()  # type: ignore[attr-defined]
+    service._urza_worker = _make_urza_worker()  # type: ignore[attr-defined]
 
     # Build Kasmina packets
     crit = _kasmina_packet(
@@ -99,3 +104,50 @@ async def test_weatherlight_routes_kasmina_by_priority() -> None:
     assert counters["high"] >= 1
     assert counters["normal"] >= 1
     assert service.telemetry_publish_failures == 0
+
+
+@pytest.mark.asyncio
+async def test_weatherlight_tracks_tamiyo_emergency_telemetry() -> None:
+    service = WeatherlightService()
+    fake = _FakeOona()
+    service._oona = fake  # type: ignore[attr-defined]
+    service._urza_worker = _make_urza_worker()  # type: ignore[attr-defined]
+
+    packet = build_telemetry_packet(
+        packet_id="tamiyo-emergency",
+        source="tamiyo",
+        level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
+        metrics=[TelemetryMetric("tamiyo.gnn.feature_coverage", 0.05, unit="ratio")],
+        events=[
+            TelemetryEvent(
+                description="degraded_inputs",
+                level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
+                attributes={"coverage_avg": "0.05"},
+            )
+        ],
+        health_status=leyline_pb2.HealthStatus.HEALTH_STATUS_CRITICAL,
+        health_summary="degraded_inputs",
+        health_indicators={
+            "priority": leyline_pb2.MessagePriority.Name(
+                leyline_pb2.MessagePriority.MESSAGE_PRIORITY_CRITICAL
+            )
+        },
+    )
+    message = OonaMessage(
+        stream="oona.emergency",
+        message_id="1-0",
+        message_type=leyline_pb2.BusMessageType.BUS_MESSAGE_TYPE_TELEMETRY,
+        payload=packet.SerializeToString(),
+        attributes={"priority": "critical"},
+    )
+
+    await service._on_emergency_message(message)
+
+    assert service._emergency_telemetry_counts.get("tamiyo") == 1
+
+    telemetry_packet = await service._build_telemetry_packet()  # type: ignore[attr-defined]
+    metric_map = {m.name: m.value for m in telemetry_packet.metrics}
+    assert metric_map.get("weatherlight.emergency.telemetry_total") == pytest.approx(1.0)
+    assert metric_map.get("weatherlight.emergency.tamiyo_total") == pytest.approx(1.0)
+
+    await service.shutdown()

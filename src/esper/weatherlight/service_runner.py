@@ -126,6 +126,8 @@ class WeatherlightService:
             "critical": 0,
         }
         self._telemetry_publish_failures: int = 0
+        self._emergency_telemetry_counts: dict[str, int] = {}
+        self._emergency_telemetry_last_seen: dict[str, float] = {}
 
     async def start(self) -> None:
         """Initialise subsystems and spawn background workers (Slice 1 & 2)."""
@@ -488,23 +490,61 @@ class WeatherlightService:
                 await asyncio.sleep(0.2)
 
     async def _on_emergency_message(self, message: OonaMessage) -> None:
-        if message.message_type != leyline_pb2.BusMessageType.BUS_MESSAGE_TYPE_EMERGENCY_SIGNAL:
+        if message.message_type == leyline_pb2.BusMessageType.BUS_MESSAGE_TYPE_EMERGENCY_SIGNAL:
+            signal = leyline_pb2.EmergencySignal()
+            signal.ParseFromString(message.payload)
+            reason = signal.reason or message.attributes.get("reason", "")
+            if not reason:
+                reason = "unspecified"
+            origin = signal.origin or message.attributes.get("origin", "stream")
+            triggered_ms = (
+                int(signal.monotonic_time_ms) if getattr(signal, "monotonic_time_ms", 0) else None
+            )
+            await self._handle_emergency_detection(
+                level=int(signal.level),
+                reason=reason,
+                origin=f"stream:{origin}",
+                triggered_ms=triggered_ms,
+            )
             return
-        signal = leyline_pb2.EmergencySignal()
-        signal.ParseFromString(message.payload)
-        reason = signal.reason or message.attributes.get("reason", "")
-        if not reason:
-            reason = "unspecified"
-        origin = signal.origin or message.attributes.get("origin", "stream")
-        triggered_ms = (
-            int(signal.monotonic_time_ms) if getattr(signal, "monotonic_time_ms", 0) else None
-        )
-        await self._handle_emergency_detection(
-            level=int(signal.level),
-            reason=reason,
-            origin=f"stream:{origin}",
-            triggered_ms=triggered_ms,
-        )
+
+        if message.message_type == leyline_pb2.BusMessageType.BUS_MESSAGE_TYPE_TELEMETRY:
+            packet = leyline_pb2.TelemetryPacket()
+            packet.ParseFromString(message.payload)
+            origin = packet.source_subsystem or message.attributes.get("origin", "telemetry")
+            origin = origin.lower() or "telemetry"
+            self._record_emergency_telemetry(origin, packet)
+            return
+
+        # Other emergency stream payloads are acknowledged but ignored.
+        return
+
+    def _record_emergency_telemetry(
+        self,
+        origin: str,
+        packet: leyline_pb2.TelemetryPacket,
+    ) -> None:
+        count = self._emergency_telemetry_counts.get(origin, 0) + 1
+        self._emergency_telemetry_counts[origin] = count
+        self._emergency_telemetry_last_seen[origin] = time.monotonic()
+        # Track overall detection counters for compatibility with existing metrics.
+        # We intentionally avoid publishing telemetry here to prevent recursive
+        # routing loops on the emergency stream.
+        if packet.level == leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL:
+            self._emergency_detections_total += 1
+            self._emergency_last_level = int(packet.level)
+            summary = ""
+            try:
+                summary = packet.system_health.summary
+            except AttributeError:
+                summary = ""
+            if not summary and packet.events:
+                try:
+                    summary = packet.events[-1].description or ""
+                except Exception:
+                    summary = ""
+            self._emergency_last_reason = summary or "telemetry"
+            self._emergency_last_detect_s = time.monotonic()
 
     async def _handle_emergency_detection(
         self,
@@ -903,6 +943,33 @@ class WeatherlightService:
                     unit="ms",
                 )
             )
+        telemetry_total = sum(self._emergency_telemetry_counts.values())
+        if telemetry_total:
+            metrics.append(
+                TelemetryMetric(
+                    "weatherlight.emergency.telemetry_total",
+                    float(telemetry_total),
+                    unit="count",
+                )
+            )
+        tamiyo_total = self._emergency_telemetry_counts.get("tamiyo", 0)
+        if tamiyo_total:
+            metrics.append(
+                TelemetryMetric(
+                    "weatherlight.emergency.tamiyo_total",
+                    float(tamiyo_total),
+                    unit="count",
+                )
+            )
+            last_seen = self._emergency_telemetry_last_seen.get("tamiyo")
+            if last_seen is not None:
+                metrics.append(
+                    TelemetryMetric(
+                        "weatherlight.emergency.tamiyo_last_ms_ago",
+                        float((time.monotonic() - last_seen) * 1000.0),
+                        unit="ms",
+                    )
+                )
         if self._emergency_last_level is not None:
             metrics.append(
                 TelemetryMetric(

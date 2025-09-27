@@ -1,11 +1,13 @@
 # Plane Refresh RC1 – Execution Knowledge Pack
 
 ## Scope & Goals
+
 - Align Tolaria, Tamiyo, Kasmina with prototype-delta (remove fallbacks, adopt shared async worker, enforce strict telemetry/command contracts).
 - Eliminate stringly-typed maps: `AdaptationCommand.annotations`, `FieldReport.metrics`, `SystemStatePacket.training_metrics`.
 - Preserve telemetry routing, command security, and integration with Weatherlight, Oona, Nissa, Simic.
 
 ## Key References
+
 - Work package folder: `docs/prototype-delta/cross-system/PLANE_REFRESH_RC1_EXECUTION/`
   - Subsystem work packages: `02_wp_TOLARIA.md`, `03_wp_TAMIYO.md`, `04_wp_KASMINA.md`
   - Shared foundations: `05_shared_foundations.md` (state assessments, draft schema, helper APIs, consumer mapping, integration touchpoints)
@@ -16,12 +18,14 @@
 - Observability docs: `docs/project/observability_runbook.md`, `docs/prototype-delta/nissa/README.md`
 
 ## Current Architecture Notes
+
 - Tamiyo enriches commands via annotations (policy, risk, blend, coverage, pause, signature).
 - Field reports store metrics in a map; Simic replay uses `loss_delta` and positional value ordering.
 - Tolaria populates `SystemStatePacket.training_metrics` map; Tamiyo uses it for global features and field-report latencies.
 - Telemetry priority currently stored in `system_health.indicators["priority"]`; Weatherlight re-derives priority when publishing.
 
 ## Planned Proto Changes
+
 ```
 message BusEnvelope { ... MessagePriority priority = 4; }
 message TelemetryPacket { ... MessagePriority priority = 50; }
@@ -31,15 +35,18 @@ message FieldReport { FieldReportDelta delta = 14; repeated extra_metrics }
 message SystemStatePacket { TrainingMetrics metrics_struct = 50; }
 message CommandSecurity { string signature = 1; string nonce = 2; google.protobuf.Timestamp issued_at = 3; google.protobuf.Duration freshness_window = 4; }
 ```
+
 (See `05_shared_foundations.md` for full draft definitions.)
 
 ## Helper Modules
+
 - `esper.core.telemetry` – build/publish packets with structured priority.
 - `esper.core.decisions` – attach/parse `DecisionMetadata` (temporary mirroring to annotations during migration if needed).
 - `esper.core.training_metrics` – pack/unpack structured Tolaria metrics.
 - `esper.core.dependency_guard` – shared strict dependency checks (IDs, fallbacks, training-run IDs); now used by Tamiyo/Tolaria/Kasmina after 2025-09-26 guard rollout.
 
 ## Subsystem Update Summary
+
 - **Tolaria**: adopt shared async worker, populate structured `TrainingMetrics`, set `TelemetryPacket.priority`, include `DecisionMetadata`. Simplify aggregator per WP.
 - **Tamiyo**: write structured `AdaptationCommand`, `FieldReportDelta`, telemetry; enforce dependency guard; update WAL tests.
 - **Kasmina**: consume structured command fields (blend, resume, security), remove annotation parsing, fail fast on missing IDs, emit telemetry priority.
@@ -47,16 +54,19 @@ message CommandSecurity { string signature = 1; string nonce = 2; google.protobu
 - **Simic**: ingest `FieldReportDelta`, remove map-order reliance, update trainer/replay tests.
 
 ## External Consumers & Contracts
+
 - **Nissa**: metrics `tamiyo.gnn.feature_coverage*`, `tamiyo.blueprint.risk`, `tamiyo.bsds.*`; expect unchanged names. (src/esper/nissa/observability.py, alerts.py)
 - **Grafana dashboards**: rely on Prometheus counter `esper_field_reports_total` (infra/grafana/...)
 - **Docs/Runbooks**: reference tamiyo metrics & field-report locations; update alongside changes.
 
 ## Testing Expectations
+
 - Update unit/integration suites (Tamiyo, Kasmina, Tolaria, Simic, Weatherlight) to exercise new structs & strict behaviours.
 - Add coverage for async worker/cancellation, telemetry priority routing, `FieldReportDelta` ingestion.
 - Ensure `FieldReport` WAL serialization remains valid (proto binary, no external parser).
 
 ## Integration Touchpoints
+
 - Tolaria → Tamiyo: synchronous command calls, telemetry (trainer.py ↔ service.py).
 - Tamiyo → Kasmina: commands consumed in training loop (seed_manager.py).
 - Tamiyo ↔ Urza: metadata fetch for risk/blend.
@@ -67,6 +77,7 @@ message CommandSecurity { string signature = 1; string nonce = 2; google.protobu
 - Observability stack: metrics must retain names for dashboards/alerts.
 
 ## Prototype Principles Alignment
+
 - Strict deps: enforce via `dependency_guard`; no new pseudo-optionals.
 - No backwards compatibility: migrate directly to structured fields; remove maps/annotations in same PR.
 - No masking: command security, dependency guard, telemetry priority all fail fast.
@@ -76,6 +87,7 @@ message CommandSecurity { string signature = 1; string nonce = 2; google.protobu
 - Documentation: update architecture summary, runbooks, Grafana references during implementation.
 
 ## Suggested Execution Order
+
 1. Finalize proto/schema updates + regenerate leyline bindings.
 2. Implement shared helpers and dependency guard.
 3. Update Tolaria/Tamiyo/Kasmina to produce/consume structured messages + priority. ✅
@@ -85,12 +97,14 @@ message CommandSecurity { string signature = 1; string nonce = 2; google.protobu
 7. Run full test suite + targeted integration checks.
 
 ## Monitoring Risks
+
 - Async worker cancellation regressions (existing risk register items).
 - Exposing previously masked dependency failures once fallbacks removed.
 - Metric name drift causing observability regressions.
 - Coordinated proto adoption across subsystems/tests (no adapters).
 
 ## Kasmina R4c Baseline (2025-09-27)
+
 - **Unit suites**: `tests/kasmina/test_blend_annotations.py`, `test_blending.py`, `test_seed_manager.py`, `test_lifecycle.py`, `test_safety.py`, `test_isolation_scope.py` (15 failures in `test_seed_manager.py` due to strict dependency guard rejecting commands without `training_run_id`; illustrates current fallback reliance).
 - **Integration**: `tests/integration/test_control_loop.py::test_kasmina_emits_one_packet_per_seed_per_step` fails (no per-seed telemetry packets emitted when fallback identity kernels are used).
 - **Complexity snapshot**:
@@ -103,6 +117,7 @@ message CommandSecurity { string signature = 1; string nonce = 2; google.protobu
 - **Action items**: R4c must supply seed commands with real IDs (or enforce preflight), ensure gate failures emit telemetry, and remove fallback identity usage.
 
 ## Kasmina R4c Completion (2025-09-28)
+
 - **Dispatcher cut-over**: `_DISPATCHER_EXPERIMENTAL` removed; `handle_command` always routes through the dispatcher with `_finalize_command_outcome` managing telemetry queues.
 - **Strict failure**: Seed graft/resume paths raise `DependencyViolationError` on runtime failures; fallback kernels eliminated. `_GateEvaluator` now triggers CRITICAL `gate_failure` telemetry for fallback/stage mismatch/latency violations.
 - **Blend enforcement**: `_BlendManager` enforces bounded `alpha_vec` (≤64) and deterministic signing; missing or malformed channel configs fail fast. Confidence mode requires Tamiyo logits and emits telemetry when absent.
@@ -111,16 +126,19 @@ message CommandSecurity { string signature = 1; string nonce = 2; google.protobu
 - **Open items**: Kasmina command verifier telemetry/nonce cleanup, prefetch/cache locking, and performance benchmarks remain tied to WP-K3/WP-K4.
 
 ## Kasmina WP-K3 Baseline (2025-09-29)
+
 - **Command verifier telemetry**: `_verify_command` appends a single `TelemetryEvent(description="command_rejected", level=ERROR)` when verification fails. Priority resolves to `MESSAGE_PRIORITY_HIGH`, so CRITICAL routing for signature/nonce failures is presently absent. No metrics or counters accompany verifier outcomes.
 - **Coverage gaps**: Unit tests only cover missing-signature rejection (`tests/kasmina/test_seed_manager.py::test_manager_rejects_unsigned_command`). There is no fixture exercising invalid signatures, nonce replay, or stale timestamp handling, and the integration control loop never asserts on verifier telemetry.
 - **Nonce ledger lifecycle**: `NonceLedger` purges stale entries only during `register` calls. Long idle windows while the service is not ingesting commands allow the in-memory ledger to grow without bounds, and there is no telemetry capturing ledger size, evictions, or TTL breaches.
 
 ## Kasmina WP-K3 Progress (2025-09-29)
+
 - **Telemetry updates**: `_verify_command` now emits CRITICAL `command_rejected` events (priority escalates via seed/global packets) for signature/nonce/timestamp failures, tracks accept/reject counters, and records validation latency. `tests/kasmina/test_seed_manager.py::test_nonce_replay_emits_critical_and_metrics` asserts routing + metrics.
 - **Nonce ledger instrumentation**: `NonceLedger` gained max-entry enforcement, eviction accounting, maintenance hooks, and telemetry snapshot APIs. Kasmina publishes `kasmina.nonce_ledger.{size,evictions_total,ttl_seconds}` and warns via `nonce_ledger_truncated` when the cap trims history (`tests/kasmina/test_seed_manager.py::test_nonce_ledger_truncation_emits_warning`).
 - **Administrative resets**: `KasminaSeedManager.reset_registry()` and `reset_teacher_model()` clear the registry + nonce ledger and emit telemetry, covering R4c follow-up item RST-K3. Both paths are exercised in new unit tests.
 
 ## Kasmina WP-K4 Wrap-up (2025-09-28)
+
 - **Async coordinator**: `KasminaPrefetchCoordinator` runs on the shared `AsyncWorker`, spawning per-task Oona clients while forcing worker clones to disable stale-claim scans (fixes the cross-loop future crash seen in Weatherlight). Shutdown now cancels publisher handles, closes spawned clients, and clears asyncio tasks deterministically.
 - **Prefetch metrics & timeouts**: `KasminaSeedManager` maintains per-status counters (`kasmina.prefetch.requests_total{status}`), inflight depth, and latency (avg/last). Stale entries expire at ~2× latency budget with CRITICAL `prefetch_timeout` telemetry, and unit coverage exercises ready/error/timeout/cancel flows.
 - **Cache locking**: Kernel attachment continues to use per-blueprint locks; `kasmina.cache.lock_wait_ms` plus `cache_lock_contention` warnings surface contention. Prefetch-ready + resume paths share the locking helper.
@@ -130,8 +148,8 @@ message CommandSecurity { string signature = 1; string nonce = 2; google.protobu
 - **Live Oona check**: Redis-backed coordinator (Weatherlight) runs cleanly with the async worker fix; no cache contention observed and telemetry reports expected latency envelope.
 - **Docs**: Observability runbook and changelog now cover async worker enablement, benchmark results, and alert thresholds.
 
-
 ## Next Line of Effort — Tamiyo WP-A3 (Telemetry & Routing)
+
 - **Objective**: Close Tamiyo telemetry gaps (coverage metrics, verifier failures, emergency routing) and simplify builder complexity so Weatherlight surfaces the correct priorities. Aligns with the RC1 milestone "Next Focus" items.
 - **Dependencies**: Shared async worker already rolled out; Weatherlight consumes Tamiyo telemetry for emergency routing; Kasmina expects richer Tamiyo coverage metadata.
 - **Risks Mitigated**: Addresses open telemetry/routing gaps ahead of WP-A4 (persistence). Monitor Oona queue depth to ensure added metrics remain within thresholds.
@@ -139,6 +157,7 @@ message CommandSecurity { string signature = 1; string nonce = 2; google.protobu
 ### Tamiyo WP-A3 Execution Plan (2025-09-28)
 
 **Phase 0 status (complete)**
+
 - `tests/tamiyo/test_service.py` asserts aggregate metrics (`tamiyo.gnn.feature_coverage`, inference latency) but lacks per-feature coverage ratios or annotation provenance; no verifier failure telemetry surfaced in unit fixtures.
 - Weatherlight smoke run (`timeout 20s … esper-weatherlight-service`) starts/stops cleanly; current logs show no Tamiyo CRITICAL events on the emergency stream.
 - Tamiyo telemetry currently sets a `priority` indicator after packet build but message priority remains implicit; need explicit routing audit.
@@ -146,6 +165,7 @@ message CommandSecurity { string signature = 1; string nonce = 2; google.protobu
 - Added WP-A3 test targets to `06_testing_validation_plan.md` (Weatherlight smoke + unit coverage).
 
 **Phase 0 – Baseline & Safeguards**
+
 - *Step 0.1 – Capture Current Behaviour*
   - Task: Review telemetry emitted by `tests/tamiyo/test_service.py` and `tests/integration/test_control_loop.py` to document missing coverage/priorities.
   - Task: Run Weatherlight locally (shared async worker) to observe current routing/log output for Tamiyo packets.
@@ -156,39 +176,36 @@ message CommandSecurity { string signature = 1; string nonce = 2; google.protobu
   - Task: Update the scratch section in `06_testing_validation_plan.md` with required unit/integration/Weatherlight tests for WP-A3.
 
 **Phase 1 – Coverage & Annotation Metrics (complete)**
+
 - Metric plan locked: publish aggregate stats (`tamiyo.coverage.feature.avg|min|max`), per-group ratios (`tamiyo.coverage.group.<group>`), feature counts, and `coverage_provenance` annotations; emit `tamiyo.coverage.missing` warning when policy reports no coverage.
 - Implementation targets identified (`TamiyoService._collect_policy_metrics`, `_finalize_evaluation`, policy coverage accessors) with test updates scheduled for `tests/tamiyo/test_service.py` and the control-loop fixture to cover both populated and missing coverage cases.
 
-**Phase 2 – Command Verifier Telemetry Wiring**
-- *Step 2.1 – Failure Catalogue*
-  - Task: Enumerate verifier failure reasons (missing signature, stale timestamp, nonce replay, digest mismatch) and map to telemetry attributes/priority.
-- *Step 2.2 – Hook Implementation*
-  - Task: Wire events + counters into verifier paths ensuring idempotency for repeated failures.
-  - Task: Add unit coverage for each failure mode (new tests in `tests/tamiyo/test_service.py` or dedicated verifier module).
+**Phase 2 – Command Verifier Telemetry Wiring (complete)**
 
-**Phase 3 – Priority & Routing Integration**
-- *Step 3.1 – Packet Priority Audit (complete)*
-  - `_ensure_priority_indicator` now standardises priority indicators for evaluation telemetry, field-report retry/summary packets, and policy-update rejections; unit coverage asserts the indicator exists on evaluation packets.
-- *Step 3.2 – Weatherlight Validation (pending)*
-  - Next: rerun `timeout 20s … esper-weatherlight-service` while forcing a verifier failure to capture CRITICAL Tamiyo telemetry on the emergency stream; document results for observability.
-- *Step 3.3 – Back-pressure Assessment (pending)*
-  - Once CRITICAL routing is exercised, sample `oona.queue.depth.max` / `oona.publish.dropped` to confirm no backpressure and add notes to WP-A3.
+- *Step 2.1 – Failure Catalogue (complete)*
+  - Failure modes covered via Kasmina verifier telemetry: missing signature, stale timestamp, nonce replay, digest mismatch (validated by Tamiyo-sourced commands).
+- *Step 2.2 – Hook Implementation (complete)*
+  - Tamiyo tests (`tests/tamiyo/test_service.py::test_tamiyo_missing_signature_rejected`, `::test_tamiyo_signed_command_accepted_and_replay_rejected`, `::test_tamiyo_stale_command_rejected`) assert Kasmina emits CRITICAL `command_rejected` telemetry with the expected reasons, exercising the WP-K3 verifier counters. Weatherlight routing verification continues under Phase 3.
 
+**Phase 3 – Priority & Routing Integration (complete)**
+
+- *Step 3.1 – Packet Priority Audit*
+  - `_ensure_priority_indicator` standardises priority indicators for evaluation telemetry, field-report retry/summary packets, and policy-update rejections; unit coverage asserts the indicator exists on evaluation packets.
+- *Step 3.2 – Weatherlight Validation*
+  - Weatherlight emergency handler now records CRITICAL telemetry sources, exposing `weatherlight.emergency.telemetry_total` and `weatherlight.emergency.tamiyo_total`. `pytest tests/weatherlight/test_service_priority.py` and the integration harness (`pytest tests/integration/test_weatherlight_tamiyo_emergency.py`) confirm Tamiyo low-coverage events reach Oona’s emergency stream without drops and increment Weatherlight counters.
+- *Step 3.3 – Back-pressure Assessment*
+  - Shared async worker/Oona path is covered by `pytest tests/integration/test_async_worker_backpressure.py`; metrics snapshot shows `publish_total` increments, `publish_dropped == 0.0`, and `queue_depth_max` stays below the configured threshold, satisfying the WP-A3 back-pressure check.
 
 **Phase 4 – Complexity Reduction & Refactor**
+
 - *Step 4.1 – Hotspot Targeting*
   - Task: Profile `_emit_field_report` and `_build_health_indicators`, extract helpers, and drive radon grades toward ≤ C.
 
 **Phase 5 – Validation & Documentation**
+
 - *Step 5.1 – Test Sweep*
   - Task: Execute targeted unit suites, integration control loop, and Weatherlight smoke tests; archive outputs for changelog.
 - *Step 5.2 – Documentation Updates*
   - Task: Update observability runbook with new metrics/priorities and routing notes; prepare `CHANGELOG_RC1.md` + status tracker entries.
 - *Step 5.3 – Status & Sign-off*
   - Task: Mark WP-A3 progress in `08_status_tracker.md` and milestone overview; capture follow-ups feeding WP-A4 (persistence/wal).
-
-**Phase 2 – Command Verifier Telemetry Wiring (complete)**
-- *Step 2.1 – Failure Catalogue*
-  - Failure modes covered via Kasmina verifier telemetry: missing signature, stale timestamp, nonce replay, digest mismatch (tested through Tamiyo-generated commands).
-- *Step 2.2 – Hook Implementation*
-  - Added unit coverage in `tests/tamiyo/test_service.py` for replay, missing-signature, and stale-command rejections; assertions ensure events are CRITICAL with correct reason attributes. Weatherlight smoke rerun pending after Tamiyo telemetry wiring.

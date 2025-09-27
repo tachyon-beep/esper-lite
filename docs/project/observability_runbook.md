@@ -118,6 +118,16 @@ process. The service will log a warning when the stub is activated.
 - Weatherlight smoke test (redis-backed coordinator) now runs cleanly with the async worker spawn fix;
   latency falls within the 35–60 ms envelope and no cache contention was observed. Keep the
   120/180 ms alert thresholds and validate against production telemetry.
+- Weatherlight now tracks emergency telemetry sources directly. Monitor
+  `weatherlight.emergency.telemetry_total` for aggregate CRITICAL telemetry flushed
+  via the emergency stream and `weatherlight.emergency.tamiyo_total` /
+  `weatherlight.emergency.tamiyo_last_ms_ago` to confirm Tamiyo degraded-input
+  events are routed correctly. The integration harness
+  (`pytest tests/integration/test_weatherlight_tamiyo_emergency.py`) validates the
+  end-to-end path when Tamiyo emits low-coverage packets.
+- Oona emergency routing counters (`emergency_published`, `emergency_rate_dropped`)
+  are exercised by the same harness; ensure `publish_dropped` remains zero during
+  low-coverage drills to confirm the token bucket ingress limits are not exceeded.
 - Shared async worker settings (`ASYNC_WORKER_MAX_CONCURRENCY`, shutdown timeout, Tolaria overrides)
   remain the control point. Kasmina auto-spawns per-task Oona clients with stale-claim scans disabled,
   so no manual Redis tuning is required beyond setting concurrency/timeout knobs and

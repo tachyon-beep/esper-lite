@@ -24,6 +24,8 @@
 - Static analysis: `.venv/bin/pylint --rcfile .codacy/tools-configs/pylint.rc src/esper/tamiyo/service.py` (10.00/10).
 - Complexity: `.venv/bin/radon cc -s src/esper/tamiyo/service.py` confirms `_apply_risk_engine` at `A (3)` and `_evaluate` at `A (1)` after Phase 4.5.
 - Fixture parity: existing golden fixtures exercised by `tests/tamiyo/test_risk_engine.py` (command + telemetry digest) all pass without diffs.
+- Emergency telemetry routing: `pytest tests/weatherlight/test_service_priority.py` now verifies CRITICAL Tamiyo packets publish with explicit priority enums and update Weatherlight emergency counters (`weatherlight.emergency.telemetry_total` / `tamiyo_total`).
+- Integration harness: `pytest tests/integration/test_weatherlight_tamiyo_emergency.py` drives a low-coverage Tamiyo flow through Weatherlight + Oona (FakeRedis) and confirms Oona emergency metrics (`emergency_published`, `publish_dropped`) and Weatherlight counters increment as expected. `tests/integration/test_async_worker_backpressure.py` exercises the shared async worker/Oona path and asserts back-pressure metrics remain within thresholds (`publish_total`, `publish_dropped`, `queue_depth_max`).
 
 ## Next Steps
 1. Phase 5 — Conservative-mode convergence: audit `_set_conservative_mode` callers to avoid duplicate enter/exit telemetry and introduce recovery evaluators.
