@@ -217,6 +217,7 @@ class TamiyoService:
         "isolation_and_device",
         "optimizer_hints",
         "stabilisation",
+        "conservative_recovery",
     )
 
     def __init__(
@@ -265,6 +266,9 @@ class TamiyoService:
         else:
             self._policy = policy
         self._risk = risk_config or RiskConfig()
+        self._conservative_enabled = self._risk.conservative_mode
+        self._conservative_last_reason: str | None = None
+        self._conservative_last_enter_s: float | None = None
         # Urza is required for prototype operation; do not mask its absence.
         if urza is None:
             raise RuntimeError(
@@ -350,6 +354,7 @@ class TamiyoService:
             "isolation_and_device": self._risk_evaluator_isolation_and_device,
             "optimizer_hints": self._risk_evaluator_optimizer_hints,
             "stabilisation": self._risk_evaluator_stabilisation,
+            "conservative_recovery": self._risk_evaluator_conservative_recovery,
         }
         return [(name, registry[name]) for name in self._RISK_EVALUATOR_SEQUENCE]
 
@@ -829,8 +834,28 @@ class TamiyoService:
             and self._metadata_breaker.state
             == leyline_pb2.CircuitBreakerState.CIRCUIT_STATE_CLOSED
         ):
-            self._set_conservative_mode(False, "stabilised", outcome.events)
+            self._conservative_last_reason = self._conservative_last_reason or "stabilised"
 
+        return outcome
+
+    def _risk_evaluator_conservative_recovery(
+        self,
+        context: TamiyoRiskContext,
+        outcome: TamiyoRiskOutcome,
+    ) -> TamiyoRiskOutcome:
+        if not self._risk.conservative_mode:
+            return outcome
+
+        if context.timed_out or context.blueprint_timeout:
+            return outcome
+
+        if self._inference_breaker.state != leyline_pb2.CircuitBreakerState.CIRCUIT_STATE_CLOSED:
+            return outcome
+
+        if self._metadata_breaker.state != leyline_pb2.CircuitBreakerState.CIRCUIT_STATE_CLOSED:
+            return outcome
+
+        self._set_conservative_mode(False, "stabilised", outcome.events)
         return outcome
     @staticmethod
     def _set_risk_reason(
@@ -1783,8 +1808,14 @@ class TamiyoService:
         reason: str,
         events: list[TelemetryEvent],
     ) -> None:
+        previously_enabled = getattr(self, "_conservative_enabled", False)
+        self._conservative_enabled = self._risk.conservative_mode
+
         if enabled and not self._risk.conservative_mode:
             self._risk.conservative_mode = True
+            self._conservative_enabled = True
+            self._conservative_last_reason = reason
+            self._conservative_last_enter_s = time.monotonic()
             events.append(
                 TelemetryEvent(
                     description="conservative_entered",
@@ -1794,13 +1825,29 @@ class TamiyoService:
             )
         elif not enabled and self._risk.conservative_mode:
             self._risk.conservative_mode = False
+            self._conservative_enabled = False
+            attributes = {
+                "reason": reason,
+            }
+            if getattr(self, "_conservative_last_reason", None):
+                attributes["previous_reason"] = self._conservative_last_reason  # type: ignore[attr-defined]
+            if getattr(self, "_conservative_last_enter_s", None):
+                elapsed = time.monotonic() - self._conservative_last_enter_s  # type: ignore[attr-defined]
+                attributes["duration_s"] = f"{max(0.0, elapsed):.3f}"
             events.append(
                 TelemetryEvent(
                     description="conservative_exited",
                     level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
-                    attributes={"reason": reason},
+                    attributes=attributes,
                 )
             )
+            self._conservative_last_reason = None
+            self._conservative_last_enter_s = None
+        else:
+            # When already in conservative mode, refresh last reason so the
+            # exit path surfaces the latest trigger to operators.
+            if enabled and previously_enabled:
+                self._conservative_last_reason = reason
 
     def _resolve_blueprint_with_timeout(
         self,

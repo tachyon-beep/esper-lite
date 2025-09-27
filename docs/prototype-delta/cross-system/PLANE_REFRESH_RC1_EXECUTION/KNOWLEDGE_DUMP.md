@@ -201,11 +201,11 @@ message CommandSecurity { string signature = 1; string nonce = 2; google.protobu
 - *Step 4.1 – Hotspot Targeting*
   - Task: Profile `_emit_field_report` and `_build_health_indicators`, extract helpers, and drive radon grades toward ≤ C.
 
-**Phase 5 – Validation & Documentation**
+**Phase 5 – Validation & Documentation (complete)**
 
 - *Step 5.1 – Test Sweep*
-  - Task: Execute targeted unit suites, integration control loop, and Weatherlight smoke tests; archive outputs for changelog.
+  - Targeted suites executed: `pytest tests/tamiyo/test_risk_engine.py`, `pytest tests/tamiyo/test_service.py`, and `PYTHONPATH=. pytest tests/integration -k "not async_worker_soak"` to confirm cross-system parity after conservative-mode changes.
 - *Step 5.2 – Documentation Updates*
-  - Task: Update observability runbook with new metrics/priorities and routing notes; prepare `CHANGELOG_RC1.md` + status tracker entries.
+  - Observability runbook updated with Weatherlight emergency telemetry metrics; changelog entry added for WP-A3 wrap-up. Status report and risk-engine plan reflect completion.
 - *Step 5.3 – Status & Sign-off*
-  - Task: Mark WP-A3 progress in `08_status_tracker.md` and milestone overview; capture follow-ups feeding WP-A4 (persistence/wal).
+  - WP-A3 marked complete in STATUS_R4B_PHASE3.md; knowledge pack and changelog now reference the emergency routing/back-pressure harnesses.

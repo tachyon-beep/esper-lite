@@ -41,11 +41,13 @@
 ### Phase 5 — Conservative Mode & Breaker Coordination
 - Audit `_set_conservative_mode` paths to emit telemetry exactly once per transition and clear conservative mode when breakers recover.
 - Add evaluator covering recovery pathway (closed breakers + no timeouts).
+- Status (2025-09-29): Completed. `_set_conservative_mode` now tracks last-enter metadata and suppresses duplicate enter events; exit telemetry carries previous reason/duration without breaking fixtures. New `conservative_recovery` evaluator clears conservative mode when breakers close with no timeouts, emitting a single `conservative_exited` event. Unit coverage added via `tests/tamiyo/test_risk_engine.py::test_set_conservative_mode_no_duplicate_events` and `::test_conservative_recovery_evaluator_clears_mode`.
 
 ### Phase 6 — Regression & Complexity Validation
 - Run targeted pytest suite (`tests/tamiyo/test_risk_engine.py`, `tests/tamiyo/test_service.py`).
 - Confirm `_apply_risk_engine` complexity ≤ C via `radon cc` and record results.
 - Re-run pylint for Tamiyo modules to ensure no regressions.
+- Status (2025-09-29): Completed alongside Phase 5. `pytest tests/tamiyo/test_risk_engine.py` and `pytest tests/tamiyo/test_service.py` remain green; `PYTHONPATH=. pytest tests/integration -k "not async_worker_soak"` confirms cross-system parity. `radon cc -s src/esper/tamiyo/service.py` keeps `_apply_risk_engine` at `A (3)` / `_evaluate` at `A (1)` and pylint still reports 10.00.
 
 ### Phase 7 — Documentation & Status Updates
 - Update `TAMIYO_REVIEW_FINDINGS.md`, `lint_static_analysis.md`, `CHANGELOG_RC1.md`, and `08_status_tracker.md` with outcomes, test runs, and telemetry verification.

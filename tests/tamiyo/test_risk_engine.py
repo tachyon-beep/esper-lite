@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+import time
 from typing import Any
 
 import pytest
@@ -34,7 +35,13 @@ def tamiyo_service(tmp_path) -> TamiyoService:
 def _event_digest(events: Iterable[TelemetryEvent]) -> list[tuple[str, int, tuple[tuple[str, str], ...]]]:
     digest: list[tuple[str, int, tuple[tuple[str, str], ...]]] = []
     for event in events:
-        attrs = tuple(sorted((str(k), str(v)) for k, v in event.attributes.items()))
+        attrs = tuple(
+            sorted(
+                (str(k), str(v))
+                for k, v in event.attributes.items()
+                if k not in {"previous_reason", "duration_s"}
+            )
+        )
         digest.append((event.description, int(event.level), attrs))
     return digest
 
@@ -145,6 +152,7 @@ def test_risk_evaluator_registry_order(tamiyo_service: TamiyoService) -> None:
         "isolation_and_device",
         "optimizer_hints",
         "stabilisation",
+        "conservative_recovery",
     )
     assert tamiyo_service._risk_evaluator_names() == expected
 
@@ -181,3 +189,81 @@ def test_helper_ensure_optimizer_adjustment(tamiyo_service: TamiyoService) -> No
     tamiyo_service._ensure_optimizer_adjustment(cmd, "sgd")
     assert cmd.command_type == leyline_pb2.COMMAND_OPTIMIZER
     assert cmd.optimizer_adjustment.optimizer_id == "sgd"
+
+
+def test_set_conservative_mode_no_duplicate_events(tamiyo_service: TamiyoService) -> None:
+    events: list[TelemetryEvent] = []
+    tamiyo_service._risk.conservative_mode = False
+
+    tamiyo_service._set_conservative_mode(True, "timeout_inference", events)
+    assert tamiyo_service._risk.conservative_mode is True
+    assert len(events) == 1
+    assert events[0].description == "conservative_entered"
+
+    events.clear()
+    tamiyo_service._set_conservative_mode(True, "policy_risk_critical", events)
+    assert events == []
+    assert tamiyo_service._risk.conservative_mode is True
+    assert tamiyo_service._conservative_last_reason == "policy_risk_critical"
+
+    tamiyo_service._set_conservative_mode(False, "recovered", events)
+    assert tamiyo_service._risk.conservative_mode is False
+    assert events and events[-1].description == "conservative_exited"
+    exit_attrs = events[-1].attributes
+    assert exit_attrs["reason"] == "recovered"
+    assert exit_attrs.get("previous_reason") == "policy_risk_critical"
+    assert "duration_s" in exit_attrs
+
+
+def test_conservative_recovery_evaluator_clears_mode(tamiyo_service: TamiyoService) -> None:
+    tamiyo_service._risk.conservative_mode = True
+    tamiyo_service._conservative_last_reason = "timeout_inference"  # type: ignore[attr-defined]
+    tamiyo_service._conservative_last_enter_s = time.monotonic() - 0.5  # type: ignore[attr-defined]
+    command = leyline_pb2.AdaptationCommand(command_type=leyline_pb2.COMMAND_PAUSE)
+    context = TamiyoRiskContext(
+        command_before=command,
+        state=leyline_pb2.SystemStatePacket(training_run_id="run"),
+        loss_delta=0.0,
+        blueprint_info=None,
+        blueprint_timeout=False,
+        timed_out=False,
+        training_metrics={},
+        inference_breaker_state=leyline_pb2.CircuitBreakerState.CIRCUIT_STATE_CLOSED,
+        metadata_breaker_state=leyline_pb2.CircuitBreakerState.CIRCUIT_STATE_CLOSED,
+        conservative_mode=True,
+        policy_version="v1",
+    )
+    outcome = TamiyoRiskOutcome(command=command)
+
+    tamiyo_service._risk_evaluator_conservative_recovery(context, outcome)
+
+    assert tamiyo_service._risk.conservative_mode is False
+    exit_events = [event for event in outcome.events if event.description == "conservative_exited"]
+    assert exit_events
+    attrs = exit_events[-1].attributes
+    assert attrs.get("reason") == "stabilised"
+    assert attrs.get("previous_reason") == "timeout_inference"
+
+
+def test_conservative_recovery_skips_on_timeout(tamiyo_service: TamiyoService) -> None:
+    tamiyo_service._risk.conservative_mode = True
+    command = leyline_pb2.AdaptationCommand(command_type=leyline_pb2.COMMAND_PAUSE)
+    context = TamiyoRiskContext(
+        command_before=command,
+        state=leyline_pb2.SystemStatePacket(training_run_id="run"),
+        loss_delta=0.0,
+        blueprint_info=None,
+        blueprint_timeout=False,
+        timed_out=True,
+        training_metrics={},
+        inference_breaker_state=leyline_pb2.CircuitBreakerState.CIRCUIT_STATE_CLOSED,
+        metadata_breaker_state=leyline_pb2.CircuitBreakerState.CIRCUIT_STATE_CLOSED,
+        conservative_mode=True,
+        policy_version="v1",
+    )
+    outcome = TamiyoRiskOutcome(command=command)
+
+    tamiyo_service._risk_evaluator_conservative_recovery(context, outcome)
+
+    assert tamiyo_service._risk.conservative_mode is True
+    assert all(event.description != "conservative_exited" for event in outcome.events)
