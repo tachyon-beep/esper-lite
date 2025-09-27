@@ -29,6 +29,9 @@ Acceptance:
 Risks:
 - Behaviour change affects Tamiyo/Tolaria; coordinate messaging.
 
+Status:
+- ✅ Completed 2025-09-28 — Dispatcher is authoritative, fallbacks now raise `DependencyViolationError`, and CRITICAL `gate_failure` telemetry is emitted. Coverage: `pytest tests/kasmina/test_seed_manager.py`, `pytest tests/kasmina/test_command_dispatcher.py`, `pytest tests/integration/test_control_loop.py::test_kasmina_emits_one_packet_per_seed_per_step`.
+
 ### WP-K2 — Blending & Isolation Upgrades
 Tasks:
 1. Ensure confidence gating receives Tamiyo logits; remove activation-based fallback.
@@ -43,6 +46,9 @@ Risks:
 - Requires Tamiyo to emit logits; ensure dependency tracked in WP-A2.
 - Refactor touches large code paths; incremental PRs recommended.
 
+Status:
+- ✅ Completed 2025-09-28 — `_BlendManager` enforces logits/alpha_vec bounds, telemetry includes blend metadata, and isolation monitoring remains intact. Coverage: `pytest tests/kasmina/test_blend_annotations.py`, `pytest tests/kasmina/test_seed_manager.py`.
+
 ### WP-K3 — Command/Security/Telemetry
 Tasks:
 1. Hook command verifier failures to telemetry; emit CRITICAL when signature/nonce invalid.
@@ -55,6 +61,9 @@ Acceptance:
 Risks:
 - Telemetry volume increase; monitor Oona queue.
 - Registry reset may affect existing seeds; plan migration.
+
+Status:
+- ⏳ Deferred — Command verifier telemetry/nonce cleanup remain backlog; R4c delivered degraded-input and blend telemetry while capturing follow-up tasks for Phase 6+.
 
 ### WP-K4 — Prefetch & Cache Reliability
 Tasks:
@@ -69,10 +78,13 @@ Risks:
 - Async changes must align with Tolaria/Tamiyo worker.
 - Additional locks may impact throughput; benchmark.
 
+Status:
+- ⏳ Not started — Prefetch/cache reliability slated for later RC1 slices; strict dependency guard covers training IDs for now.
+
 ## Testing
-- Unit: gate failure, blend config, isolation stats, registry reset, command verifier.
-- Integration: prefetch flows with Oona, gate enforcement in control loop.
-- Performance: prefetch/caching benchmarks, step latency.
+- Unit: `pytest tests/kasmina` (seed manager, blending, dispatcher, prewarm suites), `radon cc -s src/esper/kasmina/seed_manager.py` (complexity snapshot).
+- Integration: `pytest tests/integration/test_control_loop.py` (round trip, Kasmina telemetry uniqueness).
+- Performance: Prefetch/cache benchmarks deferred alongside WP-K4.
 
 ## Rollback Plan
 - Guard new fallback behaviour behind config until validated.
@@ -83,5 +95,5 @@ Risks:
 - Emergency telemetry routes via Weatherlight per shared foundations.
 
 ## Sign-off
-- WP-K1..K4 tasks completed with updated tests; complexity reductions recorded.
-- `CHANGELOG_RC1.md` updated with Kasmina entries.
+- WP-K1/WP-K2 complete (dispatcher, strict failures, blend telemetry); WP-K3/WP-K4 remain open items for telemetry/registry and prefetch/cache reliability in subsequent phases.
+- `CHANGELOG_RC1.md` updated with Kasmina R4c entry summarising strict-dependency enforcement, async worker fix, and test coverage.

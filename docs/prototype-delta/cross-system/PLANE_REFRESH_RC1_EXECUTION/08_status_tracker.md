@@ -8,7 +8,7 @@
 | Risk Reduction | R5 – Confidence gating logits export | Tamiyo lead | Complete | Tamiyo annotates blend mode; Kasmina enforces logits + telemetry (2025-09-27) |
 | Risk Reduction | R4a – Tolaria complexity refactor | Tolaria lead | Complete | `_EpochRunner` runs the full training loop, legacy code removed, fixture parity guard in place, lint/static analysis green (2025-09-27). |
 | Risk Reduction | R4b – Tamiyo risk engine refactor | Tamiyo lead | Complete | Evaluator pipeline owns all risk logic; `_apply_risk_engine` complexity A (3), fixtures + service tests green, flag removed 2025-09-27 |
-| Risk Reduction | R4c – Kasmina command dispatcher refactor | Kasmina lead | Not Started | Introduce command dispatcher, enforce blend gating with telemetry comparisons, re-run perf baselines |
+| Risk Reduction | R4c – Kasmina command dispatcher refactor | Kasmina lead | Complete | Dispatcher + strict failures + telemetry updates shipped; docs & changelog sync finished 2025-09-28 |
 | Shared Foundations | Async worker implementation | (tbd) | Not Started |  |
 | Shared Foundations | Telemetry routing update | (tbd) | Not Started |  |
 | Shared Foundations | Dependency guard helper | (tbd) | Not Started |  |

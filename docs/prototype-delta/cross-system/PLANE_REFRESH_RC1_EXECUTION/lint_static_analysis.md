@@ -22,14 +22,12 @@ This document captures the lint/static-analysis signals that must be addressed d
 - `TamiyoPolicy.select_action`, `_maybe_emit_blend_mode_annotations`, `validate_state_dict`, `_warmup_compiled_model` — **D (22–28)**; split action selection pipeline (graph build, inference, command assembly) and telemetry.
 
 ## Kasmina
-- `KasminaSeedManager.handle_command` — **F (51)** complexity. Create command dispatcher modules (seed ops, breaker ops, pause/resume) to simplify branching.
-- `KasminaSeedManager._graft_seed` — **D (22)** complexity; isolate blueprint fetch, gate orchestration, and telemetry.
-- `KasminaSeedManager._apply_blend_annotations`, `_resume_seed`, `_build_seed_packet`, `_attach_kernel`, `_flush_seed_packets`, `_build_global_packet` — **C (11–19)**; share parser/telemetry helpers.
-- `KasminaSeedManager.__init__` — **B (7)** but still dense; align with new configuration object.
-- `KasminaPrefetchCoordinator.poll_task_issue` — **B (7)**; tighten async error handling per shared worker plan.
-- `KasminaGates.evaluate` / `_evaluate_g0` — **B (7–8)**; revisit once gate enforcement refactor lands.
-- `CommandVerifier.verify` — **B (8)**; augment with telemetry hooks and better failure reporting.
-- `blend_with_config`, `IsolationSession._make_projection_hook` — **B (7–9)**; simplify once blend/isolations are reworked per Kasmina action items.
+- `KasminaSeedManager.handle_command` — **A (4)** complexity after dispatcher refactor (2025-09-28). Legacy branching removed; dispatcher outcome finaliser handles telemetry routing.
+- `_BlendManager.apply` — **D (26)** complexity; consider splitting confidence/channel handlers if further changes land.
+- `_graft_seed` — **D (22)** complexity; future work could extract blueprint fetch vs gate orchestration but no longer blocks R4c.
+- `_resume_seed`, `_build_seed_packet`, `_build_global_packet`, `_attach_kernel`, `_flush_seed_packets` — **C (11–19)**; acceptable given current scope, revisit if additional features land.
+- `CommandVerifier.verify` — **B (8)**; telemetry hook work pending WP-K3.
+- Prefetch/cache modules remain at **B** complexity; locking improvements tracked under WP-K4.
 
 ## General Notes
 - Pylint reports 10/10 for Tolaria, Tamiyo, and Kasmina with the project configuration; no direct lint errors surfaced.

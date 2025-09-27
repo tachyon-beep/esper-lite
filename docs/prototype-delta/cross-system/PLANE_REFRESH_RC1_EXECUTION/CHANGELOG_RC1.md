@@ -69,3 +69,12 @@
   - Complexity: `/home/john/esper-lite/.venv/bin/radon cc -s src/esper/tamiyo/service.py`
 - **Telemetry Verification**: Fixture comparisons confirm `timeout_inference`, `bp_quarantine`, and coverage/degraded-input events retain ordering; priority indicator still reflects highest emitted level.
 - **Notes**: `_prepare_training_metrics`, `_run_risk_engine_with_context`, and `_finalize_evaluation` now own the side effects that previously leaked through `_evaluate`. Sets the stage for Phase 5 conservative-mode cleanup and R4c coordination.
+
+## 2025-09-28 — Kasmina Command Dispatcher Refactor (Risk R4c)
+- **Summary**: Enabled the Kasmina command dispatcher by default, removed fallback kernel paths, enforced strict dependency guardrails (blueprint/training-run IDs), and upgraded telemetry to emit CRITICAL gate failures. Hardened `AsyncWorker.shutdown` to prevent Tolaria integration hangs and refreshed integration fixtures with deterministic signing and unique command IDs.
+- **Tests Run**:
+  - Unit: `/home/john/esper-lite/.venv/bin/pytest tests/kasmina -q`
+  - Integration: `/home/john/esper-lite/.venv/bin/pytest tests/integration/test_control_loop.py -q`
+  - Static: `/home/john/esper-lite/.venv/bin/radon cc -s src/esper/kasmina/seed_manager.py`
+- **Telemetry Verification**: `tests/kasmina/test_seed_manager.py::test_handle_command_logs_tamiyo_annotations` confirms degraded-input/CRITICAL events; integration control loop asserts step-indexed per-seed packets. Gate failures surface as CRITICAL with reasons, and dispatcher telemetry flushes persist.
+- **Notes**: WP-K1/WP-K2 complete; command verifier telemetry and prefetch/cache reliability remain tracked under WP-K3/K4. Async worker fix benefits Tolaria/Tamiyo test harnesses and is documented in shared foundations.

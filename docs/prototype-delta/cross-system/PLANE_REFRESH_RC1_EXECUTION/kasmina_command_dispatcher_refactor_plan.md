@@ -70,9 +70,8 @@ Each phase is broken into detailed steps below.
 
 ### Phase 2 Results (2025-09-27)
 - Added `KasminaCommandContext`/`KasminaCommandOutcome` dataclasses and exposed them via `KasminaSeedManager.CommandContext/CommandOutcome` for downstream use.
-- Introduced `_DISPATCHER_EXPERIMENTAL` feature flag, `_build_command_context`, and a no-op `_dispatch_command` stub. When the flag is enabled, the dispatcher short-circuits `handle_command` without executing legacy logic—tests confirm no exceptions.
-- Added `tests/kasmina/test_command_dispatcher.py` to verify context/outcome defaults and stub behaviour behind the feature flag.
-- Legacy path remains the default (`_DISPATCHER_EXPERIMENTAL = False`), so Kasmina behaviour and existing test failures are unchanged.
+- Introduced the initial dispatcher scaffolding (`_build_command_context`, `_dispatch_command`) behind an experimental toggle, with unit coverage establishing parity while the legacy path stayed default. The flag was removed during Phase 5 once the dispatcher became authoritative.
+- Added `tests/kasmina/test_command_dispatcher.py` to verify context/outcome defaults and stub behaviour.
 
 ### Phase 2 Tasks
 - **Step 2.1: Introduce Context/Outcome Dataclasses**
@@ -104,6 +103,31 @@ Each phase is broken into detailed steps below.
 - **Step 4.3:** Run targeted tests (`tests/kasmina/test_lifecycle.py`, control-loop integration) under flag-on/off to ensure parity.
 - **Deliverables:** Dispatcher routes operational with behaviour parity proven via flag toggles.
 
+### Phase 4 Task Breakdown
+- **Step 4.1: Context Population Enhancements**
+  - Task 4.1.1: Extend `_build_command_context` to resolve seed/blueprint/training-run IDs, Tamiyo annotations (blend metadata), and stage expectations.
+  - Task 4.1.2: Capture legacy state references (existing `SeedContext`, registry, caches) inside the context for handlers to consume.
+- **Step 4.2: Implement Route Handlers**
+  - Task 4.2.1: `_handle_seed(context)` — orchestrate blend manager, gate evaluator, `_graft_seed`/`_retire_seed`, telemetry aggregation, and fallback detection (still deferring strict failure to Phase 5).
+  - Task 4.2.2: `_handle_optimizer(context)`, `_handle_pause(context)`, `_handle_breaker(context)`, `_handle_emergency(context)` — mirror current behaviour with structured outcome events.
+  - Task 4.2.3: Allow handlers to return `KasminaCommandOutcome` indicating whether to queue seed/global events or remove seeds after flush.
+- **Step 4.3: Dispatcher Integration**
+  - Task 4.3.1: Update `_dispatch_command` to route based on `command_type`, invoking handlers and returning their outcomes.
+  - Task 4.3.2: Keep legacy code path reachable (flag off) while enabling dispatcher when `_DISPATCHER_EXPERIMENTAL` is true; ensure double execution is avoided.
+- **Step 4.4: Telemetry & Queue Wiring**
+  - Task 4.4.1: Update dispatcher outcomes to feed `KasminaSeedManager._queue_seed_events/_queue_global_events` without duplicating logic.
+  - Task 4.4.2: Preserve existing event attributes/priorities to maintain parity (compare against recorded baseline).
+- **Step 4.5: Verification**
+  - Task 4.5.1: Run seeded unit tests (`tests/kasmina/test_seed_manager.py`) and integration control-loop with dispatcher flag on/off; confirm outcomes match legacy behaviour (still expecting dependency-guard failures flag-off).
+  - Task 4.5.2: Capture radon complexity improvement (goal: `handle_command` drops below F once routing moved) even if legacy remains for now.
+- **Deliverables:** Dispatcher routes in place, parity verified under experimental flag, and plan ready for Phase 5 legacy removal/strict enforcement.
+
+### Phase 4 Progress (2025-09-27)
+- `_dispatch_command` now routes to dedicated handlers: `_handle_seed_command`, `_handle_optimizer_command`, `_handle_pause_command`, `_handle_breaker_command`, `_handle_emergency_command`, and `_handle_unknown_command`.
+- Handlers reuse the new `_BlendManager`, `_GateEvaluator`, and `_append_tamiyo_annotations` helpers to preserve legacy telemetry/metadata behaviour. Outcomes bubble `seed_id`, telemetry events, and `remove_after_flush` signals back to the caller.
+- Legacy routing parity was validated under the experimental flag; the flag was subsequently removed in Phase 5 when the dispatcher became the default path.
+- Complexity reduction is tracked for Phase 5 once the duplicate logic is eliminated.
+
 ## Phase 5 — Orchestrator Finalisation
 - **Step 5.1:** Remove the legacy `handle_command` branches in favour of dispatcher orchestration; ensure strict dependency failures throw rather than fallback.
 - **Step 5.2:** Integrate telemetry flush (gate failures, blend metrics, degraded inputs) into `KasminaCommandOutcome` finaliser akin to Tamiyo’s `_finalize_evaluation`.
@@ -111,11 +135,41 @@ Each phase is broken into detailed steps below.
 - **Step 5.4:** Re-run full Kasmina suite + relevant integration tests; capture radon improvement (target `_handle_command` ≤ C).
 - **Deliverables:** Clean dispatcher path, tests green, risk R4c mitigated.
 
+### Phase 5 Task Breakdown
+- **Step 5.1: Remove Legacy Path / Enable Dispatcher**
+  - Task 5.1.1: Drop `_DISPATCHER_EXPERIMENTAL` flag; make dispatcher the default path.
+  - Task 5.1.2: Delete redundant legacy logic in `handle_command` once dispatcher is authoritative.
+- **Step 5.2: Enforce Strict Failure**
+  - Task 5.2.1: Modify `_graft_seed` / `_load_fallback` to fail instead of injecting fallback kernels; ensure `KasminaCommandOutcome` captures gate failure telemetry.
+  - Task 5.2.2: Update gate evaluator or handling to treat fallback_used and stage mismatch as CRITICAL events that stop progression.
+  - Task 5.2.3: Enforce blend vector length/logits requirements in `_BlendManager` with actionable errors.
+  - **Step 5.3: Telemetry Finalisation**
+  - Task 5.3.1: Ensure dispatcher outcomes flow through `_queue_seed_events/_queue_global_events` with proper priority and metadata (no missing per-seed packets).
+  - Task 5.3.2: Verify degraded-input, seed annotations, and emergency telemetry still recorded via `_append_tamiyo_annotations`.
+- **Step 5.4: Update Tests & fixtures**
+  - Task 5.4.1: Update `tests/kasmina/test_seed_manager.py` expectations (fallback tests now expect exceptions or CRITICAL events); add coverage for stage/fallback failures.
+  - Task 5.4.2: Adjust integration control-loop test to expect per-seed telemetry without fallback path.
+  - Task 5.4.3: Regenerate fixtures if telemetry changed (seed export, prewarm, etc.).
+- **Step 5.5: Regression & Complexity Validation**
+  - Task 5.5.1: Run full Kasmina + relevant integration suites; ensure green.
+  - Task 5.5.2: Capture radon complexity improvement (`handle_command` ≤ C) and note results in `lint_static_analysis.md`.
+  - Task 5.5.3: Update docs (`04_wp_KASMINA.md`, changelog, status tracker, knowledge dump) with final outcomes.
+
 ## Phase 6 — Documentation & Status Updates
 - **Step 6.1:** Update `04_wp_KASMINA.md`, `lint_static_analysis.md`, `CHANGELOG_RC1.md`, and `STATUS_R4B_PHASE3.md` (or new Kasmina status doc) with outcomes.
 - **Step 6.2:** Note lessons learned and telemetry adjustments in `KNOWLEDGE_DUMP.md`.
 - **Step 6.3:** Ensure risk register reflects R4c progress.
 - **Deliverables:** Documentation synced with implementation.
+
+### Phase 5 Progress (2025-09-28)
+- **Step 5.1 complete:** Dispatcher is the sole orchestration path; the `_DISPATCHER_EXPERIMENTAL` flag and legacy branches were removed, and unit coverage now exercises the default dispatcher.
+- **Step 5.2 complete:** Fallback kernels no longer attach—runtime fetch failures now raise `DependencyViolationError`s and trigger CRITICAL gate telemetry. Blend annotations enforce bounded `alpha_vec` values (≤64) with deterministic signing updates, and pause/resume strictness propagates dependency violations when kernels are missing.
+- **Step 5.3 complete:** `KasminaCommandOutcome` now flows through a dedicated finaliser that pushes seed/global telemetry via `_queue_*` helpers even when `remove_after_flush` is requested with no new events. Degraded-input and gate-failure events surface with correct priorities, and regression coverage exercises pause/resume, blend validation, and dispatcher outcomes.
+- **Step 5.4 complete:** Kasmina unit suites (`pytest tests/kasmina`) and the control-loop integration test (`pytest tests/integration/test_control_loop.py::test_kasmina_emits_one_packet_per_seed_per_step`) now pass after hardening `AsyncWorker.shutdown` to avoid hanging joins. Radon reports `handle_command` at grade A.
+- **Step 5.5 complete:** Full Kasmina and integration suites (`pytest tests/kasmina`, `pytest tests/integration/test_control_loop.py`) are green; radon snapshot captured (`radon cc -s src/esper/kasmina/seed_manager.py`) with `handle_command` at grade A. Documentation/status updates queued for Phase 6.
+
+### Phase 6 Progress (2025-09-28)
+- Documentation tidied across `04_wp_KASMINA.md`, `CHANGELOG_RC1.md`, `KNOWLEDGE_DUMP.md`, `lint_static_analysis.md`, `08_status_tracker.md`, and `kasmina_command_dispatcher_refactor_plan.md` to reflect completed R4c work. Outstanding items (WP-K3/K4, telemetry/registry follow-ups) explicitly deferred to future milestones.
 
 ## Acceptance Criteria
 - `KasminaSeedManager.handle_command` refactored to orchestrate dispatcher helpers with complexity ≤ C.

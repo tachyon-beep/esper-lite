@@ -101,3 +101,11 @@ message CommandSecurity { string signature = 1; string nonce = 2; google.protobu
   - `KasminaGates.evaluate` — B (7)
 - **Telemetry observations**: Seed-manager tests expect fallback kernels to keep commands alive; telemetry lacks CRITICAL gate failure events when fallbacks engaged. Command annotations omit `training_run_id`, triggering dependency violations.
 - **Action items**: R4c must supply seed commands with real IDs (or enforce preflight), ensure gate failures emit telemetry, and remove fallback identity usage.
+
+## Kasmina R4c Completion (2025-09-28)
+- **Dispatcher cut-over**: `_DISPATCHER_EXPERIMENTAL` removed; `handle_command` always routes through the dispatcher with `_finalize_command_outcome` managing telemetry queues.
+- **Strict failure**: Seed graft/resume paths raise `DependencyViolationError` on runtime failures; fallback kernels eliminated. `_GateEvaluator` now triggers CRITICAL `gate_failure` telemetry for fallback/stage mismatch/latency violations.
+- **Blend enforcement**: `_BlendManager` enforces bounded `alpha_vec` (≤64) and deterministic signing; missing or malformed channel configs fail fast. Confidence mode requires Tamiyo logits and emits telemetry when absent.
+- **Async worker resilience**: `AsyncWorker.shutdown` now applies bounded joins and final `loop.stop`, preventing Tolaria integration tests from hanging. Integration fixtures disable the worker (`tamiyo_timeout_s=0.0`) for deterministic execution.
+- **Tests executed**: `pytest tests/kasmina -q`, `pytest tests/integration/test_control_loop.py -q`, `radon cc -s src/esper/kasmina/seed_manager.py` (reports `handle_command` at grade A).
+- **Open items**: Kasmina command verifier telemetry/nonce cleanup, prefetch/cache locking, and performance benchmarks remain tied to WP-K3/WP-K4.

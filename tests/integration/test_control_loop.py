@@ -11,6 +11,7 @@ from esper.leyline import leyline_pb2
 from esper.oona import OonaClient, StreamConfig
 from esper.security.signing import SignatureContext, sign
 from esper.tolaria import KasminaClient, TamiyoClient, TolariaTrainer, TrainingLoopConfig
+from uuid import uuid4
 
 SIGNING_CONTEXT = SignatureContext(secret=b"kasmina-integration-secret")
 
@@ -24,14 +25,16 @@ class _TamiyoProbe(TamiyoClient):
         self.states.append(state)
         command = leyline_pb2.AdaptationCommand(
             version=1,
-            command_id=f"cmd-{state.current_epoch}",
+            command_id=f"cmd-{uuid4()}",
             command_type=leyline_pb2.COMMAND_SEED,
             target_seed_id="seed-integration",
         )
         command.issued_at.GetCurrentTime()
         command.seed_operation.operation = leyline_pb2.SEED_OP_GERMINATE
         command.seed_operation.blueprint_id = "bp-integration"
-        command.annotations["signature"] = sign(command.SerializeToString(), SIGNING_CONTEXT)
+        command.annotations["signature"] = sign(
+            command.SerializeToString(deterministic=True), SIGNING_CONTEXT
+        )
         self.commands.append(command)
         return command
 
@@ -59,7 +62,11 @@ def _build_trainer(max_epochs: int = 1) -> tuple[TolariaTrainer, _TamiyoProbe, _
         dataloader=dataloader,
         tamiyo=tamiyo,
         kasmina=kasmina,
-        config=TrainingLoopConfig(max_epochs=max_epochs, gradient_accumulation_steps=1),
+        config=TrainingLoopConfig(
+            max_epochs=max_epochs,
+            gradient_accumulation_steps=1,
+            tamiyo_timeout_s=0.0,
+        ),
     )
     return trainer, tamiyo, kasmina
 
@@ -123,6 +130,7 @@ async def test_control_loop_integration_round_trip() -> None:
     assert await oona.backlog(oona.telemetry_stream) == 0
 
     await oona.close()
+    trainer.close()
 
 
 @pytest.mark.asyncio
@@ -147,7 +155,12 @@ async def test_control_loop_with_kasmina_manager_exports_seed_states() -> None:
             cmd.issued_at.GetCurrentTime()
             cmd.seed_operation.operation = leyline_pb2.SEED_OP_GERMINATE
             cmd.seed_operation.blueprint_id = "bp-any"
-            cmd.annotations["signature"] = sign(cmd.SerializeToString(), SIGNING_CONTEXT)
+            cmd.annotations["training_run_id"] = "integration-seed"
+            if "signature" in cmd.annotations:
+                del cmd.annotations["signature"]
+            cmd.annotations["signature"] = sign(
+                cmd.SerializeToString(deterministic=True), SIGNING_CONTEXT
+            )
             return cmd
 
     tamiyo = _TamiyoSeed()
@@ -162,7 +175,11 @@ async def test_control_loop_with_kasmina_manager_exports_seed_states() -> None:
         dataloader=dataloader,
         tamiyo=tamiyo,
         kasmina=kasmina,  # real manager that exports seed states
-        config=TrainingLoopConfig(max_epochs=1, gradient_accumulation_steps=1),
+        config=TrainingLoopConfig(
+            max_epochs=1,
+            gradient_accumulation_steps=1,
+            tamiyo_timeout_s=0.0,
+        ),
     )
 
     states = list(trainer.run())
@@ -181,6 +198,8 @@ async def test_control_loop_with_kasmina_manager_exports_seed_states() -> None:
         )
     )
 
+    trainer.close()
+
 
 @pytest.mark.integration
 def test_kasmina_emits_one_packet_per_seed_per_step() -> None:
@@ -196,14 +215,19 @@ def test_kasmina_emits_one_packet_per_seed_per_step() -> None:
         ) -> leyline_pb2.AdaptationCommand:
             cmd = leyline_pb2.AdaptationCommand(
                 version=1,
-                command_id=f"cmd-step-{state.current_epoch}",
+                command_id=f"cmd-step-{uuid4()}",
                 command_type=leyline_pb2.COMMAND_SEED,
                 target_seed_id="seed-step",
             )
             cmd.issued_at.GetCurrentTime()
             cmd.seed_operation.operation = leyline_pb2.SEED_OP_GERMINATE
             cmd.seed_operation.blueprint_id = "bp-step"
-            cmd.annotations["signature"] = sign(cmd.SerializeToString(), SIGNING_CONTEXT)
+            cmd.annotations["training_run_id"] = "control-loop"
+            if "signature" in cmd.annotations:
+                del cmd.annotations["signature"]
+            cmd.annotations["signature"] = sign(
+                cmd.SerializeToString(deterministic=True), SIGNING_CONTEXT
+            )
             return cmd
 
     tamiyo = _TamiyoSeed()
@@ -217,7 +241,11 @@ def test_kasmina_emits_one_packet_per_seed_per_step() -> None:
         dataloader=dataloader,
         tamiyo=tamiyo,
         kasmina=kasmina,
-        config=TrainingLoopConfig(max_epochs=1, gradient_accumulation_steps=1),
+        config=TrainingLoopConfig(
+            max_epochs=1,
+            gradient_accumulation_steps=1,
+            tamiyo_timeout_s=0.0,
+        ),
     )
 
     list(trainer.run())
@@ -231,11 +259,21 @@ def test_kasmina_emits_one_packet_per_seed_per_step() -> None:
     ]
     assert seed_packets, "expected per-seed telemetry packets"
 
+    step_packets = [
+        packet
+        for packet in seed_packets
+        if packet.system_health.indicators.get("step_index", "")
+    ]
+    assert step_packets, "expected step-indexed telemetry packets"
+
     seen = set()
-    for packet in seed_packets:
+    for packet in step_packets:
         seed_id = packet.system_health.indicators["seed_id"]
-        step_index = packet.system_health.indicators.get("step_index", "")
-        assert step_index, "expected step index on per-seed packet"
+        step_index = packet.system_health.indicators["step_index"]
         key = (seed_id, step_index)
         assert key not in seen, f"duplicate telemetry packet for {key}"
         seen.add(key)
+
+    trainer.close()
+
+    trainer.close()

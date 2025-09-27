@@ -7,6 +7,7 @@ Actual kernel grafting logic will land in Slice 1 (see backlog TKT-102).
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import time
 from dataclasses import dataclass, field
@@ -48,6 +49,7 @@ from .security import CommandVerifier, NonceLedger
 logger = logging.getLogger(__name__)
 
 MAX_PENDING_EVENTS = 64
+MAX_CHANNEL_ALPHA_VEC = 64
 
 
 _MATMUL_INITIALISED = False
@@ -94,10 +96,6 @@ class PrefetchCoordinator(Protocol):
 
 DEFAULT_EMBARGO_SECONDS = 30.0
 
-# Experimental dispatcher toggle for R4c scaffolding
-_DISPATCHER_EXPERIMENTAL = False
-
-
 @dataclass(slots=True)
 class SeedContext:
     """Represents state tracked for each active seed."""
@@ -129,7 +127,13 @@ class KasminaCommandContext:
     blueprint_id: str = ""
     training_run_id: str = ""
     annotations: dict[str, str] = field(default_factory=dict)
-    legacy_mode: bool = True
+    seed_context: SeedContext | None = None
+    operation: int | None = None
+    parameters: dict[str, str] = field(default_factory=dict)
+    expected_stage: int | None = None
+    resume: bool = False
+    include_teacher: bool = False
+    optimizer_id: str = ""
 
 
 @dataclass(slots=True)
@@ -139,6 +143,7 @@ class KasminaCommandOutcome:
     events: list[TelemetryEvent] = field(default_factory=list)
     handled: bool = False
     seed_id: str | None = None
+    remove_after_flush: bool = False
 
 
 class _BlendManager:
@@ -188,29 +193,73 @@ class _BlendManager:
                 context.metadata.pop("confidence_logits_required", None)
         elif mode == "CHANNEL":
             vec_json = annotations.get("alpha_vec")
-            if vec_json:
+            if not (vec_json and vec_json.strip()):
+                raise DependencyViolationError(
+                    "kasmina",
+                    "channel blend missing alpha_vec",
+                    context={"seed_id": seed_id, "blueprint_id": annotations.get("blueprint_id", "")},
+                )
+            parsed: list[float] = []
+            parse_error: Exception | None = None
+            try:
+                data = json.loads(vec_json)
+                if isinstance(data, list):
+                    parsed = [float(max(0.0, min(1.0, float(x)))) for x in data]
+            except Exception as exc:  # pragma: no cover - invalid JSON path handled below
+                parse_error = exc
+            if not parsed:
                 try:
-                    data = json.loads(vec_json)
-                    if isinstance(data, list):
-                        vec: list[float] = []
-                        for x in data:
-                            try:
-                                vec.append(float(max(0.0, min(1.0, float(x)))))
-                            except Exception:
-                                continue
-                        if vec:
-                            cfg.alpha_vec = vec
-                            context.metadata["alpha_vec_len"] = str(len(vec))
-                except Exception:
-                    try:
-                        s = vec_json.strip().lstrip("[").rstrip("]")
-                        parts = [p.strip() for p in s.split(",") if p.strip()]
-                        vec = [float(max(0.0, min(1.0, float(p)))) for p in parts]
-                        if vec:
-                            cfg.alpha_vec = vec
-                            context.metadata["alpha_vec_len"] = str(len(vec))
-                    except Exception:
-                        pass
+                    s = vec_json.strip().lstrip("[").rstrip("]")
+                    parts = [p.strip() for p in s.split(",") if p.strip()]
+                    parsed = [float(max(0.0, min(1.0, float(p)))) for p in parts]
+                except Exception as exc:  # pragma: no cover - final parsing attempt
+                    parse_error = parse_error or exc
+            if not parsed:
+                raise DependencyViolationError(
+                    "kasmina",
+                    "channel blend invalid alpha_vec",
+                    context={
+                        "seed_id": seed_id,
+                        "payload": vec_json[:64],
+                        "error": str(parse_error) if parse_error else "empty",
+                    },
+                )
+            if len(parsed) > MAX_CHANNEL_ALPHA_VEC:
+                raise DependencyViolationError(
+                    "kasmina",
+                    "channel blend alpha_vec exceeds limit",
+                    context={
+                        "seed_id": seed_id,
+                        "length": len(parsed),
+                        "limit": MAX_CHANNEL_ALPHA_VEC,
+                    },
+                )
+            annotated_len = annotations.get("alpha_vec_len")
+            if annotated_len:
+                try:
+                    expected_len = int(annotated_len)
+                except ValueError as exc:  # pragma: no cover - invalid annotation
+                    raise DependencyViolationError(
+                        "kasmina",
+                        "channel blend invalid alpha_vec_len",
+                        context={
+                            "seed_id": seed_id,
+                            "alpha_vec_len": annotated_len,
+                            "error": str(exc),
+                        },
+                    ) from exc
+                if expected_len != len(parsed):
+                    raise DependencyViolationError(
+                        "kasmina",
+                        "channel blend alpha_vec length mismatch",
+                        context={
+                            "seed_id": seed_id,
+                            "expected": expected_len,
+                            "actual": len(parsed),
+                        },
+                    )
+            cfg.alpha_vec = parsed
+            context.metadata["alpha_vec_len"] = str(len(parsed))
 
         context.metadata["blend_mode"] = mode
         context.blend_config = cfg
@@ -247,6 +296,30 @@ class _GateEvaluator:
             expected_stage=expected_stage,
             reset_clean=self._manager._reset_clean(context),
         )
+        if inputs.fallback_used:
+            failure = GateResult(
+                gate=gate,
+                passed=False,
+                reason="fallback_kernel_used",
+                attributes={
+                    "seed_id": context.seed_id,
+                    "stage": pb.SeedLifecycleStage.Name(context.lifecycle.state),
+                },
+            )
+            self._manager._handle_gate_failure(context, failure, events)
+            return False
+        if inputs.expected_stage and inputs.telemetry_stage and inputs.expected_stage != inputs.telemetry_stage:
+            failure = GateResult(
+                gate=gate,
+                passed=False,
+                reason="stage_mismatch",
+                attributes={
+                    "expected_stage": inputs.expected_stage,
+                    "telemetry_stage": inputs.telemetry_stage,
+                },
+            )
+            self._manager._handle_gate_failure(context, failure, events)
+            return False
         result = self._manager._gates.evaluate(gate, inputs)
         context.last_gate_results[gate] = result
         self._manager._append_gate_event(events, context.seed_id, result)
@@ -474,6 +547,77 @@ class KasminaSeedManager:
         priority = self._priority_from_events(events_list)
         if priority > self._global_priority:
             self._global_priority = priority
+
+    def _append_tamiyo_annotations(
+        self,
+        seed_id: str | None,
+        command: pb.AdaptationCommand,
+        events: list[TelemetryEvent],
+    ) -> None:
+        try:
+            ann = dict(command.annotations)
+            has_coverage = "feature_coverage" in ann
+            has_risk_reason = "risk_reason" in ann
+            has_bp = any(
+                key in ann for key in ("blueprint_risk", "blueprint_tier", "blueprint_stage")
+            )
+            if not (has_coverage or has_risk_reason or has_bp):
+                return
+
+            attrs: dict[str, str] = {}
+            if seed_id:
+                attrs["seed_id"] = seed_id
+            if has_coverage:
+                attrs["feature_coverage"] = str(ann.get("feature_coverage"))
+            if has_risk_reason:
+                attrs["risk_reason"] = str(ann.get("risk_reason"))
+            if "blueprint_risk" in ann:
+                attrs["blueprint_risk"] = str(ann.get("blueprint_risk"))
+            if "blueprint_tier" in ann:
+                attrs["blueprint_tier"] = str(ann.get("blueprint_tier"))
+            if "blueprint_stage" in ann:
+                attrs["blueprint_stage"] = str(ann.get("blueprint_stage"))
+            events.append(TelemetryEvent(description="tamiyo_annotations", attributes=attrs))
+
+            cov = None
+            try:
+                cov = float(ann.get("feature_coverage", 1.0))
+            except Exception:
+                cov = None
+            if cov is not None and cov < 0.3:
+                severity = pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING
+                if cov < 0.1:
+                    severity = pb.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
+                events.append(
+                    TelemetryEvent(
+                        description="degraded_inputs",
+                        level=severity,
+                        attributes={**attrs, "coverage_avg": f"{cov:.3f}"},
+                    )
+                )
+                if seed_id:
+                    ctx = self._seeds.get(seed_id)
+                    if ctx is None:
+                        ctx = SeedContext(seed_id)
+                        self._seeds[seed_id] = ctx
+                        self._ephemeral_seeds.add(seed_id)
+                    ctx.metadata["tamiyo_conservative_fallback"] = "true"
+
+            if seed_id:
+                ctx = self._seeds.get(seed_id)
+                if ctx is None:
+                    ctx = SeedContext(seed_id)
+                    self._seeds[seed_id] = ctx
+                    self._ephemeral_seeds.add(seed_id)
+                if has_coverage:
+                    ctx.metadata["tamiyo_feature_coverage"] = str(ann.get("feature_coverage"))
+                if has_risk_reason:
+                    ctx.metadata["tamiyo_risk_reason"] = str(ann.get("risk_reason"))
+                for key in ("blueprint_risk", "blueprint_tier", "blueprint_stage"):
+                    if key in ann:
+                        ctx.metadata[f"tamiyo_{key}"] = str(ann.get(key))
+        except Exception:
+            pass
 
     def finalize_step(self, *, step_index: int | None = None) -> None:
         """Flush queued telemetry into per-seed packets for the given step."""
@@ -885,266 +1029,232 @@ class KasminaSeedManager:
     def handle_command(self, command: pb.AdaptationCommand) -> None:
         """Dispatch a Tamiyo command to the appropriate lifecycle handler."""
 
-        if self._dispatcher_enabled():
-            context = self._build_command_context(command)
-            outcome = self._dispatch_command(context)
-            if outcome.events:
-                self._queue_global_events(outcome.events)
-            return
-
         self._memory.cleanup()
 
         events: list[TelemetryEvent] = []
         if not self._verify_command(command, events):
-            # Even when rejected, surface any degraded-input context from annotations (resilience)
-            try:
-                ann = dict(command.annotations)
-                if ann:
-                    attrs: dict[str, str] = {}
-                    for key in (
-                        "feature_coverage",
-                        "risk_reason",
-                        "blueprint_risk",
-                        "blueprint_tier",
-                        "blueprint_stage",
-                    ):
-                        if key in ann:
-                            attrs[key] = str(ann.get(key))
-                    if attrs:
-                        events.append(
-                            TelemetryEvent(description="tamiyo_annotations", attributes=attrs)
-                        )
-                    # Emit degraded_inputs event if coverage below threshold
-                    try:
-                        cov = float(ann.get("feature_coverage", 1.0))
-                    except Exception:
-                        cov = None
-                    if cov is not None and cov < 0.3:
-                        sev = pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING
-                        if cov < 0.1:
-                            sev = pb.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
-                        events.append(
-                            TelemetryEvent(
-                                description="degraded_inputs",
-                                level=sev,
-                                attributes={**attrs, "coverage_avg": f"{cov:.3f}"},
-                            )
-                        )
-            except Exception:
-                pass
             if events:
                 self._queue_global_events(events)
             return
-        command_label = pb.CommandType.Name(command.command_type)
-        seed_event_target: str | None = None
-        remove_after_flush = False
-        if command.command_type == pb.COMMAND_SEED and command.HasField("seed_operation"):
-            raw_seed_id = command.target_seed_id or command.seed_operation.parameters.get(
-                "seed_id", ""
-            )
-            seed_id = str(raw_seed_id)
-            blueprint_id = command.seed_operation.blueprint_id
-            training_run_id = (command.annotations.get("training_run_id", "") if hasattr(command, "annotations") else "").strip()
-            ensure_present(
-                bool(blueprint_id.strip()),
-                DependencyContext(
-                    subsystem="kasmina",
-                    dependency_type="blueprint",
-                    identifier=blueprint_id or "<empty>",
-                    details={"command_id": command.command_id or ""},
-                ),
-                reason="seed operation missing blueprint_id",
-            )
-            ensure_present(
-                bool(training_run_id),
-                DependencyContext(
-                    subsystem="kasmina",
-                    dependency_type="training_run_id",
-                    identifier=training_run_id or "<empty>",
-                    details={"command_id": command.command_id or ""},
-                ),
-                reason="seed command missing training_run_id",
-            )
-            context = self._seeds.setdefault(seed_id, SeedContext(seed_id))
-            context.metadata["training_run_id"] = training_run_id
-            operation = command.seed_operation.operation
-            parameters = dict(command.seed_operation.parameters)
-            seed_event_target = seed_id
-            events.append(
-                TelemetryEvent(
-                    description="seed_operation",
-                    attributes={
-                        "command_type": command_label,
-                        "operation": pb.SeedOperation.Name(operation),
-                        "seed_id": seed_id,
-                        "blueprint_id": blueprint_id,
-                    },
-                )
-            )
-            # Parse optional Tamiyo blend-mode annotations (WP-K7)
-            try:
-                self._apply_blend_annotations(seed_id, dict(command.annotations))
-            except Exception:
-                pass
-            if operation == pb.SEED_OP_GERMINATE:
-                events.extend(self._graft_seed(seed_id, blueprint_id, parameters))
-            elif operation in (pb.SEED_OP_CULL, pb.SEED_OP_CANCEL):
-                events.extend(self._retire_seed(seed_id))
-                remove_after_flush = True
-        elif command.command_type == pb.COMMAND_SEED:
-            raise DependencyViolationError(
-                "kasmina",
-                "seed command missing seed_operation",
-                context={"dependency_type": "seed_operation", "command_id": command.command_id or ""},
-            )
-        elif command.command_type == pb.COMMAND_CIRCUIT_BREAKER and command.HasField(
-            "circuit_breaker"
-        ):
-            events.extend(self._apply_breaker_command(command.circuit_breaker))
-        elif command.command_type == pb.COMMAND_OPTIMIZER:
-            self._log_adjustment(command)
-            optimizer_id = ""
-            if command.HasField("optimizer_adjustment"):
-                optimizer_id = command.optimizer_adjustment.optimizer_id
-            events.append(
-                TelemetryEvent(
-                    description="optimizer_adjust",
-                    attributes={
-                        "command_type": command_label,
-                        "optimizer_id": optimizer_id,
-                    },
-                )
-            )
-        elif command.command_type == pb.COMMAND_PAUSE:
-            resume_flag = command.annotations.get("resume", "").lower() == "true"
-            if resume_flag:
-                seed_event_target = command.target_seed_id
-                events.extend(self._resume_seed(command.target_seed_id))
-            else:
-                seed_event_target = command.target_seed_id
-                events.extend(self._pause_seed(command.target_seed_id))
-        elif command.command_type == pb.COMMAND_EMERGENCY:
-            include_teacher = command.annotations.get("include_teacher", "").lower() == "true"
-            cleanup_stats = self._memory.emergency_cleanup(include_teacher=include_teacher)
-            events.append(
-                TelemetryEvent(
-                    description="emergency_cleanup",
-                    level=pb.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
-                    attributes={
-                        "include_teacher": str(include_teacher).lower(),
-                        **{k: str(v) for k, v in cleanup_stats.items()},
-                    },
-                )
-            )
-        else:
-            self._noop(command)
-            events.append(
-                TelemetryEvent(
-                    description="unsupported_command",
-                    level=pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
-                    attributes={"command_type": command_label},
-                )
-            )
 
-        # WP-K1: Parse Tamiyo coverage/BSDS annotations and surface per-seed events/metadata
-        try:
-            ann = dict(command.annotations)
-            has_coverage = "feature_coverage" in ann
-            has_risk_reason = "risk_reason" in ann
-            has_bp = any(k in ann for k in ("blueprint_risk", "blueprint_tier", "blueprint_stage"))
-            if has_coverage or has_risk_reason or has_bp:
-                attrs: dict[str, str] = {}
-                if seed_event_target:
-                    attrs["seed_id"] = seed_event_target
-                if has_coverage:
-                    attrs["feature_coverage"] = str(ann.get("feature_coverage"))
-                if has_risk_reason:
-                    attrs["risk_reason"] = str(ann.get("risk_reason"))
-                if "blueprint_risk" in ann:
-                    attrs["blueprint_risk"] = str(ann.get("blueprint_risk"))
-                if "blueprint_tier" in ann:
-                    attrs["blueprint_tier"] = str(ann.get("blueprint_tier"))
-                if "blueprint_stage" in ann:
-                    attrs["blueprint_stage"] = str(ann.get("blueprint_stage"))
-                events.append(TelemetryEvent(description="tamiyo_annotations", attributes=attrs))
-
-                # Optional degraded-input event and conservative marker
-                cov = None
-                try:
-                    cov = float(ann.get("feature_coverage", 1.0))
-                except Exception:
-                    cov = None
-                if cov is not None and cov < 0.3:
-                    sev = pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING
-                    if cov < 0.1:
-                        sev = pb.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
-                    events.append(
-                        TelemetryEvent(
-                            description="degraded_inputs",
-                            level=sev,
-                            attributes={**attrs, "coverage_avg": f"{cov:.3f}"},
-                        )
-                    )
-                    # Record conservative fallback intent in seed metadata
-                    if seed_event_target:
-                        ctx = self._seeds.get(seed_event_target)
-                        if ctx is None:
-                            ctx = SeedContext(seed_event_target)
-                            self._seeds[seed_event_target] = ctx
-                            self._ephemeral_seeds.add(seed_event_target)
-                        ctx.metadata["tamiyo_conservative_fallback"] = "true"
-                # Store annotations in seed metadata for downstream tools
-                if seed_event_target:
-                    ctx = self._seeds.get(seed_event_target)
-                    if ctx is None:
-                        ctx = SeedContext(seed_event_target)
-                        self._seeds[seed_event_target] = ctx
-                        self._ephemeral_seeds.add(seed_event_target)
-                    if has_coverage:
-                        ctx.metadata["tamiyo_feature_coverage"] = str(ann.get("feature_coverage"))
-                    if has_risk_reason:
-                        ctx.metadata["tamiyo_risk_reason"] = str(ann.get("risk_reason"))
-                    for key in ("blueprint_risk", "blueprint_tier", "blueprint_stage"):
-                        if key in ann:
-                            ctx.metadata[f"tamiyo_{key}"] = str(ann.get(key))
-        except Exception:  # pragma: no cover - defensive guard
-            pass
-
+        context = self._build_command_context(command)
+        outcome = self._dispatch_command(context)
         if events:
-            if seed_event_target:
-                self._queue_seed_events(
-                    seed_event_target,
-                    events,
-                    remove_after_flush=remove_after_flush,
-                )
-            else:
-                self._queue_global_events(events)
+            outcome.events = events + outcome.events
+        self._finalize_command_outcome(context, outcome)
 
-    # Compatibility: satisfy Tolaria's KasminaClient protocol
     def apply_command(
         self, command: pb.AdaptationCommand
     ) -> None:  # pragma: no cover - thin wrapper
         self.handle_command(command)
 
-    @staticmethod
-    def _dispatcher_enabled() -> bool:
-        return _DISPATCHER_EXPERIMENTAL
 
     def _build_command_context(
         self, command: pb.AdaptationCommand
     ) -> KasminaCommandContext:
-        return KasminaCommandContext(
+        annotations = dict(command.annotations)
+        context = KasminaCommandContext(
             command=command,
-            annotations=dict(command.annotations),
-            legacy_mode=not self._dispatcher_enabled(),
+            annotations=annotations,
         )
+
+        cmd_type = command.command_type
+        if cmd_type == pb.COMMAND_SEED and command.HasField("seed_operation"):
+            raw_seed_id = command.target_seed_id or command.seed_operation.parameters.get(
+                "seed_id", ""
+            )
+            context.seed_id = str(raw_seed_id)
+            context.blueprint_id = command.seed_operation.blueprint_id or ""
+            context.training_run_id = annotations.get("training_run_id", "").strip()
+            context.operation = command.seed_operation.operation
+            context.parameters = dict(command.seed_operation.parameters)
+            context.seed_context = self._seeds.get(context.seed_id)
+            if context.seed_context is not None:
+                context.expected_stage = self._stage_name(context.seed_context.lifecycle.state)
+        elif cmd_type == pb.COMMAND_PAUSE:
+            context.seed_id = command.target_seed_id or ""
+            context.resume = annotations.get("resume", "").lower() == "true"
+            context.seed_context = self._seeds.get(context.seed_id)
+        elif cmd_type == pb.COMMAND_OPTIMIZER and command.HasField("optimizer_adjustment"):
+            context.optimizer_id = command.optimizer_adjustment.optimizer_id
+        elif cmd_type == pb.COMMAND_EMERGENCY:
+            context.include_teacher = annotations.get("include_teacher", "").lower() == "true"
+
+        return context
 
     def _dispatch_command(
         self, context: KasminaCommandContext
     ) -> KasminaCommandOutcome:
-        """Placeholder dispatcher; legacy path still authoritative."""
+        command = context.command
+        cmd_type = command.command_type
+        if cmd_type == pb.COMMAND_SEED and command.HasField("seed_operation"):
+            return self._handle_seed_command(context)
+        if cmd_type == pb.COMMAND_OPTIMIZER:
+            return self._handle_optimizer_command(context)
+        if cmd_type == pb.COMMAND_PAUSE:
+            return self._handle_pause_command(context)
+        if cmd_type == pb.COMMAND_CIRCUIT_BREAKER and command.HasField("circuit_breaker"):
+            return self._handle_breaker_command(context)
+        if cmd_type == pb.COMMAND_EMERGENCY:
+            return self._handle_emergency_command(context)
+        return self._handle_unknown_command(context)
 
-        return KasminaCommandOutcome()
+    def _handle_seed_command(self, context: KasminaCommandContext) -> KasminaCommandOutcome:
+        outcome = KasminaCommandOutcome(seed_id=context.seed_id)
+        command = context.command
+        seed_id = context.seed_id
+        if not seed_id:
+            return outcome
+
+        blueprint_id = context.blueprint_id or command.seed_operation.blueprint_id
+        ensure_present(
+            bool((blueprint_id or "").strip()),
+            DependencyContext(
+                subsystem="kasmina",
+                dependency_type="blueprint",
+                identifier=blueprint_id or "<empty>",
+                details={"command_id": command.command_id or ""},
+            ),
+            reason="seed operation missing blueprint_id",
+        )
+
+        training_run_id = context.training_run_id or context.annotations.get("training_run_id", "").strip()
+        ensure_present(
+            bool(training_run_id),
+            DependencyContext(
+                subsystem="kasmina",
+                dependency_type="training_run_id",
+                identifier=training_run_id or "<empty>",
+                details={"command_id": command.command_id or ""},
+            ),
+            reason="seed command missing training_run_id",
+        )
+
+        seed_ctx = self._seeds.setdefault(seed_id, SeedContext(seed_id))
+        seed_ctx.metadata["training_run_id"] = training_run_id
+
+        operation = context.operation if context.operation is not None else command.seed_operation.operation
+        parameters = context.parameters if context.parameters else dict(command.seed_operation.parameters)
+
+        events = outcome.events
+        events.append(
+            TelemetryEvent(
+                description="seed_operation",
+                attributes={
+                    "command_type": pb.CommandType.Name(command.command_type),
+                    "operation": pb.SeedOperation.Name(operation),
+                    "seed_id": seed_id,
+                    "blueprint_id": blueprint_id,
+                },
+            )
+        )
+        context.annotations.setdefault("blueprint_id", blueprint_id)
+        self._blend_manager.apply(self, seed_id, context.annotations)
+
+        if operation == pb.SEED_OP_GERMINATE:
+            events.extend(self._graft_seed(seed_id, blueprint_id, parameters))
+        elif operation in (pb.SEED_OP_CULL, pb.SEED_OP_CANCEL):
+            events.extend(self._retire_seed(seed_id))
+            outcome.remove_after_flush = True
+        else:
+            events.append(
+                TelemetryEvent(
+                    description="unsupported_seed_operation",
+                    level=pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={
+                        "seed_id": seed_id,
+                        "operation": str(operation),
+                    },
+                )
+            )
+
+        self._append_tamiyo_annotations(seed_id, command, events)
+        outcome.handled = True
+        return outcome
+
+    def _finalize_command_outcome(
+        self,
+        context: KasminaCommandContext,
+        outcome: KasminaCommandOutcome,
+    ) -> None:
+        events = outcome.events
+        seed_id = outcome.seed_id
+        if seed_id:
+            self._queue_seed_events(
+                seed_id,
+                events,
+                remove_after_flush=outcome.remove_after_flush,
+            )
+            return
+        if events:
+            self._queue_global_events(events)
+
+    def _handle_optimizer_command(self, context: KasminaCommandContext) -> KasminaCommandOutcome:
+        outcome = KasminaCommandOutcome()
+        command = context.command
+        self._log_adjustment(command)
+        optimizer_id = context.optimizer_id
+        if not optimizer_id and command.HasField("optimizer_adjustment"):
+            optimizer_id = command.optimizer_adjustment.optimizer_id
+        outcome.events.append(
+            TelemetryEvent(
+                description="optimizer_adjust",
+                attributes={
+                    "command_type": pb.CommandType.Name(command.command_type),
+                    "optimizer_id": optimizer_id,
+                },
+            )
+        )
+        outcome.handled = True
+        return outcome
+
+    def _handle_pause_command(self, context: KasminaCommandContext) -> KasminaCommandOutcome:
+        outcome = KasminaCommandOutcome(seed_id=context.seed_id)
+        seed_id = context.seed_id
+        if not seed_id:
+            return outcome
+        if context.resume:
+            outcome.events.extend(self._resume_seed(seed_id))
+        else:
+            outcome.events.extend(self._pause_seed(seed_id))
+        outcome.handled = True
+        return outcome
+
+    def _handle_breaker_command(self, context: KasminaCommandContext) -> KasminaCommandOutcome:
+        outcome = KasminaCommandOutcome()
+        outcome.events.extend(self._apply_breaker_command(context.command.circuit_breaker))
+        outcome.handled = True
+        return outcome
+
+    def _handle_emergency_command(self, context: KasminaCommandContext) -> KasminaCommandOutcome:
+        outcome = KasminaCommandOutcome()
+        stats = self._memory.emergency_cleanup(include_teacher=context.include_teacher)
+        outcome.events.append(
+            TelemetryEvent(
+                description="emergency_cleanup",
+                level=pb.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
+                attributes={
+                    "include_teacher": str(context.include_teacher).lower(),
+                    **{k: str(v) for k, v in stats.items()},
+                },
+            )
+        )
+        outcome.handled = True
+        return outcome
+
+    def _handle_unknown_command(self, context: KasminaCommandContext) -> KasminaCommandOutcome:
+        outcome = KasminaCommandOutcome()
+        outcome.events.append(
+            TelemetryEvent(
+                description="unsupported_command",
+                level=pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                attributes={
+                    "command_type": pb.CommandType.Name(context.command.command_type)
+                },
+            )
+        )
+        outcome.handled = False
+        return outcome
 
     def seeds(self) -> dict[str, SeedContext]:
         """Return the tracked seed contexts."""
@@ -1388,11 +1498,20 @@ class KasminaSeedManager:
             breaker_event = self._breaker.record_failure("fetch_error")
             if breaker_event:
                 events.append(self._breaker_event_to_telemetry(context.seed_id, breaker_event))
-            kernel = self._load_fallback(seed_id)
-            context.used_fallback = True
-            context.last_kernel_latency_ms = self._latency_budget_ms
-            self._last_fallback_used = True
-            context.metadata["kernel_cache"] = "fallback"
+            context.used_fallback = False
+            self._last_fallback_used = False
+            failure = GateResult(
+                gate=pb.SEED_GATE_G1_GRADIENT_HEALTH,
+                passed=False,
+                reason="kernel_fetch_failed",
+                attributes={"blueprint_id": blueprint_id},
+            )
+            self._handle_gate_failure(context, failure, events)
+            raise DependencyViolationError(
+                "kasmina",
+                "kernel fetch failed",
+                context={"dependency_type": "kernel", "seed_id": seed_id, "blueprint_id": blueprint_id},
+            )
         else:
             assert kernel is not None  # for type checkers
             latency_ms = reported_latency if reported_latency is not None else elapsed_ms
@@ -1410,10 +1529,22 @@ class KasminaSeedManager:
                 breaker_event = self._breaker.record_failure("latency_budget_exceeded")
                 if breaker_event:
                     events.append(self._breaker_event_to_telemetry(context.seed_id, breaker_event))
-                kernel = self._load_fallback(seed_id)
-                context.used_fallback = True
-                context.last_kernel_latency_ms = latency_ms
-                self._last_fallback_used = True
+                failure = GateResult(
+                    gate=pb.SEED_GATE_G1_GRADIENT_HEALTH,
+                    passed=False,
+                    reason="kernel_fetch_latency_exceeded",
+                    attributes={
+                        "blueprint_id": blueprint_id,
+                        "latency_ms": f"{latency_ms:.2f}",
+                        "budget_ms": f"{self._latency_budget_ms:.2f}",
+                    },
+                )
+                self._handle_gate_failure(context, failure, events)
+                raise DependencyViolationError(
+                    "kasmina",
+                    "kernel fetch exceeded latency budget",
+                    context={"dependency_type": "kernel", "seed_id": seed_id, "blueprint_id": blueprint_id},
+                )
             else:
                 breaker_event = self._breaker.record_success()
                 if breaker_event:
@@ -1636,10 +1767,20 @@ class KasminaSeedManager:
         if self._embargo_seconds:
             self._transition(context, pb.SEED_STAGE_EMBARGOED)
 
+        critical_reasons = {
+            "fallback_kernel_used",
+            "stage_mismatch",
+            "resume_kernel_fetch_failed",
+            "kernel_fetch_failed",
+            "kernel_fetch_latency_exceeded",
+        }
+        event_level = pb.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
+        if result.reason not in critical_reasons:
+            event_level = pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING
         events.append(
             TelemetryEvent(
                 description="gate_failure",
-                level=pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                level=event_level,
                 attributes={
                     "seed_id": context.seed_id,
                     "gate": pb.SeedLifecycleGate.Name(result.gate),
@@ -1992,27 +2133,6 @@ class KasminaSeedManager:
             ]
         )
 
-    def _load_fallback(self, seed_id: str) -> nn.Module:
-        self._last_fallback_used = True
-        context = self._seeds.get(seed_id)
-        if context:
-            context.used_fallback = True
-            context.metadata["performance_status"] = "fallback"
-        if self._fallback_blueprint_id:
-            try:
-                kernel, _ = self._runtime.fetch_kernel(self._fallback_blueprint_id)
-                logger.info(
-                    "Kasmina fallback blueprint %s applied to seed %s",
-                    self._fallback_blueprint_id,
-                    seed_id,
-                )
-                return kernel
-            except Exception as exc:  # pragma: no cover - defensive guard
-                logger.error(
-                    "Fallback blueprint %s unavailable: %s", self._fallback_blueprint_id, exc
-                )
-        return nn.Identity()
-
     def _estimate_model_memory_gb(self, model: nn.Module) -> float:
         total_bytes = 0
         for param in model.parameters():
@@ -2067,10 +2187,27 @@ class KasminaSeedManager:
             try:
                 kernel, latency = self._runtime.fetch_kernel(blueprint_id)
                 context.last_kernel_latency_ms = latency
-            except Exception as exc:  # pragma: no cover
+            except Exception as exc:  # pragma: no cover - strict failure
                 logger.error("Resume fetch failed for %s: %s", blueprint_id, exc)
-                kernel = self._load_fallback(seed_id)
-                context.used_fallback = True
+                failure = GateResult(
+                    gate=pb.SEED_GATE_G1_GRADIENT_HEALTH,
+                    passed=False,
+                    reason="resume_kernel_fetch_failed",
+                    attributes={
+                        "seed_id": seed_id,
+                        "blueprint_id": blueprint_id,
+                    },
+                )
+                self._handle_gate_failure(context, failure, events)
+                raise DependencyViolationError(
+                    "kasmina",
+                    "resume kernel fetch failed",
+                    context={
+                        "dependency_type": "kernel",
+                        "seed_id": seed_id,
+                        "blueprint_id": blueprint_id,
+                    },
+                ) from exc
         if kernel is not None:
             self._attach_kernel(seed_id, kernel)
             context.kernel_attached = True

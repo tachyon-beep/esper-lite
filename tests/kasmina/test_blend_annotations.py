@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 
-import pytest
 import torch
+import pytest
 
 from torch import nn
 
+from esper.core.dependency_guard import DependencyViolationError
 from esper.kasmina import KasminaSeedManager
 from esper.leyline import leyline_pb2
 from esper.security.signing import SignatureContext, sign
@@ -164,6 +165,38 @@ def test_channel_mode_annotations_parse_alpha_vec() -> None:
     pkt = mgr.telemetry_packets[-1]
     ev = [e for e in pkt.events if e.description == "blend_config"][-1]
     assert ev.attributes.get("alpha_vec_len") == str(len(vec))
+
+
+def test_channel_mode_missing_alpha_vec_rejected() -> None:
+    mgr = KasminaSeedManager(
+        runtime=type("R", (), {"fetch_kernel": lambda *_: (nn.Identity(), 0.0)})(),
+        signing_context=_SIGNING_CONTEXT,
+    )
+    mgr.register_host_model(nn.Linear(1, 1))
+    cmd = _make_seed_command("seed-chan-missing", "BP-ANN")
+    cmd.annotations["blend_mode"] = "CHANNEL"
+    if "signature" in cmd.annotations:
+        del cmd.annotations["signature"]
+    cmd.annotations["signature"] = sign(cmd.SerializeToString(deterministic=True), _SIGNING_CONTEXT)
+    with pytest.raises(DependencyViolationError):
+        mgr.handle_command(cmd)
+
+
+def test_channel_mode_rejects_oversized_alpha_vec() -> None:
+    mgr = KasminaSeedManager(
+        runtime=type("R", (), {"fetch_kernel": lambda *_: (nn.Identity(), 0.0)})(),
+        signing_context=_SIGNING_CONTEXT,
+    )
+    mgr.register_host_model(nn.Linear(1, 1))
+    cmd = _make_seed_command("seed-chan-oversize", "BP-ANN")
+    cmd.annotations["blend_mode"] = "CHANNEL"
+    vec = [0.5] * 65
+    cmd.annotations["alpha_vec"] = json.dumps(vec)
+    if "signature" in cmd.annotations:
+        del cmd.annotations["signature"]
+    cmd.annotations["signature"] = sign(cmd.SerializeToString(deterministic=True), _SIGNING_CONTEXT)
+    with pytest.raises(DependencyViolationError):
+        mgr.handle_command(cmd)
 
 
 def test_unknown_mode_falls_back_to_convex() -> None:

@@ -6,6 +6,7 @@ import pytest
 import torch
 from torch import nn
 
+from esper.core.dependency_guard import DependencyViolationError
 from esper.kasmina import KasminaSeedManager
 from esper.leyline import leyline_pb2
 from esper.security.signing import SignatureContext, sign
@@ -35,13 +36,16 @@ def _make_command(operation: int, blueprint_id: str) -> leyline_pb2.AdaptationCo
     )
     command.seed_operation.operation = operation
     command.seed_operation.blueprint_id = blueprint_id
+    command.annotations["training_run_id"] = "seed-training"
     _sign_command(command)
     return command
 
 
 def _sign_command(command: leyline_pb2.AdaptationCommand) -> None:
+    if "signature" in command.annotations:
+        del command.annotations["signature"]
     command.issued_at.GetCurrentTime()
-    signature = sign(command.SerializeToString(), _SIGNING_CONTEXT)
+    signature = sign(command.SerializeToString(deterministic=True), _SIGNING_CONTEXT)
     command.annotations["signature"] = signature
 
 
@@ -102,9 +106,10 @@ def test_seed_manager_uses_fallback_on_failure() -> None:
     )
     manager.register_host_model(nn.Linear(1, 1))
     command = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP999")
-    manager.handle_command(command)
-    assert runtime.calls == ["BP999", "BP001"]
-    assert manager.last_fallback_used
+    with pytest.raises(DependencyViolationError):
+        manager.handle_command(command)
+    assert runtime.calls == ["BP999"]
+    assert manager.last_fallback_used is False
 
 
 def test_seed_manager_warns_on_latency() -> None:
@@ -117,8 +122,9 @@ def test_seed_manager_warns_on_latency() -> None:
     )
     manager.register_host_model(nn.Linear(1, 1))
     command = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP002")
-    manager.handle_command(command)
-    assert runtime.calls == ["BP002", "BP001"]
+    with pytest.raises(DependencyViolationError):
+        manager.handle_command(command)
+    assert runtime.calls == ["BP002"]
     assert manager.last_fetch_latency_ms >= 25.0
 
 
@@ -278,6 +284,7 @@ def test_handle_command_logs_tamiyo_annotations() -> None:
         leyline_pb2.BlueprintTier.BLUEPRINT_TIER_EXPERIMENTAL
     )
     cmd.annotations["blueprint_stage"] = "3"
+    cmd.annotations["training_run_id"] = "annotation-run"
     _sign_command(cmd)
     manager.handle_command(cmd)
     packets = _finalize(manager, step_index=13)
@@ -389,6 +396,7 @@ def test_gpu_cache_enables_reuse_between_seeds() -> None:
     )
     second.seed_operation.operation = leyline_pb2.SEED_OP_GERMINATE
     second.seed_operation.blueprint_id = "BP777"
+    second.annotations["training_run_id"] = "seed-training-2"
     _sign_command(second)
     manager.handle_command(second)
 
@@ -513,6 +521,7 @@ def test_parameter_registry_blocks_duplicate_kernel() -> None:
     )
     second.seed_operation.operation = leyline_pb2.SEED_OP_GERMINATE
     second.seed_operation.blueprint_id = "BP301"
+    second.annotations["training_run_id"] = "seed-training-dup"
     _sign_command(second)
     manager.handle_command(second)
     packets_after_dup = _finalize(manager, step_index=11)

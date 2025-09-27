@@ -27,6 +27,7 @@ def _cmd(seed_id: str, blueprint_id: str) -> leyline_pb2.AdaptationCommand:
     )
     cmd.seed_operation.operation = leyline_pb2.SEED_OP_GERMINATE
     cmd.seed_operation.blueprint_id = blueprint_id
+    cmd.annotations["training_run_id"] = f"{seed_id}-run"
     cmd.issued_at.GetCurrentTime()
     cmd.annotations["signature"] = sign(cmd.SerializeToString(deterministic=True), SIGN)
     return cmd

@@ -57,7 +57,12 @@ class CommandVerifier:
         self._freshness_window = timedelta(seconds=freshness_window_seconds)
 
     def verify(self, command: leyline_pb2.AdaptationCommand, signature: str) -> VerificationResult:
+        stored_signature = command.annotations.get("signature")
+        if stored_signature is not None:
+            del command.annotations["signature"]
         payload = command.SerializeToString(deterministic=True)
+        if stored_signature is not None:
+            command.annotations["signature"] = stored_signature
         if not signature:
             return VerificationResult(False, "missing_signature")
         if not verify(payload, signature, self._ctx):

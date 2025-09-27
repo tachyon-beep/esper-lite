@@ -11,6 +11,7 @@ execution primitive during RC1 remediation work.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import functools
 import inspect
 import threading
@@ -213,9 +214,10 @@ class AsyncWorker:
                 await asyncio.gather(*self._tasks, return_exceptions=True)
             self._loop.stop()
 
+        join_timeout = timeout if timeout is not None else self._graceful_shutdown_timeout
         future = asyncio.run_coroutine_threadsafe(_graceful_shutdown(), self._loop)
         try:
-            future.result(timeout=self._graceful_shutdown_timeout if timeout is None else timeout)
+            future.result(timeout=join_timeout)
         except FuturesTimeout:
             if not self._loop.is_closed():
                 try:
@@ -223,7 +225,12 @@ class AsyncWorker:
                 except RuntimeError:
                     pass
 
-        self._thread.join(timeout)
+        self._thread.join(join_timeout)
+        if self._thread.is_alive():
+            # Force stop and attempt one final join to avoid hanging callers.
+            with contextlib.suppress(RuntimeError):
+                self._loop.call_soon_threadsafe(self._loop.stop)
+            self._thread.join(join_timeout)
 
     def close(self) -> None:
         self.shutdown()
