@@ -78,3 +78,21 @@
   - Static: `/home/john/esper-lite/.venv/bin/radon cc -s src/esper/kasmina/seed_manager.py`
 - **Telemetry Verification**: `tests/kasmina/test_seed_manager.py::test_handle_command_logs_tamiyo_annotations` confirms degraded-input/CRITICAL events; integration control loop asserts step-indexed per-seed packets. Gate failures surface as CRITICAL with reasons, and dispatcher telemetry flushes persist.
 - **Notes**: WP-K1/WP-K2 complete; command verifier telemetry and prefetch/cache reliability remain tracked under WP-K3/K4. Async worker fix benefits Tolaria/Tamiyo test harnesses and is documented in shared foundations.
+
+## 2025-09-29 — Kasmina Command Verifier Telemetry (Risk R4c / WP-K3)
+- **Summary**: Elevated Kasmina command verifier failures to CRITICAL telemetry and added cumulative counters/latency metrics. Nonce ledger now enforces a bounded size with eviction accounting, publishes `kasmina.nonce_ledger.*` gauges, and emits warnings when the cap trims history. Administrative helpers (`reset_registry`, `reset_teacher_model`) clear registry + nonce ledger state with accompanying telemetry.
+- **Tests Run**:
+  - Unit: `/home/john/esper-lite/.venv/bin/pytest tests/kasmina/test_seed_manager.py --disable-warnings`
+  - Unit: `/home/john/esper-lite/.venv/bin/pytest tests/kasmina --disable-warnings`
+  - Integration: `/home/john/esper-lite/.venv/bin/pytest tests/integration/test_control_loop.py::test_kasmina_emits_one_packet_per_seed_per_step --disable-warnings`
+- **Telemetry Verification**: `tests/kasmina/test_seed_manager.py::test_nonce_replay_emits_critical_and_metrics` confirms CRITICAL routing and verifier counters; `::test_nonce_ledger_truncation_emits_warning` asserts truncation warnings and ledger gauges. Reset helpers emit `registry_reset`/`teacher_deregistered` events with zeroed metrics.
+- **Notes**: WP-K3 now covers telemetry, metrics, and registry hooks. Prefetch/cache work (WP-K4) remains outstanding and will extend ledger settings into async prefetch flows.
+
+## 2025-09-29 — Kasmina Prefetch & Cache Reliability (Risk R4c / WP-K4)
+- **Summary**: Prefetch coordinator now runs on the shared `AsyncWorker`, ensuring cancellable publish/consume loops with failure surfacing. Seed manager tracks per-status prefetch counters/latency, enforces timeouts, and emits CRITICAL `prefetch_timeout` telemetry. Kernel attachment uses per-blueprint locks with contention telemetry, and administrative resets cancel outstanding requests cleanly.
+- **Tests Run**:
+  - Unit: `/home/john/esper-lite/.venv/bin/pytest tests/kasmina/test_seed_manager.py --disable-warnings`
+  - Unit: `/home/john/esper-lite/.venv/bin/pytest tests/kasmina --disable-warnings`
+  - Integration: `/home/john/esper-lite/.venv/bin/pytest tests/integration/test_control_loop.py::test_kasmina_emits_one_packet_per_seed_per_step --disable-warnings`
+- **Telemetry Verification**: `tests/kasmina/test_seed_manager.py::test_nonce_replay_emits_critical_and_metrics` (latency + counters), `::test_nonce_ledger_truncation_emits_warning` (inflight + truncations), and new prefetch tests assert `prefetch_timeout`, `prefetch_canceled`, and cache lock contention behaviour. Average and last-latency gauges now appear in Kasmina global packets.
+- **Notes**: Outstanding follow-up: benchmark prefetch throughput under contention and integrate metrics into observability runbooks. WP-K4 remains open for performance validation but functional reliability changes are in place.

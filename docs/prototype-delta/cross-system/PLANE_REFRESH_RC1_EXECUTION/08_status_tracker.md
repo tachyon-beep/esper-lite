@@ -23,8 +23,8 @@
 | Tamiyo WP-A4 | WAL/fsync & registry | (tbd) | Not Started |  |
 | Kasmina WP-K1 | Gate fallback enforcement | (tbd) | Not Started |  |
 | Kasmina WP-K2 | Blend telemetry/logits | (tbd) | Not Started |  |
-| Kasmina WP-K3 | Command verifier telemetry, nonce ledger | (tbd) | Not Started |  |
-| Kasmina WP-K4 | Prefetch worker & cache locking | (tbd) | Not Started |  |
+| Kasmina WP-K3 | Command verifier telemetry, nonce ledger | Codex | In Progress | Critical verifier events + metrics landed; nonce ledger metrics/reset hooks implemented; prefetch/cache follow-up pending |
+| Kasmina WP-K4 | Prefetch worker & cache locking | Codex | In Progress | Async worker integration, telemetry/metrics, and cache locking implemented; performance tuning & benchmarking pending |
 | Testing & Validation | Performance harness execution | (tbd) | Not Started |  |
 | Testing & Validation | Telemetry verification runbook | (tbd) | Not Started |  |
 | Documentation | Update lint & change log | (tbd) | Not Started |  |

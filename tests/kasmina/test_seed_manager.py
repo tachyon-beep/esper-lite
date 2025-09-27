@@ -50,8 +50,18 @@ def _sign_command(command: leyline_pb2.AdaptationCommand) -> None:
 
 
 def _finalize(manager: KasminaSeedManager, step_index: int) -> list[leyline_pb2.TelemetryPacket]:
+    start = len(manager.telemetry_packets)
     manager.finalize_step(step_index=step_index)
-    return manager.telemetry_packets
+    return manager.telemetry_packets[start:]
+
+
+def _metric(packet: leyline_pb2.TelemetryPacket, name: str, **attrs: str) -> float:
+    for metric in packet.metrics:
+        if metric.name != name:
+            continue
+        if all(metric.attributes.get(key) == value for key, value in attrs.items()):
+            return metric.value
+    raise AssertionError(f"metric {name!r} with attrs {attrs!r} not found")
 
 
 class _PrefetchStub:
@@ -584,9 +594,110 @@ def test_manager_rejects_unsigned_command() -> None:
     last_packet = manager.telemetry_packets[-1]
     assert any(event.description == "command_rejected" for event in last_packet.events)
     assert last_packet.system_health.indicators["priority"] == leyline_pb2.MessagePriority.Name(
-        leyline_pb2.MessagePriority.MESSAGE_PRIORITY_HIGH
+        leyline_pb2.MessagePriority.MESSAGE_PRIORITY_CRITICAL
     )
 
+
+def test_nonce_replay_emits_critical_and_metrics() -> None:
+    runtime = _Runtime()
+    manager = KasminaSeedManager(runtime, signing_context=_SIGNING_CONTEXT)
+    manager.register_host_model(nn.Linear(1, 1))
+
+    first = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP700")
+    manager.handle_command(first)
+    _finalize(manager, step_index=13)
+
+    manager.handle_command(first)
+    _finalize(manager, step_index=14)
+    events = [evt for pkt in manager.telemetry_packets for evt in pkt.events]
+    rejected = [evt for evt in events if evt.description == "command_rejected"]
+    assert rejected, "expected command_rejected telemetry"
+    assert rejected[-1].attributes["reason"] == "nonce_replayed"
+    assert (
+        rejected[-1].level
+        == leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
+    )
+    priority_packet = next(
+        pkt
+        for pkt in manager.telemetry_packets
+        if any(evt.description == "command_rejected" for evt in pkt.events)
+    )
+    priority = priority_packet.system_health.indicators["priority"]
+    assert priority == leyline_pb2.MessagePriority.Name(
+        leyline_pb2.MessagePriority.MESSAGE_PRIORITY_CRITICAL
+    )
+
+    last_packet = manager.telemetry_packets[-1]
+    accepted_total = _metric(last_packet, "kasmina.command_verifier.accepted_total")
+    assert accepted_total >= 1.0
+    replay_total = _metric(
+        last_packet,
+        "kasmina.command_verifier.rejections_total",
+        reason="nonce_replayed",
+    )
+    assert replay_total >= 1.0
+    latency = _metric(last_packet, "kasmina.command_verifier.validation_latency_ms")
+    assert latency >= 0.0
+
+
+def test_nonce_ledger_truncation_emits_warning() -> None:
+    runtime = _Runtime()
+    manager = KasminaSeedManager(
+        runtime,
+        signing_context=_SIGNING_CONTEXT,
+        nonce_max_entries=1,
+    )
+    manager.register_host_model(nn.Linear(1, 1))
+
+    first = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP710")
+    manager.handle_command(first)
+    _finalize(manager, step_index=15)
+
+    second = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP711")
+    second.command_id = "cmd-second"
+    _sign_command(second)
+    manager.handle_command(second)
+    _finalize(manager, step_index=16)
+    events = [evt for pkt in manager.telemetry_packets for evt in pkt.events]
+    truncations = [evt for evt in events if evt.description == "nonce_ledger_truncated"]
+    assert truncations, "expected nonce_ledger_truncated telemetry"
+    assert truncations[-1].level == leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING
+    assert truncations[-1].attributes["removed"] == "1"
+    size_metric = _metric(manager.telemetry_packets[-1], "kasmina.nonce_ledger.size")
+    assert size_metric == 1.0
+
+
+def test_reset_registry_clears_state() -> None:
+    runtime = _Runtime()
+    manager = KasminaSeedManager(runtime, signing_context=_SIGNING_CONTEXT)
+    manager.register_host_model(nn.Linear(1, 1))
+    command = _make_command(leyline_pb2.SEED_OP_GERMINATE, "BP720")
+    manager.handle_command(command)
+    _finalize(manager, step_index=17)
+    assert manager.seeds(), "registry should have active seeds before reset"
+
+    manager.reset_registry()
+    _finalize(manager, step_index=18)
+    assert manager.seeds() == {}
+    events = [evt for pkt in manager.telemetry_packets for evt in pkt.events]
+    assert any(evt.description == "registry_reset" for evt in events)
+    assert _metric(manager.telemetry_packets[-1], "kasmina.command_verifier.accepted_total") == 0.0
+    assert _metric(manager.telemetry_packets[-1], "kasmina.nonce_ledger.size") == 0.0
+
+
+def test_reset_teacher_model_flushes_ledger() -> None:
+    runtime = _Runtime()
+    manager = KasminaSeedManager(runtime, signing_context=_SIGNING_CONTEXT)
+    teacher = nn.Linear(3, 3)
+    manager.register_teacher_model(teacher)
+    manager.finalize_step(step_index=19)
+
+    manager.reset_teacher_model()
+    _finalize(manager, step_index=20)
+    events = [evt for pkt in manager.telemetry_packets for evt in pkt.events]
+    assert any(evt.description == "teacher_deregistered" for evt in events)
+    assert manager._teacher_model is None
+    assert _metric(manager.telemetry_packets[-1], "kasmina.nonce_ledger.size") == 0.0
 
 def test_register_teacher_model_blocks_updates() -> None:
     runtime = _Runtime()

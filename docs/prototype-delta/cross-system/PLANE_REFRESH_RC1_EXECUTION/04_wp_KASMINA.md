@@ -51,29 +51,29 @@ Status:
 
 ### WP-K3 — Command/Security/Telemetry
 Tasks:
-1. Hook command verifier failures to telemetry; emit CRITICAL when signature/nonce invalid.
-2. Add periodic nonce cleanup; expose TTL metrics.
-3. Provide teacher deregistration/reset in registry.
-4. Update telemetry to include blend mode/clamping, command verification, degraded inputs.
+1. Hook command verifier failures to telemetry; emit `command_rejected` at `TelemetryLevel.CRITICAL` (priority CRITICAL) for `{missing_signature, invalid_signature, nonce_replayed, missing_timestamp, stale_command}` and attach reason/command_id attributes.
+2. Add periodic nonce cleanup with configurable TTL (default 300 s), hard cap (10 k entries), and expose gauges/counters (`kasmina.nonce_ledger.size`, `kasmina.nonce_ledger.evictions_total`, `kasmina.nonce_ledger.ttl_seconds`).
+3. Provide teacher deregistration/reset entry points that clear the nonce ledger and seed registry consistently before accepting new commands.
+4. Update telemetry helpers to publish verifier acceptance/rejection counters, nonce ledger truncation warnings, and blend mode/clamping metadata.
 Acceptance:
-- Telemetry logs `command_rejected` with reason; nonce map stable.
-- Registry tests cover teacher swaps.
+- Telemetry logs `command_rejected` with critical priority for security failures; metrics counters/gauges exported and asserted in tests.
+- Registry tests cover teacher swaps and ensure nonce ledger reset hooks run.
 Risks:
 - Telemetry volume increase; monitor Oona queue.
 - Registry reset may affect existing seeds; plan migration.
 
 Status:
-- ⏳ Deferred — Command verifier telemetry/nonce cleanup remain backlog; R4c delivered degraded-input and blend telemetry while capturing follow-up tasks for Phase 6+.
+- 🚧 In Progress — Command verifier telemetry now emits CRITICAL `command_rejected` events, verifier counters/latency metrics ship with Kasmina packets, nonce ledger cleanup exposes size/evictions, and administrative resets clear registry + ledger state. Remaining items: nonce TTL tuning hooks, registry observability, and prefetch/cache reliability (WP-K4).
 
 ### WP-K4 — Prefetch & Cache Reliability
 Tasks:
-1. Require real training_run_id; remove `prototype` fallback.
-2. Refactor prefetch to use shared async worker; handle shutdown cancellation.
-3. Add locking or single-thread enforcement around GPU cache.
-4. Emit cache telemetry (hits/evictions per interval) per RC1 guidelines.
+1. Require real `training_run_id`; remove `prototype` fallback (already enforced via dependency guard) and thread the ID through telemetry/metrics.
+2. Run prefetch publish/consume loops on the shared `AsyncWorker`, track outstanding requests, and cancel on shutdown/deadline expiry. Surface CRITICAL `prefetch_timeout` telemetry with request metadata.
+3. Add per-blueprint locking (or equivalent single-writer enforcement) around GPU/cache attachments to eliminate concurrent mutation; emit contention metrics/events when waits exceed thresholds.
+4. Emit `kasmina.prefetch.requests_total`, `kasmina.prefetch.inflight`, `kasmina.prefetch.latency_ms`, and extend cache telemetry with lock-wait metrics so operators can observe prefetch health.
 Acceptance:
-- Prefetch integration tests demonstrate cancellation; no nested loops.
-- Cache telemetry matches lint document expectations.
+- Prefetch integration tests demonstrate cancellation/timeouts without hanging the worker; coordinator shutdown returns cleanly.
+- Cache telemetry reports lock-wait metrics and hit/miss counters without races; unit tests cover contention scenarios.
 Risks:
 - Async changes must align with Tolaria/Tamiyo worker.
 - Additional locks may impact throughput; benchmark.

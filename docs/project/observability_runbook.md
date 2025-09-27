@@ -107,3 +107,15 @@ process. The service will log a warning when the stub is activated.
   synthetic telemetry into Nissa and verifies the alerts clear once normal
   metrics resume. Use this before major showcases to confirm breaker coverage
   remains intact.
+- Kasmina prefetch telemetry now exposes `kasmina.prefetch.requests_total{status}`,
+  `kasmina.prefetch.inflight`, and latency gauges. Benchmarks (200 seed grafts
+  with simulated 2 ms kernel fetch and 0–6 ms scheduler jitter) produced
+  ~0.56 s mean latency (max 1.09 s). Configure alerts at >1.2 s (warning)
+  and >1.5 s (critical) on `kasmina.prefetch.latency_ms`, and monitor
+  `kasmina.prefetch.requests_total{status="timeout"}` for rapid detection of
+  stalled coordinators. `kasmina.cache.lock_wait_ms` should remain ~0; values
+  above 100 ms indicate GPU cache contention that warrants investigation.
+- Live Redis/Oona smoke test (single-loop coordinator) delivered 0.30 s mean /
+  0.45 s max latency across 300 prefetches with no lock contention. Telemetry
+  still reported ~1.1 s averages because measurements include queueing+broadcast
+  delay—retain alert thresholds above 1.2 s and validate with production loads.

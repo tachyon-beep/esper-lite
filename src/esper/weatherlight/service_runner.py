@@ -152,6 +152,7 @@ class WeatherlightService:
         self._kasmina_manager = KasminaSeedManager(
             self._urza_runtime,
             packet_callback=_on_kasmina_packet,
+            nonce_max_entries=self._settings.kernel_nonce_cache_size,
         )
         self._kasmina_coordinator = KasminaPrefetchCoordinator(
             self._kasmina_manager,

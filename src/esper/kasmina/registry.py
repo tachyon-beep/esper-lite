@@ -43,6 +43,11 @@ class SeedParameterRegistry:
         for param in _iter_parameters(module):
             self._teacher_parameter_ids.add(id(param))
 
+    def deregister_teacher(self) -> None:
+        """Forget the registered teacher parameter identifiers."""
+
+        self._teacher_parameter_ids.clear()
+
     def validate_update(self, seed_id: str, parameters: Iterable[nn.Parameter]) -> bool:
         for param in parameters:
             pid = id(param)
@@ -55,6 +60,13 @@ class SeedParameterRegistry:
 
     def owner_of(self, parameter: nn.Parameter) -> str | None:
         return self._parameter_index.get(id(parameter))
+
+    def reset(self) -> None:
+        """Clear all registry state (seeds and teacher assignments)."""
+
+        self._seed_records.clear()
+        self._parameter_index.clear()
+        self._teacher_parameter_ids.clear()
 
 
 def _iter_parameters(module: nn.Module) -> Iterable[nn.Parameter]:

@@ -17,29 +17,90 @@ class VerificationResult:
     reason: str = ""
 
 
+@dataclass(slots=True)
+class NonceLedgerSnapshot:
+    """Summary of ledger state for telemetry/metrics."""
+
+    size: int
+    ttl_seconds: float
+    evictions_total: int
+
+
 class NonceLedger:
     """Tracks recently seen nonces to prevent replay."""
 
     def __init__(
-        self, *, ttl_seconds: float = 300.0, clock: Callable[[], float] | None = None
+        self,
+        *,
+        ttl_seconds: float = 300.0,
+        max_entries: int | None = 10_000,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         self._ttl = ttl_seconds
         self._clock = clock or time.monotonic
         self._entries: dict[str, float] = {}
+        self._evictions_total = 0
+        self._max_entries = max_entries if max_entries and max_entries > 0 else None
+        self._recent_truncation = 0
 
     def register(self, nonce: str) -> bool:
         now = self._clock()
-        self._cleanup(now)
+        self._evictions_total += self._cleanup(now)
         expiry = self._entries.get(nonce)
         if expiry is not None and expiry > now:
             return False
         self._entries[nonce] = now + self._ttl
+        self._evictions_total += self._enforce_capacity()
         return True
 
-    def _cleanup(self, now: float) -> None:
+    def maintenance(self) -> int:
+        """Perform background cleanup and return number of stale nonces removed."""
+
+        evicted = self._cleanup(self._clock())
+        self._evictions_total += evicted
+        return evicted
+
+    def clear(self) -> None:
+        """Remove all tracked nonces and reset counters."""
+
+        self._entries.clear()
+        self._recent_truncation = 0
+        self._evictions_total = 0
+
+    def snapshot(self) -> NonceLedgerSnapshot:
+        """Return a snapshot suitable for telemetry emission."""
+
+        return NonceLedgerSnapshot(
+            size=len(self._entries),
+            ttl_seconds=self._ttl,
+            evictions_total=self._evictions_total,
+        )
+
+    def pop_recent_truncation(self) -> int:
+        """Return and clear the most recent truncation count."""
+
+        value = self._recent_truncation
+        self._recent_truncation = 0
+        return value
+
+    def _cleanup(self, now: float) -> int:
         stale = [nonce for nonce, expiry in self._entries.items() if expiry <= now]
         for nonce in stale:
             del self._entries[nonce]
+        return len(stale)
+
+    def _enforce_capacity(self) -> int:
+        if self._max_entries is None or len(self._entries) <= self._max_entries:
+            return 0
+        truncated = 0
+        while len(self._entries) > self._max_entries:
+            # Remove the nonce with the earliest expiry to preserve newer entries.
+            oldest_nonce = min(self._entries.items(), key=lambda item: item[1])[0]
+            del self._entries[oldest_nonce]
+            truncated += 1
+        if truncated:
+            self._recent_truncation += truncated
+        return truncated
 
 
 class CommandVerifier:
@@ -85,4 +146,4 @@ class CommandVerifier:
         return VerificationResult(True, "ok")
 
 
-__all__ = ["CommandVerifier", "NonceLedger", "VerificationResult"]
+__all__ = ["CommandVerifier", "NonceLedger", "NonceLedgerSnapshot", "VerificationResult"]

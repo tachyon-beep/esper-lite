@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from esper.core import DependencyViolationError
 from esper.leyline import leyline_pb2
@@ -30,6 +30,7 @@ class KasminaPrefetchCoordinator:
         self._tasks: list[asyncio.Task] = []
         self._running = False
         self._worker = async_worker
+        self._worker_handles: list[Any] = []
 
     def request_kernel(
         self,
@@ -60,8 +61,16 @@ class KasminaPrefetchCoordinator:
     def start(self) -> None:
         if self._running:
             return
-        loop = asyncio.get_running_loop()
         self._running = True
+        if self._worker is not None:
+            self._worker_handles = [
+                self._worker.submit(self._consume_ready(), name="kasmina-prefetch-ready"),
+                self._worker.submit(self._consume_error(), name="kasmina-prefetch-error"),
+            ]
+            self._tasks = []
+            return
+
+        loop = asyncio.get_running_loop()
         self._tasks = [
             loop.create_task(self._consume_ready()),
             loop.create_task(self._consume_error()),
@@ -69,19 +78,29 @@ class KasminaPrefetchCoordinator:
 
     async def close(self) -> None:
         self._running = False
+        if self._worker_handles:
+            handles = list(self._worker_handles)
+            self._worker_handles.clear()
+            for handle in handles:
+                handle.cancel()
+            for handle in handles:
+                try:
+                    handle.result(timeout=0)
+                except Exception:
+                    continue
         for task in self._tasks:
             task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
 
     def _schedule(self, coro) -> None:
+        if self._worker is not None:
+            self._worker.submit(coro, name="kasmina-prefetch-publish")
+            return
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            if self._worker is not None:
-                self._worker.submit(coro)
-            else:
-                asyncio.run(coro)
+            asyncio.run(coro)
         else:
             loop.create_task(coro)
 
@@ -119,6 +138,23 @@ class KasminaPrefetchCoordinator:
                     return RuntimeError("Kasmina prefetch task exited unexpectedly")
                 continue
             return exception
+        for handle in self._worker_handles:
+            if not handle.done():
+                continue
+            try:
+                result = handle.result(timeout=0)
+            except asyncio.CancelledError:
+                if self._running:
+                    return RuntimeError("Kasmina prefetch worker cancelled unexpectedly")
+                continue
+            except Exception as exc:
+                return exc
+            else:
+                if self._running:
+                    return RuntimeError(
+                        f"Kasmina prefetch worker '{handle.name}' exited unexpectedly"
+                    )
+                continue
         return None
 
 

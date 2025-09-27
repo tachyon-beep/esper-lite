@@ -80,7 +80,8 @@
 - **Standardisation actions**:
   1. Consume the proposed `DecisionMetadata`/`SeedOperation` fields instead of parsing arbitrary maps; implement strict schema validation and reject commands lacking the structured payload.
   2. When `TelemetryPacket.priority` exists, emit priority via the dedicated field and reserve `indicators` for human-readable summaries (e.g., seed id, lifecycle stage).
-3. Update kernel prefetch to require typed identifiers (`training_run_id`, `seed_id`) and remove the fallback strings once dependency guard is in place. ✅
+  3. Update kernel prefetch to require typed identifiers (`training_run_id`, `seed_id`) and remove the fallback strings once dependency guard is in place. ✅
+  4. Expose explicit registry APIs: `SeedParameterRegistry.reset()` clears state, `KasminaSeedManager.reset_teacher()` releases teacher models/memory, and both helpers must flush the nonce ledger before accepting new commands to avoid replay deadlocks after administrative resets.
 
   _Annotation usage mapping_
   - Blend configuration: `blend_mode`, `blend_mode_source`, `alpha_vec`, `gate_k`, `gate_tau`, `alpha_lo`, `alpha_hi` → feed `_apply_blend_annotations` and populate `SeedContext.blend_config` (`src/esper/kasmina/seed_manager.py:1524-1584`).
@@ -413,6 +414,20 @@ Helpers will emit structured telemetry for migration telemetry (e.g., `telemetry
 ## Telemetry Schema
 - Document common metrics/events: timeout, gate failure, blend telemetry, command rejection.
 - Provide helper to attach coverage map/types, command verification results, fallback flags.
+- **Command verifier routing**: Kasmina (and any consumer of the shared verifier) MUST emit `TelemetryEvent(description="command_rejected")` with `TelemetryLevel.CRITICAL` whenever `reason` is one of `{missing_signature, invalid_signature, nonce_replayed, missing_timestamp, stale_command}`. Less severe reasons (e.g., `verifier_unavailable`) stay at `TelemetryLevel.ERROR`. The finaliser must set `system_health.indicators["priority"]` (or the future `TelemetryPacket.priority` field) to `MESSAGE_PRIORITY_CRITICAL` so Weatherlight/Oona route failures to the emergency stream.
+- **Verifier metrics**: publish `kasmina.command_verifier.rejections_total{reason="..."}`, `kasmina.command_verifier.accepted_total`, and `kasmina.command_verifier.validation_latency_ms`. Nonce lifecycle is surfaced via gauges/counters `kasmina.nonce_ledger.size`, `kasmina.nonce_ledger.evictions_total`, and `kasmina.nonce_ledger.ttl_seconds` (constant but exported for runbook parity). Metrics live under the shared telemetry helper to keep naming aligned across subsystems once Tamiyo adopts structured `CommandSecurity` fields.
+- **Prefetch metrics**: introduce `kasmina.prefetch.requests_total{status="scheduled|ready|error|canceled"}`, `kasmina.prefetch.inflight`, and `kasmina.prefetch.latency_ms` (time from request → ready/error). Emit telemetry events on cancellation/escalation: `prefetch_canceled` (WARNING), `prefetch_timeout` (CRITICAL), and enrich existing `prefetch_ready`/`prefetch_error` packets with latency + queue depth attributes.
+
+## Nonce Ledger Strategy
+- Ledger TTL defaults to 300 seconds; expose it through configuration and telemetry. Services must invoke a cleanup sweep at least once per control-loop iteration (Kasmina via `finalize_step`, Tamiyo via evaluation loop) to prevent unbounded growth during idle periods.
+- Maintain a hard cap (default 10,000 entries). When the cap is exceeded, evict the oldest entries and emit a `TelemetryEvent(description="nonce_ledger_truncated", level=TelemetryLevel.WARNING, attributes={"size": str(size)})` alongside incrementing `kasmina.nonce_ledger.evictions_total`.
+- Registry resets or teacher swaps must clear the ledger to avoid blocking replays after administrative actions; provide explicit hooks rather than relying on process restarts.
+
+## Prefetch & Cache Reliability Plan
+- **Async execution**: Prefetch publishing and result consumers should run on the shared `AsyncWorker` so shutdown is deterministic. Coordinators must expose `start()`/`close()` hooks that submit/await worker tasks, and `KasminaSeedManager.finalize_step` should poll for task failures via `poll_task_issue()`.
+- **Cancellation policy**: Track per-request deadlines (based on Tamiyo/Kasmina latency budget) and cancel inflight tasks when exceeded. Emit `prefetch_timeout` (CRITICAL) with attributes `{seed_id, blueprint_id, request_id}` and increment `kasmina.prefetch.requests_total{status="canceled"}`.
+- **Cache locking**: Introduce a lightweight lock (per blueprint) around GPU cache attach/evict to prevent concurrent writes. Lock contention should surface via `kasmina.cache.lock_wait_ms` and a WARNING `cache_lock_contention` event if wait exceeds 100 ms.
+- **Shutdown hygiene**: On `reset_registry`, `reset_teacher_model`, or service shutdown, cancel outstanding prefetch requests, evict cache entries, and emit a single INFO `prefetch_cleanup` event summarising counts removed. Coordinators must join worker tasks within the AsyncWorker timeout to avoid test hangs.
 
 ## Timeline & Integration
 1. Finalise Async Worker & Config schema (before WP-T2).

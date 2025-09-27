@@ -9,9 +9,11 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import threading
 import time
+from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Callable, Iterable, Protocol
+from typing import Callable, Iterable, Iterator, Protocol
 
 import torch
 from google.protobuf import struct_pb2
@@ -50,6 +52,23 @@ logger = logging.getLogger(__name__)
 
 MAX_PENDING_EVENTS = 64
 MAX_CHANNEL_ALPHA_VEC = 64
+
+
+_CRITICAL_VERIFIER_REASONS = {
+    "missing_signature",
+    "invalid_signature",
+    "nonce_replayed",
+    "missing_timestamp",
+    "stale_command",
+}
+
+
+@dataclass(slots=True)
+class _PrefetchRequest:
+    seed_id: str
+    blueprint_id: str
+    training_run_id: str
+    issued_at: float
 
 
 _MATMUL_INITIALISED = False
@@ -354,6 +373,7 @@ class KasminaSeedManager:
         embargo_seconds: float = DEFAULT_EMBARGO_SECONDS,
         signing_context: SignatureContext | None = None,
         nonce_ttl_seconds: float = 300.0,
+        nonce_max_entries: int | None = 10_000,
         freshness_window_seconds: float = 60.0,
         gpu_cache_capacity: int | None = 32,
         packet_callback: Callable[[pb.TelemetryPacket], None] | None = None,
@@ -390,7 +410,21 @@ class KasminaSeedManager:
         self._alpha_schedule = AlphaSchedule(total_steps=20, temperature=2.0)
         self._registry = SeedParameterRegistry()
         self._memory = KasminaMemoryManager()
-        self._nonce_ledger = NonceLedger(ttl_seconds=nonce_ttl_seconds, clock=self._clock)
+        self._nonce_max_entries = nonce_max_entries if nonce_max_entries and nonce_max_entries > 0 else None
+        self._nonce_ledger = NonceLedger(
+            ttl_seconds=nonce_ttl_seconds,
+            max_entries=self._nonce_max_entries,
+            clock=self._clock,
+        )
+        self._command_verifier_accept_total = 0
+        self._command_verifier_reject_totals: dict[str, int] = defaultdict(int)
+        self._command_verifier_last_latency_ms: float = 0.0
+        self._prefetch_timeout_ms = max(latency_budget_ms * 2.0, 1_000.0)
+        self._prefetch_counters: dict[str, int] = defaultdict(int)
+        self._prefetch_latency_sum_ms: float = 0.0
+        self._prefetch_latency_samples: int = 0
+        self._prefetch_last_latency_ms: float = 0.0
+        self._prefetch_inflight: int = 0
         self._rollback_records: dict[str, struct_pb2.Struct] = {}
         self._last_rollback_latency_ms: float = 0.0
         self._last_prewarm_latency_ms: float = 0.0
@@ -404,7 +438,10 @@ class KasminaSeedManager:
             else None
         )
         self._prefetch: PrefetchCoordinator | None = None
-        self._prefetch_requests: dict[str, tuple[str, str]] = {}
+        self._prefetch_requests: dict[str, _PrefetchRequest] = {}
+        self._cache_locks: dict[str, threading.Lock] = {}
+        self._cache_lock_wait_threshold_ms: float = 100.0
+        self._cache_last_lock_wait_ms: float = 0.0
         self._packet_callback = packet_callback
         if signing_context is None:
             try:
@@ -444,6 +481,20 @@ class KasminaSeedManager:
                     return candidate
                 priority = candidate
         return priority
+
+    @contextlib.contextmanager
+    def _cache_lock(self, blueprint_id: str | None) -> Iterator[float]:
+        if not blueprint_id:
+            yield 0.0
+            return
+        lock = self._cache_locks.setdefault(blueprint_id, threading.Lock())
+        start = self._clock()
+        lock.acquire()
+        wait_ms = (self._clock() - start) * 1000.0
+        try:
+            yield wait_ms
+        finally:
+            lock.release()
 
     def _emit_packet(self, packet: pb.TelemetryPacket, *, priority: int | None = None) -> None:
         self._memory.telemetry_cache.set(packet.packet_id, packet)
@@ -622,6 +673,8 @@ class KasminaSeedManager:
     def finalize_step(self, *, step_index: int | None = None) -> None:
         """Flush queued telemetry into per-seed packets for the given step."""
 
+        self._nonce_ledger.maintenance()
+        self._expire_stale_prefetches()
         self._flush_seed_packets(step_index)
         self._flush_global_packets(step_index)
 
@@ -911,6 +964,7 @@ class KasminaSeedManager:
         return packet, priority
 
     def _global_metrics_snapshot(self) -> list[TelemetryMetric]:
+        snapshot = self._nonce_ledger.snapshot()
         metrics: list[TelemetryMetric] = [
             TelemetryMetric(
                 "kasmina.seeds.active",
@@ -923,6 +977,93 @@ class KasminaSeedManager:
                 unit="count",
             ),
         ]
+        metrics.append(
+            TelemetryMetric(
+                "kasmina.command_verifier.accepted_total",
+                float(self._command_verifier_accept_total),
+                unit="count",
+            )
+        )
+        for reason, count in self._command_verifier_reject_totals.items():
+            metrics.append(
+                TelemetryMetric(
+                    "kasmina.command_verifier.rejections_total",
+                    float(count),
+                    unit="count",
+                    attributes={"reason": reason},
+                )
+            )
+        if self._command_verifier_last_latency_ms > 0.0:
+            metrics.append(
+                TelemetryMetric(
+                    "kasmina.command_verifier.validation_latency_ms",
+                    self._command_verifier_last_latency_ms,
+                    unit="ms",
+                )
+            )
+        metrics.append(
+            TelemetryMetric(
+                "kasmina.nonce_ledger.size",
+                float(snapshot.size),
+                unit="count",
+            )
+        )
+        metrics.append(
+            TelemetryMetric(
+                "kasmina.nonce_ledger.evictions_total",
+                float(snapshot.evictions_total),
+                unit="count",
+            )
+        )
+        metrics.append(
+            TelemetryMetric(
+                "kasmina.nonce_ledger.ttl_seconds",
+                float(snapshot.ttl_seconds),
+                unit="seconds",
+            )
+        )
+        metrics.append(
+            TelemetryMetric(
+                "kasmina.prefetch.inflight",
+                float(self._prefetch_inflight),
+                unit="count",
+            )
+        )
+        for status, count in self._prefetch_counters.items():
+            metrics.append(
+                TelemetryMetric(
+                    "kasmina.prefetch.requests_total",
+                    float(count),
+                    unit="count",
+                    attributes={"status": status},
+                )
+            )
+        if self._prefetch_latency_samples:
+            avg_prefetch_latency = self._prefetch_latency_sum_ms / self._prefetch_latency_samples
+        else:
+            avg_prefetch_latency = 0.0
+        metrics.append(
+            TelemetryMetric(
+                "kasmina.prefetch.latency_ms",
+                avg_prefetch_latency,
+                unit="ms",
+            )
+        )
+        if self._prefetch_last_latency_ms:
+            metrics.append(
+                TelemetryMetric(
+                    "kasmina.prefetch.last_latency_ms",
+                    self._prefetch_last_latency_ms,
+                    unit="ms",
+                )
+            )
+        metrics.append(
+            TelemetryMetric(
+                "kasmina.cache.lock_wait_ms",
+                self._cache_last_lock_wait_ms,
+                unit="ms",
+            )
+        )
         if self._last_prewarm_latency_ms:
             metrics.append(
                 TelemetryMetric(
@@ -1550,21 +1691,34 @@ class KasminaSeedManager:
                 if breaker_event:
                     events.append(self._breaker_event_to_telemetry(context.seed_id, breaker_event))
 
-        try:
-            self._attach_kernel(seed_id, kernel)
-        except ValueError as exc:
-            failure = GateResult(
-                gate=pb.SEED_GATE_G1_GRADIENT_HEALTH,
-                passed=False,
-                reason=str(exc),
-                attributes={"error": "registry_conflict"},
-            )
-            self._handle_gate_failure(context, failure, events)
-            return events
-        context.kernel_attached = True
+        with self._cache_lock(blueprint_id) as wait_ms:
+            self._cache_last_lock_wait_ms = wait_ms
+            if wait_ms > self._cache_lock_wait_threshold_ms:
+                events.append(
+                    TelemetryEvent(
+                        description="cache_lock_contention",
+                        level=pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                        attributes={
+                            "blueprint_id": blueprint_id,
+                            "wait_ms": f"{wait_ms:.3f}",
+                        },
+                    )
+                )
+            try:
+                self._attach_kernel(seed_id, kernel)
+            except ValueError as exc:
+                failure = GateResult(
+                    gate=pb.SEED_GATE_G1_GRADIENT_HEALTH,
+                    passed=False,
+                    reason=str(exc),
+                    attributes={"error": "registry_conflict"},
+                )
+                self._handle_gate_failure(context, failure, events)
+                return events
+            context.kernel_attached = True
 
-        if not cache_hit and self._gpu_cache is not None and kernel is not None:
-            self._gpu_cache.set(blueprint_id, kernel)
+            if not cache_hit and self._gpu_cache is not None and kernel is not None:
+                self._gpu_cache.set(blueprint_id, kernel)
 
         self._finalise_kernel_attachment(context, events)
         return events
@@ -1609,9 +1763,23 @@ class KasminaSeedManager:
             blueprint_id = context.metadata.get("blueprint_id")
             if blueprint_id:
                 self._gpu_cache.delete(blueprint_id)
-        for request_id, (tracked_seed, _) in list(self._prefetch_requests.items()):
-            if tracked_seed == seed_id:
+        for request_id, request in list(self._prefetch_requests.items()):
+            if request.seed_id == seed_id:
                 self._prefetch_requests.pop(request_id, None)
+                self._prefetch_inflight = max(0, self._prefetch_inflight - 1)
+                self._prefetch_counters["canceled"] += 1
+                events.append(
+                    TelemetryEvent(
+                        description="prefetch_canceled",
+                        level=pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                        attributes={
+                            "seed_id": seed_id,
+                            "blueprint_id": request.blueprint_id,
+                            "request_id": request_id,
+                            "reason": "seed_retired",
+                        },
+                    )
+                )
         self._record_rollback(seed_id, context, reason="retired")
         events.append(
             TelemetryEvent(
@@ -1895,6 +2063,7 @@ class KasminaSeedManager:
 
     def _verify_command(self, command: pb.AdaptationCommand, events: list[TelemetryEvent]) -> bool:
         if self._command_verifier is None:
+            self._command_verifier_reject_totals["verifier_unavailable"] += 1
             events.append(
                 TelemetryEvent(
                     description="command_rejected",
@@ -1908,19 +2077,42 @@ class KasminaSeedManager:
         if signature:
             # Temporarily remove the signature while verifying so the payload matches.
             del command.annotations["signature"]
+        start = time.perf_counter()
         result = self._command_verifier.verify(command, signature)
+        self._command_verifier_last_latency_ms = (time.perf_counter() - start) * 1000.0
+        truncations = self._nonce_ledger.pop_recent_truncation()
         if signature:
             command.annotations["signature"] = signature
+        if truncations:
+            snapshot = self._nonce_ledger.snapshot()
+            events.append(
+                TelemetryEvent(
+                    description="nonce_ledger_truncated",
+                    level=pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={
+                        "removed": str(truncations),
+                        "size": str(snapshot.size),
+                    },
+                )
+            )
         if result.accepted:
+            self._command_verifier_accept_total += 1
             return True
 
+        reason = result.reason or "unknown"
+        self._command_verifier_reject_totals[reason] += 1
+        level = (
+            pb.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL
+            if reason in _CRITICAL_VERIFIER_REASONS
+            else pb.TelemetryLevel.TELEMETRY_LEVEL_ERROR
+        )
         events.append(
             TelemetryEvent(
                 description="command_rejected",
-                level=pb.TelemetryLevel.TELEMETRY_LEVEL_ERROR,
+                level=level,
                 attributes={
-                    "reason": result.reason,
-                    "command_id": command.command_id,
+                    "reason": reason,
+                    "command_id": command.command_id or "",
                 },
             )
         )
@@ -1945,13 +2137,88 @@ class KasminaSeedManager:
             blueprint_id,
             training_run_id=training_run_id,
         )
-        self._prefetch_requests[request_id] = (context.seed_id, blueprint_id)
+        self._prefetch_requests[request_id] = _PrefetchRequest(
+            seed_id=context.seed_id,
+            blueprint_id=blueprint_id,
+            training_run_id=training_run_id,
+            issued_at=self._clock(),
+        )
+        self._prefetch_counters["scheduled"] += 1
+        self._prefetch_inflight += 1
+        context.metadata.setdefault("blueprint_id", blueprint_id)
+        context.metadata["training_run_id"] = training_run_id
         context.metadata["prefetch_request_id"] = request_id
         context.metadata["pending_kernel"] = "true"
         return request_id
 
     def set_prefetch(self, coordinator: PrefetchCoordinator) -> None:
         self._prefetch = coordinator
+
+    def _expire_stale_prefetches(self) -> None:
+        if not self._prefetch_requests:
+            return
+        timeout_s = self._prefetch_timeout_ms / 1000.0
+        now = self._clock()
+        for request_id, request in list(self._prefetch_requests.items()):
+            if now - request.issued_at < timeout_s:
+                continue
+            self._prefetch_requests.pop(request_id, None)
+            self._prefetch_inflight = max(0, self._prefetch_inflight - 1)
+            self._prefetch_counters["timeout"] += 1
+            latency_ms = (now - request.issued_at) * 1000.0
+            self._prefetch_latency_sum_ms += latency_ms
+            self._prefetch_latency_samples += 1
+            self._prefetch_last_latency_ms = latency_ms
+            context = self._seeds.get(request.seed_id)
+            if context:
+                context.metadata["pending_kernel"] = "false"
+                context.metadata.pop("prefetch_request_id", None)
+            attributes = {
+                "seed_id": request.seed_id,
+                "blueprint_id": request.blueprint_id,
+                "request_id": request_id,
+                "training_run_id": request.training_run_id,
+                "latency_ms": f"{latency_ms:.3f}",
+            }
+            event = TelemetryEvent(
+                description="prefetch_timeout",
+                level=pb.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
+                attributes=attributes,
+            )
+            if context:
+                failure = GateResult(
+                    gate=pb.SEED_GATE_G1_GRADIENT_HEALTH,
+                    passed=False,
+                    reason="prefetch_timeout",
+                    attributes={"blueprint_id": request.blueprint_id},
+                )
+                events = [event]
+                self._handle_gate_failure(context, failure, events)
+                self._queue_seed_events(request.seed_id, events)
+            else:
+                self._queue_global_events([event])
+
+    def _cancel_all_prefetches(self, *, reason: str) -> list[TelemetryEvent]:
+        if not self._prefetch_requests:
+            return []
+        events: list[TelemetryEvent] = []
+        for request_id, request in list(self._prefetch_requests.items()):
+            self._prefetch_requests.pop(request_id, None)
+            self._prefetch_inflight = max(0, self._prefetch_inflight - 1)
+            self._prefetch_counters["canceled"] += 1
+            events.append(
+                TelemetryEvent(
+                    description="prefetch_canceled",
+                    level=pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                    attributes={
+                        "seed_id": request.seed_id,
+                        "blueprint_id": request.blueprint_id,
+                        "request_id": request_id,
+                        "reason": reason,
+                    },
+                )
+            )
+        return events
 
     # Internal helper for tests and prototyping until Tamiyo P8 lands.
     def _set_blend_config_for_test(self, seed_id: str, config: BlenderConfig) -> None:
@@ -2037,21 +2304,32 @@ class KasminaSeedManager:
         entry = self._prefetch_requests.pop(ready.request_id, None)
         if not entry:
             return
-        seed_id, blueprint_id = entry
+        self._prefetch_inflight = max(0, self._prefetch_inflight - 1)
+        self._prefetch_counters["ready"] += 1
+        seed_id = entry.seed_id
+        blueprint_id = entry.blueprint_id
+        latency_ms = (self._clock() - entry.issued_at) * 1000.0
+        self._prefetch_latency_sum_ms += latency_ms
+        self._prefetch_latency_samples += 1
+        self._prefetch_last_latency_ms = latency_ms
         context = self._seeds.get(seed_id)
         if not context:
             return
         events: list[TelemetryEvent] = [
             TelemetryEvent(
                 description="prefetch_ready",
+                level=pb.TelemetryLevel.TELEMETRY_LEVEL_INFO,
                 attributes={
                     "seed_id": seed_id,
                     "blueprint_id": blueprint_id,
                     "request_id": ready.request_id,
+                    "latency_ms": f"{latency_ms:.3f}",
+                    "training_run_id": entry.training_run_id,
                 },
             )
         ]
         context.metadata["pending_kernel"] = "false"
+        context.metadata.pop("prefetch_request_id", None)
         try:
             kernel, _ = self._runtime.fetch_kernel(blueprint_id)
         except Exception as exc:  # pragma: no cover - defensive guard
@@ -2067,7 +2345,20 @@ class KasminaSeedManager:
             )
             self._queue_seed_events(seed_id, events)
             return
-        self._attach_kernel(seed_id, kernel)
+        with self._cache_lock(blueprint_id) as wait_ms:
+            self._cache_last_lock_wait_ms = wait_ms
+            if wait_ms > self._cache_lock_wait_threshold_ms:
+                events.append(
+                    TelemetryEvent(
+                        description="cache_lock_contention",
+                        level=pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                        attributes={
+                            "blueprint_id": blueprint_id,
+                            "wait_ms": f"{wait_ms:.3f}",
+                        },
+                    )
+                )
+            self._attach_kernel(seed_id, kernel)
         context.kernel_attached = True
         self._finalise_kernel_attachment(context, events)
         self._queue_seed_events(seed_id, events)
@@ -2076,11 +2367,19 @@ class KasminaSeedManager:
         entry = self._prefetch_requests.pop(error.request_id, None)
         if not entry:
             return
-        seed_id, blueprint_id = entry
+        self._prefetch_inflight = max(0, self._prefetch_inflight - 1)
+        self._prefetch_counters["error"] += 1
+        seed_id = entry.seed_id
+        blueprint_id = entry.blueprint_id
+        latency_ms = (self._clock() - entry.issued_at) * 1000.0
+        self._prefetch_latency_sum_ms += latency_ms
+        self._prefetch_latency_samples += 1
+        self._prefetch_last_latency_ms = latency_ms
         context = self._seeds.get(seed_id)
         if not context:
             return
         context.metadata["pending_kernel"] = "false"
+        context.metadata.pop("prefetch_request_id", None)
         failure = GateResult(
             gate=pb.SEED_GATE_G1_GRADIENT_HEALTH,
             passed=False,
@@ -2095,6 +2394,8 @@ class KasminaSeedManager:
                     "seed_id": seed_id,
                     "blueprint_id": blueprint_id,
                     "reason": error.reason,
+                    "request_id": error.request_id,
+                    "latency_ms": f"{latency_ms:.3f}",
                 },
             )
         ]
@@ -2132,6 +2433,46 @@ class KasminaSeedManager:
                 )
             ]
         )
+
+    def reset_teacher_model(self) -> None:
+        """Remove the registered teacher model and clear related state."""
+
+        self._registry.deregister_teacher()
+        self._teacher_model = None
+        self._teacher_memory_estimate_gb = None
+        self._nonce_ledger.clear()
+        cancel_events = self._cancel_all_prefetches(reason="teacher_reset")
+        if self._gpu_cache is not None:
+            self._gpu_cache.delete("teacher")
+        self._memory.kernel_cache.delete("teacher")
+        events = cancel_events + [
+            TelemetryEvent(
+                description="teacher_deregistered",
+                level=pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+            )
+        ]
+        self._queue_global_events(events)
+
+    def reset_registry(self) -> None:
+        """Administrative reset covering seed registry and nonce state."""
+
+        self._registry.reset()
+        self._nonce_ledger.clear()
+        self._seeds.clear()
+        self._ephemeral_seeds.clear()
+        cancel_events = self._cancel_all_prefetches(reason="registry_reset")
+        self._rollback_records.clear()
+        self._isolation_sessions.clear()
+        self._command_verifier_reject_totals.clear()
+        self._command_verifier_accept_total = 0
+        self._command_verifier_last_latency_ms = 0.0
+        events = cancel_events + [
+            TelemetryEvent(
+                description="registry_reset",
+                level=pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+            )
+        ]
+        self._queue_global_events(events)
 
     def _estimate_model_memory_gb(self, model: nn.Module) -> float:
         total_bytes = 0
@@ -2209,10 +2550,26 @@ class KasminaSeedManager:
                     },
                 ) from exc
         if kernel is not None:
-            self._attach_kernel(seed_id, kernel)
-            context.kernel_attached = True
-            if self._gpu_cache is not None and blueprint_id and not cache_hit:
-                self._gpu_cache.set(blueprint_id, kernel)
+            with self._cache_lock(blueprint_id) as wait_ms:
+                self._cache_last_lock_wait_ms = wait_ms
+                if (
+                    wait_ms > self._cache_lock_wait_threshold_ms
+                    and blueprint_id is not None
+                ):
+                    events.append(
+                        TelemetryEvent(
+                            description="cache_lock_contention",
+                            level=pb.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
+                            attributes={
+                                "blueprint_id": blueprint_id,
+                                "wait_ms": f"{wait_ms:.3f}",
+                            },
+                        )
+                    )
+                self._attach_kernel(seed_id, kernel)
+                context.kernel_attached = True
+                if self._gpu_cache is not None and blueprint_id and not cache_hit:
+                    self._gpu_cache.set(blueprint_id, kernel)
         events.append(
             TelemetryEvent(
                 description="seed_resumed",

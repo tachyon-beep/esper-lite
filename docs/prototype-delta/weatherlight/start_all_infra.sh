@@ -79,7 +79,8 @@ for i in {1..30}; do
     fi
   else
     # Best-effort healthcheck against local default port
-    if docker exec "$(docker ps --format '{{.Names}}' | grep -E '^.+_redis_1$' | head -n1)" redis-cli ping >/dev/null 2>&1; then
+    container="$(docker ps --format '{{.Names}}' | grep -E '(-|_)redis(-|_)1$' | head -n1)"
+    if [[ -n "$container" ]] && docker exec "$container" redis-cli ping >/dev/null 2>&1; then
       log "Redis is up (docker exec)"; break
     fi
   fi
@@ -94,20 +95,16 @@ WEATHERLIGHT_CMD=(esper-weatherlight-service)
 NISSA_CMD=(esper-nissa-service)
 
 log "Starting Weatherlight supervisor: ${WEATHERLIGHT_CMD[*]}"
-(
-  cd "$ROOT_DIR" || exit 1
-  # Prefer existing venv if active; otherwise, assume environment is prepared
-  stdbuf -oL -eL "${WEATHERLIGHT_CMD[@]}" \
-    > var/log/weatherlight.out.log 2> var/log/weatherlight.err.log & echo $! > var/log/weatherlight.pid
-) || die "Failed to start Weatherlight"
+cd "$ROOT_DIR" || die "Missing repository root"
+stdbuf -oL -eL "${WEATHERLIGHT_CMD[@]}" \
+  > var/log/weatherlight.out.log 2> var/log/weatherlight.err.log &
+echo $! > var/log/weatherlight.pid
 
 if (( RUN_NISSA == 1 )); then
   log "Starting Nissa service: ${NISSA_CMD[*]}"
-  (
-    cd "$ROOT_DIR" || exit 1
-    stdbuf -oL -eL "${NISSA_CMD[@]}" \
-      > var/log/nissa.out.log 2> var/log/nissa.err.log & echo $! > var/log/nissa.pid
-  ) || die "Failed to start Nissa"
+  stdbuf -oL -eL "${NISSA_CMD[@]}" \
+    > var/log/nissa.out.log 2> var/log/nissa.err.log &
+  echo $! > var/log/nissa.pid
 else
   log "Skipping Nissa (per --no-nissa)"
 fi
@@ -139,6 +136,5 @@ trap cleanup INT TERM
 log "Weatherlight and Nissa started. Logs: var/log/*.out.log (stderr in *.err.log)"
 log "Press Ctrl-C to stop."
 
-# Wait on child processes
-weatherlight_pid="$(cat var/log/weatherlight.pid)"
-wait "$weatherlight_pid"
+# Background supervisor (tail the pid file so this script stays running)
+tail --pid="$(cat var/log/weatherlight.pid)" -f /dev/null
