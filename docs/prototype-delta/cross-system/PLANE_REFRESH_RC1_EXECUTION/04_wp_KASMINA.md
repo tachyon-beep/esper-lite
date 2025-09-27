@@ -63,7 +63,7 @@ Risks:
 - Registry reset may affect existing seeds; plan migration.
 
 Status:
-- 🚧 In Progress — Command verifier telemetry now emits CRITICAL `command_rejected` events, verifier counters/latency metrics ship with Kasmina packets, nonce ledger cleanup exposes size/evictions, and administrative resets clear registry + ledger state. Remaining items: nonce TTL tuning hooks, registry observability, and prefetch/cache reliability (WP-K4).
+- ✅ Completed 2025-09-28 — Command verifier telemetry emits CRITICAL `command_rejected` events with metrics, nonce ledger cleanup/counters are exposed (TTL/evictions), administrative resets clear registry + ledger state, and Kasmina telemetry/tests cover failure/success paths. Prefetch/cache reliability continues under WP-K4.
 
 ### WP-K4 — Prefetch & Cache Reliability
 Tasks:
@@ -79,7 +79,7 @@ Risks:
 - Additional locks may impact throughput; benchmark.
 
 Status:
-- ⏳ Not started — Prefetch/cache reliability slated for later RC1 slices; strict dependency guard covers training IDs for now.
+- 🚧 In Progress — Shared async worker integration, timeout/telemetry metrics, cache locking, and administrative resets implemented. Remaining actions: finalize observability/benchmark documentation and incorporate the integration test slice into the validation plan.
 
 ## Testing
 - Unit: `pytest tests/kasmina` (seed manager, blending, dispatcher, prewarm suites), `radon cc -s src/esper/kasmina/seed_manager.py` (complexity snapshot).

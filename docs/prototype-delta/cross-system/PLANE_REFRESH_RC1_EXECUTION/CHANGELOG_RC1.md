@@ -95,4 +95,14 @@
   - Unit: `/home/john/esper-lite/.venv/bin/pytest tests/kasmina --disable-warnings`
   - Integration: `/home/john/esper-lite/.venv/bin/pytest tests/integration/test_control_loop.py::test_kasmina_emits_one_packet_per_seed_per_step --disable-warnings`
 - **Telemetry Verification**: `tests/kasmina/test_seed_manager.py::test_nonce_replay_emits_critical_and_metrics` (latency + counters), `::test_nonce_ledger_truncation_emits_warning` (inflight + truncations), and new prefetch tests assert `prefetch_timeout`, `prefetch_canceled`, and cache lock contention behaviour. Average and last-latency gauges now appear in Kasmina global packets.
-- **Notes**: Outstanding follow-up: benchmark prefetch throughput under contention and integrate metrics into observability runbooks. WP-K4 remains open for performance validation but functional reliability changes are in place.
+- **Notes**: Outstanding follow-up: benchmark prefetch throughput under contention and integrate metrics into observability runbooks. WP-K4 remains open for performance validation but functional reliability changes (async worker clients, telemetry, locking) are in place.
+
+## 2025-09-28 — Tolaria WP-T1/T2 Aggregation & Emergency Hardening
+- **Summary**: Completed WP-T1 gradient aggregation fixes (pairwise PCGrad, weighted broadcast safeguards) with new unit coverage, and advanced WP-T2 through timeout telemetry and emergency dispatch hardening. Tolaria now sources shared async worker settings from `EsperSettings`, emits `tolaria.timeout.*` and emergency metrics, and Weatherlight honours the same configuration knobs.
+- **Tests Run**:
+  - Unit: `pytest tests/tolaria/test_aggregation.py`
+  - Unit: `pytest tests/tolaria/test_tolaria_trainer.py::test_tolaria_timeout_metrics_incremented`
+  - Unit: `pytest tests/tolaria/test_tolaria_trainer.py::test_tolaria_emergency_dispatch_success tests/tolaria/test_tolaria_trainer.py::test_tolaria_emergency_dispatch_failure`
+  - Integration: `pytest tests/tolaria/test_aggregation_attribution.py`
+- **Telemetry Verification**: Timeout counters/latencies appear in telemetry packets; emergency dispatch metrics log successful publishes and CRITICAL failures with error context. Fixture parity tests assert the new metrics are a superset of the recorded baseline.
+- **Notes**: Async worker defaults now include `ASYNC_WORKER_MAX_CONCURRENCY`, `ASYNC_WORKER_SHUTDOWN_TIMEOUT_S`, and optional Tolaria overrides; emergency controller resets after successful epochs. Remaining WP-T2 work covers telemetry summaries in observability docs and rollback/emergency integration tests.

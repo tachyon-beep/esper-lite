@@ -48,6 +48,20 @@ class EsperSettings(BaseSettings):
     leyline_schema_dir: str = Field(alias="LEYLINE_SCHEMA_DIR", default="./contracts/leyline")
     leyline_namespace: str = Field(alias="LEYLINE_DEFAULT_NAMESPACE", default="esper.leyline.v1")
 
+    # Shared async worker defaults
+    async_worker_max_concurrency: int = Field(
+        alias="ASYNC_WORKER_MAX_CONCURRENCY", default=8
+    )
+    async_worker_shutdown_timeout_s: float = Field(
+        alias="ASYNC_WORKER_SHUTDOWN_TIMEOUT_S", default=5.0
+    )
+    tolaria_async_worker_max_concurrency: int | None = Field(
+        alias="TOLARIA_ASYNC_WORKER_MAX_CONCURRENCY", default=None
+    )
+    tolaria_async_worker_shutdown_timeout_s: float | None = Field(
+        alias="TOLARIA_ASYNC_WORKER_SHUTDOWN_TIMEOUT_S", default=None
+    )
+
     tamiyo_policy_dir: str = Field(alias="TAMIYO_POLICY_DIR", default="./var/tamiyo/policies")
     tamiyo_conservative_mode: bool = Field(alias="TAMIYO_CONSERVATIVE_MODE", default=False)
     tamiyo_field_report_retention_hours: int = Field(
@@ -123,6 +137,9 @@ class EsperSettings(BaseSettings):
     )
     tolaria_emergency_signal_name: str | None = Field(
         alias="TOLARIA_EMERGENCY_SIGNAL_NAME", default=None
+    )
+    tolaria_emergency_dispatch_timeout_s: float = Field(
+        alias="TOLARIA_EMERGENCY_DISPATCH_TIMEOUT_S", default=2.0
     )
 
     # Multi-seed aggregation

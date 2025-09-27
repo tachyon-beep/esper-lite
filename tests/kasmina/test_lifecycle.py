@@ -9,6 +9,8 @@ from torch import nn
 
 from esper.karn import BlueprintDescriptor, BlueprintTier, KarnCatalog
 from esper.core import DependencyViolationError
+import asyncio
+
 from esper.kasmina import KasminaLifecycle, KasminaPrefetchCoordinator, KasminaSeedManager, SeedContext
 from esper.leyline import leyline_pb2
 from esper.security.signing import SignatureContext, sign
@@ -188,6 +190,58 @@ def test_prefetch_coordinator_requires_training_run_id() -> None:
     assert manager.events == []  # scheduler shouldn't run in synchronous path
 
 
+def test_prefetch_coordinator_worker_spawns_clients(monkeypatch) -> None:
+    manager = _ManagerStub()
+    oona = _SpawnableOonaStub()
+    worker = _WorkerStub()
+    coordinator = KasminaPrefetchCoordinator(manager, oona, async_worker=worker)
+
+    coordinator.start()
+    assert len(worker.calls) == 2
+
+    async def stub_ready(client):
+        assert isinstance(client, _SpawnedClientStub)
+        coordinator._running = False
+
+    async def stub_error(client):
+        assert isinstance(client, _SpawnedClientStub)
+        coordinator._running = False
+
+    coordinator._consume_ready = stub_ready  # type: ignore[assignment]
+    coordinator._consume_error = stub_error  # type: ignore[assignment]
+    coordinator._running = False
+
+    for func, args, kwargs, _handle in worker.calls:
+        asyncio.run(func(*args, **kwargs))
+
+    assert any("ready" in call for call in oona.spawn_calls)
+    assert any("error" in call for call in oona.spawn_calls)
+    asyncio.run(coordinator.close())
+
+
+def test_prefetch_coordinator_worker_publish_uses_spawn(monkeypatch) -> None:
+    manager = _ManagerStub()
+    oona = _SpawnableOonaStub()
+    worker = _WorkerStub()
+    coordinator = KasminaPrefetchCoordinator(manager, oona, async_worker=worker)
+    coordinator._running = True
+
+    coordinator.request_kernel(
+        "seed-1",
+        "bp-1",
+        training_run_id="run-1",
+    )
+
+    publish_calls = [call for call in worker.calls if call[0] == coordinator._publish_request_worker]
+    assert publish_calls, "publish worker not scheduled"
+
+    func, args, kwargs, _handle = publish_calls[0]
+    asyncio.run(func(*args, **kwargs))
+
+    assert any("publish" in call for call in oona.spawn_calls)
+    asyncio.run(coordinator.close())
+
+
 _SIGNING_CONTEXT = SignatureContext(secret=b"kasmina-test-secret")
 
 
@@ -220,3 +274,84 @@ class _ManagerStub:
 class _OonaStub:
     async def publish_kernel_prefetch_request(self, _request):
         return None
+
+
+class _WorkerHandleStub:
+    def __init__(self, name: str = "stub") -> None:
+        self._name = name
+        self._cancelled = False
+        self._callbacks: list[callable] = []
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    def cancel(self) -> bool:
+        if self._cancelled:
+            return False
+        self._cancelled = True
+        for callback in list(self._callbacks):
+            callback(self)
+        return True
+
+    def result(self, timeout: float | None = None):
+        if self._cancelled:
+            raise asyncio.CancelledError
+        return None
+
+    def done(self) -> bool:
+        return self._cancelled
+
+    def add_done_callback(self, callback):
+        self._callbacks.append(callback)
+
+    def exception(self, timeout: float | None = None):  # pragma: no cover - stub
+        return None
+
+
+class _WorkerStub:
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+
+    def submit(self, func, *args, **kwargs):
+        name = kwargs.pop("name", "worker")
+        handle = _WorkerHandleStub(name)
+        self.calls.append((func, args, kwargs, handle))
+        return handle
+
+
+class _SpawnedClientStub:
+    def __init__(self, role: str, tracker: list[str]) -> None:
+        self.role = role
+        self.tracker = tracker
+        self.closed = False
+        self.published: list[leyline_pb2.KernelPrefetchRequest] = []
+
+    async def ensure_consumer_group(self) -> None:  # pragma: no cover - stub
+        return None
+
+    async def publish_kernel_prefetch_request(self, request: leyline_pb2.KernelPrefetchRequest) -> None:
+        self.tracker.append(f"publish:{self.role}")
+        self.published.append(request)
+
+    async def consume_kernel_ready(self, handler, *, block_ms: int = 0) -> None:
+        self.tracker.append(f"ready:{self.role}")
+
+    async def consume_kernel_errors(self, handler, *, block_ms: int = 0) -> None:
+        self.tracker.append(f"error:{self.role}")
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class _SpawnableOonaStub(_OonaStub):
+    def __init__(self) -> None:
+        self.spawn_calls: list[str] = []
+        self.children: list[_SpawnedClientStub] = []
+
+    def spawn(self, *, consumer_suffix: str | None = None) -> _SpawnedClientStub:
+        role = consumer_suffix or "spawn"
+        self.spawn_calls.append(role)
+        child = _SpawnedClientStub(role, self.spawn_calls)
+        self.children.append(child)
+        return child

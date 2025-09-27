@@ -1027,8 +1027,11 @@ class _EpochRunner:
             try:
                 command, tamiyo_latency_ms = trainer._invoke_tamiyo_step(step_state)
                 trainer._last_tamiyo_latency_ms = tamiyo_latency_ms
+                trainer._metrics["tolaria.timeout.tamiyo_last_ms"] = tamiyo_latency_ms
             except TimeoutError as exc:
                 local_failure = "tamiyo_timeout"
+                trainer._metrics["tolaria.timeout.tamiyo_total"] += 1.0
+                trainer._metrics["tolaria.timeout.tamiyo_last_ms"] = 0.0
                 trainer._emit_event(
                     "tolaria.tamiyo_timeout",
                     level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
@@ -1047,15 +1050,19 @@ class _EpochRunner:
                 command = trainer._build_conservative_command()
                 trainer._enter_conservative_mode(local_failure)
                 trainer._last_tamiyo_latency_ms = 0.0
+                trainer._metrics["tolaria.timeout.tamiyo_last_ms"] = 0.0
 
         apply_ms = 0.0
         try:
             t_apply = perf_counter()
             trainer._apply_kasmina_command(command)
             apply_ms = (perf_counter() - t_apply) * 1000.0
+            trainer._metrics["tolaria.timeout.kasmina_last_ms"] = apply_ms
         except TimeoutError as exc:
             reason = "kasmina_timeout"
             local_failure = local_failure or reason
+            trainer._metrics["tolaria.timeout.kasmina_total"] += 1.0
+            trainer._metrics["tolaria.timeout.kasmina_last_ms"] = 0.0
             trainer._emit_event(
                 "tolaria.kasmina_timeout",
                 level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
@@ -1065,6 +1072,7 @@ class _EpochRunner:
         except Exception as exc:  # pragma: no cover - defensive
             reason = "kasmina_error"
             local_failure = local_failure or reason
+            trainer._metrics["tolaria.timeout.kasmina_last_ms"] = 0.0
             trainer._emit_event(
                 "tolaria.kasmina_error",
                 level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING,
@@ -1426,9 +1434,24 @@ class TolariaTrainer:
         self._seed_agg_metrics: list[TelemetryMetric] = []
         self._async_worker = async_worker
         self._owns_async_worker = False
+        worker_concurrency = (
+            self._settings.tolaria_async_worker_max_concurrency
+            if self._settings.tolaria_async_worker_max_concurrency is not None
+            else self._settings.async_worker_max_concurrency
+        )
+        worker_shutdown_s = (
+            self._settings.tolaria_async_worker_shutdown_timeout_s
+            if self._settings.tolaria_async_worker_shutdown_timeout_s is not None
+            else self._settings.async_worker_shutdown_timeout_s
+        )
         if self._async_worker is None:
-            self._async_worker = AsyncWorker(max_concurrency=4, name="tolaria-worker")
+            self._async_worker = AsyncWorker(
+                max_concurrency=int(worker_concurrency),
+                name="tolaria-worker",
+                graceful_shutdown_timeout=float(worker_shutdown_s),
+            )
             self._owns_async_worker = True
+        self._async_shutdown_timeout_s = float(worker_shutdown_s)
         # Snapshot cadence and rebuild storm guard
         try:
             self._rollback_snapshot_steps = max(
@@ -1530,6 +1553,12 @@ class TolariaTrainer:
             "tolaria.train.tf32_enabled": 1.0 if self._tf32_enabled else 0.0,
             "tolaria.train.foreach_enabled": 1.0 if self._foreach_enabled else 0.0,
             "tolaria.train.pin_memory": 1.0 if self._pin_memory_enabled else 0.0,
+            "tolaria.timeout.tamiyo_total": 0.0,
+            "tolaria.timeout.kasmina_total": 0.0,
+            "tolaria.timeout.tamiyo_last_ms": 0.0,
+            "tolaria.timeout.kasmina_last_ms": 0.0,
+            "tolaria.emergency.broadcast_failures_total": 0.0,
+            "tolaria.emergency.last_broadcast_latency_ms": 0.0,
         }
 
         # Profiler telemetry
@@ -1626,6 +1655,9 @@ class TolariaTrainer:
         # Final activation depends on compact telemetry preference
         self._per_layer_enabled = self._per_layer_requested and not self._seed_health_compact
 
+        self._emergency_dispatch_timeout_s = float(
+            getattr(self._settings, "tolaria_emergency_dispatch_timeout_s", 2.0)
+        )
         self._emergency: EmergencyController | None = None
         self._emergency_signal_bridge: SharedEmergencySignal | LocalEmergencySignal | None = None
         if self._settings.tolaria_emergency_enabled:
@@ -1776,6 +1808,8 @@ class TolariaTrainer:
                 self._update_breaker_state(success_snapshot)
                 self._exit_conservative_mode()
                 self._failed_epochs_streak = 0
+                if self._emergency is not None:
+                    self._emergency.reset()
                 # Optional optimizer rebuild at epoch fence
                 if (
                     self._opt_manager is not None
@@ -2137,6 +2171,26 @@ class TolariaTrainer:
                     unit="ratio",
                 ),
                 TelemetryMetric(
+                    "tolaria.timeout.tamiyo_total",
+                    self._metrics.get("tolaria.timeout.tamiyo_total", 0.0),
+                    unit="count",
+                ),
+                TelemetryMetric(
+                    "tolaria.timeout.kasmina_total",
+                    self._metrics.get("tolaria.timeout.kasmina_total", 0.0),
+                    unit="count",
+                ),
+                TelemetryMetric(
+                    "tolaria.timeout.tamiyo_last_ms",
+                    self._metrics.get("tolaria.timeout.tamiyo_last_ms", 0.0),
+                    unit="ms",
+                ),
+                TelemetryMetric(
+                    "tolaria.timeout.kasmina_last_ms",
+                    self._metrics.get("tolaria.timeout.kasmina_last_ms", 0.0),
+                    unit="ms",
+                ),
+                TelemetryMetric(
                     "tolaria.profiler.enabled",
                     self._metrics.get("tolaria.profiler.enabled", 0.0),
                     unit="bool",
@@ -2366,6 +2420,36 @@ class TolariaTrainer:
                 grad_norm += float(param.grad.detach().norm().item())
         return grad_norm
 
+    def _submit_async(
+        self,
+        func: Callable[..., Any],
+        *args: Any,
+        timeout_s: float | None = None,
+        name: str | None = None,
+        timeout_exc: Exception | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Submit ``func`` to the shared async worker with unified timeout handling."""
+
+        if self._async_worker is None or (timeout_s is not None and timeout_s <= 0):
+            return func(*args, **kwargs)
+
+        handle = self._async_worker.submit(
+            func,
+            *args,
+            timeout=timeout_s,
+            name=name,
+            **kwargs,
+        )
+        try:
+            return handle.result()
+        except AsyncTimeoutError as exc:
+            if timeout_exc is not None:
+                raise timeout_exc from exc
+            raise TimeoutError(
+                f"Async worker call {name or func.__name__} timed out after {timeout_s}s"
+            ) from exc
+
     def _invoke_tamiyo(
         self, state: leyline_pb2.SystemStatePacket
     ) -> tuple[leyline_pb2.AdaptationCommand, float]:
@@ -2383,19 +2467,14 @@ class TolariaTrainer:
         use_step: bool,
     ) -> tuple[leyline_pb2.AdaptationCommand, float]:
         start = perf_counter()
-        if self._async_worker is not None and self._config.tamiyo_timeout_s > 0:
-            handle = self._async_worker.submit(
-                self._call_tamiyo,
-                state,
-                use_step=use_step,
-                timeout=self._config.tamiyo_timeout_s,
-            )
-            try:
-                command = handle.result()
-            except AsyncTimeoutError as exc:
-                raise TimeoutError("Tamiyo evaluation timed out") from exc
-        else:
-            command = self._call_tamiyo(state, use_step)
+        command = self._submit_async(
+            self._call_tamiyo,
+            state,
+            use_step=use_step,
+            timeout_s=self._config.tamiyo_timeout_s,
+            name="tolaria.tamiyo",
+            timeout_exc=TimeoutError("Tamiyo evaluation timed out"),
+        )
         self._validate_command_dependencies(command)
         latency_ms = (perf_counter() - start) * 1000.0
         return command, latency_ms
@@ -2412,18 +2491,13 @@ class TolariaTrainer:
         return self._tamiyo.evaluate_epoch(state)
 
     def _apply_kasmina_command(self, command: leyline_pb2.AdaptationCommand) -> None:
-        if self._async_worker is not None and self._config.tamiyo_timeout_s > 0:
-            handle = self._async_worker.submit(
-                self._kasmina.apply_command,
-                command,
-                timeout=self._config.tamiyo_timeout_s,
-            )
-            try:
-                handle.result()
-            except AsyncTimeoutError as exc:
-                raise TimeoutError("Kasmina command application timed out") from exc
-        else:
-            self._kasmina.apply_command(command)
+        self._submit_async(
+            self._kasmina.apply_command,
+            command,
+            timeout_s=self._config.tamiyo_timeout_s,
+            name="tolaria.kasmina",
+            timeout_exc=TimeoutError("Kasmina command application timed out"),
+        )
 
     def _build_conservative_command(self) -> leyline_pb2.AdaptationCommand:
         cmd = leyline_pb2.AdaptationCommand()
@@ -2479,16 +2553,42 @@ class TolariaTrainer:
         dispatched = False
         publisher = self._emergency_publisher
         if publisher is not None:
+            start = perf_counter()
             try:
-                import asyncio
-
-                loop = asyncio.get_running_loop()
-                loop.create_task(publisher(signal))
+                self._submit_async(
+                    publisher,
+                    signal,
+                    timeout_s=self._emergency_dispatch_timeout_s,
+                    name="tolaria.emergency.dispatch",
+                    timeout_exc=TimeoutError("Emergency dispatch timed out"),
+                )
+                latency_ms = (perf_counter() - start) * 1000.0
+                self._metrics["tolaria.emergency.last_broadcast_latency_ms"] = latency_ms
                 self._metrics["tolaria.emergency.broadcasts_total"] = (
                     self._metrics.get("tolaria.emergency.broadcasts_total", 0.0) + 1.0
                 )
                 dispatched = True
-            except Exception:
+            except TimeoutError as exc:
+                self._metrics["tolaria.emergency.broadcast_failures_total"] = (
+                    self._metrics.get("tolaria.emergency.broadcast_failures_total", 0.0) + 1.0
+                )
+                self._metrics["tolaria.emergency.last_broadcast_latency_ms"] = 0.0
+                self._emit_event(
+                    "tolaria.emergency.dispatch_timeout",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
+                    attributes={"error": str(exc), "reason": reason},
+                )
+                dispatched = False
+            except Exception as exc:  # pragma: no cover - defensive
+                self._metrics["tolaria.emergency.broadcast_failures_total"] = (
+                    self._metrics.get("tolaria.emergency.broadcast_failures_total", 0.0) + 1.0
+                )
+                self._metrics["tolaria.emergency.last_broadcast_latency_ms"] = 0.0
+                self._emit_event(
+                    "tolaria.emergency.dispatch_error",
+                    level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_CRITICAL,
+                    attributes={"error": type(exc).__name__, "reason": reason},
+                )
                 dispatched = False
         if not dispatched:
             self._emergency_signals.append(signal)
@@ -2562,7 +2662,10 @@ class TolariaTrainer:
         """Release worker resources if owned by this trainer."""
 
         if self._owns_async_worker and self._async_worker is not None:
-            self._async_worker.shutdown(cancel_pending=True)
+            self._async_worker.shutdown(
+                cancel_pending=True,
+                timeout=self._async_shutdown_timeout_s,
+            )
             self._async_worker = None
             self._owns_async_worker = False
 

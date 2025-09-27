@@ -89,6 +89,9 @@ class WeatherlightService:
         self._kasmina_coordinator: KasminaPrefetchCoordinator | None = None
         self._async_worker: AsyncWorker | None = None
         self._owns_async_worker = False
+        self._async_worker_shutdown_timeout_s = float(
+            self._settings.async_worker_shutdown_timeout_s
+        )
         self._tamiyo_service: TamiyoService | None = None
         self._urabrask_producer: UrabraskProducer | None = None
         self._urabrask_bench: UrabraskBenchWorker | None = None
@@ -146,7 +149,11 @@ class WeatherlightService:
                 self._kasmina_packet_drops += 1
 
         if self._async_worker is None:
-            self._async_worker = AsyncWorker(max_concurrency=8, name="weatherlight-worker")
+            self._async_worker = AsyncWorker(
+                max_concurrency=int(self._settings.async_worker_max_concurrency),
+                name="weatherlight-worker",
+                graceful_shutdown_timeout=self._async_worker_shutdown_timeout_s,
+            )
             self._owns_async_worker = True
 
         self._kasmina_manager = KasminaSeedManager(
@@ -1315,7 +1322,10 @@ class WeatherlightService:
             if self._emergency_signal is not None:
                 self._emergency_signal.close()
         if self._owns_async_worker and self._async_worker is not None:
-            self._async_worker.shutdown(cancel_pending=True)
+            self._async_worker.shutdown(
+                cancel_pending=True,
+                timeout=self._async_worker_shutdown_timeout_s,
+            )
             self._async_worker = None
             self._owns_async_worker = False
         self._shutdown_complete.set()

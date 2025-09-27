@@ -19,7 +19,7 @@
 - Blend telemetry metrics (alpha, sparsity) in Kasmina/Tamiyo. ✅ (Kasmina/Tamiyo suites)
 - Command verification telemetry (all subsystems). ◻️ pending WP-K3 / WP-A3 follow-up.
 - Rollback SLA measurement tests (500 ms / 12 s) for Tolaria/Kasmina. ◻️ deferred to post-R4c.
-- Prefetch cancellation/regression tests with Oona fakes. ◻️ tracked under WP-K4.
+- Prefetch cancellation/regression tests with Oona fakes. ✅ covered via Kasmina prefetch worker tests (WP-K4).
 
 ## Performance Validation
 - Tolaria: step latency benchmark before/after aggregator refactor.

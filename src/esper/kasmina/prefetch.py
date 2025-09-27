@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from esper.core import DependencyViolationError
+from esper.core import AsyncWorker, AsyncWorkerHandle, DependencyViolationError
 from esper.leyline import leyline_pb2
 from esper.oona import OonaClient, OonaMessage
-from esper.core import AsyncWorker
 
 if TYPE_CHECKING:  # pragma: no cover - type checking only
     from .seed_manager import KasminaSeedManager
@@ -30,7 +30,10 @@ class KasminaPrefetchCoordinator:
         self._tasks: list[asyncio.Task] = []
         self._running = False
         self._worker = async_worker
-        self._worker_handles: list[Any] = []
+        self._worker_handles: list[AsyncWorkerHandle[Any]] = []
+        self._publisher_handles: list[AsyncWorkerHandle[Any]] = []
+        self._managed_worker_clients: list[OonaClient] = []
+        self._lock = threading.Lock()
 
     def request_kernel(
         self,
@@ -55,7 +58,7 @@ class KasminaPrefetchCoordinator:
             training_run_id=training_run_id,
         )
         request.issued_at.GetCurrentTime()
-        self._schedule(self._oona.publish_kernel_prefetch_request(request))
+        self._schedule_prefetch_request(request)
         return request.request_id
 
     def start(self) -> None:
@@ -64,8 +67,14 @@ class KasminaPrefetchCoordinator:
         self._running = True
         if self._worker is not None:
             self._worker_handles = [
-                self._worker.submit(self._consume_ready(), name="kasmina-prefetch-ready"),
-                self._worker.submit(self._consume_error(), name="kasmina-prefetch-error"),
+                self._worker.submit(
+                    self._consume_ready_worker,
+                    name="kasmina-prefetch-ready",
+                ),
+                self._worker.submit(
+                    self._consume_error_worker,
+                    name="kasmina-prefetch-error",
+                ),
             ]
             self._tasks = []
             return
@@ -86,41 +95,70 @@ class KasminaPrefetchCoordinator:
             for handle in handles:
                 try:
                     handle.result(timeout=0)
-                except Exception:
+                except BaseException:
                     continue
+        with self._lock:
+            publisher_handles = list(self._publisher_handles)
+            self._publisher_handles.clear()
+        for handle in publisher_handles:
+            handle.cancel()
+            try:
+                handle.result(timeout=0)
+            except BaseException:
+                continue
         for task in self._tasks:
             task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
+        with self._lock:
+            clients = list(self._managed_worker_clients)
+            self._managed_worker_clients.clear()
+        for client in clients:
+            try:
+                await client.close()
+            except Exception:
+                continue
 
-    def _schedule(self, coro) -> None:
+    def _schedule_prefetch_request(
+        self, request: leyline_pb2.KernelPrefetchRequest
+    ) -> None:
         if self._worker is not None:
-            self._worker.submit(coro, name="kasmina-prefetch-publish")
+            payload = request.SerializeToString()
+            handle = self._worker.submit(
+                self._publish_request_worker,
+                payload,
+                name="kasmina-prefetch-publish",
+            )
+            with self._lock:
+                self._publisher_handles.append(handle)
+            handle.add_done_callback(lambda _f, h=handle: self._remove_publisher_handle(h))
             return
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            asyncio.run(coro)
+            asyncio.run(self._oona.publish_kernel_prefetch_request(request))
         else:
-            loop.create_task(coro)
+            loop.create_task(self._oona.publish_kernel_prefetch_request(request))
 
-    async def _consume_ready(self) -> None:
+    async def _consume_ready(self, client: OonaClient | None = None) -> None:
+        oona = client or self._oona
         async def handler(message: OonaMessage) -> None:
             ready = leyline_pb2.KernelArtifactReady()
             ready.ParseFromString(message.payload)
             self._manager.process_prefetch_ready(ready)
 
         while self._running:
-            await self._oona.consume_kernel_ready(handler, block_ms=500)
+            await oona.consume_kernel_ready(handler, block_ms=500)
 
-    async def _consume_error(self) -> None:
+    async def _consume_error(self, client: OonaClient | None = None) -> None:
+        oona = client or self._oona
         async def handler(message: OonaMessage) -> None:
             error = leyline_pb2.KernelArtifactError()
             error.ParseFromString(message.payload)
             self._manager.process_prefetch_error(error)
 
         while self._running:
-            await self._oona.consume_kernel_errors(handler, block_ms=500)
+            await oona.consume_kernel_errors(handler, block_ms=500)
 
     def poll_task_issue(self) -> BaseException | None:
         """Check background tasks and return an exception if any finished abnormally."""
@@ -155,7 +193,73 @@ class KasminaPrefetchCoordinator:
                         f"Kasmina prefetch worker '{handle.name}' exited unexpectedly"
                     )
                 continue
+        with self._lock:
+            publisher_handles = list(self._publisher_handles)
+        for handle in publisher_handles:
+            if not handle.done():
+                continue
+            try:
+                handle.result(timeout=0)
+            except asyncio.CancelledError:
+                if self._running:
+                    return RuntimeError("Kasmina prefetch publish cancelled unexpectedly")
+                continue
+            except Exception as exc:
+                return exc
         return None
+
+    async def _consume_ready_worker(self) -> None:
+        client, managed = self._spawn_worker_client("ready")
+        try:
+            if managed:
+                await client.ensure_consumer_group()
+            await self._consume_ready(client)
+        finally:
+            if managed:
+                await client.close()
+                self._unregister_worker_client(client)
+
+    async def _consume_error_worker(self) -> None:
+        client, managed = self._spawn_worker_client("error")
+        try:
+            if managed:
+                await client.ensure_consumer_group()
+            await self._consume_error(client)
+        finally:
+            if managed:
+                await client.close()
+                self._unregister_worker_client(client)
+
+    async def _publish_request_worker(self, payload: bytes) -> None:
+        client, managed = self._spawn_worker_client("publish")
+        try:
+            request = leyline_pb2.KernelPrefetchRequest()
+            request.ParseFromString(payload)
+            await client.publish_kernel_prefetch_request(request)
+        finally:
+            if managed:
+                await client.close()
+                self._unregister_worker_client(client)
+
+    def _spawn_worker_client(self, role: str) -> tuple[OonaClient, bool]:
+        spawner = getattr(self._oona, "spawn", None)
+        if spawner is None:
+            return self._oona, False
+        suffix = f"{role}-{uuid.uuid4().hex[:6]}"
+        client = spawner(consumer_suffix=suffix)
+        with self._lock:
+            self._managed_worker_clients.append(client)
+        return client, True
+
+    def _unregister_worker_client(self, client: OonaClient) -> None:
+        with self._lock:
+            if client in self._managed_worker_clients:
+                self._managed_worker_clients.remove(client)
+
+    def _remove_publisher_handle(self, handle: AsyncWorkerHandle[Any]) -> None:
+        with self._lock:
+            if handle in self._publisher_handles:
+                self._publisher_handles.remove(handle)
 
 
 __all__ = ["KasminaPrefetchCoordinator"]

@@ -37,6 +37,7 @@ class Escalation:
     reason: str
     broadcasted: bool
     latency_ms: float
+    error: str | None = None
 
 
 class EmergencyController:
@@ -44,6 +45,7 @@ class EmergencyController:
         self._level = Level.L1_NOTICE
         self._bypass_cap = max(1, bypass_cap_per_min)
         self._bypass_count = 0
+        self._last: Escalation | None = None
 
     @property
     def level(self) -> int:
@@ -58,6 +60,7 @@ class EmergencyController:
     ) -> Escalation:
         start = perf_counter()
         broadcasted = False
+        error: str | None = None
         if level > self._level:
             self._level = level
             if broadcaster is not None:
@@ -70,23 +73,52 @@ class EmergencyController:
                     )
                     broadcaster(msg)
                     broadcasted = True
-                except Exception:
+                except Exception as exc:
+                    error = f"{type(exc).__name__}: {exc}"
                     broadcasted = False
-        return Escalation(
-            level=int(level),
+        esc = Escalation(
+            level=int(self._level),
             reason=reason,
             broadcasted=broadcasted,
             latency_ms=(perf_counter() - start) * 1000.0,
+            error=error,
         )
+        self._last = esc
+        return esc
 
     def telemetry_events(self) -> list[TelemetryEvent]:
-        return [
+        events = [
             TelemetryEvent(
                 description="tolaria.emergency.level",
                 level=leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO,
                 attributes={"level": str(int(self._level))},
             )
         ]
+        if self._last is not None:
+            attributes = {
+                "level": str(int(self._last.level)),
+                "reason": self._last.reason,
+                "broadcasted": str(self._last.broadcasted).lower(),
+            }
+            if self._last.error:
+                attributes["error"] = self._last.error
+            events.append(
+                TelemetryEvent(
+                    description="tolaria.emergency.last_escalation",
+                    level=(
+                        leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_WARNING
+                        if self._last.error
+                        else leyline_pb2.TelemetryLevel.TELEMETRY_LEVEL_INFO
+                    ),
+                    attributes=attributes,
+                )
+            )
+        return events
+
+    def reset(self) -> None:
+        self._level = Level.L1_NOTICE
+        self._bypass_count = 0
+        self._last = None
 
 
 class LocalEmergencySignal:

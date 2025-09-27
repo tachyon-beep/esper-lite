@@ -8,7 +8,8 @@ import time
 import uuid
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+import uuid
 
 import redis.asyncio as aioredis
 
@@ -128,14 +129,20 @@ class OonaClient:
 
     def __init__(
         self,
-        redis_url: str,
+        redis_url: str | None,
         config: StreamConfig,
         *,
         redis_client: aioredis.Redis | None = None,
         signing_context: SignatureContext | None = None,
     ) -> None:
         self._config = config
-        self._redis = redis_client or aioredis.from_url(redis_url)
+        self._redis_url = redis_url
+        if redis_client is not None:
+            self._redis = redis_client
+        else:
+            if redis_url is None:
+                raise ValueError("redis_url is required when redis_client is not provided")
+            self._redis = aioredis.from_url(redis_url)
         self._telemetry_stream = config.telemetry_stream or config.normal_stream
         self._policy_stream = config.policy_stream or config.normal_stream
         self._kernel_request_stream = config.kernel_request_stream or "oona.kernels.requests"
@@ -173,6 +180,19 @@ class OonaClient:
         self._em_last_refill: float = time.monotonic()
         self._em_src_published: dict[str, float] = {}
         self._em_src_dropped: dict[str, float] = {}
+
+    def spawn(self, *, consumer_suffix: str | None = None) -> "OonaClient":
+        """Create a new Oona client instance sharing configuration with a unique consumer."""
+
+        if self._redis_url is None:
+            raise RuntimeError("Cannot spawn OonaClient without redis_url")
+        suffix = consumer_suffix or uuid.uuid4().hex[:8]
+        worker_config = replace(self._config, consumer=f"{self._config.consumer}-{suffix}")
+        return OonaClient(
+            redis_url=self._redis_url,
+            config=worker_config,
+            signing_context=self._signing_context,
+        )
 
     async def close(self) -> None:
         close = getattr(self._redis, "aclose", None)

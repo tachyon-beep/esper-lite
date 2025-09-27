@@ -12,9 +12,9 @@
 | Shared Foundations | Async worker implementation | (tbd) | Not Started |  |
 | Shared Foundations | Telemetry routing update | (tbd) | Not Started |  |
 | Shared Foundations | Dependency guard helper | (tbd) | Not Started |  |
-| Tolaria WP-T1 | PCGrad rework & tests | (tbd) | Not Started |  |
-| Tolaria WP-T1 | Weighted aggregation broadcast fix | (tbd) | Not Started |  |
-| Tolaria WP-T2 | Async worker adoption | (tbd) | Not Started |  |
+| Tolaria WP-T1 | PCGrad rework & tests | Codex | Complete | Phases 0–4 delivered; PCGrad pairwise projection, dtype/device guards, and unit coverage landed 2025-09-28 |
+| Tolaria WP-T1 | Weighted aggregation broadcast fix | Codex | Complete | Broadcast, validation guards, and trainer telemetry assertions in place 2025-09-28 |
+| Tolaria WP-T2 | Async worker adoption | Codex | In Progress | Phases 0–3 complete: shared worker adapter, timeout metrics, emergency dispatch hardening landed 2025-09-28 |
 | Tolaria WP-T3 | Rollback hardening | (tbd) | Not Started |  |
 | Tolaria WP-T4 | Complexity refactor (`_train_single_epoch`, etc.) | (tbd) | Not Started |  |
 | Tamiyo WP-A1 | Strict timeout behaviour | (tbd) | Not Started |  |
@@ -23,8 +23,8 @@
 | Tamiyo WP-A4 | WAL/fsync & registry | (tbd) | Not Started |  |
 | Kasmina WP-K1 | Gate fallback enforcement | (tbd) | Not Started |  |
 | Kasmina WP-K2 | Blend telemetry/logits | (tbd) | Not Started |  |
-| Kasmina WP-K3 | Command verifier telemetry, nonce ledger | Codex | In Progress | Critical verifier events + metrics landed; nonce ledger metrics/reset hooks implemented; prefetch/cache follow-up pending |
-| Kasmina WP-K4 | Prefetch worker & cache locking | Codex | In Progress | Async worker integration, telemetry/metrics, and cache locking implemented; performance tuning & benchmarking pending |
+| Kasmina WP-K3 | Command verifier telemetry, nonce ledger | Codex | Complete | Telemetry, nonce ledger metrics, and registry resets landed; remaining work tracked under WP-K4 |
+| Kasmina WP-K4 | Prefetch worker & cache locking | Codex | In Progress | Async worker integration, telemetry/metrics, and cache locking implemented; finalize observability docs and throughput benchmark sign-off |
 | Testing & Validation | Performance harness execution | (tbd) | Not Started |  |
 | Testing & Validation | Telemetry verification runbook | (tbd) | Not Started |  |
 | Documentation | Update lint & change log | (tbd) | Not Started |  |

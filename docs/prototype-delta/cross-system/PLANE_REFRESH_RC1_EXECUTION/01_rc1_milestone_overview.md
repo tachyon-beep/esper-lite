@@ -31,12 +31,12 @@ Bring Tolaria, Tamiyo, and Kasmina to the prototype-delta standard by removing m
 | Work Package | Lead | Reviewers |
 |--------------|------|-----------|
 | Shared Foundations | (tbd) | Leads from Tolaria, Tamiyo, Kasmina |
-| Tolaria WP-T1/T2 | (tbd) | Tamiyo & Kasmina reps |
+| Tolaria WP-T1/T2 | Codex | Tolaria & Tamiyo reps |
 | Tolaria WP-T3/T4 | (tbd) | Shared foundations lead |
 | Tamiyo WP-A1/A2 | (tbd) | Tolaria & Kasmina reps |
 | Tamiyo WP-A3/A4 | (tbd) | Shared foundations lead |
 | Kasmina WP-K1/K2 | (tbd) | Tolaria & Tamiyo reps |
-| Kasmina WP-K3/K4 | (tbd) | Shared foundations lead |
+| Kasmina WP-K3/K4 | Codex | Shared foundations lead |
 
 ## Checkpoints
 - Kickoff: confirm owners, dependencies, test plan.
@@ -44,13 +44,14 @@ Bring Tolaria, Tamiyo, and Kasmina to the prototype-delta standard by removing m
 - Telemetry validation checkpoint post WP-A3/WP-K3.
 - Final sign-off: all success criteria met; change log updated.
 
-## Progress Snapshot (2025-09-27)
-- Risk reductions R1–R3 and R5 are closed; the shared async worker, strict dependency guard, telemetry load harness, and confidence gating fixes are documented and in production.
-- Tolaria R4a landed: `_EpochRunner` now drives the epoch loop with fixture parity tests guarding behaviour.
-- Tamiyo R4b Phase 4 is complete: `_apply_risk_engine` and `_evaluate` both sit at radon **A**, with orchestrator helpers in place ahead of WP-A3.
-- Tamiyo, Kasmina, and Tolaria targeted suites remain green (`tests/tamiyo/test_service.py`, `tests/kasmina/test_blend_annotations.py`, `tests/tolaria/test_tolaria_trainer.py`).
+## Progress Snapshot (2025-09-28)
+- Shared foundations complete: strict dependency guard, async worker adoption, and telemetry routing harness shipped; Weatherlight/Tolaria now share worker settings.
+- Tolaria WP-T1 and WP-T2 are complete (PCGrad/aggregation fixes, timeout/emergency telemetry, shared worker wiring). WP-T3/T4 remain queued.
+- Tamiyo WP-A1/A2 delivered; A3/A4 outstanding.
+- Kasmina WP-K1–K3 complete (dispatcher, blend telemetry, verifier/nonce ledger); WP-K4 prefetch/cache reliability still in progress.
+- Targeted suites remain green (`tests/tolaria/test_tolaria_trainer.py`, `tests/tamiyo/test_service.py`, `tests/kasmina/test_seed_manager.py`, integration control loop).
 
-## Next Focus (Q4 Ramp)
-- Finalise Tamiyo doc/status updates (Phase 5 telemetry follow-ups) and kick off Kasmina R4c command dispatcher refactor.
-- Proceed with Tamiyo WP-A3 (telemetry completeness) and Kasmina WP-K2/K3 once Kasmina dispatcher scaffolding is in place.
-- Prepare the performance/rollback checkpoint (WP-T3/WP-T4) after Kasmina risk items are retired, ensuring metrics flow into `06_testing_validation_plan.md`.
+## Next Focus (RC1 Close-out)
+- Finish Kasmina WP-K4 prefetch/cache benchmarking and observability follow-ups.
+- Deliver Tamiyo WP-A3 (telemetry completeness) and WP-A4 (persistence hardening).
+- Execute Tolaria WP-T3/T4 (rollback and complexity refactors) alongside performance harness/rollback SLA validation.

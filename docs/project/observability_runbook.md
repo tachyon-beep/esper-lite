@@ -119,3 +119,8 @@ process. The service will log a warning when the stub is activated.
   0.45 s max latency across 300 prefetches with no lock contention. Telemetry
   still reported ~1.1 s averages because measurements include queueing+broadcast
   delay—retain alert thresholds above 1.2 s and validate with production loads.
+- When enabling the shared async worker for Kasmina prefetch (`ASYNC_WORKER_MAX_CONCURRENCY`,
+  optional Tolaria overrides), ensure the worker-side Oona clients run with dedicated
+  Redis connections. The coordinator now auto-spawns per-task clients; no additional
+  configuration is required beyond setting the concurrency/timeout knobs and
+  `TOLARIA_EMERGENCY_DISPATCH_TIMEOUT_S` for Tolaria emergency telemetry.
