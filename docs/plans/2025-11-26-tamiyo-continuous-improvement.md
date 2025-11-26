@@ -91,46 +91,58 @@ good_episodes = [ep for ep in episodes if ep.final_accuracy > threshold]
 
 **Key insight**: We have (state, action, reward, next_state) tuples. This is an offline RL dataset.
 
-**The Core Problem (from yzmir-deep-rl:offline-rl skill)**:
+**Status**: 🔶 Implemented but Limited by Data (2025-11-26)
 
-Standard Q-learning on offline data fails because:
-1. Q-values get overestimated for actions not in dataset
-2. Policy picks these overestimated actions
-3. No environment feedback to correct the error
-4. Policy diverges, performance collapses
+**Implementation**: `src/esper/simic_iql.py`
 
-For Tamiyo specifically:
-```
-Q(state, GERMINATE) might get overestimated
-because GERMINATE samples are rare (~30% of data).
-Standard training: policy picks GERMINATE everywhere.
-Reality: GERMINATE at wrong time = training instability.
-```
+**Results**:
 
-**Methods to consider**:
+| Method | α/τ | Agreement | Action Distribution |
+|--------|-----|-----------|---------------------|
+| IQL | τ=0.7 | 12.9% | 70% GERMINATE (bad!) |
+| IQL | τ=0.9 | 6.6% | 51% CULL (worse!) |
+| CQL | α=5.0 | 86.7% | 90% WAIT (close to behavior) |
+| CQL | α=1.0 | 51.1% | 50% WAIT, 49% GERMINATE |
+| CQL | α=0.5 | 72.6% | 75% WAIT, 25% GERMINATE |
 
-**Conservative Q-Learning (CQL)** - Recommended
-- Adds penalty term: `logsumexp(Q_random) + logsumexp(Q_batch)`
-- Forces Q-network to be pessimistic about OOD actions
-- Good for discrete action spaces (we have 4 actions)
-- Well-understood, plenty of implementations
+**Key Finding: IQL Failed, CQL Works (But Can't Improve)**
 
-**Implicit Q-Learning (IQL)** - Simpler alternative
-- Uses expectile regression instead of explicit penalty
-- V(s) trained to underestimate Q slightly (pessimistic)
-- Q(s,a) = r + γV(s') instead of r + γ max Q(s',a')
-- Simpler to implement, fewer hyperparameters
+IQL failed catastrophically because:
+- Expectile regression with high τ selects high-variance optimistic estimates
+- Rare actions (GERMINATE 2%, CULL 0.5%) have inflated upper tails
+- Policy diverges to prefer rare actions based on noise, not signal
 
-**Decision Transformer** - Overkill for now
-- Treat RL as sequence modeling
-- Condition on desired return, predict actions
-- More complex, better for longer horizons
+CQL works because it explicitly penalizes Q-values for OOD actions.
 
-**Recommended**: Start with **IQL** (simpler), try **CQL** if IQL underperforms.
+**Fundamental Limitation: No Counterfactual Data**
 
-**Ceiling**: Can exceed heuristic by learning "what should have been done" from suboptimal trajectories.
+Action diversity analysis revealed:
+- 87% of state clusters have **only one action** (Kasmina is deterministic)
+- Only 13/103 state clusters have counterfactual data
+- Kasmina follows simple rules: same state → same action
 
-**Complexity**: Moderate - need Q-network, V-network (IQL) or CQL penalty term.
+**Implication**: Offline RL cannot significantly outperform Kasmina because there's no data showing "what would have happened if we chose differently."
+
+**Future Direction: Diverse Training Runs**
+
+The solution is generating data with varied:
+- Model architectures (different CNNs, ResNets, etc.)
+- Datasets (CIFAR-100, different subsets)
+- Hyperparameters (learning rates, batch sizes)
+
+This creates situations where the "right" action varies, giving counterfactual data. The V2 telemetry (gradient health, per-class accuracy, sharpness) then becomes **discriminative** - helping Tamiyo understand *why* intervention helps in one case but not another.
+
+**Methods implemented**:
+
+**CQL (Conservative Q-Learning)** ✅
+- Works with α≥5.0 for conservative behavior
+- Lower α causes divergence
+
+**IQL (Implicit Q-Learning)** ✅
+- Implemented but fails on this dataset
+- Would work better with more action diversity
+
+**Complexity**: Moderate - Q-network + V-network (IQL) or CQL penalty term.
 
 **Implementation sketch (IQL)**:
 ```python
