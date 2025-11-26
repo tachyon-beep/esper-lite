@@ -14,13 +14,35 @@ To exceed the heuristic, we need to shift from "what did the expert do?" to "wha
 
 ### Phase 1: Imitation Learning (Complete)
 
-**Approach**: Supervised learning on (observation, action) pairs from Heuristic Tamiyo.
+**Approach**: Supervised learning on (observation, action) pairs from Heuristic Tamiyo (Kasmina).
 
-**Loss**: `CrossEntropy(predicted_action, heuristic_action)`
+**Loss**: `CrossEntropy(predicted_action, heuristic_action)` with class weighting
 
 **Ceiling**: Heuristic performance (can't exceed the teacher)
 
-**Status**: ✅ Complete - 93.6% accuracy on GERMINATE decisions
+**Status**: ✅ Complete (2025-11-26)
+
+**Results**:
+| Dataset | Episodes | Features | Balanced Accuracy |
+|---------|----------|----------|-------------------|
+| V1 | 234 | 27 | 98.2% |
+| V2 (research telemetry) | 300 | ~288 | 98.9% |
+
+Per-class accuracy (V2):
+- WAIT: 98.0%
+- GERMINATE: 100%
+- ADVANCE: 97.6%
+- CULL: 100%
+
+**Key learnings**:
+- Class weighting essential (94% WAIT imbalance)
+- Effective number of samples weighting (β=0.999) works well
+- Optimize for balanced accuracy, not overall accuracy
+- V2 rich telemetry improved ADVANCE detection (94% → 98%)
+
+**Data packs**:
+- `data/packs/simic_v1_final.json` (17 MB)
+- `data/packs/simic_v2_research_2025-11-26.json` (37 MB)
 
 **Value**: Proves the pipeline works, gives a solid initialization for later phases.
 
