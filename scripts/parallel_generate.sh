@@ -1,19 +1,64 @@
 #!/bin/bash
 # Parallel episode generation across GPUs
 #
-# Usage: ./scripts/parallel_generate.sh [episodes_per_worker] [workers_per_gpu] [profile]
+# Usage: ./scripts/parallel_generate.sh [options]
 #
-# Example: ./scripts/parallel_generate.sh 35 3 diagnostic
-#   - Runs 3 workers on GPU 0, 3 workers on GPU 1 (6 total)
-#   - Each generates 35 episodes = 210 total
-#   - Uses 'diagnostic' telemetry profile for rich data
+# Options:
+#   -n, --episodes N      Episodes per worker (default: 35)
+#   -w, --workers N       Workers per GPU (default: 3)
+#   -p, --profile NAME    Telemetry profile (minimal, standard, diagnostic, research)
+#   -d, --data-dir DIR    Output directory (default: data/simic_episodes)
+#   -e, --max-epochs N    Max epochs per episode (default: 25)
+#   -h, --help            Show this help
 #
-# Profiles: minimal, standard, diagnostic, research
-# Default: 35 episodes x 6 workers = 210 episodes (no profile = v1 format)
+# Examples:
+#   ./scripts/parallel_generate.sh -n 35 -w 3 -p diagnostic -d data/simic_v2_episodes
+#   ./scripts/parallel_generate.sh --episodes 50 --profile research
+#   ./scripts/parallel_generate.sh  # Uses defaults (35 eps x 6 workers = 210 total)
 
-EPISODES_PER_WORKER=${1:-35}
-WORKERS_PER_GPU=${2:-3}
-PROFILE=${3:-""}
+set -e
+
+# Defaults
+EPISODES_PER_WORKER=35
+WORKERS_PER_GPU=3
+PROFILE=""
+DATA_DIR="data/simic_episodes"
+MAX_EPOCHS=25
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -n|--episodes)
+            EPISODES_PER_WORKER="$2"
+            shift 2
+            ;;
+        -w|--workers)
+            WORKERS_PER_GPU="$2"
+            shift 2
+            ;;
+        -p|--profile)
+            PROFILE="$2"
+            shift 2
+            ;;
+        -d|--data-dir)
+            DATA_DIR="$2"
+            shift 2
+            ;;
+        -e|--max-epochs)
+            MAX_EPOCHS="$2"
+            shift 2
+            ;;
+        -h|--help)
+            head -20 "$0" | tail -18
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Use --help for usage"
+            exit 1
+            ;;
+    esac
+done
 
 # Use venv python
 PYTHON=".venv/bin/python"
@@ -29,6 +74,9 @@ fi
 TOTAL_WORKERS=$((NUM_GPUS * WORKERS_PER_GPU))
 TOTAL_EPISODES=$((EPISODES_PER_WORKER * TOTAL_WORKERS))
 
+# Create output directory
+mkdir -p "$DATA_DIR"
+
 echo "========================================"
 echo "Parallel Episode Generation"
 echo "========================================"
@@ -37,13 +85,17 @@ echo "Workers per GPU: $WORKERS_PER_GPU"
 echo "Total workers: $TOTAL_WORKERS"
 echo "Episodes per worker: $EPISODES_PER_WORKER"
 echo "Total episodes: $TOTAL_EPISODES"
+echo "Max epochs: $MAX_EPOCHS"
+echo "Output: $DATA_DIR"
 if [ -n "$PROFILE" ]; then
     echo "Telemetry profile: $PROFILE"
+else
+    echo "Telemetry: disabled (v1 format)"
 fi
 echo "========================================"
 
-# Find next available episode ID
-EXISTING=$(ls data/simic_episodes/episode_*.json 2>/dev/null | wc -l)
+# Find next available episode ID in target directory
+EXISTING=$(ls "$DATA_DIR"/episode_*.json 2>/dev/null | wc -l)
 echo "Existing episodes: $EXISTING"
 echo "Starting from ID: $EXISTING"
 echo "========================================"
@@ -59,10 +111,10 @@ for ((gpu=0; gpu<NUM_GPUS; gpu++)); do
 
         echo "Starting worker $WORKER_ID on $DEVICE (episodes $START_ID-$((START_ID + EPISODES_PER_WORKER - 1)))"
 
-        # Build command with optional profile
-        PROFILE_ARG=""
+        # Build optional args
+        EXTRA_ARGS=""
         if [ -n "$PROFILE" ]; then
-            PROFILE_ARG="--profile $PROFILE"
+            EXTRA_ARGS="$EXTRA_ARGS --profile $PROFILE"
         fi
 
         PYTHONPATH=src $PYTHON src/esper/simic_overnight.py \
@@ -70,8 +122,10 @@ for ((gpu=0; gpu<NUM_GPUS; gpu++)); do
             --episodes $EPISODES_PER_WORKER \
             --start-id $START_ID \
             --device $DEVICE \
-            $PROFILE_ARG \
-            > "data/simic_episodes/worker_${WORKER_ID}.log" 2>&1 &
+            --data-dir "$DATA_DIR" \
+            --max-epochs $MAX_EPOCHS \
+            $EXTRA_ARGS \
+            > "$DATA_DIR/worker_${WORKER_ID}.log" 2>&1 &
 
         PIDS+=($!)
         WORKER_ID=$((WORKER_ID + 1))
@@ -80,7 +134,7 @@ done
 
 echo ""
 echo "All workers started. PIDs: ${PIDS[*]}"
-echo "Logs: data/simic_episodes/worker_*.log"
+echo "Logs: $DATA_DIR/worker_*.log"
 echo ""
 echo "Monitoring progress..."
 
@@ -93,7 +147,7 @@ while true; do
         fi
     done
 
-    CURRENT=$(ls data/simic_episodes/episode_*.json 2>/dev/null | wc -l)
+    CURRENT=$(ls "$DATA_DIR"/episode_*.json 2>/dev/null | wc -l)
     NEW=$((CURRENT - EXISTING))
 
     echo -ne "\rWorkers: $RUNNING/$TOTAL_WORKERS | Episodes: $NEW/$TOTAL_EPISODES"
@@ -102,7 +156,7 @@ while true; do
         echo ""
         echo "========================================"
         echo "All workers complete!"
-        echo "Total episodes: $CURRENT"
+        echo "Total episodes in $DATA_DIR: $CURRENT"
         echo "========================================"
         break
     fi
