@@ -28,6 +28,7 @@ checkpoints/
 # Training data (large, regeneratable)
 data/simic_episodes/
 data/simic_test/
+data/packs/
 data/cifar-10-python.tar.gz
 data/cifar-10-batches-py/
 

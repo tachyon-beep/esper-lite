@@ -1,0 +1,103 @@
+# Telemetry Profiles for Policy Tamiyo
+#
+# Profiles define what diagnostic information to collect during training.
+# Use --profile <name> when generating episodes, or override individual settings.
+#
+# Performance impact estimates:
+#   minimal:    baseline (fastest)
+#   standard:   +10% runtime
+#   diagnostic: +30% runtime
+#   research:   +60% runtime
+
+profiles:
+  # Fast iteration - minimal overhead
+  # Use for: quick experiments, debugging logic, CI/CD
+  minimal:
+    history_length: 5
+    gradients:
+      enabled: false
+    per_class:
+      enabled: false
+    loss_landscape:
+      enabled: false
+    track_weight_norms: false
+    track_activation_stats: false
+
+  # Default for data generation
+  # Use for: building training datasets, normal operation
+  standard:
+    history_length: 10
+    gradients:
+      enabled: true
+      layers:
+        - "host.conv1"
+        - "host.conv2"
+        - "host.fc"
+      track_norm: true
+      track_std: true
+      percentiles: [1, 50, 99]
+      detect_vanishing: true
+      detect_exploding: true
+      vanishing_threshold: 1.0e-7
+      exploding_threshold: 1000.0
+    per_class:
+      enabled: false
+    loss_landscape:
+      enabled: false
+    track_weight_norms: false
+    track_activation_stats: false
+
+  # Deep analysis runs
+  # Use for: understanding training dynamics, debugging policy decisions
+  diagnostic:
+    history_length: 20
+    gradients:
+      enabled: true
+      layers: "all"
+      track_norm: true
+      track_std: true
+      percentiles: [1, 25, 50, 75, 99]
+      detect_vanishing: true
+      detect_exploding: true
+      vanishing_threshold: 1.0e-7
+      exploding_threshold: 1000.0
+    per_class:
+      enabled: true
+      track_accuracy: true
+      track_loss: true
+      track_confusion: false
+    loss_landscape:
+      enabled: true
+      perturbation_samples: 5
+      perturbation_scale: 0.01
+      estimate_sharpness: true
+    track_weight_norms: true
+    track_activation_stats: false
+
+  # Kitchen sink - everything
+  # Use for: research, detailed analysis, when you need ALL the data
+  research:
+    history_length: 50
+    gradients:
+      enabled: true
+      layers: "all"
+      track_norm: true
+      track_std: true
+      percentiles: [1, 5, 10, 25, 50, 75, 90, 95, 99]
+      detect_vanishing: true
+      detect_exploding: true
+      vanishing_threshold: 1.0e-7
+      exploding_threshold: 1000.0
+      full_histogram: true
+    per_class:
+      enabled: true
+      track_accuracy: true
+      track_loss: true
+      track_confusion: true
+    loss_landscape:
+      enabled: true
+      perturbation_samples: 10
+      perturbation_scale: 0.01
+      estimate_sharpness: true
+    track_weight_norms: true
+    track_activation_stats: true

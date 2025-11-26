@@ -720,11 +720,27 @@ class PolicyNetwork:
         batch_size: int = 32,
         val_split: float = 0.2,
         verbose: bool = True,
+        class_weights: bool = True,
     ) -> dict:
-        """Train the policy on collected episodes."""
+        """Train the policy on collected episodes.
+
+        Args:
+            class_weights: If True, weight classes inversely to frequency
+                          to handle imbalanced data (WAIT dominates).
+        """
         import torch
 
         X_train, y_train, X_val, y_val = self._prepare_data(episodes, val_split)
+
+        # Compute class weights if requested
+        if class_weights:
+            class_counts = torch.bincount(y_train, minlength=len(SimicAction)).float()
+            # Inverse frequency weighting, with smoothing
+            weights = 1.0 / (class_counts + 1.0)
+            weights = weights / weights.sum() * len(SimicAction)  # Normalize
+            self.criterion = torch.nn.CrossEntropyLoss(weight=weights.to(self.device))
+            if verbose:
+                print(f"Class weights: {dict(zip([a.name for a in SimicAction], weights.tolist()))}")
 
         if verbose:
             print(f"Training on {len(X_train)} samples, validating on {len(X_val)}")

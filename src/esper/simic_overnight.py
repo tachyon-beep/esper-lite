@@ -41,6 +41,8 @@ from esper.simic import (
     PolicyNetwork, print_confusion_matrix, SimicAction,
 )
 from esper.poc_tamiyo import ConvBlock, HostCNN, MorphogeneticModel
+from esper.telemetry_config import TelemetryConfig
+from esper.telemetry import DiagnosticTracker
 
 
 # =============================================================================
@@ -89,12 +91,28 @@ def generate_episode(
     max_epochs: int = 25,
     device: str = "cuda",
     verbose: bool = False,
+    telemetry_config: TelemetryConfig | None = None,
 ) -> None:
-    """Generate one episode using Heuristic Tamiyo with real seed execution."""
+    """Generate one episode using Heuristic Tamiyo with real seed execution.
+
+    Args:
+        episode_id: Unique identifier for this episode.
+        trainloader: Training data loader.
+        testloader: Validation data loader.
+        max_epochs: Maximum training epochs.
+        device: Device to train on (cuda/cpu).
+        verbose: Print progress during training.
+        telemetry_config: Optional telemetry configuration for rich diagnostics.
+    """
 
     # Setup model with seed infrastructure
     model = create_model(device)
     criterion = nn.CrossEntropyLoss()
+
+    # Setup diagnostic tracker if config provided
+    diag_tracker = None
+    if telemetry_config:
+        diag_tracker = DiagnosticTracker(model, telemetry_config, device=device)
 
     # Optimizers - host optimizer always active, seed optimizer when needed
     host_optimizer = optim.SGD(model.get_host_parameters(), lr=0.01, momentum=0.9)
@@ -155,9 +173,23 @@ def generate_episode(
 
         # Validation phase
         model.eval()
-        val_loss, val_accuracy, train_loss, train_accuracy = _validate_and_get_metrics(
-            model, trainloader, testloader, criterion, device
+        compute_per_class = diag_tracker is not None and telemetry_config.per_class.enabled
+        val_loss, val_accuracy, train_loss, train_accuracy, per_class_acc = _validate_and_get_metrics(
+            model, trainloader, testloader, criterion, device, compute_per_class=compute_per_class
         )
+
+        # Update diagnostic tracker if enabled
+        diag_snapshot = None
+        if diag_tracker:
+            diag_snapshot = diag_tracker.end_epoch(
+                epoch=epoch,
+                train_loss=train_loss,
+                val_loss=val_loss,
+                val_accuracy=val_accuracy,
+                per_class_accuracy=per_class_acc,
+                val_loader=testloader,
+                criterion=criterion,
+            )
 
         # Update seed metrics if active
         if model.has_active_seed:
@@ -256,6 +288,13 @@ def generate_episode(
         seeds_culled=seeds_culled,
     )
 
+    # Attach telemetry data if enabled
+    if diag_tracker:
+        # Store telemetry config and history with episode
+        episode._telemetry_config = telemetry_config.model_dump() if telemetry_config else None
+        episode._telemetry_history = [snap.to_dict() for snap in diag_tracker.history]
+        diag_tracker.cleanup()
+
     return episode
 
 
@@ -307,14 +346,28 @@ def _train_epoch_blended(model, trainloader, criterion, host_optimizer, seed_opt
             seed_optimizer.step()
 
 
-def _validate_and_get_metrics(model, trainloader, testloader, criterion, device):
-    """Get validation and training metrics."""
+def _validate_and_get_metrics(model, trainloader, testloader, criterion, device, compute_per_class: bool = False):
+    """Get validation and training metrics.
+
+    Args:
+        compute_per_class: If True, compute per-class accuracy (for telemetry).
+
+    Returns:
+        Tuple of (val_loss, val_accuracy, train_loss, train_accuracy, per_class_acc)
+        per_class_acc is None if compute_per_class is False.
+    """
     model.eval()
 
     # Validation
     val_loss = 0.0
     val_correct = 0
     val_total = 0
+
+    # Per-class tracking
+    if compute_per_class:
+        class_correct = [0] * 10
+        class_total = [0] * 10
+
     with torch.no_grad():
         for inputs, labels in testloader:
             inputs, labels = inputs.to(device), labels.to(device)
@@ -325,8 +378,22 @@ def _validate_and_get_metrics(model, trainloader, testloader, criterion, device)
             val_total += labels.size(0)
             val_correct += predicted.eq(labels).sum().item()
 
+            if compute_per_class:
+                for i in range(labels.size(0)):
+                    label = labels[i].item()
+                    class_total[label] += 1
+                    if predicted[i] == label:
+                        class_correct[label] += 1
+
     val_loss /= len(testloader)
     val_accuracy = 100.0 * val_correct / val_total
+
+    per_class_acc = None
+    if compute_per_class:
+        per_class_acc = {
+            i: 100.0 * class_correct[i] / class_total[i] if class_total[i] > 0 else 0.0
+            for i in range(10)
+        }
 
     # Training metrics (quick sample)
     train_loss = 0.0
@@ -347,7 +414,28 @@ def _validate_and_get_metrics(model, trainloader, testloader, criterion, device)
     train_loss /= min(10, len(trainloader))
     train_accuracy = 100.0 * train_correct / train_total if train_total > 0 else 0.0
 
-    return val_loss, val_accuracy, train_loss, train_accuracy
+    return val_loss, val_accuracy, train_loss, train_accuracy, per_class_acc
+
+
+def _save_episode_with_telemetry(dm: DatasetManager, episode) -> Path:
+    """Save episode, including telemetry data if present."""
+    import json
+
+    # Get base episode dict
+    ep_dict = episode.to_dict()
+
+    # Add telemetry if present
+    if hasattr(episode, '_telemetry_config') and episode._telemetry_config:
+        ep_dict['telemetry_config'] = episode._telemetry_config
+    if hasattr(episode, '_telemetry_history') and episode._telemetry_history:
+        ep_dict['telemetry_history'] = episode._telemetry_history
+
+    # Save manually to include extended data
+    path = dm.data_dir / f"{episode.episode_id}.json"
+    with open(path, 'w') as f:
+        json.dump(ep_dict, f, indent=2)
+
+    return path
 
 
 def generate_episodes(
@@ -356,12 +444,25 @@ def generate_episodes(
     max_epochs: int = 25,
     device: str = "cuda",
     start_id: int = 0,
+    telemetry_config: TelemetryConfig | None = None,
 ) -> DatasetManager:
-    """Generate multiple episodes."""
+    """Generate multiple episodes.
+
+    Args:
+        n_episodes: Number of episodes to generate.
+        data_dir: Directory to save episodes.
+        max_epochs: Max epochs per episode.
+        device: Device to train on.
+        start_id: Starting episode ID number.
+        telemetry_config: Optional telemetry configuration for rich diagnostics.
+    """
 
     print(f"\n{'='*60}")
     print(f"Generating {n_episodes} episodes")
     print(f"{'='*60}")
+
+    if telemetry_config:
+        print(f"Telemetry: {telemetry_config.profile_name} (~{telemetry_config.feature_count_estimate()} features)")
 
     # Load data once
     print("Loading CIFAR-10...")
@@ -389,9 +490,11 @@ def generate_episodes(
             max_epochs=max_epochs,
             device=device,
             verbose=False,
+            telemetry_config=telemetry_config,
         )
 
-        dm.save_episode(episode)
+        # Save episode with telemetry if present
+        _save_episode_with_telemetry(dm, episode)
         ep_time = time.time() - ep_start
         print(f"done ({ep_time:.1f}s, final_acc={episode.final_accuracy:.1f}%)")
 
@@ -648,10 +751,22 @@ def main():
                         help="Episodes for live comparison")
     parser.add_argument("--start-id", type=int, default=0,
                         help="Starting episode ID (for parallel runs)")
+    parser.add_argument("--device", type=str, default=None,
+                        help="Device to use (cuda:0, cuda:1, cpu). Auto-detects if not set.")
+    parser.add_argument("--profile", type=str, default=None,
+                        help="Telemetry profile (minimal, standard, diagnostic, research)")
 
     args = parser.parse_args()
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if args.device:
+        device = args.device
+    else:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # Load telemetry config if specified
+    telemetry_config = None
+    if args.profile:
+        telemetry_config = TelemetryConfig.from_profile(args.profile)
 
     if args.compare:
         # Just run comparison
@@ -681,6 +796,7 @@ def main():
             max_epochs=args.max_epochs,
             device=device,
             start_id=args.start_id,
+            telemetry_config=telemetry_config,
         )
     else:
         # Full pipeline: generate, train, evaluate, compare
@@ -690,6 +806,7 @@ def main():
             max_epochs=args.max_epochs,
             device=device,
             start_id=args.start_id,
+            telemetry_config=telemetry_config,
         )
 
         policy = train_policy(
