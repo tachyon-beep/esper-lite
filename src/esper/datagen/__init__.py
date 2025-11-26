@@ -9,6 +9,7 @@ from esper.datagen.configs import (
     ENVIRONMENT_PRESETS,
     POLICY_PRESETS,
 )
+from esper.datagen.architectures import create_model, SUPPORTED_ARCHITECTURES
 
 __all__ = [
     "EnvironmentConfig",
@@ -18,4 +19,6 @@ __all__ = [
     "StepMetadata",
     "ENVIRONMENT_PRESETS",
     "POLICY_PRESETS",
+    "create_model",
+    "SUPPORTED_ARCHITECTURES",
 ]
