@@ -1,0 +1,75 @@
+{
+  "device": "cuda",
+  "per_trainer": {
+    "mode": "per_trainer",
+    "epochs": 3,
+    "warmup_batches": 2,
+    "captures": [
+      {
+        "graph_enabled": true,
+        "stage_copy_ms": 0.01104000024497509,
+        "capture_ms": 61.45580700831488,
+        "replay_ms": 0.03603700315579772,
+        "fallback": false
+      },
+      {
+        "graph_enabled": true,
+        "stage_copy_ms": 0.010400000028312206,
+        "capture_ms": 5057.477366004605,
+        "replay_ms": 0.03617798211053014,
+        "fallback": false
+      },
+      {
+        "graph_enabled": true,
+        "stage_copy_ms": 0.010400000028312206,
+        "capture_ms": 5062.957443995401,
+        "replay_ms": 0.03629800630733371,
+        "fallback": false
+      }
+    ],
+    "ctor_times_s": [
+      4.237983375787735e-06,
+      3.8069847505539656e-06,
+      2.635002601891756e-06
+    ],
+    "capture_times_s": [
+      0.0612760910007637,
+      5.057327777001774,
+      5.062830786977429
+    ]
+  },
+  "reuse_trainer": {
+    "mode": "reuse_trainer",
+    "epochs": 3,
+    "warmup_batches": 2,
+    "captures": [
+      {
+        "graph_enabled": true,
+        "stage_copy_ms": 0.01033599954098463,
+        "capture_ms": 5063.437539996812,
+        "replay_ms": 0.036057987017557025,
+        "fallback": false
+      },
+      {
+        "graph_enabled": true,
+        "stage_copy_ms": 0.010367999784648418,
+        "capture_ms": 5063.437539996812,
+        "replay_ms": 0.03617699258029461,
+        "fallback": false
+      },
+      {
+        "graph_enabled": true,
+        "stage_copy_ms": 0.010367999784648418,
+        "capture_ms": 5063.437539996812,
+        "replay_ms": 0.03617699258029461,
+        "fallback": false
+      }
+    ],
+    "ctor_times_s": [
+      2.515007508918643e-06
+    ],
+    "capture_times_s": [
+      5.063305772986496
+    ]
+  }
+}

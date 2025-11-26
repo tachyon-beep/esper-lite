@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+.venv/
+venv/
+
+# IDE
+.vscode/
+*.swp
+
+# Testing
+.pytest_cache/
+.coverage
+.hypothesis/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# PyTorch checkpoints
+*.pt
+*.pth
+checkpoints/
+
+# Training data (large, regeneratable)
+data/simic_episodes/
+data/simic_test/
+data/cifar-10-python.tar.gz
+data/cifar-10-batches-py/
+
+# Misc
+*.log
+*.sqlite3
+*.db
+var/

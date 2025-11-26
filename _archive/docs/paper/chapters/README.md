@@ -1,0 +1,21 @@
+# Chapters
+
+- [00 Preface](00-preface.md)
+- [01 Introduction](01-introduction.md)
+- [02 Conceptual Foundations](02-conceptual-foundations.md)
+- [03 Foundational Paradigms Enabling Local Evolution](03-foundational-paradigms-enabling-local-evolution.md)
+- [04 Techniques for Grafting and Precise Editing](04-techniques-for-grafting-and-precise-editing.md)
+- [05 Failure Handling and Risk Containment](05-failure-handling-and-risk-containment.md)
+- [06 Architectural Patterns and Agent Roles](06-architectural-patterns-and-agent-roles.md)
+- [07 Prototype Implementation and Micro-Demonstration](07-prototype-implementation-and-micro-demonstration.md)
+- [08 Controller Training: The Tamiyo Curriculum](08-controller-training-the-tamiyo-curriculum.md)
+- [09 Tables and Figures](09-tables-and-figures.md)
+- [10 Evaluation Criteria and Safety Constraints](10-evaluation-criteria-and-safety-constraints.md)
+- [11 Future Work and Research Directions](11-future-work-and-research-directions.md)
+- [12 Deployment Pathway and Strategic Vision](12-deployment-pathway-and-strategic-vision.md)
+- [13 Citations](13-citations.md)
+- Appendices
+  - [Appendix A: Prototype Code – Full-Fidelity Managed Germination](appendix-a-prototype-code-full-fidelity-managed-germination.md)
+  - [Appendix B: Diagnostic Tooling and Control](appendix-b-diagnostic-tooling-and-control.md)
+  - [Appendix C: Bibliography / Reading List](appendix-c-bibliography-reading-list.md)
+  - [Appendix D: Reproducibility Checklist](appendix-d-reproducibility-checklist.md)

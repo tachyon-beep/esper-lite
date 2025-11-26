@@ -1,0 +1,40 @@
+{
+  "device": "cuda",
+  "records": [
+    {
+      "graph_enabled": false,
+      "stage_copy_ms": 0.0,
+      "capture_ms": 0.0,
+      "replay_ms": 0.0,
+      "fallback": false
+    },
+    {
+      "graph_enabled": true,
+      "stage_copy_ms": 0.01104000024497509,
+      "capture_ms": 5073.286405997351,
+      "replay_ms": 0.03642798401415348,
+      "fallback": false
+    },
+    {
+      "graph_enabled": false,
+      "stage_copy_ms": 0.0,
+      "capture_ms": 0.0,
+      "replay_ms": 0.0,
+      "fallback": false
+    },
+    {
+      "graph_enabled": true,
+      "stage_copy_ms": 0.01158399973064661,
+      "capture_ms": 5055.387934989994,
+      "replay_ms": 0.037040008464828134,
+      "fallback": false
+    },
+    {
+      "graph_enabled": false,
+      "stage_copy_ms": 0.0,
+      "capture_ms": 0.0,
+      "replay_ms": 0.0,
+      "fallback": false
+    }
+  ]
+}

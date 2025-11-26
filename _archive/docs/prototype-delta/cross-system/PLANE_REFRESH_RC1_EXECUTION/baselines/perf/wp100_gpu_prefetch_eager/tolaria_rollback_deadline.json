@@ -1,0 +1,193 @@
+{
+  "tamiyo": {
+    "events": [
+      {
+        "attributes": {
+          "index": "0",
+          "score": "0.000"
+        },
+        "description": "policy_risk_signal",
+        "level": 1
+      },
+      {
+        "attributes": {
+          "volatility": "0.661"
+        },
+        "description": "loss_volatility_high",
+        "level": 2
+      }
+    ],
+    "metrics": {
+      "tamiyo.blending.method_index": 0.0,
+      "tamiyo.blending.schedule_end": 0.0,
+      "tamiyo.blending.schedule_start": 0.0,
+      "tamiyo.breaker.inference_failures": 0.0,
+      "tamiyo.breaker.inference_state": 1.0,
+      "tamiyo.breaker.metadata_failures": 0.0,
+      "tamiyo.breaker.metadata_state": 1.0,
+      "tamiyo.conservative_mode": 0.0,
+      "tamiyo.gnn.compile_enabled": 0.0,
+      "tamiyo.gnn.compile_warm_ms": 0.0,
+      "tamiyo.gnn.feature_coverage": 0.5833333333333334,
+      "tamiyo.gnn.feature_coverage.edges.activation_configures": 1.0,
+      "tamiyo.gnn.feature_coverage.edges.blueprint_composes": 1.0,
+      "tamiyo.gnn.feature_coverage.edges.global_influences": 0.0,
+      "tamiyo.gnn.feature_coverage.edges.global_operates": 1.0,
+      "tamiyo.gnn.feature_coverage.edges.layer_activates": 1.0,
+      "tamiyo.gnn.feature_coverage.edges.layer_connects": 1.0,
+      "tamiyo.gnn.feature_coverage.edges.layer_feedback": 1.0,
+      "tamiyo.gnn.feature_coverage.edges.layer_feeds": 1.0,
+      "tamiyo.gnn.feature_coverage.edges.parameter_modulates": 1.0,
+      "tamiyo.gnn.feature_coverage.edges.parameter_targets": 1.0,
+      "tamiyo.gnn.feature_coverage.edges.seed_monitors": 0.0,
+      "tamiyo.gnn.feature_coverage.edges.seed_reports": 0.0,
+      "tamiyo.gnn.feature_coverage.node.activation": 0.25,
+      "tamiyo.gnn.feature_coverage.node.blueprint": 0.7777777777777778,
+      "tamiyo.gnn.feature_coverage.node.global": 0.6,
+      "tamiyo.gnn.feature_coverage.node.layer": 0.125,
+      "tamiyo.gnn.feature_coverage.node.parameter": 1.0,
+      "tamiyo.gnn.inference.latency_ms": 3.6782730021514,
+      "tamiyo.inference.latency_ms": 3.6782730021514,
+      "tamiyo.loss_delta": 0.0,
+      "tamiyo.policy.risk_index": 0.0,
+      "tamiyo.policy.risk_score": 0.0,
+      "tamiyo.policy.value_estimate": 0.0,
+      "tamiyo.selection.blueprint_index": -1.0,
+      "tamiyo.selection.seed_index": -1.0,
+      "tamiyo.selection.seed_score": 0.0,
+      "tamiyo.validation_loss": 1.6536668539047241
+    },
+    "priority": "MESSAGE_PRIORITY_NORMAL"
+  },
+  "tolaria": {
+    "events": [
+      {
+        "attributes": {},
+        "description": "latency_high",
+        "level": 2
+      },
+      {
+        "attributes": {
+          "index": "0",
+          "name": "sgd"
+        },
+        "description": "optimizer_family",
+        "level": 1
+      },
+      {
+        "attributes": {
+          "error": "Tamiyo evaluation timed out"
+        },
+        "description": "tolaria.tamiyo_timeout",
+        "level": 2
+      },
+      {
+        "attributes": {
+          "reason": "tamiyo_timeout"
+        },
+        "description": "tolaria.conservative_mode_entered",
+        "level": 2
+      },
+      {
+        "attributes": {
+          "index": "0",
+          "name": "sgd"
+        },
+        "description": "optimizer_family",
+        "level": 1
+      },
+      {
+        "attributes": {
+          "index": "0",
+          "name": "sgd"
+        },
+        "description": "optimizer_family",
+        "level": 1
+      },
+      {
+        "attributes": {
+          "index": "0",
+          "name": "sgd"
+        },
+        "description": "optimizer_family",
+        "level": 1
+      },
+      {
+        "attributes": {
+          "latency_ms": "35.94"
+        },
+        "description": "tolaria.epoch_budget_exceeded",
+        "level": 2
+      },
+      {
+        "attributes": {
+          "level": "2",
+          "reason": "epoch_budget"
+        },
+        "description": "tolaria.emergency.escalated",
+        "level": 1
+      },
+      {
+        "attributes": {
+          "detail": "deadline_exceeded",
+          "reason": "full_restore"
+        },
+        "description": "tolaria.rollback.restore_failed",
+        "level": 4
+      },
+      {
+        "attributes": {
+          "level": "4",
+          "reason": "rollback_deadline"
+        },
+        "description": "tolaria.emergency.halt",
+        "level": 1
+      }
+    ],
+    "metrics": {
+      "tolaria.breaker.state": 1.0,
+      "tolaria.emergency.halt": 1.0,
+      "tolaria.emergency.halts_total": 1.0,
+      "tolaria.epoch_hook.latency_ms": 0.1753379765432328,
+      "tolaria.epochs.failed": 1.0,
+      "tolaria.epochs.total": 1.0,
+      "tolaria.grad_agg.conflict_ratio": 0.0,
+      "tolaria.grad_agg.conflicts": 0.0,
+      "tolaria.grad_agg.microbatches_total": 4.0,
+      "tolaria.grad_agg.pcgrad_applied": 0.0,
+      "tolaria.grad_agg.teacher_share": 0.0,
+      "tolaria.grad_agg.weights_mean": 0.0,
+      "tolaria.hook.latency_ms": 0.1753379765432328,
+      "tolaria.lr_controller.current_lr": 0.0,
+      "tolaria.lr_controller.enabled": 0.0,
+      "tolaria.mode.conservative": 1.0,
+      "tolaria.opt.rebuild_failures_total": 0.0,
+      "tolaria.opt.rebuild_latency_ms": 0.0,
+      "tolaria.opt.rebuild_skipped_total": 0.0,
+      "tolaria.opt.rebuilds_total": 0.0,
+      "tolaria.profiler.enabled": 0.0,
+      "tolaria.profiler.traces_emitted_total": 0.0,
+      "tolaria.profiler.traces_failed_total": 0.0,
+      "tolaria.rollback.failures_total": 1.0,
+      "tolaria.rollback.fast_hits_total": 0.0,
+      "tolaria.rollback.fast_misses_total": 1.0,
+      "tolaria.rollback.fast_size_bytes": 0.0,
+      "tolaria.rollback.restore_latency_ms": 12000.0,
+      "tolaria.rollback.snapshots_total": 0.0,
+      "tolaria.seeds.active": 0.0,
+      "tolaria.timeout.kasmina_last_ms": 0.17397498595528305,
+      "tolaria.timeout.kasmina_total": 0.0,
+      "tolaria.timeout.tamiyo_last_ms": 0.0,
+      "tolaria.timeout.tamiyo_total": 1.0,
+      "tolaria.train.amp_enabled": 0.0,
+      "tolaria.train.compile_enabled": 0.0,
+      "tolaria.train.foreach_enabled": 1.0,
+      "tolaria.train.pin_memory": 1.0,
+      "tolaria.train.tf32_enabled": 0.0,
+      "tolaria.training.accuracy": 0.1875,
+      "tolaria.training.latency_ms": 35.93769599683583,
+      "tolaria.training.loss": 0.3842689096927643
+    },
+    "priority": "MESSAGE_PRIORITY_HIGH"
+  }
+}

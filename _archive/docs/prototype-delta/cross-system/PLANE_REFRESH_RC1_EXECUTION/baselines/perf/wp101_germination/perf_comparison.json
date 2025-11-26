@@ -1,0 +1,19 @@
+{
+  "device": "cuda",
+  "with_seeds": {
+    "enable_seeds": 1.0,
+    "epochs": 20.0,
+    "eval_loss": 1.3560344576835632,
+    "train_latency_ms": 2387.9833984375,
+    "seed_alpha": 1.0,
+    "kasmina_packets": 639
+  },
+  "without_seeds": {
+    "enable_seeds": 0.0,
+    "epochs": 20.0,
+    "eval_loss": 1.3560344576835632,
+    "train_latency_ms": 560.081787109375,
+    "seed_alpha": 0.0,
+    "kasmina_packets": 320
+  }
+}

@@ -1,0 +1,216 @@
+{
+  "default": {
+    "training_latency_ms": 1826.1427560064476,
+    "compile_enabled": true,
+    "prefetch_used": false,
+    "teacher_share": 0.0,
+    "hook_latency_ms": 2.940812992164865,
+    "timeout.tamiyo_total": 0.0,
+    "rollback.failures_total": 0.0,
+    "seed_metrics_present": [],
+    "events": [
+      {
+        "attributes": {},
+        "description": "latency_high",
+        "level": 2
+      },
+      {
+        "attributes": {
+          "dynamic": "false",
+          "mode": "reduce-overhead"
+        },
+        "description": "tolaria.compile_enabled",
+        "level": 1
+      },
+      {
+        "attributes": {
+          "index": "0",
+          "name": "sgd"
+        },
+        "description": "optimizer_family",
+        "level": 1
+      },
+      {
+        "attributes": {
+          "index": "0",
+          "name": "sgd"
+        },
+        "description": "optimizer_family",
+        "level": 1
+      },
+      {
+        "attributes": {
+          "index": "0",
+          "name": "sgd"
+        },
+        "description": "optimizer_family",
+        "level": 1
+      },
+      {
+        "attributes": {
+          "index": "0",
+          "name": "sgd"
+        },
+        "description": "optimizer_family",
+        "level": 1
+      },
+      {
+        "attributes": {
+          "latency_ms": "1826.14"
+        },
+        "description": "tolaria.epoch_budget_exceeded",
+        "level": 2
+      },
+      {
+        "attributes": {
+          "reason": "epoch_budget"
+        },
+        "description": "tolaria.conservative_mode_entered",
+        "level": 2
+      }
+    ],
+    "tamiyo_latency_ms": 1.3596639910247177,
+    "timeout_packet_latency_ms": 0.0,
+    "rollback_packet_latency_ms": 12000.0
+  },
+  "prefetch_enabled": {
+    "training_latency_ms": 1808.5389669868164,
+    "compile_enabled": true,
+    "prefetch_used": false,
+    "teacher_share": 0.0,
+    "hook_latency_ms": 2.556783991167322,
+    "timeout.tamiyo_total": 0.0,
+    "rollback.failures_total": 0.0,
+    "seed_metrics_present": [],
+    "events": [
+      {
+        "attributes": {},
+        "description": "latency_high",
+        "level": 2
+      },
+      {
+        "attributes": {
+          "dynamic": "false",
+          "mode": "reduce-overhead"
+        },
+        "description": "tolaria.compile_enabled",
+        "level": 1
+      },
+      {
+        "attributes": {
+          "index": "0",
+          "name": "sgd"
+        },
+        "description": "optimizer_family",
+        "level": 1
+      },
+      {
+        "attributes": {
+          "index": "0",
+          "name": "sgd"
+        },
+        "description": "optimizer_family",
+        "level": 1
+      },
+      {
+        "attributes": {
+          "index": "0",
+          "name": "sgd"
+        },
+        "description": "optimizer_family",
+        "level": 1
+      },
+      {
+        "attributes": {
+          "index": "0",
+          "name": "sgd"
+        },
+        "description": "optimizer_family",
+        "level": 1
+      },
+      {
+        "attributes": {
+          "latency_ms": "1808.54"
+        },
+        "description": "tolaria.epoch_budget_exceeded",
+        "level": 2
+      },
+      {
+        "attributes": {
+          "reason": "epoch_budget"
+        },
+        "description": "tolaria.conservative_mode_entered",
+        "level": 2
+      }
+    ],
+    "tamiyo_latency_ms": 0.984883023193106,
+    "timeout_packet_latency_ms": 0.0,
+    "rollback_packet_latency_ms": 12000.0
+  },
+  "no_compile": {
+    "training_latency_ms": 157.6923799875658,
+    "compile_enabled": false,
+    "prefetch_used": false,
+    "teacher_share": 0.0,
+    "hook_latency_ms": 2.6669510116335005,
+    "timeout.tamiyo_total": 0.0,
+    "rollback.failures_total": 0.0,
+    "seed_metrics_present": [],
+    "events": [
+      {
+        "attributes": {},
+        "description": "latency_high",
+        "level": 2
+      },
+      {
+        "attributes": {
+          "index": "0",
+          "name": "sgd"
+        },
+        "description": "optimizer_family",
+        "level": 1
+      },
+      {
+        "attributes": {
+          "index": "0",
+          "name": "sgd"
+        },
+        "description": "optimizer_family",
+        "level": 1
+      },
+      {
+        "attributes": {
+          "index": "0",
+          "name": "sgd"
+        },
+        "description": "optimizer_family",
+        "level": 1
+      },
+      {
+        "attributes": {
+          "index": "0",
+          "name": "sgd"
+        },
+        "description": "optimizer_family",
+        "level": 1
+      },
+      {
+        "attributes": {
+          "latency_ms": "157.69"
+        },
+        "description": "tolaria.epoch_budget_exceeded",
+        "level": 2
+      },
+      {
+        "attributes": {
+          "reason": "epoch_budget"
+        },
+        "description": "tolaria.conservative_mode_entered",
+        "level": 2
+      }
+    ],
+    "tamiyo_latency_ms": 1.0650729818735272,
+    "timeout_packet_latency_ms": 0.0,
+    "rollback_packet_latency_ms": 12000.0
+  }
+}

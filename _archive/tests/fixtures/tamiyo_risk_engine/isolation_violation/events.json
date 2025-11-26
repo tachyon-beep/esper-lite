@@ -1,0 +1,17 @@
+[
+  {
+    "attributes": {
+      "index": "0",
+      "score": "0.100"
+    },
+    "description": "policy_risk_signal",
+    "level": 1
+  },
+  {
+    "attributes": {
+      "violations": "2"
+    },
+    "description": "isolation_violations",
+    "level": 2
+  }
+]

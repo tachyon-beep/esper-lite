@@ -1,0 +1,31 @@
+[
+  {
+    "attributes": {
+      "index": "0",
+      "score": "0.100"
+    },
+    "description": "policy_risk_signal",
+    "level": 1
+  },
+  {
+    "attributes": {
+      "delta": "0.180"
+    },
+    "description": "loss_spike",
+    "level": 2
+  },
+  {
+    "attributes": {
+      "reason": "loss_spike"
+    },
+    "description": "conservative_entered",
+    "level": 2
+  },
+  {
+    "attributes": {
+      "reason": "stabilised"
+    },
+    "description": "conservative_exited",
+    "level": 1
+  }
+]

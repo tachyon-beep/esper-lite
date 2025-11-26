@@ -1,0 +1,5 @@
+scenario,accuracy_final,epochs,latency_mean_ms,latency_p95_ms,loss_final
+steady_train,0.000000,3.000000,41.573311,135.819981,0.000000
+rollback_deadline,1.000000,12.000000,4.000000
+tamiyo_timeout,2.000000,0.000000,1.000000
+kasmina_prefetch_burst,21.093331,20.417080,20.683536,128.000000

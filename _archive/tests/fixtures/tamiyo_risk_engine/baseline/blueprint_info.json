@@ -1,0 +1,11 @@
+{
+  "allowed_parameters": {},
+  "approval_required": false,
+  "description": "Fixture baseline",
+  "parameter_count": 0,
+  "quarantine_only": false,
+  "risk": 0.1,
+  "stage": 1,
+  "tier": "BLUEPRINT_TIER_EXPERIMENTAL",
+  "tier_index": 2
+}

@@ -1,0 +1,26 @@
+{
+  "device": "cuda",
+  "records": [
+    {
+      "graph_enabled": false,
+      "stage_copy_ms": 0.0,
+      "capture_ms": 0.0,
+      "replay_ms": 0.0,
+      "fallback": false
+    },
+    {
+      "graph_enabled": false,
+      "stage_copy_ms": 0.0,
+      "capture_ms": 0.0,
+      "replay_ms": 0.0,
+      "fallback": false
+    },
+    {
+      "graph_enabled": false,
+      "stage_copy_ms": 0.0,
+      "capture_ms": 0.0,
+      "replay_ms": 0.0,
+      "fallback": false
+    }
+  ]
+}

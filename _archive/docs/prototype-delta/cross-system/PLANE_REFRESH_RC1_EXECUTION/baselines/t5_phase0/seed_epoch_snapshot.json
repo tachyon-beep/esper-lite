@@ -1,0 +1,660 @@
+{
+  "epochs_generated": 3,
+  "metrics_snapshot": {
+    "tolaria.breaker.state": 1.0,
+    "tolaria.emergency.broadcast_failures_total": 0.0,
+    "tolaria.emergency.last_broadcast_latency_ms": 0.0,
+    "tolaria.emergency.shared_signal_mode": 0.0,
+    "tolaria.epochs.failed": 1.0,
+    "tolaria.epochs.total": 2.0,
+    "tolaria.grad_agg.conflict_ratio": 0.0,
+    "tolaria.grad_agg.conflicts": 0.0,
+    "tolaria.grad_agg.microbatches_total": 4.0,
+    "tolaria.grad_agg.pcgrad_applied": 0.0,
+    "tolaria.grad_agg.teacher_share": 0.0,
+    "tolaria.grad_agg.weights_mean": 0.0,
+    "tolaria.hook.latency_ms": 0.10661000851541758,
+    "tolaria.lr_controller.enabled": 0.0,
+    "tolaria.mode.conservative": 0.0,
+    "tolaria.profiler.enabled": 0.0,
+    "tolaria.profiler.traces_emitted_total": 0.0,
+    "tolaria.profiler.traces_failed_total": 0.0,
+    "tolaria.timeout.kasmina_last_ms": 0.10564700642134994,
+    "tolaria.timeout.kasmina_total": 0.0,
+    "tolaria.timeout.tamiyo_last_ms": 0.0,
+    "tolaria.timeout.tamiyo_total": 0.0,
+    "tolaria.train.amp_enabled": 0.0,
+    "tolaria.train.compile_enabled": 0.0,
+    "tolaria.train.foreach_enabled": 0.0,
+    "tolaria.train.pin_memory": 0.0,
+    "tolaria.train.tf32_enabled": 0.0
+  },
+  "telemetry_packets": [
+    {
+      "epoch": 0,
+      "events": [
+        {
+          "attributes": {
+            "index": "0",
+            "name": "sgd"
+          },
+          "description": "optimizer_family",
+          "event_id": "evt-1",
+          "level": 1
+        },
+        {
+          "attributes": {
+            "error": "DependencyViolationError"
+          },
+          "description": "tolaria.tamiyo_error",
+          "event_id": "evt-2",
+          "level": 2
+        },
+        {
+          "attributes": {
+            "reason": "tamiyo_error"
+          },
+          "description": "tolaria.conservative_mode_entered",
+          "event_id": "evt-3",
+          "level": 2
+        },
+        {
+          "attributes": {
+            "index": "0",
+            "name": "sgd"
+          },
+          "description": "optimizer_family",
+          "event_id": "evt-4",
+          "level": 1
+        },
+        {
+          "attributes": {
+            "index": "0",
+            "name": "sgd"
+          },
+          "description": "optimizer_family",
+          "event_id": "evt-5",
+          "level": 1
+        },
+        {
+          "attributes": {
+            "index": "0",
+            "name": "sgd"
+          },
+          "description": "optimizer_family",
+          "event_id": "evt-6",
+          "level": 1
+        }
+      ],
+      "indicators": {
+        "epoch": "0",
+        "priority": "MESSAGE_PRIORITY_HIGH"
+      },
+      "metrics": [
+        {
+          "name": "tolaria.training.loss",
+          "value": 0.3330714702606201
+        },
+        {
+          "name": "tolaria.training.accuracy",
+          "value": 0.4375
+        },
+        {
+          "name": "tolaria.training.latency_ms",
+          "value": 3.947345001506619
+        },
+        {
+          "name": "tolaria.seeds.active",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.epoch_hook.latency_ms",
+          "value": 0.11449400335550308
+        },
+        {
+          "name": "tolaria.breaker.state",
+          "value": 1.0
+        },
+        {
+          "name": "tolaria.mode.conservative",
+          "value": 1.0
+        },
+        {
+          "name": "tolaria.epochs.total",
+          "value": 1.0
+        },
+        {
+          "name": "tolaria.epochs.failed",
+          "value": 1.0
+        },
+        {
+          "name": "tolaria.hook.latency_ms",
+          "value": 0.11449400335550308
+        },
+        {
+          "name": "tolaria.train.compile_enabled",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.train.amp_enabled",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.train.tf32_enabled",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.train.foreach_enabled",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.train.pin_memory",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.lr_controller.enabled",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.lr_controller.current_lr",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.opt.rebuilds_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.opt.rebuild_failures_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.opt.rebuild_latency_ms",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.rollback.fast_size_bytes",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.rollback.snapshots_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.rollback.failures_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.rollback.fast_hits_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.rollback.fast_misses_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.rollback.restore_latency_ms",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.grad_agg.microbatches_total",
+          "value": 4.0
+        },
+        {
+          "name": "tolaria.grad_agg.conflicts",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.grad_agg.weights_mean",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.grad_agg.pcgrad_applied",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.grad_agg.conflict_ratio",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.timeout.tamiyo_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.timeout.kasmina_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.timeout.tamiyo_last_ms",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.timeout.kasmina_last_ms",
+          "value": 0.11295100557617843
+        },
+        {
+          "name": "tolaria.profiler.enabled",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.profiler.traces_emitted_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.profiler.traces_failed_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.opt.rebuild_skipped_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.emergency.halts_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.emergency.halt",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.grad_agg.teacher_share",
+          "value": 0.0
+        }
+      ]
+    },
+    {
+      "epoch": 1,
+      "events": [
+        {
+          "attributes": {
+            "index": "0",
+            "name": "sgd"
+          },
+          "description": "optimizer_family",
+          "event_id": "evt-1",
+          "level": 1
+        },
+        {
+          "attributes": {
+            "index": "0",
+            "name": "sgd"
+          },
+          "description": "optimizer_family",
+          "event_id": "evt-2",
+          "level": 1
+        },
+        {
+          "attributes": {
+            "index": "0",
+            "name": "sgd"
+          },
+          "description": "optimizer_family",
+          "event_id": "evt-3",
+          "level": 1
+        },
+        {
+          "attributes": {
+            "index": "0",
+            "name": "sgd"
+          },
+          "description": "optimizer_family",
+          "event_id": "evt-4",
+          "level": 1
+        },
+        {
+          "attributes": {},
+          "description": "tolaria.conservative_mode_cleared",
+          "event_id": "evt-5",
+          "level": 1
+        }
+      ],
+      "indicators": {
+        "epoch": "1",
+        "priority": "MESSAGE_PRIORITY_NORMAL"
+      },
+      "metrics": [
+        {
+          "name": "tolaria.training.loss",
+          "value": 0.32926153019070625
+        },
+        {
+          "name": "tolaria.training.accuracy",
+          "value": 0.4375
+        },
+        {
+          "name": "tolaria.training.latency_ms",
+          "value": 2.4384019925491884
+        },
+        {
+          "name": "tolaria.seeds.active",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.epoch_hook.latency_ms",
+          "value": 0.10661000851541758
+        },
+        {
+          "name": "tolaria.breaker.state",
+          "value": 1.0
+        },
+        {
+          "name": "tolaria.mode.conservative",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.epochs.total",
+          "value": 2.0
+        },
+        {
+          "name": "tolaria.epochs.failed",
+          "value": 1.0
+        },
+        {
+          "name": "tolaria.hook.latency_ms",
+          "value": 0.10661000851541758
+        },
+        {
+          "name": "tolaria.train.compile_enabled",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.train.amp_enabled",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.train.tf32_enabled",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.train.foreach_enabled",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.train.pin_memory",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.lr_controller.enabled",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.lr_controller.current_lr",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.opt.rebuilds_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.opt.rebuild_failures_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.opt.rebuild_latency_ms",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.rollback.fast_size_bytes",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.rollback.snapshots_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.rollback.failures_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.rollback.fast_hits_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.rollback.fast_misses_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.rollback.restore_latency_ms",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.grad_agg.microbatches_total",
+          "value": 4.0
+        },
+        {
+          "name": "tolaria.grad_agg.conflicts",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.grad_agg.weights_mean",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.grad_agg.pcgrad_applied",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.grad_agg.conflict_ratio",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.timeout.tamiyo_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.timeout.kasmina_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.timeout.tamiyo_last_ms",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.timeout.kasmina_last_ms",
+          "value": 0.10564700642134994
+        },
+        {
+          "name": "tolaria.profiler.enabled",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.profiler.traces_emitted_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.profiler.traces_failed_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.opt.rebuild_skipped_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.emergency.halts_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.emergency.halt",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.grad_agg.teacher_share",
+          "value": 0.0
+        }
+      ]
+    },
+    {
+      "epoch": 2,
+      "events": [],
+      "indicators": {
+        "epoch": "2",
+        "priority": "MESSAGE_PRIORITY_NORMAL"
+      },
+      "metrics": [
+        {
+          "name": "tolaria.training.loss",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.training.accuracy",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.training.latency_ms",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.seeds.active",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.breaker.state",
+          "value": 1.0
+        },
+        {
+          "name": "tolaria.mode.conservative",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.epochs.total",
+          "value": 2.0
+        },
+        {
+          "name": "tolaria.epochs.failed",
+          "value": 1.0
+        },
+        {
+          "name": "tolaria.hook.latency_ms",
+          "value": 0.10661000851541758
+        },
+        {
+          "name": "tolaria.train.compile_enabled",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.train.amp_enabled",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.train.tf32_enabled",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.train.foreach_enabled",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.train.pin_memory",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.lr_controller.enabled",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.lr_controller.current_lr",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.opt.rebuilds_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.opt.rebuild_failures_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.opt.rebuild_latency_ms",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.rollback.fast_size_bytes",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.rollback.snapshots_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.rollback.failures_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.rollback.fast_hits_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.rollback.fast_misses_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.rollback.restore_latency_ms",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.grad_agg.microbatches_total",
+          "value": 4.0
+        },
+        {
+          "name": "tolaria.grad_agg.conflicts",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.grad_agg.weights_mean",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.grad_agg.pcgrad_applied",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.grad_agg.conflict_ratio",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.timeout.tamiyo_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.timeout.kasmina_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.timeout.tamiyo_last_ms",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.timeout.kasmina_last_ms",
+          "value": 0.10564700642134994
+        },
+        {
+          "name": "tolaria.profiler.enabled",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.profiler.traces_emitted_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.profiler.traces_failed_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.opt.rebuild_skipped_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.emergency.halts_total",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.emergency.halt",
+          "value": 0.0
+        },
+        {
+          "name": "tolaria.grad_agg.teacher_share",
+          "value": 0.0
+        }
+      ]
+    }
+  ]
+}

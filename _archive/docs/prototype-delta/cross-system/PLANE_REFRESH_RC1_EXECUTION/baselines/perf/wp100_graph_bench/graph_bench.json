@@ -1,0 +1,26 @@
+{
+  "device": "cuda",
+  "records": [
+    {
+      "graph_enabled": true,
+      "stage_copy_ms": 0.011264000087976456,
+      "capture_ms": 62.82451600418426,
+      "replay_ms": 0.036829005694016814,
+      "fallback": false
+    },
+    {
+      "graph_enabled": true,
+      "stage_copy_ms": 0.01056000031530857,
+      "capture_ms": 5059.897038998315,
+      "replay_ms": 0.036618992453441024,
+      "fallback": false
+    },
+    {
+      "graph_enabled": true,
+      "stage_copy_ms": 0.010879999957978725,
+      "capture_ms": 5066.803099995013,
+      "replay_ms": 0.037349003832787275,
+      "fallback": false
+    }
+  ]
+}
