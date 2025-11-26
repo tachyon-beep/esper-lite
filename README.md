@@ -58,6 +58,44 @@ PYTHONPATH=src .venv/bin/python src/esper/simic_overnight.py --train-only
 PYTHONPATH=src .venv/bin/python src/esper/simic_overnight.py --compare
 ```
 
+## Diverse Data Generation (Datagen)
+
+Generate diverse offline RL training data with full coverage across environments and behavior policies:
+
+```bash
+# Preview generation plan (no training)
+PYTHONPATH=src .venv/bin/python -m esper.datagen.generate --dry-run
+
+# Generate skeleton episodes (fast, for testing)
+PYTHONPATH=src .venv/bin/python -m esper.datagen.generate --skeleton --episodes-per-combo 2
+
+# Full generation with training
+PYTHONPATH=src .venv/bin/python -m esper.datagen.generate --episodes-per-combo 10
+
+# Run health checks on existing data
+PYTHONPATH=src .venv/bin/python -m esper.datagen.generate --health-check
+
+# Generate for specific configurations
+PYTHONPATH=src .venv/bin/python -m esper.datagen.generate \
+    --env-ids baseline resnet34 \
+    --policy-ids baseline aggressive random
+```
+
+### Generation Matrix
+
+The system generates episodes across:
+- **13 environment configs**: HostCNN, ResNet-18/34, various learning rates, batch sizes, optimizers
+- **11 behavior policies**: baseline, aggressive, conservative, random, early/late interveners, etc.
+- **Epsilon variants**: Configurable ε-greedy exploration for each policy
+
+### Data Quality
+
+Health checks ensure dataset quality for offline RL:
+- **Action coverage**: All actions represented (≥2% each)
+- **Action entropy**: Diverse action distribution
+- **Policy diversity**: Multiple behavior policies represented
+- **State-action coverage**: Actions vary across similar states
+
 ## Project Structure
 
 ```
@@ -66,12 +104,17 @@ src/esper/
 ├── kasmina.py          # Seed management (slots, blueprints, blending)
 ├── tamiyo.py           # Strategic controller (heuristic policy)
 ├── simic.py            # Policy learning (data collection, training)
+├── simic_iql.py        # Offline RL training (IQL/CQL)
 ├── poc.py              # Proof-of-concept (fixed schedule)
 ├── poc_tamiyo.py       # Tamiyo-driven training
-└── simic_overnight.py  # Batch training runner
-
-docs/plans/
-└── 2025-01-25-policy-tamiyo-design.md  # Current design doc
+├── simic_overnight.py  # Batch training runner
+└── datagen/            # Diverse data generation system
+    ├── configs.py      # Environment and policy configurations
+    ├── architectures.py # Model factory (HostCNN, ResNet variants)
+    ├── policies.py     # Behavior policy wrapper with ε-greedy
+    ├── health.py       # Dataset quality checks
+    ├── orchestrator.py # Generation matrix and progress tracking
+    └── generate.py     # Main CLI for data generation
 ```
 
 ## Results
