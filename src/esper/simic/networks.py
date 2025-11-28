@@ -7,7 +7,16 @@ actor-critic architectures for RL.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
+
+try:
+    import torch
+    import torch.nn as nn
+    from torch.distributions import Categorical
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
 
 
 # =============================================================================
@@ -333,10 +342,144 @@ def print_confusion_matrix(eval_result: dict) -> None:
 
 
 # =============================================================================
+# RL Network Architectures
+# =============================================================================
+
+if TORCH_AVAILABLE:
+    class ActorCritic(nn.Module):
+        """Actor-Critic network for PPO.
+
+        Uses shared feature extraction with separate actor and critic heads.
+        """
+
+        def __init__(self, state_dim: int, action_dim: int, hidden_dim: int = 256):
+            super().__init__()
+
+            # Shared feature extractor
+            self.shared = nn.Sequential(
+                nn.Linear(state_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.ReLU(),
+            )
+
+            # Actor head (policy)
+            self.actor = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim // 2),
+                nn.ReLU(),
+                nn.Linear(hidden_dim // 2, action_dim),
+            )
+
+            # Critic head (value function)
+            self.critic = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim // 2),
+                nn.ReLU(),
+                nn.Linear(hidden_dim // 2, 1),
+            )
+
+            self._init_weights()
+
+        def _init_weights(self):
+            """Initialize weights with orthogonal initialization."""
+            for module in self.modules():
+                if isinstance(module, nn.Linear):
+                    nn.init.orthogonal_(module.weight, gain=math.sqrt(2))
+                    nn.init.zeros_(module.bias)
+
+            # Smaller init for output layers
+            nn.init.orthogonal_(self.actor[-1].weight, gain=0.01)
+            nn.init.orthogonal_(self.critic[-1].weight, gain=1.0)
+
+        def forward(self, state: torch.Tensor) -> tuple[Categorical, torch.Tensor]:
+            """Forward pass returning action distribution and value."""
+            features = self.shared(state)
+            logits = self.actor(features)
+            dist = Categorical(logits=logits)
+            value = self.critic(features).squeeze(-1)
+            return dist, value
+
+        def get_action(self, state: torch.Tensor, deterministic: bool = False
+                       ) -> tuple[int, float, float]:
+            """Sample action from policy."""
+            with torch.no_grad():
+                dist, value = self.forward(state)
+                if deterministic:
+                    action = dist.probs.argmax(dim=-1)
+                else:
+                    action = dist.sample()
+                log_prob = dist.log_prob(action)
+                return action.item(), log_prob.item(), value.item()
+
+        def get_action_batch(self, states: torch.Tensor, deterministic: bool = False
+                             ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+            """Sample actions for a batch of states."""
+            with torch.no_grad():
+                dist, values = self.forward(states)
+                if deterministic:
+                    actions = dist.probs.argmax(dim=-1)
+                else:
+                    actions = dist.sample()
+                log_probs = dist.log_prob(actions)
+                return actions, log_probs, values
+
+        def evaluate_actions(self, states: torch.Tensor, actions: torch.Tensor
+                             ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+            """Evaluate actions for PPO update."""
+            dist, values = self.forward(states)
+            log_probs = dist.log_prob(actions)
+            entropy = dist.entropy()
+            return log_probs, values, entropy
+
+
+    class QNetwork(nn.Module):
+        """Q-network for IQL: Q(s, a) for all actions."""
+
+        def __init__(self, state_dim: int, action_dim: int, hidden_dim: int = 256):
+            super().__init__()
+            self.net = nn.Sequential(
+                nn.Linear(state_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, action_dim),
+            )
+
+        def forward(self, state: torch.Tensor) -> torch.Tensor:
+            """Returns Q-values for all actions: shape (batch, action_dim)."""
+            return self.net(state)
+
+
+    class VNetwork(nn.Module):
+        """V-network for IQL: V(s) state value."""
+
+        def __init__(self, state_dim: int, hidden_dim: int = 256):
+            super().__init__()
+            self.net = nn.Sequential(
+                nn.Linear(state_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, 1),
+            )
+
+        def forward(self, state: torch.Tensor) -> torch.Tensor:
+            """Returns state value: shape (batch, 1)."""
+            return self.net(state)
+else:
+    # Stub classes when torch is not available
+    ActorCritic = None
+    QNetwork = None
+    VNetwork = None
+
+
+# =============================================================================
 # Exports
 # =============================================================================
 
 __all__ = [
     "PolicyNetwork",
     "print_confusion_matrix",
+    "ActorCritic",
+    "QNetwork",
+    "VNetwork",
 ]
