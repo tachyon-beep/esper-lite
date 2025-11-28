@@ -114,7 +114,7 @@ echo "========================================"
 echo ""
 
 # Build command
-CMD="PYTHONPATH=src $PYTHON -m esper.simic_ppo"
+CMD="PYTHONPATH=src $PYTHON -m esper.simic.ppo"
 CMD="$CMD --episodes $EPISODES"
 CMD="$CMD --max-epochs $MAX_EPOCHS"
 CMD="$CMD --entropy-coef $ENTROPY_COEF"
