@@ -762,7 +762,7 @@ def live_comparison(
         torch.manual_seed(42 + ep_idx)
 
         # Setup
-        from esper.simic_overnight import create_model
+        from esper.tolaria import create_model
         model = create_model(device)
         criterion = nn.CrossEntropyLoss()
         optimizer = torch.optim.SGD(model.get_host_parameters(), lr=0.01, momentum=0.9)
@@ -970,7 +970,7 @@ def head_to_head_comparison(
         """Run a single training episode controlled by the given policy."""
         torch.manual_seed(seed)
 
-        from esper.simic_overnight import create_model
+        from esper.tolaria import create_model
         model = create_model(device)
         criterion = nn.CrossEntropyLoss()
         host_optimizer = optim.SGD(model.get_host_parameters(), lr=0.01, momentum=0.9)
