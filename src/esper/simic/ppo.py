@@ -673,7 +673,7 @@ def run_episode(
     """
     # Lazy imports to avoid circular deps
     from esper.leyline import SeedStage
-    from esper.simic_overnight import create_model
+    from esper.tolaria import create_model
 
     # Set seeds
     torch.manual_seed(base_seed)
@@ -914,7 +914,7 @@ def train_ppo(
     Returns:
         Tuple of (trained_agent, training_history)
     """
-    from esper.simic_overnight import load_cifar10
+    from esper.utils import load_cifar10
 
     print("=" * 60)
     print("PPO Training for Tamiyo")
@@ -1099,7 +1099,8 @@ def train_ppo_vectorized(
     Returns:
         Tuple of (trained_agent, training_history)
     """
-    from esper.simic_overnight import load_cifar10, create_model
+    from esper.tolaria import create_model
+    from esper.utils import load_cifar10
     from esper.tamiyo import SignalTracker
     from esper.leyline import SeedStage
 
