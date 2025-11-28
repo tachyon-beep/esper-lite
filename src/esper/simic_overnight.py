@@ -60,8 +60,21 @@ def create_model(device: str = "cuda") -> MorphogeneticModel:
 # Data Loading
 # =============================================================================
 
-def load_cifar10(batch_size: int = 128):
-    """Load CIFAR-10 dataset."""
+def load_cifar10(
+    batch_size: int = 128,
+    generator: torch.Generator | None = None,
+):
+    """Load CIFAR-10 dataset.
+
+    Args:
+        batch_size: Batch size for DataLoaders.
+        generator: Optional torch.Generator for reproducible shuffling.
+            Use different generators per environment to avoid GIL contention
+            when multiple CUDA streams iterate shared DataLoaders.
+
+    Returns:
+        Tuple of (trainloader, testloader).
+    """
     transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
@@ -70,12 +83,23 @@ def load_cifar10(batch_size: int = 128):
     trainset = torchvision.datasets.CIFAR10(
         root='./data', train=True, download=True, transform=transform
     )
-    trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=2)
+    trainloader = DataLoader(
+        trainset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=2,
+        generator=generator,
+    )
 
     testset = torchvision.datasets.CIFAR10(
         root='./data', train=False, download=True, transform=transform
     )
-    testloader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=2)
+    testloader = DataLoader(
+        testset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=2,
+    )
 
     return trainloader, testloader
 

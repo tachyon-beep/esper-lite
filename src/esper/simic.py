@@ -104,6 +104,74 @@ class TrainingSnapshot:
         # 11 scalar fields + 5 loss_history + 5 accuracy_history + 6 seed fields
         return 27
 
+    @staticmethod
+    def batch_to_tensor(
+        snapshots: list["TrainingSnapshot"],
+        device: str = "cpu",
+    ) -> "torch.Tensor":
+        """Convert a batch of snapshots to a tensor directly on device.
+
+        This is optimized for the high-throughput PPO vectorized training loop
+        where we need to batch observations from multiple parallel environments.
+
+        Instead of:
+            vectors = [snap.to_vector() for snap in snapshots]
+            tensor = torch.tensor(vectors, device=device)
+
+        This creates a contiguous tensor directly with less GC pressure.
+
+        Args:
+            snapshots: List of TrainingSnapshot objects
+            device: Target device (e.g., "cuda:0", "cpu")
+
+        Returns:
+            Tensor of shape (batch_size, 27) on the specified device
+        """
+        import torch
+        import math
+
+        n_snapshots = len(snapshots)
+        if n_snapshots == 0:
+            return torch.empty(0, 27, device=device)
+
+        # Pre-allocate tensor on device
+        tensor = torch.empty(n_snapshots, 27, device=device)
+
+        # Helper to clamp inf/nan to safe values
+        def safe(v: float, default: float = 0.0, max_val: float = 100.0) -> float:
+            if math.isnan(v) or math.isinf(v):
+                return default
+            return max(-max_val, min(v, max_val))
+
+        # Fill tensor directly (avoids intermediate list allocation)
+        for i, snap in enumerate(snapshots):
+            tensor[i, 0] = float(snap.epoch)
+            tensor[i, 1] = float(snap.global_step)
+            tensor[i, 2] = safe(snap.train_loss, default=10.0)
+            tensor[i, 3] = safe(snap.val_loss, default=10.0)
+            tensor[i, 4] = safe(snap.loss_delta, default=0.0)
+            tensor[i, 5] = snap.train_accuracy
+            tensor[i, 6] = snap.val_accuracy
+            tensor[i, 7] = safe(snap.accuracy_delta, default=0.0)
+            tensor[i, 8] = float(snap.plateau_epochs)
+            tensor[i, 9] = snap.best_val_accuracy
+            tensor[i, 10] = safe(snap.best_val_loss, default=10.0)
+            # Loss history (indices 11-15)
+            for j, v in enumerate(snap.loss_history_5):
+                tensor[i, 11 + j] = safe(v, default=10.0)
+            # Accuracy history (indices 16-20)
+            for j, v in enumerate(snap.accuracy_history_5):
+                tensor[i, 16 + j] = v
+            # Seed state (indices 21-26)
+            tensor[i, 21] = float(snap.has_active_seed)
+            tensor[i, 22] = float(snap.seed_stage)
+            tensor[i, 23] = float(snap.seed_epochs_in_stage)
+            tensor[i, 24] = snap.seed_alpha
+            tensor[i, 25] = snap.seed_improvement
+            tensor[i, 26] = float(snap.available_slots)
+
+        return tensor
+
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
         return {
@@ -161,12 +229,32 @@ class TrainingSnapshot:
 class SimicAction(Enum):
     """Discrete actions Tamiyo can take.
 
-    Simplified from TamiyoAction for policy learning.
+    The action space includes blueprint-specific GERMINATE actions so the
+    policy can learn which blueprint is most suitable for different situations.
     """
     WAIT = 0
-    GERMINATE = 1
-    ADVANCE = 2  # Advance to next stage (training, blending, fossilize)
-    CULL = 3
+    GERMINATE_CONV = 1      # Germinate with conv_enhance blueprint
+    GERMINATE_ATTENTION = 2  # Germinate with attention blueprint
+    GERMINATE_NORM = 3       # Germinate with norm blueprint
+    GERMINATE_DEPTHWISE = 4  # Germinate with depthwise blueprint
+    ADVANCE = 5              # Advance to next stage (training, blending, fossilize)
+    CULL = 6
+
+    @classmethod
+    def is_germinate(cls, action: "SimicAction") -> bool:
+        """Check if action is any germinate variant."""
+        return action in (cls.GERMINATE_CONV, cls.GERMINATE_ATTENTION,
+                         cls.GERMINATE_NORM, cls.GERMINATE_DEPTHWISE)
+
+    @classmethod
+    def get_blueprint_id(cls, action: "SimicAction") -> str | None:
+        """Get blueprint ID for germinate actions, None for others."""
+        return {
+            cls.GERMINATE_CONV: "conv_enhance",
+            cls.GERMINATE_ATTENTION: "attention",
+            cls.GERMINATE_NORM: "norm",
+            cls.GERMINATE_DEPTHWISE: "depthwise",
+        }.get(action)
 
 
 @dataclass
@@ -181,13 +269,13 @@ class ActionTaken:
 
     def to_vector(self) -> list[float]:
         """Convert to flat vector (one-hot action + confidence)."""
-        one_hot = [0.0, 0.0, 0.0, 0.0]
+        one_hot = [0.0] * 7  # 7 actions now
         one_hot[self.action.value] = 1.0
         return one_hot + [self.confidence]
 
     @staticmethod
     def vector_size() -> int:
-        return 5  # 4 actions one-hot + confidence
+        return 8  # 7 actions one-hot + confidence
 
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""

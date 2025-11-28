@@ -48,11 +48,12 @@ from esper.leyline import (
 # Seed Metrics (extends Leyline contract with behavior)
 # =============================================================================
 
-@dataclass
+@dataclass(slots=True)
 class SeedMetrics:
     """Metrics tracked for a seed throughout its lifecycle.
 
     This extends the Leyline SeedMetrics contract with behavior.
+    Uses __slots__ for reduced memory footprint and faster attribute access.
     """
 
     epochs_total: int = 0
@@ -602,6 +603,15 @@ class SeedSlot:
     """A slot in the model where a seed can be attached.
 
     Manages the full lifecycle of a seed with quality gates.
+
+    Args:
+        slot_id: Unique identifier for this slot.
+        channels: Number of channels for seed modules.
+        device: Device to place seed on.
+        gates: Quality gates for stage transitions.
+        on_telemetry: Callback for telemetry events.
+        fast_mode: If True, disable telemetry and isolation monitoring
+            for high-throughput PPO rollouts. Default: False.
     """
 
     def __init__(
@@ -611,19 +621,22 @@ class SeedSlot:
         device: torch.device | str = "cpu",
         gates: QualityGates | None = None,
         on_telemetry: Callable[[TelemetryEvent], None] | None = None,
+        fast_mode: bool = False,
     ):
         self.slot_id = slot_id
         self.channels = channels
         self.device = device
         self.gates = gates or QualityGates()
         self.on_telemetry = on_telemetry
+        self.fast_mode = fast_mode  # Disable telemetry/isolation for PPO
 
         self.seed: nn.Module | None = None
         self.state: SeedState | None = None
         self.alpha_schedule: AlphaSchedule | None = None
         self.isolate_gradients: bool = False
 
-        self.isolation_monitor = GradientIsolationMonitor()
+        # Only create isolation monitor if not in fast mode
+        self.isolation_monitor = None if fast_mode else GradientIsolationMonitor()
 
     @property
     def is_active(self) -> bool:
@@ -665,8 +678,8 @@ class SeedSlot:
         else:
             raise RuntimeError(f"G0 gate failed: {gate_result.checks_failed}")
 
-        # Register for isolation monitoring
-        if host_module is not None:
+        # Register for isolation monitoring (skipped in fast_mode)
+        if host_module is not None and self.isolation_monitor is not None:
             self.isolation_monitor.register(host_module, self.seed)
 
         self._emit_telemetry(TelemetryEventType.SEED_GERMINATED)
@@ -735,7 +748,8 @@ class SeedSlot:
         self.state = None
         self.alpha_schedule = None
         self.isolate_gradients = False
-        self.isolation_monitor.reset()
+        if self.isolation_monitor is not None:
+            self.isolation_monitor.reset()
 
     def forward(self, host_features: torch.Tensor) -> torch.Tensor:
         """Process features through this slot."""
@@ -794,8 +808,11 @@ class SeedSlot:
         event_type: TelemetryEventType,
         data: dict | None = None,
     ) -> None:
-        """Emit a telemetry event."""
-        if self.on_telemetry is None:
+        """Emit a telemetry event.
+
+        Skipped entirely in fast_mode for zero overhead in PPO rollouts.
+        """
+        if self.fast_mode or self.on_telemetry is None:
             return
 
         event = TelemetryEvent(

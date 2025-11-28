@@ -31,7 +31,7 @@ data/simic_test/
 data/packs/
 data/cifar-10-python.tar.gz
 data/cifar-10-batches-py/
-
+data/
 # Misc
 *.log
 *.sqlite3
