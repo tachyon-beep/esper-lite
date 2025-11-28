@@ -13,25 +13,7 @@ import torch.nn.functional as F
 from esper.leyline import SeedStage
 from esper.kasmina.slot import SeedSlot
 from esper.kasmina.isolation import GradientIsolationMonitor
-
-
-# =============================================================================
-# Host Network Components
-# =============================================================================
-
-class ConvBlock(nn.Module):
-    """Standard conv-bn-relu block."""
-
-    def __init__(self, in_channels: int, out_channels: int, kernel_size: int = 3):
-        super().__init__()
-        self.conv = nn.Conv2d(
-            in_channels, out_channels, kernel_size,
-            padding=kernel_size // 2, bias=False
-        )
-        self.bn = nn.BatchNorm2d(out_channels)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return F.relu(self.bn(self.conv(x)))
+from esper.kasmina.blueprints import ConvBlock  # Reuse shared building block
 
 
 class HostCNN(nn.Module):
