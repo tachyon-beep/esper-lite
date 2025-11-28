@@ -16,19 +16,26 @@ Public API:
 """
 
 from esper.tolaria.environment import create_model
-from esper.tolaria.trainer import (
-    train_epoch_normal,
-    train_epoch_seed_isolated,
-    train_epoch_blended,
-    validate_and_get_metrics,
-)
 
-__all__ = [
-    # Environment
-    "create_model",
-    # Trainer
-    "train_epoch_normal",
-    "train_epoch_seed_isolated",
-    "train_epoch_blended",
-    "validate_and_get_metrics",
-]
+# Trainer module not yet implemented - will be added in Task 4
+try:
+    from esper.tolaria.trainer import (
+        train_epoch_normal,
+        train_epoch_seed_isolated,
+        train_epoch_blended,
+        validate_and_get_metrics,
+    )
+    __all__ = [
+        # Environment
+        "create_model",
+        # Trainer
+        "train_epoch_normal",
+        "train_epoch_seed_isolated",
+        "train_epoch_blended",
+        "validate_and_get_metrics",
+    ]
+except ImportError:
+    __all__ = [
+        # Environment
+        "create_model",
+    ]
