@@ -30,19 +30,21 @@ from torch.utils.data import DataLoader
 import torchvision
 import torchvision.transforms as transforms
 
+from esper.leyline import TrainingSignals, SimicAction
 from esper.tamiyo import (
-    TrainingSignals, SignalTracker, HeuristicTamiyo,
+    SignalTracker, HeuristicTamiyo,
     HeuristicPolicyConfig, TamiyoDecision, TamiyoAction,
 )
-from esper.kasmina import SeedStage, SeedSlot, BlueprintCatalog
+from esper.kasmina import (
+    SeedStage, SeedSlot, BlueprintCatalog,
+    ConvBlock, HostCNN, MorphogeneticModel,
+)
 from esper.simic import (
     EpisodeCollector, DatasetManager, StepOutcome,
     snapshot_from_signals, action_from_decision,
-    PolicyNetwork, print_confusion_matrix, SimicAction,
+    PolicyNetwork, print_confusion_matrix,
 )
-from esper.poc_tamiyo import ConvBlock, HostCNN, MorphogeneticModel
-from esper.telemetry_config import TelemetryConfig
-from esper.telemetry import DiagnosticTracker
+from esper.nissa import TelemetryConfig, DiagnosticTracker
 
 
 # =============================================================================

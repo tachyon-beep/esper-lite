@@ -39,8 +39,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from esper.simic import SimicAction, TrainingSnapshot
-from esper.simic_train import obs_to_base_features, telemetry_to_features, safe
+from esper.leyline import SimicAction
+from esper.simic.episodes import TrainingSnapshot
+from esper.simic.features import obs_to_base_features, telemetry_to_features, safe
 from esper.tamiyo import HeuristicTamiyo, HeuristicPolicyConfig, SignalTracker
 
 
@@ -924,7 +925,7 @@ def head_to_head_comparison(
     from torch.utils.data import DataLoader
     import torch.optim as optim
 
-    from esper.kasmina import SeedStage
+    from esper.leyline import SeedStage
 
     print("=" * 60)
     print("Head-to-Head: Heuristic Tamiyo vs IQL Policy")

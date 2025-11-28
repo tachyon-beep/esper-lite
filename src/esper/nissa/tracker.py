@@ -25,7 +25,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from esper.telemetry_config import TelemetryConfig
+from esper.nissa.config import TelemetryConfig
 
 
 @dataclass

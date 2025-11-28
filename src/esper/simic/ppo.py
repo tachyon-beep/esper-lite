@@ -41,8 +41,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Categorical
 
-from esper.simic import SimicAction
-from esper.rewards import compute_shaped_reward, SeedInfo
+from esper.leyline import SimicAction
+from esper.simic.rewards import compute_shaped_reward, SeedInfo
 from esper.tamiyo import SignalTracker
 
 
@@ -672,7 +672,7 @@ def run_episode(
         Tuple of (final_accuracy, action_counts, episode_rewards)
     """
     # Lazy imports to avoid circular deps
-    from esper.kasmina import SeedStage
+    from esper.leyline import SeedStage
     from esper.simic_overnight import create_model
 
     # Set seeds
@@ -1101,7 +1101,7 @@ def train_ppo_vectorized(
     """
     from esper.simic_overnight import load_cifar10, create_model
     from esper.tamiyo import SignalTracker
-    from esper.kasmina import SeedStage
+    from esper.leyline import SeedStage
 
     if devices is None:
         devices = [device]

@@ -132,12 +132,12 @@ class TelemetryConfig(BaseModel):
         Raises:
             ValueError: If profile name is not recognized.
         """
-        profiles_path = Path(__file__).parent / "telemetry_profiles.yaml"
+        profiles_path = Path(__file__).parent / "profiles.yaml"
 
         if not profiles_path.exists():
             raise FileNotFoundError(
                 f"Profiles file not found: {profiles_path}. "
-                "Please create telemetry_profiles.yaml in the esper package."
+                "Please create profiles.yaml in the nissa package."
             )
 
         with open(profiles_path) as f:

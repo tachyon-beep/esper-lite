@@ -1,9 +1,9 @@
 """Reward Computation for Tamiyo Seed Lifecycle Controller.
 
 This module consolidates reward functions used across:
-- Online PPO training (simic_ppo.py)
+- Online PPO training (simic/ppo.py)
 - Offline data generation (datagen/generate.py)
-- Offline RL (simic_iql.py)
+- Offline RL (simic/iql.py)
 
 The reward design follows these principles:
 1. Accuracy improvement is the primary signal
@@ -12,7 +12,7 @@ The reward design follows these principles:
 4. Potential-based shaping maintains optimal policy invariance
 
 Usage:
-    from esper.rewards import compute_shaped_reward, RewardConfig
+    from esper.simic.rewards import compute_shaped_reward, RewardConfig
 
     reward = compute_shaped_reward(
         action=SimicAction.GERMINATE_CONV.value,  # Action as int
@@ -35,8 +35,7 @@ Action values (SimicAction enum):
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from enum import IntEnum
+from dataclasses import dataclass
 from typing import NamedTuple
 
 
@@ -116,7 +115,7 @@ class SeedInfo(NamedTuple):
     epochs_in_stage: int
 
     @staticmethod
-    def from_seed_state(seed_state) -> "SeedInfo":
+    def from_seed_state(seed_state) -> "SeedInfo | None":
         """Convert from kasmina.SeedState to SeedInfo."""
         if seed_state is None:
             return None

@@ -1,25 +1,22 @@
-"""Simic: Policy Learning for Tamiyo
+"""Episode Data Structures for Policy Learning
 
-This module handles:
-- Observation/outcome data structures for policy learning
-- Episode collection from training runs
-- Episode persistence (save/load)
-- (Future) Policy network training
+This module contains the data structures for collecting and managing
+training episodes for Tamiyo policy learning:
+- TrainingSnapshot: What Tamiyo sees (observations)
+- ActionTaken: What Tamiyo does (actions)
+- StepOutcome: What happens (outcomes/rewards)
+- Episode: Complete trajectories for learning
+- EpisodeCollector: Helper for collecting episodes during training
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from enum import Enum, auto
 from pathlib import Path
-from typing import Any
 
-from esper.leyline import (
-    SeedStage,
-    FieldReport as LeylineFieldReport,
-)
+from esper.leyline import SeedStage, FieldReport as LeylineFieldReport
 
 
 # =============================================================================
@@ -223,45 +220,21 @@ class TrainingSnapshot:
 
 
 # =============================================================================
-# Action Space
+# Action Space (imported from leyline.actions)
 # =============================================================================
 
-class SimicAction(Enum):
-    """Discrete actions Tamiyo can take.
-
-    The action space includes blueprint-specific GERMINATE actions so the
-    policy can learn which blueprint is most suitable for different situations.
-    """
-    WAIT = 0
-    GERMINATE_CONV = 1      # Germinate with conv_enhance blueprint
-    GERMINATE_ATTENTION = 2  # Germinate with attention blueprint
-    GERMINATE_NORM = 3       # Germinate with norm blueprint
-    GERMINATE_DEPTHWISE = 4  # Germinate with depthwise blueprint
-    ADVANCE = 5              # Advance to next stage (training, blending, fossilize)
-    CULL = 6
-
-    @classmethod
-    def is_germinate(cls, action: "SimicAction") -> bool:
-        """Check if action is any germinate variant."""
-        return action in (cls.GERMINATE_CONV, cls.GERMINATE_ATTENTION,
-                         cls.GERMINATE_NORM, cls.GERMINATE_DEPTHWISE)
-
-    @classmethod
-    def get_blueprint_id(cls, action: "SimicAction") -> str | None:
-        """Get blueprint ID for germinate actions, None for others."""
-        return {
-            cls.GERMINATE_CONV: "conv_enhance",
-            cls.GERMINATE_ATTENTION: "attention",
-            cls.GERMINATE_NORM: "norm",
-            cls.GERMINATE_DEPTHWISE: "depthwise",
-        }.get(action)
+# Note: SimicAction is now in esper.leyline.actions
+# Import it from there, not defined here
 
 
 @dataclass
 class ActionTaken:
-    """Record of an action taken by Tamiyo."""
+    """Record of an action taken by Tamiyo.
 
-    action: SimicAction
+    Note: The action field refers to SimicAction from leyline.
+    """
+
+    action: "SimicAction"  # From leyline.actions
     blueprint_id: str | None = None
     target_seed_id: str | None = None
     confidence: float = 1.0
@@ -290,6 +263,7 @@ class ActionTaken:
     @classmethod
     def from_dict(cls, d: dict) -> "ActionTaken":
         """Create from dictionary."""
+        from esper.leyline import SimicAction
         return cls(
             action=SimicAction[d["action"]],
             blueprint_id=d["blueprint_id"],
@@ -600,73 +574,6 @@ class EpisodeCollector:
 
 
 # =============================================================================
-# Conversion Helpers
-# =============================================================================
-
-def snapshot_from_signals(
-    signals,  # TrainingSignals from tamiyo
-    seed_state=None,  # SeedState from kasmina, optional
-) -> TrainingSnapshot:
-    """Convert Tamiyo's TrainingSignals to a Simic TrainingSnapshot."""
-    # Pad history to 5 elements
-    loss_hist = signals.loss_history[-5:] if signals.loss_history else []
-    loss_hist = [0.0] * (5 - len(loss_hist)) + loss_hist
-
-    acc_hist = signals.accuracy_history[-5:] if signals.accuracy_history else []
-    acc_hist = [0.0] * (5 - len(acc_hist)) + acc_hist
-
-    snapshot = TrainingSnapshot(
-        epoch=signals.epoch,
-        global_step=signals.global_step,
-        train_loss=signals.train_loss,
-        val_loss=signals.val_loss,
-        loss_delta=signals.loss_delta,
-        train_accuracy=signals.train_accuracy,
-        val_accuracy=signals.val_accuracy,
-        accuracy_delta=signals.accuracy_delta,
-        plateau_epochs=signals.plateau_epochs,
-        best_val_accuracy=signals.best_val_accuracy,
-        loss_history_5=tuple(loss_hist),
-        accuracy_history_5=tuple(acc_hist),
-        available_slots=signals.available_slots,
-    )
-
-    # Add seed state if present
-    if seed_state is not None:
-        snapshot.has_active_seed = True
-        snapshot.seed_stage = int(seed_state.stage)
-        snapshot.seed_epochs_in_stage = seed_state.epochs_in_stage
-        snapshot.seed_alpha = seed_state.alpha
-        snapshot.seed_improvement = seed_state.metrics.improvement_since_stage_start
-
-    return snapshot
-
-
-def action_from_decision(decision) -> ActionTaken:
-    """Convert Tamiyo's TamiyoDecision to a Simic ActionTaken."""
-    from esper.tamiyo import TamiyoAction
-
-    # Map TamiyoAction to SimicAction
-    action_map = {
-        TamiyoAction.WAIT: SimicAction.WAIT,
-        TamiyoAction.GERMINATE: SimicAction.GERMINATE,
-        TamiyoAction.ADVANCE_TRAINING: SimicAction.ADVANCE,
-        TamiyoAction.ADVANCE_BLENDING: SimicAction.ADVANCE,
-        TamiyoAction.ADVANCE_FOSSILIZE: SimicAction.ADVANCE,
-        TamiyoAction.CULL: SimicAction.CULL,
-        TamiyoAction.CHANGE_BLUEPRINT: SimicAction.CULL,  # Cull + new germinate
-    }
-
-    return ActionTaken(
-        action=action_map.get(decision.action, SimicAction.WAIT),
-        blueprint_id=decision.blueprint_id,
-        target_seed_id=decision.target_seed_id,
-        confidence=decision.confidence,
-        reason=decision.reason,
-    )
-
-
-# =============================================================================
 # Dataset Manager
 # =============================================================================
 
@@ -721,279 +628,71 @@ class DatasetManager:
 
 
 # =============================================================================
-# Policy Network (requires torch)
+# Helper Functions
 # =============================================================================
 
-def _check_torch():
-    """Check if torch is available."""
-    try:
-        import torch
-        return True
-    except ImportError:
-        return False
+def snapshot_from_signals(
+    signals,  # TrainingSignals from tamiyo
+    seed_state=None,  # SeedState from kasmina, optional
+) -> TrainingSnapshot:
+    """Convert Tamiyo's TrainingSignals to a Simic TrainingSnapshot."""
+    # Pad history to 5 elements
+    loss_hist = signals.loss_history[-5:] if signals.loss_history else []
+    loss_hist = [0.0] * (5 - len(loss_hist)) + loss_hist
+
+    acc_hist = signals.accuracy_history[-5:] if signals.accuracy_history else []
+    acc_hist = [0.0] * (5 - len(acc_hist)) + acc_hist
+
+    snapshot = TrainingSnapshot(
+        epoch=signals.epoch,
+        global_step=signals.global_step,
+        train_loss=signals.train_loss,
+        val_loss=signals.val_loss,
+        loss_delta=signals.loss_delta,
+        train_accuracy=signals.train_accuracy,
+        val_accuracy=signals.val_accuracy,
+        accuracy_delta=signals.accuracy_delta,
+        plateau_epochs=signals.plateau_epochs,
+        best_val_accuracy=signals.best_val_accuracy,
+        loss_history_5=tuple(loss_hist),
+        accuracy_history_5=tuple(acc_hist),
+        available_slots=signals.available_slots,
+    )
+
+    # Add seed state if present
+    if seed_state is not None:
+        snapshot.has_active_seed = True
+        snapshot.seed_stage = int(seed_state.stage)
+        snapshot.seed_epochs_in_stage = seed_state.epochs_in_stage
+        snapshot.seed_alpha = seed_state.alpha
+        snapshot.seed_improvement = seed_state.metrics.improvement_since_stage_start
+
+    return snapshot
 
 
-class PolicyNetwork:
-    """Simple MLP policy for imitation learning.
+def action_from_decision(decision) -> ActionTaken:
+    """Convert Tamiyo's TamiyoDecision to a Simic ActionTaken."""
+    from esper.leyline import SimicAction
+    from esper.tamiyo import TamiyoAction
 
-    Architecture: Input(27) → Linear(64) → ReLU → Linear(32) → ReLU → Linear(4)
+    # Map TamiyoAction to SimicAction
+    action_map = {
+        TamiyoAction.WAIT: SimicAction.WAIT,
+        TamiyoAction.GERMINATE: SimicAction.GERMINATE,
+        TamiyoAction.ADVANCE_TRAINING: SimicAction.ADVANCE,
+        TamiyoAction.ADVANCE_BLENDING: SimicAction.ADVANCE,
+        TamiyoAction.ADVANCE_FOSSILIZE: SimicAction.ADVANCE,
+        TamiyoAction.CULL: SimicAction.CULL,
+        TamiyoAction.CHANGE_BLUEPRINT: SimicAction.CULL,  # Cull + new germinate
+    }
 
-    Usage:
-        policy = PolicyNetwork()
-        policy.train_on_episodes(episodes, epochs=100)
-        action = policy.predict(snapshot)
-        policy.save("policy.pt")
-    """
-
-    def __init__(self, hidden1: int = 64, hidden2: int = 32, lr: float = 0.001):
-        if not _check_torch():
-            raise ImportError("PyTorch required for PolicyNetwork")
-
-        import torch
-        import torch.nn as nn
-
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        # Simple MLP
-        self.model = nn.Sequential(
-            nn.Linear(TrainingSnapshot.vector_size(), hidden1),
-            nn.ReLU(),
-            nn.Linear(hidden1, hidden2),
-            nn.ReLU(),
-            nn.Linear(hidden2, len(SimicAction)),
-        ).to(self.device)
-
-        self.criterion = nn.CrossEntropyLoss()
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
-
-        # Track training history
-        self.train_losses: list[float] = []
-        self.val_losses: list[float] = []
-        self.val_accuracies: list[float] = []
-
-    def _prepare_data(
-        self, episodes: list[Episode], val_split: float = 0.2
-    ) -> tuple:
-        """Prepare training and validation data from episodes."""
-        import torch
-        import random
-
-        # Shuffle and split by episode
-        episodes = episodes.copy()
-        random.shuffle(episodes)
-        split_idx = int(len(episodes) * (1 - val_split))
-        train_eps = episodes[:split_idx]
-        val_eps = episodes[split_idx:]
-
-        def episodes_to_tensors(eps_list):
-            X, y = [], []
-            for ep in eps_list:
-                for dp in ep.decisions:
-                    X.append(dp.observation.to_vector())
-                    y.append(dp.action.action.value)
-            return (
-                torch.tensor(X, dtype=torch.float32, device=self.device),
-                torch.tensor(y, dtype=torch.long, device=self.device),
-            )
-
-        X_train, y_train = episodes_to_tensors(train_eps)
-        X_val, y_val = episodes_to_tensors(val_eps)
-
-        return X_train, y_train, X_val, y_val
-
-    def train_on_episodes(
-        self,
-        episodes: list[Episode],
-        epochs: int = 100,
-        batch_size: int = 32,
-        val_split: float = 0.2,
-        verbose: bool = True,
-        class_weights: bool = True,
-    ) -> dict:
-        """Train the policy on collected episodes.
-
-        Args:
-            class_weights: If True, weight classes inversely to frequency
-                          to handle imbalanced data (WAIT dominates).
-        """
-        import torch
-
-        X_train, y_train, X_val, y_val = self._prepare_data(episodes, val_split)
-
-        # Compute class weights if requested
-        if class_weights:
-            class_counts = torch.bincount(y_train, minlength=len(SimicAction)).float()
-            # Inverse frequency weighting, with smoothing
-            weights = 1.0 / (class_counts + 1.0)
-            weights = weights / weights.sum() * len(SimicAction)  # Normalize
-            self.criterion = torch.nn.CrossEntropyLoss(weight=weights.to(self.device))
-            if verbose:
-                print(f"Class weights: {dict(zip([a.name for a in SimicAction], weights.tolist()))}")
-
-        if verbose:
-            print(f"Training on {len(X_train)} samples, validating on {len(X_val)}")
-            print(f"Device: {self.device}")
-
-        self.train_losses.clear()
-        self.val_losses.clear()
-        self.val_accuracies.clear()
-
-        for epoch in range(epochs):
-            # Training
-            self.model.train()
-            indices = torch.randperm(len(X_train))
-            total_loss = 0.0
-            n_batches = 0
-
-            for i in range(0, len(X_train), batch_size):
-                batch_idx = indices[i:i + batch_size]
-                X_batch = X_train[batch_idx]
-                y_batch = y_train[batch_idx]
-
-                self.optimizer.zero_grad()
-                outputs = self.model(X_batch)
-                loss = self.criterion(outputs, y_batch)
-                loss.backward()
-                self.optimizer.step()
-
-                total_loss += loss.item()
-                n_batches += 1
-
-            avg_train_loss = total_loss / n_batches
-            self.train_losses.append(avg_train_loss)
-
-            # Validation
-            self.model.eval()
-            with torch.no_grad():
-                val_outputs = self.model(X_val)
-                val_loss = self.criterion(val_outputs, y_val).item()
-                predictions = val_outputs.argmax(dim=1)
-                accuracy = (predictions == y_val).float().mean().item() * 100
-
-            self.val_losses.append(val_loss)
-            self.val_accuracies.append(accuracy)
-
-            if verbose and (epoch + 1) % 10 == 0:
-                print(f"Epoch {epoch+1:3d}: train_loss={avg_train_loss:.4f}, "
-                      f"val_loss={val_loss:.4f}, val_acc={accuracy:.1f}%")
-
-        return {
-            "final_train_loss": self.train_losses[-1],
-            "final_val_loss": self.val_losses[-1],
-            "final_val_accuracy": self.val_accuracies[-1],
-        }
-
-    def predict(self, snapshot: TrainingSnapshot) -> SimicAction:
-        """Predict action for a single observation."""
-        import torch
-
-        self.model.eval()
-        with torch.no_grad():
-            x = torch.tensor(
-                [snapshot.to_vector()],
-                dtype=torch.float32,
-                device=self.device
-            )
-            output = self.model(x)
-            action_idx = output.argmax(dim=1).item()
-
-        return SimicAction(action_idx)
-
-    def predict_probs(self, snapshot: TrainingSnapshot) -> dict[SimicAction, float]:
-        """Predict action probabilities for a single observation."""
-        import torch
-        import torch.nn.functional as F
-
-        self.model.eval()
-        with torch.no_grad():
-            x = torch.tensor(
-                [snapshot.to_vector()],
-                dtype=torch.float32,
-                device=self.device
-            )
-            output = self.model(x)
-            probs = F.softmax(output, dim=1)[0]
-
-        return {
-            SimicAction(i): probs[i].item()
-            for i in range(len(SimicAction))
-        }
-
-    def evaluate(self, episodes: list[Episode]) -> dict:
-        """Evaluate policy on episodes, returning accuracy and confusion matrix."""
-        import torch
-
-        X, y_true = [], []
-        for ep in episodes:
-            for dp in ep.decisions:
-                X.append(dp.observation.to_vector())
-                y_true.append(dp.action.action.value)
-
-        X = torch.tensor(X, dtype=torch.float32, device=self.device)
-        y_true = torch.tensor(y_true, dtype=torch.long, device=self.device)
-
-        self.model.eval()
-        with torch.no_grad():
-            outputs = self.model(X)
-            y_pred = outputs.argmax(dim=1)
-
-        # Accuracy
-        accuracy = (y_pred == y_true).float().mean().item() * 100
-
-        # Confusion matrix (4x4)
-        n_classes = len(SimicAction)
-        confusion = [[0] * n_classes for _ in range(n_classes)]
-        for true, pred in zip(y_true.tolist(), y_pred.tolist()):
-            confusion[true][pred] += 1
-
-        # Per-class accuracy
-        class_acc = {}
-        for i, action in enumerate(SimicAction):
-            total = sum(confusion[i])
-            correct = confusion[i][i] if total > 0 else 0
-            class_acc[action.name] = (correct / total * 100) if total > 0 else 0.0
-
-        return {
-            "accuracy": accuracy,
-            "confusion_matrix": confusion,
-            "class_accuracy": class_acc,
-            "total_samples": len(y_true),
-        }
-
-    def save(self, path: str | Path) -> None:
-        """Save model weights."""
-        import torch
-        torch.save(self.model.state_dict(), path)
-
-    def load(self, path: str | Path) -> None:
-        """Load model weights."""
-        import torch
-        self.model.load_state_dict(torch.load(path, map_location=self.device))
-
-
-def print_confusion_matrix(eval_result: dict) -> None:
-    """Pretty print a confusion matrix."""
-    cm = eval_result["confusion_matrix"]
-    actions = [a.name for a in SimicAction]
-
-    # Header
-    print("\nConfusion Matrix (rows=actual, cols=predicted):")
-    print(f"{'':>12}", end="")
-    for name in actions:
-        print(f"{name:>10}", end="")
-    print()
-
-    # Rows
-    for i, name in enumerate(actions):
-        print(f"{name:>12}", end="")
-        for j in range(len(actions)):
-            print(f"{cm[i][j]:>10}", end="")
-        print()
-
-    # Per-class accuracy
-    print("\nPer-class accuracy:")
-    for name, acc in eval_result["class_accuracy"].items():
-        print(f"  {name}: {acc:.1f}%")
+    return ActionTaken(
+        action=action_map.get(decision.action, SimicAction.WAIT),
+        blueprint_id=decision.blueprint_id,
+        target_seed_id=decision.target_seed_id,
+        confidence=decision.confidence,
+        reason=decision.reason,
+    )
 
 
 # =============================================================================
@@ -1004,7 +703,6 @@ __all__ = [
     # Observations
     "TrainingSnapshot",
     # Actions
-    "SimicAction",
     "ActionTaken",
     # Outcomes
     "StepOutcome",
@@ -1015,9 +713,6 @@ __all__ = [
     "EpisodeCollector",
     # Dataset
     "DatasetManager",
-    # Policy
-    "PolicyNetwork",
-    "print_confusion_matrix",
     # Helpers
     "snapshot_from_signals",
     "action_from_decision",
