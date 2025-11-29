@@ -546,9 +546,11 @@ def train_ppo_vectorized(
         print(f"  Actions: {total_actions}")
 
         if metrics:
+            current_entropy_coef = agent.get_entropy_coef()
             print(f"  Policy loss: {metrics['policy_loss']:.4f}, "
                   f"Value loss: {metrics['value_loss']:.4f}, "
-                  f"Entropy: {metrics['entropy']:.4f}")
+                  f"Entropy: {metrics['entropy']:.4f}, "
+                  f"Entropy coef: {current_entropy_coef:.4f}")
 
         history.append({
             'batch': batch_idx + 1,
@@ -558,6 +560,7 @@ def train_ppo_vectorized(
             'rolling_avg_accuracy': rolling_avg_acc,
             'avg_reward': avg_reward,
             'action_counts': total_actions,
+            'entropy_coef': agent.get_entropy_coef(),
             **metrics,
         })
 
