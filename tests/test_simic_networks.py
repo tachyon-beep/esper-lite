@@ -104,19 +104,41 @@ def test_ppo_features_match_comparison_dimensions():
     from esper.tolaria import create_model
     from esper.leyline import SeedTelemetry
 
-    # Create mock signals and model
+    model = create_model("cpu")
     tracker = SignalTracker()
-    signals = tracker.update(
+
+    # Test case 1: Empty active_seeds
+    signals_empty = tracker.update(
         epoch=1, global_step=100, train_loss=1.0, train_accuracy=50.0,
         val_loss=1.0, val_accuracy=50.0, active_seeds=[], available_slots=1
     )
 
-    model = create_model("cpu")
+    ppo_features_empty = signals_to_features(signals_empty, model, tracker, use_telemetry=True)
+    assert len(ppo_features_empty) == 37, \
+        f"Empty active_seeds: Expected 37 dims, got {len(ppo_features_empty)}"
 
-    # PPO features with telemetry
-    ppo_features = signals_to_features(signals, model, tracker, use_telemetry=True)
+    # Test case 2: Active seeds with IDs (should still produce 37-dim with zero telemetry)
+    # TrainingSignals.active_seeds will contain seed ID strings after tracker.update
+    # even though we pass SeedState objects to tracker.update
+    from unittest.mock import Mock
+    mock_seed = Mock()
+    mock_seed.seed_id = "seed_1"
 
-    # Comparison features with telemetry (zero seed telemetry)
+    signals_with_seeds = tracker.update(
+        epoch=2, global_step=200, train_loss=0.9, train_accuracy=55.0,
+        val_loss=0.9, val_accuracy=55.0, active_seeds=[mock_seed], available_slots=0
+    )
+
+    # Verify active_seeds contains strings, not SeedState objects
+    assert len(signals_with_seeds.active_seeds) == 1
+    assert isinstance(signals_with_seeds.active_seeds[0], str)
+    assert signals_with_seeds.active_seeds[0] == "seed_1"
+
+    ppo_features_with_seeds = signals_to_features(signals_with_seeds, model, tracker, use_telemetry=True)
+    assert len(ppo_features_with_seeds) == 37, \
+        f"With active_seeds: Expected 37 dims, got {len(ppo_features_with_seeds)}"
+
+    # Test case 3: Compare with snapshot_to_features
     snapshot = TrainingSnapshot(
         epoch=1, global_step=100, train_loss=1.0, val_loss=1.0,
         loss_delta=0.0, train_accuracy=50.0, val_accuracy=50.0,
@@ -126,15 +148,14 @@ def test_ppo_features_match_comparison_dimensions():
         seed_alpha=0.0, seed_improvement=0.0, available_slots=1
     )
 
-    # Create zero telemetry for comparison
     zero_telemetry = SeedTelemetry(seed_id="test")
     comparison_features = snapshot_to_features(
         snapshot, use_telemetry=True, seed_telemetry=zero_telemetry
     )
 
     # CRITICAL: Dimensions must match
-    assert len(ppo_features) == len(comparison_features), \
-        f"PPO uses {len(ppo_features)}-dim, comparison uses {len(comparison_features)}-dim"
+    assert len(ppo_features_empty) == len(comparison_features), \
+        f"PPO uses {len(ppo_features_empty)}-dim, comparison uses {len(comparison_features)}-dim"
 
     # Both should be 37-dim (27 base + 10 seed telemetry)
-    assert len(ppo_features) == 37, f"Expected 37 dims, got {len(ppo_features)}"
+    assert len(comparison_features) == 37, f"Expected 37 dims, got {len(comparison_features)}"

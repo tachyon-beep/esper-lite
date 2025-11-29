@@ -33,7 +33,11 @@ def signals_to_features(signals, model, tracker=None, use_telemetry: bool = True
         use_telemetry: Whether to include telemetry features
 
     Returns:
-        Feature vector (27 dims base, +10 if telemetry)
+        Feature vector (27 dims base, +10 if telemetry = 37 dims total)
+
+    Note:
+        TrainingSignals.active_seeds contains seed IDs (strings), not SeedState
+        objects, so seed-specific features and telemetry are always zero-padded.
     """
     from esper.simic.features import obs_to_base_features
 
@@ -65,28 +69,22 @@ def signals_to_features(signals, model, tracker=None, use_telemetry: bool = True
     }
 
     # Seed state features
-    if signals.active_seeds:
-        seed = signals.active_seeds[0]
-        obs['seed_stage'] = seed.stage.value
-        obs['seed_epochs_in_stage'] = seed.metrics.epochs_in_current_stage
-        obs['seed_alpha'] = seed.alpha
-        obs['seed_improvement'] = seed.metrics.improvement_since_stage_start
-    else:
-        obs['seed_stage'] = 0
-        obs['seed_epochs_in_stage'] = 0
-        obs['seed_alpha'] = 0.0
-        obs['seed_improvement'] = 0.0
+    # NOTE: TrainingSignals.active_seeds is a list of seed IDs (strings),
+    # not SeedState objects. We cannot access seed attributes here.
+    # Always use zero-padding for seed-specific features.
+    obs['seed_stage'] = 0
+    obs['seed_epochs_in_stage'] = 0
+    obs['seed_alpha'] = 0.0
+    obs['seed_improvement'] = 0.0
 
     features = obs_to_base_features(obs)
 
     if use_telemetry:
-        # Use seed telemetry (10 dims) not legacy full telemetry (27 dims)
-        if signals.active_seeds and hasattr(signals.active_seeds[0], 'telemetry'):
-            features.extend(signals.active_seeds[0].telemetry.to_features())
-        else:
-            # No seed active or no telemetry - use zeros
-            from esper.leyline import SeedTelemetry
-            features.extend([0.0] * SeedTelemetry.feature_dim())
+        # TrainingSignals doesn't provide access to SeedState objects
+        # (only seed IDs), so we cannot access seed telemetry here.
+        # Zero-pad telemetry features when requested.
+        from esper.leyline import SeedTelemetry
+        features.extend([0.0] * SeedTelemetry.feature_dim())
 
     return features
 
