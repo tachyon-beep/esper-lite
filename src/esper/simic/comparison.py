@@ -206,8 +206,8 @@ def live_comparison(
                 available_slots=available_slots,
             )
 
-            # Get heuristic decision
-            h_action = tamiyo.decide(signals)
+            # Get heuristic decision (requires signals and active_seeds)
+            h_action = tamiyo.decide(signals, active_seeds)
 
             # Get IQL decision
             # Pad history to 5 elements
@@ -514,14 +514,22 @@ def head_to_head_comparison(
     def heuristic_action_fn(signals, model, tracker, use_telemetry):
         """Get action from heuristic Tamiyo."""
         tamiyo = HeuristicTamiyo(HeuristicPolicyConfig())
-        decision = tamiyo.decide(signals)
+        # Get active seeds from model
+        active_seeds = [model.seed_state] if model.has_active_seed and model.seed_state else []
+        decision = tamiyo.decide(signals, active_seeds)
         # Map TamiyoAction to SimicAction
         action_name = decision.action.name
         if action_name == "WAIT":
             return SimicAction.WAIT
         elif action_name == "GERMINATE":
-            # Default to CONV variant - heuristic doesn't specify blueprint
-            return SimicAction.GERMINATE_CONV
+            # Map blueprint_id to appropriate GERMINATE_* variant
+            blueprint_map = {
+                "conv_enhance": SimicAction.GERMINATE_CONV,
+                "attention": SimicAction.GERMINATE_ATTENTION,
+                "norm": SimicAction.GERMINATE_NORM,
+                "depthwise": SimicAction.GERMINATE_DEPTHWISE,
+            }
+            return blueprint_map.get(decision.blueprint_id, SimicAction.GERMINATE_CONV)
         elif action_name in ("ADVANCE_TRAINING", "ADVANCE_BLENDING", "ADVANCE_FOSSILIZE"):
             return SimicAction.ADVANCE
         elif action_name in ("CULL", "CHANGE_BLUEPRINT"):

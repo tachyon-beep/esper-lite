@@ -676,18 +676,29 @@ def action_from_decision(decision) -> ActionTaken:
     from esper.tamiyo import TamiyoAction
 
     # Map TamiyoAction to SimicAction
-    action_map = {
-        TamiyoAction.WAIT: SimicAction.WAIT,
-        TamiyoAction.GERMINATE: SimicAction.GERMINATE,
-        TamiyoAction.ADVANCE_TRAINING: SimicAction.ADVANCE,
-        TamiyoAction.ADVANCE_BLENDING: SimicAction.ADVANCE,
-        TamiyoAction.ADVANCE_FOSSILIZE: SimicAction.ADVANCE,
-        TamiyoAction.CULL: SimicAction.CULL,
-        TamiyoAction.CHANGE_BLUEPRINT: SimicAction.CULL,  # Cull + new germinate
-    }
+    # For GERMINATE, we need to map based on blueprint_id
+    if decision.action == TamiyoAction.GERMINATE:
+        # Map blueprint_id to appropriate GERMINATE_* variant
+        blueprint_map = {
+            "conv_enhance": SimicAction.GERMINATE_CONV,
+            "attention": SimicAction.GERMINATE_ATTENTION,
+            "norm": SimicAction.GERMINATE_NORM,
+            "depthwise": SimicAction.GERMINATE_DEPTHWISE,
+        }
+        simic_action = blueprint_map.get(decision.blueprint_id, SimicAction.GERMINATE_CONV)
+    else:
+        action_map = {
+            TamiyoAction.WAIT: SimicAction.WAIT,
+            TamiyoAction.ADVANCE_TRAINING: SimicAction.ADVANCE,
+            TamiyoAction.ADVANCE_BLENDING: SimicAction.ADVANCE,
+            TamiyoAction.ADVANCE_FOSSILIZE: SimicAction.ADVANCE,
+            TamiyoAction.CULL: SimicAction.CULL,
+            TamiyoAction.CHANGE_BLUEPRINT: SimicAction.CULL,  # Cull + new germinate
+        }
+        simic_action = action_map.get(decision.action, SimicAction.WAIT)
 
     return ActionTaken(
-        action=action_map.get(decision.action, SimicAction.WAIT),
+        action=simic_action,
         blueprint_id=decision.blueprint_id,
         target_seed_id=decision.target_seed_id,
         confidence=decision.confidence,
