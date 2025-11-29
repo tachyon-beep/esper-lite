@@ -158,3 +158,63 @@ class TestEntropyAnnealing:
         assert agent.get_entropy_coef() == 0.05
         agent.train_steps = 100
         assert agent.get_entropy_coef() == 0.05  # Still fixed
+
+    def test_annealing_at_start(self):
+        """Step 0 should return entropy_coef_start."""
+        from esper.simic.ppo import PPOAgent
+
+        agent = PPOAgent(
+            state_dim=27,
+            action_dim=7,
+            entropy_coef_start=0.2,
+            entropy_coef_end=0.01,
+            entropy_anneal_steps=100,
+            device='cpu'
+        )
+        agent.train_steps = 0
+        assert agent.get_entropy_coef() == 0.2
+
+    def test_annealing_at_midpoint(self):
+        """Midpoint should return average of start and end."""
+        from esper.simic.ppo import PPOAgent
+
+        agent = PPOAgent(
+            state_dim=27,
+            action_dim=7,
+            entropy_coef_start=0.2,
+            entropy_coef_end=0.0,
+            entropy_anneal_steps=100,
+            device='cpu'
+        )
+        agent.train_steps = 50
+        assert abs(agent.get_entropy_coef() - 0.1) < 1e-6
+
+    def test_annealing_at_end(self):
+        """At anneal_steps, should return entropy_coef_end."""
+        from esper.simic.ppo import PPOAgent
+
+        agent = PPOAgent(
+            state_dim=27,
+            action_dim=7,
+            entropy_coef_start=0.2,
+            entropy_coef_end=0.01,
+            entropy_anneal_steps=100,
+            device='cpu'
+        )
+        agent.train_steps = 100
+        assert abs(agent.get_entropy_coef() - 0.01) < 1e-6
+
+    def test_annealing_clamps_beyond_schedule(self):
+        """Beyond anneal_steps, should stay at entropy_coef_end."""
+        from esper.simic.ppo import PPOAgent
+
+        agent = PPOAgent(
+            state_dim=27,
+            action_dim=7,
+            entropy_coef_start=0.2,
+            entropy_coef_end=0.01,
+            entropy_anneal_steps=100,
+            device='cpu'
+        )
+        agent.train_steps = 200
+        assert abs(agent.get_entropy_coef() - 0.01) < 1e-6
