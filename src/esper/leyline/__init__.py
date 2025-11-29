@@ -58,6 +58,7 @@ from esper.leyline.telemetry import (
     TelemetryEvent,
     PerformanceBudgets,
     DEFAULT_BUDGETS,
+    SeedTelemetry,
 )
 
 __all__ = [
@@ -103,4 +104,5 @@ __all__ = [
     "TelemetryEvent",
     "PerformanceBudgets",
     "DEFAULT_BUDGETS",
+    "SeedTelemetry",
 ]

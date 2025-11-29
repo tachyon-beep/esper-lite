@@ -90,3 +90,70 @@ class PerformanceBudgets:
 
 # Default budgets
 DEFAULT_BUDGETS = PerformanceBudgets()
+
+
+# =============================================================================
+# Seed Telemetry Snapshot
+# =============================================================================
+
+@dataclass(slots=True)
+class SeedTelemetry:
+    """Per-seed telemetry snapshot - the seed's 'local picture'.
+
+    Contract between seed implementations (Kasmina/Simic) and
+    decision-makers (Tamiyo). Designed for:
+    - Single seed (current): one instance
+    - Multi-seed (future): collection managed by registry
+    - Hierarchical (stretch): tactical aggregates for strategic
+
+    Note: Uses slots=True for memory efficiency in multi-seed scenarios.
+    """
+
+    seed_id: str
+    blueprint_id: str = ""
+    layer_id: str = ""
+
+    # Health signals (lightweight, always collected)
+    gradient_norm: float = 0.0
+    gradient_health: float = 1.0  # 0-1, higher is healthier
+    has_vanishing: bool = False
+    has_exploding: bool = False
+
+    # Progress signals
+    accuracy: float = 0.0  # percentage (0-100)
+    accuracy_delta: float = 0.0  # positive = improving
+    epochs_in_stage: int = 0
+
+    # Stage context
+    stage: int = 1  # SeedStage enum value (1-7)
+    alpha: float = 0.0  # blending weight (0-1)
+
+    # Temporal context
+    epoch: int = 0
+    max_epochs: int = 25
+
+    # Timestamp for staleness detection
+    captured_at: datetime = field(default_factory=_utc_now)
+
+    def to_features(self) -> list[float]:
+        """Convert to 10-dim feature vector for RL policies.
+
+        All features normalized to approximately [0, 1] range.
+        """
+        return [
+            min(self.gradient_norm, 10.0) / 10.0,
+            self.gradient_health,
+            float(self.has_vanishing),
+            float(self.has_exploding),
+            min(self.epochs_in_stage, 50) / 50.0,
+            self.accuracy / 100.0,
+            max(-1.0, min(1.0, self.accuracy_delta / 10.0)),
+            (self.stage - 1) / 6.0,  # stages 1-7 -> [0, 1]
+            self.alpha,
+            self.epoch / max(self.max_epochs, 1),  # temporal position
+        ]
+
+    @classmethod
+    def feature_dim(cls) -> int:
+        """Return current feature vector dimension."""
+        return 10
