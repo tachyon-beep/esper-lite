@@ -206,7 +206,7 @@ class PPOAgent:
                 loss = (
                     policy_loss
                     + self.value_coef * value_loss
-                    + self.entropy_coef * entropy_loss
+                    + self.get_entropy_coef() * entropy_loss
                 )
 
                 self.optimizer.zero_grad()

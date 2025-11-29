@@ -218,3 +218,36 @@ class TestEntropyAnnealing:
         )
         agent.train_steps = 200
         assert abs(agent.get_entropy_coef() - 0.01) < 1e-6
+
+    def test_annealed_entropy_used_in_update(self):
+        """PPO update should use annealed entropy coefficient."""
+        from esper.simic.ppo import PPOAgent
+        import torch
+
+        # Create agent with annealing
+        agent = PPOAgent(
+            state_dim=27,
+            action_dim=7,
+            entropy_coef_start=0.5,
+            entropy_coef_end=0.01,
+            entropy_anneal_steps=10,
+            device='cpu'
+        )
+
+        # Add some dummy transitions
+        for _ in range(5):
+            state = torch.randn(27)
+            agent.store_transition(state, action=0, log_prob=-1.0, value=0.5, reward=1.0, done=False)
+
+        # At step 0, entropy_coef should be 0.5
+        assert agent.train_steps == 0
+        assert agent.get_entropy_coef() == 0.5
+
+        # Perform update
+        metrics = agent.update(last_value=0.0)
+
+        # After update, train_steps incremented
+        assert agent.train_steps == 1
+        # Entropy coef should have changed
+        expected_coef = 0.5 + (1/10) * (0.01 - 0.5)  # 0.451
+        assert abs(agent.get_entropy_coef() - expected_coef) < 1e-6
