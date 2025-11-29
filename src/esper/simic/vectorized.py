@@ -31,6 +31,7 @@ import torch
 import torch.nn as nn
 
 from esper.leyline import SimicAction, SeedStage, SeedTelemetry
+from esper.simic.gradient_collector import collect_seed_gradients
 from esper.simic.buffers import RolloutBuffer
 from esper.simic.networks import ActorCritic
 from esper.simic.normalization import RunningMeanStd
@@ -210,15 +211,21 @@ def train_ppo_vectorized(
         )
 
     def process_train_batch(env_state: ParallelEnvState, inputs: torch.Tensor,
-                            targets: torch.Tensor, criterion: nn.Module) -> tuple[torch.Tensor, torch.Tensor, int]:
+                            targets: torch.Tensor, criterion: nn.Module,
+                            use_telemetry: bool = False) -> tuple[torch.Tensor, torch.Tensor, int, dict | None]:
         """Process a single training batch for one environment (runs in CUDA stream).
 
         Returns TENSORS (not floats) to avoid blocking .item() calls inside stream context.
         Call .item() only AFTER synchronizing all streams.
+
+        Returns:
+            Tuple of (loss_tensor, correct_tensor, total, grad_stats)
+            grad_stats is None if use_telemetry=False or no active seed in TRAINING stage
         """
         model = env_state.model
         seed_state = model.seed_state
         env_dev = env_state.env_device
+        grad_stats = None
 
         # Use CUDA stream for async execution
         stream_ctx = torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
@@ -260,6 +267,10 @@ def train_ppo_vectorized(
             loss = criterion(outputs, targets)
             loss.backward()
 
+            # Collect gradient stats for telemetry (after backward, before step)
+            if use_telemetry and seed_state and seed_state.stage in (SeedStage.TRAINING, SeedStage.BLENDING):
+                grad_stats = collect_seed_gradients(model.get_seed_parameters())
+
             optimizer.step()
             if seed_state and seed_state.stage == SeedStage.BLENDING and env_state.seed_optimizer:
                 env_state.seed_optimizer.step()
@@ -268,7 +279,7 @@ def train_ppo_vectorized(
             correct_tensor = predicted.eq(targets).sum()  # Keep as tensor, no .item()
 
             # Return tensors - .item() called after stream sync
-            return loss.detach(), correct_tensor, targets.size(0)
+            return loss.detach(), correct_tensor, targets.size(0), grad_stats
 
     def process_val_batch(env_state: ParallelEnvState, inputs: torch.Tensor,
                           targets: torch.Tensor, criterion: nn.Module) -> tuple[torch.Tensor, torch.Tensor, int]:
@@ -324,6 +335,9 @@ def train_ppo_vectorized(
 
         # Run epochs with INVERTED CONTROL FLOW
         for epoch in range(1, max_epochs + 1):
+            # Track gradient stats per env for telemetry sync
+            env_grad_stats = [None] * envs_this_batch
+
             # Reset per-epoch metrics - GPU tensors for accumulation, sync only at epoch end
             train_loss_accum = [torch.zeros(1, device=env_states[i].env_device) for i in range(envs_this_batch)]
             train_correct_accum = [torch.zeros(1, device=env_states[i].env_device) for i in range(envs_this_batch)]
@@ -349,7 +363,11 @@ def train_ppo_vectorized(
                     if env_batches[i] is None:
                         continue
                     inputs, targets = env_batches[i]
-                    loss_tensor, correct_tensor, total = process_train_batch(env_state, inputs, targets, criterion)
+                    loss_tensor, correct_tensor, total, grad_stats = process_train_batch(
+                        env_state, inputs, targets, criterion, use_telemetry=use_telemetry
+                    )
+                    if grad_stats is not None:
+                        env_grad_stats[i] = grad_stats  # Keep last batch's grad stats
                     # Accumulate inside stream context (in-place add respects stream ordering)
                     stream_ctx = torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
                     with stream_ctx:
@@ -404,6 +422,22 @@ def train_ppo_vectorized(
             val_corrects = [t.item() for t in val_correct_accum]
 
             # ===== Compute epoch metrics and get BATCHED actions =====
+            # First, sync telemetry for envs with active seeds (must happen BEFORE feature extraction)
+            for env_idx, env_state in enumerate(env_states):
+                model = env_state.model
+                seed_state = model.seed_state
+
+                if use_telemetry and seed_state and env_grad_stats[env_idx]:
+                    grad_stats = env_grad_stats[env_idx]
+                    seed_state.sync_telemetry(
+                        gradient_norm=grad_stats['gradient_norm'],
+                        gradient_health=grad_stats['gradient_health'],
+                        has_vanishing=grad_stats['has_vanishing'],
+                        has_exploding=grad_stats['has_exploding'],
+                        epoch=epoch,
+                        max_epochs=max_epochs,
+                    )
+
             # Collect features from all environments
             all_features = []
             all_signals = []
