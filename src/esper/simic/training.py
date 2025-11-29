@@ -506,8 +506,11 @@ def train_ppo(
     lr: float = 3e-4,
     clip_ratio: float = 0.2,
     entropy_coef: float = 0.01,
+    entropy_coef_start: float | None = None,
+    entropy_coef_end: float | None = None,
+    entropy_anneal_episodes: int = 0,
     gamma: float = 0.99,
-    save_path: str = None,
+    save_path: str | None = None,
 ):
     """Train PPO agent."""
     from esper.simic.ppo import PPOAgent
@@ -524,12 +527,21 @@ def train_ppo(
     BASE_FEATURE_DIM = 27
     state_dim = BASE_FEATURE_DIM + (SeedTelemetry.feature_dim() if use_telemetry else 0)
 
+    # Convert episode-based annealing to step-based
+    # CRITICAL: Non-vectorized training only updates every `update_every` episodes
+    # So actual PPO updates = n_episodes / update_every
+    # If update_every=5 and entropy_anneal_episodes=100, we get 20 PPO updates
+    entropy_anneal_steps = (entropy_anneal_episodes // update_every) if entropy_anneal_episodes > 0 else 0
+
     agent = PPOAgent(
         state_dim=state_dim,
         action_dim=len(SimicAction),
         lr=lr,
         clip_ratio=clip_ratio,
         entropy_coef=entropy_coef,
+        entropy_coef_start=entropy_coef_start,
+        entropy_coef_end=entropy_coef_end,
+        entropy_anneal_steps=entropy_anneal_steps,
         gamma=gamma,
         device=device,
     )
