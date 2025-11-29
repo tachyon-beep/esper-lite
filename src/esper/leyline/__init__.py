@@ -11,7 +11,7 @@ Example:
 LEYLINE_VERSION = "0.2.0"
 
 # Actions
-from esper.leyline.actions import SimicAction
+from esper.leyline.actions import Action, SimicAction  # SimicAction is alias
 
 # Stages and transitions
 from esper.leyline.stages import (
@@ -66,7 +66,8 @@ __all__ = [
     "LEYLINE_VERSION",
 
     # Actions
-    "SimicAction",
+    "Action",
+    "SimicAction",  # deprecated alias
 
     # Stages
     "SeedStage",
