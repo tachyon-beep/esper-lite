@@ -582,3 +582,163 @@ class TestLoadIQLModelDimensions:
         assert mode_54 == 'legacy'
         use_telemetry_54 = (mode_54 in ['seed', 'legacy'])
         assert use_telemetry_54 is True
+
+
+class TestEndToEndTelemetryPipeline:
+    """End-to-end test of the complete telemetry pipeline."""
+
+    def test_complete_telemetry_flow(self):
+        """Test the entire flow from gradient collection to feature extraction.
+
+        This integration test verifies:
+        1. Create a model and seed state
+        2. Do a forward/backward pass to generate gradients
+        3. Collect gradients with SeedGradientCollector
+        4. Sync telemetry to seed_state
+        5. Create a TrainingSnapshot
+        6. Call snapshot_to_features with seed_telemetry
+        7. Verify output is 37-dim with expected values
+        """
+        import torch
+        import torch.nn as nn
+        from esper.kasmina.slot import SeedState
+        from esper.leyline import SeedStage, SeedTelemetry
+        from esper.simic.gradient_collector import SeedGradientCollector
+        from esper.simic.episodes import TrainingSnapshot
+        from esper.simic.comparison import snapshot_to_features
+
+        # Step 1: Create a simple model and seed state
+        model = nn.Sequential(
+            nn.Linear(10, 20),
+            nn.ReLU(),
+            nn.Linear(20, 5)
+        )
+
+        seed_state = SeedState(
+            seed_id="integration_test_seed",
+            blueprint_id="conv_enhance"
+        )
+        seed_state.stage = SeedStage.TRAINING
+        seed_state.metrics.current_val_accuracy = 72.5
+        seed_state.metrics.epochs_in_current_stage = 3
+        seed_state.alpha = 0.0
+
+        # Step 2: Perform a forward/backward pass to generate real gradients
+        x = torch.randn(8, 10)
+        target = torch.randint(0, 5, (8,))
+
+        # Forward pass
+        output = model(x)
+        loss = nn.functional.cross_entropy(output, target)
+
+        # Backward pass generates gradients
+        loss.backward()
+
+        # Step 3: Collect gradients using SeedGradientCollector
+        collector = SeedGradientCollector()
+        gradient_stats = collector.collect(model.parameters())
+
+        # Verify we got real gradient statistics
+        assert gradient_stats['gradient_norm'] > 0, "Should have non-zero gradient norm"
+        assert 0 <= gradient_stats['gradient_health'] <= 1
+        assert isinstance(gradient_stats['has_vanishing'], bool)
+        assert isinstance(gradient_stats['has_exploding'], bool)
+
+        # Step 4: Sync telemetry to seed_state
+        current_epoch = 5
+        max_epochs = 25
+
+        seed_state.sync_telemetry(
+            gradient_norm=gradient_stats['gradient_norm'],
+            gradient_health=gradient_stats['gradient_health'],
+            has_vanishing=gradient_stats['has_vanishing'],
+            has_exploding=gradient_stats['has_exploding'],
+            epoch=current_epoch,
+            max_epochs=max_epochs,
+        )
+
+        # Verify telemetry was updated correctly
+        assert seed_state.telemetry.seed_id == "integration_test_seed"
+        assert seed_state.telemetry.blueprint_id == "conv_enhance"
+        assert seed_state.telemetry.gradient_norm == gradient_stats['gradient_norm']
+        assert seed_state.telemetry.gradient_health == gradient_stats['gradient_health']
+        assert seed_state.telemetry.has_vanishing == gradient_stats['has_vanishing']
+        assert seed_state.telemetry.has_exploding == gradient_stats['has_exploding']
+        assert seed_state.telemetry.accuracy == 72.5
+        assert seed_state.telemetry.epochs_in_stage == 3
+        assert seed_state.telemetry.stage == SeedStage.TRAINING.value
+        assert seed_state.telemetry.alpha == 0.0
+        assert seed_state.telemetry.epoch == current_epoch
+        assert seed_state.telemetry.max_epochs == max_epochs
+
+        # Step 5: Create a TrainingSnapshot (simulating a training scenario)
+        snapshot = TrainingSnapshot(
+            epoch=current_epoch,
+            global_step=500,
+            train_loss=0.45,
+            val_loss=0.52,
+            loss_delta=-0.08,
+            train_accuracy=78.0,
+            val_accuracy=72.5,
+            accuracy_delta=2.5,
+            plateau_epochs=0,
+            best_val_accuracy=72.5,
+            best_val_loss=0.52,
+            loss_history_5=(0.9, 0.75, 0.6, 0.52, 0.52),
+            accuracy_history_5=(60.0, 65.0, 68.0, 70.0, 72.5),
+            has_active_seed=True,
+            seed_stage=SeedStage.TRAINING.value,
+            seed_epochs_in_stage=3,
+            seed_alpha=0.0,
+            seed_improvement=5.0,
+            available_slots=0,
+        )
+
+        # Step 6: Call snapshot_to_features with seed_telemetry
+        features = snapshot_to_features(
+            snapshot,
+            use_telemetry=True,
+            seed_telemetry=seed_state.telemetry
+        )
+
+        # Step 7: Verify output is 37-dim with expected values
+        assert len(features) == 37, f"Expected 37 features, got {len(features)}"
+
+        # First 27 dimensions are base snapshot features
+        base_features = features[:27]
+        assert len(base_features) == 27
+
+        # Last 10 dimensions are seed telemetry features
+        telemetry_features = features[-10:]
+        assert len(telemetry_features) == 10
+
+        # Verify telemetry features match what we'd get from to_features()
+        expected_telemetry_features = seed_state.telemetry.to_features()
+        assert telemetry_features == expected_telemetry_features
+
+        # Verify gradient information is present in telemetry features
+        # First feature should be normalized gradient_norm (should be > 0)
+        assert telemetry_features[0] > 0, "Gradient norm feature should be non-zero"
+
+        # Second feature should be gradient_health (should be in [0, 1])
+        assert 0 <= telemetry_features[1] <= 1, "Gradient health should be in [0, 1]"
+
+        # Boolean features for vanishing/exploding gradients
+        # These are 0.0 or 1.0
+        assert telemetry_features[2] in [0.0, 1.0], "has_vanishing should be boolean"
+        assert telemetry_features[3] in [0.0, 1.0], "has_exploding should be boolean"
+
+        # Verify all features are finite
+        for i, feature in enumerate(features):
+            assert torch.isfinite(torch.tensor(feature)), f"Feature {i} is not finite"
+
+        # Verify telemetry features are in normalized range [-1, 1]
+        for i, feature in enumerate(telemetry_features):
+            assert -1.0 <= feature <= 1.0, f"Telemetry feature {i} out of normalized range: {feature}"
+
+        # Verify the telemetry timestamp is recent
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc)
+        captured_at = seed_state.telemetry.captured_at
+        time_diff = (now - captured_at).total_seconds()
+        assert time_diff < 5.0, "Telemetry should have been captured recently"
