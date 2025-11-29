@@ -35,6 +35,8 @@ def main():
         help="Episodes over which to anneal entropy (0=fixed, no annealing)")
     ppo_parser.add_argument("--gamma", type=float, default=0.99)
     ppo_parser.add_argument("--save", help="Path to save model")
+    ppo_parser.add_argument("--resume", help="Path to checkpoint to resume from")
+    ppo_parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     ppo_parser.add_argument("--device", default="cuda:0")
     ppo_parser.add_argument("--vectorized", action="store_true")
     ppo_parser.add_argument("--n-envs", type=int, default=4)
@@ -85,6 +87,8 @@ def main():
                 entropy_anneal_episodes=args.entropy_anneal_episodes,
                 gamma=args.gamma,
                 save_path=args.save,
+                resume_path=args.resume,
+                seed=args.seed,
             )
         else:
             from esper.simic.training import train_ppo
@@ -102,6 +106,8 @@ def main():
                 entropy_anneal_episodes=args.entropy_anneal_episodes,
                 gamma=args.gamma,
                 save_path=args.save,
+                resume_path=args.resume,
+                seed=args.seed,
             )
 
     elif args.algorithm == "iql":

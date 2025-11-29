@@ -21,10 +21,12 @@ class MockSeedState:
         epochs_in_stage: int = 5,
         improvement_since_stage_start: float = 2.0,
         total_improvement: float = 5.0,
+        blueprint_id: str = "conv_enhance",
     ):
         self.seed_id = seed_id
         self.stage = stage
         self.epochs_in_stage = epochs_in_stage
+        self.blueprint_id = blueprint_id
         self.metrics = MagicMock()
         self.metrics.improvement_since_stage_start = improvement_since_stage_start
         self.metrics.total_improvement = total_improvement

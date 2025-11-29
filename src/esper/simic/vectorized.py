@@ -93,6 +93,8 @@ def train_ppo_vectorized(
     entropy_anneal_episodes: int = 0,
     gamma: float = 0.99,
     save_path: str = None,
+    resume_path: str = None,
+    seed: int = 42,
 ) -> tuple[PPOAgent, list[dict]]:
     """Train PPO with vectorized environments using INVERTED CONTROL FLOW.
 
@@ -112,6 +114,8 @@ def train_ppo_vectorized(
         entropy_coef: Entropy coefficient
         gamma: Discount factor
         save_path: Optional path to save model
+        resume_path: Optional path to resume from checkpoint
+        seed: Random seed for reproducibility
 
     Returns:
         Tuple of (trained_agent, training_history)
@@ -130,6 +134,9 @@ def train_ppo_vectorized(
     print(f"Max epochs per episode: {max_epochs}")
     print(f"Policy device: {device}")
     print(f"Env devices: {devices} ({n_envs // len(devices)} envs per device)")
+    print(f"Random seed: {seed}")
+    if resume_path:
+        print(f"Resuming from: {resume_path}")
     if entropy_anneal_episodes > 0:
         print(f"Entropy annealing: {entropy_coef_start or entropy_coef} -> {entropy_coef_end or entropy_coef} over {entropy_anneal_episodes} episodes")
     else:
@@ -152,7 +159,7 @@ def train_ppo_vectorized(
 
     # Create DataLoaders once and reuse across all batches
     # This allows persistent_workers to actually persist
-    env_dataloaders = [create_env_dataloaders(i, 42) for i in range(n_envs)]
+    env_dataloaders = [create_env_dataloaders(i, seed) for i in range(n_envs)]
     num_train_batches = len(env_dataloaders[0][0])
     num_test_batches = len(env_dataloaders[0][1])
 
@@ -165,19 +172,38 @@ def train_ppo_vectorized(
     # Each batch of n_envs episodes = 1 PPO update step
     entropy_anneal_steps = entropy_anneal_episodes // n_envs if entropy_anneal_episodes > 0 else 0
 
-    # Create PPO agent
-    agent = PPOAgent(
-        state_dim=state_dim,
-        action_dim=len(SimicAction),
-        lr=lr,
-        clip_ratio=clip_ratio,
-        entropy_coef=entropy_coef,
-        entropy_coef_start=entropy_coef_start,
-        entropy_coef_end=entropy_coef_end,
-        entropy_anneal_steps=entropy_anneal_steps,
-        gamma=gamma,
-        device=device,
-    )
+    # Create or resume PPO agent
+    start_episode = 0
+    if resume_path:
+        print(f"Resuming from checkpoint: {resume_path}")
+        checkpoint = torch.load(resume_path, map_location=device, weights_only=False)
+        agent = PPOAgent.load(resume_path, device=device)
+
+        # Restore observation normalizer state
+        metadata = checkpoint.get('metadata', {})
+        if 'obs_normalizer_mean' in metadata:
+            obs_normalizer.mean = torch.tensor(metadata['obs_normalizer_mean'])
+            obs_normalizer.var = torch.tensor(metadata['obs_normalizer_var'])
+            obs_normalizer.to(device)
+            print(f"  Restored observation normalizer state")
+
+        # Calculate starting episode from checkpoint
+        if 'n_episodes' in metadata:
+            start_episode = metadata['n_episodes']
+            print(f"  Resuming from episode {start_episode}")
+    else:
+        agent = PPOAgent(
+            state_dim=state_dim,
+            action_dim=len(SimicAction),
+            lr=lr,
+            clip_ratio=clip_ratio,
+            entropy_coef=entropy_coef,
+            entropy_coef_start=entropy_coef_start,
+            entropy_coef_end=entropy_coef_end,
+            entropy_anneal_steps=entropy_anneal_steps,
+            gamma=gamma,
+            device=device,
+        )
 
     # Map environments to devices in round-robin
     env_device_map = [devices[i % len(devices)] for i in range(n_envs)]
@@ -314,16 +340,17 @@ def train_ppo_vectorized(
     recent_accuracies = []
     recent_rewards = []
 
-    episodes_completed = 0
+    episodes_completed = start_episode
+    total_episodes = n_episodes + start_episode  # Total target including resumed episodes
 
     batch_idx = 0
-    while episodes_completed < n_episodes:
+    while episodes_completed < total_episodes:
         # Determine how many envs to run this batch (may be fewer than n_envs for last batch)
-        remaining = n_episodes - episodes_completed
+        remaining = total_episodes - episodes_completed
         envs_this_batch = min(n_envs, remaining)
 
         # Create fresh environments for this batch, reusing persistent DataLoaders
-        base_seed = 42 + batch_idx * 10000
+        base_seed = seed + batch_idx * 10000
         env_states = [
             create_env_state(i, base_seed, env_dataloaders[i][0], env_dataloaders[i][1])
             for i in range(envs_this_batch)
@@ -612,11 +639,12 @@ def train_ppo_vectorized(
 
     if save_path:
         agent.save(save_path, metadata={
-            'n_episodes': n_episodes,
+            'n_episodes': episodes_completed,  # Total episodes trained (for resume)
             'n_envs': n_envs,
             'max_epochs': max_epochs,
             'best_avg_accuracy': best_avg_acc,
             'use_telemetry': use_telemetry,
+            'seed': seed,
             'obs_normalizer_mean': obs_normalizer.mean.tolist(),
             'obs_normalizer_var': obs_normalizer.var.tolist(),
         })

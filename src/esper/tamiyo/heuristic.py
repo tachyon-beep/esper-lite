@@ -50,10 +50,13 @@ class HeuristicPolicyConfig:
     # Matches cull_after_epochs_without_improvement for consistent pacing
     embargo_epochs_after_cull: int = 5
 
-    # Blueprint selection
+    # Blueprint selection with penalty tracking
     blueprint_rotation: list[str] = field(
         default_factory=lambda: ["conv_enhance", "attention", "norm", "depthwise"]
     )
+    blueprint_penalty_on_cull: float = 2.0  # Penalty points added when a blueprint is culled
+    blueprint_penalty_decay: float = 0.5  # Decay factor applied each successful germination
+    blueprint_penalty_threshold: float = 3.0  # Skip blueprints with penalty above this
 
 
 class HeuristicTamiyo:
@@ -71,6 +74,8 @@ class HeuristicTamiyo:
         self._germination_count = 0
         self._decisions_made: list[TamiyoDecision] = []
         self._last_cull_epoch: int = -1  # Track last cull for embargo enforcement
+        self._blueprint_penalties: dict[str, float] = {}  # Track penalty scores per blueprint
+        self._active_blueprint: str | None = None  # Track which blueprint is currently active
 
     def decide(self, signals: TrainingSignals, active_seeds: list["SeedState"]) -> TamiyoDecision:
         """Make a decision based on training signals.
@@ -213,6 +218,7 @@ class HeuristicTamiyo:
         if seed.epochs_in_stage >= self.config.cull_after_epochs_without_improvement:
             if improvement < -self.config.cull_if_accuracy_drops_by:
                 self._last_cull_epoch = signals.metrics.epoch  # Track for embargo
+                self._apply_blueprint_penalty(seed.blueprint_id)  # Penalize failing blueprint
                 return TamiyoDecision(
                     action=Action.CULL,
                     target_seed_id=seed.seed_id,
@@ -245,6 +251,7 @@ class HeuristicTamiyo:
                 )
             else:
                 self._last_cull_epoch = signals.metrics.epoch  # Track for embargo
+                self._apply_blueprint_penalty(seed.blueprint_id)  # Penalize failing blueprint
                 return TamiyoDecision(
                     action=Action.CULL,
                     target_seed_id=seed.seed_id,
@@ -258,11 +265,41 @@ class HeuristicTamiyo:
         )
 
     def _get_next_blueprint(self) -> str:
-        """Get the next blueprint to try (round-robin)."""
+        """Get the next blueprint to try, avoiding heavily penalized ones.
+
+        Uses round-robin but skips blueprints that have accumulated too many
+        penalty points from recent failures. Penalties decay over time.
+        """
         blueprints = self.config.blueprint_rotation
-        blueprint_id = blueprints[self._blueprint_index % len(blueprints)]
-        self._blueprint_index += 1
-        return blueprint_id
+
+        # Decay all penalties first (successful germination attempt = time passing)
+        for bp in list(self._blueprint_penalties.keys()):
+            self._blueprint_penalties[bp] *= self.config.blueprint_penalty_decay
+            if self._blueprint_penalties[bp] < 0.1:
+                del self._blueprint_penalties[bp]
+
+        # Try to find a blueprint below penalty threshold
+        attempts = 0
+        while attempts < len(blueprints):
+            blueprint_id = blueprints[self._blueprint_index % len(blueprints)]
+            self._blueprint_index += 1
+            penalty = self._blueprint_penalties.get(blueprint_id, 0.0)
+
+            if penalty < self.config.blueprint_penalty_threshold:
+                self._active_blueprint = blueprint_id
+                return blueprint_id
+
+            attempts += 1
+
+        # All blueprints are penalized - pick the one with lowest penalty
+        best_bp = min(blueprints, key=lambda bp: self._blueprint_penalties.get(bp, 0.0))
+        self._active_blueprint = best_bp
+        return best_bp
+
+    def _apply_blueprint_penalty(self, blueprint_id: str) -> None:
+        """Apply penalty to a blueprint that was culled."""
+        current = self._blueprint_penalties.get(blueprint_id, 0.0)
+        self._blueprint_penalties[blueprint_id] = current + self.config.blueprint_penalty_on_cull
 
     def _blueprint_to_action(self, blueprint_id: str) -> Action:
         """Convert blueprint ID to corresponding GERMINATE action."""
@@ -275,6 +312,8 @@ class HeuristicTamiyo:
         self._germination_count = 0
         self._decisions_made.clear()
         self._last_cull_epoch = -1
+        self._blueprint_penalties.clear()
+        self._active_blueprint = None
 
     @property
     def decisions(self) -> list[TamiyoDecision]:
