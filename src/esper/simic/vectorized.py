@@ -70,6 +70,8 @@ class ParallelEnvState:
     train_acc: float = 0.0
     val_loss: float = 0.0
     val_acc: float = 0.0
+    # Per-batch step counter for blending (reset when entering BLENDING stage)
+    blending_step: int = 0
 
 
 # =============================================================================
@@ -253,11 +255,10 @@ def train_ppo_vectorized(
                 optimizer = env_state.seed_optimizer
             else:  # BLENDING
                 optimizer = env_state.host_optimizer
-                # Update blend alpha for this step
+                # Update blend alpha for this step using per-batch counter
                 if model.seed_slot and seed_state:
-                    # Use epochs in current stage as step count (matches comparison.py pattern)
-                    step = seed_state.metrics.epochs_in_current_stage
-                    model.seed_slot.update_alpha_for_step(step)
+                    model.seed_slot.update_alpha_for_step(env_state.blending_step)
+                    env_state.blending_step += 1
 
             optimizer.zero_grad()
             if seed_state and seed_state.stage == SeedStage.BLENDING and env_state.seed_optimizer:
@@ -526,6 +527,7 @@ def train_ppo_vectorized(
                         if model.seed_state.stage == SeedStage.TRAINING:
                             model.seed_state.transition(SeedStage.BLENDING)
                             model.seed_slot.start_blending(total_steps=5, temperature=1.0)
+                            env_state.blending_step = 0  # Reset per-batch counter
                         elif model.seed_state.stage == SeedStage.BLENDING:
                             model.seed_state.transition(SeedStage.FOSSILIZED)
                             model.seed_slot.set_alpha(1.0)
