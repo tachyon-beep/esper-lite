@@ -3,22 +3,17 @@
 This package contains the reinforcement learning infrastructure for training
 the Tamiyo seed lifecycle controller:
 
-- rewards: Reward computation for seed lifecycle control
-- episodes: Episode data structures and collection
-- features: Feature extraction (hot path)
+- buffers: Trajectory and replay buffers
+- normalization: Observation normalization
 - networks: Policy network architectures
-- ppo: Online PPO training
-- iql: Offline IQL/CQL training
-
-Public API:
-    from esper.simic.rewards import compute_shaped_reward, SeedInfo
-    from esper.simic.episodes import Episode, TrainingSnapshot, EpisodeCollector
-    from esper.simic.features import obs_to_base_features
-    from esper.simic.networks import PolicyNetwork
-
-Note: PPO and IQL are heavy modules - import them directly when needed:
-    from esper.simic.ppo import PPOAgent
-    from esper.simic.iql import IQL
+- rewards: Reward computation
+- features: Feature extraction (hot path)
+- episodes: Episode data structures
+- ppo: PPO agent
+- iql: IQL agent
+- training: Training loops
+- vectorized: Multi-GPU training
+- comparison: Policy comparison utilities
 """
 
 # Actions
@@ -37,6 +32,17 @@ from esper.simic.episodes import (
     action_from_decision,
 )
 
+# Buffers
+from esper.simic.buffers import (
+    RolloutStep,
+    RolloutBuffer,
+    Transition,
+    ReplayBuffer,
+)
+
+# Normalization
+from esper.simic.normalization import RunningMeanStd
+
 # Rewards
 from esper.simic.rewards import (
     RewardConfig,
@@ -44,6 +50,7 @@ from esper.simic.rewards import (
     compute_shaped_reward,
     compute_potential,
     compute_pbrs_bonus,
+    compute_seed_potential,
     get_intervention_cost,
     INTERVENTION_COSTS,
     STAGE_TRAINING,
@@ -62,12 +69,17 @@ from esper.simic.features import (
 from esper.simic.networks import (
     PolicyNetwork,
     print_confusion_matrix,
+    ActorCritic,
+    QNetwork,
+    VNetwork,
 )
 
-# NOTE: We don't import ppo or iql here because they're heavy.
-# Import them directly when needed:
+# NOTE: Heavy modules imported on demand:
 #   from esper.simic.ppo import PPOAgent
 #   from esper.simic.iql import IQL
+#   from esper.simic.training import train_ppo, train_iql
+#   from esper.simic.vectorized import train_ppo_vectorized
+#   from esper.simic.comparison import live_comparison, head_to_head_comparison
 
 __all__ = [
     # Actions
@@ -84,12 +96,22 @@ __all__ = [
     "snapshot_from_signals",
     "action_from_decision",
 
+    # Buffers
+    "RolloutStep",
+    "RolloutBuffer",
+    "Transition",
+    "ReplayBuffer",
+
+    # Normalization
+    "RunningMeanStd",
+
     # Rewards
     "RewardConfig",
     "SeedInfo",
     "compute_shaped_reward",
     "compute_potential",
     "compute_pbrs_bonus",
+    "compute_seed_potential",
     "get_intervention_cost",
     "INTERVENTION_COSTS",
     "STAGE_TRAINING",
@@ -104,4 +126,7 @@ __all__ = [
     # Networks
     "PolicyNetwork",
     "print_confusion_matrix",
+    "ActorCritic",
+    "QNetwork",
+    "VNetwork",
 ]
