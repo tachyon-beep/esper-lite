@@ -415,3 +415,170 @@ class TestHeadToHeadTelemetryIntegration:
 
         # Overall features should match
         assert seed_features == expected_telemetry_features
+
+
+class TestLoadIQLModelDimensions:
+    """Tests for load_iql_model dimension detection and support."""
+
+    def test_load_27dim_model(self, tmp_path):
+        """Load 27-dim model (no telemetry) correctly."""
+        import torch
+        from esper.simic.comparison import load_iql_model
+        from esper.simic.iql import IQL
+
+        # Create a 27-dim model
+        iql = IQL(state_dim=27, action_dim=7, hidden_dim=256, device='cpu')
+
+        # Save checkpoint in expected format
+        checkpoint_path = tmp_path / "iql_27dim.pt"
+        checkpoint = {
+            'state_dim': 27,
+            'action_dim': 7,
+            'gamma': 0.99,
+            'tau': 0.7,
+            'beta': 3.0,
+            'q_network': iql.q_network.state_dict(),
+            'v_network': iql.v_network.state_dict(),
+        }
+        torch.save(checkpoint, checkpoint_path)
+
+        # Load and verify
+        loaded_iql, telemetry_mode = load_iql_model(str(checkpoint_path), device='cpu')
+
+        assert loaded_iql.q_network.net[0].in_features == 27
+        assert telemetry_mode == 'none'
+
+    def test_load_37dim_model(self, tmp_path):
+        """Load 37-dim model (seed telemetry) correctly."""
+        import torch
+        from esper.simic.comparison import load_iql_model
+        from esper.simic.iql import IQL
+
+        # Create a 37-dim model (27 base + 10 seed telemetry)
+        iql = IQL(state_dim=37, action_dim=7, hidden_dim=256, device='cpu')
+
+        # Save checkpoint in expected format
+        checkpoint_path = tmp_path / "iql_37dim.pt"
+        checkpoint = {
+            'state_dim': 37,
+            'action_dim': 7,
+            'gamma': 0.99,
+            'tau': 0.7,
+            'beta': 3.0,
+            'q_network': iql.q_network.state_dict(),
+            'v_network': iql.v_network.state_dict(),
+        }
+        torch.save(checkpoint, checkpoint_path)
+
+        # Load and verify
+        loaded_iql, telemetry_mode = load_iql_model(str(checkpoint_path), device='cpu')
+
+        assert loaded_iql.q_network.net[0].in_features == 37
+        assert telemetry_mode == 'seed'
+
+    def test_load_54dim_model(self, tmp_path):
+        """Load 54-dim model (legacy full-model telemetry) correctly."""
+        import torch
+        from esper.simic.comparison import load_iql_model
+        from esper.simic.iql import IQL
+
+        # Create a 54-dim model (27 base + 27 legacy telemetry)
+        iql = IQL(state_dim=54, action_dim=7, hidden_dim=256, device='cpu')
+
+        # Save checkpoint in expected format
+        checkpoint_path = tmp_path / "iql_54dim.pt"
+        checkpoint = {
+            'state_dim': 54,
+            'action_dim': 7,
+            'gamma': 0.99,
+            'tau': 0.7,
+            'beta': 3.0,
+            'q_network': iql.q_network.state_dict(),
+            'v_network': iql.v_network.state_dict(),
+        }
+        torch.save(checkpoint, checkpoint_path)
+
+        # Load and verify
+        loaded_iql, telemetry_mode = load_iql_model(str(checkpoint_path), device='cpu')
+
+        assert loaded_iql.q_network.net[0].in_features == 54
+        assert telemetry_mode == 'legacy'
+
+    def test_load_unknown_dimension_raises_error(self, tmp_path):
+        """Loading model with unknown dimension should raise ValueError."""
+        import torch
+        import pytest
+        from esper.simic.comparison import load_iql_model
+        from esper.simic.iql import IQL
+
+        # Create a model with unsupported dimension (e.g., 42)
+        iql = IQL(state_dim=42, action_dim=7, hidden_dim=256, device='cpu')
+
+        # Save checkpoint in expected format
+        checkpoint_path = tmp_path / "iql_42dim.pt"
+        checkpoint = {
+            'state_dim': 42,
+            'action_dim': 7,
+            'gamma': 0.99,
+            'tau': 0.7,
+            'beta': 3.0,
+            'q_network': iql.q_network.state_dict(),
+            'v_network': iql.v_network.state_dict(),
+        }
+        torch.save(checkpoint, checkpoint_path)
+
+        # Should raise ValueError for unknown dimension
+        with pytest.raises(ValueError, match="Unknown state dimension: 42"):
+            load_iql_model(str(checkpoint_path), device='cpu')
+
+    def test_backward_compatibility_with_use_telemetry_flag(self, tmp_path):
+        """Verify backward compatibility: use_telemetry flag matches telemetry_mode."""
+        import torch
+        from esper.simic.comparison import load_iql_model
+        from esper.simic.iql import IQL
+
+        # Test 27-dim: use_telemetry should be False (backward compat)
+        iql_27 = IQL(state_dim=27, action_dim=7, device='cpu')
+        path_27 = tmp_path / "iql_27.pt"
+        torch.save({
+            'state_dim': 27,
+            'action_dim': 7,
+            'q_network': iql_27.q_network.state_dict(),
+            'v_network': iql_27.v_network.state_dict(),
+        }, path_27)
+
+        loaded_27, mode_27 = load_iql_model(str(path_27), device='cpu')
+        assert mode_27 == 'none'
+        # For backward compat, we can check: use_telemetry would be False
+        use_telemetry_27 = (mode_27 in ['seed', 'legacy'])
+        assert use_telemetry_27 is False
+
+        # Test 37-dim: use_telemetry should be True
+        iql_37 = IQL(state_dim=37, action_dim=7, device='cpu')
+        path_37 = tmp_path / "iql_37.pt"
+        torch.save({
+            'state_dim': 37,
+            'action_dim': 7,
+            'q_network': iql_37.q_network.state_dict(),
+            'v_network': iql_37.v_network.state_dict(),
+        }, path_37)
+
+        loaded_37, mode_37 = load_iql_model(str(path_37), device='cpu')
+        assert mode_37 == 'seed'
+        use_telemetry_37 = (mode_37 in ['seed', 'legacy'])
+        assert use_telemetry_37 is True
+
+        # Test 54-dim: use_telemetry should be True (legacy)
+        iql_54 = IQL(state_dim=54, action_dim=7, device='cpu')
+        path_54 = tmp_path / "iql_54.pt"
+        torch.save({
+            'state_dim': 54,
+            'action_dim': 7,
+            'q_network': iql_54.q_network.state_dict(),
+            'v_network': iql_54.v_network.state_dict(),
+        }, path_54)
+
+        loaded_54, mode_54 = load_iql_model(str(path_54), device='cpu')
+        assert mode_54 == 'legacy'
+        use_telemetry_54 = (mode_54 in ['seed', 'legacy'])
+        assert use_telemetry_54 is True

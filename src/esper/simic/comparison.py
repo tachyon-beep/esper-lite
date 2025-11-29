@@ -29,17 +29,45 @@ from esper.tamiyo import HeuristicTamiyo, HeuristicPolicyConfig, SignalTracker
 # Model Loading
 # =============================================================================
 
-def load_iql_model(model_path: str, device: str = "cpu") -> tuple[IQL, bool]:
-    """Load a trained IQL model.
+def load_iql_model(model_path: str, device: str = "cpu") -> tuple[IQL, str]:
+    """Load a trained IQL model with automatic dimension detection.
+
+    Detects the state dimension from the saved model and determines the
+    telemetry mode based on the input dimension:
+    - 27-dim: No telemetry ('none')
+    - 37-dim: Seed telemetry ('seed') - 27 base + 10 seed
+    - 54-dim: Legacy full-model telemetry ('legacy') - 27 base + 27 legacy
+
+    Args:
+        model_path: Path to saved model checkpoint
+        device: Device to load model onto
 
     Returns:
-        Tuple of (IQL agent, use_telemetry flag inferred from state_dim)
+        Tuple of (IQL agent, telemetry_mode string)
+        telemetry_mode is one of: 'none', 'seed', 'legacy'
+
+    Raises:
+        ValueError: If state dimension is not one of the supported values
     """
     checkpoint = torch.load(model_path, map_location=device, weights_only=True)
 
     state_dim = checkpoint['state_dim']
-    # Infer telemetry usage: 54 = base + telemetry, 27 = base only
-    use_telemetry = (state_dim == 54)
+
+    # Determine telemetry mode from state dimension
+    if state_dim == 27:
+        telemetry_mode = 'none'
+    elif state_dim == 37:
+        telemetry_mode = 'seed'
+    elif state_dim == 54:
+        telemetry_mode = 'legacy'
+    else:
+        raise ValueError(
+            f"Unknown state dimension: {state_dim}. "
+            f"Expected 27 (no telemetry), 37 (seed telemetry), or 54 (legacy telemetry)."
+        )
+
+    # Log which mode is being used
+    print(f"Loading IQL model: state_dim={state_dim}, telemetry_mode='{telemetry_mode}'")
 
     iql = IQL(
         state_dim=state_dim,
@@ -52,7 +80,7 @@ def load_iql_model(model_path: str, device: str = "cpu") -> tuple[IQL, bool]:
     iql.q_network.load_state_dict(checkpoint['q_network'])
     iql.v_network.load_state_dict(checkpoint['v_network'])
 
-    return iql, use_telemetry
+    return iql, telemetry_mode
 
 
 # =============================================================================
@@ -145,8 +173,9 @@ def live_comparison(
 
     # Load IQL model (use_telemetry inferred from checkpoint)
     print(f"Loading IQL model from {model_path}...")
-    iql, use_telemetry = load_iql_model(model_path, device=device)
-    print(f"  State dim: {iql.q_network.net[0].in_features} (telemetry: {use_telemetry})")
+    iql, telemetry_mode = load_iql_model(model_path, device=device)
+    use_telemetry = (telemetry_mode in ['seed', 'legacy'])
+    print(f"  State dim: {iql.q_network.net[0].in_features} (telemetry mode: {telemetry_mode})")
 
     # Load CIFAR-10
     print("Loading CIFAR-10...")
@@ -348,9 +377,10 @@ def head_to_head_comparison(
 
     # Load IQL model (use_telemetry inferred from checkpoint)
     print(f"Loading IQL model from {model_path}...")
-    iql, use_telemetry = load_iql_model(model_path, device=device)
+    iql, telemetry_mode = load_iql_model(model_path, device=device)
+    use_telemetry = (telemetry_mode in ['seed', 'legacy'])
     state_dim = iql.q_network.net[0].in_features
-    print(f"  State dim: {state_dim} (telemetry: {use_telemetry})")
+    print(f"  State dim: {state_dim} (telemetry mode: {telemetry_mode})")
 
     # Load CIFAR-10 once
     print("Loading CIFAR-10...")
