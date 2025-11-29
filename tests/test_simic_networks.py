@@ -88,3 +88,53 @@ class TestVNetwork:
         values = net(state)
 
         assert values.shape == (4, 1)
+
+
+def test_ppo_features_match_comparison_dimensions():
+    """PPO and comparison should use same telemetry dimensions.
+
+    This test prevents the critical bug where PPO uses 54-dim (27 base + 27 legacy)
+    while comparison uses 37-dim (27 base + 10 seed), causing silent failures
+    when models are trained in one mode and evaluated in another.
+    """
+    from esper.simic.ppo import signals_to_features
+    from esper.simic.comparison import snapshot_to_features
+    from esper.simic.episodes import TrainingSnapshot
+    from esper.tamiyo import SignalTracker
+    from esper.tolaria import create_model
+    from esper.leyline import SeedTelemetry
+
+    # Create mock signals and model
+    tracker = SignalTracker()
+    signals = tracker.update(
+        epoch=1, global_step=100, train_loss=1.0, train_accuracy=50.0,
+        val_loss=1.0, val_accuracy=50.0, active_seeds=[], available_slots=1
+    )
+
+    model = create_model("cpu")
+
+    # PPO features with telemetry
+    ppo_features = signals_to_features(signals, model, tracker, use_telemetry=True)
+
+    # Comparison features with telemetry (zero seed telemetry)
+    snapshot = TrainingSnapshot(
+        epoch=1, global_step=100, train_loss=1.0, val_loss=1.0,
+        loss_delta=0.0, train_accuracy=50.0, val_accuracy=50.0,
+        accuracy_delta=0.0, plateau_epochs=0, best_val_accuracy=50.0,
+        best_val_loss=1.0, loss_history_5=(1.0,)*5, accuracy_history_5=(50.0,)*5,
+        has_active_seed=False, seed_stage=0, seed_epochs_in_stage=0,
+        seed_alpha=0.0, seed_improvement=0.0, available_slots=1
+    )
+
+    # Create zero telemetry for comparison
+    zero_telemetry = SeedTelemetry(seed_id="test")
+    comparison_features = snapshot_to_features(
+        snapshot, use_telemetry=True, seed_telemetry=zero_telemetry
+    )
+
+    # CRITICAL: Dimensions must match
+    assert len(ppo_features) == len(comparison_features), \
+        f"PPO uses {len(ppo_features)}-dim, comparison uses {len(comparison_features)}-dim"
+
+    # Both should be 37-dim (27 base + 10 seed telemetry)
+    assert len(ppo_features) == 37, f"Expected 37 dims, got {len(ppo_features)}"

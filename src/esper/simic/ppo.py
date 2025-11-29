@@ -26,76 +26,67 @@ from esper.simic.features import safe, telemetry_to_features
 def signals_to_features(signals, model, tracker=None, use_telemetry: bool = True) -> list[float]:
     """Convert training signals to feature vector.
 
-    This is a PPO-specific wrapper that builds features from TrainingSignals
-    and model state. For the core feature extraction, see simic.features.
-
     Args:
-        signals: TrainingSignals from tamiyo module
+        signals: TrainingSignals from tamiyo
         model: MorphogeneticModel
-        tracker: Optional DiagnosticTracker for V2 features
+        tracker: Optional tracker (unused, kept for API compatibility)
         use_telemetry: Whether to include telemetry features
 
     Returns:
-        Feature vector (27 dims base, +27 if telemetry)
+        Feature vector (27 dims base, +10 if telemetry)
     """
-    # Loss history (5 values)
+    from esper.simic.features import obs_to_base_features
+
+    # Build observation dict
     loss_hist = list(signals.loss_history[-5:]) if signals.loss_history else []
     while len(loss_hist) < 5:
         loss_hist.insert(0, 0.0)
 
-    # Accuracy history (5 values)
     acc_hist = list(signals.accuracy_history[-5:]) if signals.accuracy_history else []
     while len(acc_hist) < 5:
         acc_hist.insert(0, 0.0)
 
-    # Seed state from signals
-    has_active_seed = 1.0 if signals.active_seeds else 0.0
+    obs = {
+        'epoch': signals.metrics.epoch,
+        'global_step': signals.metrics.global_step,
+        'train_loss': signals.metrics.train_loss,
+        'val_loss': signals.metrics.val_loss,
+        'loss_delta': signals.metrics.loss_delta,
+        'train_accuracy': signals.metrics.train_accuracy,
+        'val_accuracy': signals.metrics.val_accuracy,
+        'accuracy_delta': signals.metrics.accuracy_delta,
+        'plateau_epochs': signals.metrics.plateau_epochs,
+        'best_val_accuracy': signals.metrics.best_val_accuracy,
+        'best_val_loss': min(signals.loss_history) if signals.loss_history else 10.0,
+        'loss_history_5': loss_hist,
+        'accuracy_history_5': acc_hist,
+        'has_active_seed': 1.0 if signals.active_seeds else 0.0,
+        'available_slots': signals.available_slots,
+    }
+
+    # Seed state features
     if signals.active_seeds:
-        seed_state = signals.active_seeds[0]
-        seed_stage = seed_state.stage.value if seed_state else 0
-        seed_epochs = seed_state.epochs_in_stage if seed_state else 0
-        seed_alpha = model.seed_slot.alpha if model.seed_slot else 0.0
-        if seed_state and seed_state.metrics:
-            seed_improvement = seed_state.metrics.current_val_accuracy - seed_state.metrics.accuracy_at_stage_start
-        else:
-            seed_improvement = 0.0
+        seed = signals.active_seeds[0]
+        obs['seed_stage'] = seed.stage.value
+        obs['seed_epochs_in_stage'] = seed.metrics.epochs_in_current_stage
+        obs['seed_alpha'] = seed.alpha
+        obs['seed_improvement'] = seed.metrics.improvement_since_stage_start
     else:
-        seed_stage = 0
-        seed_epochs = 0
-        seed_alpha = 0.0
-        seed_improvement = 0.0
+        obs['seed_stage'] = 0
+        obs['seed_epochs_in_stage'] = 0
+        obs['seed_alpha'] = 0.0
+        obs['seed_improvement'] = 0.0
 
-    available_slots = signals.available_slots
+    features = obs_to_base_features(obs)
 
-    # Base features (27 dims)
-    features = [
-        float(signals.epoch),
-        float(signals.global_step),
-        safe(signals.train_loss, 10.0),
-        safe(signals.val_loss, 10.0),
-        safe(signals.loss_delta, 0.0),
-        signals.train_accuracy,
-        signals.val_accuracy,
-        safe(signals.accuracy_delta, 0.0),
-        float(signals.plateau_epochs),
-        signals.best_val_accuracy,
-        min(signals.loss_history) if signals.loss_history else 10.0,
-        *[safe(v, 10.0) for v in loss_hist],
-        *acc_hist,
-        has_active_seed,
-        float(seed_stage),
-        float(seed_epochs),
-        seed_alpha,
-        seed_improvement,
-        float(available_slots),
-    ]
-
-    # Telemetry features (27 dims)
-    if use_telemetry and tracker:
-        telem = tracker.compute_telemetry()
-        features.extend(telemetry_to_features(telem))
-    elif use_telemetry:
-        features.extend([0.0] * 27)
+    if use_telemetry:
+        # Use seed telemetry (10 dims) not legacy full telemetry (27 dims)
+        if signals.active_seeds and hasattr(signals.active_seeds[0], 'telemetry'):
+            features.extend(signals.active_seeds[0].telemetry.to_features())
+        else:
+            # No seed active or no telemetry - use zeros
+            from esper.leyline import SeedTelemetry
+            features.extend([0.0] * SeedTelemetry.feature_dim())
 
     return features
 
