@@ -742,3 +742,50 @@ class TestEndToEndTelemetryPipeline:
         captured_at = seed_state.telemetry.captured_at
         time_diff = (now - captured_at).total_seconds()
         assert time_diff < 5.0, "Telemetry should have been captured recently"
+
+
+class TestTelemetryEnforcement:
+    """Tests for telemetry requirement enforcement (Task 9)."""
+
+    def test_snapshot_to_features_requires_telemetry_when_enabled(self):
+        """When use_telemetry=True with active seed, seed_telemetry must be provided.
+
+        This enforces the DRL review finding that zero-padding telemetry
+        causes distribution shift and degrades policy quality.
+        """
+        from esper.simic.comparison import snapshot_to_features
+        from esper.simic.episodes import TrainingSnapshot
+        import pytest
+
+        snapshot = TrainingSnapshot(
+            epoch=1, global_step=100, train_loss=1.0, val_loss=1.0,
+            loss_delta=0.0, train_accuracy=50.0, val_accuracy=50.0,
+            accuracy_delta=0.0, plateau_epochs=0, best_val_accuracy=50.0,
+            best_val_loss=1.0, loss_history_5=(1.0,)*5, accuracy_history_5=(50.0,)*5,
+            has_active_seed=True,  # Seed active but no telemetry provided
+            seed_stage=2, seed_epochs_in_stage=3, seed_alpha=0.0,
+            seed_improvement=5.0, available_slots=0
+        )
+
+        # Should raise ValueError, not warn
+        with pytest.raises(ValueError, match="seed_telemetry is required"):
+            snapshot_to_features(snapshot, use_telemetry=True, seed_telemetry=None)
+
+
+    def test_snapshot_to_features_allows_none_when_no_seed(self):
+        """When use_telemetry=True but no seed is active, None telemetry is OK."""
+        from esper.simic.comparison import snapshot_to_features
+        from esper.simic.episodes import TrainingSnapshot
+
+        snapshot = TrainingSnapshot(
+            epoch=1, global_step=100, train_loss=1.0, val_loss=1.0,
+            loss_delta=0.0, train_accuracy=50.0, val_accuracy=50.0,
+            accuracy_delta=0.0, plateau_epochs=0, best_val_accuracy=50.0,
+            best_val_loss=1.0, loss_history_5=(1.0,)*5, accuracy_history_5=(50.0,)*5,
+            has_active_seed=False,  # No seed active
+            available_slots=1
+        )
+
+        # Should NOT raise when no seed is active
+        features = snapshot_to_features(snapshot, use_telemetry=True, seed_telemetry=None)
+        assert len(features) == 37  # 27 base + 10 zero telemetry

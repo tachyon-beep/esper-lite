@@ -134,14 +134,20 @@ def snapshot_to_features(
         if seed_telemetry is not None:
             features.extend(seed_telemetry.to_features())
         else:
-            # Fallback to zeros (anti-pattern per DRL review, but safe default)
-            import warnings
-            warnings.warn(
-                "use_telemetry=True but no seed_telemetry provided. "
-                "Using zero-padding which may cause distribution shift.",
-                UserWarning,
-            )
-            features.extend([0.0] * SeedTelemetry.feature_dim())
+            # Check if we have an active seed that needs telemetry
+            if snapshot.has_active_seed:
+                # CRITICAL: Zero-padding causes distribution shift (DRL review)
+                # Refuse to proceed rather than corrupt the model's inputs
+                raise ValueError(
+                    "seed_telemetry is required when use_telemetry=True and seed is active. "
+                    "Zero-padding telemetry features causes distribution shift and "
+                    "degrades policy quality. Either provide real telemetry or set "
+                    "use_telemetry=False."
+                )
+            else:
+                # No active seed - zeros are semantically correct
+                from esper.leyline import SeedTelemetry
+                features.extend([0.0] * SeedTelemetry.feature_dim())
 
     return features
 
@@ -156,12 +162,25 @@ def live_comparison(
     max_epochs: int = 25,
     device: str = "cpu",
 ) -> dict:
-    """Run live comparison between heuristic Tamiyo and IQL policy.
+    """Compare IQL policy decisions against heuristic Tamiyo (observation only).
 
-    Both policies make decisions, but only heuristic actually controls training.
-    We track what IQL *would* have done and compare accuracy outcomes.
+    This mode runs a single training trajectory and asks both policies what
+    they would do at each step. Actions are NOT executed - both policies
+    observe the same unmodified training run.
 
-    Note: use_telemetry is inferred from the model checkpoint's state_dim.
+    WARNING: This mode does not support telemetry features. If the loaded
+    model was trained with telemetry (37-dim or 54-dim), it will be evaluated
+    using only base features (27-dim) since no seeds are created. For accurate
+    telemetry-aware evaluation, use head_to_head_comparison.
+
+    Args:
+        model_path: Path to saved IQL model checkpoint
+        n_episodes: Number of episodes to run
+        max_epochs: Maximum epochs per episode
+        device: Device to run on
+
+    Returns:
+        Dictionary with comparison results including agreement rates
     """
     import torchvision
     import torchvision.transforms as transforms
@@ -174,8 +193,22 @@ def live_comparison(
     # Load IQL model (use_telemetry inferred from checkpoint)
     print(f"Loading IQL model from {model_path}...")
     iql, telemetry_mode = load_iql_model(model_path, device=device)
-    use_telemetry = (telemetry_mode in ['seed', 'legacy'])
+    use_telemetry_model = (telemetry_mode in ['seed', 'legacy'])
     print(f"  State dim: {iql.q_network.net[0].in_features} (telemetry mode: {telemetry_mode})")
+
+    # Warn about telemetry limitation in live_comparison mode
+    if use_telemetry_model:
+        import warnings
+        warnings.warn(
+            f"Model was trained with telemetry_mode='{telemetry_mode}', but live_comparison "
+            "cannot provide telemetry (no seeds created). Evaluation will use base features "
+            "only (27-dim). Results may not be accurate. Use head_to_head_comparison for "
+            "telemetry-aware evaluation.",
+            UserWarning,
+        )
+
+    # Force disable telemetry since we can't provide it
+    use_telemetry = False
 
     # Load CIFAR-10
     print("Loading CIFAR-10...")
@@ -291,7 +324,7 @@ def live_comparison(
                 available_slots=available_slots,
             )
 
-            features = snapshot_to_features(snapshot, use_telemetry=use_telemetry)
+            features = snapshot_to_features(snapshot, use_telemetry=False)  # No telemetry in live mode
             state_tensor = torch.tensor([features], dtype=torch.float32, device=device)
             iql_action_idx = iql.get_action(state_tensor, deterministic=True)
             iql_action = SimicAction(iql_action_idx).name
