@@ -384,10 +384,15 @@ def head_to_head_comparison(
         torch.manual_seed(seed)
 
         from esper.tolaria import create_model
+        from esper.simic.gradient_collector import SeedGradientCollector
+
         model = create_model(device)
         criterion = nn.CrossEntropyLoss()
         host_optimizer = optim.SGD(model.get_host_parameters(), lr=0.01, momentum=0.9)
         seed_optimizer = None
+
+        # Instantiate gradient collector for telemetry
+        gradient_collector = SeedGradientCollector()
 
         tracker = SignalTracker()
         action_counts = {a.name: 0 for a in SimicAction}
@@ -397,6 +402,9 @@ def head_to_head_comparison(
             seed_state = model.seed_state
 
             # Training phase - mode depends on seed state
+            # We'll collect gradients after backward pass for seed parameters
+            gradient_stats = None
+
             if seed_state is None:
                 # No seed - normal training
                 model.train()
@@ -406,6 +414,7 @@ def head_to_head_comparison(
                     outputs = model(inputs)
                     loss = criterion(outputs, labels)
                     loss.backward()
+                    # No seed to collect gradients from
                     host_optimizer.step()
             elif seed_state.stage == SeedStage.GERMINATED:
                 # Auto-advance to TRAINING
@@ -418,6 +427,8 @@ def head_to_head_comparison(
                     outputs = model(inputs)
                     loss = criterion(outputs, labels)
                     loss.backward()
+                    # Collect gradients AFTER backward, BEFORE optimizer.step
+                    gradient_stats = gradient_collector.collect(model.get_seed_parameters())
                     seed_optimizer.step()
             elif seed_state.stage == SeedStage.TRAINING:
                 # Seed isolated training
@@ -430,6 +441,8 @@ def head_to_head_comparison(
                     outputs = model(inputs)
                     loss = criterion(outputs, labels)
                     loss.backward()
+                    # Collect gradients AFTER backward, BEFORE optimizer.step
+                    gradient_stats = gradient_collector.collect(model.get_seed_parameters())
                     seed_optimizer.step()
             elif seed_state.stage in (SeedStage.BLENDING, SeedStage.FOSSILIZED):
                 # Blending or fossilized - joint training
@@ -445,6 +458,8 @@ def head_to_head_comparison(
                     outputs = model(inputs)
                     loss = criterion(outputs, labels)
                     loss.backward()
+                    # Collect gradients from seed parameters
+                    gradient_stats = gradient_collector.collect(model.get_seed_parameters())
                     host_optimizer.step()
                     if seed_optimizer:
                         seed_optimizer.step()
@@ -457,6 +472,7 @@ def head_to_head_comparison(
                     outputs = model(inputs)
                     loss = criterion(outputs, labels)
                     loss.backward()
+                    # No seed to collect gradients from
                     host_optimizer.step()
 
             # Validation phase
@@ -490,6 +506,17 @@ def head_to_head_comparison(
             # Update seed metrics if active
             if model.has_active_seed:
                 model.seed_state.metrics.record_accuracy(val_acc)
+
+            # Sync telemetry after validation (if we have gradient stats and active seed)
+            if model.has_active_seed and gradient_stats is not None:
+                model.seed_state.sync_telemetry(
+                    gradient_norm=gradient_stats['gradient_norm'],
+                    gradient_health=gradient_stats['gradient_health'],
+                    has_vanishing=gradient_stats['has_vanishing'],
+                    has_exploding=gradient_stats['has_exploding'],
+                    epoch=epoch,
+                    max_epochs=max_epochs,
+                )
 
             # Update signal tracker
             active_seeds = [model.seed_state] if model.has_active_seed else []
@@ -591,7 +618,13 @@ def head_to_head_comparison(
             available_slots=available_slots,
         )
 
-        features = snapshot_to_features(snapshot, use_telemetry=use_telemetry)
+        # Pass real telemetry to snapshot_to_features when use_telemetry=True
+        seed_telemetry = model.seed_state.telemetry if model.has_active_seed else None
+        features = snapshot_to_features(
+            snapshot,
+            use_telemetry=use_telemetry,
+            seed_telemetry=seed_telemetry
+        )
         state_tensor = torch.tensor([features], dtype=torch.float32, device=device)
         action_idx = iql.get_action(state_tensor, deterministic=True)
         return SimicAction(action_idx)

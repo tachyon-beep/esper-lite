@@ -277,3 +277,141 @@ class TestComparisonTelemetry:
 
         features = snapshot_to_features(snapshot, use_telemetry=False)
         assert len(features) == 27
+
+
+class TestHeadToHeadTelemetryIntegration:
+    """Integration tests for telemetry collection in head_to_head_comparison."""
+
+    def test_telemetry_collected_during_training(self):
+        """head_to_head_comparison should collect and sync telemetry during training.
+
+        This test verifies that:
+        1. Gradient collector is instantiated
+        2. Gradients are collected after backward pass
+        3. Telemetry is synced to seed_state
+        4. iql_action_fn receives real telemetry (not zeros)
+        """
+        import torch
+        import torch.nn as nn
+        from unittest.mock import patch, MagicMock
+        from esper.simic.gradient_collector import SeedGradientCollector
+        from esper.kasmina.slot import SeedState
+        from esper.leyline import SeedStage
+
+        # Create a mock scenario where we have a seed with gradients
+        seed_state = SeedState(seed_id="test", blueprint_id="conv_enhance")
+        seed_state.stage = SeedStage.TRAINING
+        seed_state.metrics.current_val_accuracy = 75.0
+        seed_state.metrics.epochs_in_current_stage = 3
+        seed_state.alpha = 0.0
+
+        # Create a simple model to generate real gradients
+        model = nn.Linear(10, 5)
+        x = torch.randn(4, 10)
+        y = model(x)
+        loss = y.sum()
+        loss.backward()
+
+        # Test the gradient collector
+        collector = SeedGradientCollector()
+        stats = collector.collect(model.parameters())
+
+        # Verify stats are non-default (we have real gradients)
+        assert stats['gradient_norm'] > 0, "Should collect non-zero gradient norm"
+        assert 0 <= stats['gradient_health'] <= 1, "Health should be in [0, 1]"
+        assert 'has_vanishing' in stats
+        assert 'has_exploding' in stats
+
+        # Test sync_telemetry updates seed_state.telemetry
+        seed_state.sync_telemetry(
+            gradient_norm=stats['gradient_norm'],
+            gradient_health=stats['gradient_health'],
+            has_vanishing=stats['has_vanishing'],
+            has_exploding=stats['has_exploding'],
+            epoch=5,
+            max_epochs=25,
+        )
+
+        # Verify telemetry was updated
+        assert seed_state.telemetry.gradient_norm == stats['gradient_norm']
+        assert seed_state.telemetry.gradient_health == stats['gradient_health']
+        assert seed_state.telemetry.accuracy == 75.0  # from metrics
+        assert seed_state.telemetry.stage == SeedStage.TRAINING.value
+        assert seed_state.telemetry.epochs_in_stage == 3
+
+        # Verify telemetry produces non-zero features
+        features = seed_state.telemetry.to_features()
+        assert len(features) == 10
+        # At least gradient_norm should be non-zero
+        assert features[0] > 0, "First feature (gradient_norm) should be non-zero"
+
+    def test_telemetry_passed_to_snapshot_to_features(self):
+        """iql_action_fn should pass real telemetry to snapshot_to_features."""
+        import torch
+        from esper.simic.comparison import snapshot_to_features
+        from esper.simic.episodes import TrainingSnapshot
+        from esper.leyline import SeedTelemetry
+
+        # Create a snapshot with active seed
+        snapshot = TrainingSnapshot(
+            epoch=5,
+            global_step=500,
+            train_loss=0.5,
+            val_loss=0.6,
+            loss_delta=-0.1,
+            train_accuracy=80.0,
+            val_accuracy=75.0,
+            accuracy_delta=2.0,
+            plateau_epochs=0,
+            best_val_accuracy=75.0,
+            best_val_loss=0.6,
+            loss_history_5=(0.9, 0.8, 0.7, 0.6, 0.6),
+            accuracy_history_5=(60.0, 65.0, 70.0, 73.0, 75.0),
+            has_active_seed=True,
+            seed_stage=3,
+            seed_epochs_in_stage=2,
+            seed_alpha=0.0,
+            seed_improvement=5.0,
+            available_slots=0,
+        )
+
+        # Create telemetry with non-default values
+        telemetry = SeedTelemetry(
+            seed_id="test_seed",
+            blueprint_id="conv_enhance",
+            gradient_norm=2.5,
+            gradient_health=0.85,
+            has_vanishing=False,
+            has_exploding=False,
+            accuracy=75.0,
+            accuracy_delta=2.0,
+            epochs_in_stage=2,
+            stage=3,
+            alpha=0.0,
+            epoch=5,
+            max_epochs=25,
+        )
+
+        # Convert to features with telemetry
+        features = snapshot_to_features(
+            snapshot,
+            use_telemetry=True,
+            seed_telemetry=telemetry
+        )
+
+        # Verify we get 37 dimensions
+        assert len(features) == 37
+
+        # Verify the last 10 dimensions are from real telemetry (not zeros)
+        seed_features = features[-10:]
+        expected_telemetry_features = telemetry.to_features()
+
+        # Check that we're getting real telemetry data
+        # gradient_norm should be 2.5/10.0 = 0.25
+        assert abs(seed_features[0] - 0.25) < 0.01
+
+        # gradient_health should be 0.85
+        assert abs(seed_features[1] - 0.85) < 0.01
+
+        # Overall features should match
+        assert seed_features == expected_telemetry_features
