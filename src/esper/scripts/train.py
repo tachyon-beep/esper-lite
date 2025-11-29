@@ -27,6 +27,12 @@ def main():
     ppo_parser.add_argument("--lr", type=float, default=3e-4)
     ppo_parser.add_argument("--clip-ratio", type=float, default=0.2)
     ppo_parser.add_argument("--entropy-coef", type=float, default=0.05)  # Increased from 0.01 to prevent premature convergence
+    ppo_parser.add_argument("--entropy-coef-start", type=float, default=None,
+        help="Initial entropy coefficient (default: use --entropy-coef)")
+    ppo_parser.add_argument("--entropy-coef-end", type=float, default=None,
+        help="Final entropy coefficient (default: use --entropy-coef)")
+    ppo_parser.add_argument("--entropy-anneal-episodes", type=int, default=0,
+        help="Episodes over which to anneal entropy (0=fixed, no annealing)")
     ppo_parser.add_argument("--gamma", type=float, default=0.99)
     ppo_parser.add_argument("--save", help="Path to save model")
     ppo_parser.add_argument("--device", default="cuda:0")
