@@ -85,6 +85,9 @@ def train_ppo_vectorized(
     lr: float = 3e-4,
     clip_ratio: float = 0.2,
     entropy_coef: float = 0.1,
+    entropy_coef_start: float | None = None,
+    entropy_coef_end: float | None = None,
+    entropy_anneal_episodes: int = 0,
     gamma: float = 0.99,
     save_path: str = None,
 ) -> tuple[PPOAgent, list[dict]]:
@@ -124,7 +127,10 @@ def train_ppo_vectorized(
     print(f"Max epochs per episode: {max_epochs}")
     print(f"Policy device: {device}")
     print(f"Env devices: {devices} ({n_envs // len(devices)} envs per device)")
-    print(f"Entropy coef: {entropy_coef}")
+    if entropy_anneal_episodes > 0:
+        print(f"Entropy annealing: {entropy_coef_start or entropy_coef} -> {entropy_coef_end or entropy_coef} over {entropy_anneal_episodes} episodes")
+    else:
+        print(f"Entropy coef: {entropy_coef} (fixed)")
     print(f"Learning rate: {lr}")
     print()
 
@@ -152,6 +158,10 @@ def train_ppo_vectorized(
     state_dim = BASE_FEATURE_DIM + (SeedTelemetry.feature_dim() if use_telemetry else 0)
     obs_normalizer = RunningMeanStd((state_dim,))
 
+    # Convert episode-based annealing to step-based
+    # Each batch of n_envs episodes = 1 PPO update step
+    entropy_anneal_steps = entropy_anneal_episodes // n_envs if entropy_anneal_episodes > 0 else 0
+
     # Create PPO agent
     agent = PPOAgent(
         state_dim=state_dim,
@@ -159,6 +169,9 @@ def train_ppo_vectorized(
         lr=lr,
         clip_ratio=clip_ratio,
         entropy_coef=entropy_coef,
+        entropy_coef_start=entropy_coef_start,
+        entropy_coef_end=entropy_coef_end,
+        entropy_anneal_steps=entropy_anneal_steps,
         gamma=gamma,
         device=device,
     )

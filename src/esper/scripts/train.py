@@ -80,6 +80,9 @@ def main():
                 lr=args.lr,
                 clip_ratio=args.clip_ratio,
                 entropy_coef=args.entropy_coef,
+                entropy_coef_start=args.entropy_coef_start,
+                entropy_coef_end=args.entropy_coef_end,
+                entropy_anneal_episodes=args.entropy_anneal_episodes,
                 gamma=args.gamma,
                 save_path=args.save,
             )
