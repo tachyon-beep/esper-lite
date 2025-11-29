@@ -2,6 +2,9 @@
 
 Provides running mean/std normalization using Welford's numerically stable
 online algorithm. Used by vectorized PPO for observation preprocessing.
+
+GPU-native: All operations stay on the same device as input tensors,
+avoiding costly CPU synchronization in the training loop.
 """
 
 from __future__ import annotations
@@ -13,16 +16,26 @@ class RunningMeanStd:
     """Running mean and std for observation normalization.
 
     Uses Welford's online algorithm for numerical stability.
+    GPU-native: automatically moves stats to match input device.
     """
 
-    def __init__(self, shape: tuple[int, ...], epsilon: float = 1e-4):
-        self.mean = torch.zeros(shape)
-        self.var = torch.ones(shape)
+    def __init__(self, shape: tuple[int, ...], epsilon: float = 1e-4, device: str = "cpu"):
+        self.mean = torch.zeros(shape, device=device)
+        self.var = torch.ones(shape, device=device)
         self.count = epsilon  # Prevent div by zero
         self.epsilon = epsilon
+        self._device = device
 
     def update(self, x: torch.Tensor) -> None:
-        """Update running stats with new batch of observations."""
+        """Update running stats with new batch of observations.
+
+        GPU-native: operates entirely on the input tensor's device,
+        avoiding CPU synchronization overhead.
+        """
+        # Auto-migrate stats to input device (one-time cost)
+        if self.mean.device != x.device:
+            self.to(x.device)
+
         batch_mean = x.mean(dim=0)
         batch_var = x.var(dim=0, unbiased=False)
         batch_count = x.shape[0]
@@ -52,11 +65,17 @@ class RunningMeanStd:
             -clip, clip
         )
 
-    def to(self, device: str) -> "RunningMeanStd":
+    def to(self, device: str | torch.device) -> "RunningMeanStd":
         """Move stats to device."""
         self.mean = self.mean.to(device)
         self.var = self.var.to(device)
+        self._device = str(device)
         return self
+
+    @property
+    def device(self) -> torch.device:
+        """Current device of the stats."""
+        return self.mean.device
 
 
 __all__ = ["RunningMeanStd"]

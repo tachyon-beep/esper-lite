@@ -483,8 +483,8 @@ def train_ppo_vectorized(
             # Batch all states into a single tensor
             states_batch = torch.tensor(all_features, dtype=torch.float32, device=device)
 
-            # Update observation normalizer and normalize
-            obs_normalizer.update(states_batch.cpu())
+            # Update observation normalizer and normalize (GPU-native, no .cpu() needed)
+            obs_normalizer.update(states_batch)
             states_batch = obs_normalizer.normalize(states_batch)
 
             # Get BATCHED actions from policy network (single forward pass!)

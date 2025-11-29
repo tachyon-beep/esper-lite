@@ -67,6 +67,31 @@ class MorphogeneticModel(nn.Module):
         # Isolation monitor
         self.isolation_monitor = GradientIsolationMonitor()
 
+    def to(self, *args, **kwargs):
+        """Override to() to propagate device change to SeedSlot.
+
+        SeedSlot is not an nn.Module, so PyTorch's recursive to() doesn't
+        reach it. We manually propagate the device change to ensure the
+        slot creates new seeds on the correct device.
+        """
+        result = super().to(*args, **kwargs)
+
+        # Determine the new device from model parameters
+        try:
+            new_device = next(self.parameters()).device
+        except StopIteration:
+            return result  # No parameters, nothing to update
+
+        # Propagate to seed slot
+        self.seed_slot.device = new_device
+        self._device = str(new_device)
+
+        # Move existing seed if present
+        if self.seed_slot.seed is not None:
+            self.seed_slot.seed = self.seed_slot.seed.to(new_device)
+
+        return result
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         features = self.host.forward_to_injection(x)
         features = self.seed_slot.forward(features)
