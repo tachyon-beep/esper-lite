@@ -21,6 +21,9 @@ Note: PPO and IQL are heavy modules - import them directly when needed:
     from esper.simic.iql import IQL
 """
 
+# Actions
+from esper.leyline import SimicAction
+
 # Core data structures
 from esper.simic.episodes import (
     TrainingSnapshot,
@@ -67,6 +70,9 @@ from esper.simic.networks import (
 #   from esper.simic.iql import IQL
 
 __all__ = [
+    # Actions
+    "SimicAction",
+
     # Episodes
     "TrainingSnapshot",
     "ActionTaken",
