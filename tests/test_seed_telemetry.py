@@ -134,3 +134,67 @@ class TestSeedStateTelemetry:
         assert state.telemetry.gradient_health == 0.9
         assert state.telemetry.epoch == 10
         assert state.telemetry.max_epochs == 25
+
+
+class TestSeedGradientCollector:
+    """Tests for lightweight gradient collection."""
+
+    def test_import_collector(self):
+        """SeedGradientCollector should be importable."""
+        from esper.simic.gradient_collector import SeedGradientCollector
+        assert SeedGradientCollector is not None
+
+    def test_collect_gradient_stats(self):
+        """Collector should compute gradient stats from parameters."""
+        import torch
+        import torch.nn as nn
+        from esper.simic.gradient_collector import SeedGradientCollector
+
+        # Create a simple model with gradients
+        model = nn.Linear(10, 5)
+        x = torch.randn(4, 10)
+        y = model(x)
+        loss = y.sum()
+        loss.backward()
+
+        collector = SeedGradientCollector()
+        stats = collector.collect(model.parameters())
+
+        assert 'gradient_norm' in stats
+        assert 'gradient_health' in stats
+        assert 'has_vanishing' in stats
+        assert 'has_exploding' in stats
+        assert stats['gradient_norm'] >= 0
+        assert 0 <= stats['gradient_health'] <= 1
+
+    def test_detect_vanishing_gradients(self):
+        """Collector should detect vanishing gradients."""
+        import torch
+        import torch.nn as nn
+        from esper.simic.gradient_collector import SeedGradientCollector
+
+        # Create model with tiny gradients
+        model = nn.Linear(10, 5)
+        for p in model.parameters():
+            p.grad = torch.zeros_like(p) + 1e-10
+
+        collector = SeedGradientCollector(vanishing_threshold=1e-7)
+        stats = collector.collect(model.parameters())
+
+        assert stats['has_vanishing'] is True
+
+    def test_detect_exploding_gradients(self):
+        """Collector should detect exploding gradients."""
+        import torch
+        import torch.nn as nn
+        from esper.simic.gradient_collector import SeedGradientCollector
+
+        # Create model with huge gradients
+        model = nn.Linear(10, 5)
+        for p in model.parameters():
+            p.grad = torch.ones_like(p) * 1000
+
+        collector = SeedGradientCollector(exploding_threshold=100)
+        stats = collector.collect(model.parameters())
+
+        assert stats['has_exploding'] is True
