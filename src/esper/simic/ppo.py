@@ -241,6 +241,9 @@ class PPOAgent:
                 'gae_lambda': self.gae_lambda,
                 'clip_ratio': self.clip_ratio,
                 'entropy_coef': self.entropy_coef,
+                'entropy_coef_start': self.entropy_coef_start,
+                'entropy_coef_end': self.entropy_coef_end,
+                'entropy_anneal_steps': self.entropy_anneal_steps,
                 'value_coef': self.value_coef,
             }
         }
