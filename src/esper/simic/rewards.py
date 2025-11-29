@@ -38,6 +38,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import NamedTuple
 
+from esper.leyline import SeedStage
+
 
 # =============================================================================
 # Reward Configuration
@@ -130,10 +132,10 @@ class SeedInfo(NamedTuple):
         )
 
 
-# Stage constants (match SeedStage IntEnum values)
-STAGE_TRAINING = 3
-STAGE_BLENDING = 4
-STAGE_FOSSILIZED = 7
+# Stage constants from leyline contract
+STAGE_TRAINING = SeedStage.TRAINING.value
+STAGE_BLENDING = SeedStage.BLENDING.value
+STAGE_FOSSILIZED = SeedStage.FOSSILIZED.value
 
 
 # =============================================================================
