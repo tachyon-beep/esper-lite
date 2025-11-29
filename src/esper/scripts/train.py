@@ -33,6 +33,7 @@ def main():
     ppo_parser.add_argument("--vectorized", action="store_true")
     ppo_parser.add_argument("--n-envs", type=int, default=4)
     ppo_parser.add_argument("--devices", nargs="+")
+    ppo_parser.add_argument("--no-telemetry", action="store_true", help="Disable telemetry features (27-dim instead of 54-dim)")
 
     # IQL subcommand
     iql_parser = subparsers.add_parser("iql", help="Train IQL agent")
@@ -61,6 +62,7 @@ def main():
     args = parser.parse_args()
 
     if args.algorithm == "ppo":
+        use_telemetry = not args.no_telemetry
         if args.vectorized:
             from esper.simic.vectorized import train_ppo_vectorized
             train_ppo_vectorized(
@@ -69,6 +71,7 @@ def main():
                 max_epochs=args.max_epochs,
                 device=args.device,
                 devices=args.devices,
+                use_telemetry=use_telemetry,
                 lr=args.lr,
                 clip_ratio=args.clip_ratio,
                 entropy_coef=args.entropy_coef,
@@ -82,6 +85,7 @@ def main():
                 max_epochs=args.max_epochs,
                 update_every=args.update_every,
                 device=args.device,
+                use_telemetry=use_telemetry,
                 lr=args.lr,
                 clip_ratio=args.clip_ratio,
                 entropy_coef=args.entropy_coef,

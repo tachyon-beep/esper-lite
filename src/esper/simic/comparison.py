@@ -28,12 +28,20 @@ from esper.tamiyo import HeuristicTamiyo, HeuristicPolicyConfig, SignalTracker
 # Model Loading
 # =============================================================================
 
-def load_iql_model(model_path: str, device: str = "cpu") -> IQL:
-    """Load a trained IQL model."""
+def load_iql_model(model_path: str, device: str = "cpu") -> tuple[IQL, bool]:
+    """Load a trained IQL model.
+
+    Returns:
+        Tuple of (IQL agent, use_telemetry flag inferred from state_dim)
+    """
     checkpoint = torch.load(model_path, map_location=device, weights_only=True)
 
+    state_dim = checkpoint['state_dim']
+    # Infer telemetry usage: 54 = base + telemetry, 27 = base only
+    use_telemetry = (state_dim == 54)
+
     iql = IQL(
-        state_dim=checkpoint['state_dim'],
+        state_dim=state_dim,
         action_dim=checkpoint['action_dim'],
         gamma=checkpoint.get('gamma', 0.99),
         tau=checkpoint.get('tau', 0.7),
@@ -43,7 +51,7 @@ def load_iql_model(model_path: str, device: str = "cpu") -> IQL:
     iql.q_network.load_state_dict(checkpoint['q_network'])
     iql.v_network.load_state_dict(checkpoint['v_network'])
 
-    return iql
+    return iql, use_telemetry
 
 
 # =============================================================================
@@ -93,12 +101,13 @@ def live_comparison(
     n_episodes: int = 5,
     max_epochs: int = 25,
     device: str = "cpu",
-    use_telemetry: bool = True,
 ) -> dict:
     """Run live comparison between heuristic Tamiyo and IQL policy.
 
     Both policies make decisions, but only heuristic actually controls training.
     We track what IQL *would* have done and compare accuracy outcomes.
+
+    Note: use_telemetry is inferred from the model checkpoint's state_dim.
     """
     import torchvision
     import torchvision.transforms as transforms
@@ -108,10 +117,10 @@ def live_comparison(
     print("Live Comparison: Heuristic Tamiyo vs IQL Policy")
     print("=" * 60)
 
-    # Load IQL model
+    # Load IQL model (use_telemetry inferred from checkpoint)
     print(f"Loading IQL model from {model_path}...")
-    iql = load_iql_model(model_path, device=device)
-    print(f"  State dim: {iql.q_network.net[0].in_features}")
+    iql, use_telemetry = load_iql_model(model_path, device=device)
+    print(f"  State dim: {iql.q_network.net[0].in_features} (telemetry: {use_telemetry})")
 
     # Load CIFAR-10
     print("Loading CIFAR-10...")
@@ -288,7 +297,6 @@ def head_to_head_comparison(
     n_episodes: int = 5,
     max_epochs: int = 25,
     device: str = "cpu",
-    use_telemetry: bool = True,
 ) -> dict:
     """Run head-to-head comparison where each policy ACTUALLY controls training.
 
@@ -298,6 +306,8 @@ def head_to_head_comparison(
     2. IQL policy controls another run
 
     We compare final accuracies to determine which policy is better.
+
+    Note: use_telemetry is inferred from the model checkpoint's state_dim.
     """
     import torchvision
     import torchvision.transforms as transforms
@@ -310,11 +320,11 @@ def head_to_head_comparison(
     print("Each policy EXECUTES its decisions in separate training runs")
     print()
 
-    # Load IQL model
+    # Load IQL model (use_telemetry inferred from checkpoint)
     print(f"Loading IQL model from {model_path}...")
-    iql = load_iql_model(model_path, device=device)
+    iql, use_telemetry = load_iql_model(model_path, device=device)
     state_dim = iql.q_network.net[0].in_features
-    print(f"  State dim: {state_dim}")
+    print(f"  State dim: {state_dim} (telemetry: {use_telemetry})")
 
     # Load CIFAR-10 once
     print("Loading CIFAR-10...")

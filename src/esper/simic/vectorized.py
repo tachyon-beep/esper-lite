@@ -147,8 +147,8 @@ def train_ppo_vectorized(
     num_test_batches = len(sample_test)
     del sample_train, sample_test  # Free memory
 
-    # State dimension and observation normalizer
-    state_dim = 27
+    # State dimension: 27 base features + 27 telemetry features if enabled
+    state_dim = 54 if use_telemetry else 27
     obs_normalizer = RunningMeanStd((state_dim,))
 
     # Create PPO agent
@@ -235,6 +235,11 @@ def train_ppo_vectorized(
                 optimizer = env_state.seed_optimizer
             else:  # BLENDING
                 optimizer = env_state.host_optimizer
+                # Update blend alpha for this step
+                if model.seed_slot:
+                    # Use global_step from signal_tracker as step count
+                    step = env_state.signal_tracker.global_step if hasattr(env_state.signal_tracker, 'global_step') else 0
+                    model.seed_slot.update_alpha_for_step(step)
 
             optimizer.zero_grad()
             if seed_state and seed_state.stage == SeedStage.BLENDING and env_state.seed_optimizer:
@@ -286,38 +291,50 @@ def train_ppo_vectorized(
     recent_accuracies = []
     recent_rewards = []
 
-    episodes_per_env = (n_episodes + n_envs - 1) // n_envs
+    episodes_completed = 0
 
-    for batch_idx in range(episodes_per_env):
+    batch_idx = 0
+    while episodes_completed < n_episodes:
+        # Determine how many envs to run this batch (may be fewer than n_envs for last batch)
+        remaining = n_episodes - episodes_completed
+        envs_this_batch = min(n_envs, remaining)
+
         # Create fresh environments for this batch
         base_seed = 42 + batch_idx * 10000
-        env_states = [create_env_state(i, base_seed) for i in range(n_envs)]
+        env_states = [create_env_state(i, base_seed) for i in range(envs_this_batch)]
         criterion = nn.CrossEntropyLoss()
 
         # Per-env accumulators
-        env_final_accs = [0.0] * n_envs
-        env_total_rewards = [0.0] * n_envs
+        env_final_accs = [0.0] * envs_this_batch
+        env_total_rewards = [0.0] * envs_this_batch
 
         # Run epochs with INVERTED CONTROL FLOW
         for epoch in range(1, max_epochs + 1):
             # Reset per-epoch metrics
-            train_losses = [0.0] * n_envs
-            train_corrects = [0] * n_envs
-            train_totals = [0] * n_envs
+            train_losses = [0.0] * envs_this_batch
+            train_corrects = [0] * envs_this_batch
+            train_totals = [0] * envs_this_batch
 
             # ===== TRAINING: Iterate batches first, launch all envs via CUDA streams =====
-            # Use first env's DataLoader as shared batch source (all envs see same data)
-            train_iter = iter(env_states[0].trainloader)
+            # Each env has its own DataLoader with independent shuffling
+            train_iters = [iter(env_state.trainloader) for env_state in env_states]
             for batch_step in range(num_train_batches):
-                try:
-                    inputs, targets = next(train_iter)
-                except StopIteration:
-                    break
+                # Get batch from each env's own dataloader (independent shuffling)
+                env_batches = []
+                for i, train_iter in enumerate(train_iters):
+                    try:
+                        inputs, targets = next(train_iter)
+                        env_batches.append((inputs, targets))
+                    except StopIteration:
+                        env_batches.append(None)
 
                 # Launch all environments in their respective CUDA streams (async)
                 env_results = []
                 for i, env_state in enumerate(env_states):
-                    result = process_train_batch(env_state, inputs.clone(), targets.clone(), criterion)
+                    if env_batches[i] is None:
+                        continue
+                    inputs, targets = env_batches[i]
+                    result = process_train_batch(env_state, inputs, targets, criterion)
                     env_results.append((i, result))
 
                 # Sync all streams after launching all work (THE BARRIER)
@@ -332,22 +349,29 @@ def train_ppo_vectorized(
                     train_totals[env_idx] += total
 
             # ===== VALIDATION: Same inverted pattern with CUDA streams =====
-            val_losses = [0.0] * n_envs
-            val_corrects = [0] * n_envs
-            val_totals = [0] * n_envs
+            val_losses = [0.0] * envs_this_batch
+            val_corrects = [0] * envs_this_batch
+            val_totals = [0] * envs_this_batch
 
-            # Use first env's testloader as shared batch source
-            test_iter = iter(env_states[0].testloader)
+            # Each env has its own testloader (validation data order doesn't matter, but for consistency)
+            test_iters = [iter(env_state.testloader) for env_state in env_states]
             for batch_step in range(num_test_batches):
-                try:
-                    inputs, targets = next(test_iter)
-                except StopIteration:
-                    break
+                # Get batch from each env's own testloader
+                env_batches = []
+                for i, test_iter in enumerate(test_iters):
+                    try:
+                        inputs, targets = next(test_iter)
+                        env_batches.append((inputs, targets))
+                    except StopIteration:
+                        env_batches.append(None)
 
                 # Launch all environments in their respective CUDA streams (async)
                 env_results = []
                 for i, env_state in enumerate(env_states):
-                    result = process_val_batch(env_state, inputs.clone(), targets.clone(), criterion)
+                    if env_batches[i] is None:
+                        continue
+                    inputs, targets = env_batches[i]
+                    result = process_val_batch(env_state, inputs, targets, criterion)
                     env_results.append((i, result))
 
                 # Sync all streams (THE BARRIER)
@@ -381,6 +405,10 @@ def train_ppo_vectorized(
                 env_state.val_loss = val_loss
                 env_state.val_acc = val_acc
 
+                # Record accuracy in seed metrics for reward shaping
+                if seed_state and seed_state.metrics:
+                    seed_state.metrics.record_accuracy(val_acc)
+
                 # Update signal tracker
                 active_seeds = [seed_state] if seed_state else []
                 available_slots = 0 if model.has_active_seed else 1
@@ -396,7 +424,7 @@ def train_ppo_vectorized(
                 )
                 all_signals.append(signals)
 
-                features = signals_to_features(signals, model, tracker=None, use_telemetry=False)
+                features = signals_to_features(signals, model, tracker=None, use_telemetry=use_telemetry)
                 all_features.append(features)
 
             # Batch all states into a single tensor
@@ -487,8 +515,8 @@ def train_ppo_vectorized(
 
         rolling_avg_acc = sum(recent_accuracies) / len(recent_accuracies)
 
-        ep_num = (batch_idx + 1) * n_envs
-        print(f"Batch {batch_idx + 1}: Episodes {ep_num}/{n_episodes}")
+        episodes_completed += envs_this_batch
+        print(f"Batch {batch_idx + 1}: Episodes {episodes_completed}/{n_episodes}")
         print(f"  Env accuracies: {[f'{a:.1f}%' for a in env_final_accs]}")
         print(f"  Avg acc: {avg_acc:.1f}% (rolling: {rolling_avg_acc:.1f}%)")
         print(f"  Avg reward: {avg_reward:.1f}")
@@ -506,7 +534,7 @@ def train_ppo_vectorized(
 
         history.append({
             'batch': batch_idx + 1,
-            'episodes': ep_num,
+            'episodes': episodes_completed,
             'env_accuracies': list(env_final_accs),
             'avg_accuracy': avg_acc,
             'rolling_avg_accuracy': rolling_avg_acc,
@@ -518,6 +546,8 @@ def train_ppo_vectorized(
         if rolling_avg_acc > best_avg_acc:
             best_avg_acc = rolling_avg_acc
             best_state = {k: v.clone() for k, v in agent.network.state_dict().items()}
+
+        batch_idx += 1
 
     if best_state:
         agent.network.load_state_dict(best_state)

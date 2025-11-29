@@ -349,20 +349,29 @@ def compute_seed_potential(obs: dict) -> float:
 
     Returns:
         Potential value for the current state
+
+    Note:
+        seed_stage values match SeedStage enum from leyline:
+        - DORMANT=1, GERMINATED=2, TRAINING=3, BLENDING=4
+        - SHADOWING=5, PROBATIONARY=6, FOSSILIZED=7
     """
     has_active = obs.get('has_active_seed', 0)
     seed_stage = obs.get('seed_stage', 0)
     epochs_in_stage = obs.get('seed_epochs_in_stage', 0)
 
-    if not has_active or seed_stage == 0:
+    # No potential for inactive seeds or DORMANT (stage 1)
+    if not has_active or seed_stage <= 1:
         return 0.0
 
-    # Stage-based potential values
+    # Stage-based potential values (matching SeedStage enum values)
+    # Potential increases as seed progresses toward FOSSILIZED
     stage_potentials = {
-        1: 5.0,   # GERMINATED - just started
-        2: 15.0,  # TRAINING - actively learning
-        3: 25.0,  # BLENDING - about to integrate
-        4: 10.0,  # FOSSILIZED - value mostly realized
+        2: 5.0,   # GERMINATED - just started
+        3: 15.0,  # TRAINING - actively learning
+        4: 25.0,  # BLENDING - about to integrate
+        5: 28.0,  # SHADOWING - monitoring integration
+        6: 30.0,  # PROBATIONARY - almost done
+        7: 10.0,  # FOSSILIZED - terminal success, value realized
     }
 
     base_potential = stage_potentials.get(seed_stage, 0.0)

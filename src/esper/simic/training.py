@@ -343,11 +343,15 @@ def run_ppo_episode(
                 correct += predicted.eq(targets).sum().item()
 
         elif seed_state.stage == SeedStage.BLENDING:
+            step = 0
             for inputs, targets in trainloader:
                 inputs, targets = inputs.to(device), targets.to(device)
                 host_optimizer.zero_grad()
                 if seed_optimizer:
                     seed_optimizer.zero_grad()
+                # Update blend alpha for this step
+                if model.seed_slot:
+                    model.seed_slot.update_alpha_for_step(step)
                 outputs = model(inputs)
                 loss = criterion(outputs, targets)
                 loss.backward()
@@ -358,6 +362,7 @@ def run_ppo_episode(
                 _, predicted = outputs.max(1)
                 total += targets.size(0)
                 correct += predicted.eq(targets).sum().item()
+                step += 1
 
         elif seed_state.stage == SeedStage.FOSSILIZED:
             for inputs, targets in trainloader:
@@ -394,6 +399,10 @@ def run_ppo_episode(
         val_loss /= len(testloader)
         val_acc = 100.0 * correct / total
 
+        # Record accuracy in seed metrics for reward shaping
+        if seed_state and seed_state.metrics:
+            seed_state.metrics.record_accuracy(val_acc)
+
         # Update signal tracker
         active_seeds = [seed_state] if seed_state else []
         available_slots = 0 if model.has_active_seed else 1
@@ -411,7 +420,8 @@ def run_ppo_episode(
         acc_delta = signals.accuracy_delta
 
         # Get features and action
-        features = signals_to_features(signals, model, tracker=None, use_telemetry=False)
+        # Note: tracker would provide DiagnosticTracker telemetry if available
+        features = signals_to_features(signals, model, tracker=None, use_telemetry=use_telemetry)
         state = torch.tensor([features], dtype=torch.float32, device=device)
 
         action_idx, log_prob, value = agent.get_action(state, deterministic=deterministic)
@@ -491,10 +501,11 @@ def train_ppo(
     print("PPO Training for Tamiyo")
     print("=" * 60)
     print(f"Episodes: {n_episodes}, Max epochs: {max_epochs}")
-    print(f"Device: {device}")
+    print(f"Device: {device}, Telemetry: {use_telemetry}")
 
     trainloader, testloader = load_cifar10(batch_size=128)
-    state_dim = 27
+    # State dimension: 27 base features + 27 telemetry features if enabled
+    state_dim = 54 if use_telemetry else 27
 
     agent = PPOAgent(
         state_dim=state_dim,
