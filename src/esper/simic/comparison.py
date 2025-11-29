@@ -17,9 +17,10 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from esper.leyline import SimicAction, SeedStage
+from esper.leyline import SimicAction, SeedStage, SeedTelemetry
 from esper.simic.episodes import TrainingSnapshot
 from esper.simic.features import obs_to_base_features, telemetry_to_features
+from esper.simic.gradient_collector import collect_seed_gradients
 from esper.simic.iql import IQL
 from esper.tamiyo import HeuristicTamiyo, HeuristicPolicyConfig, SignalTracker
 
@@ -58,8 +59,24 @@ def load_iql_model(model_path: str, device: str = "cpu") -> tuple[IQL, bool]:
 # Feature Conversion
 # =============================================================================
 
-def snapshot_to_features(snapshot: TrainingSnapshot, use_telemetry: bool = False) -> list[float]:
-    """Convert TrainingSnapshot to feature vector for IQL."""
+def snapshot_to_features(
+    snapshot: TrainingSnapshot,
+    use_telemetry: bool = False,
+    seed_telemetry: SeedTelemetry | None = None,
+) -> list[float]:
+    """Convert TrainingSnapshot to feature vector for IQL.
+
+    Args:
+        snapshot: Training state snapshot
+        use_telemetry: Whether to include telemetry features
+        seed_telemetry: Per-seed telemetry (10 dims). If None and use_telemetry=True,
+                       falls back to zeros with a warning.
+
+    Returns:
+        Feature vector:
+        - 27 dims if use_telemetry=False
+        - 37 dims if use_telemetry=True (27 base + 10 seed)
+    """
     # Convert snapshot to observation dict format expected by obs_to_base_features
     obs = {
         'epoch': snapshot.epoch,
@@ -86,8 +103,17 @@ def snapshot_to_features(snapshot: TrainingSnapshot, use_telemetry: bool = False
     features = obs_to_base_features(obs)
 
     if use_telemetry:
-        # Pad with zeros for telemetry features (not available in live comparison)
-        features.extend([0.0] * 27)
+        if seed_telemetry is not None:
+            features.extend(seed_telemetry.to_features())
+        else:
+            # Fallback to zeros (anti-pattern per DRL review, but safe default)
+            import warnings
+            warnings.warn(
+                "use_telemetry=True but no seed_telemetry provided. "
+                "Using zero-padding which may cause distribution shift.",
+                UserWarning,
+            )
+            features.extend([0.0] * SeedTelemetry.feature_dim())
 
     return features
 

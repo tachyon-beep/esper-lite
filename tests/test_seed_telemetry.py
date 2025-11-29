@@ -198,3 +198,82 @@ class TestSeedGradientCollector:
         stats = collector.collect(model.parameters())
 
         assert stats['has_exploding'] is True
+
+
+class TestComparisonTelemetry:
+    """Tests for comparison.py telemetry integration."""
+
+    def test_snapshot_to_features_with_seed_telemetry(self):
+        """snapshot_to_features should use seed telemetry when provided."""
+        from esper.simic.comparison import snapshot_to_features
+        from esper.simic.episodes import TrainingSnapshot
+        from esper.leyline import SeedTelemetry
+
+        snapshot = TrainingSnapshot(
+            epoch=5,
+            global_step=500,
+            train_loss=0.5,
+            val_loss=0.6,
+            loss_delta=-0.1,
+            train_accuracy=80.0,
+            val_accuracy=75.0,
+            accuracy_delta=2.0,
+            plateau_epochs=0,
+            best_val_accuracy=75.0,
+            best_val_loss=0.6,
+            loss_history_5=(0.9, 0.8, 0.7, 0.6, 0.6),
+            accuracy_history_5=(60.0, 65.0, 70.0, 73.0, 75.0),
+            has_active_seed=True,
+            seed_stage=3,
+            seed_epochs_in_stage=2,
+            seed_alpha=0.0,
+            seed_improvement=5.0,
+            available_slots=0,
+        )
+
+        seed_telemetry = SeedTelemetry(
+            seed_id="test",
+            gradient_norm=1.5,
+            gradient_health=0.9,
+            has_vanishing=False,
+            has_exploding=False,
+            accuracy=75.0,
+            accuracy_delta=5.0,
+            epochs_in_stage=2,
+            stage=3,
+            alpha=0.0,
+            epoch=5,
+            max_epochs=25,
+        )
+
+        features = snapshot_to_features(
+            snapshot,
+            use_telemetry=True,
+            seed_telemetry=seed_telemetry
+        )
+
+        # Should be 27 base + 10 seed = 37 dims
+        assert len(features) == 37
+
+        # Last 10 should be from seed telemetry
+        seed_features = features[-10:]
+        expected = seed_telemetry.to_features()
+        assert seed_features == expected
+
+    def test_snapshot_to_features_no_telemetry(self):
+        """Without telemetry, should return 27 dims."""
+        from esper.simic.comparison import snapshot_to_features
+        from esper.simic.episodes import TrainingSnapshot
+
+        snapshot = TrainingSnapshot(
+            epoch=1, global_step=100, train_loss=1.0, val_loss=1.0,
+            loss_delta=0.0, train_accuracy=50.0, val_accuracy=50.0,
+            accuracy_delta=0.0, plateau_epochs=0, best_val_accuracy=50.0,
+            best_val_loss=1.0, loss_history_5=(1.0,)*5,
+            accuracy_history_5=(50.0,)*5, has_active_seed=False,
+            seed_stage=0, seed_epochs_in_stage=0, seed_alpha=0.0,
+            seed_improvement=0.0, available_slots=1,
+        )
+
+        features = snapshot_to_features(snapshot, use_telemetry=False)
+        assert len(features) == 27
