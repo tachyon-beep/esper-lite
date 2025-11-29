@@ -30,6 +30,7 @@ from esper.leyline import (
     # Telemetry
     TelemetryEvent,
     TelemetryEventType,
+    SeedTelemetry,
 )
 
 
@@ -125,6 +126,48 @@ class SeedState:
 
     # History
     stage_history: list[tuple[SeedStage, datetime]] = field(default_factory=list)
+
+    # Telemetry (initialized in __post_init__)
+    telemetry: SeedTelemetry = field(default=None)
+
+    def __post_init__(self):
+        """Initialize telemetry with seed identity."""
+        if self.telemetry is None:
+            self.telemetry = SeedTelemetry(
+                seed_id=self.seed_id,
+                blueprint_id=self.blueprint_id,
+            )
+
+    def sync_telemetry(
+        self,
+        gradient_norm: float,
+        gradient_health: float,
+        has_vanishing: bool,
+        has_exploding: bool,
+        epoch: int = 0,
+        max_epochs: int = 25,
+    ) -> None:
+        """Sync telemetry from metrics + gradient signals.
+
+        Call this once per epoch after validation to update telemetry.
+        SeedMetrics remains the source of truth for accuracy/epoch data.
+        """
+        from datetime import timezone
+
+        self.telemetry.accuracy = self.metrics.current_val_accuracy
+        self.telemetry.accuracy_delta = self.metrics.improvement_since_stage_start
+        self.telemetry.epochs_in_stage = self.metrics.epochs_in_current_stage
+        self.telemetry.stage = self.stage.value
+        self.telemetry.alpha = self.alpha
+
+        self.telemetry.gradient_norm = gradient_norm
+        self.telemetry.gradient_health = gradient_health
+        self.telemetry.has_vanishing = has_vanishing
+        self.telemetry.has_exploding = has_exploding
+
+        self.telemetry.epoch = epoch
+        self.telemetry.max_epochs = max_epochs
+        self.telemetry.captured_at = datetime.now(timezone.utc)
 
     def can_transition_to(self, new_stage: SeedStage) -> bool:
         """Check if transition to new_stage is valid per Leyline contract."""

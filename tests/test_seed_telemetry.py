@@ -87,3 +87,50 @@ class TestSeedTelemetry:
         telem = SeedTelemetry(seed_id="test")
         after = datetime.now(timezone.utc)
         assert before <= telem.captured_at <= after
+
+
+class TestSeedStateTelemetry:
+    """Tests for SeedState.telemetry integration."""
+
+    def test_seed_state_has_telemetry(self):
+        """SeedState should have a telemetry field."""
+        from esper.kasmina.slot import SeedState
+        state = SeedState(seed_id="test", blueprint_id="conv_enhance")
+        assert hasattr(state, 'telemetry')
+        assert state.telemetry is not None
+
+    def test_telemetry_initialized_with_seed_info(self):
+        """Telemetry should be initialized with seed_id and blueprint_id."""
+        from esper.kasmina.slot import SeedState
+        state = SeedState(seed_id="seed_1", blueprint_id="attention")
+        assert state.telemetry.seed_id == "seed_1"
+        assert state.telemetry.blueprint_id == "attention"
+
+    def test_sync_telemetry_updates_from_metrics(self):
+        """sync_telemetry should copy values from metrics."""
+        from esper.kasmina.slot import SeedState
+        from esper.leyline import SeedStage
+
+        state = SeedState(seed_id="test", blueprint_id="conv")
+        state.stage = SeedStage.TRAINING
+        state.metrics.current_val_accuracy = 75.0
+        state.metrics.epochs_in_current_stage = 5
+        state.alpha = 0.3
+
+        state.sync_telemetry(
+            gradient_norm=2.5,
+            gradient_health=0.9,
+            has_vanishing=False,
+            has_exploding=False,
+            epoch=10,
+            max_epochs=25,
+        )
+
+        assert state.telemetry.accuracy == 75.0
+        assert state.telemetry.epochs_in_stage == 5
+        assert state.telemetry.stage == SeedStage.TRAINING.value
+        assert state.telemetry.alpha == 0.3
+        assert state.telemetry.gradient_norm == 2.5
+        assert state.telemetry.gradient_health == 0.9
+        assert state.telemetry.epoch == 10
+        assert state.telemetry.max_epochs == 25
