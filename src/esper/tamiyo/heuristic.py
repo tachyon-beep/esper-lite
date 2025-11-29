@@ -148,6 +148,22 @@ class HeuristicTamiyo:
                 if decision.action != Action.WAIT:
                     return decision
 
+            elif seed.stage == SeedStage.SHADOWING:
+                # Shadowing stage - continue advancing toward fossilization
+                return TamiyoDecision(
+                    action=Action.ADVANCE,
+                    target_seed_id=seed.seed_id,
+                    reason="Shadowing complete, advancing to probationary",
+                )
+
+            elif seed.stage == SeedStage.PROBATIONARY:
+                # Probationary stage - advance to fossilized
+                return TamiyoDecision(
+                    action=Action.ADVANCE,
+                    target_seed_id=seed.seed_id,
+                    reason="Probationary complete, fossilizing seed",
+                )
+
         return TamiyoDecision(
             action=Action.WAIT,
             reason="Seeds progressing normally"

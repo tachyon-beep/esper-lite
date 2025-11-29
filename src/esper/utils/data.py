@@ -41,7 +41,10 @@ def load_cifar10(
         trainset,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=2,
+        num_workers=4,  # Parallel data loading workers
+        pin_memory=True,  # Required for non_blocking=True to work
+        persistent_workers=True,  # Keep workers alive between epochs
+        prefetch_factor=4,  # Queue 4 batches per worker ahead of time
         generator=generator,
     )
 
@@ -52,7 +55,10 @@ def load_cifar10(
         testset,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=2,
+        num_workers=4,  # Parallel data loading workers
+        pin_memory=True,  # Required for non_blocking=True to work
+        persistent_workers=True,  # Keep workers alive between epochs
+        prefetch_factor=4,  # Queue 4 batches per worker ahead of time
     )
 
     return trainloader, testloader

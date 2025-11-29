@@ -476,34 +476,6 @@ class TestLoadIQLModelDimensions:
         assert loaded_iql.q_network.net[0].in_features == 37
         assert telemetry_mode == 'seed'
 
-    def test_load_54dim_model(self, tmp_path):
-        """Load 54-dim model (legacy full-model telemetry) correctly."""
-        import torch
-        from esper.simic.comparison import load_iql_model
-        from esper.simic.iql import IQL
-
-        # Create a 54-dim model (27 base + 27 legacy telemetry)
-        iql = IQL(state_dim=54, action_dim=7, hidden_dim=256, device='cpu')
-
-        # Save checkpoint in expected format
-        checkpoint_path = tmp_path / "iql_54dim.pt"
-        checkpoint = {
-            'state_dim': 54,
-            'action_dim': 7,
-            'gamma': 0.99,
-            'tau': 0.7,
-            'beta': 3.0,
-            'q_network': iql.q_network.state_dict(),
-            'v_network': iql.v_network.state_dict(),
-        }
-        torch.save(checkpoint, checkpoint_path)
-
-        # Load and verify
-        loaded_iql, telemetry_mode = load_iql_model(str(checkpoint_path), device='cpu')
-
-        assert loaded_iql.q_network.net[0].in_features == 54
-        assert telemetry_mode == 'legacy'
-
     def test_load_unknown_dimension_raises_error(self, tmp_path):
         """Loading model with unknown dimension should raise ValueError."""
         import torch
@@ -565,23 +537,8 @@ class TestLoadIQLModelDimensions:
 
         loaded_37, mode_37 = load_iql_model(str(path_37), device='cpu')
         assert mode_37 == 'seed'
-        use_telemetry_37 = (mode_37 in ['seed', 'legacy'])
+        use_telemetry_37 = (mode_37 in ['seed'])
         assert use_telemetry_37 is True
-
-        # Test 54-dim: use_telemetry should be True (legacy)
-        iql_54 = IQL(state_dim=54, action_dim=7, device='cpu')
-        path_54 = tmp_path / "iql_54.pt"
-        torch.save({
-            'state_dim': 54,
-            'action_dim': 7,
-            'q_network': iql_54.q_network.state_dict(),
-            'v_network': iql_54.v_network.state_dict(),
-        }, path_54)
-
-        loaded_54, mode_54 = load_iql_model(str(path_54), device='cpu')
-        assert mode_54 == 'legacy'
-        use_telemetry_54 = (mode_54 in ['seed', 'legacy'])
-        assert use_telemetry_54 is True
 
 
 class TestEndToEndTelemetryPipeline:

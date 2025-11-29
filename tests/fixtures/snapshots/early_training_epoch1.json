@@ -1,0 +1,21 @@
+{
+  "epoch": 1,
+  "global_step": 100,
+  "train_loss": 2.5,
+  "val_loss": 2.7,
+  "train_accuracy": 30.0,
+  "val_accuracy": 35.2,
+  "accuracy_delta": 0.0,
+  "loss_delta": 0.0,
+  "best_val_accuracy": 35.2,
+  "best_val_loss": 2.7,
+  "plateau_epochs": 0,
+  "loss_history_5": [2.8, 2.7, 2.6, 2.6, 2.5],
+  "accuracy_history_5": [32.1, 33.0, 34.5, 35.0, 35.2],
+  "has_active_seed": false,
+  "seed_stage": 0,
+  "seed_epochs_in_stage": 0,
+  "seed_alpha": 0.0,
+  "seed_improvement": 0.0,
+  "available_slots": 1
+}

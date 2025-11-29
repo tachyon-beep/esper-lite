@@ -22,11 +22,11 @@ def main():
     # PPO subcommand
     ppo_parser = subparsers.add_parser("ppo", help="Train PPO agent")
     ppo_parser.add_argument("--episodes", type=int, default=100)
-    ppo_parser.add_argument("--max-epochs", type=int, default=25)
+    ppo_parser.add_argument("--max-epochs", type=int, default=75)  # Increased from 25 to allow seed fossilization
     ppo_parser.add_argument("--update-every", type=int, default=5)
     ppo_parser.add_argument("--lr", type=float, default=3e-4)
     ppo_parser.add_argument("--clip-ratio", type=float, default=0.2)
-    ppo_parser.add_argument("--entropy-coef", type=float, default=0.01)
+    ppo_parser.add_argument("--entropy-coef", type=float, default=0.05)  # Increased from 0.01 to prevent premature convergence
     ppo_parser.add_argument("--gamma", type=float, default=0.99)
     ppo_parser.add_argument("--save", help="Path to save model")
     ppo_parser.add_argument("--device", default="cuda:0")

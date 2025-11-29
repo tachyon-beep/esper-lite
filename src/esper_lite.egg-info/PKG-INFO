@@ -3,8 +3,9 @@ Name: esper-lite
 Version: 0.1.0
 Summary: Morphogenetic neural network training - proof of concept
 Requires-Python: >=3.11
-Requires-Dist: torch>=2.0.0
+Requires-Dist: torch>=2.8.0
 Requires-Dist: numpy>=1.24.0
+Requires-Dist: hypothesis>=6.148.3
 Provides-Extra: dev
 Requires-Dist: pytest>=7.0.0; extra == "dev"
 Requires-Dist: ipython>=8.0.0; extra == "dev"

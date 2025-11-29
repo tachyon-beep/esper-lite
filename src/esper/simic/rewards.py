@@ -65,9 +65,9 @@ class RewardConfig:
     stage_improvement_weight: float = 0.1
     blending_improvement_bonus: float = 0.2
 
-    # Action-specific weights
-    germinate_no_seed_bonus: float = 0.3
-    germinate_early_bonus: float = 0.2
+    # Action-specific weights (immediate bonuses removed to prevent churn exploitation)
+    germinate_no_seed_bonus: float = 0.0  # Was 0.3
+    germinate_early_bonus: float = 0.0    # Was 0.2
     germinate_with_seed_penalty: float = -0.3
 
     advance_good_bonus: float = 0.5
@@ -75,8 +75,8 @@ class RewardConfig:
     advance_blending_bonus: float = 0.4
     advance_no_seed_penalty: float = -0.2
 
-    cull_failing_bonus: float = 0.3
-    cull_acceptable_bonus: float = 0.1
+    cull_failing_bonus: float = 0.0       # Was 0.3
+    cull_acceptable_bonus: float = 0.0    # Was 0.1
     cull_promising_penalty: float = -0.3
     cull_no_seed_penalty: float = -0.2
 

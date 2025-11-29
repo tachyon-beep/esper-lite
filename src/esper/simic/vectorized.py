@@ -139,13 +139,13 @@ def train_ppo_vectorized(
         # Use unique seed per environment for data shuffling
         gen = torch.Generator()
         gen.manual_seed(base_seed + env_idx * 7919)  # Prime number for seed spacing
-        return load_cifar10(batch_size=128, generator=gen)
+        return load_cifar10(batch_size=512, generator=gen)
 
-    # Get batch counts from first loader (all have same size)
-    sample_train, sample_test = load_cifar10(batch_size=128)
-    num_train_batches = len(sample_train)
-    num_test_batches = len(sample_test)
-    del sample_train, sample_test  # Free memory
+    # Create DataLoaders once and reuse across all batches
+    # This allows persistent_workers to actually persist
+    env_dataloaders = [create_env_dataloaders(i, 42) for i in range(n_envs)]
+    num_train_batches = len(env_dataloaders[0][0])
+    num_test_batches = len(env_dataloaders[0][1])
 
     # State dimension: 27 base features + 10 telemetry features if enabled
     BASE_FEATURE_DIM = 27
@@ -166,8 +166,8 @@ def train_ppo_vectorized(
     # Map environments to devices in round-robin
     env_device_map = [devices[i % len(devices)] for i in range(n_envs)]
 
-    def create_env_state(env_idx: int, base_seed: int) -> ParallelEnvState:
-        """Create environment state with CUDA stream and independent DataLoaders."""
+    def create_env_state(env_idx: int, base_seed: int, trainloader, testloader) -> ParallelEnvState:
+        """Create environment state with CUDA stream, reusing pre-created DataLoaders."""
         env_device = env_device_map[env_idx]
         torch.manual_seed(base_seed + env_idx * 1000)
         random.seed(base_seed + env_idx * 1000)
@@ -180,9 +180,6 @@ def train_ppo_vectorized(
         # Create CUDA stream for this environment
         stream = torch.cuda.Stream(device=env_device) if 'cuda' in env_device else None
 
-        # Create independent DataLoaders for this environment
-        env_trainloader, env_testloader = create_env_dataloaders(env_idx, base_seed)
-
         return ParallelEnvState(
             model=model,
             host_optimizer=host_optimizer,
@@ -190,8 +187,8 @@ def train_ppo_vectorized(
             signal_tracker=SignalTracker(),
             env_device=env_device,
             stream=stream,
-            trainloader=env_trainloader,
-            testloader=env_testloader,
+            trainloader=trainloader,
+            testloader=testloader,
             train_iter=None,  # Will be set per epoch
             test_iter=None,
             seeds_created=0,
@@ -300,9 +297,12 @@ def train_ppo_vectorized(
         remaining = n_episodes - episodes_completed
         envs_this_batch = min(n_envs, remaining)
 
-        # Create fresh environments for this batch
+        # Create fresh environments for this batch, reusing persistent DataLoaders
         base_seed = 42 + batch_idx * 10000
-        env_states = [create_env_state(i, base_seed) for i in range(envs_this_batch)]
+        env_states = [
+            create_env_state(i, base_seed, env_dataloaders[i][0], env_dataloaders[i][1])
+            for i in range(envs_this_batch)
+        ]
         criterion = nn.CrossEntropyLoss()
 
         # Per-env accumulators
@@ -311,13 +311,14 @@ def train_ppo_vectorized(
 
         # Run epochs with INVERTED CONTROL FLOW
         for epoch in range(1, max_epochs + 1):
-            # Reset per-epoch metrics
-            train_losses = [0.0] * envs_this_batch
-            train_corrects = [0] * envs_this_batch
+            # Reset per-epoch metrics - GPU tensors for accumulation, sync only at epoch end
+            train_loss_accum = [torch.zeros(1, device=env_states[i].env_device) for i in range(envs_this_batch)]
+            train_correct_accum = [torch.zeros(1, device=env_states[i].env_device) for i in range(envs_this_batch)]
             train_totals = [0] * envs_this_batch
 
             # ===== TRAINING: Iterate batches first, launch all envs via CUDA streams =====
             # Each env has its own DataLoader with independent shuffling
+            # DataLoader workers (num_workers=4) provide parallel prefetching
             train_iters = [iter(env_state.trainloader) for env_state in env_states]
             for batch_step in range(num_train_batches):
                 # Get batch from each env's own dataloader (independent shuffling)
@@ -330,34 +331,35 @@ def train_ppo_vectorized(
                         env_batches.append(None)
 
                 # Launch all environments in their respective CUDA streams (async)
-                env_results = []
+                # Accumulate on GPU inside stream context - no sync until epoch end
                 for i, env_state in enumerate(env_states):
                     if env_batches[i] is None:
                         continue
                     inputs, targets = env_batches[i]
-                    result = process_train_batch(env_state, inputs, targets, criterion)
-                    env_results.append((i, result))
+                    loss_tensor, correct_tensor, total = process_train_batch(env_state, inputs, targets, criterion)
+                    # Accumulate inside stream context (in-place add respects stream ordering)
+                    stream_ctx = torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
+                    with stream_ctx:
+                        train_loss_accum[i].add_(loss_tensor)
+                        train_correct_accum[i].add_(correct_tensor)
+                    train_totals[i] += total
 
-                # Sync all streams after launching all work (THE BARRIER)
-                for env_state in env_states:
-                    if env_state.stream:
-                        env_state.stream.synchronize()
+            # Sync all streams ONCE at epoch end
+            for env_state in env_states:
+                if env_state.stream:
+                    env_state.stream.synchronize()
 
-                # NOW safe to call .item() - GPUs are done
-                for env_idx, (loss_tensor, correct_tensor, total) in env_results:
-                    train_losses[env_idx] += loss_tensor.item()
-                    train_corrects[env_idx] += correct_tensor.item()
-                    train_totals[env_idx] += total
+            # NOW safe to call .item() - all GPU work done
+            train_losses = [t.item() for t in train_loss_accum]
+            train_corrects = [t.item() for t in train_correct_accum]
 
-            # ===== VALIDATION: Same inverted pattern with CUDA streams =====
-            val_losses = [0.0] * envs_this_batch
-            val_corrects = [0] * envs_this_batch
+            # ===== VALIDATION: Same pattern - accumulate on GPU, sync once =====
+            val_loss_accum = [torch.zeros(1, device=env_states[i].env_device) for i in range(envs_this_batch)]
+            val_correct_accum = [torch.zeros(1, device=env_states[i].env_device) for i in range(envs_this_batch)]
             val_totals = [0] * envs_this_batch
 
-            # Each env has its own testloader (validation data order doesn't matter, but for consistency)
             test_iters = [iter(env_state.testloader) for env_state in env_states]
             for batch_step in range(num_test_batches):
-                # Get batch from each env's own testloader
                 env_batches = []
                 for i, test_iter in enumerate(test_iters):
                     try:
@@ -367,24 +369,26 @@ def train_ppo_vectorized(
                         env_batches.append(None)
 
                 # Launch all environments in their respective CUDA streams (async)
-                env_results = []
                 for i, env_state in enumerate(env_states):
                     if env_batches[i] is None:
                         continue
                     inputs, targets = env_batches[i]
-                    result = process_val_batch(env_state, inputs, targets, criterion)
-                    env_results.append((i, result))
+                    loss_tensor, correct_tensor, total = process_val_batch(env_state, inputs, targets, criterion)
+                    # Accumulate inside stream context
+                    stream_ctx = torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
+                    with stream_ctx:
+                        val_loss_accum[i].add_(loss_tensor)
+                        val_correct_accum[i].add_(correct_tensor)
+                    val_totals[i] += total
 
-                # Sync all streams (THE BARRIER)
-                for env_state in env_states:
-                    if env_state.stream:
-                        env_state.stream.synchronize()
+            # Sync all streams ONCE at epoch end
+            for env_state in env_states:
+                if env_state.stream:
+                    env_state.stream.synchronize()
 
-                # NOW safe to call .item() - GPUs are done
-                for env_idx, (loss_tensor, correct_tensor, total) in env_results:
-                    val_losses[env_idx] += loss_tensor.item()
-                    val_corrects[env_idx] += correct_tensor.item()
-                    val_totals[env_idx] += total
+            # NOW safe to call .item()
+            val_losses = [t.item() for t in val_loss_accum]
+            val_corrects = [t.item() for t in val_correct_accum]
 
             # ===== Compute epoch metrics and get BATCHED actions =====
             # Collect features from all environments

@@ -1,0 +1,16 @@
+{
+  "seed_id": "seed-healthy-001",
+  "blueprint_id": "conv_enhance",
+  "layer_id": "layer2.conv1",
+  "gradient_norm": 0.05,
+  "gradient_health": 0.95,
+  "has_vanishing": false,
+  "has_exploding": false,
+  "accuracy": 72.5,
+  "accuracy_delta": 1.2,
+  "epochs_in_stage": 5,
+  "stage": 3,
+  "alpha": 0.3,
+  "epoch": 15,
+  "max_epochs": 25
+}
