@@ -334,6 +334,43 @@ def compute_pbrs_bonus(
     return gamma * potential_next - potential_prev
 
 
+def compute_seed_potential(obs: dict) -> float:
+    """Compute potential value Phi(s) based on seed state.
+
+    The potential captures the expected future value of having an active seed
+    in various stages. This helps bridge the temporal gap where GERMINATE
+    has negative immediate reward but high future value.
+
+    Potential-based reward shaping: r' = r + gamma*Phi(s') - Phi(s)
+    This preserves optimal policy (PBRS guarantee) while improving learning.
+
+    Args:
+        obs: Observation dictionary with has_active_seed, seed_stage, seed_epochs_in_stage
+
+    Returns:
+        Potential value for the current state
+    """
+    has_active = obs.get('has_active_seed', 0)
+    seed_stage = obs.get('seed_stage', 0)
+    epochs_in_stage = obs.get('seed_epochs_in_stage', 0)
+
+    if not has_active or seed_stage == 0:
+        return 0.0
+
+    # Stage-based potential values
+    stage_potentials = {
+        1: 5.0,   # GERMINATED - just started
+        2: 15.0,  # TRAINING - actively learning
+        3: 25.0,  # BLENDING - about to integrate
+        4: 10.0,  # FOSSILIZED - value mostly realized
+    }
+
+    base_potential = stage_potentials.get(seed_stage, 0.0)
+    progress_bonus = min(epochs_in_stage * 0.5, 3.0)
+
+    return base_potential + progress_bonus
+
+
 # =============================================================================
 # Intervention Costs
 # =============================================================================
@@ -368,6 +405,7 @@ __all__ = [
     "compute_shaped_reward",
     "compute_potential",
     "compute_pbrs_bonus",
+    "compute_seed_potential",
     "get_intervention_cost",
     "INTERVENTION_COSTS",
     "STAGE_TRAINING",
