@@ -235,13 +235,8 @@ class HeuristicTamiyo:
 
     def _blueprint_to_action(self, blueprint_id: str) -> Action:
         """Convert blueprint ID to corresponding GERMINATE action."""
-        blueprint_map = {
-            "conv_enhance": Action.GERMINATE_CONV,
-            "attention": Action.GERMINATE_ATTENTION,
-            "norm": Action.GERMINATE_NORM,
-            "depthwise": Action.GERMINATE_DEPTHWISE,
-        }
-        return blueprint_map.get(blueprint_id, Action.GERMINATE_CONV)
+        from esper.leyline import blueprint_to_action
+        return blueprint_to_action(blueprint_id)
 
     def reset(self) -> None:
         """Reset policy state."""

@@ -29,12 +29,8 @@ class Action(Enum):
     @classmethod
     def get_blueprint_id(cls, action: "Action") -> str | None:
         """Get blueprint ID for germinate actions, None for others."""
-        return {
-            cls.GERMINATE_CONV: "conv_enhance",
-            cls.GERMINATE_ATTENTION: "attention",
-            cls.GERMINATE_NORM: "norm",
-            cls.GERMINATE_DEPTHWISE: "depthwise",
-        }.get(action)
+        from esper.leyline.blueprints import action_to_blueprint
+        return action_to_blueprint(action)
 
 
 # Backwards compatibility alias (deprecated)
