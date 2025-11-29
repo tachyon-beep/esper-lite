@@ -46,6 +46,10 @@ class HeuristicPolicyConfig:
     cull_after_epochs_without_improvement: int = 5
     cull_if_accuracy_drops_by: float = 2.0  # % drop triggers cull
 
+    # Anti-thrashing: cooldown after cull to prevent immediate re-germination
+    # Matches cull_after_epochs_without_improvement for consistent pacing
+    embargo_epochs_after_cull: int = 5
+
     # Blueprint selection
     blueprint_rotation: list[str] = field(
         default_factory=lambda: ["conv_enhance", "attention", "norm", "depthwise"]
@@ -66,6 +70,7 @@ class HeuristicTamiyo:
         self._blueprint_index = 0
         self._germination_count = 0
         self._decisions_made: list[TamiyoDecision] = []
+        self._last_cull_epoch: int = -1  # Track last cull for embargo enforcement
 
     def decide(self, signals: TrainingSignals, active_seeds: list["SeedState"]) -> TamiyoDecision:
         """Make a decision based on training signals.
@@ -81,9 +86,17 @@ class HeuristicTamiyo:
         # Check if we have any active seeds
         if not active_seeds:
             # No active seeds - should we germinate?
-            decision = self._decide_germination(signals)
+            # First check embargo: prevents thrashing (germinate -> cull -> germinate -> cull)
+            epochs_since_cull = signals.metrics.epoch - self._last_cull_epoch
+            if self._last_cull_epoch >= 0 and epochs_since_cull < self.config.embargo_epochs_after_cull:
+                decision = TamiyoDecision(
+                    action=Action.WAIT,
+                    reason=f"Embargo cooldown ({epochs_since_cull}/{self.config.embargo_epochs_after_cull} epochs since cull)"
+                )
+            else:
+                decision = self._decide_germination(signals)
         else:
-            # Have active seeds - manage them
+            # Have active seeds - manage them (embargo doesn't block management)
             decision = self._decide_seed_management(signals, active_seeds)
 
         self._decisions_made.append(decision)
@@ -199,6 +212,7 @@ class HeuristicTamiyo:
         # Check if we should cull
         if seed.epochs_in_stage >= self.config.cull_after_epochs_without_improvement:
             if improvement < -self.config.cull_if_accuracy_drops_by:
+                self._last_cull_epoch = signals.metrics.epoch  # Track for embargo
                 return TamiyoDecision(
                     action=Action.CULL,
                     target_seed_id=seed.seed_id,
@@ -230,6 +244,7 @@ class HeuristicTamiyo:
                     reason=f"Blending complete, total improvement: {improvement:.2f}%",
                 )
             else:
+                self._last_cull_epoch = signals.metrics.epoch  # Track for embargo
                 return TamiyoDecision(
                     action=Action.CULL,
                     target_seed_id=seed.seed_id,
@@ -259,6 +274,7 @@ class HeuristicTamiyo:
         self._blueprint_index = 0
         self._germination_count = 0
         self._decisions_made.clear()
+        self._last_cull_epoch = -1
 
     @property
     def decisions(self) -> list[TamiyoDecision]:

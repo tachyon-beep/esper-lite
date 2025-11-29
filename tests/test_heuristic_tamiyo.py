@@ -355,3 +355,238 @@ class TestHeuristicTamiyoMultipleSeeds:
         decision = tamiyo.decide(signals, active_seeds=[seed1, seed2])
 
         assert decision.action == Action.WAIT
+
+
+class TestHeuristicTamiyoEmbargo:
+    """Tests for anti-thrashing embargo after cull actions.
+
+    Embargo prevents immediate re-germination after a cull, breaking the
+    thrashing loop: germinate -> cull -> germinate -> cull.
+    """
+
+    def test_embargo_prevents_immediate_germination_after_cull(self):
+        """Should not germinate immediately after a cull action."""
+        config = HeuristicPolicyConfig(
+            min_epochs_before_germinate=1,
+            plateau_epochs_to_germinate=1,
+            embargo_epochs_after_cull=5,
+            min_training_epochs=1,
+            cull_after_epochs_without_improvement=1,
+            cull_if_accuracy_drops_by=1.0,
+        )
+        tamiyo = HeuristicTamiyo(config)
+
+        # First, trigger a cull at epoch 10
+        signals = TrainingSignals()
+        signals.metrics.epoch = 10
+        signals.metrics.plateau_epochs = 5
+
+        seed = MockSeedState(
+            stage=SeedStage.TRAINING,
+            epochs_in_stage=5,
+            improvement_since_stage_start=-3.0,  # Trigger cull
+        )
+
+        decision1 = tamiyo.decide(signals, active_seeds=[seed])
+        assert decision1.action == Action.CULL
+
+        # Now at epoch 11 (1 epoch after cull), try to germinate
+        signals.metrics.epoch = 11
+        signals.metrics.plateau_epochs = 5  # Still in plateau
+
+        decision2 = tamiyo.decide(signals, active_seeds=[])
+        assert decision2.action == Action.WAIT
+        assert "Embargo cooldown" in decision2.reason
+        assert "1/5" in decision2.reason
+
+    def test_embargo_expires_after_cooldown(self):
+        """Should allow germination after embargo expires."""
+        config = HeuristicPolicyConfig(
+            min_epochs_before_germinate=1,
+            plateau_epochs_to_germinate=1,
+            embargo_epochs_after_cull=3,
+            min_training_epochs=1,
+            cull_after_epochs_without_improvement=1,
+            cull_if_accuracy_drops_by=1.0,
+        )
+        tamiyo = HeuristicTamiyo(config)
+
+        # Trigger cull at epoch 10
+        signals = TrainingSignals()
+        signals.metrics.epoch = 10
+        signals.metrics.plateau_epochs = 5
+
+        seed = MockSeedState(
+            stage=SeedStage.TRAINING,
+            epochs_in_stage=5,
+            improvement_since_stage_start=-3.0,
+        )
+
+        tamiyo.decide(signals, active_seeds=[seed])
+
+        # At epoch 13 (3 epochs after cull), embargo should expire
+        signals.metrics.epoch = 13
+        signals.metrics.plateau_epochs = 5
+
+        decision = tamiyo.decide(signals, active_seeds=[])
+        assert Action.is_germinate(decision.action)
+        assert "Plateau detected" in decision.reason
+
+    def test_no_embargo_before_first_cull(self):
+        """Should germinate normally if no cull has occurred."""
+        config = HeuristicPolicyConfig(
+            min_epochs_before_germinate=5,
+            plateau_epochs_to_germinate=3,
+            embargo_epochs_after_cull=5,
+        )
+        tamiyo = HeuristicTamiyo(config)
+
+        signals = TrainingSignals()
+        signals.metrics.epoch = 10
+        signals.metrics.plateau_epochs = 5
+
+        decision = tamiyo.decide(signals, active_seeds=[])
+        assert Action.is_germinate(decision.action)
+
+    def test_reset_clears_embargo_state(self):
+        """reset() should clear embargo tracking."""
+        config = HeuristicPolicyConfig(
+            embargo_epochs_after_cull=5,
+            min_training_epochs=1,
+            cull_after_epochs_without_improvement=1,
+            cull_if_accuracy_drops_by=1.0,
+        )
+        tamiyo = HeuristicTamiyo(config)
+
+        # Trigger a cull
+        signals = TrainingSignals()
+        signals.metrics.epoch = 10
+        seed = MockSeedState(
+            stage=SeedStage.TRAINING,
+            epochs_in_stage=5,
+            improvement_since_stage_start=-3.0,
+        )
+        tamiyo.decide(signals, active_seeds=[seed])
+
+        assert tamiyo._last_cull_epoch == 10
+
+        tamiyo.reset()
+
+        assert tamiyo._last_cull_epoch == -1
+
+    def test_embargo_blocks_germination_even_with_extreme_plateau(self):
+        """Embargo should block germination even with very high plateau."""
+        config = HeuristicPolicyConfig(
+            min_epochs_before_germinate=1,
+            plateau_epochs_to_germinate=1,
+            embargo_epochs_after_cull=5,
+            min_training_epochs=1,
+            cull_after_epochs_without_improvement=1,
+            cull_if_accuracy_drops_by=1.0,
+        )
+        tamiyo = HeuristicTamiyo(config)
+
+        # Trigger cull at epoch 10
+        signals = TrainingSignals()
+        signals.metrics.epoch = 10
+        seed = MockSeedState(
+            stage=SeedStage.TRAINING,
+            epochs_in_stage=5,
+            improvement_since_stage_start=-3.0,
+        )
+        tamiyo.decide(signals, active_seeds=[seed])
+
+        # Extreme plateau at epoch 12 (still in embargo)
+        signals.metrics.epoch = 12
+        signals.metrics.plateau_epochs = 100  # Very high plateau
+
+        decision = tamiyo.decide(signals, active_seeds=[])
+        assert decision.action == Action.WAIT
+        assert "Embargo cooldown" in decision.reason
+
+    def test_multiple_culls_reset_embargo(self):
+        """Multiple cull actions should reset the embargo timer."""
+        config = HeuristicPolicyConfig(
+            min_epochs_before_germinate=1,
+            plateau_epochs_to_germinate=1,
+            embargo_epochs_after_cull=3,
+            blending_epochs=1,
+        )
+        tamiyo = HeuristicTamiyo(config)
+
+        signals = TrainingSignals()
+
+        # First cull at epoch 10 (from blending)
+        signals.metrics.epoch = 10
+        seed1 = MockSeedState(
+            stage=SeedStage.BLENDING,
+            epochs_in_stage=5,
+            total_improvement=-1.0,  # Negative = cull
+        )
+        decision1 = tamiyo.decide(signals, active_seeds=[seed1])
+        assert decision1.action == Action.CULL
+
+        # Second cull at epoch 12 (still within first embargo)
+        signals.metrics.epoch = 12
+        seed2 = MockSeedState(
+            stage=SeedStage.BLENDING,
+            epochs_in_stage=5,
+            total_improvement=-1.0,
+        )
+        decision2 = tamiyo.decide(signals, active_seeds=[seed2])
+        assert decision2.action == Action.CULL
+
+        # At epoch 14 (only 2 epochs since second cull), should still be embargoed
+        signals.metrics.epoch = 14
+        signals.metrics.plateau_epochs = 10
+
+        decision3 = tamiyo.decide(signals, active_seeds=[])
+        assert decision3.action == Action.WAIT
+        assert "Embargo cooldown" in decision3.reason
+        assert "2/3" in decision3.reason  # 2 epochs since last cull
+
+    def test_no_germination_when_culled_seed_still_in_active_list(self):
+        """No germination when culled seed is still in active_seeds.
+
+        After a CULL, the seed moves to CULLED stage but may still be in the
+        active_seeds list. Since active_seeds is not empty, we manage seeds
+        (skipping the CULLED one) rather than germinating. Once the list is
+        truly empty, the embargo would then block germination.
+        """
+        config = HeuristicPolicyConfig(
+            min_epochs_before_germinate=1,
+            plateau_epochs_to_germinate=1,
+            embargo_epochs_after_cull=5,
+            min_training_epochs=1,
+            cull_after_epochs_without_improvement=1,
+            cull_if_accuracy_drops_by=1.0,
+        )
+        tamiyo = HeuristicTamiyo(config)
+
+        # Trigger cull at epoch 10
+        signals = TrainingSignals()
+        signals.metrics.epoch = 10
+        seed = MockSeedState(
+            stage=SeedStage.TRAINING,
+            epochs_in_stage=5,
+            improvement_since_stage_start=-3.0,
+        )
+        tamiyo.decide(signals, active_seeds=[seed])
+
+        # Next epoch - seed is now CULLED but still in list
+        signals.metrics.epoch = 11
+        signals.metrics.plateau_epochs = 10  # High plateau
+        culled_seed = MockSeedState(
+            seed_id="culled",
+            stage=SeedStage.CULLED,  # Now in failure stage
+        )
+
+        # With culled seed in list, we wait (seed management, not germination)
+        decision = tamiyo.decide(signals, active_seeds=[culled_seed])
+        assert decision.action == Action.WAIT
+        assert "progressing normally" in decision.reason
+
+        # Once list is empty, embargo blocks germination
+        decision2 = tamiyo.decide(signals, active_seeds=[])
+        assert decision2.action == Action.WAIT
+        assert "Embargo cooldown" in decision2.reason
