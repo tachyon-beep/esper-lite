@@ -139,3 +139,22 @@ class TestPPOFeatureDimensions:
             dist, value = agent_tel.network(state_tensor_tel)
 
         assert dist.probs.shape == (1, 7), "Telemetry path should work"
+
+
+class TestEntropyAnnealing:
+    """Test entropy coefficient annealing schedule."""
+
+    def test_no_annealing_when_disabled(self):
+        """entropy_anneal_steps=0 should use fixed entropy_coef."""
+        from esper.simic.ppo import PPOAgent
+
+        agent = PPOAgent(
+            state_dim=27,
+            action_dim=7,
+            entropy_coef=0.05,
+            entropy_anneal_steps=0,
+            device='cpu'
+        )
+        assert agent.get_entropy_coef() == 0.05
+        agent.train_steps = 100
+        assert agent.get_entropy_coef() == 0.05  # Still fixed

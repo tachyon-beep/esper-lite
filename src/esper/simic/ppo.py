@@ -115,6 +115,9 @@ class PPOAgent:
         gae_lambda: float = 0.95,
         clip_ratio: float = 0.2,
         entropy_coef: float = 0.01,
+        entropy_coef_start: float | None = None,
+        entropy_coef_end: float | None = None,
+        entropy_anneal_steps: int = 0,
         value_coef: float = 0.5,
         max_grad_norm: float = 0.5,
         n_epochs: int = 10,
@@ -125,6 +128,9 @@ class PPOAgent:
         self.gae_lambda = gae_lambda
         self.clip_ratio = clip_ratio
         self.entropy_coef = entropy_coef
+        self.entropy_coef_start = entropy_coef_start if entropy_coef_start is not None else entropy_coef
+        self.entropy_coef_end = entropy_coef_end if entropy_coef_end is not None else entropy_coef
+        self.entropy_anneal_steps = entropy_anneal_steps
         self.value_coef = value_coef
         self.max_grad_norm = max_grad_norm
         self.n_epochs = n_epochs
@@ -135,6 +141,19 @@ class PPOAgent:
         self.optimizer = torch.optim.Adam(self.network.parameters(), lr=lr, eps=1e-5)
         self.buffer = RolloutBuffer()
         self.train_steps = 0
+
+    def get_entropy_coef(self) -> float:
+        """Get current entropy coefficient (annealed if configured).
+
+        Returns fixed entropy_coef when entropy_anneal_steps=0 (legacy behavior).
+        Otherwise linearly interpolates from entropy_coef_start to entropy_coef_end
+        over entropy_anneal_steps training updates.
+        """
+        if self.entropy_anneal_steps == 0:
+            return self.entropy_coef
+
+        progress = min(1.0, self.train_steps / self.entropy_anneal_steps)
+        return self.entropy_coef_start + progress * (self.entropy_coef_end - self.entropy_coef_start)
 
     def get_action(self, state: torch.Tensor, deterministic: bool = False
                    ) -> tuple[int, float, float]:
