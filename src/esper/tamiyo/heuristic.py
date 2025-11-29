@@ -8,8 +8,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol, TYPE_CHECKING
 
-from esper.leyline import SeedStage, is_terminal_stage, is_failure_stage, TrainingSignals
-from esper.tamiyo.decisions import TamiyoAction, TamiyoDecision
+from esper.leyline import Action, SeedStage, is_terminal_stage, is_failure_stage, TrainingSignals
+from esper.tamiyo.decisions import TamiyoDecision
 
 if TYPE_CHECKING:
     from esper.kasmina import SeedState
@@ -95,24 +95,25 @@ class HeuristicTamiyo:
         # Don't germinate too early
         if signals.metrics.epoch < self.config.min_epochs_before_germinate:
             return TamiyoDecision(
-                action=TamiyoAction.WAIT,
+                action=Action.WAIT,
                 reason=f"Too early (epoch {signals.metrics.epoch} < {self.config.min_epochs_before_germinate})"
             )
 
         # Check for plateau
         if signals.metrics.plateau_epochs >= self.config.plateau_epochs_to_germinate:
+            # Select germinate action based on blueprint
             blueprint_id = self._get_next_blueprint()
+            germinate_action = self._blueprint_to_action(blueprint_id)
             self._germination_count += 1
             return TamiyoDecision(
-                action=TamiyoAction.GERMINATE,
-                blueprint_id=blueprint_id,
+                action=germinate_action,
                 reason=f"Plateau detected ({signals.metrics.plateau_epochs} epochs without improvement)",
                 confidence=min(1.0, signals.metrics.plateau_epochs / 5.0),
             )
 
         # No action needed
         return TamiyoDecision(
-            action=TamiyoAction.WAIT,
+            action=Action.WAIT,
             reason="Training progressing normally"
         )
 
@@ -132,23 +133,23 @@ class HeuristicTamiyo:
             if seed.stage == SeedStage.GERMINATED:
                 # Ready to start training
                 return TamiyoDecision(
-                    action=TamiyoAction.ADVANCE_TRAINING,
+                    action=Action.ADVANCE,
                     target_seed_id=seed.seed_id,
                     reason="Seed germinated, starting isolated training",
                 )
 
             elif seed.stage == SeedStage.TRAINING:
                 decision = self._evaluate_training_seed(signals, seed)
-                if decision.action != TamiyoAction.WAIT:
+                if decision.action != Action.WAIT:
                     return decision
 
             elif seed.stage == SeedStage.BLENDING:
                 decision = self._evaluate_blending_seed(signals, seed)
-                if decision.action != TamiyoAction.WAIT:
+                if decision.action != Action.WAIT:
                     return decision
 
         return TamiyoDecision(
-            action=TamiyoAction.WAIT,
+            action=Action.WAIT,
             reason="Seeds progressing normally"
         )
 
@@ -162,7 +163,7 @@ class HeuristicTamiyo:
         # Need minimum training time
         if seed.epochs_in_stage < self.config.min_training_epochs:
             return TamiyoDecision(
-                action=TamiyoAction.WAIT,
+                action=Action.WAIT,
                 target_seed_id=seed.seed_id,
                 reason=f"Training epoch {seed.epochs_in_stage}/{self.config.min_training_epochs}"
             )
@@ -173,7 +174,7 @@ class HeuristicTamiyo:
         if improvement >= self.config.training_improvement_threshold:
             # Good improvement - advance to blending
             return TamiyoDecision(
-                action=TamiyoAction.ADVANCE_BLENDING,
+                action=Action.ADVANCE,
                 target_seed_id=seed.seed_id,
                 reason=f"Good improvement ({improvement:.2f}%), advancing to blending",
                 confidence=min(1.0, improvement / 5.0),
@@ -183,13 +184,13 @@ class HeuristicTamiyo:
         if seed.epochs_in_stage >= self.config.cull_after_epochs_without_improvement:
             if improvement < -self.config.cull_if_accuracy_drops_by:
                 return TamiyoDecision(
-                    action=TamiyoAction.CULL,
+                    action=Action.CULL,
                     target_seed_id=seed.seed_id,
                     reason=f"Seed hurting performance ({improvement:.2f}%)",
                 )
 
         return TamiyoDecision(
-            action=TamiyoAction.WAIT,
+            action=Action.WAIT,
             target_seed_id=seed.seed_id,
             reason=f"Training in progress, improvement: {improvement:.2f}%"
         )
@@ -208,19 +209,19 @@ class HeuristicTamiyo:
 
             if improvement > 0:
                 return TamiyoDecision(
-                    action=TamiyoAction.ADVANCE_FOSSILIZE,
+                    action=Action.ADVANCE,
                     target_seed_id=seed.seed_id,
                     reason=f"Blending complete, total improvement: {improvement:.2f}%",
                 )
             else:
                 return TamiyoDecision(
-                    action=TamiyoAction.CULL,
+                    action=Action.CULL,
                     target_seed_id=seed.seed_id,
                     reason=f"Blending complete but no improvement ({improvement:.2f}%)",
                 )
 
         return TamiyoDecision(
-            action=TamiyoAction.WAIT,
+            action=Action.WAIT,
             target_seed_id=seed.seed_id,
             reason=f"Blending epoch {seed.epochs_in_stage}/{self.config.blending_epochs}"
         )
@@ -231,6 +232,16 @@ class HeuristicTamiyo:
         blueprint_id = blueprints[self._blueprint_index % len(blueprints)]
         self._blueprint_index += 1
         return blueprint_id
+
+    def _blueprint_to_action(self, blueprint_id: str) -> Action:
+        """Convert blueprint ID to corresponding GERMINATE action."""
+        blueprint_map = {
+            "conv_enhance": Action.GERMINATE_CONV,
+            "attention": Action.GERMINATE_ATTENTION,
+            "norm": Action.GERMINATE_NORM,
+            "depthwise": Action.GERMINATE_DEPTHWISE,
+        }
+        return blueprint_map.get(blueprint_id, Action.GERMINATE_CONV)
 
     def reset(self) -> None:
         """Reset policy state."""

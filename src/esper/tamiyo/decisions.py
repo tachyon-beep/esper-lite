@@ -7,10 +7,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from enum import Enum, auto
-from typing import Any
 
 from esper.leyline import (
+    Action,
     CommandType,
     RiskLevel,
     AdaptationCommand,
@@ -23,26 +22,15 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-class TamiyoAction(Enum):
-    """Actions that Tamiyo can take."""
-    WAIT = auto()              # Do nothing this epoch
-    GERMINATE = auto()         # Start a new seed
-    ADVANCE_TRAINING = auto()  # Move seed from GERMINATED to TRAINING
-    ADVANCE_BLENDING = auto()  # Move seed from TRAINING to BLENDING
-    ADVANCE_FOSSILIZE = auto() # Move seed from BLENDING to FOSSILIZED
-    CULL = auto()              # Kill an underperforming seed
-    CHANGE_BLUEPRINT = auto()  # Cull and try a different blueprint
-
-
-# Mapping from TamiyoAction to leyline CommandType and target stage
-_ACTION_TO_COMMAND: dict[TamiyoAction, tuple[CommandType, SeedStage | None]] = {
-    TamiyoAction.WAIT: (CommandType.REQUEST_STATE, None),  # No-op, just query
-    TamiyoAction.GERMINATE: (CommandType.GERMINATE, SeedStage.GERMINATED),
-    TamiyoAction.ADVANCE_TRAINING: (CommandType.ADVANCE_STAGE, SeedStage.TRAINING),
-    TamiyoAction.ADVANCE_BLENDING: (CommandType.ADVANCE_STAGE, SeedStage.BLENDING),
-    TamiyoAction.ADVANCE_FOSSILIZE: (CommandType.ADVANCE_STAGE, SeedStage.FOSSILIZED),
-    TamiyoAction.CULL: (CommandType.CULL, SeedStage.CULLED),
-    TamiyoAction.CHANGE_BLUEPRINT: (CommandType.CULL, SeedStage.CULLED),  # Cull then germinate
+# Mapping from Action to leyline CommandType and target stage
+_ACTION_TO_COMMAND: dict[Action, tuple[CommandType, SeedStage | None]] = {
+    Action.WAIT: (CommandType.REQUEST_STATE, None),
+    Action.GERMINATE_CONV: (CommandType.GERMINATE, SeedStage.GERMINATED),
+    Action.GERMINATE_ATTENTION: (CommandType.GERMINATE, SeedStage.GERMINATED),
+    Action.GERMINATE_NORM: (CommandType.GERMINATE, SeedStage.GERMINATED),
+    Action.GERMINATE_DEPTHWISE: (CommandType.GERMINATE, SeedStage.GERMINATED),
+    Action.ADVANCE: (CommandType.ADVANCE_STAGE, None),  # Target determined by current stage
+    Action.CULL: (CommandType.CULL, SeedStage.CULLED),
 }
 
 
@@ -50,12 +38,11 @@ _ACTION_TO_COMMAND: dict[TamiyoAction, tuple[CommandType, SeedStage | None]] = {
 class TamiyoDecision:
     """A decision made by Tamiyo.
 
-    This is Tamiyo's internal decision format. For sending to Kasmina,
-    use to_command() to convert to the canonical AdaptationCommand format.
+    Uses the shared Action enum from leyline for compatibility with
+    all controllers (heuristic, RL, etc.).
     """
-    action: TamiyoAction
+    action: Action
     target_seed_id: str | None = None
-    blueprint_id: str | None = None
     reason: str = ""
     confidence: float = 1.0
 
@@ -63,11 +50,14 @@ class TamiyoDecision:
         parts = [f"Action: {self.action.name}"]
         if self.target_seed_id:
             parts.append(f"Target: {self.target_seed_id}")
-        if self.blueprint_id:
-            parts.append(f"Blueprint: {self.blueprint_id}")
         if self.reason:
             parts.append(f"Reason: {self.reason}")
         return " | ".join(parts)
+
+    @property
+    def blueprint_id(self) -> str | None:
+        """Get blueprint ID if this is a germinate action."""
+        return Action.get_blueprint_id(self.action)
 
     def to_command(self) -> AdaptationCommand:
         """Convert to Leyline's canonical AdaptationCommand format."""
@@ -77,15 +67,13 @@ class TamiyoDecision:
         )
 
         # Determine risk level based on action
-        if self.action == TamiyoAction.WAIT:
+        if self.action == Action.WAIT:
             risk = RiskLevel.GREEN
-        elif self.action == TamiyoAction.GERMINATE:
+        elif Action.is_germinate(self.action):
             risk = RiskLevel.YELLOW
-        elif self.action in (TamiyoAction.ADVANCE_TRAINING, TamiyoAction.ADVANCE_BLENDING):
+        elif self.action == Action.ADVANCE:
             risk = RiskLevel.YELLOW
-        elif self.action == TamiyoAction.ADVANCE_FOSSILIZE:
-            risk = RiskLevel.ORANGE  # Permanent change
-        elif self.action in (TamiyoAction.CULL, TamiyoAction.CHANGE_BLUEPRINT):
+        elif self.action == Action.CULL:
             risk = RiskLevel.ORANGE
         else:
             risk = RiskLevel.GREEN
@@ -102,6 +90,5 @@ class TamiyoDecision:
 
 
 __all__ = [
-    "TamiyoAction",
     "TamiyoDecision",
 ]
