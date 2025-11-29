@@ -1,9 +1,9 @@
 # Test Suite Detailed Design - Esper-Lite
 
 **Date**: 2025-11-29
-**Status**: DESIGN (Detailed Implementation Spec)
+**Status**: READY FOR IMPLEMENTATION (All imports validated)
 **Parent**: `2025-11-29-test-suite-design.md` (High-Level Strategy)
-**Last Updated**: 2025-11-30 (Implementation fixes applied)
+**Last Updated**: 2025-11-30 (Critical bugfixes applied, dimension test created)
 
 ---
 
@@ -19,8 +19,52 @@ This document has been updated with the following corrections:
 6. **Action helpers**: Fixed to use `ACTION_TO_BLUEPRINT` dictionary instead of non-existent `Action.get_blueprint_id()`
 7. **Blueprint IDs**: Corrected blueprint constant from `"conv"` to `"conv_enhance"`
 8. **Function imports**: Fixed `snapshot_to_features` import from `esper.simic.comparison`
+9. **Hypothesis strategies import**: Added missing `from hypothesis import strategies as st` to test_reward_properties.py
+10. **Strategy imports**: Added missing `seed_stages` import to test_reward_properties.py
 
-All code examples are now verified against the actual esper-lite codebase.
+All code examples are now verified against the actual esper-lite codebase and all imports have been validated.
+
+---
+
+## Critical Bugfixes Applied (2025-11-30)
+
+**IMPORTANT**: Before implementing the main test suite, critical dimension mismatch bugs were discovered and fixed:
+
+### Bug 1: PPO state_dim Mismatch (P0 - Showstopper)
+**Location**: `src/esper/simic/training.py:508`
+
+**Issue**: Hard-coded `state_dim = 54 if use_telemetry else 27` expected 54-dim input when telemetry is enabled, but `signals_to_features()` returns only 37 values (27 base + 10 telemetry). This caused 100% crash rate with RuntimeError on first forward pass.
+
+**Fix Applied**:
+```python
+# Before (BROKEN):
+state_dim = 54 if use_telemetry else 27
+
+# After (FIXED):
+from esper.leyline import SeedTelemetry
+BASE_FEATURE_DIM = 27
+state_dim = BASE_FEATURE_DIM + (SeedTelemetry.feature_dim() if use_telemetry else 0)
+```
+
+**Result**: `state_dim = 37` when `use_telemetry=True` (correct), `27` otherwise.
+
+### Bug 2: Vectorized PPO Same Issue (P0)
+**Location**: `src/esper/simic/vectorized.py:151`
+
+**Issue**: Identical hard-coded dimension mismatch in vectorized trainer.
+
+**Fix Applied**: Same dynamic computation using `SeedTelemetry.feature_dim()`.
+
+### Regression Prevention Test Created
+**File**: `tests/test_simic_ppo.py` ✅ (8 tests, all passing)
+
+This test suite validates:
+- Feature dimensions match expectations (27 without telemetry, 37 with)
+- PPO network accepts correct input dimensions
+- Wrong dimensions are rejected with clear errors
+- End-to-end consistency from signals → features → network
+
+**Status**: All tests passing. These bugs must remain fixed for the main test suite implementation to succeed.
 
 ---
 
@@ -34,6 +78,7 @@ This document provides **implementation-ready specifications** for the esper-lit
 
 ## Table of Contents
 
+0. [Critical Bugfixes Applied (2025-11-30)](#critical-bugfixes-applied-2025-11-30)
 1. [Critical Design Fixes](#part-0-critical-design-fixes)
 2. [Hypothesis Strategies (Complete Specification)](#part-1-hypothesis-strategies)
 3. [Property Test Specifications (55 Tests)](#part-2-property-test-specifications)
@@ -626,12 +671,14 @@ Tests mathematical invariants that must hold for ALL inputs:
 import math
 import pytest
 from hypothesis import given, assume, settings, example
+from hypothesis import strategies as st
 from tests.strategies import (
     bounded_floats,
     accuracies,
     action_values,
     seed_infos,
     reward_configs,
+    seed_stages,
 )
 
 from esper.simic.rewards import (
@@ -825,8 +872,8 @@ class TestSeedPotential:
 Tests RunningMeanStd and normalization invariants.
 """
 
-import pytest
 import math
+import pytest
 from hypothesis import given, assume, settings
 from hypothesis import strategies as st
 from tests.strategies import bounded_floats
@@ -1787,6 +1834,7 @@ precision = 2
 
 | Old Test | Status | New Location | Notes |
 |----------|--------|--------------|-------|
+| `test_simic_ppo.py` | ✅ **KEEP** | `tests/test_simic_ppo.py` | **Already exists!** Created 2025-11-30 to prevent dimension mismatch regressions |
 | `test_simic_rewards.py::TestComputeSeedPotential` | MIGRATE | `tests/properties/test_reward_properties.py` | Convert to property tests |
 | `test_simic.py::TestTrainingSnapshot::test_vector_size_matches` | KEEP | `tests/unit/test_snapshots.py` | Simple unit test, no property needed |
 | `test_simic_normalization.py` | MIGRATE | `tests/properties/test_normalization_properties.py` | Perfect for property-based testing |
@@ -1796,6 +1844,12 @@ precision = 2
 ### 6.2 Migration Checklist
 
 **Note**: Phase timings (e.g., "Week 1") are indicative only for planning purposes. As an open-source project, actual implementation will proceed at the community's pace.
+
+**Phase 0: Prerequisites** ✅ **COMPLETED (2025-11-30)**
+- [x] Verify critical bugfixes applied to `training.py` and `vectorized.py`
+- [x] Verify `tests/test_simic_ppo.py` exists and passes (8 tests)
+- [x] Confirm state_dim computation uses `SeedTelemetry.feature_dim()`
+- [x] Document fixes in plan (see [Critical Bugfixes Applied](#critical-bugfixes-applied-2025-11-30))
 
 **Phase 1: Foundation**
 - [ ] Create `tests/strategies.py` with all Hypothesis strategies
@@ -1839,7 +1893,14 @@ precision = 2
 
 ### Ready to Implement
 
-This design is complete and ready for implementation. To begin:
+This design is complete and ready for implementation.
+
+**Phase 0 Prerequisites: ✅ COMPLETED (2025-11-30)**
+- Critical bugfixes applied to `training.py` and `vectorized.py`
+- Dimension validation test (`test_simic_ppo.py`) created and passing
+- State dimension computation now uses `SeedTelemetry.feature_dim()` dynamically
+
+**To begin Phase 1:**
 
 1. **Review this document** with team
 2. **Approve design** (any changes needed?)
@@ -1854,8 +1915,13 @@ This design is complete and ready for implementation. To begin:
 
 ### Success Criteria
 
-After implementation:
-- ✅ 93 tests (55 property, 23 integration, 15 other)
+**Current Status (Phase 0 Complete)**:
+- ✅ 8 PPO dimension tests passing (`test_simic_ppo.py`)
+- ✅ Critical dimension mismatch bugs fixed
+- ✅ Regression prevention in place
+
+**After full implementation**:
+- ✅ 93+ tests (55 property, 23 integration, 15+ other including existing PPO tests)
 - ✅ CI pipeline <15 min on PR
 - ✅ Property coverage >80%
 - ✅ Zero flaky tests (seed-based RNG)
@@ -1872,10 +1938,17 @@ This detailed design provides **implementation-ready specifications** for every 
 - ✅ Specific test cases
 - ✅ Configuration details
 - ✅ Migration strategy
-- ✅ All imports and syntax validated
+- ✅ All imports and syntax validated (2025-11-30 update)
 
-**Implementation blockers have been resolved**. All code examples are now verified against the actual esper-lite codebase structure.
+**Implementation blockers have been resolved**. All code examples are now verified against the actual esper-lite codebase structure, and all imports have been validated and corrected.
 
-**Next step**: Begin Phase 1 implementation (Foundation).
+**Critical bugfixes applied (2025-11-30)**: PPO dimension mismatch bugs fixed in `training.py` and `vectorized.py`. Regression test created (`test_simic_ppo.py`, 8 tests passing).
+
+**Status**: ✅ **READY FOR PHASE 1**
+
+**Phase 0 (Prerequisites)**: ✅ **COMPLETED**
+**Phase 1 (Foundation)**: Ready to begin
+
+**Next step**: Begin Phase 1 implementation (Foundation) - see [Implementation Checklist](#part-7-implementation-checklist).
 
 **Questions?** Refer to parent document `2025-11-29-test-suite-design.md` for strategic context.
