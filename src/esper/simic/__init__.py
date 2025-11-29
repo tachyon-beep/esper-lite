@@ -17,7 +17,7 @@ the Tamiyo seed lifecycle controller:
 """
 
 # Actions
-from esper.leyline import SimicAction
+from esper.leyline import Action, SimicAction  # SimicAction is deprecated alias
 
 # Core data structures
 from esper.simic.episodes import (
@@ -83,7 +83,8 @@ from esper.simic.networks import (
 
 __all__ = [
     # Actions
-    "SimicAction",
+    "Action",
+    "SimicAction",  # deprecated alias
 
     # Episodes
     "TrainingSnapshot",
