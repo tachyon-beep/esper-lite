@@ -296,12 +296,11 @@ def live_comparison(
             iql_action_idx = iql.get_action(state_tensor, deterministic=True)
             iql_action = SimicAction(iql_action_idx).name
 
-            # Track - convert TamiyoAction to SimicAction name
-            h_action_name = h_action.action.name  # TamiyoAction enum
-            results['action_counts']['heuristic'][h_action_name] += 1
+            # Track actions - both now use Action enum
+            results['action_counts']['heuristic'][h_action.action.name] += 1
             results['action_counts']['iql'][iql_action] += 1
 
-            if h_action_name == iql_action:
+            if h_action.action.name == iql_action:
                 ep_agreements += 1
             ep_total += 1
 
@@ -596,28 +595,11 @@ def head_to_head_comparison(
     # Define policy action functions
     def heuristic_action_fn(signals, model, tracker, use_telemetry):
         """Get action from heuristic Tamiyo."""
-        tamiyo = HeuristicTamiyo(HeuristicPolicyConfig())
         # Get active seeds from model
         active_seeds = [model.seed_state] if model.has_active_seed and model.seed_state else []
         decision = tamiyo.decide(signals, active_seeds)
-        # Map TamiyoAction to SimicAction
-        action_name = decision.action.name
-        if action_name == "WAIT":
-            return SimicAction.WAIT
-        elif action_name == "GERMINATE":
-            # Map blueprint_id to appropriate GERMINATE_* variant
-            blueprint_map = {
-                "conv_enhance": SimicAction.GERMINATE_CONV,
-                "attention": SimicAction.GERMINATE_ATTENTION,
-                "norm": SimicAction.GERMINATE_NORM,
-                "depthwise": SimicAction.GERMINATE_DEPTHWISE,
-            }
-            return blueprint_map.get(decision.blueprint_id, SimicAction.GERMINATE_CONV)
-        elif action_name in ("ADVANCE_TRAINING", "ADVANCE_BLENDING", "ADVANCE_FOSSILIZE"):
-            return SimicAction.ADVANCE
-        elif action_name in ("CULL", "CHANGE_BLUEPRINT"):
-            return SimicAction.CULL
-        return SimicAction.WAIT
+        # Decision.action is already an Action enum from leyline
+        return decision.action
 
     def iql_action_fn(signals, model, tracker, use_telemetry):
         """Get action from IQL policy."""

@@ -671,34 +671,15 @@ def snapshot_from_signals(
 
 
 def action_from_decision(decision) -> ActionTaken:
-    """Convert Tamiyo's TamiyoDecision to a Simic ActionTaken."""
-    from esper.leyline import SimicAction
-    from esper.tamiyo import TamiyoAction
+    """Convert Tamiyo's TamiyoDecision to a Simic ActionTaken.
 
-    # Map TamiyoAction to SimicAction
-    # For GERMINATE, we need to map based on blueprint_id
-    if decision.action == TamiyoAction.GERMINATE:
-        # Map blueprint_id to appropriate GERMINATE_* variant
-        blueprint_map = {
-            "conv_enhance": SimicAction.GERMINATE_CONV,
-            "attention": SimicAction.GERMINATE_ATTENTION,
-            "norm": SimicAction.GERMINATE_NORM,
-            "depthwise": SimicAction.GERMINATE_DEPTHWISE,
-        }
-        simic_action = blueprint_map.get(decision.blueprint_id, SimicAction.GERMINATE_CONV)
-    else:
-        action_map = {
-            TamiyoAction.WAIT: SimicAction.WAIT,
-            TamiyoAction.ADVANCE_TRAINING: SimicAction.ADVANCE,
-            TamiyoAction.ADVANCE_BLENDING: SimicAction.ADVANCE,
-            TamiyoAction.ADVANCE_FOSSILIZE: SimicAction.ADVANCE,
-            TamiyoAction.CULL: SimicAction.CULL,
-            TamiyoAction.CHANGE_BLUEPRINT: SimicAction.CULL,  # Cull + new germinate
-        }
-        simic_action = action_map.get(decision.action, SimicAction.WAIT)
+    Since TamiyoDecision now uses the shared Action enum from leyline,
+    this is a simple wrapper that extracts the relevant fields.
+    """
+    from esper.leyline import Action
 
     return ActionTaken(
-        action=simic_action,
+        action=decision.action,  # Already an Action enum
         blueprint_id=decision.blueprint_id,
         target_seed_id=decision.target_seed_id,
         confidence=decision.confidence,
