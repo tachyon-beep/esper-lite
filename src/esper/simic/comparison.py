@@ -19,7 +19,7 @@ import torch.nn as nn
 
 from esper.leyline import SimicAction, SeedStage, SeedTelemetry
 from esper.simic.episodes import TrainingSnapshot
-from esper.simic.features import obs_to_base_features, telemetry_to_features
+from esper.simic.features import obs_to_base_features
 from esper.simic.gradient_collector import collect_seed_gradients
 from esper.simic.iql import IQL
 from esper.tamiyo import HeuristicTamiyo, HeuristicPolicyConfig, SignalTracker
@@ -36,7 +36,6 @@ def load_iql_model(model_path: str, device: str = "cpu") -> tuple[IQL, str]:
     telemetry mode based on the input dimension:
     - 27-dim: No telemetry ('none')
     - 37-dim: Seed telemetry ('seed') - 27 base + 10 seed
-    - 54-dim: Legacy full-model telemetry ('legacy') - 27 base + 27 legacy
 
     Args:
         model_path: Path to saved model checkpoint
@@ -44,7 +43,7 @@ def load_iql_model(model_path: str, device: str = "cpu") -> tuple[IQL, str]:
 
     Returns:
         Tuple of (IQL agent, telemetry_mode string)
-        telemetry_mode is one of: 'none', 'seed', 'legacy'
+        telemetry_mode is one of: 'none', 'seed'
 
     Raises:
         ValueError: If state dimension is not one of the supported values
@@ -58,12 +57,10 @@ def load_iql_model(model_path: str, device: str = "cpu") -> tuple[IQL, str]:
         telemetry_mode = 'none'
     elif state_dim == 37:
         telemetry_mode = 'seed'
-    elif state_dim == 54:
-        telemetry_mode = 'legacy'
     else:
         raise ValueError(
             f"Unknown state dimension: {state_dim}. "
-            f"Expected 27 (no telemetry), 37 (seed telemetry), or 54 (legacy telemetry)."
+            f"Expected 27 (no telemetry) or 37 (seed telemetry)."
         )
 
     # Log which mode is being used
@@ -168,10 +165,8 @@ def live_comparison(
     they would do at each step. Actions are NOT executed - both policies
     observe the same unmodified training run.
 
-    WARNING: This mode does not support telemetry features. If the loaded
-    model was trained with telemetry (37-dim or 54-dim), it will be evaluated
-    using only base features (27-dim) since no seeds are created. For accurate
-    telemetry-aware evaluation, use head_to_head_comparison.
+    NOTE: Telemetry features are zero-filled in live mode since no seeds are
+    created. For evaluation with real telemetry signals, use head_to_head_comparison.
 
     Args:
         model_path: Path to saved IQL model checkpoint
@@ -324,7 +319,16 @@ def live_comparison(
                 available_slots=available_slots,
             )
 
-            features = snapshot_to_features(snapshot, use_telemetry=False)  # No telemetry in live mode
+            # Build features matching the model's expected dimension
+            # Note: live mode cannot collect real telemetry, so we use zeros when needed
+            if telemetry_mode == 'seed':
+                # Create zero-filled telemetry to match 37-dim model expectations
+                zero_telemetry = SeedTelemetry(seed_id="live_comparison_dummy")
+                features = snapshot_to_features(snapshot, use_telemetry=True, seed_telemetry=zero_telemetry)
+            else:
+                # 27-dim model - no telemetry
+                features = snapshot_to_features(snapshot, use_telemetry=False)
+
             state_tensor = torch.tensor([features], dtype=torch.float32, device=device)
             iql_action_idx = iql.get_action(state_tensor, deterministic=True)
             iql_action = SimicAction(iql_action_idx).name
@@ -717,8 +721,8 @@ def head_to_head_comparison(
         print(f"\n  WINNER: {winner} (H={h_acc:.2f}% vs IQL={iql_acc:.2f}%)")
 
         # Reset tamiyo state for next episode (blueprint rotation, etc.)
-        if hasattr(tamiyo, 'reset'):
-            tamiyo.reset()
+        # HeuristicTamiyo always has reset() method
+        tamiyo.reset()
 
     # Summary
     print("\n" + "=" * 60)

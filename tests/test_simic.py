@@ -102,10 +102,12 @@ class TestActionTaken:
         for i, simic_action in enumerate(SimicAction):
             action = ActionTaken(action=simic_action)
             vec = action.to_vector()
-            # First 4 elements are one-hot
-            for j in range(4):
+            # First 7 elements are one-hot (7 actions in current space)
+            for j in range(7):
                 expected = 1.0 if j == i else 0.0
                 assert vec[j] == expected, f"Action {simic_action}: vec[{j}] should be {expected}"
+            # 8th element is confidence (default 1.0)
+            assert vec[7] == 1.0, f"Confidence should be 1.0 by default"
 
     def test_serialization_roundtrip(self):
         """Test to_dict/from_dict roundtrip."""

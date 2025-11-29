@@ -24,7 +24,6 @@ if TYPE_CHECKING:
 __all__ = [
     "safe",
     "obs_to_base_features",
-    "telemetry_to_features",
 ]
 
 
@@ -96,66 +95,3 @@ def obs_to_base_features(obs: dict) -> list[float]:
         obs['seed_improvement'],
         float(obs['available_slots']),
     ]
-
-
-# =============================================================================
-# Telemetry Features (V2 - 27 dimensions)
-# =============================================================================
-
-def telemetry_to_features(telem: dict) -> list[float]:
-    """Extract V2 telemetry features (27 dims) from telemetry snapshot.
-
-    Telemetry features capture deeper model health signals:
-    - Gradient health: overall_norm, norm_variance, vanishing_layers,
-                      exploding_layers, health_score (5)
-    - Per-class accuracy: class 0-9 (10)
-    - Class balance: class_variance (1)
-    - Loss landscape: sharpness (1)
-    - Layer gradients: gradient norms for 7 layers (7)
-    - Red flags: severe_class_imbalance, sharp_minimum, gradient_issues (3)
-
-    Total: 27 features
-
-    Args:
-        telem: Telemetry dictionary from DiagnosticTracker
-
-    Returns:
-        List of 27 floats
-    """
-    features = []
-
-    # Gradient health (5 features)
-    gh = telem.get('gradient_health', {})
-    features.extend([
-        safe(gh.get('overall_norm', 0), 0, 10),
-        safe(gh.get('norm_variance', 0), 0, 10),
-        float(gh.get('vanishing_layers', 0)),
-        float(gh.get('exploding_layers', 0)),
-        safe(gh.get('health_score', 1), 1, 1),
-    ])
-
-    # Per-class accuracy (10 features) - sorted by class name
-    pca = telem.get('per_class_accuracy', {})
-    for i in range(10):
-        features.append(safe(pca.get(str(i), 50), 50, 100))
-
-    # Class variance (1 feature)
-    features.append(safe(telem.get('class_variance', 0), 0, 1000))
-
-    # Sharpness (1 feature)
-    features.append(safe(telem.get('sharpness', 0), 0, 100))
-
-    # Gradient stats per layer - just norms (7 features)
-    gs = telem.get('gradient_stats', [])
-    layer_norms = [safe(g.get('norm', 0), 0, 10) for g in gs[:7]]
-    while len(layer_norms) < 7:
-        layer_norms.append(0.0)
-    features.extend(layer_norms)
-
-    # Red flags as binary (3 features)
-    rf = telem.get('red_flags', [])
-    features.append(1.0 if 'severe_class_imbalance' in rf else 0.0)
-    features.append(1.0 if 'sharp_minimum' in rf else 0.0)
-    features.append(1.0 if 'gradient_issues' in rf else 0.0)
-
-    return features  # 27 features

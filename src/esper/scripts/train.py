@@ -33,7 +33,7 @@ def main():
     ppo_parser.add_argument("--vectorized", action="store_true")
     ppo_parser.add_argument("--n-envs", type=int, default=4)
     ppo_parser.add_argument("--devices", nargs="+")
-    ppo_parser.add_argument("--no-telemetry", action="store_true", help="Disable telemetry features (27-dim instead of 54-dim)")
+    ppo_parser.add_argument("--no-telemetry", action="store_true", help="Disable telemetry features (27-dim instead of 37-dim)")
 
     # IQL subcommand
     iql_parser = subparsers.add_parser("iql", help="Train IQL agent")
@@ -47,7 +47,6 @@ def main():
     iql_parser.add_argument("--lr", type=float, default=3e-4)
     iql_parser.add_argument("--cql-alpha", type=float, default=0.0)
     iql_parser.add_argument("--reward-shaping", action="store_true")
-    iql_parser.add_argument("--no-telemetry", action="store_true")
     iql_parser.add_argument("--save", help="Path to save model")
     iql_parser.add_argument("--device", default="cpu")
 
@@ -105,7 +104,6 @@ def main():
             beta=args.beta,
             lr=args.lr,
             cql_alpha=args.cql_alpha,
-            use_telemetry=not args.no_telemetry,
             use_reward_shaping=args.reward_shaping,
             device=args.device,
             save_path=args.save,

@@ -302,7 +302,7 @@ def run_diagnostic_episode(
         action = SimicAction(action_idx)
 
         # Compute reward
-        acc_delta = signals.accuracy_delta
+        acc_delta = signals.metrics.accuracy_delta
         reward = compute_shaped_reward(
             action=action.value,
             acc_delta=acc_delta,

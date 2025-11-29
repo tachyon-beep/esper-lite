@@ -66,6 +66,8 @@ class ConsoleOutput(OutputBackend):
     def _emit_summary(self, event: TelemetryEvent) -> None:
         """Emit compact summary to console."""
         timestamp = event.timestamp.strftime("%H:%M:%S") if event.timestamp else datetime.now().strftime("%H:%M:%S")
+        # hasattr AUTHORIZED by operator on 2025-11-29 15:05:24 UTC
+        # Justification: Serialization - handle both enum and string event_type values
         event_type = event.event_type.name if hasattr(event.event_type, 'name') else str(event.event_type)
         seed_id = event.seed_id or "system"
 
@@ -96,10 +98,14 @@ class ConsoleOutput(OutputBackend):
             data = event.__dict__
 
         # Convert datetime objects to ISO format strings
+        # hasattr AUTHORIZED by operator on 2025-11-29 15:05:24 UTC
+        # Justification: Serialization - safely handle datetime objects from various sources
         if 'timestamp' in data and hasattr(data['timestamp'], 'isoformat'):
             data['timestamp'] = data['timestamp'].isoformat()
 
         # Convert enum to string
+        # hasattr AUTHORIZED by operator on 2025-11-29 15:05:24 UTC
+        # Justification: Serialization - safely handle enum objects with .name attribute
         if 'event_type' in data and hasattr(data['event_type'], 'name'):
             data['event_type'] = data['event_type'].name
 
@@ -144,6 +150,8 @@ class FileOutput(OutputBackend):
 
     def close(self) -> None:
         """Close the file backend."""
+        # hasattr AUTHORIZED by operator on 2025-11-29 15:05:24 UTC
+        # Justification: Cleanup guard - defensive check in close() to avoid errors
         if hasattr(self, '_file') and not self._file.closed:
             self.flush()
             self._file.close()
@@ -156,10 +164,14 @@ class FileOutput(OutputBackend):
             data = event.__dict__
 
         # Convert datetime objects to ISO format strings
+        # hasattr AUTHORIZED by operator on 2025-11-29 15:05:24 UTC
+        # Justification: Serialization - safely handle datetime objects from various sources
         if 'timestamp' in data and hasattr(data['timestamp'], 'isoformat'):
             data['timestamp'] = data['timestamp'].isoformat()
 
         # Convert enum to string
+        # hasattr AUTHORIZED by operator on 2025-11-29 15:05:24 UTC
+        # Justification: Serialization - safely handle enum objects with .name attribute
         if 'event_type' in data and hasattr(data['event_type'], 'name'):
             data['event_type'] = data['event_type'].name
 
@@ -167,6 +179,8 @@ class FileOutput(OutputBackend):
 
     def __del__(self):
         """Ensure file is closed on deletion."""
+        # hasattr AUTHORIZED by operator on 2025-11-29 15:05:24 UTC
+        # Justification: Cleanup guard - defensive check in __del__ to avoid errors during teardown
         if hasattr(self, '_file') and not self._file.closed:
             self.close()
 

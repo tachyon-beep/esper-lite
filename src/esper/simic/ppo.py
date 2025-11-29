@@ -16,7 +16,7 @@ import torch.nn.functional as F
 
 from esper.simic.buffers import RolloutBuffer
 from esper.simic.networks import ActorCritic
-from esper.simic.features import safe, telemetry_to_features
+from esper.simic.features import safe
 
 
 # =============================================================================
@@ -61,7 +61,7 @@ def signals_to_features(signals, model, tracker=None, use_telemetry: bool = True
         'accuracy_delta': signals.metrics.accuracy_delta,
         'plateau_epochs': signals.metrics.plateau_epochs,
         'best_val_accuracy': signals.metrics.best_val_accuracy,
-        'best_val_loss': min(signals.loss_history) if signals.loss_history else 10.0,
+        'best_val_loss': signals.metrics.best_val_loss,
         'loss_history_5': loss_hist,
         'accuracy_history_5': acc_hist,
         'has_active_seed': 1.0 if signals.active_seeds else 0.0,
@@ -70,21 +70,30 @@ def signals_to_features(signals, model, tracker=None, use_telemetry: bool = True
 
     # Seed state features
     # NOTE: TrainingSignals.active_seeds is a list of seed IDs (strings),
-    # not SeedState objects. We cannot access seed attributes here.
-    # Always use zero-padding for seed-specific features.
-    obs['seed_stage'] = 0
-    obs['seed_epochs_in_stage'] = 0
-    obs['seed_alpha'] = 0.0
-    obs['seed_improvement'] = 0.0
+    # not SeedState objects. Use model.seed_state to access full seed state.
+    if model and model.has_active_seed:
+        seed_state = model.seed_state
+        obs['seed_stage'] = seed_state.stage.value
+        obs['seed_epochs_in_stage'] = seed_state.metrics.epochs_in_current_stage
+        obs['seed_alpha'] = seed_state.alpha
+        obs['seed_improvement'] = seed_state.metrics.improvement_since_stage_start
+    else:
+        obs['seed_stage'] = 0
+        obs['seed_epochs_in_stage'] = 0
+        obs['seed_alpha'] = 0.0
+        obs['seed_improvement'] = 0.0
 
     features = obs_to_base_features(obs)
 
     if use_telemetry:
-        # TrainingSignals doesn't provide access to SeedState objects
-        # (only seed IDs), so we cannot access seed telemetry here.
-        # Zero-pad telemetry features when requested.
+        # Use real telemetry from model.seed_state when available
         from esper.leyline import SeedTelemetry
-        features.extend([0.0] * SeedTelemetry.feature_dim())
+        if model and model.has_active_seed:
+            seed_state = model.seed_state
+            # SeedState always has telemetry field (initialized in __post_init__)
+            features.extend(seed_state.telemetry.to_features())
+        else:
+            features.extend([0.0] * SeedTelemetry.feature_dim())
 
     return features
 

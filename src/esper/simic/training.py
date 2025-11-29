@@ -13,10 +13,11 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
-from esper.leyline import SimicAction
+from esper.leyline import SimicAction, SeedTelemetry
 from esper.simic.buffers import Transition, ReplayBuffer
-from esper.simic.features import obs_to_base_features, telemetry_to_features
+from esper.simic.features import obs_to_base_features
 from esper.simic.rewards import compute_shaped_reward, SeedInfo
+from esper.simic.gradient_collector import collect_seed_gradients
 
 
 # =============================================================================
@@ -25,7 +26,6 @@ from esper.simic.rewards import compute_shaped_reward, SeedInfo
 
 def extract_transitions(
     pack: dict,
-    use_telemetry: bool = True,
     reward_scale: float = 0.1,
     use_reward_shaping: bool = False,
     gamma: float = 0.99,
@@ -34,13 +34,12 @@ def extract_transitions(
 
     Args:
         pack: Data pack dictionary
-        use_telemetry: Whether to include V2 telemetry features
         reward_scale: Scale factor for rewards
         use_reward_shaping: Whether to add potential-based reward shaping
         gamma: Discount factor for reward shaping
 
     Returns:
-        List of Transition objects
+        List of Transition objects (27-dim base features only)
     """
     from esper.simic.rewards import compute_seed_potential
 
@@ -48,19 +47,14 @@ def extract_transitions(
 
     for ep in pack['episodes']:
         decisions = ep['decisions']
-        telem_hist = ep.get('telemetry_history', [])
 
         for i, decision in enumerate(decisions):
             state = obs_to_base_features(decision['observation'])
-            if use_telemetry and telem_hist:
-                epoch = decision['observation']['epoch']
-                if epoch <= len(telem_hist):
-                    state.extend(telemetry_to_features(telem_hist[epoch - 1]))
-                else:
-                    state.extend([0.0] * 27)
-            elif use_telemetry:
-                state.extend([0.0] * 27)
+            # Legacy telemetry removed - only 27-dim base features supported
 
+            # NOTE: Data packs must use current action space (7 actions with blueprint-specific
+            # germinate variants). Old packs with 4-action space (generic GERMINATE) will KeyError.
+            # See data/archive_old_action_space/README.md
             action = SimicAction[decision['action']['action']].value
             raw_reward = decision['outcome'].get('reward', 0) * reward_scale
 
@@ -73,14 +67,6 @@ def extract_transitions(
                 next_decision = decisions[i + 1]
                 next_obs = next_decision['observation']
                 next_state = obs_to_base_features(next_obs)
-                if use_telemetry and telem_hist:
-                    next_epoch = next_obs['epoch']
-                    if next_epoch <= len(telem_hist):
-                        next_state.extend(telemetry_to_features(telem_hist[next_epoch - 1]))
-                    else:
-                        next_state.extend([0.0] * 27)
-                elif use_telemetry:
-                    next_state.extend([0.0] * 27)
                 done = False
 
             if use_reward_shaping:
@@ -154,12 +140,16 @@ def train_iql(
     beta: float = 3.0,
     lr: float = 3e-4,
     cql_alpha: float = 0.0,
-    use_telemetry: bool = True,
     use_reward_shaping: bool = False,
     device: str = "cuda:0",
     save_path: Optional[str] = None,
 ):
-    """Train IQL on offline data."""
+    """Train IQL on offline data.
+
+    Note: IQL only supports 27-dim base features. Offline data packs do not
+    contain SeedTelemetry, so telemetry-enabled IQL models cannot be trained
+    from offline data. Use PPO for telemetry-enabled policies.
+    """
     import copy
     from esper.simic.iql import IQL
 
@@ -175,7 +165,6 @@ def train_iql(
     print("Extracting transitions...")
     transitions = extract_transitions(
         pack,
-        use_telemetry=use_telemetry,
         use_reward_shaping=use_reward_shaping,
         gamma=gamma,
     )
@@ -292,6 +281,7 @@ def run_ppo_episode(
 
     for epoch in range(1, max_epochs + 1):
         seed_state = model.seed_state
+        grad_stats = None  # Will collect gradient stats if use_telemetry and seed active
 
         # Training phase
         model.train()
@@ -321,6 +311,11 @@ def run_ppo_episode(
                 outputs = model(inputs)
                 loss = criterion(outputs, targets)
                 loss.backward()
+
+                # Collect gradient stats for telemetry (once per epoch, last batch)
+                if use_telemetry:
+                    grad_stats = collect_seed_gradients(model.get_seed_parameters())
+
                 seed_optimizer.step()
                 running_loss += loss.item()
                 _, predicted = outputs.max(1)
@@ -336,6 +331,11 @@ def run_ppo_episode(
                 outputs = model(inputs)
                 loss = criterion(outputs, targets)
                 loss.backward()
+
+                # Collect gradient stats for telemetry (once per epoch, last batch)
+                if use_telemetry:
+                    grad_stats = collect_seed_gradients(model.get_seed_parameters())
+
                 seed_optimizer.step()
                 running_loss += loss.item()
                 _, predicted = outputs.max(1)
@@ -355,6 +355,11 @@ def run_ppo_episode(
                 outputs = model(inputs)
                 loss = criterion(outputs, targets)
                 loss.backward()
+
+                # Collect gradient stats for telemetry (once per epoch, last batch)
+                if use_telemetry:
+                    grad_stats = collect_seed_gradients(model.get_seed_parameters())
+
                 host_optimizer.step()
                 if seed_optimizer:
                     seed_optimizer.step()
@@ -417,7 +422,18 @@ def run_ppo_episode(
             available_slots=available_slots,
         )
 
-        acc_delta = signals.accuracy_delta
+        # Sync telemetry after validation
+        if use_telemetry and seed_state and grad_stats:
+            seed_state.sync_telemetry(
+                gradient_norm=grad_stats['gradient_norm'],
+                gradient_health=grad_stats['gradient_health'],
+                has_vanishing=grad_stats['has_vanishing'],
+                has_exploding=grad_stats['has_exploding'],
+                epoch=epoch,
+                max_epochs=max_epochs,
+            )
+
+        acc_delta = signals.metrics.accuracy_delta
 
         # Get features and action
         # Note: tracker would provide DiagnosticTracker telemetry if available
@@ -504,8 +520,9 @@ def train_ppo(
     print(f"Device: {device}, Telemetry: {use_telemetry}")
 
     trainloader, testloader = load_cifar10(batch_size=128)
-    # State dimension: 27 base features + 27 telemetry features if enabled
-    state_dim = 54 if use_telemetry else 27
+    # State dimension: 27 base features + 10 telemetry features if enabled
+    BASE_FEATURE_DIM = 27
+    state_dim = BASE_FEATURE_DIM + (SeedTelemetry.feature_dim() if use_telemetry else 0)
 
     agent = PPOAgent(
         state_dim=state_dim,

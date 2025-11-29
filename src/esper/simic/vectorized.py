@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 import torch
 import torch.nn as nn
 
-from esper.leyline import SimicAction, SeedStage
+from esper.leyline import SimicAction, SeedStage, SeedTelemetry
 from esper.simic.buffers import RolloutBuffer
 from esper.simic.networks import ActorCritic
 from esper.simic.normalization import RunningMeanStd
@@ -147,8 +147,9 @@ def train_ppo_vectorized(
     num_test_batches = len(sample_test)
     del sample_train, sample_test  # Free memory
 
-    # State dimension: 27 base features + 27 telemetry features if enabled
-    state_dim = 54 if use_telemetry else 27
+    # State dimension: 27 base features + 10 telemetry features if enabled
+    BASE_FEATURE_DIM = 27
+    state_dim = BASE_FEATURE_DIM + (SeedTelemetry.feature_dim() if use_telemetry else 0)
     obs_normalizer = RunningMeanStd((state_dim,))
 
     # Create PPO agent
@@ -236,9 +237,9 @@ def train_ppo_vectorized(
             else:  # BLENDING
                 optimizer = env_state.host_optimizer
                 # Update blend alpha for this step
-                if model.seed_slot:
-                    # Use global_step from signal_tracker as step count
-                    step = env_state.signal_tracker.global_step if hasattr(env_state.signal_tracker, 'global_step') else 0
+                if model.seed_slot and seed_state:
+                    # Use epochs in current stage as step count (matches comparison.py pattern)
+                    step = seed_state.metrics.epochs_in_current_stage
                     model.seed_slot.update_alpha_for_step(step)
 
             optimizer.zero_grad()
@@ -453,7 +454,7 @@ def train_ppo_vectorized(
                 # Compute shaped reward
                 reward = compute_shaped_reward(
                     action=action.value,
-                    acc_delta=signals.accuracy_delta,
+                    acc_delta=signals.metrics.accuracy_delta,
                     val_acc=env_state.val_acc,
                     seed_info=SeedInfo.from_seed_state(seed_state),
                     epoch=epoch,

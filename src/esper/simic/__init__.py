@@ -62,7 +62,6 @@ from esper.simic.rewards import (
 from esper.simic.features import (
     safe,
     obs_to_base_features,
-    telemetry_to_features,
 )
 
 # Networks
@@ -122,7 +121,6 @@ __all__ = [
     # Features
     "safe",
     "obs_to_base_features",
-    "telemetry_to_features",
 
     # Networks
     "PolicyNetwork",
