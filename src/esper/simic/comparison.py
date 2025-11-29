@@ -404,6 +404,9 @@ def head_to_head_comparison(
         },
     }
 
+    # Create heuristic Tamiyo ONCE - maintains state across episodes
+    tamiyo = HeuristicTamiyo(HeuristicPolicyConfig())
+
     def run_training_episode(
         policy_name: str,
         action_fn,  # function(signals, model, tracker) -> SimicAction
@@ -679,6 +682,10 @@ def head_to_head_comparison(
             winner = "TIE"
 
         print(f"\n  WINNER: {winner} (H={h_acc:.2f}% vs IQL={iql_acc:.2f}%)")
+
+        # Reset tamiyo state for next episode (blueprint rotation, etc.)
+        if hasattr(tamiyo, 'reset'):
+            tamiyo.reset()
 
     # Summary
     print("\n" + "=" * 60)
