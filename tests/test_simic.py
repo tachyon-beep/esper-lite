@@ -110,7 +110,7 @@ class TestActionTaken:
     def test_serialization_roundtrip(self):
         """Test to_dict/from_dict roundtrip."""
         original = ActionTaken(
-            action=SimicAction.GERMINATE,
+            action=SimicAction.GERMINATE_CONV,
             blueprint_id="conv_enhance",
             confidence=0.85,
             reason="Plateau detected",
@@ -399,7 +399,7 @@ class TestPolicyNetwork:
         snap = TrainingSnapshot(epoch=10, val_accuracy=70.0)
         probs = policy.predict_probs(snap)
 
-        assert len(probs) == 4
+        assert len(probs) == len(SimicAction)  # 7 actions now
         total = sum(probs.values())
         assert abs(total - 1.0) < 0.01  # Should sum to ~1
 
