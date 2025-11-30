@@ -249,11 +249,14 @@ class TestLifecycleIntegration:
         for _ in range(3):
             model.seed_slot.step_epoch()
 
-        # Now fossilize
-        model.seed_state.transition(SeedStage.FOSSILIZED)
+        # After step_epoch completes blending, seed is in PROBATIONARY
+        # Mock improvement so gate check passes
+        model.seed_state.metrics.initial_val_accuracy = 60.0
+        model.seed_state.metrics.current_val_accuracy = 65.0  # +5% improvement
 
-        # Trigger the fossilization telemetry via advance_stage
-        # Note: We need to call advance_stage to emit telemetry, not just transition
+        # Use advance_stage to fossilize (this emits telemetry)
+        result = model.seed_slot.advance_stage(target_stage=SeedStage.FOSSILIZED)
+        assert result.passed, f"Gate should pass with mocked improvement: {result}"
 
         # Check we got SEED_FOSSILIZED event
         fossilized_events = [
