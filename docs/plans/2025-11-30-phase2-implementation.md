@@ -2598,9 +2598,586 @@ git commit -m "chore: update package exports for Phase 2"
 
 ---
 
+## Task 15: Topology Safety Guard
+
+Add assertion in SeedSlot.germinate() to prevent blueprint/host topology mismatch.
+
+**Files:**
+- Modify: `src/esper/kasmina/slot.py`
+- Test: `tests/test_topology_guard.py`
+
+**Step 1: Write the failing test**
+
+```python
+# tests/test_topology_guard.py
+"""Tests for topology safety guard."""
+
+import pytest
+
+
+def test_germinate_wrong_topology_raises():
+    """Germinating transformer blueprint on CNN slot raises."""
+    from esper.kasmina.slot import SeedSlot
+    from esper.simic.features import TaskConfig
+
+    # CNN task config
+    config = TaskConfig.for_cifar10()
+
+    slot = SeedSlot(
+        slot_id="block2_post",
+        channels=64,
+        task_config=config,  # CNN topology
+    )
+
+    # Try to germinate a transformer blueprint
+    with pytest.raises(AssertionError, match="topology"):
+        slot.germinate("lora", "bad-seed")  # lora is transformer-only
+
+
+def test_germinate_correct_topology_succeeds():
+    """Germinating matching topology blueprint succeeds."""
+    from esper.kasmina.slot import SeedSlot
+    from esper.simic.features import TaskConfig
+
+    config = TaskConfig.for_cifar10()
+
+    slot = SeedSlot(
+        slot_id="block2_post",
+        channels=64,
+        task_config=config,
+    )
+
+    # Germinate CNN blueprint - should work
+    state = slot.germinate("norm", "good-seed")
+    assert state is not None
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `PYTHONPATH=src .venv/bin/python -m pytest tests/test_topology_guard.py -v`
+Expected: FAIL (SeedSlot doesn't have task_config parameter)
+
+**Step 3: Update SeedSlot**
+
+```python
+# In src/esper/kasmina/slot.py - update __init__ and germinate
+
+def __init__(
+    self,
+    slot_id: str,
+    channels: int,
+    device: torch.device | str = "cpu",
+    gates: QualityGates | None = None,
+    on_telemetry: Callable[[TelemetryEvent], None] | None = None,
+    fast_mode: bool = False,
+    task_config: "TaskConfig | None" = None,  # NEW
+):
+    # ... existing init ...
+    self.task_config = task_config
+
+def germinate(
+    self,
+    blueprint_id: str,
+    seed_id: str | None = None,
+    host_module: nn.Module | None = None,
+) -> SeedState:
+    """Germinate a new seed in this slot."""
+    from esper.kasmina.blueprints import BlueprintRegistry
+
+    # Topology guard
+    if self.task_config is not None:
+        topology = self.task_config.topology
+        try:
+            spec = BlueprintRegistry.get(topology, blueprint_id)
+        except ValueError:
+            # Blueprint not found for this topology
+            available = BlueprintRegistry.list_for_topology(topology)
+            names = [s.name for s in available]
+            raise AssertionError(
+                f"Blueprint '{blueprint_id}' not available for topology '{topology}'. "
+                f"Available: {names}"
+            )
+
+    # ... rest of existing germinate code ...
+```
+
+**Step 4: Run test to verify it passes**
+
+Run: `PYTHONPATH=src .venv/bin/python -m pytest tests/test_topology_guard.py -v`
+Expected: PASS
+
+**Step 5: Commit**
+
+```bash
+git add src/esper/kasmina/slot.py tests/test_topology_guard.py
+git commit -m "feat(kasmina): add topology safety guard in SeedSlot.germinate"
+```
+
+---
+
+## Task 16: Rent Grace Period
+
+Add seed age tracking and rent-free grace period for newly germinated seeds.
+
+**Files:**
+- Modify: `src/esper/simic/rewards.py`
+- Test: `tests/test_rent_grace.py`
+
+**Step 1: Write the failing test**
+
+```python
+# tests/test_rent_grace.py
+"""Tests for rent grace period."""
+
+import pytest
+
+
+def test_rent_not_applied_during_grace():
+    """No rent during grace period."""
+    from esper.simic.rewards import compute_loss_reward, LossRewardConfig, SeedInfo
+    from esper.leyline import SeedStage
+
+    config = LossRewardConfig.default()
+    config.grace_epochs = 3
+
+    # Seed in grace period (age=1)
+    seed_info = SeedInfo(
+        stage=SeedStage.TRAINING.value,
+        improvement_since_stage_start=0.0,
+        epochs_in_stage=1,
+        seed_params=50000,
+        seed_age_epochs=1,  # NEW: within grace
+    )
+
+    reward_grace = compute_loss_reward(
+        action=0,
+        loss_delta=-0.1,
+        val_loss=2.0,
+        seed_info=seed_info,
+        epoch=5,
+        max_epochs=25,
+        total_params=50000,
+        host_params=100000,
+        config=config,
+    )
+
+    # Same but outside grace
+    seed_info_old = SeedInfo(
+        stage=SeedStage.TRAINING.value,
+        improvement_since_stage_start=0.0,
+        epochs_in_stage=5,
+        seed_params=50000,
+        seed_age_epochs=5,  # Outside grace
+    )
+
+    reward_no_grace = compute_loss_reward(
+        action=0,
+        loss_delta=-0.1,
+        val_loss=2.0,
+        seed_info=seed_info_old,
+        epoch=9,
+        max_epochs=25,
+        total_params=50000,
+        host_params=100000,
+        config=config,
+    )
+
+    # Grace period should give higher reward (no rent paid)
+    assert reward_grace > reward_no_grace
+
+
+def test_rent_applied_after_grace():
+    """Rent applied after grace period ends."""
+    from esper.simic.rewards import compute_loss_reward, LossRewardConfig, SeedInfo
+    from esper.leyline import SeedStage
+
+    config = LossRewardConfig.default()
+    config.grace_epochs = 3
+
+    # Seed past grace (age=5)
+    seed_info = SeedInfo(
+        stage=SeedStage.TRAINING.value,
+        improvement_since_stage_start=0.0,
+        epochs_in_stage=5,
+        seed_params=50000,
+        seed_age_epochs=5,
+    )
+
+    # With params
+    reward_with_params = compute_loss_reward(
+        action=0, loss_delta=0.0, val_loss=2.0,
+        seed_info=seed_info, epoch=10, max_epochs=25,
+        total_params=50000, host_params=100000,
+        config=config,
+    )
+
+    # Without params
+    reward_no_params = compute_loss_reward(
+        action=0, loss_delta=0.0, val_loss=2.0,
+        seed_info=seed_info, epoch=10, max_epochs=25,
+        total_params=0, host_params=100000,
+        config=config,
+    )
+
+    # Rent should be applied
+    assert reward_no_params > reward_with_params
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `PYTHONPATH=src .venv/bin/python -m pytest tests/test_rent_grace.py -v`
+Expected: FAIL (SeedInfo doesn't have seed_age_epochs)
+
+**Step 3: Update implementation**
+
+```python
+# Update SeedInfo in src/esper/simic/rewards.py
+
+class SeedInfo(NamedTuple):
+    """Minimal seed information for reward computation."""
+    stage: int
+    improvement_since_stage_start: float
+    epochs_in_stage: int
+    seed_params: int = 0
+    previous_stage: int = 0
+    seed_age_epochs: int = 0  # NEW: total epochs since germination
+
+
+@dataclass(slots=True)
+class LossRewardConfig:
+    # ... existing fields ...
+    grace_epochs: int = 3  # NEW: rent-free grace period
+
+
+def compute_loss_reward(...) -> float:
+    # ... existing code ...
+
+    # === SECONDARY: Compute rent (with grace period) ===
+    if host_params > 0 and total_params > 0:
+        # Check if seed is past grace period
+        in_grace = False
+        if seed_info is not None:
+            in_grace = seed_info.seed_age_epochs < config.grace_epochs
+
+        if not in_grace:
+            params_ratio = total_params / host_params
+            reward -= config.compute_rent_weight * params_ratio
+
+    # ... rest of function ...
+```
+
+**Step 4: Run test to verify it passes**
+
+Run: `PYTHONPATH=src .venv/bin/python -m pytest tests/test_rent_grace.py -v`
+Expected: PASS
+
+**Step 5: Commit**
+
+```bash
+git add src/esper/simic/rewards.py tests/test_rent_grace.py
+git commit -m "feat(simic): add rent-free grace period for new seeds"
+```
+
+---
+
+## Task 17: LM Validation (Perplexity)
+
+Add perplexity computation for language model validation.
+
+**Files:**
+- Modify: `src/esper/tolaria/trainer.py`
+- Test: `tests/test_lm_validation.py`
+
+**Step 1: Write the failing test**
+
+```python
+# tests/test_lm_validation.py
+"""Tests for LM validation metrics."""
+
+import pytest
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader, TensorDataset
+
+
+def test_validate_lm_returns_perplexity():
+    """validate_and_get_metrics computes perplexity for LM."""
+    from esper.tolaria.trainer import validate_and_get_metrics
+
+    # Simple model
+    model = nn.Linear(100, 100)
+
+    # Fake data
+    x = torch.randint(0, 100, (32, 10))
+    y = torch.randint(0, 100, (32, 10))
+    dataset = TensorDataset(x, y)
+    loader = DataLoader(dataset, batch_size=8)
+
+    criterion = nn.CrossEntropyLoss()
+
+    val_loss, val_acc, train_loss, train_acc, per_class, perplexity = \
+        validate_and_get_metrics(
+            model=model,
+            trainloader=loader,
+            testloader=loader,
+            criterion=criterion,
+            device="cpu",
+            task_type="lm",  # NEW
+        )
+
+    assert perplexity is not None
+    assert perplexity > 0
+
+
+def test_validate_classification_no_perplexity():
+    """Classification tasks return None for perplexity."""
+    from esper.tolaria.trainer import validate_and_get_metrics
+
+    # Simple CNN
+    model = nn.Sequential(
+        nn.Flatten(),
+        nn.Linear(3 * 32 * 32, 10)
+    )
+
+    # Fake data
+    x = torch.randn(32, 3, 32, 32)
+    y = torch.randint(0, 10, (32,))
+    dataset = TensorDataset(x, y)
+    loader = DataLoader(dataset, batch_size=8)
+
+    criterion = nn.CrossEntropyLoss()
+
+    val_loss, val_acc, train_loss, train_acc, per_class, perplexity = \
+        validate_and_get_metrics(
+            model=model,
+            trainloader=loader,
+            testloader=loader,
+            criterion=criterion,
+            device="cpu",
+            task_type="classification",
+        )
+
+    assert perplexity is None
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `PYTHONPATH=src .venv/bin/python -m pytest tests/test_lm_validation.py -v`
+Expected: FAIL (task_type parameter not supported)
+
+**Step 3: Update validate_and_get_metrics**
+
+```python
+# In src/esper/tolaria/trainer.py
+
+import math
+
+def validate_and_get_metrics(
+    model: nn.Module,
+    trainloader: DataLoader,
+    testloader: DataLoader,
+    criterion: nn.Module,
+    device: str,
+    compute_per_class: bool = False,
+    num_classes: int = 10,
+    task_type: str = "classification",  # NEW: "classification" or "lm"
+) -> tuple[float, float, float, float, dict[int, float] | None, float | None]:
+    """Get validation and training metrics.
+
+    Returns:
+        Tuple of (val_loss, val_accuracy, train_loss, train_accuracy,
+                  per_class_acc, perplexity)
+        perplexity is None for classification, exp(val_loss) for LM.
+    """
+    # ... existing validation code ...
+
+    # Compute perplexity for LM tasks
+    perplexity = None
+    if task_type == "lm":
+        perplexity = math.exp(val_loss) if val_loss < 20 else float('inf')
+
+    return val_loss, val_accuracy, train_loss, train_accuracy, per_class_acc, perplexity
+```
+
+**Step 4: Run test to verify it passes**
+
+Run: `PYTHONPATH=src .venv/bin/python -m pytest tests/test_lm_validation.py -v`
+Expected: PASS
+
+**Step 5: Commit**
+
+```bash
+git add src/esper/tolaria/trainer.py tests/test_lm_validation.py
+git commit -m "feat(tolaria): add perplexity computation for LM validation"
+```
+
+---
+
+## Task 18: Sanity Check Logging
+
+Add lightweight logging to catch issues early: reward magnitude, params ratio, shape assertions.
+
+**Files:**
+- Modify: `src/esper/simic/training.py` (or create `src/esper/simic/sanity.py`)
+- Test: `tests/test_sanity_logging.py`
+
+**Step 1: Write the failing test**
+
+```python
+# tests/test_sanity_logging.py
+"""Tests for sanity check logging."""
+
+import pytest
+
+
+def test_reward_magnitude_warning(caplog):
+    """Large reward magnitude triggers warning."""
+    from esper.simic.sanity import check_reward_magnitude
+
+    import logging
+    caplog.set_level(logging.WARNING)
+
+    # Normal reward
+    check_reward_magnitude(2.5, epoch=1, max_epochs=25)
+    assert len(caplog.records) == 0
+
+    # Large reward should warn
+    check_reward_magnitude(15.0, epoch=1, max_epochs=25)
+    assert any("reward magnitude" in r.message.lower() for r in caplog.records)
+
+
+def test_params_ratio_logging():
+    """Params ratio is logged for debugging."""
+    from esper.simic.sanity import log_params_ratio
+
+    # Just verify it doesn't crash
+    log_params_ratio(total_params=50000, host_params=100000, epoch=5)
+
+
+def test_shape_guard_assertion():
+    """Shape guard raises on mismatch."""
+    import torch
+    from esper.simic.sanity import assert_slot_shape
+
+    x = torch.randn(2, 64, 8, 8)  # CNN: (B, C, H, W)
+
+    # Correct shape
+    assert_slot_shape(x, expected_dim=64, topology="cnn")  # Should pass
+
+    # Wrong shape
+    with pytest.raises(AssertionError):
+        assert_slot_shape(x, expected_dim=128, topology="cnn")
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `PYTHONPATH=src .venv/bin/python -m pytest tests/test_sanity_logging.py -v`
+Expected: FAIL (no simic.sanity module)
+
+**Step 3: Create sanity module**
+
+```python
+# src/esper/simic/sanity.py
+"""Sanity Check Utilities for Simic Training.
+
+Lightweight logging and assertions to catch issues early.
+Enable with DEBUG logging level or environment variable.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+
+import torch
+
+logger = logging.getLogger(__name__)
+
+# Enable detailed sanity checks via env var
+SANITY_CHECKS_ENABLED = os.getenv("ESPER_SANITY_CHECKS", "0") == "1"
+
+
+def check_reward_magnitude(
+    reward: float,
+    epoch: int,
+    max_epochs: int,
+    threshold: float = 10.0,
+) -> None:
+    """Warn if reward magnitude is unexpectedly large.
+
+    Large rewards suggest miscalibrated weights or normalization issues.
+    """
+    if abs(reward) > threshold:
+        logger.warning(
+            f"Large reward magnitude {reward:.2f} at epoch {epoch}/{max_epochs}. "
+            "Consider reducing loss_delta_weight or adjusting typical_loss_delta_std."
+        )
+
+
+def log_params_ratio(
+    total_params: int,
+    host_params: int,
+    epoch: int,
+) -> None:
+    """Log params ratio for debugging rent calibration."""
+    if host_params > 0:
+        ratio = total_params / host_params
+        logger.debug(f"Epoch {epoch}: params_ratio={ratio:.3f} ({total_params}/{host_params})")
+
+
+def assert_slot_shape(
+    x: torch.Tensor,
+    expected_dim: int,
+    topology: str,
+) -> None:
+    """Assert tensor has expected dimension for slot.
+
+    CNN: expects (B, C, H, W) where C == expected_dim
+    Transformer: expects (B, T, D) where D == expected_dim
+    """
+    if topology == "cnn":
+        if x.dim() != 4:
+            raise AssertionError(f"CNN slot expects 4D tensor, got {x.dim()}D")
+        actual = x.shape[1]  # C dimension
+    elif topology == "transformer":
+        if x.dim() != 3:
+            raise AssertionError(f"Transformer slot expects 3D tensor, got {x.dim()}D")
+        actual = x.shape[2]  # D dimension
+    else:
+        raise ValueError(f"Unknown topology: {topology}")
+
+    if actual != expected_dim:
+        raise AssertionError(
+            f"Slot dimension mismatch: expected {expected_dim}, got {actual}"
+        )
+
+
+__all__ = [
+    "check_reward_magnitude",
+    "log_params_ratio",
+    "assert_slot_shape",
+]
+```
+
+**Step 4: Run test to verify it passes**
+
+Run: `PYTHONPATH=src .venv/bin/python -m pytest tests/test_sanity_logging.py -v`
+Expected: PASS
+
+**Step 5: Commit**
+
+```bash
+git add src/esper/simic/sanity.py tests/test_sanity_logging.py
+git commit -m "feat(simic): add sanity check utilities for early issue detection"
+```
+
+---
+
 ## Summary
 
 This implementation plan covers the core Phase 2 infrastructure:
+
+### Core Infrastructure (Tasks 1-14)
 
 1. **HostProtocol** - Structural typing for pluggable hosts
 2. **HostCNN refactor** - ModuleDict + Identity pattern
@@ -2617,22 +3194,17 @@ This implementation plan covers the core Phase 2 infrastructure:
 13. **Test verification** - Full suite passes
 14. **Package exports** - Updated __init__.py files
 
-**Total estimated tasks:** 14 (each with 4-6 sub-steps)
+### Guards & Sanity Checks (Tasks 15-18)
+
+15. **Topology safety guard** - Prevent blueprint/host mismatch
+16. **Rent grace period** - Rent-free exploration for new seeds
+17. **LM validation** - Perplexity computation for language models
+18. **Sanity logging** - Reward magnitude, params ratio, shape assertions
+
+**Total estimated tasks:** 18 (each with 4-6 sub-steps)
 
 **Not included (deferred to Phase 3+):**
 - MorphogeneticModel updates for TransformerHost
 - Multi-slot coordination
 - TensorSchema update (accuracy removal)
 - Training loop modifications for LM task
-
----
-
-**Plan complete and saved to `docs/plans/2025-11-30-phase2-implementation.md`.**
-
-**Two execution options:**
-
-**1. Subagent-Driven (this session)** - I dispatch fresh subagent per task, review between tasks, fast iteration
-
-**2. Parallel Session (separate)** - Open new session with executing-plans, batch execution with checkpoints
-
-**Which approach?**

@@ -88,6 +88,8 @@ class HostProtocol(Protocol):
 - **Compile-friendly** — Uses ModuleDict + Identity pattern (see implementation)
 - **Extensible** — Complex topologies (U-Net, MoE) can implement the same interface
 
+> **Critical Invariant:** Hosts **must** call attached slots inside `forward`; Kasmina never orchestrates partial forwards in Phase 2.
+
 ### What's Deferred to Phase 3+
 
 - `forward_through_layer`/`forward_from_layer` for partial routing (recursive seeds)
@@ -188,6 +190,14 @@ def compute_pbrs_stage_bonus(
     # PBRS: F(s, s') = gamma * Phi(s') - Phi(s)
     return config.stage_potential_weight * (gamma * current_potential - previous_potential)
 ```
+
+### Tuning Notes
+
+> **`loss_delta_weight` tuning:** Initial value 5.0 is conservative. Validate against actual reward magnitudes in early training — if per-step rewards regularly exceed ±10, reduce this weight or adjust `typical_loss_delta_std`.
+
+> **Compute rent grace period:** Newly germinated seeds receive `grace_epochs` (default: 3) of rent-free operation before their params contribute to the rent term. This avoids punishing exploration during the critical early-training phase.
+
+> **PBRS guarantee:** Stage potentials are monotonic with FOSSILIZED highest (6.0); PBRS ensures shaping doesn't change the optimal policy. The terminal bonus is sparse (fires only at `max_epochs`), but PBRS stage bonuses provide denser signal throughout.
 
 ### Observation Normalization
 
@@ -382,6 +392,14 @@ def build_action_enum(topology: str) -> type[IntEnum]:
 > - Head D: lifecycle op (WAIT/GERMINATE/ADVANCE/CULL)
 >
 > This prevents action explosion (10 slots × 8 blueprints × 3 blends × 4 ops = 960 actions).
+
+### Topology Guard
+
+> **Safety invariant:** Kasmina must prevent germinating a blueprint whose `topology` mismatches the current host (e.g., CNN blueprint into Transformer host). This is enforced via assertion in `SeedSlot.germinate()`:
+> ```python
+> assert blueprint_spec.topology == task_config.topology, \
+>     f"Blueprint {blueprint_spec.name} is for {blueprint_spec.topology}, not {task_config.topology}"
+> ```
 
 ---
 
@@ -587,6 +605,8 @@ class TinyStoriesDataset(Dataset):
         y = tokens[1:]    # target (shifted by 1)
         return x, y
 ```
+
+> **Memory mode guidance:** For small-scale experiments (quick iteration, debugging), use in-memory tokenization (`streaming=False`, `max_samples=10000`). For longer training runs, switch to `streaming=True` to avoid loading the full TinyStories corpus (~2GB tokenized) into RAM.
 
 ### Training Loop
 
