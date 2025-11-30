@@ -43,6 +43,13 @@ from esper.nissa.output import (
     get_hub,
     emit,
 )
+from esper.nissa.analytics import (
+    BlueprintStats,
+    SeedScoreboard,
+    BlueprintAnalytics,
+    BLUEPRINT_COMPUTE_MULTIPLIERS,
+    compute_cost_for_blueprint,
+)
 
 __all__ = [
     # Config
@@ -62,4 +69,10 @@ __all__ = [
     "NissaHub",
     "get_hub",
     "emit",
+    # Analytics
+    "BlueprintStats",
+    "SeedScoreboard",
+    "BlueprintAnalytics",
+    "BLUEPRINT_COMPUTE_MULTIPLIERS",
+    "compute_cost_for_blueprint",
 ]
