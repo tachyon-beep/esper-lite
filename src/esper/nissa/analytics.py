@@ -102,19 +102,24 @@ class BlueprintAnalytics(OutputBackend):
         self.scoreboards: dict[int, SeedScoreboard] = {}
 
     def emit(self, event: TelemetryEvent) -> None:
-        """Process lifecycle events to update stats."""
+        """Process lifecycle events to update stats and print status."""
         if event.event_type == TelemetryEventType.SEED_GERMINATED:
             bp_id = event.data.get("blueprint_id", "unknown")
             env_id = event.data.get("env_id", 0)
+            seed_id = event.data.get("seed_id", "unknown")
+            params = event.data.get("params", 0)
 
             self.stats[bp_id].germinated += 1
             sb = self._get_scoreboard(env_id)
             sb.total_germinated += 1
             sb.live_blueprint = bp_id
 
+            print(f"    [env{env_id}] Germinated '{seed_id}' ({bp_id}, {params/1000:.1f}K params)")
+
         elif event.event_type == TelemetryEventType.SEED_FOSSILIZED:
             bp_id = event.data.get("blueprint_id", "unknown")
             env_id = event.data.get("env_id", 0)
+            seed_id = event.data.get("seed_id", "unknown")
             improvement = event.data.get("improvement", 0.0)
             params = event.data.get("params_added", 0)
 
@@ -127,10 +132,14 @@ class BlueprintAnalytics(OutputBackend):
             sb.params_added += params
             sb.live_blueprint = None
 
+            print(f"    [env{env_id}] Fossilized '{seed_id}' ({bp_id}, Δacc {improvement:+.2f}%)")
+
         elif event.event_type == TelemetryEventType.SEED_CULLED:
             bp_id = event.data.get("blueprint_id", "unknown")
             env_id = event.data.get("env_id", 0)
+            seed_id = event.data.get("seed_id", "unknown")
             improvement = event.data.get("improvement", 0.0)
+            reason = event.data.get("reason", "")
 
             self.stats[bp_id].culled += 1
             self.stats[bp_id].churns.append(improvement)
@@ -138,6 +147,9 @@ class BlueprintAnalytics(OutputBackend):
             sb = self._get_scoreboard(env_id)
             sb.total_culled += 1
             sb.live_blueprint = None
+
+            reason_str = f" ({reason})" if reason else ""
+            print(f"    [env{env_id}] Culled '{seed_id}' ({bp_id}, Δacc {improvement:+.2f}%){reason_str}")
 
     def _get_scoreboard(self, env_id: int) -> SeedScoreboard:
         """Get or create scoreboard for environment."""

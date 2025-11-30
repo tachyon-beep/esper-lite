@@ -104,12 +104,9 @@ class MorphogeneticModel(nn.Module):
             seed_id=seed_id,
             host_module=self.host,
         )
-        print(f"    [Kasmina] Germinated seed '{seed_id}' with blueprint '{blueprint_id}'")
 
     def cull_seed(self) -> None:
         """Cull the current seed."""
-        if self.seed_slot.state:
-            print(f"    [Kasmina] Culling seed '{self.seed_slot.state.seed_id}'")
         self.seed_slot.cull()
 
     def get_seed_parameters(self):
