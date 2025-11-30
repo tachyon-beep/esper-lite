@@ -23,9 +23,9 @@ class SignalTracker:
     plateau_threshold: float = 0.5  # Min improvement to not count as plateau
     history_window: int = 10
 
-    # History windows
-    _loss_history: deque[float] = field(default_factory=lambda: deque(maxlen=10))
-    _accuracy_history: deque[float] = field(default_factory=lambda: deque(maxlen=10))
+    # History windows (initialized in __post_init__ with history_window)
+    _loss_history: deque[float] = field(default_factory=deque)
+    _accuracy_history: deque[float] = field(default_factory=deque)
 
     # Best values seen
     _best_accuracy: float = 0.0
@@ -36,11 +36,10 @@ class SignalTracker:
     _prev_loss: float = float('inf')
 
     def __post_init__(self):
-        """Initialize deques with proper maxlen."""
-        if not isinstance(self._loss_history, deque):
-            self._loss_history = deque(maxlen=self.history_window)
-        if not isinstance(self._accuracy_history, deque):
-            self._accuracy_history = deque(maxlen=self.history_window)
+        """Initialize deques with proper maxlen from history_window."""
+        # Recreate deques with the correct maxlen from history_window parameter
+        self._loss_history = deque(self._loss_history, maxlen=self.history_window)
+        self._accuracy_history = deque(self._accuracy_history, maxlen=self.history_window)
 
     def update(
         self,

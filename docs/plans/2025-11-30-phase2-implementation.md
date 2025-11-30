@@ -12,6 +12,138 @@
 
 ---
 
+## Phase 0: Risk Reduction (Execute Before Task 1)
+
+These prerequisite tasks fix structural issues that would otherwise cause later tasks to fail.
+
+---
+
+### Task 0.1: Clear Blueprint Package Namespace
+
+**Blocks:** Task 4 (Blueprint Registry)
+
+**Problem:** Task 4 creates `blueprints/` directory but `blueprints.py` exists. Python cannot have both.
+
+**Files:**
+- Rename: `src/esper/kasmina/blueprints.py` → `src/esper/kasmina/_blueprints_v1.py`
+- Modify: `src/esper/kasmina/host.py`
+- Modify: `src/esper/kasmina/__init__.py`
+- Modify: `src/esper/kasmina/slot.py`
+
+**Steps:**
+1. `mv src/esper/kasmina/blueprints.py src/esper/kasmina/_blueprints_v1.py`
+2. Update `host.py:16`: `from esper.kasmina._blueprints_v1 import ConvBlock`
+3. Update `__init__.py:34`: `from esper.kasmina._blueprints_v1 import ...`
+4. Update `slot.py:478`: `from esper.kasmina._blueprints_v1 import BlueprintCatalog`
+5. Verify: `PYTHONPATH=src .venv/bin/python -c "from esper.kasmina import BlueprintCatalog"`
+
+---
+
+### Task 0.2: Extend SeedInfo Fields
+
+**Blocks:** Task 8, Task 16 (Loss-Primary Rewards, Rent Grace Period)
+
+**Problem:** `SeedInfo` lacks `previous_stage` and `seed_age_epochs` fields required by later tasks.
+
+**Files:**
+- Modify: `src/esper/simic/rewards.py`
+
+**Steps:**
+1. Add to `SeedInfo` NamedTuple after `seed_params`:
+   ```python
+   previous_stage: int = 0  # For PBRS stage bonus
+   seed_age_epochs: int = 0  # For rent grace period
+   ```
+2. Update `from_seed_state()` to populate new fields from `seed_state.previous_stage.value` and `metrics.epochs_total`
+3. Verify: `PYTHONPATH=src .venv/bin/python -c "from esper.simic.rewards import SeedInfo; print(SeedInfo._fields)"`
+
+---
+
+### Task 0.3: Add LossRewardConfig
+
+**Blocks:** Task 8 (Loss-Primary Rewards)
+
+**Problem:** `LossRewardConfig` class doesn't exist. Only `RewardConfig` exists.
+
+**Files:**
+- Modify: `src/esper/simic/rewards.py`
+
+**Steps:**
+1. Add `LossRewardConfig` dataclass after `RewardConfig` (see full impl in Task 8)
+2. Include fields: `loss_delta_weight`, `grace_epochs`, `baseline_loss`, `target_loss`, `terminal_loss_weight`
+3. Add factory methods: `default()`, `for_cifar10()`, `for_tinystories()`
+4. Add `"LossRewardConfig"` to `__all__`
+5. Verify: `PYTHONPATH=src .venv/bin/python -c "from esper.simic.rewards import LossRewardConfig"`
+
+---
+
+### Task 0.4: Add TaskConfig to Features
+
+**Blocks:** Task 9 (Observation Normalization)
+
+**Problem:** `TaskConfig` and `normalize_observation` don't exist in features.py.
+
+**Files:**
+- Modify: `src/esper/simic/features.py`
+
+**Steps:**
+1. Add `from dataclasses import dataclass` import
+2. Add `TaskConfig` dataclass with: `task_type`, `topology`, `baseline_loss`, `target_loss`, `typical_loss_delta_std`, `max_epochs`, `max_steps`
+3. Add factory methods: `for_cifar10()`, `for_tinystories()`
+4. Add `normalize_observation(obs: dict, config: TaskConfig) -> dict` function
+5. Update `__all__` to include both
+6. Verify: `PYTHONPATH=src .venv/bin/python -c "from esper.simic.features import TaskConfig"`
+
+---
+
+### Task 0.5: Add task_config to SeedSlot
+
+**Blocks:** Task 15 (Topology Safety Guard)
+
+**Problem:** `SeedSlot.__init__` lacks `task_config` parameter required by Task 15.
+
+**Files:**
+- Modify: `src/esper/kasmina/slot.py`
+
+**Steps:**
+1. Add `task_config: "TaskConfig | None" = None` parameter to `__init__`
+2. Add `self.task_config = task_config` in body
+3. Verify: `PYTHONPATH=src .venv/bin/python -c "from esper.kasmina.slot import SeedSlot; SeedSlot('x', 64, task_config=None)"`
+
+---
+
+### Task 0.6: Update validate_and_get_metrics Signature
+
+**Blocks:** Task 17 (LM Validation)
+
+**Problem:** Function returns 5-tuple, Task 17 expects 6-tuple with `perplexity`.
+
+**Files:**
+- Modify: `src/esper/tolaria/trainer.py`
+
+**Steps:**
+1. Add `task_type: str = "classification"` parameter
+2. Add `import math` if not present
+3. Compute perplexity at end:
+   ```python
+   perplexity = None
+   if task_type == "lm":
+       perplexity = math.exp(val_loss) if val_loss < 20 else float('inf')
+   ```
+4. Return 6-tuple: `(val_loss, val_accuracy, train_loss, train_accuracy, per_class_acc, perplexity)`
+5. Check existing callers handle new return value (may need `*_` to ignore extra value)
+
+---
+
+### Phase 0 Verification
+
+After all Phase 0 tasks, run:
+```bash
+PYTHONPATH=src .venv/bin/python -m pytest tests/ -v --ignore=tests/integration/test_ppo_integration.py -x
+```
+
+---
+
 ## Task 1: HostProtocol Definition
 
 Create the structural typing Protocol for pluggable host architectures.
