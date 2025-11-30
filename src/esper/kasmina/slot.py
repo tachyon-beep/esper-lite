@@ -120,6 +120,10 @@ class SeedState:
     alpha: float = 0.0
     metrics: SeedMetrics = field(default_factory=SeedMetrics)
 
+    # Blending progress tracking
+    blending_steps_done: int = 0
+    blending_steps_total: int = 0
+
     # Flags
     is_healthy: bool = True
     is_paused: bool = False
