@@ -33,8 +33,11 @@ class TestTolariaGovernor:
         gov = TolariaGovernor(model)
 
         assert gov.model is model
-        assert gov.sensitivity == 3.0
+        assert gov.sensitivity == 6.0  # Conservative default
+        assert gov.multiplier == 3.0   # Loss must be 3x average
+        assert gov.absolute_threshold == 10.0  # Minimum loss threshold
         assert gov.death_penalty == 10.0
+        assert gov.min_panics_before_rollback == 2  # Require consecutive
         assert len(gov.loss_history) == 0
         assert gov.last_good_state is None
         assert gov.consecutive_panics == 0
@@ -47,13 +50,19 @@ class TestTolariaGovernor:
         gov = TolariaGovernor(
             model,
             sensitivity=5.0,
+            multiplier=5.0,
+            absolute_threshold=50.0,
             death_penalty=20.0,
-            history_window=20,
+            history_window=30,
+            min_panics_before_rollback=3,
         )
 
         assert gov.sensitivity == 5.0
+        assert gov.multiplier == 5.0
+        assert gov.absolute_threshold == 50.0
         assert gov.death_penalty == 20.0
-        assert gov.loss_history.maxlen == 20
+        assert gov.loss_history.maxlen == 30
+        assert gov.min_panics_before_rollback == 3
 
     def test_snapshot_saves_state(self):
         """Test that snapshot() saves model state."""
@@ -117,19 +126,17 @@ class TestTolariaGovernor:
         assert gov.check_vital_signs(float('-inf')) is True
 
     def test_check_vital_signs_no_panic_with_insufficient_history(self):
-        """Test that no panic occurs with < 5 samples."""
+        """Test that no panic occurs with < 10 samples."""
         from esper.tolaria import TolariaGovernor
 
         model = DummyModel()
         gov = TolariaGovernor(model)
 
-        # First 4 samples should not panic (building history)
-        assert gov.check_vital_signs(1.0) is False
-        assert gov.check_vital_signs(1.1) is False
-        assert gov.check_vital_signs(1.2) is False
-        assert gov.check_vital_signs(1.3) is False
+        # First 9 samples should not panic (building history)
+        for i in range(9):
+            assert gov.check_vital_signs(1.0 + i * 0.1) is False
 
-        assert len(gov.loss_history) == 4
+        assert len(gov.loss_history) == 9
 
     def test_check_vital_signs_no_panic_on_normal_loss(self):
         """Test that normal loss values don't trigger panic."""
@@ -146,38 +153,44 @@ class TestTolariaGovernor:
         assert len(gov.loss_history) == 10
         assert gov.consecutive_panics == 0
 
-    def test_check_vital_signs_panics_on_spike(self):
-        """Test that statistical spike triggers panic."""
+    def test_check_vital_signs_panics_on_catastrophic_spike(self):
+        """Test that truly catastrophic spike triggers panic after consecutive anomalies."""
         from esper.tolaria import TolariaGovernor
 
         model = DummyModel()
-        gov = TolariaGovernor(model, sensitivity=3.0)
+        # Use min_panics=1 to test single-spike behavior
+        gov = TolariaGovernor(model, sensitivity=3.0, multiplier=2.0,
+                              absolute_threshold=5.0, min_panics_before_rollback=1)
 
         # Build stable history (mean ~1.0, low std)
-        for i in range(10):
+        for i in range(15):
             gov.check_vital_signs(1.0 + (i * 0.01))
 
-        # Huge spike should trigger panic
-        # With mean=1.045 and low std, a loss of 10.0 should panic
-        assert gov.check_vital_signs(10.0) is True
+        # Catastrophic spike (>5.0 absolute, >2x mean, >3 sigma) should panic
+        assert gov.check_vital_signs(50.0) is True
 
-    def test_check_vital_signs_requires_both_conditions(self):
-        """Test that panic requires BOTH threshold AND 20% above mean."""
+    def test_check_vital_signs_requires_all_conditions(self):
+        """Test that panic requires ALL thresholds: absolute, multiplier, and statistical."""
         from esper.tolaria import TolariaGovernor
 
         model = DummyModel()
-        gov = TolariaGovernor(model, sensitivity=3.0)
+        # Set absolute_threshold=20 so we can test values below it
+        gov = TolariaGovernor(model, sensitivity=3.0, multiplier=3.0,
+                              absolute_threshold=20.0, min_panics_before_rollback=1)
 
-        # Build history with mean=10.0, std=0
-        for i in range(10):
-            gov.check_vital_signs(10.0)
+        # Build history with mean=2.0, std~0
+        for i in range(15):
+            gov.check_vital_signs(2.0)
 
-        # Loss of 11.5 is < 20% above mean (12.0), so no panic
-        # Even though it exceeds mean + 3*std (10.0 + 0)
-        result = gov.check_vital_signs(11.5)
-
-        # This should NOT panic because 11.5 < 10.0 * 1.2 = 12.0
+        # Loss of 15.0 is 7.5x mean but < absolute_threshold (20.0)
+        # Should NOT panic even though it exceeds statistical and multiplier
+        result = gov.check_vital_signs(15.0)
         assert result is False
+
+        # Loss of 25.0 exceeds all thresholds but requires consecutive panics
+        # (default is 2, we set to 1 for this test)
+        result2 = gov.check_vital_signs(25.0)
+        assert result2 is True
 
     def test_check_vital_signs_resets_consecutive_panics_on_normal(self):
         """Test that consecutive_panics resets when vitals are good."""
@@ -186,15 +199,20 @@ class TestTolariaGovernor:
         model = DummyModel()
         gov = TolariaGovernor(model)
 
-        # Set up some panic history
-        gov.consecutive_panics = 5
-
-        # Build normal history
-        for i in range(10):
+        # Build initial history so statistical detection is active
+        for i in range(12):
             gov.check_vital_signs(1.0 + (i * 0.01))
 
-        # Should have reset
+        # Simulate a panic scenario manually (after history built)
+        gov.consecutive_panics = 5
+        gov._pending_panic = True
+
+        # Add a normal value - should reset consecutive panics
+        gov.check_vital_signs(1.15)
+
+        # Should have reset because the value is normal
         assert gov.consecutive_panics == 0
+        assert gov._pending_panic is False
 
     def test_execute_rollback_restores_weights(self):
         """Test that rollback restores model to snapshot state."""
@@ -312,10 +330,10 @@ class TestTolariaGovernor:
         from esper.tolaria import TolariaGovernor
 
         model = DummyModel()
-        gov = TolariaGovernor(model, sensitivity=3.0)
+        gov = TolariaGovernor(model)  # Use conservative defaults
 
-        # Simulate 20 stable epochs
-        for epoch in range(20):
+        # Simulate 30 stable epochs
+        for epoch in range(30):
             # Take snapshot every 5 epochs
             if epoch % 5 == 0:
                 gov.snapshot()
@@ -323,38 +341,37 @@ class TestTolariaGovernor:
             # Normal loss with small variance
             loss = 1.0 + (epoch * 0.01) + (0.05 if epoch % 2 else 0.0)
 
-            # Should never panic
+            # Should never panic - normal training noise is expected
             is_panic = gov.check_vital_signs(loss)
             assert is_panic is False
 
         assert gov.consecutive_panics == 0
 
     def test_integration_scenario_panic_and_recovery(self):
-        """Integration test: Panic triggers rollback, then recovery."""
+        """Integration test: NaN triggers immediate rollback."""
         from esper.tolaria import TolariaGovernor
 
         model = DummyModel()
-        gov = TolariaGovernor(model, sensitivity=3.0)
+        gov = TolariaGovernor(model)  # Conservative defaults
 
         # Save initial weights
         initial_weight = model.linear.weight.data.clone()
 
         # Stable training
         gov.snapshot()
-        for i in range(10):
+        for i in range(15):
             gov.check_vital_signs(1.0 + (i * 0.01))
 
         # Corrupt model
         model.linear.weight.data.fill_(999.0)
 
-        # Loss spike causes panic
-        is_panic = gov.check_vital_signs(100.0)
+        # NaN causes immediate panic (the nuclear option)
+        is_panic = gov.check_vital_signs(float('nan'))
         assert is_panic is True
 
         # Execute rollback
         report = gov.execute_rollback()
         assert report.rollback_occurred is True
-        assert report.consecutive_panics == 1
 
         # Model should be restored
         assert torch.allclose(model.linear.weight.data, initial_weight)
