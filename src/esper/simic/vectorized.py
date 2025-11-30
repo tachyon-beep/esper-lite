@@ -292,8 +292,10 @@ def train_ppo_vectorized(
 
             # Determine which optimizer to use based on seed state
             if seed_state is None or seed_state.stage == SeedStage.FOSSILIZED:
+                # No seed or seed fully integrated - train host only
                 optimizer = env_state.host_optimizer
             elif seed_state.stage in (SeedStage.GERMINATED, SeedStage.TRAINING):
+                # Isolated seed training
                 if seed_state.stage == SeedStage.GERMINATED:
                     seed_state.transition(SeedStage.TRAINING)
                     env_state.seed_optimizer = torch.optim.SGD(
@@ -304,12 +306,18 @@ def train_ppo_vectorized(
                         model.get_seed_parameters(), lr=0.01, momentum=0.9
                     )
                 optimizer = env_state.seed_optimizer
-            else:  # BLENDING
+            elif seed_state.stage == SeedStage.BLENDING:
+                # Active blending - update alpha, train both
                 optimizer = env_state.host_optimizer
-                # Update blend alpha for this step using per-batch counter
                 if model.seed_slot and seed_state:
                     model.seed_slot.update_alpha_for_step(env_state.blending_step)
                     env_state.blending_step += 1
+            elif seed_state.stage in (SeedStage.SHADOWING, SeedStage.PROBATIONARY):
+                # Post-blending validation - alpha locked at 1.0, joint training
+                optimizer = env_state.host_optimizer
+            else:
+                # Unknown stage - shouldn't happen
+                optimizer = env_state.host_optimizer
 
             optimizer.zero_grad()
             if seed_state and seed_state.stage == SeedStage.BLENDING and env_state.seed_optimizer:
