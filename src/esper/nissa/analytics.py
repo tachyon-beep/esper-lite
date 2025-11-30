@@ -11,6 +11,9 @@ from collections import defaultdict
 from dataclasses import dataclass, field, asdict
 from typing import Callable
 
+from esper.leyline import TelemetryEvent, TelemetryEventType
+from esper.nissa.output import OutputBackend
+
 
 # =============================================================================
 # Compute Cost Multipliers
@@ -86,9 +89,130 @@ class SeedScoreboard:
         return (self.params_added / self.host_params * 100) if self.host_params > 0 else 0.0
 
 
+class BlueprintAnalytics(OutputBackend):
+    """Aggregates blueprint performance from telemetry events.
+
+    Implements OutputBackend to receive events from NissaHub.
+    Tracks:
+    - Per-blueprint stats (germinated, fossilized, culled, accuracy)
+    - Per-environment scoreboards (params, compute cost, distribution)
+    """
+
+    def __init__(self):
+        self.stats: dict[str, BlueprintStats] = defaultdict(BlueprintStats)
+        self.scoreboards: dict[int, SeedScoreboard] = {}
+
+    def emit(self, event: TelemetryEvent) -> None:
+        """Process lifecycle events to update stats."""
+        if event.event_type == TelemetryEventType.SEED_GERMINATED:
+            bp_id = event.data.get("blueprint_id", "unknown")
+            env_id = event.data.get("env_id", 0)
+
+            self.stats[bp_id].germinated += 1
+            sb = self._get_scoreboard(env_id)
+            sb.total_germinated += 1
+            sb.live_blueprint = bp_id
+
+        elif event.event_type == TelemetryEventType.SEED_FOSSILIZED:
+            bp_id = event.data.get("blueprint_id", "unknown")
+            env_id = event.data.get("env_id", 0)
+            improvement = event.data.get("improvement", 0.0)
+            params = event.data.get("params_added", 0)
+
+            self.stats[bp_id].fossilized += 1
+            self.stats[bp_id].acc_deltas.append(improvement)
+
+            sb = self._get_scoreboard(env_id)
+            sb.total_fossilized += 1
+            sb.fossilized_by_blueprint[bp_id] += 1
+            sb.params_added += params
+            sb.live_blueprint = None
+
+        elif event.event_type == TelemetryEventType.SEED_CULLED:
+            bp_id = event.data.get("blueprint_id", "unknown")
+            env_id = event.data.get("env_id", 0)
+            improvement = event.data.get("improvement", 0.0)
+
+            self.stats[bp_id].culled += 1
+            self.stats[bp_id].churns.append(improvement)
+
+            sb = self._get_scoreboard(env_id)
+            sb.total_culled += 1
+            sb.live_blueprint = None
+
+    def _get_scoreboard(self, env_id: int) -> SeedScoreboard:
+        """Get or create scoreboard for environment."""
+        if env_id not in self.scoreboards:
+            self.scoreboards[env_id] = SeedScoreboard()
+        return self.scoreboards[env_id]
+
+    def summary_table(self) -> str:
+        """Pretty-print blueprint performance stats."""
+        lines = ["Blueprint Stats:"]
+        lines.append("  " + "-" * 75)
+        lines.append(
+            f"  {'Blueprint':<14} {'Germ':>5} {'Foss':>5} {'Cull':>5} "
+            f"{'Rate':>6} {'ΔAcc':>8} {'Churn':>8}"
+        )
+        lines.append("  " + "-" * 75)
+
+        for bp_id in sorted(self.stats.keys()):
+            s = self.stats[bp_id]
+            lines.append(
+                f"  {bp_id:<14} {s.germinated:>5} {s.fossilized:>5} "
+                f"{s.culled:>5} {s.fossilization_rate:>5.1f}% "
+                f"{s.mean_acc_delta:>+7.2f}% {s.mean_churn:>+7.2f}%"
+            )
+        return "\n".join(lines)
+
+    def scoreboard_table(self, env_id: int = 0) -> str:
+        """Pretty-print scoreboard for an environment."""
+        sb = self._get_scoreboard(env_id)
+
+        dist = ", ".join(
+            f"{bp} x{count}" for bp, count in sb.fossilized_by_blueprint.items()
+        )
+
+        lines = [
+            f"Seed Scoreboard (env {env_id}):",
+            f"  Fossilized: {sb.total_fossilized} "
+            f"(+{sb.params_added/1000:.1f}K params, +{sb.params_percentage:.1f}% of host)",
+            f"  Compute cost: {sb.compute_cost:.2f}x baseline",
+            f"  Distribution: {dist or 'none'}",
+        ]
+        return "\n".join(lines)
+
+    def snapshot(self) -> dict:
+        """Return serializable snapshot for history."""
+        return {
+            "stats": {
+                bp: {
+                    "germinated": s.germinated,
+                    "fossilized": s.fossilized,
+                    "culled": s.culled,
+                    "mean_acc_delta": s.mean_acc_delta,
+                    "mean_churn": s.mean_churn,
+                    "fossilization_rate": s.fossilization_rate,
+                }
+                for bp, s in self.stats.items()
+            },
+            "scoreboards": {
+                env_id: {
+                    "total_germinated": sb.total_germinated,
+                    "total_fossilized": sb.total_fossilized,
+                    "total_culled": sb.total_culled,
+                    "params_added": sb.params_added,
+                    "compute_cost": sb.compute_cost,
+                }
+                for env_id, sb in self.scoreboards.items()
+            },
+        }
+
+
 __all__ = [
     "BLUEPRINT_COMPUTE_MULTIPLIERS",
     "compute_cost_for_blueprint",
     "BlueprintStats",
     "SeedScoreboard",
+    "BlueprintAnalytics",
 ]

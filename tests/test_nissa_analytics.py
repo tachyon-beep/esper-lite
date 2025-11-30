@@ -2,6 +2,8 @@
 
 import pytest
 from esper.nissa.analytics import BlueprintStats, SeedScoreboard
+from esper.leyline import TelemetryEvent, TelemetryEventType
+from esper.nissa.analytics import BlueprintAnalytics
 
 
 class TestBlueprintStats:
@@ -70,3 +72,101 @@ class TestSeedScoreboard:
         """Params percentage calculated correctly."""
         sb = SeedScoreboard(params_added=10000, host_params=100000)
         assert sb.params_percentage == 10.0
+
+
+class TestBlueprintAnalytics:
+    """Tests for BlueprintAnalytics OutputBackend."""
+
+    def test_tracks_germination(self):
+        """Germination events increment counters."""
+        analytics = BlueprintAnalytics()
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.SEED_GERMINATED,
+            seed_id="seed_001",
+            data={"blueprint_id": "depthwise", "env_id": 0, "params": 5000},
+        )
+        analytics.emit(event)
+
+        assert analytics.stats["depthwise"].germinated == 1
+        assert analytics.scoreboards[0].total_germinated == 1
+        assert analytics.scoreboards[0].live_blueprint == "depthwise"
+
+    def test_tracks_fossilization(self):
+        """Fossilization events update stats and scoreboard."""
+        analytics = BlueprintAnalytics()
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.SEED_FOSSILIZED,
+            seed_id="seed_001",
+            data={
+                "blueprint_id": "depthwise",
+                "env_id": 0,
+                "improvement": 2.5,
+                "params_added": 10000,
+            },
+        )
+        analytics.emit(event)
+
+        assert analytics.stats["depthwise"].fossilized == 1
+        assert analytics.stats["depthwise"].acc_deltas == [2.5]
+        assert analytics.scoreboards[0].total_fossilized == 1
+        assert analytics.scoreboards[0].params_added == 10000
+        assert analytics.scoreboards[0].fossilized_by_blueprint["depthwise"] == 1
+
+    def test_tracks_cull(self):
+        """Cull events update stats with churn."""
+        analytics = BlueprintAnalytics()
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.SEED_CULLED,
+            seed_id="seed_001",
+            data={
+                "blueprint_id": "attention",
+                "env_id": 1,
+                "improvement": -0.3,
+                "reason": "no_improvement",
+            },
+        )
+        analytics.emit(event)
+
+        assert analytics.stats["attention"].culled == 1
+        assert analytics.stats["attention"].churns == [-0.3]
+        assert analytics.scoreboards[1].total_culled == 1
+
+    def test_ignores_irrelevant_events(self):
+        """Non-lifecycle events are ignored."""
+        analytics = BlueprintAnalytics()
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.EPOCH_COMPLETED,
+            seed_id="seed_001",
+            data={"val_accuracy": 75.0},
+        )
+        analytics.emit(event)
+
+        assert len(analytics.stats) == 0
+        assert len(analytics.scoreboards) == 0
+
+    def test_summary_table_format(self):
+        """Summary table is formatted correctly."""
+        analytics = BlueprintAnalytics()
+        # Add some test data
+        analytics.stats["depthwise"].germinated = 10
+        analytics.stats["depthwise"].fossilized = 6
+        analytics.stats["depthwise"].culled = 4
+        analytics.stats["depthwise"].acc_deltas = [2.0, 2.5, 3.0, 2.0, 2.5, 3.0]
+
+        table = analytics.summary_table()
+
+        assert "Blueprint Stats:" in table
+        assert "depthwise" in table
+        assert "60.0%" in table  # fossilization rate
+
+    def test_snapshot_serializable(self):
+        """Snapshot returns serializable dict."""
+        analytics = BlueprintAnalytics()
+        analytics.stats["depthwise"].germinated = 5
+        analytics._get_scoreboard(0).total_germinated = 5
+
+        snapshot = analytics.snapshot()
+
+        assert "stats" in snapshot
+        assert "scoreboards" in snapshot
+        assert snapshot["stats"]["depthwise"]["germinated"] == 5
