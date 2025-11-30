@@ -629,6 +629,11 @@ class SeedSlot:
         """Initialize alpha schedule for blending phase."""
         from esper.kasmina.isolation import AlphaSchedule
 
+        # Initialize blending progress tracking
+        if self.state:
+            self.state.blending_steps_total = total_steps
+            self.state.blending_steps_done = 0
+
         self.alpha_schedule = AlphaSchedule(
             total_steps=total_steps,
             start=0.0,
