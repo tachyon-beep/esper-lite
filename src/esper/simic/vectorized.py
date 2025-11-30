@@ -30,13 +30,14 @@ from dataclasses import dataclass, field
 import torch
 import torch.nn as nn
 
-from esper.leyline import SimicAction, SeedStage, SeedTelemetry
+from esper.leyline import SimicAction, SeedStage, SeedTelemetry, TelemetryEvent
 from esper.simic.gradient_collector import collect_seed_gradients
 from esper.simic.buffers import RolloutBuffer
 from esper.simic.networks import ActorCritic
 from esper.simic.normalization import RunningMeanStd
 from esper.simic.ppo import PPOAgent, signals_to_features
 from esper.simic.rewards import compute_shaped_reward, SeedInfo
+from esper.nissa import NissaHub, BlueprintAnalytics
 
 
 # =============================================================================
@@ -205,6 +206,20 @@ def train_ppo_vectorized(
             device=device,
         )
 
+    # ==========================================================================
+    # Blueprint Analytics Setup
+    # ==========================================================================
+    analytics = BlueprintAnalytics()
+    hub = NissaHub()
+    hub.add_backend(analytics)
+
+    def make_telemetry_callback(env_idx: int):
+        """Create callback that injects env_id before emitting to hub."""
+        def callback(event: TelemetryEvent):
+            event.data["env_id"] = env_idx
+            hub.emit(event)
+        return callback
+
     # Map environments to devices in round-robin
     env_device_map = [devices[i % len(devices)] for i in range(n_envs)]
 
@@ -215,6 +230,16 @@ def train_ppo_vectorized(
         random.seed(base_seed + env_idx * 1000)
 
         model = create_model(env_device)
+
+        # Wire telemetry callback with env_id injection
+        model.seed_slot.on_telemetry = make_telemetry_callback(env_idx)
+        model.seed_slot.fast_mode = False  # Enable telemetry
+
+        # Set host_params baseline for scoreboard
+        analytics._get_scoreboard(env_idx).host_params = sum(
+            p.numel() for p in model.host.parameters() if p.requires_grad
+        )
+
         host_optimizer = torch.optim.SGD(
             model.get_host_parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4
         )
@@ -615,6 +640,15 @@ def train_ppo_vectorized(
                   f"Entropy: {metrics['entropy']:.4f}, "
                   f"Entropy coef: {current_entropy_coef:.4f}")
 
+        # Print analytics summary every 5 batches (5 * n_envs episodes)
+        if (batch_idx + 1) % 5 == 0 and len(analytics.stats) > 0:
+            print()
+            print(analytics.summary_table())
+            for env_idx in range(n_envs):
+                if env_idx in analytics.scoreboards:
+                    print(analytics.scoreboard_table(env_idx))
+            print()
+
         history.append({
             'batch': batch_idx + 1,
             'episodes': episodes_completed,
@@ -649,6 +683,10 @@ def train_ppo_vectorized(
             'obs_normalizer_var': obs_normalizer.var.tolist(),
         })
         print(f"Model saved to {save_path}")
+
+    # Add analytics to final history entry
+    if history:
+        history[-1]["blueprint_analytics"] = analytics.snapshot()
 
     return agent, history
 
