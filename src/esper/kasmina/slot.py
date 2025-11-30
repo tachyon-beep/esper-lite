@@ -460,6 +460,13 @@ class SeedSlot:
         """Current blending alpha."""
         return self.state.alpha if self.state else 0.0
 
+    @property
+    def active_seed_params(self) -> int:
+        """Return trainable params of active seed, or 0 if no seed."""
+        if self.seed is None:
+            return 0
+        return sum(p.numel() for p in self.seed.parameters() if p.requires_grad)
+
     def germinate(
         self,
         blueprint_id: str,
@@ -468,7 +475,7 @@ class SeedSlot:
     ) -> SeedState:
         """Germinate a new seed in this slot."""
         # Import here to avoid circular dependency
-        from esper.kasmina.blueprints import BlueprintCatalog
+        from esper.kasmina._blueprints_v1 import BlueprintCatalog
 
         if self.is_active and not is_failure_stage(self.state.stage):
             raise RuntimeError(f"Slot {self.slot_id} already has active seed")

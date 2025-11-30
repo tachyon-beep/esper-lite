@@ -13,7 +13,7 @@ import torch.nn.functional as F
 from esper.leyline import SeedStage
 from esper.kasmina.slot import SeedSlot
 from esper.kasmina.isolation import GradientIsolationMonitor
-from esper.kasmina.blueprints import ConvBlock  # Reuse shared building block
+from esper.kasmina._blueprints_v1 import ConvBlock  # Reuse shared building block
 
 
 class HostCNN(nn.Module):
@@ -122,6 +122,11 @@ class MorphogeneticModel(nn.Module):
     @property
     def seed_state(self):
         return self.seed_slot.state
+
+    @property
+    def active_seed_params(self) -> int:
+        """Return trainable params of active seed."""
+        return self.seed_slot.active_seed_params
 
 
 __all__ = [

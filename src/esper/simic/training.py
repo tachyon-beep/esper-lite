@@ -279,6 +279,10 @@ def run_ppo_episode(
     action_counts = {a.name: 0 for a in SimicAction}
     episode_rewards = []
 
+    # Track host params and added params for compute rent
+    host_params = sum(p.numel() for p in model.get_host_parameters() if p.requires_grad)
+    params_added = 0  # Accumulates when seeds are fossilized
+
     for epoch in range(1, max_epochs + 1):
         seed_state = model.seed_state
         grad_stats = None  # Will collect gradient stats if use_telemetry and seed active
@@ -444,13 +448,17 @@ def run_ppo_episode(
         action = SimicAction(action_idx)
         action_counts[action.name] += 1
 
+        # Compute total params for rent (fossilized + active)
+        total_params = params_added + model.active_seed_params
         reward = compute_shaped_reward(
             action=action.value,
             acc_delta=acc_delta,
             val_acc=val_acc,
-            seed_info=SeedInfo.from_seed_state(seed_state),
+            seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
             epoch=epoch,
             max_epochs=max_epochs,
+            total_params=total_params,
+            host_params=host_params,
         )
 
         # Execute action
@@ -468,6 +476,8 @@ def run_ppo_episode(
                     model.seed_state.transition(SeedStage.BLENDING)
                     model.seed_slot.start_blending(total_steps=5, temperature=1.0)
                 elif model.seed_state.stage == SeedStage.BLENDING:
+                    # Track params before fossilization
+                    params_added += model.active_seed_params
                     model.seed_state.transition(SeedStage.FOSSILIZED)
                     model.seed_slot.set_alpha(1.0)
 

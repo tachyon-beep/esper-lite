@@ -154,6 +154,10 @@ def run_diagnostic_episode(
     record = EpisodeRecord(episode_id=episode_id, final_accuracy=0.0, total_return=0.0)
     seed_birth_epoch = None
 
+    # Track host params and added params for compute rent
+    host_params = sum(p.numel() for p in model.get_host_parameters() if p.requires_grad)
+    params_added = 0  # Accumulates when seeds are fossilized
+
     for epoch in range(1, max_epochs + 1):
         seed_state = model.seed_state
 
@@ -301,15 +305,18 @@ def run_diagnostic_episode(
 
         action = SimicAction(action_idx)
 
-        # Compute reward
+        # Compute reward with cost params
         acc_delta = signals.metrics.accuracy_delta
+        total_params = params_added + model.active_seed_params
         reward = compute_shaped_reward(
             action=action.value,
             acc_delta=acc_delta,
             val_acc=val_acc,
-            seed_info=SeedInfo.from_seed_state(seed_state),
+            seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
             epoch=epoch,
             max_epochs=max_epochs,
+            total_params=total_params,
+            host_params=host_params,
         )
         record.total_return += reward
 
@@ -351,6 +358,8 @@ def run_diagnostic_episode(
                     model.seed_state.transition(SeedStage.BLENDING)
                     model.seed_slot.start_blending(total_steps=5, temperature=1.0)
                 elif model.seed_state.stage == SeedStage.BLENDING:
+                    # Track params before fossilization
+                    params_added += model.active_seed_params
                     model.seed_state.transition(SeedStage.FOSSILIZED)
                     model.seed_slot.set_alpha(1.0)
                     record.seeds_fossilized += 1
