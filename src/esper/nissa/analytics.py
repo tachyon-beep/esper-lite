@@ -8,8 +8,7 @@ Aggregates telemetry events into strategic dashboards:
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass, field, asdict
-from typing import Callable
+from dataclasses import dataclass, field
 
 from esper.leyline import TelemetryEvent, TelemetryEventType
 from esper.nissa.output import OutputBackend

@@ -1,65 +1,134 @@
-# Esper
+# Esper: Morphogenetic Neural Networks
 
-Morphogenetic neural network training: grow specialist seed modules, graft them into a host model, and keep the host stable while gaining new capabilities.
+**Grow capabilities, don't just train weights.**
 
-## What This Project Is
+Esper is a framework for **Morphogenetic AI**—neural networks that dynamically grow, prune, and adapt their own topology during training. Instead of a static architecture, Esper uses a lifecycle-driven approach where "seed" modules are germinated in isolation, trained on residuals, and carefully grafted into a stable host model only when they prove their worth.
 
-Esper tests staged growth for neural networks—train seeds in isolation, blend them into the host, and fossilize once proven. The goal is to outperform static architectures without destabilizing prior knowledge.
+## 🚀 Key Features
 
-## Architecture Overview
+* **🛡️ Gradient Isolation:** Seeds train in a "womb" state, learning from the host's errors without destabilizing its existing knowledge (catastrophic forgetting prevention).
+* **🧠 Dual-Mode Control:**
+  * **Tamiyo (Heuristic):** A rule-based baseline controller for stable, predictable growth.
+  * **Simic (RL):** A PPO/IQL reinforcement learning agent that learns optimal growth strategies by observing training dynamics.
+* **⚡ Vectorized Training:** High-performance, multi-GPU RL environment using CUDA streams and inverted control flow for massive parallel throughput.
+* **🔍 Rich Telemetry:** The **Nissa** subsystem provides profile-based diagnostics (gradient health, loss landscape sharpness) for deep debugging.
 
-- **Leyline**: Contracts and enums for stages, commands, telemetry, and tensor schemas.
-- **Kasmina**: Seed mechanics and host models (blueprints, slots, isolation, blending).
-- **Tamiyo**: Heuristic controller that issues commands based on training signals.
-- **Simic**: RL policy that learns to improve Tamiyo (PPO/IQL); batch runner lives at `src/esper/simic_overnight.py`.
-- **Nissa**: Optional telemetry profiles and outputs.
-- Flow: training signals → Tamiyo/Simic action → Kasmina seed update → Leyline reports → back into signals. Keep tensor/vector sizes and stage enums consistent across layers.
+---
 
-## Quick Start
+## 🏗️ Architecture
+
+The system is organized into five decoupled domains:
+
+| Domain | Role | Analogy | Description |
+| :--- | :--- | :--- | :--- |
+| **Kasmina** | **Body** | The Plant | The neural network model, slot management, and grafting mechanics. |
+| **Leyline** | **Nervous System** | Signals | Shared data contracts, enums (`SeedStage`), and tensor schemas. |
+| **Tamiyo** | **Brain** | The Gardener | Strategic decision-making logic (heuristic or neural policy). |
+| **Tolaria** | **Hands** | Tools | Execution engine that runs the PyTorch training loops and optimizers. |
+| **Simic** | **Gym** | Simulator | RL infrastructure (PPO, IQL) for training the strategic brain. |
+| **Nissa** | **Senses** | Sensors | Observability hub for routing telemetry and generating narratives. |
+
+---
+
+## ⚡ Quick Start
+
+### 1. Installation
+
+Requires Python 3.10+ and PyTorch.
 
 ```bash
-# Setup (Python 3.11+)
+# Clone and setup
+git clone [https://github.com/yourusername/esper.git](https://github.com/yourusername/esper.git)
+cd esper
 python -m venv .venv
 source .venv/bin/activate
-pip install -e .[dev]
-pip install torch torchvision   # choose CUDA/CPU build as needed
 
-# Proof-of-concept runs
-PYTHONPATH=src python src/esper/poc.py           # fixed schedule
-PYTHONPATH=src python src/esper/poc_tamiyo.py    # Tamiyo-controlled
+# Install in editable mode with dev dependencies
+pip install -e ".[dev]"
+````
 
-# Policy learning (Simic)
-./scripts/train_ppo.sh -e 50 --single            # PPO; GPU recommended
-PYTHONPATH=src python src/esper/simic_overnight.py --episodes 50
+### 2\. Run a Heuristic Baseline
 
-# Tests
-PYTHONPATH=src pytest -q
+Train a CIFAR-10 model where `Tamiyo` (the rule-based system) manages the growth.
+
+```bash
+# Run on CPU/GPU automatically
+PYTHONPATH=src python src/esper/poc_tamiyo.py
 ```
 
-## Seed Lifecycle
+### 3\. Train the Brain (Reinforcement Learning)
 
+Train the **Simic** agent using PPO to discover better growth strategies than the heuristic.
+
+```bash
+# Vectorized PPO training (Recommended for GPU)
+# Runs 4 parallel environments on cuda:0
+PYTHONPATH=src python -m esper.scripts.train ppo \
+    --vectorized \
+    --n-envs 4 \
+    --device cuda:0 \
+    --episodes 100 \
+    --max-epochs 75 \
+    --entropy-coef 0.05
 ```
-DORMANT → GERMINATED → TRAINING → BLENDING → SHADOWING → PROBATIONARY → FOSSILIZED
-                ↓           ↓          ↓            ↓
-              CULLED ←── EMBARGOED ← RESETTING ← DORMANT
+
+-----
+
+## 🌱 The Seed Lifecycle
+
+Esper treats neural modules like living organisms. They must earn their place in the network.
+
+```mermaid
+stateDiagram-v2
+    [*] --> DORMANT
+    DORMANT --> GERMINATED: Germinate Action
+    GERMINATED --> TRAINING: Auto-Start
+    TRAINING --> BLENDING: Advance (Gradient Health > 0.8)
+    TRAINING --> CULLED: Cull (Performance Drop)
+    BLENDING --> FOSSILIZED: Advance (Stability Check)
+    BLENDING --> CULLED: Cull (Regression)
+    FOSSILIZED --> [*]: Terminal Success
+    CULLED --> EMBARGOED: Cleanup
+    EMBARGOED --> DORMANT: Cooldown Complete
 ```
 
-- Growth path: dormant slot → germinate → isolate/train → blend → shadow → probation → fossilize (success).
-- Recovery path: cull → embargoed cooldown → resetting cleanup → dormant reuse.
+1. **Germinated:** Module created. Input connected, output detached.
+2. **Training:** Module trains on host errors. Host weights frozen relative to this path.
+3. **Blending:** Module output is alpha-blended into host stream.
+4. **Fossilized:** Weights permanently integrated. Module becomes part of the "Host" for future seeds.
 
-## Results (CIFAR-10 POC)
+-----
 
-| Approach | Final Accuracy |
-|----------|----------------|
-| Baseline (no seeds) | 69.31% |
-| Morphogenetic (fixed schedule) | 80.16% |
-| Morphogenetic (Tamiyo-driven) | 82.16% |
-| From-scratch retraining | 65.97% |
+## 📊 Results (POC)
 
-Key finding: staged growth (isolate → blend → fossilize) outperforms both baseline and from-scratch training.
+Preliminary results on CIFAR-10 (ResNet-style Host):
 
-## Design Principles
+| Approach | Final Accuracy | Notes |
+| :--- | :--- | :--- |
+| **Static Baseline** | 69.31% | Standard training, no growth. |
+| **From-Scratch** | 65.97% | Re-initializing larger model (poor convergence). |
+| **Esper (Heuristic)** | **82.16%** | Staged growth managed by Tamiyo. |
+| **Esper (PPO)** | *Training...* | Learning to optimize the fossilization timing. |
 
-- Small, testable stages before full integration.
-- Contracts first: define shapes/enums in Leyline, then implement.
-- Preserve host competency while adding capabilities.
+-----
+
+## 🛠️ Development
+
+**Project Structure:**
+
+```text
+src/esper/
+├── kasmina/      # Model & Slot mechanics
+├── leyline/      # Shared types & contracts
+├── tamiyo/       # Decision logic
+├── tolaria/      # PyTorch training loops
+├── simic/        # RL Algorithms (PPO, IQL)
+├── nissa/        # Telemetry & Logging
+└── scripts/      # CLI Entry points
+```
+
+**Run Tests:**
+
+```bash
+pytest src/tests
+```
