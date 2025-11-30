@@ -75,6 +75,32 @@ class ParallelEnvState:
     val_acc: float = 0.0
 
 
+def _advance_active_seed(model) -> None:
+    """Advance lifecycle for the active seed, emitting telemetry via SeedSlot."""
+    if not model.has_active_seed:
+        return
+
+    seed_state = model.seed_state
+    current_stage = seed_state.stage
+
+    if current_stage == SeedStage.TRAINING:
+        ok = seed_state.transition(SeedStage.BLENDING)
+        if not ok:
+            raise RuntimeError(
+                "Illegal lifecycle transition TRAINING → BLENDING"
+            )
+        model.seed_slot.start_blending(total_steps=5, temperature=1.0)
+
+    elif current_stage == SeedStage.PROBATIONARY:
+        gate_result = model.seed_slot.advance_stage(SeedStage.FOSSILIZED)
+        if gate_result.passed:
+            model.seed_slot.set_alpha(1.0)
+        # Gate check failed - this is normal, Tamiyo learns from failed attempts
+        # The action has no effect, but the RL agent receives the shaped reward
+
+    # else: BLENDING/SHADOWING - no-op, Kasmina auto-advances via step_epoch
+
+
 # =============================================================================
 # Vectorized PPO Training
 # =============================================================================
@@ -254,6 +280,7 @@ def train_ppo_vectorized(
             death_penalty=10.0,
             history_window=10,
         )
+        governor.snapshot()  # Ensure rollback is always possible before first panic
 
         return ParallelEnvState(
             model=model,
@@ -620,28 +647,7 @@ def train_ppo_vectorized(
                         env_state.seed_optimizer = None
 
                 elif action == SimicAction.ADVANCE:
-                    if model.has_active_seed:
-                        current_stage = model.seed_state.stage
-
-                        if current_stage == SeedStage.TRAINING:
-                            # Strategic: Tamiyo decides to start blending
-                            ok = model.seed_state.transition(SeedStage.BLENDING)
-                            if not ok:
-                                raise RuntimeError(
-                                    f"Illegal lifecycle transition TRAINING → BLENDING"
-                                )
-                            model.seed_slot.start_blending(total_steps=5, temperature=1.0)
-
-                        elif current_stage == SeedStage.PROBATIONARY:
-                            # Strategic: Tamiyo decides to fossilize
-                            ok = model.seed_state.transition(SeedStage.FOSSILIZED)
-                            if not ok:
-                                raise RuntimeError(
-                                    f"Illegal lifecycle transition PROBATIONARY → FOSSILIZED"
-                                )
-                            model.seed_slot.set_alpha(1.0)
-
-                        # else: BLENDING/SHADOWING - no-op, Kasmina auto-advances via step_epoch
+                    _advance_active_seed(model)
 
                 elif action == SimicAction.CULL:
                     if model.has_active_seed:
