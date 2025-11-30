@@ -59,6 +59,8 @@ class TolariaGovernor:
         self._pending_panic: bool = False
         # Random guessing loss = ln(num_classes), the "lobotomy signature"
         self.random_guess_loss = math.log(num_classes)
+        # Capture an initial snapshot so rollback is always possible, even on first panic
+        self.snapshot()
 
     def snapshot(self) -> None:
         """Save Last Known Good state (lightweight RAM copy)."""
@@ -163,9 +165,9 @@ class TolariaGovernor:
     def reset(self) -> None:
         """Reset governor state (for new episode)."""
         self.loss_history.clear()
-        self.last_good_state = None
         self.consecutive_panics = 0
         self._pending_panic = False
+        self.snapshot()
 
 
 __all__ = ["TolariaGovernor", "GovernorReport"]

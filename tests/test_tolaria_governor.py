@@ -39,7 +39,8 @@ class TestTolariaGovernor:
         assert gov.death_penalty == 10.0
         assert gov.min_panics_before_rollback == 2  # Require consecutive
         assert len(gov.loss_history) == 0
-        assert gov.last_good_state is None
+        assert gov.last_good_state is not None
+        assert 'linear.weight' in gov.last_good_state
         assert gov.consecutive_panics == 0
 
     def test_custom_parameters(self):
@@ -71,12 +72,13 @@ class TestTolariaGovernor:
         model = DummyModel()
         gov = TolariaGovernor(model)
 
-        # Initially no snapshot
-        assert gov.last_good_state is None
+        # Auto-snapshot is taken on init, and manual snapshot refreshes it
+        initial_snapshot = gov.last_good_state
 
-        # Take snapshot
+        model.linear.weight.data.add_(1.0)
         gov.snapshot()
         assert gov.last_good_state is not None
+        assert gov.last_good_state is not initial_snapshot
         assert isinstance(gov.last_good_state, dict)
 
         # Snapshot should contain model weights
@@ -272,16 +274,22 @@ class TestTolariaGovernor:
         # Weights should be restored
         assert torch.allclose(model.linear.weight.data, original_weight)
 
-    def test_execute_rollback_without_snapshot_raises(self):
-        """Test that rollback fails if no snapshot exists."""
+    def test_execute_rollback_uses_initial_snapshot(self):
+        """Rollback should work immediately using the auto snapshot."""
         from esper.tolaria import TolariaGovernor
 
         model = DummyModel()
         gov = TolariaGovernor(model)
 
-        # No snapshot taken
-        with pytest.raises(RuntimeError, match="panic before first snapshot"):
-            gov.execute_rollback()
+        # Corrupt model right away (before any manual snapshot)
+        original_weight = model.linear.weight.data.clone()
+        model.linear.weight.data.fill_(123.0)
+
+        report = gov.execute_rollback()
+
+        # Weights restored from initial snapshot and report indicates rollback
+        assert torch.allclose(model.linear.weight.data, original_weight)
+        assert report.rollback_occurred is True
 
     def test_execute_rollback_returns_report(self):
         """Test that rollback returns proper GovernorReport."""
@@ -354,9 +362,10 @@ class TestTolariaGovernor:
         # Reset
         gov.reset()
 
-        # Everything should be cleared
+        # Everything should be cleared and a fresh snapshot captured
         assert len(gov.loss_history) == 0
-        assert gov.last_good_state is None
+        assert gov.last_good_state is not None
+        assert torch.allclose(gov.last_good_state['linear.weight'], model.linear.weight.data)
         assert gov.consecutive_panics == 0
 
     def test_integration_scenario_stable_training(self):
