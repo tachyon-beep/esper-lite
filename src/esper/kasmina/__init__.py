@@ -30,8 +30,8 @@ from esper.kasmina.slot import (
     SeedSlot,
 )
 
-# Blueprints
-from esper.kasmina.blueprints import (
+# Blueprints (v1 - will be replaced by registry in Phase 2)
+from esper.kasmina._blueprints_v1 import (
     ConvBlock,
     ConvEnhanceSeed,
     AttentionSeed,

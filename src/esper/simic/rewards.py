@@ -93,10 +93,68 @@ class RewardConfig:
     wait_patience_threshold: float = 0.5
     wait_stagnant_epochs: int = 5
 
+    # Compute cost penalty (per-step rent on excess params)
+    compute_rent_weight: float = 0.05
+
     @staticmethod
     def default() -> "RewardConfig":
         """Return default configuration."""
         return RewardConfig()
+
+
+# =============================================================================
+# Loss-Primary Reward Configuration (Phase 2)
+# =============================================================================
+
+@dataclass(slots=True)
+class LossRewardConfig:
+    """Configuration for loss-primary reward computation.
+
+    All weights are tunable hyperparameters optimized for
+    cross-task comparability using normalized loss delta.
+    """
+
+    # Loss delta scaling
+    loss_delta_weight: float = 5.0
+    max_loss_delta: float = 5.0  # After normalization
+    regression_penalty_scale: float = 0.5  # Asymmetric clipping
+    typical_loss_delta_std: float = 0.1  # Task-specific normalization
+
+    # Compute rent
+    compute_rent_weight: float = 0.05
+    grace_epochs: int = 3  # Rent-free grace period for new seeds
+
+    # Stage bonuses (PBRS-compatible)
+    stage_potential_weight: float = 0.1
+
+    # Terminal bonus
+    baseline_loss: float = 2.3  # Task-specific (random init loss)
+    target_loss: float = 0.3  # Task-specific (achievable loss)
+    terminal_loss_weight: float = 1.0
+
+    @property
+    def achievable_range(self) -> float:
+        return self.baseline_loss - self.target_loss
+
+    @staticmethod
+    def default() -> "LossRewardConfig":
+        return LossRewardConfig()
+
+    @staticmethod
+    def for_cifar10() -> "LossRewardConfig":
+        return LossRewardConfig(
+            baseline_loss=2.3,  # ln(10)
+            target_loss=0.3,
+            typical_loss_delta_std=0.05,
+        )
+
+    @staticmethod
+    def for_tinystories() -> "LossRewardConfig":
+        return LossRewardConfig(
+            baseline_loss=10.8,  # ln(50257)
+            target_loss=3.5,
+            typical_loss_delta_std=0.15,
+        )
 
 
 # =============================================================================
@@ -115,20 +173,36 @@ class SeedInfo(NamedTuple):
     stage: int  # SeedStage.value
     improvement_since_stage_start: float
     epochs_in_stage: int
+    seed_params: int = 0  # Trainable params of active seed
+    previous_stage: int = 0  # For PBRS stage bonus calculation
+    seed_age_epochs: int = 0  # Total epochs since germination (for rent grace)
 
     @staticmethod
-    def from_seed_state(seed_state) -> "SeedInfo | None":
-        """Convert from kasmina.SeedState to SeedInfo."""
+    def from_seed_state(seed_state, seed_params: int = 0) -> "SeedInfo | None":
+        """Convert from kasmina.SeedState to SeedInfo.
+
+        Args:
+            seed_state: The seed state from kasmina, or None
+            seed_params: Trainable parameter count of the active seed module
+
+        Returns:
+            SeedInfo or None if no seed state
+        """
         if seed_state is None:
             return None
         metrics = seed_state.metrics
         improvement = 0.0
+        seed_age = 0
         if metrics:
             improvement = metrics.current_val_accuracy - metrics.accuracy_at_stage_start
+            seed_age = metrics.epochs_total
         return SeedInfo(
             stage=seed_state.stage.value,
             improvement_since_stage_start=improvement,
             epochs_in_stage=seed_state.epochs_in_stage,
+            seed_params=seed_params,
+            previous_stage=seed_state.previous_stage.value,
+            seed_age_epochs=seed_age,
         )
 
 
@@ -149,6 +223,8 @@ def compute_shaped_reward(
     seed_info: SeedInfo | None,
     epoch: int,
     max_epochs: int,
+    total_params: int = 0,
+    host_params: int = 1,
     config: RewardConfig | None = None,
 ) -> float:
     """Compute shaped reward for seed lifecycle control.
@@ -165,6 +241,8 @@ def compute_shaped_reward(
         seed_info: Seed state info (None if no active seed)
         epoch: Current epoch
         max_epochs: Maximum epochs in episode
+        total_params: Extra params added (fossilized + active seed)
+        host_params: Baseline host model params (for normalization)
         config: Reward configuration (uses default if None)
 
     Returns:
@@ -177,6 +255,12 @@ def compute_shaped_reward(
 
     # Base: accuracy improvement
     reward += acc_delta * config.acc_delta_weight
+
+    # Compute rent: penalize excess params proportionally
+    # This is blueprint-agnostic: cost is determined by actual params added
+    if host_params > 0 and total_params > 0:
+        excess_params_ratio = total_params / host_params
+        reward -= config.compute_rent_weight * excess_params_ratio
 
     # Lifecycle stage rewards
     if seed_info is not None:
@@ -366,14 +450,15 @@ def compute_seed_potential(obs: dict) -> float:
         return 0.0
 
     # Stage-based potential values (matching SeedStage enum values)
-    # Potential increases as seed progresses toward FOSSILIZED
+    # Monotonically increasing toward FOSSILIZED (terminal success = highest)
+    # This avoids the shaping cliff that punished fossilization
     stage_potentials = {
         2: 5.0,   # GERMINATED - just started
-        3: 15.0,  # TRAINING - actively learning
-        4: 25.0,  # BLENDING - about to integrate
-        5: 28.0,  # SHADOWING - monitoring integration
-        6: 30.0,  # PROBATIONARY - almost done
-        7: 10.0,  # FOSSILIZED - terminal success, value realized
+        3: 10.0,  # TRAINING - actively learning
+        4: 15.0,  # BLENDING - about to integrate
+        5: 20.0,  # SHADOWING - monitoring integration
+        6: 25.0,  # PROBATIONARY - almost done
+        7: 35.0,  # FOSSILIZED - closing bonus for banked value
     }
 
     base_potential = stage_potentials.get(seed_stage, 0.0)
@@ -412,6 +497,7 @@ def get_intervention_cost(action: int) -> float:
 
 __all__ = [
     "RewardConfig",
+    "LossRewardConfig",
     "SeedInfo",
     "compute_shaped_reward",
     "compute_potential",
