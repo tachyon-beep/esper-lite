@@ -651,6 +651,49 @@ class SeedSlot:
             return alpha
         return self.alpha
 
+    def step_epoch(self) -> None:
+        """Called once per epoch to update blending progress and auto-advance lifecycle.
+
+        When in BLENDING stage:
+        - Increments blending_steps_done
+        - Updates alpha based on schedule
+        - When α reaches 1.0, auto-advances through SHADOWING→PROBATIONARY
+
+        This separates mechanical transitions (Kasmina's job) from strategic
+        decisions (Tamiyo's ADVANCE action at TRAINING and PROBATIONARY).
+        """
+        if not self.state:
+            return
+
+        if self.state.stage != SeedStage.BLENDING:
+            return
+
+        # Increment blending progress
+        self.state.blending_steps_done += 1
+
+        # Update alpha based on schedule
+        if self.alpha_schedule is not None:
+            alpha = self.alpha_schedule(self.state.blending_steps_done)
+            self.set_alpha(alpha)
+
+        # Auto-advance when blending complete
+        if self.state.blending_steps_done >= self.state.blending_steps_total:
+            self.set_alpha(1.0)  # Ensure fully blended
+
+            # BLENDING → SHADOWING
+            ok = self.state.transition(SeedStage.SHADOWING)
+            if not ok:
+                raise RuntimeError(
+                    f"Illegal lifecycle transition {self.state.stage} → SHADOWING"
+                )
+
+            # SHADOWING → PROBATIONARY (collapse through - no validation yet)
+            ok = self.state.transition(SeedStage.PROBATIONARY)
+            if not ok:
+                raise RuntimeError(
+                    f"Illegal lifecycle transition {self.state.stage} → PROBATIONARY"
+                )
+
     def get_state_report(self) -> SeedStateReport | None:
         """Get current state as Leyline report."""
         if not self.state:

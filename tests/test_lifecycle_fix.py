@@ -66,3 +66,78 @@ class TestStartBlendingProgress:
         slot.start_blending(total_steps=5, temperature=1.0)
 
         assert slot.state.blending_steps_done == 0
+
+
+class TestStepEpochAutoAdvance:
+    """Test that step_epoch auto-advances through mechanical stages."""
+
+    def _create_blending_slot(self) -> SeedSlot:
+        """Helper to create a slot in BLENDING stage."""
+        slot = SeedSlot(slot_id="test", channels=64, device="cpu")
+
+        from unittest.mock import MagicMock
+        host = MagicMock()
+        host.injection_channels = 64
+        slot.germinate(blueprint_id="conv_enhance", seed_id="test_seed", host_module=host)
+        slot.state.transition(SeedStage.TRAINING)
+        slot.state.transition(SeedStage.BLENDING)
+        slot.start_blending(total_steps=3, temperature=1.0)
+
+        return slot
+
+    def test_step_epoch_increments_blending_progress(self):
+        """step_epoch should increment blending_steps_done."""
+        slot = self._create_blending_slot()
+
+        assert slot.state.blending_steps_done == 0
+
+        slot.step_epoch()
+        assert slot.state.blending_steps_done == 1
+
+        slot.step_epoch()
+        assert slot.state.blending_steps_done == 2
+
+    def test_step_epoch_updates_alpha(self):
+        """step_epoch should update alpha based on progress."""
+        slot = self._create_blending_slot()
+
+        assert slot.alpha == 0.0
+
+        slot.step_epoch()  # 1/3
+        slot.step_epoch()  # 2/3
+        slot.step_epoch()  # 3/3 = 1.0
+
+        assert slot.alpha >= 0.99  # Should be at or near 1.0
+
+    def test_step_epoch_auto_advances_when_blending_complete(self):
+        """step_epoch should auto-advance BLENDING→SHADOWING→PROBATIONARY when α=1.0."""
+        slot = self._create_blending_slot()
+
+        # Run through all blending steps
+        for _ in range(3):
+            slot.step_epoch()
+
+        # Should have auto-advanced through SHADOWING to PROBATIONARY
+        assert slot.state.stage == SeedStage.PROBATIONARY
+        assert slot.alpha >= 0.99
+
+    def test_step_epoch_noop_when_not_blending(self):
+        """step_epoch should be no-op when not in BLENDING stage."""
+        slot = SeedSlot(slot_id="test", channels=64, device="cpu")
+
+        from unittest.mock import MagicMock
+        host = MagicMock()
+        host.injection_channels = 64
+        slot.germinate(blueprint_id="conv_enhance", seed_id="test_seed", host_module=host)
+        slot.state.transition(SeedStage.TRAINING)
+
+        # Should not raise or change state
+        slot.step_epoch()
+        assert slot.state.stage == SeedStage.TRAINING
+
+    def test_step_epoch_noop_when_no_seed(self):
+        """step_epoch should be no-op when no active seed."""
+        slot = SeedSlot(slot_id="test", channels=64, device="cpu")
+
+        # Should not raise
+        slot.step_epoch()
