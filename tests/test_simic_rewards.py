@@ -40,26 +40,26 @@ class TestComputeSeedPotential:
         """Test BLENDING stage (4) has high potential."""
         obs = {'has_active_seed': 1, 'seed_stage': 4, 'seed_epochs_in_stage': 0}
         potential = compute_seed_potential(obs)
-        assert potential == 25.0
+        assert potential == 15.0  # BLENDING base potential
 
     def test_probationary_has_highest_potential(self):
-        """Test PROBATIONARY stage (6) has highest potential before FOSSILIZED."""
+        """Test PROBATIONARY stage (6) has high potential before FOSSILIZED."""
         obs = {'has_active_seed': 1, 'seed_stage': 6, 'seed_epochs_in_stage': 0}
         potential = compute_seed_potential(obs)
-        assert potential == 30.0
+        assert potential == 25.0  # PROBATIONARY base potential
 
     def test_fossilized_has_lower_potential(self):
-        """Test FOSSILIZED stage (7) has lower potential (value already realized)."""
+        """Test FOSSILIZED stage (7) has highest potential (closing bonus for banked value)."""
         obs = {'has_active_seed': 1, 'seed_stage': 7, 'seed_epochs_in_stage': 0}
         potential = compute_seed_potential(obs)
-        assert potential == 10.0
+        assert potential == 35.0  # FOSSILIZED gets closing bonus
 
     def test_progress_bonus_capped(self):
         """Test that progress bonus is capped at 3.0."""
         obs = {'has_active_seed': 1, 'seed_stage': 3, 'seed_epochs_in_stage': 100}
         potential = compute_seed_potential(obs)
-        # Base 15.0 (TRAINING) + max 3.0 progress = 18.0
-        assert potential == 18.0
+        # Base 10.0 (TRAINING) + max 3.0 progress = 13.0
+        assert potential == 13.0
 
     def test_stage_progression_increases_potential(self):
         """Test that potential generally increases through stages until FOSSILIZED."""
