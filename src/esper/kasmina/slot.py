@@ -496,7 +496,14 @@ class SeedSlot:
                 self.isolation_monitor = GradientIsolationMonitor()
             self.isolation_monitor.register(host_module, self.seed)
 
-        self._emit_telemetry(TelemetryEventType.SEED_GERMINATED)
+        self._emit_telemetry(
+            TelemetryEventType.SEED_GERMINATED,
+            data={
+                "blueprint_id": blueprint_id,
+                "seed_id": seed_id,
+                "params": sum(p.numel() for p in self.seed.parameters() if p.requires_grad),
+            }
+        )
         return self.state
 
     def advance_stage(self, target_stage: SeedStage | None = None) -> GateResult:
@@ -540,7 +547,17 @@ class SeedSlot:
 
                 # Handle special stage entry logic
                 if target_stage == SeedStage.FOSSILIZED:
-                    self._emit_telemetry(TelemetryEventType.SEED_FOSSILIZED)
+                    self._emit_telemetry(
+                        TelemetryEventType.SEED_FOSSILIZED,
+                        data={
+                            "blueprint_id": self.state.blueprint_id,
+                            "seed_id": self.state.seed_id,
+                            "improvement": self.state.metrics.total_improvement,
+                            "params_added": sum(
+                                p.numel() for p in self.seed.parameters() if p.requires_grad
+                            ),
+                        }
+                    )
             else:
                 gate_result = GateResult(
                     gate=gate_result.gate,
@@ -553,10 +570,20 @@ class SeedSlot:
     def cull(self, reason: str = "") -> None:
         """Cull the current seed."""
         if self.state:
+            # Capture metrics before transition clears state
+            improvement = self.state.metrics.total_improvement
+            blueprint_id = self.state.blueprint_id
+            seed_id = self.state.seed_id
+
             self.state.transition(SeedStage.CULLED)
             self._emit_telemetry(
                 TelemetryEventType.SEED_CULLED,
-                data={"reason": reason}
+                data={
+                    "reason": reason,
+                    "blueprint_id": blueprint_id,
+                    "seed_id": seed_id,
+                    "improvement": improvement,
+                }
             )
         self.seed = None
         self.state = None
