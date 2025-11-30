@@ -640,8 +640,8 @@ def train_ppo_vectorized(
                   f"Entropy: {metrics['entropy']:.4f}, "
                   f"Entropy coef: {current_entropy_coef:.4f}")
 
-        # Print analytics summary every 5 batches (5 * n_envs episodes)
-        if (batch_idx + 1) % 5 == 0 and len(analytics.stats) > 0:
+        # Print analytics summary every 5 episodes
+        if episodes_completed % 5 == 0 and len(analytics.stats) > 0:
             print()
             print(analytics.summary_table())
             for env_idx in range(n_envs):
