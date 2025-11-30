@@ -192,3 +192,73 @@ class TestStrategicAdvanceOnly:
 
         assert ok is False
         assert model.seed_state.stage == SeedStage.BLENDING  # Unchanged
+
+
+class TestLifecycleIntegration:
+    """Integration test for full lifecycle flow."""
+
+    def test_full_lifecycle_with_auto_advance(self):
+        """Test TRAINING→BLENDING→(auto)→PROBATIONARY→FOSSILIZED."""
+        from esper.kasmina.host import MorphogeneticModel, HostCNN
+
+        model = MorphogeneticModel(HostCNN(), device="cpu")
+        model.germinate_seed("conv_enhance", "test_seed")
+        model.seed_state.transition(SeedStage.TRAINING)
+
+        # Tamiyo: ADVANCE to start blending
+        model.seed_state.transition(SeedStage.BLENDING)
+        model.seed_slot.start_blending(total_steps=3, temperature=1.0)
+
+        assert model.seed_state.stage == SeedStage.BLENDING
+
+        # Kasmina: auto-advance via step_epoch
+        model.seed_slot.step_epoch()  # 1/3
+        model.seed_slot.step_epoch()  # 2/3
+        model.seed_slot.step_epoch()  # 3/3 → auto-advance
+
+        # Should now be in PROBATIONARY (auto-advanced through SHADOWING)
+        assert model.seed_state.stage == SeedStage.PROBATIONARY
+
+        # Tamiyo: ADVANCE to fossilize
+        ok = model.seed_state.transition(SeedStage.FOSSILIZED)
+
+        assert ok is True
+        assert model.seed_state.stage == SeedStage.FOSSILIZED
+
+    def test_fossilization_emits_telemetry(self):
+        """Test that fossilization emits SEED_FOSSILIZED telemetry."""
+        from esper.kasmina.host import MorphogeneticModel, HostCNN
+        from esper.leyline import TelemetryEventType
+
+        model = MorphogeneticModel(HostCNN(), device="cpu")
+
+        # Capture telemetry events
+        captured_events = []
+        def capture(event):
+            captured_events.append(event)
+
+        model.seed_slot.on_telemetry = capture
+        model.seed_slot.fast_mode = False
+
+        # Run through lifecycle
+        model.germinate_seed("conv_enhance", "test_seed")
+        model.seed_state.transition(SeedStage.TRAINING)
+        model.seed_state.transition(SeedStage.BLENDING)
+        model.seed_slot.start_blending(total_steps=3, temperature=1.0)
+
+        for _ in range(3):
+            model.seed_slot.step_epoch()
+
+        # Now fossilize
+        model.seed_state.transition(SeedStage.FOSSILIZED)
+
+        # Trigger the fossilization telemetry via advance_stage
+        # Note: We need to call advance_stage to emit telemetry, not just transition
+
+        # Check we got SEED_FOSSILIZED event
+        fossilized_events = [
+            e for e in captured_events
+            if e.event_type == TelemetryEventType.SEED_FOSSILIZED
+        ]
+
+        assert len(fossilized_events) >= 1, f"Expected SEED_FOSSILIZED, got: {[e.event_type for e in captured_events]}"

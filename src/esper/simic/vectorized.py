@@ -491,6 +491,9 @@ def train_ppo_vectorized(
                         max_epochs=max_epochs,
                     )
 
+                # Auto-advance blending lifecycle (Kasmina's mechanical transitions)
+                model.seed_slot.step_epoch()
+
             # Collect features from all environments
             all_features = []
             all_signals = []
