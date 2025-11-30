@@ -576,13 +576,28 @@ def train_ppo_vectorized(
 
                 elif action == SimicAction.ADVANCE:
                     if model.has_active_seed:
-                        if model.seed_state.stage == SeedStage.TRAINING:
-                            model.seed_state.transition(SeedStage.BLENDING)
+                        current_stage = model.seed_state.stage
+
+                        if current_stage == SeedStage.TRAINING:
+                            # Strategic: Tamiyo decides to start blending
+                            ok = model.seed_state.transition(SeedStage.BLENDING)
+                            if not ok:
+                                raise RuntimeError(
+                                    f"Illegal lifecycle transition TRAINING → BLENDING"
+                                )
                             model.seed_slot.start_blending(total_steps=5, temperature=1.0)
-                            env_state.blending_step = 0  # Reset per-batch counter
-                        elif model.seed_state.stage == SeedStage.BLENDING:
-                            model.seed_state.transition(SeedStage.FOSSILIZED)
+                            env_state.blending_step = 0
+
+                        elif current_stage == SeedStage.PROBATIONARY:
+                            # Strategic: Tamiyo decides to fossilize
+                            ok = model.seed_state.transition(SeedStage.FOSSILIZED)
+                            if not ok:
+                                raise RuntimeError(
+                                    f"Illegal lifecycle transition PROBATIONARY → FOSSILIZED"
+                                )
                             model.seed_slot.set_alpha(1.0)
+
+                        # else: BLENDING/SHADOWING - no-op, Kasmina auto-advances via step_epoch
 
                 elif action == SimicAction.CULL:
                     if model.has_active_seed:

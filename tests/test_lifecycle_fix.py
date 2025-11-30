@@ -141,3 +141,54 @@ class TestStepEpochAutoAdvance:
 
         # Should not raise
         slot.step_epoch()
+
+
+class TestStrategicAdvanceOnly:
+    """Test that ADVANCE only works at strategic decision points."""
+
+    def test_advance_from_training_starts_blending(self):
+        """ADVANCE from TRAINING should transition to BLENDING."""
+        from esper.kasmina.host import MorphogeneticModel, HostCNN
+
+        model = MorphogeneticModel(HostCNN(), device="cpu")
+        model.germinate_seed("conv_enhance", "test_seed")
+        model.seed_state.transition(SeedStage.TRAINING)
+
+        # Simulate ADVANCE action
+        assert model.seed_state.stage == SeedStage.TRAINING
+        model.seed_state.transition(SeedStage.BLENDING)
+        model.seed_slot.start_blending(total_steps=5, temperature=1.0)
+
+        assert model.seed_state.stage == SeedStage.BLENDING
+
+    def test_advance_from_probationary_fossilizes(self):
+        """ADVANCE from PROBATIONARY should transition to FOSSILIZED."""
+        from esper.kasmina.host import MorphogeneticModel, HostCNN
+
+        model = MorphogeneticModel(HostCNN(), device="cpu")
+        model.germinate_seed("conv_enhance", "test_seed")
+        model.seed_state.transition(SeedStage.TRAINING)
+        model.seed_state.transition(SeedStage.BLENDING)
+        model.seed_state.transition(SeedStage.SHADOWING)
+        model.seed_state.transition(SeedStage.PROBATIONARY)
+
+        # ADVANCE from PROBATIONARY should work
+        ok = model.seed_state.transition(SeedStage.FOSSILIZED)
+
+        assert ok is True
+        assert model.seed_state.stage == SeedStage.FOSSILIZED
+
+    def test_advance_from_blending_is_noop(self):
+        """ADVANCE from BLENDING should NOT transition directly to FOSSILIZED."""
+        from esper.kasmina.host import MorphogeneticModel, HostCNN
+
+        model = MorphogeneticModel(HostCNN(), device="cpu")
+        model.germinate_seed("conv_enhance", "test_seed")
+        model.seed_state.transition(SeedStage.TRAINING)
+        model.seed_state.transition(SeedStage.BLENDING)
+
+        # This SHOULD fail (the bug we're fixing)
+        ok = model.seed_state.transition(SeedStage.FOSSILIZED)
+
+        assert ok is False
+        assert model.seed_state.stage == SeedStage.BLENDING  # Unchanged
