@@ -45,6 +45,7 @@ class TolariaGovernor:
         death_penalty: float = 10.0,
         history_window: int = 20,  # Longer window for stable estimates
         min_panics_before_rollback: int = 2,  # Require consecutive panics
+        num_classes: int = 10,  # For random-guess detection (CIFAR-10 default)
     ):
         self.model = model
         self.sensitivity = sensitivity
@@ -56,6 +57,8 @@ class TolariaGovernor:
         self.consecutive_panics: int = 0
         self.min_panics_before_rollback = min_panics_before_rollback
         self._pending_panic: bool = False
+        # Random guessing loss = ln(num_classes), the "lobotomy signature"
+        self.random_guess_loss = math.log(num_classes)
 
     def snapshot(self) -> None:
         """Save Last Known Good state (lightweight RAM copy)."""
@@ -76,6 +79,18 @@ class TolariaGovernor:
             self._pending_panic = False
             self.consecutive_panics = self.min_panics_before_rollback  # Skip to rollback
             return True
+
+        # Lobotomy detection: loss jumped to exactly random guessing
+        # This catches "silent failures" where model outputs uniform probabilities
+        if len(self.loss_history) >= 10:
+            avg = sum(self.loss_history) / len(self.loss_history)
+            # If we were doing well (loss < 60% of random guess) and suddenly
+            # hit exactly the random guess loss (±0.15), that's a lobotomy
+            if (avg < self.random_guess_loss * 0.6 and
+                abs(current_loss - self.random_guess_loss) < 0.15):
+                self._pending_panic = False
+                self.consecutive_panics = self.min_panics_before_rollback
+                return True
 
         # Need sufficient history for stable estimates
         if len(self.loss_history) < 10:

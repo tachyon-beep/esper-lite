@@ -125,6 +125,40 @@ class TestTolariaGovernor:
         assert gov.check_vital_signs(float('inf')) is True
         assert gov.check_vital_signs(float('-inf')) is True
 
+    def test_check_vital_signs_detects_lobotomy(self):
+        """Test that sudden jump to random-guess loss triggers panic."""
+        from esper.tolaria import TolariaGovernor
+        import math
+
+        model = DummyModel()
+        gov = TolariaGovernor(model, num_classes=10)  # ln(10) ≈ 2.3
+
+        # Build healthy history (loss ~0.8, well below random guess)
+        for _ in range(15):
+            gov.check_vital_signs(0.8)
+
+        # Sudden jump to exactly random guessing (ln(10) ≈ 2.302)
+        # This is the "lobotomy signature" - model outputs uniform probs
+        is_panic = gov.check_vital_signs(math.log(10))
+        assert is_panic is True, "Should detect lobotomy (jump to random guess loss)"
+
+    def test_check_vital_signs_no_lobotomy_if_already_bad(self):
+        """Test that lobotomy detection only fires if we were doing well."""
+        from esper.tolaria import TolariaGovernor
+        import math
+
+        model = DummyModel()
+        gov = TolariaGovernor(model, num_classes=10)
+
+        # Build history where we were already doing poorly (loss ~2.0)
+        for _ in range(15):
+            gov.check_vital_signs(2.0)
+
+        # Jump to random guess loss - but we weren't doing well before
+        # So this shouldn't trigger lobotomy detection
+        is_panic = gov.check_vital_signs(math.log(10))
+        assert is_panic is False, "Should not trigger if we weren't doing well"
+
     def test_check_vital_signs_no_panic_with_insufficient_history(self):
         """Test that no panic occurs with < 10 samples."""
         from esper.tolaria import TolariaGovernor
