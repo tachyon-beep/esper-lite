@@ -38,6 +38,7 @@ from esper.simic.normalization import RunningMeanStd
 from esper.simic.ppo import PPOAgent, signals_to_features
 from esper.simic.rewards import compute_shaped_reward, SeedInfo
 from esper.nissa import NissaHub, BlueprintAnalytics
+from esper.tolaria import TolariaGovernor
 
 
 # =============================================================================
@@ -56,6 +57,7 @@ class ParallelEnvState:
     host_optimizer: torch.optim.Optimizer
     seed_optimizer: torch.optim.Optimizer | None
     signal_tracker: any  # SignalTracker from tamiyo
+    governor: TolariaGovernor  # Fail-safe watchdog for catastrophic failure detection
     env_device: str = "cuda:0"  # Device this env runs on
     stream: torch.cuda.Stream | None = None  # CUDA stream for async execution
     # Independent DataLoaders per env to avoid GIL contention
@@ -247,11 +249,20 @@ def train_ppo_vectorized(
         # Create CUDA stream for this environment
         stream = torch.cuda.Stream(device=env_device) if 'cuda' in env_device else None
 
+        # Create Governor for fail-safe watchdog
+        governor = TolariaGovernor(
+            model=model,
+            sensitivity=3.0,
+            death_penalty=10.0,
+            history_window=10,
+        )
+
         return ParallelEnvState(
             model=model,
             host_optimizer=host_optimizer,
             seed_optimizer=None,
             signal_tracker=SignalTracker(),
+            governor=governor,
             env_device=env_device,
             stream=stream,
             trainloader=trainloader,
@@ -505,6 +516,7 @@ def train_ppo_vectorized(
             # Collect features from all environments
             all_features = []
             all_signals = []
+            governor_panic_envs = []  # Track which envs need rollback
 
             for env_idx, env_state in enumerate(env_states):
                 model = env_state.model
@@ -520,6 +532,15 @@ def train_ppo_vectorized(
                 env_state.train_acc = train_acc
                 env_state.val_loss = val_loss
                 env_state.val_acc = val_acc
+
+                # Governor watchdog: snapshot when loss is stable (every 5 epochs)
+                if epoch % 5 == 0:
+                    env_state.governor.snapshot()
+
+                # Governor watchdog: check vital signs after validation
+                is_panic = env_state.governor.check_vital_signs(val_loss)
+                if is_panic:
+                    governor_panic_envs.append(env_idx)
 
                 # Record accuracy in seed metrics for reward shaping
                 if seed_state and seed_state.metrics:
@@ -566,15 +587,31 @@ def train_ppo_vectorized(
                 action = SimicAction(action_idx)
                 env_state.action_counts[action.name] += 1
 
-                # Compute shaped reward
+                # Governor rollback: execute if this env panicked
+                if env_idx in governor_panic_envs:
+                    report = env_state.governor.execute_rollback()
+                    print(f"  [ENV {env_idx}] Governor rollback: {report.reason} "
+                          f"(threshold={report.loss_threshold:.4f}, panics={report.consecutive_panics})")
+
+                # Compute shaped reward with cost params
+                scoreboard = analytics._get_scoreboard(env_idx)
+                total_params = scoreboard.params_added + model.active_seed_params
                 reward = compute_shaped_reward(
                     action=action.value,
                     acc_delta=signals.metrics.accuracy_delta,
                     val_acc=env_state.val_acc,
-                    seed_info=SeedInfo.from_seed_state(seed_state),
+                    seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
                     epoch=epoch,
                     max_epochs=max_epochs,
+                    total_params=total_params,
+                    host_params=scoreboard.host_params,
                 )
+
+                # Governor punishment: inject negative reward if rollback occurred
+                if env_idx in governor_panic_envs:
+                    punishment = env_state.governor.get_punishment_reward()
+                    reward += punishment
+                    print(f"  [ENV {env_idx}] Punishment reward: {punishment:.1f} (final reward: {reward:.1f})")
 
                 # Execute action
                 if SimicAction.is_germinate(action):
