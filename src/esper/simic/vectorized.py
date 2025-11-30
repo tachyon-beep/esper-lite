@@ -73,8 +73,6 @@ class ParallelEnvState:
     train_acc: float = 0.0
     val_loss: float = 0.0
     val_acc: float = 0.0
-    # Per-batch step counter for blending (reset when entering BLENDING stage)
-    blending_step: int = 0
 
 
 # =============================================================================
@@ -318,11 +316,10 @@ def train_ppo_vectorized(
                     )
                 optimizer = env_state.seed_optimizer
             elif seed_state.stage == SeedStage.BLENDING:
-                # Active blending - update alpha, train both
+                # Active blending - train both host and seed jointly
+                # Note: Alpha is driven by step_epoch() once per epoch, not per batch
+                # This keeps alpha progression in sync with the auto-advance counter
                 optimizer = env_state.host_optimizer
-                if model.seed_slot and seed_state:
-                    model.seed_slot.update_alpha_for_step(env_state.blending_step)
-                    env_state.blending_step += 1
             elif seed_state.stage in (SeedStage.SHADOWING, SeedStage.PROBATIONARY):
                 # Post-blending validation - alpha locked at 1.0, joint training
                 optimizer = env_state.host_optimizer
@@ -634,7 +631,6 @@ def train_ppo_vectorized(
                                     f"Illegal lifecycle transition TRAINING → BLENDING"
                                 )
                             model.seed_slot.start_blending(total_steps=5, temperature=1.0)
-                            env_state.blending_step = 0
 
                         elif current_stage == SeedStage.PROBATIONARY:
                             # Strategic: Tamiyo decides to fossilize
