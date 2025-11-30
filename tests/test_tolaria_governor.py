@@ -439,4 +439,39 @@ class TestTolariaGovernor:
         assert report.loss_at_panic == 999.0
         assert report.loss_threshold == 10.0
         assert report.consecutive_panics == 3
+
+    def test_execute_rollback_clears_live_seeds(self):
+        """Test that rollback clears live (non-fossilized) seeds from slots.
+
+        This implements Option B semantics:
+        - Restore host + fossilized seeds
+        - Discard experimental (non-fossilized) seeds
+        """
+        from esper.tolaria import TolariaGovernor
+        from esper.kasmina import MorphogeneticModel, HostCNN
+
+        # Create a real MorphogeneticModel with seed slot
+        host = HostCNN()
+        model = MorphogeneticModel(host, device="cpu")
+        gov = TolariaGovernor(model)
+
+        # Take snapshot
+        gov.snapshot()
+
+        # Germinate a seed (simulates live/experimental seed)
+        model.seed_slot.germinate("conv_enhance", "test_seed")
+        assert model.seed_slot.is_active
+        assert model.seed_slot.state is not None
+
+        # Build minimal history
+        for i in range(5):
+            gov.loss_history.append(1.0)
+
+        # Execute rollback
+        report = gov.execute_rollback()
+
+        # Seed slot should be cleared (experimental seeds discarded)
+        assert not model.seed_slot.is_active
+        assert model.seed_slot.seed is None
+        assert model.seed_slot.state is None
         assert report.rollback_occurred is True

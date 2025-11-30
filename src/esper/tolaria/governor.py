@@ -132,14 +132,31 @@ class TolariaGovernor:
             return False
 
     def execute_rollback(self) -> GovernorReport:
-        """Emergency stop: restore LKG state and return punishment info."""
+        """Emergency stop: restore LKG state and return punishment info.
+
+        Rollback semantics (Option B):
+        - Restore host + fossilized seeds from snapshot
+        - Discard any live/experimental seeds (not fossilized)
+        - Reset seed slots to empty/DORMANT state
+
+        Philosophy: Fossils are committed stable memory. Live seeds are
+        experimental hypotheses - a catastrophic event means they failed
+        the safety test and should be discarded.
+        """
         print(f"[GOVERNOR] CRITICAL INSTABILITY DETECTED. INITIATING ROLLBACK.")
 
         if self.last_good_state is None:
             raise RuntimeError("Governor panic before first snapshot!")
 
-        # Restore model weights
+        # Restore host + fossilized seeds
         self.model.load_state_dict(self.last_good_state)
+
+        # Clear any live (non-fossilized) seeds from slots
+        # This implements "revert to stable organism, dump all temporary grafts"
+        if hasattr(self.model, 'seed_slot'):  # hasattr AUTHORIZED by John on 2025-12-01 16:30:00 UTC
+                                              # Justification: Feature detection - MorphogeneticModel has seed_slot, base models may not
+            if self.model.seed_slot.is_active:
+                self.model.seed_slot.cull("governor_rollback")
 
         self.consecutive_panics += 1
 

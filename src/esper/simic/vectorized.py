@@ -618,8 +618,12 @@ def train_ppo_vectorized(
                           f"(threshold={report.loss_threshold:.4f}, panics={report.consecutive_panics})")
 
                 # Compute shaped reward with cost params
+                # Derive cost from CURRENT architecture, not cumulative scoreboard
+                # (scoreboard.params_added persists across episodes, causing stale rent)
                 scoreboard = analytics._get_scoreboard(env_idx)
-                total_params = scoreboard.params_added + model.active_seed_params
+                host_params = scoreboard.host_params
+                total_model_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+                excess_params = max(0, total_model_params - host_params)
                 reward = compute_shaped_reward(
                     action=action.value,
                     acc_delta=signals.metrics.accuracy_delta,
@@ -627,8 +631,8 @@ def train_ppo_vectorized(
                     seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
                     epoch=epoch,
                     max_epochs=max_epochs,
-                    total_params=total_params,
-                    host_params=scoreboard.host_params,
+                    total_params=excess_params,
+                    host_params=host_params,
                 )
 
                 # Governor punishment: inject negative reward if rollback occurred
