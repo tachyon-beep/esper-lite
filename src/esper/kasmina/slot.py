@@ -294,6 +294,18 @@ class QualityGates:
         }
         return mapping.get(target_stage, GateLevel.G0)
 
+    def _seed_ready_for_blending(self, state: SeedState) -> GateResult:
+        """Seed-specific readiness for BLENDING.
+
+        Requires a minimum number of epochs in the current stage (TRAINING)
+        so the seed has seen enough updates before we start blending. This
+        complements the global improvement check, which looks at host + seed
+        stability, by ensuring this particular seed is not effectively untrained.
+        """
+        # Use epochs_in_current_stage as "training age" in TRAINING.
+        # We reuse min_blending_epochs as a conservative lower bound.
+        return state.metrics.epochs_in_current_stage >= self.min_blending_epochs
+
     def _check_g0(self, state: SeedState) -> GateResult:
         """G0: Basic sanity for germination."""
         checks_passed = []
@@ -334,23 +346,37 @@ class QualityGates:
         )
 
     def _check_g2(self, state: SeedState) -> GateResult:
-        """G2: Blending readiness - requires positive improvement."""
+        """G2: Blending readiness – global improvement + seed readiness."""
         checks_passed = []
         checks_failed = []
 
         improvement = state.metrics.improvement_since_stage_start
 
+        # Global performance: host + training loop improving
         if improvement >= self.min_training_improvement:
-            checks_passed.append(f"improvement_{improvement:.2f}%")
+            checks_passed.append(f"global_improvement_{improvement:.2f}%")
+            perf_ok = True
         else:
-            checks_failed.append(f"insufficient_improvement_{improvement:.2f}%")
+            checks_failed.append(f"global_improvement_insufficient_{improvement:.2f}%")
+            perf_ok = False
 
+        # Global isolation guard
         if state.metrics.isolation_violations <= self.max_isolation_violations:
             checks_passed.append("isolation_ok")
+            isolation_ok = True
         else:
             checks_failed.append(f"isolation_violations_{state.metrics.isolation_violations}")
+            isolation_ok = False
 
-        passed = len(checks_failed) == 0
+        # Seed-specific readiness: enough TRAINING epochs to be worth blending
+        if self._seed_ready_for_blending(state):
+            checks_passed.append("seed_ready")
+            seed_ok = True
+        else:
+            checks_failed.append("seed_not_ready")
+            seed_ok = False
+
+        passed = perf_ok and isolation_ok and seed_ok
         score = min(1.0, improvement / 5.0) if improvement > 0 else 0.0
 
         return GateResult(

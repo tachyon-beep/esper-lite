@@ -86,6 +86,11 @@ def run_ppo_episode(
 
     model.seed_slot.on_telemetry = telemetry_callback
     model.seed_slot.fast_mode = False
+    # Womb mode gradient isolation: detach host input into the seed path so host
+    # gradients match the baseline model while the seed trickle-learns via STE.
+    # Host optimizer still steps every batch; isolation only affects gradients
+    # flowing through the seed branch.
+    model.seed_slot.isolate_gradients = True
 
     criterion = nn.CrossEntropyLoss()
     host_optimizer = torch.optim.SGD(
@@ -128,9 +133,13 @@ def run_ppo_episode(
             gate_result = model.seed_slot.advance_stage(SeedStage.TRAINING)
             if not gate_result.passed:
                 raise RuntimeError(f"G1 gate failed during TRAINING entry: {gate_result}")
-            seed_optimizer = torch.optim.SGD(model.get_seed_parameters(), lr=0.01, momentum=0.9)
+            if seed_optimizer is None:
+                seed_optimizer = torch.optim.SGD(
+                    model.get_seed_parameters(), lr=0.01, momentum=0.9
+                )
             for inputs, targets in trainloader:
                 inputs, targets = inputs.to(device), targets.to(device)
+                host_optimizer.zero_grad()
                 seed_optimizer.zero_grad()
                 outputs = model(inputs)
                 loss, correct_batch, batch_total = _loss_and_correct(outputs, targets, criterion, task_type)
@@ -140,6 +149,7 @@ def run_ppo_episode(
                 if use_telemetry:
                     grad_stats = collect_seed_gradients(model.get_seed_parameters())
 
+                host_optimizer.step()
                 seed_optimizer.step()
                 running_loss += loss.item()
                 total += batch_total
@@ -147,9 +157,12 @@ def run_ppo_episode(
 
         elif seed_state.stage == SeedStage.TRAINING:
             if seed_optimizer is None:
-                seed_optimizer = torch.optim.SGD(model.get_seed_parameters(), lr=0.01, momentum=0.9)
+                seed_optimizer = torch.optim.SGD(
+                    model.get_seed_parameters(), lr=0.01, momentum=0.9
+                )
             for inputs, targets in trainloader:
                 inputs, targets = inputs.to(device), targets.to(device)
+                host_optimizer.zero_grad()
                 seed_optimizer.zero_grad()
                 outputs = model(inputs)
                 loss, correct_batch, batch_total = _loss_and_correct(outputs, targets, criterion, task_type)
@@ -159,6 +172,7 @@ def run_ppo_episode(
                 if use_telemetry:
                     grad_stats = collect_seed_gradients(model.get_seed_parameters())
 
+                host_optimizer.step()
                 seed_optimizer.step()
                 running_loss += loss.item()
                 total += batch_total

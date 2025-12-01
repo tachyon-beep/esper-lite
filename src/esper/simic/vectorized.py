@@ -299,6 +299,11 @@ def train_ppo_vectorized(
         # Wire telemetry callback with env_id injection
         model.seed_slot.on_telemetry = make_telemetry_callback(env_idx)
         model.seed_slot.fast_mode = False  # Enable telemetry
+        # Womb mode gradient isolation: detach host input into the seed path so
+        # host gradients remain identical to the host-only model while the seed
+        # trickle-learns via STE in TRAINING. The host optimizer still steps
+        # every batch; isolation only affects gradients through the seed branch.
+        model.seed_slot.isolate_gradients = True
 
         # Set host_params baseline for scoreboard via Nissa analytics
         host_params = sum(p.numel() for p in model.host.parameters() if p.requires_grad)
@@ -372,19 +377,17 @@ def train_ppo_vectorized(
                 # No seed or seed fully integrated - train host only
                 optimizer = env_state.host_optimizer
             elif seed_state.stage in (SeedStage.GERMINATED, SeedStage.TRAINING):
-                # Isolated seed training
+                # Womb/isolated seed training: train host + seed in lockstep.
                 if seed_state.stage == SeedStage.GERMINATED:
                     gate_result = model.seed_slot.advance_stage(SeedStage.TRAINING)
                     if not gate_result.passed:
                         raise RuntimeError(f"G1 gate failed during TRAINING entry: {gate_result}")
-                    env_state.seed_optimizer = torch.optim.SGD(
-                        model.get_seed_parameters(), lr=0.01, momentum=0.9
-                    )
                 if env_state.seed_optimizer is None:
                     env_state.seed_optimizer = torch.optim.SGD(
                         model.get_seed_parameters(), lr=0.01, momentum=0.9
                     )
-                optimizer = env_state.seed_optimizer
+                # Host optimizer remains primary; seed optimizer is stepped separately.
+                optimizer = env_state.host_optimizer
             elif seed_state.stage == SeedStage.BLENDING:
                 # Active blending - train both host and seed jointly
                 # Note: Alpha is driven by step_epoch() once per epoch, not per batch
@@ -398,7 +401,11 @@ def train_ppo_vectorized(
                 optimizer = env_state.host_optimizer
 
             optimizer.zero_grad()
-            if seed_state and seed_state.stage == SeedStage.BLENDING and env_state.seed_optimizer:
+            if (
+                seed_state
+                and seed_state.stage in (SeedStage.GERMINATED, SeedStage.TRAINING, SeedStage.BLENDING)
+                and env_state.seed_optimizer
+            ):
                 env_state.seed_optimizer.zero_grad()
 
             outputs = model(inputs)
@@ -410,7 +417,11 @@ def train_ppo_vectorized(
                 grad_stats = collect_seed_gradients(model.get_seed_parameters())
 
             optimizer.step()
-            if seed_state and seed_state.stage == SeedStage.BLENDING and env_state.seed_optimizer:
+            if (
+                seed_state
+                and seed_state.stage in (SeedStage.GERMINATED, SeedStage.TRAINING, SeedStage.BLENDING)
+                and env_state.seed_optimizer
+            ):
                 env_state.seed_optimizer.step()
 
             # Return tensors - .item() called after stream sync
