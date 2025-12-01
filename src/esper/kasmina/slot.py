@@ -294,13 +294,14 @@ class QualityGates:
         }
         return mapping.get(target_stage, GateLevel.G0)
 
-    def _seed_ready_for_blending(self, state: SeedState) -> GateResult:
+    def _seed_ready_for_blending(self, state: SeedState) -> bool:
         """Seed-specific readiness for BLENDING.
 
-        Requires a minimum number of epochs in the current stage (TRAINING)
-        so the seed has seen enough updates before we start blending. This
-        complements the global improvement check, which looks at host + seed
-        stability, by ensuring this particular seed is not effectively untrained.
+        Returns True when the seed has spent a minimum number of epochs in
+        the current stage (TRAINING) so it has seen enough updates before
+        we start blending. This complements the global improvement check,
+        which looks at host + seed stability, by ensuring this particular
+        seed is not effectively untrained.
         """
         # Use epochs_in_current_stage as "training age" in TRAINING.
         # We reuse min_blending_epochs as a conservative lower bound.
@@ -651,6 +652,16 @@ class SeedSlot(nn.Module):
             seed_id = self.state.seed_id
 
             if self.state.transition(target_stage):
+                # Stage-specific gradient isolation hooks:
+                # - GERMINATED → TRAINING: enable Womb isolation so the seed
+                #   sees detached host features during its training phase.
+                # - TRAINING → BLENDING: disable isolation so blended seeds can
+                #   co-adapt with the host trunk.
+                if old_stage == SeedStage.GERMINATED and target_stage == SeedStage.TRAINING:
+                    self.isolate_gradients = True
+                elif old_stage == SeedStage.TRAINING and target_stage == SeedStage.BLENDING:
+                    self.isolate_gradients = False
+
                 self._emit_telemetry(
                     TelemetryEventType.SEED_STAGE_CHANGED,
                     data={"from": old_stage.name, "to": target_stage.name}
@@ -824,6 +835,9 @@ class SeedSlot(nn.Module):
                 raise RuntimeError(
                     f"Illegal lifecycle transition {self.state.stage} → BLENDING"
                 )
+            # Leaving TRAINING: disable Womb isolation so BLENDING/SHADOWING/
+            # FOSSILIZED can drive host trunk updates via the seed branch.
+            self.isolate_gradients = False
             self._emit_telemetry(
                 TelemetryEventType.SEED_STAGE_CHANGED,
                 data={"from": old_stage.name, "to": self.state.stage.name},
