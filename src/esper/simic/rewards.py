@@ -217,6 +217,8 @@ class SeedInfo(NamedTuple):
 STAGE_TRAINING = SeedStage.TRAINING.value
 STAGE_BLENDING = SeedStage.BLENDING.value
 STAGE_FOSSILIZED = SeedStage.FOSSILIZED.value
+STAGE_SHADOWING = SeedStage.SHADOWING.value
+STAGE_PROBATIONARY = SeedStage.PROBATIONARY.value
 
 
 # =============================================================================
@@ -358,14 +360,20 @@ def _advance_shaping(seed_info: SeedInfo | None, config: RewardConfig) -> float:
     stage = seed_info.stage
     improvement = seed_info.improvement_since_stage_start
 
-    if stage == STAGE_TRAINING:
+    # Only reward FOSSILIZE where it can actually finalize the seed.
+    # Leyline VALID_TRANSITIONS only allow PROBATIONARY → FOSSILIZED; calls
+    # from SHADOWING are rejected by SeedState.transition and treated as a
+    # failed/no-op fossilize in the environment.
+    if stage == STAGE_PROBATIONARY:
         if improvement > 0:
             return config.advance_good_bonus
-        else:
-            return config.advance_premature_penalty
-    elif stage == STAGE_BLENDING:
-        return config.advance_blending_bonus
+        return config.advance_premature_penalty
 
+    # Earlier lifecycle stages: FOSSILIZE is a no-op and should be discouraged.
+    if stage in (STAGE_TRAINING, STAGE_BLENDING, STAGE_SHADOWING):
+        return config.advance_premature_penalty
+
+    # FOSSILIZED / others: no shaping for FOSSILIZE.
     return 0.0
 
 
@@ -627,4 +635,6 @@ __all__ = [
     "STAGE_TRAINING",
     "STAGE_BLENDING",
     "STAGE_FOSSILIZED",
+    "STAGE_SHADOWING",
+    "STAGE_PROBATIONARY",
 ]

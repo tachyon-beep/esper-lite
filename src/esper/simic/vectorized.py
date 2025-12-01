@@ -75,6 +75,7 @@ class ParallelEnvState:
     train_acc: float = 0.0
     val_loss: float = 0.0
     val_acc: float = 0.0
+    params_added_baseline: int = 0
 
     def __post_init__(self) -> None:
         if not self.action_counts and self.action_enum is not None:
@@ -95,7 +96,10 @@ def _advance_active_seed(model) -> bool:
     seed_state = model.seed_state
     current_stage = seed_state.stage
 
-    # Tamiyo only finalizes; mechanical blending/advancement handled by Kasmina
+    # Tamiyo only finalizes; mechanical blending/advancement handled by Kasmina.
+    # NOTE: Leyline VALID_TRANSITIONS only allow PROBATIONARY → FOSSILIZED.
+    # From SHADOWING this advance_stage call will fail the transition and
+    # return a GateResult with passed=False (no lifecycle change).
     if current_stage in (SeedStage.PROBATIONARY, SeedStage.SHADOWING):
         gate_result = model.seed_slot.advance_stage(SeedStage.FOSSILIZED)
         if gate_result.passed:
@@ -299,6 +303,8 @@ def train_ppo_vectorized(
         # Set host_params baseline for scoreboard via Nissa analytics
         host_params = sum(p.numel() for p in model.host.parameters() if p.requires_grad)
         analytics.set_host_params(env_idx, host_params)
+        # Snapshot current cumulative params so rent uses per-episode delta.
+        params_added_baseline = analytics._get_scoreboard(env_idx).params_added
 
         host_optimizer = torch.optim.SGD(
             model.get_host_parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4
@@ -331,6 +337,7 @@ def train_ppo_vectorized(
             seeds_created=0,
             episode_rewards=[],
             action_enum=ActionEnum,
+            params_added_baseline=params_added_baseline,
         )
 
     def process_train_batch(env_state: ParallelEnvState, inputs: torch.Tensor,
@@ -654,8 +661,9 @@ def train_ppo_vectorized(
                 # (scoreboard.params_added persists across episodes, causing stale rent)
                 scoreboard = analytics._get_scoreboard(env_idx)
                 host_params = scoreboard.host_params
-                total_params = analytics._get_scoreboard(env_idx).params_added + model.active_seed_params
-                excess_params = max(0, total_params)
+                # Use env-local params (delta vs baseline) so rent resets with each fresh model.
+                params_added_delta = max(0, scoreboard.params_added - env_state.params_added_baseline)
+                total_params = params_added_delta + model.active_seed_params
                 reward = compute_shaped_reward(
                     action=action,
                     acc_delta=signals.metrics.accuracy_delta,
@@ -663,7 +671,7 @@ def train_ppo_vectorized(
                     seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
                     epoch=epoch,
                     max_epochs=max_epochs,
-                    total_params=excess_params,
+                    total_params=total_params,
                     host_params=host_params,
                 )
 

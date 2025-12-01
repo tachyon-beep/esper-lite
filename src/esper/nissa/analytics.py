@@ -73,6 +73,8 @@ class SeedScoreboard:
     live_blueprint: str | None = None
     params_added: int = 0
     host_params: int = 0
+    total_fossilize_age_epochs: int = 0
+    total_cull_age_epochs: int = 0
 
     @property
     def compute_cost(self) -> float:
@@ -86,6 +88,24 @@ class SeedScoreboard:
     def params_percentage(self) -> float:
         """Params added as percentage of host."""
         return (self.params_added / self.host_params * 100) if self.host_params > 0 else 0.0
+
+    @property
+    def avg_fossilize_age_epochs(self) -> float:
+        """Average total age (epochs) at fossilization."""
+        return (
+            self.total_fossilize_age_epochs / self.total_fossilized
+            if self.total_fossilized > 0
+            else 0.0
+        )
+
+    @property
+    def avg_cull_age_epochs(self) -> float:
+        """Average total age (epochs) at cull."""
+        return (
+            self.total_cull_age_epochs / self.total_culled
+            if self.total_culled > 0
+            else 0.0
+        )
 
 
 class BlueprintAnalytics(OutputBackend):
@@ -127,6 +147,7 @@ class BlueprintAnalytics(OutputBackend):
             seed_id = event.data.get("seed_id", "unknown")
             improvement = event.data.get("improvement", 0.0)
             params = event.data.get("params_added", 0)
+            epochs_total = event.data.get("epochs_total", 0)
 
             self.stats[bp_id].fossilized += 1
             self.stats[bp_id].acc_deltas.append(improvement)
@@ -135,6 +156,7 @@ class BlueprintAnalytics(OutputBackend):
             sb.total_fossilized += 1
             sb.fossilized_by_blueprint[bp_id] += 1
             sb.params_added += params
+            sb.total_fossilize_age_epochs += int(epochs_total)
             sb.live_blueprint = None
 
             print(f"    [env{env_id}] Fossilized '{seed_id}' ({bp_id}, Δacc {improvement:+.2f}%)")
@@ -145,12 +167,14 @@ class BlueprintAnalytics(OutputBackend):
             seed_id = event.data.get("seed_id", "unknown")
             improvement = event.data.get("improvement", 0.0)
             reason = event.data.get("reason", "")
+            epochs_total = event.data.get("epochs_total", 0)
 
             self.stats[bp_id].culled += 1
             self.stats[bp_id].churns.append(improvement)
 
             sb = self._get_scoreboard(env_id)
             sb.total_culled += 1
+            sb.total_cull_age_epochs += int(epochs_total)
             sb.live_blueprint = None
 
             reason_str = f" ({reason})" if reason else ""
@@ -193,6 +217,9 @@ class BlueprintAnalytics(OutputBackend):
             f"Seed Scoreboard (env {env_id}):",
             f"  Fossilized: {sb.total_fossilized} "
             f"(+{sb.params_added/1000:.1f}K params, +{sb.params_percentage:.1f}% of host)",
+            f"  Culled: {sb.total_culled}",
+            f"  Avg fossilize age: {sb.avg_fossilize_age_epochs:.1f} epochs",
+            f"  Avg cull age: {sb.avg_cull_age_epochs:.1f} epochs",
             f"  Compute cost: {sb.compute_cost:.2f}x baseline",
             f"  Distribution: {dist or 'none'}",
         ]
@@ -219,6 +246,8 @@ class BlueprintAnalytics(OutputBackend):
                     "total_culled": sb.total_culled,
                     "params_added": sb.params_added,
                     "compute_cost": sb.compute_cost,
+                    "total_fossilize_age_epochs": sb.total_fossilize_age_epochs,
+                    "total_cull_age_epochs": sb.total_cull_age_epochs,
                 }
                 for env_id, sb in self.scoreboards.items()
             },

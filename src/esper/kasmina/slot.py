@@ -615,6 +615,15 @@ class SeedSlot(nn.Module):
 
         if gate_result.passed:
             old_stage = self.state.stage
+
+            # Capture metrics before transition resets stage counters
+            metrics = self.state.metrics
+            improvement = metrics.total_improvement
+            epochs_total = metrics.epochs_total
+            epochs_in_stage = metrics.epochs_in_current_stage
+            blueprint_id = self.state.blueprint_id
+            seed_id = self.state.seed_id
+
             if self.state.transition(target_stage):
                 self._emit_telemetry(
                     TelemetryEventType.SEED_STAGE_CHANGED,
@@ -626,12 +635,14 @@ class SeedSlot(nn.Module):
                     self._emit_telemetry(
                         TelemetryEventType.SEED_FOSSILIZED,
                         data={
-                            "blueprint_id": self.state.blueprint_id,
-                            "seed_id": self.state.seed_id,
-                            "improvement": self.state.metrics.total_improvement,
+                            "blueprint_id": blueprint_id,
+                            "seed_id": seed_id,
+                            "improvement": improvement,
                             "params_added": sum(
                                 p.numel() for p in self.seed.parameters() if p.requires_grad
                             ),
+                            "epochs_total": epochs_total,
+                            "epochs_in_stage": epochs_in_stage,
                         }
                     )
             else:
@@ -648,6 +659,8 @@ class SeedSlot(nn.Module):
         if self.state:
             # Capture metrics before transition clears state
             improvement = self.state.metrics.total_improvement
+            epochs_total = self.state.metrics.epochs_total
+            epochs_in_stage = self.state.metrics.epochs_in_current_stage
             blueprint_id = self.state.blueprint_id
             seed_id = self.state.seed_id
 
@@ -664,6 +677,8 @@ class SeedSlot(nn.Module):
                     "blueprint_id": blueprint_id,
                     "seed_id": seed_id,
                     "improvement": improvement,
+                    "epochs_total": epochs_total,
+                    "epochs_in_stage": epochs_in_stage,
                 }
             )
         self.seed = None

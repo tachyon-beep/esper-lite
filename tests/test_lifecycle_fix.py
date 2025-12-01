@@ -230,6 +230,41 @@ class TestLifecycleIntegration:
         assert ok is True
         assert model.seed_state.stage == SeedStage.FOSSILIZED
 
+    def test_full_state_machine_reaches_probationary(self):
+        """Germinate → TRAINING → BLENDING → SHADOWING → PROBATIONARY via Kasmina mechanics."""
+        from esper.kasmina.host import MorphogeneticModel, CNNHost
+
+        model = MorphogeneticModel(CNNHost(), device="cpu")
+        model.germinate_seed("conv_enhance", "test_seed")
+
+        # Advance G1 gate: GERMINATED -> TRAINING (mirrors Simic training path).
+        result = model.seed_slot.advance_stage(SeedStage.TRAINING)
+        assert result.passed
+        assert model.seed_state.stage == SeedStage.TRAINING
+
+        # Drive metrics until TRAINING → BLENDING triggers via step_epoch.
+        acc = 60.0
+        for _ in range(10):
+            model.seed_state.metrics.record_accuracy(acc)
+            model.seed_slot.step_epoch()
+            acc += 1.0
+            if model.seed_state.stage == SeedStage.BLENDING:
+                break
+
+        assert model.seed_state.stage == SeedStage.BLENDING, \
+            f"Seed failed to leave TRAINING; current stage: {model.seed_state.stage}"
+
+        # Continue driving epochs so BLENDING → SHADOWING → PROBATIONARY auto-advance.
+        for _ in range(20):
+            model.seed_state.metrics.record_accuracy(acc)
+            model.seed_slot.step_epoch()
+            acc += 0.5
+            if model.seed_state.stage == SeedStage.PROBATIONARY:
+                break
+
+        assert model.seed_state.stage == SeedStage.PROBATIONARY, \
+            f"Seed failed to reach PROBATIONARY; current stage: {model.seed_state.stage}"
+
     def test_fossilization_emits_telemetry(self):
         """Test that fossilization emits SEED_FOSSILIZED telemetry."""
         from esper.kasmina.host import MorphogeneticModel, CNNHost
