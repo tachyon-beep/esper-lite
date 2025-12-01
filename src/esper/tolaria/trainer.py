@@ -17,12 +17,26 @@ from torch.utils.data import DataLoader
 import math
 
 
+def _compute_loss(
+    outputs: torch.Tensor,
+    labels: torch.Tensor,
+    criterion: nn.Module,
+    task_type: str,
+) -> torch.Tensor:
+    """Compute loss for classification or language modeling."""
+    if task_type == "lm":
+        vocab = outputs.size(-1)
+        return criterion(outputs.view(-1, vocab), labels.view(-1))
+    return criterion(outputs, labels)
+
+
 def train_epoch_normal(
     model: nn.Module,
     trainloader: DataLoader,
     criterion: nn.Module,
     optimizer: torch.optim.Optimizer,
     device: str,
+    task_type: str = "classification",
 ) -> None:
     """Train one epoch without seed.
 
@@ -40,7 +54,7 @@ def train_epoch_normal(
         inputs, labels = inputs.to(device), labels.to(device)
         optimizer.zero_grad()
         outputs = model(inputs)
-        loss = criterion(outputs, labels)
+        loss = _compute_loss(outputs, labels, criterion, task_type)
         loss.backward()
         optimizer.step()
 
@@ -51,11 +65,12 @@ def train_epoch_seed_isolated(
     criterion: nn.Module,
     seed_optimizer: torch.optim.Optimizer,
     device: str,
+    task_type: str = "classification",
 ) -> None:
     """Train one epoch with seed in isolation (only seed weights updated).
 
     RL Context: During TRAINING stage, only seed parameters update.
-    The RL agent observes seed_improvement and decides when to ADVANCE.
+    The RL agent observes seed_improvement and decides when to FOSSILIZE or CULL.
 
     Note: We don't freeze host params because that breaks gradient flow.
     Instead, we just don't step the host optimizer - gradients flow through
@@ -75,7 +90,7 @@ def train_epoch_seed_isolated(
         # Zero ALL grads to prevent accumulation
         model.zero_grad()
         outputs = model(inputs)
-        loss = criterion(outputs, labels)
+        loss = _compute_loss(outputs, labels, criterion, task_type)
         loss.backward()
         # Only step seed optimizer - host grads computed but not applied
         seed_optimizer.step()
@@ -88,6 +103,7 @@ def train_epoch_blended(
     host_optimizer: torch.optim.Optimizer,
     seed_optimizer: torch.optim.Optimizer | None,
     device: str,
+    task_type: str = "classification",
 ) -> None:
     """Train one epoch with blended host+seed.
 
@@ -109,7 +125,7 @@ def train_epoch_blended(
         if seed_optimizer:
             seed_optimizer.zero_grad()
         outputs = model(inputs)
-        loss = criterion(outputs, labels)
+        loss = _compute_loss(outputs, labels, criterion, task_type)
         loss.backward()
         host_optimizer.step()
         if seed_optimizer:
@@ -159,18 +175,23 @@ def validate_and_get_metrics(
         for inputs, labels in testloader:
             inputs, labels = inputs.to(device), labels.to(device)
             outputs = model(inputs)
-            loss = criterion(outputs, labels)
+            loss = _compute_loss(outputs, labels, criterion, task_type)
             val_loss += loss.item()
-            _, predicted = outputs.max(1)
-            val_total += labels.size(0)
-            val_correct += predicted.eq(labels).sum().item()
+            if task_type == "lm":
+                predicted = outputs.argmax(dim=-1)
+                val_total += labels.numel()
+                val_correct += (predicted == labels).sum().item()
+            else:
+                _, predicted = outputs.max(1)
+                val_total += labels.size(0)
+                val_correct += predicted.eq(labels).sum().item()
 
-            if compute_per_class:
-                for i in range(labels.size(0)):
-                    label = labels[i].item()
-                    class_total[label] += 1
-                    if predicted[i] == label:
-                        class_correct[label] += 1
+                if compute_per_class:
+                    for i in range(labels.size(0)):
+                        label = labels[i].item()
+                        class_total[label] += 1
+                        if predicted[i] == label:
+                            class_correct[label] += 1
 
     val_loss /= len(testloader) if len(testloader) > 0 else 1
     val_accuracy = 100.0 * val_correct / val_total if val_total > 0 else 0.0
@@ -192,11 +213,16 @@ def validate_and_get_metrics(
                 break
             inputs, labels = inputs.to(device), labels.to(device)
             outputs = model(inputs)
-            loss = criterion(outputs, labels)
+            loss = _compute_loss(outputs, labels, criterion, task_type)
             train_loss += loss.item()
-            _, predicted = outputs.max(1)
-            train_total += labels.size(0)
-            train_correct += predicted.eq(labels).sum().item()
+            if task_type == "lm":
+                predicted = outputs.argmax(dim=-1)
+                train_total += labels.numel()
+                train_correct += (predicted == labels).sum().item()
+            else:
+                _, predicted = outputs.max(1)
+                train_total += labels.size(0)
+                train_correct += predicted.eq(labels).sum().item()
 
     train_loss /= min(10, len(trainloader)) if len(trainloader) > 0 else 1
     train_accuracy = 100.0 * train_correct / train_total if train_total > 0 else 0.0

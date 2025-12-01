@@ -193,6 +193,10 @@ class TrainingSignals:
     # Seed states
     active_seeds: list[str] = field(default_factory=list)  # seed_ids
     available_slots: int = 0
+    seed_stage: int = 0
+    seed_epochs_in_stage: int = 0
+    seed_alpha: float = 0.0
+    seed_improvement: float = 0.0
 
     # Resource state
     gpu_memory_used: float = 0.0  # GB
@@ -208,10 +212,10 @@ class TrainingSignals:
 
     def to_fast(
         self,
-        seed_stage: int = 0,
-        seed_epochs_in_stage: int = 0,
-        seed_alpha: float = 0.0,
-        seed_improvement: float = 0.0,
+        seed_stage: int | None = None,
+        seed_epochs_in_stage: int | None = None,
+        seed_alpha: float | None = None,
+        seed_improvement: float | None = None,
     ) -> FastTrainingSignals:
         """Convert to FastTrainingSignals for PPO data plane.
 
@@ -247,9 +251,9 @@ class TrainingSignals:
             loss_history_5=tuple(loss_hist),
             accuracy_history_5=tuple(acc_hist),
             has_active_seed=1 if self.active_seeds else 0,
-            seed_stage=seed_stage,
-            seed_epochs_in_stage=seed_epochs_in_stage,
-            seed_alpha=seed_alpha,
-            seed_improvement=seed_improvement,
+            seed_stage=self.seed_stage if seed_stage is None else seed_stage,
+            seed_epochs_in_stage=self.seed_epochs_in_stage if seed_epochs_in_stage is None else seed_epochs_in_stage,
+            seed_alpha=self.seed_alpha if seed_alpha is None else seed_alpha,
+            seed_improvement=self.seed_improvement if seed_improvement is None else seed_improvement,
             available_slots=self.available_slots,
         )

@@ -12,7 +12,7 @@ def test_build_action_enum_cnn():
     assert issubclass(CNNAction, IntEnum)
     assert CNNAction.WAIT.value == 0
     assert hasattr(CNNAction, "GERMINATE_NORM")
-    assert hasattr(CNNAction, "ADVANCE")
+    assert hasattr(CNNAction, "FOSSILIZE")
     assert hasattr(CNNAction, "CULL")
 
 
@@ -25,7 +25,7 @@ def test_build_action_enum_transformer():
     assert issubclass(TransformerAction, IntEnum)
     assert TransformerAction.WAIT.value == 0
     assert hasattr(TransformerAction, "GERMINATE_LORA")
-    assert hasattr(TransformerAction, "ADVANCE")
+    assert hasattr(TransformerAction, "FOSSILIZE")
     assert hasattr(TransformerAction, "CULL")
 
 
@@ -58,5 +58,5 @@ def test_get_blueprint_from_action():
     assert blueprint == "norm"
 
     assert get_blueprint_from_action(Action.WAIT) is None
-    assert get_blueprint_from_action(Action.ADVANCE) is None
+    assert get_blueprint_from_action(Action.FOSSILIZE) is None
     assert get_blueprint_from_action(Action.CULL) is None

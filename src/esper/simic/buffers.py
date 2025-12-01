@@ -1,9 +1,4 @@
-"""Buffer data structures for RL training.
-
-This module contains trajectory and replay buffers used by PPO and IQL:
-- RolloutBuffer: On-policy trajectory storage for PPO with GAE computation
-- ReplayBuffer: Off-policy experience storage for IQL
-"""
+"""Buffer data structures for RL training (PPO)."""
 
 from __future__ import annotations
 
@@ -109,66 +104,7 @@ class RolloutBuffer:
         return batches
 
 
-# =============================================================================
-# IQL Buffers
-# =============================================================================
-
-@dataclass
-class Transition:
-    """A single (s, a, r, s', done) transition for offline RL."""
-    state: list[float]
-    action: int
-    reward: float
-    next_state: list[float]
-    done: bool
-
-
-class ReplayBuffer:
-    """Replay buffer for offline RL (IQL/CQL).
-
-    Pre-converts all data to tensors for efficient sampling.
-    """
-
-    def __init__(self, transitions: list[Transition], device: str = "cuda:0"):
-        self.device = device
-        self.size = len(transitions)
-
-        self.states = torch.tensor(
-            [t.state for t in transitions], dtype=torch.float32, device=device
-        )
-        self.actions = torch.tensor(
-            [t.action for t in transitions], dtype=torch.long, device=device
-        )
-        self.rewards = torch.tensor(
-            [t.reward for t in transitions], dtype=torch.float32, device=device
-        )
-        self.next_states = torch.tensor(
-            [t.next_state for t in transitions], dtype=torch.float32, device=device
-        )
-        self.dones = torch.tensor(
-            [t.done for t in transitions], dtype=torch.float32, device=device
-        )
-
-    def sample(self, batch_size: int) -> tuple[torch.Tensor, ...]:
-        """Sample a random batch of transitions."""
-        idx = torch.randint(0, self.size, (batch_size,), device=self.device)
-        return (
-            self.states[idx],
-            self.actions[idx],
-            self.rewards[idx],
-            self.next_states[idx],
-            self.dones[idx],
-        )
-
-    @property
-    def state_dim(self) -> int:
-        """Dimension of state vectors."""
-        return self.states.shape[1]
-
-
 __all__ = [
     "RolloutStep",
     "RolloutBuffer",
-    "Transition",
-    "ReplayBuffer",
 ]

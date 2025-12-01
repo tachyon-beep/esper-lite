@@ -7,11 +7,14 @@ germination -> training -> blending -> fossilization/culling.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Callable, TYPE_CHECKING
+import pickle
 
 import torch
 import torch.nn as nn
+
+from esper.kasmina.isolation import GradientIsolationMonitor
 
 from esper.leyline import (
     # Lifecycle
@@ -35,6 +38,11 @@ from esper.leyline import (
 
 if TYPE_CHECKING:
     from esper.simic.features import TaskConfig
+
+# Canonical feature-shape probes for seed shape validation.
+# These are smoke tests: seeds must be shape-preserving for arbitrary H/W or seq_len.
+CNN_SHAPE_PROBE_SPATIAL = 8
+TRANSFORMER_SHAPE_PROBE_SEQ_LEN = 4
 
 
 # =============================================================================
@@ -63,8 +71,15 @@ class SeedMetrics:
     current_alpha: float = 0.0
     alpha_ramp_step: int = 0
 
-    def record_accuracy(self, accuracy: float) -> None:
-        """Record a new accuracy measurement."""
+    def record_accuracy(self, accuracy: float | torch.Tensor) -> None:
+        """Record a new accuracy measurement.
+
+        Accepts either a Python float or a tensor; tensors are
+        detached and converted to float to keep metrics and
+        checkpoints device-agnostic.
+        """
+        if isinstance(accuracy, torch.Tensor):
+            accuracy = accuracy.detach().item()
         if self.epochs_total == 0:
             self.initial_val_accuracy = accuracy
             self.accuracy_at_stage_start = accuracy
@@ -118,7 +133,7 @@ class SeedState:
 
     stage: SeedStage = SeedStage.DORMANT
     previous_stage: SeedStage = SeedStage.UNKNOWN
-    stage_entered_at: datetime = field(default_factory=datetime.utcnow)
+    stage_entered_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     alpha: float = 0.0
     metrics: SeedMetrics = field(default_factory=SeedMetrics)
@@ -187,7 +202,7 @@ class SeedState:
 
         self.previous_stage = self.stage
         self.stage = new_stage
-        self.stage_entered_at = datetime.utcnow()
+        self.stage_entered_at = datetime.now(timezone.utc)
         self.stage_history.append((new_stage, self.stage_entered_at))
         self.metrics.reset_stage_baseline()
         return True
@@ -414,7 +429,7 @@ class QualityGates:
 # Seed Slot
 # =============================================================================
 
-class SeedSlot:
+class SeedSlot(nn.Module):
     """A slot in the model where a seed can be attached.
 
     Manages the full lifecycle of a seed with quality gates.
@@ -439,6 +454,7 @@ class SeedSlot:
         fast_mode: bool = False,
         task_config: "TaskConfig | None" = None,
     ):
+        super().__init__()
         self.slot_id = slot_id
         self.channels = channels
         self.device = device
@@ -484,7 +500,10 @@ class SeedSlot:
         if self.is_active and not is_failure_stage(self.state.stage):
             raise RuntimeError(f"Slot {self.slot_id} already has active seed")
 
+        # Default to "cnn" when no TaskConfig is provided to match legacy CNN tests.
         topology = self.task_config.topology if self.task_config is not None else "cnn"
+        if topology not in ("cnn", "transformer"):
+            raise AssertionError(f"Unknown topology '{topology}' for SeedSlot.germinate")
         try:
             self.seed = BlueprintRegistry.create(topology, blueprint_id, self.channels)
         except ValueError as exc:
@@ -494,6 +513,42 @@ class SeedSlot:
                 f"Blueprint '{blueprint_id}' not available for topology '{topology}'. Available: {names}"
             ) from exc
         self.seed = self.seed.to(self.device)
+
+        # Validate shape: ensure seed preserves feature shape in a host-agnostic way
+        # without mutating host BatchNorm statistics. Smoke test only.
+        if self.seed is not None:
+            if topology == "cnn":
+                # Canonical CNN feature shape: NCHW with known channel count.
+                shape_probe = torch.randn(
+                    1,
+                    self.channels,
+                    CNN_SHAPE_PROBE_SPATIAL,
+                    CNN_SHAPE_PROBE_SPATIAL,
+                    device=self.device,
+                )
+            else:
+                # Canonical transformer feature shape: (batch, seq_len, dim).
+                shape_probe = torch.randn(
+                    2,
+                    TRANSFORMER_SHAPE_PROBE_SEQ_LEN,
+                    self.channels,
+                    device=self.device,
+                )
+
+            expected_shape = shape_probe.shape
+            seed_was_training = self.seed.training
+            try:
+                self.seed.eval()
+                with torch.no_grad():
+                    seed_out = self.seed(shape_probe)
+                if isinstance(seed_out, torch.Tensor) and seed_out.shape != expected_shape:
+                    raise AssertionError(
+                        f"Seed '{blueprint_id}' changed shape: "
+                        f"{seed_out.shape} vs {expected_shape}"
+                    )
+            finally:
+                # Restore original training mode even if assertion fails.
+                self.seed.train(seed_was_training)
 
         # Initialize state
         seed_id = seed_id or f"{self.slot_id}-{blueprint_id}"
@@ -512,8 +567,7 @@ class SeedSlot:
             raise RuntimeError(f"G0 gate failed: {gate_result.checks_failed}")
 
         # Register for isolation monitoring (skipped in fast_mode)
-        if host_module is not None and self.isolation_monitor is not None:
-            from esper.kasmina.isolation import GradientIsolationMonitor
+        if host_module is not None and not self.fast_mode:
             if self.isolation_monitor is None:
                 self.isolation_monitor = GradientIsolationMonitor()
             self.isolation_monitor.register(host_module, self.seed)
@@ -597,7 +651,12 @@ class SeedSlot:
             blueprint_id = self.state.blueprint_id
             seed_id = self.state.seed_id
 
+            old_stage = self.state.stage
             self.state.transition(SeedStage.CULLED)
+            self._emit_telemetry(
+                TelemetryEventType.SEED_STAGE_CHANGED,
+                data={"from": old_stage.name, "to": SeedStage.CULLED.name},
+            )
             self._emit_telemetry(
                 TelemetryEventType.SEED_CULLED,
                 data={
@@ -618,18 +677,46 @@ class SeedSlot:
         """Process features through this slot."""
         from esper.kasmina.isolation import blend_with_isolation
 
-        if not self.is_active or self.alpha == 0.0:
+        # 1. Early exit if there is no active seed or the lifecycle
+        #    stage is inactive (CULLED/EMBARGOED/RESETTING).
+        if not self.is_active or not is_active_stage(self.state.stage):
             return host_features
 
-        if not is_active_stage(self.state.stage):
-            return host_features
-
-        # Apply gradient isolation if enabled
+        # 2. Compute seed features. For Womb/Training we must detach the
+        #    host input so seed gradients do not flow back into the host.
         seed_input = host_features.detach() if self.isolate_gradients else host_features
         seed_features = self.seed(seed_input)
 
-        # Blend
-        return blend_with_isolation(host_features, seed_features, self.alpha)
+        # 3. WOMB MODE (TRAINING stage, alpha == 0.0)
+        #
+        # Straight-Through Estimator:
+        #   forward:  host + (seed - seed.detach()) == host
+        #   backward: d loss / d seed_params == d loss / d seed_features
+        #
+        # This lets the seed see the error signal without changing the
+        # host activations. With isolate_gradients=True, host gradients
+        # are also identical to the no-seed case.
+        if self.state.stage == SeedStage.TRAINING and self.alpha == 0.0:
+            return host_features + (seed_features - seed_features.detach())
+
+        # 4. BLENDING and later stages: topology-aware host isolation.
+        detach_host = True
+        topology = self.task_config.topology if self.task_config is not None else None
+        if topology == "transformer" and self.state is not None:
+            if self.state.stage in (
+                SeedStage.BLENDING,
+                SeedStage.SHADOWING,
+                SeedStage.PROBATIONARY,
+                SeedStage.FOSSILIZED,
+            ):
+                detach_host = False
+
+        return blend_with_isolation(
+            host_features,
+            seed_features,
+            self.alpha,
+            detach_host=detach_host,
+        )
 
     def get_parameters(self):
         """Get trainable parameters of the seed."""
@@ -670,47 +757,93 @@ class SeedSlot:
         return self.alpha
 
     def step_epoch(self) -> None:
-        """Called once per epoch to update blending progress and auto-advance lifecycle.
-
-        When in BLENDING stage:
-        - Increments blending_steps_done
-        - Updates alpha based on schedule
-        - When α reaches 1.0, auto-advances through SHADOWING→PROBATIONARY
-
-        This separates mechanical transitions (Kasmina's job) from strategic
-        decisions (Tamiyo's ADVANCE action at TRAINING and PROBATIONARY).
-        """
+        """Advance lifecycle mechanically once per epoch (Kasmina timekeeper)."""
         if not self.state:
             return
 
-        if self.state.stage != SeedStage.BLENDING:
-            return
+        stage = self.state.stage
 
-        # Increment blending progress
-        self.state.blending_steps_done += 1
+        # TRAINING → BLENDING when dwell satisfied and gate passes
+        if stage == SeedStage.TRAINING:
+            dwell_epochs = 1
+            if self.task_config:
+                dwell_epochs = max(
+                    1, int(self.task_config.max_epochs * self.task_config.train_to_blend_fraction)
+                )
+            if self.state.metrics.epochs_in_current_stage < dwell_epochs:
+                return
 
-        # Update alpha based on schedule
-        if self.alpha_schedule is not None:
-            alpha = self.alpha_schedule(self.state.blending_steps_done)
-            self.set_alpha(alpha)
+            gate_result = self.gates.check_gate(self.state, SeedStage.BLENDING)
+            if not gate_result.passed:
+                return
 
-        # Auto-advance when blending complete
-        if self.state.blending_steps_done >= self.state.blending_steps_total:
-            self.set_alpha(1.0)  # Ensure fully blended
-
-            # BLENDING → SHADOWING
-            ok = self.state.transition(SeedStage.SHADOWING)
+            old_stage = self.state.stage
+            ok = self.state.transition(SeedStage.BLENDING)
             if not ok:
                 raise RuntimeError(
-                    f"Illegal lifecycle transition {self.state.stage} → SHADOWING"
+                    f"Illegal lifecycle transition {self.state.stage} → BLENDING"
                 )
+            self._emit_telemetry(
+                TelemetryEventType.SEED_STAGE_CHANGED,
+                data={"from": old_stage.name, "to": self.state.stage.name},
+            )
+            # Use explicit task_config.blending_steps if provided, otherwise default to 5.
+            total_steps = 5
+            if self.task_config is not None and hasattr(self.task_config, "blending_steps"):
+                configured_steps = self.task_config.blending_steps
+                if isinstance(configured_steps, int) and configured_steps > 0:
+                    total_steps = configured_steps
+            self.start_blending(total_steps=total_steps, temperature=1.0)
+            return
 
-            # SHADOWING → PROBATIONARY (collapse through - no validation yet)
+        # BLENDING → SHADOWING when alpha ramp completes and gate passes
+        if stage == SeedStage.BLENDING:
+            self.state.blending_steps_done += 1
+
+            if self.alpha_schedule is not None:
+                self.update_alpha_for_step(self.state.blending_steps_done)
+
+            if self.state.blending_steps_done >= self.state.blending_steps_total:
+                self.set_alpha(1.0)  # Ensure fully blended
+                gate_result = self.gates.check_gate(self.state, SeedStage.SHADOWING)
+                if not gate_result.passed:
+                    return
+                old_stage = self.state.stage
+                ok = self.state.transition(SeedStage.SHADOWING)
+                if not ok:
+                    raise RuntimeError(
+                        f"Illegal lifecycle transition {self.state.stage} → SHADOWING"
+                    )
+                self._emit_telemetry(
+                    TelemetryEventType.SEED_STAGE_CHANGED,
+                    data={"from": old_stage.name, "to": self.state.stage.name},
+                )
+            return
+
+        # SHADOWING → PROBATIONARY after dwell and gate
+        if stage == SeedStage.SHADOWING:
+            dwell_epochs = 1
+            if self.task_config:
+                dwell_epochs = max(
+                    1, int(self.task_config.max_epochs * self.task_config.shadowing_fraction)
+                )
+            if self.state.metrics.epochs_in_current_stage < dwell_epochs:
+                return
+
+            gate_result = self.gates.check_gate(self.state, SeedStage.PROBATIONARY)
+            if not gate_result.passed:
+                return
+            old_stage = self.state.stage
             ok = self.state.transition(SeedStage.PROBATIONARY)
             if not ok:
                 raise RuntimeError(
                     f"Illegal lifecycle transition {self.state.stage} → PROBATIONARY"
                 )
+            self._emit_telemetry(
+                TelemetryEventType.SEED_STAGE_CHANGED,
+                data={"from": old_stage.name, "to": self.state.stage.name},
+            )
+            # Do not immediately collapse; dwell handled above on next epochs
 
     def get_state_report(self) -> SeedStateReport | None:
         """Get current state as Leyline report."""
@@ -737,6 +870,18 @@ class SeedSlot:
             data=data or {},
         )
         self.on_telemetry(event)
+
+    def get_extra_state(self):
+        """Persist SeedState and alpha schedule in checkpoints."""
+        return {
+            "seed_state": self.state,
+            "alpha_schedule": self.alpha_schedule,
+        }
+
+    def set_extra_state(self, state: dict) -> None:
+        """Restore SeedState and alpha schedule from checkpoints."""
+        self.state = state.get("seed_state")
+        self.alpha_schedule = state.get("alpha_schedule")
 
 
 __all__ = [

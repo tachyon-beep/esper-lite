@@ -61,11 +61,11 @@ def test_transformer_gradient_flow():
 
 
 def test_host_cnn_still_works():
-    """HostCNN still works with new protocol."""
-    from esper.kasmina.host import HostCNN
+    """CNNHost still works with new protocol."""
+    from esper.kasmina.host import CNNHost
     from esper.kasmina.blueprints import BlueprintRegistry
 
-    host = HostCNN()
+    host = CNNHost()
 
     attention = BlueprintRegistry.create("cnn", "attention", dim=64)
     host.register_slot("block2_post", attention)

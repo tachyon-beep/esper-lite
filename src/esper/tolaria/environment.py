@@ -8,27 +8,20 @@ from __future__ import annotations
 
 import torch
 
-from esper.kasmina import HostCNN, MorphogeneticModel
+from esper.runtime import TaskSpec, get_task_spec
 
 
-def create_model(device: str = "cuda") -> MorphogeneticModel:
-    """Create a MorphogeneticModel with HostCNN.
+def create_model(task: TaskSpec | str = "cifar10", device: str = "cuda") -> torch.nn.Module:
+    """Create a MorphogeneticModel for the given task on device."""
+    if isinstance(task, str):
+        task_spec = get_task_spec(task)
+    else:
+        task_spec = task
 
-    Args:
-        device: Target device (cuda/cpu).
-
-    Returns:
-        Initialized MorphogeneticModel on the specified device.
-
-    Raises:
-        RuntimeError: If CUDA is requested but not available.
-    """
     if device.startswith("cuda") and not torch.cuda.is_available():
         raise RuntimeError(
             f"CUDA device '{device}' requested but CUDA is not available. "
             f"Use device='cpu' or check your CUDA installation."
         )
 
-    host = HostCNN(num_classes=10)
-    model = MorphogeneticModel(host, device=device)
-    return model.to(device)
+    return task_spec.create_model(device=device)

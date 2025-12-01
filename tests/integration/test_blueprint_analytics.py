@@ -18,7 +18,7 @@ class TestBlueprintAnalyticsIntegration:
         hub.add_backend(analytics)
 
         # Create model with telemetry callback
-        model = create_model("cpu")
+        model = create_model(device="cpu")
 
         def callback(event: TelemetryEvent):
             event.data["env_id"] = 0

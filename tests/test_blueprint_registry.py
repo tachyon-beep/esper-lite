@@ -19,9 +19,12 @@ def test_registry_register_decorator():
     def create_test(dim: int) -> nn.Module:
         return nn.Linear(dim, dim)
 
-    specs = BlueprintRegistry.list_for_topology("cnn")
-    names = [s.name for s in specs]
-    assert "test_blueprint" in names
+    try:
+        specs = BlueprintRegistry.list_for_topology("cnn")
+        names = [s.name for s in specs]
+        assert "test_blueprint" in names
+    finally:
+        BlueprintRegistry.unregister("cnn", "test_blueprint")
 
 
 def test_registry_list_for_topology():

@@ -6,8 +6,6 @@ import torch
 from esper.simic.buffers import (
     RolloutStep,
     RolloutBuffer,
-    Transition,
-    ReplayBuffer,
 )
 
 
@@ -89,52 +87,3 @@ class TestRolloutBuffer:
         assert "states" in batch
         assert "actions" in batch
         assert "old_log_probs" in batch
-
-
-class TestTransition:
-    """Tests for Transition dataclass (IQL)."""
-
-    def test_creation(self):
-        """Test Transition can be created."""
-        t = Transition(
-            state=[0.0] * 27,
-            action=1,
-            reward=0.5,
-            next_state=[0.0] * 27,
-            done=False,
-        )
-        assert t.action == 1
-        assert t.reward == 0.5
-
-
-class TestReplayBuffer:
-    """Tests for ReplayBuffer (IQL offline data)."""
-
-    def test_creation_and_properties(self):
-        """Test buffer creation from transitions."""
-        transitions = [
-            Transition([0.0] * 27, 0, 0.1, [0.0] * 27, False),
-            Transition([1.0] * 27, 1, 0.2, [1.0] * 27, False),
-            Transition([2.0] * 27, 2, 0.3, [2.0] * 27, True),
-        ]
-
-        buffer = ReplayBuffer(transitions, device="cpu")
-
-        assert buffer.size == 3
-        assert buffer.state_dim == 27
-
-    def test_sample(self):
-        """Test sampling from buffer."""
-        transitions = [
-            Transition([float(i)] * 27, i % 4, 0.1, [float(i)] * 27, False)
-            for i in range(100)
-        ]
-
-        buffer = ReplayBuffer(transitions, device="cpu")
-        states, actions, rewards, next_states, dones = buffer.sample(16)
-
-        assert states.shape == (16, 27)
-        assert actions.shape == (16,)
-        assert rewards.shape == (16,)
-        assert next_states.shape == (16, 27)
-        assert dones.shape == (16,)

@@ -1,247 +1,46 @@
-"""Training loops for PPO and IQL.
+"""Training loops for PPO.
 
-This module contains the main training functions extracted from ppo.py and iql.py.
+This module contains the main training functions extracted from ppo.py.
 """
 
 from __future__ import annotations
 
-import json
 import random
-from pathlib import Path
-from typing import Optional
 
 import torch
 import torch.nn as nn
 
-from esper.leyline.actions import build_action_enum, get_blueprint_from_action, is_germinate_action
+from esper.leyline.actions import get_blueprint_from_action, is_germinate_action
 from esper.leyline import SeedTelemetry
-from esper.simic.buffers import Transition, ReplayBuffer
-from esper.simic.features import obs_to_base_features
+from esper.runtime import get_task_spec
 from esper.simic.rewards import compute_shaped_reward, SeedInfo
 from esper.simic.gradient_collector import collect_seed_gradients
-
-# Topology-specific action enum (CNN)
-ACTION_ENUM = build_action_enum("cnn")
+from esper.nissa import get_hub
 
 
 # =============================================================================
-# IQL Data Loading
+# PPO helpers
 # =============================================================================
 
-def extract_transitions(
-    pack: dict,
-    reward_scale: float = 0.1,
-    use_reward_shaping: bool = False,
-    gamma: float = 0.99,
-) -> list[Transition]:
-    """Extract (s, a, r, s', done) transitions from episodes.
-
-    Args:
-        pack: Data pack dictionary
-        reward_scale: Scale factor for rewards
-        use_reward_shaping: Whether to add potential-based reward shaping
-        gamma: Discount factor for reward shaping
-
-    Returns:
-        List of Transition objects (27-dim base features only)
-    """
-    from esper.simic.rewards import compute_seed_potential
-
-    transitions = []
-
-    for ep in pack['episodes']:
-        decisions = ep['decisions']
-
-        for i, decision in enumerate(decisions):
-            state = obs_to_base_features(decision['observation'])
-            # Legacy telemetry removed - only 27-dim base features supported
-
-            action = ACTION_ENUM[decision['action']['action']].value
-            raw_reward = decision['outcome'].get('reward', 0) * reward_scale
-
-            is_last = (i == len(decisions) - 1)
-            if is_last:
-                next_state = state
-                done = True
-                next_obs = None
-            else:
-                next_decision = decisions[i + 1]
-                next_obs = next_decision['observation']
-                next_state = obs_to_base_features(next_obs)
-                done = False
-
-            if use_reward_shaping:
-                current_obs = decision['observation']
-                phi_s = compute_seed_potential(current_obs)
-                phi_s_prime = 0.0 if done else compute_seed_potential(next_obs)
-                shaping_bonus = gamma * phi_s_prime - phi_s
-                reward = raw_reward + shaping_bonus * reward_scale
-            else:
-                reward = raw_reward
-
-            transitions.append(Transition(
-                state=state,
-                action=action,
-                reward=reward,
-                next_state=next_state,
-                done=done,
-            ))
-
-    return transitions
-
-
-# =============================================================================
-# IQL Evaluation
-# =============================================================================
-
-def evaluate_iql_policy(
-    iql,
-    buffer: ReplayBuffer,
-    n_samples: int = 1000,
-) -> dict:
-    """Evaluate IQL policy against behavior policy."""
-    import torch
-
-    idx = torch.randint(0, buffer.size, (n_samples,), device=buffer.device)
-    states = buffer.states[idx]
-    behavior_actions = buffer.actions[idx]
-
-    with torch.no_grad():
-        q_values = iql.q_network(states)
-        iql_actions = q_values.argmax(dim=1)
-
-    agreement = (iql_actions == behavior_actions).float().mean().item()
-    behavior_dist = torch.bincount(behavior_actions, minlength=len(ACTION_ENUM)).float() / n_samples
-    iql_dist = torch.bincount(iql_actions, minlength=len(ACTION_ENUM)).float() / n_samples
-
-    q_behavior = q_values.gather(1, behavior_actions.unsqueeze(1)).squeeze(1).mean().item()
-    q_iql = q_values.gather(1, iql_actions.unsqueeze(1)).squeeze(1).mean().item()
-
-    return {
-        "agreement": agreement,
-        "q_behavior": q_behavior,
-        "q_iql": q_iql,
-        "q_improvement": q_iql - q_behavior,
-        "behavior_dist": behavior_dist.tolist(),
-        "iql_dist": iql_dist.tolist(),
-    }
-
-
-# =============================================================================
-# IQL Training
-# =============================================================================
-
-def train_iql(
-    pack_path: str,
-    epochs: int = 100,
-    steps_per_epoch: int = 1000,
-    batch_size: int = 256,
-    gamma: float = 0.99,
-    tau: float = 0.7,
-    beta: float = 3.0,
-    lr: float = 3e-4,
-    cql_alpha: float = 0.0,
-    use_reward_shaping: bool = False,
-    device: str = "cuda:0",
-    save_path: Optional[str] = None,
-):
-    """Train IQL on offline data.
-
-    Note: IQL only supports 27-dim base features. Offline data packs do not
-    contain SeedTelemetry, so telemetry-enabled IQL models cannot be trained
-    from offline data. Use PPO for telemetry-enabled policies.
-    """
-    import copy
-    from esper.simic.iql import IQL
-
-    print("=" * 60)
-    print("Tamiyo Phase 3: Implicit Q-Learning")
-    print("=" * 60)
-
-    print(f"Loading {pack_path}...")
-    with open(pack_path) as f:
-        pack = json.load(f)
-    print(f"Episodes: {pack['metadata']['num_episodes']}")
-
-    print("Extracting transitions...")
-    transitions = extract_transitions(
-        pack,
-        use_reward_shaping=use_reward_shaping,
-        gamma=gamma,
-    )
-    print(f"Transitions: {len(transitions)}")
-
-    buffer = ReplayBuffer(transitions, device=device)
-    print(f"State dim: {buffer.state_dim}")
-
-    rewards = buffer.rewards
-    print(f"Reward range: [{rewards.min():.2f}, {rewards.max():.2f}], mean: {rewards.mean():.2f}")
-
-    iql = IQL(
-        state_dim=buffer.state_dim,
-        action_dim=len(ACTION_ENUM),
-        gamma=gamma,
-        tau=tau,
-        beta=beta,
-        lr=lr,
-        cql_alpha=cql_alpha,
-        device=device,
-    )
-
-    algo_name = "IQL+CQL" if cql_alpha > 0 else "IQL"
-    print(f"\nTraining {algo_name} for {epochs} epochs")
-
-    best_q_improvement = -float('inf')
-    best_state_dict = None
-
-    for epoch in range(epochs):
-        epoch_v_loss = 0.0
-        epoch_q_loss = 0.0
-        epoch_cql_loss = 0.0
-
-        for _ in range(steps_per_epoch):
-            losses = iql.train_step(buffer, batch_size)
-            epoch_v_loss += losses["v_loss"]
-            epoch_q_loss += losses["q_loss"]
-            epoch_cql_loss += losses["cql_loss"]
-
-        epoch_v_loss /= steps_per_epoch
-        epoch_q_loss /= steps_per_epoch
-        epoch_cql_loss /= steps_per_epoch
-
-        if epoch % 10 == 0 or epoch == epochs - 1:
-            metrics = evaluate_iql_policy(iql, buffer)
-            print(f"Epoch {epoch:3d}: v_loss={epoch_v_loss:.4f}, q_loss={epoch_q_loss:.4f} | "
-                  f"agreement={metrics['agreement']*100:.1f}%, Q_improve={metrics['q_improvement']:.3f}")
-
-            if metrics['q_improvement'] > best_q_improvement:
-                best_q_improvement = metrics['q_improvement']
-                best_state_dict = {
-                    'q_network': copy.deepcopy(iql.q_network.state_dict()),
-                    'v_network': copy.deepcopy(iql.v_network.state_dict()),
-                }
-
-    if best_state_dict:
-        iql.q_network.load_state_dict(best_state_dict['q_network'])
-        iql.v_network.load_state_dict(best_state_dict['v_network'])
-
-    if save_path:
-        save_path = Path(save_path)
-        save_path.parent.mkdir(parents=True, exist_ok=True)
-        metrics = evaluate_iql_policy(iql, buffer, n_samples=min(5000, buffer.size))
-        torch.save({
-            'q_network': iql.q_network.state_dict(),
-            'v_network': iql.v_network.state_dict(),
-            'state_dim': buffer.state_dim,
-            'action_dim': len(ACTION_ENUM),
-            'gamma': gamma,
-            'tau': tau,
-            'beta': beta,
-            'metrics': metrics,
-        }, save_path)
-        print(f"Model saved to {save_path}")
-
-    return iql
+def _loss_and_correct(
+    outputs: torch.Tensor,
+    targets: torch.Tensor,
+    criterion: nn.Module,
+    task_type: str,
+) -> tuple[torch.Tensor, float, int]:
+    """Compute loss and token/sample accuracy counts for classification or LM."""
+    if task_type == "lm":
+        vocab = outputs.size(-1)
+        loss = criterion(outputs.view(-1, vocab), targets.view(-1))
+        predicted = outputs.argmax(dim=-1)
+        correct = float(predicted.eq(targets).sum().item())
+        total = targets.numel()
+    else:
+        loss = criterion(outputs, targets)
+        _, predicted = outputs.max(1)
+        correct = float(predicted.eq(targets).sum().item())
+        total = targets.size(0)
+    return loss, correct, total
 
 
 # =============================================================================
@@ -255,6 +54,7 @@ def run_ppo_episode(
     max_epochs: int = 25,
     base_seed: int = 42,
     device: str = "cuda:0",
+    task_spec=None,
     use_telemetry: bool = True,
     collect_rollout: bool = True,
     deterministic: bool = False,
@@ -265,10 +65,28 @@ def run_ppo_episode(
     from esper.tamiyo import SignalTracker
     from esper.simic.ppo import signals_to_features
 
+    if task_spec is None:
+        task_spec = get_task_spec("cifar10")
+    ActionEnum = task_spec.action_enum
+    task_type = task_spec.task_type
+
     torch.manual_seed(base_seed)
     random.seed(base_seed)
 
-    model = create_model(device)
+    model = create_model(task=task_spec, device=device)
+
+    # Wire Kasmina telemetry into global Nissa hub so fossilization and
+    # lifecycle events propagate to configured backends (console, analytics).
+    hub = get_hub()
+
+    def telemetry_callback(event):
+        # Single-env PPO uses env_id=0 for analytics compatibility.
+        event.data.setdefault("env_id", 0)
+        hub.emit(event)
+
+    model.seed_slot.on_telemetry = telemetry_callback
+    model.seed_slot.fast_mode = False
+
     criterion = nn.CrossEntropyLoss()
     host_optimizer = torch.optim.SGD(
         model.get_host_parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4
@@ -277,7 +95,7 @@ def run_ppo_episode(
     signal_tracker = SignalTracker()
 
     seeds_created = 0
-    action_counts = {a.name: 0 for a in ACTION_ENUM}
+    action_counts = {a.name: 0 for a in ActionEnum}
     episode_rewards = []
 
     # Track host params and added params for compute rent
@@ -299,22 +117,23 @@ def run_ppo_episode(
                 inputs, targets = inputs.to(device), targets.to(device)
                 host_optimizer.zero_grad()
                 outputs = model(inputs)
-                loss = criterion(outputs, targets)
+                loss, correct_batch, batch_total = _loss_and_correct(outputs, targets, criterion, task_type)
                 loss.backward()
                 host_optimizer.step()
                 running_loss += loss.item()
-                _, predicted = outputs.max(1)
-                total += targets.size(0)
-                correct += predicted.eq(targets).sum().item()
+                total += batch_total
+                correct += correct_batch
 
         elif seed_state.stage == SeedStage.GERMINATED:
-            seed_state.transition(SeedStage.TRAINING)
+            gate_result = model.seed_slot.advance_stage(SeedStage.TRAINING)
+            if not gate_result.passed:
+                raise RuntimeError(f"G1 gate failed during TRAINING entry: {gate_result}")
             seed_optimizer = torch.optim.SGD(model.get_seed_parameters(), lr=0.01, momentum=0.9)
             for inputs, targets in trainloader:
                 inputs, targets = inputs.to(device), targets.to(device)
                 seed_optimizer.zero_grad()
                 outputs = model(inputs)
-                loss = criterion(outputs, targets)
+                loss, correct_batch, batch_total = _loss_and_correct(outputs, targets, criterion, task_type)
                 loss.backward()
 
                 # Collect gradient stats for telemetry (once per epoch, last batch)
@@ -323,9 +142,8 @@ def run_ppo_episode(
 
                 seed_optimizer.step()
                 running_loss += loss.item()
-                _, predicted = outputs.max(1)
-                total += targets.size(0)
-                correct += predicted.eq(targets).sum().item()
+                total += batch_total
+                correct += correct_batch
 
         elif seed_state.stage == SeedStage.TRAINING:
             if seed_optimizer is None:
@@ -334,7 +152,7 @@ def run_ppo_episode(
                 inputs, targets = inputs.to(device), targets.to(device)
                 seed_optimizer.zero_grad()
                 outputs = model(inputs)
-                loss = criterion(outputs, targets)
+                loss, correct_batch, batch_total = _loss_and_correct(outputs, targets, criterion, task_type)
                 loss.backward()
 
                 # Collect gradient stats for telemetry (once per epoch, last batch)
@@ -343,22 +161,18 @@ def run_ppo_episode(
 
                 seed_optimizer.step()
                 running_loss += loss.item()
-                _, predicted = outputs.max(1)
-                total += targets.size(0)
-                correct += predicted.eq(targets).sum().item()
+                total += batch_total
+                correct += correct_batch
 
         elif seed_state.stage == SeedStage.BLENDING:
-            step = 0
+            # Alpha progression handled by model.seed_slot.step_epoch()
             for inputs, targets in trainloader:
                 inputs, targets = inputs.to(device), targets.to(device)
                 host_optimizer.zero_grad()
                 if seed_optimizer:
                     seed_optimizer.zero_grad()
-                # Update blend alpha for this step
-                if model.seed_slot:
-                    model.seed_slot.update_alpha_for_step(step)
                 outputs = model(inputs)
-                loss = criterion(outputs, targets)
+                loss, correct_batch, batch_total = _loss_and_correct(outputs, targets, criterion, task_type)
                 loss.backward()
 
                 # Collect gradient stats for telemetry (once per epoch, last batch)
@@ -369,26 +183,44 @@ def run_ppo_episode(
                 if seed_optimizer:
                     seed_optimizer.step()
                 running_loss += loss.item()
-                _, predicted = outputs.max(1)
-                total += targets.size(0)
-                correct += predicted.eq(targets).sum().item()
-                step += 1
+                total += batch_total
+                correct += correct_batch
+
+        elif seed_state.stage in (SeedStage.SHADOWING, SeedStage.PROBATIONARY):
+            # Seed fully blended; continue joint training without alpha ramp
+            if seed_optimizer is None:
+                seed_optimizer = torch.optim.SGD(model.get_seed_parameters(), lr=0.01, momentum=0.9)
+            for inputs, targets in trainloader:
+                inputs, targets = inputs.to(device), targets.to(device)
+                host_optimizer.zero_grad()
+                seed_optimizer.zero_grad()
+                outputs = model(inputs)
+                loss, correct_batch, batch_total = _loss_and_correct(outputs, targets, criterion, task_type)
+                loss.backward()
+
+                if use_telemetry:
+                    grad_stats = collect_seed_gradients(model.get_seed_parameters())
+
+                host_optimizer.step()
+                seed_optimizer.step()
+                running_loss += loss.item()
+                total += batch_total
+                correct += correct_batch
 
         elif seed_state.stage == SeedStage.FOSSILIZED:
             for inputs, targets in trainloader:
                 inputs, targets = inputs.to(device), targets.to(device)
                 host_optimizer.zero_grad()
                 outputs = model(inputs)
-                loss = criterion(outputs, targets)
+                loss, correct_batch, batch_total = _loss_and_correct(outputs, targets, criterion, task_type)
                 loss.backward()
                 host_optimizer.step()
                 running_loss += loss.item()
-                _, predicted = outputs.max(1)
-                total += targets.size(0)
-                correct += predicted.eq(targets).sum().item()
+                total += batch_total
+                correct += correct_batch
 
-        train_loss = running_loss / len(trainloader)
-        train_acc = 100.0 * correct / total
+        train_loss = running_loss / len(trainloader) if len(trainloader) > 0 else 0.0
+        train_acc = 100.0 * correct / total if total > 0 else 0.0
 
         # Validate
         model.eval()
@@ -400,14 +232,13 @@ def run_ppo_episode(
             for inputs, targets in testloader:
                 inputs, targets = inputs.to(device), targets.to(device)
                 outputs = model(inputs)
-                loss = criterion(outputs, targets)
+                loss, correct_batch, batch_total = _loss_and_correct(outputs, targets, criterion, task_type)
                 val_loss += loss.item()
-                _, predicted = outputs.max(1)
-                total += targets.size(0)
-                correct += predicted.eq(targets).sum().item()
+                total += batch_total
+                correct += correct_batch
 
-        val_loss /= len(testloader)
-        val_acc = 100.0 * correct / total
+        val_loss = val_loss / len(testloader) if len(testloader) > 0 else 0.0
+        val_acc = 100.0 * correct / total if total > 0 else 0.0
 
         # Record accuracy in seed metrics for reward shaping
         if seed_state and seed_state.metrics:
@@ -440,19 +271,23 @@ def run_ppo_episode(
 
         acc_delta = signals.metrics.accuracy_delta
 
+        # Mechanical lifecycle advance (blending/shadowing dwell)
+        model.seed_slot.step_epoch()
+        seed_state = model.seed_state
+
         # Get features and action
         # Note: tracker would provide DiagnosticTracker telemetry if available
         features = signals_to_features(signals, model, tracker=None, use_telemetry=use_telemetry)
         state = torch.tensor([features], dtype=torch.float32, device=device)
 
         action_idx, log_prob, value = agent.get_action(state, deterministic=deterministic)
-        action = ACTION_ENUM(action_idx)
+        action = ActionEnum(action_idx)
         action_counts[action.name] += 1
 
         # Compute total params for rent (fossilized + active)
         total_params = params_added + model.active_seed_params
         reward = compute_shaped_reward(
-            action=action.value,
+            action=action,
             acc_delta=acc_delta,
             val_acc=val_acc,
             seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
@@ -471,18 +306,14 @@ def run_ppo_episode(
                 seeds_created += 1
                 seed_optimizer = None
 
-        elif action == ACTION_ENUM.ADVANCE:
-            if model.has_active_seed:
-                if model.seed_state.stage == SeedStage.TRAINING:
-                    model.seed_state.transition(SeedStage.BLENDING)
-                    model.seed_slot.start_blending(total_steps=5, temperature=1.0)
-                elif model.seed_state.stage == SeedStage.BLENDING:
-                    # Track params before fossilization
+        elif action == ActionEnum.FOSSILIZE:
+            if model.has_active_seed and model.seed_state.stage in (SeedStage.PROBATIONARY, SeedStage.SHADOWING):
+                gate_result = model.seed_slot.advance_stage(SeedStage.FOSSILIZED)
+                if gate_result.passed:
                     params_added += model.active_seed_params
-                    model.seed_state.transition(SeedStage.FOSSILIZED)
                     model.seed_slot.set_alpha(1.0)
 
-        elif action == ACTION_ENUM.CULL:
+        elif action == ActionEnum.CULL:
             if model.has_active_seed:
                 model.cull_seed()
                 seed_optimizer = None
@@ -513,6 +344,7 @@ def train_ppo(
     max_epochs: int = 25,
     update_every: int = 5,
     device: str = "cuda:0",
+    task: str = "cifar10",
     use_telemetry: bool = True,
     lr: float = 3e-4,
     clip_ratio: float = 0.2,
@@ -522,18 +354,24 @@ def train_ppo(
     entropy_anneal_episodes: int = 0,
     gamma: float = 0.99,
     save_path: str | None = None,
+    resume_path: str | None = None,
+    seed: int | None = None,
 ):
     """Train PPO agent."""
     from esper.simic.ppo import PPOAgent
     from esper.utils import load_cifar10
 
+    task_spec = get_task_spec(task)
+    ActionEnum = task_spec.action_enum
+
     print("=" * 60)
     print("PPO Training for Tamiyo")
     print("=" * 60)
+    print(f"Task: {task_spec.name} (topology={task_spec.topology}, type={task_spec.task_type})")
     print(f"Episodes: {n_episodes}, Max epochs: {max_epochs}")
     print(f"Device: {device}, Telemetry: {use_telemetry}")
 
-    trainloader, testloader = load_cifar10(batch_size=128)
+    trainloader, testloader = task_spec.create_dataloaders()
     # State dimension: 27 base features + 10 telemetry features if enabled
     BASE_FEATURE_DIM = 27
     state_dim = BASE_FEATURE_DIM + (SeedTelemetry.feature_dim() if use_telemetry else 0)
@@ -546,7 +384,7 @@ def train_ppo(
 
     agent = PPOAgent(
         state_dim=state_dim,
-        action_dim=len(ACTION_ENUM),
+        action_dim=len(ActionEnum),
         lr=lr,
         clip_ratio=clip_ratio,
         entropy_coef=entropy_coef,
@@ -573,6 +411,7 @@ def train_ppo(
             max_epochs=max_epochs,
             base_seed=base_seed,
             device=device,
+            task_spec=task_spec,
             use_telemetry=use_telemetry,
             collect_rollout=True,
             deterministic=False,
@@ -624,9 +463,6 @@ def train_ppo(
 
 
 __all__ = [
-    "extract_transitions",
-    "evaluate_iql_policy",
-    "train_iql",
     "run_ppo_episode",
     "train_ppo",
 ]

@@ -77,12 +77,12 @@ def test_advance_active_seed_noop_on_failed_fossilization_gate():
     # Stage should NOT change (stub's advance_stage still sets it, but in real code it wouldn't)
 
 
-def test_advance_active_seed_starts_blending_from_training_stage():
-    """TRAINING seeds should transition to BLENDING and start alpha schedule."""
+def test_advance_active_seed_noop_from_training_stage():
+    """TRAINING seeds are handled mechanically; fossilize action should do nothing."""
     model = _StubModel(SeedStage.TRAINING)
 
     _advance_active_seed(model)
 
-    assert model.seed_state.transition_calls == [SeedStage.BLENDING]
-    assert model.seed_slot.start_blending_calls == [(5, 1.0)]
-    assert model.seed_state.stage == SeedStage.BLENDING
+    assert model.seed_state.transition_calls == []
+    assert model.seed_slot.start_blending_calls == []
+    assert model.seed_state.stage == SeedStage.TRAINING

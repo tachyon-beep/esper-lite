@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import torch
 from datetime import datetime, timezone
+from enum import IntEnum
 from hypothesis import strategies as st
 from hypothesis.extra.numpy import arrays
 import numpy as np
@@ -298,15 +299,16 @@ def training_snapshots(draw, has_active_seed: bool | None = None):
 # =============================================================================
 
 @st.composite
-def action_values(draw):
-    """Generate valid action values (0-6).
-
-    Actions:
-        0=WAIT, 1=GERMINATE_CONV, 2=GERMINATE_ATTENTION,
-        3=GERMINATE_NORM, 4=GERMINATE_DEPTHWISE,
-        5=ADVANCE, 6=CULL
-    """
-    return draw(st.integers(min_value=0, max_value=6))
+def action_members(draw):
+    """Generate action enum members with a variable number of germinate actions."""
+    germinate_count = draw(st.integers(min_value=1, max_value=6))
+    members = {"WAIT": 0}
+    for i in range(1, germinate_count + 1):
+        members[f"GERMINATE_{i}"] = i
+    members["FOSSILIZE"] = germinate_count + 1
+    members["CULL"] = germinate_count + 2
+    ActionEnum = IntEnum("TestAction", members)
+    return draw(st.sampled_from(list(ActionEnum)))
 
 
 @st.composite
@@ -434,7 +436,7 @@ __all__ = [
     "training_signals",
     "training_snapshots",
     # Simic
-    "action_values",
+    "action_members",
     "reward_configs",
     "seed_infos",
     # Networks

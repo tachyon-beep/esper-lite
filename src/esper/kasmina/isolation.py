@@ -48,10 +48,12 @@ def blend_with_isolation(
     host_features: torch.Tensor,
     seed_features: torch.Tensor,
     alpha: float,
+    detach_host: bool = True,
 ) -> torch.Tensor:
-    """Blend host and seed features with gradient isolation on host path."""
+    """Blend host and seed features with optional gradient isolation on host path."""
     alpha = max(0.0, min(1.0, alpha))
-    return alpha * seed_features + (1.0 - alpha) * host_features.detach()
+    host_path = host_features.detach() if detach_host else host_features
+    return alpha * seed_features + (1.0 - alpha) * host_path
 
 
 # =============================================================================

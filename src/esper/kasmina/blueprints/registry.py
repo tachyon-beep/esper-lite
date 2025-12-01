@@ -48,6 +48,13 @@ class BlueprintRegistry:
                 param_estimate=param_estimate,
                 description=description,
             )
+            # Invalidate cached action enums for this topology so new blueprints appear
+            try:
+                from esper.leyline import actions as leyline_actions  # Local import to avoid cycle
+                leyline_actions._action_enum_cache.pop(topology, None)
+            except Exception:
+                # Cache invalidation best-effort; failures here shouldn't break registration
+                pass
             return factory
 
         return decorator
@@ -77,6 +84,17 @@ class BlueprintRegistry:
         """Create a module from a registered blueprint."""
         spec = cls.get(topology, name)
         return spec.factory(dim)
+
+    @classmethod
+    def unregister(cls, topology: str, name: str) -> None:
+        """Remove a blueprint from the registry (primarily for tests)."""
+        key = f"{topology}:{name}"
+        cls._blueprints.pop(key, None)
+        try:
+            from esper.leyline import actions as leyline_actions  # Local import to avoid cycle
+            leyline_actions._action_enum_cache.pop(topology, None)
+        except Exception:
+            pass
 
 
 __all__ = ["BlueprintSpec", "BlueprintRegistry"]

@@ -35,3 +35,27 @@ def test_germinate_correct_topology_succeeds():
 
     state = slot.germinate("norm", "good-seed")
     assert state is not None
+
+
+def test_germinate_unknown_topology_fails_loudly():
+    """Unknown topology should raise before blueprint lookup."""
+    from esper.kasmina.slot import SeedSlot
+    from esper.simic.features import TaskConfig
+
+    config = TaskConfig(
+        task_type="classification",
+        topology="weird",
+        baseline_loss=1.0,
+        target_loss=0.5,
+        typical_loss_delta_std=0.1,
+        max_epochs=5,
+    )
+
+    slot = SeedSlot(
+        slot_id="weird_slot",
+        channels=8,
+        task_config=config,
+    )
+
+    with pytest.raises(AssertionError, match="Unknown topology"):
+        slot.germinate("norm", "weird-seed")

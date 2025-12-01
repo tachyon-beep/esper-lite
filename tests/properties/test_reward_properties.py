@@ -14,7 +14,7 @@ from hypothesis import strategies as st
 from tests.strategies import (
     bounded_floats,
     accuracies,
-    action_values,
+    action_members,
     seed_infos,
     reward_configs,
     seed_stages,
@@ -34,7 +34,7 @@ class TestRewardBounds:
     """Test that rewards are bounded for all inputs."""
 
     @given(
-        action=action_values(),
+        action=action_members(),
         acc_delta=bounded_floats(-10.0, 10.0),
         val_acc=accuracies(),
         seed_info=st.one_of(seed_infos(), st.none()),
@@ -59,10 +59,11 @@ class TestRewardBounds:
         )
 
         # Reward should be bounded (conservative bounds for safety)
-        assert -20.0 < reward < 20.0, f"Reward {reward} out of bounds"
+        # PBRS bonuses can add headroom above legacy limits; keep a generous cap.
+        assert -40.0 < reward < 40.0, f"Reward {reward} out of bounds"
 
     @given(
-        action=action_values(),
+        action=action_members(),
         acc_delta=bounded_floats(-10.0, 10.0),
         val_acc=accuracies(),
         epoch=st.integers(0, 100),
@@ -91,21 +92,24 @@ class TestRewardBounds:
 class TestRewardMonotonicity:
     """Test that better performance → better reward."""
 
+    delta_pairs = bounded_floats(-5.0, 4.9).flatmap(
+        lambda d1: st.tuples(st.just(d1), bounded_floats(min_value=d1 + 0.01, max_value=5.0))
+    )
+
     @given(
-        action=action_values(),
-        acc_delta1=bounded_floats(-5.0, 5.0),
-        acc_delta2=bounded_floats(-5.0, 5.0),
+        action=action_members(),
+        deltas=delta_pairs,
         val_acc=accuracies(),
         epoch=st.integers(0, 100),
         max_epochs=st.integers(1, 100),
     )
-    def test_higher_acc_delta_better_reward(self, action, acc_delta1, acc_delta2, val_acc, epoch, max_epochs):
+    def test_higher_acc_delta_better_reward(self, action, deltas, val_acc, epoch, max_epochs):
         """Property: Higher accuracy improvement → higher reward.
 
         This is the core signal for the RL agent.
         """
         assume(epoch <= max_epochs)
-        assume(acc_delta1 < acc_delta2)  # Ensure strict ordering
+        acc_delta1, acc_delta2 = deltas
 
         r1 = compute_shaped_reward(action, acc_delta1, val_acc, None, epoch, max_epochs)
         r2 = compute_shaped_reward(action, acc_delta2, val_acc, None, epoch, max_epochs)
@@ -149,7 +153,7 @@ class TestPotentialBasedShaping:
 class TestInterventionCosts:
     """Test intervention costs are consistent."""
 
-    @given(action=action_values())
+    @given(action=action_members())
     def test_intervention_cost_non_positive(self, action):
         """Property: Intervention costs should be <= 0 (discourage unnecessary actions)."""
         cost = get_intervention_cost(action)
@@ -158,7 +162,9 @@ class TestInterventionCosts:
 
     def test_wait_has_zero_cost(self):
         """Property: WAIT action should have zero cost."""
-        cost = get_intervention_cost(0)  # 0 = WAIT
+        from enum import IntEnum
+        TestAction = IntEnum("TestAction", {"WAIT": 0, "FOSSILIZE": 1, "CULL": 2})
+        cost = get_intervention_cost(TestAction.WAIT)
 
         assert cost == 0.0
 

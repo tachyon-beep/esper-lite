@@ -16,7 +16,7 @@ def build_action_enum(topology: str) -> type[IntEnum]:
     Action layout:
         0: WAIT
         1-N: GERMINATE_<BLUEPRINT> (sorted by param count)
-        N+1: ADVANCE
+        N+1: FOSSILIZE
         N+2: CULL
     """
     if topology in _action_enum_cache:
@@ -29,7 +29,7 @@ def build_action_enum(topology: str) -> type[IntEnum]:
     members = {"WAIT": 0}
     for i, spec in enumerate(blueprints, start=1):
         members[f"GERMINATE_{spec.name.upper()}"] = i
-    members["ADVANCE"] = len(blueprints) + 1
+    members["FOSSILIZE"] = len(blueprints) + 1
     members["CULL"] = len(blueprints) + 2
 
     enum_name = f"{topology.title()}Action"
@@ -59,7 +59,7 @@ class Action(IntEnum):
     GERMINATE_ATTENTION = 2
     GERMINATE_NORM = 3
     GERMINATE_DEPTHWISE = 4
-    ADVANCE = 5
+    FOSSILIZE = 5
     CULL = 6
 
     @classmethod

@@ -12,29 +12,47 @@ import torch.nn.functional as F
 
 from esper.leyline import SeedStage
 from esper.kasmina.slot import SeedSlot
-from esper.kasmina.isolation import GradientIsolationMonitor
 from esper.kasmina.blueprints.cnn import ConvBlock  # Reuse shared building block
 
 
-class HostCNN(nn.Module):
-    """CNN host with single injection point after block2."""
+class CNNHost(nn.Module):
+    """CNN host with dynamic blocks and injection points after each block (except the first).
 
-    def __init__(self, num_classes: int = 10):
+    Mirrors TransformerHost's pattern: a ModuleList of blocks, a ModuleDict of slots keyed
+    by block index, and a simple looped forward that applies slots as identities when unused.
+    """
+
+    def __init__(self, num_classes: int = 10, n_blocks: int = 3, base_channels: int = 32):
         super().__init__()
-        self.block1 = ConvBlock(3, 32)
-        self.block2 = ConvBlock(32, 64)
-        self.block3 = ConvBlock(64, 128)
-        self.pool = nn.MaxPool2d(2, 2)
-        self.classifier = nn.Linear(128, num_classes)
+        if n_blocks < 2:
+            raise ValueError("CNNHost requires at least 2 blocks to expose an injection point")
 
-        # Injection points with compile-friendly ModuleDict
-        self._slot_keys = ("block2_post",)
+        self.n_blocks = n_blocks
+        self.base_channels = base_channels
+
+        # Build blocks with doubling channels each stage
+        blocks: list[nn.Module] = []
+        in_c = 3
+        for i in range(n_blocks):
+            out_c = base_channels * (2 ** i)
+            blocks.append(ConvBlock(in_c, out_c))
+            in_c = out_c
+        self.blocks = nn.ModuleList(blocks)
+        self.pool = nn.MaxPool2d(2, 2)
+
+        # Slots after each block except the first (aligns with previous block2_post default)
+        self._slot_indices = tuple(range(1, n_blocks))
+        # Keep legacy-friendly naming (block2_post) while allowing multiple slots
+        self._slot_keys = tuple(f"block{idx + 1}_post" for idx in self._slot_indices)
         self.slots = nn.ModuleDict({k: nn.Identity() for k in self._slot_keys})
+
+        # Classifier maps final channels → logits
+        self.classifier = nn.Linear(in_c, num_classes)
 
     @property
     def injection_points(self) -> dict[str, int]:
         """Map of slot_id -> channel dimension."""
-        return {"block2_post": 64}
+        return {k: self.blocks[idx].conv.out_channels for k, idx in zip(self._slot_keys, self._slot_indices)}
 
     def register_slot(self, slot_id: str, slot: nn.Module) -> None:
         """Attach a seed module at the specified injection point."""
@@ -50,31 +68,12 @@ class HostCNN(nn.Module):
         self.slots[slot_id] = nn.Identity()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.pool(self.block1(x))
-        x = self.pool(self.block2(x))
+        for idx, block in enumerate(self.blocks):
+            x = self.pool(block(x))
+            key = f"block{idx + 1}_post"
+            if key in self.slots:
+                x = self.slots[key](x)  # Identity when no seed
 
-        # Always call slot (Identity is no-op when empty)
-        x = self.slots["block2_post"](x)
-
-        x = self.pool(self.block3(x))
-        x = F.adaptive_avg_pool2d(x, 1).flatten(1)
-        return self.classifier(x)
-
-    # Legacy methods for MorphogeneticModel compatibility
-    @property
-    def injection_channels(self) -> int:
-        """Legacy: channel count at injection point."""
-        return 64
-
-    def forward_to_injection(self, x: torch.Tensor) -> torch.Tensor:
-        """Legacy: forward to injection point."""
-        x = self.pool(self.block1(x))
-        x = self.pool(self.block2(x))
-        return x
-
-    def forward_from_injection(self, x: torch.Tensor) -> torch.Tensor:
-        """Legacy: forward from injection point."""
-        x = self.pool(self.block3(x))
         x = F.adaptive_avg_pool2d(x, 1).flatten(1)
         return self.classifier(x)
 
@@ -235,57 +234,75 @@ class TransformerHost(nn.Module):
 # Morphogenetic Model
 # =============================================================================
 
-class MorphogeneticModel(nn.Module):
-    """Model with Kasmina seed slot."""
 
-    def __init__(self, host: HostCNN, device: str = "cpu"):
+class MorphogeneticModel(nn.Module):
+    """Model with Kasmina seed slot registered into host injection points."""
+
+    def __init__(
+        self,
+        host: nn.Module,
+        device: str = "cpu",
+        slot_id: str | None = None,
+        task_config=None,
+        fast_mode: bool = False,
+    ):
         super().__init__()
         self.host = host
         self._device = device
+        self.task_config = task_config
 
-        # Single seed slot at injection point
+        # Host must expose a concrete injection_points mapping for seed slots.
+        try:
+            injection_points = host.injection_points
+        except AttributeError as exc:
+            raise ValueError("Host must expose injection_points mapping for seed slots") from exc
+        if not injection_points:
+            raise ValueError("Host injection_points mapping must not be empty")
+
+        self.slot_id = slot_id or next(iter(injection_points))
+        if self.slot_id not in injection_points:
+            raise ValueError(
+                f"Slot '{self.slot_id}' not found in host injection points: {list(injection_points.keys())}"
+            )
+
+        channels = injection_points[self.slot_id]
         self.seed_slot = SeedSlot(
-            slot_id="injection_point",
-            channels=host.injection_channels,
+            slot_id=self.slot_id,
+            channels=channels,
             device=device,
+            task_config=task_config,
+            fast_mode=fast_mode,
         )
 
-        # Isolation monitor
-        self.isolation_monitor = GradientIsolationMonitor()
+        # Host must implement register_slot(slot_id, module).
+        try:
+            register_slot = self.host.register_slot
+        except AttributeError as exc:
+            raise ValueError("Host must implement register_slot(slot_id, module)") from exc
+
+        register_slot(self.slot_id, self.seed_slot)
+        self.host = self.host.to(device)
 
     def to(self, *args, **kwargs):
-        """Override to() to propagate device change to SeedSlot.
-
-        SeedSlot is not an nn.Module, so PyTorch's recursive to() doesn't
-        reach it. We manually propagate the device change to ensure the
-        slot creates new seeds on the correct device.
-        """
+        """Override to() to propagate device change to SeedSlot."""
         result = super().to(*args, **kwargs)
-
-        # Determine the new device from model parameters
         try:
             new_device = next(self.parameters()).device
         except StopIteration:
-            return result  # No parameters, nothing to update
+            return result
 
-        # Propagate to seed slot
         self.seed_slot.device = new_device
-        self._device = str(new_device)
-
-        # Move existing seed if present
-        if self.seed_slot.seed is not None:
+        if self.seed_slot.is_active and self.seed_slot.seed is not None:
             self.seed_slot.seed = self.seed_slot.seed.to(new_device)
-
+        self._device = str(new_device)
         return result
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        features = self.host.forward_to_injection(x)
-        features = self.seed_slot.forward(features)
-        return self.host.forward_from_injection(features)
+        return self.host(x)
 
     def germinate_seed(self, blueprint_id: str, seed_id: str) -> None:
         """Germinate a new seed."""
-        state = self.seed_slot.germinate(
+        self.seed_slot.germinate(
             blueprint_id=blueprint_id,
             seed_id=seed_id,
             host_module=self.host,
@@ -299,7 +316,11 @@ class MorphogeneticModel(nn.Module):
         return self.seed_slot.get_parameters()
 
     def get_host_parameters(self):
-        return self.host.parameters()
+        """Return host backbone parameters only (exclude seed slots)."""
+        for name, param in self.host.named_parameters():
+            if "slots" in name:
+                continue
+            yield param
 
     @property
     def has_active_seed(self) -> bool:
@@ -317,7 +338,7 @@ class MorphogeneticModel(nn.Module):
 
 __all__ = [
     "ConvBlock",
-    "HostCNN",
+    "CNNHost",
     "CausalSelfAttention",
     "MLP",
     "TransformerBlock",

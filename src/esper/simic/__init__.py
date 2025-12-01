@@ -3,17 +3,15 @@
 This package contains the reinforcement learning infrastructure for training
 the Tamiyo seed lifecycle controller:
 
-- buffers: Trajectory and replay buffers
+- buffers: Trajectory buffers
 - normalization: Observation normalization
 - networks: Policy network architectures
 - rewards: Reward computation
 - features: Feature extraction (hot path)
 - episodes: Episode data structures
 - ppo: PPO agent
-- iql: IQL agent
 - training: Training loops
 - vectorized: Multi-GPU training
-- comparison: Policy comparison utilities
 """
 
 # Actions
@@ -36,8 +34,6 @@ from esper.simic.episodes import (
 from esper.simic.buffers import (
     RolloutStep,
     RolloutBuffer,
-    Transition,
-    ReplayBuffer,
 )
 
 # Normalization
@@ -55,7 +51,6 @@ from esper.simic.rewards import (
     compute_loss_reward,
     compute_seed_potential,
     get_intervention_cost,
-    INTERVENTION_COSTS,
     STAGE_TRAINING,
     STAGE_BLENDING,
     STAGE_FOSSILIZED,
@@ -80,10 +75,8 @@ from esper.simic.networks import (
 
 # NOTE: Heavy modules imported on demand:
 #   from esper.simic.ppo import PPOAgent
-#   from esper.simic.iql import IQL
-#   from esper.simic.training import train_ppo, train_iql
+#   from esper.simic.training import train_ppo
 #   from esper.simic.vectorized import train_ppo_vectorized
-#   from esper.simic.comparison import live_comparison, head_to_head_comparison
 
 __all__ = [
     # Actions
@@ -104,8 +97,6 @@ __all__ = [
     # Buffers
     "RolloutStep",
     "RolloutBuffer",
-    "Transition",
-    "ReplayBuffer",
 
     # Normalization
     "RunningMeanStd",
@@ -121,7 +112,6 @@ __all__ = [
     "compute_loss_reward",
     "compute_seed_potential",
     "get_intervention_cost",
-    "INTERVENTION_COSTS",
     "STAGE_TRAINING",
     "STAGE_BLENDING",
     "STAGE_FOSSILIZED",

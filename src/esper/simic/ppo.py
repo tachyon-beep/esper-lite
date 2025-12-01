@@ -78,10 +78,11 @@ def signals_to_features(signals, model, tracker=None, use_telemetry: bool = True
         obs['seed_alpha'] = seed_state.alpha
         obs['seed_improvement'] = seed_state.metrics.improvement_since_stage_start
     else:
-        obs['seed_stage'] = 0
-        obs['seed_epochs_in_stage'] = 0
-        obs['seed_alpha'] = 0.0
-        obs['seed_improvement'] = 0.0
+        # Use TrainingSignals context when no live model is available (offline/replay)
+        obs['seed_stage'] = signals.seed_stage
+        obs['seed_epochs_in_stage'] = signals.seed_epochs_in_stage
+        obs['seed_alpha'] = signals.seed_alpha
+        obs['seed_improvement'] = signals.seed_improvement
 
     features = obs_to_base_features(obs)
 

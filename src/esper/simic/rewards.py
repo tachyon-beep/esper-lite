@@ -15,35 +15,30 @@ Usage:
     from esper.simic.rewards import compute_shaped_reward, RewardConfig
 
     reward = compute_shaped_reward(
-        action=SimicAction.GERMINATE_CONV.value,  # Action as int
+        action=ActionEnum.GERMINATE_CONV,  # Pass Enum member
         acc_delta=0.5,
         val_acc=65.0,
-        seed_info=SeedInfo(...),  # or None if no active seed
+        seed_info=SeedInfo(...),
         epoch=10,
         max_epochs=25,
+        action_enum=ActionEnum, # Required context
     )
-
-Action values (SimicAction enum):
-    0: WAIT
-    1: GERMINATE_CONV
-    2: GERMINATE_ATTENTION
-    3: GERMINATE_NORM
-    4: GERMINATE_DEPTHWISE
-    5: ADVANCE
-    6: CULL
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import IntEnum
 from typing import NamedTuple
 
 from esper.leyline import SeedStage
+from esper.leyline.actions import is_germinate_action
 
 
 # =============================================================================
 # Reward Configuration
 # =============================================================================
+
 
 @dataclass(slots=True)
 class RewardConfig:
@@ -67,7 +62,7 @@ class RewardConfig:
 
     # Action-specific weights (immediate bonuses removed to prevent churn exploitation)
     germinate_no_seed_bonus: float = 0.0  # Was 0.3
-    germinate_early_bonus: float = 0.0    # Was 0.2
+    germinate_early_bonus: float = 0.0  # Was 0.2
     germinate_with_seed_penalty: float = -0.3
 
     advance_good_bonus: float = 0.5
@@ -75,8 +70,8 @@ class RewardConfig:
     advance_blending_bonus: float = 0.4
     advance_no_seed_penalty: float = -0.2
 
-    cull_failing_bonus: float = 0.0       # Was 0.3
-    cull_acceptable_bonus: float = 0.0    # Was 0.1
+    cull_failing_bonus: float = 0.0  # Was 0.3
+    cull_acceptable_bonus: float = 0.0  # Was 0.1
     cull_promising_penalty: float = -0.3
     cull_no_seed_penalty: float = -0.2
 
@@ -95,6 +90,11 @@ class RewardConfig:
 
     # Compute cost penalty (per-step rent on excess params)
     compute_rent_weight: float = 0.05
+    compute_rent_exponent: float = 1.0  # Progressive tax exponent (1.0 = linear)
+    max_rent_penalty: float = 5.0  # Cap to prevent runaway negatives
+
+    # PBRS scaling for seed-based potential shaping
+    seed_potential_weight: float = 0.3
 
     @staticmethod
     def default() -> "RewardConfig":
@@ -105,6 +105,7 @@ class RewardConfig:
 # =============================================================================
 # Loss-Primary Reward Configuration (Phase 2)
 # =============================================================================
+
 
 @dataclass(slots=True)
 class LossRewardConfig:
@@ -122,6 +123,8 @@ class LossRewardConfig:
 
     # Compute rent
     compute_rent_weight: float = 0.05
+    compute_rent_exponent: float = 1.0
+    max_rent_penalty: float = 5.0
     grace_epochs: int = 3  # Rent-free grace period for new seeds
 
     # Stage bonuses (PBRS-compatible)
@@ -146,6 +149,7 @@ class LossRewardConfig:
             baseline_loss=2.3,  # ln(10)
             target_loss=0.3,
             typical_loss_delta_std=0.05,
+            compute_rent_exponent=1.1,
         )
 
     @staticmethod
@@ -154,12 +158,15 @@ class LossRewardConfig:
             baseline_loss=10.8,  # ln(50257)
             target_loss=3.5,
             typical_loss_delta_std=0.15,
+            compute_rent_weight=0.01,
+            compute_rent_exponent=1.5,
         )
 
 
 # =============================================================================
 # Lightweight Seed Info (for fast path)
 # =============================================================================
+
 
 class SeedInfo(NamedTuple):
     """Minimal seed information for reward computation.
@@ -216,8 +223,9 @@ STAGE_FOSSILIZED = SeedStage.FOSSILIZED.value
 # Core Reward Functions
 # =============================================================================
 
+
 def compute_shaped_reward(
-    action: int,  # SimicAction.value
+    action: IntEnum,  # dynamic action enum member (e.g., WAIT, GERMINATE_X, FOSSILIZE, CULL)
     acc_delta: float,
     val_acc: float,
     seed_info: SeedInfo | None,
@@ -226,6 +234,7 @@ def compute_shaped_reward(
     total_params: int = 0,
     host_params: int = 1,
     config: RewardConfig | None = None,
+    action_enum: type | None = None,  # <--- NEW: Added this argument to fix TypeError
 ) -> float:
     """Compute shaped reward for seed lifecycle control.
 
@@ -235,7 +244,7 @@ def compute_shaped_reward(
     - Zero allocations in hot path
 
     Args:
-        action: Action taken (0=WAIT, 1-4=GERMINATE_*, 5=ADVANCE, 6=CULL)
+        action: Action taken (dynamic IntEnum member)
         acc_delta: Accuracy improvement this step
         val_acc: Current validation accuracy
         seed_info: Seed state info (None if no active seed)
@@ -244,6 +253,7 @@ def compute_shaped_reward(
         total_params: Extra params added (fossilized + active seed)
         host_params: Baseline host model params (for normalization)
         config: Reward configuration (uses default if None)
+        action_enum: Optional Enum class for validating integer actions (legacy compat)
 
     Returns:
         Shaped reward value
@@ -256,11 +266,14 @@ def compute_shaped_reward(
     # Base: accuracy improvement
     reward += acc_delta * config.acc_delta_weight
 
-    # Compute rent: penalize excess params proportionally
-    # This is blueprint-agnostic: cost is determined by actual params added
+    # Compute rent: penalize excess params progressively
     if host_params > 0 and total_params > 0:
-        excess_params_ratio = total_params / host_params
-        reward -= config.compute_rent_weight * excess_params_ratio
+        # total_params currently passed as added params; convert to growth ratio
+        growth_ratio = 1.0 + (total_params / host_params)
+        scaled_cost = (growth_ratio**config.compute_rent_exponent) - 1.0
+        rent_penalty = config.compute_rent_weight * scaled_cost
+        rent_penalty = min(rent_penalty, config.max_rent_penalty)
+        reward -= rent_penalty
 
     # Lifecycle stage rewards
     if seed_info is not None:
@@ -280,15 +293,35 @@ def compute_shaped_reward(
         elif stage == STAGE_FOSSILIZED:
             reward += config.fossilized_bonus
 
-    # Action-specific shaping
-    # Action values: 0=WAIT, 1-4=GERMINATE_*, 5=ADVANCE, 6=CULL
-    if 1 <= action <= 4:  # Any GERMINATE variant
+    # Potential-based reward shaping for lifecycle progression
+    if seed_info is not None:
+        current_stage = seed_info.stage
+        previous_stage = seed_info.previous_stage
+        current_obs = {
+            "has_active_seed": 1,
+            "seed_stage": current_stage,
+            "seed_epochs_in_stage": seed_info.epochs_in_stage,
+        }
+        prev_obs = {
+            "has_active_seed": 1,
+            "seed_stage": previous_stage,
+            "seed_epochs_in_stage": max(0, seed_info.epochs_in_stage - 1),
+        }
+        phi_t = compute_seed_potential(current_obs)
+        phi_t_prev = compute_seed_potential(prev_obs)
+        pb_bonus = compute_pbrs_bonus(phi_t_prev, phi_t, gamma=0.99)
+        reward += config.seed_potential_weight * pb_bonus
+
+    # Action-specific shaping (semantic, enum-based)
+    # We rely on action.name (IntEnum member)
+    action_name = action.name
+    if is_germinate_action(action):
         reward += _germinate_shaping(seed_info, epoch, max_epochs, config)
-    elif action == 5:  # ADVANCE
+    elif action_name == "FOSSILIZE":
         reward += _advance_shaping(seed_info, config)
-    elif action == 6:  # CULL
+    elif action_name == "CULL":
         reward += _cull_shaping(seed_info, config)
-    elif action == 0:  # WAIT
+    elif action_name == "WAIT":
         reward += _wait_shaping(seed_info, acc_delta, config)
 
     # Terminal bonus
@@ -318,7 +351,7 @@ def _germinate_shaping(
 
 
 def _advance_shaping(seed_info: SeedInfo | None, config: RewardConfig) -> float:
-    """Compute shaping for ADVANCE action."""
+    """Compute shaping for FOSSILIZE action."""
     if seed_info is None:
         return config.advance_no_seed_penalty
 
@@ -384,6 +417,7 @@ _DEFAULT_CONFIG = RewardConfig()
 # Potential-Based Shaping (for offline RL compatibility)
 # =============================================================================
 
+
 def compute_potential(val_acc: float, epoch: int, max_epochs: int) -> float:
     """Compute potential function for PBRS.
 
@@ -441,9 +475,9 @@ def compute_seed_potential(obs: dict) -> float:
         - DORMANT=1, GERMINATED=2, TRAINING=3, BLENDING=4
         - SHADOWING=5, PROBATIONARY=6, FOSSILIZED=7
     """
-    has_active = obs.get('has_active_seed', 0)
-    seed_stage = obs.get('seed_stage', 0)
-    epochs_in_stage = obs.get('seed_epochs_in_stage', 0)
+    has_active = obs.get("has_active_seed", 0)
+    seed_stage = obs.get("seed_stage", 0)
+    epochs_in_stage = obs.get("seed_epochs_in_stage", 0)
 
     # No potential for inactive seeds or DORMANT (stage 1)
     if not has_active or seed_stage <= 1:
@@ -453,7 +487,7 @@ def compute_seed_potential(obs: dict) -> float:
     # Monotonically increasing toward FOSSILIZED (terminal success = highest)
     # This avoids the shaping cliff that punished fossilization
     stage_potentials = {
-        2: 5.0,   # GERMINATED - just started
+        2: 5.0,  # GERMINATED - just started
         3: 10.0,  # TRAINING - actively learning
         4: 15.0,  # BLENDING - about to integrate
         5: 20.0,  # SHADOWING - monitoring integration
@@ -490,12 +524,14 @@ def compute_pbrs_stage_bonus(
     gamma: float = 0.99,
 ) -> float:
     """PBRS-compatible stage bonus using potential function."""
-    previous_stage = getattr(seed_info, "previous_stage", seed_info.stage)
+    previous_stage = seed_info.previous_stage
 
     current_potential = _STAGE_POTENTIALS.get(seed_info.stage, 0.0)
     previous_potential = _STAGE_POTENTIALS.get(previous_stage, 0.0)
 
-    return config.stage_potential_weight * (gamma * current_potential - previous_potential)
+    return config.stage_potential_weight * (
+        gamma * current_potential - previous_potential
+    )
 
 
 def compute_loss_reward(
@@ -528,8 +564,11 @@ def compute_loss_reward(
         if seed_info is not None:
             in_grace = seed_info.seed_age_epochs < config.grace_epochs
         if not in_grace:
-            params_ratio = total_params / host_params
-            reward -= config.compute_rent_weight * params_ratio
+            growth_ratio = 1.0 + (total_params / host_params)
+            scaled_cost = (growth_ratio**config.compute_rent_exponent) - 1.0
+            rent_penalty = config.compute_rent_weight * scaled_cost
+            rent_penalty = min(rent_penalty, config.max_rent_penalty)
+            reward -= rent_penalty
 
     # Stage bonuses (PBRS)
     if seed_info is not None:
@@ -549,24 +588,24 @@ def compute_loss_reward(
 # Intervention Costs
 # =============================================================================
 
-INTERVENTION_COSTS = {
-    0: 0.0,    # WAIT
-    1: -0.02,  # GERMINATE_CONV
-    2: -0.02,  # GERMINATE_ATTENTION
-    3: -0.02,  # GERMINATE_NORM
-    4: -0.02,  # GERMINATE_DEPTHWISE
-    5: -0.01,  # ADVANCE
-    6: -0.005, # CULL
+GERMINATE_INTERVENTION_COST = -0.02
+
+INTERVENTION_COSTS_BY_NAME = {
+    "WAIT": 0.0,
+    "FOSSILIZE": -0.01,
+    "CULL": -0.005,
 }
 
 
-def get_intervention_cost(action: int) -> float:
+def get_intervention_cost(action: IntEnum) -> float:
     """Get intervention cost for an action.
 
     Small negative costs discourage unnecessary interventions,
     encouraging the agent to only act when beneficial.
     """
-    return INTERVENTION_COSTS.get(action, 0.0)
+    if is_germinate_action(action):
+        return GERMINATE_INTERVENTION_COST
+    return INTERVENTION_COSTS_BY_NAME.get(action.name, 0.0)
 
 
 # =============================================================================
@@ -584,7 +623,7 @@ __all__ = [
     "compute_loss_reward",
     "compute_seed_potential",
     "get_intervention_cost",
-    "INTERVENTION_COSTS",
+    "INTERVENTION_COSTS_BY_NAME",
     "STAGE_TRAINING",
     "STAGE_BLENDING",
     "STAGE_FOSSILIZED",

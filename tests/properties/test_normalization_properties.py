@@ -63,7 +63,7 @@ class TestNormalizationConvergence:
         """
         # Skip if all values are the same (zero variance case)
         all_values_tensor = torch.tensor(values, dtype=torch.float32)
-        if all_values_tensor.var().item() < 1e-6:
+        if all_values_tensor.var(unbiased=False).item() < 1e-6:
             assume(False)  # Skip this example
 
         normalizer = RunningMeanStd(shape=())

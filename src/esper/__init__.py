@@ -16,7 +16,6 @@ __version__ = "1.0.0"
 # Re-export key types for convenience
 from esper.leyline import SimicAction, SeedStage, TrainingSignals
 from esper.kasmina import MorphogeneticModel, SeedSlot
-from esper.tamiyo import HeuristicTamiyo
 
 __all__ = [
     "SimicAction",
@@ -24,5 +23,4 @@ __all__ = [
     "TrainingSignals",
     "MorphogeneticModel",
     "SeedSlot",
-    "HeuristicTamiyo",
 ]

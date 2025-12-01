@@ -87,11 +87,28 @@ class SignalTracker:
             best_val_loss=min(self._loss_history) if self._loss_history else float('inf'),
         )
 
+        seed_stage = 0
+        seed_epochs_in_stage = 0
+        seed_alpha = 0.0
+        seed_improvement = 0.0
+
+        if active_seeds:
+            first_seed = active_seeds[0]
+            seed_stage = int(first_seed.stage)
+            # SeedState contract guarantees metrics and epochs_in_stage integer.
+            seed_epochs_in_stage = first_seed.epochs_in_stage
+            seed_alpha = first_seed.alpha
+            seed_improvement = first_seed.metrics.improvement_since_stage_start
+
         # Build TrainingSignals (Leyline format with nested metrics)
         signals = TrainingSignals(
             metrics=metrics,
             active_seeds=[s.seed_id for s in active_seeds],
             available_slots=available_slots,
+            seed_stage=seed_stage,
+            seed_epochs_in_stage=seed_epochs_in_stage,
+            seed_alpha=seed_alpha,
+            seed_improvement=seed_improvement,
             loss_history=list(self._loss_history)[-5:],  # Last 5 for compat
             accuracy_history=list(self._accuracy_history)[-5:],
         )

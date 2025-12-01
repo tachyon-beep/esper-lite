@@ -23,19 +23,19 @@ def test_host_protocol_has_required_methods():
 
 
 def test_host_cnn_implements_protocol():
-    """HostCNN implements HostProtocol."""
+    """CNNHost implements HostProtocol."""
     from esper.kasmina.protocol import HostProtocol
-    from esper.kasmina.host import HostCNN
+    from esper.kasmina.host import CNNHost
 
-    host = HostCNN()
+    host = CNNHost()
     assert isinstance(host, HostProtocol)
 
 
 def test_host_cnn_injection_points():
-    """HostCNN declares injection points."""
-    from esper.kasmina.host import HostCNN
+    """CNNHost declares injection points."""
+    from esper.kasmina.host import CNNHost
 
-    host = HostCNN()
+    host = CNNHost()
     points = host.injection_points
 
     assert "block2_post" in points
@@ -43,10 +43,10 @@ def test_host_cnn_injection_points():
 
 
 def test_host_cnn_register_slot():
-    """HostCNN can register a slot module."""
-    from esper.kasmina.host import HostCNN
+    """CNNHost can register a slot module."""
+    from esper.kasmina.host import CNNHost
 
-    host = HostCNN()
+    host = CNNHost()
     slot = torch.nn.Conv2d(64, 64, 1)
 
     host.register_slot("block2_post", slot)
@@ -55,10 +55,10 @@ def test_host_cnn_register_slot():
 
 
 def test_host_cnn_register_invalid_slot_raises():
-    """HostCNN raises ValueError for invalid slot_id."""
-    from esper.kasmina.host import HostCNN
+    """CNNHost raises ValueError for invalid slot_id."""
+    from esper.kasmina.host import CNNHost
 
-    host = HostCNN()
+    host = CNNHost()
     slot = torch.nn.Conv2d(64, 64, 1)
 
     with pytest.raises(ValueError, match="Unknown injection point"):
@@ -66,10 +66,10 @@ def test_host_cnn_register_invalid_slot_raises():
 
 
 def test_host_cnn_unregister_slot():
-    """HostCNN can unregister a slot (resets to Identity)."""
-    from esper.kasmina.host import HostCNN
+    """CNNHost can unregister a slot (resets to Identity)."""
+    from esper.kasmina.host import CNNHost
 
-    host = HostCNN()
+    host = CNNHost()
     slot = torch.nn.Conv2d(64, 64, 1)
 
     host.register_slot("block2_post", slot)
@@ -79,10 +79,10 @@ def test_host_cnn_unregister_slot():
 
 
 def test_host_cnn_forward_with_identity():
-    """HostCNN forward works with Identity slots (no-op)."""
-    from esper.kasmina.host import HostCNN
+    """CNNHost forward works with Identity slots (no-op)."""
+    from esper.kasmina.host import CNNHost
 
-    host = HostCNN()
+    host = CNNHost()
     x = torch.randn(2, 3, 32, 32)
 
     out = host(x)
@@ -91,10 +91,10 @@ def test_host_cnn_forward_with_identity():
 
 
 def test_host_cnn_forward_with_slot():
-    """HostCNN forward passes through registered slot."""
-    from esper.kasmina.host import HostCNN
+    """CNNHost forward passes through registered slot."""
+    from esper.kasmina.host import CNNHost
 
-    host = HostCNN()
+    host = CNNHost()
 
     class DoubleSlot(torch.nn.Module):
         def forward(self, x):

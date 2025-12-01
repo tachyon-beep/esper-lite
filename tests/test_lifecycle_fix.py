@@ -115,9 +115,14 @@ class TestStepEpochAutoAdvance:
 
         # Run through all blending steps
         for _ in range(3):
+            slot.state.metrics.record_accuracy(0.0)
             slot.step_epoch()
 
-        # Should have auto-advanced through SHADOWING to PROBATIONARY
+        # Record metrics to simulate validation and allow dwell accounting in SHADOWING
+        slot.state.metrics.record_accuracy(0.0)
+
+        # One more epoch to complete SHADOWING dwell
+        slot.step_epoch()
         assert slot.state.stage == SeedStage.PROBATIONARY
         assert slot.alpha >= 0.99
 
@@ -143,46 +148,43 @@ class TestStepEpochAutoAdvance:
         slot.step_epoch()
 
 
-class TestStrategicAdvanceOnly:
-    """Test that ADVANCE only works at strategic decision points."""
+class TestStrategicFossilizeOnly:
+    """Test that FOSSILIZE only works at strategic decision points."""
 
-    def test_advance_from_training_starts_blending(self):
-        """ADVANCE from TRAINING should transition to BLENDING."""
-        from esper.kasmina.host import MorphogeneticModel, HostCNN
+    def test_fossilize_from_training_disallowed(self):
+        """FOSSILIZE from TRAINING should not bypass blending."""
+        from esper.kasmina.host import MorphogeneticModel, CNNHost
 
-        model = MorphogeneticModel(HostCNN(), device="cpu")
+        model = MorphogeneticModel(CNNHost(), device="cpu")
         model.germinate_seed("conv_enhance", "test_seed")
         model.seed_state.transition(SeedStage.TRAINING)
 
-        # Simulate ADVANCE action
+        ok = model.seed_state.transition(SeedStage.FOSSILIZED)
+        assert ok is False
         assert model.seed_state.stage == SeedStage.TRAINING
-        model.seed_state.transition(SeedStage.BLENDING)
-        model.seed_slot.start_blending(total_steps=5, temperature=1.0)
 
-        assert model.seed_state.stage == SeedStage.BLENDING
+    def test_fossilize_from_probationary(self):
+        """FOSSILIZE from PROBATIONARY should transition to FOSSILIZED."""
+        from esper.kasmina.host import MorphogeneticModel, CNNHost
 
-    def test_advance_from_probationary_fossilizes(self):
-        """ADVANCE from PROBATIONARY should transition to FOSSILIZED."""
-        from esper.kasmina.host import MorphogeneticModel, HostCNN
-
-        model = MorphogeneticModel(HostCNN(), device="cpu")
+        model = MorphogeneticModel(CNNHost(), device="cpu")
         model.germinate_seed("conv_enhance", "test_seed")
         model.seed_state.transition(SeedStage.TRAINING)
         model.seed_state.transition(SeedStage.BLENDING)
         model.seed_state.transition(SeedStage.SHADOWING)
         model.seed_state.transition(SeedStage.PROBATIONARY)
 
-        # ADVANCE from PROBATIONARY should work
+        # FOSSILIZE from PROBATIONARY should work
         ok = model.seed_state.transition(SeedStage.FOSSILIZED)
 
         assert ok is True
         assert model.seed_state.stage == SeedStage.FOSSILIZED
 
-    def test_advance_from_blending_is_noop(self):
-        """ADVANCE from BLENDING should NOT transition directly to FOSSILIZED."""
-        from esper.kasmina.host import MorphogeneticModel, HostCNN
+    def test_fossilize_from_blending_is_noop(self):
+        """FOSSILIZE from BLENDING should NOT transition directly to FOSSILIZED."""
+        from esper.kasmina.host import MorphogeneticModel, CNNHost
 
-        model = MorphogeneticModel(HostCNN(), device="cpu")
+        model = MorphogeneticModel(CNNHost(), device="cpu")
         model.germinate_seed("conv_enhance", "test_seed")
         model.seed_state.transition(SeedStage.TRAINING)
         model.seed_state.transition(SeedStage.BLENDING)
@@ -199,27 +201,30 @@ class TestLifecycleIntegration:
 
     def test_full_lifecycle_with_auto_advance(self):
         """Test TRAINING→BLENDING→(auto)→PROBATIONARY→FOSSILIZED."""
-        from esper.kasmina.host import MorphogeneticModel, HostCNN
+        from esper.kasmina.host import MorphogeneticModel, CNNHost
 
-        model = MorphogeneticModel(HostCNN(), device="cpu")
+        model = MorphogeneticModel(CNNHost(), device="cpu")
         model.germinate_seed("conv_enhance", "test_seed")
         model.seed_state.transition(SeedStage.TRAINING)
 
-        # Tamiyo: ADVANCE to start blending
+        # Tamiyo: action triggers blending start (mechanical now)
         model.seed_state.transition(SeedStage.BLENDING)
         model.seed_slot.start_blending(total_steps=3, temperature=1.0)
 
         assert model.seed_state.stage == SeedStage.BLENDING
 
         # Kasmina: auto-advance via step_epoch
-        model.seed_slot.step_epoch()  # 1/3
-        model.seed_slot.step_epoch()  # 2/3
-        model.seed_slot.step_epoch()  # 3/3 → auto-advance
+        for _ in range(3):
+            model.seed_state.metrics.record_accuracy(0.0)
+            model.seed_slot.step_epoch()  # advance blending progress
 
-        # Should now be in PROBATIONARY (auto-advanced through SHADOWING)
+        # Shadowing dwell requires a recorded epoch
+        model.seed_state.metrics.record_accuracy(0.0)
+        model.seed_slot.step_epoch()  # dwell → PROBATIONARY
+
         assert model.seed_state.stage == SeedStage.PROBATIONARY
 
-        # Tamiyo: ADVANCE to fossilize
+        # Tamiyo: FOSSILIZE to finalize
         ok = model.seed_state.transition(SeedStage.FOSSILIZED)
 
         assert ok is True
@@ -227,10 +232,10 @@ class TestLifecycleIntegration:
 
     def test_fossilization_emits_telemetry(self):
         """Test that fossilization emits SEED_FOSSILIZED telemetry."""
-        from esper.kasmina.host import MorphogeneticModel, HostCNN
+        from esper.kasmina.host import MorphogeneticModel, CNNHost
         from esper.leyline import TelemetryEventType
 
-        model = MorphogeneticModel(HostCNN(), device="cpu")
+        model = MorphogeneticModel(CNNHost(), device="cpu")
 
         # Capture telemetry events
         captured_events = []
@@ -246,13 +251,13 @@ class TestLifecycleIntegration:
         model.seed_state.transition(SeedStage.BLENDING)
         model.seed_slot.start_blending(total_steps=3, temperature=1.0)
 
-        for _ in range(3):
-            model.seed_slot.step_epoch()
+        # Simulate training/validation metrics to drive dwell counters and gates
+        for acc in (60.0, 61.0, 62.0):
+            model.seed_state.metrics.record_accuracy(acc)
+            model.seed_slot.step_epoch()  # advance blending progress
 
-        # After step_epoch completes blending, seed is in PROBATIONARY
-        # Mock improvement so gate check passes
-        model.seed_state.metrics.initial_val_accuracy = 60.0
-        model.seed_state.metrics.current_val_accuracy = 65.0  # +5% improvement
+        model.seed_state.metrics.record_accuracy(63.0)  # shadowing dwell epoch
+        model.seed_slot.step_epoch()
 
         # Use advance_stage to fossilize (this emits telemetry)
         result = model.seed_slot.advance_stage(target_stage=SeedStage.FOSSILIZED)

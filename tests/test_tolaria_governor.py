@@ -448,10 +448,10 @@ class TestTolariaGovernor:
         - Discard experimental (non-fossilized) seeds
         """
         from esper.tolaria import TolariaGovernor
-        from esper.kasmina import MorphogeneticModel, HostCNN
+        from esper.kasmina import MorphogeneticModel, CNNHost
 
         # Create a real MorphogeneticModel with seed slot
-        host = HostCNN()
+        host = CNNHost()
         model = MorphogeneticModel(host, device="cpu")
         gov = TolariaGovernor(model)
 

@@ -33,7 +33,7 @@ from esper.kasmina.isolation import AlphaSchedule, blend_with_isolation, Gradien
 
 # Host
 from esper.kasmina.protocol import HostProtocol
-from esper.kasmina.host import HostCNN, TransformerHost, TransformerBlock, MorphogeneticModel
+from esper.kasmina.host import CNNHost, TransformerHost, TransformerBlock, MorphogeneticModel
 
 __all__ = [
     # Re-exported Leyline types
@@ -60,7 +60,7 @@ __all__ = [
     "GradientIsolationMonitor",
     # Host
     "HostProtocol",
-    "HostCNN",
+    "CNNHost",
     "TransformerHost",
     "TransformerBlock",
     "MorphogeneticModel",

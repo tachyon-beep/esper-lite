@@ -13,12 +13,16 @@
 - Core loop: training signals -> Tamiyo/Simic action -> Kasmina seed update -> Leyline reports back into signals; keep vector sizes and enums consistent across layers.
 
 ## Build, Test, and Development Commands
-- Create env: `python -m venv .venv && source .venv/bin/activate`.
-- Install: `pip install -e .[dev]` (pytest, jupyter; Python 3.11+).
-- Proof-of-concepts: `PYTHONPATH=src python src/esper/poc.py` (fixed) or `PYTHONPATH=src python src/esper/poc_tamiyo.py` (Tamiyo-driven).
+- Preferred env/tooling: **use `uv`** (fast, isolated, no system-site-packages edits).
+  - First time: `uv sync` (optional; `uv run` will also resolve deps).
+  - Run tests: `uv run pytest -q` from repo root.
+  - Run scripts: `uv run python src/esper/poc.py`, `uv run python src/esper/poc_tamiyo.py`, etc.
+- Legacy/manual env (only if you really need it):
+  - Create env: `python -m venv .venv && source .venv/bin/activate`.
+  - Install: `pip install -e .[dev]` (pytest, jupyter; Python 3.11+).
 - Policy training: `./scripts/train_ppo.sh -e 50 --single` (writes `data/models/ppo_tamiyo.pt`; `--help` for options); GPU recommended, CPU supported but slower.
 - Batch policy learning: `PYTHONPATH=src python src/esper/simic_overnight.py --episodes 50`.
-- Tests: `PYTHONPATH=src pytest -q` before PRs.
+- Tests (non-uv): `PYTHONPATH=src pytest -q` before PRs.
 
 ## Coding Style & Naming Conventions
 - 4-space indentation, type hints; prefer `@dataclass(slots=True)` or `NamedTuple` for hot paths.
@@ -44,9 +48,9 @@
 - **Never add:** Version checks, feature flags for old behavior, compatibility modes, deprecated stubs, commented-out old code, `_legacy`/`_old` helpers, or migration helpers supporting both old and new.
 - **Default stance:** If it’s removed or replaced, it’s gone—rely on git history, not in-repo shims.
 
-## hasattr Authorization
-- **Strict:** Every `hasattr()` must have an inline authorization comment with operator name, ISO 8601 datetime (UTC), and justification.
+## hasattr/getattr Authorization
+- **Strict:** Every `hasattr()` and every dynamic `getattr()` used for feature/attribute detection or polymorphic access must have an inline authorization comment with operator name, ISO 8601 datetime (UTC), and justification.
 - **Format example:**  
   `# hasattr AUTHORIZED by John on 2025-11-30 14:23:00 UTC`  
   `# Justification: Serialization handling of external polymorphic payloads`
-- **Allowed cases (still require authorization):** External/serialization polymorphism, cleanup guards (`__del__/close`), external feature detection. All others should be refactored away.
+- **Allowed cases (still require authorization):** External/serialization polymorphism, cleanup guards (`__del__/close`), external feature detection. All others should be refactored away or rewritten to use explicit, typed interfaces rather than `hasattr()`/dynamic `getattr()`.

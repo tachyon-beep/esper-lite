@@ -101,6 +101,11 @@ class BlueprintAnalytics(OutputBackend):
         self.stats: dict[str, BlueprintStats] = defaultdict(BlueprintStats)
         self.scoreboards: dict[int, SeedScoreboard] = {}
 
+    def set_host_params(self, env_id: int, host_params: int) -> None:
+        """Initialize or update host parameter count for an environment."""
+        sb = self._get_scoreboard(env_id)
+        sb.host_params = host_params
+
     def emit(self, event: TelemetryEvent) -> None:
         """Process lifecycle events to update stats and print status."""
         if event.event_type == TelemetryEventType.SEED_GERMINATED:

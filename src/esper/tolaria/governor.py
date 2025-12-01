@@ -149,14 +149,13 @@ class TolariaGovernor:
             raise RuntimeError("Governor panic before first snapshot!")
 
         # Restore host + fossilized seeds
-        self.model.load_state_dict(self.last_good_state)
+        self.model.load_state_dict(self.last_good_state, strict=False)
 
         # Clear any live (non-fossilized) seeds from slots
         # This implements "revert to stable organism, dump all temporary grafts"
         if hasattr(self.model, 'seed_slot'):  # hasattr AUTHORIZED by John on 2025-12-01 16:30:00 UTC
                                               # Justification: Feature detection - MorphogeneticModel has seed_slot, base models may not
-            if self.model.seed_slot.is_active:
-                self.model.seed_slot.cull("governor_rollback")
+            self.model.seed_slot.cull("governor_rollback")
 
         self.consecutive_panics += 1
 

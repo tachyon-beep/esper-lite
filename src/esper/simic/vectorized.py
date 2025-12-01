@@ -30,19 +30,15 @@ from dataclasses import dataclass, field
 import torch
 import torch.nn as nn
 
+from esper.runtime import get_task_spec
 from esper.leyline import SeedStage, SeedTelemetry, TelemetryEvent
-from esper.leyline.actions import build_action_enum, get_blueprint_from_action, is_germinate_action
+from esper.leyline.actions import get_blueprint_from_action, is_germinate_action
 from esper.simic.gradient_collector import collect_seed_gradients
-from esper.simic.buffers import RolloutBuffer
-from esper.simic.networks import ActorCritic
 from esper.simic.normalization import RunningMeanStd
 from esper.simic.ppo import PPOAgent, signals_to_features
 from esper.simic.rewards import compute_shaped_reward, SeedInfo
-from esper.nissa import NissaHub, BlueprintAnalytics
+from esper.nissa import get_hub, BlueprintAnalytics
 from esper.tolaria import TolariaGovernor
-
-# Action enum for CNN topology (current vectorized trainer)
-ACTION_ENUM = build_action_enum("cnn")
 
 
 # =============================================================================
@@ -71,38 +67,44 @@ class ParallelEnvState:
     test_iter: any = None   # Persistent testloader iterator
     seeds_created: int = 0
     episode_rewards: list = field(default_factory=list)
-    action_counts: dict = field(default_factory=lambda: {a.name: 0 for a in ACTION_ENUM})
+    action_counts: dict = field(default_factory=dict)
+    successful_action_counts: dict = field(default_factory=dict)
+    action_enum: type | None = None
     # Metrics for current batch step
     train_loss: float = 0.0
     train_acc: float = 0.0
     val_loss: float = 0.0
     val_acc: float = 0.0
 
+    def __post_init__(self) -> None:
+        if not self.action_counts and self.action_enum is not None:
+            base_counts = {a.name: 0 for a in self.action_enum}
+            self.action_counts = base_counts.copy()
+            self.successful_action_counts = base_counts.copy()
 
-def _advance_active_seed(model) -> None:
-    """Advance lifecycle for the active seed, emitting telemetry via SeedSlot."""
+
+def _advance_active_seed(model) -> bool:
+    """Advance lifecycle for the active seed, emitting telemetry via SeedSlot.
+
+    Returns:
+        True if the seed successfully fossilized, False otherwise.
+    """
     if not model.has_active_seed:
-        return
+        return False
 
     seed_state = model.seed_state
     current_stage = seed_state.stage
 
-    if current_stage == SeedStage.TRAINING:
-        ok = seed_state.transition(SeedStage.BLENDING)
-        if not ok:
-            raise RuntimeError(
-                "Illegal lifecycle transition TRAINING → BLENDING"
-            )
-        model.seed_slot.start_blending(total_steps=5, temperature=1.0)
-
-    elif current_stage == SeedStage.PROBATIONARY:
+    # Tamiyo only finalizes; mechanical blending/advancement handled by Kasmina
+    if current_stage in (SeedStage.PROBATIONARY, SeedStage.SHADOWING):
         gate_result = model.seed_slot.advance_stage(SeedStage.FOSSILIZED)
         if gate_result.passed:
             model.seed_slot.set_alpha(1.0)
-        # Gate check failed - this is normal, Tamiyo learns from failed attempts
-        # The action has no effect, but the RL agent receives the shaped reward
-
-    # else: BLENDING/SHADOWING - no-op, Kasmina auto-advances via step_epoch
+            return True
+        # Gate check failure is normal; reward shaping will penalize
+        return False
+    return False
+    # else: TRAINING/BLENDING handled mechanically via SeedSlot.step_epoch
 
 
 # =============================================================================
@@ -115,7 +117,8 @@ def train_ppo_vectorized(
     max_epochs: int = 25,
     device: str = "cuda:0",
     devices: list[str] | None = None,
-    use_telemetry: bool = False,
+    task: str = "cifar10",
+    use_telemetry: bool = True,
     lr: float = 3e-4,
     clip_ratio: float = 0.2,
     entropy_coef: float = 0.1,
@@ -126,6 +129,7 @@ def train_ppo_vectorized(
     save_path: str = None,
     resume_path: str = None,
     seed: int = 42,
+    num_workers: int | None = None,
 ) -> tuple[PPOAgent, list[dict]]:
     """Train PPO with vectorized environments using INVERTED CONTROL FLOW.
 
@@ -152,15 +156,18 @@ def train_ppo_vectorized(
         Tuple of (trained_agent, training_history)
     """
     from esper.tolaria import create_model
-    from esper.utils import load_cifar10
     from esper.tamiyo import SignalTracker
 
     if devices is None:
         devices = [device]
 
+    task_spec = get_task_spec(task)
+    ActionEnum = task_spec.action_enum
+
     print("=" * 60)
     print("PPO Vectorized Training (INVERTED CONTROL FLOW + CUDA STREAMS)")
     print("=" * 60)
+    print(f"Task: {task_spec.name} (topology={task_spec.topology}, type={task_spec.task_type})")
     print(f"Episodes: {n_episodes} (across {n_envs} parallel envs)")
     print(f"Max epochs per episode: {max_epochs}")
     print(f"Policy device: {device}")
@@ -173,26 +180,48 @@ def train_ppo_vectorized(
     else:
         print(f"Entropy coef: {entropy_coef} (fixed)")
     print(f"Learning rate: {lr}")
+    print(f"Telemetry features: {'ENABLED' if use_telemetry else 'DISABLED'}")
     print()
 
     # Create independent DataLoaders per environment to avoid GIL contention.
     # When multiple CUDA streams try to iterate a shared DataLoader, the GIL
     # serializes access. Independent DataLoaders with unique random seeds
     # allow true parallel data loading.
-    print(f"Loading CIFAR-10 ({n_envs} independent DataLoaders)...")
+    print(f"Loading {task_spec.name} ({n_envs} independent DataLoaders)...")
 
     def create_env_dataloaders(env_idx: int, base_seed: int):
         """Create DataLoaders with unique random seed for this environment."""
-        # Use unique seed per environment for data shuffling
-        gen = torch.Generator()
-        gen.manual_seed(base_seed + env_idx * 7919)  # Prime number for seed spacing
-        return load_cifar10(batch_size=512, generator=gen)
+        loader_kwargs: dict = {}
+        if "generator" in task_spec.dataloader_defaults:
+            gen = torch.Generator()
+            gen.manual_seed(base_seed + env_idx * 7919)  # Prime spacing for seeds
+            loader_kwargs["generator"] = gen
+        if task_spec.name == "cifar10":
+            loader_kwargs["batch_size"] = 512  # Preserve high-throughput setting
+        if num_workers is not None:
+            loader_kwargs["num_workers"] = num_workers
+        return task_spec.create_dataloaders(**loader_kwargs)
 
     # Create DataLoaders once and reuse across all batches
     # This allows persistent_workers to actually persist
     env_dataloaders = [create_env_dataloaders(i, seed) for i in range(n_envs)]
     num_train_batches = len(env_dataloaders[0][0])
     num_test_batches = len(env_dataloaders[0][1])
+
+    def loss_and_correct(outputs: torch.Tensor, targets: torch.Tensor, criterion: nn.Module):
+        """Compute loss and correct counts for classification or LM."""
+        if task_spec.task_type == "lm":
+            vocab = outputs.size(-1)
+            loss = criterion(outputs.view(-1, vocab), targets.view(-1))
+            predicted = outputs.argmax(dim=-1)
+            correct = predicted.eq(targets).sum()
+            total = targets.numel()
+        else:
+            loss = criterion(outputs, targets)
+            _, predicted = outputs.max(1)
+            correct = predicted.eq(targets).sum()
+            total = targets.size(0)
+        return loss, correct, total
 
     # State dimension: 27 base features + 10 telemetry features if enabled
     BASE_FEATURE_DIM = 27
@@ -225,7 +254,7 @@ def train_ppo_vectorized(
     else:
         agent = PPOAgent(
             state_dim=state_dim,
-            action_dim=len(ACTION_ENUM),
+            action_dim=len(ActionEnum),
             lr=lr,
             clip_ratio=clip_ratio,
             entropy_coef=entropy_coef,
@@ -237,17 +266,19 @@ def train_ppo_vectorized(
         )
 
     # ==========================================================================
-    # Blueprint Analytics Setup
+    # Blueprint Analytics + Nissa Hub Wiring
     # ==========================================================================
     analytics = BlueprintAnalytics()
-    hub = NissaHub()
+    hub = get_hub()
     hub.add_backend(analytics)
 
     def make_telemetry_callback(env_idx: int):
         """Create callback that injects env_id before emitting to hub."""
+
         def callback(event: TelemetryEvent):
             event.data["env_id"] = env_idx
             hub.emit(event)
+
         return callback
 
     # Map environments to devices in round-robin
@@ -259,16 +290,15 @@ def train_ppo_vectorized(
         torch.manual_seed(base_seed + env_idx * 1000)
         random.seed(base_seed + env_idx * 1000)
 
-        model = create_model(env_device)
+        model = create_model(task=task_spec, device=env_device)
 
         # Wire telemetry callback with env_id injection
         model.seed_slot.on_telemetry = make_telemetry_callback(env_idx)
         model.seed_slot.fast_mode = False  # Enable telemetry
 
-        # Set host_params baseline for scoreboard
-        analytics._get_scoreboard(env_idx).host_params = sum(
-            p.numel() for p in model.host.parameters() if p.requires_grad
-        )
+        # Set host_params baseline for scoreboard via Nissa analytics
+        host_params = sum(p.numel() for p in model.host.parameters() if p.requires_grad)
+        analytics.set_host_params(env_idx, host_params)
 
         host_optimizer = torch.optim.SGD(
             model.get_host_parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4
@@ -300,7 +330,7 @@ def train_ppo_vectorized(
             test_iter=None,
             seeds_created=0,
             episode_rewards=[],
-            action_counts={a.name: 0 for a in ACTION_ENUM},
+            action_enum=ActionEnum,
         )
 
     def process_train_batch(env_state: ParallelEnvState, inputs: torch.Tensor,
@@ -337,7 +367,9 @@ def train_ppo_vectorized(
             elif seed_state.stage in (SeedStage.GERMINATED, SeedStage.TRAINING):
                 # Isolated seed training
                 if seed_state.stage == SeedStage.GERMINATED:
-                    seed_state.transition(SeedStage.TRAINING)
+                    gate_result = model.seed_slot.advance_stage(SeedStage.TRAINING)
+                    if not gate_result.passed:
+                        raise RuntimeError(f"G1 gate failed during TRAINING entry: {gate_result}")
                     env_state.seed_optimizer = torch.optim.SGD(
                         model.get_seed_parameters(), lr=0.01, momentum=0.9
                     )
@@ -363,7 +395,7 @@ def train_ppo_vectorized(
                 env_state.seed_optimizer.zero_grad()
 
             outputs = model(inputs)
-            loss = criterion(outputs, targets)
+            loss, correct_tensor, total = loss_and_correct(outputs, targets, criterion)
             loss.backward()
 
             # Collect gradient stats for telemetry (after backward, before step)
@@ -374,11 +406,8 @@ def train_ppo_vectorized(
             if seed_state and seed_state.stage == SeedStage.BLENDING and env_state.seed_optimizer:
                 env_state.seed_optimizer.step()
 
-            _, predicted = outputs.max(1)
-            correct_tensor = predicted.eq(targets).sum()  # Keep as tensor, no .item()
-
             # Return tensors - .item() called after stream sync
-            return loss.detach(), correct_tensor, targets.size(0), grad_stats
+            return loss.detach(), correct_tensor, total, grad_stats
 
     def process_val_batch(env_state: ParallelEnvState, inputs: torch.Tensor,
                           targets: torch.Tensor, criterion: nn.Module) -> tuple[torch.Tensor, torch.Tensor, int]:
@@ -399,12 +428,10 @@ def train_ppo_vectorized(
             model.eval()
             with torch.no_grad():
                 outputs = model(inputs)
-                loss = criterion(outputs, targets)
-                _, predicted = outputs.max(1)
-                correct_tensor = predicted.eq(targets).sum()  # Keep as tensor, no .item()
+                loss, correct_tensor, total = loss_and_correct(outputs, targets, criterion)
 
             # Return tensors - .item() called after stream sync
-            return loss, correct_tensor, targets.size(0)
+            return loss, correct_tensor, total
 
     history = []
     best_avg_acc = 0.0
@@ -612,8 +639,9 @@ def train_ppo_vectorized(
                 log_prob = log_probs[env_idx].item()
                 value = values[env_idx].item()
 
-                action = ACTION_ENUM(action_idx)
+                action = ActionEnum(action_idx)
                 env_state.action_counts[action.name] += 1
+                action_success = False
 
                 # Governor rollback: execute if this env panicked
                 if env_idx in governor_panic_envs:
@@ -626,10 +654,10 @@ def train_ppo_vectorized(
                 # (scoreboard.params_added persists across episodes, causing stale rent)
                 scoreboard = analytics._get_scoreboard(env_idx)
                 host_params = scoreboard.host_params
-                total_model_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-                excess_params = max(0, total_model_params - host_params)
+                total_params = analytics._get_scoreboard(env_idx).params_added + model.active_seed_params
+                excess_params = max(0, total_params)
                 reward = compute_shaped_reward(
-                    action=action.value,
+                    action=action,
                     acc_delta=signals.metrics.accuracy_delta,
                     val_acc=env_state.val_acc,
                     seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
@@ -653,14 +681,23 @@ def train_ppo_vectorized(
                         model.germinate_seed(blueprint_id, seed_id)
                         env_state.seeds_created += 1
                         env_state.seed_optimizer = None
+                        action_success = True
 
-                elif action == ACTION_ENUM.ADVANCE:
-                    _advance_active_seed(model)
+                elif action == ActionEnum.FOSSILIZE:
+                    action_success = _advance_active_seed(model)
 
-                elif action == ACTION_ENUM.CULL:
+                elif action == ActionEnum.CULL:
                     if model.has_active_seed:
                         model.cull_seed()
                         env_state.seed_optimizer = None
+                        action_success = True
+
+                else:
+                    # WAIT or any other no-op action always "succeeds"
+                    action_success = True
+
+                if action_success:
+                    env_state.successful_action_counts[action.name] += 1
 
                 # Store transition
                 done = (epoch == max_epochs)
@@ -700,11 +737,15 @@ def train_ppo_vectorized(
         print(f"  Avg acc: {avg_acc:.1f}% (rolling: {rolling_avg_acc:.1f}%)")
         print(f"  Avg reward: {avg_reward:.1f}")
 
-        total_actions = {a.name: 0 for a in ACTION_ENUM}
+        total_actions = {a.name: 0 for a in ActionEnum}
+        successful_actions = {a.name: 0 for a in ActionEnum}
         for env_state in env_states:
             for a, c in env_state.action_counts.items():
                 total_actions[a] += c
+            for a, c in env_state.successful_action_counts.items():
+                successful_actions[a] += c
         print(f"  Actions: {total_actions}")
+        print(f"  Successful: {successful_actions}")
 
         if metrics:
             current_entropy_coef = agent.get_entropy_coef()

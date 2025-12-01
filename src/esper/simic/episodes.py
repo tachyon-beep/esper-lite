@@ -17,10 +17,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from esper.leyline import SeedStage, FieldReport as LeylineFieldReport
-from esper.leyline.actions import build_action_enum
-
-# Action enum for CNN topology (current episodes schema)
-ACTION_ENUM = build_action_enum("cnn")
 
 
 # =============================================================================
@@ -234,7 +230,7 @@ class ActionTaken:
     Uses the topology-specific action enum from leyline.actions.
     """
 
-    action: ACTION_ENUM
+    action: object
     blueprint_id: str | None = None
     target_seed_id: str | None = None
     confidence: float = 1.0
@@ -242,13 +238,14 @@ class ActionTaken:
 
     def to_vector(self) -> list[float]:
         """Convert to flat vector (one-hot action + confidence)."""
-        one_hot = [0.0] * len(ACTION_ENUM)
+        action_enum = self.action.__class__
+        one_hot = [0.0] * len(action_enum)
         one_hot[self.action.value] = 1.0
         return one_hot + [self.confidence]
 
     @staticmethod
-    def vector_size() -> int:
-        return len(ACTION_ENUM) + 1  # action one-hot + confidence
+    def vector_size(action_enum) -> int:
+        return len(action_enum) + 1  # action one-hot + confidence
 
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
@@ -261,10 +258,12 @@ class ActionTaken:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "ActionTaken":
+    def from_dict(cls, d: dict, action_enum) -> "ActionTaken":
         """Create from dictionary."""
+        if action_enum is None:
+            raise ValueError("action_enum is required to deserialize ActionTaken")
         return cls(
-            action=ACTION_ENUM[d["action"]],
+            action=action_enum[d["action"]],
             blueprint_id=d["blueprint_id"],
             target_seed_id=d["target_seed_id"],
             confidence=d["confidence"],
@@ -351,11 +350,11 @@ class DecisionPoint:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "DecisionPoint":
+    def from_dict(cls, d: dict, action_enum) -> "DecisionPoint":
         """Create from dictionary."""
         return cls(
             observation=TrainingSnapshot.from_dict(d["observation"]),
-            action=ActionTaken.from_dict(d["action"]),
+            action=ActionTaken.from_dict(d["action"], action_enum=action_enum),
             outcome=StepOutcome.from_dict(d["outcome"]),
             timestamp=datetime.fromisoformat(d["timestamp"]),
         )
@@ -425,7 +424,7 @@ class Episode:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "Episode":
+    def from_dict(cls, d: dict, action_enum) -> "Episode":
         """Create from dictionary."""
         return cls(
             episode_id=d["episode_id"],
@@ -435,7 +434,7 @@ class Episode:
             initial_lr=d["initial_lr"],
             model_name=d["model_name"],
             dataset_name=d["dataset_name"],
-            decisions=[DecisionPoint.from_dict(dp) for dp in d["decisions"]],
+            decisions=[DecisionPoint.from_dict(dp, action_enum=action_enum) for dp in d["decisions"]],
             final_accuracy=d["final_accuracy"],
             best_accuracy=d["best_accuracy"],
             total_seeds_created=d["total_seeds_created"],
@@ -451,10 +450,10 @@ class Episode:
             json.dump(self.to_dict(), f, indent=2)
 
     @classmethod
-    def load(cls, path: str | Path) -> "Episode":
+    def load(cls, path: str | Path, action_enum) -> "Episode":
         """Load episode from JSON file."""
         with open(path, 'r') as f:
-            return cls.from_dict(json.load(f))
+            return cls.from_dict(json.load(f), action_enum=action_enum)
 
 
 # =============================================================================
@@ -488,7 +487,7 @@ class EpisodeCollector:
         episode_id: str,
         max_epochs: int,
         initial_lr: float = 0.001,
-        model_name: str = "HostCNN",
+        model_name: str = "CNNHost",
         dataset_name: str = "CIFAR-10",
     ) -> None:
         """Start collecting a new episode."""
@@ -579,9 +578,19 @@ class EpisodeCollector:
 class DatasetManager:
     """Manages a directory of episode files for training."""
 
-    def __init__(self, data_dir: str | Path = "data/simic_episodes"):
+    def __init__(
+        self,
+        data_dir: str | Path = "data/simic_episodes",
+        task: str = "cifar10",
+        action_enum=None,
+    ):
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
+        if action_enum is not None:
+            self.action_enum = action_enum
+        else:
+            from esper.runtime import get_task_spec  # Local import to avoid import cycle
+            self.action_enum = get_task_spec(task).action_enum
 
     def save_episode(self, episode: Episode) -> Path:
         """Save episode to the dataset directory."""
@@ -593,7 +602,7 @@ class DatasetManager:
     def load_episode(self, episode_id: str) -> Episode:
         """Load a specific episode by ID."""
         path = self.data_dir / f"{episode_id}.json"
-        return Episode.load(path)
+        return Episode.load(path, action_enum=self.action_enum)
 
     def list_episodes(self) -> list[str]:
         """List all episode IDs in the dataset."""
@@ -601,7 +610,7 @@ class DatasetManager:
 
     def load_all(self) -> list[Episode]:
         """Load all episodes from the dataset."""
-        return [Episode.load(p) for p in self.data_dir.glob("*.json")]
+        return [Episode.load(p, action_enum=self.action_enum) for p in self.data_dir.glob("*.json")]
 
     def get_training_data(self) -> list[tuple[list[float], list[float], float]]:
         """Get all training data from all episodes."""

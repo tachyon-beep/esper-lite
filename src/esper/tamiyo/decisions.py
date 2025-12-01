@@ -9,9 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from esper.leyline import CommandType, RiskLevel, AdaptationCommand, SeedStage
-from esper.leyline.actions import build_action_enum, is_germinate_action, get_blueprint_from_action
-
-Action = build_action_enum("cnn")
+from esper.leyline.actions import is_germinate_action, get_blueprint_from_action
 
 
 def _utc_now() -> datetime:
@@ -25,7 +23,7 @@ class TamiyoDecision:
 
     Uses the topology-specific action enum from leyline.actions.
     """
-    action: Action
+    action: object
     target_seed_id: str | None = None
     reason: str = ""
     confidence: float = 1.0
@@ -45,25 +43,26 @@ class TamiyoDecision:
 
     def to_command(self) -> AdaptationCommand:
         """Convert to Leyline's canonical AdaptationCommand format."""
-        if self.action == Action.WAIT:
+        action_name = self.action.name
+        if action_name == "WAIT":
             command_type, target_stage = CommandType.REQUEST_STATE, None
         elif is_germinate_action(self.action):
             command_type, target_stage = CommandType.GERMINATE, SeedStage.GERMINATED
-        elif self.action == Action.ADVANCE:
-            command_type, target_stage = CommandType.ADVANCE_STAGE, None
-        elif self.action == Action.CULL:
+        elif action_name == "FOSSILIZE":
+            command_type, target_stage = CommandType.ADVANCE_STAGE, SeedStage.FOSSILIZED
+        elif action_name == "CULL":
             command_type, target_stage = CommandType.CULL, SeedStage.CULLED
         else:
             command_type, target_stage = CommandType.REQUEST_STATE, None
 
         # Determine risk level based on action
-        if self.action == Action.WAIT:
+        if action_name == "WAIT":
             risk = RiskLevel.GREEN
         elif is_germinate_action(self.action):
             risk = RiskLevel.YELLOW
-        elif self.action == Action.ADVANCE:
+        elif action_name == "FOSSILIZE":
             risk = RiskLevel.YELLOW
-        elif self.action == Action.CULL:
+        elif action_name == "CULL":
             risk = RiskLevel.ORANGE
         else:
             risk = RiskLevel.GREEN

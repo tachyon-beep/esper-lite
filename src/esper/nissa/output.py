@@ -80,6 +80,38 @@ class ConsoleOutput(OutputBackend):
         elif "COMMAND" in event_type:
             action = event.data.get("action", "unknown")
             print(f"[{timestamp}] {seed_id} | Command: {action}")
+        elif event_type.startswith("SEED_"):
+            data = event.data or {}
+            if event_type == "SEED_GERMINATED":
+                blueprint_id = data.get("blueprint_id", "?")
+                params = data.get("params")
+                if isinstance(params, (int, float)):
+                    msg = f"Germinated ({blueprint_id}, {params/1000:.1f}K params)"
+                else:
+                    msg = f"Germinated ({blueprint_id})"
+            elif event_type == "SEED_STAGE_CHANGED":
+                from_stage = data.get("from", "?")
+                to_stage = data.get("to", "?")
+                msg = f"Stage transition: {from_stage} \u2192 {to_stage}"
+            elif event_type == "SEED_FOSSILIZED":
+                blueprint_id = data.get("blueprint_id", "?")
+                improvement = data.get("improvement")
+                if isinstance(improvement, (int, float)):
+                    msg = f"Fossilized ({blueprint_id}, \u0394acc {improvement:+.2f}%)"
+                else:
+                    msg = f"Fossilized ({blueprint_id})"
+            elif event_type == "SEED_CULLED":
+                blueprint_id = data.get("blueprint_id", "?")
+                improvement = data.get("improvement")
+                reason = data.get("reason")
+                reason_str = f" ({reason})" if reason else ""
+                if isinstance(improvement, (int, float)):
+                    msg = f"Culled ({blueprint_id}, \u0394acc {improvement:+.2f}%){reason_str}"
+                else:
+                    msg = f"Culled ({blueprint_id}){reason_str}"
+            else:
+                msg = event.message or event_type
+            print(f"[{timestamp}] {seed_id} | {msg}")
         else:
             msg = event.message or event_type
             print(f"[{timestamp}] {seed_id} | {msg}")

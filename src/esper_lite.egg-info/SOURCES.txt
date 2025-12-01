@@ -23,11 +23,9 @@ src/esper/scripts/evaluate.py
 src/esper/scripts/train.py
 src/esper/simic/__init__.py
 src/esper/simic/buffers.py
-src/esper/simic/comparison.py
 src/esper/simic/episodes.py
 src/esper/simic/features.py
 src/esper/simic/gradient_collector.py
-src/esper/simic/iql.py
 src/esper/simic/networks.py
 src/esper/simic/normalization.py
 src/esper/simic/ppo.py
@@ -36,7 +34,6 @@ src/esper/simic/training.py
 src/esper/simic/vectorized.py
 src/esper/tamiyo/__init__.py
 src/esper/tamiyo/decisions.py
-src/esper/tamiyo/heuristic.py
 src/esper/tamiyo/tracker.py
 src/esper/tolaria/__init__.py
 src/esper/tolaria/environment.py
@@ -48,9 +45,7 @@ src/esper_lite.egg-info/SOURCES.txt
 src/esper_lite.egg-info/dependency_links.txt
 src/esper_lite.egg-info/requires.txt
 src/esper_lite.egg-info/top_level.txt
-tests/test_action_unification.py
 tests/test_leyline.py
-tests/test_seed_telemetry.py
 tests/test_simic.py
 tests/test_simic_buffers.py
 tests/test_simic_networks.py
