@@ -13,11 +13,15 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
-from esper.leyline import SimicAction, SeedTelemetry
+from esper.leyline.actions import build_action_enum, get_blueprint_from_action, is_germinate_action
+from esper.leyline import SeedTelemetry
 from esper.simic.buffers import Transition, ReplayBuffer
 from esper.simic.features import obs_to_base_features
 from esper.simic.rewards import compute_shaped_reward, SeedInfo
 from esper.simic.gradient_collector import collect_seed_gradients
+
+# Topology-specific action enum (CNN)
+ACTION_ENUM = build_action_enum("cnn")
 
 
 # =============================================================================
@@ -52,10 +56,7 @@ def extract_transitions(
             state = obs_to_base_features(decision['observation'])
             # Legacy telemetry removed - only 27-dim base features supported
 
-            # NOTE: Data packs must use current action space (7 actions with blueprint-specific
-            # germinate variants). Old packs with 4-action space (generic GERMINATE) will KeyError.
-            # See data/archive_old_action_space/README.md
-            action = SimicAction[decision['action']['action']].value
+            action = ACTION_ENUM[decision['action']['action']].value
             raw_reward = decision['outcome'].get('reward', 0) * reward_scale
 
             is_last = (i == len(decisions) - 1)
@@ -110,8 +111,8 @@ def evaluate_iql_policy(
         iql_actions = q_values.argmax(dim=1)
 
     agreement = (iql_actions == behavior_actions).float().mean().item()
-    behavior_dist = torch.bincount(behavior_actions, minlength=len(SimicAction)).float() / n_samples
-    iql_dist = torch.bincount(iql_actions, minlength=len(SimicAction)).float() / n_samples
+    behavior_dist = torch.bincount(behavior_actions, minlength=len(ACTION_ENUM)).float() / n_samples
+    iql_dist = torch.bincount(iql_actions, minlength=len(ACTION_ENUM)).float() / n_samples
 
     q_behavior = q_values.gather(1, behavior_actions.unsqueeze(1)).squeeze(1).mean().item()
     q_iql = q_values.gather(1, iql_actions.unsqueeze(1)).squeeze(1).mean().item()
@@ -178,7 +179,7 @@ def train_iql(
 
     iql = IQL(
         state_dim=buffer.state_dim,
-        action_dim=len(SimicAction),
+        action_dim=len(ACTION_ENUM),
         gamma=gamma,
         tau=tau,
         beta=beta,
@@ -232,7 +233,7 @@ def train_iql(
             'q_network': iql.q_network.state_dict(),
             'v_network': iql.v_network.state_dict(),
             'state_dim': buffer.state_dim,
-            'action_dim': len(SimicAction),
+            'action_dim': len(ACTION_ENUM),
             'gamma': gamma,
             'tau': tau,
             'beta': beta,
@@ -276,7 +277,7 @@ def run_ppo_episode(
     signal_tracker = SignalTracker()
 
     seeds_created = 0
-    action_counts = {a.name: 0 for a in SimicAction}
+    action_counts = {a.name: 0 for a in ACTION_ENUM}
     episode_rewards = []
 
     # Track host params and added params for compute rent
@@ -445,7 +446,7 @@ def run_ppo_episode(
         state = torch.tensor([features], dtype=torch.float32, device=device)
 
         action_idx, log_prob, value = agent.get_action(state, deterministic=deterministic)
-        action = SimicAction(action_idx)
+        action = ACTION_ENUM(action_idx)
         action_counts[action.name] += 1
 
         # Compute total params for rent (fossilized + active)
@@ -462,15 +463,15 @@ def run_ppo_episode(
         )
 
         # Execute action
-        if SimicAction.is_germinate(action):
+        if is_germinate_action(action):
             if not model.has_active_seed:
-                blueprint_id = SimicAction.get_blueprint_id(action)
+                blueprint_id = get_blueprint_from_action(action)
                 seed_id = f"seed_{seeds_created}"
                 model.germinate_seed(blueprint_id, seed_id)
                 seeds_created += 1
                 seed_optimizer = None
 
-        elif action == SimicAction.ADVANCE:
+        elif action == ACTION_ENUM.ADVANCE:
             if model.has_active_seed:
                 if model.seed_state.stage == SeedStage.TRAINING:
                     model.seed_state.transition(SeedStage.BLENDING)
@@ -481,7 +482,7 @@ def run_ppo_episode(
                     model.seed_state.transition(SeedStage.FOSSILIZED)
                     model.seed_slot.set_alpha(1.0)
 
-        elif action == SimicAction.CULL:
+        elif action == ACTION_ENUM.CULL:
             if model.has_active_seed:
                 model.cull_seed()
                 seed_optimizer = None
@@ -545,7 +546,7 @@ def train_ppo(
 
     agent = PPOAgent(
         state_dim=state_dim,
-        action_dim=len(SimicAction),
+        action_dim=len(ACTION_ENUM),
         lr=lr,
         clip_ratio=clip_ratio,
         entropy_coef=entropy_coef,

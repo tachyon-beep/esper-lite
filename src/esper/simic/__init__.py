@@ -46,10 +46,13 @@ from esper.simic.normalization import RunningMeanStd
 # Rewards
 from esper.simic.rewards import (
     RewardConfig,
+    LossRewardConfig,
     SeedInfo,
     compute_shaped_reward,
     compute_potential,
     compute_pbrs_bonus,
+    compute_pbrs_stage_bonus,
+    compute_loss_reward,
     compute_seed_potential,
     get_intervention_cost,
     INTERVENTION_COSTS,
@@ -62,6 +65,8 @@ from esper.simic.rewards import (
 from esper.simic.features import (
     safe,
     obs_to_base_features,
+    TaskConfig,
+    normalize_observation,
 )
 
 # Networks
@@ -107,10 +112,13 @@ __all__ = [
 
     # Rewards
     "RewardConfig",
+    "LossRewardConfig",
     "SeedInfo",
     "compute_shaped_reward",
     "compute_potential",
     "compute_pbrs_bonus",
+    "compute_pbrs_stage_bonus",
+    "compute_loss_reward",
     "compute_seed_potential",
     "get_intervention_cost",
     "INTERVENTION_COSTS",
@@ -121,6 +129,8 @@ __all__ = [
     # Features
     "safe",
     "obs_to_base_features",
+    "TaskConfig",
+    "normalize_observation",
 
     # Networks
     "PolicyNetwork",

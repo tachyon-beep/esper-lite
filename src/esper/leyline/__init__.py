@@ -11,17 +11,12 @@ Example:
 LEYLINE_VERSION = "0.2.0"
 
 # Actions
-from esper.leyline.actions import Action, SimicAction  # SimicAction is alias
-
-# Blueprints
-from esper.leyline.blueprints import (
-    BLUEPRINT_CONV_ENHANCE,
-    BLUEPRINT_ATTENTION,
-    BLUEPRINT_NORM,
-    BLUEPRINT_DEPTHWISE,
-    ALL_BLUEPRINTS,
-    blueprint_to_action,
-    action_to_blueprint,
+from esper.leyline.actions import (
+    Action,
+    SimicAction,  # SimicAction is alias
+    build_action_enum,
+    get_blueprint_from_action,
+    is_germinate_action,
 )
 
 # Stages and transitions
@@ -79,15 +74,9 @@ __all__ = [
     # Actions
     "Action",
     "SimicAction",  # deprecated alias
-
-    # Blueprints
-    "BLUEPRINT_CONV_ENHANCE",
-    "BLUEPRINT_ATTENTION",
-    "BLUEPRINT_NORM",
-    "BLUEPRINT_DEPTHWISE",
-    "ALL_BLUEPRINTS",
-    "blueprint_to_action",
-    "action_to_blueprint",
+    "build_action_enum",
+    "get_blueprint_from_action",
+    "is_germinate_action",
 
     # Stages
     "SeedStage",

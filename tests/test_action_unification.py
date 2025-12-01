@@ -9,15 +9,20 @@ Verifies that:
 
 import pytest
 
+from esper.leyline.actions import build_action_enum, get_blueprint_from_action, is_germinate_action
+from esper.kasmina.blueprints import BlueprintRegistry
+
+ACTION_ENUM = build_action_enum("cnn")
+
 
 class TestActionUnification:
     """Tests for unified action space."""
 
     def test_action_importable_from_leyline(self):
-        """Action should be importable from leyline."""
-        from esper.leyline import Action
-        assert Action is not None
-        assert len(Action) == 7  # WAIT + 4 GERMINATE + ADVANCE + CULL
+        """Action enum builds from registry."""
+        assert ACTION_ENUM is not None
+        expected = len(BlueprintRegistry.list_for_topology("cnn")) + 3  # WAIT + ADVANCE + CULL
+        assert len(ACTION_ENUM) == expected
 
     def test_simicaction_is_alias(self):
         """SimicAction should be an alias for Action."""
@@ -34,7 +39,8 @@ class TestActionUnification:
 
     def test_heuristic_tamiyo_returns_action(self):
         """HeuristicTamiyo.decide() should return decision with Action."""
-        from esper.leyline import Action, TrainingSignals
+        from esper.leyline.actions import build_action_enum
+        from esper.leyline import TrainingSignals
         from esper.tamiyo import HeuristicTamiyo, HeuristicPolicyConfig
 
         tamiyo = HeuristicTamiyo(HeuristicPolicyConfig())
@@ -44,7 +50,8 @@ class TestActionUnification:
 
         decision = tamiyo.decide(signals, active_seeds=[])
 
-        assert isinstance(decision.action, Action)
+        ActionEnum = build_action_enum("cnn")
+        assert isinstance(decision.action, ActionEnum)
 
     def test_no_tamiyoaction_exists(self):
         """TamiyoAction should not exist anymore."""
@@ -53,14 +60,16 @@ class TestActionUnification:
 
     def test_action_from_decision_returns_action(self):
         """action_from_decision should return ActionTaken with Action."""
-        from esper.leyline import Action
+        from esper.leyline.actions import build_action_enum
         from esper.tamiyo import TamiyoDecision
         from esper.simic.episodes import action_from_decision
 
-        decision = TamiyoDecision(action=Action.GERMINATE_CONV)
+        ActionEnum = build_action_enum("cnn")
+        germinate = getattr(ActionEnum, "GERMINATE_CONV_ENHANCE", None) or getattr(ActionEnum, "GERMINATE_CONV", None)
+        decision = TamiyoDecision(action=germinate)
         action_taken = action_from_decision(decision)
 
-        assert action_taken.action == Action.GERMINATE_CONV
+        assert action_taken.action == decision.action
 
     def test_stage_constants_match_leyline(self):
         """Stage constants in rewards should match leyline."""
@@ -75,31 +84,17 @@ class TestActionUnification:
 class TestBlueprintCentralization:
     """Tests for centralized blueprint mappings."""
 
-    def test_blueprint_to_action_function(self):
-        """blueprint_to_action should map correctly."""
-        from esper.leyline import blueprint_to_action, Action
+    def test_blueprint_mappings_dynamic(self):
+        """Dynamic action enum aligns with registry."""
+        from esper.leyline.actions import build_action_enum, get_blueprint_from_action, is_germinate_action
+        from esper.kasmina.blueprints import BlueprintRegistry
 
-        assert blueprint_to_action("conv_enhance") == Action.GERMINATE_CONV
-        assert blueprint_to_action("attention") == Action.GERMINATE_ATTENTION
-        assert blueprint_to_action("norm") == Action.GERMINATE_NORM
-        assert blueprint_to_action("depthwise") == Action.GERMINATE_DEPTHWISE
-
-    def test_action_to_blueprint_function(self):
-        """action_to_blueprint should map correctly."""
-        from esper.leyline import action_to_blueprint, Action
-
-        assert action_to_blueprint(Action.GERMINATE_CONV) == "conv_enhance"
-        assert action_to_blueprint(Action.GERMINATE_ATTENTION) == "attention"
-        assert action_to_blueprint(Action.GERMINATE_NORM) == "norm"
-        assert action_to_blueprint(Action.GERMINATE_DEPTHWISE) == "depthwise"
-        assert action_to_blueprint(Action.WAIT) is None
-
-    def test_action_get_blueprint_id_uses_centralized(self):
-        """Action.get_blueprint_id should use centralized mapping."""
-        from esper.leyline import Action
-
-        assert Action.get_blueprint_id(Action.GERMINATE_CONV) == "conv_enhance"
-        assert Action.get_blueprint_id(Action.WAIT) is None
+        ActionEnum = build_action_enum("cnn")
+        specs = BlueprintRegistry.list_for_topology("cnn")
+        for spec in specs:
+            action = getattr(ActionEnum, f"GERMINATE_{spec.name.upper()}")
+            assert is_germinate_action(action)
+            assert get_blueprint_from_action(action) == spec.name
 
 
 class TestFeatureDimensionConsistency:
@@ -229,13 +224,15 @@ class TestEndToEndIntegration:
 
     def test_tamiyo_decision_to_action_taken_pipeline(self):
         """Test complete pipeline from TamiyoDecision to ActionTaken."""
-        from esper.leyline import Action
         from esper.tamiyo import TamiyoDecision
         from esper.simic.episodes import action_from_decision
+        from esper.kasmina.blueprints import BlueprintRegistry
 
-        # Create a decision
+        blueprint_id = BlueprintRegistry.list_for_topology("cnn")[0].name
+        action = getattr(ACTION_ENUM, f"GERMINATE_{blueprint_id.upper()}")
+
         decision = TamiyoDecision(
-            action=Action.GERMINATE_CONV,
+            action=action,
             target_seed_id="seed_123",
             reason="Plateau detected",
             confidence=0.85
@@ -244,23 +241,18 @@ class TestEndToEndIntegration:
         # Convert to ActionTaken
         action_taken = action_from_decision(decision)
 
-        # Verify all fields preserved
-        assert action_taken.action == Action.GERMINATE_CONV
-        assert action_taken.blueprint_id == "conv_enhance"
+        assert action_taken.action == action
+        assert action_taken.blueprint_id == blueprint_id
         assert action_taken.target_seed_id == "seed_123"
         assert action_taken.confidence == 0.85
         assert action_taken.reason == "Plateau detected"
 
     def test_blueprint_to_action_round_trip(self):
         """Test blueprint_id to action and back."""
-        from esper.leyline import blueprint_to_action, action_to_blueprint
-
-        # Test all blueprints
-        blueprints = ["conv_enhance", "attention", "norm", "depthwise"]
-        for blueprint_id in blueprints:
-            action = blueprint_to_action(blueprint_id)
-            recovered_blueprint = action_to_blueprint(action)
-            assert recovered_blueprint == blueprint_id
+        for spec in BlueprintRegistry.list_for_topology("cnn"):
+            action = getattr(ACTION_ENUM, f"GERMINATE_{spec.name.upper()}")
+            recovered_blueprint = get_blueprint_from_action(action)
+            assert recovered_blueprint == spec.name
 
     def test_feature_dimension_consistency_across_all_modes(self):
         """Verify feature dimensions are consistent across PPO, IQL, and comparison."""
@@ -311,8 +303,7 @@ class TestEndToEndIntegration:
     def test_heuristic_tamiyo_uses_centralized_blueprints(self):
         """HeuristicTamiyo should use centralized blueprint mappings."""
         from esper.tamiyo import HeuristicTamiyo, HeuristicPolicyConfig
-        from esper.leyline import Action, TrainingSignals
-        from esper.leyline import blueprint_to_action
+        from esper.leyline import TrainingSignals
 
         config = HeuristicPolicyConfig(
             min_epochs_before_germinate=2,
@@ -327,12 +318,10 @@ class TestEndToEndIntegration:
         decision = tamiyo.decide(signals, active_seeds=[])
 
         # Should be a germinate action
-        assert Action.is_germinate(decision.action)
+        assert is_germinate_action(decision.action)
 
         # Blueprint ID should match centralized mapping
         blueprint_id = decision.blueprint_id
-        assert blueprint_id in ["conv_enhance", "attention", "norm", "depthwise"]
-
-        # Verify it matches centralized mapping
-        expected_action = blueprint_to_action(blueprint_id)
-        assert decision.action == expected_action
+        spec_names = {s.name for s in BlueprintRegistry.list_for_topology("cnn")}
+        assert blueprint_id in spec_names
+        assert get_blueprint_from_action(decision.action) == blueprint_id

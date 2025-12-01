@@ -8,13 +8,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from esper.leyline import (
-    Action,
-    CommandType,
-    RiskLevel,
-    AdaptationCommand,
-    SeedStage,
-)
+from esper.leyline import CommandType, RiskLevel, AdaptationCommand, SeedStage
+from esper.leyline.actions import build_action_enum, is_germinate_action, get_blueprint_from_action
+
+Action = build_action_enum("cnn")
 
 
 def _utc_now() -> datetime:
@@ -22,24 +19,11 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-# Mapping from Action to leyline CommandType and target stage
-_ACTION_TO_COMMAND: dict[Action, tuple[CommandType, SeedStage | None]] = {
-    Action.WAIT: (CommandType.REQUEST_STATE, None),
-    Action.GERMINATE_CONV: (CommandType.GERMINATE, SeedStage.GERMINATED),
-    Action.GERMINATE_ATTENTION: (CommandType.GERMINATE, SeedStage.GERMINATED),
-    Action.GERMINATE_NORM: (CommandType.GERMINATE, SeedStage.GERMINATED),
-    Action.GERMINATE_DEPTHWISE: (CommandType.GERMINATE, SeedStage.GERMINATED),
-    Action.ADVANCE: (CommandType.ADVANCE_STAGE, None),  # Target determined by current stage
-    Action.CULL: (CommandType.CULL, SeedStage.CULLED),
-}
-
-
 @dataclass
 class TamiyoDecision:
     """A decision made by Tamiyo.
 
-    Uses the shared Action enum from leyline for compatibility with
-    all controllers (heuristic, RL, etc.).
+    Uses the topology-specific action enum from leyline.actions.
     """
     action: Action
     target_seed_id: str | None = None
@@ -57,19 +41,25 @@ class TamiyoDecision:
     @property
     def blueprint_id(self) -> str | None:
         """Get blueprint ID if this is a germinate action."""
-        return Action.get_blueprint_id(self.action)
+        return get_blueprint_from_action(self.action)
 
     def to_command(self) -> AdaptationCommand:
         """Convert to Leyline's canonical AdaptationCommand format."""
-        command_type, target_stage = _ACTION_TO_COMMAND.get(
-            self.action,
-            (CommandType.REQUEST_STATE, None)
-        )
+        if self.action == Action.WAIT:
+            command_type, target_stage = CommandType.REQUEST_STATE, None
+        elif is_germinate_action(self.action):
+            command_type, target_stage = CommandType.GERMINATE, SeedStage.GERMINATED
+        elif self.action == Action.ADVANCE:
+            command_type, target_stage = CommandType.ADVANCE_STAGE, None
+        elif self.action == Action.CULL:
+            command_type, target_stage = CommandType.CULL, SeedStage.CULLED
+        else:
+            command_type, target_stage = CommandType.REQUEST_STATE, None
 
         # Determine risk level based on action
         if self.action == Action.WAIT:
             risk = RiskLevel.GREEN
-        elif Action.is_germinate(self.action):
+        elif is_germinate_action(self.action):
             risk = RiskLevel.YELLOW
         elif self.action == Action.ADVANCE:
             risk = RiskLevel.YELLOW

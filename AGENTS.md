@@ -38,3 +38,15 @@
 ## Security & Configuration Tips
 - Keep `PYTHONPATH=src` for all local runs; prefer `.venv/bin/python` in scripts.
 - Avoid committing checkpoints or generated data; if essential, keep under `data/`, note sizes, and prefer gitignore/LFS for large files.
+
+## No Legacy Code Policy
+- **Strict:** No backwards compatibility, shims, adapters, or dual code paths. When behavior changes, delete old code entirely and update all call sites in the same change.
+- **Never add:** Version checks, feature flags for old behavior, compatibility modes, deprecated stubs, commented-out old code, `_legacy`/`_old` helpers, or migration helpers supporting both old and new.
+- **Default stance:** If it’s removed or replaced, it’s gone—rely on git history, not in-repo shims.
+
+## hasattr Authorization
+- **Strict:** Every `hasattr()` must have an inline authorization comment with operator name, ISO 8601 datetime (UTC), and justification.
+- **Format example:**  
+  `# hasattr AUTHORIZED by John on 2025-11-30 14:23:00 UTC`  
+  `# Justification: Serialization handling of external polymorphic payloads`
+- **Allowed cases (still require authorization):** External/serialization polymorphism, cleanup guards (`__del__/close`), external feature detection. All others should be refactored away.

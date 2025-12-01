@@ -13,11 +13,11 @@ import torch.nn.functional as F
 from esper.leyline import SeedStage
 from esper.kasmina.slot import SeedSlot
 from esper.kasmina.isolation import GradientIsolationMonitor
-from esper.kasmina._blueprints_v1 import ConvBlock  # Reuse shared building block
+from esper.kasmina.blueprints.cnn import ConvBlock  # Reuse shared building block
 
 
 class HostCNN(nn.Module):
-    """Host CNN with injection point."""
+    """CNN host with single injection point after block2."""
 
     def __init__(self, num_classes: int = 10):
         super().__init__()
@@ -27,22 +27,208 @@ class HostCNN(nn.Module):
         self.pool = nn.MaxPool2d(2, 2)
         self.classifier = nn.Linear(128, num_classes)
 
-        # Injection point info
-        self.injection_channels = 64  # After block2
+        # Injection points with compile-friendly ModuleDict
+        self._slot_keys = ("block2_post",)
+        self.slots = nn.ModuleDict({k: nn.Identity() for k in self._slot_keys})
+
+    @property
+    def injection_points(self) -> dict[str, int]:
+        """Map of slot_id -> channel dimension."""
+        return {"block2_post": 64}
+
+    def register_slot(self, slot_id: str, slot: nn.Module) -> None:
+        """Attach a seed module at the specified injection point."""
+        if slot_id not in self.slots:
+            raise ValueError(f"Unknown injection point: {slot_id}")
+        device = next(self.parameters()).device
+        self.slots[slot_id] = slot.to(device)
+
+    def unregister_slot(self, slot_id: str) -> None:
+        """Remove a seed module from the specified injection point."""
+        if slot_id not in self.slots:
+            raise ValueError(f"Unknown injection point: {slot_id}")
+        self.slots[slot_id] = nn.Identity()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.pool(self.block1(x))
+        x = self.pool(self.block2(x))
+
+        # Always call slot (Identity is no-op when empty)
+        x = self.slots["block2_post"](x)
+
+        x = self.pool(self.block3(x))
+        x = F.adaptive_avg_pool2d(x, 1).flatten(1)
+        return self.classifier(x)
+
+    # Legacy methods for MorphogeneticModel compatibility
+    @property
+    def injection_channels(self) -> int:
+        """Legacy: channel count at injection point."""
+        return 64
 
     def forward_to_injection(self, x: torch.Tensor) -> torch.Tensor:
+        """Legacy: forward to injection point."""
         x = self.pool(self.block1(x))
         x = self.pool(self.block2(x))
         return x
 
     def forward_from_injection(self, x: torch.Tensor) -> torch.Tensor:
+        """Legacy: forward from injection point."""
         x = self.pool(self.block3(x))
         x = F.adaptive_avg_pool2d(x, 1).flatten(1)
         return self.classifier(x)
 
+
+# =============================================================================
+# Transformer Components
+# =============================================================================
+
+
+class CausalSelfAttention(nn.Module):
+    """Causal self-attention with pre-computed mask."""
+
+    def __init__(self, n_embd: int, n_head: int, block_size: int, dropout: float):
+        super().__init__()
+        assert n_embd % n_head == 0
+        self.n_head = n_head
+        self.n_embd = n_embd
+        self.head_dim = n_embd // n_head
+
+        self.c_attn = nn.Linear(n_embd, 3 * n_embd)
+        self.c_proj = nn.Linear(n_embd, n_embd)
+        self.attn_dropout = nn.Dropout(dropout)
+        self.resid_dropout = nn.Dropout(dropout)
+
+        # Causal mask
+        self.register_buffer(
+            "mask",
+            torch.tril(torch.ones(block_size, block_size)).view(1, 1, block_size, block_size),
+        )
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.forward_to_injection(x)
-        return self.forward_from_injection(x)
+        B, T, C = x.shape
+
+        # QKV projection
+        qkv = self.c_attn(x)
+        q, k, v = qkv.split(self.n_embd, dim=2)
+
+        # Reshape for multi-head attention
+        q = q.view(B, T, self.n_head, self.head_dim).transpose(1, 2)
+        k = k.view(B, T, self.n_head, self.head_dim).transpose(1, 2)
+        v = v.view(B, T, self.n_head, self.head_dim).transpose(1, 2)
+
+        # Attention
+        att = (q @ k.transpose(-2, -1)) * (1.0 / (self.head_dim ** 0.5))
+        att = att.masked_fill(self.mask[:, :, :T, :T] == 0, float("-inf"))
+        att = F.softmax(att, dim=-1)
+        att = self.attn_dropout(att)
+
+        y = att @ v
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
+
+        return self.resid_dropout(self.c_proj(y))
+
+
+class MLP(nn.Module):
+    """Feed-forward network with GELU activation."""
+
+    def __init__(self, n_embd: int, dropout: float):
+        super().__init__()
+        self.c_fc = nn.Linear(n_embd, 4 * n_embd)
+        self.c_proj = nn.Linear(4 * n_embd, n_embd)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = F.gelu(self.c_fc(x))
+        x = self.c_proj(x)
+        return self.dropout(x)
+
+
+class TransformerBlock(nn.Module):
+    """Pre-norm transformer block with causal attention."""
+
+    def __init__(self, n_embd: int, n_head: int, block_size: int, dropout: float):
+        super().__init__()
+        self.ln1 = nn.LayerNorm(n_embd)
+        self.attn = CausalSelfAttention(n_embd, n_head, block_size, dropout)
+        self.ln2 = nn.LayerNorm(n_embd)
+        self.mlp = MLP(n_embd, dropout)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x + self.attn(self.ln1(x))
+        x = x + self.mlp(self.ln2(x))
+        return x
+
+
+class TransformerHost(nn.Module):
+    """GPT-style decoder with injection points after each layer."""
+
+    def __init__(
+        self,
+        vocab_size: int = 50257,
+        n_embd: int = 384,
+        n_head: int = 6,
+        n_layer: int = 6,
+        block_size: int = 256,
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+        self.n_layer = n_layer
+        self.n_embd = n_embd
+        self.block_size = block_size
+
+        self.tok_emb = nn.Embedding(vocab_size, n_embd)
+        self.pos_emb = nn.Embedding(block_size, n_embd)
+        self.drop = nn.Dropout(dropout)
+
+        self.layers = nn.ModuleList(
+            [TransformerBlock(n_embd, n_head, block_size, dropout) for _ in range(n_layer)]
+        )
+
+        self.ln_f = nn.LayerNorm(n_embd)
+        self.head = nn.Linear(n_embd, vocab_size, bias=False)
+
+        # Weight tying: tok_emb is master
+        self.head.weight = self.tok_emb.weight
+
+        # Injection points with compile-friendly ModuleDict
+        self._slot_keys = tuple(f"layer_{i}_post_block" for i in range(n_layer))
+        self.slots = nn.ModuleDict({k: nn.Identity() for k in self._slot_keys})
+
+    @property
+    def injection_points(self) -> dict[str, int]:
+        """Map of slot_id -> embedding dimension."""
+        return {k: self.n_embd for k in self._slot_keys}
+
+    def register_slot(self, slot_id: str, slot: nn.Module) -> None:
+        """Attach a seed module at the specified injection point."""
+        if slot_id not in self.slots:
+            raise ValueError(f"Unknown injection point: {slot_id}")
+        device = self.tok_emb.weight.device
+        self.slots[slot_id] = slot.to(device)
+
+    def unregister_slot(self, slot_id: str) -> None:
+        """Remove a seed module from the specified injection point."""
+        if slot_id not in self.slots:
+            raise ValueError(f"Unknown injection point: {slot_id}")
+        self.slots[slot_id] = nn.Identity()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, T = x.shape
+        assert T <= self.block_size, f"Sequence length {T} exceeds block_size {self.block_size}"
+
+        # Embeddings
+        pos = torch.arange(T, device=x.device)
+        h = self.drop(self.tok_emb(x) + self.pos_emb(pos))
+
+        # Transformer layers with slot injection
+        for i, layer in enumerate(self.layers):
+            h = layer(h)
+            h = self.slots[self._slot_keys[i]](h)  # Always call, Identity is no-op
+
+        # Output
+        h = self.ln_f(h)
+        return self.head(h)
 
 
 # =============================================================================
@@ -132,5 +318,9 @@ class MorphogeneticModel(nn.Module):
 __all__ = [
     "ConvBlock",
     "HostCNN",
+    "CausalSelfAttention",
+    "MLP",
+    "TransformerBlock",
+    "TransformerHost",
     "MorphogeneticModel",
 ]

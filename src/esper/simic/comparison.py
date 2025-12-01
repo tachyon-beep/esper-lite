@@ -17,12 +17,16 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from esper.leyline import SimicAction, SeedStage, SeedTelemetry
+from esper.leyline import SeedStage, SeedTelemetry
+from esper.leyline.actions import build_action_enum, get_blueprint_from_action, is_germinate_action
 from esper.simic.episodes import TrainingSnapshot
 from esper.simic.features import obs_to_base_features
 from esper.simic.gradient_collector import collect_seed_gradients
 from esper.simic.iql import IQL
 from esper.tamiyo import HeuristicTamiyo, HeuristicPolicyConfig, SignalTracker
+
+# Action enum for CNN topology (current comparison flows)
+ACTION_ENUM = build_action_enum("cnn")
 
 
 # =============================================================================
@@ -220,8 +224,8 @@ def live_comparison(
         'heuristic_accuracies': [],
         'iql_would_have': [],  # What IQL would have chosen
         'agreements': [],
-        'action_counts': {'heuristic': {a.name: 0 for a in SimicAction},
-                         'iql': {a.name: 0 for a in SimicAction}},
+        'action_counts': {'heuristic': {a.name: 0 for a in ACTION_ENUM},
+                         'iql': {a.name: 0 for a in ACTION_ENUM}},
     }
 
     for ep_idx in range(n_episodes):
@@ -331,7 +335,7 @@ def live_comparison(
 
             state_tensor = torch.tensor([features], dtype=torch.float32, device=device)
             iql_action_idx = iql.get_action(state_tensor, deterministic=True)
-            iql_action = SimicAction(iql_action_idx).name
+            iql_action = ACTION_ENUM(iql_action_idx).name
 
             # Track actions - both now use Action enum
             results['action_counts']['heuristic'][h_action.action.name] += 1
@@ -371,7 +375,7 @@ def live_comparison(
     h_total = sum(results['action_counts']['heuristic'].values())
     i_total = sum(results['action_counts']['iql'].values())
 
-    for action in SimicAction:
+    for action in ACTION_ENUM:
         h_pct = results['action_counts']['heuristic'][action.name] / h_total * 100 if h_total > 0 else 0
         i_pct = results['action_counts']['iql'][action.name] / i_total * 100 if i_total > 0 else 0
         print(f"  {action.name:<12} {h_pct:>9.1f}% {i_pct:>9.1f}%")
@@ -436,8 +440,8 @@ def head_to_head_comparison(
         'iql_wins': 0,
         'ties': 0,
         'action_counts': {
-            'heuristic': {a.name: 0 for a in SimicAction},
-            'iql': {a.name: 0 for a in SimicAction},
+            'heuristic': {a.name: 0 for a in ACTION_ENUM},
+            'iql': {a.name: 0 for a in ACTION_ENUM},
         },
     }
 
@@ -446,7 +450,7 @@ def head_to_head_comparison(
 
     def run_training_episode(
         policy_name: str,
-        action_fn,  # function(signals, model, tracker) -> SimicAction
+        action_fn,  # function(signals, model, tracker) -> ACTION_ENUM
         seed: int,
     ) -> tuple[float, dict]:
         """Run a single training episode controlled by the given policy."""
@@ -464,7 +468,7 @@ def head_to_head_comparison(
         gradient_collector = SeedGradientCollector()
 
         tracker = SignalTracker()
-        action_counts = {a.name: 0 for a in SimicAction}
+        action_counts = {a.name: 0 for a in ACTION_ENUM}
         seeds_created = 0
 
         for epoch in range(1, max_epochs + 1):
@@ -606,15 +610,15 @@ def head_to_head_comparison(
             action_counts[action.name] += 1
 
             # Execute action
-            if SimicAction.is_germinate(action):
+            if is_germinate_action(action):
                 if not model.has_active_seed:
-                    blueprint_id = SimicAction.get_blueprint_id(action)
+                    blueprint_id = get_blueprint_from_action(action)
                     seed_id = f"seed_{seeds_created}"
                     model.germinate_seed(blueprint_id, seed_id)
                     seeds_created += 1
                     seed_optimizer = None
 
-            elif action == SimicAction.ADVANCE:
+            elif action == ACTION_ENUM.ADVANCE:
                 if model.has_active_seed:
                     if model.seed_state.stage == SeedStage.TRAINING:
                         model.seed_state.transition(SeedStage.BLENDING)
@@ -625,7 +629,7 @@ def head_to_head_comparison(
                         model.seed_state.metrics.reset_stage_baseline()
                         model.seed_slot.set_alpha(1.0)
 
-            elif action == SimicAction.CULL:
+            elif action == ACTION_ENUM.CULL:
                 if model.has_active_seed:
                     model.cull_seed()
                     seed_optimizer = None
@@ -679,7 +683,7 @@ def head_to_head_comparison(
         )
         state_tensor = torch.tensor([features], dtype=torch.float32, device=device)
         action_idx = iql.get_action(state_tensor, deterministic=True)
-        return SimicAction(action_idx)
+        return ACTION_ENUM(action_idx)
 
     # Run episodes
     for ep_idx in range(n_episodes):
@@ -749,7 +753,7 @@ def head_to_head_comparison(
     h_total = sum(results['action_counts']['heuristic'].values())
     i_total = sum(results['action_counts']['iql'].values())
 
-    for action in SimicAction:
+    for action in ACTION_ENUM:
         h_pct = results['action_counts']['heuristic'][action.name] / h_total * 100 if h_total > 0 else 0
         i_pct = results['action_counts']['iql'][action.name] / i_total * 100 if i_total > 0 else 0
         print(f"  {action.name:<12} {h_pct:>9.1f}% {i_pct:>9.1f}%")

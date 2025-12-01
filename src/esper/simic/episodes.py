@@ -17,6 +17,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from esper.leyline import SeedStage, FieldReport as LeylineFieldReport
+from esper.leyline.actions import build_action_enum
+
+# Action enum for CNN topology (current episodes schema)
+ACTION_ENUM = build_action_enum("cnn")
 
 
 # =============================================================================
@@ -223,18 +227,14 @@ class TrainingSnapshot:
 # Action Space (imported from leyline.actions)
 # =============================================================================
 
-# Note: SimicAction is now in esper.leyline.actions
-# Import it from there, not defined here
-
-
 @dataclass
 class ActionTaken:
     """Record of an action taken by Tamiyo.
 
-    Note: The action field refers to SimicAction from leyline.
+    Uses the topology-specific action enum from leyline.actions.
     """
 
-    action: "SimicAction"  # From leyline.actions
+    action: ACTION_ENUM
     blueprint_id: str | None = None
     target_seed_id: str | None = None
     confidence: float = 1.0
@@ -242,13 +242,13 @@ class ActionTaken:
 
     def to_vector(self) -> list[float]:
         """Convert to flat vector (one-hot action + confidence)."""
-        one_hot = [0.0] * 7  # 7 actions now
+        one_hot = [0.0] * len(ACTION_ENUM)
         one_hot[self.action.value] = 1.0
         return one_hot + [self.confidence]
 
     @staticmethod
     def vector_size() -> int:
-        return 8  # 7 actions one-hot + confidence
+        return len(ACTION_ENUM) + 1  # action one-hot + confidence
 
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
@@ -263,9 +263,8 @@ class ActionTaken:
     @classmethod
     def from_dict(cls, d: dict) -> "ActionTaken":
         """Create from dictionary."""
-        from esper.leyline import SimicAction
         return cls(
-            action=SimicAction[d["action"]],
+            action=ACTION_ENUM[d["action"]],
             blueprint_id=d["blueprint_id"],
             target_seed_id=d["target_seed_id"],
             confidence=d["confidence"],

@@ -10,6 +10,7 @@ in the vectorized PPO training loop.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import math
 from typing import TYPE_CHECKING
 
@@ -24,6 +25,8 @@ if TYPE_CHECKING:
 __all__ = [
     "safe",
     "obs_to_base_features",
+    "TaskConfig",
+    "normalize_observation",
 ]
 
 
@@ -95,3 +98,65 @@ def obs_to_base_features(obs: dict) -> list[float]:
         obs['seed_improvement'],
         float(obs['available_slots']),
     ]
+
+
+# =============================================================================
+# Task Configuration and Observation Normalization (Phase 2)
+# =============================================================================
+
+
+@dataclass(slots=True)
+class TaskConfig:
+    """Task-specific configuration for observation normalization."""
+
+    task_type: str  # "classification" or "lm"
+    topology: str   # "cnn" or "transformer"
+    baseline_loss: float  # Random init loss
+    target_loss: float    # Achievable loss
+    typical_loss_delta_std: float
+    max_epochs: int
+    max_steps: int = 10000
+
+    @property
+    def achievable_range(self) -> float:
+        return self.baseline_loss - self.target_loss
+
+    @staticmethod
+    def for_cifar10() -> "TaskConfig":
+        return TaskConfig(
+            task_type="classification",
+            topology="cnn",
+            baseline_loss=2.3,  # ln(10)
+            target_loss=0.3,
+            typical_loss_delta_std=0.05,
+            max_epochs=25,
+            max_steps=10000,
+        )
+
+    @staticmethod
+    def for_tinystories() -> "TaskConfig":
+        return TaskConfig(
+            task_type="lm",
+            topology="transformer",
+            baseline_loss=10.8,  # ln(50257)
+            target_loss=3.5,
+            typical_loss_delta_std=0.15,
+            max_epochs=50,
+            max_steps=50000,
+        )
+
+
+def normalize_observation(obs: dict, config: TaskConfig) -> dict:
+    """Normalize observations for stable PPO training."""
+    achievable_range = config.achievable_range or 1.0
+    return {
+        "epoch": obs["epoch"] / config.max_epochs,
+        "global_step": obs["global_step"] / config.max_steps,
+        "train_loss": (obs["train_loss"] - config.target_loss) / achievable_range,
+        "val_loss": (obs["val_loss"] - config.target_loss) / achievable_range,
+        "loss_delta": obs["loss_delta"] / config.typical_loss_delta_std,
+        "plateau_epochs": min(obs["plateau_epochs"] / 10.0, 1.0),
+        "seed_alpha": obs["seed_alpha"],
+        "has_active_seed": obs["has_active_seed"],
+        "seed_stage": obs["seed_stage"] / 7.0,
+    }

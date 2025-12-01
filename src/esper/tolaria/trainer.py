@@ -14,6 +14,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+import math
 
 
 def train_epoch_normal(
@@ -123,7 +124,8 @@ def validate_and_get_metrics(
     device: str,
     compute_per_class: bool = False,
     num_classes: int = 10,
-) -> tuple[float, float, float, float, dict[int, float] | None]:
+    task_type: str = "classification",
+) -> tuple[float, float, float, float, dict[int, float] | None, float | None]:
     """Get validation and training metrics.
 
     Args:
@@ -134,10 +136,12 @@ def validate_and_get_metrics(
         device: Device to evaluate on.
         compute_per_class: If True, compute per-class accuracy (for telemetry).
         num_classes: Number of classes in the dataset.
+        task_type: Task type ("classification" or "lm").
 
     Returns:
-        Tuple of (val_loss, val_accuracy, train_loss, train_accuracy, per_class_acc)
+        Tuple of (val_loss, val_accuracy, train_loss, train_accuracy, per_class_acc, perplexity)
         per_class_acc is None if compute_per_class is False.
+        perplexity is only computed for language modeling tasks.
     """
     model.eval()
 
@@ -197,4 +201,8 @@ def validate_and_get_metrics(
     train_loss /= min(10, len(trainloader)) if len(trainloader) > 0 else 1
     train_accuracy = 100.0 * train_correct / train_total if train_total > 0 else 0.0
 
-    return val_loss, val_accuracy, train_loss, train_accuracy, per_class_acc
+    perplexity = None
+    if task_type == "lm":
+        perplexity = math.exp(val_loss) if val_loss < 20 else float("inf")
+
+    return val_loss, val_accuracy, train_loss, train_accuracy, per_class_acc, perplexity

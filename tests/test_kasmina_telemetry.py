@@ -5,7 +5,6 @@ import torch
 
 from esper.leyline import TelemetryEvent, TelemetryEventType
 from esper.kasmina.slot import SeedSlot
-from esper.kasmina import BlueprintCatalog
 
 
 class TestEnrichedTelemetry:

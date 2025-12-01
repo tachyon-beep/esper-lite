@@ -468,6 +468,84 @@ def compute_seed_potential(obs: dict) -> float:
 
 
 # =============================================================================
+# Loss-Primary Reward (Phase 2)
+# =============================================================================
+
+# Stage potentials for PBRS (monotonically increasing toward FOSSILIZED)
+_STAGE_POTENTIALS = {
+    0: 0.0,  # UNKNOWN
+    1: 0.0,  # DORMANT
+    2: 1.0,  # GERMINATED
+    3: 2.0,  # TRAINING
+    4: 3.0,  # BLENDING
+    5: 4.0,  # SHADOWING
+    6: 5.0,  # PROBATIONARY
+    7: 7.0,  # FOSSILIZED (highest)
+}
+
+
+def compute_pbrs_stage_bonus(
+    seed_info: SeedInfo,
+    config: LossRewardConfig,
+    gamma: float = 0.99,
+) -> float:
+    """PBRS-compatible stage bonus using potential function."""
+    previous_stage = getattr(seed_info, "previous_stage", seed_info.stage)
+
+    current_potential = _STAGE_POTENTIALS.get(seed_info.stage, 0.0)
+    previous_potential = _STAGE_POTENTIALS.get(previous_stage, 0.0)
+
+    return config.stage_potential_weight * (gamma * current_potential - previous_potential)
+
+
+def compute_loss_reward(
+    action: int,
+    loss_delta: float,
+    val_loss: float,
+    seed_info: SeedInfo | None,
+    epoch: int,
+    max_epochs: int,
+    total_params: int = 0,
+    host_params: int = 1,
+    config: LossRewardConfig | None = None,
+) -> float:
+    """Compute loss-primary reward for seed lifecycle control."""
+    if config is None:
+        config = LossRewardConfig.default()
+
+    reward = 0.0
+
+    # Primary: loss improvement (negative delta = improvement)
+    normalized_delta = loss_delta / config.typical_loss_delta_std
+    clipped = max(-config.max_loss_delta, min(normalized_delta, config.max_loss_delta))
+    if clipped > 0:
+        clipped *= config.regression_penalty_scale
+    reward += (-clipped) * config.loss_delta_weight
+
+    # Compute rent with grace period
+    if host_params > 0 and total_params > 0:
+        in_grace = False
+        if seed_info is not None:
+            in_grace = seed_info.seed_age_epochs < config.grace_epochs
+        if not in_grace:
+            params_ratio = total_params / host_params
+            reward -= config.compute_rent_weight * params_ratio
+
+    # Stage bonuses (PBRS)
+    if seed_info is not None:
+        reward += compute_pbrs_stage_bonus(seed_info, config)
+
+    # Terminal bonus based on normalized improvement
+    if epoch == max_epochs:
+        improvement = config.baseline_loss - val_loss
+        achievable_range = config.achievable_range or 1.0
+        normalized = max(0.0, min(improvement / achievable_range, 1.0))
+        reward += normalized * config.terminal_loss_weight
+
+    return reward
+
+
+# =============================================================================
 # Intervention Costs
 # =============================================================================
 
@@ -502,6 +580,8 @@ __all__ = [
     "compute_shaped_reward",
     "compute_potential",
     "compute_pbrs_bonus",
+    "compute_pbrs_stage_bonus",
+    "compute_loss_reward",
     "compute_seed_potential",
     "get_intervention_cost",
     "INTERVENTION_COSTS",

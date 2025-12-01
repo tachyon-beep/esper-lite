@@ -4,6 +4,7 @@ import itertools
 
 import pytest
 import torch
+from torch.utils.data import DataLoader, TensorDataset
 
 from esper.tolaria import (
     create_model,
@@ -12,7 +13,6 @@ from esper.tolaria import (
     train_epoch_seed_isolated,
     validate_and_get_metrics,
 )
-from esper.utils import load_cifar10
 
 
 class TestEnvironment:
@@ -45,10 +45,12 @@ class TestTrainer:
     def model_and_loader(self):
         """Create model and minimal data loader for testing."""
         model = create_model(device="cpu")
-        trainloader, testloader = load_cifar10(batch_size=32)
-        # Just use first 2 batches for speed
-        mini_train = list(itertools.islice(trainloader, 2))
-        mini_test = list(itertools.islice(testloader, 2))
+        x = torch.randn(64, 3, 32, 32)
+        y = torch.randint(0, 10, (64,))
+        dataset = TensorDataset(x, y)
+        loader = DataLoader(dataset, batch_size=32, shuffle=False, num_workers=0)
+        mini_train = list(itertools.islice(loader, 2))
+        mini_test = list(itertools.islice(loader, 2))
         return model, mini_train, mini_test
 
     def test_train_epoch_normal_runs(self, model_and_loader):
@@ -91,12 +93,13 @@ class TestTrainer:
             model, mini_train, mini_test, criterion, "cpu"
         )
 
-        assert len(result) == 5
-        val_loss, val_acc, train_loss, train_acc, per_class = result
+        assert len(result) == 6
+        val_loss, val_acc, train_loss, train_acc, per_class, perplexity = result
         assert isinstance(val_loss, float)
         assert isinstance(val_acc, float)
         assert 0 <= val_acc <= 100
         assert per_class is None  # compute_per_class=False by default
+        assert perplexity is None
 
     def test_validate_and_get_metrics_per_class(self, model_and_loader):
         """Test per-class accuracy computation."""
@@ -108,6 +111,7 @@ class TestTrainer:
             compute_per_class=True
         )
 
-        _, _, _, _, per_class = result
+        _, _, _, _, per_class, perplexity = result
         assert per_class is not None
         assert len(per_class) == 10  # CIFAR-10 has 10 classes
+        assert perplexity is None

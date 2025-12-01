@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Callable
+from typing import Callable, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
@@ -32,6 +32,9 @@ from esper.leyline import (
     TelemetryEventType,
     SeedTelemetry,
 )
+
+if TYPE_CHECKING:
+    from esper.simic.features import TaskConfig
 
 
 # =============================================================================
@@ -434,6 +437,7 @@ class SeedSlot:
         gates: QualityGates | None = None,
         on_telemetry: Callable[[TelemetryEvent], None] | None = None,
         fast_mode: bool = False,
+        task_config: "TaskConfig | None" = None,
     ):
         self.slot_id = slot_id
         self.channels = channels
@@ -441,6 +445,7 @@ class SeedSlot:
         self.gates = gates or QualityGates()
         self.on_telemetry = on_telemetry
         self.fast_mode = fast_mode  # Disable telemetry/isolation for PPO
+        self.task_config = task_config
 
         self.seed: nn.Module | None = None
         self.state: SeedState | None = None
@@ -474,14 +479,20 @@ class SeedSlot:
         host_module: nn.Module | None = None,
     ) -> SeedState:
         """Germinate a new seed in this slot."""
-        # Import here to avoid circular dependency
-        from esper.kasmina._blueprints_v1 import BlueprintCatalog
+        from esper.kasmina.blueprints import BlueprintRegistry
 
         if self.is_active and not is_failure_stage(self.state.stage):
             raise RuntimeError(f"Slot {self.slot_id} already has active seed")
 
-        # Create seed
-        self.seed = BlueprintCatalog.create_seed(blueprint_id, self.channels)
+        topology = self.task_config.topology if self.task_config is not None else "cnn"
+        try:
+            self.seed = BlueprintRegistry.create(topology, blueprint_id, self.channels)
+        except ValueError as exc:
+            available = BlueprintRegistry.list_for_topology(topology)
+            names = [s.name for s in available]
+            raise AssertionError(
+                f"Blueprint '{blueprint_id}' not available for topology '{topology}'. Available: {names}"
+            ) from exc
         self.seed = self.seed.to(self.device)
 
         # Initialize state

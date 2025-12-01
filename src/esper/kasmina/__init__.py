@@ -23,35 +23,17 @@ from esper.leyline import (
 )
 
 # Slot management
-from esper.kasmina.slot import (
-    SeedMetrics,
-    SeedState,
-    QualityGates,
-    SeedSlot,
-)
+from esper.kasmina.slot import SeedMetrics, SeedState, QualityGates, SeedSlot
 
-# Blueprints (v1 - will be replaced by registry in Phase 2)
-from esper.kasmina._blueprints_v1 import (
-    ConvBlock,
-    ConvEnhanceSeed,
-    AttentionSeed,
-    NormSeed,
-    DepthwiseSeed,
-    BlueprintCatalog,
-)
+# Blueprints / registry
+from esper.kasmina.blueprints import BlueprintRegistry, BlueprintSpec, ConvBlock
 
 # Isolation
-from esper.kasmina.isolation import (
-    AlphaSchedule,
-    blend_with_isolation,
-    GradientIsolationMonitor,
-)
+from esper.kasmina.isolation import AlphaSchedule, blend_with_isolation, GradientIsolationMonitor
 
 # Host
-from esper.kasmina.host import (
-    HostCNN,
-    MorphogeneticModel,
-)
+from esper.kasmina.protocol import HostProtocol
+from esper.kasmina.host import HostCNN, TransformerHost, TransformerBlock, MorphogeneticModel
 
 __all__ = [
     # Re-exported Leyline types
@@ -68,18 +50,18 @@ __all__ = [
     "SeedState",
     "QualityGates",
     "SeedSlot",
-    # Blueprints
+    # Blueprints / registry
+    "BlueprintRegistry",
+    "BlueprintSpec",
     "ConvBlock",
-    "ConvEnhanceSeed",
-    "AttentionSeed",
-    "NormSeed",
-    "DepthwiseSeed",
-    "BlueprintCatalog",
     # Isolation
     "AlphaSchedule",
     "blend_with_isolation",
     "GradientIsolationMonitor",
     # Host
+    "HostProtocol",
     "HostCNN",
+    "TransformerHost",
+    "TransformerBlock",
     "MorphogeneticModel",
 ]

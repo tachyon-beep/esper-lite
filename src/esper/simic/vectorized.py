@@ -30,7 +30,8 @@ from dataclasses import dataclass, field
 import torch
 import torch.nn as nn
 
-from esper.leyline import SimicAction, SeedStage, SeedTelemetry, TelemetryEvent
+from esper.leyline import SeedStage, SeedTelemetry, TelemetryEvent
+from esper.leyline.actions import build_action_enum, get_blueprint_from_action, is_germinate_action
 from esper.simic.gradient_collector import collect_seed_gradients
 from esper.simic.buffers import RolloutBuffer
 from esper.simic.networks import ActorCritic
@@ -39,6 +40,9 @@ from esper.simic.ppo import PPOAgent, signals_to_features
 from esper.simic.rewards import compute_shaped_reward, SeedInfo
 from esper.nissa import NissaHub, BlueprintAnalytics
 from esper.tolaria import TolariaGovernor
+
+# Action enum for CNN topology (current vectorized trainer)
+ACTION_ENUM = build_action_enum("cnn")
 
 
 # =============================================================================
@@ -67,7 +71,7 @@ class ParallelEnvState:
     test_iter: any = None   # Persistent testloader iterator
     seeds_created: int = 0
     episode_rewards: list = field(default_factory=list)
-    action_counts: dict = field(default_factory=lambda: {a.name: 0 for a in SimicAction})
+    action_counts: dict = field(default_factory=lambda: {a.name: 0 for a in ACTION_ENUM})
     # Metrics for current batch step
     train_loss: float = 0.0
     train_acc: float = 0.0
@@ -221,7 +225,7 @@ def train_ppo_vectorized(
     else:
         agent = PPOAgent(
             state_dim=state_dim,
-            action_dim=len(SimicAction),
+            action_dim=len(ACTION_ENUM),
             lr=lr,
             clip_ratio=clip_ratio,
             entropy_coef=entropy_coef,
@@ -296,7 +300,7 @@ def train_ppo_vectorized(
             test_iter=None,
             seeds_created=0,
             episode_rewards=[],
-            action_counts={a.name: 0 for a in SimicAction},
+            action_counts={a.name: 0 for a in ACTION_ENUM},
         )
 
     def process_train_batch(env_state: ParallelEnvState, inputs: torch.Tensor,
@@ -608,7 +612,7 @@ def train_ppo_vectorized(
                 log_prob = log_probs[env_idx].item()
                 value = values[env_idx].item()
 
-                action = SimicAction(action_idx)
+                action = ACTION_ENUM(action_idx)
                 env_state.action_counts[action.name] += 1
 
                 # Governor rollback: execute if this env panicked
@@ -642,18 +646,18 @@ def train_ppo_vectorized(
                     print(f"  [ENV {env_idx}] Punishment reward: {punishment:.1f} (final reward: {reward:.1f})")
 
                 # Execute action
-                if SimicAction.is_germinate(action):
+                if is_germinate_action(action):
                     if not model.has_active_seed:
-                        blueprint_id = SimicAction.get_blueprint_id(action)
+                        blueprint_id = get_blueprint_from_action(action)
                         seed_id = f"env{env_idx}_seed_{env_state.seeds_created}"
                         model.germinate_seed(blueprint_id, seed_id)
                         env_state.seeds_created += 1
                         env_state.seed_optimizer = None
 
-                elif action == SimicAction.ADVANCE:
+                elif action == ACTION_ENUM.ADVANCE:
                     _advance_active_seed(model)
 
-                elif action == SimicAction.CULL:
+                elif action == ACTION_ENUM.CULL:
                     if model.has_active_seed:
                         model.cull_seed()
                         env_state.seed_optimizer = None
@@ -696,7 +700,7 @@ def train_ppo_vectorized(
         print(f"  Avg acc: {avg_acc:.1f}% (rolling: {rolling_avg_acc:.1f}%)")
         print(f"  Avg reward: {avg_reward:.1f}")
 
-        total_actions = {a.name: 0 for a in SimicAction}
+        total_actions = {a.name: 0 for a in ACTION_ENUM}
         for env_state in env_states:
             for a, c in env_state.action_counts.items():
                 total_actions[a] += c

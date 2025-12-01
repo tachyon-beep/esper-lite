@@ -1,0 +1,109 @@
+"""CNN Blueprints - Seed modules for convolutional hosts."""
+
+from __future__ import annotations
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+from .registry import BlueprintRegistry
+
+
+class ConvBlock(nn.Module):
+    """Standard conv-bn-relu block."""
+
+    def __init__(self, in_channels: int, out_channels: int, kernel_size: int = 3):
+        super().__init__()
+        self.conv = nn.Conv2d(
+            in_channels, out_channels, kernel_size, padding=kernel_size // 2, bias=False
+        )
+        self.bn = nn.BatchNorm2d(out_channels)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return F.relu(self.bn(self.conv(x)))
+
+
+@BlueprintRegistry.register("norm", "cnn", param_estimate=100, description="BatchNorm only")
+def create_norm_seed(channels: int) -> nn.Module:
+    """Normalization enhancement seed."""
+
+    class NormSeed(nn.Module):
+        def __init__(self, channels: int):
+            super().__init__()
+            self.norm = nn.GroupNorm(num_groups=min(32, channels), num_channels=channels)
+            self.scale = nn.Parameter(torch.ones(1))
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            return x + self.scale * (self.norm(x) - x)
+
+    return NormSeed(channels)
+
+
+@BlueprintRegistry.register(
+    "attention", "cnn", param_estimate=2000, description="SE-style channel attention"
+)
+def create_attention_seed(channels: int, reduction: int = 4) -> nn.Module:
+    """Channel attention seed (SE-style)."""
+
+    class AttentionSeed(nn.Module):
+        def __init__(self, channels: int, reduction: int):
+            super().__init__()
+            self.avg_pool = nn.AdaptiveAvgPool2d(1)
+            self.fc = nn.Sequential(
+                nn.Linear(channels, channels // reduction, bias=False),
+                nn.ReLU(inplace=True),
+                nn.Linear(channels // reduction, channels, bias=False),
+                nn.Sigmoid(),
+            )
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            b, c, _, _ = x.size()
+            y = self.avg_pool(x).view(b, c)
+            y = self.fc(y).view(b, c, 1, 1)
+            return x * y.expand_as(x)
+
+    return AttentionSeed(channels, reduction)
+
+
+@BlueprintRegistry.register("depthwise", "cnn", param_estimate=4800, description="Depthwise-separable conv")
+def create_depthwise_seed(channels: int) -> nn.Module:
+    """Depthwise separable convolution seed."""
+
+    class DepthwiseSeed(nn.Module):
+        def __init__(self, channels: int):
+            super().__init__()
+            self.depthwise = nn.Conv2d(
+                channels, channels, kernel_size=3, padding=1, groups=channels, bias=False
+            )
+            self.pointwise = nn.Conv2d(channels, channels, kernel_size=1, bias=False)
+            self.bn = nn.BatchNorm2d(channels)
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            residual = x
+            x = self.depthwise(x)
+            x = self.pointwise(x)
+            x = self.bn(x)
+            return residual + F.relu(x)
+
+    return DepthwiseSeed(channels)
+
+
+@BlueprintRegistry.register("conv_enhance", "cnn", param_estimate=74000, description="Heavy conv block")
+def create_conv_enhance_seed(channels: int) -> nn.Module:
+    """Convolutional enhancement seed."""
+
+    class ConvEnhanceSeed(nn.Module):
+        def __init__(self, channels: int):
+            super().__init__()
+            self.enhance = nn.Sequential(
+                ConvBlock(channels, channels),
+                ConvBlock(channels, channels),
+            )
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            return x + self.enhance(x)
+
+    return ConvEnhanceSeed(channels)
+
+
+__all__ = ["ConvBlock"]

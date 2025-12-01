@@ -10,6 +10,8 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
+from esper.leyline.actions import build_action_enum
+
 try:
     import torch
     import torch.nn as nn
@@ -57,10 +59,10 @@ class PolicyNetwork:
 
         # Import here to avoid circular dependencies
         from esper.simic.episodes import TrainingSnapshot
-        from esper.leyline import SimicAction
+        from esper.leyline.actions import build_action_enum
 
         self.TrainingSnapshot = TrainingSnapshot
-        self.SimicAction = SimicAction
+        self.action_enum = build_action_enum("cnn")
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -70,7 +72,7 @@ class PolicyNetwork:
             nn.ReLU(),
             nn.Linear(hidden1, hidden2),
             nn.ReLU(),
-            nn.Linear(hidden2, len(SimicAction)),
+            nn.Linear(hidden2, len(self.action_enum)),
         ).to(self.device)
 
         self.criterion = nn.CrossEntropyLoss()
@@ -140,13 +142,13 @@ class PolicyNetwork:
 
         # Compute class weights if requested
         if class_weights:
-            class_counts = torch.bincount(y_train, minlength=len(self.SimicAction)).float()
+            class_counts = torch.bincount(y_train, minlength=len(self.action_enum)).float()
             # Inverse frequency weighting, with smoothing
             weights = 1.0 / (class_counts + 1.0)
-            weights = weights / weights.sum() * len(self.SimicAction)  # Normalize
+            weights = weights / weights.sum() * len(self.action_enum)  # Normalize
             self.criterion = torch.nn.CrossEntropyLoss(weight=weights.to(self.device))
             if verbose:
-                print(f"Class weights: {dict(zip([a.name for a in self.SimicAction], weights.tolist()))}")
+                print(f"Class weights: {dict(zip([a.name for a in self.action_enum], weights.tolist()))}")
 
         if verbose:
             print(f"Training on {len(X_train)} samples, validating on {len(X_val)}")
@@ -201,15 +203,8 @@ class PolicyNetwork:
             "final_val_accuracy": self.val_accuracies[-1],
         }
 
-    def predict(self, snapshot) -> "SimicAction":
-        """Predict action for a single observation.
-
-        Args:
-            snapshot: TrainingSnapshot object
-
-        Returns:
-            SimicAction enum value
-        """
+    def predict(self, snapshot):
+        """Predict action for a single observation."""
         import torch
 
         self.model.eval()
@@ -222,7 +217,7 @@ class PolicyNetwork:
             output = self.model(x)
             action_idx = output.argmax(dim=1).item()
 
-        return self.SimicAction(action_idx)
+        return self.action_enum(action_idx)
 
     def predict_probs(self, snapshot) -> dict:
         """Predict action probabilities for a single observation.
@@ -231,7 +226,7 @@ class PolicyNetwork:
             snapshot: TrainingSnapshot object
 
         Returns:
-            Dict mapping SimicAction to probability
+            Dict mapping action enum to probability
         """
         import torch
         import torch.nn.functional as F
@@ -247,8 +242,8 @@ class PolicyNetwork:
             probs = F.softmax(output, dim=1)[0]
 
         return {
-            self.SimicAction(i): probs[i].item()
-            for i in range(len(self.SimicAction))
+            self.action_enum(i): probs[i].item()
+            for i in range(len(self.action_enum))
         }
 
     def evaluate(self, episodes: list) -> dict:
@@ -280,14 +275,14 @@ class PolicyNetwork:
         accuracy = (y_pred == y_true).float().mean().item() * 100
 
         # Confusion matrix
-        n_classes = len(self.SimicAction)
+        n_classes = len(self.action_enum)
         confusion = [[0] * n_classes for _ in range(n_classes)]
         for true, pred in zip(y_true.tolist(), y_pred.tolist()):
             confusion[true][pred] += 1
 
         # Per-class accuracy
         class_acc = {}
-        for i, action in enumerate(self.SimicAction):
+        for i, action in enumerate(self.action_enum):
             total = sum(confusion[i])
             correct = confusion[i][i] if total > 0 else 0
             class_acc[action.name] = (correct / total * 100) if total > 0 else 0.0
@@ -316,10 +311,8 @@ def print_confusion_matrix(eval_result: dict) -> None:
     Args:
         eval_result: Dict from PolicyNetwork.evaluate()
     """
-    from esper.leyline import SimicAction
-
     cm = eval_result["confusion_matrix"]
-    actions = [a.name for a in SimicAction]
+    actions = [a.name for a in build_action_enum("cnn")]
 
     # Header
     print("\nConfusion Matrix (rows=actual, cols=predicted):")

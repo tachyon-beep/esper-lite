@@ -7,8 +7,12 @@ including the newly added SHADOWING and PROBATIONARY stages.
 import pytest
 from unittest.mock import MagicMock
 
-from esper.leyline import Action, SeedStage, TrainingSignals
+from esper.leyline import SeedStage, TrainingSignals
+from esper.leyline.actions import build_action_enum, get_blueprint_from_action, is_germinate_action
 from esper.tamiyo import HeuristicTamiyo, HeuristicPolicyConfig, TamiyoDecision
+
+ACTION_ENUM = build_action_enum("cnn")
+Action = ACTION_ENUM  # alias for test expectations
 
 
 class MockSeedState:
@@ -61,7 +65,7 @@ class TestHeuristicTamiyoGermination:
 
         decision = tamiyo.decide(signals, active_seeds=[])
 
-        assert Action.is_germinate(decision.action)
+        assert is_germinate_action(decision.action)
         assert "Plateau detected" in decision.reason
 
     def test_wait_when_no_plateau(self):
@@ -284,8 +288,8 @@ class TestHeuristicTamiyoBlueprintRotation:
 
         # First germination should be CONV
         decision1 = tamiyo.decide(signals, active_seeds=[])
-        assert Action.is_germinate(decision1.action)
-        assert decision1.action == Action.GERMINATE_CONV
+        assert is_germinate_action(decision1.action)
+        assert get_blueprint_from_action(decision1.action) == "conv_enhance"
 
         # Blueprint index advances on germination, next would be ATTENTION
         # But a single policy instance already made a decision, so we verify
@@ -299,7 +303,7 @@ class TestHeuristicTamiyoBlueprintRotation:
             blueprint_rotation=["conv_enhance", "attention", "norm", "depthwise"],
         ))
         decision2 = tamiyo2.decide(signals, active_seeds=[])
-        assert decision2.action == Action.GERMINATE_CONV
+        assert get_blueprint_from_action(decision2.action) == "conv_enhance"
 
     def test_reset_clears_state(self):
         """reset() should clear policy state."""
@@ -431,7 +435,7 @@ class TestHeuristicTamiyoEmbargo:
         signals.metrics.plateau_epochs = 5
 
         decision = tamiyo.decide(signals, active_seeds=[])
-        assert Action.is_germinate(decision.action)
+        assert is_germinate_action(decision.action)
         assert "Plateau detected" in decision.reason
 
     def test_no_embargo_before_first_cull(self):
@@ -448,7 +452,7 @@ class TestHeuristicTamiyoEmbargo:
         signals.metrics.plateau_epochs = 5
 
         decision = tamiyo.decide(signals, active_seeds=[])
-        assert Action.is_germinate(decision.action)
+        assert is_germinate_action(decision.action)
 
     def test_reset_clears_embargo_state(self):
         """reset() should clear embargo tracking."""

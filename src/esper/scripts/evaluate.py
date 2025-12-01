@@ -25,7 +25,11 @@ from typing import NamedTuple
 import torch
 import torch.nn as nn
 
-from esper.leyline import SimicAction, SeedStage
+from esper.leyline import SeedStage
+from esper.leyline.actions import build_action_enum, get_blueprint_from_action, is_germinate_action
+
+# Action enum for CNN topology (current evaluate script)
+ACTION_ENUM = build_action_enum("cnn")
 
 
 class StepRecord(NamedTuple):
@@ -303,7 +307,7 @@ def run_diagnostic_episode(
             action_idx = dist.probs.argmax().item()
             log_prob = dist.log_prob(torch.tensor(action_idx, device=device)).item()
 
-        action = SimicAction(action_idx)
+        action = ACTION_ENUM(action_idx)
 
         # Compute reward with cost params
         acc_delta = signals.metrics.accuracy_delta
@@ -343,16 +347,16 @@ def run_diagnostic_episode(
         record.steps.append(step)
 
         # Execute action
-        if SimicAction.is_germinate(action):
+        if is_germinate_action(action):
             if not model.has_active_seed:
-                blueprint_id = SimicAction.get_blueprint_id(action)
+                blueprint_id = get_blueprint_from_action(action)
                 seed_id = f"seed_{record.seeds_created}"
                 model.germinate_seed(blueprint_id, seed_id)
                 record.seeds_created += 1
                 seed_birth_epoch = epoch
                 seed_optimizer = None
 
-        elif action == SimicAction.ADVANCE:
+        elif action == ACTION_ENUM.ADVANCE:
             if model.has_active_seed:
                 if model.seed_state.stage == SeedStage.TRAINING:
                     model.seed_state.transition(SeedStage.BLENDING)
@@ -364,7 +368,7 @@ def run_diagnostic_episode(
                     model.seed_slot.set_alpha(1.0)
                     record.seeds_fossilized += 1
 
-        elif action == SimicAction.CULL:
+        elif action == ACTION_ENUM.CULL:
             if model.has_active_seed:
                 model.cull_seed()
                 record.seeds_culled += 1

@@ -8,11 +8,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol, TYPE_CHECKING
 
-from esper.leyline import Action, SeedStage, is_terminal_stage, is_failure_stage, TrainingSignals
+from esper.leyline import SeedStage, is_terminal_stage, is_failure_stage, TrainingSignals
+from esper.leyline.actions import build_action_enum
 from esper.tamiyo.decisions import TamiyoDecision
 
 if TYPE_CHECKING:
     from esper.kasmina import SeedState
+
+# Action enum for CNN topology (current heuristic policy)
+Action = build_action_enum("cnn")
 
 
 class TamiyoPolicy(Protocol):
@@ -303,8 +307,7 @@ class HeuristicTamiyo:
 
     def _blueprint_to_action(self, blueprint_id: str) -> Action:
         """Convert blueprint ID to corresponding GERMINATE action."""
-        from esper.leyline import blueprint_to_action
-        return blueprint_to_action(blueprint_id)
+        return getattr(Action, f"GERMINATE_{blueprint_id.upper()}")
 
     def reset(self) -> None:
         """Reset policy state."""

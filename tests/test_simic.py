@@ -6,9 +6,9 @@ import tempfile
 from pathlib import Path
 from datetime import datetime, timezone
 
+from esper.leyline.actions import build_action_enum
 from esper.simic import (
     TrainingSnapshot,
-    SimicAction,
     ActionTaken,
     StepOutcome,
     DecisionPoint,
@@ -16,6 +16,8 @@ from esper.simic import (
     EpisodeCollector,
     DatasetManager,
 )
+
+ACTION_ENUM = build_action_enum("cnn")
 
 
 class TestTrainingSnapshot:
@@ -93,26 +95,24 @@ class TestActionTaken:
 
     def test_vector_size_matches(self):
         """Test that to_vector() length matches vector_size()."""
-        action = ActionTaken(action=SimicAction.WAIT)
+        action = ActionTaken(action=ACTION_ENUM.WAIT)
         vec = action.to_vector()
         assert len(vec) == ActionTaken.vector_size()
 
     def test_one_hot_encoding(self):
         """Test that action is one-hot encoded in vector."""
-        for i, simic_action in enumerate(SimicAction):
-            action = ActionTaken(action=simic_action)
+        for i, action_enum in enumerate(ACTION_ENUM):
+            action = ActionTaken(action=action_enum)
             vec = action.to_vector()
-            # First 7 elements are one-hot (7 actions in current space)
-            for j in range(7):
+            for j in range(len(ACTION_ENUM)):
                 expected = 1.0 if j == i else 0.0
-                assert vec[j] == expected, f"Action {simic_action}: vec[{j}] should be {expected}"
-            # 8th element is confidence (default 1.0)
-            assert vec[7] == 1.0, f"Confidence should be 1.0 by default"
+                assert vec[j] == expected, f"Action {action_enum}: vec[{j}] should be {expected}"
+            assert vec[-1] == 1.0, f"Confidence should be 1.0 by default"
 
     def test_serialization_roundtrip(self):
         """Test to_dict/from_dict roundtrip."""
         original = ActionTaken(
-            action=SimicAction.GERMINATE_CONV,
+            action=getattr(ACTION_ENUM, "GERMINATE_CONV_ENHANCE", None) or getattr(ACTION_ENUM, "GERMINATE_CONV"),
             blueprint_id="conv_enhance",
             confidence=0.85,
             reason="Plateau detected",
@@ -166,7 +166,7 @@ class TestDecisionPoint:
         """Test to_dict/from_dict roundtrip."""
         original = DecisionPoint(
             observation=TrainingSnapshot(epoch=5, val_accuracy=70.0),
-            action=ActionTaken(action=SimicAction.WAIT),
+            action=ActionTaken(action=ACTION_ENUM.WAIT),
             outcome=StepOutcome(accuracy_after=71.0, accuracy_change=1.0, reward=10.0),
         )
 
@@ -174,14 +174,14 @@ class TestDecisionPoint:
         restored = DecisionPoint.from_dict(d)
 
         assert restored.observation.epoch == 5
-        assert restored.action.action == SimicAction.WAIT
+        assert restored.action.action == ACTION_ENUM.WAIT
         assert restored.outcome.reward == 10.0
 
     def test_timestamp_preserved(self):
         """Test that timestamp is preserved in serialization."""
         original = DecisionPoint(
             observation=TrainingSnapshot(),
-            action=ActionTaken(action=SimicAction.WAIT),
+            action=ActionTaken(action=ACTION_ENUM.WAIT),
             outcome=StepOutcome(),
         )
 
@@ -202,12 +202,12 @@ class TestEpisode:
         episode.decisions = [
             DecisionPoint(
                 observation=TrainingSnapshot(),
-                action=ActionTaken(action=SimicAction.WAIT),
+                action=ActionTaken(action=ACTION_ENUM.WAIT),
                 outcome=StepOutcome(reward=10.0),
             ),
             DecisionPoint(
                 observation=TrainingSnapshot(),
-                action=ActionTaken(action=SimicAction.WAIT),
+                action=ActionTaken(action=ACTION_ENUM.WAIT),
                 outcome=StepOutcome(reward=5.0),
             ),
         ]
@@ -220,7 +220,7 @@ class TestEpisode:
         episode.decisions = [
             DecisionPoint(
                 observation=TrainingSnapshot(epoch=1),
-                action=ActionTaken(action=SimicAction.WAIT),
+                action=ActionTaken(action=ACTION_ENUM.WAIT),
                 outcome=StepOutcome(reward=10.0),
             ),
         ]
@@ -243,7 +243,7 @@ class TestEpisode:
         episode.decisions = [
             DecisionPoint(
                 observation=TrainingSnapshot(epoch=1, val_accuracy=70.0),
-                action=ActionTaken(action=SimicAction.WAIT),
+                action=ActionTaken(action=ACTION_ENUM.WAIT),
                 outcome=StepOutcome(reward=10.0),
             ),
         ]
@@ -273,7 +273,7 @@ class TestEpisodeCollector:
         collector.start_episode("test_001", max_epochs=10)
 
         collector.record_observation(TrainingSnapshot(epoch=1))
-        collector.record_action(ActionTaken(action=SimicAction.WAIT))
+        collector.record_action(ActionTaken(action=ACTION_ENUM.WAIT))
         collector.record_outcome(StepOutcome(accuracy_change=1.0))
 
         episode = collector.end_episode(
@@ -292,7 +292,7 @@ class TestEpisodeCollector:
 
         for i in range(5):
             collector.record_observation(TrainingSnapshot(epoch=i+1))
-            collector.record_action(ActionTaken(action=SimicAction.WAIT))
+            collector.record_action(ActionTaken(action=ACTION_ENUM.WAIT))
             collector.record_outcome(StepOutcome(accuracy_change=0.5))
 
         episode = collector.end_episode(final_accuracy=75.0, best_accuracy=76.0)
@@ -312,7 +312,7 @@ class TestEpisodeCollector:
         collector.start_episode("test", max_epochs=10)
 
         with pytest.raises(RuntimeError):
-            collector.record_action(ActionTaken(action=SimicAction.WAIT))
+            collector.record_action(ActionTaken(action=ACTION_ENUM.WAIT))
 
 
 class TestDatasetManager:
@@ -362,7 +362,7 @@ class TestDatasetManager:
                 episode.decisions = [
                     DecisionPoint(
                         observation=TrainingSnapshot(),
-                        action=ActionTaken(action=SimicAction.WAIT),
+                        action=ActionTaken(action=ACTION_ENUM.WAIT),
                         outcome=StepOutcome(reward=10.0),
                     )
                 ]
@@ -394,14 +394,14 @@ class TestPolicyNetwork:
         """Test that predict returns a SimicAction."""
         snap = TrainingSnapshot(epoch=10, val_accuracy=70.0)
         action = policy.predict(snap)
-        assert isinstance(action, SimicAction)
+        assert isinstance(action, type(ACTION_ENUM.WAIT))
 
     def test_predict_probs_sums_to_one(self, policy):
         """Test that predict_probs returns valid probabilities."""
         snap = TrainingSnapshot(epoch=10, val_accuracy=70.0)
         probs = policy.predict_probs(snap)
 
-        assert len(probs) == len(SimicAction)  # 7 actions now
+        assert len(probs) == len(ACTION_ENUM)
         total = sum(probs.values())
         assert abs(total - 1.0) < 0.01  # Should sum to ~1
 
@@ -425,7 +425,7 @@ class TestPolicyNetwork:
             pred_after = policy2.predict_probs(snap)
 
             # Predictions should be identical
-            for action in SimicAction:
+            for action in ACTION_ENUM:
                 assert abs(pred_before[action] - pred_after[action]) < 0.01
         finally:
             Path(path).unlink()
