@@ -1,6 +1,8 @@
 torch>=2.8.0
 numpy>=1.24.0
 hypothesis>=6.148.3
+datasets>=4.4.1
+transformers>=4.57.3
 
 [dev]
 pytest>=7.0.0
