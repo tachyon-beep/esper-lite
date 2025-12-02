@@ -118,6 +118,7 @@ class PPOAgent:
         entropy_coef: float = 0.01,
         entropy_coef_start: float | None = None,
         entropy_coef_end: float | None = None,
+        entropy_coef_min: float = 0.1,
         entropy_anneal_steps: int = 0,
         value_coef: float = 0.5,
         clip_value: bool = True,
@@ -132,6 +133,7 @@ class PPOAgent:
         self.entropy_coef = entropy_coef
         self.entropy_coef_start = entropy_coef_start if entropy_coef_start is not None else entropy_coef
         self.entropy_coef_end = entropy_coef_end if entropy_coef_end is not None else entropy_coef
+        self.entropy_coef_min = entropy_coef_min
         self.entropy_anneal_steps = entropy_anneal_steps
         self.value_coef = value_coef
         self.clip_value = clip_value
@@ -151,12 +153,16 @@ class PPOAgent:
         Returns fixed entropy_coef when entropy_anneal_steps=0 (legacy behavior).
         Otherwise linearly interpolates from entropy_coef_start to entropy_coef_end
         over entropy_anneal_steps training updates.
+
+        The returned value is always >= entropy_coef_min to prevent exploration
+        collapse. Default floor is 0.1 (maintains ~5x exploration vs 0.01).
         """
         if self.entropy_anneal_steps == 0:
-            return self.entropy_coef
+            return max(self.entropy_coef, self.entropy_coef_min)
 
         progress = min(1.0, self.train_steps / self.entropy_anneal_steps)
-        return self.entropy_coef_start + progress * (self.entropy_coef_end - self.entropy_coef_start)
+        annealed = self.entropy_coef_start + progress * (self.entropy_coef_end - self.entropy_coef_start)
+        return max(annealed, self.entropy_coef_min)
 
     def get_action(self, state: torch.Tensor, deterministic: bool = False
                    ) -> tuple[int, float, float]:
@@ -256,6 +262,7 @@ class PPOAgent:
                 'entropy_coef': self.entropy_coef,
                 'entropy_coef_start': self.entropy_coef_start,
                 'entropy_coef_end': self.entropy_coef_end,
+                'entropy_coef_min': self.entropy_coef_min,
                 'entropy_anneal_steps': self.entropy_anneal_steps,
                 'value_coef': self.value_coef,
                 'clip_value': self.clip_value,

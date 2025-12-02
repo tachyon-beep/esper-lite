@@ -152,6 +152,7 @@ class TestEntropyAnnealing:
             state_dim=27,
             action_dim=7,
             entropy_coef=0.05,
+            entropy_coef_min=0.0,  # Disable floor for this test
             entropy_anneal_steps=0,
             device='cpu'
         )
@@ -198,6 +199,7 @@ class TestEntropyAnnealing:
             action_dim=7,
             entropy_coef_start=0.2,
             entropy_coef_end=0.01,
+            entropy_coef_min=0.0,  # Disable floor for this test
             entropy_anneal_steps=100,
             device='cpu'
         )
@@ -213,11 +215,49 @@ class TestEntropyAnnealing:
             action_dim=7,
             entropy_coef_start=0.2,
             entropy_coef_end=0.01,
+            entropy_coef_min=0.0,  # Disable floor for this test
             entropy_anneal_steps=100,
             device='cpu'
         )
         agent.train_steps = 200
         assert abs(agent.get_entropy_coef() - 0.01) < 1e-6
+
+    def test_entropy_floor_prevents_collapse(self):
+        """Entropy floor should prevent coefficient from going below minimum."""
+        from esper.simic.ppo import PPOAgent
+
+        agent = PPOAgent(
+            state_dim=27,
+            action_dim=7,
+            entropy_coef_start=0.2,
+            entropy_coef_end=0.0,  # Would go to zero without floor
+            entropy_coef_min=0.1,  # Floor at 0.1
+            entropy_anneal_steps=100,
+            device='cpu'
+        )
+        # At end of annealing, should be clamped to floor
+        agent.train_steps = 100
+        assert agent.get_entropy_coef() == 0.1
+
+        # Beyond annealing, still at floor
+        agent.train_steps = 200
+        assert agent.get_entropy_coef() == 0.1
+
+    def test_entropy_floor_default_is_sensible(self):
+        """Default entropy floor should be 0.1 to prevent policy collapse."""
+        from esper.simic.ppo import PPOAgent
+
+        agent = PPOAgent(
+            state_dim=27,
+            action_dim=7,
+            entropy_coef_start=0.2,
+            entropy_coef_end=0.01,  # Below default floor of 0.1
+            entropy_anneal_steps=100,
+            device='cpu'
+        )
+        # Default floor should prevent going below 0.1
+        agent.train_steps = 100
+        assert agent.get_entropy_coef() == 0.1  # Clamped at default floor
 
     def test_annealed_entropy_used_in_update(self):
         """PPO update should use annealed entropy coefficient."""

@@ -47,6 +47,8 @@ def main():
         help="Initial entropy coefficient (default: use --entropy-coef)")
     ppo_parser.add_argument("--entropy-coef-end", type=float, default=None,
         help="Final entropy coefficient (default: use --entropy-coef)")
+    ppo_parser.add_argument("--entropy-coef-min", type=float, default=0.1,
+        help="Minimum entropy coefficient floor to prevent exploration collapse (default: 0.1)")
     ppo_parser.add_argument("--entropy-anneal-episodes", type=int, default=0,
         help="Episodes over which to anneal entropy (0=fixed, no annealing)")
     ppo_parser.add_argument("--gamma", type=float, default=0.99)
@@ -109,6 +111,7 @@ def main():
                 entropy_coef=args.entropy_coef,
                 entropy_coef_start=args.entropy_coef_start,
                 entropy_coef_end=args.entropy_coef_end,
+                entropy_coef_min=args.entropy_coef_min,
                 entropy_anneal_episodes=args.entropy_anneal_episodes,
                 gamma=args.gamma,
                 save_path=args.save,
@@ -130,6 +133,7 @@ def main():
                 entropy_coef=args.entropy_coef,
                 entropy_coef_start=args.entropy_coef_start,
                 entropy_coef_end=args.entropy_coef_end,
+                entropy_coef_min=args.entropy_coef_min,
                 entropy_anneal_episodes=args.entropy_anneal_episodes,
                 gamma=args.gamma,
                 save_path=args.save,
