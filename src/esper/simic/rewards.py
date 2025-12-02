@@ -27,6 +27,7 @@ Usage:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from enum import IntEnum
 from typing import NamedTuple
@@ -90,8 +91,10 @@ class RewardConfig:
     wait_stagnant_epochs: int = 5
 
     # Compute cost penalty (per-step rent on excess params)
+    # Uses logarithmic scaling: rent = weight * log(1 + growth_ratio)
+    # This provides diminishing marginal penalty, avoiding the cliff between
+    # small seeds (2K params) and large seeds (74K params) that quadratic caused.
     compute_rent_weight: float = 0.5
-    compute_rent_exponent: float = 2.0  # Quadratic bloat penalty
     max_rent_penalty: float = 8.0  # Cap to prevent runaway negatives
 
     # PBRS scaling for seed-based potential shaping
@@ -122,9 +125,8 @@ class LossRewardConfig:
     regression_penalty_scale: float = 0.5  # Asymmetric clipping
     typical_loss_delta_std: float = 0.1  # Task-specific normalization
 
-    # Compute rent
+    # Compute rent (logarithmic scaling like RewardConfig)
     compute_rent_weight: float = 0.05
-    compute_rent_exponent: float = 1.0
     max_rent_penalty: float = 5.0
     grace_epochs: int = 3  # Rent-free grace period for new seeds
 
@@ -150,7 +152,6 @@ class LossRewardConfig:
             baseline_loss=2.3,  # ln(10)
             target_loss=0.3,
             typical_loss_delta_std=0.05,
-            compute_rent_exponent=1.1,
         )
 
     @staticmethod
@@ -160,7 +161,6 @@ class LossRewardConfig:
             target_loss=3.5,
             typical_loss_delta_std=0.15,
             compute_rent_weight=0.01,
-            compute_rent_exponent=1.5,
         )
 
 
@@ -270,11 +270,15 @@ def compute_shaped_reward(
     # Base: accuracy improvement
     reward += acc_delta * config.acc_delta_weight
 
-    # Compute rent: penalize excess params progressively
+    # Compute rent: penalize excess params with logarithmic scaling
+    # log(1 + growth_ratio) provides diminishing marginal penalty:
+    # - Still penalizes large param counts
+    # - But removes the 50x cliff between small (2K) and large (74K) seeds
+    # - Allows conv_enhance seeds to be viable despite higher param count
     if host_params > 0 and total_params > 0:
         # total_params currently passed as added params; convert to growth ratio
-        growth_ratio = 1.0 + (total_params / host_params)
-        scaled_cost = (growth_ratio**config.compute_rent_exponent) - 1.0
+        growth_ratio = total_params / host_params
+        scaled_cost = math.log(1.0 + growth_ratio)
         rent_penalty = config.compute_rent_weight * scaled_cost
         rent_penalty = min(rent_penalty, config.max_rent_penalty)
         reward -= rent_penalty
@@ -658,14 +662,14 @@ def compute_loss_reward(
         clipped *= config.regression_penalty_scale
     reward += (-clipped) * config.loss_delta_weight
 
-    # Compute rent with grace period
+    # Compute rent with grace period (logarithmic scaling)
     if host_params > 0 and total_params > 0:
         in_grace = False
         if seed_info is not None:
             in_grace = seed_info.seed_age_epochs < config.grace_epochs
         if not in_grace:
-            growth_ratio = 1.0 + (total_params / host_params)
-            scaled_cost = (growth_ratio**config.compute_rent_exponent) - 1.0
+            growth_ratio = total_params / host_params
+            scaled_cost = math.log(1.0 + growth_ratio)
             rent_penalty = config.compute_rent_weight * scaled_cost
             rent_penalty = min(rent_penalty, config.max_rent_penalty)
             reward -= rent_penalty
