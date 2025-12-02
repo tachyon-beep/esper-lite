@@ -7,9 +7,15 @@ from esper.simic.rewards import (
     RewardConfig,
     SeedInfo,
     STAGE_BLENDING,
+    STAGE_GERMINATED,
     STAGE_TRAINING,
+    STAGE_SHADOWING,
+    STAGE_PROBATIONARY,
+    STAGE_FOSSILIZED,
     compute_seed_potential,
     compute_shaped_reward,
+    _cull_shaping,
+    _wait_shaping,
 )
 
 
@@ -145,3 +151,129 @@ class TestPBRSStageBonus:
         # any subsequent in-stage PBRS bonuses.
         assert r1 > 0.0
         assert 0.0 < r2 < r1
+
+
+class TestCullAgeProtection:
+    """Tests for CULL age penalty to prevent immediate germinate-cull."""
+
+    def _make_seed_info(self, stage: int, age: int, improvement: float = 0.0) -> SeedInfo:
+        return SeedInfo(
+            stage=stage,
+            improvement_since_stage_start=improvement,
+            epochs_in_stage=age,
+            seed_params=1000,
+            previous_stage=STAGE_GERMINATED,
+            seed_age_epochs=age,
+        )
+
+    def test_cull_at_age_zero_heavily_penalized(self):
+        """Culling immediately after germination should be heavily penalized."""
+        config = RewardConfig.default()
+        seed_info = self._make_seed_info(STAGE_GERMINATED, age=0)
+
+        shaping = _cull_shaping(seed_info, config)
+
+        # Age penalty: -0.3 * (3 - 0) = -0.9
+        assert shaping == pytest.approx(-0.9)
+
+    def test_cull_at_age_one_penalized(self):
+        """Culling at age 1 should still be penalized."""
+        config = RewardConfig.default()
+        seed_info = self._make_seed_info(STAGE_TRAINING, age=1)
+
+        shaping = _cull_shaping(seed_info, config)
+
+        # Age penalty: -0.3 * (3 - 1) = -0.6
+        assert shaping == pytest.approx(-0.6)
+
+    def test_cull_at_age_three_no_age_penalty(self):
+        """Culling at age 3+ should have no age penalty."""
+        config = RewardConfig.default()
+        seed_info = self._make_seed_info(STAGE_TRAINING, age=3, improvement=0.0)
+
+        shaping = _cull_shaping(seed_info, config)
+
+        # No age penalty, but base shaping kicks in (promising seed = -0.3)
+        # Plus PBRS correction for destroying the seed
+        assert shaping != pytest.approx(-0.9)  # Not the age-0 penalty
+
+    def test_age_penalty_only_for_early_stages(self):
+        """Age penalty should only apply to GERMINATED and TRAINING."""
+        config = RewardConfig.default()
+
+        # BLENDING at age 0 should NOT get age penalty
+        seed_info = SeedInfo(
+            stage=STAGE_BLENDING,
+            improvement_since_stage_start=0.0,
+            epochs_in_stage=0,
+            seed_params=1000,
+            previous_stage=STAGE_TRAINING,
+            seed_age_epochs=0,  # Age 0 but in BLENDING
+        )
+
+        shaping = _cull_shaping(seed_info, config)
+
+        # Should NOT be -0.9 (the age-0 penalty)
+        assert shaping != pytest.approx(-0.9)
+
+
+class TestWaitBlendingShaping:
+    """Tests for WAIT action shaping at BLENDING stage."""
+
+    def _make_seed_info(self, stage: int, improvement: float, epochs: int = 1) -> SeedInfo:
+        return SeedInfo(
+            stage=stage,
+            improvement_since_stage_start=improvement,
+            epochs_in_stage=epochs,
+            seed_params=0,
+            previous_stage=STAGE_TRAINING,
+            seed_age_epochs=epochs,
+        )
+
+    def test_wait_at_blending_with_improvement_rewarded(self):
+        """WAIT at BLENDING with improvement should get patience bonus."""
+        config = RewardConfig.default()
+        seed_info = self._make_seed_info(STAGE_BLENDING, improvement=1.0)
+
+        shaping = _wait_shaping(seed_info, acc_delta=0.0, config=config)
+
+        assert shaping == pytest.approx(config.wait_patience_bonus)
+
+    def test_wait_at_blending_no_improvement_neutral(self):
+        """WAIT at BLENDING without improvement should be neutral (not penalized)."""
+        config = RewardConfig.default()
+        seed_info = self._make_seed_info(STAGE_BLENDING, improvement=0.0)
+
+        shaping = _wait_shaping(seed_info, acc_delta=0.0, config=config)
+
+        # BLENDING is mechanical - no stagnant penalty
+        assert shaping == pytest.approx(0.0)
+
+    def test_wait_at_blending_no_stagnant_penalty(self):
+        """WAIT at BLENDING should never get stagnant penalty (even after many epochs)."""
+        config = RewardConfig.default()
+        seed_info = self._make_seed_info(STAGE_BLENDING, improvement=0.0, epochs=10)
+
+        shaping = _wait_shaping(seed_info, acc_delta=0.0, config=config)
+
+        # Even after 10 epochs, no penalty for BLENDING (unlike TRAINING)
+        assert shaping >= 0.0
+
+    def test_wait_at_shadowing_rewarded(self):
+        """WAIT at SHADOWING with improvement should get patience bonus."""
+        config = RewardConfig.default()
+        seed_info = self._make_seed_info(STAGE_SHADOWING, improvement=0.5)
+
+        shaping = _wait_shaping(seed_info, acc_delta=0.0, config=config)
+
+        assert shaping == pytest.approx(config.wait_patience_bonus)
+
+    def test_wait_at_probationary_neutral_without_improvement(self):
+        """WAIT at PROBATIONARY without improvement should be neutral."""
+        config = RewardConfig.default()
+        seed_info = self._make_seed_info(STAGE_PROBATIONARY, improvement=0.0)
+
+        shaping = _wait_shaping(seed_info, acc_delta=0.0, config=config)
+
+        # PROBATIONARY is hands-off, WAIT is always acceptable
+        assert shaping == pytest.approx(0.0)

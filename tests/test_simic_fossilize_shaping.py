@@ -15,34 +15,37 @@ def make_seed_info(stage: SeedStage, improvement: float) -> SeedInfo:
     )
 
 
-def test_advance_shaping_penalizes_training_noop():
-    """FOSSILIZE in TRAINING is a no-op and should be penalized."""
+def test_advance_shaping_penalizes_training_invalid():
+    """FOSSILIZE in TRAINING is INVALID and should be heavily penalized."""
     config = RewardConfig.default()
     seed_info = make_seed_info(SeedStage.TRAINING, improvement=1.0)
 
     shaping = _advance_shaping(seed_info, config)
 
-    assert shaping == pytest.approx(config.advance_premature_penalty)
+    # Invalid action penalty: -1.0 (wasted action)
+    assert shaping == pytest.approx(-1.0)
 
 
-def test_advance_shaping_penalizes_blending_noop():
-    """FOSSILIZE in BLENDING is a no-op and should be penalized."""
+def test_advance_shaping_penalizes_blending_invalid():
+    """FOSSILIZE in BLENDING is INVALID and should be heavily penalized."""
     config = RewardConfig.default()
     seed_info = make_seed_info(SeedStage.BLENDING, improvement=0.0)
 
     shaping = _advance_shaping(seed_info, config)
 
-    assert shaping == pytest.approx(config.advance_premature_penalty)
+    # Invalid action penalty: -1.0 (wasted action)
+    assert shaping == pytest.approx(-1.0)
 
 
-def test_advance_shaping_penalizes_shadowing_noop():
-    """FOSSILIZE in SHADOWING should not be rewarded."""
+def test_advance_shaping_penalizes_shadowing_invalid():
+    """FOSSILIZE in SHADOWING is INVALID and should be heavily penalized."""
     config = RewardConfig.default()
     seed_info = make_seed_info(SeedStage.SHADOWING, improvement=1.0)
 
     shaping = _advance_shaping(seed_info, config)
 
-    assert shaping == pytest.approx(config.advance_premature_penalty)
+    # Invalid action penalty: -1.0 (wasted action)
+    assert shaping == pytest.approx(-1.0)
 
 
 def test_advance_shaping_rewards_probationary_with_improvement():

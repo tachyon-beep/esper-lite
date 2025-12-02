@@ -305,3 +305,56 @@ class TestLifecycleIntegration:
         ]
 
         assert len(fossilized_events) >= 1, f"Expected SEED_FOSSILIZED, got: {[e.event_type for e in captured_events]}"
+
+
+class TestFossilizedCullProtection:
+    """Test that FOSSILIZED seeds cannot be culled."""
+
+    def test_cull_fossilized_seed_returns_false(self):
+        """Attempting to cull a FOSSILIZED seed should return False."""
+        from esper.kasmina.host import MorphogeneticModel, CNNHost
+
+        model = MorphogeneticModel(CNNHost(), device="cpu")
+        model.germinate_seed("conv_enhance", "test_seed")
+
+        # Drive through lifecycle to FOSSILIZED
+        model.seed_state.transition(SeedStage.TRAINING)
+        model.seed_state.transition(SeedStage.BLENDING)
+        model.seed_slot.start_blending(total_steps=3, temperature=1.0)
+
+        for acc in (60.0, 61.0, 62.0):
+            model.seed_state.metrics.record_accuracy(acc)
+            model.seed_slot.step_epoch()
+
+        model.seed_state.metrics.record_accuracy(63.0)
+        model.seed_slot.step_epoch()
+
+        # Fossilize
+        ok = model.seed_state.transition(SeedStage.FOSSILIZED)
+        assert ok is True
+        assert model.seed_state.stage == SeedStage.FOSSILIZED
+
+        # Attempt to cull - should return False
+        cull_result = model.seed_slot.cull("test_cull_attempt")
+        assert cull_result is False, "FOSSILIZED seeds should not be cullable"
+
+        # Seed should still be FOSSILIZED
+        assert model.seed_state is not None
+        assert model.seed_state.stage == SeedStage.FOSSILIZED
+
+    def test_cull_non_fossilized_seed_works(self):
+        """Culling non-FOSSILIZED seeds should still work."""
+        from esper.kasmina.host import MorphogeneticModel, CNNHost
+
+        model = MorphogeneticModel(CNNHost(), device="cpu")
+        model.germinate_seed("conv_enhance", "test_seed")
+        model.seed_state.transition(SeedStage.TRAINING)
+
+        assert model.seed_state.stage == SeedStage.TRAINING
+
+        # Cull from TRAINING - should work
+        cull_result = model.seed_slot.cull("performance_issue")
+        assert cull_result is True, "Non-FOSSILIZED seeds should be cullable"
+
+        # Seed should be gone
+        assert model.seed_state is None

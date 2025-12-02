@@ -215,6 +215,7 @@ class SeedInfo(NamedTuple):
 
 
 # Stage constants from leyline contract
+STAGE_GERMINATED = SeedStage.GERMINATED.value
 STAGE_TRAINING = SeedStage.TRAINING.value
 STAGE_BLENDING = SeedStage.BLENDING.value
 STAGE_FOSSILIZED = SeedStage.FOSSILIZED.value
@@ -368,8 +369,9 @@ def _germinate_shaping(
 def _advance_shaping(seed_info: SeedInfo | None, config: RewardConfig) -> float:
     """Compute shaping for FOSSILIZE action.
 
-    FOSSILIZE is a terminal action when successful (PROBATIONARY → FOSSILIZED).
-    We give a large immediate bonus to make fossilization clearly better than culling.
+    FOSSILIZE only succeeds from PROBATIONARY → FOSSILIZED (Leyline contract).
+    Attempting FOSSILIZE at other stages is an INVALID action that will fail.
+    We heavily penalize invalid attempts to teach the agent the state machine.
     """
     if seed_info is None:
         return config.advance_no_seed_penalty
@@ -377,10 +379,7 @@ def _advance_shaping(seed_info: SeedInfo | None, config: RewardConfig) -> float:
     stage = seed_info.stage
     improvement = seed_info.improvement_since_stage_start
 
-    # Only reward FOSSILIZE where it can actually finalize the seed.
-    # Leyline VALID_TRANSITIONS only allow PROBATIONARY → FOSSILIZED; calls
-    # from SHADOWING are rejected by SeedState.transition and treated as a
-    # failed/no-op fossilize in the environment.
+    # Only reward FOSSILIZE at PROBATIONARY (the only valid source state)
     if stage == STAGE_PROBATIONARY:
         if improvement > 0:
             # Large immediate bonus for successful fossilization
@@ -390,19 +389,26 @@ def _advance_shaping(seed_info: SeedInfo | None, config: RewardConfig) -> float:
             return fossilize_bonus + improvement_bonus
         return config.advance_premature_penalty
 
-    # Earlier lifecycle stages: FOSSILIZE is a no-op and should be discouraged.
+    # FOSSILIZE at earlier stages is INVALID - action will fail.
+    # Heavy penalty to teach agent the state machine constraints.
+    # Must be more expensive than CULL penalty so agent doesn't spam FOSSILIZE.
     if stage in (STAGE_TRAINING, STAGE_BLENDING, STAGE_SHADOWING):
-        return config.advance_premature_penalty
+        return -1.0  # Wasted action penalty (same as CULL from FOSSILIZED)
 
-    # FOSSILIZED / others: no shaping for FOSSILIZE.
+    # FOSSILIZED: FOSSILIZE is a no-op (already fossilized)
+    if stage == STAGE_FOSSILIZED:
+        return -0.5  # Mild penalty for redundant action
+
     return 0.0
 
 
 def _cull_shaping(seed_info: SeedInfo | None, config: RewardConfig) -> float:
     """Compute shaping for CULL action.
 
-    CULL is now incentivized for failing seeds and for recovering bloated params.
-    The terminal PBRS correction is smaller due to flattened potentials.
+    CULL is incentivized for failing seeds but FOSSILIZED seeds cannot be culled.
+    Attempting to cull a FOSSILIZED seed is a wasted action (no-op) and penalized.
+
+    Age penalty prevents "germinate then immediately cull" anti-pattern.
     """
     if seed_info is None:
         return config.cull_no_seed_penalty
@@ -410,6 +416,20 @@ def _cull_shaping(seed_info: SeedInfo | None, config: RewardConfig) -> float:
     improvement = seed_info.improvement_since_stage_start
     stage = seed_info.stage
     seed_params = seed_info.seed_params
+    seed_age = seed_info.seed_age_epochs
+
+    # FOSSILIZED seeds cannot be culled - they are permanent by design.
+    # Attempting to cull is a wasted action. Heavy penalty to discourage.
+    if stage == STAGE_FOSSILIZED:
+        return -1.0  # Wasted action penalty
+
+    # Age penalty: culling a very young seed wastes the germination investment.
+    # This prevents the "germinate then immediately cull" anti-pattern.
+    # Scale: -0.3 per epoch missing from minimum age (3 epochs)
+    MIN_CULL_AGE = 3
+    if seed_age < MIN_CULL_AGE and stage in (STAGE_GERMINATED, STAGE_TRAINING):
+        age_penalty = -0.3 * (MIN_CULL_AGE - seed_age)  # -0.9 at age 0, -0.6 at age 1
+        return age_penalty  # Return early - don't add other bonuses to young culls
 
     # Base shaping: reward culling failing seeds, penalize culling promising ones
     if improvement < config.cull_failing_threshold:
@@ -447,7 +467,12 @@ def _wait_shaping(
     acc_delta: float,
     config: RewardConfig,
 ) -> float:
-    """Compute shaping for WAIT action."""
+    """Compute shaping for WAIT action.
+
+    WAIT is the correct default action during mechanical stages (TRAINING,
+    BLENDING, SHADOWING) because Kasmina auto-advances through these stages.
+    Tamiyo's job is to "not cull" unless something is clearly failing.
+    """
     if seed_info is None:
         # Penalize waiting when plateauing with no seed
         if acc_delta < 0.5:
@@ -458,17 +483,28 @@ def _wait_shaping(
     improvement = seed_info.improvement_since_stage_start
     epochs_in_stage = seed_info.epochs_in_stage
 
+    # MECHANICAL STAGES: WAIT is the correct default action.
+    # Auto-advance handles progression; agent should only intervene (CULL) if failing.
     if stage == STAGE_TRAINING:
         if improvement > config.wait_patience_threshold:
             return config.wait_patience_bonus
         elif epochs_in_stage > config.wait_stagnant_epochs:
             return config.wait_stagnant_penalty
+        # Neutral otherwise - WAIT is still correct, just no bonus
 
-    # Encourage waiting at SHADOWING/PROBATIONARY - seeds auto-advance here
-    # WAIT is the correct action; CULL/FOSSILIZE are usually wrong
+    # BLENDING: WAIT is correct. Agent cannot accelerate alpha ramping.
+    # Mirror TRAINING logic but without stagnant penalty (progress is deterministic).
+    if stage == STAGE_BLENDING:
+        if improvement > config.wait_patience_threshold:
+            return config.wait_patience_bonus
+        return 0.0  # WAIT is correct, no penalty for slow blending
+
+    # SHADOWING/PROBATIONARY: Auto-advance stages where WAIT is strongly encouraged.
+    # These are "hands off" stages - agent should wait for mechanical completion.
     if stage in (STAGE_SHADOWING, STAGE_PROBATIONARY):
         if improvement > 0:
             return config.wait_patience_bonus  # Reward patience with good seeds
+        return 0.0  # Still correct to WAIT even without improvement
 
     return 0.0
 

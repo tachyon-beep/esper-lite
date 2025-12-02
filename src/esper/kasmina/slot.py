@@ -692,39 +692,58 @@ class SeedSlot(nn.Module):
 
         return gate_result
 
-    def cull(self, reason: str = "") -> None:
-        """Cull the current seed."""
-        if self.state:
-            # Capture metrics before transition clears state
-            improvement = self.state.metrics.total_improvement
-            epochs_total = self.state.metrics.epochs_total
-            epochs_in_stage = self.state.metrics.epochs_in_current_stage
-            blueprint_id = self.state.blueprint_id
-            seed_id = self.state.seed_id
+    def cull(self, reason: str = "") -> bool:
+        """Cull the current seed.
 
-            old_stage = self.state.stage
-            self.state.transition(SeedStage.CULLED)
-            self._emit_telemetry(
-                TelemetryEventType.SEED_STAGE_CHANGED,
-                data={"from": old_stage.name, "to": SeedStage.CULLED.name},
-            )
-            self._emit_telemetry(
-                TelemetryEventType.SEED_CULLED,
-                data={
-                    "reason": reason,
-                    "blueprint_id": blueprint_id,
-                    "seed_id": seed_id,
-                    "improvement": improvement,
-                    "epochs_total": epochs_total,
-                    "epochs_in_stage": epochs_in_stage,
-                }
-            )
+        FOSSILIZED seeds cannot be culled - they are permanent by design.
+        The PROBATIONARY stage exists as the last decision point before
+        permanent integration. A future pruning subsystem will handle
+        removal of non-performant fossilized nodes.
+
+        Returns:
+            True if cull succeeded, False if seed is uncullable (FOSSILIZED)
+        """
+        if not self.state:
+            return False
+
+        # FOSSILIZED seeds are permanent - cannot be culled
+        if self.state.stage == SeedStage.FOSSILIZED:
+            return False
+
+        # Capture metrics before transition clears state
+        improvement = self.state.metrics.total_improvement
+        epochs_total = self.state.metrics.epochs_total
+        epochs_in_stage = self.state.metrics.epochs_in_current_stage
+        blueprint_id = self.state.blueprint_id
+        seed_id = self.state.seed_id
+
+        old_stage = self.state.stage
+        if not self.state.transition(SeedStage.CULLED):
+            # Transition failed (shouldn't happen for non-FOSSILIZED)
+            return False
+
+        self._emit_telemetry(
+            TelemetryEventType.SEED_STAGE_CHANGED,
+            data={"from": old_stage.name, "to": SeedStage.CULLED.name},
+        )
+        self._emit_telemetry(
+            TelemetryEventType.SEED_CULLED,
+            data={
+                "reason": reason,
+                "blueprint_id": blueprint_id,
+                "seed_id": seed_id,
+                "improvement": improvement,
+                "epochs_total": epochs_total,
+                "epochs_in_stage": epochs_in_stage,
+            }
+        )
         self.seed = None
         self.state = None
         self.alpha_schedule = None
         self.isolate_gradients = False
         if self.isolation_monitor is not None:
             self.isolation_monitor.reset()
+        return True
 
     def forward(self, host_features: torch.Tensor) -> torch.Tensor:
         """Process features through this slot."""
