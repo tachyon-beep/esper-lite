@@ -61,3 +61,43 @@ class TestRunningMeanStd:
         assert 99.0 < rms.mean[0] < 101.0
         # Var should be small (0.01^2 scale)
         assert rms.var[0] < 1.0
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+    def test_normalize_same_device_gpu(self):
+        """Regression test: normalize must work when normalizer and input are on GPU.
+
+        This prevents the device mismatch error:
+        RuntimeError: Expected all tensors to be on the same device, but found
+        at least two devices, cuda:0 and cpu!
+        """
+        device = "cuda:0"
+
+        # Create normalizer directly on GPU (like vectorized.py should do)
+        rms = RunningMeanStd(shape=(37,), device=device)
+
+        # Simulate some updates to populate stats
+        for _ in range(5):
+            batch = torch.randn(16, 37, device=device)
+            rms.update(batch)
+
+        # Normalize a GPU tensor - this should NOT raise device mismatch
+        states = torch.randn(8, 37, device=device)
+        normalized = rms.normalize(states)
+
+        # Verify output is on same device
+        assert normalized.device.type == "cuda"
+        assert normalized.shape == states.shape
+
+    def test_normalize_same_device_cpu(self):
+        """Test normalize works when normalizer and input are on CPU."""
+        rms = RunningMeanStd(shape=(27,), device="cpu")
+
+        # Update with some data
+        rms.update(torch.randn(100, 27))
+
+        # Normalize should work without device errors
+        states = torch.randn(8, 27)
+        normalized = rms.normalize(states)
+
+        assert normalized.device.type == "cpu"
+        assert normalized.shape == states.shape

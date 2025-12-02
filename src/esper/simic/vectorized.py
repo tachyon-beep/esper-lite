@@ -232,7 +232,7 @@ def train_ppo_vectorized(
     # State dimension: 27 base features + 10 telemetry features if enabled
     BASE_FEATURE_DIM = 27
     state_dim = BASE_FEATURE_DIM + (SeedTelemetry.feature_dim() if use_telemetry else 0)
-    obs_normalizer = RunningMeanStd((state_dim,))
+    obs_normalizer = RunningMeanStd((state_dim,), device=device)
 
     # Convert episode-based annealing to step-based
     # Each batch of n_envs episodes = 1 PPO update step
