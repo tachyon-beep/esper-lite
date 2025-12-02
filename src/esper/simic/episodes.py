@@ -6,7 +6,7 @@ training episodes for Tamiyo policy learning:
 - ActionTaken: What Tamiyo does (actions)
 - StepOutcome: What happens (outcomes/rewards)
 - Episode: Complete trajectories for learning
-- EpisodeCollector: Helper for collecting episodes during training
+- DatasetManager: For loading/saving episode datasets (offline RL)
 """
 
 from __future__ import annotations
@@ -100,74 +100,6 @@ class TrainingSnapshot:
         """Size of the vector representation."""
         # 11 scalar fields + 5 loss_history + 5 accuracy_history + 6 seed fields
         return 27
-
-    @staticmethod
-    def batch_to_tensor(
-        snapshots: list["TrainingSnapshot"],
-        device: str = "cpu",
-    ) -> "torch.Tensor":
-        """Convert a batch of snapshots to a tensor directly on device.
-
-        This is optimized for the high-throughput PPO vectorized training loop
-        where we need to batch observations from multiple parallel environments.
-
-        Instead of:
-            vectors = [snap.to_vector() for snap in snapshots]
-            tensor = torch.tensor(vectors, device=device)
-
-        This creates a contiguous tensor directly with less GC pressure.
-
-        Args:
-            snapshots: List of TrainingSnapshot objects
-            device: Target device (e.g., "cuda:0", "cpu")
-
-        Returns:
-            Tensor of shape (batch_size, 27) on the specified device
-        """
-        import torch
-        import math
-
-        n_snapshots = len(snapshots)
-        if n_snapshots == 0:
-            return torch.empty(0, 27, device=device)
-
-        # Pre-allocate tensor on device
-        tensor = torch.empty(n_snapshots, 27, device=device)
-
-        # Helper to clamp inf/nan to safe values
-        def safe(v: float, default: float = 0.0, max_val: float = 100.0) -> float:
-            if math.isnan(v) or math.isinf(v):
-                return default
-            return max(-max_val, min(v, max_val))
-
-        # Fill tensor directly (avoids intermediate list allocation)
-        for i, snap in enumerate(snapshots):
-            tensor[i, 0] = float(snap.epoch)
-            tensor[i, 1] = float(snap.global_step)
-            tensor[i, 2] = safe(snap.train_loss, default=10.0)
-            tensor[i, 3] = safe(snap.val_loss, default=10.0)
-            tensor[i, 4] = safe(snap.loss_delta, default=0.0)
-            tensor[i, 5] = snap.train_accuracy
-            tensor[i, 6] = snap.val_accuracy
-            tensor[i, 7] = safe(snap.accuracy_delta, default=0.0)
-            tensor[i, 8] = float(snap.plateau_epochs)
-            tensor[i, 9] = snap.best_val_accuracy
-            tensor[i, 10] = safe(snap.best_val_loss, default=10.0)
-            # Loss history (indices 11-15)
-            for j, v in enumerate(snap.loss_history_5):
-                tensor[i, 11 + j] = safe(v, default=10.0)
-            # Accuracy history (indices 16-20)
-            for j, v in enumerate(snap.accuracy_history_5):
-                tensor[i, 16 + j] = v
-            # Seed state (indices 21-26)
-            tensor[i, 21] = float(snap.has_active_seed)
-            tensor[i, 22] = float(snap.seed_stage)
-            tensor[i, 23] = float(snap.seed_epochs_in_stage)
-            tensor[i, 24] = snap.seed_alpha
-            tensor[i, 25] = snap.seed_improvement
-            tensor[i, 26] = float(snap.available_slots)
-
-        return tensor
 
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
@@ -292,14 +224,8 @@ class StepOutcome:
     seed_still_alive: bool = True
     seed_stage_after: int = 0
 
-    # Computed reward (can be customized)
+    # Computed reward (populated by compute_shaped_reward from simic.rewards)
     reward: float = 0.0
-
-    def compute_reward(self) -> float:
-        """Compute reward from outcome. Simple accuracy-based for now."""
-        # Reward accuracy improvement, penalize drops
-        self.reward = self.accuracy_change * 10.0  # Scale to [-10, 10] roughly
-        return self.reward
 
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
@@ -457,121 +383,6 @@ class Episode:
 
 
 # =============================================================================
-# Episode Collector
-# =============================================================================
-
-class EpisodeCollector:
-    """Collects training episodes for policy learning.
-
-    Usage:
-        collector = EpisodeCollector()
-        collector.start_episode(config)
-
-        # In training loop:
-        collector.record_observation(snapshot)
-        collector.record_action(action)
-        collector.record_outcome(outcome)
-
-        # After training:
-        episode = collector.end_episode(final_accuracy, field_reports)
-    """
-
-    def __init__(self):
-        self._current_episode: Episode | None = None
-        self._pending_observation: TrainingSnapshot | None = None
-        self._pending_action: ActionTaken | None = None
-        self._completed_episodes: list[Episode] = []
-
-    def start_episode(
-        self,
-        episode_id: str,
-        max_epochs: int,
-        initial_lr: float = 0.001,
-        model_name: str = "CNNHost",
-        dataset_name: str = "CIFAR-10",
-    ) -> None:
-        """Start collecting a new episode."""
-        self._current_episode = Episode(
-            episode_id=episode_id,
-            max_epochs=max_epochs,
-            initial_lr=initial_lr,
-            model_name=model_name,
-            dataset_name=dataset_name,
-        )
-        self._pending_observation = None
-        self._pending_action = None
-
-    def record_observation(self, snapshot: TrainingSnapshot) -> None:
-        """Record the current training state before a decision."""
-        if self._current_episode is None:
-            raise RuntimeError("No episode started. Call start_episode() first.")
-        self._pending_observation = snapshot
-
-    def record_action(self, action: ActionTaken) -> None:
-        """Record the action taken by Tamiyo."""
-        if self._pending_observation is None:
-            raise RuntimeError("No observation recorded. Call record_observation() first.")
-        self._pending_action = action
-
-    def record_outcome(self, outcome: StepOutcome) -> None:
-        """Record the outcome after the action."""
-        if self._pending_observation is None or self._pending_action is None:
-            raise RuntimeError("Must record observation and action before outcome.")
-
-        # Compute reward
-        outcome.compute_reward()
-
-        # Create decision point
-        decision = DecisionPoint(
-            observation=self._pending_observation,
-            action=self._pending_action,
-            outcome=outcome,
-        )
-        self._current_episode.decisions.append(decision)
-
-        # Clear pending state
-        self._pending_observation = None
-        self._pending_action = None
-
-    def end_episode(
-        self,
-        final_accuracy: float,
-        best_accuracy: float,
-        seeds_created: int = 0,
-        seeds_fossilized: int = 0,
-        seeds_culled: int = 0,
-        field_reports: list[LeylineFieldReport] | None = None,
-    ) -> Episode:
-        """Complete the episode and return it."""
-        if self._current_episode is None:
-            raise RuntimeError("No episode started.")
-
-        self._current_episode.ended_at = datetime.now(timezone.utc)
-        self._current_episode.final_accuracy = final_accuracy
-        self._current_episode.best_accuracy = best_accuracy
-        self._current_episode.total_seeds_created = seeds_created
-        self._current_episode.total_seeds_fossilized = seeds_fossilized
-        self._current_episode.total_seeds_culled = seeds_culled
-        if field_reports:
-            self._current_episode.field_reports = field_reports
-
-        episode = self._current_episode
-        self._completed_episodes.append(episode)
-        self._current_episode = None
-
-        return episode
-
-    @property
-    def episodes(self) -> list[Episode]:
-        """Get all completed episodes."""
-        return self._completed_episodes.copy()
-
-    def clear(self) -> None:
-        """Clear all collected episodes."""
-        self._completed_episodes.clear()
-
-
-# =============================================================================
 # Dataset Manager
 # =============================================================================
 
@@ -636,66 +447,6 @@ class DatasetManager:
 
 
 # =============================================================================
-# Helper Functions
-# =============================================================================
-
-def snapshot_from_signals(
-    signals,  # TrainingSignals from tamiyo
-    seed_state=None,  # SeedState from kasmina, optional
-) -> TrainingSnapshot:
-    """Convert Tamiyo's TrainingSignals to a Simic TrainingSnapshot."""
-    # Pad history to 5 elements
-    loss_hist = signals.loss_history[-5:] if signals.loss_history else []
-    loss_hist = [0.0] * (5 - len(loss_hist)) + loss_hist
-
-    acc_hist = signals.accuracy_history[-5:] if signals.accuracy_history else []
-    acc_hist = [0.0] * (5 - len(acc_hist)) + acc_hist
-
-    snapshot = TrainingSnapshot(
-        epoch=signals.metrics.epoch,
-        global_step=signals.metrics.global_step,
-        train_loss=signals.metrics.train_loss,
-        val_loss=signals.metrics.val_loss,
-        loss_delta=signals.metrics.loss_delta,
-        train_accuracy=signals.metrics.train_accuracy,
-        val_accuracy=signals.metrics.val_accuracy,
-        accuracy_delta=signals.metrics.accuracy_delta,
-        plateau_epochs=signals.metrics.plateau_epochs,
-        best_val_accuracy=signals.metrics.best_val_accuracy,
-        loss_history_5=tuple(loss_hist),
-        accuracy_history_5=tuple(acc_hist),
-        available_slots=signals.available_slots,
-    )
-
-    # Add seed state if present
-    if seed_state is not None:
-        snapshot.has_active_seed = True
-        snapshot.seed_stage = int(seed_state.stage)
-        snapshot.seed_epochs_in_stage = seed_state.epochs_in_stage
-        snapshot.seed_alpha = seed_state.alpha
-        snapshot.seed_improvement = seed_state.metrics.improvement_since_stage_start
-
-    return snapshot
-
-
-def action_from_decision(decision) -> ActionTaken:
-    """Convert Tamiyo's TamiyoDecision to a Simic ActionTaken.
-
-    Since TamiyoDecision now uses the shared Action enum from leyline,
-    this is a simple wrapper that extracts the relevant fields.
-    """
-    from esper.leyline import Action
-
-    return ActionTaken(
-        action=decision.action,  # Already an Action enum
-        blueprint_id=decision.blueprint_id,
-        target_seed_id=decision.target_seed_id,
-        confidence=decision.confidence,
-        reason=decision.reason,
-    )
-
-
-# =============================================================================
 # Exports
 # =============================================================================
 
@@ -709,11 +460,6 @@ __all__ = [
     # Episodes
     "DecisionPoint",
     "Episode",
-    # Collector
-    "EpisodeCollector",
     # Dataset
     "DatasetManager",
-    # Helpers
-    "snapshot_from_signals",
-    "action_from_decision",
 ]

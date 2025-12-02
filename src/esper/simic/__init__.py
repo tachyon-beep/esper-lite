@@ -24,10 +24,7 @@ from esper.simic.episodes import (
     StepOutcome,
     DecisionPoint,
     Episode,
-    EpisodeCollector,
     DatasetManager,
-    snapshot_from_signals,
-    action_from_decision,
 )
 
 # Buffers
@@ -89,10 +86,7 @@ __all__ = [
     "StepOutcome",
     "DecisionPoint",
     "Episode",
-    "EpisodeCollector",
     "DatasetManager",
-    "snapshot_from_signals",
-    "action_from_decision",
 
     # Buffers
     "RolloutStep",

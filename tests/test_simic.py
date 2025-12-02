@@ -13,7 +13,6 @@ from esper.simic import (
     StepOutcome,
     DecisionPoint,
     Episode,
-    EpisodeCollector,
     DatasetManager,
 )
 
@@ -134,19 +133,6 @@ class TestActionTaken:
 class TestStepOutcome:
     """Tests for StepOutcome dataclass."""
 
-    def test_compute_reward(self):
-        """Test reward computation."""
-        outcome = StepOutcome(accuracy_change=1.0)
-        reward = outcome.compute_reward()
-        assert reward == 10.0  # accuracy_change * 10
-        assert outcome.reward == 10.0
-
-    def test_negative_reward(self):
-        """Test negative reward for accuracy drop."""
-        outcome = StepOutcome(accuracy_change=-0.5)
-        reward = outcome.compute_reward()
-        assert reward == -5.0
-
     def test_serialization_roundtrip(self):
         """Test to_dict/from_dict roundtrip."""
         original = StepOutcome(
@@ -266,57 +252,6 @@ class TestEpisode:
             assert loaded.decisions[0].observation.val_accuracy == 70.0
         finally:
             Path(path).unlink()
-
-
-class TestEpisodeCollector:
-    """Tests for EpisodeCollector."""
-
-    def test_basic_collection(self, action_enum):
-        """Test basic collection workflow."""
-        collector = EpisodeCollector()
-        collector.start_episode("test_001", max_epochs=10)
-
-        collector.record_observation(TrainingSnapshot(epoch=1))
-        collector.record_action(ActionTaken(action=action_enum.WAIT))
-        collector.record_outcome(StepOutcome(accuracy_change=1.0))
-
-        episode = collector.end_episode(
-            final_accuracy=75.0,
-            best_accuracy=76.0,
-        )
-
-        assert episode.episode_id == "test_001"
-        assert len(episode.decisions) == 1
-        assert episode.decisions[0].outcome.reward == 10.0  # computed
-
-    def test_multiple_decisions(self, action_enum):
-        """Test collecting multiple decisions."""
-        collector = EpisodeCollector()
-        collector.start_episode("test_002", max_epochs=10)
-
-        for i in range(5):
-            collector.record_observation(TrainingSnapshot(epoch=i+1))
-            collector.record_action(ActionTaken(action=action_enum.WAIT))
-            collector.record_outcome(StepOutcome(accuracy_change=0.5))
-
-        episode = collector.end_episode(final_accuracy=75.0, best_accuracy=76.0)
-
-        assert len(episode.decisions) == 5
-
-    def test_error_without_start(self):
-        """Test error when recording without starting episode."""
-        collector = EpisodeCollector()
-
-        with pytest.raises(RuntimeError):
-            collector.record_observation(TrainingSnapshot())
-
-    def test_error_without_observation(self, action_enum):
-        """Test error when recording action without observation."""
-        collector = EpisodeCollector()
-        collector.start_episode("test", max_epochs=10)
-
-        with pytest.raises(RuntimeError):
-            collector.record_action(ActionTaken(action=action_enum.WAIT))
 
 
 class TestDatasetManager:
