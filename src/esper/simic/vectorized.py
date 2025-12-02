@@ -514,7 +514,18 @@ def train_ppo_vectorized(
                     )
                     if grad_stats is not None:
                         env_grad_stats[i] = grad_stats  # Keep last batch's grad stats
-                    # Accumulate inside stream context (in-place add respects stream ordering)
+                    # Synchronize stream before accumulator writes to prevent race condition:
+                    # loss_tensor/correct_tensor are computed on env_state.stream inside
+                    # process_train_batch. When that function returns, we re-enter the same
+                    # stream context for accumulation. However, if multiple envs share a device,
+                    # their streams can execute concurrently. The accumulators are allocated on
+                    # the default stream, so we must ensure the env stream waits for any
+                    # pending default stream work before writing. record_stream marks the
+                    # tensors as used by this stream, preventing premature deallocation.
+                    if env_state.stream:
+                        train_loss_accum[i].record_stream(env_state.stream)
+                        train_correct_accum[i].record_stream(env_state.stream)
+                        env_state.stream.wait_stream(torch.cuda.default_stream(env_state.env_device))
                     stream_ctx = torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
                     with stream_ctx:
                         train_loss_accum[i].add_(loss_tensor)
@@ -551,7 +562,11 @@ def train_ppo_vectorized(
                         continue
                     inputs, targets = env_batches[i]
                     loss_tensor, correct_tensor, total = process_val_batch(env_state, inputs, targets, criterion)
-                    # Accumulate inside stream context
+                    # Synchronize stream before accumulator writes (same pattern as training)
+                    if env_state.stream:
+                        val_loss_accum[i].record_stream(env_state.stream)
+                        val_correct_accum[i].record_stream(env_state.stream)
+                        env_state.stream.wait_stream(torch.cuda.default_stream(env_state.env_device))
                     stream_ctx = torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
                     with stream_ctx:
                         val_loss_accum[i].add_(loss_tensor)
