@@ -33,7 +33,7 @@ import torch.nn as nn
 from esper.runtime import get_task_spec
 from esper.leyline import SeedStage, SeedTelemetry, TelemetryEvent
 from esper.leyline.actions import get_blueprint_from_action, is_germinate_action
-from esper.simic.gradient_collector import collect_seed_gradients
+from esper.simic.gradient_collector import collect_seed_gradients_async, materialize_grad_stats
 from esper.simic.normalization import RunningMeanStd
 from esper.simic.ppo import PPOAgent, signals_to_features
 from esper.simic.rewards import compute_shaped_reward, SeedInfo
@@ -413,8 +413,9 @@ def train_ppo_vectorized(
             loss.backward()
 
             # Collect gradient stats for telemetry (after backward, before step)
+            # Use async version to avoid .item() sync inside stream context
             if use_telemetry and seed_state and seed_state.stage in (SeedStage.TRAINING, SeedStage.BLENDING):
-                grad_stats = collect_seed_gradients(model.get_seed_parameters())
+                grad_stats = collect_seed_gradients_async(model.get_seed_parameters())
 
             optimizer.step()
             if (
@@ -573,7 +574,8 @@ def train_ppo_vectorized(
                 seed_state = model.seed_state
 
                 if use_telemetry and seed_state and env_grad_stats[env_idx]:
-                    grad_stats = env_grad_stats[env_idx]
+                    # Materialize async grad stats NOW (after stream sync, safe to call .item())
+                    grad_stats = materialize_grad_stats(env_grad_stats[env_idx])
                     seed_state.sync_telemetry(
                         gradient_norm=grad_stats['gradient_norm'],
                         gradient_health=grad_stats['gradient_health'],
