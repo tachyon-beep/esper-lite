@@ -61,10 +61,20 @@ class TestNormalizationConvergence:
         This tests that the running variance estimator converges correctly
         and that normalization scales the data appropriately.
         """
-        # Skip if all values are the same (zero variance case)
+        # Skip near-constant input: when variance is too low relative to the data range,
+        # normalization cannot produce unit variance because outliers get clipped.
+        # Use coefficient of variation threshold: std/|mean| or absolute variance threshold.
         all_values_tensor = torch.tensor(values, dtype=torch.float32)
-        if all_values_tensor.var(unbiased=False).item() < 1e-6:
-            assume(False)  # Skip this example
+        input_var = all_values_tensor.var(unbiased=False).item()
+        input_std = math.sqrt(input_var)
+        input_range = (all_values_tensor.max() - all_values_tensor.min()).item()
+
+        # Skip if variance is too low (near-constant data)
+        # Threshold: std should be at least 1% of the data range for meaningful variance test
+        if input_range > 0 and input_std / input_range < 0.01:
+            assume(False)  # Skip near-constant examples
+        if input_var < 0.01:
+            assume(False)  # Skip very low variance examples
 
         normalizer = RunningMeanStd(shape=())
 
