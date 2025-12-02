@@ -1,6 +1,6 @@
 {
   "seed_id": "seed-healthy-001",
-  "blueprint_id": "conv_enhance",
+  "blueprint_id": "conv_heavy",
   "layer_id": "layer2.conv1",
   "gradient_norm": 0.05,
   "gradient_health": 0.95,

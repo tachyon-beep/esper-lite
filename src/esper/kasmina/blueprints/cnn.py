@@ -118,11 +118,26 @@ def create_depthwise_seed(channels: int) -> nn.Module:
     return DepthwiseSeed(channels)
 
 
-@BlueprintRegistry.register("conv_enhance", "cnn", param_estimate=74000, description="Heavy conv block")
-def create_conv_enhance_seed(channels: int) -> nn.Module:
-    """Convolutional enhancement seed."""
+@BlueprintRegistry.register("conv_light", "cnn", param_estimate=37000, description="Light conv block")
+def create_conv_light_seed(channels: int) -> nn.Module:
+    """Single convolution enhancement seed - lighter alternative to conv_heavy."""
 
-    class ConvEnhanceSeed(nn.Module):
+    class ConvLightSeed(nn.Module):
+        def __init__(self, channels: int):
+            super().__init__()
+            self.enhance = SeedConvBlock(channels, channels)
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            return x + self.enhance(x)
+
+    return ConvLightSeed(channels)
+
+
+@BlueprintRegistry.register("conv_heavy", "cnn", param_estimate=74000, description="Heavy conv block")
+def create_conv_heavy_seed(channels: int) -> nn.Module:
+    """Double convolution enhancement seed - heavier but potentially more powerful."""
+
+    class ConvHeavySeed(nn.Module):
         def __init__(self, channels: int):
             super().__init__()
             self.enhance = nn.Sequential(
@@ -133,7 +148,7 @@ def create_conv_enhance_seed(channels: int) -> nn.Module:
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             return x + self.enhance(x)
 
-    return ConvEnhanceSeed(channels)
+    return ConvHeavySeed(channels)
 
 
 __all__ = ["ConvBlock", "SeedConvBlock", "get_num_groups"]

@@ -10,14 +10,14 @@ class TestBlendingProgressTracking:
 
     def test_seedstate_has_blending_fields(self):
         """SeedState should have blending progress fields."""
-        state = SeedState(seed_id="test", blueprint_id="conv_enhance")
+        state = SeedState(seed_id="test", blueprint_id="conv_heavy")
 
         assert state.blending_steps_done == 0
         assert state.blending_steps_total == 0
 
     def test_blending_fields_increment(self):
         """Blending fields should be mutable."""
-        state = SeedState(seed_id="test", blueprint_id="conv_enhance")
+        state = SeedState(seed_id="test", blueprint_id="conv_heavy")
         state.blending_steps_total = 5
         state.blending_steps_done = 3
 
@@ -36,7 +36,7 @@ class TestStartBlendingProgress:
         from unittest.mock import MagicMock
         host = MagicMock()
         host.injection_channels = 64
-        slot.germinate(blueprint_id="conv_enhance", seed_id="test_seed", host_module=host)
+        slot.germinate(blueprint_id="conv_heavy", seed_id="test_seed", host_module=host)
 
         # Transition to TRAINING then BLENDING
         slot.state.transition(SeedStage.TRAINING)
@@ -55,7 +55,7 @@ class TestStartBlendingProgress:
         from unittest.mock import MagicMock
         host = MagicMock()
         host.injection_channels = 64
-        slot.germinate(blueprint_id="conv_enhance", seed_id="test_seed", host_module=host)
+        slot.germinate(blueprint_id="conv_heavy", seed_id="test_seed", host_module=host)
         slot.state.transition(SeedStage.TRAINING)
         slot.state.transition(SeedStage.BLENDING)
 
@@ -78,7 +78,7 @@ class TestStepEpochAutoAdvance:
         from unittest.mock import MagicMock
         host = MagicMock()
         host.injection_channels = 64
-        slot.germinate(blueprint_id="conv_enhance", seed_id="test_seed", host_module=host)
+        slot.germinate(blueprint_id="conv_heavy", seed_id="test_seed", host_module=host)
         slot.state.transition(SeedStage.TRAINING)
         slot.state.transition(SeedStage.BLENDING)
         slot.start_blending(total_steps=3, temperature=1.0)
@@ -133,7 +133,7 @@ class TestStepEpochAutoAdvance:
         from unittest.mock import MagicMock
         host = MagicMock()
         host.injection_channels = 64
-        slot.germinate(blueprint_id="conv_enhance", seed_id="test_seed", host_module=host)
+        slot.germinate(blueprint_id="conv_heavy", seed_id="test_seed", host_module=host)
         slot.state.transition(SeedStage.TRAINING)
 
         # Should not raise or change state
@@ -156,7 +156,7 @@ class TestStrategicFossilizeOnly:
         from esper.kasmina.host import MorphogeneticModel, CNNHost
 
         model = MorphogeneticModel(CNNHost(), device="cpu")
-        model.germinate_seed("conv_enhance", "test_seed")
+        model.germinate_seed("conv_heavy", "test_seed")
         model.seed_state.transition(SeedStage.TRAINING)
 
         ok = model.seed_state.transition(SeedStage.FOSSILIZED)
@@ -168,7 +168,7 @@ class TestStrategicFossilizeOnly:
         from esper.kasmina.host import MorphogeneticModel, CNNHost
 
         model = MorphogeneticModel(CNNHost(), device="cpu")
-        model.germinate_seed("conv_enhance", "test_seed")
+        model.germinate_seed("conv_heavy", "test_seed")
         model.seed_state.transition(SeedStage.TRAINING)
         model.seed_state.transition(SeedStage.BLENDING)
         model.seed_state.transition(SeedStage.SHADOWING)
@@ -185,7 +185,7 @@ class TestStrategicFossilizeOnly:
         from esper.kasmina.host import MorphogeneticModel, CNNHost
 
         model = MorphogeneticModel(CNNHost(), device="cpu")
-        model.germinate_seed("conv_enhance", "test_seed")
+        model.germinate_seed("conv_heavy", "test_seed")
         model.seed_state.transition(SeedStage.TRAINING)
         model.seed_state.transition(SeedStage.BLENDING)
 
@@ -204,7 +204,7 @@ class TestLifecycleIntegration:
         from esper.kasmina.host import MorphogeneticModel, CNNHost
 
         model = MorphogeneticModel(CNNHost(), device="cpu")
-        model.germinate_seed("conv_enhance", "test_seed")
+        model.germinate_seed("conv_heavy", "test_seed")
         model.seed_state.transition(SeedStage.TRAINING)
 
         # Tamiyo: action triggers blending start (mechanical now)
@@ -235,7 +235,7 @@ class TestLifecycleIntegration:
         from esper.kasmina.host import MorphogeneticModel, CNNHost
 
         model = MorphogeneticModel(CNNHost(), device="cpu")
-        model.germinate_seed("conv_enhance", "test_seed")
+        model.germinate_seed("conv_heavy", "test_seed")
 
         # Advance G1 gate: GERMINATED -> TRAINING (mirrors Simic training path).
         result = model.seed_slot.advance_stage(SeedStage.TRAINING)
@@ -281,7 +281,7 @@ class TestLifecycleIntegration:
         model.seed_slot.fast_mode = False
 
         # Run through lifecycle
-        model.germinate_seed("conv_enhance", "test_seed")
+        model.germinate_seed("conv_heavy", "test_seed")
         model.seed_state.transition(SeedStage.TRAINING)
         model.seed_state.transition(SeedStage.BLENDING)
         model.seed_slot.start_blending(total_steps=3, temperature=1.0)
@@ -315,7 +315,7 @@ class TestFossilizedCullProtection:
         from esper.kasmina.host import MorphogeneticModel, CNNHost
 
         model = MorphogeneticModel(CNNHost(), device="cpu")
-        model.germinate_seed("conv_enhance", "test_seed")
+        model.germinate_seed("conv_heavy", "test_seed")
 
         # Drive through lifecycle to FOSSILIZED
         model.seed_state.transition(SeedStage.TRAINING)
@@ -347,7 +347,7 @@ class TestFossilizedCullProtection:
         from esper.kasmina.host import MorphogeneticModel, CNNHost
 
         model = MorphogeneticModel(CNNHost(), device="cpu")
-        model.germinate_seed("conv_enhance", "test_seed")
+        model.germinate_seed("conv_heavy", "test_seed")
         model.seed_state.transition(SeedStage.TRAINING)
 
         assert model.seed_state.stage == SeedStage.TRAINING

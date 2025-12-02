@@ -115,8 +115,8 @@ class TestActionTaken:
     def test_serialization_roundtrip(self, action_enum):
         """Test to_dict/from_dict roundtrip."""
         original = ActionTaken(
-            action=getattr(action_enum, "GERMINATE_CONV_ENHANCE", None) or getattr(action_enum, "GERMINATE_CONV"),
-            blueprint_id="conv_enhance",
+            action=action_enum.GERMINATE_CONV_HEAVY,
+            blueprint_id="conv_heavy",
             confidence=0.85,
             reason="Plateau detected",
         )

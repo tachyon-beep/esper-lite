@@ -52,34 +52,48 @@ def is_germinate_action(action: IntEnum) -> bool:
 
 
 class Action(IntEnum):
-    """Legacy action enum for Phase 1 CNN-only code."""
+    """Legacy action enum for Phase 1 CNN-only code.
+
+    Action layout (sorted by blueprint param_estimate):
+        0: WAIT
+        1: GERMINATE_NORM (100 params)
+        2: GERMINATE_ATTENTION (2K params)
+        3: GERMINATE_DEPTHWISE (4.8K params)
+        4: GERMINATE_CONV_LIGHT (37K params)
+        5: GERMINATE_CONV_HEAVY (74K params)
+        6: FOSSILIZE
+        7: CULL
+    """
 
     WAIT = 0
-    GERMINATE_CONV = 1
+    GERMINATE_NORM = 1
     GERMINATE_ATTENTION = 2
-    GERMINATE_NORM = 3
-    GERMINATE_DEPTHWISE = 4
-    FOSSILIZE = 5
-    CULL = 6
+    GERMINATE_DEPTHWISE = 3
+    GERMINATE_CONV_LIGHT = 4
+    GERMINATE_CONV_HEAVY = 5
+    FOSSILIZE = 6
+    CULL = 7
 
     @classmethod
     def is_germinate(cls, action: "Action") -> bool:
         """Check if action is any germinate variant."""
         return action in (
-            cls.GERMINATE_CONV,
-            cls.GERMINATE_ATTENTION,
             cls.GERMINATE_NORM,
+            cls.GERMINATE_ATTENTION,
             cls.GERMINATE_DEPTHWISE,
+            cls.GERMINATE_CONV_LIGHT,
+            cls.GERMINATE_CONV_HEAVY,
         )
 
     @classmethod
     def get_blueprint_id(cls, action: "Action") -> str | None:
         """Get blueprint ID for germinate actions, None for others."""
         legacy_map = {
-            cls.GERMINATE_CONV: "conv_enhance",
-            cls.GERMINATE_ATTENTION: "attention",
             cls.GERMINATE_NORM: "norm",
+            cls.GERMINATE_ATTENTION: "attention",
             cls.GERMINATE_DEPTHWISE: "depthwise",
+            cls.GERMINATE_CONV_LIGHT: "conv_light",
+            cls.GERMINATE_CONV_HEAVY: "conv_heavy",
         }
         return legacy_map.get(action)
 

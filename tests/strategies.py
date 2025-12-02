@@ -158,7 +158,7 @@ def seed_telemetries(draw, seed_id: str | None = None):
 
     return SeedTelemetry(
         seed_id=seed_id or draw(st.text(min_size=1, max_size=16)),
-        blueprint_id=draw(st.sampled_from(["conv_enhance", "attention", "norm", "depthwise"])),
+        blueprint_id=draw(st.sampled_from(["conv_heavy", "attention", "norm", "depthwise"])),
         layer_id=draw(st.text(min_size=0, max_size=32)),
         # Health signals
         gradient_norm=draw(bounded_floats(0.0, 100.0)),

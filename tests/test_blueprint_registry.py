@@ -34,7 +34,8 @@ def test_registry_list_for_topology():
     cnn_specs = BlueprintRegistry.list_for_topology("cnn")
     transformer_specs = BlueprintRegistry.list_for_topology("transformer")
 
-    assert any(s.name == "conv_enhance" for s in cnn_specs)
+    assert any(s.name == "conv_heavy" for s in cnn_specs)
+    assert any(s.name == "conv_light" for s in cnn_specs)
 
     cnn_names = {s.name for s in cnn_specs}
     transformer_names = {s.name for s in transformer_specs}

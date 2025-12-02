@@ -459,7 +459,7 @@ class TestTolariaGovernor:
         gov.snapshot()
 
         # Germinate a seed (simulates live/experimental seed)
-        model.seed_slot.germinate("conv_enhance", "test_seed")
+        model.seed_slot.germinate("conv_heavy", "test_seed")
         assert model.seed_slot.is_active
         assert model.seed_slot.state is not None
 
