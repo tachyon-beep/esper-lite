@@ -339,14 +339,81 @@ def print_confusion_matrix(eval_result: dict) -> None:
 # =============================================================================
 
 if TORCH_AVAILABLE:
+    import torch.nn.functional as F
+
+    class InvalidStateMachineError(RuntimeError):
+        """Raised when action mask has no valid actions (state machine bug)."""
+        pass
+
+    class MaskedCategorical:
+        """Categorical distribution with action masking and correct entropy calculation.
+
+        Masks invalid actions by setting their logits to -1e8 before softmax.
+        Computes entropy only over valid actions to avoid penalizing restricted states.
+        """
+
+        def __init__(self, logits: torch.Tensor, mask: torch.Tensor):
+            """Initialize masked categorical distribution.
+
+            Args:
+                logits: Raw policy logits [batch, num_actions]
+                mask: Binary mask, 1.0 = valid, 0.0 = invalid [batch, num_actions]
+
+            Raises:
+                InvalidStateMachineError: If any batch element has no valid actions
+            """
+            # Verify at least one action is valid per batch element
+            valid_count = mask.sum(dim=-1)
+            if (valid_count == 0).any():
+                raise InvalidStateMachineError(
+                    f"No valid actions available. Mask: {mask}. "
+                    "This indicates a bug in the Kasmina state machine."
+                )
+
+            self.mask = mask
+            self.masked_logits = logits.masked_fill(mask < 0.5, -1e8)
+            self._dist = Categorical(logits=self.masked_logits)
+
+        @property
+        def probs(self) -> torch.Tensor:
+            """Action probabilities (masked actions have ~0 probability)."""
+            return self._dist.probs
+
+        def sample(self) -> torch.Tensor:
+            """Sample actions from the masked distribution."""
+            return self._dist.sample()
+
+        def log_prob(self, actions: torch.Tensor) -> torch.Tensor:
+            """Compute log probability of actions."""
+            return self._dist.log_prob(actions)
+
+        def entropy(self) -> torch.Tensor:
+            """Compute entropy only over valid actions.
+
+            This prevents artificially low entropy in restricted states from
+            incorrectly reducing the exploration bonus.
+            """
+            # Standard entropy: -sum(p * log(p)) over valid actions only
+            # Mask out invalid actions' contributions
+            probs = self._dist.probs
+            log_probs = self._dist.logits - self._dist.logits.logsumexp(dim=-1, keepdim=True)
+
+            # Zero out invalid actions' entropy contribution
+            entropy = -(probs * log_probs * self.mask).sum(dim=-1)
+            return entropy
+
+
     class ActorCritic(nn.Module):
-        """Actor-Critic network for PPO.
+        """Actor-Critic network for PPO with action masking support.
 
         Uses shared feature extraction with separate actor and critic heads.
+        Action mask is applied only to actor logits, not to critic (value is mask-agnostic).
         """
 
         def __init__(self, state_dim: int, action_dim: int, hidden_dim: int = 256):
             super().__init__()
+
+            self.action_dim = action_dim
 
             # Shared feature extractor
             self.shared = nn.Sequential(
@@ -383,20 +450,54 @@ if TORCH_AVAILABLE:
             nn.init.orthogonal_(self.actor[-1].weight, gain=0.01)
             nn.init.orthogonal_(self.critic[-1].weight, gain=1.0)
 
-        def forward(self, state: torch.Tensor) -> tuple[Categorical, torch.Tensor]:
-            """Forward pass returning action distribution and value."""
+        def forward(
+            self,
+            state: torch.Tensor,
+            action_mask: torch.Tensor,
+        ) -> tuple[MaskedCategorical, torch.Tensor]:
+            """Forward pass returning masked action distribution and value.
+
+            Args:
+                state: Observation tensor [batch, state_dim]
+                action_mask: Binary mask [batch, action_dim], 1=valid, 0=invalid
+
+            Returns:
+                dist: MaskedCategorical distribution over actions
+                value: State value estimate [batch]
+            """
             features = self.shared(state)
             logits = self.actor(features)
-            dist = Categorical(logits=logits)
+            dist = MaskedCategorical(logits=logits, mask=action_mask)
             value = self.critic(features).squeeze(-1)
             return dist, value
 
-        def get_action(self, state: torch.Tensor, deterministic: bool = False
-                       ) -> tuple[int, float, float]:
-            """Sample action from policy."""
+        def get_action(
+            self,
+            state: torch.Tensor,
+            action_mask: torch.Tensor,
+            deterministic: bool = False,
+        ) -> tuple[int, float, float]:
+            """Sample action from policy with masking.
+
+            Args:
+                state: Single observation [1, state_dim] or [state_dim]
+                action_mask: Binary mask [1, action_dim] or [action_dim]
+                deterministic: If True, return argmax instead of sampling
+
+            Returns:
+                action: Selected action index
+                log_prob: Log probability of action
+                value: State value estimate
+            """
             # inference_mode is more efficient than no_grad (disables version tracking)
             with torch.inference_mode():
-                dist, value = self.forward(state)
+                # Ensure batch dimension
+                if state.dim() == 1:
+                    state = state.unsqueeze(0)
+                if action_mask.dim() == 1:
+                    action_mask = action_mask.unsqueeze(0)
+
+                dist, value = self.forward(state, action_mask)
                 if deterministic:
                     action = dist.probs.argmax(dim=-1)
                 else:
@@ -404,11 +505,26 @@ if TORCH_AVAILABLE:
                 log_prob = dist.log_prob(action)
                 return action.item(), log_prob.item(), value.item()
 
-        def get_action_batch(self, states: torch.Tensor, deterministic: bool = False
-                             ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-            """Sample actions for a batch of states."""
+        def get_action_batch(
+            self,
+            states: torch.Tensor,
+            action_masks: torch.Tensor,
+            deterministic: bool = False,
+        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+            """Sample actions for a batch of states with masking.
+
+            Args:
+                states: Batch of observations [batch, state_dim]
+                action_masks: Batch of masks [batch, action_dim]
+                deterministic: If True, return argmax instead of sampling
+
+            Returns:
+                actions: Selected actions [batch]
+                log_probs: Log probabilities [batch]
+                values: State values [batch]
+            """
             with torch.inference_mode():
-                dist, values = self.forward(states)
+                dist, values = self.forward(states, action_masks)
                 if deterministic:
                     actions = dist.probs.argmax(dim=-1)
                 else:
@@ -416,10 +532,25 @@ if TORCH_AVAILABLE:
                 log_probs = dist.log_prob(actions)
                 return actions, log_probs, values
 
-        def evaluate_actions(self, states: torch.Tensor, actions: torch.Tensor
-                             ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-            """Evaluate actions for PPO update."""
-            dist, values = self.forward(states)
+        def evaluate_actions(
+            self,
+            states: torch.Tensor,
+            actions: torch.Tensor,
+            action_masks: torch.Tensor,
+        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+            """Evaluate actions for PPO update with masking.
+
+            Args:
+                states: Batch of observations [batch, state_dim]
+                actions: Actions taken [batch]
+                action_masks: Binary masks from rollout [batch, action_dim]
+
+            Returns:
+                log_probs: Log probabilities of actions [batch]
+                values: State value estimates [batch]
+                entropy: Policy entropy (masked) [batch]
+            """
+            dist, values = self.forward(states, action_masks)
             log_probs = dist.log_prob(actions)
             entropy = dist.entropy()
             return log_probs, values, entropy
@@ -474,6 +605,8 @@ __all__ = [
     "PolicyNetwork",
     "print_confusion_matrix",
     "ActorCritic",
+    "MaskedCategorical",
+    "InvalidStateMachineError",
     "QNetwork",
     "VNetwork",
 ]

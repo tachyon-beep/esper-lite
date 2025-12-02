@@ -20,6 +20,7 @@ class RolloutStep(NamedTuple):
     value: float
     reward: float
     done: bool
+    action_mask: torch.Tensor
 
 
 @dataclass
@@ -27,13 +28,33 @@ class RolloutBuffer:
     """Buffer for storing PPO rollout data.
 
     Stores trajectory steps and computes returns/advantages using GAE.
+    Action masks are stored alongside observations to ensure consistent
+    masking during PPO updates (same mask that was active when action was taken).
     """
     steps: list[RolloutStep] = field(default_factory=list)
 
-    def add(self, state: torch.Tensor, action: int, log_prob: float,
-            value: float, reward: float, done: bool) -> None:
-        """Add a step to the buffer."""
-        self.steps.append(RolloutStep(state, action, log_prob, value, reward, done))
+    def add(
+        self,
+        state: torch.Tensor,
+        action: int,
+        log_prob: float,
+        value: float,
+        reward: float,
+        done: bool,
+        action_mask: torch.Tensor,
+    ) -> None:
+        """Add a step to the buffer.
+
+        Args:
+            state: Observation tensor
+            action: Action taken
+            log_prob: Log probability of action under policy
+            value: Value estimate at this state
+            reward: Reward received
+            done: Whether episode ended
+            action_mask: Binary mask of valid actions at this state
+        """
+        self.steps.append(RolloutStep(state, action, log_prob, value, reward, done, action_mask))
 
     def clear(self) -> None:
         """Clear all steps from the buffer."""
@@ -83,6 +104,7 @@ class RolloutBuffer:
         """Get shuffled minibatches for PPO update.
 
         Returns list of (batch_dict, batch_indices) tuples.
+        Includes action_masks for correct masked policy evaluation.
         """
         n_steps = len(self.steps)
         indices = torch.randperm(n_steps)
@@ -100,6 +122,7 @@ class RolloutBuffer:
                                                dtype=torch.float32, device=device),
                 'values': torch.tensor([self.steps[i].value for i in batch_idx],
                                        dtype=torch.float32, device=device),
+                'action_masks': torch.stack([self.steps[i].action_mask for i in batch_idx]).to(device),
             }
             batches.append((batch, batch_idx))
 

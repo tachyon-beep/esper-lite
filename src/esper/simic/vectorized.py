@@ -33,6 +33,7 @@ import torch.nn as nn
 from esper.runtime import get_task_spec
 from esper.leyline import SeedStage, SeedTelemetry, TelemetryEvent
 from esper.leyline.actions import get_blueprint_from_action, is_germinate_action
+from esper.simic.features import compute_action_mask
 from esper.simic.gradient_collector import collect_seed_gradients_async, materialize_grad_stats
 from esper.simic.normalization import RunningMeanStd
 from esper.simic.ppo import PPOAgent, signals_to_features
@@ -610,10 +611,14 @@ def train_ppo_vectorized(
                 # Auto-advance blending lifecycle (Kasmina's mechanical transitions)
                 model.seed_slot.step_epoch()
 
-            # Collect features from all environments
+            # Collect features and action masks from all environments
             all_features = []
+            all_masks = []
             all_signals = []
             governor_panic_envs = []  # Track which envs need rollback
+
+            # Number of germinate actions = total actions - 3 (WAIT, FOSSILIZE, CULL)
+            num_germinate_actions = len(ActionEnum) - 3
 
             for env_idx, env_state in enumerate(env_states):
                 model = env_state.model
@@ -661,8 +666,15 @@ def train_ppo_vectorized(
                 features = signals_to_features(signals, model, tracker=None, use_telemetry=use_telemetry)
                 all_features.append(features)
 
-            # Batch all states into a single tensor
+                # Compute action mask based on current state
+                has_active = 1.0 if model.has_active_seed else 0.0
+                seed_stage = seed_state.stage.value if seed_state else 0
+                mask = compute_action_mask(has_active, seed_stage, num_germinate_actions)
+                all_masks.append(mask)
+
+            # Batch all states and masks into tensors
             states_batch = torch.tensor(all_features, dtype=torch.float32, device=device)
+            masks_batch = torch.tensor(all_masks, dtype=torch.float32, device=device)
 
             # Accumulate raw states for deferred normalizer update
             raw_states_for_normalizer_update.append(states_batch.detach())
@@ -675,8 +687,10 @@ def train_ppo_vectorized(
             # with different mean/var, causing PPO ratio calculation errors.
             states_batch_normalized = obs_normalizer.normalize(states_batch)
 
-            # Get BATCHED actions from policy network (single forward pass!)
-            actions, log_probs, values = agent.network.get_action_batch(states_batch_normalized, deterministic=False)
+            # Get BATCHED actions from policy network with action masking (single forward pass!)
+            actions, log_probs, values = agent.network.get_action_batch(
+                states_batch_normalized, masks_batch, deterministic=False
+            )
 
             # Execute actions and store transitions for each environment
             for env_idx, env_state in enumerate(env_states):
@@ -749,7 +763,7 @@ def train_ppo_vectorized(
                 if action_success:
                     env_state.successful_action_counts[action.name] += 1
 
-                # Store transition (use normalized state to match what policy saw)
+                # Store transition with action mask (use normalized state to match what policy saw)
                 done = (epoch == max_epochs)
                 agent.store_transition(
                     states_batch_normalized[env_idx].cpu(),
@@ -757,7 +771,8 @@ def train_ppo_vectorized(
                     log_prob,
                     value,
                     reward,
-                    done
+                    done,
+                    masks_batch[env_idx].cpu(),
                 )
 
                 env_state.episode_rewards.append(reward)

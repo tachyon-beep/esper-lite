@@ -49,14 +49,15 @@ class TestPPOFeatureDimensions:
 
         agent = PPOAgent(state_dim=state_dim, action_dim=7, device='cpu')
 
-        # Create dummy 27-dim state tensor
+        # Create dummy 27-dim state tensor and all-valid action mask
         dummy_state = torch.randn(1, 27)
+        dummy_mask = torch.ones(1, 7)  # All actions valid
 
         # Forward pass should work without shape errors
         with torch.no_grad():
-            dist, value = agent.network(dummy_state)
+            dist, value = agent.network(dummy_state, dummy_mask)
 
-        # dist is a Categorical distribution
+        # dist is a MaskedCategorical distribution
         assert dist.probs.shape == (1, 7), "Action probs should be (batch_size, action_dim)"
         assert value.shape == (1,), "Value should be (batch_size,)"
 
@@ -67,14 +68,15 @@ class TestPPOFeatureDimensions:
 
         agent = PPOAgent(state_dim=state_dim, action_dim=7, device='cpu')
 
-        # Create dummy 37-dim state tensor
+        # Create dummy 37-dim state tensor and all-valid action mask
         dummy_state = torch.randn(1, 37)
+        dummy_mask = torch.ones(1, 7)  # All actions valid
 
         # Forward pass should work without shape errors
         with torch.no_grad():
-            dist, value = agent.network(dummy_state)
+            dist, value = agent.network(dummy_state, dummy_mask)
 
-        # dist is a Categorical distribution
+        # dist is a MaskedCategorical distribution
         assert dist.probs.shape == (1, 7), "Action probs should be (batch_size, action_dim)"
         assert value.shape == (1,), "Value should be (batch_size,)"
 
@@ -86,10 +88,11 @@ class TestPPOFeatureDimensions:
 
         # Try to feed 54-dim input (old incorrect dimension)
         wrong_state = torch.randn(1, 54)
+        dummy_mask = torch.ones(1, 7)  # All actions valid
 
         with pytest.raises(RuntimeError, match="mat1 and mat2 shapes cannot be multiplied"):
             with torch.no_grad():
-                agent.network(wrong_state)
+                agent.network(wrong_state, dummy_mask)
 
     def test_telemetry_feature_dim_is_10(self):
         """Verify SeedTelemetry.feature_dim() returns 10 (not 27 legacy value)."""
@@ -124,9 +127,10 @@ class TestPPOFeatureDimensions:
         features_no_tel = signals_to_features(signals, model=None, use_telemetry=False)
         agent_no_tel = PPOAgent(state_dim=len(features_no_tel), action_dim=7, device='cpu')
         state_tensor_no_tel = torch.tensor([features_no_tel], dtype=torch.float32)
+        dummy_mask = torch.ones(1, 7)  # All actions valid
 
         with torch.no_grad():
-            dist, value = agent_no_tel.network(state_tensor_no_tel)
+            dist, value = agent_no_tel.network(state_tensor_no_tel, dummy_mask)
 
         assert dist.probs.shape == (1, 7), "No-telemetry path should work"
 
@@ -136,7 +140,7 @@ class TestPPOFeatureDimensions:
         state_tensor_tel = torch.tensor([features_tel], dtype=torch.float32)
 
         with torch.no_grad():
-            dist, value = agent_tel.network(state_tensor_tel)
+            dist, value = agent_tel.network(state_tensor_tel, dummy_mask)
 
         assert dist.probs.shape == (1, 7), "Telemetry path should work"
 
@@ -270,14 +274,16 @@ class TestEntropyAnnealing:
             action_dim=7,
             entropy_coef_start=0.5,
             entropy_coef_end=0.01,
+            entropy_coef_min=0.0,  # Disable floor for this test
             entropy_anneal_steps=10,
             device='cpu'
         )
 
-        # Add some dummy transitions
+        # Add some dummy transitions with action masks
+        dummy_mask = torch.ones(7)  # All actions valid
         for _ in range(5):
             state = torch.randn(27)
-            agent.store_transition(state, action=0, log_prob=-1.0, value=0.5, reward=1.0, done=False)
+            agent.store_transition(state, action=0, log_prob=-1.0, value=0.5, reward=1.0, done=False, action_mask=dummy_mask)
 
         # At step 0, entropy_coef should be 0.5
         assert agent.train_steps == 0

@@ -164,15 +164,48 @@ class PPOAgent:
         annealed = self.entropy_coef_start + progress * (self.entropy_coef_end - self.entropy_coef_start)
         return max(annealed, self.entropy_coef_min)
 
-    def get_action(self, state: torch.Tensor, deterministic: bool = False
-                   ) -> tuple[int, float, float]:
-        """Get action for current state."""
-        return self.network.get_action(state, deterministic)
+    def get_action(
+        self,
+        state: torch.Tensor,
+        action_mask: torch.Tensor,
+        deterministic: bool = False,
+    ) -> tuple[int, float, float]:
+        """Get action for current state with masking.
 
-    def store_transition(self, state: torch.Tensor, action: int, log_prob: float,
-                         value: float, reward: float, done: bool) -> None:
-        """Store transition in buffer."""
-        self.buffer.add(state, action, log_prob, value, reward, done)
+        Args:
+            state: Observation tensor
+            action_mask: Binary mask of valid actions (1=valid, 0=invalid)
+            deterministic: If True, return argmax instead of sampling
+
+        Returns:
+            action: Selected action index
+            log_prob: Log probability of action
+            value: State value estimate
+        """
+        return self.network.get_action(state, action_mask, deterministic)
+
+    def store_transition(
+        self,
+        state: torch.Tensor,
+        action: int,
+        log_prob: float,
+        value: float,
+        reward: float,
+        done: bool,
+        action_mask: torch.Tensor,
+    ) -> None:
+        """Store transition in buffer.
+
+        Args:
+            state: Observation tensor
+            action: Action taken
+            log_prob: Log probability of action
+            value: Value estimate
+            reward: Reward received
+            done: Whether episode ended
+            action_mask: Binary mask of valid actions (stored for PPO update)
+        """
+        self.buffer.add(state, action, log_prob, value, reward, done, action_mask)
 
     def update(self, last_value: float = 0.0) -> dict:
         """Perform PPO update."""
@@ -199,10 +232,11 @@ class PPOAgent:
                 actions = batch['actions']
                 old_log_probs = batch['old_log_probs']
                 old_values = batch['values']
+                action_masks = batch['action_masks']
                 batch_returns = returns[batch_idx].to(self.device)
                 batch_advantages = advantages[batch_idx].to(self.device)
 
-                log_probs, values, entropy = self.network.evaluate_actions(states, actions)
+                log_probs, values, entropy = self.network.evaluate_actions(states, actions, action_masks)
 
                 # PPO-Clip loss
                 ratio = torch.exp(log_probs - old_log_probs)

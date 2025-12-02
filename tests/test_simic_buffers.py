@@ -21,9 +21,11 @@ class TestRolloutStep:
             value=1.0,
             reward=0.1,
             done=False,
+            action_mask=torch.ones(7),
         )
         assert step.action == 0
         assert step.done is False
+        assert step.action_mask.shape == (7,)
 
 
 class TestRolloutBuffer:
@@ -41,14 +43,16 @@ class TestRolloutBuffer:
             value=1.0,
             reward=0.1,
             done=False,
+            action_mask=torch.ones(7),
         )
         assert len(buffer) == 1
 
     def test_clear(self):
         """Test clearing the buffer."""
         buffer = RolloutBuffer()
-        buffer.add(torch.zeros(27), 0, -0.5, 1.0, 0.1, False)
-        buffer.add(torch.zeros(27), 1, -0.3, 0.9, 0.2, False)
+        dummy_mask = torch.ones(7)
+        buffer.add(torch.zeros(27), 0, -0.5, 1.0, 0.1, False, dummy_mask)
+        buffer.add(torch.zeros(27), 1, -0.3, 0.9, 0.2, False, dummy_mask)
         assert len(buffer) == 2
 
         buffer.clear()
@@ -57,6 +61,7 @@ class TestRolloutBuffer:
     def test_compute_returns_and_advantages(self):
         """Test GAE computation produces correct shapes."""
         buffer = RolloutBuffer()
+        dummy_mask = torch.ones(7)
         for i in range(5):
             buffer.add(
                 state=torch.zeros(27),
@@ -65,6 +70,7 @@ class TestRolloutBuffer:
                 value=1.0 - i * 0.1,
                 reward=0.1,
                 done=(i == 4),
+                action_mask=dummy_mask,
             )
 
         returns, advantages = buffer.compute_returns_and_advantages(
@@ -77,8 +83,9 @@ class TestRolloutBuffer:
     def test_get_batches(self):
         """Test minibatch generation."""
         buffer = RolloutBuffer()
+        dummy_mask = torch.ones(7)
         for i in range(10):
-            buffer.add(torch.randn(27), i % 4, -0.5, 1.0, 0.1, False)
+            buffer.add(torch.randn(27), i % 4, -0.5, 1.0, 0.1, False, dummy_mask)
 
         batches = buffer.get_batches(batch_size=4, device="cpu")
 
@@ -87,3 +94,5 @@ class TestRolloutBuffer:
         assert "states" in batch
         assert "actions" in batch
         assert "old_log_probs" in batch
+        assert "action_masks" in batch
+        assert batch["action_masks"].shape[1] == 7
