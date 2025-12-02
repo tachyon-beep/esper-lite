@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 from esper.leyline.stages import SeedStage
 from esper.leyline.signals import TrainingSignals
@@ -122,7 +123,3 @@ class FieldReport:
     # Failure info (if culled)
     failure_reason: str = ""
     failure_stage: SeedStage = SeedStage.UNKNOWN
-
-
-# Import uuid4 after dataclass definitions to avoid circular import issues
-from uuid import uuid4

@@ -51,9 +51,10 @@ def blend_with_isolation(
     detach_host: bool = True,
 ) -> torch.Tensor:
     """Blend host and seed features with optional gradient isolation on host path."""
-    alpha = max(0.0, min(1.0, alpha))
     host_path = host_features.detach() if detach_host else host_features
-    return alpha * seed_features + (1.0 - alpha) * host_path
+    # torch.lerp is a fused operation: lerp(a, b, w) = a + w * (b - a)
+    # Clamp alpha to [0, 1] for safety
+    return torch.lerp(host_path, seed_features, max(0.0, min(1.0, alpha)))
 
 
 # =============================================================================

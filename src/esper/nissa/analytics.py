@@ -69,7 +69,7 @@ class SeedScoreboard:
     total_germinated: int = 0
     total_fossilized: int = 0
     total_culled: int = 0
-    fossilized_by_blueprint: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    fossilized_by_blueprint: defaultdict[str, int] = field(default_factory=lambda: defaultdict(int))
     live_blueprint: str | None = None
     params_added: int = 0
     host_params: int = 0

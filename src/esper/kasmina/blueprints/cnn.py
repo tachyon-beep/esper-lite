@@ -9,6 +9,22 @@ import torch.nn.functional as F
 from .registry import BlueprintRegistry
 
 
+def get_num_groups(channels: int, target_group_size: int = 16) -> int:
+    """Select optimal num_groups for GroupNorm.
+
+    Prefers 32 groups, falls back to smaller counts if channels isn't divisible.
+    Targets at least `target_group_size` channels per group for statistical stability.
+    """
+    for num_groups in [32, 16, 8, 4, 2, 1]:
+        if channels % num_groups == 0 and channels // num_groups >= target_group_size:
+            return num_groups
+    # Fallback: just find a divisor
+    for num_groups in [32, 16, 8, 4, 2, 1]:
+        if channels % num_groups == 0:
+            return num_groups
+    return 1
+
+
 class ConvBlock(nn.Module):
     """Standard conv-bn-relu block."""
 
@@ -23,7 +39,21 @@ class ConvBlock(nn.Module):
         return F.relu(self.bn(self.conv(x)))
 
 
-@BlueprintRegistry.register("norm", "cnn", param_estimate=100, description="BatchNorm only")
+class SeedConvBlock(nn.Module):
+    """Conv-groupnorm-relu block for seeds (no running stats drift)."""
+
+    def __init__(self, in_channels: int, out_channels: int, kernel_size: int = 3):
+        super().__init__()
+        self.conv = nn.Conv2d(
+            in_channels, out_channels, kernel_size, padding=kernel_size // 2, bias=False
+        )
+        self.gn = nn.GroupNorm(get_num_groups(out_channels), out_channels)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return F.relu(self.gn(self.conv(x)))
+
+
+@BlueprintRegistry.register("norm", "cnn", param_estimate=100, description="GroupNorm enhancement")
 def create_norm_seed(channels: int) -> nn.Module:
     """Normalization enhancement seed."""
 
@@ -76,13 +106,13 @@ def create_depthwise_seed(channels: int) -> nn.Module:
                 channels, channels, kernel_size=3, padding=1, groups=channels, bias=False
             )
             self.pointwise = nn.Conv2d(channels, channels, kernel_size=1, bias=False)
-            self.bn = nn.BatchNorm2d(channels)
+            self.gn = nn.GroupNorm(get_num_groups(channels), channels)
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             residual = x
             x = self.depthwise(x)
             x = self.pointwise(x)
-            x = self.bn(x)
+            x = self.gn(x)
             return residual + F.relu(x)
 
     return DepthwiseSeed(channels)
@@ -96,8 +126,8 @@ def create_conv_enhance_seed(channels: int) -> nn.Module:
         def __init__(self, channels: int):
             super().__init__()
             self.enhance = nn.Sequential(
-                ConvBlock(channels, channels),
-                ConvBlock(channels, channels),
+                SeedConvBlock(channels, channels),
+                SeedConvBlock(channels, channels),
             )
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -106,4 +136,4 @@ def create_conv_enhance_seed(channels: int) -> nn.Module:
     return ConvEnhanceSeed(channels)
 
 
-__all__ = ["ConvBlock"]
+__all__ = ["ConvBlock", "SeedConvBlock", "get_num_groups"]

@@ -2,7 +2,7 @@
 
 This module provides the core training loop functions for different seed states:
 - train_epoch_normal: Standard training without seed
-- train_epoch_seed_isolated: Seed-only training (host frozen)
+- train_epoch_womb_mode: STE training (seed output isolated, both train)
 - train_epoch_blended: Joint host+seed training
 - validate_and_get_metrics: Validation and metric computation
 
@@ -11,10 +11,12 @@ These functions are generic and work with any DataLoader, not tied to CIFAR-10.
 
 from __future__ import annotations
 
+import itertools
+import math
+
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-import math
 
 
 def _compute_loss(
@@ -51,48 +53,53 @@ def train_epoch_normal(
     """
     model.train()
     for inputs, labels in trainloader:
-        inputs, labels = inputs.to(device), labels.to(device)
-        optimizer.zero_grad()
+        inputs, labels = inputs.to(device, non_blocking=True), labels.to(device, non_blocking=True)
+        optimizer.zero_grad(set_to_none=True)
         outputs = model(inputs)
         loss = _compute_loss(outputs, labels, criterion, task_type)
         loss.backward()
         optimizer.step()
 
 
-def train_epoch_seed_isolated(
+def train_epoch_womb_mode(
     model: nn.Module,
     trainloader: DataLoader,
     criterion: nn.Module,
+    host_optimizer: torch.optim.Optimizer,
     seed_optimizer: torch.optim.Optimizer,
     device: str,
     task_type: str = "classification",
 ) -> None:
-    """Train one epoch with seed in isolation (only seed weights updated).
+    """Train one epoch with seed in isolation (seed output doesn't affect forward pass).
 
-    RL Context: During TRAINING stage, only seed parameters update.
-    The RL agent observes seed_improvement and decides when to FOSSILIZE or CULL.
+    During TRAINING stage (womb mode), the seed uses a Straight-Through Estimator:
+    - Forward: output = host_features (seed contribution is zero)
+    - Backward: seed receives gradients as if fully blended
 
-    Note: We don't freeze host params because that breaks gradient flow.
-    Instead, we just don't step the host optimizer - gradients flow through
-    but host weights stay fixed.
+    CRITICAL: Both host AND seed train. The "isolation" refers to the seed's
+    output not affecting the loss computation (alpha=0), NOT to freezing the host.
+    Without this, on large models with frequent seed cycling, the host would
+    never train.
 
     Args:
         model: The model to train.
         trainloader: Training data loader.
         criterion: Loss function.
-        seed_optimizer: Optimizer for seed parameters only.
+        host_optimizer: Optimizer for host parameters.
+        seed_optimizer: Optimizer for seed parameters.
         device: Device to train on.
+        task_type: Task type (classification or lm).
     """
     model.train()
 
     for inputs, labels in trainloader:
-        inputs, labels = inputs.to(device), labels.to(device)
-        # Zero ALL grads to prevent accumulation
-        model.zero_grad()
+        inputs, labels = inputs.to(device, non_blocking=True), labels.to(device, non_blocking=True)
+        host_optimizer.zero_grad(set_to_none=True)
+        seed_optimizer.zero_grad(set_to_none=True)
         outputs = model(inputs)
         loss = _compute_loss(outputs, labels, criterion, task_type)
         loss.backward()
-        # Only step seed optimizer - host grads computed but not applied
+        host_optimizer.step()
         seed_optimizer.step()
 
 
@@ -120,10 +127,10 @@ def train_epoch_blended(
     """
     model.train()
     for inputs, labels in trainloader:
-        inputs, labels = inputs.to(device), labels.to(device)
-        host_optimizer.zero_grad()
+        inputs, labels = inputs.to(device, non_blocking=True), labels.to(device, non_blocking=True)
+        host_optimizer.zero_grad(set_to_none=True)
         if seed_optimizer:
-            seed_optimizer.zero_grad()
+            seed_optimizer.zero_grad(set_to_none=True)
         outputs = model(inputs)
         loss = _compute_loss(outputs, labels, criterion, task_type)
         loss.backward()
@@ -161,70 +168,81 @@ def validate_and_get_metrics(
     """
     model.eval()
 
-    # Validation
-    val_loss = 0.0
-    val_correct = 0
+    # Validation - accumulate on GPU to avoid CPU-GPU sync per batch
+    val_loss_tensor = torch.tensor(0.0, device=device)
+    val_correct_tensor = torch.tensor(0, dtype=torch.long, device=device)
     val_total = 0
 
-    # Per-class tracking
+    # Per-class tracking (vectorized)
     if compute_per_class:
-        class_correct = [0] * num_classes
-        class_total = [0] * num_classes
+        class_correct_tensor = torch.zeros(num_classes, dtype=torch.long, device=device)
+        class_total_tensor = torch.zeros(num_classes, dtype=torch.long, device=device)
 
     with torch.no_grad():
         for inputs, labels in testloader:
-            inputs, labels = inputs.to(device), labels.to(device)
+            inputs, labels = inputs.to(device, non_blocking=True), labels.to(device, non_blocking=True)
             outputs = model(inputs)
             loss = _compute_loss(outputs, labels, criterion, task_type)
-            val_loss += loss.item()
+            val_loss_tensor += loss
             if task_type == "lm":
                 predicted = outputs.argmax(dim=-1)
                 val_total += labels.numel()
-                val_correct += (predicted == labels).sum().item()
+                val_correct_tensor += (predicted == labels).sum()
             else:
                 _, predicted = outputs.max(1)
                 val_total += labels.size(0)
-                val_correct += predicted.eq(labels).sum().item()
+                val_correct_tensor += predicted.eq(labels).sum()
 
                 if compute_per_class:
-                    for i in range(labels.size(0)):
-                        label = labels[i].item()
-                        class_total[label] += 1
-                        if predicted[i] == label:
-                            class_correct[label] += 1
+                    # Vectorized per-class counting using bincount
+                    # Note: bincount handles empty inputs gracefully (returns zeros)
+                    class_total_tensor += torch.bincount(labels, minlength=num_classes)
+                    correct_mask = predicted == labels
+                    class_correct_tensor += torch.bincount(
+                        labels[correct_mask], minlength=num_classes
+                    )
 
-    val_loss /= len(testloader) if len(testloader) > 0 else 1
+    # Single CPU sync point at end of validation
+    val_loss = val_loss_tensor.item() / max(len(testloader), 1)
+    val_correct = val_correct_tensor.item()
     val_accuracy = 100.0 * val_correct / val_total if val_total > 0 else 0.0
 
     per_class_acc = None
     if compute_per_class:
+        # Single sync for per-class stats
+        class_correct = class_correct_tensor.cpu()
+        class_total = class_total_tensor.cpu()
         per_class_acc = {
-            i: 100.0 * class_correct[i] / class_total[i] if class_total[i] > 0 else 0.0
+            i: 100.0 * class_correct[i].item() / class_total[i].item()
+            if class_total[i].item() > 0 else 0.0
             for i in range(num_classes)
         }
 
-    # Training metrics (quick sample)
-    train_loss = 0.0
-    train_correct = 0
+    # Training metrics (quick sample) - use islice to avoid graph-breaking if-break
+    train_loss_tensor = torch.tensor(0.0, device=device)
+    train_correct_tensor = torch.tensor(0, dtype=torch.long, device=device)
     train_total = 0
+    train_batches = 0
+
     with torch.no_grad():
-        for i, (inputs, labels) in enumerate(trainloader):
-            if i >= 10:  # Sample first 10 batches
-                break
-            inputs, labels = inputs.to(device), labels.to(device)
+        for inputs, labels in itertools.islice(trainloader, 10):
+            inputs, labels = inputs.to(device, non_blocking=True), labels.to(device, non_blocking=True)
             outputs = model(inputs)
             loss = _compute_loss(outputs, labels, criterion, task_type)
-            train_loss += loss.item()
+            train_loss_tensor += loss
+            train_batches += 1
             if task_type == "lm":
                 predicted = outputs.argmax(dim=-1)
                 train_total += labels.numel()
-                train_correct += (predicted == labels).sum().item()
+                train_correct_tensor += (predicted == labels).sum()
             else:
                 _, predicted = outputs.max(1)
                 train_total += labels.size(0)
-                train_correct += predicted.eq(labels).sum().item()
+                train_correct_tensor += predicted.eq(labels).sum()
 
-    train_loss /= min(10, len(trainloader)) if len(trainloader) > 0 else 1
+    # Single CPU sync point at end of training metrics
+    train_loss = train_loss_tensor.item() / max(train_batches, 1)
+    train_correct = train_correct_tensor.item()
     train_accuracy = 100.0 * train_correct / train_total if train_total > 0 else 0.0
 
     perplexity = None

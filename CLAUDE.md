@@ -108,3 +108,23 @@ The only legitimate uses of `hasattr()` are:
 3. **Feature Detection:** When integrating with external libraries where feature availability varies
 
 Even these cases require authorization and documentation.
+
+## Archive Directory Policy
+
+**The `_archive/` directory contains old, broken, failed implementations.**
+
+### What It Contains
+- Previous architectural attempts that were abandoned
+- Prototype code that was never production-ready
+- Historical artifacts from earlier project phases
+
+### How to Treat It
+- **Interesting to look at** for historical context or understanding past decisions
+- **Otherwise meaningless** for current development
+- **DO NOT** use as reference for implementing current features
+- **DO NOT** attempt to port or adapt archive code to current architecture
+- **DO NOT** rely on patterns or interfaces found in archive code
+
+### The Rule
+
+The archive exists solely as a git-preserved history. Current implementations should be built fresh using the active codebase patterns, not retrofitted from archive code.

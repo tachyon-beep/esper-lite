@@ -148,7 +148,7 @@ class SeedTelemetry:
             min(self.epochs_in_stage, 50) / 50.0,
             self.accuracy / 100.0,
             max(-1.0, min(1.0, self.accuracy_delta / 10.0)),
-            (self.stage - 1) / 6.0,  # stages 1-7 -> [0, 1]
+            min((self.stage - 1) / 6.0, 1.0),  # stages 1-7 -> [0, 1], clamp overflow
             self.alpha,
             self.epoch / max(self.max_epochs, 1),  # temporal position
         ]

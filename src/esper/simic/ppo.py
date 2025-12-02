@@ -120,6 +120,7 @@ class PPOAgent:
         entropy_coef_end: float | None = None,
         entropy_anneal_steps: int = 0,
         value_coef: float = 0.5,
+        clip_value: bool = True,
         max_grad_norm: float = 0.5,
         n_epochs: int = 10,
         batch_size: int = 64,
@@ -133,6 +134,7 @@ class PPOAgent:
         self.entropy_coef_end = entropy_coef_end if entropy_coef_end is not None else entropy_coef
         self.entropy_anneal_steps = entropy_anneal_steps
         self.value_coef = value_coef
+        self.clip_value = clip_value
         self.max_grad_norm = max_grad_norm
         self.n_epochs = n_epochs
         self.batch_size = batch_size
@@ -190,6 +192,7 @@ class PPOAgent:
                 states = batch['states']
                 actions = batch['actions']
                 old_log_probs = batch['old_log_probs']
+                old_values = batch['values']
                 batch_returns = returns[batch_idx].to(self.device)
                 batch_advantages = advantages[batch_idx].to(self.device)
 
@@ -201,7 +204,16 @@ class PPOAgent:
                 surr2 = torch.clamp(ratio, 1 - self.clip_ratio, 1 + self.clip_ratio) * batch_advantages
                 policy_loss = -torch.min(surr1, surr2).mean()
 
-                value_loss = F.mse_loss(values, batch_returns)
+                # Value function loss (with optional clipping)
+                if self.clip_value:
+                    values_clipped = old_values + torch.clamp(
+                        values - old_values, -self.clip_ratio, self.clip_ratio
+                    )
+                    value_loss_unclipped = (values - batch_returns) ** 2
+                    value_loss_clipped = (values_clipped - batch_returns) ** 2
+                    value_loss = 0.5 * torch.max(value_loss_unclipped, value_loss_clipped).mean()
+                else:
+                    value_loss = F.mse_loss(values, batch_returns)
                 entropy_loss = -entropy.mean()
 
                 loss = (
@@ -246,6 +258,7 @@ class PPOAgent:
                 'entropy_coef_end': self.entropy_coef_end,
                 'entropy_anneal_steps': self.entropy_anneal_steps,
                 'value_coef': self.value_coef,
+                'clip_value': self.clip_value,
             }
         }
         if metadata:

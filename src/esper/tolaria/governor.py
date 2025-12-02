@@ -11,6 +11,7 @@ import math
 from collections import deque
 from dataclasses import dataclass
 
+import torch
 import torch.nn as nn
 
 
@@ -57,14 +58,18 @@ class TolariaGovernor:
         self.consecutive_panics: int = 0
         self.min_panics_before_rollback = min_panics_before_rollback
         self._pending_panic: bool = False
+        self._panic_loss: float | None = None  # Track loss that triggered panic
         # Random guessing loss = ln(num_classes), the "lobotomy signature"
         self.random_guess_loss = math.log(num_classes)
         # Capture an initial snapshot so rollback is always possible, even on first panic
         self.snapshot()
 
     def snapshot(self) -> None:
-        """Save Last Known Good state (lightweight RAM copy)."""
-        self.last_good_state = copy.deepcopy(self.model.state_dict())
+        """Save Last Known Good state (GPU-native clone for tensors, deepcopy for extra_state)."""
+        self.last_good_state = {
+            k: v.clone() if isinstance(v, torch.Tensor) else copy.deepcopy(v)
+            for k, v in self.model.state_dict().items()
+        }
 
     def check_vital_signs(self, current_loss: float) -> bool:
         """Check if the system is irreparably damaged.
@@ -79,6 +84,7 @@ class TolariaGovernor:
         # Immediate panic on NaN/Inf - these are always catastrophic
         if math.isnan(current_loss) or math.isinf(current_loss):
             self._pending_panic = False
+            self._panic_loss = current_loss
             self.consecutive_panics = self.min_panics_before_rollback  # Skip to rollback
             return True
 
@@ -91,6 +97,7 @@ class TolariaGovernor:
             if (avg < self.random_guess_loss * 0.6 and
                 abs(current_loss - self.random_guess_loss) < 0.15):
                 self._pending_panic = False
+                self._panic_loss = current_loss
                 self.consecutive_panics = self.min_panics_before_rollback
                 return True
 
@@ -121,6 +128,7 @@ class TolariaGovernor:
         if is_anomaly:
             self.consecutive_panics += 1
             self._pending_panic = True
+            self._panic_loss = current_loss
             # Only actually panic after consecutive anomalies
             if self.consecutive_panics >= self.min_panics_before_rollback:
                 return True
@@ -148,14 +156,15 @@ class TolariaGovernor:
         if self.last_good_state is None:
             raise RuntimeError("Governor panic before first snapshot!")
 
-        # Restore host + fossilized seeds
-        self.model.load_state_dict(self.last_good_state, strict=False)
-
-        # Clear any live (non-fossilized) seeds from slots
-        # This implements "revert to stable organism, dump all temporary grafts"
+        # Clear any live (non-fossilized) seeds FIRST
+        # This removes seed parameters so state_dict keys match snapshot
+        # Implements "revert to stable organism, dump all temporary grafts"
         if hasattr(self.model, 'seed_slot'):  # hasattr AUTHORIZED by John on 2025-12-01 16:30:00 UTC
                                               # Justification: Feature detection - MorphogeneticModel has seed_slot, base models may not
             self.model.seed_slot.cull("governor_rollback")
+
+        # Restore host + fossilized seeds (strict=True ensures complete restoration)
+        self.model.load_state_dict(self.last_good_state, strict=True)
 
         self.consecutive_panics += 1
 
@@ -168,7 +177,7 @@ class TolariaGovernor:
 
         return GovernorReport(
             reason="Structural Collapse",
-            loss_at_panic=float('nan'),  # We don't store the panic loss
+            loss_at_panic=self._panic_loss if self._panic_loss is not None else float('nan'),
             loss_threshold=threshold,
             consecutive_panics=self.consecutive_panics,
             rollback_occurred=True,
@@ -183,6 +192,7 @@ class TolariaGovernor:
         self.loss_history.clear()
         self.consecutive_panics = 0
         self._pending_panic = False
+        self._panic_loss = None
         self.snapshot()
 
 

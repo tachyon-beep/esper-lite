@@ -394,7 +394,8 @@ if TORCH_AVAILABLE:
         def get_action(self, state: torch.Tensor, deterministic: bool = False
                        ) -> tuple[int, float, float]:
             """Sample action from policy."""
-            with torch.no_grad():
+            # inference_mode is more efficient than no_grad (disables version tracking)
+            with torch.inference_mode():
                 dist, value = self.forward(state)
                 if deterministic:
                     action = dist.probs.argmax(dim=-1)
@@ -406,7 +407,7 @@ if TORCH_AVAILABLE:
         def get_action_batch(self, states: torch.Tensor, deterministic: bool = False
                              ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
             """Sample actions for a batch of states."""
-            with torch.no_grad():
+            with torch.inference_mode():
                 dist, values = self.forward(states)
                 if deterministic:
                     actions = dist.probs.argmax(dim=-1)

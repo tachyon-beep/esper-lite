@@ -98,6 +98,8 @@ class RolloutBuffer:
                                         dtype=torch.long, device=device),
                 'old_log_probs': torch.tensor([self.steps[i].log_prob for i in batch_idx],
                                                dtype=torch.float32, device=device),
+                'values': torch.tensor([self.steps[i].value for i in batch_idx],
+                                       dtype=torch.float32, device=device),
             }
             batches.append((batch, batch_idx))
 

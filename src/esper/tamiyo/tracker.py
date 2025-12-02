@@ -92,7 +92,7 @@ class SignalTracker:
         seed_alpha = 0.0
         seed_improvement = 0.0
 
-        if active_seeds:
+        if active_seeds and active_seeds[0] is not None:
             first_seed = active_seeds[0]
             seed_stage = int(first_seed.stage)
             # SeedState contract guarantees metrics and epochs_in_stage integer.
@@ -121,8 +121,9 @@ class SignalTracker:
 
     def reset(self) -> None:
         """Reset tracker state."""
-        self._loss_history.clear()
-        self._accuracy_history.clear()
+        # Recreate deques with current history_window (not just clear)
+        self._loss_history = deque(maxlen=self.history_window)
+        self._accuracy_history = deque(maxlen=self.history_window)
         self._best_accuracy = 0.0
         self._plateau_count = 0
         self._prev_accuracy = 0.0

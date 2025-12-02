@@ -178,19 +178,30 @@ class DiagnosticTracker:
         cfg = self.config.gradients
         grad_flat = grad.detach().abs().flatten()
 
-        stats = GradientStats(layer_name=name)
-        stats.norm = grad.norm().item()
-        stats.std = grad.std().item()
-        stats.mean = grad.mean().item()
+        # Compute all tensor ops first, then single sync at end
+        norm_t = grad.norm()
+        std_t = grad.std()
+        mean_t = grad.mean()
+        vanishing_t = (grad_flat < cfg.vanishing_threshold).float().mean() if cfg.detect_vanishing else None
+        exploding_t = (grad_flat > cfg.exploding_threshold).float().mean() if cfg.detect_exploding else None
 
-        if cfg.detect_vanishing:
-            stats.vanishing_pct = (grad_flat < cfg.vanishing_threshold).float().mean().item()
-        if cfg.detect_exploding:
-            stats.exploding_pct = (grad_flat > cfg.exploding_threshold).float().mean().item()
-
+        percentile_tensors = {}
         if cfg.percentiles:
+            grad_float = grad_flat.float()
             for p in cfg.percentiles:
-                stats.percentiles[p] = torch.quantile(grad_flat.float(), p / 100).item()
+                percentile_tensors[p] = torch.quantile(grad_float, p / 100)
+
+        # Single sync point - all .item() calls together
+        stats = GradientStats(layer_name=name)
+        stats.norm = norm_t.item()
+        stats.std = std_t.item()
+        stats.mean = mean_t.item()
+        if vanishing_t is not None:
+            stats.vanishing_pct = vanishing_t.item()
+        if exploding_t is not None:
+            stats.exploding_pct = exploding_t.item()
+        for p, t in percentile_tensors.items():
+            stats.percentiles[p] = t.item()
 
         self._grad_stats[name] = stats
 
@@ -273,21 +284,21 @@ class DiagnosticTracker:
 
     def _compute_val_loss(self, val_loader, criterion) -> float:
         """Compute validation loss."""
-        total_loss = 0.0
+        total_loss = torch.tensor(0.0, device=self.device)
         n_batches = 0
 
         with torch.no_grad():
             for inputs, targets in val_loader:
-                inputs = inputs.to(self.device)
-                targets = targets.to(self.device)
+                inputs = inputs.to(self.device, non_blocking=True)
+                targets = targets.to(self.device, non_blocking=True)
                 outputs = self.model(inputs)
                 loss = criterion(outputs, targets)
-                total_loss += loss.item()
+                total_loss += loss
                 n_batches += 1
                 if n_batches >= 10:  # Sample for speed
                     break
 
-        return total_loss / max(n_batches, 1)
+        return total_loss.item() / max(n_batches, 1)
 
     def _compute_weight_norms(self) -> dict[str, float]:
         """Compute weight norms per layer."""

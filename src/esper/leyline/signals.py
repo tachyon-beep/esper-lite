@@ -247,7 +247,7 @@ class TrainingSignals:
             accuracy_delta=self.metrics.accuracy_delta,
             plateau_epochs=self.metrics.plateau_epochs,
             best_val_accuracy=self.metrics.best_val_accuracy,
-            best_val_loss=self.metrics.best_val_loss if self.metrics.best_val_loss != float('inf') else 10.0,
+            best_val_loss=min(self.metrics.best_val_loss, 10.0),  # Clamp inf to reasonable max
             loss_history_5=tuple(loss_hist),
             accuracy_history_5=tuple(acc_hist),
             has_active_seed=1 if self.active_seeds else 0,

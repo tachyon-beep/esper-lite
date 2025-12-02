@@ -479,7 +479,276 @@ def train_ppo(
     return agent, history
 
 
+# =============================================================================
+# Heuristic Training
+# =============================================================================
+
+def run_heuristic_episode(
+    policy,
+    trainloader,
+    testloader,
+    max_epochs: int = 75,
+    max_batches: int | None = None,
+    base_seed: int = 42,
+    device: str = "cuda:0",
+    task_spec=None,
+) -> tuple[float, dict[str, int], list[float]]:
+    """Run a single training episode with heuristic policy.
+
+    Args:
+        policy: HeuristicTamiyo instance
+        trainloader: Training data loader
+        testloader: Test data loader
+        max_epochs: Maximum epochs per episode
+        max_batches: Limit batches per epoch (None = all)
+        base_seed: Random seed
+        device: Device to use
+        task_spec: Task specification
+
+    Returns:
+        (final_accuracy, action_counts, episode_rewards)
+    """
+    from esper.leyline import SeedStage
+    from esper.tolaria import create_model
+    from esper.tamiyo import SignalTracker
+
+    if task_spec is None:
+        task_spec = get_task_spec("cifar10")
+    ActionEnum = task_spec.action_enum
+    task_type = task_spec.task_type
+
+    torch.manual_seed(base_seed)
+    random.seed(base_seed)
+
+    model = create_model(task=task_spec, device=device)
+
+    # Wire telemetry
+    hub = get_hub()
+    def telemetry_callback(event):
+        event.data.setdefault("env_id", 0)
+        hub.emit(event)
+
+    model.seed_slot.on_telemetry = telemetry_callback
+    model.seed_slot.fast_mode = False
+    model.seed_slot.isolate_gradients = True
+
+    criterion = nn.CrossEntropyLoss()
+    host_optimizer = torch.optim.SGD(
+        model.get_host_parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4
+    )
+    seed_optimizer = None
+    signal_tracker = SignalTracker()
+
+    seeds_created = 0
+    action_counts = {a.name: 0 for a in ActionEnum}
+    episode_rewards = []
+
+    host_params = sum(p.numel() for p in model.get_host_parameters() if p.requires_grad)
+    params_added = 0
+
+    for epoch in range(1, max_epochs + 1):
+        seed_state = model.seed_state
+
+        # Training phase
+        model.train()
+        running_loss = 0.0
+        correct = 0
+        total = 0
+        batch_count = 0
+
+        for inputs, targets in trainloader:
+            if max_batches and batch_count >= max_batches:
+                break
+            batch_count += 1
+
+            inputs, targets = inputs.to(device), targets.to(device)
+            host_optimizer.zero_grad()
+            if seed_optimizer:
+                seed_optimizer.zero_grad()
+
+            outputs = model(inputs)
+            loss, correct_batch, batch_total = _loss_and_correct(outputs, targets, criterion, task_type)
+            loss.backward()
+
+            host_optimizer.step()
+            if seed_optimizer:
+                seed_optimizer.step()
+
+            running_loss += loss.item()
+            total += batch_total
+            correct += correct_batch
+
+        train_loss = running_loss / max(1, batch_count)
+        train_acc = 100.0 * correct / total if total > 0 else 0.0
+
+        # Validation
+        model.eval()
+        val_loss = 0.0
+        correct = 0
+        total = 0
+        batch_count = 0
+
+        with torch.no_grad():
+            for inputs, targets in testloader:
+                if max_batches and batch_count >= max_batches:
+                    break
+                batch_count += 1
+
+                inputs, targets = inputs.to(device), targets.to(device)
+                outputs = model(inputs)
+                loss, correct_batch, batch_total = _loss_and_correct(outputs, targets, criterion, task_type)
+                val_loss += loss.item()
+                total += batch_total
+                correct += correct_batch
+
+        val_loss = val_loss / max(1, batch_count)
+        val_acc = 100.0 * correct / total if total > 0 else 0.0
+
+        # Record accuracy in seed metrics
+        if seed_state and seed_state.metrics:
+            seed_state.metrics.record_accuracy(val_acc)
+
+        # Update signal tracker
+        active_seeds = [seed_state] if seed_state else []
+        available_slots = 0 if model.has_active_seed else 1
+        signals = signal_tracker.update(
+            epoch=epoch,
+            global_step=epoch * len(trainloader),
+            train_loss=train_loss,
+            train_accuracy=train_acc,
+            val_loss=val_loss,
+            val_accuracy=val_acc,
+            active_seeds=active_seeds,
+            available_slots=available_slots,
+        )
+
+        acc_delta = signals.metrics.accuracy_delta
+
+        # Mechanical lifecycle advance
+        model.seed_slot.step_epoch()
+        seed_state = model.seed_state
+
+        # Get heuristic decision
+        decision = policy.decide(signals, active_seeds)
+        action = decision.action
+        action_counts[action.name] += 1
+
+        # Compute reward (for comparison with PPO)
+        total_params = params_added + model.active_seed_params
+        reward = compute_shaped_reward(
+            action=action,
+            acc_delta=acc_delta,
+            val_acc=val_acc,
+            seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
+            epoch=epoch,
+            max_epochs=max_epochs,
+            total_params=total_params,
+            host_params=host_params,
+        )
+        episode_rewards.append(reward)
+
+        # Execute action
+        if is_germinate_action(action):
+            if not model.has_active_seed:
+                blueprint_id = get_blueprint_from_action(action)
+                seed_id = f"seed_{seeds_created}"
+                model.germinate_seed(blueprint_id, seed_id)
+                seeds_created += 1
+                seed_optimizer = torch.optim.SGD(
+                    model.get_seed_parameters(), lr=0.01, momentum=0.9
+                )
+
+        elif action.name == "FOSSILIZE":
+            if model.has_active_seed and model.seed_state.stage == SeedStage.PROBATIONARY:
+                gate_result = model.seed_slot.advance_stage(SeedStage.FOSSILIZED)
+                if gate_result.passed:
+                    params_added += model.active_seed_params
+                    model.seed_slot.set_alpha(1.0)
+
+        elif action.name == "CULL":
+            if model.has_active_seed:
+                model.cull_seed()
+                seed_optimizer = None
+
+        # Print progress every 10 epochs
+        if epoch % 10 == 0 or epoch == max_epochs:
+            seed_info = f"seed={seed_state.stage.name}" if seed_state else "no seed"
+            print(f"  Epoch {epoch:3d}/{max_epochs}: acc={val_acc:.1f}%, {seed_info}, action={action.name}")
+
+    return val_acc, action_counts, episode_rewards
+
+
+def train_heuristic(
+    n_episodes: int = 1,
+    max_epochs: int = 75,
+    max_batches: int | None = 50,
+    device: str = "cuda:0",
+    task: str = "cifar10",
+    seed: int = 42,
+):
+    """Train with heuristic policy.
+
+    Args:
+        n_episodes: Number of episodes to run
+        max_epochs: Maximum epochs per episode
+        max_batches: Limit batches per epoch (None = all, 50 = fast mode)
+        device: Device to use
+        task: Task preset (cifar10 or tinystories)
+        seed: Random seed
+    """
+    from esper.tamiyo import HeuristicTamiyo
+
+    task_spec = get_task_spec(task)
+
+    print("=" * 60)
+    print("Heuristic Training (h-esper)")
+    print("=" * 60)
+    print(f"Task: {task_spec.name} (topology={task_spec.topology})")
+    print(f"Episodes: {n_episodes}, Max epochs: {max_epochs}")
+    print(f"Batches per epoch: {max_batches or 'all'}")
+    print(f"Device: {device}")
+    print("=" * 60)
+
+    trainloader, testloader = task_spec.create_dataloaders()
+
+    policy = HeuristicTamiyo(topology=task_spec.topology)
+    history = []
+
+    for ep in range(1, n_episodes + 1):
+        print(f"\nEpisode {ep}/{n_episodes}")
+        print("-" * 40)
+
+        policy.reset()
+        base_seed = seed + ep * 1000
+
+        final_acc, action_counts, rewards = run_heuristic_episode(
+            policy=policy,
+            trainloader=trainloader,
+            testloader=testloader,
+            max_epochs=max_epochs,
+            max_batches=max_batches,
+            base_seed=base_seed,
+            device=device,
+            task_spec=task_spec,
+        )
+
+        total_reward = sum(rewards)
+        print(f"\nEpisode {ep} complete: acc={final_acc:.1f}%, reward={total_reward:.1f}")
+        print(f"Actions: {dict(action_counts)}")
+
+        history.append({
+            'episode': ep,
+            'accuracy': final_acc,
+            'total_reward': total_reward,
+            'action_counts': dict(action_counts),
+        })
+
+    return history
+
+
 __all__ = [
     "run_ppo_episode",
     "train_ppo",
+    "run_heuristic_episode",
+    "train_heuristic",
 ]

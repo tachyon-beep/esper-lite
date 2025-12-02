@@ -49,7 +49,7 @@ class RewardConfig:
     """
 
     # Accuracy delta scaling
-    acc_delta_weight: float = 0.5
+    acc_delta_weight: float = 2.0
 
     # Stage presence bonuses
     training_bonus: float = 0.2
@@ -70,10 +70,11 @@ class RewardConfig:
     advance_blending_bonus: float = 0.4
     advance_no_seed_penalty: float = -0.2
 
-    cull_failing_bonus: float = 0.0  # Was 0.3
-    cull_acceptable_bonus: float = 0.0  # Was 0.1
+    cull_failing_bonus: float = 0.3
+    cull_acceptable_bonus: float = 0.15
     cull_promising_penalty: float = -0.3
     cull_no_seed_penalty: float = -0.2
+    cull_param_recovery_weight: float = 0.1  # Bonus per 10K params recovered
 
     wait_plateau_penalty: float = -0.1
     wait_patience_bonus: float = 0.1
@@ -89,9 +90,9 @@ class RewardConfig:
     wait_stagnant_epochs: int = 5
 
     # Compute cost penalty (per-step rent on excess params)
-    compute_rent_weight: float = 0.05
-    compute_rent_exponent: float = 1.0  # Progressive tax exponent (1.0 = linear)
-    max_rent_penalty: float = 5.0  # Cap to prevent runaway negatives
+    compute_rent_weight: float = 0.5
+    compute_rent_exponent: float = 2.0  # Quadratic bloat penalty
+    max_rent_penalty: float = 8.0  # Cap to prevent runaway negatives
 
     # PBRS scaling for seed-based potential shaping
     seed_potential_weight: float = 0.3
@@ -297,17 +298,29 @@ def compute_shaped_reward(
 
     # Potential-based reward shaping for lifecycle progression
     if seed_info is not None:
-        current_stage = seed_info.stage
-        previous_stage = seed_info.previous_stage
+        # Reconstruct previous timestep state:
+        # - If epochs_in_stage == 0, we just transitioned this epoch, so the
+        #   previous state was the previous_stage at some terminal epoch count.
+        #   We approximate this as epoch 0 in that stage, which is sufficient
+        #   for PBRS telescoping.
+        # - If epochs_in_stage > 0, we remained in the same stage, so the
+        #   previous state was this stage with epochs_in_stage - 1.
+        if seed_info.epochs_in_stage == 0:
+            prev_stage = seed_info.previous_stage
+            prev_epochs = 0
+        else:
+            prev_stage = seed_info.stage
+            prev_epochs = seed_info.epochs_in_stage - 1
+
         current_obs = {
             "has_active_seed": 1,
-            "seed_stage": current_stage,
+            "seed_stage": seed_info.stage,
             "seed_epochs_in_stage": seed_info.epochs_in_stage,
         }
         prev_obs = {
             "has_active_seed": 1,
-            "seed_stage": previous_stage,
-            "seed_epochs_in_stage": max(0, seed_info.epochs_in_stage - 1),
+            "seed_stage": prev_stage,
+            "seed_epochs_in_stage": prev_epochs,
         }
         phi_t = compute_seed_potential(current_obs)
         phi_t_prev = compute_seed_potential(prev_obs)
@@ -353,7 +366,11 @@ def _germinate_shaping(
 
 
 def _advance_shaping(seed_info: SeedInfo | None, config: RewardConfig) -> float:
-    """Compute shaping for FOSSILIZE action."""
+    """Compute shaping for FOSSILIZE action.
+
+    FOSSILIZE is a terminal action when successful (PROBATIONARY → FOSSILIZED).
+    We give a large immediate bonus to make fossilization clearly better than culling.
+    """
     if seed_info is None:
         return config.advance_no_seed_penalty
 
@@ -366,7 +383,11 @@ def _advance_shaping(seed_info: SeedInfo | None, config: RewardConfig) -> float:
     # failed/no-op fossilize in the environment.
     if stage == STAGE_PROBATIONARY:
         if improvement > 0:
-            return config.advance_good_bonus
+            # Large immediate bonus for successful fossilization
+            # Base bonus + improvement-scaled bonus
+            fossilize_bonus = config.advance_good_bonus + 1.5  # Base 2.0 total
+            improvement_bonus = 0.1 * improvement  # +0.1 per % improvement
+            return fossilize_bonus + improvement_bonus
         return config.advance_premature_penalty
 
     # Earlier lifecycle stages: FOSSILIZE is a no-op and should be discouraged.
@@ -378,18 +399,47 @@ def _advance_shaping(seed_info: SeedInfo | None, config: RewardConfig) -> float:
 
 
 def _cull_shaping(seed_info: SeedInfo | None, config: RewardConfig) -> float:
-    """Compute shaping for CULL action."""
+    """Compute shaping for CULL action.
+
+    CULL is now incentivized for failing seeds and for recovering bloated params.
+    The terminal PBRS correction is smaller due to flattened potentials.
+    """
     if seed_info is None:
         return config.cull_no_seed_penalty
 
     improvement = seed_info.improvement_since_stage_start
+    stage = seed_info.stage
+    seed_params = seed_info.seed_params
 
+    # Base shaping: reward culling failing seeds, penalize culling promising ones
     if improvement < config.cull_failing_threshold:
-        return config.cull_failing_bonus
+        base_shaping = config.cull_failing_bonus
     elif improvement < 0:
-        return config.cull_acceptable_bonus
+        base_shaping = config.cull_acceptable_bonus
     else:
-        return config.cull_promising_penalty
+        # Scale penalty with improvement - culling +14% seed should hurt more than +1%
+        improvement_penalty = -0.1 * max(0, improvement)
+        # Scale penalty with stage - culling at SHADOWING hurts more than at TRAINING
+        stage_penalty = -0.5 * max(0, stage - 3)  # TRAINING=3, so penalty starts at BLENDING
+        base_shaping = config.cull_promising_penalty + improvement_penalty + stage_penalty
+
+    # Param recovery bonus: incentivize culling bloated seeds to free resources
+    # +0.1 per 10K params, capped at 0.5
+    param_recovery_bonus = min(0.5, (seed_params / 10_000) * config.cull_param_recovery_weight)
+
+    # Terminal PBRS correction: account for potential loss from destroying the seed
+    # With flattened potentials (max 7.5), this penalty is now much smaller
+    current_obs = {
+        "has_active_seed": 1,
+        "seed_stage": stage,
+        "seed_epochs_in_stage": seed_info.epochs_in_stage,
+    }
+    phi_current = compute_seed_potential(current_obs)
+    # PBRS: gamma * phi(next) - phi(current) where next = no seed (phi=0)
+    pbrs_correction = 0.99 * 0.0 - phi_current  # = -phi_current
+    terminal_pbrs = config.seed_potential_weight * pbrs_correction
+
+    return base_shaping + param_recovery_bonus + terminal_pbrs
 
 
 def _wait_shaping(
@@ -413,6 +463,12 @@ def _wait_shaping(
             return config.wait_patience_bonus
         elif epochs_in_stage > config.wait_stagnant_epochs:
             return config.wait_stagnant_penalty
+
+    # Encourage waiting at SHADOWING/PROBATIONARY - seeds auto-advance here
+    # WAIT is the correct action; CULL/FOSSILIZE are usually wrong
+    if stage in (STAGE_SHADOWING, STAGE_PROBATIONARY):
+        if improvement > 0:
+            return config.wait_patience_bonus  # Reward patience with good seeds
 
     return 0.0
 
@@ -492,15 +548,15 @@ def compute_seed_potential(obs: dict) -> float:
         return 0.0
 
     # Stage-based potential values (matching SeedStage enum values)
-    # Monotonically increasing toward FOSSILIZED (terminal success = highest)
-    # This avoids the shaping cliff that punished fossilization
+    # Monotonically increasing toward FOSSILIZED with diminishing returns.
+    # Flattened to prevent fossilization farming (was 5→35, now 2→7.5).
     stage_potentials = {
-        2: 5.0,  # GERMINATED - just started
-        3: 10.0,  # TRAINING - actively learning
-        4: 15.0,  # BLENDING - about to integrate
-        5: 20.0,  # SHADOWING - monitoring integration
-        6: 25.0,  # PROBATIONARY - almost done
-        7: 35.0,  # FOSSILIZED - closing bonus for banked value
+        2: 2.0,  # GERMINATED - just started
+        3: 4.0,  # TRAINING - actively learning
+        4: 5.5,  # BLENDING - about to integrate
+        5: 6.5,  # SHADOWING - monitoring integration
+        6: 7.0,  # PROBATIONARY - almost done
+        7: 7.5,  # FOSSILIZED - small bonus, not a farming target
     }
 
     base_potential = stage_potentials.get(seed_stage, 0.0)

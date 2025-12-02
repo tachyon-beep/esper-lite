@@ -6,6 +6,7 @@ germination -> training -> blending -> fossilization/culling.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, TYPE_CHECKING
@@ -14,7 +15,7 @@ import pickle
 import torch
 import torch.nn as nn
 
-from esper.kasmina.isolation import GradientIsolationMonitor
+from esper.kasmina.isolation import GradientIsolationMonitor, blend_with_isolation
 
 from esper.leyline import (
     # Lifecycle
@@ -146,8 +147,8 @@ class SeedState:
     is_healthy: bool = True
     is_paused: bool = False
 
-    # History
-    stage_history: list[tuple[SeedStage, datetime]] = field(default_factory=list)
+    # History (bounded to prevent unbounded memory growth in long-running training)
+    stage_history: deque = field(default_factory=lambda: deque(maxlen=100))
 
     # Telemetry (initialized in __post_init__)
     telemetry: SeedTelemetry = field(default=None)
@@ -727,7 +728,7 @@ class SeedSlot(nn.Module):
 
     def forward(self, host_features: torch.Tensor) -> torch.Tensor:
         """Process features through this slot."""
-        from esper.kasmina.isolation import blend_with_isolation
+        # blend_with_isolation imported at module level for torch.compile compatibility
 
         # 1. Early exit if there is no active seed or the lifecycle
         #    stage is inactive (CULLED/EMBARGOED/RESETTING).
@@ -814,6 +815,26 @@ class SeedSlot(nn.Module):
             return
 
         stage = self.state.stage
+
+        # GERMINATED → TRAINING: immediate advance (no dwell required)
+        if stage == SeedStage.GERMINATED:
+            gate_result = self.gates.check_gate(self.state, SeedStage.TRAINING)
+            if not gate_result.passed:
+                return
+
+            old_stage = self.state.stage
+            ok = self.state.transition(SeedStage.TRAINING)
+            if not ok:
+                raise RuntimeError(
+                    f"Illegal lifecycle transition {self.state.stage} → TRAINING"
+                )
+            # Enable Womb isolation so seed sees detached host features
+            self.isolate_gradients = True
+            self._emit_telemetry(
+                TelemetryEventType.SEED_STAGE_CHANGED,
+                data={"from": old_stage.name, "to": self.state.stage.name},
+            )
+            return
 
         # TRAINING → BLENDING when dwell satisfied and gate passes
         if stage == SeedStage.TRAINING:

@@ -7,16 +7,33 @@ Usage:
 
     # Vectorized PPO
     PYTHONPATH=src python -m esper.scripts.train ppo --vectorized --n-envs 4 --devices cuda:0 cuda:1
+
+    # Heuristic (h-esper)
+    PYTHONPATH=src python -m esper.scripts.train heuristic --max-epochs 75 --max-batches 50
 """
 
 import argparse
 
-from esper.nissa import get_hub, ConsoleOutput
+from esper.nissa import get_hub, ConsoleOutput, FileOutput
 
 
 def main():
     parser = argparse.ArgumentParser(description="Train Simic RL agents")
+
+    # Global options (apply to all subcommands)
+    parser.add_argument("--telemetry-file", type=str, default=None,
+                        help="Save Nissa telemetry to JSONL file")
+
     subparsers = parser.add_subparsers(dest="algorithm", required=True)
+
+    # Heuristic subcommand
+    heur_parser = subparsers.add_parser("heuristic", help="Train with heuristic policy (h-esper)")
+    heur_parser.add_argument("--episodes", type=int, default=1)
+    heur_parser.add_argument("--max-epochs", type=int, default=75)
+    heur_parser.add_argument("--max-batches", type=int, default=50, help="Batches per epoch (None=all)")
+    heur_parser.add_argument("--task", default="cifar10")
+    heur_parser.add_argument("--device", default="cuda:0")
+    heur_parser.add_argument("--seed", type=int, default=42)
 
     # PPO subcommand
     ppo_parser = subparsers.add_parser("ppo", help="Train PPO agent")
@@ -57,7 +74,25 @@ def main():
     hub = get_hub()
     hub.add_backend(ConsoleOutput())
 
-    if args.algorithm == "ppo":
+    # Add file output if requested
+    file_backend = None
+    if args.telemetry_file:
+        file_backend = FileOutput(args.telemetry_file)
+        hub.add_backend(file_backend)
+        print(f"Telemetry will be saved to: {args.telemetry_file}")
+
+    if args.algorithm == "heuristic":
+        from esper.simic.training import train_heuristic
+        train_heuristic(
+            n_episodes=args.episodes,
+            max_epochs=args.max_epochs,
+            max_batches=args.max_batches if args.max_batches > 0 else None,
+            device=args.device,
+            task=args.task,
+            seed=args.seed,
+        )
+
+    elif args.algorithm == "ppo":
         use_telemetry = not args.no_telemetry
         if args.vectorized:
             from esper.simic.vectorized import train_ppo_vectorized

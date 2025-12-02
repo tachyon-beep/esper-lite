@@ -22,10 +22,12 @@ class RunningMeanStd:
     def __init__(self, shape: tuple[int, ...], epsilon: float = 1e-4, device: str = "cpu"):
         self.mean = torch.zeros(shape, device=device)
         self.var = torch.ones(shape, device=device)
-        self.count = epsilon  # Prevent div by zero
+        # Use tensor for count to keep all ops on device (avoids CPU sync)
+        self.count = torch.tensor(epsilon, device=device)
         self.epsilon = epsilon
         self._device = device
 
+    @torch.no_grad()
     def update(self, x: torch.Tensor) -> None:
         """Update running stats with new batch of observations.
 
@@ -59,9 +61,12 @@ class RunningMeanStd:
         self.count = tot_count
 
     def normalize(self, x: torch.Tensor, clip: float = 10.0) -> torch.Tensor:
-        """Normalize observation using running stats."""
+        """Normalize observation using running stats.
+
+        Note: After auto-migration in update(), mean/var are on correct device.
+        """
         return torch.clamp(
-            (x - self.mean.to(x.device)) / torch.sqrt(self.var.to(x.device) + self.epsilon),
+            (x - self.mean) / torch.sqrt(self.var + self.epsilon),
             -clip, clip
         )
 
@@ -69,6 +74,7 @@ class RunningMeanStd:
         """Move stats to device."""
         self.mean = self.mean.to(device)
         self.var = self.var.to(device)
+        self.count = self.count.to(device)
         self._device = str(device)
         return self
 

@@ -46,13 +46,19 @@ def test_advance_shaping_penalizes_shadowing_noop():
 
 
 def test_advance_shaping_rewards_probationary_with_improvement():
-    """FOSSILIZE in PROBATIONARY with improvement gets a positive bonus."""
+    """FOSSILIZE in PROBATIONARY with improvement gets a large bonus.
+
+    The bonus is: base (0.5) + 1.5 + 0.1 * improvement
+    For improvement=0.5: 0.5 + 1.5 + 0.05 = 2.05
+    """
     config = RewardConfig.default()
     seed_info = make_seed_info(SeedStage.PROBATIONARY, improvement=0.5)
 
     shaping = _advance_shaping(seed_info, config)
 
-    assert shaping == pytest.approx(config.advance_good_bonus)
+    # New formula: advance_good_bonus + 1.5 + 0.1 * improvement
+    expected = config.advance_good_bonus + 1.5 + 0.1 * 0.5
+    assert shaping == pytest.approx(expected)
 
 
 def test_advance_shaping_penalizes_probationary_without_improvement():

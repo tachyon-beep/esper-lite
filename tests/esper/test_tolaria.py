@@ -10,7 +10,7 @@ from esper.tolaria import (
     create_model,
     train_epoch_blended,
     train_epoch_normal,
-    train_epoch_seed_isolated,
+    train_epoch_womb_mode,
     validate_and_get_metrics,
 )
 
@@ -62,16 +62,17 @@ class TestTrainer:
         # Should not raise
         train_epoch_normal(model, mini_train, criterion, optimizer, "cpu")
 
-    def test_train_epoch_seed_isolated_runs(self, model_and_loader):
-        """Smoke test for train_epoch_seed_isolated."""
+    def test_train_epoch_womb_mode_runs(self, model_and_loader):
+        """Smoke test for train_epoch_womb_mode (STE training)."""
         model, mini_train, _ = model_and_loader
         criterion = torch.nn.CrossEntropyLoss()
         # For smoke test, use any optimizer (even for all params)
-        # In real usage, would be only for seed params after germination
+        # In real usage, host_optimizer has host params, seed_optimizer has seed params
+        host_optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
         seed_optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
 
         # Should not raise
-        train_epoch_seed_isolated(model, mini_train, criterion, seed_optimizer, "cpu")
+        train_epoch_womb_mode(model, mini_train, criterion, host_optimizer, seed_optimizer, "cpu")
 
     def test_train_epoch_blended_runs(self, model_and_loader):
         """Smoke test for train_epoch_blended."""
