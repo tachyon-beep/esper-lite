@@ -479,6 +479,11 @@ def train_ppo_vectorized(
         env_final_accs = [0.0] * envs_this_batch
         env_total_rewards = [0.0] * envs_this_batch
 
+        # Accumulate raw (unnormalized) states for deferred normalizer update.
+        # We freeze normalizer stats during rollout to ensure consistent normalization
+        # across all states in a batch, then update stats after PPO update.
+        raw_states_for_normalizer_update = []
+
         # Run epochs with INVERTED CONTROL FLOW
         for epoch in range(1, max_epochs + 1):
             # Track gradient stats per env for telemetry sync
@@ -657,12 +662,19 @@ def train_ppo_vectorized(
             # Batch all states into a single tensor
             states_batch = torch.tensor(all_features, dtype=torch.float32, device=device)
 
-            # Update observation normalizer and normalize (GPU-native, no .cpu() needed)
-            obs_normalizer.update(states_batch)
-            states_batch = obs_normalizer.normalize(states_batch)
+            # Accumulate raw states for deferred normalizer update
+            raw_states_for_normalizer_update.append(states_batch.detach())
+
+            # Normalize using FROZEN statistics during rollout collection.
+            # IMPORTANT: We do NOT update obs_normalizer here - statistics are updated
+            # AFTER the PPO update to ensure all states in a rollout batch use identical
+            # normalization parameters. This prevents the "normalizer drift" bug where
+            # states from different epochs within the same batch would be normalized
+            # with different mean/var, causing PPO ratio calculation errors.
+            states_batch_normalized = obs_normalizer.normalize(states_batch)
 
             # Get BATCHED actions from policy network (single forward pass!)
-            actions, log_probs, values = agent.network.get_action_batch(states_batch, deterministic=False)
+            actions, log_probs, values = agent.network.get_action_batch(states_batch_normalized, deterministic=False)
 
             # Execute actions and store transitions for each environment
             for env_idx, env_state in enumerate(env_states):
@@ -735,10 +747,10 @@ def train_ppo_vectorized(
                 if action_success:
                     env_state.successful_action_counts[action.name] += 1
 
-                # Store transition
+                # Store transition (use normalized state to match what policy saw)
                 done = (epoch == max_epochs)
                 agent.store_transition(
-                    states_batch[env_idx].cpu(),
+                    states_batch_normalized[env_idx].cpu(),
                     action_idx,
                     log_prob,
                     value,
@@ -754,6 +766,13 @@ def train_ppo_vectorized(
 
         # PPO Update after all episodes in batch complete
         metrics = agent.update(last_value=0.0)
+
+        # NOW update the observation normalizer with all raw states from this batch.
+        # This ensures the next batch will use updated statistics, but all states
+        # within the same batch used identical normalization parameters.
+        if raw_states_for_normalizer_update:
+            all_raw_states = torch.cat(raw_states_for_normalizer_update, dim=0)
+            obs_normalizer.update(all_raw_states)
 
         # Track results
         avg_acc = sum(env_final_accs) / len(env_final_accs)
