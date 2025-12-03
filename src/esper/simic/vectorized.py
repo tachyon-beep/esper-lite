@@ -85,6 +85,8 @@ class ParallelEnvState:
     val_loss_accum: torch.Tensor | None = None
     val_correct_accum: torch.Tensor | None = None
     cf_correct_accum: torch.Tensor | None = None  # Counterfactual accumulator
+    # LSTM hidden state for recurrent policy (None = fresh episode)
+    lstm_hidden: tuple[torch.Tensor, torch.Tensor] | None = None
 
     def __post_init__(self) -> None:
         if not self.action_counts and self.action_enum is not None:
