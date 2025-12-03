@@ -2259,7 +2259,8 @@ git commit -m "test: add comprehensive integration tests for recurrent PPO"
 
 **Key improvements (v3 -> v4):**
 - **CRITICAL: chunk_length=25** matches max_epochs default (was incorrectly 20)
-- Single PPO epoch default with warning for n_epochs>1
+- **Phase 0: API migration** - find and update all get_action() call sites first
+- Single PPO epoch default with info log for n_epochs>1 (not warning - industry standard)
 - Per-environment step lists (no interleaving corruption)
 - GAE wired through to chunks correctly
 - Batched chunk processing (GPU efficiency)
