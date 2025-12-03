@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import NamedTuple
+from typing import Iterator, NamedTuple
 
 import torch
 
@@ -139,7 +139,291 @@ class RolloutBuffer:
         return batches
 
 
+# =============================================================================
+# Recurrent PPO Buffers
+# =============================================================================
+
+class RecurrentRolloutStep(NamedTuple):
+    """Single step in a recurrent PPO rollout.
+
+    Note: Hidden states are NOT stored per-step (memory optimization).
+    They're only stored at chunk boundaries during get_chunks().
+    """
+    state: torch.Tensor       # [state_dim]
+    action: int
+    log_prob: float
+    value: float
+    reward: float
+    done: bool
+    action_mask: torch.Tensor  # [action_dim]
+
+
+@dataclass
+class RecurrentRolloutBuffer:
+    """Buffer for recurrent PPO with per-environment storage.
+
+    Key design decisions (from reviewer feedback):
+    1. Per-env step lists - avoids interleaving corruption
+    2. chunk_length=25 matches max_epochs default (no mid-episode chunking)
+    3. GAE computed per-episode, then distributed to chunks
+    4. Returns/advantages included in every chunk dict
+    5. Single PPO epoch avoids hidden state drift between old/new log_probs
+
+    Args:
+        chunk_length: Length of chunks for BPTT (default 25 = max_epochs default)
+        lstm_hidden_dim: Hidden dimension for zero-init at episode starts
+    """
+    chunk_length: int = 25
+    lstm_hidden_dim: int = 128
+
+    # Per-environment step storage (no interleaving)
+    env_steps: dict[int, list[RecurrentRolloutStep]] = field(default_factory=dict)
+    episode_boundaries: dict[int, list[tuple[int, int]]] = field(default_factory=dict)
+    _current_episode_start: dict[int, int] = field(default_factory=dict)
+
+    # GAE results (computed once, distributed to chunks)
+    _episode_returns: dict[tuple[int, int, int], torch.Tensor] = field(default_factory=dict)
+    _episode_advantages: dict[tuple[int, int, int], torch.Tensor] = field(default_factory=dict)
+    _gae_computed: bool = field(default=False, init=False)
+
+    def start_episode(self, env_id: int) -> None:
+        """Mark start of a new episode for an environment."""
+        if env_id not in self.env_steps:
+            self.env_steps[env_id] = []
+        self._current_episode_start[env_id] = len(self.env_steps[env_id])
+
+    def end_episode(self, env_id: int) -> None:
+        """Mark end of episode, recording boundary."""
+        if env_id not in self._current_episode_start:
+            return
+        start = self._current_episode_start[env_id]
+        end = len(self.env_steps[env_id])
+        if env_id not in self.episode_boundaries:
+            self.episode_boundaries[env_id] = []
+        self.episode_boundaries[env_id].append((start, end))
+        del self._current_episode_start[env_id]
+
+    def add(
+        self,
+        state: torch.Tensor,
+        action: int,
+        log_prob: float,
+        value: float,
+        reward: float,
+        done: bool,
+        action_mask: torch.Tensor,
+        env_id: int,
+    ) -> None:
+        """Add a step to the correct environment's list."""
+        if env_id not in self.env_steps:
+            self.env_steps[env_id] = []
+
+        self.env_steps[env_id].append(RecurrentRolloutStep(
+            state=state.cpu(),  # Store on CPU to save GPU memory
+            action=action,
+            log_prob=log_prob,
+            value=value,
+            reward=reward,
+            done=done,
+            action_mask=action_mask.cpu(),
+        ))
+
+    def clear(self) -> None:
+        """Clear all data."""
+        self.env_steps = {}
+        self.episode_boundaries = {}
+        self._current_episode_start = {}
+        self._episode_returns = {}
+        self._episode_advantages = {}
+        self._gae_computed = False
+
+    def __len__(self) -> int:
+        return sum(len(steps) for steps in self.env_steps.values())
+
+    def compute_gae(
+        self,
+        gamma: float = 0.99,
+        gae_lambda: float = 0.95,
+    ) -> None:
+        """Compute GAE returns/advantages for all episodes.
+
+        Must be called before get_chunks(). Stores results keyed by
+        (env_id, episode_start, episode_end) for chunk retrieval.
+        """
+        for env_id, boundaries in self.episode_boundaries.items():
+            steps = self.env_steps[env_id]
+
+            for start_idx, end_idx in boundaries:
+                episode_steps = steps[start_idx:end_idx]
+                n_steps = len(episode_steps)
+
+                if n_steps == 0:
+                    continue
+
+                returns = torch.zeros(n_steps)
+                advantages = torch.zeros(n_steps)
+
+                last_gae = 0.0
+                next_value = 0.0  # Terminal
+
+                for t in reversed(range(n_steps)):
+                    step = episode_steps[t]
+                    if step.done:
+                        next_value = 0.0
+                        last_gae = 0.0
+
+                    delta = step.reward + gamma * next_value - step.value
+                    advantages[t] = last_gae = delta + gamma * gae_lambda * last_gae
+                    returns[t] = advantages[t] + step.value
+                    next_value = step.value
+
+                # Store keyed by episode identity
+                key = (env_id, start_idx, end_idx)
+                self._episode_returns[key] = returns
+                self._episode_advantages[key] = advantages
+
+        self._gae_computed = True
+
+    def get_chunks(self, device: str | torch.device) -> list[dict]:
+        """Get all chunks with returns/advantages included.
+
+        Each chunk is a dict with shape [1, chunk_len, ...] for batching later.
+        """
+        if not self._gae_computed:
+            raise RuntimeError("Must call compute_gae() before get_chunks()")
+
+        chunks = []
+
+        for env_id, boundaries in self.episode_boundaries.items():
+            steps = self.env_steps[env_id]
+
+            for start_idx, end_idx in boundaries:
+                episode_steps = steps[start_idx:end_idx]
+                episode_len = len(episode_steps)
+
+                # Get precomputed GAE for this episode
+                key = (env_id, start_idx, end_idx)
+                episode_returns = self._episode_returns[key]
+                episode_advantages = self._episode_advantages[key]
+
+                # Chunk this episode
+                for chunk_start in range(0, episode_len, self.chunk_length):
+                    chunk_end = min(chunk_start + self.chunk_length, episode_len)
+                    chunk_steps = episode_steps[chunk_start:chunk_end]
+                    actual_len = len(chunk_steps)
+                    pad_len = self.chunk_length - actual_len
+
+                    # Get GAE slice for this chunk
+                    chunk_returns = episode_returns[chunk_start:chunk_end]
+                    chunk_advantages = episode_advantages[chunk_start:chunk_end]
+
+                    # Pad if needed
+                    if pad_len > 0:
+                        pad_step = chunk_steps[-1]
+                        for _ in range(pad_len):
+                            chunk_steps = list(chunk_steps) + [RecurrentRolloutStep(
+                                state=torch.zeros_like(pad_step.state),
+                                action=0,
+                                log_prob=0.0,
+                                value=0.0,
+                                reward=0.0,
+                                done=True,
+                                action_mask=pad_step.action_mask,
+                            )]
+                        # Pad returns/advantages with zeros
+                        chunk_returns = torch.cat([
+                            chunk_returns,
+                            torch.zeros(pad_len),
+                        ])
+                        chunk_advantages = torch.cat([
+                            chunk_advantages,
+                            torch.zeros(pad_len),
+                        ])
+
+                    # Initial hidden state determination:
+                    # - Episode start (chunk_start == 0): zeros (correct)
+                    # - Mid-episode chunk: would need stored hidden from previous chunk
+                    #
+                    # With chunk_length=25 matching max_epochs exactly,
+                    # episodes fit in a single chunk, so chunk_start is ALWAYS 0.
+                    # This avoids the hidden state drift problem entirely.
+                    #
+                    # GRACEFUL HANDLING: If chunk_length < episode_length (mid-episode
+                    # chunking), we use zeros for initial hidden and log a warning.
+                    # This is suboptimal (loses temporal context at chunk boundaries)
+                    # but won't crash. For best results, set chunk_length >= episode_length.
+                    is_episode_start = (chunk_start == 0)
+                    if not is_episode_start:
+                        import warnings
+                        warnings.warn(
+                            f"Mid-episode chunking detected (chunk_start={chunk_start}). "
+                            f"Using zeros for initial hidden state, which loses temporal "
+                            f"context. For correct BPTT, set chunk_length >= episode_length "
+                            f"or implement burn-in BPTT.",
+                            RuntimeWarning,
+                        )
+
+                    # Stack into tensors with batch dim [1, seq, ...]
+                    chunk = {
+                        'states': torch.stack([s.state for s in chunk_steps]).unsqueeze(0).to(device),
+                        'actions': torch.tensor([s.action for s in chunk_steps], dtype=torch.long).unsqueeze(0).to(device),
+                        'old_log_probs': torch.tensor([s.log_prob for s in chunk_steps], dtype=torch.float32).unsqueeze(0).to(device),
+                        'old_values': torch.tensor([s.value for s in chunk_steps], dtype=torch.float32).unsqueeze(0).to(device),
+                        'action_masks': torch.stack([s.action_mask for s in chunk_steps]).unsqueeze(0).to(device),
+                        'returns': chunk_returns.unsqueeze(0).to(device),
+                        'advantages': chunk_advantages.unsqueeze(0).to(device),
+                        'valid_mask': torch.tensor(
+                            [True] * actual_len + [False] * pad_len,
+                            dtype=torch.bool,
+                        ).unsqueeze(0).to(device),
+                        # Initial hidden: zeros for episode start, zeros for chunk boundaries (TBPTT)
+                        'initial_hidden_h': torch.zeros(1, 1, self.lstm_hidden_dim, device=device),
+                        'initial_hidden_c': torch.zeros(1, 1, self.lstm_hidden_dim, device=device),
+                        'is_episode_start': is_episode_start,
+                    }
+                    chunks.append(chunk)
+
+        return chunks
+
+    def get_batched_chunks(
+        self,
+        device: str | torch.device,
+        batch_size: int = 8,
+    ) -> Iterator[dict]:
+        """Yield batched chunks for efficient GPU processing.
+
+        Stacks multiple chunks into batches for parallel LSTM processing.
+        """
+        chunks = self.get_chunks(device)
+
+        for i in range(0, len(chunks), batch_size):
+            batch_chunks = chunks[i:i + batch_size]
+            n_chunks = len(batch_chunks)
+
+            # Stack along batch dimension
+            batch = {
+                'states': torch.cat([c['states'] for c in batch_chunks], dim=0),  # [batch, seq, state]
+                'actions': torch.cat([c['actions'] for c in batch_chunks], dim=0),
+                'old_log_probs': torch.cat([c['old_log_probs'] for c in batch_chunks], dim=0),
+                'old_values': torch.cat([c['old_values'] for c in batch_chunks], dim=0),
+                'action_masks': torch.cat([c['action_masks'] for c in batch_chunks], dim=0),
+                'returns': torch.cat([c['returns'] for c in batch_chunks], dim=0),
+                'advantages': torch.cat([c['advantages'] for c in batch_chunks], dim=0),
+                'valid_mask': torch.cat([c['valid_mask'] for c in batch_chunks], dim=0),
+                # Hidden: [num_layers, batch, hidden]
+                'initial_hidden_h': torch.cat(
+                    [c['initial_hidden_h'] for c in batch_chunks], dim=1
+                ),
+                'initial_hidden_c': torch.cat(
+                    [c['initial_hidden_c'] for c in batch_chunks], dim=1
+                ),
+            }
+            yield batch
+
+
 __all__ = [
     "RolloutStep",
     "RolloutBuffer",
+    "RecurrentRolloutStep",
+    "RecurrentRolloutBuffer",
 ]
