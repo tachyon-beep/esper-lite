@@ -115,16 +115,17 @@ class PPOAgent:
         gamma: float = 0.99,
         gae_lambda: float = 0.95,
         clip_ratio: float = 0.2,
-        entropy_coef: float = 0.01,
+        entropy_coef: float = 0.015,  # Scaled for normalized entropy (was 0.01 for raw)
         entropy_coef_start: float | None = None,
         entropy_coef_end: float | None = None,
-        entropy_coef_min: float = 0.1,
+        entropy_coef_min: float = 0.015,  # Scaled for normalized entropy
         entropy_anneal_steps: int = 0,
         value_coef: float = 0.5,
         clip_value: bool = True,
         max_grad_norm: float = 0.5,
         n_epochs: int = 10,
         batch_size: int = 64,
+        target_kl: float | None = 0.015,
         device: str = "cuda:0",
     ):
         self.gamma = gamma
@@ -140,6 +141,7 @@ class PPOAgent:
         self.max_grad_norm = max_grad_norm
         self.n_epochs = n_epochs
         self.batch_size = batch_size
+        self.target_kl = target_kl
         self.device = device
 
         self.network = ActorCritic(state_dim, action_dim, hidden_dim).to(device)
@@ -155,7 +157,7 @@ class PPOAgent:
         over entropy_anneal_steps training updates.
 
         The returned value is always >= entropy_coef_min to prevent exploration
-        collapse. Default floor is 0.1 (maintains ~5x exploration vs 0.01).
+        collapse. Default floor is 0.01 (standard PPO entropy coefficient).
         """
         if self.entropy_anneal_steps == 0:
             return max(self.entropy_coef, self.entropy_coef_min)
@@ -207,25 +209,36 @@ class PPOAgent:
         """
         self.buffer.add(state, action, log_prob, value, reward, done, action_mask)
 
-    def update(self, last_value: float = 0.0) -> dict:
-        """Perform PPO update."""
+    def update(self, last_value: float = 0.0, clear_buffer: bool = True) -> dict:
+        """Perform PPO update.
+
+        Args:
+            last_value: Value estimate for bootstrapping (0.0 for terminal states)
+            clear_buffer: Whether to clear the rollout buffer after update.
+                Set to False if calling multiple times on the same data
+                (e.g., for higher sample efficiency via ppo_updates_per_batch).
+
+        Returns:
+            Dictionary of training metrics.
+        """
         if len(self.buffer) == 0:
             return {}
 
+        # Compute returns and advantages directly on device (avoids CPU->GPU transfer)
         returns, advantages = self.buffer.compute_returns_and_advantages(
-            last_value, self.gamma, self.gae_lambda
+            last_value, self.gamma, self.gae_lambda, device=self.device
         )
 
-        # Normalize advantages
-        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-
-        returns = returns.to(self.device)
-        advantages = advantages.to(self.device)
-
         metrics = defaultdict(list)
+        early_stopped = False
 
-        for _ in range(self.n_epochs):
+        for epoch_i in range(self.n_epochs):
+            if early_stopped:
+                break
+
             batches = self.buffer.get_batches(self.batch_size, self.device)
+            epoch_kl_sum = 0.0
+            epoch_kl_count = 0
 
             for batch, batch_idx in batches:
                 states = batch['states']
@@ -233,8 +246,12 @@ class PPOAgent:
                 old_log_probs = batch['old_log_probs']
                 old_values = batch['values']
                 action_masks = batch['action_masks']
-                batch_returns = returns[batch_idx].to(self.device)
-                batch_advantages = advantages[batch_idx].to(self.device)
+                batch_returns = returns[batch_idx]  # Already on device
+                batch_advantages = advantages[batch_idx]  # Already on device
+
+                # Per-minibatch advantage normalization for better gradient stability
+                # (especially important with small batch sizes)
+                batch_advantages = (batch_advantages - batch_advantages.mean()) / (batch_advantages.std() + 1e-8)
 
                 log_probs, values, entropy = self.network.evaluate_actions(states, actions, action_masks)
 
@@ -267,18 +284,41 @@ class PPOAgent:
                 nn.utils.clip_grad_norm_(self.network.parameters(), self.max_grad_norm)
                 self.optimizer.step()
 
+                # KL(old||new) first-order approximation: E[log(p_old) - log(p_new)]
+                # Note: This is KL(old||new), not KL(new||old). The sign convention
+                # matches stable-baselines3 and other PPO implementations for early
+                # stopping diagnostics. Positive values indicate the new policy assigns
+                # lower probability than old to sampled actions.
+                batch_kl = (old_log_probs - log_probs).mean().item()
+
                 metrics['policy_loss'].append(policy_loss.item())
                 metrics['value_loss'].append(value_loss.item())
                 metrics['entropy'].append(-entropy_loss.item())
-                metrics['approx_kl'].append(((ratio - 1) - (ratio.log())).mean().item())
+                metrics['approx_kl'].append(batch_kl)
                 metrics['clip_fraction'].append(
                     ((ratio - 1).abs() > self.clip_ratio).float().mean().item()
                 )
 
-        self.train_steps += 1
-        self.buffer.clear()
+                epoch_kl_sum += batch_kl
+                epoch_kl_count += 1
 
-        return {k: sum(v) / len(v) for k, v in metrics.items()}
+            # KL-based early stopping: stop if average KL exceeds 1.5 * target_kl
+            # This prevents the policy from diverging too far from the data collection policy,
+            # which can destabilize training. (Schulman et al., 2017)
+            if self.target_kl is not None and epoch_kl_count > 0:
+                epoch_kl_avg = epoch_kl_sum / epoch_kl_count
+                if epoch_kl_avg > 1.5 * self.target_kl:
+                    early_stopped = True
+                    metrics['early_stop_epoch'] = [epoch_i + 1]
+
+        self.train_steps += 1
+        if clear_buffer:
+            self.buffer.clear()
+
+        result = {k: sum(v) / len(v) for k, v in metrics.items()}
+        if early_stopped:
+            result['early_stopped'] = 1.0
+        return result
 
     def save(self, path: str | Path, metadata: dict = None) -> None:
         """Save agent to file."""
@@ -300,6 +340,7 @@ class PPOAgent:
                 'entropy_anneal_steps': self.entropy_anneal_steps,
                 'value_coef': self.value_coef,
                 'clip_value': self.clip_value,
+                'target_kl': self.target_kl,
             }
         }
         if metadata:

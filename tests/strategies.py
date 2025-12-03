@@ -336,9 +336,11 @@ def seed_infos(draw):
     """
     from esper.simic.rewards import SeedInfo
 
+    improvement = draw(bounded_floats(-10.0, 10.0))
     return SeedInfo(
         stage=draw(seed_stages()),
-        improvement_since_stage_start=draw(bounded_floats(-10.0, 10.0)),
+        improvement_since_stage_start=improvement,
+        total_improvement=draw(bounded_floats(-10.0, 10.0)),
         epochs_in_stage=draw(st.integers(min_value=0, max_value=100)),
     )
 

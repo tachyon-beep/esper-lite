@@ -345,10 +345,25 @@ if TORCH_AVAILABLE:
         """Raised when action mask has no valid actions (state machine bug)."""
         pass
 
+    @torch.compiler.disable
+    def _validate_action_mask(mask: torch.Tensor) -> None:
+        """Validate that at least one action is valid per batch element.
+
+        Isolated from torch.compile to prevent graph breaks in the main forward path.
+        The .any() call forces CPU sync, but this safety check is worth the cost.
+        """
+        valid_count = mask.sum(dim=-1)
+        if (valid_count == 0).any():
+            raise InvalidStateMachineError(
+                f"No valid actions available. Mask: {mask}. "
+                "This indicates a bug in the Kasmina state machine."
+            )
+
     class MaskedCategorical:
         """Categorical distribution with action masking and correct entropy calculation.
 
-        Masks invalid actions by setting their logits to -1e8 before softmax.
+        Masks invalid actions by setting their logits to dtype minimum before softmax.
+        Uses torch.finfo().min for float16/bfloat16 compatibility.
         Computes entropy only over valid actions to avoid penalizing restricted states.
         """
 
@@ -361,17 +376,18 @@ if TORCH_AVAILABLE:
 
             Raises:
                 InvalidStateMachineError: If any batch element has no valid actions
+
+            Note:
+                The validation check is isolated via @torch.compiler.disable to prevent
+                graph breaks in the main forward path while preserving safety checks.
             """
-            # Verify at least one action is valid per batch element
-            valid_count = mask.sum(dim=-1)
-            if (valid_count == 0).any():
-                raise InvalidStateMachineError(
-                    f"No valid actions available. Mask: {mask}. "
-                    "This indicates a bug in the Kasmina state machine."
-                )
+            # Validate mask in isolated function to prevent graph break propagation
+            _validate_action_mask(mask)
 
             self.mask = mask
-            self.masked_logits = logits.masked_fill(mask < 0.5, -1e8)
+            # Use dtype-appropriate minimum to avoid overflow in float16/bfloat16
+            mask_value = torch.finfo(logits.dtype).min
+            self.masked_logits = logits.masked_fill(mask < 0.5, mask_value)
             self._dist = Categorical(logits=self.masked_logits)
 
         @property
@@ -388,19 +404,26 @@ if TORCH_AVAILABLE:
             return self._dist.log_prob(actions)
 
         def entropy(self) -> torch.Tensor:
-            """Compute entropy only over valid actions.
+            """Compute normalized entropy over valid actions.
 
-            This prevents artificially low entropy in restricted states from
-            incorrectly reducing the exploration bonus.
+            Returns entropy normalized to [0, 1] by dividing by max entropy
+            (log of number of valid actions). This makes exploration incentives
+            comparable across states with different action restrictions.
             """
             # Standard entropy: -sum(p * log(p)) over valid actions only
-            # Mask out invalid actions' contributions
             probs = self._dist.probs
             log_probs = self._dist.logits - self._dist.logits.logsumexp(dim=-1, keepdim=True)
 
-            # Zero out invalid actions' entropy contribution
-            entropy = -(probs * log_probs * self.mask).sum(dim=-1)
-            return entropy
+            # Raw entropy over valid actions only
+            raw_entropy = -(probs * log_probs * self.mask).sum(dim=-1)
+
+            # Normalize by max entropy for this action space
+            # max_entropy = log(num_valid_actions) - uniform distribution entropy
+            num_valid = self.mask.sum(dim=-1).clamp(min=1)
+            max_entropy = torch.log(num_valid)
+
+            # Return normalized entropy (0 = deterministic, 1 = uniform over valid)
+            return raw_entropy / max_entropy.clamp(min=1e-8)
 
 
     class ActorCritic(nn.Module):

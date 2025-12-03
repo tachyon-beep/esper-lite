@@ -12,6 +12,7 @@ def test_rent_not_applied_during_grace():
     seed_info = SeedInfo(
         stage=SeedStage.TRAINING.value,
         improvement_since_stage_start=0.0,
+        total_improvement=0.0,
         epochs_in_stage=1,
         seed_params=50000,
         seed_age_epochs=1,
@@ -32,6 +33,7 @@ def test_rent_not_applied_during_grace():
     seed_info_old = SeedInfo(
         stage=SeedStage.TRAINING.value,
         improvement_since_stage_start=0.0,
+        total_improvement=0.0,
         epochs_in_stage=5,
         seed_params=50000,
         seed_age_epochs=5,
@@ -63,6 +65,7 @@ def test_rent_applied_after_grace():
     seed_info = SeedInfo(
         stage=SeedStage.TRAINING.value,
         improvement_since_stage_start=0.0,
+        total_improvement=0.0,
         epochs_in_stage=5,
         seed_params=50000,
         seed_age_epochs=5,

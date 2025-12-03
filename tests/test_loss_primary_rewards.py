@@ -109,9 +109,10 @@ def test_pbrs_stage_bonus():
 
     seed_info = SeedInfo(
         stage=SeedStage.BLENDING.value,
-        previous_stage=SeedStage.TRAINING.value,
         improvement_since_stage_start=2.0,
+        total_improvement=2.0,
         epochs_in_stage=0,
+        previous_stage=SeedStage.TRAINING.value,
     )
 
     bonus = compute_pbrs_stage_bonus(seed_info, config)
@@ -130,9 +131,10 @@ def test_pbrs_stage_bonus_fossilized_highest():
     fossilized_bonus = compute_pbrs_stage_bonus(
         SeedInfo(
             stage=SeedStage.FOSSILIZED.value,
-            previous_stage=SeedStage.PROBATIONARY.value,
             improvement_since_stage_start=0.0,
+            total_improvement=5.0,
             epochs_in_stage=0,
+            previous_stage=SeedStage.PROBATIONARY.value,
         ),
         config,
     )
@@ -140,9 +142,10 @@ def test_pbrs_stage_bonus_fossilized_highest():
     blending_bonus = compute_pbrs_stage_bonus(
         SeedInfo(
             stage=SeedStage.BLENDING.value,
-            previous_stage=SeedStage.TRAINING.value,
             improvement_since_stage_start=0.0,
+            total_improvement=0.0,
             epochs_in_stage=0,
+            previous_stage=SeedStage.TRAINING.value,
         ),
         config,
     )

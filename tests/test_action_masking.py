@@ -16,14 +16,15 @@ class TestComputeActionMask:
     """Tests for compute_action_mask function."""
 
     def test_no_active_seed_with_plateau_allows_germinate(self):
-        """Without active seed AND plateau detected, GERMINATE should be allowed."""
-        # 4 germinate actions, plateau conditions met
+        """Without active seed AND host stabilized AND plateau detected, GERMINATE should be allowed."""
+        # 4 germinate actions, stabilized and plateau conditions met
         mask = compute_action_mask(
             has_active_seed=0.0,
             seed_stage=0,
             num_germinate_actions=4,
             epoch=MIN_GERMINATE_EPOCH,
             plateau_epochs=MIN_PLATEAU_TO_GERMINATE,
+            host_stabilized=True,
         )
 
         # Total actions: WAIT + 4 GERMINATE + FOSSILIZE + CULL = 7
@@ -45,8 +46,8 @@ class TestComputeActionMask:
         assert mask[6] == 0.0
 
     def test_active_seed_blocks_germinate(self):
-        """With active seed, GERMINATE actions should be blocked even if plateau met."""
-        # Seed in TRAINING stage (3), old enough to cull, plateau met
+        """With active seed, GERMINATE actions should be blocked even if stabilized and plateau met."""
+        # Seed in TRAINING stage (3), old enough to cull, stabilized and plateau met
         mask = compute_action_mask(
             has_active_seed=1.0,
             seed_stage=3,
@@ -54,6 +55,7 @@ class TestComputeActionMask:
             seed_age_epochs=MIN_CULL_AGE,
             epoch=MIN_GERMINATE_EPOCH,
             plateau_epochs=MIN_PLATEAU_TO_GERMINATE,
+            host_stabilized=True,
         )
 
         # WAIT (0) always valid
@@ -149,15 +151,16 @@ class TestComputeActionMask:
 
 
 class TestPlateauGating:
-    """Tests for plateau gating of GERMINATE actions.
+    """Tests for plateau and stabilization gating of GERMINATE actions.
 
-    Plateau gating ensures seeds only get credit for improvements AFTER
-    natural training gains have exhausted. This fixes credit misattribution
-    from early germination and matches h-tamiyo behavior.
+    Stabilization gating ensures seeds only get credit for improvements AFTER
+    the explosive growth phase ends. Plateau gating adds a secondary check.
+    Together they fix credit misattribution from early germination and match
+    h-tamiyo behavior.
     """
 
     def test_early_epoch_blocks_germinate(self):
-        """GERMINATE blocked before MIN_GERMINATE_EPOCH even with plateau."""
+        """GERMINATE blocked before MIN_GERMINATE_EPOCH even with stabilization and plateau."""
         for epoch in range(MIN_GERMINATE_EPOCH):
             mask = compute_action_mask(
                 has_active_seed=0.0,
@@ -165,6 +168,7 @@ class TestPlateauGating:
                 num_germinate_actions=4,
                 epoch=epoch,
                 plateau_epochs=MIN_PLATEAU_TO_GERMINATE,  # Plateau met
+                host_stabilized=True,  # Stabilized
             )
             # GERMINATE_* (1-4) should be blocked
             assert mask[1] == 0.0, f"GERMINATE blocked at epoch {epoch}"
@@ -175,7 +179,7 @@ class TestPlateauGating:
             assert mask[0] == 1.0
 
     def test_insufficient_plateau_blocks_germinate(self):
-        """GERMINATE blocked without sufficient plateau epochs."""
+        """GERMINATE blocked without sufficient plateau epochs even if stabilized."""
         for plateau in range(MIN_PLATEAU_TO_GERMINATE):
             mask = compute_action_mask(
                 has_active_seed=0.0,
@@ -183,6 +187,7 @@ class TestPlateauGating:
                 num_germinate_actions=4,
                 epoch=MIN_GERMINATE_EPOCH,  # Epoch requirement met
                 plateau_epochs=plateau,
+                host_stabilized=True,  # Stabilized
             )
             # GERMINATE_* (1-4) should be blocked
             assert mask[1] == 0.0, f"GERMINATE blocked at plateau_epochs={plateau}"
@@ -193,13 +198,14 @@ class TestPlateauGating:
             assert mask[0] == 1.0
 
     def test_plateau_met_allows_germinate(self):
-        """GERMINATE allowed when both epoch and plateau thresholds met."""
+        """GERMINATE allowed when stabilized AND epoch AND plateau thresholds met."""
         mask = compute_action_mask(
             has_active_seed=0.0,
             seed_stage=0,
             num_germinate_actions=4,
             epoch=MIN_GERMINATE_EPOCH,
             plateau_epochs=MIN_PLATEAU_TO_GERMINATE,
+            host_stabilized=True,
         )
         # GERMINATE_* (1-4) should be valid
         assert mask[1] == 1.0
@@ -208,13 +214,14 @@ class TestPlateauGating:
         assert mask[4] == 1.0
 
     def test_plateau_exceeded_allows_germinate(self):
-        """GERMINATE allowed when thresholds exceeded."""
+        """GERMINATE allowed when stabilized and thresholds exceeded."""
         mask = compute_action_mask(
             has_active_seed=0.0,
             seed_stage=0,
             num_germinate_actions=4,
             epoch=MIN_GERMINATE_EPOCH + 5,
             plateau_epochs=MIN_PLATEAU_TO_GERMINATE + 2,
+            host_stabilized=True,
         )
         # GERMINATE_* (1-4) should be valid
         assert mask[1] == 1.0
@@ -236,6 +243,28 @@ class TestPlateauGating:
         # All others should be invalid
         for i in range(1, len(mask)):
             assert mask[i] == 0.0, f"Action {i} should be blocked before plateau"
+
+    def test_unstabilized_blocks_germinate(self):
+        """GERMINATE blocked when not stabilized, even if plateau met.
+
+        Stabilization gating is the primary guard against credit misattribution
+        during the explosive growth phase. Plateau alone is not sufficient.
+        """
+        mask = compute_action_mask(
+            has_active_seed=0.0,
+            seed_stage=0,
+            num_germinate_actions=4,
+            epoch=MIN_GERMINATE_EPOCH,
+            plateau_epochs=MIN_PLATEAU_TO_GERMINATE,
+            host_stabilized=False,  # Not stabilized yet
+        )
+        # GERMINATE_* (1-4) should be blocked
+        assert mask[1] == 0.0, "GERMINATE blocked when not stabilized"
+        assert mask[2] == 0.0
+        assert mask[3] == 0.0
+        assert mask[4] == 0.0
+        # WAIT should still be valid
+        assert mask[0] == 1.0
 
 
 class TestMaskedCategorical:
@@ -278,19 +307,22 @@ class TestMaskedCategorical:
         assert probs[2].item() > 0.0
 
     def test_entropy_only_considers_valid_actions(self):
-        """Entropy should only be computed over valid actions."""
+        """Entropy should only be computed over valid actions.
+
+        Entropy is now normalized to [0, 1] by dividing by max entropy (log of num valid actions).
+        This makes exploration incentives comparable across states with different action restrictions.
+        """
         logits = torch.zeros(1, 4)  # Uniform logits
 
-        # All 4 valid - entropy should be log(4) ≈ 1.386
+        # All 4 valid - normalized entropy should be 1.0 (uniform = max entropy)
         all_valid = MaskedCategorical(logits, torch.ones(1, 4))
         entropy_4 = all_valid.entropy()
 
-        # Only 2 valid - entropy should be log(2) ≈ 0.693
+        # Only 2 valid - normalized entropy should be 1.0 (still uniform = max entropy for 2 actions)
         two_valid = MaskedCategorical(logits, torch.tensor([[1.0, 1.0, 0.0, 0.0]]))
         entropy_2 = two_valid.entropy()
 
-        # With uniform logits over valid actions:
-        # 4 valid: entropy = log(4) = 1.386
-        # 2 valid: entropy = log(2) = 0.693
-        assert abs(entropy_4.item() - 1.386) < 0.01
-        assert abs(entropy_2.item() - 0.693) < 0.01
+        # With uniform logits over valid actions, normalized entropy = 1.0 (maximum)
+        # because we divide raw entropy by max possible entropy for that number of valid actions
+        assert abs(entropy_4.item() - 1.0) < 0.01
+        assert abs(entropy_2.item() - 1.0) < 0.01

@@ -68,6 +68,7 @@ class RolloutBuffer:
         last_value: float,
         gamma: float = 0.99,
         gae_lambda: float = 0.95,
+        device: str | torch.device = "cpu",
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute returns and GAE advantages.
 
@@ -75,13 +76,14 @@ class RolloutBuffer:
             last_value: Value estimate for state after last step (0 if done)
             gamma: Discount factor
             gae_lambda: GAE lambda for bias-variance tradeoff
+            device: Device to create tensors on (avoids CPU->GPU transfer)
 
         Returns:
-            Tuple of (returns, advantages)
+            Tuple of (returns, advantages) on the specified device
         """
         n_steps = len(self.steps)
-        returns = torch.zeros(n_steps)
-        advantages = torch.zeros(n_steps)
+        returns = torch.zeros(n_steps, device=device)
+        advantages = torch.zeros(n_steps, device=device)
 
         last_gae = 0.0
         next_value = last_value
@@ -105,24 +107,32 @@ class RolloutBuffer:
 
         Returns list of (batch_dict, batch_indices) tuples.
         Includes action_masks for correct masked policy evaluation.
+
+        Performance: Pre-stacks all data once, then slices for batches to avoid
+        repeated tensor creation and memory fragmentation.
         """
         n_steps = len(self.steps)
         indices = torch.randperm(n_steps)
+
+        # Pre-stack all data once to avoid repeated tensor creation per batch
+        all_states = torch.stack([s.state for s in self.steps]).to(device)
+        all_actions = torch.tensor([s.action for s in self.steps], dtype=torch.long, device=device)
+        all_log_probs = torch.tensor([s.log_prob for s in self.steps], dtype=torch.float32, device=device)
+        all_values = torch.tensor([s.value for s in self.steps], dtype=torch.float32, device=device)
+        all_masks = torch.stack([s.action_mask for s in self.steps]).to(device)
 
         batches = []
         for start in range(0, n_steps, batch_size):
             end = min(start + batch_size, n_steps)
             batch_idx = indices[start:end]
 
+            # Slice pre-stacked tensors (views, not copies)
             batch = {
-                'states': torch.stack([self.steps[i].state for i in batch_idx]).to(device),
-                'actions': torch.tensor([self.steps[i].action for i in batch_idx],
-                                        dtype=torch.long, device=device),
-                'old_log_probs': torch.tensor([self.steps[i].log_prob for i in batch_idx],
-                                               dtype=torch.float32, device=device),
-                'values': torch.tensor([self.steps[i].value for i in batch_idx],
-                                       dtype=torch.float32, device=device),
-                'action_masks': torch.stack([self.steps[i].action_mask for i in batch_idx]).to(device),
+                'states': all_states[batch_idx],
+                'actions': all_actions[batch_idx],
+                'old_log_probs': all_log_probs[batch_idx],
+                'values': all_values[batch_idx],
+                'action_masks': all_masks[batch_idx],
             }
             batches.append((batch, batch_idx))
 

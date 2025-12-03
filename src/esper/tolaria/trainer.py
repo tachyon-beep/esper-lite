@@ -5,6 +5,7 @@ This module provides the core training loop functions for different seed states:
 - train_epoch_womb_mode: STE training (seed output isolated, both train)
 - train_epoch_blended: Joint host+seed training
 - validate_and_get_metrics: Validation and metric computation
+- validate_with_attribution: Counterfactual validation for true causal attribution
 
 These functions are generic and work with any DataLoader, not tied to CIFAR-10.
 """
@@ -13,10 +14,26 @@ from __future__ import annotations
 
 import itertools
 import math
+from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+
+
+@dataclass
+class AttributionResult:
+    """Result of counterfactual validation for seed attribution.
+
+    Compares model performance with seed (real alpha) vs without seed (alpha=0)
+    to determine the true causal contribution of the seed.
+    """
+
+    real_accuracy: float  # Accuracy with current alpha
+    baseline_accuracy: float  # Accuracy with alpha=0 (host-only)
+    seed_contribution: float  # real - baseline (positive = seed helps)
+    real_loss: float
+    baseline_loss: float
 
 
 def _compute_loss(
@@ -250,3 +267,80 @@ def validate_and_get_metrics(
         perplexity = math.exp(val_loss) if val_loss < 20 else float("inf")
 
     return val_loss, val_accuracy, train_loss, train_accuracy, per_class_acc, perplexity
+
+
+def validate_with_attribution(
+    model: nn.Module,
+    testloader: DataLoader,
+    criterion: nn.Module,
+    device: str,
+    task_type: str = "classification",
+) -> AttributionResult:
+    """Counterfactual validation for true seed contribution measurement.
+
+    Runs two forward passes through the validation set:
+    1. Real pass: model with current alpha (seed contributing)
+    2. Baseline pass: model with alpha=0 (host-only, seed output zeroed)
+
+    The difference in accuracy between these passes gives the true causal
+    attribution of the seed - how much accuracy the seed actually contributes
+    vs natural host training gains.
+
+    This addresses the "Scapegoat Problem" where seeds were blamed/credited
+    for host accuracy changes during TRAINING stage when they had zero impact.
+
+    Args:
+        model: The model to evaluate (must have seed_slot with force_alpha()).
+        testloader: Validation data loader.
+        criterion: Loss function.
+        device: Device to evaluate on.
+        task_type: Task type ("classification" or "lm").
+
+    Returns:
+        AttributionResult with real and baseline accuracies plus seed_contribution.
+    """
+    model.eval()
+
+    def _run_validation_pass() -> tuple[float, float]:
+        """Run a single validation pass, return (loss, accuracy)."""
+        loss_tensor = torch.tensor(0.0, device=device)
+        correct_tensor = torch.tensor(0, dtype=torch.long, device=device)
+        total = 0
+
+        with torch.no_grad():
+            for inputs, labels in testloader:
+                inputs = inputs.to(device, non_blocking=True)
+                labels = labels.to(device, non_blocking=True)
+                outputs = model(inputs)
+                loss = _compute_loss(outputs, labels, criterion, task_type)
+                loss_tensor += loss
+
+                if task_type == "lm":
+                    predicted = outputs.argmax(dim=-1)
+                    total += labels.numel()
+                    correct_tensor += (predicted == labels).sum()
+                else:
+                    _, predicted = outputs.max(1)
+                    total += labels.size(0)
+                    correct_tensor += predicted.eq(labels).sum()
+
+        avg_loss = loss_tensor.item() / max(len(testloader), 1)
+        accuracy = 100.0 * correct_tensor.item() / total if total > 0 else 0.0
+        return avg_loss, accuracy
+
+    # Pass 1: Real validation with current alpha
+    real_loss, real_accuracy = _run_validation_pass()
+
+    # Pass 2: Baseline validation with alpha=0 (host-only)
+    # Use force_alpha context manager to temporarily override alpha
+    seed_slot = model.seed_slot
+    with seed_slot.force_alpha(0.0):
+        baseline_loss, baseline_accuracy = _run_validation_pass()
+
+    return AttributionResult(
+        real_accuracy=real_accuracy,
+        baseline_accuracy=baseline_accuracy,
+        seed_contribution=real_accuracy - baseline_accuracy,
+        real_loss=real_loss,
+        baseline_loss=baseline_loss,
+    )

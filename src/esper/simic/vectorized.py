@@ -35,9 +35,9 @@ from esper.leyline import SeedStage, SeedTelemetry, TelemetryEvent
 from esper.leyline.actions import get_blueprint_from_action, is_germinate_action
 from esper.simic.features import compute_action_mask
 from esper.simic.gradient_collector import collect_seed_gradients_async, materialize_grad_stats
-from esper.simic.normalization import RunningMeanStd
+from esper.simic.normalization import RunningMeanStd, RewardNormalizer
 from esper.simic.ppo import PPOAgent, signals_to_features
-from esper.simic.rewards import compute_shaped_reward, SeedInfo
+from esper.simic.rewards import compute_shaped_reward, compute_contribution_reward, SeedInfo
 from esper.nissa import get_hub, BlueprintAnalytics
 from esper.tolaria import TolariaGovernor
 
@@ -77,12 +77,36 @@ class ParallelEnvState:
     val_loss: float = 0.0
     val_acc: float = 0.0
     params_added_baseline: int = 0
+    # Ransomware-resistant reward: track accuracy at germination for progress calculation
+    acc_at_germination: float | None = None
+    # Pre-allocated accumulators to avoid per-epoch tensor allocation churn
+    train_loss_accum: torch.Tensor | None = None
+    train_correct_accum: torch.Tensor | None = None
+    val_loss_accum: torch.Tensor | None = None
+    val_correct_accum: torch.Tensor | None = None
+    cf_correct_accum: torch.Tensor | None = None  # Counterfactual accumulator
 
     def __post_init__(self) -> None:
         if not self.action_counts and self.action_enum is not None:
             base_counts = {a.name: 0 for a in self.action_enum}
             self.action_counts = base_counts.copy()
             self.successful_action_counts = base_counts.copy()
+
+    def init_accumulators(self) -> None:
+        """Initialize pre-allocated accumulators on the environment's device."""
+        self.train_loss_accum = torch.zeros(1, device=self.env_device)
+        self.train_correct_accum = torch.zeros(1, device=self.env_device)
+        self.val_loss_accum = torch.zeros(1, device=self.env_device)
+        self.val_correct_accum = torch.zeros(1, device=self.env_device)
+        self.cf_correct_accum = torch.zeros(1, device=self.env_device)
+
+    def zero_accumulators(self) -> None:
+        """Zero accumulators at the start of each epoch (faster than reallocating)."""
+        self.train_loss_accum.zero_()
+        self.train_correct_accum.zero_()
+        self.val_loss_accum.zero_()
+        self.val_correct_accum.zero_()
+        self.cf_correct_accum.zero_()
 
 
 def _advance_active_seed(model) -> bool:
@@ -129,9 +153,10 @@ def train_ppo_vectorized(
     entropy_coef: float = 0.1,
     entropy_coef_start: float | None = None,
     entropy_coef_end: float | None = None,
-    entropy_coef_min: float = 0.1,
+    entropy_coef_min: float = 0.01,
     entropy_anneal_episodes: int = 0,
     gamma: float = 0.99,
+    ppo_updates_per_batch: int = 1,
     save_path: str = None,
     resume_path: str = None,
     seed: int = 42,
@@ -154,6 +179,10 @@ def train_ppo_vectorized(
         clip_ratio: PPO clip ratio
         entropy_coef: Entropy coefficient
         gamma: Discount factor
+        ppo_updates_per_batch: Number of PPO updates per batch of episodes.
+            Higher values improve sample efficiency but risk policy divergence.
+            With KL early stopping enabled, values of 2-4 are often safe.
+            Default: 1 (standard PPO behavior)
         save_path: Optional path to save model
         resume_path: Optional path to resume from checkpoint
         seed: Random seed for reproducibility
@@ -232,7 +261,13 @@ def train_ppo_vectorized(
     # State dimension: 27 base features + 10 telemetry features if enabled
     BASE_FEATURE_DIM = 27
     state_dim = BASE_FEATURE_DIM + (SeedTelemetry.feature_dim() if use_telemetry else 0)
-    obs_normalizer = RunningMeanStd((state_dim,), device=device)
+    # Use EMA momentum for stable normalization during long training runs
+    # (prevents distribution shift that can break PPO ratio calculations)
+    obs_normalizer = RunningMeanStd((state_dim,), device=device, momentum=0.99)
+
+    # Reward normalizer for critic stability (prevents value loss explosion)
+    # Essential after ransomware fix where reward magnitudes changed significantly
+    reward_normalizer = RewardNormalizer(clip=10.0)
 
     # Convert episode-based annealing to step-based
     # Each batch of n_envs episodes = 1 PPO update step
@@ -248,10 +283,17 @@ def train_ppo_vectorized(
         # Restore observation normalizer state
         metadata = checkpoint.get('metadata', {})
         if 'obs_normalizer_mean' in metadata:
-            obs_normalizer.mean = torch.tensor(metadata['obs_normalizer_mean'])
-            obs_normalizer.var = torch.tensor(metadata['obs_normalizer_var'])
-            obs_normalizer.to(device)
-            print(f"  Restored observation normalizer state")
+            # Create tensors directly on target device to avoid CPU->GPU transfer
+            obs_normalizer.mean = torch.tensor(metadata['obs_normalizer_mean'], device=device)
+            obs_normalizer.var = torch.tensor(metadata['obs_normalizer_var'], device=device)
+            obs_normalizer._device = device
+            # Restore count for correct Welford/EMA continuation
+            if 'obs_normalizer_count' in metadata:
+                obs_normalizer.count = torch.tensor(metadata['obs_normalizer_count'], device=device)
+            # Restore momentum (critical for EMA mode - affects normalization dynamics)
+            if 'obs_normalizer_momentum' in metadata:
+                obs_normalizer.momentum = metadata['obs_normalizer_momentum']
+            print(f"  Restored observation normalizer state (momentum={obs_normalizer.momentum})")
 
         # Calculate starting episode from checkpoint
         if 'n_episodes' in metadata:
@@ -322,19 +364,25 @@ def train_ppo_vectorized(
         stream = torch.cuda.Stream(device=env_device) if 'cuda' in env_device else None
 
         # Create Governor for fail-safe watchdog
+        # Conservative settings to avoid false positives during seed blending:
+        # - sensitivity=6.0: 6-sigma is very rare for Gaussian
+        # - history_window=20: longer window smooths blending transients
+        # - min_panics=3: require 3 consecutive anomalies before rollback
         governor = TolariaGovernor(
             model=model,
-            sensitivity=3.0,
+            sensitivity=6.0,
+            absolute_threshold=12.0,
             death_penalty=10.0,
-            history_window=10,
+            history_window=20,
+            min_panics_before_rollback=3,
         )
         governor.snapshot()  # Ensure rollback is always possible before first panic
 
-        return ParallelEnvState(
+        env_state = ParallelEnvState(
             model=model,
             host_optimizer=host_optimizer,
             seed_optimizer=None,
-            signal_tracker=SignalTracker(),
+            signal_tracker=SignalTracker(env_id=env_idx),
             governor=governor,
             env_device=env_device,
             stream=stream,
@@ -347,6 +395,9 @@ def train_ppo_vectorized(
             action_enum=ActionEnum,
             params_added_baseline=params_added_baseline,
         )
+        # Pre-allocate accumulators to avoid per-epoch allocation churn
+        env_state.init_accumulators()
+        return env_state
 
     def process_train_batch(env_state: ParallelEnvState, inputs: torch.Tensor,
                             targets: torch.Tensor, criterion: nn.Module,
@@ -487,19 +538,34 @@ def train_ppo_vectorized(
         # across all states in a batch, then update stats after PPO update.
         raw_states_for_normalizer_update = []
 
+        # Track if any Governor rollback occurred during this batch.
+        # If so, the buffer contains stale transitions from a different model state
+        # and must be cleared before PPO update.
+        batch_rollback_occurred = False
+
         # Run epochs with INVERTED CONTROL FLOW
         for epoch in range(1, max_epochs + 1):
             # Track gradient stats per env for telemetry sync
             env_grad_stats = [None] * envs_this_batch
 
-            # Reset per-epoch metrics - GPU tensors for accumulation, sync only at epoch end
-            train_loss_accum = [torch.zeros(1, device=env_states[i].env_device) for i in range(envs_this_batch)]
-            train_correct_accum = [torch.zeros(1, device=env_states[i].env_device) for i in range(envs_this_batch)]
+            # Reset per-epoch metrics by zeroing pre-allocated accumulators (faster than reallocating)
             train_totals = [0] * envs_this_batch
+            for env_state in env_states:
+                env_state.zero_accumulators()
 
             # ===== TRAINING: Iterate batches first, launch all envs via CUDA streams =====
             # Each env has its own DataLoader with independent shuffling
             # DataLoader workers (num_workers=4) provide parallel prefetching
+
+            # Issue one wait_stream per env BEFORE the loop starts (not per-batch).
+            # This syncs the accumulator zeroing on default stream before we write.
+            # record_stream marks tensors as used by this stream, preventing deallocation.
+            for i, env_state in enumerate(env_states):
+                if env_state.stream:
+                    env_state.train_loss_accum.record_stream(env_state.stream)
+                    env_state.train_correct_accum.record_stream(env_state.stream)
+                    env_state.stream.wait_stream(torch.cuda.default_stream(env_state.env_device))
+
             train_iters = [iter(env_state.trainloader) for env_state in env_states]
             for batch_step in range(num_train_batches):
                 # Get batch from each env's own dataloader (independent shuffling)
@@ -522,22 +588,10 @@ def train_ppo_vectorized(
                     )
                     if grad_stats is not None:
                         env_grad_stats[i] = grad_stats  # Keep last batch's grad stats
-                    # Synchronize stream before accumulator writes to prevent race condition:
-                    # loss_tensor/correct_tensor are computed on env_state.stream inside
-                    # process_train_batch. When that function returns, we re-enter the same
-                    # stream context for accumulation. However, if multiple envs share a device,
-                    # their streams can execute concurrently. The accumulators are allocated on
-                    # the default stream, so we must ensure the env stream waits for any
-                    # pending default stream work before writing. record_stream marks the
-                    # tensors as used by this stream, preventing premature deallocation.
-                    if env_state.stream:
-                        train_loss_accum[i].record_stream(env_state.stream)
-                        train_correct_accum[i].record_stream(env_state.stream)
-                        env_state.stream.wait_stream(torch.cuda.default_stream(env_state.env_device))
                     stream_ctx = torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
                     with stream_ctx:
-                        train_loss_accum[i].add_(loss_tensor)
-                        train_correct_accum[i].add_(correct_tensor)
+                        env_state.train_loss_accum.add_(loss_tensor)
+                        env_state.train_correct_accum.add_(correct_tensor)
                     train_totals[i] += total
 
             # Sync all streams ONCE at epoch end
@@ -546,13 +600,39 @@ def train_ppo_vectorized(
                     env_state.stream.synchronize()
 
             # NOW safe to call .item() - all GPU work done
-            train_losses = [t.item() for t in train_loss_accum]
-            train_corrects = [t.item() for t in train_correct_accum]
+            train_losses = [env_state.train_loss_accum.item() for env_state in env_states]
+            train_corrects = [env_state.train_correct_accum.item() for env_state in env_states]
 
-            # ===== VALIDATION: Same pattern - accumulate on GPU, sync once =====
-            val_loss_accum = [torch.zeros(1, device=env_states[i].env_device) for i in range(envs_this_batch)]
-            val_correct_accum = [torch.zeros(1, device=env_states[i].env_device) for i in range(envs_this_batch)]
+            # ===== VALIDATION + COUNTERFACTUAL (FUSED): Single pass over test data =====
+            # Instead of iterating test data twice (once for main validation, once for
+            # counterfactual), we fuse both into a single loop. For each batch, we run:
+            # 1. Main validation (real alpha) - accumulates val_correct_accum
+            # 2. Counterfactual (alpha=0) - accumulates cf_correct_accum (same batch!)
+            # This eliminates DataLoader overhead and halves test iteration time.
+            # Note: val/cf accumulators were already zeroed by zero_accumulators() above
+
             val_totals = [0] * envs_this_batch
+
+            # Determine which envs need counterfactual BEFORE the loop
+            # (seed with alpha > 0 means the seed is contributing to output)
+            envs_needing_counterfactual = set()
+            for i, env_state in enumerate(env_states):
+                seed_state = env_state.model.seed_state
+                if seed_state and seed_state.alpha > 0:
+                    envs_needing_counterfactual.add(i)
+
+            cf_totals = {i: 0 for i in envs_needing_counterfactual}
+            baseline_accs = [None] * envs_this_batch
+
+            # Issue one wait_stream per env before the loop starts (not per-batch)
+            # This syncs the accumulator zeroing on default stream before we write.
+            for i, env_state in enumerate(env_states):
+                if env_state.stream:
+                    env_state.val_loss_accum.record_stream(env_state.stream)
+                    env_state.val_correct_accum.record_stream(env_state.stream)
+                    env_state.stream.wait_stream(torch.cuda.default_stream(env_state.env_device))
+                    if i in envs_needing_counterfactual:
+                        env_state.cf_correct_accum.record_stream(env_state.stream)
 
             test_iters = [iter(env_state.testloader) for env_state in env_states]
             for batch_step in range(num_test_batches):
@@ -564,31 +644,43 @@ def train_ppo_vectorized(
                     except StopIteration:
                         env_batches.append(None)
 
-                # Launch all environments in their respective CUDA streams (async)
+                # Launch all environments: MAIN VALIDATION + COUNTERFACTUAL on same batch
                 for i, env_state in enumerate(env_states):
                     if env_batches[i] is None:
                         continue
                     inputs, targets = env_batches[i]
+
+                    # MAIN VALIDATION (real alpha)
                     loss_tensor, correct_tensor, total = process_val_batch(env_state, inputs, targets, criterion)
-                    # Synchronize stream before accumulator writes (same pattern as training)
-                    if env_state.stream:
-                        val_loss_accum[i].record_stream(env_state.stream)
-                        val_correct_accum[i].record_stream(env_state.stream)
-                        env_state.stream.wait_stream(torch.cuda.default_stream(env_state.env_device))
                     stream_ctx = torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
                     with stream_ctx:
-                        val_loss_accum[i].add_(loss_tensor)
-                        val_correct_accum[i].add_(correct_tensor)
+                        env_state.val_loss_accum.add_(loss_tensor)
+                        env_state.val_correct_accum.add_(correct_tensor)
                     val_totals[i] += total
 
-            # Sync all streams ONCE at epoch end
+                    # COUNTERFACTUAL (alpha=0) - SAME BATCH, no DataLoader reload!
+                    # Data is already on GPU from the main validation pass.
+                    if i in envs_needing_counterfactual:
+                        with env_state.model.seed_slot.force_alpha(0.0):
+                            _, cf_correct_tensor, cf_total = process_val_batch(
+                                env_state, inputs, targets, criterion
+                            )
+                        with stream_ctx:
+                            env_state.cf_correct_accum.add_(cf_correct_tensor)
+                        cf_totals[i] += cf_total
+
+            # Single sync point at end (not once per pass)
             for env_state in env_states:
                 if env_state.stream:
                     env_state.stream.synchronize()
 
             # NOW safe to call .item()
-            val_losses = [t.item() for t in val_loss_accum]
-            val_corrects = [t.item() for t in val_correct_accum]
+            val_losses = [env_state.val_loss_accum.item() for env_state in env_states]
+            val_corrects = [env_state.val_correct_accum.item() for env_state in env_states]
+
+            # Compute baseline accuracies for counterfactual envs
+            for i in envs_needing_counterfactual:
+                baseline_accs[i] = 100.0 * env_states[i].cf_correct_accum.item() / max(cf_totals[i], 1)
 
             # ===== Compute epoch metrics and get BATCHED actions =====
             # First, sync telemetry for envs with active seeds (must happen BEFORE feature extraction)
@@ -608,8 +700,8 @@ def train_ppo_vectorized(
                         max_epochs=max_epochs,
                     )
 
-                # Auto-advance blending lifecycle (Kasmina's mechanical transitions)
-                model.seed_slot.step_epoch()
+                # NOTE: step_epoch() moved to after record_accuracy() to ensure
+                # accuracy_at_blending_start snapshot uses current epoch's val_acc
 
             # Collect features and action masks from all environments
             all_features = []
@@ -648,6 +740,18 @@ def train_ppo_vectorized(
                 if seed_state and seed_state.metrics:
                     seed_state.metrics.record_accuracy(val_acc)
 
+                    # Log counterfactual contribution if available
+                    if baseline_accs[env_idx] is not None:
+                        cf_contribution = val_acc - baseline_accs[env_idx]
+                        if epoch == max_epochs:  # Only log at episode end to reduce noise
+                            print(f"  [ENV {env_idx}] Counterfactual: {val_acc:.1f}% real, "
+                                  f"{baseline_accs[env_idx]:.1f}% baseline, "
+                                  f"Δ={cf_contribution:+.2f}% seed contribution")
+
+                    # Auto-advance blending lifecycle AFTER recording accuracy
+                    # This ensures accuracy_at_blending_start snapshot uses current val_acc
+                    model.seed_slot.step_epoch()
+
                 # Update signal tracker
                 active_seeds = [seed_state] if seed_state else []
                 available_slots = 0 if model.has_active_seed else 1
@@ -677,6 +781,7 @@ def train_ppo_vectorized(
                     seed_age_epochs=seed_age,
                     epoch=signals.metrics.epoch,
                     plateau_epochs=signals.metrics.plateau_epochs,
+                    host_stabilized=bool(signals.metrics.host_stabilized),
                 )
                 all_masks.append(mask)
 
@@ -717,10 +822,11 @@ def train_ppo_vectorized(
                 # Governor rollback: execute if this env panicked
                 if env_idx in governor_panic_envs:
                     report = env_state.governor.execute_rollback()
+                    batch_rollback_occurred = True  # Mark batch as having stale transitions
                     print(f"  [ENV {env_idx}] Governor rollback: {report.reason} "
                           f"(threshold={report.loss_threshold:.4f}, panics={report.consecutive_panics})")
 
-                # Compute shaped reward with cost params
+                # Compute reward with cost params
                 # Derive cost from CURRENT architecture, not cumulative scoreboard
                 # (scoreboard.params_added persists across episodes, causing stale rent)
                 scoreboard = analytics._get_scoreboard(env_idx)
@@ -728,16 +834,37 @@ def train_ppo_vectorized(
                 # Use env-local params (delta vs baseline) so rent resets with each fresh model.
                 params_added_delta = max(0, scoreboard.params_added - env_state.params_added_baseline)
                 total_params = params_added_delta + model.active_seed_params
-                reward = compute_shaped_reward(
-                    action=action,
-                    acc_delta=signals.metrics.accuracy_delta,
-                    val_acc=env_state.val_acc,
-                    seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
-                    epoch=epoch,
-                    max_epochs=max_epochs,
-                    total_params=total_params,
-                    host_params=host_params,
-                )
+
+                # Compute seed_contribution from counterfactual if available
+                seed_contribution = None
+                if baseline_accs[env_idx] is not None:
+                    seed_contribution = env_state.val_acc - baseline_accs[env_idx]
+
+                # Use contribution-primary reward when counterfactual is available
+                if seed_contribution is not None:
+                    reward = compute_contribution_reward(
+                        action=action,
+                        seed_contribution=seed_contribution,
+                        val_acc=env_state.val_acc,
+                        seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
+                        epoch=epoch,
+                        max_epochs=max_epochs,
+                        total_params=total_params,
+                        host_params=host_params,
+                        acc_at_germination=env_state.acc_at_germination,
+                    )
+                else:
+                    # Fallback to legacy reward (no counterfactual available)
+                    reward = compute_shaped_reward(
+                        action=action,
+                        acc_delta=signals.metrics.accuracy_delta,
+                        val_acc=env_state.val_acc,
+                        seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
+                        epoch=epoch,
+                        max_epochs=max_epochs,
+                        total_params=total_params,
+                        host_params=host_params,
+                    )
 
                 # Governor punishment: inject negative reward if rollback occurred
                 if env_idx in governor_panic_envs:
@@ -748,6 +875,8 @@ def train_ppo_vectorized(
                 # Execute action
                 if is_germinate_action(action):
                     if not model.has_active_seed:
+                        # Record baseline accuracy for ransomware-resistant reward
+                        env_state.acc_at_germination = env_state.val_acc
                         blueprint_id = get_blueprint_from_action(action)
                         seed_id = f"env{env_idx}_seed_{env_state.seeds_created}"
                         model.germinate_seed(blueprint_id, seed_id)
@@ -757,11 +886,16 @@ def train_ppo_vectorized(
 
                 elif action == ActionEnum.FOSSILIZE:
                     action_success = _advance_active_seed(model)
+                    if action_success:
+                        # Seed is permanent now, clear germination baseline
+                        env_state.acc_at_germination = None
 
                 elif action == ActionEnum.CULL:
                     if model.has_active_seed:
                         model.cull_seed()
                         env_state.seed_optimizer = None
+                        # Reset germination baseline on cull
+                        env_state.acc_at_germination = None
                         action_success = True
 
                 else:
@@ -771,26 +905,64 @@ def train_ppo_vectorized(
                 if action_success:
                     env_state.successful_action_counts[action.name] += 1
 
+                # Normalize reward for critic stability (prevents value loss explosion)
+                # Keep raw reward for episode_rewards display
+                raw_reward = reward
+                normalized_reward = reward_normalizer.update_and_normalize(reward)
+
                 # Store transition with action mask (use normalized state to match what policy saw)
+                # Keep tensors on policy device to avoid CPU round-trip overhead.
+                # get_batches() expects tensors on CPU or will move them - since policy device
+                # is consistent across all envs, keeping on GPU is more efficient.
                 done = (epoch == max_epochs)
                 agent.store_transition(
-                    states_batch_normalized[env_idx].cpu(),
+                    states_batch_normalized[env_idx],
                     action_idx,
                     log_prob,
                     value,
-                    reward,
+                    normalized_reward,  # Use normalized reward for critic training
                     done,
-                    masks_batch[env_idx].cpu(),
+                    masks_batch[env_idx],
                 )
 
-                env_state.episode_rewards.append(reward)
+                env_state.episode_rewards.append(raw_reward)  # Display raw for interpretability
 
                 if epoch == max_epochs:
                     env_final_accs[env_idx] = env_state.val_acc
                     env_total_rewards[env_idx] = sum(env_state.episode_rewards)
 
         # PPO Update after all episodes in batch complete
-        metrics = agent.update(last_value=0.0)
+        # last_value=0.0 is correct because all episodes terminate at max_epochs
+        # (done=True), so GAE ignores this value. If we add early termination/
+        # truncation support, we'd need to compute V(s_terminal) for bootstrap.
+        #
+        # Multiple updates per batch improves sample efficiency by reusing data.
+        # With KL early stopping, the policy won't diverge too far from the
+        # data collection distribution even with multiple updates.
+        metrics = {}
+
+        # If a Governor rollback occurred, the buffer contains transitions from
+        # a different model state - training on them would cause distribution shift.
+        # Clear the buffer and skip this PPO update.
+        if batch_rollback_occurred:
+            agent.buffer.clear()
+            print("[PPO] Buffer cleared due to Governor rollback - skipping update")
+        else:
+            for update_i in range(ppo_updates_per_batch):
+                is_last_update = (update_i == ppo_updates_per_batch - 1)
+                update_metrics = agent.update(last_value=0.0, clear_buffer=is_last_update)
+                if update_i == 0:
+                    metrics = update_metrics
+                else:
+                    # Aggregate metrics across updates (average)
+                    for k, v in update_metrics.items():
+                        if k in metrics:
+                            metrics[k] = (metrics[k] + v) / 2
+                        else:
+                            metrics[k] = v
+                # Early exit if KL triggered early stopping
+                if update_metrics.get('early_stopped'):
+                    break
 
         # NOW update the observation normalizer with all raw states from this batch.
         # This ensures the next batch will use updated statistics, but all states
@@ -857,7 +1029,8 @@ def train_ppo_vectorized(
 
         if rolling_avg_acc > best_avg_acc:
             best_avg_acc = rolling_avg_acc
-            best_state = {k: v.clone() for k, v in agent.network.state_dict().items()}
+            # Store on CPU to save GPU memory (checkpoint is rarely loaded)
+            best_state = {k: v.cpu().clone() for k, v in agent.network.state_dict().items()}
 
         batch_idx += 1
 
@@ -875,6 +1048,8 @@ def train_ppo_vectorized(
             'seed': seed,
             'obs_normalizer_mean': obs_normalizer.mean.tolist(),
             'obs_normalizer_var': obs_normalizer.var.tolist(),
+            'obs_normalizer_count': obs_normalizer.count.item(),
+            'obs_normalizer_momentum': obs_normalizer.momentum,
         })
         print(f"Model saved to {save_path}")
 

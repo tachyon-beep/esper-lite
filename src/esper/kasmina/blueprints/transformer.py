@@ -66,11 +66,10 @@ def create_transformer_attention_seed(dim: int, n_head: int = 4) -> nn.Module:
             qkv = qkv.permute(2, 0, 3, 1, 4)
             q, k, v = qkv[0], qkv[1], qkv[2]
 
-            scale = self.head_dim ** -0.5
-            att = (q @ k.transpose(-2, -1)) * scale
-            att = F.softmax(att, dim=-1)
+            # Use SDPA for automatic Flash Attention optimization
+            out = F.scaled_dot_product_attention(q, k, v)
 
-            out = (att @ v).transpose(1, 2).reshape(b, t, c)
+            out = out.transpose(1, 2).reshape(b, t, c)
             return x + self.proj(out)
 
     return TransformerAttentionSeed(dim, n_head)

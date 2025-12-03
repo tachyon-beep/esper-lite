@@ -10,6 +10,21 @@ Example:
 # Version
 LEYLINE_VERSION = "0.2.0"
 
+# =============================================================================
+# Lifecycle Constants (shared across simic modules)
+# =============================================================================
+
+# Minimum seed age before CULL is allowed (structural fix for uninformed culls)
+# 10 epochs gives enough signal to evaluate seed quality
+MIN_CULL_AGE = 10
+
+# Epochs needed for confident seed quality assessment
+FULL_EVALUATION_AGE = 10
+
+# Plateau gating: prevent germination until training has plateaued
+MIN_GERMINATE_EPOCH = 5        # Let host get easy wins first
+MIN_PLATEAU_TO_GERMINATE = 3   # Consecutive epochs with <0.5% improvement
+
 # Actions
 from esper.leyline.actions import (
     Action,
@@ -70,6 +85,12 @@ from esper.leyline.telemetry import (
 __all__ = [
     # Version
     "LEYLINE_VERSION",
+
+    # Lifecycle constants
+    "MIN_CULL_AGE",
+    "FULL_EVALUATION_AGE",
+    "MIN_GERMINATE_EPOCH",
+    "MIN_PLATEAU_TO_GERMINATE",
 
     # Actions
     "Action",

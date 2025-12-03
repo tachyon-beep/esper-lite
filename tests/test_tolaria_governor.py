@@ -133,7 +133,8 @@ class TestTolariaGovernor:
         import math
 
         model = DummyModel()
-        gov = TolariaGovernor(model, num_classes=10)  # ln(10) ≈ 2.3
+        # random_guess_loss = ln(10) ≈ 2.3 for CIFAR-10 (10 classes)
+        gov = TolariaGovernor(model, random_guess_loss=math.log(10))
 
         # Build healthy history (loss ~0.8, well below random guess)
         for _ in range(15):
@@ -150,7 +151,7 @@ class TestTolariaGovernor:
         import math
 
         model = DummyModel()
-        gov = TolariaGovernor(model, num_classes=10)
+        gov = TolariaGovernor(model, random_guess_loss=math.log(10))
 
         # Build history where we were already doing poorly (loss ~2.0)
         for _ in range(15):

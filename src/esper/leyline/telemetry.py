@@ -37,6 +37,7 @@ class TelemetryEventType(Enum):
     EPOCH_COMPLETED = auto()
     PLATEAU_DETECTED = auto()
     IMPROVEMENT_DETECTED = auto()
+    TAMIYO_INITIATED = auto()  # Host stabilized, germination now allowed
 
     # Health events
     ISOLATION_VIOLATION = auto()

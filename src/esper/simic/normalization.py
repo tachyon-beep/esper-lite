@@ -15,17 +15,35 @@ import torch
 class RunningMeanStd:
     """Running mean and std for observation normalization.
 
-    Uses Welford's online algorithm for numerical stability.
+    Uses Welford's online algorithm for numerical stability by default.
+    Optionally uses EMA (exponential moving average) for slower adaptation
+    during long training runs to prevent distribution shift.
+
     GPU-native: automatically moves stats to match input device.
+
+    Args:
+        shape: Shape of observations to normalize
+        epsilon: Small constant for numerical stability
+        device: Device to store stats on
+        momentum: If None, uses Welford's algorithm (full history weighting).
+            If set (e.g., 0.99), uses EMA for slower adaptation:
+            new_stat = momentum * old_stat + (1 - momentum) * batch_stat
     """
 
-    def __init__(self, shape: tuple[int, ...], epsilon: float = 1e-4, device: str = "cpu"):
+    def __init__(
+        self,
+        shape: tuple[int, ...],
+        epsilon: float = 1e-4,
+        device: str = "cpu",
+        momentum: float | None = None,
+    ):
         self.mean = torch.zeros(shape, device=device)
         self.var = torch.ones(shape, device=device)
         # Use tensor for count to keep all ops on device (avoids CPU sync)
         self.count = torch.tensor(epsilon, device=device)
         self.epsilon = epsilon
         self._device = device
+        self.momentum = momentum
 
     @torch.no_grad()
     def update(self, x: torch.Tensor) -> None:
@@ -46,25 +64,42 @@ class RunningMeanStd:
 
     def _update_from_moments(self, batch_mean: torch.Tensor, batch_var: torch.Tensor,
                              batch_count: int) -> None:
-        """Update using batch moments (Welford's algorithm)."""
-        delta = batch_mean - self.mean
-        tot_count = self.count + batch_count
+        """Update using batch moments.
 
-        new_mean = self.mean + delta * batch_count / tot_count
-        m_a = self.var * self.count
-        m_b = batch_var * batch_count
-        m2 = m_a + m_b + delta ** 2 * self.count * batch_count / tot_count
-        new_var = m2 / tot_count
+        Uses either Welford's algorithm (momentum=None) or EMA (momentum set).
+        EMA provides slower adaptation for long training stability.
+        """
+        if self.momentum is not None:
+            # EMA update: slower adaptation to prevent distribution shift
+            # during long training runs
+            self.mean = self.momentum * self.mean + (1 - self.momentum) * batch_mean
+            self.var = self.momentum * self.var + (1 - self.momentum) * batch_var
+            # Count still tracked for diagnostics but not used in EMA
+            self.count = self.count + batch_count
+        else:
+            # Welford's online algorithm: full history weighting
+            delta = batch_mean - self.mean
+            tot_count = self.count + batch_count
 
-        self.mean = new_mean
-        self.var = new_var
-        self.count = tot_count
+            new_mean = self.mean + delta * batch_count / tot_count
+            m_a = self.var * self.count
+            m_b = batch_var * batch_count
+            m2 = m_a + m_b + delta ** 2 * self.count * batch_count / tot_count
+            new_var = m2 / tot_count
+
+            self.mean = new_mean
+            self.var = new_var
+            self.count = tot_count
 
     def normalize(self, x: torch.Tensor, clip: float = 10.0) -> torch.Tensor:
         """Normalize observation using running stats.
 
-        Note: After auto-migration in update(), mean/var are on correct device.
+        GPU-native: auto-migrates stats to input device if needed.
         """
+        # Auto-migrate stats to input device (one-time cost)
+        if self.mean.device != x.device:
+            self.to(x.device)
+
         return torch.clamp(
             (x - self.mean) / torch.sqrt(self.var + self.epsilon),
             -clip, clip
@@ -84,4 +119,58 @@ class RunningMeanStd:
         return self.mean.device
 
 
-__all__ = ["RunningMeanStd"]
+class RewardNormalizer:
+    """Running reward normalization for critic stability.
+
+    Normalizes rewards by dividing by running std (NOT subtracting mean).
+    Essential when reward magnitudes can vary wildly (e.g., ransomware fix).
+
+    Why std-only (no mean subtraction):
+    - The critic learns E[R] through its value function target
+    - Subtracting running mean from rewards creates non-stationary targets
+    - When mean shifts, the critic must constantly recalibrate
+    - Dividing by std only preserves reward semantics while stabilizing magnitudes
+
+    Uses Welford's online algorithm where:
+    - mean: running mean (tracked for variance computation only)
+    - m2: sum of squared deviations from the current mean (NOT variance)
+    - variance = m2 / (count - 1) for sample variance
+
+    Usage:
+        normalizer = RewardNormalizer(clip=10.0)
+        normalized_reward = normalizer.update_and_normalize(raw_reward)
+    """
+
+    def __init__(self, clip: float = 10.0, epsilon: float = 1e-8):
+        self.mean = 0.0
+        self.m2 = 0.0  # Sum of squared deviations (Welford's M2)
+        self.count = epsilon
+        self.clip = clip
+        self.epsilon = epsilon
+
+    def update_and_normalize(self, reward: float) -> float:
+        """Update running stats and return normalized reward.
+
+        Uses Welford's online algorithm for numerical stability.
+        Returns reward / std (no mean subtraction for critic stability).
+        """
+        self.count += 1
+        delta = reward - self.mean
+        self.mean += delta / self.count
+        delta2 = reward - self.mean
+        self.m2 += delta * delta2
+
+        # Normalize by std only (no mean subtraction)
+        # variance = m2 / (count - 1) for sample variance
+        std = max(self.epsilon, (self.m2 / max(1, self.count - 1)) ** 0.5)
+        normalized = reward / std
+        return max(-self.clip, min(self.clip, normalized))
+
+    def normalize_only(self, reward: float) -> float:
+        """Normalize without updating stats (for evaluation)."""
+        std = max(self.epsilon, (self.m2 / max(1, self.count - 1)) ** 0.5)
+        normalized = reward / std
+        return max(-self.clip, min(self.clip, normalized))
+
+
+__all__ = ["RunningMeanStd", "RewardNormalizer"]

@@ -15,7 +15,72 @@ from esper.leyline import SeedTelemetry
 from esper.runtime import get_task_spec
 from esper.simic.rewards import compute_shaped_reward, SeedInfo
 from esper.simic.gradient_collector import collect_seed_gradients
+from esper.simic.features import compute_action_mask
 from esper.nissa import get_hub
+
+
+# =============================================================================
+# Compiled Training Step
+# =============================================================================
+
+# Flag to enable/disable torch.compile (set to False if compilation causes issues)
+USE_COMPILED_TRAIN_STEP = True
+
+
+def _train_step_impl(
+    model: nn.Module,
+    inputs: torch.Tensor,
+    targets: torch.Tensor,
+    criterion: nn.Module,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Inner training step - forward pass and loss computation.
+
+    This is the compilable core that can be optimized with torch.compile.
+    Control flow (optimizer steps, seed handling) stays OUTSIDE this function.
+
+    Args:
+        model: The model to train
+        inputs: Input batch tensor
+        targets: Target batch tensor
+        criterion: Loss function (CrossEntropyLoss)
+
+    Returns:
+        Tuple of (loss tensor, output logits)
+    """
+    outputs = model(inputs)
+    # Reshape for criterion if needed (handles both LM and classification)
+    if outputs.dim() == 3:  # LM: (batch, seq, vocab)
+        vocab = outputs.size(-1)
+        loss = criterion(outputs.view(-1, vocab), targets.view(-1))
+    else:  # Classification: (batch, classes)
+        loss = criterion(outputs, targets)
+    return loss, outputs
+
+
+# Compile the training step for reduced overhead with CUDA graphs
+# mode="reduce-overhead" uses CUDA graphs for repeated calls with same shapes
+try:
+    _compiled_train_step = torch.compile(_train_step_impl, mode="reduce-overhead")
+except Exception:
+    # Fallback if compilation fails (e.g., older PyTorch version)
+    _compiled_train_step = _train_step_impl
+    USE_COMPILED_TRAIN_STEP = False
+
+
+def compiled_train_step(
+    model: nn.Module,
+    inputs: torch.Tensor,
+    targets: torch.Tensor,
+    criterion: nn.Module,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Training step with optional torch.compile optimization.
+
+    Uses compiled version if available and enabled, otherwise falls back
+    to regular implementation.
+    """
+    if USE_COMPILED_TRAIN_STEP:
+        return _compiled_train_step(model, inputs, targets, criterion)
+    return _train_step_impl(model, inputs, targets, criterion)
 
 
 # =============================================================================
@@ -100,12 +165,16 @@ def run_ppo_episode(
     signal_tracker = SignalTracker()
 
     seeds_created = 0
+    seed_created_epoch = 0  # Track when current seed was created for age computation
     action_counts = {a.name: 0 for a in ActionEnum}
     episode_rewards = []
 
     # Track host params and added params for compute rent
     host_params = sum(p.numel() for p in model.get_host_parameters() if p.requires_grad)
     params_added = 0  # Accumulates when seeds are fossilized
+
+    # Number of germinate actions for action mask computation
+    num_germinate_actions = len([a for a in ActionEnum if a.name.startswith("GERMINATE_")])
 
     for epoch in range(1, max_epochs + 1):
         seed_state = model.seed_state
@@ -294,7 +363,20 @@ def run_ppo_episode(
         features = signals_to_features(signals, model, tracker=None, use_telemetry=use_telemetry)
         state = torch.tensor([features], dtype=torch.float32, device=device)
 
-        action_idx, log_prob, value = agent.get_action(state, deterministic=deterministic)
+        # Compute action mask for valid actions
+        seed_age = (epoch - seed_created_epoch) if model.has_active_seed else 0
+        action_mask_list = compute_action_mask(
+            has_active_seed=1.0 if model.has_active_seed else 0.0,
+            seed_stage=seed_state.stage.value if seed_state else 0,
+            num_germinate_actions=num_germinate_actions,
+            seed_age_epochs=seed_age,
+            epoch=epoch,
+            plateau_epochs=signals.metrics.plateau_epochs,
+            host_stabilized=signal_tracker.is_stabilized,
+        )
+        action_mask = torch.tensor(action_mask_list, dtype=torch.float32, device=device)
+
+        action_idx, log_prob, value = agent.get_action(state, action_mask, deterministic=deterministic)
         action = ActionEnum(action_idx)
         action_counts[action.name] += 1
 
@@ -318,6 +400,7 @@ def run_ppo_episode(
                 seed_id = f"seed_{seeds_created}"
                 model.germinate_seed(blueprint_id, seed_id)
                 seeds_created += 1
+                seed_created_epoch = epoch  # Track when seed was created for age computation
                 seed_optimizer = None
 
         elif action == ActionEnum.FOSSILIZE:
@@ -344,7 +427,8 @@ def run_ppo_episode(
                 log_prob,
                 value,
                 reward,
-                done
+                done,
+                action_mask.cpu(),
             )
 
         episode_rewards.append(reward)
@@ -368,7 +452,7 @@ def train_ppo(
     entropy_coef: float = 0.01,
     entropy_coef_start: float | None = None,
     entropy_coef_end: float | None = None,
-    entropy_coef_min: float = 0.1,
+    entropy_coef_min: float = 0.01,
     entropy_anneal_episodes: int = 0,
     gamma: float = 0.99,
     save_path: str | None = None,
@@ -464,7 +548,8 @@ def train_ppo(
 
             if avg_acc > best_avg_acc:
                 best_avg_acc = avg_acc
-                best_state = {k: v.clone() for k, v in agent.network.state_dict().items()}
+                # Store on CPU to save GPU memory (checkpoint is rarely loaded)
+                best_state = {k: v.cpu().clone() for k, v in agent.network.state_dict().items()}
 
     if best_state:
         agent.network.load_state_dict(best_state)

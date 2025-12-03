@@ -15,13 +15,40 @@ if TYPE_CHECKING:
     from esper.kasmina import SeedState
 
 
+# Stabilization detection: block germination until explosive growth phase ends
+# This ensures seeds only get credit for improvements AFTER natural training gains exhaust.
+#
+# Even with counterfactual validation, stabilization gating helps during TRAINING stage
+# (before alpha > 0) where germination during explosive growth can cause credit
+# misattribution. Re-enabled per DRL expert review recommendation.
+#
+# Default values (can be overridden per-tracker):
+# - CIFAR-10: 3% threshold, 3 epochs (standard)
+# - TinyStories/LLMs: Consider lower threshold (~1%) since relative improvements are naturally smaller
+STABILIZATION_THRESHOLD = 0.03  # 3% relative improvement (lower = stricter = stabilizes later)
+STABILIZATION_EPOCHS = 3        # Require 3 consecutive stable epochs before germination allowed
+
+
 @dataclass
 class SignalTracker:
-    """Tracks training signals over time and computes derived metrics."""
+    """Tracks training signals over time and computes derived metrics.
+
+    Stabilization Parameters:
+        stabilization_threshold: Relative loss improvement threshold (default: 0.03 = 3%).
+            Epochs with improvement >= threshold are considered "explosive growth".
+            Set lower for LLMs (e.g., 0.01) where relative improvements are smaller.
+        stabilization_epochs: Consecutive stable epochs required before germination (default: 3).
+            Set to 0 to disable stabilization gating entirely.
+    """
 
     # Configuration
     plateau_threshold: float = 0.5  # Min improvement to not count as plateau
     history_window: int = 10
+    env_id: int | None = None  # Optional environment identifier for telemetry
+
+    # Stabilization parameters (task-specific tuning)
+    stabilization_threshold: float = STABILIZATION_THRESHOLD
+    stabilization_epochs: int = STABILIZATION_EPOCHS
 
     # History windows (initialized in __post_init__ with history_window)
     _loss_history: deque[float] = field(default_factory=deque)
@@ -30,6 +57,11 @@ class SignalTracker:
     # Best values seen
     _best_accuracy: float = 0.0
     _plateau_count: int = 0
+
+    # Stabilization latch (for dynamic germination gating)
+    # Once True, stays True - prevents re-locking after successful seeds
+    _is_stabilized: bool = False
+    _stable_count: int = 0
 
     # Previous values for delta computation
     _prev_accuracy: float = 0.0
@@ -64,6 +96,31 @@ class SignalTracker:
         else:
             self._plateau_count = 0
 
+        # Stabilization tracking (latch behavior - once True, stays True)
+        # Guards against germinating during explosive growth phase
+        EPS = 1e-8
+        if not self._is_stabilized and self._prev_loss < float('inf'):
+            if self._prev_loss > EPS:
+                relative_improvement = loss_delta / self._prev_loss
+                # Check: improvement is small AND loss didn't spike (not diverging)
+                is_stable_epoch = (
+                    relative_improvement < self.stabilization_threshold and
+                    val_loss < self._prev_loss * 1.5  # Sanity: not diverging
+                )
+                if is_stable_epoch:
+                    self._stable_count += 1
+                    if self._stable_count >= self.stabilization_epochs:
+                        self._is_stabilized = True
+                        env_str = f"ENV {self.env_id}" if self.env_id is not None else "Tamiyo"
+                        if self.stabilization_epochs == 0:
+                            # Stabilization disabled - just note when it happened
+                            print(f"[{env_str}] Host stabilized at epoch {epoch} - germination now allowed")
+                        else:
+                            print(f"[{env_str}] Host stabilized at epoch {epoch} "
+                                  f"({self._stable_count}/{self.stabilization_epochs} stable) - germination now allowed")
+                else:
+                    self._stable_count = 0
+
         # Update best
         if val_accuracy > self._best_accuracy:
             self._best_accuracy = val_accuracy
@@ -83,6 +140,7 @@ class SignalTracker:
             val_accuracy=val_accuracy,
             accuracy_delta=accuracy_delta,
             plateau_epochs=self._plateau_count,
+            host_stabilized=1 if self._is_stabilized else 0,
             best_val_accuracy=self._best_accuracy,
             best_val_loss=min(self._loss_history) if self._loss_history else float('inf'),
         )
@@ -129,7 +187,18 @@ class SignalTracker:
         self._prev_accuracy = 0.0
         self._prev_loss = float('inf')
 
+        # Reset stabilization latch
+        self._is_stabilized = False
+        self._stable_count = 0
+
+    @property
+    def is_stabilized(self) -> bool:
+        """Host training has stabilized (latch - stays True once set)."""
+        return self._is_stabilized
+
 
 __all__ = [
     "SignalTracker",
+    "STABILIZATION_THRESHOLD",
+    "STABILIZATION_EPOCHS",
 ]

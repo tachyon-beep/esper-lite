@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from enum import IntEnum
 from typing import NamedTuple
 
-from esper.leyline import SeedStage
+from esper.leyline import SeedStage, MIN_CULL_AGE
 from esper.leyline.actions import is_germinate_action
 
 
@@ -111,6 +111,80 @@ class RewardConfig:
 # =============================================================================
 
 
+# =============================================================================
+# Contribution-Primary Reward Configuration (uses counterfactual validation)
+# =============================================================================
+
+
+@dataclass(slots=True)
+class ContributionRewardConfig:
+    """Configuration for contribution-primary reward computation.
+
+    Uses counterfactual validation (seed_contribution) as the primary signal,
+    eliminating heuristics that conflate host drift with seed impact.
+
+    This is the recommended reward function when counterfactual validation
+    is enabled in vectorized training.
+    """
+
+    # Primary signal: seed contribution weight
+    contribution_weight: float = 3.0
+
+    # PBRS stage progression
+    pbrs_weight: float = 0.3
+    epoch_progress_bonus: float = 0.3
+    max_progress_bonus: float = 2.0
+
+    # Compute rent (logarithmic scaling)
+    rent_weight: float = 0.5
+    max_rent: float = 8.0
+
+    # Enforcement penalties (state machine compliance)
+    invalid_fossilize_penalty: float = -1.0
+    cull_fossilized_penalty: float = -1.0
+    germinate_with_seed_penalty: float = -0.3
+
+    # Intervention costs (action friction)
+    germinate_cost: float = -0.02
+    fossilize_cost: float = -0.01
+    cull_cost: float = -0.005
+
+    # Fossilize shaping
+    fossilize_base_bonus: float = 0.5
+    fossilize_contribution_scale: float = 0.1
+    fossilize_noncontributing_penalty: float = -0.2
+
+    # Cull shaping
+    cull_hurting_bonus: float = 0.3
+    cull_acceptable_bonus: float = 0.1
+    cull_good_seed_penalty: float = -0.3
+    cull_hurting_threshold: float = -0.5
+
+    # Terminal bonus
+    terminal_acc_weight: float = 0.05
+
+    # Gamma for PBRS
+    gamma: float = 0.99
+
+    @staticmethod
+    def default() -> "ContributionRewardConfig":
+        """Return default configuration."""
+        return ContributionRewardConfig()
+
+
+# Stage potentials for contribution-based PBRS (flattened to prevent farming)
+_CONTRIBUTION_STAGE_POTENTIALS = {
+    0: 0.0,   # UNKNOWN
+    1: 0.0,   # DORMANT
+    2: 1.0,   # GERMINATED
+    3: 2.0,   # TRAINING
+    4: 3.5,   # BLENDING
+    5: 4.5,   # SHADOWING
+    6: 5.5,   # PROBATIONARY
+    7: 6.0,   # FOSSILIZED (small increase - not a farming target)
+}
+
+
 @dataclass(slots=True)
 class LossRewardConfig:
     """Configuration for loss-primary reward computation.
@@ -180,6 +254,7 @@ class SeedInfo(NamedTuple):
 
     stage: int  # SeedStage.value
     improvement_since_stage_start: float
+    total_improvement: float  # Since germination (for G5 gate alignment)
     epochs_in_stage: int
     seed_params: int = 0  # Trainable params of active seed
     previous_stage: int = 0  # For PBRS stage bonus calculation
@@ -200,13 +275,16 @@ class SeedInfo(NamedTuple):
             return None
         metrics = seed_state.metrics
         improvement = 0.0
+        total_improvement = 0.0
         seed_age = 0
         if metrics:
             improvement = metrics.current_val_accuracy - metrics.accuracy_at_stage_start
+            total_improvement = metrics.total_improvement
             seed_age = metrics.epochs_total
         return SeedInfo(
             stage=seed_state.stage.value,
             improvement_since_stage_start=improvement,
+            total_improvement=total_improvement,
             epochs_in_stage=seed_state.epochs_in_stage,
             seed_params=seed_params,
             previous_stage=seed_state.previous_stage.value,
@@ -278,7 +356,8 @@ def compute_shaped_reward(
     if host_params > 0 and total_params > 0:
         # total_params currently passed as added params; convert to growth ratio
         growth_ratio = total_params / host_params
-        scaled_cost = math.log(1.0 + growth_ratio)
+        # Guard against negative ratios (defensive - shouldn't happen in practice)
+        scaled_cost = math.log(1.0 + max(0.0, growth_ratio))
         rent_penalty = config.compute_rent_weight * scaled_cost
         rent_penalty = min(rent_penalty, config.max_rent_penalty)
         reward -= rent_penalty
@@ -357,13 +436,37 @@ def _germinate_shaping(
     max_epochs: int,
     config: RewardConfig,
 ) -> float:
-    """Compute shaping for GERMINATE action."""
+    """Compute shaping for GERMINATE action.
+
+    Includes PBRS bonus for successful germination to balance the
+    PBRS penalty applied when culling seeds. Without this, germination
+    has a net negative bias because:
+    - Culling pays PBRS penalty: gamma * 0 - phi_current = -phi_current
+    - Germinating had no PBRS bonus: 0 (asymmetric)
+
+    Now germination receives: gamma * phi_germinated - 0 ≈ 1.98
+    """
     if seed_info is None:
         # Bonus for germinating when no active seed
         bonus = config.germinate_no_seed_bonus
         # Extra bonus for germinating early
         if epoch < max_epochs * config.early_epoch_fraction:
             bonus += config.germinate_early_bonus
+
+        # PBRS bonus for germination: gamma * phi(GERMINATED) - phi(no_seed)
+        # This balances the PBRS penalty applied when culling seeds.
+        # phi(no_seed) = 0, phi(GERMINATED) = 2.0 (from stage_potentials)
+        # PBRS: 0.99 * 2.0 - 0.0 = 1.98
+        germinated_obs = {
+            "has_active_seed": 1,
+            "seed_stage": STAGE_GERMINATED,
+            "seed_epochs_in_stage": 0,
+        }
+        phi_germinated = compute_seed_potential(germinated_obs)
+        phi_no_seed = 0.0
+        pbrs_bonus = compute_pbrs_bonus(phi_no_seed, phi_germinated, gamma=0.99)
+        bonus += config.seed_potential_weight * pbrs_bonus
+
         return bonus
     else:
         # Penalty for trying to germinate with existing seed
@@ -374,6 +477,8 @@ def _advance_shaping(seed_info: SeedInfo | None, config: RewardConfig) -> float:
     """Compute shaping for FOSSILIZE action.
 
     FOSSILIZE only succeeds from PROBATIONARY → FOSSILIZED (Leyline contract).
+    Additionally, G5 gate requires total_improvement > 0 (since germination).
+
     Attempting FOSSILIZE at other stages is an INVALID action that will fail.
     We heavily penalize invalid attempts to teach the agent the state machine.
     """
@@ -381,17 +486,23 @@ def _advance_shaping(seed_info: SeedInfo | None, config: RewardConfig) -> float:
         return config.advance_no_seed_penalty
 
     stage = seed_info.stage
-    improvement = seed_info.improvement_since_stage_start
+    # Use total_improvement (since germination) to align with G5 gate criteria.
+    # G5 gate checks: total_improvement > 0 AND is_healthy (currently always True).
+    # This prevents rewarding attempts that will fail the gate.
+    total_improvement = seed_info.total_improvement
 
     # Only reward FOSSILIZE at PROBATIONARY (the only valid source state)
     if stage == STAGE_PROBATIONARY:
-        if improvement > 0:
+        if total_improvement > 0:
             # Large immediate bonus for successful fossilization
             # Base bonus + improvement-scaled bonus
             fossilize_bonus = config.advance_good_bonus + 1.5  # Base 2.0 total
-            improvement_bonus = 0.1 * improvement  # +0.1 per % improvement
+            improvement_bonus = 0.1 * total_improvement  # +0.1 per % improvement
             return fossilize_bonus + improvement_bonus
-        return config.advance_premature_penalty
+        # Failed fossilize: seed has no net improvement since germination.
+        # G5 gate will reject this. Heavy penalty (-1.0) to discourage spam.
+        # DRL expert recommendation: match INVALID action penalty magnitude.
+        return -1.0
 
     # FOSSILIZE at earlier stages is INVALID - action will fail.
     # Heavy penalty to teach agent the state machine constraints.
@@ -429,8 +540,7 @@ def _cull_shaping(seed_info: SeedInfo | None, config: RewardConfig) -> float:
 
     # Age penalty: culling a very young seed wastes the germination investment.
     # This prevents the "germinate then immediately cull" anti-pattern.
-    # Scale: -0.3 per epoch missing from minimum age (3 epochs)
-    MIN_CULL_AGE = 3
+    # Scale: -0.3 per epoch missing from minimum age
     if seed_age < MIN_CULL_AGE and stage in (STAGE_GERMINATED, STAGE_TRAINING):
         age_penalty = -0.3 * (MIN_CULL_AGE - seed_age)  # -0.9 at age 0, -0.6 at age 1
         return age_penalty  # Return early - don't add other bonuses to young culls
@@ -515,6 +625,213 @@ def _wait_shaping(
 
 # Default config singleton (avoid repeated allocations)
 _DEFAULT_CONFIG = RewardConfig()
+_DEFAULT_CONTRIBUTION_CONFIG = ContributionRewardConfig()
+
+
+# =============================================================================
+# Contribution-Primary Reward (uses counterfactual validation)
+# =============================================================================
+
+
+def compute_contribution_reward(
+    action: IntEnum,
+    seed_contribution: float | None,
+    val_acc: float,
+    seed_info: SeedInfo | None,
+    epoch: int,
+    max_epochs: int,
+    total_params: int = 0,
+    host_params: int = 1,
+    config: ContributionRewardConfig | None = None,
+    acc_at_germination: float | None = None,
+) -> float:
+    """Compute reward using bounded attribution (ransomware-resistant).
+
+    This function uses counterfactual validation but prevents "ransomware"
+    rewards where seeds create structural dependencies that inflate their
+    apparent contribution beyond actual value added.
+
+    Key insight: A seed cannot create more value than the progress actually
+    observed. The counterfactual measures "removal cost" not "value added".
+
+    Solution: reward = min(progress, contribution)
+    - If seed_contribution < 0: Toxic seed, penalize
+    - If seed_contribution > progress: Dependency created, pay for progress only
+    - If progress > seed_contribution: Host learning inflated progress, pay for contribution
+
+    Args:
+        action: Action taken (IntEnum member)
+        seed_contribution: Counterfactual delta (real_acc - baseline_acc).
+                          None if alpha=0 or no seed.
+        val_acc: Current validation accuracy
+        seed_info: Seed state info (None if no active seed)
+        epoch: Current epoch
+        max_epochs: Maximum epochs in episode
+        total_params: Extra params added (fossilized + active seed)
+        host_params: Baseline host model params (for normalization)
+        config: Reward configuration (uses default if None)
+        acc_at_germination: Accuracy when seed was planted (for progress calc)
+
+    Returns:
+        Shaped reward value
+    """
+    if config is None:
+        config = _DEFAULT_CONTRIBUTION_CONFIG
+
+    reward = 0.0
+
+    # === 1. PRIMARY: Bounded Attribution (Ransomware-Resistant) ===
+    # Pay for min(progress, contribution) to prevent dependency exploitation
+    if seed_contribution is not None:
+        if seed_contribution < 0:
+            # Toxic seed - counterfactual shows it actively hurts
+            # Pay the negative contribution as penalty
+            reward += config.contribution_weight * seed_contribution
+        else:
+            # Positive contribution - bound by actual progress
+            if acc_at_germination is not None:
+                progress = val_acc - acc_at_germination
+                # Pay for whichever is SMALLER:
+                # - Prevents ransomware (high contribution, low progress)
+                # - Prevents free-riding (high progress, low contribution)
+                attributed = min(max(0.0, progress), seed_contribution)
+            else:
+                # No baseline available - discount contribution
+                attributed = seed_contribution * 0.5
+            reward += config.contribution_weight * attributed
+
+    # === 2. PBRS: Stage Progression ===
+    # Potential-based shaping preserves optimal policy (Ng et al., 1999)
+    if seed_info is not None:
+        reward += _contribution_pbrs_bonus(seed_info, config)
+
+    # === 3. RENT: Compute Cost ===
+    # Logarithmic penalty on parameter bloat
+    if host_params > 0 and total_params > 0:
+        growth_ratio = total_params / host_params
+        # Guard against negative ratios (defensive - shouldn't happen in practice)
+        scaled_cost = math.log(1.0 + max(0.0, growth_ratio))
+        rent_penalty = config.rent_weight * scaled_cost
+        reward -= min(rent_penalty, config.max_rent)
+
+    # === 4. ACTION SHAPING ===
+    # Minimal - just state machine enforcement and intervention costs
+    action_name = action.name
+
+    if is_germinate_action(action):
+        if seed_info is not None:
+            reward += config.germinate_with_seed_penalty
+        else:
+            # PBRS bonus for successful germination (no existing seed)
+            # Balances the PBRS penalty applied when culling seeds
+            phi_germinated = _CONTRIBUTION_STAGE_POTENTIALS.get(STAGE_GERMINATED, 0.0)
+            phi_no_seed = 0.0
+            pbrs_bonus = config.gamma * phi_germinated - phi_no_seed
+            reward += config.pbrs_weight * pbrs_bonus
+        reward += config.germinate_cost
+
+    elif action_name == "FOSSILIZE":
+        reward += _contribution_fossilize_shaping(seed_info, seed_contribution, config)
+        reward += config.fossilize_cost
+
+    elif action_name == "CULL":
+        reward += _contribution_cull_shaping(seed_info, seed_contribution, config)
+        reward += config.cull_cost
+
+    # WAIT: No additional shaping (correct default action)
+
+    # === 5. TERMINAL BONUS ===
+    if epoch == max_epochs:
+        reward += val_acc * config.terminal_acc_weight
+
+    return reward
+
+
+def _contribution_pbrs_bonus(
+    seed_info: SeedInfo,
+    config: ContributionRewardConfig,
+) -> float:
+    """Compute PBRS bonus for stage progression.
+
+    Uses flattened potentials to prevent fossilization farming while
+    still incentivizing lifecycle progression.
+    """
+    # Current potential
+    phi_current = _CONTRIBUTION_STAGE_POTENTIALS.get(seed_info.stage, 0.0)
+    phi_current += min(
+        seed_info.epochs_in_stage * config.epoch_progress_bonus,
+        config.max_progress_bonus,
+    )
+
+    # Previous potential (reconstruct previous state)
+    if seed_info.epochs_in_stage == 0:
+        # Just transitioned - previous was end of last stage
+        phi_prev = _CONTRIBUTION_STAGE_POTENTIALS.get(seed_info.previous_stage, 0.0)
+        phi_prev += config.max_progress_bonus  # Was at max progress in prev stage
+    else:
+        # Same stage, one fewer epoch
+        phi_prev = _CONTRIBUTION_STAGE_POTENTIALS.get(seed_info.stage, 0.0)
+        phi_prev += min(
+            (seed_info.epochs_in_stage - 1) * config.epoch_progress_bonus,
+            config.max_progress_bonus,
+        )
+
+    return config.pbrs_weight * (config.gamma * phi_current - phi_prev)
+
+
+def _contribution_fossilize_shaping(
+    seed_info: SeedInfo | None,
+    seed_contribution: float | None,
+    config: ContributionRewardConfig,
+) -> float:
+    """Shaping for FOSSILIZE action - simplified with counterfactual."""
+    if seed_info is None:
+        return config.invalid_fossilize_penalty
+
+    # FOSSILIZE only valid from PROBATIONARY
+    if seed_info.stage != STAGE_PROBATIONARY:
+        return config.invalid_fossilize_penalty
+
+    # Use seed_contribution to determine if fossilization is earned
+    if seed_contribution is not None and seed_contribution > 0:
+        # Bonus scales with actual contribution
+        return (
+            config.fossilize_base_bonus
+            + config.fossilize_contribution_scale * seed_contribution
+        )
+
+    return config.fossilize_noncontributing_penalty
+
+
+def _contribution_cull_shaping(
+    seed_info: SeedInfo | None,
+    seed_contribution: float | None,
+    config: ContributionRewardConfig,
+) -> float:
+    """Shaping for CULL action - simplified with counterfactual."""
+    if seed_info is None:
+        return -0.2  # Nothing to cull
+
+    if seed_info.stage == STAGE_FOSSILIZED:
+        return config.cull_fossilized_penalty
+
+    # Age gate: penalize culling very young seeds
+    if seed_info.seed_age_epochs < MIN_CULL_AGE:
+        return -0.3 * (MIN_CULL_AGE - seed_info.seed_age_epochs)
+
+    # Use seed_contribution if available (BLENDING+ stages)
+    if seed_contribution is not None:
+        if seed_contribution < config.cull_hurting_threshold:
+            return config.cull_hurting_bonus  # Good: seed was hurting
+        elif seed_contribution < 0:
+            return config.cull_acceptable_bonus  # Acceptable: marginal harm
+        else:
+            # Penalize culling good seeds, scaled by how good
+            return config.cull_good_seed_penalty - 0.05 * seed_contribution
+
+    # No counterfactual (TRAINING stage) - neutral
+    # We don't have information yet, so CULL is neither good nor bad
+    return 0.0
 
 
 # =============================================================================
@@ -669,7 +986,8 @@ def compute_loss_reward(
             in_grace = seed_info.seed_age_epochs < config.grace_epochs
         if not in_grace:
             growth_ratio = total_params / host_params
-            scaled_cost = math.log(1.0 + growth_ratio)
+            # Guard against negative ratios (defensive - shouldn't happen in practice)
+            scaled_cost = math.log(1.0 + max(0.0, growth_ratio))
             rent_penalty = config.compute_rent_weight * scaled_cost
             rent_penalty = min(rent_penalty, config.max_rent_penalty)
             reward -= rent_penalty
@@ -717,17 +1035,25 @@ def get_intervention_cost(action: IntEnum) -> float:
 # =============================================================================
 
 __all__ = [
+    # Config classes
     "RewardConfig",
     "LossRewardConfig",
+    "ContributionRewardConfig",
+    # Seed info
     "SeedInfo",
-    "compute_shaped_reward",
+    # Reward functions
+    "compute_shaped_reward",  # Legacy: uses acc_delta (conflated signal)
+    "compute_contribution_reward",  # NEW: uses seed_contribution (causal)
+    "compute_loss_reward",
+    # PBRS utilities
     "compute_potential",
     "compute_pbrs_bonus",
     "compute_pbrs_stage_bonus",
-    "compute_loss_reward",
     "compute_seed_potential",
+    # Intervention costs
     "get_intervention_cost",
     "INTERVENTION_COSTS_BY_NAME",
+    # Stage constants
     "STAGE_TRAINING",
     "STAGE_BLENDING",
     "STAGE_FOSSILIZED",

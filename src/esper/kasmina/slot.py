@@ -7,6 +7,7 @@ germination -> training -> blending -> fossilization/culling.
 from __future__ import annotations
 
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, TYPE_CHECKING
@@ -65,6 +66,7 @@ class SeedMetrics:
     current_val_accuracy: float = 0.0
     best_val_accuracy: float = 0.0
     accuracy_at_stage_start: float = 0.0
+    accuracy_at_blending_start: float = 0.0  # Snapshot at TRAINING→BLENDING
 
     isolation_violations: int = 0
     gradient_norm_avg: float = 0.0
@@ -96,6 +98,18 @@ class SeedMetrics:
     @property
     def improvement_since_stage_start(self) -> float:
         return self.current_val_accuracy - self.accuracy_at_stage_start
+
+    @property
+    def seed_contribution(self) -> float:
+        """Accuracy change attributable to the seed (from BLENDING onward).
+
+        This is the true causal attribution - measures impact only during
+        stages where the seed actually affects network output (alpha > 0).
+        Returns 0 if seed never reached BLENDING (no measurable impact).
+        """
+        if self.accuracy_at_blending_start == 0.0:
+            return 0.0
+        return self.current_val_accuracy - self.accuracy_at_blending_start
 
     def reset_stage_baseline(self) -> None:
         """Reset the stage start baseline (call on stage transitions)."""
@@ -499,6 +513,40 @@ class SeedSlot(nn.Module):
         # Only create isolation monitor if not in fast mode
         self.isolation_monitor = None
 
+        # Cached shape probes to avoid per-germinate allocation
+        # Keys: "cnn" or "transformer", values: (device, tensor)
+        self._shape_probe_cache: dict[str, tuple[str, torch.Tensor]] = {}
+
+    def _get_shape_probe(self, topology: str) -> torch.Tensor:
+        """Get cached shape probe for topology, creating if needed."""
+        device_str = str(self.device)
+        cached = self._shape_probe_cache.get(topology)
+
+        if cached is not None:
+            cached_device, cached_tensor = cached
+            if cached_device == device_str:
+                return cached_tensor
+
+        # Create new probe for this topology/device
+        if topology == "cnn":
+            probe = torch.randn(
+                1,
+                self.channels,
+                CNN_SHAPE_PROBE_SPATIAL,
+                CNN_SHAPE_PROBE_SPATIAL,
+                device=self.device,
+            )
+        else:
+            probe = torch.randn(
+                2,
+                TRANSFORMER_SHAPE_PROBE_SEQ_LEN,
+                self.channels,
+                device=self.device,
+            )
+
+        self._shape_probe_cache[topology] = (device_str, probe)
+        return probe
+
     @property
     def is_active(self) -> bool:
         """Check if slot has an active seed."""
@@ -508,6 +556,32 @@ class SeedSlot(nn.Module):
     def alpha(self) -> float:
         """Current blending alpha."""
         return self.state.alpha if self.state else 0.0
+
+    @contextmanager
+    def force_alpha(self, value: float):
+        """Temporarily override alpha for counterfactual evaluation.
+
+        Used for differential validation to measure true seed contribution
+        by comparing real output (current alpha) vs host-only (alpha=0).
+
+        Args:
+            value: Alpha value to force (typically 0.0 for host-only baseline)
+
+        Yields:
+            Context where alpha is temporarily overridden
+        """
+        if self.state is None:
+            # No active seed - alpha is effectively 0, nothing to override
+            yield
+            return
+
+        # Store previous alpha and override
+        prev_alpha = self.state.alpha
+        self.state.alpha = value
+        try:
+            yield
+        finally:
+            self.state.alpha = prev_alpha
 
     @property
     def active_seed_params(self) -> int:
@@ -545,24 +619,7 @@ class SeedSlot(nn.Module):
         # Validate shape: ensure seed preserves feature shape in a host-agnostic way
         # without mutating host BatchNorm statistics. Smoke test only.
         if self.seed is not None:
-            if topology == "cnn":
-                # Canonical CNN feature shape: NCHW with known channel count.
-                shape_probe = torch.randn(
-                    1,
-                    self.channels,
-                    CNN_SHAPE_PROBE_SPATIAL,
-                    CNN_SHAPE_PROBE_SPATIAL,
-                    device=self.device,
-                )
-            else:
-                # Canonical transformer feature shape: (batch, seq_len, dim).
-                shape_probe = torch.randn(
-                    2,
-                    TRANSFORMER_SHAPE_PROBE_SEQ_LEN,
-                    self.channels,
-                    device=self.device,
-                )
-
+            shape_probe = self._get_shape_probe(topology)
             expected_shape = shape_probe.shape
             seed_was_training = self.seed.training
             try:
@@ -647,6 +704,7 @@ class SeedSlot(nn.Module):
             # Capture metrics before transition resets stage counters
             metrics = self.state.metrics
             improvement = metrics.total_improvement
+            seed_contribution = metrics.seed_contribution
             epochs_total = metrics.epochs_total
             epochs_in_stage = metrics.epochs_in_current_stage
             blueprint_id = self.state.blueprint_id
@@ -662,6 +720,9 @@ class SeedSlot(nn.Module):
                     self.isolate_gradients = True
                 elif old_stage == SeedStage.TRAINING and target_stage == SeedStage.BLENDING:
                     self.isolate_gradients = False
+                    # Snapshot accuracy at blending start for true causal attribution
+                    # This is when the seed starts actually affecting network output
+                    self.state.metrics.accuracy_at_blending_start = self.state.metrics.current_val_accuracy
 
                 self._emit_telemetry(
                     TelemetryEventType.SEED_STAGE_CHANGED,
@@ -676,6 +737,7 @@ class SeedSlot(nn.Module):
                             "blueprint_id": blueprint_id,
                             "seed_id": seed_id,
                             "improvement": improvement,
+                            "seed_contribution": seed_contribution,  # True causal attribution
                             "params_added": sum(
                                 p.numel() for p in self.seed.parameters() if p.requires_grad
                             ),
@@ -712,6 +774,7 @@ class SeedSlot(nn.Module):
 
         # Capture metrics before transition clears state
         improvement = self.state.metrics.total_improvement
+        seed_contribution = self.state.metrics.seed_contribution
         epochs_total = self.state.metrics.epochs_total
         epochs_in_stage = self.state.metrics.epochs_in_current_stage
         blueprint_id = self.state.blueprint_id
@@ -733,6 +796,7 @@ class SeedSlot(nn.Module):
                 "blueprint_id": blueprint_id,
                 "seed_id": seed_id,
                 "improvement": improvement,
+                "seed_contribution": seed_contribution,  # True causal attribution
                 "epochs_total": epochs_total,
                 "epochs_in_stage": epochs_in_stage,
             }
@@ -745,8 +809,18 @@ class SeedSlot(nn.Module):
             self.isolation_monitor.reset()
         return True
 
+    @torch.compiler.disable
     def forward(self, host_features: torch.Tensor) -> torch.Tensor:
-        """Process features through this slot."""
+        """Process features through this slot.
+
+        Note: torch.compile is disabled for this method because:
+        1. Stage-dependent control flow (self.state.stage) causes graph specialization
+        2. The STE path and blend path have different computation graphs
+        3. The overhead of recompilation per-stage outweighs benefits
+
+        If profiling shows this is a bottleneck, consider separating fast-path
+        (no active seed) from slow-path (active seed with stage logic).
+        """
         # blend_with_isolation imported at module level for torch.compile compatibility
 
         # 1. Early exit if there is no active seed or the lifecycle
@@ -878,6 +952,9 @@ class SeedSlot(nn.Module):
             # Leaving TRAINING: disable Womb isolation so BLENDING/SHADOWING/
             # FOSSILIZED can drive host trunk updates via the seed branch.
             self.isolate_gradients = False
+            # Snapshot accuracy at blending start for true causal attribution
+            # This is when the seed starts actually affecting network output
+            self.state.metrics.accuracy_at_blending_start = self.state.metrics.current_val_accuracy
             self._emit_telemetry(
                 TelemetryEventType.SEED_STAGE_CHANGED,
                 data={"from": old_stage.name, "to": self.state.stage.name},

@@ -3,9 +3,6 @@
 Collects gradient statistics for seed parameters without the full
 overhead of DiagnosticTracker. Designed for per-epoch collection
 during comparison and training loops.
-
-Uses vectorized operations (torch._foreach_norm) for performance
-in multi-seed scenarios.
 """
 
 from __future__ import annotations
@@ -80,10 +77,9 @@ class SeedGradientCollector:
                 'has_exploding': False,
             }
 
-        # Vectorized Norm Calculation using _foreach_norm
-        # Computes L2 norm for all tensors in the list at once
-        # Note: _foreach_norm returns a list of scalar tensors
-        per_param_norms = torch._foreach_norm(grads, 2.0)
+        # Compute L2 norm for each gradient tensor
+        # Using public API (torch.norm) instead of private torch._foreach_norm
+        per_param_norms = [g.norm(2) for g in grads]
 
         # Stack to compute stats efficiently on GPU/CPU
         all_norms = torch.stack(per_param_norms)

@@ -46,7 +46,7 @@ class TolariaGovernor:
         death_penalty: float = 10.0,
         history_window: int = 20,  # Longer window for stable estimates
         min_panics_before_rollback: int = 2,  # Require consecutive panics
-        num_classes: int = 10,  # For random-guess detection (CIFAR-10 default)
+        random_guess_loss: float | None = None,  # Task-specific baseline (default: ln(10) for CIFAR-10)
     ):
         self.model = model
         self.sensitivity = sensitivity
@@ -59,15 +59,29 @@ class TolariaGovernor:
         self.min_panics_before_rollback = min_panics_before_rollback
         self._pending_panic: bool = False
         self._panic_loss: float | None = None  # Track loss that triggered panic
-        # Random guessing loss = ln(num_classes), the "lobotomy signature"
-        self.random_guess_loss = math.log(num_classes)
+        # Random guessing loss = "lobotomy signature"
+        # - CIFAR-10: ln(10) ≈ 2.3 (default)
+        # - TinyStories: ln(50257) ≈ 10.8
+        # - ImageNet: ln(1000) ≈ 6.9
+        self.random_guess_loss = random_guess_loss if random_guess_loss is not None else math.log(10)
         # Capture an initial snapshot so rollback is always possible, even on first panic
         self.snapshot()
 
     def snapshot(self) -> None:
-        """Save Last Known Good state (GPU-native clone for tensors, deepcopy for extra_state)."""
+        """Save Last Known Good state to CPU memory to reduce GPU memory pressure.
+
+        Tensors are moved to CPU; non-tensor values are deep copied.
+        This trades slightly slower rollback for significant GPU memory savings,
+        especially for large models where snapshots could double GPU memory usage.
+        """
+        # Explicitly free old snapshot to prevent memory fragmentation
+        if self.last_good_state is not None:
+            del self.last_good_state
+            self.last_good_state = None
+
+        # Store on CPU to save GPU memory (rollback is rare, memory savings are constant)
         self.last_good_state = {
-            k: v.clone() if isinstance(v, torch.Tensor) else copy.deepcopy(v)
+            k: v.detach().cpu().clone() if isinstance(v, torch.Tensor) else copy.deepcopy(v)
             for k, v in self.model.state_dict().items()
         }
 
@@ -164,7 +178,14 @@ class TolariaGovernor:
             self.model.seed_slot.cull("governor_rollback")
 
         # Restore host + fossilized seeds (strict=True ensures complete restoration)
-        self.model.load_state_dict(self.last_good_state, strict=True)
+        # Move all tensors to model device in one batch before loading, avoiding
+        # individual CPU->GPU transfers for each parameter.
+        device = next(self.model.parameters()).device
+        state_on_device = {
+            k: v.to(device) if isinstance(v, torch.Tensor) else v
+            for k, v in self.last_good_state.items()
+        }
+        self.model.load_state_dict(state_on_device, strict=True)
 
         self.consecutive_panics += 1
 

@@ -15,7 +15,14 @@ import math
 from typing import TYPE_CHECKING
 
 # HOT PATH: ONLY leyline imports allowed!
-from esper.leyline import TensorSchema, TENSOR_SCHEMA_SIZE
+from esper.leyline import (
+    TensorSchema,
+    TENSOR_SCHEMA_SIZE,
+    MIN_CULL_AGE,
+    FULL_EVALUATION_AGE,
+    MIN_GERMINATE_EPOCH,
+    MIN_PLATEAU_TO_GERMINATE,
+)
 
 if TYPE_CHECKING:
     # Type hints only - not imported at runtime
@@ -26,10 +33,6 @@ __all__ = [
     "safe",
     "obs_to_base_features",
     "compute_action_mask",
-    "MIN_CULL_AGE",
-    "FULL_EVALUATION_AGE",
-    "MIN_GERMINATE_EPOCH",
-    "MIN_PLATEAU_TO_GERMINATE",
     "TaskConfig",
     "normalize_observation",
 ]
@@ -61,8 +64,12 @@ def safe(v, default: float = 0.0, max_val: float = 100.0) -> float:
 # Base Features (V1 - 27 dimensions)
 # =============================================================================
 
-def obs_to_base_features(obs: dict) -> list[float]:
-    """Extract V1-style base features (27 dims) from observation dict.
+def obs_to_base_features(obs: dict, max_epochs: int = 200) -> list[float]:
+    """Extract V1-style base features (27 dims) with pre-normalization.
+
+    Pre-normalizes features to ~[0, 1] range for early training stability.
+    This reduces the burden on RunningMeanStd during the initial warmup phase
+    where statistics are poorly estimated.
 
     Base features capture training state without telemetry:
     - Timing: epoch, global_step (2)
@@ -78,30 +85,37 @@ def obs_to_base_features(obs: dict) -> list[float]:
 
     Args:
         obs: Observation dictionary from TrainingSnapshot.to_dict()
+        max_epochs: Maximum training epochs (for normalization)
 
     Returns:
-        List of 27 floats
+        List of 27 floats, pre-normalized to ~[0, 1] range
     """
     return [
-        float(obs['epoch']),
-        float(obs['global_step']),
-        safe(obs['train_loss'], 10.0),
-        safe(obs['val_loss'], 10.0),
-        safe(obs['loss_delta'], 0.0),
-        obs['train_accuracy'],
-        obs['val_accuracy'],
-        safe(obs['accuracy_delta'], 0.0),
-        float(obs['plateau_epochs']),
-        obs['best_val_accuracy'],
-        safe(obs['best_val_loss'], 10.0),
-        *[safe(v, 10.0) for v in obs['loss_history_5']],
-        *obs['accuracy_history_5'],
-        float(obs['has_active_seed']),
-        float(obs['seed_stage']),
-        float(obs['seed_epochs_in_stage']),
-        obs['seed_alpha'],
-        obs['seed_improvement'],
-        float(obs['available_slots']),
+        # Timing features
+        float(obs['epoch']) / max_epochs,                     # [0, 1]
+        float(obs['global_step']) / (max_epochs * 100),       # ~[0, 1] assuming ~100 batches/epoch
+        # Loss features (safe already clips to 10.0, divide for ~[0, 1])
+        safe(obs['train_loss'], 10.0) / 10.0,                 # ~[0, 1]
+        safe(obs['val_loss'], 10.0) / 10.0,                   # ~[0, 1]
+        safe(obs['loss_delta'], 0.0, max_val=5.0) / 5.0,      # ~[-1, 1]
+        # Accuracy features (already [0, 100] -> [0, 1])
+        obs['train_accuracy'] / 100.0,                        # [0, 1]
+        obs['val_accuracy'] / 100.0,                          # [0, 1]
+        safe(obs['accuracy_delta'], 0.0, max_val=50.0) / 50.0,  # ~[-1, 1]
+        # Trend features
+        float(obs['plateau_epochs']) / 20.0,                  # ~[0, 1] typical max ~20
+        obs['best_val_accuracy'] / 100.0,                     # [0, 1]
+        safe(obs['best_val_loss'], 10.0) / 10.0,              # ~[0, 1]
+        # History features
+        *[safe(v, 10.0) / 10.0 for v in obs['loss_history_5']],       # ~[0, 1]
+        *[v / 100.0 for v in obs['accuracy_history_5']],              # [0, 1]
+        # Seed state features
+        float(obs['has_active_seed']),                        # Already 0/1
+        float(obs['seed_stage']) / 7.0,                       # Stages 0-7 -> [0, 1]
+        float(obs['seed_epochs_in_stage']) / 50.0,            # ~[0, 1] typical max ~50
+        obs['seed_alpha'],                                    # Already [0, 1]
+        obs['seed_improvement'] / 10.0,                       # ~[-1, 1] typical range
+        float(obs['available_slots']),                        # Usually 0-2, small scale ok
     ]
 
 
@@ -112,20 +126,6 @@ def obs_to_base_features(obs: dict) -> list[float]:
 # SeedStage.PROBATIONARY = 6 (hardcoded to avoid kasmina import on hot path)
 _PROBATIONARY_STAGE = 6
 
-# Minimum seed age before CULL is allowed (structural fix for uninformed culls)
-# 10 epochs gives enough signal to evaluate seed quality and ~3% survival rate
-# for random exploration (0.5^5), sufficient for learning.
-MIN_CULL_AGE = 10
-
-# Epochs needed for confident seed quality assessment (for info potential PBRS)
-FULL_EVALUATION_AGE = 10
-
-# Plateau gating: prevent germination until training has plateaued
-# This ensures seeds only get credit for improvements AFTER natural training gains
-# have exhausted, giving cleaner reward attribution. Matches h-tamiyo behavior.
-MIN_GERMINATE_EPOCH = 5        # Let host get easy wins first
-MIN_PLATEAU_TO_GERMINATE = 3   # Consecutive epochs with <0.5% improvement
-
 
 def compute_action_mask(
     has_active_seed: float,
@@ -134,18 +134,20 @@ def compute_action_mask(
     seed_age_epochs: int = 0,
     epoch: int = 0,
     plateau_epochs: int = 0,
+    host_stabilized: bool = False,
 ) -> list[float]:
     """Compute valid action mask based on current state.
 
-    This enforces the Kasmina state machine rules plus plateau gating:
-    - GERMINATE_*: Allowed only if no active seed AND plateau detected
+    This enforces the Kasmina state machine rules plus stabilization gating:
+    - GERMINATE_*: Allowed only if no active seed AND host stabilized AND plateau detected
     - FOSSILIZE: Allowed only if seed is in PROBATIONARY stage
     - CULL: Allowed only if active seed AND seed_age >= MIN_CULL_AGE
     - WAIT: Always allowed
 
-    Plateau gating ensures seeds only get credit for improvements AFTER
-    natural training gains have exhausted. This matches h-tamiyo behavior
-    and fixes reward misattribution from early germination.
+    Stabilization gating ensures seeds only get credit for improvements AFTER
+    the explosive growth phase ends and natural training gains have exhausted.
+    This matches h-tamiyo behavior and fixes reward misattribution from early
+    germination.
 
     Args:
         has_active_seed: 1.0 if seed is active, 0.0 otherwise
@@ -154,6 +156,7 @@ def compute_action_mask(
         seed_age_epochs: Total epochs since seed germination (default 0)
         epoch: Current training epoch (default 0)
         plateau_epochs: Consecutive epochs with <0.5% improvement (default 0)
+        host_stabilized: True if explosive growth phase has ended (default False)
 
     Returns:
         Binary mask list [WAIT, GERMINATE_0..N, FOSSILIZE, CULL]
@@ -173,13 +176,14 @@ def compute_action_mask(
     mask[0] = 1.0
 
     # GERMINATE_* (indices 1 to num_germinate_actions):
-    # Only if no active seed AND plateau detected (fixes credit misattribution)
+    # Only if no active seed AND host stabilized AND plateau detected
+    # This ensures seeds only get credit for improvements AFTER explosive growth ends
     if has_active_seed < 0.5:  # No active seed
         plateau_met = (
             epoch >= MIN_GERMINATE_EPOCH and
             plateau_epochs >= MIN_PLATEAU_TO_GERMINATE
         )
-        if plateau_met:
+        if host_stabilized and plateau_met:
             for i in range(1, num_germinate_actions + 1):
                 mask[i] = 1.0
 

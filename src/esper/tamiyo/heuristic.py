@@ -84,6 +84,10 @@ class HeuristicTamiyo:
         """Make a decision based on training signals."""
         Action = self._action_enum
 
+        # Decay blueprint penalties once per decision (not per germination attempt)
+        # This ensures consistent penalty semantics regardless of germination frequency
+        self._decay_blueprint_penalties()
+
         # Filter to only non-terminal, non-failure seeds
         live_seeds = [
             s for s in active_seeds
@@ -228,15 +232,16 @@ class HeuristicTamiyo:
             reason=reason,
         )
 
-    def _get_next_blueprint(self) -> str:
-        """Get next blueprint, avoiding heavily penalized ones."""
-        blueprints = self.config.blueprint_rotation
-
-        # Decay penalties
+    def _decay_blueprint_penalties(self) -> None:
+        """Decay blueprint penalties (called once per decision)."""
         for bp in list(self._blueprint_penalties.keys()):
             self._blueprint_penalties[bp] *= self.config.blueprint_penalty_decay
             if self._blueprint_penalties[bp] < 0.1:
                 del self._blueprint_penalties[bp]
+
+    def _get_next_blueprint(self) -> str:
+        """Get next blueprint, avoiding heavily penalized ones."""
+        blueprints = self.config.blueprint_rotation
 
         # Find blueprint below penalty threshold
         for _ in range(len(blueprints)):

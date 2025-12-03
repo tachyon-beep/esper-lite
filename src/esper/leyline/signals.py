@@ -171,6 +171,7 @@ class TrainingMetrics:
 
     # Trend indicators
     plateau_epochs: int = 0  # Epochs without improvement
+    host_stabilized: int = 0  # 1 if explosive growth phase ended (latch)
     best_val_accuracy: float = 0.0
     best_val_loss: float = float('inf')
 

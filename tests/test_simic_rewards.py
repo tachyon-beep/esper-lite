@@ -115,6 +115,7 @@ class TestPBRSStageBonus:
         seed_step1 = SeedInfo(
             stage=STAGE_BLENDING,
             improvement_since_stage_start=0.0,
+            total_improvement=0.0,
             epochs_in_stage=0,
             seed_params=0,
             previous_stage=STAGE_TRAINING,
@@ -160,6 +161,7 @@ class TestCullAgeProtection:
         return SeedInfo(
             stage=stage,
             improvement_since_stage_start=improvement,
+            total_improvement=improvement,
             epochs_in_stage=age,
             seed_params=1000,
             previous_stage=STAGE_GERMINATED,
@@ -205,6 +207,7 @@ class TestCullAgeProtection:
         seed_info = SeedInfo(
             stage=STAGE_BLENDING,
             improvement_since_stage_start=0.0,
+            total_improvement=0.0,
             epochs_in_stage=0,
             seed_params=1000,
             previous_stage=STAGE_TRAINING,
@@ -224,6 +227,7 @@ class TestWaitBlendingShaping:
         return SeedInfo(
             stage=stage,
             improvement_since_stage_start=improvement,
+            total_improvement=improvement,
             epochs_in_stage=epochs,
             seed_params=0,
             previous_stage=STAGE_TRAINING,
