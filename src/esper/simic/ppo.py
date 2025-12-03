@@ -212,7 +212,7 @@ class PPOAgent:
         if self.recurrent:
             return self.network.get_action(state, action_mask, hidden, deterministic)
         else:
-            action, log_prob, value = self.network.get_action(state, action_mask, deterministic)
+            action, log_prob, value, _ = self.network.get_action(state, action_mask, deterministic)
             return action, log_prob, value, None
 
     def store_transition(
