@@ -191,8 +191,23 @@ class TestRecurrentIntegration:
             torch.randn(27), torch.ones(7, dtype=torch.bool), hidden
         )
 
-        # Fresh should be from zeros (episode start)
-        # The network will have non-zero hidden after forward, but it started from zeros
+        # Verify fresh hidden was initialized from zeros by comparing to explicit zeros
+        h_zeros, c_zeros = agent.network.get_initial_hidden(batch_size=1, device='cpu')
+        assert h_zeros.abs().sum() == 0, "Initial hidden h should be zeros"
+        assert c_zeros.abs().sum() == 0, "Initial hidden c should be zeros"
+
+        # The fresh_hidden should produce same result as explicit zeros input
+        test_state = torch.randn(27)
+        test_mask = torch.ones(7, dtype=torch.bool)
+
+        _, _, value_from_none, _ = agent.get_action(test_state, test_mask, None)
+        _, _, value_from_zeros, _ = agent.get_action(
+            test_state, test_mask, (h_zeros, c_zeros)
+        )
+
+        assert torch.isclose(
+            torch.tensor(value_from_none), torch.tensor(value_from_zeros), atol=1e-6
+        ), f"hidden=None should equal explicit zeros: {value_from_none} vs {value_from_zeros}"
 
     def test_ratio_near_one_before_update(self):
         """PPO ratio should be ~1.0 before any gradient updates (same policy).
