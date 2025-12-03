@@ -32,6 +32,9 @@
 21. **Edge case tests** (empty episode, single step, exact chunk match)
 22. **Burn-in BPTT upgrade path** documented
 23. **Phase 0: API migration** - find and update all get_action() call sites
+24. **Forget gate bias unit tests** - verify bias_ih/bias_hh[h:2h]=1.0 for all layers
+25. **approx_kl warning threshold** - warn if KL > 0.03 during recurrent update
+26. **LR info log in TrainingConfig** - note when lr > 2.5e-4 with recurrent=True
 
 **Note on n_epochs:** While n_epochs=1 is safest, CleanRL's recurrent PPO uses n_epochs=4 by default. Multiple epochs work because PPO clipping limits policy divergence. The stored `old_log_probs` become slightly stale after each epoch, but this bias is small. Use n_epochs=1 for correctness guarantees, n_epochs=2-4 for sample efficiency.
 
@@ -205,6 +208,25 @@ class TestRecurrentActorCritic:
         # Entropy must be in [0, 1] (normalized)
         assert (entropy >= 0).all(), f"Entropy has negative values: {entropy.min()}"
         assert (entropy <= 1).all(), f"Entropy exceeds 1: {entropy.max()}"
+
+    def test_forget_gate_bias_initialized_to_one(self):
+        """Verify LSTM forget gate bias is initialized to 1.0 for better gradient flow."""
+        net = RecurrentActorCritic(state_dim=27, action_dim=7, lstm_hidden_dim=128)
+        h = net.lstm_hidden_dim
+        # Forget gate is second quarter of bias vector (LSTM gate order: input, forget, cell, output)
+        assert (net.lstm.bias_ih_l0.data[h:2*h] == 1.0).all(), "bias_ih forget gate should be 1.0"
+        assert (net.lstm.bias_hh_l0.data[h:2*h] == 1.0).all(), "bias_hh forget gate should be 1.0"
+
+    def test_forget_gate_bias_multilayer(self):
+        """Verify forget gate bias is 1.0 for all LSTM layers."""
+        net = RecurrentActorCritic(state_dim=27, action_dim=7, lstm_hidden_dim=64, num_lstm_layers=2)
+        h = net.lstm_hidden_dim
+        # Layer 0
+        assert (net.lstm.bias_ih_l0.data[h:2*h] == 1.0).all(), "Layer 0 bias_ih forget gate should be 1.0"
+        assert (net.lstm.bias_hh_l0.data[h:2*h] == 1.0).all(), "Layer 0 bias_hh forget gate should be 1.0"
+        # Layer 1
+        assert (net.lstm.bias_ih_l1.data[h:2*h] == 1.0).all(), "Layer 1 bias_ih forget gate should be 1.0"
+        assert (net.lstm.bias_hh_l1.data[h:2*h] == 1.0).all(), "Layer 1 bias_hh forget gate should be 1.0"
 ```
 
 **Step 2: Run test to verify it fails**
@@ -478,7 +500,7 @@ __all__ = [
 uv run pytest tests/test_simic_networks.py::TestRecurrentActorCritic -v
 ```
 
-Expected: All 8 tests PASS
+Expected: All 10 tests PASS
 
 **Step 6: Commit**
 
@@ -1390,11 +1412,21 @@ def update_recurrent(self, n_epochs: int | None = None, chunk_batch_size: int = 
 
     self.recurrent_buffer.clear()
 
+    # Compute final metrics
+    avg_approx_kl = total_approx_kl / max(n_updates, 1)
+
+    # Warn if KL divergence is high (indicates policy changing too fast)
+    if avg_approx_kl > 0.03:
+        logger.warning(
+            f"High KL divergence ({avg_approx_kl:.4f}) during recurrent update. "
+            f"Consider reducing lr or n_epochs to stabilize training."
+        )
+
     return {
         'policy_loss': total_policy_loss / max(n_updates, 1),
         'value_loss': total_value_loss / max(n_updates, 1),
         'entropy': total_entropy / max(n_updates, 1),
-        'approx_kl': total_approx_kl / max(n_updates, 1),  # For diagnostics
+        'approx_kl': avg_approx_kl,
     }
 ```
 
@@ -1447,6 +1479,16 @@ class TrainingConfig:
                 f"Mid-episode chunking will occur, losing temporal context at chunk "
                 f"boundaries. For optimal BPTT, set chunk_length >= max_epochs.",
                 RuntimeWarning,
+            )
+
+        # Note about learning rate for recurrent policies
+        if self.recurrent and self.lr > 2.5e-4:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(
+                f"Using lr={self.lr} with recurrent=True. Recurrent policies can be "
+                f"more sensitive to learning rate. If training is unstable, consider "
+                f"reducing to lr=2.5e-4 or lr=1e-4."
             )
 ```
 
