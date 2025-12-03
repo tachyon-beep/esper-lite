@@ -26,7 +26,7 @@ class TestActorCritic:
         state = torch.randn(1, 27)
         mask = torch.ones(1, 7)
 
-        action, log_prob, value = net.get_action(state, mask)
+        action, log_prob, value, _ = net.get_action(state, mask)
 
         assert isinstance(action, int)
         assert 0 <= action < 7

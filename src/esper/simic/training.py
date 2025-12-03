@@ -376,7 +376,7 @@ def run_ppo_episode(
         )
         action_mask = torch.tensor(action_mask_list, dtype=torch.float32, device=device)
 
-        action_idx, log_prob, value = agent.get_action(state, action_mask, deterministic=deterministic)
+        action_idx, log_prob, value, _ = agent.get_action(state, action_mask, deterministic=deterministic)
         action = ActionEnum(action_idx)
         action_counts[action.name] += 1
 

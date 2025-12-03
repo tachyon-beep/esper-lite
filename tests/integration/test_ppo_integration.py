@@ -184,7 +184,7 @@ class TestPPOActionSampling:
         state = torch.randn(1, 27)
         mask = _all_valid_mask()
 
-        action, log_prob, value = agent.get_action(state, mask, deterministic=False)
+        action, log_prob, value, _ = agent.get_action(state, mask, deterministic=False)
 
         # Action should be valid index
         assert isinstance(action, int), f"Action should be int, got {type(action)}"
@@ -206,7 +206,7 @@ class TestPPOActionSampling:
         # Get deterministic action multiple times
         actions = []
         for _ in range(10):
-            action, _, _ = agent.get_action(state, mask, deterministic=True)
+            action, _, _, _ = agent.get_action(state, mask, deterministic=True)
             actions.append(action)
 
         # All should be the same
@@ -222,7 +222,7 @@ class TestPPOActionSampling:
         # Sample multiple times
         actions = []
         for _ in range(100):
-            action, _, _ = agent.get_action(state, mask, deterministic=False)
+            action, _, _, _ = agent.get_action(state, mask, deterministic=False)
             actions.append(action)
 
         # Should have some variety (with high probability)
@@ -244,7 +244,7 @@ class TestPPOActionSampling:
         action_counts = [0] * 7
 
         for _ in range(n_samples):
-            action, _, _ = agent.get_action(state, mask, deterministic=False)
+            action, _, _, _ = agent.get_action(state, mask, deterministic=False)
             action_counts[action] += 1
 
         # Get the actual probabilities from the network
@@ -274,7 +274,7 @@ class TestPPOActionSampling:
         mask = _all_valid_mask()
 
         # Get action with log prob
-        action, returned_log_prob, _ = agent.get_action(state, mask, deterministic=False)
+        action, returned_log_prob, _, _ = agent.get_action(state, mask, deterministic=False)
 
         # Compute log prob manually
         with torch.no_grad():
@@ -292,7 +292,7 @@ class TestPPOActionSampling:
         mask = _all_valid_mask()
 
         # Get value from get_action
-        _, _, returned_value = agent.get_action(state, mask, deterministic=False)
+        _, _, returned_value, _ = agent.get_action(state, mask, deterministic=False)
 
         # Get value from forward pass
         with torch.no_grad():
@@ -328,7 +328,7 @@ class TestPPOEndToEnd:
         # Get action
         state_tensor = torch.tensor([features], dtype=torch.float32)
         mask = _all_valid_mask()
-        action, log_prob, value = agent.get_action(state_tensor, mask, deterministic=False)
+        action, log_prob, value, _ = agent.get_action(state_tensor, mask, deterministic=False)
 
         # All outputs should be valid
         assert 0 <= action < 7, f"Invalid action {action}"
@@ -351,7 +351,7 @@ class TestPPOEndToEnd:
         # Get action
         state_tensor = torch.tensor([features], dtype=torch.float32)
         mask = _all_valid_mask()
-        action, log_prob, value = agent.get_action(state_tensor, mask)
+        action, log_prob, value, _ = agent.get_action(state_tensor, mask)
 
         assert 0 <= action < 7
         assert log_prob <= 0
