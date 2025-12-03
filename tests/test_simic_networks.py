@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from esper.simic.networks import ActorCritic, QNetwork, VNetwork
+from esper.simic.networks import ActorCritic, QNetwork, VNetwork, RecurrentActorCritic
 
 
 class TestActorCritic:
@@ -135,3 +135,126 @@ class TestVNetwork:
         values = net(state)
 
         assert values.shape == (4, 1)
+
+
+class TestRecurrentActorCritic:
+    """Tests for LSTM-based actor-critic network."""
+
+    def test_init_creates_lstm_layer(self):
+        """RecurrentActorCritic should have LSTM between encoder and heads."""
+        net = RecurrentActorCritic(state_dim=27, action_dim=7, lstm_hidden_dim=128)
+        # Direct attribute access (no hasattr per CLAUDE.md)
+        assert isinstance(net.lstm, torch.nn.LSTM)
+        assert net.lstm.hidden_size == 128
+
+    def test_get_initial_hidden_returns_correct_shape(self):
+        """Initial hidden state should be zeros with correct shape."""
+        net = RecurrentActorCritic(state_dim=27, action_dim=7, lstm_hidden_dim=128)
+        h, c = net.get_initial_hidden(batch_size=4, device=torch.device('cpu'))
+        # Shape: [num_layers, batch, hidden]
+        assert h.shape == (1, 4, 128)
+        assert c.shape == (1, 4, 128)
+        assert (h == 0).all()
+        assert (c == 0).all()
+
+    def test_forward_single_step_returns_dist_value_hidden(self):
+        """Forward with single step should return distribution, value, and new hidden."""
+        net = RecurrentActorCritic(state_dim=27, action_dim=7, lstm_hidden_dim=128)
+        state = torch.randn(4, 27)  # [batch, state_dim]
+        mask = torch.ones(4, 7, dtype=torch.bool)
+
+        dist, value, hidden = net.forward(state, mask, hidden=None)
+
+        assert value.shape == (4,)
+        assert len(hidden) == 2  # (h, c)
+        assert hidden[0].shape == (1, 4, 128)  # [layers, batch, hidden]
+
+    def test_forward_sequence_returns_sequence_outputs(self):
+        """Forward with sequence should return outputs for each timestep."""
+        net = RecurrentActorCritic(state_dim=27, action_dim=7, lstm_hidden_dim=128)
+        states = torch.randn(4, 16, 27)  # [batch, seq_len, state_dim]
+        masks = torch.ones(4, 16, 7, dtype=torch.bool)
+
+        dist, values, hidden = net.forward(states, masks, hidden=None)
+
+        assert dist._dist.logits.shape == (4, 16, 7)
+        assert values.shape == (4, 16)
+
+    def test_hidden_state_persists_across_calls(self):
+        """Hidden state from one forward should affect next forward."""
+        torch.manual_seed(42)  # Deterministic for reliable test
+        net = RecurrentActorCritic(state_dim=27, action_dim=7, lstm_hidden_dim=128)
+        state = torch.randn(1, 27)
+        mask = torch.ones(1, 7, dtype=torch.bool)
+
+        # First call builds hidden state
+        _, _, hidden1 = net.forward(state, mask, hidden=None)
+
+        # Build up more context
+        for _ in range(5):
+            _, _, hidden1 = net.forward(torch.randn(1, 27), mask, hidden=hidden1)
+
+        # Compare value with context vs fresh
+        _, value_with_context, _ = net.forward(state, mask, hidden=hidden1)
+        _, value_fresh, _ = net.forward(state, mask, hidden=None)
+
+        # Values must differ (context changes output)
+        assert not torch.allclose(value_with_context, value_fresh, atol=1e-5)
+
+    def test_evaluate_actions_returns_log_probs_for_sequence(self):
+        """evaluate_actions should return log probs for all sequence positions."""
+        net = RecurrentActorCritic(state_dim=27, action_dim=7, lstm_hidden_dim=128)
+        states = torch.randn(2, 8, 27)  # [batch, seq, state_dim]
+        actions = torch.randint(0, 7, (2, 8))  # [batch, seq]
+        masks = torch.ones(2, 8, 7, dtype=torch.bool)
+
+        log_probs, values, entropy, hidden = net.evaluate_actions(states, actions, masks)
+
+        assert log_probs.shape == (2, 8)
+        assert values.shape == (2, 8)
+        assert entropy.shape == (2, 8)
+        assert hidden[0].shape == (1, 2, 128)
+
+    def test_device_handling_gpu_to_cpu(self):
+        """Network should handle device placement correctly."""
+        if not torch.cuda.is_available():
+            pytest.skip("CUDA not available")
+
+        net = RecurrentActorCritic(state_dim=27, action_dim=7).cuda()
+        state = torch.randn(1, 27, device='cuda')
+        mask = torch.ones(1, 7, dtype=torch.bool, device='cuda')
+
+        _, _, hidden = net.forward(state, mask)
+        assert hidden[0].device.type == 'cuda'
+
+    def test_entropy_is_normalized(self):
+        """Verify entropy is normalized to [0, 1] range (MaskedCategorical)."""
+        net = RecurrentActorCritic(state_dim=27, action_dim=7, lstm_hidden_dim=128)
+        states = torch.randn(2, 8, 27)
+        actions = torch.randint(0, 7, (2, 8))
+        masks = torch.ones(2, 8, 7, dtype=torch.bool)
+
+        log_probs, values, entropy, hidden = net.evaluate_actions(states, actions, masks)
+
+        # Entropy must be in [0, 1] (normalized)
+        assert (entropy >= 0).all(), f"Entropy has negative values: {entropy.min()}"
+        assert (entropy <= 1).all(), f"Entropy exceeds 1: {entropy.max()}"
+
+    def test_forget_gate_bias_initialized_to_one(self):
+        """Verify LSTM forget gate bias is initialized to 1.0 for better gradient flow."""
+        net = RecurrentActorCritic(state_dim=27, action_dim=7, lstm_hidden_dim=128)
+        h = net.lstm_hidden_dim
+        # Forget gate is second quarter of bias vector (LSTM gate order: input, forget, cell, output)
+        assert (net.lstm.bias_ih_l0.data[h:2*h] == 1.0).all(), "bias_ih forget gate should be 1.0"
+        assert (net.lstm.bias_hh_l0.data[h:2*h] == 1.0).all(), "bias_hh forget gate should be 1.0"
+
+    def test_forget_gate_bias_multilayer(self):
+        """Verify forget gate bias is 1.0 for all LSTM layers."""
+        net = RecurrentActorCritic(state_dim=27, action_dim=7, lstm_hidden_dim=64, num_lstm_layers=2)
+        h = net.lstm_hidden_dim
+        # Layer 0
+        assert (net.lstm.bias_ih_l0.data[h:2*h] == 1.0).all(), "Layer 0 bias_ih forget gate should be 1.0"
+        assert (net.lstm.bias_hh_l0.data[h:2*h] == 1.0).all(), "Layer 0 bias_hh forget gate should be 1.0"
+        # Layer 1
+        assert (net.lstm.bias_ih_l1.data[h:2*h] == 1.0).all(), "Layer 1 bias_ih forget gate should be 1.0"
+        assert (net.lstm.bias_hh_l1.data[h:2*h] == 1.0).all(), "Layer 1 bias_hh forget gate should be 1.0"

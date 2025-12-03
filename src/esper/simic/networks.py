@@ -499,7 +499,7 @@ if TORCH_AVAILABLE:
             state: torch.Tensor,
             action_mask: torch.Tensor,
             deterministic: bool = False,
-        ) -> tuple[int, float, float]:
+        ) -> tuple[int, float, float, None]:
             """Sample action from policy with masking.
 
             Args:
@@ -511,6 +511,7 @@ if TORCH_AVAILABLE:
                 action: Selected action index
                 log_prob: Log probability of action
                 value: State value estimate
+                hidden_state: None (non-recurrent policy has no hidden state)
             """
             # inference_mode is more efficient than no_grad (disables version tracking)
             with torch.inference_mode():
@@ -526,7 +527,7 @@ if TORCH_AVAILABLE:
                 else:
                     action = dist.sample()
                 log_prob = dist.log_prob(action)
-                return action.item(), log_prob.item(), value.item()
+                return action.item(), log_prob.item(), value.item(), None
 
         def get_action_batch(
             self,
@@ -579,6 +580,241 @@ if TORCH_AVAILABLE:
             return log_probs, values, entropy
 
 
+    class RecurrentActorCritic(nn.Module):
+        """Actor-Critic with LSTM for temporal pattern learning.
+
+        Architecture:
+            state -> Linear(state_dim, hidden_dim) -> ReLU
+                  -> LSTM(hidden_dim, lstm_hidden_dim)
+                  -> Actor head -> action logits
+                  -> Critic head -> value
+
+        Hidden state shape convention: [num_layers, batch, lstm_hidden_dim]
+        This is PyTorch's native LSTM format - never deviate from this.
+        """
+
+        def __init__(
+            self,
+            state_dim: int,
+            action_dim: int,
+            hidden_dim: int = 256,
+            lstm_hidden_dim: int = 128,
+            num_lstm_layers: int = 1,
+        ):
+            super().__init__()
+
+            self.state_dim = state_dim
+            self.action_dim = action_dim
+            self.lstm_hidden_dim = lstm_hidden_dim
+            self.num_lstm_layers = num_lstm_layers
+
+            # Feature encoder
+            self.encoder = nn.Sequential(
+                nn.Linear(state_dim, hidden_dim),
+                nn.ReLU(),
+            )
+
+            # LSTM for temporal processing
+            self.lstm = nn.LSTM(
+                input_size=hidden_dim,
+                hidden_size=lstm_hidden_dim,
+                num_layers=num_lstm_layers,
+                batch_first=True,
+            )
+
+            # Actor head (policy)
+            self.actor = nn.Sequential(
+                nn.Linear(lstm_hidden_dim, lstm_hidden_dim // 2),
+                nn.ReLU(),
+                nn.Linear(lstm_hidden_dim // 2, action_dim),
+            )
+
+            # Critic head (value function)
+            self.critic = nn.Sequential(
+                nn.Linear(lstm_hidden_dim, lstm_hidden_dim // 2),
+                nn.ReLU(),
+                nn.Linear(lstm_hidden_dim // 2, 1),
+            )
+
+            self._init_weights()
+
+        def _init_weights(self):
+            """Initialize weights with orthogonal initialization."""
+            for module in self.modules():
+                if isinstance(module, nn.Linear):
+                    nn.init.orthogonal_(module.weight, gain=math.sqrt(2))
+                    nn.init.zeros_(module.bias)
+
+            # Smaller init for output layers
+            nn.init.orthogonal_(self.actor[-1].weight, gain=0.01)
+            nn.init.orthogonal_(self.critic[-1].weight, gain=1.0)
+
+            # LSTM-specific initialization (handles all layers)
+            for name, param in self.lstm.named_parameters():
+                if 'weight_ih' in name:
+                    nn.init.orthogonal_(param)
+                elif 'weight_hh' in name:
+                    nn.init.orthogonal_(param)
+                elif 'bias' in name:
+                    nn.init.zeros_(param)
+                    # Set forget gate bias to 1 for better gradient flow
+                    # Works for any layer: bias_ih_l0, bias_hh_l0, bias_ih_l1, etc.
+                    hidden_size = self.lstm_hidden_dim
+                    param.data[hidden_size:2*hidden_size].fill_(1.0)
+
+        def get_initial_hidden(
+            self,
+            batch_size: int,
+            device: torch.device,
+        ) -> tuple[torch.Tensor, torch.Tensor]:
+            """Return zero-initialized hidden state for new episodes.
+
+            Returns:
+                Tuple of (h, c) each with shape [num_layers, batch, lstm_hidden_dim]
+            """
+            h = torch.zeros(
+                self.num_lstm_layers, batch_size, self.lstm_hidden_dim,
+                device=device,
+            )
+            c = torch.zeros(
+                self.num_lstm_layers, batch_size, self.lstm_hidden_dim,
+                device=device,
+            )
+            return (h, c)
+
+        def forward(
+            self,
+            state: torch.Tensor,
+            action_mask: torch.Tensor,
+            hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
+        ) -> tuple[MaskedCategorical, torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
+            """Forward pass with hidden state.
+
+            Handles both single-step [batch, state_dim] and sequence
+            [batch, seq_len, state_dim] inputs.
+
+            Args:
+                state: Observation tensor
+                action_mask: Boolean mask (True=valid, False=invalid)
+                hidden: (h, c) tuple with shape [num_layers, batch, hidden] or None
+
+            Returns:
+                dist: MaskedCategorical over actions
+                value: State value estimate(s)
+                hidden: Updated (h, c) for next timestep
+            """
+            # Handle both single-step and sequence inputs
+            if state.dim() == 2:
+                state = state.unsqueeze(1)  # [batch, 1, state_dim]
+                action_mask = action_mask.unsqueeze(1)
+                squeeze_output = True
+            else:
+                squeeze_output = False
+
+            batch_size = state.size(0)
+
+            # Initialize hidden if not provided
+            if hidden is None:
+                hidden = self.get_initial_hidden(batch_size, state.device)
+
+            # Encode features: [batch, seq_len, hidden_dim]
+            features = self.encoder(state)
+
+            # LSTM processing: [batch, seq_len, lstm_hidden_dim]
+            lstm_out, hidden = self.lstm(features, hidden)
+
+            # Actor and critic heads
+            logits = self.actor(lstm_out)
+            values = self.critic(lstm_out).squeeze(-1)
+
+            # Squeeze back if single-step input
+            if squeeze_output:
+                logits = logits.squeeze(1)
+                values = values.squeeze(1)
+                action_mask = action_mask.squeeze(1)
+
+            dist = MaskedCategorical(logits=logits, mask=action_mask)
+            return dist, values, hidden
+
+        def get_action(
+            self,
+            state: torch.Tensor,
+            action_mask: torch.Tensor,
+            hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
+            deterministic: bool = False,
+        ) -> tuple[int, float, float, tuple[torch.Tensor, torch.Tensor]]:
+            """Sample action for single step during rollout collection.
+
+            Args:
+                state: Single observation [state_dim] or [1, state_dim]
+                action_mask: Boolean mask [action_dim] or [1, action_dim]
+                hidden: Current hidden state or None
+                deterministic: If True, return argmax
+
+            Returns:
+                action: Selected action index
+                log_prob: Log probability of action
+                value: State value estimate
+                hidden: Updated hidden state (detached and cloned for safe storage)
+            """
+            with torch.inference_mode():
+                # Ensure batch dimension
+                if state.dim() == 1:
+                    state = state.unsqueeze(0)
+                if action_mask.dim() == 1:
+                    action_mask = action_mask.unsqueeze(0)
+
+                dist, value, new_hidden = self.forward(state, action_mask, hidden)
+
+                if deterministic:
+                    action = dist.probs.argmax(dim=-1)
+                else:
+                    action = dist.sample()
+
+                log_prob = dist.log_prob(action)
+
+                # CRITICAL: .clone() is essential, .detach() is defensive
+                # - .clone() creates independent tensor (not a view that keeps parent alive)
+                #   Without clone, sliced tensors retain reference to full batched tensor
+                # - .detach() is technically redundant under inference_mode (no graph exists)
+                #   but included for safety if code is ever called outside inference_mode
+                detached_hidden = (
+                    new_hidden[0].detach().clone(),
+                    new_hidden[1].detach().clone(),
+                )
+
+                return action.item(), log_prob.item(), value.item(), detached_hidden
+
+        def evaluate_actions(
+            self,
+            states: torch.Tensor,
+            actions: torch.Tensor,
+            action_masks: torch.Tensor,
+            hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
+        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
+            """Evaluate actions for PPO update (supports batched sequences).
+
+            Args:
+                states: [batch, seq_len, state_dim]
+                actions: [batch, seq_len]
+                action_masks: [batch, seq_len, action_dim]
+                hidden: Initial hidden state [num_layers, batch, hidden]
+
+            Returns:
+                log_probs: [batch, seq_len]
+                values: [batch, seq_len]
+                entropy: [batch, seq_len] - NORMALIZED entropy from MaskedCategorical
+                hidden: Final hidden state
+            """
+            dist, values, hidden = self.forward(states, action_masks, hidden)
+            log_probs = dist.log_prob(actions)
+            # NOTE: MaskedCategorical.entropy() returns NORMALIZED entropy [0, 1]
+            # This matches the existing PPOAgent which uses entropy_coef scaled for
+            # normalized values (e.g., 0.015 instead of 0.01 for raw entropy).
+            entropy = dist.entropy()
+            return log_probs, values, entropy, hidden
+
+
     class QNetwork(nn.Module):
         """Q-network for IQL: Q(s, a) for all actions."""
 
@@ -628,6 +864,7 @@ __all__ = [
     "PolicyNetwork",
     "print_confusion_matrix",
     "ActorCritic",
+    "RecurrentActorCritic",
     "MaskedCategorical",
     "InvalidStateMachineError",
     "QNetwork",
