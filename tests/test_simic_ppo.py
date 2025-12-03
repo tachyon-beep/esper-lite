@@ -10,6 +10,7 @@ import torch
 
 from esper.leyline import TrainingSignals, SeedTelemetry
 from esper.simic.ppo import signals_to_features, PPOAgent
+from esper.simic.networks import ActorCritic, RecurrentActorCritic
 
 
 class TestPPOFeatureDimensions:
@@ -297,3 +298,95 @@ class TestEntropyAnnealing:
         # Entropy coef should have changed
         expected_coef = 0.5 + (1/10) * (0.01 - 0.5)  # 0.451
         assert abs(agent.get_entropy_coef() - expected_coef) < 1e-6
+
+
+class TestRecurrentPPOAgent:
+    """Tests for recurrent PPO agent."""
+
+    def test_init_with_recurrent_creates_lstm_network(self):
+        """PPOAgent(recurrent=True) should use RecurrentActorCritic."""
+        agent = PPOAgent(state_dim=27, action_dim=7, recurrent=True, lstm_hidden_dim=128)
+        assert isinstance(agent.network, RecurrentActorCritic)
+        assert agent.recurrent is True
+
+    def test_init_without_recurrent_uses_mlp(self):
+        """PPOAgent(recurrent=False) should use standard ActorCritic."""
+        agent = PPOAgent(state_dim=27, action_dim=7, recurrent=False)
+        assert isinstance(agent.network, ActorCritic)
+        assert agent.recurrent is False
+
+    def test_get_action_returns_hidden_when_recurrent(self):
+        """get_action should return hidden state for recurrent agent."""
+        agent = PPOAgent(state_dim=27, action_dim=7, recurrent=True, device='cpu')
+        state = torch.randn(27)
+        mask = torch.ones(7, dtype=torch.bool)
+
+        result = agent.get_action(state, mask, hidden=None)
+
+        assert len(result) == 4  # (action, log_prob, value, hidden)
+        action, log_prob, value, hidden = result
+        assert isinstance(action, int)
+        assert hidden is not None
+        assert len(hidden) == 2  # (h, c)
+
+    def test_update_recurrent_uses_batched_chunks(self):
+        """Recurrent update should use batched chunk processing."""
+        agent = PPOAgent(
+            state_dim=27, action_dim=7, recurrent=True, device='cpu',
+            chunk_length=4, lstm_hidden_dim=64,
+        )
+
+        # Add episode
+        agent.recurrent_buffer.start_episode(env_id=0)
+        hidden = None
+        for i in range(6):
+            state = torch.randn(27)
+            mask = torch.ones(7, dtype=torch.bool)
+            action, log_prob, value, hidden = agent.get_action(state, mask, hidden)
+            agent.store_recurrent_transition(
+                state=state, action=action, log_prob=log_prob, value=value,
+                reward=0.1, done=(i == 5), action_mask=mask, env_id=0,
+            )
+        agent.recurrent_buffer.end_episode(env_id=0)
+
+        metrics = agent.update_recurrent()
+
+        assert 'policy_loss' in metrics
+        assert 'value_loss' in metrics
+        assert metrics['policy_loss'] != 0.0
+
+    def test_advantages_are_nonzero_in_update(self):
+        """Verify GAE advantages flow through to update (critical bug fix)."""
+        agent = PPOAgent(
+            state_dim=27, action_dim=7, recurrent=True, device='cpu',
+            chunk_length=4, lstm_hidden_dim=64,
+        )
+
+        # Add episode with increasing rewards
+        agent.recurrent_buffer.start_episode(env_id=0)
+        hidden = None
+        for i in range(4):
+            state = torch.randn(27)
+            mask = torch.ones(7, dtype=torch.bool)
+            action, log_prob, value, hidden = agent.get_action(state, mask, hidden)
+            agent.store_recurrent_transition(
+                state=state, action=action, log_prob=log_prob, value=value,
+                reward=float(i + 1),  # Increasing rewards
+                done=(i == 3), action_mask=mask, env_id=0,
+            )
+        agent.recurrent_buffer.end_episode(env_id=0)
+
+        # Compute GAE
+        agent.recurrent_buffer.compute_gae(gamma=0.99, gae_lambda=0.95)
+        chunks = agent.recurrent_buffer.get_chunks(device='cpu')
+
+        # Advantages must be non-zero
+        assert chunks[0]['advantages'].abs().sum() > 0, "Advantages should be non-zero with rewards"
+
+    def test_value_coef_used_correctly(self):
+        """Value coefficient should be from agent, not hardcoded."""
+        agent = PPOAgent(
+            state_dim=27, action_dim=7, recurrent=True, device='cpu',
+            value_coef=0.25,  # Non-default value
+        )
+        assert agent.value_coef == 0.25

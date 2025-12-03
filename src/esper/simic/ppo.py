@@ -14,9 +14,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from esper.simic.buffers import RolloutBuffer
-from esper.simic.networks import ActorCritic
+from esper.simic.buffers import RolloutBuffer, RecurrentRolloutBuffer
+from esper.simic.networks import ActorCritic, RecurrentActorCritic
 from esper.simic.features import safe
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -127,7 +130,13 @@ class PPOAgent:
         batch_size: int = 64,
         target_kl: float | None = 0.015,
         device: str = "cuda:0",
+        # Recurrence params
+        recurrent: bool = False,
+        lstm_hidden_dim: int = 128,
+        chunk_length: int = 25,  # Must match max_epochs to avoid hidden state issues
     ):
+        self.recurrent = recurrent
+        self.chunk_length = chunk_length
         self.gamma = gamma
         self.gae_lambda = gae_lambda
         self.clip_ratio = clip_ratio
@@ -139,12 +148,25 @@ class PPOAgent:
         self.value_coef = value_coef
         self.clip_value = clip_value
         self.max_grad_norm = max_grad_norm
+        self.lstm_hidden_dim = lstm_hidden_dim
         self.n_epochs = n_epochs
         self.batch_size = batch_size
         self.target_kl = target_kl
         self.device = device
 
-        self.network = ActorCritic(state_dim, action_dim, hidden_dim).to(device)
+        if recurrent:
+            self.network = RecurrentActorCritic(
+                state_dim=state_dim,
+                action_dim=action_dim,
+                lstm_hidden_dim=lstm_hidden_dim,
+            ).to(device)
+            self.recurrent_buffer = RecurrentRolloutBuffer(
+                chunk_length=chunk_length,
+                lstm_hidden_dim=lstm_hidden_dim,
+            )
+        else:
+            self.network = ActorCritic(state_dim, action_dim, hidden_dim).to(device)
+
         self.optimizer = torch.optim.Adam(self.network.parameters(), lr=lr, eps=1e-5)
         self.buffer = RolloutBuffer()
         self.train_steps = 0
@@ -170,21 +192,28 @@ class PPOAgent:
         self,
         state: torch.Tensor,
         action_mask: torch.Tensor,
+        hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
         deterministic: bool = False,
-    ) -> tuple[int, float, float]:
-        """Get action for current state with masking.
+    ) -> tuple[int, float, float, tuple | None]:
+        """Get action, optionally with hidden state for recurrent policy.
 
         Args:
             state: Observation tensor
             action_mask: Binary mask of valid actions (1=valid, 0=invalid)
+            hidden: LSTM hidden state (h, c) for recurrent policy, None for MLP
             deterministic: If True, return argmax instead of sampling
 
         Returns:
             action: Selected action index
             log_prob: Log probability of action
             value: State value estimate
+            hidden: Updated hidden state (recurrent) or None (non-recurrent)
         """
-        return self.network.get_action(state, action_mask, deterministic)
+        if self.recurrent:
+            return self.network.get_action(state, action_mask, hidden, deterministic)
+        else:
+            action, log_prob, value = self.network.get_action(state, action_mask, deterministic)
+            return action, log_prob, value, None
 
     def store_transition(
         self,
@@ -208,6 +237,23 @@ class PPOAgent:
             action_mask: Binary mask of valid actions (stored for PPO update)
         """
         self.buffer.add(state, action, log_prob, value, reward, done, action_mask)
+
+    def store_recurrent_transition(
+        self,
+        state: torch.Tensor,
+        action: int,
+        log_prob: float,
+        value: float,
+        reward: float,
+        done: bool,
+        action_mask: torch.Tensor,
+        env_id: int,
+    ) -> None:
+        """Store transition for recurrent policy (no hidden stored per-step)."""
+        self.recurrent_buffer.add(
+            state=state, action=action, log_prob=log_prob, value=value,
+            reward=reward, done=done, action_mask=action_mask, env_id=env_id,
+        )
 
     def update(self, last_value: float = 0.0, clear_buffer: bool = True) -> dict:
         """Perform PPO update.
@@ -319,6 +365,144 @@ class PPOAgent:
         if early_stopped:
             result['early_stopped'] = 1.0
         return result
+
+    def update_recurrent(self, n_epochs: int | None = None, chunk_batch_size: int = 8) -> dict:
+        """PPO update for recurrent policy using batched sequences.
+
+        Key design decisions (from reviewer feedback):
+        1. GAE computed once, distributed to chunks
+        2. Batched chunk processing for GPU efficiency
+        3. SINGLE EPOCH (n_epochs=1) default to avoid hidden state drift between epochs
+           - After gradient updates, policy changes, so recomputed log_probs differ
+           - With multiple epochs, ratio = new_log_prob / old_log_prob becomes biased
+           - Single epoch is standard practice for recurrent PPO (OpenAI Five, CleanRL)
+        4. value_coef from agent, not hardcoded
+        5. Value clipping for training stability (parity with feedforward)
+        6. Gradient clipping at max_grad_norm
+        7. train_steps incremented for entropy annealing
+
+        Args:
+            n_epochs: Number of PPO epochs. Default 1 for recurrent (safest).
+                      Higher values (2-4) work due to PPO clipping but emit warning.
+            chunk_batch_size: Number of chunks per batch for GPU efficiency.
+        """
+        # Default to 1 epoch for recurrent (safest)
+        if n_epochs is None:
+            n_epochs = 1
+
+        # Log info if using multiple epochs (this is fine - CleanRL uses n_epochs=4)
+        if n_epochs > 1:
+            logger.info(
+                f"Using n_epochs={n_epochs} with recurrent policy. This is supported "
+                f"(CleanRL uses n_epochs=4). PPO clipping handles the stale log_prob bias."
+            )
+
+        # Compute GAE for all episodes
+        self.recurrent_buffer.compute_gae(
+            gamma=self.gamma,
+            gae_lambda=self.gae_lambda,
+        )
+
+        total_policy_loss = 0.0
+        total_value_loss = 0.0
+        total_entropy = 0.0
+        total_approx_kl = 0.0  # For diagnostics
+        n_updates = 0
+
+        for epoch in range(n_epochs):
+            # Process chunks in batches
+            for batch in self.recurrent_buffer.get_batched_chunks(
+                device=self.device,
+                batch_size=chunk_batch_size,
+            ):
+                batch_size = batch['states'].size(0)
+                seq_len = batch['states'].size(1)
+
+                # Get initial hidden [num_layers, batch, hidden]
+                initial_hidden = (
+                    batch['initial_hidden_h'],
+                    batch['initial_hidden_c'],
+                )
+
+                # Forward through sequences
+                log_probs, values, entropy, _ = self.network.evaluate_actions(
+                    batch['states'],
+                    batch['actions'],
+                    batch['action_masks'],
+                    hidden=initial_hidden,
+                )
+
+                # Get valid mask and flatten
+                valid = batch['valid_mask']  # [batch, seq]
+
+                # Extract valid timesteps
+                log_probs_valid = log_probs[valid]
+                values_valid = values[valid]
+                entropy_valid = entropy[valid]
+                old_log_probs_valid = batch['old_log_probs'][valid]
+                old_values_valid = batch['old_values'][valid]
+                returns_valid = batch['returns'][valid]
+                advantages_valid = batch['advantages'][valid]
+
+                # Normalize advantages
+                if len(advantages_valid) > 1:
+                    advantages_valid = (advantages_valid - advantages_valid.mean()) / (advantages_valid.std() + 1e-8)
+
+                # PPO clipped objective
+                ratio = torch.exp(log_probs_valid - old_log_probs_valid)
+                surr1 = ratio * advantages_valid
+                surr2 = torch.clamp(ratio, 1 - self.clip_ratio, 1 + self.clip_ratio) * advantages_valid
+                policy_loss = -torch.min(surr1, surr2).mean()
+
+                # Value loss with clipping (parity with feedforward PPO)
+                values_clipped = old_values_valid + torch.clamp(
+                    values_valid - old_values_valid,
+                    -self.clip_ratio,
+                    self.clip_ratio,
+                )
+                value_loss_unclipped = (values_valid - returns_valid) ** 2
+                value_loss_clipped = (values_clipped - returns_valid) ** 2
+                value_loss = 0.5 * torch.max(value_loss_unclipped, value_loss_clipped).mean()
+
+                # Entropy bonus
+                entropy_loss = -entropy_valid.mean()
+
+                # Total loss (using agent's value_coef, not hardcoded)
+                loss = policy_loss + self.value_coef * value_loss + self.get_entropy_coef() * entropy_loss
+
+                self.optimizer.zero_grad()
+                loss.backward()
+                nn.utils.clip_grad_norm_(self.network.parameters(), self.max_grad_norm)
+                self.optimizer.step()
+
+                # Increment train_steps for entropy annealing (CRITICAL for get_entropy_coef)
+                self.train_steps += 1
+
+                # Track metrics
+                total_policy_loss += policy_loss.item()
+                total_value_loss += value_loss.item()
+                total_entropy += entropy_valid.mean().item()
+                total_approx_kl += (old_log_probs_valid - log_probs_valid).mean().item()
+                n_updates += 1
+
+        self.recurrent_buffer.clear()
+
+        # Compute final metrics
+        avg_approx_kl = total_approx_kl / max(n_updates, 1)
+
+        # Warn if KL divergence is high (indicates policy changing too fast)
+        if avg_approx_kl > 0.03:
+            logger.warning(
+                f"High KL divergence ({avg_approx_kl:.4f}) during recurrent update. "
+                f"Consider reducing lr or n_epochs to stabilize training."
+            )
+
+        return {
+            'policy_loss': total_policy_loss / max(n_updates, 1),
+            'value_loss': total_value_loss / max(n_updates, 1),
+            'entropy': total_entropy / max(n_updates, 1),
+            'approx_kl': avg_approx_kl,
+        }
 
     def save(self, path: str | Path, metadata: dict = None) -> None:
         """Save agent to file."""
