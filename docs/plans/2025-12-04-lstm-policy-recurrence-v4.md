@@ -18,23 +18,75 @@
 7. Value clipping in recurrent update (parity with feedforward)
 8. No unauthorized hasattr usage
 9. Device-aware fallback hidden initialization
-10. **Explicit `.detach().clone()` for hidden state storage** (prevents memory leak)
+10. **Explicit `.detach().clone()` for hidden state storage** (.clone() prevents view retention)
 11. **Graceful handling of mid-episode chunking** (warning + zeros, not crash)
 12. **TrainingConfig integration** with `__post_init__` validation
-13. **Gradient flow test** to verify BPTT reaches early timesteps
+13. **Gradient flow test** verifies GAE bootstrap AND BPTT weight changes
 14. **Relaxed ratio test tolerance** (atol=1e-3 for float precision)
 15. **`.detach().clone()` in single-env get_action()** (was missing in v3)
 16. **train_steps increment** in update_recurrent() for entropy annealing
-17. **n_epochs warning** when using n_epochs>1 with recurrent policy
+17. **n_epochs info log** when using n_epochs>1 (not a warning - CleanRL uses n_epochs=4)
 18. **Multi-layer LSTM bias init** fixed to handle all layers
 19. **Entropy normalization test** added
 20. **Learning rate sensitivity note** and **KL monitoring** added
 21. **Edge case tests** (empty episode, single step, exact chunk match)
 22. **Burn-in BPTT upgrade path** documented
+23. **Phase 0: API migration** - find and update all get_action() call sites
 
 **Note on n_epochs:** While n_epochs=1 is safest, CleanRL's recurrent PPO uses n_epochs=4 by default. Multiple epochs work because PPO clipping limits policy divergence. The stored `old_log_probs` become slightly stale after each epoch, but this bias is small. Use n_epochs=1 for correctness guarantees, n_epochs=2-4 for sample efficiency.
 
 **Note on learning rate:** Recurrent policies can be more sensitive to learning rate than feedforward. Start with `lr=2.5e-4` for recurrent, vs `lr=3e-4` for feedforward. If training is unstable, try reducing to `lr=1e-4`.
+
+---
+
+## Phase 0: API Migration Analysis (MUST DO FIRST)
+
+### Task 0.1: Find All get_action() Call Sites
+
+**Rationale:** The recurrent `get_action()` returns a 4-tuple `(action, log_prob, value, hidden)` instead of 3-tuple. All existing call sites must be updated to handle this.
+
+**Step 1: Search for all get_action() usages**
+
+```bash
+rg "\.get_action\(" --type py src/ tests/
+```
+
+**Step 2: Document call sites**
+
+Expected locations (verify with grep):
+- `src/esper/simic/vectorized.py` - main training loop
+- `src/esper/simic/training.py` - if exists
+- `tests/test_simic_ppo.py` - PPO tests
+- Any other files using PPOAgent
+
+**Step 3: Update each call site**
+
+For each call site, update from:
+```python
+# OLD: 3-tuple unpacking
+action, log_prob, value = agent.get_action(state, mask)
+```
+
+To:
+```python
+# NEW: 4-tuple unpacking (hidden is None for non-recurrent)
+action, log_prob, value, hidden = agent.get_action(state, mask)
+# Or if hidden is needed:
+action, log_prob, value, hidden = agent.get_action(state, mask, hidden=prev_hidden)
+```
+
+**Step 4: Verify no breakage**
+
+```bash
+uv run pytest tests/ -x -q
+```
+
+**Step 5: Commit**
+
+```bash
+git add -u
+git commit -m "refactor: update get_action() call sites for 4-tuple return"
+```
 
 ---
 
@@ -361,9 +413,11 @@ class RecurrentActorCritic(nn.Module):
 
             log_prob = dist.log_prob(action)
 
-            # CRITICAL: .detach().clone() prevents memory leaks
-            # - .detach() breaks computation graph (redundant under inference_mode but safe)
-            # - .clone() creates independent tensor (not a view into larger buffer)
+            # CRITICAL: .clone() is essential, .detach() is defensive
+            # - .clone() creates independent tensor (not a view that keeps parent alive)
+            #   Without clone, sliced tensors retain reference to full batched tensor
+            # - .detach() is technically redundant under inference_mode (no graph exists)
+            #   but included for safety if code is ever called outside inference_mode
             detached_hidden = (
                 new_hidden[0].detach().clone(),
                 new_hidden[1].detach().clone(),
@@ -718,16 +772,16 @@ class RecurrentRolloutBuffer:
 
     Key design decisions (from reviewer feedback):
     1. Per-env step lists - avoids interleaving corruption
-    2. chunk_length=20 matches episode length exactly (no mid-episode chunking)
+    2. chunk_length=25 matches max_epochs default (no mid-episode chunking)
     3. GAE computed per-episode, then distributed to chunks
     4. Returns/advantages included in every chunk dict
     5. Single PPO epoch avoids hidden state drift between old/new log_probs
 
     Args:
-        chunk_length: Length of chunks for BPTT (default 20 = Tamiyo episode length)
+        chunk_length: Length of chunks for BPTT (default 25 = max_epochs default)
         lstm_hidden_dim: Hidden dimension for zero-init at episode starts
     """
-    chunk_length: int = 20
+    chunk_length: int = 25
     lstm_hidden_dim: int = 128
 
     # Per-environment step storage (no interleaving)
@@ -898,7 +952,7 @@ class RecurrentRolloutBuffer:
                     # - Episode start (chunk_start == 0): zeros (correct)
                     # - Mid-episode chunk: would need stored hidden from previous chunk
                     #
-                    # With chunk_length=20 matching episode length exactly,
+                    # With chunk_length=25 matching max_epochs exactly,
                     # episodes fit in a single chunk, so chunk_start is ALWAYS 0.
                     # This avoids the hidden state drift problem entirely.
                     #
@@ -1148,7 +1202,7 @@ def __init__(
     # Recurrence params
     recurrent: bool = False,
     lstm_hidden_dim: int = 128,
-    chunk_length: int = 20,  # Must match episode length to avoid hidden state issues
+    chunk_length: int = 25,  # Must match max_epochs to avoid hidden state issues
 ):
     self.recurrent = recurrent
     self.chunk_length = chunk_length
@@ -1214,20 +1268,38 @@ def store_recurrent_transition(
 
 5. Add `update_recurrent` method:
 ```python
-def update_recurrent(self, n_epochs: int = 1, chunk_batch_size: int = 8) -> dict:
+def update_recurrent(self, n_epochs: int | None = None, chunk_batch_size: int = 8) -> dict:
     """PPO update for recurrent policy using batched sequences.
 
     Key design decisions (from reviewer feedback):
     1. GAE computed once, distributed to chunks
     2. Batched chunk processing for GPU efficiency
-    3. SINGLE EPOCH (n_epochs=1) to avoid hidden state drift between epochs
+    3. SINGLE EPOCH (n_epochs=1) default to avoid hidden state drift between epochs
        - After gradient updates, policy changes, so recomputed log_probs differ
        - With multiple epochs, ratio = new_log_prob / old_log_prob becomes biased
        - Single epoch is standard practice for recurrent PPO (OpenAI Five, CleanRL)
     4. value_coef from agent, not hardcoded
     5. Value clipping for training stability (parity with feedforward)
     6. Gradient clipping at max_grad_norm
+    7. train_steps incremented for entropy annealing
+
+    Args:
+        n_epochs: Number of PPO epochs. Default 1 for recurrent (safest).
+                  Higher values (2-4) work due to PPO clipping but emit warning.
+        chunk_batch_size: Number of chunks per batch for GPU efficiency.
     """
+    # Default to 1 epoch for recurrent (safest)
+    if n_epochs is None:
+        n_epochs = 1
+
+    # Log info if using multiple epochs (this is fine - CleanRL uses n_epochs=4)
+    if n_epochs > 1:
+        import logging
+        logging.info(
+            f"Using n_epochs={n_epochs} with recurrent policy. This is supported "
+            f"(CleanRL uses n_epochs=4). PPO clipping handles the stale log_prob bias."
+        )
+
     # Compute GAE for all episodes
     self.recurrent_buffer.compute_gae(
         gamma=self.gamma,
@@ -1237,6 +1309,7 @@ def update_recurrent(self, n_epochs: int = 1, chunk_batch_size: int = 8) -> dict
     total_policy_loss = 0.0
     total_value_loss = 0.0
     total_entropy = 0.0
+    total_approx_kl = 0.0  # For diagnostics
     n_updates = 0
 
     for epoch in range(n_epochs):
@@ -1305,9 +1378,14 @@ def update_recurrent(self, n_epochs: int = 1, chunk_batch_size: int = 8) -> dict
             nn.utils.clip_grad_norm_(self.network.parameters(), self.max_grad_norm)
             self.optimizer.step()
 
+            # Increment train_steps for entropy annealing (CRITICAL for get_entropy_coef)
+            self.train_steps += 1
+
+            # Track metrics
             total_policy_loss += policy_loss.item()
             total_value_loss += value_loss.item()
             total_entropy += entropy_valid.mean().item()
+            total_approx_kl += (old_log_probs_valid - log_probs_valid).mean().item()
             n_updates += 1
 
     self.recurrent_buffer.clear()
@@ -1316,6 +1394,7 @@ def update_recurrent(self, n_epochs: int = 1, chunk_batch_size: int = 8) -> dict
         'policy_loss': total_policy_loss / max(n_updates, 1),
         'value_loss': total_value_loss / max(n_updates, 1),
         'entropy': total_entropy / max(n_updates, 1),
+        'approx_kl': total_approx_kl / max(n_updates, 1),  # For diagnostics
     }
 ```
 
@@ -1352,7 +1431,23 @@ class TrainingConfig:
     # === Recurrence (LSTM Policy) ===
     recurrent: bool = False
     lstm_hidden_dim: int = 128
-    chunk_length: int = 20  # Must match episode length for correct BPTT
+    chunk_length: int | None = None  # None = auto-match max_epochs; set explicitly if different
+
+    def __post_init__(self):
+        """Validate and set defaults for recurrent config."""
+        # Auto-match chunk_length to max_epochs if not set
+        if self.chunk_length is None:
+            self.chunk_length = self.max_epochs
+
+        # Warn if chunk_length < max_epochs (will cause mid-episode chunking)
+        if self.recurrent and self.chunk_length < self.max_epochs:
+            import warnings
+            warnings.warn(
+                f"chunk_length={self.chunk_length} < max_epochs={self.max_epochs}. "
+                f"Mid-episode chunking will occur, losing temporal context at chunk "
+                f"boundaries. For optimal BPTT, set chunk_length >= max_epochs.",
+                RuntimeWarning,
+            )
 ```
 
 **Step 2: Update `to_ppo_kwargs()`**
@@ -1546,7 +1641,7 @@ def train_ppo_vectorized(
     # ... existing params ...
     recurrent: bool = False,
     lstm_hidden_dim: int = 128,
-    chunk_length: int = 20,  # Must match episode length (burn_in + lifecycle = 10 + 10 = 20)
+    chunk_length: int = 25,  # Must match max_epochs default (25)
 ) -> tuple[PPOAgent, list[dict]]:
 ```
 
@@ -1599,11 +1694,11 @@ if recurrent:
         log_probs = dist.log_prob(actions)
 
     # Store new hidden per-env
-    # CRITICAL: Use .detach().clone() to:
-    # 1. Break computation graph (prevents memory leak from graph accumulation)
-    # 2. Create independent tensors (slicing creates views that keep parent alive)
-    # Note: inference_mode() tensors don't track gradients, but clone() ensures
-    # we don't hold views into the large batched tensor.
+    # CRITICAL: .clone() is essential to avoid memory retention
+    # - Slicing new_h[:, i:i+1, :] creates a VIEW into the batched tensor
+    # - Views keep the entire parent tensor alive, preventing garbage collection
+    # - .clone() creates an independent copy that allows the batch to be freed
+    # - .detach() is technically redundant under inference_mode but defensive
     for i, env_state in enumerate(env_states):
         env_state.lstm_hidden = (
             new_h[:, i:i+1, :].detach().clone(),
@@ -1941,6 +2036,10 @@ class TestRecurrentIntegration:
 
         If this test fails, the LSTM isn't learning temporal dependencies.
         Gradients should flow from later rewards back to early policy params.
+
+        This test verifies TWO things:
+        1. GAE correctly bootstraps reward from final step to early steps (advantages non-zero)
+        2. LSTM recurrent weights change (gradients flowed through time via weight_hh)
         """
         torch.manual_seed(42)
         agent = PPOAgent(
@@ -1952,36 +2051,72 @@ class TestRecurrentIntegration:
             device='cpu',
         )
 
-        # Collect episode with reward ONLY at first step
-        # If BPTT works, later steps' gradients should reach early weights
+        # Collect episode with reward ONLY at LAST step
+        # If BPTT works, early steps should have non-zero advantages (GAE bootstrap)
         agent.recurrent_buffer.start_episode(env_id=0)
         hidden = None
         for i in range(8):
             state = torch.randn(27)
             mask = torch.ones(7, dtype=torch.bool)
             action, log_prob, value, hidden = agent.get_action(state, mask, hidden)
-            # Reward structure: first step gets reward, rest get 0
-            reward = 1.0 if i == 0 else 0.0
+            # Reward structure: ONLY last step gets reward
+            reward = 10.0 if i == 7 else 0.0
             agent.store_recurrent_transition(
                 state=state, action=action, log_prob=log_prob, value=value,
                 reward=reward, done=(i == 7), action_mask=mask, env_id=0,
             )
         agent.recurrent_buffer.end_episode(env_id=0)
 
-        # Get LSTM weights before update
-        lstm_weight_before = agent.network.lstm.weight_hh_l0.clone()
+        # VERIFICATION 1: Early timesteps have non-zero advantage from GAE bootstrap
+        agent.recurrent_buffer.compute_gae(gamma=0.99, gae_lambda=0.95)
+        chunks = agent.recurrent_buffer.get_chunks(device='cpu')
+        advantages = chunks[0]['advantages'].squeeze(0)
 
-        # Run update
+        # Early timesteps should have non-zero advantage from gamma-discounted final reward
+        assert advantages[0].abs() > 0.01, (
+            f"Early timestep advantage is ~0 ({advantages[0]:.4f}). "
+            f"GAE not bootstrapping reward backward through time!"
+        )
+
+        # Get LSTM weights before update
+        lstm_weight_hh_before = agent.network.lstm.weight_hh_l0.clone()
+        lstm_weight_ih_before = agent.network.lstm.weight_ih_l0.clone()
+
+        # Run update (need to re-add data since compute_gae consumed it for chunks)
+        # Actually, update_recurrent calls compute_gae internally, so recreate episode
+        agent.recurrent_buffer.clear()
+        agent.recurrent_buffer.start_episode(env_id=0)
+        hidden = None
+        torch.manual_seed(42)  # Same seed for reproducibility
+        for i in range(8):
+            state = torch.randn(27)
+            mask = torch.ones(7, dtype=torch.bool)
+            action, log_prob, value, hidden = agent.get_action(state, mask, hidden)
+            reward = 10.0 if i == 7 else 0.0
+            agent.store_recurrent_transition(
+                state=state, action=action, log_prob=log_prob, value=value,
+                reward=reward, done=(i == 7), action_mask=mask, env_id=0,
+            )
+        agent.recurrent_buffer.end_episode(env_id=0)
+
         metrics = agent.update_recurrent(n_epochs=1)
 
-        # LSTM weights should have changed
-        lstm_weight_after = agent.network.lstm.weight_hh_l0
-        weight_diff = (lstm_weight_after - lstm_weight_before).abs().sum()
+        # VERIFICATION 2: LSTM recurrent weights changed (BPTT worked)
+        lstm_weight_hh_after = agent.network.lstm.weight_hh_l0
+        weight_hh_diff = (lstm_weight_hh_after - lstm_weight_hh_before).abs().sum()
 
-        # Weights MUST change (gradients flowed through time)
-        assert weight_diff > 1e-6, (
-            f"LSTM weights unchanged ({weight_diff:.2e}). "
-            f"Gradients not flowing through time - BPTT broken!"
+        # weight_hh connects h(t) -> h(t+1), so if it changed, gradients flowed through time
+        assert weight_hh_diff > 1e-6, (
+            f"LSTM weight_hh unchanged ({weight_hh_diff:.2e}). "
+            f"Gradients not flowing through recurrent connection - BPTT broken!"
+        )
+
+        # VERIFICATION 3: Input weights also changed (full gradient flow)
+        lstm_weight_ih_after = agent.network.lstm.weight_ih_l0
+        weight_ih_diff = (lstm_weight_ih_after - lstm_weight_ih_before).abs().sum()
+        assert weight_ih_diff > 1e-6, (
+            f"LSTM weight_ih unchanged ({weight_ih_diff:.2e}). "
+            f"Gradients not reaching input projection!"
         )
 
     def test_value_targets_equal_advantages_plus_values(self):
@@ -2015,6 +2150,82 @@ class TestRecurrentIntegration:
         assert torch.allclose(computed_returns, chunk['returns'], atol=1e-5), (
             f"GAE violated: returns != advantages + values"
         )
+
+    # === Edge Case Tests (v4) ===
+
+    def test_single_step_episode(self):
+        """Single-step episode should work correctly."""
+        agent = PPOAgent(
+            state_dim=27, action_dim=7, recurrent=True,
+            lstm_hidden_dim=64, chunk_length=4, device='cpu',
+        )
+
+        agent.recurrent_buffer.start_episode(env_id=0)
+        state = torch.randn(27)
+        mask = torch.ones(7, dtype=torch.bool)
+        action, log_prob, value, hidden = agent.get_action(state, mask, None)
+        agent.store_recurrent_transition(
+            state=state, action=action, log_prob=log_prob, value=value,
+            reward=1.0, done=True, action_mask=mask, env_id=0,
+        )
+        agent.recurrent_buffer.end_episode(env_id=0)
+
+        # Should produce 1 chunk (padded)
+        agent.recurrent_buffer.compute_gae(gamma=0.99, gae_lambda=0.95)
+        chunks = agent.recurrent_buffer.get_chunks(device='cpu')
+        assert len(chunks) == 1
+        assert chunks[0]['valid_mask'].sum() == 1  # Only 1 valid step
+
+    def test_exact_chunk_length_episode(self):
+        """Episode exactly matching chunk_length needs no padding."""
+        chunk_length = 4
+        agent = PPOAgent(
+            state_dim=27, action_dim=7, recurrent=True,
+            lstm_hidden_dim=64, chunk_length=chunk_length, device='cpu',
+        )
+
+        agent.recurrent_buffer.start_episode(env_id=0)
+        hidden = None
+        for i in range(chunk_length):
+            state = torch.randn(27)
+            mask = torch.ones(7, dtype=torch.bool)
+            action, log_prob, value, hidden = agent.get_action(state, mask, hidden)
+            agent.store_recurrent_transition(
+                state=state, action=action, log_prob=log_prob, value=value,
+                reward=0.1, done=(i == chunk_length - 1), action_mask=mask, env_id=0,
+            )
+        agent.recurrent_buffer.end_episode(env_id=0)
+
+        agent.recurrent_buffer.compute_gae(gamma=0.99, gae_lambda=0.95)
+        chunks = agent.recurrent_buffer.get_chunks(device='cpu')
+
+        assert len(chunks) == 1
+        assert chunks[0]['valid_mask'].all()  # All steps valid (no padding)
+
+    def test_approx_kl_returned_in_metrics(self):
+        """update_recurrent should return approx_kl for diagnostics."""
+        agent = PPOAgent(
+            state_dim=27, action_dim=7, recurrent=True,
+            lstm_hidden_dim=64, chunk_length=4, device='cpu',
+        )
+
+        agent.recurrent_buffer.start_episode(env_id=0)
+        hidden = None
+        for i in range(4):
+            state = torch.randn(27)
+            mask = torch.ones(7, dtype=torch.bool)
+            action, log_prob, value, hidden = agent.get_action(state, mask, hidden)
+            agent.store_recurrent_transition(
+                state=state, action=action, log_prob=log_prob, value=value,
+                reward=0.1, done=(i == 3), action_mask=mask, env_id=0,
+            )
+        agent.recurrent_buffer.end_episode(env_id=0)
+
+        metrics = agent.update_recurrent(n_epochs=1)
+
+        assert 'approx_kl' in metrics
+        # approx_kl should be near 0 before any policy drift
+        assert abs(metrics['approx_kl']) < 0.1
 ```
 
 **Step 2: Run tests**
@@ -2036,6 +2247,7 @@ git commit -m "test: add comprehensive integration tests for recurrent PPO"
 
 | Phase | Task | Files Modified | Key Fix |
 |-------|------|----------------|---------|
+| 0 | API Migration | src/, tests/ | Update all get_action() call sites |
 | 1 | RecurrentActorCritic | networks.py | No hasattr, proper shapes |
 | 2 | RecurrentRolloutBuffer | buffers.py | Per-env storage, GAE in chunks |
 | 3.1 | PPOAgent recurrent | ppo.py | Batched chunks, value_coef |
@@ -2043,11 +2255,11 @@ git commit -m "test: add comprehensive integration tests for recurrent PPO"
 | 4 | Vectorized training | vectorized.py | Batched action selection |
 | 5 | Integration tests | tests/ | Critical bug coverage |
 
-**Total commits:** 7
+**Total commits:** 8
 
-**Key improvements (v2 -> v3):**
-- chunk_length=20 matches episode length exactly (burn_in=10 + lifecycle=10)
-- Single PPO epoch default (but n_epochs=2-4 viable with clipping - documented)
+**Key improvements (v3 -> v4):**
+- **CRITICAL: chunk_length=25** matches max_epochs default (was incorrectly 20)
+- Single PPO epoch default with warning for n_epochs>1
 - Per-environment step lists (no interleaving corruption)
 - GAE wired through to chunks correctly
 - Batched chunk processing (GPU efficiency)
@@ -2056,17 +2268,23 @@ git commit -m "test: add comprehensive integration tests for recurrent PPO"
 - Device-aware hidden initialization
 - value_coef from agent config
 - Comprehensive test coverage including ratio=1.0 test for hidden state correctness
-- **NEW: Explicit `.detach().clone()` for hidden state storage** (prevents memory leak)
-- **NEW: Graceful mid-episode chunking handling** (warning instead of crash)
-- **NEW: TrainingConfig integration** for recurrent params
-- **NEW: Gradient flow test** verifies BPTT reaches early timesteps
-- **NEW: Relaxed ratio test tolerance** (atol=1e-3 for float precision)
-- **NEW: Entropy normalization documented** (uses MaskedCategorical's normalized entropy)
+- Explicit `.detach().clone()` for hidden state storage (prevents memory leak)
+- **v4: `.detach().clone()` in single-env get_action()** (was missing in v3)
+- Graceful mid-episode chunking handling (warning instead of crash)
+- **v4: TrainingConfig.__post_init__** validates chunk_length >= max_epochs
+- Gradient flow test verifies BPTT reaches early timesteps
+- Relaxed ratio test tolerance (atol=1e-3 for float precision)
+- **v4: train_steps increment** in update_recurrent() for entropy annealing
+- **v4: approx_kl tracking** for training diagnostics
+- **v4: Entropy normalization test** verifies [0,1] range
+- **v4: Multi-layer LSTM bias init** documented for all layers
+- **v4: Learning rate sensitivity note** added
+- **v4: Edge case tests** (single step, exact chunk match)
 
 **Critical design decisions:**
 1. **chunk_length >= episode_length**: Avoids mid-episode chunking entirely, eliminating
-   the need to store/restore hidden states at chunk boundaries. With chunk_length=20
-   and episodes of 20 steps, each episode is exactly one chunk.
+   the need to store/restore hidden states at chunk boundaries. With chunk_length=25
+   and episodes of 25 steps (max_epochs default), each episode is exactly one chunk.
 
 2. **Single PPO epoch (default)**: Safest for recurrent PPO. However, n_epochs=2-4
    is viable because PPO clipping limits policy divergence. CleanRL uses n_epochs=4.
@@ -2074,8 +2292,67 @@ git commit -m "test: add comprehensive integration tests for recurrent PPO"
 
 3. **Graceful mid-episode handling**: If chunk_length < episode_length, emit warning
    and use zeros for initial hidden (suboptimal but won't crash). For correct BPTT,
-   either increase chunk_length or implement burn-in BPTT (documented upgrade path).
+   either increase chunk_length or implement burn-in BPTT (see upgrade path below).
 
 4. **Explicit hidden state management**: Use `.detach().clone()` when storing hidden
    states to prevent memory leaks from computation graph accumulation and ensure
    independent tensors (not views into larger batched tensor).
+
+---
+
+## Upgrade Path: Burn-In BPTT (Future Enhancement)
+
+If mid-episode chunking becomes necessary (chunk_length < max_epochs), implement burn-in BPTT:
+
+```python
+# Concept: Run initial steps WITHOUT gradients to "warm up" hidden state
+def get_chunks_with_burnin(self, device, burn_in_length: int = 5):
+    """Get chunks with burn-in for mid-episode chunks.
+
+    For chunks that don't start at episode boundary:
+    1. Store hidden state at previous chunk boundary
+    2. During training, run burn_in_length steps with torch.no_grad()
+    3. Then run remaining steps WITH gradients
+
+    This preserves temporal context without full-episode BPTT memory cost.
+    """
+    # Implementation would:
+    # - Store hidden at each chunk boundary during rollout
+    # - Include burn_in_states in chunk dict
+    # - In evaluate_actions, run burn-in forward WITHOUT grad, then continue WITH grad
+```
+
+**Trade-offs:**
+- Burn-in adds compute overhead (re-run burn_in_length steps per chunk)
+- But enables longer episodes with bounded memory
+- OpenAI Five used 1000+ step sequences with burn-in BPTT
+
+**Current approach (chunk_length=25 = max_epochs) avoids this complexity entirely.**
+
+---
+
+## torch.compile Compatibility Note
+
+The current implementation should be `torch.compile` compatible, but watch for:
+
+1. **Graph breaks** from conditional logic in `forward()` (squeeze_output branching)
+2. **Dynamic shapes** from variable batch sizes
+
+For production, consider:
+```python
+# After training is stable, wrap for inference speedup
+model = torch.compile(agent.network, mode="reduce-overhead")
+```
+
+Test compile compatibility with:
+```bash
+TORCH_COMPILE_DEBUG=1 uv run python -c "
+import torch
+from esper.simic.networks import RecurrentActorCritic
+net = RecurrentActorCritic(27, 7)
+compiled = torch.compile(net)
+x = torch.randn(1, 10, 27)
+mask = torch.ones(1, 10, 7, dtype=torch.bool)
+compiled(x, mask)  # Check for graph breaks
+"
+```
