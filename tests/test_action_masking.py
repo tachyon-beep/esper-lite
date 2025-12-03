@@ -3,17 +3,28 @@
 import pytest
 import torch
 
-from esper.simic.features import compute_action_mask
+from esper.simic.features import (
+    compute_action_mask,
+    MIN_CULL_AGE,
+    MIN_GERMINATE_EPOCH,
+    MIN_PLATEAU_TO_GERMINATE,
+)
 from esper.simic.networks import MaskedCategorical, InvalidStateMachineError
 
 
 class TestComputeActionMask:
     """Tests for compute_action_mask function."""
 
-    def test_no_active_seed_allows_germinate(self):
-        """Without active seed, GERMINATE actions should be allowed."""
-        # 4 germinate actions (like CNN topology)
-        mask = compute_action_mask(has_active_seed=0.0, seed_stage=0, num_germinate_actions=4)
+    def test_no_active_seed_with_plateau_allows_germinate(self):
+        """Without active seed AND plateau detected, GERMINATE should be allowed."""
+        # 4 germinate actions, plateau conditions met
+        mask = compute_action_mask(
+            has_active_seed=0.0,
+            seed_stage=0,
+            num_germinate_actions=4,
+            epoch=MIN_GERMINATE_EPOCH,
+            plateau_epochs=MIN_PLATEAU_TO_GERMINATE,
+        )
 
         # Total actions: WAIT + 4 GERMINATE + FOSSILIZE + CULL = 7
         assert len(mask) == 7
@@ -21,7 +32,7 @@ class TestComputeActionMask:
         # WAIT (0) always valid
         assert mask[0] == 1.0
 
-        # GERMINATE_* (1-4) valid without active seed
+        # GERMINATE_* (1-4) valid without active seed when plateau met
         assert mask[1] == 1.0
         assert mask[2] == 1.0
         assert mask[3] == 1.0
@@ -34,14 +45,21 @@ class TestComputeActionMask:
         assert mask[6] == 0.0
 
     def test_active_seed_blocks_germinate(self):
-        """With active seed, GERMINATE actions should be blocked."""
-        # Seed in TRAINING stage (3)
-        mask = compute_action_mask(has_active_seed=1.0, seed_stage=3, num_germinate_actions=4)
+        """With active seed, GERMINATE actions should be blocked even if plateau met."""
+        # Seed in TRAINING stage (3), old enough to cull, plateau met
+        mask = compute_action_mask(
+            has_active_seed=1.0,
+            seed_stage=3,
+            num_germinate_actions=4,
+            seed_age_epochs=MIN_CULL_AGE,
+            epoch=MIN_GERMINATE_EPOCH,
+            plateau_epochs=MIN_PLATEAU_TO_GERMINATE,
+        )
 
         # WAIT (0) always valid
         assert mask[0] == 1.0
 
-        # GERMINATE_* (1-4) blocked with active seed
+        # GERMINATE_* (1-4) blocked with active seed (even with plateau)
         assert mask[1] == 0.0
         assert mask[2] == 0.0
         assert mask[3] == 0.0
@@ -50,13 +68,16 @@ class TestComputeActionMask:
         # FOSSILIZE (5) not valid - need PROBATIONARY stage (6)
         assert mask[5] == 0.0
 
-        # CULL (6) valid with active seed
+        # CULL (6) valid with active, mature seed
         assert mask[6] == 1.0
 
     def test_probationary_allows_fossilize(self):
         """In PROBATIONARY stage, FOSSILIZE should be allowed."""
-        # PROBATIONARY = stage 6
-        mask = compute_action_mask(has_active_seed=1.0, seed_stage=6, num_germinate_actions=4)
+        # PROBATIONARY = stage 6, seed is mature (reached PROBATIONARY takes time)
+        mask = compute_action_mask(
+            has_active_seed=1.0, seed_stage=6, num_germinate_actions=4,
+            seed_age_epochs=10  # Seeds reaching PROBATIONARY are always mature
+        )
 
         # WAIT (0) always valid
         assert mask[0] == 1.0
@@ -70,21 +91,151 @@ class TestComputeActionMask:
         # FOSSILIZE (5) valid in PROBATIONARY
         assert mask[5] == 1.0
 
-        # CULL (6) valid with active seed
+        # CULL (6) valid with active, mature seed
         assert mask[6] == 1.0
 
     def test_wait_always_valid(self):
         """WAIT should always be valid regardless of state."""
-        # Various states
+        # Various states - WAIT is valid in all of them
         masks = [
-            compute_action_mask(0.0, 0, 4),  # No seed
-            compute_action_mask(1.0, 3, 4),  # TRAINING
-            compute_action_mask(1.0, 6, 4),  # PROBATIONARY
-            compute_action_mask(1.0, 7, 4),  # FOSSILIZED
+            # No seed, no plateau (only WAIT valid)
+            compute_action_mask(0.0, 0, 4, epoch=0, plateau_epochs=0),
+            # No seed, plateau met (WAIT + GERMINATE valid)
+            compute_action_mask(0.0, 0, 4, epoch=5, plateau_epochs=3),
+            # Active seed in TRAINING
+            compute_action_mask(1.0, 3, 4, seed_age_epochs=5),
+            # Active seed in PROBATIONARY
+            compute_action_mask(1.0, 6, 4, seed_age_epochs=10),
+            # Active seed FOSSILIZED
+            compute_action_mask(1.0, 7, 4, seed_age_epochs=15),
         ]
 
         for mask in masks:
             assert mask[0] == 1.0, "WAIT should always be valid"
+
+    def test_young_seed_cannot_be_culled(self):
+        """Seeds younger than MIN_CULL_AGE cannot be culled.
+
+        This prevents culling seeds before we have enough signal to evaluate
+        their quality. MIN_CULL_AGE=10 gives ~3% random survival rate.
+        """
+        # Young seed at age 0-9 - CULL should be blocked
+        for age in range(MIN_CULL_AGE):
+            mask = compute_action_mask(
+                has_active_seed=1.0, seed_stage=3, num_germinate_actions=4,
+                seed_age_epochs=age
+            )
+            # CULL (index 6) should be invalid for young seeds
+            assert mask[6] == 0.0, f"CULL should be blocked at age {age}"
+
+            # WAIT should still be valid
+            assert mask[0] == 1.0, "WAIT should always be valid"
+
+    def test_mature_seed_can_be_culled(self):
+        """Seeds at or above MIN_CULL_AGE (10) can be culled."""
+        # Mature seed at exactly MIN_CULL_AGE
+        mask = compute_action_mask(
+            has_active_seed=1.0, seed_stage=3, num_germinate_actions=4,
+            seed_age_epochs=MIN_CULL_AGE
+        )
+        assert mask[6] == 1.0, f"CULL should be valid at age {MIN_CULL_AGE}"
+
+        # Even older seed
+        mask_older = compute_action_mask(
+            has_active_seed=1.0, seed_stage=3, num_germinate_actions=4,
+            seed_age_epochs=MIN_CULL_AGE + 5
+        )
+        assert mask_older[6] == 1.0, "CULL should be valid for older seeds"
+
+
+class TestPlateauGating:
+    """Tests for plateau gating of GERMINATE actions.
+
+    Plateau gating ensures seeds only get credit for improvements AFTER
+    natural training gains have exhausted. This fixes credit misattribution
+    from early germination and matches h-tamiyo behavior.
+    """
+
+    def test_early_epoch_blocks_germinate(self):
+        """GERMINATE blocked before MIN_GERMINATE_EPOCH even with plateau."""
+        for epoch in range(MIN_GERMINATE_EPOCH):
+            mask = compute_action_mask(
+                has_active_seed=0.0,
+                seed_stage=0,
+                num_germinate_actions=4,
+                epoch=epoch,
+                plateau_epochs=MIN_PLATEAU_TO_GERMINATE,  # Plateau met
+            )
+            # GERMINATE_* (1-4) should be blocked
+            assert mask[1] == 0.0, f"GERMINATE blocked at epoch {epoch}"
+            assert mask[2] == 0.0
+            assert mask[3] == 0.0
+            assert mask[4] == 0.0
+            # WAIT should still be valid
+            assert mask[0] == 1.0
+
+    def test_insufficient_plateau_blocks_germinate(self):
+        """GERMINATE blocked without sufficient plateau epochs."""
+        for plateau in range(MIN_PLATEAU_TO_GERMINATE):
+            mask = compute_action_mask(
+                has_active_seed=0.0,
+                seed_stage=0,
+                num_germinate_actions=4,
+                epoch=MIN_GERMINATE_EPOCH,  # Epoch requirement met
+                plateau_epochs=plateau,
+            )
+            # GERMINATE_* (1-4) should be blocked
+            assert mask[1] == 0.0, f"GERMINATE blocked at plateau_epochs={plateau}"
+            assert mask[2] == 0.0
+            assert mask[3] == 0.0
+            assert mask[4] == 0.0
+            # WAIT should still be valid
+            assert mask[0] == 1.0
+
+    def test_plateau_met_allows_germinate(self):
+        """GERMINATE allowed when both epoch and plateau thresholds met."""
+        mask = compute_action_mask(
+            has_active_seed=0.0,
+            seed_stage=0,
+            num_germinate_actions=4,
+            epoch=MIN_GERMINATE_EPOCH,
+            plateau_epochs=MIN_PLATEAU_TO_GERMINATE,
+        )
+        # GERMINATE_* (1-4) should be valid
+        assert mask[1] == 1.0
+        assert mask[2] == 1.0
+        assert mask[3] == 1.0
+        assert mask[4] == 1.0
+
+    def test_plateau_exceeded_allows_germinate(self):
+        """GERMINATE allowed when thresholds exceeded."""
+        mask = compute_action_mask(
+            has_active_seed=0.0,
+            seed_stage=0,
+            num_germinate_actions=4,
+            epoch=MIN_GERMINATE_EPOCH + 5,
+            plateau_epochs=MIN_PLATEAU_TO_GERMINATE + 2,
+        )
+        # GERMINATE_* (1-4) should be valid
+        assert mask[1] == 1.0
+        assert mask[2] == 1.0
+        assert mask[3] == 1.0
+        assert mask[4] == 1.0
+
+    def test_only_wait_valid_before_plateau(self):
+        """Before plateau, only WAIT should be valid (no seed)."""
+        mask = compute_action_mask(
+            has_active_seed=0.0,
+            seed_stage=0,
+            num_germinate_actions=4,
+            epoch=0,
+            plateau_epochs=0,
+        )
+        # Only WAIT (0) should be valid
+        assert mask[0] == 1.0
+        # All others should be invalid
+        for i in range(1, len(mask)):
+            assert mask[i] == 0.0, f"Action {i} should be blocked before plateau"
 
 
 class TestMaskedCategorical:

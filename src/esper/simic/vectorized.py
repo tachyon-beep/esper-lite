@@ -669,7 +669,15 @@ def train_ppo_vectorized(
                 # Compute action mask based on current state
                 has_active = 1.0 if model.has_active_seed else 0.0
                 seed_stage = seed_state.stage.value if seed_state else 0
-                mask = compute_action_mask(has_active, seed_stage, num_germinate_actions)
+                seed_age = seed_state.metrics.epochs_total if seed_state else 0
+                mask = compute_action_mask(
+                    has_active_seed=has_active,
+                    seed_stage=seed_stage,
+                    num_germinate_actions=num_germinate_actions,
+                    seed_age_epochs=seed_age,
+                    epoch=signals.metrics.epoch,
+                    plateau_epochs=signals.metrics.plateau_epochs,
+                )
                 all_masks.append(mask)
 
             # Batch all states and masks into tensors

@@ -26,6 +26,10 @@ __all__ = [
     "safe",
     "obs_to_base_features",
     "compute_action_mask",
+    "MIN_CULL_AGE",
+    "FULL_EVALUATION_AGE",
+    "MIN_GERMINATE_EPOCH",
+    "MIN_PLATEAU_TO_GERMINATE",
     "TaskConfig",
     "normalize_observation",
 ]
@@ -108,24 +112,48 @@ def obs_to_base_features(obs: dict) -> list[float]:
 # SeedStage.PROBATIONARY = 6 (hardcoded to avoid kasmina import on hot path)
 _PROBATIONARY_STAGE = 6
 
+# Minimum seed age before CULL is allowed (structural fix for uninformed culls)
+# 10 epochs gives enough signal to evaluate seed quality and ~3% survival rate
+# for random exploration (0.5^5), sufficient for learning.
+MIN_CULL_AGE = 10
+
+# Epochs needed for confident seed quality assessment (for info potential PBRS)
+FULL_EVALUATION_AGE = 10
+
+# Plateau gating: prevent germination until training has plateaued
+# This ensures seeds only get credit for improvements AFTER natural training gains
+# have exhausted, giving cleaner reward attribution. Matches h-tamiyo behavior.
+MIN_GERMINATE_EPOCH = 5        # Let host get easy wins first
+MIN_PLATEAU_TO_GERMINATE = 3   # Consecutive epochs with <0.5% improvement
+
 
 def compute_action_mask(
     has_active_seed: float,
     seed_stage: int,
     num_germinate_actions: int,
+    seed_age_epochs: int = 0,
+    epoch: int = 0,
+    plateau_epochs: int = 0,
 ) -> list[float]:
     """Compute valid action mask based on current state.
 
-    This enforces the Kasmina state machine rules:
-    - GERMINATE_*: Allowed only if no active seed
+    This enforces the Kasmina state machine rules plus plateau gating:
+    - GERMINATE_*: Allowed only if no active seed AND plateau detected
     - FOSSILIZE: Allowed only if seed is in PROBATIONARY stage
-    - CULL: Allowed only if there's an active seed
+    - CULL: Allowed only if active seed AND seed_age >= MIN_CULL_AGE
     - WAIT: Always allowed
+
+    Plateau gating ensures seeds only get credit for improvements AFTER
+    natural training gains have exhausted. This matches h-tamiyo behavior
+    and fixes reward misattribution from early germination.
 
     Args:
         has_active_seed: 1.0 if seed is active, 0.0 otherwise
         seed_stage: Current seed stage (SeedStage enum value)
         num_germinate_actions: Number of germinate actions (blueprint count)
+        seed_age_epochs: Total epochs since seed germination (default 0)
+        epoch: Current training epoch (default 0)
+        plateau_epochs: Consecutive epochs with <0.5% improvement (default 0)
 
     Returns:
         Binary mask list [WAIT, GERMINATE_0..N, FOSSILIZE, CULL]
@@ -144,17 +172,24 @@ def compute_action_mask(
     # WAIT (index 0): Always valid
     mask[0] = 1.0
 
-    # GERMINATE_* (indices 1 to num_germinate_actions): Only if no active seed
+    # GERMINATE_* (indices 1 to num_germinate_actions):
+    # Only if no active seed AND plateau detected (fixes credit misattribution)
     if has_active_seed < 0.5:  # No active seed
-        for i in range(1, num_germinate_actions + 1):
-            mask[i] = 1.0
+        plateau_met = (
+            epoch >= MIN_GERMINATE_EPOCH and
+            plateau_epochs >= MIN_PLATEAU_TO_GERMINATE
+        )
+        if plateau_met:
+            for i in range(1, num_germinate_actions + 1):
+                mask[i] = 1.0
 
     # FOSSILIZE (index num_germinate_actions + 1): Only if PROBATIONARY
     if seed_stage == _PROBATIONARY_STAGE:
         mask[num_germinate_actions + 1] = 1.0
 
-    # CULL (index num_germinate_actions + 2): Only if active seed exists
-    if has_active_seed >= 0.5:
+    # CULL (index num_germinate_actions + 2): Only if active seed AND old enough
+    # MIN_CULL_AGE prevents "germinate-then-cull" churn exploitation
+    if has_active_seed >= 0.5 and seed_age_epochs >= MIN_CULL_AGE:
         mask[num_germinate_actions + 2] = 1.0
 
     return mask

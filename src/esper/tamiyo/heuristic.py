@@ -53,7 +53,7 @@ class HeuristicPolicyConfig:
 
     # Blueprint selection with penalty tracking
     blueprint_rotation: list[str] = field(
-        default_factory=lambda: ["conv_enhance", "attention", "norm", "depthwise"]
+        default_factory=lambda: ["conv_light", "conv_heavy", "attention", "norm", "depthwise"]
     )
     blueprint_penalty_on_cull: float = 2.0
     blueprint_penalty_decay: float = 0.5
