@@ -163,6 +163,9 @@ def train_ppo_vectorized(
     resume_path: str = None,
     seed: int = 42,
     num_workers: int | None = None,
+    recurrent: bool = False,
+    lstm_hidden_dim: int = 128,
+    chunk_length: int = 25,  # Must match max_epochs default (25)
 ) -> tuple[PPOAgent, list[dict]]:
     """Train PPO with vectorized environments using INVERTED CONTROL FLOW.
 
@@ -314,6 +317,9 @@ def train_ppo_vectorized(
             entropy_anneal_steps=entropy_anneal_steps,
             gamma=gamma,
             device=device,
+            recurrent=recurrent,
+            lstm_hidden_dim=lstm_hidden_dim,
+            chunk_length=chunk_length,
         )
 
     # ==========================================================================
@@ -530,6 +536,12 @@ def train_ppo_vectorized(
             for i in range(envs_this_batch)
         ]
         criterion = nn.CrossEntropyLoss()
+
+        # Initialize episode for recurrent policy
+        if recurrent:
+            for env_idx in range(envs_this_batch):
+                agent.recurrent_buffer.start_episode(env_id=env_idx)
+                env_states[env_idx].lstm_hidden = None  # Fresh hidden for new episode
 
         # Per-env accumulators
         env_final_accs = [0.0] * envs_this_batch
@@ -803,9 +815,57 @@ def train_ppo_vectorized(
             states_batch_normalized = obs_normalizer.normalize(states_batch)
 
             # Get BATCHED actions from policy network with action masking (single forward pass!)
-            actions, log_probs, values = agent.network.get_action_batch(
-                states_batch_normalized, masks_batch, deterministic=False
-            )
+            if recurrent:
+                # Collect and batch hidden states from all envs
+                hiddens_h = []
+                hiddens_c = []
+                for env_state in env_states:
+                    if env_state.lstm_hidden is None:
+                        h, c = agent.network.get_initial_hidden(1, device)
+                    else:
+                        h, c = env_state.lstm_hidden
+                    hiddens_h.append(h)
+                    hiddens_c.append(c)
+
+                # Batch hidden: [num_layers, n_envs, hidden]
+                batch_h = torch.cat(hiddens_h, dim=1)
+                batch_c = torch.cat(hiddens_c, dim=1)
+
+                # Batched forward (no per-env loop!)
+                with torch.inference_mode():
+                    dist, values, (new_h, new_c) = agent.network.forward(
+                        states_batch_normalized,
+                        masks_batch,
+                        hidden=(batch_h, batch_c),
+                    )
+                    deterministic = False
+                    if deterministic:
+                        actions = dist.probs.argmax(dim=-1)
+                    else:
+                        actions = dist.sample()
+                    log_probs = dist.log_prob(actions)
+
+                # Store new hidden per-env
+                # CRITICAL: .clone() is essential to avoid memory retention
+                # - Slicing new_h[:, i:i+1, :] creates a VIEW into the batched tensor
+                # - Views keep the entire parent tensor alive, preventing garbage collection
+                # - .clone() creates an independent copy that allows the batch to be freed
+                # - .detach() is technically redundant under inference_mode but defensive
+                for i, env_state in enumerate(env_states):
+                    env_state.lstm_hidden = (
+                        new_h[:, i:i+1, :].detach().clone(),
+                        new_c[:, i:i+1, :].detach().clone(),
+                    )
+
+                # Convert to lists for existing loop
+                actions = actions.tolist()
+                log_probs = log_probs.tolist()
+                values = values.tolist()
+            else:
+                # Existing non-recurrent batched action selection
+                actions, log_probs, values = agent.network.get_action_batch(
+                    states_batch_normalized, masks_batch, deterministic=False
+                )
 
             # Execute actions and store transitions for each environment
             for env_idx, env_state in enumerate(env_states):
@@ -917,15 +977,33 @@ def train_ppo_vectorized(
                 # get_batches() expects tensors on CPU or will move them - since policy device
                 # is consistent across all envs, keeping on GPU is more efficient.
                 done = (epoch == max_epochs)
-                agent.store_transition(
-                    states_batch_normalized[env_idx],
-                    action_idx,
-                    log_prob,
-                    value,
-                    normalized_reward,  # Use normalized reward for critic training
-                    done,
-                    masks_batch[env_idx],
-                )
+
+                if recurrent:
+                    agent.store_recurrent_transition(
+                        state=states_batch_normalized[env_idx],
+                        action=action_idx,
+                        log_prob=log_prob,
+                        value=value,
+                        reward=normalized_reward,
+                        done=done,
+                        action_mask=masks_batch[env_idx],
+                        env_id=env_idx,
+                    )
+                else:
+                    agent.store_transition(
+                        states_batch_normalized[env_idx],
+                        action_idx,
+                        log_prob,
+                        value,
+                        normalized_reward,  # Use normalized reward for critic training
+                        done,
+                        masks_batch[env_idx],
+                    )
+
+                # Handle episode boundaries for recurrent policy
+                if done and recurrent:
+                    agent.recurrent_buffer.end_episode(env_id=env_idx)
+                    env_state.lstm_hidden = None  # Reset for next episode
 
                 env_state.episode_rewards.append(raw_reward)  # Display raw for interpretability
 
@@ -947,24 +1025,33 @@ def train_ppo_vectorized(
         # a different model state - training on them would cause distribution shift.
         # Clear the buffer and skip this PPO update.
         if batch_rollback_occurred:
-            agent.buffer.clear()
+            if recurrent:
+                agent.recurrent_buffer.clear()
+            else:
+                agent.buffer.clear()
             print("[PPO] Buffer cleared due to Governor rollback - skipping update")
         else:
-            for update_i in range(ppo_updates_per_batch):
-                is_last_update = (update_i == ppo_updates_per_batch - 1)
-                update_metrics = agent.update(last_value=0.0, clear_buffer=is_last_update)
-                if update_i == 0:
-                    metrics = update_metrics
-                else:
-                    # Aggregate metrics across updates (average)
-                    for k, v in update_metrics.items():
-                        if k in metrics:
-                            metrics[k] = (metrics[k] + v) / 2
-                        else:
-                            metrics[k] = v
-                # Early exit if KL triggered early stopping
-                if update_metrics.get('early_stopped'):
-                    break
+            if recurrent:
+                # Single epoch for recurrent to avoid hidden state drift
+                # (Multiple epochs would cause ratio bias as policy changes between epochs)
+                update_metrics = agent.update_recurrent(n_epochs=1)
+                metrics = update_metrics
+            else:
+                for update_i in range(ppo_updates_per_batch):
+                    is_last_update = (update_i == ppo_updates_per_batch - 1)
+                    update_metrics = agent.update(last_value=0.0, clear_buffer=is_last_update)
+                    if update_i == 0:
+                        metrics = update_metrics
+                    else:
+                        # Aggregate metrics across updates (average)
+                        for k, v in update_metrics.items():
+                            if k in metrics:
+                                metrics[k] = (metrics[k] + v) / 2
+                            else:
+                                metrics[k] = v
+                    # Early exit if KL triggered early stopping
+                    if update_metrics.get('early_stopped'):
+                        break
 
         # NOW update the observation normalizer with all raw states from this batch.
         # This ensures the next batch will use updated statistics, but all states
