@@ -3,6 +3,7 @@
 import pytest
 from enum import IntEnum
 
+from esper.leyline import MIN_CULL_AGE
 from esper.simic.rewards import (
     RewardConfig,
     SeedInfo,
@@ -175,8 +176,9 @@ class TestCullAgeProtection:
 
         shaping = _cull_shaping(seed_info, config)
 
-        # Age penalty: -0.3 * (3 - 0) = -0.9
-        assert shaping == pytest.approx(-0.9)
+        # Age penalty: -0.3 * (MIN_CULL_AGE - 0)
+        expected = -0.3 * MIN_CULL_AGE
+        assert shaping == pytest.approx(expected)
 
     def test_cull_at_age_one_penalized(self):
         """Culling at age 1 should still be penalized."""
@@ -185,19 +187,21 @@ class TestCullAgeProtection:
 
         shaping = _cull_shaping(seed_info, config)
 
-        # Age penalty: -0.3 * (3 - 1) = -0.6
-        assert shaping == pytest.approx(-0.6)
+        # Age penalty: -0.3 * (MIN_CULL_AGE - 1)
+        expected = -0.3 * (MIN_CULL_AGE - 1)
+        assert shaping == pytest.approx(expected)
 
-    def test_cull_at_age_three_no_age_penalty(self):
-        """Culling at age 3+ should have no age penalty."""
+    def test_cull_at_min_age_no_age_penalty(self):
+        """Culling at MIN_CULL_AGE should have no age penalty."""
         config = RewardConfig.default()
-        seed_info = self._make_seed_info(STAGE_TRAINING, age=3, improvement=0.0)
+        seed_info = self._make_seed_info(STAGE_TRAINING, age=MIN_CULL_AGE, improvement=0.0)
 
         shaping = _cull_shaping(seed_info, config)
 
         # No age penalty, but base shaping kicks in (promising seed = -0.3)
         # Plus PBRS correction for destroying the seed
-        assert shaping != pytest.approx(-0.9)  # Not the age-0 penalty
+        age_zero_penalty = -0.3 * MIN_CULL_AGE
+        assert shaping != pytest.approx(age_zero_penalty)  # Not the age-0 penalty
 
     def test_age_penalty_only_for_early_stages(self):
         """Age penalty should only apply to GERMINATED and TRAINING."""
@@ -216,8 +220,9 @@ class TestCullAgeProtection:
 
         shaping = _cull_shaping(seed_info, config)
 
-        # Should NOT be -0.9 (the age-0 penalty)
-        assert shaping != pytest.approx(-0.9)
+        # Should NOT be the age-0 penalty (only applies to GERMINATED/TRAINING)
+        age_zero_penalty = -0.3 * MIN_CULL_AGE
+        assert shaping != pytest.approx(age_zero_penalty)
 
 
 class TestWaitBlendingShaping:
