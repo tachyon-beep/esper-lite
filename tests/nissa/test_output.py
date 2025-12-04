@@ -76,3 +76,34 @@ class TestDirectoryOutput:
         datetime.strptime(ts_part, "%Y-%m-%d_%H%M%S")
 
         backend.close()
+
+
+class TestNissaHubWithDirectoryOutput:
+    """Integration tests for NissaHub with DirectoryOutput."""
+
+    def test_hub_routes_to_directory_output(self, tmp_path: Path):
+        """NissaHub correctly routes events to DirectoryOutput backend."""
+        from esper.nissa.output import NissaHub
+
+        hub = NissaHub()
+        dir_backend = DirectoryOutput(tmp_path)
+        hub.add_backend(dir_backend)
+
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.SEED_GERMINATED,
+            seed_id="seed_1",
+            epoch=0,
+            message="Germinated",
+            data={"blueprint_id": "test_bp"},
+        )
+        hub.emit(event)
+        hub.close()
+
+        # Verify event was written
+        events_file = dir_backend.output_dir / "events.jsonl"
+        assert events_file.exists()
+
+        with open(events_file) as f:
+            data = json.loads(f.readline())
+            assert data["event_type"] == "SEED_GERMINATED"
+            assert data["data"]["blueprint_id"] == "test_bp"
