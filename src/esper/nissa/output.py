@@ -217,6 +217,47 @@ class FileOutput(OutputBackend):
             self.close()
 
 
+class DirectoryOutput(OutputBackend):
+    """Output telemetry events to a timestamped directory.
+
+    Creates a subdirectory with format `telemetry_YYYY-MM-DD_HHMMSS/` and
+    writes events to `events.jsonl` inside it.
+
+    Args:
+        base_path: Base directory where timestamped subdirectory will be created.
+        buffer_size: Number of events to buffer before flushing to disk.
+    """
+
+    def __init__(self, base_path: str | Path, buffer_size: int = 10):
+        self.base_path = Path(base_path)
+        self.base_path.mkdir(parents=True, exist_ok=True)
+
+        # Generate timestamped subdirectory
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        self._output_dir = self.base_path / f"telemetry_{timestamp}"
+        self._output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create internal FileOutput for actual writing
+        self._file_output = FileOutput(self._output_dir / "events.jsonl", buffer_size)
+
+    @property
+    def output_dir(self) -> Path:
+        """Return the full path to the timestamped output directory."""
+        return self._output_dir
+
+    def emit(self, event: TelemetryEvent) -> None:
+        """Emit event to the directory's events.jsonl file."""
+        self._file_output.emit(event)
+
+    def flush(self) -> None:
+        """Flush buffered events to disk."""
+        self._file_output.flush()
+
+    def close(self) -> None:
+        """Close the directory backend."""
+        self._file_output.close()
+
+
 class NissaHub:
     """Central telemetry hub that routes events to multiple backends.
 
@@ -309,6 +350,7 @@ __all__ = [
     "OutputBackend",
     "ConsoleOutput",
     "FileOutput",
+    "DirectoryOutput",
     "NissaHub",
     "get_hub",
     "emit",
