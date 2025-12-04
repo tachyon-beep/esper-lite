@@ -45,6 +45,7 @@ class BlueprintStats:
     acc_deltas: list[float] = field(default_factory=list)
     churns: list[float] = field(default_factory=list)
     blending_deltas: list[float] = field(default_factory=list)  # Accuracy change during blending
+    counterfactuals: list[float] = field(default_factory=list)  # True causal attribution
 
     @property
     def mean_acc_delta(self) -> float:
@@ -60,6 +61,11 @@ class BlueprintStats:
     def mean_blending_delta(self) -> float:
         """Mean accuracy change during blending stages."""
         return sum(self.blending_deltas) / len(self.blending_deltas) if self.blending_deltas else 0.0
+
+    @property
+    def mean_counterfactual(self) -> float:
+        """Mean counterfactual contribution (true causal attribution)."""
+        return sum(self.counterfactuals) / len(self.counterfactuals) if self.counterfactuals else 0.0
 
     @property
     def fossilization_rate(self) -> float:
@@ -153,12 +159,15 @@ class BlueprintAnalytics(OutputBackend):
             seed_id = event.data.get("seed_id", "unknown")
             improvement = event.data.get("improvement", 0.0)
             blending_delta = event.data.get("blending_delta", 0.0)
+            counterfactual = event.data.get("counterfactual")  # May be None
             params = event.data.get("params_added", 0)
             epochs_total = event.data.get("epochs_total", 0)
 
             self.stats[bp_id].fossilized += 1
             self.stats[bp_id].acc_deltas.append(improvement)
             self.stats[bp_id].blending_deltas.append(blending_delta)
+            if counterfactual is not None:
+                self.stats[bp_id].counterfactuals.append(counterfactual)
 
             sb = self._get_scoreboard(env_id)
             sb.total_fossilized += 1
@@ -167,9 +176,10 @@ class BlueprintAnalytics(OutputBackend):
             sb.total_fossilize_age_epochs += int(epochs_total)
             sb.live_blueprint = None
 
-            # Show total improvement and blending delta (temporal, not causal)
+            # Show total improvement, blending delta, and causal contribution
+            causal_str = f", causal Δ {counterfactual:+.2f}%" if counterfactual is not None else ""
             print(f"    [env{env_id}] Fossilized '{seed_id}' ({bp_id}, "
-                  f"total Δacc {improvement:+.2f}%, blending Δ {blending_delta:+.2f}%)")
+                  f"total Δacc {improvement:+.2f}%, blending Δ {blending_delta:+.2f}%{causal_str})")
 
         elif event.event_type == TelemetryEventType.SEED_CULLED:
             bp_id = event.data.get("blueprint_id", "unknown")
@@ -177,12 +187,15 @@ class BlueprintAnalytics(OutputBackend):
             seed_id = event.data.get("seed_id", "unknown")
             improvement = event.data.get("improvement", 0.0)
             blending_delta = event.data.get("blending_delta", 0.0)
+            counterfactual = event.data.get("counterfactual")  # May be None
             reason = event.data.get("reason", "")
             epochs_total = event.data.get("epochs_total", 0)
 
             self.stats[bp_id].culled += 1
             self.stats[bp_id].churns.append(improvement)
             self.stats[bp_id].blending_deltas.append(blending_delta)
+            if counterfactual is not None:
+                self.stats[bp_id].counterfactuals.append(counterfactual)
 
             sb = self._get_scoreboard(env_id)
             sb.total_culled += 1
@@ -190,9 +203,10 @@ class BlueprintAnalytics(OutputBackend):
             sb.live_blueprint = None
 
             reason_str = f" ({reason})" if reason else ""
-            # Show total improvement and blending delta (temporal, not causal)
+            # Show total improvement, blending delta, and causal contribution
+            causal_str = f", causal Δ {counterfactual:+.2f}%" if counterfactual is not None else ""
             print(f"    [env{env_id}] Culled '{seed_id}' ({bp_id}, "
-                  f"total Δacc {improvement:+.2f}%, blending Δ {blending_delta:+.2f}%){reason_str}")
+                  f"total Δacc {improvement:+.2f}%, blending Δ {blending_delta:+.2f}%{causal_str}){reason_str}")
 
     def _get_scoreboard(self, env_id: int) -> SeedScoreboard:
         """Get or create scoreboard for environment."""
@@ -203,12 +217,12 @@ class BlueprintAnalytics(OutputBackend):
     def summary_table(self) -> str:
         """Pretty-print blueprint performance stats."""
         lines = ["Blueprint Stats:"]
-        lines.append("  " + "-" * 95)
+        lines.append("  " + "-" * 110)
         lines.append(
             f"  {'Blueprint':<14} {'Germ':>5} {'Foss':>5} {'Cull':>5} "
-            f"{'Rate':>6} {'ΔAcc':>8} {'SeedΔ':>8} {'Churn':>8}"
+            f"{'Rate':>6} {'ΔAcc':>8} {'BlendΔ':>8} {'CausalΔ':>8} {'Churn':>8}"
         )
-        lines.append("  " + "-" * 95)
+        lines.append("  " + "-" * 110)
 
         for bp_id in sorted(self.stats.keys()):
             s = self.stats[bp_id]
@@ -216,7 +230,7 @@ class BlueprintAnalytics(OutputBackend):
                 f"  {bp_id:<14} {s.germinated:>5} {s.fossilized:>5} "
                 f"{s.culled:>5} {s.fossilization_rate:>5.1f}% "
                 f"{s.mean_acc_delta:>+7.2f}% {s.mean_blending_delta:>+7.2f}% "
-                f"{s.mean_churn:>+7.2f}%"
+                f"{s.mean_counterfactual:>+7.2f}% {s.mean_churn:>+7.2f}%"
             )
         return "\n".join(lines)
 
@@ -250,6 +264,7 @@ class BlueprintAnalytics(OutputBackend):
                     "culled": s.culled,
                     "mean_acc_delta": s.mean_acc_delta,
                     "mean_blending_delta": s.mean_blending_delta,
+                    "mean_counterfactual": s.mean_counterfactual,
                     "mean_churn": s.mean_churn,
                     "fossilization_rate": s.fossilization_rate,
                 }

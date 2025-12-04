@@ -904,6 +904,9 @@ def train_ppo_vectorized(
                 seed_contribution = None
                 if baseline_accs[env_idx] is not None:
                     seed_contribution = env_state.val_acc - baseline_accs[env_idx]
+                    # Store in metrics for telemetry at fossilize/cull
+                    if seed_state and seed_state.metrics:
+                        seed_state.metrics.counterfactual_contribution = seed_contribution
 
                 # Use contribution-primary reward when counterfactual is available
                 if seed_contribution is not None:

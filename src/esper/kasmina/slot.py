@@ -74,6 +74,10 @@ class SeedMetrics:
     current_alpha: float = 0.0
     alpha_ramp_step: int = 0
 
+    # Counterfactual contribution (set by vectorized training when available)
+    # This is the TRUE causal attribution: real_acc - baseline_acc(alpha=0)
+    counterfactual_contribution: float | None = None
+
     def record_accuracy(self, accuracy: float | torch.Tensor) -> None:
         """Record a new accuracy measurement.
 
@@ -708,6 +712,7 @@ class SeedSlot(nn.Module):
             metrics = self.state.metrics
             improvement = metrics.total_improvement
             blending_delta = metrics.blending_delta
+            counterfactual = metrics.counterfactual_contribution
             epochs_total = metrics.epochs_total
             epochs_in_stage = metrics.epochs_in_current_stage
             blueprint_id = self.state.blueprint_id
@@ -741,6 +746,7 @@ class SeedSlot(nn.Module):
                             "seed_id": seed_id,
                             "improvement": improvement,
                             "blending_delta": blending_delta,
+                            "counterfactual": counterfactual,  # True causal attribution
                             "params_added": sum(
                                 p.numel() for p in self.seed.parameters() if p.requires_grad
                             ),
@@ -778,6 +784,7 @@ class SeedSlot(nn.Module):
         # Capture metrics before transition clears state
         improvement = self.state.metrics.total_improvement
         blending_delta = self.state.metrics.blending_delta
+        counterfactual = self.state.metrics.counterfactual_contribution
         epochs_total = self.state.metrics.epochs_total
         epochs_in_stage = self.state.metrics.epochs_in_current_stage
         blueprint_id = self.state.blueprint_id
@@ -800,6 +807,7 @@ class SeedSlot(nn.Module):
                 "seed_id": seed_id,
                 "improvement": improvement,
                 "blending_delta": blending_delta,
+                "counterfactual": counterfactual,  # True causal attribution
                 "epochs_total": epochs_total,
                 "epochs_in_stage": epochs_in_stage,
             }
