@@ -100,12 +100,15 @@ class SeedMetrics:
         return self.current_val_accuracy - self.accuracy_at_stage_start
 
     @property
-    def seed_contribution(self) -> float:
-        """Accuracy change attributable to the seed (from BLENDING onward).
+    def blending_delta(self) -> float:
+        """Accuracy change since blending started (includes host drift).
 
-        This is the true causal attribution - measures impact only during
-        stages where the seed actually affects network output (alpha > 0).
-        Returns 0 if seed never reached BLENDING (no measurable impact).
+        This is NOT causal attribution - it measures the total accuracy change
+        during BLENDING stages, which conflates host training gains with seed
+        impact. For true causal attribution, use counterfactual validation
+        (real_acc - baseline_acc with alpha=0).
+
+        Returns 0 if seed never reached BLENDING.
         """
         if self.accuracy_at_blending_start == 0.0:
             return 0.0
@@ -704,7 +707,7 @@ class SeedSlot(nn.Module):
             # Capture metrics before transition resets stage counters
             metrics = self.state.metrics
             improvement = metrics.total_improvement
-            seed_contribution = metrics.seed_contribution
+            blending_delta = metrics.blending_delta
             epochs_total = metrics.epochs_total
             epochs_in_stage = metrics.epochs_in_current_stage
             blueprint_id = self.state.blueprint_id
@@ -737,7 +740,7 @@ class SeedSlot(nn.Module):
                             "blueprint_id": blueprint_id,
                             "seed_id": seed_id,
                             "improvement": improvement,
-                            "seed_contribution": seed_contribution,  # True causal attribution
+                            "blending_delta": blending_delta,
                             "params_added": sum(
                                 p.numel() for p in self.seed.parameters() if p.requires_grad
                             ),
@@ -774,7 +777,7 @@ class SeedSlot(nn.Module):
 
         # Capture metrics before transition clears state
         improvement = self.state.metrics.total_improvement
-        seed_contribution = self.state.metrics.seed_contribution
+        blending_delta = self.state.metrics.blending_delta
         epochs_total = self.state.metrics.epochs_total
         epochs_in_stage = self.state.metrics.epochs_in_current_stage
         blueprint_id = self.state.blueprint_id
@@ -796,7 +799,7 @@ class SeedSlot(nn.Module):
                 "blueprint_id": blueprint_id,
                 "seed_id": seed_id,
                 "improvement": improvement,
-                "seed_contribution": seed_contribution,  # True causal attribution
+                "blending_delta": blending_delta,
                 "epochs_total": epochs_total,
                 "epochs_in_stage": epochs_in_stage,
             }
