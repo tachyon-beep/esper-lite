@@ -14,7 +14,7 @@ Usage:
 
 import argparse
 
-from esper.nissa import get_hub, ConsoleOutput, FileOutput
+from esper.nissa import get_hub, ConsoleOutput, FileOutput, DirectoryOutput
 
 
 def main():
@@ -23,6 +23,8 @@ def main():
     # Global options (apply to all subcommands)
     parser.add_argument("--telemetry-file", type=str, default=None,
                         help="Save Nissa telemetry to JSONL file")
+    parser.add_argument("--telemetry-dir", type=str, default=None,
+                        help="Save Nissa telemetry to timestamped folder in this directory")
 
     subparsers = parser.add_subparsers(dest="algorithm", required=True)
 
@@ -82,6 +84,13 @@ def main():
         file_backend = FileOutput(args.telemetry_file)
         hub.add_backend(file_backend)
         print(f"Telemetry will be saved to: {args.telemetry_file}")
+
+    # Add directory output if requested
+    dir_backend = None
+    if args.telemetry_dir:
+        dir_backend = DirectoryOutput(args.telemetry_dir)
+        hub.add_backend(dir_backend)
+        print(f"Telemetry will be saved to: {dir_backend.output_dir}")
 
     if args.algorithm == "heuristic":
         from esper.simic.training import train_heuristic
