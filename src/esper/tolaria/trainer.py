@@ -2,7 +2,7 @@
 
 This module provides the core training loop functions for different seed states:
 - train_epoch_normal: Standard training without seed
-- train_epoch_womb_mode: STE training (seed output isolated, both train)
+- train_epoch_incubator_mode: STE training (seed output isolated, both train)
 - train_epoch_blended: Joint host+seed training
 - validate_and_get_metrics: Validation and metric computation
 - validate_with_attribution: Counterfactual validation for true causal attribution
@@ -78,7 +78,7 @@ def train_epoch_normal(
         optimizer.step()
 
 
-def train_epoch_womb_mode(
+def train_epoch_incubator_mode(
     model: nn.Module,
     trainloader: DataLoader,
     criterion: nn.Module,
@@ -89,7 +89,7 @@ def train_epoch_womb_mode(
 ) -> None:
     """Train one epoch with seed in isolation (seed output doesn't affect forward pass).
 
-    During TRAINING stage (womb mode), the seed uses a Straight-Through Estimator:
+    During TRAINING stage (incubator mode), the seed uses a Straight-Through Estimator:
     - Forward: output = host_features (seed contribution is zero)
     - Backward: seed receives gradients as if fully blended
 

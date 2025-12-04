@@ -8,7 +8,7 @@
 
 ## 1. Executive Summary
 
-The `esper.kasmina` package implements a sophisticated seed lifecycle management system for morphogenetic neural networks, providing gradient-isolated "womb mode" training, alpha-scheduled blending, and a multi-stage trust escalation model with quality gates. The architecture is well-designed with clean separation between lifecycle state (slot.py), gradient mechanics (isolation.py), host abstractions (host.py/protocol.py), and pluggable seed blueprints. The implementation demonstrates solid PyTorch patterns and careful attention to gradient flow correctness.
+The `esper.kasmina` package implements a sophisticated seed lifecycle management system for morphogenetic neural networks, providing gradient-isolated "incubator mode" training, alpha-scheduled blending, and a multi-stage trust escalation model with quality gates. The architecture is well-designed with clean separation between lifecycle state (slot.py), gradient mechanics (isolation.py), host abstractions (host.py/protocol.py), and pluggable seed blueprints. The implementation demonstrates solid PyTorch patterns and careful attention to gradient flow correctness.
 
 ---
 
@@ -28,7 +28,7 @@ The `esper.kasmina` package implements a sophisticated seed lifecycle management
 
 1. **Seed Germination**: Create seed modules from blueprints with shape validation
 2. **Lifecycle Management**: DORMANT -> GERMINATED -> TRAINING -> BLENDING -> SHADOWING -> PROBATIONARY -> FOSSILIZED
-3. **Gradient Isolation**: Womb mode training where seeds learn without affecting host
+3. **Gradient Isolation**: Incubator mode training where seeds learn without affecting host
 4. **Alpha Blending**: Smooth sigmoid-scheduled integration of seed features
 5. **Quality Gates**: G0-G5 checkpoints for stage transitions
 6. **Telemetry**: Event emission for monitoring and RL reward signals
@@ -37,12 +37,12 @@ The `esper.kasmina` package implements a sophisticated seed lifecycle management
 
 ## 3. Notable Innovations
 
-### 3.1 Womb Mode / Straight-Through Estimator (STE)
+### 3.1 Incubator Mode / Straight-Through Estimator (STE)
 
 The TRAINING stage implements a clever gradient isolation pattern (slot.py:771-772):
 
 ```python
-# WOMB MODE: STE
+# INCUBATOR MODE: STE
 if self.state.stage == SeedStage.TRAINING and self.alpha == 0.0:
     return host_features + (seed_features - seed_features.detach())
 ```
@@ -195,13 +195,13 @@ This is the primary RL decision point for commit/continue/cull.
 
 **Verified Patterns:**
 
-1. **Womb Mode STE** (slot.py:771-772):
+1. **Incubator Mode STE** (slot.py:771-772):
    ```python
    return host_features + (seed_features - seed_features.detach())
    ```
    - Forward: Correctly returns host_features
    - Backward: `d/d(seed_features)` flows through the non-detached branch
-   - Test coverage: `test_womb_ste.py` validates with Hypothesis
+   - Test coverage: `test_incubator_ste.py` validates with Hypothesis
 
 2. **blend_with_isolation** (isolation.py:47-57):
    ```python

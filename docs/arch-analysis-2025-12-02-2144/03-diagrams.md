@@ -173,7 +173,7 @@ C4Component
         Component(state, "SeedState", "State Tracking", "Stage, metrics, telemetry sync")
         Component(gates, "QualityGates", "Validation", "G0-G5 stage transition checks")
 
-        Component(isolation, "Gradient Isolation", "Training", "Womb mode, alpha scheduling, blend_with_isolation")
+        Component(isolation, "Gradient Isolation", "Training", "Incubator mode, alpha scheduling, blend_with_isolation")
         Component(monitor, "IsolationMonitor", "Verification", "Gradient norm checking, violation tracking")
 
         Component(host, "HostProtocol", "Interface", "Structural typing for graftable hosts")
@@ -207,7 +207,7 @@ C4Component
 | **SeedSlot** | Lifecycle container - germinate, advance, cull, forward |
 | **SeedState** | Tracks stage, metrics, syncs telemetry |
 | **QualityGates** | G0-G5 validation for stage transitions |
-| **Gradient Isolation** | Womb mode STE, alpha schedules, blending |
+| **Gradient Isolation** | Incubator mode STE, alpha schedules, blending |
 | **IsolationMonitor** | Verifies gradient separation, tracks violations |
 | **HostProtocol** | Structural typing for injection point discovery |
 | **CNNHost** | Convolutional host with block injection points |
@@ -316,7 +316,7 @@ stateDiagram-v2
 |-------|-------------|---------------|
 | **DORMANT** | Slot empty, ready for germination | - |
 | **GERMINATED** | Seed created from blueprint | G0 (sanity) |
-| **TRAINING** | Womb mode - STE isolation | G1 (readiness) |
+| **TRAINING** | Incubator mode - STE isolation | G1 (readiness) |
 | **BLENDING** | Alpha ramp 0→1, co-adaptation | G2 (improvement) |
 | **SHADOWING** | Alpha ≈ 1, monitoring | G3 (alpha threshold) |
 | **PROBATIONARY** | Final validation | G4 (shadowing complete) |

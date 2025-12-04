@@ -174,7 +174,7 @@ These issues **must be resolved before any production deployment**:
 |------|------------|--------|------------|
 | Multi-GPU training corruption | HIGH | HIGH | Fix C1/C2 immediately |
 | Memory exhaustion at scale | MEDIUM | MEDIUM | Streaming DatasetManager |
-| Gradient explosion in womb mode | LOW | MEDIUM | TolariaGovernor 6sigma detection |
+| Gradient explosion in incubator mode | LOW | MEDIUM | TolariaGovernor 6sigma detection |
 | torch.compile graph breaks | MEDIUM | LOW | Audit dynamic control flow |
 
 ### Architectural Risks

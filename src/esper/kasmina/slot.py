@@ -720,7 +720,7 @@ class SeedSlot(nn.Module):
 
             if self.state.transition(target_stage):
                 # Stage-specific gradient isolation hooks:
-                # - GERMINATED → TRAINING: enable Womb isolation so the seed
+                # - GERMINATED → TRAINING: enable Incubator isolation so the seed
                 #   sees detached host features during its training phase.
                 # - TRAINING → BLENDING: disable isolation so blended seeds can
                 #   co-adapt with the host trunk.
@@ -839,12 +839,12 @@ class SeedSlot(nn.Module):
         if not self.is_active or not is_active_stage(self.state.stage):
             return host_features
 
-        # 2. Compute seed features. For Womb/Training we must detach the
+        # 2. Compute seed features. For Incubator/Training we must detach the
         #    host input so seed gradients do not flow back into the host.
         seed_input = host_features.detach() if self.isolate_gradients else host_features
         seed_features = self.seed(seed_input)
 
-        # 3. WOMB MODE (TRAINING stage, alpha == 0.0)
+        # 3. INCUBATOR MODE (TRAINING stage, alpha == 0.0)
         #
         # Straight-Through Estimator:
         #   forward:  host + (seed - seed.detach()) == host
@@ -932,7 +932,7 @@ class SeedSlot(nn.Module):
                 raise RuntimeError(
                     f"Illegal lifecycle transition {self.state.stage} → TRAINING"
                 )
-            # Enable Womb isolation so seed sees detached host features
+            # Enable Incubator isolation so seed sees detached host features
             self.isolate_gradients = True
             self._emit_telemetry(
                 TelemetryEventType.SEED_STAGE_CHANGED,
@@ -960,7 +960,7 @@ class SeedSlot(nn.Module):
                 raise RuntimeError(
                     f"Illegal lifecycle transition {self.state.stage} → BLENDING"
                 )
-            # Leaving TRAINING: disable Womb isolation so BLENDING/SHADOWING/
+            # Leaving TRAINING: disable Incubator isolation so BLENDING/SHADOWING/
             # FOSSILIZED can drive host trunk updates via the seed branch.
             self.isolate_gradients = False
             # Snapshot accuracy at blending start for true causal attribution

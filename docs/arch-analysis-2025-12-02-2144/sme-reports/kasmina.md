@@ -9,7 +9,7 @@
 
 ## 1. Executive Summary
 
-The kasmina package implements a sophisticated seed lifecycle management system with gradient-isolated "womb mode" training and alpha-scheduled blending across a 10-stage trust escalation model. It provides the mechanical framework for safe seed integration into host neural networks through quality gates (G0-G5), gradient isolation monitoring, and smooth blending schedules.
+The kasmina package implements a sophisticated seed lifecycle management system with gradient-isolated "incubator mode" training and alpha-scheduled blending across a 10-stage trust escalation model. It provides the mechanical framework for safe seed integration into host neural networks through quality gates (G0-G5), gradient isolation monitoring, and smooth blending schedules.
 
 ---
 
@@ -19,7 +19,7 @@ The kasmina package implements a sophisticated seed lifecycle management system 
 |---------|-------------|
 | **SeedSlot** | Lifecycle container with germination, training, blending, fossilization |
 | **Quality Gates** | G0-G5 validation for stage transitions |
-| **Gradient Isolation** | Womb mode STE for safe seed training |
+| **Gradient Isolation** | Incubator mode STE for safe seed training |
 | **Alpha Scheduling** | Sigmoid-based 0→1 blending ramp |
 | **Host Protocol** | Structural typing for graftable networks |
 | **Blueprint Registry** | Plugin system for seed architectures |
@@ -28,7 +28,7 @@ The kasmina package implements a sophisticated seed lifecycle management system 
 
 ## 3. Notable Innovations
 
-### Womb Mode (Straight-Through Estimator)
+### Incubator Mode (Straight-Through Estimator)
 ```python
 # Forward: host features only (alpha=0)
 # Backward: gradients flow to both host and seed

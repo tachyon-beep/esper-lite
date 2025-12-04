@@ -1,4 +1,4 @@
-"""Tests for Womb (TRAINING) Straight-Through Estimator behavior in SeedSlot.
+"""Tests for Incubator (TRAINING) Straight-Through Estimator behavior in SeedSlot.
 
 These tests validate the "magic residual" pattern used in SeedSlot.forward:
 
@@ -36,7 +36,7 @@ class SimpleSeed(nn.Module):
 
 @pytest.fixture
 def slot() -> SeedSlot:
-    """Create a SeedSlot configured for Womb (TRAINING) mode."""
+    """Create a SeedSlot configured for Incubator (TRAINING) mode."""
     slot = SeedSlot(slot_id="test_slot", channels=4, device="cpu")
     slot.seed = SimpleSeed(channels=4)
     slot.state = SeedState(
@@ -44,7 +44,7 @@ def slot() -> SeedSlot:
         blueprint_id="test_bp",
         stage=SeedStage.TRAINING,
     )
-    slot.set_alpha(0.0)  # Womb: alpha == 0.0
+    slot.set_alpha(0.0)  # Incubator: alpha == 0.0
     slot.isolate_gradients = True  # Detach host input into seed
     return slot
 
@@ -58,8 +58,8 @@ tensor_strategy = arrays(
 
 @given(host_input=tensor_strategy)
 @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
-def test_womb_ste_behavior(slot: SeedSlot, host_input: torch.Tensor) -> None:
-    """Womb mode should isolate forward and host gradients for all inputs."""
+def test_incubator_ste_behavior(slot: SeedSlot, host_input: torch.Tensor) -> None:
+    """Incubator mode should isolate forward and host gradients for all inputs."""
     # Filter out the degenerate all-zero case where loss == 0 and all gradients are zero.
     assume(host_input.abs().sum().item() > 0.0)
 
@@ -70,7 +70,7 @@ def test_womb_ste_behavior(slot: SeedSlot, host_input: torch.Tensor) -> None:
     output = slot(host_input)
 
     # 1) Forward isolation: output numerically equals host input
-    assert torch.allclose(output, host_input), "Womb broke forward isolation"
+    assert torch.allclose(output, host_input), "Incubator broke forward isolation"
 
     # Backward from a simple scalar loss
     loss = output.sum()
@@ -80,11 +80,11 @@ def test_womb_ste_behavior(slot: SeedSlot, host_input: torch.Tensor) -> None:
     expected_grad = torch.ones_like(host_input)
     assert torch.allclose(
         host_input.grad, expected_grad
-    ), f"Womb broke backward isolation; host grad polluted: {host_input.grad}"
+    ), f"Incubator broke backward isolation; host grad polluted: {host_input.grad}"
 
 
-def test_womb_ste_seed_receives_gradient(slot: SeedSlot) -> None:
-    """Seed should receive gradients in Womb mode for non-degenerate inputs."""
+def test_incubator_ste_seed_receives_gradient(slot: SeedSlot) -> None:
+    """Seed should receive gradients in Incubator mode for non-degenerate inputs."""
     host_input = torch.tensor(
         [[1.0, 2.0, -1.0, 0.5], [0.0, -0.5, 3.0, 1.0]],
         dtype=torch.float32,
@@ -96,10 +96,10 @@ def test_womb_ste_seed_receives_gradient(slot: SeedSlot) -> None:
     loss.backward()
 
     seed_grad_norm = slot.seed.layer.weight.grad.norm().item()
-    assert seed_grad_norm > 0.0, "Seed did not receive gradients in Womb mode"
+    assert seed_grad_norm > 0.0, "Seed did not receive gradients in Incubator mode"
 
 
-def test_womb_ste_inactive_when_blending(slot: SeedSlot) -> None:
+def test_incubator_ste_inactive_when_blending(slot: SeedSlot) -> None:
     """STE should turn off once we enter BLENDING (alpha > 0)."""
     host_input = torch.randn(2, 4, requires_grad=True)
 

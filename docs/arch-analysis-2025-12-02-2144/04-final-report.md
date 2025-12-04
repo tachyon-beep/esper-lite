@@ -59,7 +59,7 @@ The system implements a 10-stage trust escalation model where seeds must prove t
 
 ### Key Innovations
 
-1. **Womb Mode (STE)**: Gradient-isolated training where seeds learn without affecting host output
+1. **Incubator Mode (STE)**: Gradient-isolated training where seeds learn without affecting host output
 2. **PBRS Reward Shaping**: Potential-based rewards preserve optimal policy while improving learning
 3. **Quality Gates (G0-G5)**: Multi-level validation for lifecycle transitions
 4. **TolariaGovernor**: 6σ anomaly detection with automatic rollback
@@ -116,7 +116,7 @@ The system implements a 10-stage trust escalation model where seeds must prove t
 ### Cross-Cutting Concerns
 
 1. **Hot Path Optimization**: features.py and normalization.py are performance-critical
-2. **Gradient Flow**: Womb mode STE verified correct
+2. **Gradient Flow**: Incubator mode STE verified correct
 3. **Multi-GPU**: vectorized.py has race conditions needing fix
 4. **Reward Shaping**: PBRS implementation is mathematically correct
 

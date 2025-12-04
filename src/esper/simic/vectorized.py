@@ -355,7 +355,7 @@ def train_ppo_vectorized(
         # Wire telemetry callback with env_id injection
         model.seed_slot.on_telemetry = make_telemetry_callback(env_idx)
         model.seed_slot.fast_mode = False  # Enable telemetry
-        # Womb mode gradient isolation: detach host input into the seed path so
+        # Incubator mode gradient isolation: detach host input into the seed path so
         # host gradients remain identical to the host-only model while the seed
         # trickle-learns via STE in TRAINING. The host optimizer still steps
         # every batch; isolation only affects gradients through the seed branch.
@@ -442,7 +442,7 @@ def train_ppo_vectorized(
                 # No seed or seed fully integrated - train host only
                 optimizer = env_state.host_optimizer
             elif seed_state.stage in (SeedStage.GERMINATED, SeedStage.TRAINING):
-                # Womb/isolated seed training: train host + seed in lockstep.
+                # Incubator/isolated seed training: train host + seed in lockstep.
                 if seed_state.stage == SeedStage.GERMINATED:
                     gate_result = model.seed_slot.advance_stage(SeedStage.TRAINING)
                     if not gate_result.passed:

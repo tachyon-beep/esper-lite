@@ -97,7 +97,7 @@ Kasmina manages the **lifecycle and integration of seed modules into host neural
 
 ### Key Patterns
 - State Machine with Quality Gates (G0-G5)
-- Womb Mode (Straight-Through Estimator for gradient isolation)
+- Incubator Mode (Straight-Through Estimator for gradient isolation)
 - Plugin Registry (decorator-based blueprint registration)
 - Injection Point Abstraction (HostProtocol)
 - Smooth Blending (sigmoid-scheduled alpha ramp)
@@ -264,7 +264,7 @@ Tamiyo is the strategic decision-making subsystem for Esper's adaptive learning 
 **Confidence:** HIGH
 
 ### Package Responsibility
-Tolaria owns the **training infrastructure for Model Alpha** - the neural network enhanced with morphogenetic seeds. It provides generic epoch-based training loops for three seed lifecycle stages (normal/womb-mode/blended), model instantiation via task specifications, and a fail-safe watchdog for catastrophic failure detection with automatic rollback and RL punishment signaling.
+Tolaria owns the **training infrastructure for Model Alpha** - the neural network enhanced with morphogenetic seeds. It provides generic epoch-based training loops for three seed lifecycle stages (normal/incubator-mode/blended), model instantiation via task specifications, and a fail-safe watchdog for catastrophic failure detection with automatic rollback and RL punishment signaling.
 
 ### Key Public API
 
@@ -272,7 +272,7 @@ Tolaria owns the **training infrastructure for Model Alpha** - the neural networ
 |--------|---------|
 | `create_model()` | Model factory via TaskSpec |
 | `train_epoch_normal()` | Standard training (no seeds) |
-| `train_epoch_womb_mode()` | STE isolation + dual optimization |
+| `train_epoch_incubator_mode()` | STE isolation + dual optimization |
 | `train_epoch_blended()` | Joint host+seed training |
 | `validate_and_get_metrics()` | Comprehensive evaluation |
 | `TolariaGovernor` | Catastrophic failure watchdog |

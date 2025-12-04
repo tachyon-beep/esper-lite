@@ -161,7 +161,7 @@ src/esper/
 
 **Key Types:**
 - `create_model` - Model factory
-- `train_epoch_normal`, `train_epoch_womb_mode`, `train_epoch_blended` - Training modes
+- `train_epoch_normal`, `train_epoch_incubator_mode`, `train_epoch_blended` - Training modes
 - `TolariaGovernor` - Fail-safe watchdog for catastrophic failures
 
 **Coupling:** Depends on kasmina, leyline; used by simic

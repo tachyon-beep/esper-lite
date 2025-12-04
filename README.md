@@ -6,7 +6,7 @@ Esper is a framework for **Morphogenetic AI**—neural networks that dynamically
 
 ## 🚀 Key Features
 
-* **🛡️ Gradient Isolation:** Seeds train in a "womb" state, learning from the host's errors without destabilizing its existing knowledge (catastrophic forgetting prevention).
+* **🛡️ Gradient Isolation:** Seeds train in an "incubator" state, learning from the host's errors without destabilizing its existing knowledge (catastrophic forgetting prevention).
 * **🧠 Dual-Mode Control:**
   * **Tamiyo (Heuristic):** A rule-based baseline controller for stable, predictable growth.
   * **Simic (RL):** A PPO/IQL reinforcement learning agent that learns optimal growth strategies by observing training dynamics.

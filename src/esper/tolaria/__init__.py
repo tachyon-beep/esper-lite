@@ -13,7 +13,7 @@ Simic uses Tolaria to create the RL environment for training Tamiyo.
 
 Public API:
     from esper.tolaria import create_model
-    from esper.tolaria import train_epoch_normal, train_epoch_womb_mode
+    from esper.tolaria import train_epoch_normal, train_epoch_incubator_mode
     from esper.tolaria import validate_with_attribution, AttributionResult
     from esper.tolaria import TolariaGovernor, GovernorReport
 """
@@ -22,7 +22,7 @@ from esper.tolaria.environment import create_model
 from esper.tolaria.governor import GovernorReport, TolariaGovernor
 from esper.tolaria.trainer import (
     train_epoch_normal,
-    train_epoch_womb_mode,
+    train_epoch_incubator_mode,
     train_epoch_blended,
     validate_and_get_metrics,
     validate_with_attribution,
@@ -34,7 +34,7 @@ __all__ = [
     "create_model",
     # Trainer
     "train_epoch_normal",
-    "train_epoch_womb_mode",
+    "train_epoch_incubator_mode",
     "train_epoch_blended",
     "validate_and_get_metrics",
     "validate_with_attribution",

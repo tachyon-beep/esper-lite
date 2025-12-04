@@ -8,7 +8,7 @@
 
 ## 1. Executive Summary
 
-The `esper.tolaria` package provides model training infrastructure including epoch trainers, a model factory, and the TolariaGovernor catastrophic failure watchdog. The Governor implements a sophisticated safety mechanism that monitors training stability and can rollback to "Last Known Good" state while signaling punishment rewards to the RL agent. The training loops are well-structured with proper PyTorch idioms for different seed lifecycle stages (normal, womb mode, blended).
+The `esper.tolaria` package provides model training infrastructure including epoch trainers, a model factory, and the TolariaGovernor catastrophic failure watchdog. The Governor implements a sophisticated safety mechanism that monitors training stability and can rollback to "Last Known Good" state while signaling punishment rewards to the RL agent. The training loops are well-structured with proper PyTorch idioms for different seed lifecycle stages (normal, incubator mode, blended).
 
 ---
 
@@ -32,7 +32,7 @@ The `esper.tolaria` package provides model training infrastructure including epo
 
 2. **Epoch Training Functions**
    - `train_epoch_normal`: Standard training (host only)
-   - `train_epoch_womb_mode`: STE training with isolated seed output
+   - `train_epoch_incubator_mode`: STE training with isolated seed output
    - `train_epoch_blended`: Joint host+seed training
    - `validate_and_get_metrics`: Validation with optional per-class accuracy
 
@@ -88,15 +88,15 @@ if (avg < self.random_guess_loss * 0.6 and
 
 This catches the subtle failure mode where a neural network collapses to outputting uniform distributions (ln(num_classes) loss).
 
-### Womb Mode Training
+### Incubator Mode Training
 
-The womb mode concept isolates seed output while still training both host and seed:
+The incubator mode concept isolates seed output while still training both host and seed:
 
 ```python
-def train_epoch_womb_mode(...):
+def train_epoch_incubator_mode(...):
     """Train one epoch with seed in isolation (seed output doesn't affect forward pass).
 
-    During TRAINING stage (womb mode), the seed uses a Straight-Through Estimator:
+    During TRAINING stage (incubator mode), the seed uses a Straight-Through Estimator:
     - Forward: output = host_features (seed contribution is zero)
     - Backward: seed receives gradients as if fully blended
 
@@ -213,7 +213,7 @@ class_correct_tensor += torch.bincount(labels[correct_mask], minlength=num_class
 
 **Pattern:**
 ```python
-# Womb mode: separate optimizers, simultaneous stepping
+# Incubator mode: separate optimizers, simultaneous stepping
 host_optimizer.zero_grad(set_to_none=True)
 seed_optimizer.zero_grad(set_to_none=True)
 outputs = model(inputs)
@@ -351,7 +351,7 @@ if device.startswith("cuda") and not torch.cuda.is_available():
 ### Long-term (Architecture)
 
 5. **Gradient Checkpointing Integration**
-   For larger models, integrate `torch.utils.checkpoint` for memory efficiency during womb mode training.
+   For larger models, integrate `torch.utils.checkpoint` for memory efficiency during incubator mode training.
 
 ---
 
@@ -379,7 +379,7 @@ The package is well-implemented with no critical bugs or security issues. The ha
 
 2. **Training loops follow PyTorch best practices** - GPU-native accumulation, non-blocking transfers, and efficient gradient handling.
 
-3. **Womb mode training is correctly implemented** - The dual-optimizer pattern with STE semantics enables safe seed exploration.
+3. **Incubator mode training is correctly implemented** - The dual-optimizer pattern with STE semantics enables safe seed exploration.
 
 4. **Minor technical debt exists** - Optimizer state not included in snapshots is the most significant gap.
 

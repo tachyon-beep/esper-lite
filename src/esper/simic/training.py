@@ -151,7 +151,7 @@ def run_ppo_episode(
 
     model.seed_slot.on_telemetry = telemetry_callback
     model.seed_slot.fast_mode = False
-    # Womb mode gradient isolation: detach host input into the seed path so host
+    # Incubator mode gradient isolation: detach host input into the seed path so host
     # gradients match the baseline model while the seed trickle-learns via STE.
     # Host optimizer still steps every batch; isolation only affects gradients
     # flowing through the seed branch.

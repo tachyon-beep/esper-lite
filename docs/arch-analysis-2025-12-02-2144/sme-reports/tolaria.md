@@ -19,7 +19,7 @@ The tolaria package provides a sophisticated training infrastructure with a stan
 |---------|-------------|
 | **create_model()** | Model factory via TaskSpec |
 | **train_epoch_normal()** | Standard training without seeds |
-| **train_epoch_womb_mode()** | STE-based gradient isolation |
+| **train_epoch_incubator_mode()** | STE-based gradient isolation |
 | **train_epoch_blended()** | Joint host+seed training |
 | **TolariaGovernor** | Catastrophic failure watchdog with rollback |
 | **validate_and_get_metrics()** | Comprehensive evaluation |
@@ -85,7 +85,7 @@ if self._consecutive_panics >= self.min_panics_before_rollback:
 
 | Aspect | Rating | Notes |
 |--------|--------|-------|
-| Womb Mode | GOOD | Safe seed exploration |
+| Incubator Mode | GOOD | Safe seed exploration |
 | Blending | GOOD | Smooth alpha ramp |
 | Rollback | GOOD | Quick recovery |
 
