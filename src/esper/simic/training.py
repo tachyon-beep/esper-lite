@@ -479,8 +479,8 @@ def train_ppo(
     print(f"Device: {device}, Telemetry: {use_telemetry}")
 
     trainloader, testloader = task_spec.create_dataloaders()
-    # State dimension: 30 base features + 10 telemetry features if enabled
-    BASE_FEATURE_DIM = 30
+    # State dimension: 35 base features + 10 telemetry features if enabled
+    BASE_FEATURE_DIM = 35
     state_dim = BASE_FEATURE_DIM + (SeedTelemetry.feature_dim() if use_telemetry else 0)
 
     # Convert episode-based annealing to step-based

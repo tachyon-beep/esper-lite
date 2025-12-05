@@ -84,6 +84,11 @@ def signals_to_features(signals, model, tracker=None, use_telemetry: bool = True
         obs['seed_counterfactual'] = seed_state.metrics.counterfactual_contribution or 0.0
         obs['host_grad_norm'] = signals.metrics.grad_norm_host
         obs['host_learning_phase'] = signals.metrics.epoch / max(1, max_epochs)
+        # Blueprint one-hot encoding (DRL Expert recommendation for categorical data)
+        # Convert blueprint_id string to integer index for one-hot encoding
+        # Standard blueprint order: conv_light=1, conv_heavy=2, attention=3, depthwise=4, norm=5
+        blueprint_map = {'conv_light': 1, 'conv_heavy': 2, 'attention': 3, 'depthwise': 4, 'norm': 5}
+        obs['seed_blueprint_id'] = blueprint_map.get(seed_state.blueprint_id, 0)
     else:
         # Use TrainingSignals context when no live model is available (offline/replay)
         obs['seed_stage'] = signals.seed_stage
@@ -93,6 +98,7 @@ def signals_to_features(signals, model, tracker=None, use_telemetry: bool = True
         obs['seed_counterfactual'] = signals.seed_counterfactual
         obs['host_grad_norm'] = signals.metrics.grad_norm_host
         obs['host_learning_phase'] = signals.metrics.epoch / max(1, max_epochs)
+        obs['seed_blueprint_id'] = 0  # No active seed
 
     features = obs_to_base_features(obs)
 

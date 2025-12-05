@@ -267,8 +267,8 @@ def train_ppo_vectorized(
             total = targets.size(0)
         return loss, correct, total
 
-    # State dimension: 30 base features + 10 telemetry features if enabled
-    BASE_FEATURE_DIM = 30
+    # State dimension: 35 base features + 10 telemetry features if enabled
+    BASE_FEATURE_DIM = 35
     state_dim = BASE_FEATURE_DIM + (SeedTelemetry.feature_dim() if use_telemetry else 0)
     # Use EMA momentum for stable normalization during long training runs
     # (prevents distribution shift that can break PPO ratio calculations)
