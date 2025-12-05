@@ -56,6 +56,7 @@ class TelemetryEventType(Enum):
 
     # === NEW: Debug Events (triggered by anomalies) ===
     RATIO_EXPLOSION_DETECTED = auto()
+    RATIO_COLLAPSE_DETECTED = auto()
     VALUE_COLLAPSE_DETECTED = auto()
     GRADIENT_PATHOLOGY_DETECTED = auto()
     NUMERICAL_INSTABILITY_DETECTED = auto()

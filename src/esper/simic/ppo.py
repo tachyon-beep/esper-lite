@@ -440,11 +440,12 @@ class PPOAgent:
             max_ratio = max(metrics['ratio_max'])
             min_ratio = min(metrics['ratio_min'])
 
+            # NOTE: has_nan/has_inf are hardcoded False - NUMERICAL_INSTABILITY won't fire until wired up
             anomaly_report = anomaly_detector.check_all(
                 ratio_max=max_ratio,
                 ratio_min=min_ratio,
                 explained_variance=explained_variance,
-                has_nan=False,  # Would need to track during update
+                has_nan=False,
                 has_inf=False,
             )
 
@@ -459,7 +460,7 @@ class PPOAgent:
                     if anomaly_type == "ratio_explosion":
                         event_type = TelemetryEventType.RATIO_EXPLOSION_DETECTED
                     elif anomaly_type == "ratio_collapse":
-                        event_type = TelemetryEventType.RATIO_EXPLOSION_DETECTED  # Same event for both
+                        event_type = TelemetryEventType.RATIO_COLLAPSE_DETECTED
                     elif anomaly_type == "value_collapse":
                         event_type = TelemetryEventType.VALUE_COLLAPSE_DETECTED
                     elif anomaly_type == "numerical_instability":
@@ -476,6 +477,9 @@ class PPOAgent:
                             "ratio_min": min_ratio,
                             "explained_variance": explained_variance,
                             "train_steps": self.train_steps,
+                            "approx_kl": sum(metrics['approx_kl']) / len(metrics['approx_kl']) if metrics['approx_kl'] else 0.0,
+                            "clip_fraction": sum(metrics['clip_fraction']) / len(metrics['clip_fraction']) if metrics['clip_fraction'] else 0.0,
+                            "entropy": sum(metrics['entropy']) / len(metrics['entropy']) if metrics['entropy'] else 0.0,
                         },
                         severity="warning",
                     ))
