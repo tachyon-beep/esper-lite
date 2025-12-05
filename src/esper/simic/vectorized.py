@@ -31,7 +31,7 @@ import torch
 import torch.nn as nn
 
 from esper.runtime import get_task_spec
-from esper.leyline import SeedStage, SeedTelemetry, TelemetryEvent
+from esper.leyline import SeedStage, SeedTelemetry, TelemetryEvent, TelemetryEventType
 from esper.leyline.actions import get_blueprint_from_action, is_germinate_action
 from esper.simic.features import compute_action_mask
 from esper.simic.gradient_collector import collect_seed_gradients_async, materialize_grad_stats
@@ -1108,6 +1108,38 @@ def train_ppo_vectorized(
                   f"Value loss: {metrics['value_loss']:.4f}, "
                   f"Entropy: {metrics['entropy']:.4f}, "
                   f"Entropy coef: {current_entropy_coef:.4f}")
+
+            # Emit PPO telemetry
+            # Note: clip_fraction, ratio_*, explained_variance not available in recurrent path
+            ppo_event = TelemetryEvent(
+                event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+                data={
+                    "batch": batch_idx + 1,
+                    "episodes_completed": episodes_completed,
+                    "train_steps": agent.train_steps,
+                    # Core losses
+                    "policy_loss": metrics.get("policy_loss", 0.0),
+                    "value_loss": metrics.get("value_loss", 0.0),
+                    "entropy": metrics.get("entropy", 0.0),
+                    "entropy_coef": current_entropy_coef,
+                    # PPO health (KL, clipping)
+                    "approx_kl": metrics.get("approx_kl", 0.0),
+                    "clip_fraction": metrics.get("clip_fraction", 0.0),
+                    # Ratio statistics (early warning for policy collapse)
+                    "ratio_max": metrics.get("ratio_max", 1.0),
+                    "ratio_min": metrics.get("ratio_min", 1.0),
+                    "ratio_std": metrics.get("ratio_std", 0.0),
+                    # Value function health (negative = critic broken)
+                    "explained_variance": metrics.get("explained_variance", 0.0),
+                    # Early stopping info
+                    "early_stop_epoch": metrics.get("early_stop_epoch"),
+                    # Episode-level metrics
+                    "avg_accuracy": avg_acc,
+                    "avg_reward": avg_reward,
+                    "rolling_avg_accuracy": rolling_avg_acc,
+                },
+            )
+            hub.emit(ppo_event)
 
         # Print analytics summary every 5 episodes
         if episodes_completed % 5 == 0 and len(analytics.stats) > 0:
