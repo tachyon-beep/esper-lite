@@ -278,17 +278,30 @@ class MorphogeneticModel(nn.Module):
         self.host = self.host.to(device)
 
     def to(self, *args, **kwargs):
-        """Override to() to propagate device change to SeedSlot."""
+        """Override to() to update device tracking after transfer.
+
+        Note: super().to() already moves all registered submodules including
+        seed_slot and its seed. We only update our device tracking string.
+
+        Implementation note (PyTorch Expert review): Query device from parameters
+        AFTER super().to() completes rather than parsing args. This is simpler,
+        correct, and follows PyTorch conventions - query state after mutation
+        rather than trying to parse the complex .to() signature which accepts
+        device, dtype, tensor, memory_format, and non_blocking in various forms.
+        """
         result = super().to(*args, **kwargs)
+
+        # Query actual device from parameters (canonical source of truth)
         try:
-            new_device = next(self.parameters()).device
+            actual_device = next(self.parameters()).device
         except StopIteration:
+            # No parameters - keep existing device tracking
             return result
 
-        self.seed_slot.device = new_device
-        if self.seed_slot.is_active and self.seed_slot.seed is not None:
-            self.seed_slot.seed = self.seed_slot.seed.to(new_device)
-        self._device = str(new_device)
+        # Update tracking (seed already moved by super().to())
+        self.seed_slot.device = actual_device
+        self._device = str(actual_device)
+
         return result
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
