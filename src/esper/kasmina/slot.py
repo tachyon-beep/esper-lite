@@ -540,16 +540,16 @@ class SeedSlot(nn.Module):
 
         # Cached shape probes to avoid per-germinate allocation
         # Keys: "cnn" or "transformer", values: (device, tensor)
-        self._shape_probe_cache: dict[str, tuple[str, torch.Tensor]] = {}
+        self._shape_probe_cache: dict[str, tuple[torch.device, torch.Tensor]] = {}
 
     def _get_shape_probe(self, topology: str) -> torch.Tensor:
         """Get cached shape probe for topology, creating if needed."""
-        device_str = str(self.device)
         cached = self._shape_probe_cache.get(topology)
 
         if cached is not None:
             cached_device, cached_tensor = cached
-            if cached_device == device_str:
+            # Use direct device comparison instead of string
+            if cached_device == self.device:
                 return cached_tensor
 
         # Create new probe for this topology/device
@@ -569,42 +569,29 @@ class SeedSlot(nn.Module):
                 device=self.device,
             )
 
-        self._shape_probe_cache[topology] = (device_str, probe)
+        # Store device as torch.device, not string
+        self._shape_probe_cache[topology] = (self.device, probe)
         return probe
 
     def to(self, *args, **kwargs) -> "SeedSlot":
-        """Transfer slot to a new device/dtype, clearing cached tensors.
-
-        Extends nn.Module.to() to clear the shape probe cache. The cache
-        stores device-specific tensors that become invalid after device
-        transfer.
-
-        Args:
-            *args, **kwargs: Passed to nn.Module.to() - supports device,
-                dtype, memory_format, and non_blocking arguments.
-
-        Returns:
-            Self for method chaining (standard nn.Module behavior).
-        """
-        # Defensive: clear cache before transfer to avoid holding references
-        # to tensors on the old device. The cache self-invalidates on access,
-        # but explicit clearing prevents potential memory leaks during transfer.
-        self._shape_probe_cache.clear()
-
-        # Call parent to handle all registered parameters, buffers, submodules
+        """Transfer slot and any active seed to device."""
+        old_device = self.device  # Track before move
         super().to(*args, **kwargs)
 
-        # Update self.device tracking if a device was specified
-        device = kwargs.get('device')
-        if device is None and args:
-            arg = args[0]
-            if isinstance(arg, (str, torch.device)):
-                device = arg
-            elif isinstance(arg, torch.Tensor):
-                device = arg.device
+        # Update device tracking (query from parameters after move)
+        try:
+            actual_device = next(self.parameters()).device
+            self.device = actual_device
+        except StopIteration:
+            # Infer from args if no parameters
+            for arg in args:
+                if isinstance(arg, (str, torch.device)):
+                    self.device = torch.device(arg) if isinstance(arg, str) else arg
+                    break
 
-        if device is not None:
-            self.device = torch.device(device) if isinstance(device, str) else device
+        # Only clear cache if device actually changed
+        if self.device != old_device:
+            self._shape_probe_cache.clear()
 
         return self
 

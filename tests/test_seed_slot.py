@@ -266,23 +266,25 @@ class TestG5RequiresCounterfactual:
 class TestShapeProbeCacheDeviceTransfer:
     """Shape probe cache should be cleared on device transfer."""
 
-    def test_cache_cleared_on_to_call(self):
-        """Calling .to(device) should clear the shape probe cache."""
+    def test_cache_only_cleared_on_device_change(self):
+        """Cache should only be cleared when device actually changes."""
         import torch
         from esper.kasmina.slot import SeedSlot
 
         slot = SeedSlot(slot_id="test", channels=64, device="cpu")
 
         # Warm the cache
-        _ = slot._get_shape_probe("cnn")
-        _ = slot._get_shape_probe("transformer")
+        probe1 = slot._get_shape_probe("cnn")
+        probe2 = slot._get_shape_probe("transformer")
         assert len(slot._shape_probe_cache) == 2, "Cache should have 2 entries"
 
-        # Transfer to same device (simulating .to() call)
+        # Transfer to SAME device - cache should NOT be cleared (optimization)
         slot.to("cpu")
+        assert len(slot._shape_probe_cache) == 2, "Cache should persist on same-device transfer"
 
-        # Cache should be cleared
-        assert len(slot._shape_probe_cache) == 0, "Cache should be empty after .to()"
+        # Verify cached probes are still the same objects
+        assert slot._get_shape_probe("cnn") is probe1
+        assert slot._get_shape_probe("transformer") is probe2
 
     def test_to_returns_self(self):
         """The .to() method should return self for chaining."""
@@ -353,3 +355,23 @@ def test_gradient_isolation_monitor_batch_sync():
     assert metrics["host_grad_norm"] > 0
     assert metrics["seed_grad_norm"] > 0
     assert metrics["violations"] == 1
+
+
+def test_shape_probe_cache_device_comparison():
+    """Shape probe cache should use direct device comparison."""
+    from esper.kasmina.slot import SeedSlot
+
+    slot = SeedSlot("test", channels=64, device="cpu")
+
+    # Get probe - should create and cache
+    probe1 = slot._get_shape_probe("cnn")
+    assert probe1.device == torch.device("cpu")
+
+    # Get again - should return cached
+    probe2 = slot._get_shape_probe("cnn")
+    assert probe1 is probe2  # Same object
+
+    # Different topology - should create new
+    probe3 = slot._get_shape_probe("transformer")
+    assert probe3.device == torch.device("cpu")
+    assert probe1 is not probe3
