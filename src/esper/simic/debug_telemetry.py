@@ -180,9 +180,80 @@ def check_numerical_stability(
     )
 
 
+@dataclass(slots=True)
+class RatioExplosionDiagnostic:
+    """Diagnostic data when PPO ratios explode.
+
+    Captures the specific transitions that caused ratio explosion
+    for post-hoc debugging.
+    """
+
+    # Indices of problematic transitions
+    worst_ratio_indices: list[int] = field(default_factory=list)
+    worst_ratio_values: list[float] = field(default_factory=list)
+    worst_ratio_actions: list[int] = field(default_factory=list)
+
+    # Log prob divergence
+    logit_diff_mean: float = 0.0
+    logit_diff_max: float = 0.0
+
+    @classmethod
+    def from_batch(
+        cls,
+        ratio: "torch.Tensor",
+        old_log_probs: "torch.Tensor",
+        new_log_probs: "torch.Tensor",
+        states: "torch.Tensor",
+        actions: "torch.Tensor",
+        action_masks: "torch.Tensor",
+        max_threshold: float = 5.0,
+        min_threshold: float = 0.1,
+    ) -> "RatioExplosionDiagnostic":
+        """Create diagnostic from batch tensors.
+
+        Args:
+            ratio: PPO ratio tensor [N]
+            old_log_probs: Old log probabilities [N]
+            new_log_probs: New log probabilities [N]
+            states: State observations [N, state_dim]
+            actions: Actions taken [N]
+            action_masks: Valid action masks [N, action_dim]
+            max_threshold: Ratio above this is problematic
+            min_threshold: Ratio below this is problematic
+
+        Returns:
+            RatioExplosionDiagnostic
+        """
+        # Find problematic indices
+        bad_mask = (ratio > max_threshold) | (ratio < min_threshold)
+        bad_indices = bad_mask.nonzero(as_tuple=True)[0].tolist()
+
+        # Extract worst values
+        worst_values = ratio[bad_indices].tolist() if bad_indices else []
+        worst_actions = actions[bad_indices].tolist() if bad_indices else []
+
+        # Compute log prob divergence
+        logit_diff = (new_log_probs - old_log_probs).abs()
+        logit_diff_mean = logit_diff.mean().item()
+        logit_diff_max = logit_diff.max().item()
+
+        return cls(
+            worst_ratio_indices=bad_indices,
+            worst_ratio_values=worst_values,
+            worst_ratio_actions=worst_actions,
+            logit_diff_mean=logit_diff_mean,
+            logit_diff_max=logit_diff_max,
+        )
+
+    def to_dict(self) -> dict:
+        """Convert to dict for serialization."""
+        return asdict(self)
+
+
 __all__ = [
     "LayerGradientStats",
     "collect_per_layer_gradients",
     "NumericalStabilityReport",
     "check_numerical_stability",
+    "RatioExplosionDiagnostic",
 ]
