@@ -70,6 +70,36 @@ from esper.simic.networks import (
     VNetwork,
 )
 
+# Telemetry
+from esper.simic.telemetry_config import (
+    TelemetryLevel,
+    TelemetryConfig,
+)
+from esper.simic.ppo_telemetry import (
+    PPOHealthTelemetry,
+    ValueFunctionTelemetry,
+)
+from esper.simic.reward_telemetry import (
+    RewardComponentsTelemetry,
+)
+from esper.simic.memory_telemetry import (
+    MemoryMetrics,
+    collect_memory_metrics,
+)
+from esper.simic.gradient_collector import (
+    GradientHealthMetrics,
+)
+from esper.simic.debug_telemetry import (
+    LayerGradientStats,
+    collect_per_layer_gradients,
+    NumericalStabilityReport,
+    check_numerical_stability,
+    RatioExplosionDiagnostic,
+)
+from esper.simic.action_telemetry import (
+    ActionTelemetry,
+)
+
 # NOTE: Heavy modules imported on demand:
 #   from esper.simic.ppo import PPOAgent
 #   from esper.simic.training import train_ppo
@@ -122,4 +152,20 @@ __all__ = [
     "ActorCritic",
     "QNetwork",
     "VNetwork",
+
+    # Telemetry
+    "TelemetryLevel",
+    "TelemetryConfig",
+    "PPOHealthTelemetry",
+    "ValueFunctionTelemetry",
+    "RewardComponentsTelemetry",
+    "MemoryMetrics",
+    "collect_memory_metrics",
+    "GradientHealthMetrics",
+    "LayerGradientStats",
+    "collect_per_layer_gradients",
+    "NumericalStabilityReport",
+    "check_numerical_stability",
+    "RatioExplosionDiagnostic",
+    "ActionTelemetry",
 ]
