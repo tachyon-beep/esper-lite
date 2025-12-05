@@ -7,10 +7,10 @@ like over-conservative behavior or action spam.
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 
 
-@dataclass
+@dataclass(slots=True)
 class ActionTelemetry:
     """Tracks action distribution and success rates.
 
@@ -58,6 +58,10 @@ class ActionTelemetry:
         """Reset counters for new batch/episode."""
         self._action_counts.clear()
         self._success_counts.clear()
+
+    def to_dict(self) -> dict:
+        """Convert to dict for TelemetryEvent data field."""
+        return asdict(self)
 
 
 __all__ = ["ActionTelemetry"]
