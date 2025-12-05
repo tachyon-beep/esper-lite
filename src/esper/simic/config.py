@@ -60,7 +60,7 @@ class TrainingConfig:
     clip_value: bool = True
 
     # === Entropy (Exploration) ===
-    entropy_coef: float = 0.1
+    entropy_coef: float = 0.05  # Unified default (validated in for_tinystories preset)
     entropy_coef_start: float | None = None
     entropy_coef_end: float | None = None
     entropy_coef_min: float = 0.01

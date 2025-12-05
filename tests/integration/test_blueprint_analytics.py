@@ -41,10 +41,12 @@ class TestBlueprintAnalyticsIntegration:
         # Simulate improvement and fossilize
         model.seed_slot.state.metrics.initial_val_accuracy = 70.0
         model.seed_slot.state.metrics.current_val_accuracy = 75.0
+        model.seed_slot.state.metrics.counterfactual_contribution = 5.0  # Required for G5
 
         # Force to PROBATIONARY stage for fossilization (per instructions)
         from esper.leyline import SeedStage
         model.seed_slot.state.stage = SeedStage.PROBATIONARY
+        model.seed_slot.state.is_healthy = True  # G5 also requires health
         model.seed_slot.advance_stage(SeedStage.FOSSILIZED)
 
         assert analytics.stats["depthwise"].fossilized == 1

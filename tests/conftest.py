@@ -111,7 +111,7 @@ def small_ppo_model_deterministic(tmp_path_factory):
     from esper.simic.ppo import PPOAgent
 
     # Create agent with deterministic weights
-    agent = PPOAgent(state_dim=27, action_dim=7)
+    agent = PPOAgent(state_dim=30, action_dim=7)
 
     # Initialize all weights deterministically
     for param in agent.parameters():

@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from enum import IntEnum
 from typing import NamedTuple
 
-from esper.leyline import SeedStage, MIN_CULL_AGE
+from esper.leyline import SeedStage, MIN_CULL_AGE, MIN_PROBATION_EPOCHS
 from esper.leyline.actions import is_germinate_action
 
 
@@ -817,7 +817,12 @@ def _contribution_fossilize_shaping(
     seed_contribution: float | None,
     config: ContributionRewardConfig,
 ) -> float:
-    """Shaping for FOSSILIZE action - simplified with counterfactual."""
+    """Shaping for FOSSILIZE action - with legitimacy discount.
+
+    Rapid fossilization (short PROBATIONARY period) is discounted to prevent
+    dependency gaming where seeds create artificial dependencies during
+    BLENDING/SHADOWING that inflate metrics.
+    """
     if seed_info is None:
         return config.invalid_fossilize_penalty
 
@@ -825,14 +830,20 @@ def _contribution_fossilize_shaping(
     if seed_info.stage != STAGE_PROBATIONARY:
         return config.invalid_fossilize_penalty
 
+    # Legitimacy discount: must have spent time in PROBATIONARY to earn full bonus
+    # This prevents rapid fossilization gaming
+    legitimacy_discount = min(1.0, seed_info.epochs_in_stage / MIN_PROBATION_EPOCHS)
+
     # Use seed_contribution to determine if fossilization is earned
     if seed_contribution is not None and seed_contribution > 0:
-        # Bonus scales with actual contribution
-        return (
+        # Bonus scales with actual contribution AND legitimacy
+        base_bonus = (
             config.fossilize_base_bonus
             + config.fossilize_contribution_scale * seed_contribution
         )
+        return base_bonus * legitimacy_discount
 
+    # Non-contributing or no counterfactual - penalty (no discount on penalties)
     return config.fossilize_noncontributing_penalty
 
 

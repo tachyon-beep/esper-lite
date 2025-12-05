@@ -109,8 +109,12 @@ class GradientIsolationMonitor:
         }
 
     def reset(self) -> None:
-        """Reset violation counter."""
+        """Reset violation counter and clear parameter references."""
         self.violations = 0
+        self.host_grad_norm = 0.0
+        self.seed_grad_norm = 0.0
+        self._host_params.clear()
+        self._seed_params.clear()
 
 
 __all__ = [

@@ -52,8 +52,8 @@ class BlueprintRegistry:
             try:
                 from esper.leyline import actions as leyline_actions  # Local import to avoid cycle
                 leyline_actions._action_enum_cache.pop(topology, None)
-            except Exception:
-                # Cache invalidation best-effort; failures here shouldn't break registration
+            except (ImportError, AttributeError, KeyError):
+                # Cache invalidation best-effort; import cycle or missing cache is acceptable
                 pass
             return factory
 
@@ -93,7 +93,17 @@ class BlueprintRegistry:
         try:
             from esper.leyline import actions as leyline_actions  # Local import to avoid cycle
             leyline_actions._action_enum_cache.pop(topology, None)
-        except Exception:
+        except (ImportError, AttributeError, KeyError):
+            pass
+
+    @classmethod
+    def reset(cls) -> None:
+        """Reset registry to empty state (for test cleanup)."""
+        cls._blueprints.clear()
+        try:
+            from esper.leyline import actions as leyline_actions
+            leyline_actions._action_enum_cache.clear()
+        except (ImportError, AttributeError, KeyError):
             pass
 
 

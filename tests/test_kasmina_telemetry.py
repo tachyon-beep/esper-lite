@@ -45,9 +45,11 @@ class TestEnrichedTelemetry:
         # Simulate training improvement
         self.slot.state.metrics.initial_val_accuracy = 70.0
         self.slot.state.metrics.current_val_accuracy = 75.0
+        self.slot.state.metrics.counterfactual_contribution = 5.0  # Required for G5
 
         # Advance through stages to FOSSILIZED (must go through PROBATIONARY)
         self.slot.state.stage = SeedStage.PROBATIONARY
+        self.slot.state.is_healthy = True  # G5 also requires health
         self.slot.advance_stage(SeedStage.FOSSILIZED)
 
         # Find fossilization event

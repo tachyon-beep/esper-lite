@@ -16,7 +16,7 @@ class TestRolloutStep:
     def test_creation(self):
         """Test RolloutStep can be created with expected fields."""
         step = RolloutStep(
-            state=torch.zeros(27),
+            state=torch.zeros(28),
             action=0,
             log_prob=-0.5,
             value=1.0,
@@ -38,7 +38,7 @@ class TestRolloutBuffer:
         assert len(buffer) == 0
 
         buffer.add(
-            state=torch.zeros(27),
+            state=torch.zeros(28),
             action=0,
             log_prob=-0.5,
             value=1.0,
@@ -52,8 +52,8 @@ class TestRolloutBuffer:
         """Test clearing the buffer."""
         buffer = RolloutBuffer()
         dummy_mask = torch.ones(7)
-        buffer.add(torch.zeros(27), 0, -0.5, 1.0, 0.1, False, dummy_mask)
-        buffer.add(torch.zeros(27), 1, -0.3, 0.9, 0.2, False, dummy_mask)
+        buffer.add(torch.zeros(28), 0, -0.5, 1.0, 0.1, False, dummy_mask)
+        buffer.add(torch.zeros(28), 1, -0.3, 0.9, 0.2, False, dummy_mask)
         assert len(buffer) == 2
 
         buffer.clear()
@@ -65,7 +65,7 @@ class TestRolloutBuffer:
         dummy_mask = torch.ones(7)
         for i in range(5):
             buffer.add(
-                state=torch.zeros(27),
+                state=torch.zeros(28),
                 action=i % 4,
                 log_prob=-0.5,
                 value=1.0 - i * 0.1,
@@ -86,7 +86,7 @@ class TestRolloutBuffer:
         buffer = RolloutBuffer()
         dummy_mask = torch.ones(7)
         for i in range(10):
-            buffer.add(torch.randn(27), i % 4, -0.5, 1.0, 0.1, False, dummy_mask)
+            buffer.add(torch.randn(30), i % 4, -0.5, 1.0, 0.1, False, dummy_mask)
 
         batches = buffer.get_batches(batch_size=4, device="cpu")
 
@@ -109,7 +109,7 @@ class TestRecurrentRolloutBuffer:
         # Add to env 0
         buffer.start_episode(env_id=0)
         buffer.add(
-            state=torch.randn(27), action=0, log_prob=-0.5, value=1.0,
+            state=torch.randn(30), action=0, log_prob=-0.5, value=1.0,
             reward=0.1, done=False, action_mask=torch.ones(7, dtype=torch.bool),
             env_id=0,
         )
@@ -117,7 +117,7 @@ class TestRecurrentRolloutBuffer:
         # Add to env 1 (different env)
         buffer.start_episode(env_id=1)
         buffer.add(
-            state=torch.randn(27), action=1, log_prob=-0.3, value=1.2,
+            state=torch.randn(30), action=1, log_prob=-0.3, value=1.2,
             reward=0.2, done=False, action_mask=torch.ones(7, dtype=torch.bool),
             env_id=1,
         )
@@ -136,7 +136,7 @@ class TestRecurrentRolloutBuffer:
         buffer.start_episode(env_id=0)
         for i in range(2):
             buffer.add(
-                state=torch.randn(27), action=i, log_prob=-0.5, value=1.0,
+                state=torch.randn(30), action=i, log_prob=-0.5, value=1.0,
                 reward=0.1, done=(i == 1), action_mask=torch.ones(7, dtype=torch.bool),
                 env_id=0,
             )
@@ -146,7 +146,7 @@ class TestRecurrentRolloutBuffer:
         buffer.start_episode(env_id=1)
         for i in range(3):
             buffer.add(
-                state=torch.randn(27), action=i, log_prob=-0.3, value=1.2,
+                state=torch.randn(30), action=i, log_prob=-0.3, value=1.2,
                 reward=0.2, done=(i == 2), action_mask=torch.ones(7, dtype=torch.bool),
                 env_id=1,
             )
@@ -164,7 +164,7 @@ class TestRecurrentRolloutBuffer:
         buffer.start_episode(env_id=0)
         for i in range(3):
             buffer.add(
-                state=torch.randn(27), action=i % 7, log_prob=-0.5, value=1.0,
+                state=torch.randn(30), action=i % 7, log_prob=-0.5, value=1.0,
                 reward=0.1, done=(i == 2), action_mask=torch.ones(7, dtype=torch.bool),
                 env_id=0,
             )
@@ -175,7 +175,7 @@ class TestRecurrentRolloutBuffer:
         buffer.start_episode(env_id=0)
         for i in range(6):
             buffer.add(
-                state=torch.randn(27), action=i % 7, log_prob=-0.5, value=1.0,
+                state=torch.randn(30), action=i % 7, log_prob=-0.5, value=1.0,
                 reward=0.1, done=(i == 5), action_mask=torch.ones(7, dtype=torch.bool),
                 env_id=0,
             )
@@ -208,7 +208,7 @@ class TestRecurrentRolloutBuffer:
         buffer.start_episode(env_id=0)
         for i in range(5):
             buffer.add(
-                state=torch.randn(27), action=0, log_prob=-0.5, value=1.0,
+                state=torch.randn(30), action=0, log_prob=-0.5, value=1.0,
                 reward=0.1, done=(i == 4), action_mask=torch.ones(7, dtype=torch.bool),
                 env_id=0,
             )
@@ -238,7 +238,7 @@ class TestRecurrentRolloutBuffer:
         buffer.start_episode(env_id=0)
         for i in range(4):
             buffer.add(
-                state=torch.randn(27), action=0, log_prob=-0.5, value=1.0,
+                state=torch.randn(30), action=0, log_prob=-0.5, value=1.0,
                 reward=0.1 * (i + 1), done=(i == 3),
                 action_mask=torch.ones(7, dtype=torch.bool), env_id=0,
             )
@@ -265,12 +265,12 @@ class TestRecurrentRolloutBuffer:
         # 2 steps - will be padded to 4
         buffer.start_episode(env_id=0)
         buffer.add(
-            state=torch.randn(27), action=0, log_prob=-0.5, value=1.0,
+            state=torch.randn(30), action=0, log_prob=-0.5, value=1.0,
             reward=0.1, done=False, action_mask=torch.ones(7, dtype=torch.bool),
             env_id=0,
         )
         buffer.add(
-            state=torch.randn(27), action=1, log_prob=-0.3, value=1.2,
+            state=torch.randn(30), action=1, log_prob=-0.3, value=1.2,
             reward=0.2, done=True, action_mask=torch.ones(7, dtype=torch.bool),
             env_id=0,
         )
@@ -291,7 +291,7 @@ class TestRecurrentRolloutBuffer:
         buffer.start_episode(env_id=0)
         for i in range(4):
             buffer.add(
-                state=torch.randn(27), action=0, log_prob=-0.5, value=1.0,
+                state=torch.randn(30), action=0, log_prob=-0.5, value=1.0,
                 reward=0.1, done=(i == 3),
                 action_mask=torch.ones(7, dtype=torch.bool), env_id=0,
             )
@@ -316,7 +316,7 @@ class TestRecurrentRolloutBuffer:
             buffer.start_episode(env_id=0)
             for i in range(3):
                 buffer.add(
-                    state=torch.randn(27), action=ep, log_prob=-0.5, value=1.0,
+                    state=torch.randn(30), action=ep, log_prob=-0.5, value=1.0,
                     reward=0.1, done=(i == 2),
                     action_mask=torch.ones(7, dtype=torch.bool), env_id=0,
                 )
@@ -328,5 +328,5 @@ class TestRecurrentRolloutBuffer:
 
         assert len(batches) == 1  # 2 chunks batched together
         batch = batches[0]
-        assert batch['states'].shape == (2, 4, 27)  # [batch, seq, state_dim]
+        assert batch['states'].shape == (2, 4, 30)  # [batch, seq, state_dim]
         assert batch['initial_hidden_h'].shape == (1, 2, 64)  # [layers, batch, hidden]

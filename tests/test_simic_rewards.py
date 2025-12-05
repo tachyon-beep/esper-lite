@@ -286,3 +286,72 @@ class TestWaitBlendingShaping:
 
         # PROBATIONARY is hands-off, WAIT is always acceptable
         assert shaping == pytest.approx(0.0)
+
+
+class TestFossilizeLegitimacyDiscount:
+    """Fossilization bonus should be discounted for rapid fossilization."""
+
+    def test_short_probation_gets_discounted(self):
+        """Seeds with short PROBATIONARY get reduced fossilize bonus."""
+        from esper.simic.rewards import (
+            _contribution_fossilize_shaping,
+            ContributionRewardConfig,
+            SeedInfo,
+            STAGE_PROBATIONARY,
+        )
+        from esper.leyline import MIN_PROBATION_EPOCHS
+
+        config = ContributionRewardConfig()
+
+        # Seed with very short probation (1 epoch)
+        short_probation = SeedInfo(
+            stage=STAGE_PROBATIONARY,
+            improvement_since_stage_start=5.0,
+            total_improvement=10.0,
+            epochs_in_stage=1,  # Just entered probation
+            seed_age_epochs=15,
+        )
+
+        # Seed with full probation
+        full_probation = SeedInfo(
+            stage=STAGE_PROBATIONARY,
+            improvement_since_stage_start=5.0,
+            total_improvement=10.0,
+            epochs_in_stage=MIN_PROBATION_EPOCHS,  # Full probation
+            seed_age_epochs=20,
+        )
+
+        short_bonus = _contribution_fossilize_shaping(short_probation, 3.0, config)
+        full_bonus = _contribution_fossilize_shaping(full_probation, 3.0, config)
+
+        # Short probation should get less bonus
+        assert short_bonus < full_bonus, (
+            f"Short probation ({short_bonus}) should be less than full ({full_bonus})"
+        )
+
+        # Discount should be proportional
+        expected_discount = 1 / MIN_PROBATION_EPOCHS
+        assert short_bonus == pytest.approx(full_bonus * expected_discount, rel=0.01)
+
+    def test_zero_probation_gets_zero_bonus(self):
+        """Seeds with 0 epochs in PROBATIONARY get no bonus."""
+        from esper.simic.rewards import (
+            _contribution_fossilize_shaping,
+            ContributionRewardConfig,
+            SeedInfo,
+            STAGE_PROBATIONARY,
+        )
+
+        config = ContributionRewardConfig()
+        seed = SeedInfo(
+            stage=STAGE_PROBATIONARY,
+            improvement_since_stage_start=5.0,
+            total_improvement=10.0,
+            epochs_in_stage=0,  # Just entered, no validation yet
+            seed_age_epochs=15,
+        )
+
+        bonus = _contribution_fossilize_shaping(seed, 3.0, config)
+
+        # Should get penalty, not bonus (legitimacy_discount = 0)
+        assert bonus <= 0, f"Zero probation should not get positive bonus: {bonus}"

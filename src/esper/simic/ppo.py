@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # Feature Extraction (PPO-specific wrapper)
 # =============================================================================
 
-def signals_to_features(signals, model, tracker=None, use_telemetry: bool = True) -> list[float]:
+def signals_to_features(signals, model, tracker=None, use_telemetry: bool = True, max_epochs: int = 200) -> list[float]:
     """Convert training signals to feature vector.
 
     Args:
@@ -34,9 +34,10 @@ def signals_to_features(signals, model, tracker=None, use_telemetry: bool = True
         model: MorphogeneticModel
         tracker: Optional tracker (unused, kept for API compatibility)
         use_telemetry: Whether to include telemetry features
+        max_epochs: Maximum epochs for learning phase normalization
 
     Returns:
-        Feature vector (27 dims base, +10 if telemetry = 37 dims total)
+        Feature vector (30 dims base, +10 if telemetry = 40 dims total)
 
     Note:
         TrainingSignals.active_seeds contains seed IDs (strings), not SeedState
@@ -80,12 +81,18 @@ def signals_to_features(signals, model, tracker=None, use_telemetry: bool = True
         obs['seed_epochs_in_stage'] = seed_state.metrics.epochs_in_current_stage
         obs['seed_alpha'] = seed_state.alpha
         obs['seed_improvement'] = seed_state.metrics.improvement_since_stage_start
+        obs['seed_counterfactual'] = seed_state.metrics.counterfactual_contribution or 0.0
+        obs['host_grad_norm'] = signals.metrics.grad_norm_host
+        obs['host_learning_phase'] = signals.metrics.epoch / max(1, max_epochs)
     else:
         # Use TrainingSignals context when no live model is available (offline/replay)
         obs['seed_stage'] = signals.seed_stage
         obs['seed_epochs_in_stage'] = signals.seed_epochs_in_stage
         obs['seed_alpha'] = signals.seed_alpha
         obs['seed_improvement'] = signals.seed_improvement
+        obs['seed_counterfactual'] = signals.seed_counterfactual
+        obs['host_grad_norm'] = signals.metrics.grad_norm_host
+        obs['host_learning_phase'] = signals.metrics.epoch / max(1, max_epochs)
 
     features = obs_to_base_features(obs)
 
@@ -118,10 +125,10 @@ class PPOAgent:
         gamma: float = 0.99,
         gae_lambda: float = 0.95,
         clip_ratio: float = 0.2,
-        entropy_coef: float = 0.015,  # Scaled for normalized entropy (was 0.01 for raw)
+        entropy_coef: float = 0.05,  # Unified default (validated in for_tinystories preset)
         entropy_coef_start: float | None = None,
         entropy_coef_end: float | None = None,
-        entropy_coef_min: float = 0.015,  # Scaled for normalized entropy
+        entropy_coef_min: float = 0.01,  # Unified minimum for exploration floor
         entropy_anneal_steps: int = 0,
         value_coef: float = 0.5,
         clip_value: bool = True,
@@ -224,6 +231,8 @@ class PPOAgent:
         reward: float,
         done: bool,
         action_mask: torch.Tensor,
+        truncated: bool = False,
+        bootstrap_value: float = 0.0,
     ) -> None:
         """Store transition in buffer.
 
@@ -235,8 +244,10 @@ class PPOAgent:
             reward: Reward received
             done: Whether episode ended
             action_mask: Binary mask of valid actions (stored for PPO update)
+            truncated: Whether episode ended due to time limit
+            bootstrap_value: Value to bootstrap from if truncated
         """
-        self.buffer.add(state, action, log_prob, value, reward, done, action_mask)
+        self.buffer.add(state, action, log_prob, value, reward, done, action_mask, truncated, bootstrap_value)
 
     def store_recurrent_transition(
         self,
@@ -248,11 +259,14 @@ class PPOAgent:
         done: bool,
         action_mask: torch.Tensor,
         env_id: int,
+        truncated: bool = False,
+        bootstrap_value: float = 0.0,
     ) -> None:
         """Store transition for recurrent policy (no hidden stored per-step)."""
         self.recurrent_buffer.add(
             state=state, action=action, log_prob=log_prob, value=value,
             reward=reward, done=done, action_mask=action_mask, env_id=env_id,
+            truncated=truncated, bootstrap_value=bootstrap_value,
         )
 
     def update(
@@ -303,6 +317,10 @@ class PPOAgent:
         metrics['explained_variance'] = [explained_variance]  # Single value, not per-batch
         early_stopped = False
 
+        # Normalize advantages once over full buffer (before batching)
+        # This prevents per-batch normalization variance in gradient updates
+        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
         # === AUTO-ESCALATION: Check for anomalies and escalate if needed ===
         from esper.simic.anomaly_detector import AnomalyDetector
 
@@ -324,11 +342,7 @@ class PPOAgent:
                 old_values = batch['values']
                 action_masks = batch['action_masks']
                 batch_returns = returns[batch_idx]  # Already on device
-                batch_advantages = advantages[batch_idx]  # Already on device
-
-                # Per-minibatch advantage normalization for better gradient stability
-                # (especially important with small batch sizes)
-                batch_advantages = (batch_advantages - batch_advantages.mean()) / (batch_advantages.std() + 1e-8)
+                batch_advantages = advantages[batch_idx]  # Already on device (pre-normalized)
 
                 log_probs, values, entropy = self.network.evaluate_actions(states, actions, action_masks)
 
@@ -489,6 +503,10 @@ class PPOAgent:
             gae_lambda=self.gae_lambda,
         )
 
+        # Normalize advantages once over full buffer (before batching)
+        # This prevents per-batch normalization variance in gradient updates
+        self.recurrent_buffer.normalize_advantages()
+
         total_policy_loss = 0.0
         total_value_loss = 0.0
         total_entropy = 0.0
@@ -528,11 +546,7 @@ class PPOAgent:
                 old_log_probs_valid = batch['old_log_probs'][valid]
                 old_values_valid = batch['old_values'][valid]
                 returns_valid = batch['returns'][valid]
-                advantages_valid = batch['advantages'][valid]
-
-                # Normalize advantages
-                if len(advantages_valid) > 1:
-                    advantages_valid = (advantages_valid - advantages_valid.mean()) / (advantages_valid.std() + 1e-8)
+                advantages_valid = batch['advantages'][valid]  # Already normalized globally
 
                 # PPO clipped objective
                 ratio = torch.exp(log_probs_valid - old_log_probs_valid)
@@ -561,15 +575,16 @@ class PPOAgent:
                 nn.utils.clip_grad_norm_(self.network.parameters(), self.max_grad_norm)
                 self.optimizer.step()
 
-                # Increment train_steps for entropy annealing (CRITICAL for get_entropy_coef)
-                self.train_steps += 1
-
                 # Track metrics
                 total_policy_loss += policy_loss.item()
                 total_value_loss += value_loss.item()
                 total_entropy += entropy_valid.mean().item()
                 total_approx_kl += (old_log_probs_valid - log_probs_valid).mean().item()
                 n_updates += 1
+
+        # Increment train_steps for entropy annealing (CRITICAL for get_entropy_coef)
+        # Must be AFTER epoch/batch loops to match update() behavior (was at line 565, causing ~8x too fast annealing)
+        self.train_steps += 1
 
         self.recurrent_buffer.clear()
 

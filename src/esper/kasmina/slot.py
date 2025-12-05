@@ -6,12 +6,16 @@ germination -> training -> blending -> fossilization/culling.
 
 from __future__ import annotations
 
+import os
 from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, TYPE_CHECKING
 import pickle
+
+# Debug flag for STE gradient assertions (set ESPER_DEBUG_STE=1 to enable)
+_DEBUG_STE = os.environ.get("ESPER_DEBUG_STE", "").lower() in ("1", "true", "yes")
 
 import torch
 import torch.nn as nn
@@ -172,7 +176,7 @@ class SeedState:
     stage_history: deque = field(default_factory=lambda: deque(maxlen=100))
 
     # Telemetry (initialized in __post_init__)
-    telemetry: SeedTelemetry = field(default=None)
+    telemetry: SeedTelemetry | None = field(default=None)
 
     def __post_init__(self):
         """Initialize telemetry with seed identity."""
@@ -448,15 +452,30 @@ class QualityGates:
         )
 
     def _check_g5(self, state: SeedState) -> GateResult:
-        """G5: Fossilization readiness - probation passed."""
+        """G5: Fossilization readiness - requires counterfactual validation.
+
+        G5 is only reachable from PROBATIONARY stage where counterfactual
+        validation is mandatory. No fallback to total_improvement.
+        """
         checks_passed = []
         checks_failed = []
 
-        # Check total improvement
-        if state.metrics.total_improvement > 0:
-            checks_passed.append(f"positive_improvement_{state.metrics.total_improvement:.2f}%")
+        # REQUIRE counterfactual - no fallback
+        contribution = state.metrics.counterfactual_contribution
+        if contribution is None:
+            return GateResult(
+                gate=GateLevel.G5,
+                passed=False,
+                score=0.0,
+                checks_passed=[],
+                checks_failed=["counterfactual_not_available"],
+            )
+
+        # Check contribution is positive
+        if contribution > 0:
+            checks_passed.append(f"positive_contribution_{contribution:.2f}%")
         else:
-            checks_failed.append("no_improvement")
+            checks_failed.append("non_positive_contribution")
 
         # Check health
         if state.is_healthy:
@@ -468,7 +487,7 @@ class QualityGates:
         return GateResult(
             gate=GateLevel.G5,
             passed=passed,
-            score=min(1.0, state.metrics.total_improvement / 10.0),
+            score=min(1.0, contribution / 10.0) if contribution > 0 else 0.0,
             checks_passed=checks_passed,
             checks_failed=checks_failed,
         )
@@ -506,7 +525,7 @@ class SeedSlot(nn.Module):
         super().__init__()
         self.slot_id = slot_id
         self.channels = channels
-        self.device = device
+        self.device = torch.device(device) if isinstance(device, str) else device
         self.gates = gates or QualityGates()
         self.on_telemetry = on_telemetry
         self.fast_mode = fast_mode  # Disable telemetry/isolation for PPO
@@ -553,6 +572,42 @@ class SeedSlot(nn.Module):
 
         self._shape_probe_cache[topology] = (device_str, probe)
         return probe
+
+    def to(self, *args, **kwargs) -> "SeedSlot":
+        """Transfer slot to a new device/dtype, clearing cached tensors.
+
+        Extends nn.Module.to() to clear the shape probe cache. The cache
+        stores device-specific tensors that become invalid after device
+        transfer.
+
+        Args:
+            *args, **kwargs: Passed to nn.Module.to() - supports device,
+                dtype, memory_format, and non_blocking arguments.
+
+        Returns:
+            Self for method chaining (standard nn.Module behavior).
+        """
+        # Defensive: clear cache before transfer to avoid holding references
+        # to tensors on the old device. The cache self-invalidates on access,
+        # but explicit clearing prevents potential memory leaks during transfer.
+        self._shape_probe_cache.clear()
+
+        # Call parent to handle all registered parameters, buffers, submodules
+        super().to(*args, **kwargs)
+
+        # Update self.device tracking if a device was specified
+        device = kwargs.get('device')
+        if device is None and args:
+            arg = args[0]
+            if isinstance(arg, (str, torch.device)):
+                device = arg
+            elif isinstance(arg, torch.Tensor):
+                device = arg.device
+
+        if device is not None:
+            self.device = torch.device(device) if isinstance(device, str) else device
+
+        return self
 
     @property
     def is_active(self) -> bool:
@@ -625,22 +680,21 @@ class SeedSlot(nn.Module):
 
         # Validate shape: ensure seed preserves feature shape in a host-agnostic way
         # without mutating host BatchNorm statistics. Smoke test only.
-        if self.seed is not None:
-            shape_probe = self._get_shape_probe(topology)
-            expected_shape = shape_probe.shape
-            seed_was_training = self.seed.training
-            try:
-                self.seed.eval()
-                with torch.no_grad():
-                    seed_out = self.seed(shape_probe)
-                if isinstance(seed_out, torch.Tensor) and seed_out.shape != expected_shape:
-                    raise AssertionError(
-                        f"Seed '{blueprint_id}' changed shape: "
-                        f"{seed_out.shape} vs {expected_shape}"
-                    )
-            finally:
-                # Restore original training mode even if assertion fails.
-                self.seed.train(seed_was_training)
+        shape_probe = self._get_shape_probe(topology)
+        expected_shape = shape_probe.shape
+        seed_was_training = self.seed.training
+        try:
+            self.seed.eval()
+            with torch.no_grad():
+                seed_out = self.seed(shape_probe)
+            if isinstance(seed_out, torch.Tensor) and seed_out.shape != expected_shape:
+                raise AssertionError(
+                    f"Seed '{blueprint_id}' changed shape: "
+                    f"{seed_out.shape} vs {expected_shape}"
+                )
+        finally:
+            # Restore original training mode even if assertion fails.
+            self.seed.train(seed_was_training)
 
         # Initialize state
         seed_id = seed_id or f"{self.slot_id}-{blueprint_id}"
@@ -854,6 +908,10 @@ class SeedSlot(nn.Module):
         # host activations. With isolate_gradients=True, host gradients
         # are also identical to the no-seed case.
         if self.state.stage == SeedStage.TRAINING and self.alpha == 0.0:
+            if _DEBUG_STE:
+                assert seed_features.requires_grad, (
+                    "STE requires seed_features to have requires_grad=True for gradient flow"
+                )
             return host_features + (seed_features - seed_features.detach())
 
         # 4. BLENDING and later stages: topology-aware host isolation.
@@ -972,7 +1030,7 @@ class SeedSlot(nn.Module):
             )
             # Use explicit task_config.blending_steps if provided, otherwise default to 5.
             total_steps = 5
-            if self.task_config is not None and hasattr(self.task_config, "blending_steps"):
+            if self.task_config is not None:
                 configured_steps = self.task_config.blending_steps
                 if isinstance(configured_steps, int) and configured_steps > 0:
                     total_steps = configured_steps

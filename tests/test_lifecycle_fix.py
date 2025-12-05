@@ -294,6 +294,10 @@ class TestLifecycleIntegration:
         model.seed_state.metrics.record_accuracy(63.0)  # shadowing dwell epoch
         model.seed_slot.step_epoch()
 
+        # Set counterfactual and health required for G5 gate
+        model.seed_state.metrics.counterfactual_contribution = 3.0
+        model.seed_state.is_healthy = True
+
         # Use advance_stage to fossilize (this emits telemetry)
         result = model.seed_slot.advance_stage(target_stage=SeedStage.FOSSILIZED)
         assert result.passed, f"Gate should pass with mocked improvement: {result}"

@@ -21,6 +21,8 @@ class RolloutStep(NamedTuple):
     reward: float
     done: bool
     action_mask: torch.Tensor
+    truncated: bool = False  # True if episode ended due to time limit (should bootstrap)
+    bootstrap_value: float = 0.0  # Value to bootstrap from if truncated
 
 
 @dataclass
@@ -42,6 +44,8 @@ class RolloutBuffer:
         reward: float,
         done: bool,
         action_mask: torch.Tensor,
+        truncated: bool = False,
+        bootstrap_value: float = 0.0,
     ) -> None:
         """Add a step to the buffer.
 
@@ -51,10 +55,12 @@ class RolloutBuffer:
             log_prob: Log probability of action under policy
             value: Value estimate at this state
             reward: Reward received
-            done: Whether episode ended
+            done: Whether episode ended (naturally or truncated)
             action_mask: Binary mask of valid actions at this state
+            truncated: Whether episode ended due to time limit (not natural termination)
+            bootstrap_value: Value to bootstrap from if truncated
         """
-        self.steps.append(RolloutStep(state, action, log_prob, value, reward, done, action_mask))
+        self.steps.append(RolloutStep(state, action, log_prob, value, reward, done, action_mask, truncated, bootstrap_value))
 
     def clear(self) -> None:
         """Clear all steps from the buffer."""
@@ -92,7 +98,12 @@ class RolloutBuffer:
             step = self.steps[t]
 
             if step.done:
-                next_value = 0.0
+                # For truncated episodes, bootstrap from the estimated value
+                # For naturally terminated episodes, use 0.0
+                if step.truncated:
+                    next_value = step.bootstrap_value
+                else:
+                    next_value = 0.0
                 last_gae = 0.0
 
             delta = step.reward + gamma * next_value - step.value
@@ -156,6 +167,8 @@ class RecurrentRolloutStep(NamedTuple):
     reward: float
     done: bool
     action_mask: torch.Tensor  # [action_dim]
+    truncated: bool = False  # True if episode ended due to time limit (should bootstrap)
+    bootstrap_value: float = 0.0  # Value to bootstrap from if truncated
 
 
 @dataclass
@@ -213,6 +226,8 @@ class RecurrentRolloutBuffer:
         done: bool,
         action_mask: torch.Tensor,
         env_id: int,
+        truncated: bool = False,
+        bootstrap_value: float = 0.0,
     ) -> None:
         """Add a step to the correct environment's list."""
         if env_id not in self.env_steps:
@@ -226,6 +241,8 @@ class RecurrentRolloutBuffer:
             reward=reward,
             done=done,
             action_mask=action_mask.cpu(),
+            truncated=truncated,
+            bootstrap_value=bootstrap_value,
         ))
 
     def clear(self) -> None:
@@ -269,7 +286,12 @@ class RecurrentRolloutBuffer:
                 for t in reversed(range(n_steps)):
                     step = episode_steps[t]
                     if step.done:
-                        next_value = 0.0
+                        # For truncated episodes, bootstrap from the estimated value
+                        # For naturally terminated episodes, use 0.0
+                        if step.truncated:
+                            next_value = step.bootstrap_value
+                        else:
+                            next_value = 0.0
                         last_gae = 0.0
 
                     delta = step.reward + gamma * next_value - step.value
@@ -283,6 +305,32 @@ class RecurrentRolloutBuffer:
                 self._episode_advantages[key] = advantages
 
         self._gae_computed = True
+
+    def normalize_advantages(self) -> None:
+        """Normalize advantages globally across all episodes.
+
+        Must be called after compute_gae(). Normalizes advantages in-place
+        to prevent per-batch normalization variance during PPO updates.
+        """
+        if not self._gae_computed:
+            raise RuntimeError("Must call compute_gae() before normalize_advantages()")
+
+        # Collect all advantages into a single tensor
+        all_advantages = []
+        for adv in self._episode_advantages.values():
+            all_advantages.append(adv)
+
+        if not all_advantages:
+            return
+
+        # Compute global mean and std
+        all_adv_tensor = torch.cat(all_advantages)
+        mean = all_adv_tensor.mean()
+        std = all_adv_tensor.std()
+
+        # Normalize each episode's advantages in-place
+        for key in self._episode_advantages:
+            self._episode_advantages[key] = (self._episode_advantages[key] - mean) / (std + 1e-8)
 
     def get_chunks(self, device: str | torch.device) -> list[dict]:
         """Get all chunks with returns/advantages included.

@@ -179,3 +179,127 @@ def test_germinate_transformer_shape_mismatch_raises_assertion():
             slot.germinate("__test_bad_transformer_shape__", "transformer-bad-seed")
     finally:
         BlueprintRegistry.unregister("transformer", "__test_bad_transformer_shape__")
+
+
+class TestG5RequiresCounterfactual:
+    """G5 gate must require counterfactual - no fallback to total_improvement."""
+
+    def test_g5_fails_without_counterfactual(self):
+        """G5 should fail if counterfactual_contribution is None."""
+        from esper.kasmina.slot import SeedState, SeedMetrics, QualityGates
+        from esper.leyline import SeedStage
+
+        gates = QualityGates()
+        state = SeedState(
+            seed_id="test",
+            blueprint_id="test_bp",
+            stage=SeedStage.PROBATIONARY,
+        )
+        # Set high total_improvement but NO counterfactual
+        state.metrics.initial_val_accuracy = 50.0
+        state.metrics.current_val_accuracy = 60.0  # 10% total improvement
+        state.metrics.counterfactual_contribution = None  # No counterfactual!
+
+        result = gates._check_g5(state)
+
+        assert not result.passed, "G5 should fail without counterfactual"
+        assert "counterfactual_not_available" in result.checks_failed
+
+    def test_g5_passes_with_positive_counterfactual(self):
+        """G5 should pass with positive counterfactual contribution."""
+        from esper.kasmina.slot import SeedState, SeedMetrics, QualityGates
+        from esper.leyline import SeedStage
+
+        gates = QualityGates()
+        state = SeedState(
+            seed_id="test",
+            blueprint_id="test_bp",
+            stage=SeedStage.PROBATIONARY,
+            is_healthy=True,
+        )
+        state.metrics.counterfactual_contribution = 2.5  # Positive contribution
+
+        result = gates._check_g5(state)
+
+        assert result.passed, f"G5 should pass: {result.checks_failed}"
+        assert "positive_contribution" in str(result.checks_passed)
+
+    def test_g5_fails_with_negative_counterfactual(self):
+        """G5 should fail with negative counterfactual contribution."""
+        from esper.kasmina.slot import SeedState, QualityGates
+        from esper.leyline import SeedStage
+
+        gates = QualityGates()
+        state = SeedState(
+            seed_id="test",
+            blueprint_id="test_bp",
+            stage=SeedStage.PROBATIONARY,
+            is_healthy=True,
+        )
+        state.metrics.counterfactual_contribution = -1.0  # Negative!
+
+        result = gates._check_g5(state)
+
+        assert not result.passed
+        assert "non_positive_contribution" in result.checks_failed
+
+    def test_g5_fails_with_zero_counterfactual(self):
+        """G5 should fail with zero counterfactual contribution (no value added)."""
+        from esper.kasmina.slot import SeedState, QualityGates
+        from esper.leyline import SeedStage
+
+        gates = QualityGates()
+        state = SeedState(
+            seed_id="test",
+            blueprint_id="test_bp",
+            stage=SeedStage.PROBATIONARY,
+            is_healthy=True,
+        )
+        state.metrics.counterfactual_contribution = 0.0  # Zero = no value added
+
+        result = gates._check_g5(state)
+
+        assert not result.passed, "Zero contribution should not pass G5"
+        assert "non_positive_contribution" in result.checks_failed  # 0 is not > 0
+
+
+class TestShapeProbeCacheDeviceTransfer:
+    """Shape probe cache should be cleared on device transfer."""
+
+    def test_cache_cleared_on_to_call(self):
+        """Calling .to(device) should clear the shape probe cache."""
+        import torch
+        from esper.kasmina.slot import SeedSlot
+
+        slot = SeedSlot(slot_id="test", channels=64, device="cpu")
+
+        # Warm the cache
+        _ = slot._get_shape_probe("cnn")
+        _ = slot._get_shape_probe("transformer")
+        assert len(slot._shape_probe_cache) == 2, "Cache should have 2 entries"
+
+        # Transfer to same device (simulating .to() call)
+        slot.to("cpu")
+
+        # Cache should be cleared
+        assert len(slot._shape_probe_cache) == 0, "Cache should be empty after .to()"
+
+    def test_to_returns_self(self):
+        """The .to() method should return self for chaining."""
+        import torch
+        from esper.kasmina.slot import SeedSlot
+
+        slot = SeedSlot(slot_id="test", channels=64, device="cpu")
+        result = slot.to("cpu")
+
+        assert result is slot, ".to() should return self"
+
+    def test_to_updates_device(self):
+        """The .to() method should update self.device."""
+        import torch
+        from esper.kasmina.slot import SeedSlot
+
+        slot = SeedSlot(slot_id="test", channels=64, device="cpu")
+        slot.to("cpu")  # No-op but should still work
+
+        assert slot.device == torch.device("cpu")

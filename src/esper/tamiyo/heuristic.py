@@ -79,14 +79,18 @@ class HeuristicTamiyo:
         self._decisions_made: list[TamiyoDecision] = []
         self._last_cull_epoch: int = -100  # Start with no embargo
         self._blueprint_penalties: dict[str, float] = {}
+        self._last_decay_epoch: int = -1  # Track epoch for per-epoch decay
 
     def decide(self, signals: TrainingSignals, active_seeds: list["SeedState"]) -> TamiyoDecision:
         """Make a decision based on training signals."""
         Action = self._action_enum
 
-        # Decay blueprint penalties once per decision (not per germination attempt)
-        # This ensures consistent penalty semantics regardless of germination frequency
-        self._decay_blueprint_penalties()
+        # Decay blueprint penalties once per epoch (not per decision)
+        # With decay=0.5, penalties now persist ~10 epochs instead of ~4 decisions
+        current_epoch = signals.metrics.epoch
+        if current_epoch > self._last_decay_epoch:
+            self._decay_blueprint_penalties()
+            self._last_decay_epoch = current_epoch
 
         # Filter to only non-terminal, non-failure seeds
         live_seeds = [
@@ -112,6 +116,13 @@ class HeuristicTamiyo:
             return TamiyoDecision(
                 action=Action.WAIT,
                 reason=f"Embargo ({epochs_since_cull}/{self.config.embargo_epochs_after_cull} since cull)"
+            )
+
+        # Stabilization gate: prevent germination during explosive host growth
+        if not signals.metrics.host_stabilized:
+            return TamiyoDecision(
+                action=Action.WAIT,
+                reason="Host not stabilized"
             )
 
         # Too early in training
@@ -190,19 +201,24 @@ class HeuristicTamiyo:
 
             # PROBATIONARY: decision point - fossilize or cull
             if stage == SeedStage.PROBATIONARY:
-                total_improvement = seed.metrics.total_improvement
+                # Prefer counterfactual contribution (true causal impact) when available
+                contribution = seed.metrics.counterfactual_contribution
+                if contribution is not None:
+                    improvement = contribution
+                else:
+                    improvement = seed.metrics.total_improvement  # Fallback
 
-                if total_improvement > self.config.min_improvement_to_fossilize:
+                if improvement > self.config.min_improvement_to_fossilize:
                     return TamiyoDecision(
                         action=Action.FOSSILIZE,
                         target_seed_id=seed.seed_id,
-                        reason=f"Fossilizing: {total_improvement:+.2f}% total improvement",
-                        confidence=min(1.0, total_improvement / 5.0),
+                        reason=f"Fossilizing: {improvement:+.2f}% contribution",
+                        confidence=min(1.0, improvement / 5.0),
                     )
                 else:
                     return self._cull_seed(
                         signals, seed,
-                        f"No improvement in PROBATIONARY ({total_improvement:+.2f}%)"
+                        f"No improvement in PROBATIONARY ({improvement:+.2f}%)"
                     )
 
         return TamiyoDecision(
@@ -266,6 +282,7 @@ class HeuristicTamiyo:
         self._decisions_made.clear()
         self._last_cull_epoch = -100
         self._blueprint_penalties.clear()
+        self._last_decay_epoch = -1
 
     @property
     def decisions(self) -> list[TamiyoDecision]:

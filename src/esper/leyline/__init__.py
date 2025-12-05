@@ -21,6 +21,9 @@ MIN_CULL_AGE = 10
 # Epochs needed for confident seed quality assessment
 FULL_EVALUATION_AGE = 10
 
+# Minimum epochs in PROBATIONARY to earn full fossilize bonus
+MIN_PROBATION_EPOCHS = 5
+
 # Plateau gating: prevent germination until training has plateaued
 MIN_GERMINATE_EPOCH = 5        # Let host get easy wins first
 MIN_PLATEAU_TO_GERMINATE = 3   # Consecutive epochs with <0.5% improvement
@@ -89,6 +92,7 @@ __all__ = [
     # Lifecycle constants
     "MIN_CULL_AGE",
     "FULL_EVALUATION_AGE",
+    "MIN_PROBATION_EPOCHS",
     "MIN_GERMINATE_EPOCH",
     "MIN_PLATEAU_TO_GERMINATE",
 

@@ -419,6 +419,8 @@ def run_ppo_episode(
                 seed_optimizer = None
 
         done = (epoch == max_epochs)
+        truncated = done  # All episodes end at max_epochs (time limit truncation)
+        bootstrap_value = value if truncated else 0.0  # Bootstrap from V(s_final) for truncation
 
         if collect_rollout:
             agent.store_transition(
@@ -429,6 +431,8 @@ def run_ppo_episode(
                 reward,
                 done,
                 action_mask.cpu(),
+                truncated=truncated,
+                bootstrap_value=bootstrap_value,
             )
 
         episode_rewards.append(reward)
@@ -449,10 +453,10 @@ def train_ppo(
     use_telemetry: bool = True,
     lr: float = 3e-4,
     clip_ratio: float = 0.2,
-    entropy_coef: float = 0.01,
+    entropy_coef: float = 0.05,  # Unified default
     entropy_coef_start: float | None = None,
     entropy_coef_end: float | None = None,
-    entropy_coef_min: float = 0.01,
+    entropy_coef_min: float = 0.01,  # Unified minimum
     entropy_anneal_episodes: int = 0,
     gamma: float = 0.99,
     save_path: str | None = None,
@@ -475,8 +479,8 @@ def train_ppo(
     print(f"Device: {device}, Telemetry: {use_telemetry}")
 
     trainloader, testloader = task_spec.create_dataloaders()
-    # State dimension: 27 base features + 10 telemetry features if enabled
-    BASE_FEATURE_DIM = 27
+    # State dimension: 30 base features + 10 telemetry features if enabled
+    BASE_FEATURE_DIM = 30
     state_dim = BASE_FEATURE_DIM + (SeedTelemetry.feature_dim() if use_telemetry else 0)
 
     # Convert episode-based annealing to step-based

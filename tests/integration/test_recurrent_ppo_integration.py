@@ -11,7 +11,7 @@ class TestRecurrentIntegration:
     def test_full_episode_training_loop(self):
         """Test complete training loop with recurrent policy."""
         agent = PPOAgent(
-            state_dim=27,
+            state_dim=30,
             action_dim=7,
             recurrent=True,
             lstm_hidden_dim=64,
@@ -25,7 +25,7 @@ class TestRecurrentIntegration:
             hidden = None
 
             for step in range(12):
-                state = torch.randn(27)
+                state = torch.randn(30)
                 mask = torch.ones(7, dtype=torch.bool)
                 mask[3] = False  # Mask one action
 
@@ -55,7 +55,7 @@ class TestRecurrentIntegration:
     def test_multi_env_parallel_episodes(self):
         """Test parallel episodes from multiple environments."""
         agent = PPOAgent(
-            state_dim=27,
+            state_dim=30,
             action_dim=7,
             recurrent=True,
             lstm_hidden_dim=64,
@@ -71,7 +71,7 @@ class TestRecurrentIntegration:
 
         for step in range(10):
             for env_id in range(4):
-                state = torch.randn(27)
+                state = torch.randn(30)
                 mask = torch.ones(7, dtype=torch.bool)
 
                 action, log_prob, value, hiddens[env_id] = agent.get_action(
@@ -104,7 +104,7 @@ class TestRecurrentIntegration:
     def test_advantages_nonzero_with_rewards(self):
         """Critical: Verify GAE advantages are computed and non-zero."""
         agent = PPOAgent(
-            state_dim=27,
+            state_dim=30,
             action_dim=7,
             recurrent=True,
             lstm_hidden_dim=64,
@@ -116,7 +116,7 @@ class TestRecurrentIntegration:
         hidden = None
 
         for step in range(4):
-            state = torch.randn(27)
+            state = torch.randn(30)
             mask = torch.ones(7, dtype=torch.bool)
             action, log_prob, value, hidden = agent.get_action(state, mask, hidden)
 
@@ -142,14 +142,14 @@ class TestRecurrentIntegration:
         """Verify hidden state evolves within episode."""
         torch.manual_seed(42)
         agent = PPOAgent(
-            state_dim=27,
+            state_dim=30,
             action_dim=7,
             recurrent=True,
             lstm_hidden_dim=64,
             device='cpu',
         )
 
-        state = torch.randn(27)
+        state = torch.randn(30)
         mask = torch.ones(7, dtype=torch.bool)
 
         # Get values at different points in "history"
@@ -157,7 +157,7 @@ class TestRecurrentIntegration:
 
         # Build up context
         for _ in range(5):
-            _, _, _, hidden = agent.get_action(torch.randn(27), mask, hidden)
+            _, _, _, hidden = agent.get_action(torch.randn(30), mask, hidden)
 
         _, _, value_t5, _ = agent.get_action(state, mask, hidden)
 
@@ -167,7 +167,7 @@ class TestRecurrentIntegration:
     def test_episode_boundary_resets_hidden(self):
         """Hidden state should reset at episode boundaries."""
         agent = PPOAgent(
-            state_dim=27,
+            state_dim=30,
             action_dim=7,
             recurrent=True,
             device='cpu',
@@ -177,7 +177,7 @@ class TestRecurrentIntegration:
         hidden = None
         for _ in range(5):
             _, _, _, hidden = agent.get_action(
-                torch.randn(27), torch.ones(7, dtype=torch.bool), hidden
+                torch.randn(30), torch.ones(7, dtype=torch.bool), hidden
             )
 
         assert hidden is not None
@@ -188,7 +188,7 @@ class TestRecurrentIntegration:
 
         # Get fresh hidden
         _, _, _, fresh_hidden = agent.get_action(
-            torch.randn(27), torch.ones(7, dtype=torch.bool), hidden
+            torch.randn(30), torch.ones(7, dtype=torch.bool), hidden
         )
 
         # Verify fresh hidden was initialized from zeros by comparing to explicit zeros
@@ -197,7 +197,7 @@ class TestRecurrentIntegration:
         assert c_zeros.abs().sum() == 0, "Initial hidden c should be zeros"
 
         # The fresh_hidden should produce same result as explicit zeros input
-        test_state = torch.randn(27)
+        test_state = torch.randn(30)
         test_mask = torch.ones(7, dtype=torch.bool)
 
         _, _, value_from_none, _ = agent.get_action(test_state, test_mask, None)
@@ -217,7 +217,7 @@ class TestRecurrentIntegration:
         """
         torch.manual_seed(42)
         agent = PPOAgent(
-            state_dim=27,
+            state_dim=30,
             action_dim=7,
             recurrent=True,
             lstm_hidden_dim=64,
@@ -229,7 +229,7 @@ class TestRecurrentIntegration:
         agent.recurrent_buffer.start_episode(env_id=0)
         hidden = None
         for i in range(4):
-            state = torch.randn(27)
+            state = torch.randn(30)
             mask = torch.ones(7, dtype=torch.bool)
             action, log_prob, value, hidden = agent.get_action(state, mask, hidden)
             agent.store_recurrent_transition(
@@ -277,7 +277,7 @@ class TestRecurrentIntegration:
         """
         torch.manual_seed(42)
         agent = PPOAgent(
-            state_dim=27,
+            state_dim=30,
             action_dim=7,
             recurrent=True,
             lstm_hidden_dim=64,
@@ -290,7 +290,7 @@ class TestRecurrentIntegration:
         agent.recurrent_buffer.start_episode(env_id=0)
         hidden = None
         for i in range(8):
-            state = torch.randn(27)
+            state = torch.randn(30)
             mask = torch.ones(7, dtype=torch.bool)
             action, log_prob, value, hidden = agent.get_action(state, mask, hidden)
             # Reward structure: ONLY last step gets reward
@@ -323,7 +323,7 @@ class TestRecurrentIntegration:
         hidden = None
         torch.manual_seed(42)  # Same seed for reproducibility
         for i in range(8):
-            state = torch.randn(27)
+            state = torch.randn(30)
             mask = torch.ones(7, dtype=torch.bool)
             action, log_prob, value, hidden = agent.get_action(state, mask, hidden)
             reward = 10.0 if i == 7 else 0.0
@@ -356,7 +356,7 @@ class TestRecurrentIntegration:
     def test_value_targets_equal_advantages_plus_values(self):
         """Verify GAE relationship: returns = advantages + old_values."""
         agent = PPOAgent(
-            state_dim=27,
+            state_dim=30,
             action_dim=7,
             recurrent=True,
             lstm_hidden_dim=64,
@@ -367,7 +367,7 @@ class TestRecurrentIntegration:
         agent.recurrent_buffer.start_episode(env_id=0)
         hidden = None
         for i in range(4):
-            state = torch.randn(27)
+            state = torch.randn(30)
             mask = torch.ones(7, dtype=torch.bool)
             action, log_prob, value, hidden = agent.get_action(state, mask, hidden)
             agent.store_recurrent_transition(
@@ -390,12 +390,12 @@ class TestRecurrentIntegration:
     def test_single_step_episode(self):
         """Single-step episode should work correctly."""
         agent = PPOAgent(
-            state_dim=27, action_dim=7, recurrent=True,
+            state_dim=30, action_dim=7, recurrent=True,
             lstm_hidden_dim=64, chunk_length=4, device='cpu',
         )
 
         agent.recurrent_buffer.start_episode(env_id=0)
-        state = torch.randn(27)
+        state = torch.randn(30)
         mask = torch.ones(7, dtype=torch.bool)
         action, log_prob, value, hidden = agent.get_action(state, mask, None)
         agent.store_recurrent_transition(
@@ -414,14 +414,14 @@ class TestRecurrentIntegration:
         """Episode exactly matching chunk_length needs no padding."""
         chunk_length = 4
         agent = PPOAgent(
-            state_dim=27, action_dim=7, recurrent=True,
+            state_dim=30, action_dim=7, recurrent=True,
             lstm_hidden_dim=64, chunk_length=chunk_length, device='cpu',
         )
 
         agent.recurrent_buffer.start_episode(env_id=0)
         hidden = None
         for i in range(chunk_length):
-            state = torch.randn(27)
+            state = torch.randn(30)
             mask = torch.ones(7, dtype=torch.bool)
             action, log_prob, value, hidden = agent.get_action(state, mask, hidden)
             agent.store_recurrent_transition(
@@ -439,14 +439,14 @@ class TestRecurrentIntegration:
     def test_approx_kl_returned_in_metrics(self):
         """update_recurrent should return approx_kl for diagnostics."""
         agent = PPOAgent(
-            state_dim=27, action_dim=7, recurrent=True,
+            state_dim=30, action_dim=7, recurrent=True,
             lstm_hidden_dim=64, chunk_length=4, device='cpu',
         )
 
         agent.recurrent_buffer.start_episode(env_id=0)
         hidden = None
         for i in range(4):
-            state = torch.randn(27)
+            state = torch.randn(30)
             mask = torch.ones(7, dtype=torch.bool)
             action, log_prob, value, hidden = agent.get_action(state, mask, hidden)
             agent.store_recurrent_transition(

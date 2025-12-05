@@ -24,7 +24,7 @@ class TensorSchema(IntEnum):
     Maps feature names to tensor indices for vectorized PPO training.
     Use this to slice state vectors by name without string lookups.
 
-    Total: 27 base features (V1 compatible)
+    Total: 30 base features (V3 with host state)
     """
     # Core state (2)
     EPOCH = 0
@@ -59,17 +59,22 @@ class TensorSchema(IntEnum):
     ACC_HIST_3 = 19
     ACC_HIST_4 = 20
 
-    # Seed state (6)
+    # Seed state (7) - added SEED_COUNTERFACTUAL
     HAS_ACTIVE_SEED = 21
     SEED_STAGE = 22
     SEED_EPOCHS_IN_STAGE = 23
     SEED_ALPHA = 24
     SEED_IMPROVEMENT = 25
     AVAILABLE_SLOTS = 26
+    SEED_COUNTERFACTUAL = 27  # True causal attribution
+
+    # Host state (2) - V3: host network observability
+    HOST_GRAD_NORM = 28
+    HOST_LEARNING_PHASE = 29
 
 
-# Total feature count for V1 compatibility
-TENSOR_SCHEMA_SIZE = 27
+# Total feature count for V3 (with host state)
+TENSOR_SCHEMA_SIZE = 30
 
 
 class FastTrainingSignals(NamedTuple):
@@ -109,6 +114,11 @@ class FastTrainingSignals(NamedTuple):
     seed_alpha: float
     seed_improvement: float
     available_slots: int
+    seed_counterfactual: float  # True causal attribution (0.0 if unavailable)
+
+    # Host state
+    host_grad_norm: float
+    host_learning_phase: float
 
     def to_vector(self) -> list[float]:
         """Convert to flat feature vector matching TensorSchema."""
@@ -132,6 +142,9 @@ class FastTrainingSignals(NamedTuple):
             self.seed_alpha,
             self.seed_improvement,
             float(self.available_slots),
+            self.seed_counterfactual / 10.0,  # Normalize to ~[-1, 1]
+            min(self.host_grad_norm, 10.0) / 10.0,  # Clamp and normalize
+            self.host_learning_phase,  # Already [0, 1]
         ]
 
     @staticmethod
@@ -146,6 +159,8 @@ class FastTrainingSignals(NamedTuple):
             accuracy_history_5=(0.0, 0.0, 0.0, 0.0, 0.0),
             has_active_seed=0, seed_stage=0, seed_epochs_in_stage=0,
             seed_alpha=0.0, seed_improvement=0.0, available_slots=1,
+            seed_counterfactual=0.0,
+            host_grad_norm=0.0, host_learning_phase=0.0,
         )
 
 
@@ -198,6 +213,7 @@ class TrainingSignals:
     seed_epochs_in_stage: int = 0
     seed_alpha: float = 0.0
     seed_improvement: float = 0.0
+    seed_counterfactual: float = 0.0
 
     # Resource state
     gpu_memory_used: float = 0.0  # GB
@@ -217,6 +233,8 @@ class TrainingSignals:
         seed_epochs_in_stage: int | None = None,
         seed_alpha: float | None = None,
         seed_improvement: float | None = None,
+        seed_counterfactual: float | None = None,
+        max_epochs: int = 200,
     ) -> FastTrainingSignals:
         """Convert to FastTrainingSignals for PPO data plane.
 
@@ -225,6 +243,8 @@ class TrainingSignals:
             seed_epochs_in_stage: Epochs in current stage
             seed_alpha: Current blending alpha
             seed_improvement: Improvement since stage start
+            seed_counterfactual: Counterfactual improvement estimate
+            max_epochs: Maximum epochs for learning phase normalization
 
         Returns:
             FastTrainingSignals with fixed-size history tuples
@@ -257,4 +277,7 @@ class TrainingSignals:
             seed_alpha=self.seed_alpha if seed_alpha is None else seed_alpha,
             seed_improvement=self.seed_improvement if seed_improvement is None else seed_improvement,
             available_slots=self.available_slots,
+            seed_counterfactual=self.seed_counterfactual if seed_counterfactual is None else seed_counterfactual,
+            host_grad_norm=self.metrics.grad_norm_host,
+            host_learning_phase=self.metrics.epoch / max(1, max_epochs),
         )

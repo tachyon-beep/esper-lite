@@ -22,7 +22,7 @@ class TestPPOFeatureCompatibility:
     """Test that signals_to_features output is compatible with PPOAgent."""
 
     def test_features_without_telemetry_compatible_with_agent(self):
-        """Features without telemetry should be compatible with 27-dim agent."""
+        """Features without telemetry should be compatible with 28-dim agent."""
         # Create signals
         signals = TrainingSignals()
         signals.metrics.epoch = 5
@@ -48,7 +48,7 @@ class TestPPOFeatureCompatibility:
         assert value.shape == (1,), "Value should be scalar per batch item"
 
     def test_features_with_telemetry_compatible_with_agent(self):
-        """Features with telemetry should be compatible with 37-dim agent."""
+        """Features with telemetry should be compatible with 38-dim agent."""
         # Create signals (no active seed, so telemetry will be zero-padded)
         signals = TrainingSignals()
         signals.metrics.epoch = 10
@@ -86,10 +86,10 @@ class TestPPOFeatureCompatibility:
 
         # Stack into batch
         batch_tensor = torch.tensor(all_features, dtype=torch.float32)
-        assert batch_tensor.shape == (batch_size, 27)
+        assert batch_tensor.shape == (batch_size, 30)
 
         # Create agent
-        agent = PPOAgent(state_dim=27, action_dim=7, device='cpu')
+        agent = PPOAgent(state_dim=30, action_dim=7, device='cpu')
         mask = _all_valid_mask(batch_size)
 
         # Should handle batch without errors
@@ -105,8 +105,8 @@ class TestPPOForwardPass:
 
     def test_forward_pass_returns_valid_distribution(self):
         """Forward pass should return valid categorical distribution."""
-        agent = PPOAgent(state_dim=27, action_dim=7, device='cpu')
-        state = torch.randn(1, 27)
+        agent = PPOAgent(state_dim=30, action_dim=7, device='cpu')
+        state = torch.randn(1, 30)
         mask = _all_valid_mask()
 
         with torch.no_grad():
@@ -127,9 +127,9 @@ class TestPPOForwardPass:
 
     def test_forward_pass_value_is_scalar(self):
         """Value function should output scalar per state."""
-        agent = PPOAgent(state_dim=27, action_dim=7, device='cpu')
+        agent = PPOAgent(state_dim=30, action_dim=7, device='cpu')
         batch_size = 8
-        states = torch.randn(batch_size, 27)
+        states = torch.randn(batch_size, 30)
         mask = _all_valid_mask(batch_size)
 
         with torch.no_grad():
@@ -139,8 +139,8 @@ class TestPPOForwardPass:
 
     def test_forward_pass_deterministic(self):
         """Same input should produce same output."""
-        agent = PPOAgent(state_dim=27, action_dim=7, device='cpu')
-        state = torch.randn(1, 27)
+        agent = PPOAgent(state_dim=30, action_dim=7, device='cpu')
+        state = torch.randn(1, 30)
         mask = _all_valid_mask()
 
         # Set to eval mode for deterministic behavior
@@ -156,12 +156,12 @@ class TestPPOForwardPass:
 
     def test_forward_pass_different_inputs_different_outputs(self):
         """Different inputs should produce different outputs."""
-        agent = PPOAgent(state_dim=27, action_dim=7, device='cpu')
+        agent = PPOAgent(state_dim=30, action_dim=7, device='cpu')
         mask = _all_valid_mask()
 
         # Create two very different states to ensure outputs differ
-        state1 = torch.zeros(1, 27)
-        state2 = torch.ones(1, 27) * 10.0  # Very different from zeros
+        state1 = torch.zeros(1, 30)
+        state2 = torch.ones(1, 30) * 10.0  # Very different from zeros
 
         with torch.no_grad():
             dist1, value1 = agent.network(state1, mask)
@@ -180,8 +180,8 @@ class TestPPOActionSampling:
 
     def test_get_action_returns_valid_action(self):
         """get_action should return valid action index."""
-        agent = PPOAgent(state_dim=27, action_dim=7, device='cpu')
-        state = torch.randn(1, 27)
+        agent = PPOAgent(state_dim=30, action_dim=7, device='cpu')
+        state = torch.randn(1, 30)
         mask = _all_valid_mask()
 
         action, log_prob, value, _ = agent.get_action(state, mask, deterministic=False)
@@ -199,8 +199,8 @@ class TestPPOActionSampling:
 
     def test_deterministic_action_selects_argmax(self):
         """Deterministic action should select highest probability action."""
-        agent = PPOAgent(state_dim=27, action_dim=7, device='cpu')
-        state = torch.randn(1, 27)
+        agent = PPOAgent(state_dim=30, action_dim=7, device='cpu')
+        state = torch.randn(1, 30)
         mask = _all_valid_mask()
 
         # Get deterministic action multiple times
@@ -215,8 +215,8 @@ class TestPPOActionSampling:
 
     def test_stochastic_action_samples_from_distribution(self):
         """Stochastic action should sample from distribution."""
-        agent = PPOAgent(state_dim=27, action_dim=7, device='cpu')
-        state = torch.randn(1, 27)
+        agent = PPOAgent(state_dim=30, action_dim=7, device='cpu')
+        state = torch.randn(1, 30)
         mask = _all_valid_mask()
 
         # Sample multiple times
@@ -232,11 +232,11 @@ class TestPPOActionSampling:
 
     def test_action_sampling_respects_probabilities(self):
         """Sampled actions should roughly match the distribution probabilities."""
-        agent = PPOAgent(state_dim=27, action_dim=7, device='cpu')
+        agent = PPOAgent(state_dim=30, action_dim=7, device='cpu')
 
         # Create a state that produces skewed probabilities
         # (In practice, the network initialization might already produce this)
-        state = torch.randn(1, 27)
+        state = torch.randn(1, 30)
         mask = _all_valid_mask()
 
         # Sample many times
@@ -269,8 +269,8 @@ class TestPPOActionSampling:
 
     def test_log_prob_matches_distribution(self):
         """Log prob returned by get_action should match distribution."""
-        agent = PPOAgent(state_dim=27, action_dim=7, device='cpu')
-        state = torch.randn(1, 27)
+        agent = PPOAgent(state_dim=30, action_dim=7, device='cpu')
+        state = torch.randn(1, 30)
         mask = _all_valid_mask()
 
         # Get action with log prob
@@ -287,8 +287,8 @@ class TestPPOActionSampling:
 
     def test_value_matches_forward_pass(self):
         """Value returned by get_action should match forward pass."""
-        agent = PPOAgent(state_dim=27, action_dim=7, device='cpu')
-        state = torch.randn(1, 27)
+        agent = PPOAgent(state_dim=30, action_dim=7, device='cpu')
+        state = torch.randn(1, 30)
         mask = _all_valid_mask()
 
         # Get value from get_action
@@ -343,10 +343,10 @@ class TestPPOEndToEnd:
 
         # Extract features with telemetry (will be zero-padded)
         features = signals_to_features(signals, model=None, use_telemetry=True)
-        assert len(features) == 37, "Should have 37 features with telemetry"
+        assert len(features) == 40, "Should have 40 features with telemetry"
 
         # Create agent
-        agent = PPOAgent(state_dim=37, action_dim=7, device='cpu')
+        agent = PPOAgent(state_dim=40, action_dim=7, device='cpu')
 
         # Get action
         state_tensor = torch.tensor([features], dtype=torch.float32)

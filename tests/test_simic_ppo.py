@@ -16,42 +16,42 @@ from esper.simic.networks import ActorCritic, RecurrentActorCritic
 class TestPPOFeatureDimensions:
     """Test that PPO network state_dim matches signals_to_features output."""
 
-    def test_signals_to_features_without_telemetry_is_27_dim(self):
-        """Feature vector without telemetry must be exactly 27 dimensions."""
+    def test_signals_to_features_without_telemetry_is_28_dim(self):
+        """Feature vector without telemetry must be exactly 28 dimensions."""
         signals = TrainingSignals()
         signals.metrics.epoch = 10
         signals.metrics.val_accuracy = 75.0
 
         features = signals_to_features(signals, model=None, use_telemetry=False)
 
-        assert len(features) == 27, (
-            f"Expected 27 base features, got {len(features)}. "
+        assert len(features) == 30, (
+            f"Expected 30 base features, got {len(features)}. "
             "This is the base feature dimension without telemetry."
         )
 
-    def test_signals_to_features_with_telemetry_is_37_dim(self):
-        """Feature vector with telemetry must be 27 base + 10 telemetry = 37 dimensions."""
+    def test_signals_to_features_with_telemetry_is_40_dim(self):
+        """Feature vector with telemetry must be 30 base + 10 telemetry = 40 dimensions."""
         signals = TrainingSignals()
         signals.metrics.epoch = 10
         signals.metrics.val_accuracy = 75.0
 
         features = signals_to_features(signals, model=None, use_telemetry=True)
 
-        expected_dim = 27 + SeedTelemetry.feature_dim()  # 27 + 10 = 37
+        expected_dim = 30 + SeedTelemetry.feature_dim()  # 30 + 10 = 40
         assert len(features) == expected_dim, (
-            f"Expected {expected_dim} features (27 base + {SeedTelemetry.feature_dim()} telemetry), "
+            f"Expected {expected_dim} features (30 base + {SeedTelemetry.feature_dim()} telemetry), "
             f"got {len(features)}. Telemetry adds {SeedTelemetry.feature_dim()} dimensions."
         )
 
     def test_ppo_agent_state_dim_without_telemetry_matches_features(self):
-        """PPO agent created with use_telemetry=False must accept 27-dim vectors."""
-        BASE_FEATURE_DIM = 27
+        """PPO agent created with use_telemetry=False must accept 30-dim vectors."""
+        BASE_FEATURE_DIM = 30
         state_dim = BASE_FEATURE_DIM
 
         agent = PPOAgent(state_dim=state_dim, action_dim=7, device='cpu')
 
-        # Create dummy 27-dim state tensor and all-valid action mask
-        dummy_state = torch.randn(1, 27)
+        # Create dummy 30-dim state tensor and all-valid action mask
+        dummy_state = torch.randn(1, 30)
         dummy_mask = torch.ones(1, 7)  # All actions valid
 
         # Forward pass should work without shape errors
@@ -63,14 +63,14 @@ class TestPPOFeatureDimensions:
         assert value.shape == (1,), "Value should be (batch_size,)"
 
     def test_ppo_agent_state_dim_with_telemetry_matches_features(self):
-        """PPO agent created with use_telemetry=True must accept 37-dim vectors."""
-        BASE_FEATURE_DIM = 27
-        state_dim = BASE_FEATURE_DIM + SeedTelemetry.feature_dim()  # 27 + 10 = 37
+        """PPO agent created with use_telemetry=True must accept 40-dim vectors."""
+        BASE_FEATURE_DIM = 30
+        state_dim = BASE_FEATURE_DIM + SeedTelemetry.feature_dim()  # 30 + 10 = 40
 
         agent = PPOAgent(state_dim=state_dim, action_dim=7, device='cpu')
 
-        # Create dummy 37-dim state tensor and all-valid action mask
-        dummy_state = torch.randn(1, 37)
+        # Create dummy 40-dim state tensor and all-valid action mask
+        dummy_state = torch.randn(1, 40)
         dummy_mask = torch.ones(1, 7)  # All actions valid
 
         # Forward pass should work without shape errors
@@ -83,8 +83,8 @@ class TestPPOFeatureDimensions:
 
     def test_ppo_agent_rejects_wrong_dimension(self):
         """PPO agent should fail with clear error when given wrong input dimension."""
-        # Create agent expecting 37-dim input
-        state_dim = 37
+        # Create agent expecting 40-dim input
+        state_dim = 40
         agent = PPOAgent(state_dim=state_dim, action_dim=7, device='cpu')
 
         # Try to feed 54-dim input (old incorrect dimension)
@@ -105,17 +105,17 @@ class TestPPOFeatureDimensions:
     def test_training_py_would_compute_correct_state_dim(self):
         """Verify the fixed dimension computation logic matches expected values."""
         # This tests the logic from training.py after the fix
-        BASE_FEATURE_DIM = 27
+        BASE_FEATURE_DIM = 30
 
         # Without telemetry
         use_telemetry = False
         state_dim_no_tel = BASE_FEATURE_DIM + (SeedTelemetry.feature_dim() if use_telemetry else 0)
-        assert state_dim_no_tel == 27, "Without telemetry should be 27 dims"
+        assert state_dim_no_tel == 30, "Without telemetry should be 30 dims"
 
         # With telemetry
         use_telemetry = True
         state_dim_tel = BASE_FEATURE_DIM + (SeedTelemetry.feature_dim() if use_telemetry else 0)
-        assert state_dim_tel == 37, "With telemetry should be 37 dims (27 + 10)"
+        assert state_dim_tel == 40, "With telemetry should be 40 dims (30 + 10)"
 
     def test_end_to_end_dimension_consistency(self):
         """End-to-end test: signals -> features -> agent forward pass."""
@@ -154,7 +154,7 @@ class TestEntropyAnnealing:
         from esper.simic.ppo import PPOAgent
 
         agent = PPOAgent(
-            state_dim=27,
+            state_dim=30,
             action_dim=7,
             entropy_coef=0.05,
             entropy_coef_min=0.0,  # Disable floor for this test
@@ -170,7 +170,7 @@ class TestEntropyAnnealing:
         from esper.simic.ppo import PPOAgent
 
         agent = PPOAgent(
-            state_dim=27,
+            state_dim=30,
             action_dim=7,
             entropy_coef_start=0.2,
             entropy_coef_end=0.01,
@@ -185,7 +185,7 @@ class TestEntropyAnnealing:
         from esper.simic.ppo import PPOAgent
 
         agent = PPOAgent(
-            state_dim=27,
+            state_dim=30,
             action_dim=7,
             entropy_coef_start=0.2,
             entropy_coef_end=0.0,
@@ -200,7 +200,7 @@ class TestEntropyAnnealing:
         from esper.simic.ppo import PPOAgent
 
         agent = PPOAgent(
-            state_dim=27,
+            state_dim=30,
             action_dim=7,
             entropy_coef_start=0.2,
             entropy_coef_end=0.01,
@@ -216,7 +216,7 @@ class TestEntropyAnnealing:
         from esper.simic.ppo import PPOAgent
 
         agent = PPOAgent(
-            state_dim=27,
+            state_dim=30,
             action_dim=7,
             entropy_coef_start=0.2,
             entropy_coef_end=0.01,
@@ -232,7 +232,7 @@ class TestEntropyAnnealing:
         from esper.simic.ppo import PPOAgent
 
         agent = PPOAgent(
-            state_dim=27,
+            state_dim=30,
             action_dim=7,
             entropy_coef_start=0.2,
             entropy_coef_end=0.0,  # Would go to zero without floor
@@ -249,20 +249,20 @@ class TestEntropyAnnealing:
         assert agent.get_entropy_coef() == 0.1
 
     def test_entropy_floor_default_is_sensible(self):
-        """Default entropy floor should be 0.01 (standard PPO)."""
+        """Default entropy floor should be 0.01 (unified minimum)."""
         from esper.simic.ppo import PPOAgent
 
         agent = PPOAgent(
-            state_dim=27,
+            state_dim=30,
             action_dim=7,
             entropy_coef_start=0.2,
-            entropy_coef_end=0.001,  # Below default floor of 0.015
+            entropy_coef_end=0.001,  # Below default floor of 0.01
             entropy_anneal_steps=100,
             device='cpu'
         )
-        # Default floor should prevent going below 0.015 (scaled for normalized entropy)
+        # Default floor should prevent going below 0.01 (unified minimum)
         agent.train_steps = 100
-        assert agent.get_entropy_coef() == 0.015  # Clamped at default floor
+        assert agent.get_entropy_coef() == 0.01  # Clamped at default floor
 
     def test_annealed_entropy_used_in_update(self):
         """PPO update should use annealed entropy coefficient."""
@@ -271,7 +271,7 @@ class TestEntropyAnnealing:
 
         # Create agent with annealing
         agent = PPOAgent(
-            state_dim=27,
+            state_dim=30,
             action_dim=7,
             entropy_coef_start=0.5,
             entropy_coef_end=0.01,
@@ -283,7 +283,7 @@ class TestEntropyAnnealing:
         # Add some dummy transitions with action masks
         dummy_mask = torch.ones(7)  # All actions valid
         for _ in range(5):
-            state = torch.randn(27)
+            state = torch.randn(30)
             agent.store_transition(state, action=0, log_prob=-1.0, value=0.5, reward=1.0, done=False, action_mask=dummy_mask)
 
         # At step 0, entropy_coef should be 0.5
@@ -305,20 +305,20 @@ class TestRecurrentPPOAgent:
 
     def test_init_with_recurrent_creates_lstm_network(self):
         """PPOAgent(recurrent=True) should use RecurrentActorCritic."""
-        agent = PPOAgent(state_dim=27, action_dim=7, recurrent=True, lstm_hidden_dim=128)
+        agent = PPOAgent(state_dim=30, action_dim=7, recurrent=True, lstm_hidden_dim=128)
         assert isinstance(agent.network, RecurrentActorCritic)
         assert agent.recurrent is True
 
     def test_init_without_recurrent_uses_mlp(self):
         """PPOAgent(recurrent=False) should use standard ActorCritic."""
-        agent = PPOAgent(state_dim=27, action_dim=7, recurrent=False)
+        agent = PPOAgent(state_dim=30, action_dim=7, recurrent=False)
         assert isinstance(agent.network, ActorCritic)
         assert agent.recurrent is False
 
     def test_get_action_returns_hidden_when_recurrent(self):
         """get_action should return hidden state for recurrent agent."""
-        agent = PPOAgent(state_dim=27, action_dim=7, recurrent=True, device='cpu')
-        state = torch.randn(27)
+        agent = PPOAgent(state_dim=30, action_dim=7, recurrent=True, device='cpu')
+        state = torch.randn(30)
         mask = torch.ones(7, dtype=torch.bool)
 
         result = agent.get_action(state, mask, hidden=None)
@@ -332,7 +332,7 @@ class TestRecurrentPPOAgent:
     def test_update_recurrent_uses_batched_chunks(self):
         """Recurrent update should use batched chunk processing."""
         agent = PPOAgent(
-            state_dim=27, action_dim=7, recurrent=True, device='cpu',
+            state_dim=30, action_dim=7, recurrent=True, device='cpu',
             chunk_length=4, lstm_hidden_dim=64,
         )
 
@@ -340,7 +340,7 @@ class TestRecurrentPPOAgent:
         agent.recurrent_buffer.start_episode(env_id=0)
         hidden = None
         for i in range(6):
-            state = torch.randn(27)
+            state = torch.randn(30)
             mask = torch.ones(7, dtype=torch.bool)
             action, log_prob, value, hidden = agent.get_action(state, mask, hidden)
             agent.store_recurrent_transition(
@@ -358,7 +358,7 @@ class TestRecurrentPPOAgent:
     def test_advantages_are_nonzero_in_update(self):
         """Verify GAE advantages flow through to update (critical bug fix)."""
         agent = PPOAgent(
-            state_dim=27, action_dim=7, recurrent=True, device='cpu',
+            state_dim=30, action_dim=7, recurrent=True, device='cpu',
             chunk_length=4, lstm_hidden_dim=64,
         )
 
@@ -366,7 +366,7 @@ class TestRecurrentPPOAgent:
         agent.recurrent_buffer.start_episode(env_id=0)
         hidden = None
         for i in range(4):
-            state = torch.randn(27)
+            state = torch.randn(30)
             mask = torch.ones(7, dtype=torch.bool)
             action, log_prob, value, hidden = agent.get_action(state, mask, hidden)
             agent.store_recurrent_transition(
@@ -386,7 +386,7 @@ class TestRecurrentPPOAgent:
     def test_value_coef_used_correctly(self):
         """Value coefficient should be from agent, not hardcoded."""
         agent = PPOAgent(
-            state_dim=27, action_dim=7, recurrent=True, device='cpu',
+            state_dim=30, action_dim=7, recurrent=True, device='cpu',
             value_coef=0.25,  # Non-default value
         )
         assert agent.value_coef == 0.25

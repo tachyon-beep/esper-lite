@@ -90,13 +90,13 @@ class TestRunningMeanStd:
 
     def test_normalize_same_device_cpu(self):
         """Test normalize works when normalizer and input are on CPU."""
-        rms = RunningMeanStd(shape=(27,), device="cpu")
+        rms = RunningMeanStd(shape=(30,), device="cpu")
 
         # Update with some data
-        rms.update(torch.randn(100, 27))
+        rms.update(torch.randn(100, 30))
 
         # Normalize should work without device errors
-        states = torch.randn(8, 27)
+        states = torch.randn(8, 30)
         normalized = rms.normalize(states)
 
         assert normalized.device.type == "cpu"

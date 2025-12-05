@@ -155,10 +155,10 @@ def train_ppo_vectorized(
     use_telemetry: bool = True,
     lr: float = 3e-4,
     clip_ratio: float = 0.2,
-    entropy_coef: float = 0.1,
+    entropy_coef: float = 0.05,  # Unified default
     entropy_coef_start: float | None = None,
     entropy_coef_end: float | None = None,
-    entropy_coef_min: float = 0.01,
+    entropy_coef_min: float = 0.01,  # Unified minimum
     entropy_anneal_episodes: int = 0,
     gamma: float = 0.99,
     ppo_updates_per_batch: int = 1,
@@ -267,8 +267,8 @@ def train_ppo_vectorized(
             total = targets.size(0)
         return loss, correct, total
 
-    # State dimension: 27 base features + 10 telemetry features if enabled
-    BASE_FEATURE_DIM = 27
+    # State dimension: 30 base features + 10 telemetry features if enabled
+    BASE_FEATURE_DIM = 30
     state_dim = BASE_FEATURE_DIM + (SeedTelemetry.feature_dim() if use_telemetry else 0)
     # Use EMA momentum for stable normalization during long training runs
     # (prevents distribution shift that can break PPO ratio calculations)
@@ -984,6 +984,8 @@ def train_ppo_vectorized(
                 # get_batches() expects tensors on CPU or will move them - since policy device
                 # is consistent across all envs, keeping on GPU is more efficient.
                 done = (epoch == max_epochs)
+                truncated = done  # All episodes end at max_epochs (time limit truncation)
+                bootstrap_value = value if truncated else 0.0  # Bootstrap from V(s_final) for truncation
 
                 if recurrent:
                     agent.store_recurrent_transition(
@@ -995,6 +997,8 @@ def train_ppo_vectorized(
                         done=done,
                         action_mask=masks_batch[env_idx],
                         env_id=env_idx,
+                        truncated=truncated,
+                        bootstrap_value=bootstrap_value,
                     )
                 else:
                     agent.store_transition(
@@ -1005,6 +1009,8 @@ def train_ppo_vectorized(
                         normalized_reward,  # Use normalized reward for critic training
                         done,
                         masks_batch[env_idx],
+                        truncated=truncated,
+                        bootstrap_value=bootstrap_value,
                     )
 
                 # Handle episode boundaries for recurrent policy
@@ -1019,9 +1025,10 @@ def train_ppo_vectorized(
                     env_total_rewards[env_idx] = sum(env_state.episode_rewards)
 
         # PPO Update after all episodes in batch complete
-        # last_value=0.0 is correct because all episodes terminate at max_epochs
-        # (done=True), so GAE ignores this value. If we add early termination/
-        # truncation support, we'd need to compute V(s_terminal) for bootstrap.
+        # Truncation bootstrapping: Episodes end at max_epochs (time limit), not natural
+        # termination. Each transition stores its bootstrap_value (V(s_final)) which GAE
+        # uses instead of 0 for truncated episodes. This prevents systematic downward bias
+        # in advantage estimates.
         #
         # Multiple updates per batch improves sample efficiency by reusing data.
         # With KL early stopping, the policy won't diverge too far from the

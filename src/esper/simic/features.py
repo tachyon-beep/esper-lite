@@ -61,11 +61,11 @@ def safe(v, default: float = 0.0, max_val: float = 100.0) -> float:
 
 
 # =============================================================================
-# Base Features (V1 - 27 dimensions)
+# Base Features (V3 - 30 dimensions)
 # =============================================================================
 
 def obs_to_base_features(obs: dict, max_epochs: int = 200) -> list[float]:
-    """Extract V1-style base features (27 dims) with pre-normalization.
+    """Extract V3-style base features (30 dims) with pre-normalization.
 
     Pre-normalizes features to ~[0, 1] range for early training stability.
     This reduces the burden on RunningMeanStd during the initial warmup phase
@@ -78,17 +78,18 @@ def obs_to_base_features(obs: dict, max_epochs: int = 200) -> list[float]:
     - Trends: plateau_epochs, best_val_accuracy, best_val_loss (3)
     - History: loss_history_5 (5), accuracy_history_5 (5)
     - Seed state: has_active_seed, seed_stage, seed_epochs_in_stage,
-                  seed_alpha, seed_improvement (5)
+                  seed_alpha, seed_improvement, seed_counterfactual (6)
     - Slots: available_slots (1)
+    - Host state: host_grad_norm, host_learning_phase (2)
 
-    Total: 27 features
+    Total: 30 features
 
     Args:
         obs: Observation dictionary from TrainingSnapshot.to_dict()
         max_epochs: Maximum training epochs (for normalization)
 
     Returns:
-        List of 27 floats, pre-normalized to ~[0, 1] range
+        List of 30 floats, pre-normalized to ~[0, 1] range
     """
     return [
         # Timing features
@@ -114,8 +115,12 @@ def obs_to_base_features(obs: dict, max_epochs: int = 200) -> list[float]:
         float(obs['seed_stage']) / 7.0,                       # Stages 0-7 -> [0, 1]
         float(obs['seed_epochs_in_stage']) / 50.0,            # ~[0, 1] typical max ~50
         obs['seed_alpha'],                                    # Already [0, 1]
-        obs['seed_improvement'] / 10.0,                       # ~[-1, 1] typical range
+        safe(obs['seed_improvement'], 0.0, max_val=10.0) / 10.0,  # [-1, 1] clamped
         float(obs['available_slots']),                        # Usually 0-2, small scale ok
+        safe(obs.get('seed_counterfactual', 0.0), 0.0, max_val=10.0) / 10.0,  # [-1, 1] clamped
+        # Host state features
+        safe(obs.get('host_grad_norm', 0.0), 0.0, max_val=10.0) / 10.0,  # [0, 1] clamped
+        obs.get('host_learning_phase', 0.0),                 # Already [0, 1]
     ]
 
 

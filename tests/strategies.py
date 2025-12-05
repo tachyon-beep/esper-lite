@@ -48,7 +48,7 @@ def pytorch_tensors(
 
     Args:
         draw: Hypothesis draw function
-        shape: Tensor shape (e.g., (32, 27) for batch_size=32, features=27)
+        shape: Tensor shape (e.g., (32, 30) for batch_size=32, features=28)
         min_value: Minimum value for elements
         max_value: Maximum value for elements
         dtype: PyTorch dtype
@@ -57,7 +57,7 @@ def pytorch_tensors(
         torch.Tensor of specified shape
 
     Example:
-        @given(pytorch_tensors(shape=(32, 27)))
+        @given(pytorch_tensors(shape=(32, 30)))
         def test_forward_pass(batch):
             output = model(batch)
             assert output.shape[0] == 32
@@ -350,7 +350,7 @@ def seed_infos(draw):
 # =============================================================================
 
 @st.composite
-def simple_network_configs(draw, state_dim: int = 27, action_dim: int = 7):
+def simple_network_configs(draw, state_dim: int = 28, action_dim: int = 7):
     """Generate configurations for simple neural networks.
 
     Returns dict with network hyperparameters.

@@ -11,8 +11,8 @@ class TestActorCritic:
 
     def test_forward_shapes(self):
         """Test forward pass returns correct shapes."""
-        net = ActorCritic(state_dim=27, action_dim=7, hidden_dim=64)
-        state = torch.randn(4, 27)  # batch of 4
+        net = ActorCritic(state_dim=30, action_dim=7, hidden_dim=64)
+        state = torch.randn(4, 30)  # batch of 4
         mask = torch.ones(4, 7)  # all actions valid
 
         dist, value = net(state, mask)
@@ -22,8 +22,8 @@ class TestActorCritic:
 
     def test_get_action(self):
         """Test single action sampling."""
-        net = ActorCritic(state_dim=27, action_dim=7)
-        state = torch.randn(1, 27)
+        net = ActorCritic(state_dim=30, action_dim=7)
+        state = torch.randn(1, 30)
         mask = torch.ones(1, 7)
 
         action, log_prob, value, _ = net.get_action(state, mask)
@@ -35,8 +35,8 @@ class TestActorCritic:
 
     def test_get_action_deterministic(self):
         """Test deterministic action selection."""
-        net = ActorCritic(state_dim=27, action_dim=7)
-        state = torch.randn(1, 27)
+        net = ActorCritic(state_dim=30, action_dim=7)
+        state = torch.randn(1, 30)
         mask = torch.ones(1, 7)
 
         # Deterministic should give same action each time
@@ -45,8 +45,8 @@ class TestActorCritic:
 
     def test_get_action_batch(self):
         """Test batched action sampling."""
-        net = ActorCritic(state_dim=27, action_dim=7)
-        states = torch.randn(8, 27)
+        net = ActorCritic(state_dim=30, action_dim=7)
+        states = torch.randn(8, 30)
         masks = torch.ones(8, 7)
 
         actions, log_probs, values = net.get_action_batch(states, masks)
@@ -57,8 +57,8 @@ class TestActorCritic:
 
     def test_evaluate_actions(self):
         """Test action evaluation for PPO update."""
-        net = ActorCritic(state_dim=27, action_dim=7)
-        states = torch.randn(16, 27)
+        net = ActorCritic(state_dim=30, action_dim=7)
+        states = torch.randn(16, 30)
         actions = torch.randint(0, 7, (16,))
         masks = torch.ones(16, 7)
 
@@ -70,8 +70,8 @@ class TestActorCritic:
 
     def test_action_masking_blocks_invalid(self):
         """Test that masked actions have near-zero probability."""
-        net = ActorCritic(state_dim=27, action_dim=7)
-        state = torch.randn(1, 27)
+        net = ActorCritic(state_dim=30, action_dim=7)
+        state = torch.randn(1, 30)
         # Only action 0 and 3 are valid
         mask = torch.tensor([[1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]])
 
@@ -89,8 +89,8 @@ class TestActorCritic:
 
     def test_masked_entropy_excludes_invalid(self):
         """Test that entropy only considers valid actions."""
-        net = ActorCritic(state_dim=27, action_dim=7)
-        state = torch.randn(1, 27)
+        net = ActorCritic(state_dim=30, action_dim=7)
+        state = torch.randn(1, 30)
 
         # All actions valid - higher entropy
         all_valid_mask = torch.ones(1, 7)
@@ -116,8 +116,8 @@ class TestQNetwork:
 
     def test_forward_shape(self):
         """Test Q-network outputs Q-values for all actions."""
-        net = QNetwork(state_dim=27, action_dim=7)
-        state = torch.randn(4, 27)
+        net = QNetwork(state_dim=30, action_dim=7)
+        state = torch.randn(4, 30)
 
         q_values = net(state)
 
@@ -129,8 +129,8 @@ class TestVNetwork:
 
     def test_forward_shape(self):
         """Test V-network outputs scalar value."""
-        net = VNetwork(state_dim=27)
-        state = torch.randn(4, 27)
+        net = VNetwork(state_dim=30)
+        state = torch.randn(4, 30)
 
         values = net(state)
 
@@ -142,14 +142,14 @@ class TestRecurrentActorCritic:
 
     def test_init_creates_lstm_layer(self):
         """RecurrentActorCritic should have LSTM between encoder and heads."""
-        net = RecurrentActorCritic(state_dim=27, action_dim=7, lstm_hidden_dim=128)
+        net = RecurrentActorCritic(state_dim=30, action_dim=7, lstm_hidden_dim=128)
         # Direct attribute access (no hasattr per CLAUDE.md)
         assert isinstance(net.lstm, torch.nn.LSTM)
         assert net.lstm.hidden_size == 128
 
     def test_get_initial_hidden_returns_correct_shape(self):
         """Initial hidden state should be zeros with correct shape."""
-        net = RecurrentActorCritic(state_dim=27, action_dim=7, lstm_hidden_dim=128)
+        net = RecurrentActorCritic(state_dim=30, action_dim=7, lstm_hidden_dim=128)
         h, c = net.get_initial_hidden(batch_size=4, device=torch.device('cpu'))
         # Shape: [num_layers, batch, hidden]
         assert h.shape == (1, 4, 128)
@@ -159,8 +159,8 @@ class TestRecurrentActorCritic:
 
     def test_forward_single_step_returns_dist_value_hidden(self):
         """Forward with single step should return distribution, value, and new hidden."""
-        net = RecurrentActorCritic(state_dim=27, action_dim=7, lstm_hidden_dim=128)
-        state = torch.randn(4, 27)  # [batch, state_dim]
+        net = RecurrentActorCritic(state_dim=30, action_dim=7, lstm_hidden_dim=128)
+        state = torch.randn(4, 30)  # [batch, state_dim]
         mask = torch.ones(4, 7, dtype=torch.bool)
 
         dist, value, hidden = net.forward(state, mask, hidden=None)
@@ -171,8 +171,8 @@ class TestRecurrentActorCritic:
 
     def test_forward_sequence_returns_sequence_outputs(self):
         """Forward with sequence should return outputs for each timestep."""
-        net = RecurrentActorCritic(state_dim=27, action_dim=7, lstm_hidden_dim=128)
-        states = torch.randn(4, 16, 27)  # [batch, seq_len, state_dim]
+        net = RecurrentActorCritic(state_dim=30, action_dim=7, lstm_hidden_dim=128)
+        states = torch.randn(4, 16, 30)  # [batch, seq_len, state_dim]
         masks = torch.ones(4, 16, 7, dtype=torch.bool)
 
         dist, values, hidden = net.forward(states, masks, hidden=None)
@@ -183,8 +183,8 @@ class TestRecurrentActorCritic:
     def test_hidden_state_persists_across_calls(self):
         """Hidden state from one forward should affect next forward."""
         torch.manual_seed(42)  # Deterministic for reliable test
-        net = RecurrentActorCritic(state_dim=27, action_dim=7, lstm_hidden_dim=128)
-        state = torch.randn(1, 27)
+        net = RecurrentActorCritic(state_dim=30, action_dim=7, lstm_hidden_dim=128)
+        state = torch.randn(1, 30)
         mask = torch.ones(1, 7, dtype=torch.bool)
 
         # First call builds hidden state
@@ -192,7 +192,7 @@ class TestRecurrentActorCritic:
 
         # Build up more context
         for _ in range(5):
-            _, _, hidden1 = net.forward(torch.randn(1, 27), mask, hidden=hidden1)
+            _, _, hidden1 = net.forward(torch.randn(1, 30), mask, hidden=hidden1)
 
         # Compare value with context vs fresh
         _, value_with_context, _ = net.forward(state, mask, hidden=hidden1)
@@ -203,8 +203,8 @@ class TestRecurrentActorCritic:
 
     def test_evaluate_actions_returns_log_probs_for_sequence(self):
         """evaluate_actions should return log probs for all sequence positions."""
-        net = RecurrentActorCritic(state_dim=27, action_dim=7, lstm_hidden_dim=128)
-        states = torch.randn(2, 8, 27)  # [batch, seq, state_dim]
+        net = RecurrentActorCritic(state_dim=30, action_dim=7, lstm_hidden_dim=128)
+        states = torch.randn(2, 8, 30)  # [batch, seq, state_dim]
         actions = torch.randint(0, 7, (2, 8))  # [batch, seq]
         masks = torch.ones(2, 8, 7, dtype=torch.bool)
 
@@ -220,8 +220,8 @@ class TestRecurrentActorCritic:
         if not torch.cuda.is_available():
             pytest.skip("CUDA not available")
 
-        net = RecurrentActorCritic(state_dim=27, action_dim=7).cuda()
-        state = torch.randn(1, 27, device='cuda')
+        net = RecurrentActorCritic(state_dim=30, action_dim=7).cuda()
+        state = torch.randn(1, 30, device='cuda')
         mask = torch.ones(1, 7, dtype=torch.bool, device='cuda')
 
         _, _, hidden = net.forward(state, mask)
@@ -229,20 +229,20 @@ class TestRecurrentActorCritic:
 
     def test_entropy_is_normalized(self):
         """Verify entropy is normalized to [0, 1] range (MaskedCategorical)."""
-        net = RecurrentActorCritic(state_dim=27, action_dim=7, lstm_hidden_dim=128)
-        states = torch.randn(2, 8, 27)
+        net = RecurrentActorCritic(state_dim=30, action_dim=7, lstm_hidden_dim=128)
+        states = torch.randn(2, 8, 30)
         actions = torch.randint(0, 7, (2, 8))
         masks = torch.ones(2, 8, 7, dtype=torch.bool)
 
         log_probs, values, entropy, hidden = net.evaluate_actions(states, actions, masks)
 
-        # Entropy must be in [0, 1] (normalized)
+        # Entropy must be in [0, 1] (normalized, with small epsilon for float precision)
         assert (entropy >= 0).all(), f"Entropy has negative values: {entropy.min()}"
-        assert (entropy <= 1).all(), f"Entropy exceeds 1: {entropy.max()}"
+        assert (entropy <= 1.0 + 1e-6).all(), f"Entropy exceeds 1: {entropy.max()}"
 
     def test_forget_gate_bias_initialized_to_one(self):
         """Verify LSTM forget gate bias is initialized to 1.0 for better gradient flow."""
-        net = RecurrentActorCritic(state_dim=27, action_dim=7, lstm_hidden_dim=128)
+        net = RecurrentActorCritic(state_dim=30, action_dim=7, lstm_hidden_dim=128)
         h = net.lstm_hidden_dim
         # Forget gate is second quarter of bias vector (LSTM gate order: input, forget, cell, output)
         assert (net.lstm.bias_ih_l0.data[h:2*h] == 1.0).all(), "bias_ih forget gate should be 1.0"
@@ -250,7 +250,7 @@ class TestRecurrentActorCritic:
 
     def test_forget_gate_bias_multilayer(self):
         """Verify forget gate bias is 1.0 for all LSTM layers."""
-        net = RecurrentActorCritic(state_dim=27, action_dim=7, lstm_hidden_dim=64, num_lstm_layers=2)
+        net = RecurrentActorCritic(state_dim=30, action_dim=7, lstm_hidden_dim=64, num_lstm_layers=2)
         h = net.lstm_hidden_dim
         # Layer 0
         assert (net.lstm.bias_ih_l0.data[h:2*h] == 1.0).all(), "Layer 0 bias_ih forget gate should be 1.0"

@@ -46,17 +46,24 @@ def load_cifar10(
         testloader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=0)
         return trainloader, testloader
 
-    transform = transforms.Compose([
+    train_transform = transforms.Compose([
+        transforms.RandomCrop(32, padding=4),
+        transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
-        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
+    ])
+
+    test_transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
     ])
 
     try:
         trainset = torchvision.datasets.CIFAR10(
-            root=data_root, train=True, download=True, transform=transform
+            root=data_root, train=True, download=True, transform=train_transform
         )
         testset = torchvision.datasets.CIFAR10(
-            root=data_root, train=False, download=True, transform=transform
+            root=data_root, train=False, download=True, transform=test_transform
         )
     except Exception as exc:
         warnings.warn(f"Falling back to synthetic CIFAR-10 data: {exc}")
