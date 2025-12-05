@@ -65,3 +65,32 @@ class TestMemoryMetrics:
             oom_risk_score=0.8,
         )
         assert unhealthy.is_healthy() is False
+
+    def test_is_healthy_high_fragmentation(self):
+        """High fragmentation is unhealthy even with adequate headroom."""
+        fragmented = MemoryMetrics(
+            allocated_mb=2000,
+            reserved_mb=6000,  # 3x fragmentation ratio
+            max_allocated_mb=2500,
+            fragmentation_ratio=3.0,  # Above default 2.5 threshold
+            utilization=0.3,
+            headroom_mb=4000,  # Plenty of headroom
+            oom_risk_score=0.3,
+        )
+        assert fragmented.is_healthy() is False
+
+    def test_is_healthy_with_custom_thresholds(self):
+        """Can customize health thresholds."""
+        metrics = MemoryMetrics(
+            allocated_mb=5000,
+            reserved_mb=6000,
+            max_allocated_mb=5500,
+            fragmentation_ratio=1.5,
+            utilization=0.5,
+            headroom_mb=150,  # Below default 200MB threshold
+            oom_risk_score=0.2,
+        )
+        # Default thresholds - unhealthy (headroom < 200)
+        assert metrics.is_healthy() is False
+        # Custom thresholds - healthy
+        assert metrics.is_healthy(min_headroom_mb=100.0) is True
