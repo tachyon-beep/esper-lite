@@ -20,16 +20,25 @@ from esper.nissa import get_hub, ConsoleOutput, FileOutput, DirectoryOutput
 def main():
     parser = argparse.ArgumentParser(description="Train Simic RL agents")
 
-    # Global options (apply to all subcommands)
-    parser.add_argument("--telemetry-file", type=str, default=None,
-                        help="Save Nissa telemetry to JSONL file")
-    parser.add_argument("--telemetry-dir", type=str, default=None,
-                        help="Save Nissa telemetry to timestamped folder in this directory")
+    # Parent parser for shared telemetry options
+    telemetry_parent = argparse.ArgumentParser(add_help=False)
+    telemetry_parent.add_argument("--telemetry-file", type=str, default=None,
+                                  help="Save Nissa telemetry to JSONL file")
+    telemetry_parent.add_argument("--telemetry-dir", type=str, default=None,
+                                  help="Save Nissa telemetry to timestamped folder in this directory")
+    telemetry_parent.add_argument(
+        "--telemetry-level",
+        type=str,
+        choices=["off", "minimal", "normal", "debug"],
+        default="normal",
+        help="Telemetry verbosity level (default: normal)",
+    )
 
     subparsers = parser.add_subparsers(dest="algorithm", required=True)
 
     # Heuristic subcommand
-    heur_parser = subparsers.add_parser("heuristic", help="Train with heuristic policy (h-esper)")
+    heur_parser = subparsers.add_parser("heuristic", help="Train with heuristic policy (h-esper)",
+                                        parents=[telemetry_parent])
     heur_parser.add_argument("--episodes", type=int, default=1)
     heur_parser.add_argument("--max-epochs", type=int, default=75)
     heur_parser.add_argument("--max-batches", type=int, default=50, help="Batches per epoch (None=all)")
@@ -38,7 +47,8 @@ def main():
     heur_parser.add_argument("--seed", type=int, default=42)
 
     # PPO subcommand
-    ppo_parser = subparsers.add_parser("ppo", help="Train PPO agent")
+    ppo_parser = subparsers.add_parser("ppo", help="Train PPO agent",
+                                       parents=[telemetry_parent])
     ppo_parser.add_argument("--episodes", type=int, default=100)
     ppo_parser.add_argument("--max-epochs", type=int, default=75)  # Increased from 25 to allow seed fossilization
     ppo_parser.add_argument("--update-every", type=int, default=5)
@@ -71,6 +81,17 @@ def main():
     ppo_parser.add_argument("--no-telemetry", action="store_true", help="Disable telemetry features (27-dim instead of 37-dim)")
 
     args = parser.parse_args()
+
+    # Create TelemetryConfig from CLI argument
+    from esper.simic.telemetry_config import TelemetryConfig, TelemetryLevel
+
+    level_map = {
+        "off": TelemetryLevel.OFF,
+        "minimal": TelemetryLevel.MINIMAL,
+        "normal": TelemetryLevel.NORMAL,
+        "debug": TelemetryLevel.DEBUG,
+    }
+    telemetry_config = TelemetryConfig(level=level_map[args.telemetry_level])
 
     # Wire Nissa console telemetry to the global hub so all
     # lifecycle events (including fossilization) are visible
