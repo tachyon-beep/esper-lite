@@ -275,7 +275,21 @@ class PPOAgent:
             last_value, self.gamma, self.gae_lambda, device=self.device
         )
 
+        # Compute explained variance for value function diagnostics
+        # Uses values from buffer before any updates
+        values_tensor = torch.tensor(
+            [t.value for t in self.buffer.steps],
+            device=self.device,
+        )
+        var_returns = returns.var()
+        if var_returns > 1e-8:
+            explained_variance = 1.0 - (returns - values_tensor).var() / var_returns
+            explained_variance = explained_variance.item()
+        else:
+            explained_variance = 0.0
+
         metrics = defaultdict(list)
+        metrics['explained_variance'] = [explained_variance]  # Single value, not per-batch
         early_stopped = False
 
         for epoch_i in range(self.n_epochs):
