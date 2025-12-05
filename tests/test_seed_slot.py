@@ -326,3 +326,30 @@ def test_morphogenetic_model_to_device_consistency():
     # Verify seed is on correct device
     seed_param = next(model.seed_slot.seed.parameters())
     assert seed_param.device == torch.device("cpu")
+
+
+def test_gradient_isolation_monitor_batch_sync():
+    """Verify check_isolation works correctly with batched computation."""
+    from esper.kasmina.isolation import GradientIsolationMonitor
+
+    monitor = GradientIsolationMonitor()
+
+    # Create simple modules
+    host = torch.nn.Linear(10, 10)
+    seed = torch.nn.Linear(10, 10)
+
+    monitor.register(host, seed)
+
+    # Simulate gradients
+    for p in host.parameters():
+        p.grad = torch.randn_like(p) * 0.01
+    for p in seed.parameters():
+        p.grad = torch.randn_like(p)
+
+    is_isolated, metrics = monitor.check_isolation()
+
+    # Should detect non-zero host gradients
+    assert not is_isolated
+    assert metrics["host_grad_norm"] > 0
+    assert metrics["seed_grad_norm"] > 0
+    assert metrics["violations"] == 1
