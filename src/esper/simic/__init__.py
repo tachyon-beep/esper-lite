@@ -99,6 +99,10 @@ from esper.simic.debug_telemetry import (
 from esper.simic.action_telemetry import (
     ActionTelemetry,
 )
+from esper.simic.anomaly_detector import (
+    AnomalyDetector,
+    AnomalyReport,
+)
 
 # NOTE: Heavy modules imported on demand:
 #   from esper.simic.ppo import PPOAgent
@@ -168,4 +172,6 @@ __all__ = [
     "check_numerical_stability",
     "RatioExplosionDiagnostic",
     "ActionTelemetry",
+    "AnomalyDetector",
+    "AnomalyReport",
 ]
