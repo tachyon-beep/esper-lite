@@ -258,3 +258,22 @@ class TestRecurrentActorCritic:
         # Layer 1
         assert (net.lstm.bias_ih_l1.data[h:2*h] == 1.0).all(), "Layer 1 bias_ih forget gate should be 1.0"
         assert (net.lstm.bias_hh_l1.data[h:2*h] == 1.0).all(), "Layer 1 bias_hh forget gate should be 1.0"
+
+
+def test_attention_seed_small_channels():
+    """AttentionSeed should handle small channel counts gracefully."""
+    from esper.kasmina.blueprints.cnn import create_attention_seed
+
+    # This should not crash - channels=2 with reduction=4 would give 0 features
+    seed = create_attention_seed(channels=2, reduction=4)
+
+    # Verify it works
+    x = torch.randn(1, 2, 8, 8)
+    out = seed(x)
+    assert out.shape == x.shape
+
+    # Also test edge case: channels=1
+    seed_tiny = create_attention_seed(channels=1, reduction=4)
+    x_tiny = torch.randn(1, 1, 8, 8)
+    out_tiny = seed_tiny(x_tiny)
+    assert out_tiny.shape == x_tiny.shape

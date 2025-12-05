@@ -79,10 +79,12 @@ def create_attention_seed(channels: int, reduction: int = 4) -> nn.Module:
         def __init__(self, channels: int, reduction: int):
             super().__init__()
             self.avg_pool = nn.AdaptiveAvgPool2d(1)
+            # Ensure reduced dimension is at least 1
+            reduced = max(1, channels // reduction)
             self.fc = nn.Sequential(
-                nn.Linear(channels, channels // reduction, bias=False),
+                nn.Linear(channels, reduced, bias=False),
                 nn.ReLU(inplace=True),
-                nn.Linear(channels // reduction, channels, bias=False),
+                nn.Linear(reduced, channels, bias=False),
                 nn.Sigmoid(),
             )
 
