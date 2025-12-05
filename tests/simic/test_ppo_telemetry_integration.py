@@ -57,15 +57,20 @@ class TestPPOTelemetryIntegration:
     def test_debug_level_adds_extra_diagnostics(
         self, agent_with_telemetry, filled_buffer
     ):
-        """DEBUG level adds extra diagnostic info."""
+        """DEBUG level adds extra diagnostic info beyond NORMAL level."""
         config = TelemetryConfig(level=TelemetryLevel.DEBUG)
         metrics = agent_with_telemetry.update(
             last_value=0.0,
             telemetry_config=config,
         )
 
-        # Should have debug-level metrics
-        assert "value_function_telemetry" in metrics or "explained_variance" in metrics
+        # Should have NORMAL level metrics
+        assert "ratio_mean" in metrics
+        assert "explained_variance" in metrics
+
+        # Should ALSO have DEBUG-specific metrics
+        assert "debug_gradient_stats" in metrics
+        assert "debug_numerical_stability" in metrics
 
     def test_debug_level_collects_layer_gradients(
         self, agent_with_telemetry, filled_buffer
