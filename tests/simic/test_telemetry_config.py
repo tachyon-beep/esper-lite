@@ -58,3 +58,15 @@ class TestTelemetryConfig:
         config.tick_escalation()
         assert config.escalation_epochs_remaining == 0
         assert config.effective_level == TelemetryLevel.NORMAL
+
+    def test_should_collect_when_off(self):
+        """should_collect returns False for all categories when OFF."""
+        config = TelemetryConfig(level=TelemetryLevel.OFF)
+        assert config.should_collect("ops_normal") is False
+        assert config.should_collect("debug") is False
+
+    def test_should_collect_when_minimal(self):
+        """MINIMAL level collects neither ops_normal nor debug."""
+        config = TelemetryConfig(level=TelemetryLevel.MINIMAL)
+        assert config.should_collect("ops_normal") is False
+        assert config.should_collect("debug") is False
