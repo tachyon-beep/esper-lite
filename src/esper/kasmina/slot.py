@@ -12,7 +12,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, TYPE_CHECKING
-import pickle
 
 # Debug flag for STE gradient assertions (set ESPER_DEBUG_STE=1 to enable)
 _DEBUG_STE = os.environ.get("ESPER_DEBUG_STE", "").lower() in ("1", "true", "yes")
