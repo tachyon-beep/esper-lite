@@ -8,6 +8,28 @@ from typing import Callable
 import torch.nn as nn
 
 
+def _invalidate_action_cache(topology: str | None = None) -> None:
+    """Invalidate Leyline action enum cache for topology.
+
+    Best-effort operation that fails silently during import cycles.
+
+    Args:
+        topology: Specific topology to invalidate, or None to clear all.
+    """
+    try:
+        from esper.leyline import actions as leyline_actions
+    except ImportError:
+        return
+
+    try:
+        if topology is None:
+            leyline_actions._action_enum_cache.clear()
+        else:
+            leyline_actions._action_enum_cache.pop(topology, None)
+    except AttributeError:
+        pass  # Cache doesn't exist yet
+
+
 @dataclass(frozen=True, slots=True)
 class BlueprintSpec:
     """Specification for a registered blueprint."""
@@ -48,13 +70,7 @@ class BlueprintRegistry:
                 param_estimate=param_estimate,
                 description=description,
             )
-            # Invalidate cached action enums for this topology so new blueprints appear
-            try:
-                from esper.leyline import actions as leyline_actions  # Local import to avoid cycle
-                leyline_actions._action_enum_cache.pop(topology, None)
-            except (ImportError, AttributeError, KeyError):
-                # Cache invalidation best-effort; import cycle or missing cache is acceptable
-                pass
+            _invalidate_action_cache(topology)
             return factory
 
         return decorator
@@ -90,21 +106,13 @@ class BlueprintRegistry:
         """Remove a blueprint from the registry (primarily for tests)."""
         key = f"{topology}:{name}"
         cls._blueprints.pop(key, None)
-        try:
-            from esper.leyline import actions as leyline_actions  # Local import to avoid cycle
-            leyline_actions._action_enum_cache.pop(topology, None)
-        except (ImportError, AttributeError, KeyError):
-            pass
+        _invalidate_action_cache(topology)
 
     @classmethod
     def reset(cls) -> None:
         """Reset registry to empty state (for test cleanup)."""
         cls._blueprints.clear()
-        try:
-            from esper.leyline import actions as leyline_actions
-            leyline_actions._action_enum_cache.clear()
-        except (ImportError, AttributeError, KeyError):
-            pass
+        _invalidate_action_cache()
 
 
 __all__ = ["BlueprintSpec", "BlueprintRegistry"]
