@@ -612,6 +612,14 @@ class SeedSlot(nn.Module):
         Used for differential validation to measure true seed contribution
         by comparing real output (current alpha) vs host-only (alpha=0).
 
+        Warning:
+            NOT THREAD-SAFE. Do not use during concurrent forward passes
+            or with DataParallel/DistributedDataParallel. Use model.eval()
+            and single-threaded validation only.
+
+            Nested calls are NOT supported - the inner override will be
+            clobbered when the outer context exits.
+
         Args:
             value: Alpha value to force (typically 0.0 for host-only baseline)
 
