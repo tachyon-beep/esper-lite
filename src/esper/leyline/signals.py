@@ -24,7 +24,7 @@ class TensorSchema(IntEnum):
     Maps feature names to tensor indices for vectorized PPO training.
     Use this to slice state vectors by name without string lookups.
 
-    Total: 30 base features (V3 with host state)
+    Total: 35 base features (V3 with host state + blueprint one-hot)
     """
     # Core state (2)
     EPOCH = 0
@@ -72,9 +72,16 @@ class TensorSchema(IntEnum):
     HOST_GRAD_NORM = 28
     HOST_LEARNING_PHASE = 29
 
+    # Blueprint one-hot encoding (5) - V3.1: blueprint-specific policies
+    BLUEPRINT_0 = 30  # First blueprint (e.g., norm)
+    BLUEPRINT_1 = 31  # Second blueprint (e.g., attention)
+    BLUEPRINT_2 = 32  # Third blueprint (e.g., conv_enhance)
+    BLUEPRINT_3 = 33  # Fourth blueprint (e.g., residual)
+    BLUEPRINT_4 = 34  # Fifth blueprint (e.g., dropout)
 
-# Total feature count for V3 (with host state)
-TENSOR_SCHEMA_SIZE = 30
+
+# Total feature count for V3.1 (with host state + blueprint one-hot)
+TENSOR_SCHEMA_SIZE = 35
 
 
 class FastTrainingSignals(NamedTuple):

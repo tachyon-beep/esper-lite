@@ -86,10 +86,10 @@ class TestPPOFeatureCompatibility:
 
         # Stack into batch
         batch_tensor = torch.tensor(all_features, dtype=torch.float32)
-        assert batch_tensor.shape == (batch_size, 30)
+        assert batch_tensor.shape == (batch_size, 35)
 
         # Create agent
-        agent = PPOAgent(state_dim=30, action_dim=7, device='cpu')
+        agent = PPOAgent(state_dim=35, action_dim=7, device='cpu')
         mask = _all_valid_mask(batch_size)
 
         # Should handle batch without errors
@@ -105,8 +105,8 @@ class TestPPOForwardPass:
 
     def test_forward_pass_returns_valid_distribution(self):
         """Forward pass should return valid categorical distribution."""
-        agent = PPOAgent(state_dim=30, action_dim=7, device='cpu')
-        state = torch.randn(1, 30)
+        agent = PPOAgent(state_dim=35, action_dim=7, device='cpu')
+        state = torch.randn(1, 35)
         mask = _all_valid_mask()
 
         with torch.no_grad():
@@ -127,9 +127,9 @@ class TestPPOForwardPass:
 
     def test_forward_pass_value_is_scalar(self):
         """Value function should output scalar per state."""
-        agent = PPOAgent(state_dim=30, action_dim=7, device='cpu')
+        agent = PPOAgent(state_dim=35, action_dim=7, device='cpu')
         batch_size = 8
-        states = torch.randn(batch_size, 30)
+        states = torch.randn(batch_size, 35)
         mask = _all_valid_mask(batch_size)
 
         with torch.no_grad():
@@ -139,8 +139,8 @@ class TestPPOForwardPass:
 
     def test_forward_pass_deterministic(self):
         """Same input should produce same output."""
-        agent = PPOAgent(state_dim=30, action_dim=7, device='cpu')
-        state = torch.randn(1, 30)
+        agent = PPOAgent(state_dim=35, action_dim=7, device='cpu')
+        state = torch.randn(1, 35)
         mask = _all_valid_mask()
 
         # Set to eval mode for deterministic behavior
@@ -156,12 +156,12 @@ class TestPPOForwardPass:
 
     def test_forward_pass_different_inputs_different_outputs(self):
         """Different inputs should produce different outputs."""
-        agent = PPOAgent(state_dim=30, action_dim=7, device='cpu')
+        agent = PPOAgent(state_dim=35, action_dim=7, device='cpu')
         mask = _all_valid_mask()
 
         # Create two very different states to ensure outputs differ
-        state1 = torch.zeros(1, 30)
-        state2 = torch.ones(1, 30) * 10.0  # Very different from zeros
+        state1 = torch.zeros(1, 35)
+        state2 = torch.ones(1, 35) * 10.0  # Very different from zeros
 
         with torch.no_grad():
             dist1, value1 = agent.network(state1, mask)
@@ -343,10 +343,10 @@ class TestPPOEndToEnd:
 
         # Extract features with telemetry (will be zero-padded)
         features = signals_to_features(signals, model=None, use_telemetry=True)
-        assert len(features) == 40, "Should have 40 features with telemetry"
+        assert len(features) == 45, "Should have 45 features with telemetry"
 
         # Create agent
-        agent = PPOAgent(state_dim=40, action_dim=7, device='cpu')
+        agent = PPOAgent(state_dim=45, action_dim=7, device='cpu')
 
         # Get action
         state_tensor = torch.tensor([features], dtype=torch.float32)

@@ -61,11 +61,11 @@ def safe(v, default: float = 0.0, max_val: float = 100.0) -> float:
 
 
 # =============================================================================
-# Base Features (V3 - 30 dimensions)
+# Base Features (V3 - 35 dimensions)
 # =============================================================================
 
 def obs_to_base_features(obs: dict, max_epochs: int = 200) -> list[float]:
-    """Extract V3-style base features (30 dims) with pre-normalization.
+    """Extract V3-style base features (35 dims) with pre-normalization.
 
     Pre-normalizes features to ~[0, 1] range for early training stability.
     This reduces the burden on RunningMeanStd during the initial warmup phase
@@ -81,16 +81,26 @@ def obs_to_base_features(obs: dict, max_epochs: int = 200) -> list[float]:
                   seed_alpha, seed_improvement, seed_counterfactual (6)
     - Slots: available_slots (1)
     - Host state: host_grad_norm, host_learning_phase (2)
+    - Blueprint: one-hot encoding (5) [NEW - DRL Expert recommendation]
 
-    Total: 30 features
+    Total: 35 features
 
     Args:
         obs: Observation dictionary from TrainingSnapshot.to_dict()
         max_epochs: Maximum training epochs (for normalization)
 
     Returns:
-        List of 30 floats, pre-normalized to ~[0, 1] range
+        List of 35 floats, pre-normalized to ~[0, 1] range
     """
+    # Blueprint one-hot encoding (DRL Expert recommendation)
+    # blueprint_id: 0=none, 1=first blueprint, 2=second, etc.
+    # One-hot avoids imposing artificial ordinal relationships on categorical data
+    blueprint_id = obs.get('seed_blueprint_id', 0)
+    num_blueprints = obs.get('num_blueprints', 5)
+    blueprint_one_hot = [0.0] * num_blueprints
+    if blueprint_id > 0 and blueprint_id <= num_blueprints:
+        blueprint_one_hot[blueprint_id - 1] = 1.0  # 1-indexed to 0-indexed
+
     return [
         # Timing features
         float(obs['epoch']) / max_epochs,                     # [0, 1]
@@ -121,6 +131,8 @@ def obs_to_base_features(obs: dict, max_epochs: int = 200) -> list[float]:
         # Host state features
         safe(obs.get('host_grad_norm', 0.0), 0.0, max_val=10.0) / 10.0,  # [0, 1] clamped
         obs.get('host_learning_phase', 0.0),                 # Already [0, 1]
+        # Blueprint features (NEW - one-hot encoding)
+        *blueprint_one_hot,                                   # 5 features, exactly one is 1.0 or all zeros
     ]
 
 
