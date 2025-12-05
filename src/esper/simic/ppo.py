@@ -255,7 +255,12 @@ class PPOAgent:
             reward=reward, done=done, action_mask=action_mask, env_id=env_id,
         )
 
-    def update(self, last_value: float = 0.0, clear_buffer: bool = True) -> dict:
+    def update(
+        self,
+        last_value: float = 0.0,
+        clear_buffer: bool = True,
+        telemetry_config: "TelemetryConfig | None" = None,
+    ) -> dict:
         """Perform PPO update.
 
         Args:
@@ -263,10 +268,16 @@ class PPOAgent:
             clear_buffer: Whether to clear the rollout buffer after update.
                 Set to False if calling multiple times on the same data
                 (e.g., for higher sample efficiency via ppo_updates_per_batch).
+            telemetry_config: Optional telemetry configuration for diagnostic collection.
+                If None, creates default TelemetryConfig(level=TelemetryLevel.NORMAL).
 
         Returns:
             Dictionary of training metrics.
         """
+        from esper.simic.telemetry_config import TelemetryConfig, TelemetryLevel
+
+        if telemetry_config is None:
+            telemetry_config = TelemetryConfig(level=TelemetryLevel.NORMAL)
         if len(self.buffer) == 0:
             return {}
 
