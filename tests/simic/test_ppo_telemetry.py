@@ -119,3 +119,27 @@ class TestValueFunctionTelemetry:
         bad_values = torch.tensor([2.5, 2.5, 2.5, 2.5])
         unhealthy = ValueFunctionTelemetry.from_tensors(returns, bad_values)
         assert unhealthy.explained_variance < 0.1
+
+    def test_explained_variance_zero_variance_returns(self):
+        """Handles zero-variance returns without division error."""
+        import torch
+
+        # All returns identical - zero variance
+        returns = torch.tensor([2.0, 2.0, 2.0, 2.0])
+        values = torch.tensor([1.9, 2.1, 2.0, 2.0])
+
+        telemetry = ValueFunctionTelemetry.from_tensors(returns, values)
+        # Should gracefully handle and return 0.0
+        assert telemetry.explained_variance == 0.0
+
+    def test_from_tensors_with_advantages(self):
+        """from_tensors correctly handles advantages parameter."""
+        import torch
+
+        returns = torch.tensor([1.0, 2.0, 3.0, 4.0])
+        values = torch.tensor([1.1, 1.9, 3.1, 3.9])
+        advantages = torch.tensor([0.5, -0.3, 0.2, 0.1])
+
+        telemetry = ValueFunctionTelemetry.from_tensors(returns, values, advantages)
+        assert abs(telemetry.advantage_mean - 0.125) < 0.01  # mean of advantages
+        assert telemetry.advantage_std > 0
