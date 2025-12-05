@@ -49,6 +49,17 @@ class TelemetryEventType(Enum):
     COMMAND_EXECUTED = auto()
     COMMAND_FAILED = auto()
 
+    # === NEW: PPO Training Events (Ops Normal) ===
+    PPO_UPDATE_COMPLETED = auto()
+    MEMORY_WARNING = auto()
+    REWARD_HACKING_SUSPECTED = auto()
+
+    # === NEW: Debug Events (triggered by anomalies) ===
+    RATIO_EXPLOSION_DETECTED = auto()
+    VALUE_COLLAPSE_DETECTED = auto()
+    GRADIENT_PATHOLOGY_DETECTED = auto()
+    NUMERICAL_INSTABILITY_DETECTED = auto()
+
 
 @dataclass
 class TelemetryEvent:
