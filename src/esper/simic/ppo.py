@@ -17,6 +17,8 @@ import torch.nn.functional as F
 from esper.simic.buffers import RolloutBuffer, RecurrentRolloutBuffer
 from esper.simic.networks import ActorCritic, RecurrentActorCritic
 from esper.simic.features import safe
+from esper.leyline import TelemetryEvent, TelemetryEventType
+from esper.nissa import get_hub
 import logging
 
 logger = logging.getLogger(__name__)
@@ -450,6 +452,33 @@ class PPOAgent:
                 anomaly_detected = True
                 if telemetry_config.auto_escalate_on_anomaly:
                     telemetry_config.escalate_temporarily()
+
+                # Emit specific anomaly events
+                hub = get_hub()
+                for anomaly_type in anomaly_report.anomaly_types:
+                    if anomaly_type == "ratio_explosion":
+                        event_type = TelemetryEventType.RATIO_EXPLOSION_DETECTED
+                    elif anomaly_type == "ratio_collapse":
+                        event_type = TelemetryEventType.RATIO_EXPLOSION_DETECTED  # Same event for both
+                    elif anomaly_type == "value_collapse":
+                        event_type = TelemetryEventType.VALUE_COLLAPSE_DETECTED
+                    elif anomaly_type == "numerical_instability":
+                        event_type = TelemetryEventType.NUMERICAL_INSTABILITY_DETECTED
+                    else:
+                        event_type = TelemetryEventType.GRADIENT_ANOMALY
+
+                    hub.emit(TelemetryEvent(
+                        event_type=event_type,
+                        data={
+                            "anomaly_type": anomaly_type,
+                            "detail": anomaly_report.details.get(anomaly_type, ""),
+                            "ratio_max": max_ratio,
+                            "ratio_min": min_ratio,
+                            "explained_variance": explained_variance,
+                            "train_steps": self.train_steps,
+                        },
+                        severity="warning",
+                    ))
 
         # Tick escalation countdown
         telemetry_config.tick_escalation()

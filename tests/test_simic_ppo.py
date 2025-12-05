@@ -390,3 +390,161 @@ class TestRecurrentPPOAgent:
             value_coef=0.25,  # Non-default value
         )
         assert agent.value_coef == 0.25
+
+
+class TestPPOAnomalyTelemetry:
+    """Test that PPO emits anomaly telemetry events."""
+
+    def test_ratio_explosion_emits_telemetry(self):
+        """Ratio explosion triggers RATIO_EXPLOSION_DETECTED event."""
+        from esper.leyline import TelemetryEventType
+        from esper.nissa import get_hub
+        from esper.simic.anomaly_detector import AnomalyDetector
+
+        # Capture emitted events
+        captured_events = []
+        hub = get_hub()
+
+        class CaptureBackend:
+            def emit(self, event):
+                captured_events.append(event)
+
+        hub.add_backend(CaptureBackend())
+
+        # Create agent with very tight ratio threshold to trigger explosion
+        agent = PPOAgent(
+            state_dim=10,
+            action_dim=5,
+            device='cpu',
+        )
+
+        # Add steps that will cause ratio explosion
+        for _ in range(10):
+            state = torch.randn(10)
+            agent.buffer.add(
+                state=state,
+                action=0,
+                log_prob=-5.0,  # Very low log prob will cause high ratio
+                value=0.0,
+                reward=1.0,
+                done=False,
+                action_mask=torch.ones(5),
+            )
+
+        # Update should detect ratio explosion
+        agent.update()
+
+        # Check for RATIO_EXPLOSION_DETECTED event
+        explosion_events = [
+            e for e in captured_events
+            if e.event_type == TelemetryEventType.RATIO_EXPLOSION_DETECTED
+        ]
+        assert len(explosion_events) >= 1, f"Expected RATIO_EXPLOSION_DETECTED, got: {[e.event_type for e in captured_events]}"
+        assert "ratio_max" in explosion_events[0].data
+
+    def test_value_collapse_emits_telemetry(self):
+        """Value collapse triggers VALUE_COLLAPSE_DETECTED event."""
+        from esper.leyline import TelemetryEventType
+        from esper.nissa import get_hub
+        from esper.simic.anomaly_detector import AnomalyDetector
+
+        # Capture emitted events
+        captured_events = []
+        hub = get_hub()
+
+        class CaptureBackend:
+            def emit(self, event):
+                captured_events.append(event)
+
+        hub.add_backend(CaptureBackend())
+
+        # Create agent with very tight explained variance threshold
+        agent = PPOAgent(
+            state_dim=10,
+            action_dim=5,
+            device='cpu',
+        )
+
+        # Add steps with constant values (will cause low explained variance)
+        for _ in range(10):
+            state = torch.randn(10)
+            agent.buffer.add(
+                state=state,
+                action=0,
+                log_prob=-1.0,
+                value=0.0,  # Constant value
+                reward=0.0,  # No reward
+                done=False,
+                action_mask=torch.ones(5),
+            )
+
+        # Update should detect value collapse
+        agent.update()
+
+        # Check for VALUE_COLLAPSE_DETECTED event
+        collapse_events = [
+            e for e in captured_events
+            if e.event_type == TelemetryEventType.VALUE_COLLAPSE_DETECTED
+        ]
+        assert len(collapse_events) >= 1, f"Expected VALUE_COLLAPSE_DETECTED, got: {[e.event_type for e in captured_events]}"
+        assert "explained_variance" in collapse_events[0].data
+
+    def test_all_anomaly_event_data_fields_present(self):
+        """Verify all anomaly events include required data fields."""
+        from esper.leyline import TelemetryEventType
+        from esper.nissa import get_hub
+
+        # Capture emitted events
+        captured_events = []
+        hub = get_hub()
+
+        class CaptureBackend:
+            def emit(self, event):
+                captured_events.append(event)
+
+        hub.add_backend(CaptureBackend())
+
+        # Create agent
+        agent = PPOAgent(
+            state_dim=10,
+            action_dim=5,
+            device='cpu',
+        )
+
+        # Add steps that will trigger ratio explosion
+        for _ in range(10):
+            state = torch.randn(10)
+            agent.buffer.add(
+                state=state,
+                action=0,
+                log_prob=-5.0,
+                value=0.0,
+                reward=1.0,
+                done=False,
+                action_mask=torch.ones(5),
+            )
+
+        # Update should detect anomaly
+        agent.update()
+
+        # Check data fields
+        anomaly_events = [
+            e for e in captured_events
+            if e.event_type in [
+                TelemetryEventType.RATIO_EXPLOSION_DETECTED,
+                TelemetryEventType.VALUE_COLLAPSE_DETECTED,
+                TelemetryEventType.NUMERICAL_INSTABILITY_DETECTED,
+                TelemetryEventType.GRADIENT_ANOMALY,
+            ]
+        ]
+        assert len(anomaly_events) >= 1
+
+        for event in anomaly_events:
+            # All anomaly events should have these fields
+            assert "anomaly_type" in event.data
+            assert "detail" in event.data
+            assert "ratio_max" in event.data
+            assert "ratio_min" in event.data
+            assert "explained_variance" in event.data
+            assert "train_steps" in event.data
+            assert event.severity == "warning"
