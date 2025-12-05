@@ -148,6 +148,7 @@ def main():
                 resume_path=args.resume,
                 seed=args.seed,
                 num_workers=args.num_workers,
+                telemetry_config=telemetry_config,
             )
         else:
             from esper.simic.training import train_ppo
@@ -169,6 +170,7 @@ def main():
                 save_path=args.save,
                 resume_path=args.resume,
                 seed=args.seed,
+                telemetry_config=telemetry_config,
             )
 
 if __name__ == "__main__":

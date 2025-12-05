@@ -169,6 +169,7 @@ def train_ppo_vectorized(
     recurrent: bool = False,
     lstm_hidden_dim: int = 128,
     chunk_length: int = 25,  # Must match max_epochs default (25)
+    telemetry_config: "TelemetryConfig | None" = None,
 ) -> tuple[PPOAgent, list[dict]]:
     """Train PPO with vectorized environments using INVERTED CONTROL FLOW.
 
@@ -1045,7 +1046,7 @@ def train_ppo_vectorized(
             else:
                 for update_i in range(ppo_updates_per_batch):
                     is_last_update = (update_i == ppo_updates_per_batch - 1)
-                    update_metrics = agent.update(last_value=0.0, clear_buffer=is_last_update)
+                    update_metrics = agent.update(last_value=0.0, clear_buffer=is_last_update, telemetry_config=telemetry_config)
                     if update_i == 0:
                         metrics = update_metrics
                     else:

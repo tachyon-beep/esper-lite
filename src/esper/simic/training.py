@@ -458,6 +458,7 @@ def train_ppo(
     save_path: str | None = None,
     resume_path: str | None = None,
     seed: int | None = None,
+    telemetry_config: "TelemetryConfig | None" = None,
 ):
     """Train PPO agent."""
     from esper.simic.ppo import PPOAgent
@@ -529,7 +530,7 @@ def train_ppo(
             recent_rewards.pop(0)
 
         if ep % update_every == 0 or ep == n_episodes:
-            metrics = agent.update(last_value=0.0)
+            metrics = agent.update(last_value=0.0, telemetry_config=telemetry_config)
 
             avg_acc = sum(recent_accuracies) / len(recent_accuracies)
             avg_reward = sum(recent_rewards) / len(recent_rewards)
