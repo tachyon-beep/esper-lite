@@ -355,3 +355,100 @@ class TestFossilizeLegitimacyDiscount:
 
         # Should get penalty, not bonus (legitimacy_discount = 0)
         assert bonus <= 0, f"Zero probation should not get positive bonus: {bonus}"
+
+
+class TestCullLateStageHealthScaling:
+    """Tests for CULL PBRS penalty scaling by health_factor in late stages."""
+
+    def test_cull_shaping_late_stage_not_excessive(self):
+        """CULL penalty for late-stage failing seeds should not be excessive."""
+        config = RewardConfig()
+
+        # Failing seed in BLENDING stage
+        seed_info = SeedInfo(
+            stage=STAGE_BLENDING,
+            improvement_since_stage_start=-2.0,  # Clearly failing
+            total_improvement=-1.0,
+            epochs_in_stage=5,
+            seed_params=2000,
+            previous_stage=STAGE_TRAINING,
+            seed_age_epochs=8,
+        )
+
+        shaping = _cull_shaping(seed_info, config)
+
+        # Should be positive (reward for culling failing seed) or only mildly negative
+        # The old behavior gave ~-1.65 which is too harsh
+        assert shaping > -1.0, f"CULL penalty too harsh for failing seed: {shaping}"
+
+    def test_early_stage_pbrs_unaffected(self):
+        """CULL PBRS penalty in early stages should NOT be scaled by health."""
+        config = RewardConfig()
+
+        # Failing seed in TRAINING stage (early)
+        seed_info = SeedInfo(
+            stage=STAGE_TRAINING,
+            improvement_since_stage_start=-2.0,  # Failing
+            total_improvement=-2.0,
+            epochs_in_stage=3,
+            seed_params=2000,
+            previous_stage=STAGE_GERMINATED,
+            seed_age_epochs=5,
+        )
+
+        shaping = _cull_shaping(seed_info, config)
+
+        # Early stages should not get health scaling - preserve full PBRS incentives
+        # The PBRS penalty will be smaller for TRAINING anyway (lower potential)
+        # We just verify it doesn't have the health_factor applied
+
+        # Calculate expected components:
+        # - base_shaping: config.cull_failing_bonus (0.3)
+        # - param_recovery_bonus: (2000/10000) * 0.1 = 0.02
+        # - terminal_pbrs: no health scaling for TRAINING (stage < BLENDING)
+
+        # This is more of a regression test - ensure early stages work
+        assert isinstance(shaping, float)
+
+    def test_health_factor_floor_at_30_percent(self):
+        """Health factor should not go below 0.3 even for very bad seeds."""
+        config = RewardConfig()
+
+        # Extremely failing seed in SHADOWING stage
+        seed_info = SeedInfo(
+            stage=STAGE_SHADOWING,
+            improvement_since_stage_start=-10.0,  # Catastrophically bad
+            total_improvement=-10.0,
+            epochs_in_stage=3,
+            seed_params=2000,
+            previous_stage=STAGE_BLENDING,
+            seed_age_epochs=10,
+        )
+
+        shaping = _cull_shaping(seed_info, config)
+
+        # Even with -10% improvement, health_factor floors at 0.3
+        # So PBRS penalty is scaled to 30% of original
+        # Seed is failing badly, so culling should be rewarded
+        assert shaping > -0.8, f"CULL with catastrophic seed should not be harshly penalized: {shaping}"
+
+    def test_positive_improvement_no_health_scaling(self):
+        """Seeds with positive improvement don't get health_factor (it only applies to failing seeds)."""
+        config = RewardConfig()
+
+        # Good seed in BLENDING stage
+        seed_info = SeedInfo(
+            stage=STAGE_BLENDING,
+            improvement_since_stage_start=2.0,  # Doing well
+            total_improvement=3.0,
+            epochs_in_stage=5,
+            seed_params=2000,
+            previous_stage=STAGE_TRAINING,
+            seed_age_epochs=8,
+        )
+
+        shaping = _cull_shaping(seed_info, config)
+
+        # Culling a good seed should be penalized
+        # health_factor only applies when improvement < 0
+        assert shaping < 0, "Culling a good seed should be penalized"

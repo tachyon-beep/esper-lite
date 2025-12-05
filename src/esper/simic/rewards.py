@@ -557,6 +557,18 @@ def _cull_shaping(seed_info: SeedInfo | None, config: RewardConfig) -> float:
     Attempting to cull a FOSSILIZED seed is a wasted action (no-op) and penalized.
 
     Age penalty prevents "germinate then immediately cull" anti-pattern.
+    PBRS penalty is scaled by seed health FOR LATE STAGES ONLY - this preserves
+    full PBRS incentives for early-stage decisions while allowing exits from
+    failing late-stage seeds.
+
+    Note on PBRS Deviation (DRL Expert review):
+        The health_factor scaling intentionally deviates from pure potential-based
+        reward shaping (Ng et al., 1999) which would preserve optimal policy guarantees.
+        We accept this deviation because:
+        1. Failing seeds trapped in late stages represent a pathological case
+        2. The 0.3 floor prevents gaming by intentionally tanking seeds
+        3. Other shaping terms (base_shaping, param_recovery) are already non-PBRS
+        4. Early stages (< BLENDING) retain full PBRS to preserve learning signal
     """
     if seed_info is None:
         return config.cull_no_seed_penalty
@@ -595,16 +607,24 @@ def _cull_shaping(seed_info: SeedInfo | None, config: RewardConfig) -> float:
     param_recovery_bonus = min(0.5, (seed_params / 10_000) * config.cull_param_recovery_weight)
 
     # Terminal PBRS correction: account for potential loss from destroying the seed
-    # With flattened potentials (max 7.5), this penalty is now much smaller
     current_obs = {
         "has_active_seed": 1,
         "seed_stage": stage,
         "seed_epochs_in_stage": seed_info.epochs_in_stage,
     }
     phi_current = compute_seed_potential(current_obs)
+
+    # Health discount: failing seeds in LATE STAGES get reduced PBRS penalty
+    # (DRL Expert recommendation: only apply for stage >= BLENDING to preserve
+    # early-stage PBRS incentives where the penalty is smaller anyway)
+    health_factor = 1.0
+    if improvement < 0 and stage >= STAGE_BLENDING:
+        # Scale from 1.0 (improvement=0) to 0.3 (improvement=-3 or worse)
+        health_factor = max(0.3, 1.0 + improvement / 3.0)
+
     # PBRS: gamma * phi(next) - phi(current) where next = no seed (phi=0)
     pbrs_correction = 0.99 * 0.0 - phi_current  # = -phi_current
-    terminal_pbrs = config.seed_potential_weight * pbrs_correction
+    terminal_pbrs = config.seed_potential_weight * pbrs_correction * health_factor
 
     return base_shaping + param_recovery_bonus + terminal_pbrs
 
