@@ -7,10 +7,58 @@ during comparison and training loops.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, asdict
 from typing import Iterator
 
 import torch
 import torch.nn as nn
+
+
+@dataclass(slots=True)
+class GradientHealthMetrics:
+    """Enhanced gradient health metrics for Ops Normal monitoring.
+
+    Extends basic gradient stats with layer-wise information
+    and numerical stability indicators.
+    """
+
+    # Basic stats (existing)
+    gradient_norm: float
+    gradient_health: float
+    has_vanishing: bool
+    has_exploding: bool
+
+    # Layer-wise summary
+    min_layer_norm: float
+    max_layer_norm: float
+    norm_ratio: float  # max/min - high ratio indicates imbalance
+
+    # Quality indicators
+    zero_grad_fraction: float
+    nan_count: int
+    inf_count: int
+
+    def is_healthy(
+        self,
+        max_norm_ratio: float = 1000.0,
+        max_zero_fraction: float = 0.5,
+    ) -> bool:
+        """Check if gradients indicate healthy training.
+
+        Returns:
+            True if gradients are healthy
+        """
+        return (
+            self.nan_count == 0
+            and self.inf_count == 0
+            and self.norm_ratio < max_norm_ratio
+            and self.zero_grad_fraction < max_zero_fraction
+            and not self.has_exploding
+        )
+
+    def to_dict(self) -> dict:
+        """Convert to dict for TelemetryEvent data field."""
+        return asdict(self)
 
 
 class SeedGradientCollector:
@@ -151,25 +199,94 @@ def collect_seed_gradients(
     seed_parameters: Iterator[nn.Parameter],
     vanishing_threshold: float = 1e-7,
     exploding_threshold: float = 100.0,
-) -> dict:
-    """Convenience function to collect gradient stats (sync version).
-
-    WARNING: Calls .item() which forces CPU-GPU sync. Use collect_seed_gradients_async()
-    inside CUDA stream contexts to avoid blocking.
+    return_enhanced: bool = False,
+) -> dict | GradientHealthMetrics:
+    """Convenience function to collect gradient stats.
 
     Args:
         seed_parameters: Iterator of seed parameters
         vanishing_threshold: Threshold for vanishing detection
         exploding_threshold: Threshold for exploding detection
+        return_enhanced: If True, return GradientHealthMetrics dataclass
 
     Returns:
-        Dict with gradient statistics
+        Dict with gradient statistics, or GradientHealthMetrics if return_enhanced
     """
-    collector = SeedGradientCollector(
-        vanishing_threshold=vanishing_threshold,
-        exploding_threshold=exploding_threshold,
-    )
-    return collector.collect(seed_parameters)
+    # Convert to list to allow multiple passes
+    params = list(seed_parameters)
+    grads = [p.grad for p in params if p.grad is not None]
+
+    if not grads:
+        if return_enhanced:
+            return GradientHealthMetrics(
+                gradient_norm=0.0,
+                gradient_health=1.0,
+                has_vanishing=False,
+                has_exploding=False,
+                min_layer_norm=0.0,
+                max_layer_norm=0.0,
+                norm_ratio=1.0,
+                zero_grad_fraction=0.0,
+                nan_count=0,
+                inf_count=0,
+            )
+        return {
+            'gradient_norm': 0.0,
+            'gradient_health': 1.0,
+            'has_vanishing': False,
+            'has_exploding': False,
+        }
+
+    # Compute per-layer norms
+    per_layer_norms = [g.norm(2).item() for g in grads]
+    n_grads = len(grads)
+
+    # Aggregate stats
+    total_norm = sum(n**2 for n in per_layer_norms) ** 0.5
+    avg_norm = total_norm / n_grads
+
+    min_norm = min(per_layer_norms)
+    max_norm = max(per_layer_norms)
+    norm_ratio = max_norm / max(min_norm, 1e-10)
+
+    # Count vanishing/exploding
+    n_vanishing = sum(1 for n in per_layer_norms if n < vanishing_threshold)
+    n_exploding = sum(1 for n in per_layer_norms if n > exploding_threshold)
+
+    # Quality checks
+    all_grads = torch.cat([g.view(-1) for g in grads])
+    zero_fraction = (all_grads == 0).float().mean().item()
+    nan_count = torch.isnan(all_grads).sum().item()
+    inf_count = torch.isinf(all_grads).sum().item()
+
+    # Health score
+    vanishing_ratio = n_vanishing / n_grads
+    exploding_ratio = n_exploding / n_grads
+    health = 1.0
+    health -= vanishing_ratio * 0.5
+    health -= exploding_ratio * 0.8
+    health = max(0.0, min(1.0, health))
+
+    if return_enhanced:
+        return GradientHealthMetrics(
+            gradient_norm=avg_norm,
+            gradient_health=health,
+            has_vanishing=n_vanishing > 0,
+            has_exploding=n_exploding > 0,
+            min_layer_norm=min_norm,
+            max_layer_norm=max_norm,
+            norm_ratio=norm_ratio,
+            zero_grad_fraction=zero_fraction,
+            nan_count=int(nan_count),
+            inf_count=int(inf_count),
+        )
+
+    return {
+        'gradient_norm': avg_norm,
+        'gradient_health': health,
+        'has_vanishing': n_vanishing > 0,
+        'has_exploding': n_exploding > 0,
+    }
 
 
 def collect_seed_gradients_async(
