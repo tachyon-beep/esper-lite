@@ -66,3 +66,31 @@ class TestPPOTelemetryIntegration:
 
         # Should have debug-level metrics
         assert "value_function_telemetry" in metrics or "explained_variance" in metrics
+
+    def test_debug_level_collects_layer_gradients(
+        self, agent_with_telemetry, filled_buffer
+    ):
+        """DEBUG level collects per-layer gradient statistics."""
+        config = TelemetryConfig(level=TelemetryLevel.DEBUG)
+        metrics = agent_with_telemetry.update(
+            last_value=0.0,
+            telemetry_config=config,
+        )
+
+        # Should have debug-specific metrics
+        assert "debug_gradient_stats" in metrics
+        assert "debug_numerical_stability" in metrics
+
+    def test_normal_level_skips_debug_collection(
+        self, agent_with_telemetry, filled_buffer
+    ):
+        """NORMAL level does not collect expensive debug telemetry."""
+        config = TelemetryConfig(level=TelemetryLevel.NORMAL)
+        metrics = agent_with_telemetry.update(
+            last_value=0.0,
+            telemetry_config=config,
+        )
+
+        # Should NOT have debug-specific metrics
+        assert "debug_gradient_stats" not in metrics
+        assert "debug_numerical_stability" not in metrics

@@ -365,6 +365,22 @@ class PPOAgent:
 
                 self.optimizer.zero_grad()
                 loss.backward()
+
+                # === DEBUG TELEMETRY: Collect expensive diagnostics if enabled ===
+                if telemetry_config.should_collect("debug"):
+                    from esper.simic.debug_telemetry import (
+                        collect_per_layer_gradients,
+                        check_numerical_stability,
+                    )
+                    # Collect once per update (first batch only) to limit overhead
+                    if 'debug_gradient_stats' not in metrics:
+                        layer_stats = collect_per_layer_gradients(self.network)
+                        metrics['debug_gradient_stats'] = [
+                            [s.to_dict() for s in layer_stats]
+                        ]
+                        stability = check_numerical_stability(self.network, loss)
+                        metrics['debug_numerical_stability'] = [stability.to_dict()]
+
                 nn.utils.clip_grad_norm_(self.network.parameters(), self.max_grad_norm)
                 self.optimizer.step()
 
@@ -421,7 +437,16 @@ class PPOAgent:
         if clear_buffer:
             self.buffer.clear()
 
-        result = {k: sum(v) / len(v) for k, v in metrics.items()}
+        # Build result dict, handling special debug telemetry
+        result = {}
+        for k, v in metrics.items():
+            if k in ('debug_gradient_stats', 'debug_numerical_stability'):
+                # Debug metrics are already in final form (list of dicts)
+                result[k] = v[0] if v else None
+            else:
+                # Regular metrics are lists of scalars that need averaging
+                result[k] = sum(v) / len(v)
+
         result['anomaly_detected'] = 1.0 if anomaly_detected else 0.0
         if early_stopped:
             result['early_stopped'] = 1.0
