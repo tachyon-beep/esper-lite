@@ -51,6 +51,45 @@ class TestPPOHealthTelemetry:
         assert d["policy_loss"] == 0.5
         assert "ratio_max" in d
 
+    def test_is_ratio_healthy_at_exact_threshold(self):
+        """Boundary: ratio exactly at threshold is healthy (< not <=)."""
+        # ratio_max exactly at 5.0 threshold - should be healthy (< 5.0)
+        at_max = PPOHealthTelemetry(
+            policy_loss=0.5, value_loss=0.3, entropy=0.8,
+            approx_kl=0.01, clip_fraction=0.15,
+            ratio_mean=1.0, ratio_std=0.1, ratio_max=4.999, ratio_min=0.101,
+        )
+        assert at_max.is_ratio_healthy() is True
+
+        # Just above max threshold
+        above_max = PPOHealthTelemetry(
+            policy_loss=0.5, value_loss=0.3, entropy=0.8,
+            approx_kl=0.01, clip_fraction=0.15,
+            ratio_mean=1.0, ratio_std=0.1, ratio_max=5.001, ratio_min=0.5,
+        )
+        assert above_max.is_ratio_healthy() is False
+
+        # Just below min threshold
+        below_min = PPOHealthTelemetry(
+            policy_loss=0.5, value_loss=0.3, entropy=0.8,
+            approx_kl=0.01, clip_fraction=0.15,
+            ratio_mean=1.0, ratio_std=0.1, ratio_max=2.0, ratio_min=0.099,
+        )
+        assert below_min.is_ratio_healthy() is False
+
+    def test_is_ratio_healthy_with_custom_thresholds(self):
+        """Can use custom thresholds for ratio health check."""
+        telemetry = PPOHealthTelemetry(
+            policy_loss=0.5, value_loss=0.3, entropy=0.8,
+            approx_kl=0.01, clip_fraction=0.15,
+            ratio_mean=1.0, ratio_std=0.1, ratio_max=3.0, ratio_min=0.3,
+        )
+        # Default thresholds (5.0, 0.1) - healthy
+        assert telemetry.is_ratio_healthy() is True
+        # Stricter thresholds - unhealthy
+        assert telemetry.is_ratio_healthy(max_ratio_threshold=2.0) is False
+        assert telemetry.is_ratio_healthy(min_ratio_threshold=0.5) is False
+
 
 class TestValueFunctionTelemetry:
     """Tests for ValueFunctionTelemetry."""
