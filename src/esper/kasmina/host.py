@@ -274,8 +274,11 @@ class MorphogeneticModel(nn.Module):
         except AttributeError as exc:
             raise ValueError("Host must implement register_slot(slot_id, module)") from exc
 
-        register_slot(self.slot_id, self.seed_slot)
+        # Move host to device BEFORE registering slot. register_slot() queries
+        # next(self.parameters()).device to place the slot, so host must already
+        # be on the target device to avoid corrupting SeedSlot.device to CPU.
         self.host = self.host.to(device)
+        register_slot(self.slot_id, self.seed_slot)
 
     def to(self, *args, **kwargs):
         """Override to() to update device tracking after transfer.
