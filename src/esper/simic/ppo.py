@@ -303,6 +303,12 @@ class PPOAgent:
         metrics['explained_variance'] = [explained_variance]  # Single value, not per-batch
         early_stopped = False
 
+        # === AUTO-ESCALATION: Check for anomalies and escalate if needed ===
+        from esper.simic.anomaly_detector import AnomalyDetector
+
+        anomaly_detector = AnomalyDetector()
+        anomaly_detected = False
+
         for epoch_i in range(self.n_epochs):
             if early_stopped:
                 break
@@ -390,10 +396,33 @@ class PPOAgent:
                     metrics['early_stop_epoch'] = [epoch_i + 1]
 
         self.train_steps += 1
+
+        # === AUTO-ESCALATION: Analyze collected metrics for anomalies ===
+        if metrics['ratio_max']:  # Only if we have ratio data
+            max_ratio = max(metrics['ratio_max'])
+            min_ratio = min(metrics['ratio_min'])
+
+            anomaly_report = anomaly_detector.check_all(
+                ratio_max=max_ratio,
+                ratio_min=min_ratio,
+                explained_variance=explained_variance,
+                has_nan=False,  # Would need to track during update
+                has_inf=False,
+            )
+
+            if anomaly_report.has_anomaly:
+                anomaly_detected = True
+                if telemetry_config.auto_escalate_on_anomaly:
+                    telemetry_config.escalate_temporarily()
+
+        # Tick escalation countdown
+        telemetry_config.tick_escalation()
+
         if clear_buffer:
             self.buffer.clear()
 
         result = {k: sum(v) / len(v) for k, v in metrics.items()}
+        result['anomaly_detected'] = 1.0 if anomaly_detected else 0.0
         if early_stopped:
             result['early_stopped'] = 1.0
         return result
