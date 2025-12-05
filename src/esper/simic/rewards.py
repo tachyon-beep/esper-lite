@@ -317,7 +317,8 @@ def compute_shaped_reward(
     host_params: int = 1,
     config: RewardConfig | None = None,
     action_enum: type | None = None,  # <--- NEW: Added this argument to fix TypeError
-) -> float:
+    return_components: bool = False,
+) -> float | tuple[float, "RewardComponentsTelemetry"]:
     """Compute shaped reward for seed lifecycle control.
 
     This function is designed for high-throughput use:
@@ -336,23 +337,33 @@ def compute_shaped_reward(
         host_params: Baseline host model params (for normalization)
         config: Reward configuration (uses default if None)
         action_enum: Optional Enum class for validating integer actions (legacy compat)
+        return_components: If True, return (reward, RewardComponentsTelemetry) tuple
 
     Returns:
-        Shaped reward value
+        Shaped reward value, or (reward, components) if return_components=True
     """
+    from esper.simic.reward_telemetry import RewardComponentsTelemetry
+
     if config is None:
         config = _DEFAULT_CONFIG
+
+    # Track components if requested
+    components = RewardComponentsTelemetry() if return_components else None
 
     reward = 0.0
 
     # Base: accuracy improvement
-    reward += acc_delta * config.acc_delta_weight
+    base_acc = acc_delta * config.acc_delta_weight
+    reward += base_acc
+    if components:
+        components.base_acc_delta = base_acc
 
     # Compute rent: penalize excess params with logarithmic scaling
     # log(1 + growth_ratio) provides diminishing marginal penalty:
     # - Still penalizes large param counts
     # - But removes the 50x cliff between small (2K) and large (74K) seeds
     # - Allows conv_enhance seeds to be viable despite higher param count
+    rent_penalty = 0.0
     if host_params > 0 and total_params > 0:
         # total_params currently passed as added params; convert to growth ratio
         growth_ratio = total_params / host_params
@@ -361,26 +372,34 @@ def compute_shaped_reward(
         rent_penalty = config.compute_rent_weight * scaled_cost
         rent_penalty = min(rent_penalty, config.max_rent_penalty)
         reward -= rent_penalty
+    if components:
+        components.compute_rent = -rent_penalty
 
     # Lifecycle stage rewards
+    stage_bonus = 0.0
     if seed_info is not None:
         stage = seed_info.stage
         improvement = seed_info.improvement_since_stage_start
 
         if stage == STAGE_TRAINING:
-            reward += config.training_bonus
+            stage_bonus += config.training_bonus
             if improvement > 0:
-                reward += improvement * config.stage_improvement_weight
+                stage_bonus += improvement * config.stage_improvement_weight
 
         elif stage == STAGE_BLENDING:
-            reward += config.blending_bonus
+            stage_bonus += config.blending_bonus
             if acc_delta > 0:
-                reward += config.blending_improvement_bonus
+                stage_bonus += config.blending_improvement_bonus
 
         elif stage == STAGE_FOSSILIZED:
-            reward += config.fossilized_bonus
+            stage_bonus += config.fossilized_bonus
+
+    reward += stage_bonus
+    if components:
+        components.stage_bonus = stage_bonus
 
     # Potential-based reward shaping for lifecycle progression
+    pbrs_bonus = 0.0
     if seed_info is not None:
         # Reconstruct previous timestep state:
         # - If epochs_in_stage == 0, we just transitioned this epoch, so the
@@ -409,24 +428,38 @@ def compute_shaped_reward(
         phi_t = compute_seed_potential(current_obs)
         phi_t_prev = compute_seed_potential(prev_obs)
         pb_bonus = compute_pbrs_bonus(phi_t_prev, phi_t, gamma=0.99)
-        reward += config.seed_potential_weight * pb_bonus
+        pbrs_bonus = config.seed_potential_weight * pb_bonus
+        reward += pbrs_bonus
+    if components:
+        components.pbrs_bonus = pbrs_bonus
 
     # Action-specific shaping (semantic, enum-based)
     # We rely on action.name (IntEnum member)
+    action_shaping = 0.0
     action_name = action.name
     if is_germinate_action(action):
-        reward += _germinate_shaping(seed_info, epoch, max_epochs, config)
+        action_shaping = _germinate_shaping(seed_info, epoch, max_epochs, config)
     elif action_name == "FOSSILIZE":
-        reward += _advance_shaping(seed_info, config)
+        action_shaping = _advance_shaping(seed_info, config)
     elif action_name == "CULL":
-        reward += _cull_shaping(seed_info, config)
+        action_shaping = _cull_shaping(seed_info, config)
     elif action_name == "WAIT":
-        reward += _wait_shaping(seed_info, acc_delta, config)
+        action_shaping = _wait_shaping(seed_info, acc_delta, config)
+    reward += action_shaping
+    if components:
+        components.action_shaping = action_shaping
 
     # Terminal bonus
+    terminal_bonus = 0.0
     if epoch == max_epochs:
-        reward += val_acc * config.terminal_acc_weight
+        terminal_bonus = val_acc * config.terminal_acc_weight
+        reward += terminal_bonus
+    if components:
+        components.terminal_bonus = terminal_bonus
+        components.total_reward = reward
 
+    if return_components:
+        return reward, components
     return reward
 
 
