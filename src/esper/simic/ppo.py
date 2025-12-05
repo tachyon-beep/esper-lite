@@ -303,6 +303,13 @@ class PPOAgent:
 
                 # PPO-Clip loss
                 ratio = torch.exp(log_probs - old_log_probs)
+
+                # Track ratio statistics for telemetry
+                metrics['ratio_mean'].append(ratio.mean().item())
+                metrics['ratio_std'].append(ratio.std().item())
+                metrics['ratio_max'].append(ratio.max().item())
+                metrics['ratio_min'].append(ratio.min().item())
+
                 surr1 = ratio * batch_advantages
                 surr2 = torch.clamp(ratio, 1 - self.clip_ratio, 1 + self.clip_ratio) * batch_advantages
                 policy_loss = -torch.min(surr1, surr2).mean()
