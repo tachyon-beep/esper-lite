@@ -138,6 +138,7 @@ class PPOAgent:
         entropy_coef_start: float | None = None,
         entropy_coef_end: float | None = None,
         entropy_coef_min: float = 0.01,  # Unified minimum for exploration floor
+        adaptive_entropy_floor: bool = False,  # Scale floor with valid action count
         entropy_anneal_steps: int = 0,
         value_coef: float = 0.5,
         clip_value: bool = True,
@@ -161,6 +162,7 @@ class PPOAgent:
         self.entropy_coef_start = entropy_coef_start if entropy_coef_start is not None else entropy_coef
         self.entropy_coef_end = entropy_coef_end if entropy_coef_end is not None else entropy_coef
         self.entropy_coef_min = entropy_coef_min
+        self.adaptive_entropy_floor = adaptive_entropy_floor
         self.entropy_anneal_steps = entropy_anneal_steps
         self.value_coef = value_coef
         self.clip_value = clip_value
@@ -222,22 +224,67 @@ class PPOAgent:
         self.buffer = RolloutBuffer()
         self.train_steps = 0
 
-    def get_entropy_coef(self) -> float:
-        """Get current entropy coefficient (annealed if configured).
+    def get_entropy_coef(self, action_mask: torch.Tensor | None = None) -> float:
+        """Get current entropy coefficient with optional adaptive floor.
 
-        Returns fixed entropy_coef when entropy_anneal_steps=0 (legacy behavior).
-        Otherwise linearly interpolates from entropy_coef_start to entropy_coef_end
-        over entropy_anneal_steps training updates.
+        Args:
+            action_mask: Optional action mask for adaptive floor computation
 
-        The returned value is always >= entropy_coef_min to prevent exploration
-        collapse. Default floor is 0.01 (standard PPO entropy coefficient).
+        Returns:
+            Entropy coefficient (decayed if enabled, floored if adaptive)
         """
         if self.entropy_anneal_steps == 0:
-            return max(self.entropy_coef, self.entropy_coef_min)
+            # No annealing - use fixed coefficient with adaptive floor
+            floor = self.get_entropy_floor(action_mask)
+            return max(self.entropy_coef, floor)
 
+        # With annealing - interpolate and apply adaptive floor
         progress = min(1.0, self.train_steps / self.entropy_anneal_steps)
         annealed = self.entropy_coef_start + progress * (self.entropy_coef_end - self.entropy_coef_start)
-        return max(annealed, self.entropy_coef_min)
+
+        # Get floor (adaptive if enabled, otherwise base floor)
+        floor = self.get_entropy_floor(action_mask)
+
+        return max(annealed, floor)
+
+    def get_entropy_floor(self, action_mask: torch.Tensor | None = None) -> float:
+        """Get entropy floor, optionally scaled by valid action count.
+
+        When adaptive_entropy_floor=True, uses information-theoretic scaling:
+        scale_factor = log(num_total) / log(num_valid)
+
+        This maintains the same "relative exploration" level - if we want
+        10% of max entropy with 7 actions, we want 10% of max entropy with
+        2 actions, but max_entropy(2) = log(2) < max_entropy(7) = log(7).
+
+        Args:
+            action_mask: Binary mask of valid actions [action_dim] or None
+
+        Returns:
+            Entropy coefficient floor (minimum value)
+        """
+        if not self.adaptive_entropy_floor or action_mask is None:
+            return self.entropy_coef_min
+
+        # Count valid actions
+        num_valid = int(action_mask.sum().item())
+        num_total = action_mask.shape[-1]
+
+        if num_valid >= num_total or num_valid <= 1:
+            return self.entropy_coef_min
+
+        # Information-theoretic scaling: ratio of maximum entropies
+        # max_entropy_full = log(num_total), max_entropy_valid = log(num_valid)
+        max_entropy_full = math.log(num_total)
+        max_entropy_valid = math.log(num_valid)
+
+        # Scale to maintain same fraction of max entropy
+        scale_factor = max_entropy_full / max_entropy_valid
+
+        # Cap at 3x to avoid extreme values
+        scale_factor = min(scale_factor, 3.0)
+
+        return self.entropy_coef_min * scale_factor
 
     def get_action(
         self,
@@ -425,10 +472,16 @@ class PPOAgent:
                     value_loss = F.mse_loss(values, batch_returns)
                 entropy_loss = -entropy.mean()
 
+                # Get entropy coefficient with adaptive floor
+                # Use batch's action mask for floor computation
+                # For batched masks, use the most restrictive (min valid actions)
+                representative_mask = action_masks[0] if action_masks is not None else None
+                entropy_coef = self.get_entropy_coef(representative_mask)
+
                 loss = (
                     policy_loss
                     + self.value_coef * value_loss
-                    + self.get_entropy_coef() * entropy_loss
+                    + entropy_coef * entropy_loss
                 )
 
                 self.optimizer.zero_grad()
@@ -666,8 +719,13 @@ class PPOAgent:
                 # Entropy bonus
                 entropy_loss = -entropy_valid.mean()
 
+                # Get entropy coefficient with adaptive floor
+                # Use first action mask from batch as representative
+                representative_mask = batch['action_masks'][0, 0] if batch['action_masks'] is not None else None
+                entropy_coef = self.get_entropy_coef(representative_mask)
+
                 # Total loss (using agent's value_coef, not hardcoded)
-                loss = policy_loss + self.value_coef * value_loss + self.get_entropy_coef() * entropy_loss
+                loss = policy_loss + self.value_coef * value_loss + entropy_coef * entropy_loss
 
                 self.optimizer.zero_grad()
                 loss.backward()
@@ -735,6 +793,7 @@ class PPOAgent:
                 'entropy_coef_start': self.entropy_coef_start,
                 'entropy_coef_end': self.entropy_coef_end,
                 'entropy_coef_min': self.entropy_coef_min,
+                'adaptive_entropy_floor': self.adaptive_entropy_floor,
                 'entropy_anneal_steps': self.entropy_anneal_steps,
                 'value_coef': self.value_coef,
                 'clip_value': self.clip_value,

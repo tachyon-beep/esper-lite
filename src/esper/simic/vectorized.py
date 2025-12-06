@@ -159,6 +159,7 @@ def train_ppo_vectorized(
     entropy_coef_start: float | None = None,
     entropy_coef_end: float | None = None,
     entropy_coef_min: float = 0.01,  # Unified minimum
+    adaptive_entropy_floor: bool = False,
     entropy_anneal_episodes: int = 0,
     gamma: float = 0.99,
     ppo_updates_per_batch: int = 1,
@@ -326,6 +327,7 @@ def train_ppo_vectorized(
             entropy_coef_start=entropy_coef_start,
             entropy_coef_end=entropy_coef_end,
             entropy_coef_min=entropy_coef_min,
+            adaptive_entropy_floor=adaptive_entropy_floor,
             entropy_anneal_steps=entropy_anneal_steps,
             gamma=gamma,
             device=device,

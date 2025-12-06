@@ -719,3 +719,33 @@ def test_ppo_agent_weight_decay_recurrent():
             assert group['weight_decay'] == 0.0, "Shared (encoder+lstm) must have wd=0"
         elif 'critic' in name:
             assert group['weight_decay'] > 0.0, "Critic should have weight decay"
+
+
+def test_adaptive_entropy_floor_log_scaling():
+    """Entropy floor should use log-ratio scaling (information-theoretic)."""
+    import math
+    import torch
+    from esper.simic.ppo import PPOAgent
+
+    agent = PPOAgent(
+        state_dim=10, action_dim=7, device="cpu",
+        entropy_coef=0.05, entropy_coef_min=0.01,
+        adaptive_entropy_floor=True,
+    )
+
+    # With all 7 actions valid, floor is base floor
+    mask_all = torch.ones(7)
+    floor_all = agent.get_entropy_floor(mask_all)
+    assert floor_all == 0.01  # Base floor
+
+    # With only 2 actions valid, floor should use log-ratio scaling:
+    # scale = log(7) / log(2) = 1.95 / 0.69 = 2.8
+    # floor = 0.01 * 2.8 = 0.028
+    mask_few = torch.tensor([1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+    floor_few = agent.get_entropy_floor(mask_few)
+
+    expected_scale = math.log(7) / math.log(2)  # ~2.8
+    expected_floor = 0.01 * min(expected_scale, 3.0)  # Capped at 3x
+
+    assert abs(floor_few - expected_floor) < 0.001, \
+        f"Expected {expected_floor:.4f}, got {floor_few:.4f}"

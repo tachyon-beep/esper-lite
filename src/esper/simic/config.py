@@ -67,6 +67,8 @@ class TrainingConfig:
     entropy_coef_start: float | None = None
     entropy_coef_end: float | None = None
     entropy_coef_min: float = 0.01
+    # Scale entropy floor with valid action count (information-theoretic)
+    adaptive_entropy_floor: bool = False
     entropy_anneal_episodes: int = 0
 
     # === KL Early Stopping ===
@@ -188,6 +190,7 @@ class TrainingConfig:
             "entropy_coef_start": self.entropy_coef_start,
             "entropy_coef_end": self.entropy_coef_end,
             "entropy_coef_min": self.entropy_coef_min,
+            "adaptive_entropy_floor": self.adaptive_entropy_floor,
             "value_coef": self.value_coef,
             "clip_value": self.clip_value,
             "max_grad_norm": self.max_grad_norm,
@@ -213,6 +216,7 @@ class TrainingConfig:
             "entropy_coef_start": self.entropy_coef_start,
             "entropy_coef_end": self.entropy_coef_end,
             "entropy_coef_min": self.entropy_coef_min,
+            "adaptive_entropy_floor": self.adaptive_entropy_floor,
             "entropy_anneal_episodes": self.entropy_anneal_episodes,
             "gamma": self.gamma,
             "ppo_updates_per_batch": self.ppo_updates_per_batch,
