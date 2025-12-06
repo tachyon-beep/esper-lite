@@ -92,29 +92,24 @@ class GradientIsolationMonitor:
     def check_isolation(self) -> tuple[bool, dict]:
         """Check if gradient isolation is maintained.
 
-        Uses batched norm computation to minimize CUDA synchronization points.
-        Reduces from O(n_params) CUDA syncs to O(1) by accumulating on GPU.
-
-        Implementation note (PyTorch Expert review): For maximum performance on
-        large models, consider using torch._foreach_norm (used internally by
-        clip_grad_norm_). The current approach is correct and sufficient for
-        typical model sizes.
+        Uses torch._foreach_norm for batched norm computation - O(1) CUDA syncs
+        instead of O(n_params). This matches torch.nn.utils.clip_grad_norm_ internals.
         """
         # Collect gradients that exist
         host_grads = [p.grad for p in self._host_params if p.grad is not None]
         seed_grads = [p.grad for p in self._seed_params if p.grad is not None]
 
-        # Compute norms with single sync per group
+        # Compute norms with foreach (single sync per group)
         if host_grads:
-            # Stack squared norms, sum, sqrt - single .item() call
-            host_norm_sq = sum(g.pow(2).sum() for g in host_grads)
-            host_norm = host_norm_sq.sqrt().item()
+            # torch._foreach_norm returns list of norms per tensor
+            norms = torch._foreach_norm(host_grads)
+            host_norm = torch.stack(norms).pow(2).sum().sqrt().item()
         else:
             host_norm = 0.0
 
         if seed_grads:
-            seed_norm_sq = sum(g.pow(2).sum() for g in seed_grads)
-            seed_norm = seed_norm_sq.sqrt().item()
+            norms = torch._foreach_norm(seed_grads)
+            seed_norm = torch.stack(norms).pow(2).sum().sqrt().item()
         else:
             seed_norm = 0.0
 
