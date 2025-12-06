@@ -58,6 +58,9 @@ class TrainingConfig:
     n_epochs: int = 10
     batch_size: int = 64
     clip_value: bool = True
+    # Weight decay (L2 regularization) - applied to critic only
+    # Actor weight decay is disabled to preserve exploration (RL best practice)
+    weight_decay: float = 0.0
 
     # === Entropy (Exploration) ===
     entropy_coef: float = 0.05  # Unified default (validated in for_tinystories preset)
@@ -188,6 +191,7 @@ class TrainingConfig:
             "value_coef": self.value_coef,
             "clip_value": self.clip_value,
             "max_grad_norm": self.max_grad_norm,
+            "weight_decay": self.weight_decay,
             "n_epochs": self.n_epochs,
             "batch_size": self.batch_size,
             "target_kl": self.target_kl,

@@ -651,3 +651,71 @@ def test_fused_nan_inf_detection():
         "Should use fused check (ratio_has_numerical_issue), not separate nan/inf flags"
     assert has_new_api or not any(metrics.values()), \
         "Should have ratio_has_numerical_issue when numerical issues detected"
+
+
+def test_ppo_agent_weight_decay_critic_only():
+    """PPOAgent weight decay should apply only to critic, not actor or shared."""
+    import torch
+    from esper.simic.ppo import PPOAgent
+
+    # Without weight decay - uses Adam
+    agent_no_wd = PPOAgent(state_dim=10, action_dim=4, device="cpu")
+    assert isinstance(agent_no_wd.optimizer, torch.optim.Adam)
+
+    # With weight decay - should use AdamW with param groups
+    agent_with_wd = PPOAgent(
+        state_dim=10, action_dim=4, device="cpu", weight_decay=0.01
+    )
+    assert isinstance(agent_with_wd.optimizer, torch.optim.AdamW)
+
+    # Verify param groups exist
+    param_groups = agent_with_wd.optimizer.param_groups
+    assert len(param_groups) >= 3, "Should have separate param groups for actor/shared/critic"
+
+    # Find each group's weight decay
+    actor_wd = None
+    shared_wd = None
+    critic_wd = None
+    for group in param_groups:
+        name = group.get('name', '')
+        if 'actor' in name:
+            actor_wd = group['weight_decay']
+        elif 'shared' in name:
+            shared_wd = group['weight_decay']
+        elif 'critic' in name:
+            critic_wd = group['weight_decay']
+
+    # Actor should NOT have weight decay (biases toward determinism)
+    assert actor_wd == 0.0, f"Actor weight_decay should be 0, got {actor_wd}"
+    # Shared should NOT have weight decay (feeds into actor)
+    assert shared_wd == 0.0, f"Shared weight_decay should be 0, got {shared_wd}"
+    # Critic SHOULD have weight decay
+    assert critic_wd > 0.0, f"Critic weight_decay should be >0, got {critic_wd}"
+
+
+def test_ppo_agent_weight_decay_recurrent():
+    """PPOAgent weight decay should work with recurrent=True."""
+    import torch
+    from esper.simic.ppo import PPOAgent
+
+    # Recurrent agent with weight decay
+    agent = PPOAgent(
+        state_dim=10, action_dim=4, device="cpu",
+        weight_decay=0.01, recurrent=True, lstm_hidden_dim=32
+    )
+    assert isinstance(agent.optimizer, torch.optim.AdamW)
+
+    # Verify param groups
+    param_groups = agent.optimizer.param_groups
+    assert len(param_groups) >= 3
+
+    # Find weight decays by group name
+    for group in param_groups:
+        name = group.get('name', '')
+        if 'actor' in name:
+            assert group['weight_decay'] == 0.0, "Actor must have wd=0"
+        elif 'shared' in name:
+            # For recurrent, 'shared' contains encoder + lstm
+            assert group['weight_decay'] == 0.0, "Shared (encoder+lstm) must have wd=0"
+        elif 'critic' in name:
+            assert group['weight_decay'] > 0.0, "Critic should have weight decay"

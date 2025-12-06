@@ -145,6 +145,7 @@ class PPOAgent:
         n_epochs: int = 10,
         batch_size: int = 64,
         target_kl: float | None = 0.015,
+        weight_decay: float = 0.0,  # Applied to critic only (RL best practice)
         device: str = "cuda:0",
         # Recurrence params
         recurrent: bool = False,
@@ -168,6 +169,7 @@ class PPOAgent:
         self.n_epochs = n_epochs
         self.batch_size = batch_size
         self.target_kl = target_kl
+        self.weight_decay = weight_decay
         self.device = device
 
         if recurrent:
@@ -183,7 +185,40 @@ class PPOAgent:
         else:
             self.network = ActorCritic(state_dim, action_dim, hidden_dim).to(device)
 
-        self.optimizer = torch.optim.Adam(self.network.parameters(), lr=lr, eps=1e-5)
+        # [PyTorch 2.9] Use fused=True for CUDA, foreach=True for CPU
+        use_cuda = device.startswith("cuda")
+        optimizer_kwargs = {'lr': lr, 'eps': 1e-5}
+        if use_cuda:
+            optimizer_kwargs['fused'] = True
+        else:
+            optimizer_kwargs['foreach'] = True  # Multi-tensor optimization for CPU
+
+        if weight_decay > 0:
+            # [DRL Best Practice] Apply weight decay ONLY to critic, not actor or shared
+            # Weight decay on actor biases toward determinism (smaller weights =
+            # smaller logits = sharper softmax), which kills exploration.
+            # Shared layers feed into actor, so they must also have wd=0.
+            # Reference: SAC, TD3 implementations apply WD only to critic.
+            actor_params = list(self.network.actor.parameters())
+            critic_params = list(self.network.critic.parameters())
+
+            if self.recurrent:
+                # RecurrentActorCritic: encoder + lstm feed into actor, must be wd=0
+                shared_params = (list(self.network.encoder.parameters()) +
+                                list(self.network.lstm.parameters()))
+            else:
+                # ActorCritic: shared feeds into actor
+                shared_params = list(self.network.shared.parameters())
+
+            self.optimizer = torch.optim.AdamW([
+                {'params': actor_params, 'weight_decay': 0.0, 'name': 'actor'},
+                {'params': shared_params, 'weight_decay': 0.0, 'name': 'shared'},  # Must be 0!
+                {'params': critic_params, 'weight_decay': weight_decay, 'name': 'critic'},
+            ], **optimizer_kwargs)
+        else:
+            self.optimizer = torch.optim.Adam(
+                self.network.parameters(), **optimizer_kwargs
+            )
         self.buffer = RolloutBuffer()
         self.train_steps = 0
 
