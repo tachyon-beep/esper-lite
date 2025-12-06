@@ -780,3 +780,32 @@ def test_comprehensive_value_function_metrics():
     assert 'return_max' in metrics
     assert 'advantage_mean_prenorm' in metrics  # Critical for PPO stability
     assert 'advantage_std_prenorm' in metrics
+
+
+def test_recurrent_ppo_epochs_safety_cap():
+    """Recurrent PPO should warn early (>2) and cap n_epochs to prevent policy drift."""
+    import torch
+    import pytest
+    from esper.simic.ppo import PPOAgent
+
+    agent = PPOAgent(
+        state_dim=10, action_dim=4, device="cpu",
+        recurrent=True, lstm_hidden_dim=32,
+    )
+
+    # Add some transitions to each env
+    for env_id in range(2):
+        for i in range(5):
+            state = torch.randn(10)
+            action_mask = torch.ones(4)
+            agent.store_recurrent_transition(
+                state, 0, -0.5, 0.5, 1.0, i == 4, action_mask, env_id
+            )
+
+    # n_epochs > 2 should warn (early warning)
+    with pytest.warns(RuntimeWarning, match="n_epochs.*elevated"):
+        metrics = agent.update_recurrent(n_epochs=3)
+
+    # n_epochs > 4 should be capped (hard limit)
+    with pytest.warns(RuntimeWarning, match="n_epochs.*capped"):
+        metrics = agent.update_recurrent(n_epochs=10)

@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections import defaultdict
 from pathlib import Path
 import math
+import warnings
 
 import torch
 import torch.nn as nn
@@ -680,11 +681,27 @@ class PPOAgent:
         if n_epochs is None:
             n_epochs = 1
 
-        # Log info if using multiple epochs (this is fine - CleanRL uses n_epochs=4)
-        if n_epochs > 1:
-            logger.info(
-                f"Using n_epochs={n_epochs} with recurrent policy. This is supported "
-                f"(CleanRL uses n_epochs=4). PPO clipping handles the stale log_prob bias."
+        # [DRL Best Practice] Two-tier warnings for recurrent PPO n_epochs
+        # After gradient updates, policy changes, so recomputed log_probs differ
+        # from stored log_probs. With multiple epochs, this staleness compounds.
+
+        WARN_THRESHOLD = 2   # Warn when > 2 (early warning)
+        MAX_RECURRENT_EPOCHS = 4  # Hard cap
+
+        if n_epochs > MAX_RECURRENT_EPOCHS:
+            warnings.warn(
+                f"n_epochs={n_epochs} is too high for recurrent PPO and has been capped "
+                f"to {MAX_RECURRENT_EPOCHS}. Values > {MAX_RECURRENT_EPOCHS} cause severe "
+                f"policy drift due to hidden state staleness.",
+                RuntimeWarning,
+            )
+            n_epochs = MAX_RECURRENT_EPOCHS
+        elif n_epochs > WARN_THRESHOLD:
+            warnings.warn(
+                f"n_epochs={n_epochs} is elevated for recurrent PPO. "
+                f"Values > {WARN_THRESHOLD} risk policy drift due to hidden state staleness. "
+                f"Consider n_epochs=1-2 for maximum stability.",
+                RuntimeWarning,
             )
 
         # Compute GAE for all episodes
