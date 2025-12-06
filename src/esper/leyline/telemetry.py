@@ -46,14 +46,14 @@ class TelemetryEventType(Enum):
     PERFORMANCE_DEGRADATION = auto()
 
     # Command events
-    COMMAND_ISSUED = auto()
-    COMMAND_EXECUTED = auto()
-    COMMAND_FAILED = auto()
+    COMMAND_ISSUED = auto()  # TODO: Implement when command system built
+    COMMAND_EXECUTED = auto()  # TODO: Implement when command system built
+    COMMAND_FAILED = auto()  # TODO: Implement when command system built
 
     # === NEW: PPO Training Events (Ops Normal) ===
     PPO_UPDATE_COMPLETED = auto()
-    MEMORY_WARNING = auto()
-    REWARD_HACKING_SUSPECTED = auto()
+    MEMORY_WARNING = auto()  # TODO: Wire up GPU memory monitoring
+    REWARD_HACKING_SUSPECTED = auto()  # TODO: Wire up reward hacking detection
 
     # === NEW: Debug Events (triggered by anomalies) ===
     RATIO_EXPLOSION_DETECTED = auto()
