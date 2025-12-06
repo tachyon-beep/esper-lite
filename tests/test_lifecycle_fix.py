@@ -246,6 +246,8 @@ class TestLifecycleIntegration:
         acc = 60.0
         for _ in range(10):
             model.seed_state.metrics.record_accuracy(acc)
+            # Set gradient ratio to pass G2 gradient activity check
+            model.seed_state.metrics.seed_gradient_norm_ratio = 0.1
             model.seed_slot.step_epoch()
             acc += 1.0
             if model.seed_state.stage == SeedStage.BLENDING:
