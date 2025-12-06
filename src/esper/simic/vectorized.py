@@ -1141,6 +1141,30 @@ def train_ppo_vectorized(
             )
             hub.emit(ppo_event)
 
+            # Emit training progress events
+            if len(recent_accuracies) >= 2:
+                acc_delta = recent_accuracies[-1] - recent_accuracies[-2]
+                if acc_delta < 0.5:  # Plateau
+                    hub.emit(TelemetryEvent(
+                        event_type=TelemetryEventType.PLATEAU_DETECTED,
+                        data={
+                            "batch": batch_idx + 1,
+                            "accuracy_delta": acc_delta,
+                            "rolling_avg_accuracy": rolling_avg_acc,
+                            "episodes_completed": episodes_completed,
+                        },
+                    ))
+                elif acc_delta > 2.0:  # Significant improvement
+                    hub.emit(TelemetryEvent(
+                        event_type=TelemetryEventType.IMPROVEMENT_DETECTED,
+                        data={
+                            "batch": batch_idx + 1,
+                            "accuracy_delta": acc_delta,
+                            "rolling_avg_accuracy": rolling_avg_acc,
+                            "episodes_completed": episodes_completed,
+                        },
+                    ))
+
         # Print analytics summary every 5 episodes
         if episodes_completed % 5 == 0 and len(analytics.stats) > 0:
             print()
