@@ -96,10 +96,17 @@ class BlueprintRegistry:
         return cls._blueprints[key]
 
     @classmethod
-    def create(cls, topology: str, name: str, dim: int) -> nn.Module:
-        """Create a module from a registered blueprint."""
+    def create(cls, topology: str, name: str, dim: int, **kwargs) -> nn.Module:
+        """Create a module from a registered blueprint.
+
+        Args:
+            topology: The topology type (e.g., "transformer", "cnn")
+            name: The blueprint name (e.g., "mlp", "attention")
+            dim: The dimension parameter
+            **kwargs: Additional keyword arguments passed to the factory function
+        """
         spec = cls.get(topology, name)
-        return spec.factory(dim)
+        return spec.factory(dim, **kwargs)
 
     @classmethod
     def unregister(cls, topology: str, name: str) -> None:

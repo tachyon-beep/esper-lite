@@ -5,6 +5,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint as torch_checkpoint
 
 from .registry import BlueprintRegistry
 
@@ -86,21 +87,27 @@ def create_transformer_attention_seed(dim: int, n_head: int = 4) -> nn.Module:
 @BlueprintRegistry.register(
     "mlp", "transformer", param_estimate=1200000, description="Additional MLP (4x expansion)"
 )
-def create_transformer_mlp_seed(dim: int, expansion: int = 4) -> nn.Module:
-    """Additional MLP seed."""
+def create_transformer_mlp_seed(dim: int, expansion: int = 4, checkpoint: bool = False) -> nn.Module:
+    """Additional MLP seed with optional activation checkpointing."""
 
     class TransformerMLPSeed(nn.Module):
-        def __init__(self, dim: int, expansion: int):
+        def __init__(self, dim: int, expansion: int, use_checkpoint: bool):
             super().__init__()
             self.fc1 = nn.Linear(dim, dim * expansion)
             self.fc2 = nn.Linear(dim * expansion, dim)
+            self.use_checkpoint = use_checkpoint
             nn.init.zeros_(self.fc2.weight)
             nn.init.zeros_(self.fc2.bias)
 
-        def forward(self, x: torch.Tensor) -> torch.Tensor:
-            return x + self.fc2(F.gelu(self.fc1(x)))
+        def _mlp_forward(self, x: torch.Tensor) -> torch.Tensor:
+            return self.fc2(F.gelu(self.fc1(x)))
 
-    return TransformerMLPSeed(dim, expansion)
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            if self.use_checkpoint and self.training and x.requires_grad:
+                return x + torch_checkpoint(self._mlp_forward, x, use_reentrant=False)
+            return x + self._mlp_forward(x)
+
+    return TransformerMLPSeed(dim, expansion, checkpoint)
 
 
 # FlexAttention blueprint - conditionally registered
