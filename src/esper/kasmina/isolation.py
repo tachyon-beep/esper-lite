@@ -57,6 +57,17 @@ def blend_with_isolation(
     return torch.lerp(host_path, seed_features, max(0.0, min(1.0, alpha)))
 
 
+def ste_forward(host_features: torch.Tensor, seed_features: torch.Tensor) -> torch.Tensor:
+    """Straight-Through Estimator forward pass.
+
+    Forward: returns host_features (seed contribution cancels out)
+    Backward: gradients flow to both host and seed parameters
+
+    This is torch.compile friendly - pure tensor operations, no control flow.
+    """
+    return host_features + (seed_features - seed_features.detach())
+
+
 # =============================================================================
 # Gradient Isolation Monitor
 # =============================================================================
@@ -134,5 +145,6 @@ class GradientIsolationMonitor:
 __all__ = [
     "AlphaSchedule",
     "blend_with_isolation",
+    "ste_forward",
     "GradientIsolationMonitor",
 ]
