@@ -148,7 +148,7 @@ class SeedMetrics:
 # Seed State
 # =============================================================================
 
-@dataclass
+@dataclass(kw_only=True)
 class SeedState:
     """Complete state of a seed through its lifecycle."""
 
