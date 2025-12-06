@@ -36,6 +36,9 @@ from esper.simic.buffers import (
 # Normalization
 from esper.simic.normalization import RunningMeanStd
 
+# Curriculum
+from esper.simic.curriculum import BlueprintCurriculum, BlueprintStats
+
 # Rewards
 from esper.simic.rewards import (
     RewardConfig,
@@ -128,6 +131,10 @@ __all__ = [
 
     # Normalization
     "RunningMeanStd",
+
+    # Curriculum
+    "BlueprintCurriculum",
+    "BlueprintStats",
 
     # Rewards
     "RewardConfig",
