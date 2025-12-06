@@ -2,7 +2,7 @@
 import pytest
 import torch
 
-from esper.kasmina.host import TransformerHost
+from esper.kasmina.host import CNNHost, TransformerHost
 
 
 class TestTransformerHostCompile:
@@ -28,3 +28,27 @@ class TestTransformerHostCompile:
 
         with pytest.raises(ValueError, match="exceeds block_size"):
             host(x)
+
+
+class TestCNNHostCompile:
+    """Verify CNNHost compiles efficiently."""
+
+    def test_forward_uses_precomputed_keys(self):
+        """CNNHost should not format strings in forward loop."""
+        host = CNNHost(num_classes=10, n_blocks=3)
+
+        # Should compile without string formatting graph breaks
+        compiled_host = torch.compile(host, fullgraph=True)
+
+        x = torch.randn(2, 3, 32, 32)
+        result = compiled_host(x)
+
+        assert result.shape == (2, 10)
+
+    def test_slot_key_lookup_uses_tuple(self):
+        """Verify _slot_keys tuple is used for O(1) lookup."""
+        host = CNNHost(num_classes=10, n_blocks=4)
+
+        # Verify internal structure via direct access
+        assert isinstance(host._slot_keys, tuple)
+        assert len(host._slot_keys) == 3  # n_blocks - 1

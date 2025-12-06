@@ -68,11 +68,13 @@ class CNNHost(nn.Module):
         self.slots[slot_id] = nn.Identity()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        slot_idx = 0
         for idx, block in enumerate(self.blocks):
             x = self.pool(block(x))
-            key = f"block{idx + 1}_post"
-            if key in self.slots:
-                x = self.slots[key](x)  # Identity when no seed
+            # Use pre-computed _slot_indices instead of string formatting
+            if idx in self._slot_indices:
+                x = self.slots[self._slot_keys[slot_idx]](x)
+                slot_idx += 1
 
         x = F.adaptive_avg_pool2d(x, 1).flatten(1)
         return self.classifier(x)
