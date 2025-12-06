@@ -9,6 +9,14 @@ import torch.nn.functional as F
 from .registry import BlueprintRegistry
 
 
+# Check for FlexAttention availability (PyTorch 2.5+)
+try:
+    from torch.nn.attention.flex_attention import flex_attention, create_block_mask
+    _HAS_FLEX_ATTENTION = True
+except ImportError:
+    _HAS_FLEX_ATTENTION = False
+
+
 @BlueprintRegistry.register("norm", "transformer", param_estimate=800, description="LayerNorm only")
 def create_transformer_norm_seed(dim: int) -> nn.Module:
     """LayerNorm enhancement seed for transformers."""
@@ -93,6 +101,46 @@ def create_transformer_mlp_seed(dim: int, expansion: int = 4) -> nn.Module:
             return x + self.fc2(F.gelu(self.fc1(x)))
 
     return TransformerMLPSeed(dim, expansion)
+
+
+# FlexAttention blueprint - conditionally registered
+if _HAS_FLEX_ATTENTION:
+    @BlueprintRegistry.register(
+        "flex_attention", "transformer", param_estimate=55000,
+        description="FlexAttention with causal mask (PyTorch 2.5+)"
+    )
+    def create_flex_attention_seed(dim: int, n_head: int = 4) -> nn.Module:
+        """FlexAttention seed with customizable attention patterns."""
+
+        class FlexAttentionSeed(nn.Module):
+            def __init__(self, dim: int, n_head: int):
+                super().__init__()
+                self.n_head = n_head
+                self.head_dim = dim // n_head
+
+                self.qkv = nn.Linear(dim, 3 * dim)
+                self.proj = nn.Linear(dim, dim)
+                nn.init.zeros_(self.proj.weight)
+                nn.init.zeros_(self.proj.bias)
+
+            def forward(self, x: torch.Tensor) -> torch.Tensor:
+                b, t, c = x.shape
+
+                qkv = self.qkv(x).reshape(b, t, 3, self.n_head, self.head_dim)
+                qkv = qkv.permute(2, 0, 3, 1, 4)
+                q, k, v = qkv[0], qkv[1], qkv[2]
+
+                # FlexAttention with causal mask
+                # score_mod signature: (score, batch, head, q_idx, kv_idx) -> score
+                def causal_mask(score, b, h, q_idx, kv_idx):
+                    return torch.where(q_idx >= kv_idx, score, float('-inf'))
+
+                out = flex_attention(q, k, v, score_mod=causal_mask)
+
+                out = out.transpose(1, 2).reshape(b, t, c)
+                return x + self.proj(out)
+
+        return FlexAttentionSeed(dim, n_head)
 
 
 __all__ = []
