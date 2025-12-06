@@ -1142,24 +1142,45 @@ def train_ppo_vectorized(
             hub.emit(ppo_event)
 
             # Emit training progress events
-            if len(recent_accuracies) >= 2:
-                acc_delta = recent_accuracies[-1] - recent_accuracies[-2]
-                if acc_delta < 0.5:  # Plateau
+            # Use smoothed delta instead of consecutive batch comparison to avoid noise
+            if len(recent_accuracies) >= 6:
+                # Compare rolling window averages (need at least 6 samples for meaningful comparison)
+                recent_avg = sum(recent_accuracies[-3:]) / 3
+                older_avg = sum(recent_accuracies[-6:-3]) / 3
+                smoothed_delta = recent_avg - older_avg
+
+                if abs(smoothed_delta) < 0.5:  # True plateau - no significant change either direction
                     hub.emit(TelemetryEvent(
                         event_type=TelemetryEventType.PLATEAU_DETECTED,
                         data={
                             "batch": batch_idx + 1,
-                            "accuracy_delta": acc_delta,
+                            "smoothed_delta": smoothed_delta,
+                            "recent_avg": recent_avg,
+                            "older_avg": older_avg,
                             "rolling_avg_accuracy": rolling_avg_acc,
                             "episodes_completed": episodes_completed,
                         },
                     ))
-                elif acc_delta > 2.0:  # Significant improvement
+                elif smoothed_delta < -2.0:  # Significant degradation
+                    hub.emit(TelemetryEvent(
+                        event_type=TelemetryEventType.DEGRADATION_DETECTED,
+                        data={
+                            "batch": batch_idx + 1,
+                            "smoothed_delta": smoothed_delta,
+                            "recent_avg": recent_avg,
+                            "older_avg": older_avg,
+                            "rolling_avg_accuracy": rolling_avg_acc,
+                            "episodes_completed": episodes_completed,
+                        },
+                    ))
+                elif smoothed_delta > 2.0:  # Significant improvement
                     hub.emit(TelemetryEvent(
                         event_type=TelemetryEventType.IMPROVEMENT_DETECTED,
                         data={
                             "batch": batch_idx + 1,
-                            "accuracy_delta": acc_delta,
+                            "smoothed_delta": smoothed_delta,
+                            "recent_avg": recent_avg,
+                            "older_avg": older_avg,
                             "rolling_avg_accuracy": rolling_avg_acc,
                             "episodes_completed": episodes_completed,
                         },

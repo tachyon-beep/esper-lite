@@ -90,10 +90,13 @@ def test_advance_active_seed_noop_from_training_stage():
 
 
 def test_plateau_detection_logic():
-    """Test that plateau detection logic works correctly.
+    """Test that plateau/degradation/improvement detection logic works correctly.
 
-    This is an integration-style test that verifies the plateau/improvement
-    detection code emits the correct events when accuracy deltas cross thresholds.
+    This is an integration-style test that verifies the plateau/improvement/degradation
+    detection code emits the correct events when smoothed deltas cross thresholds.
+
+    The new logic uses smoothed deltas (comparing 3-batch rolling windows) to avoid
+    noisy batch-to-batch fluctuations and properly distinguish plateau from degradation.
     """
     # Mock the hub to capture emitted events
     mock_hub = MagicMock()
@@ -101,39 +104,70 @@ def test_plateau_detection_logic():
     # Simulate recent_accuracies with various patterns
     test_cases = [
         # (recent_accuracies, expected_event_type, description)
-        ([10.0], None, "single value - no event"),
-        ([10.0, 10.1], TelemetryEventType.PLATEAU_DETECTED, "delta 0.1 < 0.5 = plateau"),
-        ([10.0, 10.4], TelemetryEventType.PLATEAU_DETECTED, "delta 0.4 < 0.5 = plateau"),
-        ([10.0, 12.5], TelemetryEventType.IMPROVEMENT_DETECTED, "delta 2.5 > 2.0 = improvement"),
-        ([10.0, 11.0], None, "delta 1.0 in middle range = no event"),
-        ([10.0, 11.5], None, "delta 1.5 in middle range = no event"),
+        ([10.0], None, "single value - no event (< 6 samples)"),
+        ([10.0, 10.1], None, "2 values - no event (< 6 samples)"),
+        ([10.0, 10.1, 10.2, 10.3, 10.4], None, "5 values - no event (< 6 samples)"),
+        # With 6+ samples, use smoothed delta
+        ([10.0, 10.0, 10.0, 10.0, 10.0, 10.0], TelemetryEventType.PLATEAU_DETECTED,
+         "flat: smoothed_delta=0.0, abs < 0.5 = plateau"),
+        ([10.0, 10.1, 10.2, 10.1, 10.2, 10.3], TelemetryEventType.PLATEAU_DETECTED,
+         "small positive: smoothed_delta=0.2, abs < 0.5 = plateau"),
+        ([10.0, 10.1, 10.2, 10.0, 10.1, 10.0], TelemetryEventType.PLATEAU_DETECTED,
+         "small negative: smoothed_delta=-0.13, abs < 0.5 = plateau"),
+        ([10.0, 11.0, 12.0, 13.0, 14.0, 15.0], TelemetryEventType.IMPROVEMENT_DETECTED,
+         "strong improvement: smoothed_delta=3.0 > 2.0 = improvement"),
+        ([15.0, 14.0, 13.0, 12.0, 11.0, 10.0], TelemetryEventType.DEGRADATION_DETECTED,
+         "strong degradation: smoothed_delta=-3.0 < -2.0 = degradation"),
+        ([10.0, 10.5, 11.0, 11.5, 12.0, 12.5], None,
+         "medium improvement: smoothed_delta=1.5, not > 2.0 = no event"),
+        ([12.5, 12.0, 11.5, 11.0, 10.5, 10.0], None,
+         "medium degradation: smoothed_delta=-1.5, not < -2.0 = no event"),
     ]
 
     for recent_accs, expected_event, description in test_cases:
         mock_hub.reset_mock()
 
         # Simulate the logic from vectorized.py
-        if len(recent_accs) >= 2:
-            acc_delta = recent_accs[-1] - recent_accs[-2]
+        if len(recent_accs) >= 6:
+            # Compare rolling window averages (need at least 6 samples for meaningful comparison)
+            recent_avg = sum(list(recent_accs)[-3:]) / 3
+            older_avg = sum(list(recent_accs)[-6:-3]) / 3
+            smoothed_delta = recent_avg - older_avg
 
-            if acc_delta < 0.5:
-                from esper.leyline import TelemetryEvent
+            from esper.leyline import TelemetryEvent
+
+            if abs(smoothed_delta) < 0.5:  # True plateau - no significant change either direction
                 mock_hub.emit(TelemetryEvent(
                     event_type=TelemetryEventType.PLATEAU_DETECTED,
                     data={
                         "batch": 1,
-                        "accuracy_delta": acc_delta,
+                        "smoothed_delta": smoothed_delta,
+                        "recent_avg": recent_avg,
+                        "older_avg": older_avg,
                         "rolling_avg_accuracy": sum(recent_accs) / len(recent_accs),
                         "episodes_completed": 10,
                     },
                 ))
-            elif acc_delta > 2.0:
-                from esper.leyline import TelemetryEvent
+            elif smoothed_delta < -2.0:  # Significant degradation
+                mock_hub.emit(TelemetryEvent(
+                    event_type=TelemetryEventType.DEGRADATION_DETECTED,
+                    data={
+                        "batch": 1,
+                        "smoothed_delta": smoothed_delta,
+                        "recent_avg": recent_avg,
+                        "older_avg": older_avg,
+                        "rolling_avg_accuracy": sum(recent_accs) / len(recent_accs),
+                        "episodes_completed": 10,
+                    },
+                ))
+            elif smoothed_delta > 2.0:  # Significant improvement
                 mock_hub.emit(TelemetryEvent(
                     event_type=TelemetryEventType.IMPROVEMENT_DETECTED,
                     data={
                         "batch": 1,
-                        "accuracy_delta": acc_delta,
+                        "smoothed_delta": smoothed_delta,
+                        "recent_avg": recent_avg,
+                        "older_avg": older_avg,
                         "rolling_avg_accuracy": sum(recent_accs) / len(recent_accs),
                         "episodes_completed": 10,
                     },
