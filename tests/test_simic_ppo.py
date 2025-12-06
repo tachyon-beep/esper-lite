@@ -548,3 +548,66 @@ class TestPPOAnomalyTelemetry:
             assert "explained_variance" in event.data
             assert "train_steps" in event.data
             assert event.severity == "warning"
+
+    def test_numerical_instability_emits_telemetry(self):
+        """NaN loss triggers NUMERICAL_INSTABILITY_DETECTED event."""
+        from esper.leyline import TelemetryEventType
+        from esper.nissa import get_hub
+        import numpy as np
+
+        # Capture emitted events
+        captured_events = []
+        hub = get_hub()
+
+        class CaptureBackend:
+            def emit(self, event):
+                captured_events.append(event)
+
+        hub.add_backend(CaptureBackend())
+
+        # Create agent
+        agent = PPOAgent(
+            state_dim=10,
+            action_dim=5,
+            device='cpu',
+        )
+
+        # Add normal transitions
+        for _ in range(10):
+            state = torch.randn(10)
+            agent.buffer.add(
+                state=state,
+                action=0,
+                log_prob=-1.0,
+                value=0.5,
+                reward=1.0,
+                done=False,
+                action_mask=torch.ones(5),
+            )
+
+        # Monkey-patch the network to return NaN loss
+        original_evaluate = agent.network.evaluate_actions
+
+        def evaluate_with_nan(*args, **kwargs):
+            log_probs, values, entropy = original_evaluate(*args, **kwargs)
+            # Inject NaN into values to cause NaN loss
+            values = torch.full_like(values, float('nan'))
+            return log_probs, values, entropy
+
+        agent.network.evaluate_actions = evaluate_with_nan
+
+        # Update should detect numerical instability
+        agent.update()
+
+        # Check for NUMERICAL_INSTABILITY_DETECTED event
+        instability_events = [
+            e for e in captured_events
+            if e.event_type == TelemetryEventType.NUMERICAL_INSTABILITY_DETECTED
+        ]
+
+        # Should have detected NaN
+        assert len(instability_events) >= 1, (
+            f"Expected NUMERICAL_INSTABILITY_DETECTED, got: {[e.event_type for e in captured_events]}"
+        )
+        assert "anomaly_type" in instability_events[0].data
+        assert instability_events[0].data["anomaly_type"] == "numerical_instability"

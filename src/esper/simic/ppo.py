@@ -440,13 +440,22 @@ class PPOAgent:
             max_ratio = max(metrics['ratio_max'])
             min_ratio = min(metrics['ratio_min'])
 
-            # NOTE: has_nan/has_inf are hardcoded False - NUMERICAL_INSTABILITY won't fire until wired up
+            # Check for NaN/Inf in all loss values from the mini-batches
+            batch_has_nan = any(
+                torch.isnan(torch.tensor(loss_val)).any().item()
+                for loss_val in (metrics['policy_loss'] + metrics['value_loss'])
+            )
+            batch_has_inf = any(
+                torch.isinf(torch.tensor(loss_val)).any().item()
+                for loss_val in (metrics['policy_loss'] + metrics['value_loss'])
+            )
+
             anomaly_report = anomaly_detector.check_all(
                 ratio_max=max_ratio,
                 ratio_min=min_ratio,
                 explained_variance=explained_variance,
-                has_nan=False,
-                has_inf=False,
+                has_nan=batch_has_nan,
+                has_inf=batch_has_inf,
             )
 
             if anomaly_report.has_anomaly:
