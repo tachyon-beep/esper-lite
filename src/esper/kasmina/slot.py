@@ -289,23 +289,22 @@ class QualityGates:
     def check_gate(self, state: SeedState, target_stage: SeedStage) -> GateResult:
         """Check if seed passes the gate for target stage."""
 
-        gate = self._get_gate_level(target_stage)
-
-        if gate == GateLevel.G0:
-            return self._check_g0(state)
-        elif gate == GateLevel.G1:
-            return self._check_g1(state)
-        elif gate == GateLevel.G2:
-            return self._check_g2(state)
-        elif gate == GateLevel.G3:
-            return self._check_g3(state)
-        elif gate == GateLevel.G4:
-            return self._check_g4(state)
-        elif gate == GateLevel.G5:
-            return self._check_g5(state)
-
-        # Default: pass
-        return GateResult(gate=gate, passed=True, score=1.0)
+        match self._get_gate_level(target_stage):
+            case GateLevel.G0:
+                return self._check_g0(state)
+            case GateLevel.G1:
+                return self._check_g1(state)
+            case GateLevel.G2:
+                return self._check_g2(state)
+            case GateLevel.G3:
+                return self._check_g3(state)
+            case GateLevel.G4:
+                return self._check_g4(state)
+            case GateLevel.G5:
+                return self._check_g5(state)
+            case gate:
+                # Default: pass
+                return GateResult(gate=gate, passed=True, score=1.0)
 
     def _get_gate_level(self, target_stage: SeedStage) -> GateLevel:
         """Map target stage to gate level."""
