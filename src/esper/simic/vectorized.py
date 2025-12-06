@@ -170,6 +170,8 @@ def train_ppo_vectorized(
     lstm_hidden_dim: int = 128,
     chunk_length: int = 25,  # Must match max_epochs default (25)
     telemetry_config: "TelemetryConfig | None" = None,
+    plateau_threshold: float = 0.5,
+    improvement_threshold: float = 2.0,
 ) -> tuple[PPOAgent, list[dict]]:
     """Train PPO with vectorized environments using INVERTED CONTROL FLOW.
 
@@ -195,6 +197,12 @@ def train_ppo_vectorized(
         save_path: Optional path to save model
         resume_path: Optional path to resume from checkpoint
         seed: Random seed for reproducibility
+        plateau_threshold: Absolute delta threshold below which training is considered
+            plateaued (emits PLATEAU_DETECTED event). Scale-dependent: adjust for
+            different accuracy scales (e.g., 0-1 vs 0-100).
+        improvement_threshold: Delta threshold above which training shows significant
+            improvement/degradation (emits IMPROVEMENT_DETECTED/DEGRADATION_DETECTED
+            events). Scale-dependent: adjust for different accuracy scales.
 
     Returns:
         Tuple of (trained_agent, training_history)
@@ -1149,7 +1157,7 @@ def train_ppo_vectorized(
                 older_avg = sum(recent_accuracies[-6:-3]) / 3
                 smoothed_delta = recent_avg - older_avg
 
-                if abs(smoothed_delta) < 0.5:  # True plateau - no significant change either direction
+                if abs(smoothed_delta) < plateau_threshold:  # True plateau - no significant change either direction
                     hub.emit(TelemetryEvent(
                         event_type=TelemetryEventType.PLATEAU_DETECTED,
                         data={
@@ -1161,7 +1169,7 @@ def train_ppo_vectorized(
                             "episodes_completed": episodes_completed,
                         },
                     ))
-                elif smoothed_delta < -2.0:  # Significant degradation
+                elif smoothed_delta < -improvement_threshold:  # Significant degradation
                     hub.emit(TelemetryEvent(
                         event_type=TelemetryEventType.DEGRADATION_DETECTED,
                         data={
@@ -1173,7 +1181,7 @@ def train_ppo_vectorized(
                             "episodes_completed": episodes_completed,
                         },
                     ))
-                elif smoothed_delta > 2.0:  # Significant improvement
+                elif smoothed_delta > improvement_threshold:  # Significant improvement
                     hub.emit(TelemetryEvent(
                         event_type=TelemetryEventType.IMPROVEMENT_DETECTED,
                         data={

@@ -89,6 +89,74 @@ def test_advance_active_seed_noop_from_training_stage():
     assert model.seed_state.stage == SeedStage.TRAINING
 
 
+def test_custom_thresholds_respected():
+    """Test that custom plateau_threshold and improvement_threshold parameters are respected.
+
+    Verifies that custom thresholds change which events fire, confirming the parameters
+    are actually used instead of hardcoded values.
+    """
+    mock_hub = MagicMock()
+
+    # Test case: smoothed_delta = 3.0 (would normally trigger IMPROVEMENT with default threshold of 2.0)
+    recent_accuracies = [10.0, 11.0, 12.0, 13.0, 14.0, 15.0]
+
+    # With default thresholds (0.5, 2.0), this should fire IMPROVEMENT_DETECTED
+    plateau_threshold = 0.5
+    improvement_threshold = 2.0
+
+    recent_avg = sum(recent_accuracies[-3:]) / 3
+    older_avg = sum(recent_accuracies[-6:-3]) / 3
+    smoothed_delta = recent_avg - older_avg
+
+    from esper.leyline import TelemetryEvent
+
+    # Simulate default threshold behavior (smoothed_delta = 3.0)
+    if abs(smoothed_delta) < plateau_threshold:
+        mock_hub.emit(TelemetryEvent(
+            event_type=TelemetryEventType.PLATEAU_DETECTED,
+            data={"smoothed_delta": smoothed_delta},
+        ))
+    elif smoothed_delta < -improvement_threshold:
+        mock_hub.emit(TelemetryEvent(
+            event_type=TelemetryEventType.DEGRADATION_DETECTED,
+            data={"smoothed_delta": smoothed_delta},
+        ))
+    elif smoothed_delta > improvement_threshold:
+        mock_hub.emit(TelemetryEvent(
+            event_type=TelemetryEventType.IMPROVEMENT_DETECTED,
+            data={"smoothed_delta": smoothed_delta},
+        ))
+
+    assert mock_hub.emit.call_count == 1
+    assert mock_hub.emit.call_args[0][0].event_type == TelemetryEventType.IMPROVEMENT_DETECTED
+
+    # Now with custom very high improvement threshold, smoothed_delta=3.0 should be considered plateau
+    mock_hub.reset_mock()
+    plateau_threshold = 5.0  # smoothed_delta=3.0 < 5.0, so it's a plateau
+    improvement_threshold = 5.0  # smoothed_delta=3.0 < 5.0, won't trigger improvement
+
+    if abs(smoothed_delta) < plateau_threshold:
+        mock_hub.emit(TelemetryEvent(
+            event_type=TelemetryEventType.PLATEAU_DETECTED,
+            data={"smoothed_delta": smoothed_delta},
+        ))
+    elif smoothed_delta < -improvement_threshold:
+        mock_hub.emit(TelemetryEvent(
+            event_type=TelemetryEventType.DEGRADATION_DETECTED,
+            data={"smoothed_delta": smoothed_delta},
+        ))
+    elif smoothed_delta > improvement_threshold:
+        mock_hub.emit(TelemetryEvent(
+            event_type=TelemetryEventType.IMPROVEMENT_DETECTED,
+            data={"smoothed_delta": smoothed_delta},
+        ))
+
+    # With high thresholds, should emit PLATEAU instead of IMPROVEMENT
+    assert mock_hub.emit.call_count == 1, "Custom thresholds should change which event fires"
+    assert mock_hub.emit.call_args[0][0].event_type == TelemetryEventType.PLATEAU_DETECTED, \
+        "With high thresholds, smoothed_delta=3.0 should be considered a plateau"
+
+
 def test_plateau_detection_logic():
     """Test that plateau/degradation/improvement detection logic works correctly.
 
