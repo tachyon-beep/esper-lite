@@ -611,3 +611,43 @@ class TestPPOAnomalyTelemetry:
         )
         assert "anomaly_type" in instability_events[0].data
         assert instability_events[0].data["anomaly_type"] == "numerical_instability"
+
+
+def test_fused_nan_inf_detection():
+    """Verify NaN/Inf detection uses single fused check instead of separate checks."""
+    import torch
+    from esper.simic.ppo import PPOAgent
+    from unittest.mock import patch
+
+    agent = PPOAgent(state_dim=10, action_dim=4, device="cpu")
+
+    # Create buffer with normal data
+    state = torch.randn(10)
+    action_mask = torch.ones(4)
+    agent.store_transition(state, 0, -0.5, 0.5, 1.0, False, action_mask)
+    agent.store_transition(state, 1, -0.3, 0.6, 0.5, True, action_mask)
+
+    # Mock ratio to contain NaN to trigger detection
+    original_evaluate = agent.network.evaluate_actions
+    def mock_evaluate(states, actions, masks):
+        log_probs, values, entropy = original_evaluate(states, actions, masks)
+        # Create old_log_probs that will make ratio become NaN
+        # ratio = exp(log_probs - old_log_probs), if old_log_probs is NaN, ratio is NaN
+        log_probs = torch.full_like(log_probs, float('nan'))
+        return log_probs, values, entropy
+
+    with patch.object(agent.network, 'evaluate_actions', side_effect=mock_evaluate):
+        metrics = agent.update(last_value=0.0)
+
+    # OLD implementation sets separate flags: ratio_has_nan=True, ratio_has_inf=True
+    # NEW implementation sets combined flag: ratio_has_numerical_issue=True
+    # This test expects OLD behavior to fail, then we'll implement NEW behavior
+    has_old_api = 'ratio_has_nan' in metrics or 'ratio_has_inf' in metrics
+    has_new_api = 'ratio_has_numerical_issue' in metrics
+
+    # Test should fail with old implementation (has_old_api=True)
+    # After fix, should pass (has_old_api=False, has_new_api=True)
+    assert not has_old_api, \
+        "Should use fused check (ratio_has_numerical_issue), not separate nan/inf flags"
+    assert has_new_api or not any(metrics.values()), \
+        "Should have ratio_has_numerical_issue when numerical issues detected"

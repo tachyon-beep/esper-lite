@@ -324,6 +324,7 @@ class PPOAgent:
 
         metrics = defaultdict(list)
         metrics['explained_variance'] = [explained_variance]  # Single value, not per-batch
+        flags = {}  # Non-list metrics (boolean flags)
         early_stopped = False
 
         # Normalize advantages once over full buffer (before batching)
@@ -358,11 +359,14 @@ class PPOAgent:
                 # PPO-Clip loss
                 ratio = torch.exp(log_probs - old_log_probs)
 
-                # Check ratio for numerical issues (critical detection point)
-                if torch.isnan(ratio).any():
-                    metrics['ratio_has_nan'] = True
-                if torch.isinf(ratio).any():
-                    metrics['ratio_has_inf'] = True
+                # Check ratio for numerical issues - single fused kernel
+                # isfinite() combines isnan + isinf into one kernel, all() is single reduction
+                if not torch.isfinite(ratio).all():
+                    flags['ratio_has_numerical_issue'] = True
+                    # Debug breakdown only when telemetry requests it (avoids extra syncs)
+                    if telemetry_config.should_collect("debug"):
+                        flags['ratio_has_nan'] = torch.isnan(ratio).any().item()
+                        flags['ratio_has_inf'] = torch.isinf(ratio).any().item()
 
                 # Track ratio statistics for telemetry
                 metrics['ratio_mean'].append(ratio.mean().item())
@@ -449,15 +453,17 @@ class PPOAgent:
 
             # Check for NaN/Inf in all loss values from the mini-batches
             all_losses = metrics['policy_loss'] + metrics['value_loss']
-            batch_has_nan = any(math.isnan(v) for v in all_losses) or metrics.get('ratio_has_nan', False)
-            batch_has_inf = any(math.isinf(v) for v in all_losses) or metrics.get('ratio_has_inf', False)
+            loss_has_issue = any(math.isnan(v) or math.isinf(v) for v in all_losses)
+            ratio_has_issue = flags.get('ratio_has_numerical_issue', False)
+            has_numerical_issue = loss_has_issue or ratio_has_issue
 
+            # Use debug breakdown values when available for accurate anomaly reporting
             anomaly_report = anomaly_detector.check_all(
                 ratio_max=max_ratio,
                 ratio_min=min_ratio,
                 explained_variance=explained_variance,
-                has_nan=batch_has_nan,
-                has_inf=batch_has_inf,
+                has_nan=flags.get('ratio_has_nan', has_numerical_issue),
+                has_inf=flags.get('ratio_has_inf', False),
             )
 
             if anomaly_report.has_anomaly:
@@ -510,6 +516,9 @@ class PPOAgent:
             else:
                 # Regular metrics are lists of scalars that need averaging
                 result[k] = sum(v) / len(v)
+
+        # Merge in boolean flags from separate dict
+        result.update(flags)
 
         result['anomaly_detected'] = 1.0 if anomaly_detected else 0.0
         if early_stopped:
@@ -667,11 +676,10 @@ class PPOAgent:
             metrics['ratio_min'] = [stacked.min().item()]
             metrics['ratio_std'] = [stacked.std().item()]
 
-            # Check for NaN/Inf in ratios
-            if torch.isnan(stacked).any():
-                metrics['ratio_has_nan'] = True
-            if torch.isinf(stacked).any():
-                metrics['ratio_has_inf'] = True
+            # Check for NaN/Inf in ratios - single fused check
+            # Store in separate dict to avoid type conflict with list-based metrics
+            if not torch.isfinite(stacked).all():
+                metrics['ratio_has_numerical_issue'] = True
 
         return metrics
 
