@@ -125,27 +125,25 @@ class SeedGradientCollector:
                 'has_exploding': False,
             }
 
-        # Compute L2 norm for each gradient tensor
-        # Using public API (torch.norm) instead of private torch._foreach_norm
-        per_param_norms = [g.norm(2) for g in grads]
+        # [PyTorch 2.9] Use _foreach_norm for efficient multi-tensor norm computation
+        # This is a fused CUDA kernel that computes all norms in a single kernel launch,
+        # avoiding Python iteration overhead. Used internally by clip_grad_norm_.
+        per_param_norms = torch._foreach_norm(grads, ord=2)
 
-        # Stack to compute stats efficiently on GPU/CPU
+        # Stack for vectorized comparisons
         all_norms = torch.stack(per_param_norms)
         n_grads = len(grads)
 
-        # Compute Statistics - keep as tensors!
-        total_squared_norm = torch.sum(all_norms ** 2)
-
-        # Health Checks (vectorized) - keep as tensors!
-        n_vanishing = torch.sum(all_norms < self.vanishing_threshold)
-        n_exploding = torch.sum(all_norms > self.exploding_threshold)
+        # Total norm via Pythagorean theorem (avoids large tensor allocation)
+        total_squared_norm = (all_norms ** 2).sum()
 
         return {
             '_empty': False,
             '_n_grads': n_grads,
             '_total_squared_norm': total_squared_norm,
-            '_n_vanishing': n_vanishing,
-            '_n_exploding': n_exploding,
+            '_all_norms': all_norms,
+            '_n_vanishing': (all_norms < self.vanishing_threshold).sum(),
+            '_n_exploding': (all_norms > self.exploding_threshold).sum(),
         }
 
 
