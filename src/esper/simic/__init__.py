@@ -32,6 +32,10 @@ from esper.simic.buffers import (
     RolloutStep,
     RolloutBuffer,
 )
+from esper.simic.prioritized_buffer import (
+    SumTree,
+    PrioritizedReplayBuffer,
+)
 
 # Normalization
 from esper.simic.normalization import RunningMeanStd
@@ -128,6 +132,8 @@ __all__ = [
     # Buffers
     "RolloutStep",
     "RolloutBuffer",
+    "SumTree",
+    "PrioritizedReplayBuffer",
 
     # Normalization
     "RunningMeanStd",
