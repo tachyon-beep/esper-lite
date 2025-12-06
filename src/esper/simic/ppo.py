@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from pathlib import Path
+import math
 
 import torch
 import torch.nn as nn
@@ -357,6 +358,12 @@ class PPOAgent:
                 # PPO-Clip loss
                 ratio = torch.exp(log_probs - old_log_probs)
 
+                # Check ratio for numerical issues (critical detection point)
+                if torch.isnan(ratio).any():
+                    metrics['ratio_has_nan'] = True
+                if torch.isinf(ratio).any():
+                    metrics['ratio_has_inf'] = True
+
                 # Track ratio statistics for telemetry
                 metrics['ratio_mean'].append(ratio.mean().item())
                 metrics['ratio_std'].append(ratio.std().item())
@@ -441,14 +448,9 @@ class PPOAgent:
             min_ratio = min(metrics['ratio_min'])
 
             # Check for NaN/Inf in all loss values from the mini-batches
-            batch_has_nan = any(
-                torch.isnan(torch.tensor(loss_val)).any().item()
-                for loss_val in (metrics['policy_loss'] + metrics['value_loss'])
-            )
-            batch_has_inf = any(
-                torch.isinf(torch.tensor(loss_val)).any().item()
-                for loss_val in (metrics['policy_loss'] + metrics['value_loss'])
-            )
+            all_losses = metrics['policy_loss'] + metrics['value_loss']
+            batch_has_nan = any(math.isnan(v) for v in all_losses) or metrics.get('ratio_has_nan', False)
+            batch_has_inf = any(math.isinf(v) for v in all_losses) or metrics.get('ratio_has_inf', False)
 
             anomaly_report = anomaly_detector.check_all(
                 ratio_max=max_ratio,
