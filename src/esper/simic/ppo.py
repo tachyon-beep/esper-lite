@@ -562,6 +562,7 @@ class PPOAgent:
         total_entropy = 0.0
         total_approx_kl = 0.0  # For diagnostics
         n_updates = 0
+        all_ratios = []  # Track ratio statistics for anomaly detection
 
         for epoch in range(n_epochs):
             # Process chunks in batches
@@ -600,6 +601,10 @@ class PPOAgent:
 
                 # PPO clipped objective
                 ratio = torch.exp(log_probs_valid - old_log_probs_valid)
+
+                # Track ratio for anomaly detection
+                all_ratios.append(ratio.detach())
+
                 surr1 = ratio * advantages_valid
                 surr2 = torch.clamp(ratio, 1 - self.clip_ratio, 1 + self.clip_ratio) * advantages_valid
                 policy_loss = -torch.min(surr1, surr2).mean()
@@ -648,12 +653,27 @@ class PPOAgent:
                 f"Consider reducing lr or n_epochs to stabilize training."
             )
 
-        return {
+        # Compute ratio statistics for anomaly detection
+        metrics = {
             'policy_loss': total_policy_loss / max(n_updates, 1),
             'value_loss': total_value_loss / max(n_updates, 1),
             'entropy': total_entropy / max(n_updates, 1),
             'approx_kl': avg_approx_kl,
         }
+
+        if all_ratios:
+            stacked = torch.cat(all_ratios)
+            metrics['ratio_max'] = [stacked.max().item()]
+            metrics['ratio_min'] = [stacked.min().item()]
+            metrics['ratio_std'] = [stacked.std().item()]
+
+            # Check for NaN/Inf in ratios
+            if torch.isnan(stacked).any():
+                metrics['ratio_has_nan'] = True
+            if torch.isinf(stacked).any():
+                metrics['ratio_has_inf'] = True
+
+        return metrics
 
     def save(self, path: str | Path, metadata: dict = None) -> None:
         """Save agent to file."""
