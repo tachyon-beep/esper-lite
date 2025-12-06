@@ -282,12 +282,14 @@ class QualityGates:
         max_isolation_violations: int = 10,
         min_shadowing_correlation: float = 0.9,
         min_probation_stability: float = 0.95,
+        min_seed_gradient_ratio: float = 0.05,
     ):
         self.min_training_improvement = min_training_improvement
         self.min_blending_epochs = min_blending_epochs
         self.max_isolation_violations = max_isolation_violations
         self.min_shadowing_correlation = min_shadowing_correlation
         self.min_probation_stability = min_probation_stability
+        self.min_seed_gradient_ratio = min_seed_gradient_ratio
 
     def check_gate(self, state: SeedState, target_stage: SeedStage) -> GateResult:
         """Check if seed passes the gate for target stage."""
@@ -406,8 +408,7 @@ class QualityGates:
 
         # NEW: Gradient-based seed activity check
         # Ensures seed is actually learning, not just riding host improvements
-        min_gradient_ratio = 0.05  # Seed should have at least 5% of host gradient activity
-        if state.metrics.seed_gradient_norm_ratio >= min_gradient_ratio:
+        if state.metrics.seed_gradient_norm_ratio >= self.min_seed_gradient_ratio:
             checks_passed.append(f"seed_gradient_active_{state.metrics.seed_gradient_norm_ratio:.2f}")
             gradient_ok = True
         else:

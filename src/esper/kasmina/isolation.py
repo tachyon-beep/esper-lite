@@ -121,9 +121,13 @@ class GradientIsolationMonitor:
         if not is_isolated:
             self.violations += 1
 
+        # Compute gradient ratio: seed_norm / (host_norm + eps)
+        ratio = seed_norm / (host_norm + 1e-8) if host_norm > 0 else 0.0
+
         return is_isolated, {
             "host_grad_norm": host_norm,
             "seed_grad_norm": seed_norm,
+            "seed_gradient_ratio": ratio,
             "isolated": is_isolated,
             "violations": self.violations,
         }
