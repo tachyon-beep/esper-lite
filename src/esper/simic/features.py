@@ -14,6 +14,8 @@ from dataclasses import dataclass
 import math
 from typing import TYPE_CHECKING
 
+import torch
+
 # HOT PATH: ONLY leyline imports allowed!
 from esper.leyline import (
     TensorSchema,
@@ -32,6 +34,7 @@ if TYPE_CHECKING:
 __all__ = [
     "safe",
     "obs_to_base_features",
+    "obs_to_base_features_tensor",
     "compute_action_mask",
     "TaskConfig",
     "normalize_observation",
@@ -134,6 +137,85 @@ def obs_to_base_features(obs: dict, max_epochs: int = 200) -> list[float]:
         # Blueprint features (NEW - one-hot encoding)
         *blueprint_one_hot,                                   # 5 features, exactly one is 1.0 or all zeros
     ]
+
+
+def obs_to_base_features_tensor(
+    obs: dict,
+    device: torch.device,
+    max_epochs: int = 200,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Extract V3-style base features directly as tensor.
+
+    More efficient than obs_to_base_features() + torch.tensor() for
+    high-throughput training loops. Avoids Python list allocation.
+
+    Note: This function is NOT designed for torch.compile due to
+    dict access and variable-length history. Use for rollout collection
+    only; the network forward pass should use the tensor directly.
+
+    Args:
+        obs: Observation dictionary
+        device: Target device for tensor
+        max_epochs: Maximum epochs for normalization
+        out: Optional pre-allocated output tensor (35,) for zero-alloc mode
+
+    Returns:
+        Tensor of shape (35,) with base features
+    """
+    if out is None:
+        out = torch.empty(35, dtype=torch.float32, device=device)
+
+    # Blueprint one-hot
+    blueprint_id = obs.get('seed_blueprint_id', 0)
+    num_blueprints = obs.get('num_blueprints', 5)
+
+    # Convert histories to tensors for vectorized assignment
+    loss_hist_raw = torch.tensor(obs['loss_history_5'], dtype=torch.float32, device=device)
+    acc_hist = torch.tensor(obs['accuracy_history_5'], dtype=torch.float32, device=device)
+
+    # Handle NaN/Inf like safe() does - replace with default value (10.0 for loss)
+    loss_hist = torch.where(torch.isfinite(loss_hist_raw), loss_hist_raw, torch.full_like(loss_hist_raw, 10.0))
+    # Match safe() clipping: max_val defaults to 100.0, not 10.0
+    loss_hist = torch.clamp(loss_hist, min=-100.0, max=100.0) / 10.0
+
+    # Accuracy doesn't use safe() in list version, just divide
+    acc_hist = acc_hist / 100.0
+
+    # Fill tensor - scalar assignments
+    out[0] = float(obs['epoch']) / max_epochs
+    out[1] = float(obs['global_step']) / (max_epochs * 100)
+    out[2] = safe(obs['train_loss'], 10.0) / 10.0
+    out[3] = safe(obs['val_loss'], 10.0) / 10.0
+    out[4] = safe(obs['loss_delta'], 0.0, max_val=5.0) / 5.0
+    out[5] = obs['train_accuracy'] / 100.0
+    out[6] = obs['val_accuracy'] / 100.0
+    out[7] = safe(obs['accuracy_delta'], 0.0, max_val=50.0) / 50.0
+    out[8] = float(obs['plateau_epochs']) / 20.0
+    out[9] = obs['best_val_accuracy'] / 100.0
+    out[10] = safe(obs['best_val_loss'], 10.0) / 10.0
+
+    # History features - vectorized slice assignment
+    out[11:16] = loss_hist
+    out[16:21] = acc_hist
+
+    # Seed state features
+    out[21] = float(obs['has_active_seed'])
+    out[22] = float(obs['seed_stage']) / 7.0
+    out[23] = float(obs['seed_epochs_in_stage']) / 50.0
+    out[24] = obs['seed_alpha']
+    out[25] = safe(obs['seed_improvement'], 0.0, max_val=10.0) / 10.0
+    out[26] = float(obs['available_slots'])
+    out[27] = safe(obs.get('seed_counterfactual', 0.0), 0.0, max_val=10.0) / 10.0
+    out[28] = safe(obs.get('host_grad_norm', 0.0), 0.0, max_val=10.0) / 10.0
+    out[29] = obs.get('host_learning_phase', 0.0)
+
+    # Blueprint one-hot (5 features)
+    out[30:35] = 0.0
+    if blueprint_id > 0 and blueprint_id <= num_blueprints:
+        out[29 + blueprint_id] = 1.0
+
+    return out
 
 
 # =============================================================================
