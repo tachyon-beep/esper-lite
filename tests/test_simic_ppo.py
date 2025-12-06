@@ -749,3 +749,34 @@ def test_adaptive_entropy_floor_log_scaling():
 
     assert abs(floor_few - expected_floor) < 0.001, \
         f"Expected {expected_floor:.4f}, got {floor_few:.4f}"
+
+
+def test_comprehensive_value_function_metrics():
+    """PPO update should return comprehensive value function diagnostics."""
+    import torch
+    from esper.simic.ppo import PPOAgent
+
+    agent = PPOAgent(state_dim=10, action_dim=4, device="cpu")
+
+    # Add transitions
+    for i in range(10):
+        state = torch.randn(10)
+        action_mask = torch.ones(4)
+        reward = 1.0 if i > 5 else -0.5
+        done = i == 9
+        agent.store_transition(state, i % 4, -0.5, 0.5, reward, done, action_mask)
+
+    metrics = agent.update(last_value=0.0)
+
+    # Core value function diagnostics
+    assert 'value_pred_mean' in metrics
+    assert 'value_pred_std' in metrics
+    assert 'return_mean' in metrics
+    assert 'return_std' in metrics
+
+    # Additional diagnostics (DRL Expert recommendations)
+    assert 'value_mse_before' in metrics  # Critic error before update
+    assert 'return_min' in metrics
+    assert 'return_max' in metrics
+    assert 'advantage_mean_prenorm' in metrics  # Critical for PPO stability
+    assert 'advantage_std_prenorm' in metrics

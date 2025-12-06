@@ -411,7 +411,50 @@ class PPOAgent:
 
         # Normalize advantages once over full buffer (before batching)
         # This prevents per-batch normalization variance in gradient updates
+        # Store pre-normalization stats for stability diagnostics (BEFORE normalization)
+        advantages_prenorm_mean = advantages.mean()
+        advantages_prenorm_std = advantages.std()
+
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
+        # === Value Function Diagnostics (DRL Expert recommendations) ===
+        # Compute all stats as a single tensor for batched extraction (fewer CPU syncs)
+        # [PyTorch Expert] Cast to float32 for stable statistics under mixed precision
+        with torch.no_grad():
+            v = values_tensor.float() if values_tensor.dtype != torch.float32 else values_tensor
+            r = returns.float() if returns.dtype != torch.float32 else returns
+
+            value_stats = torch.stack([
+                v.mean(),
+                v.std(),
+                r.mean(),
+                r.std(),
+                r.min(),
+                r.max(),
+                F.mse_loss(v, r),  # Critic error before update
+                advantages_prenorm_mean,  # Pre-normalization (critical for stability debugging)
+                advantages_prenorm_std,   # If very small, normalization amplifies noise
+            ])
+
+        # Single CPU sync to extract all values
+        stats_list = value_stats.tolist()
+
+        metrics['value_pred_mean'] = [stats_list[0]]
+        metrics['value_pred_std'] = [stats_list[1]]
+        metrics['return_mean'] = [stats_list[2]]
+        metrics['return_std'] = [stats_list[3]]
+        metrics['return_min'] = [stats_list[4]]
+        metrics['return_max'] = [stats_list[5]]
+        metrics['value_mse_before'] = [stats_list[6]]
+        metrics['advantage_mean_prenorm'] = [stats_list[7]]
+        metrics['advantage_std_prenorm'] = [stats_list[8]]
+
+        # [DRL Expert] Warn when advantage std is very low - normalization amplifies noise
+        if stats_list[8] < 0.1:
+            logger.warning(
+                f"Very low advantage std ({stats_list[8]:.4f}) before normalization. "
+                f"Normalization may amplify noise. Consider reducing gamma or checking reward scale."
+            )
 
         # === AUTO-ESCALATION: Check for anomalies and escalate if needed ===
         from esper.simic.anomaly_detector import AnomalyDetector
