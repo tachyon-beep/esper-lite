@@ -19,7 +19,7 @@ _DEBUG_STE = os.environ.get("ESPER_DEBUG_STE", "").lower() in ("1", "true", "yes
 import torch
 import torch.nn as nn
 
-from esper.kasmina.isolation import GradientIsolationMonitor, blend_with_isolation
+from esper.kasmina.isolation import GradientIsolationMonitor, blend_with_isolation, ste_forward
 
 from esper.leyline import (
     # Lifecycle
@@ -906,7 +906,7 @@ class SeedSlot(nn.Module):
                 assert seed_features.requires_grad, (
                     "STE requires seed_features to have requires_grad=True for gradient flow"
                 )
-            return host_features + (seed_features - seed_features.detach())
+            return ste_forward(host_features, seed_features)
 
         # 4. BLENDING and later stages: topology-aware host isolation.
         detach_host = True
