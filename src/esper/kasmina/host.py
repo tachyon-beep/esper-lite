@@ -208,7 +208,8 @@ class TransformerHost(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, T = x.shape
-        assert T <= self.block_size, f"Sequence length {T} exceeds block_size {self.block_size}"
+        if T > self.block_size:
+            raise ValueError(f"Sequence length {T} exceeds block_size {self.block_size}")
 
         # Embeddings
         pos = torch.arange(T, device=x.device)
