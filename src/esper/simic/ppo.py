@@ -595,7 +595,7 @@ class PPOAgent:
                 ratio_min=min_ratio,
                 explained_variance=explained_variance,
                 has_nan=flags.get('ratio_has_nan', has_numerical_issue),
-                has_inf=flags.get('ratio_has_inf', False),
+                has_inf=flags.get('ratio_has_inf', has_numerical_issue),
             )
 
             if anomaly_report.has_anomaly:
