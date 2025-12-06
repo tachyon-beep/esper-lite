@@ -81,6 +81,9 @@ class SeedMetrics:
     # This is the TRUE causal attribution: real_acc - baseline_acc(alpha=0)
     counterfactual_contribution: float | None = None
 
+    # Gradient-based seed activity metric
+    seed_gradient_norm_ratio: float = 0.0  # seed_grad_norm / (host_grad_norm + eps)
+
     def record_accuracy(self, accuracy: float | torch.Tensor) -> None:
         """Record a new accuracy measurement.
 
@@ -371,7 +374,7 @@ class QualityGates:
         )
 
     def _check_g2(self, state: SeedState) -> GateResult:
-        """G2: Blending readiness – global improvement + seed readiness."""
+        """G2: Blending readiness – global improvement + seed readiness + gradient activity."""
         checks_passed = []
         checks_failed = []
 
@@ -401,7 +404,17 @@ class QualityGates:
             checks_failed.append("seed_not_ready")
             seed_ok = False
 
-        passed = perf_ok and isolation_ok and seed_ok
+        # NEW: Gradient-based seed activity check
+        # Ensures seed is actually learning, not just riding host improvements
+        min_gradient_ratio = 0.05  # Seed should have at least 5% of host gradient activity
+        if state.metrics.seed_gradient_norm_ratio >= min_gradient_ratio:
+            checks_passed.append(f"seed_gradient_active_{state.metrics.seed_gradient_norm_ratio:.2f}")
+            gradient_ok = True
+        else:
+            checks_failed.append(f"seed_gradient_low_{state.metrics.seed_gradient_norm_ratio:.2f}")
+            gradient_ok = False
+
+        passed = perf_ok and isolation_ok and seed_ok and gradient_ok
         score = min(1.0, improvement / 5.0) if improvement > 0 else 0.0
 
         return GateResult(
