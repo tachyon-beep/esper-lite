@@ -9,7 +9,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from esper.leyline import TrainingSignals, TrainingMetrics
+from esper.leyline import TrainingSignals, TrainingMetrics, TelemetryEvent, TelemetryEventType
+from esper.nissa import get_hub
 
 if TYPE_CHECKING:
     from esper.kasmina import SeedState
@@ -118,6 +119,21 @@ class SignalTracker:
                         else:
                             print(f"[{env_str}] Host stabilized at epoch {epoch} "
                                   f"({self._stable_count}/{self.stabilization_epochs} stable) - germination now allowed")
+
+                        # Emit TAMIYO_INITIATED telemetry
+                        hub = get_hub()
+                        hub.emit(TelemetryEvent(
+                            event_type=TelemetryEventType.TAMIYO_INITIATED,
+                            epoch=epoch,
+                            data={
+                                "env_id": self.env_id,
+                                "epoch": epoch,
+                                "stable_count": self._stable_count,
+                                "stabilization_epochs": self.stabilization_epochs,
+                                "val_loss": val_loss,
+                            },
+                            message="Host stabilized - germination now allowed",
+                        ))
                 else:
                     self._stable_count = 0
 
