@@ -259,6 +259,17 @@ class TestRecurrentActorCritic:
         assert (net.lstm.bias_ih_l1.data[h:2*h] == 1.0).all(), "Layer 1 bias_ih forget gate should be 1.0"
         assert (net.lstm.bias_hh_l1.data[h:2*h] == 1.0).all(), "Layer 1 bias_hh forget gate should be 1.0"
 
+    def test_recurrent_actor_critic_has_layernorm(self):
+        """RecurrentActorCritic should have LayerNorm on LSTM output."""
+        net = RecurrentActorCritic(state_dim=10, action_dim=4)
+
+        # Verify lstm_ln exists and is correct type (will raise AttributeError if missing)
+        lstm_ln = net.lstm_ln
+        assert isinstance(lstm_ln, torch.nn.LayerNorm), "lstm_ln should be LayerNorm"
+
+        # LayerNorm should match LSTM hidden dim
+        assert lstm_ln.normalized_shape[0] == net.lstm_hidden_dim
+
 
 def test_attention_seed_small_channels():
     """AttentionSeed should handle small channel counts gracefully."""

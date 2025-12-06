@@ -622,6 +622,10 @@ if TORCH_AVAILABLE:
                 batch_first=True,
             )
 
+            # [DRL Best Practice] LayerNorm on LSTM output for stability
+            # Prevents hidden state magnitude drift over long sequences
+            self.lstm_ln = nn.LayerNorm(lstm_hidden_dim)
+
             # Actor head (policy)
             self.actor = nn.Sequential(
                 nn.Linear(lstm_hidden_dim, lstm_hidden_dim // 2),
@@ -722,6 +726,9 @@ if TORCH_AVAILABLE:
 
             # LSTM processing: [batch, seq_len, lstm_hidden_dim]
             lstm_out, hidden = self.lstm(features, hidden)
+
+            # [DRL Best Practice] Normalize LSTM output to stabilize hidden magnitudes
+            lstm_out = self.lstm_ln(lstm_out)
 
             # Actor and critic heads
             logits = self.actor(lstm_out)
