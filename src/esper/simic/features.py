@@ -21,7 +21,6 @@ from esper.leyline import (
     TensorSchema,
     TENSOR_SCHEMA_SIZE,
     MIN_CULL_AGE,
-    FULL_EVALUATION_AGE,
     MIN_GERMINATE_EPOCH,
     MIN_PLATEAU_TO_GERMINATE,
 )
