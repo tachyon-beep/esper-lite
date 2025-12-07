@@ -48,7 +48,9 @@ def _cifar10_spec() -> TaskSpec:
     loss_cfg = LossRewardConfig.for_cifar10()
 
     def _make_model(device: str) -> MorphogeneticModel:
-        host = CNNHost(num_classes=10)
+        # Deliberately weak host (8 base channels vs default 32) to leave
+        # headroom for seeds to demonstrate value. Expected accuracy ~40-50%.
+        host = CNNHost(num_classes=10, base_channels=8)
         return MorphogeneticModel(host, device=device, task_config=cifar_config)
 
     return TaskSpec(
