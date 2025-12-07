@@ -122,6 +122,23 @@ class ConsoleOutput(OutputBackend):
             else:
                 msg = event.message or event_type
             print(f"[{timestamp}] {seed_id} | {msg}")
+        elif event_type == "REWARD_COMPUTED":
+            data = event.data or {}
+            env_id = data.get("env_id", "?")
+            action = data.get("action_name", "?")
+            total = data.get("total_reward", 0.0)
+            # Show key components
+            bounded = data.get("bounded_attribution")
+            base = data.get("base_acc_delta", 0.0)
+            rent = data.get("compute_rent", 0.0)
+            val_acc = data.get("val_acc", 0.0)
+            # Format: env, action, total reward, and key breakdown
+            if bounded is not None:
+                # Contribution-primary reward
+                print(f"[{timestamp}] env{env_id} | {action}: r={total:+.2f} (attr={bounded:+.2f}, rent={rent:.2f}) acc={val_acc:.1f}%")
+            else:
+                # Legacy shaped reward
+                print(f"[{timestamp}] env{env_id} | {action}: r={total:+.2f} (Δacc={base:+.2f}, rent={rent:.2f}) acc={val_acc:.1f}%")
         else:
             msg = event.message or event_type
             print(f"[{timestamp}] {seed_id} | {msg}")
