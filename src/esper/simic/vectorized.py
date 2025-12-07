@@ -35,8 +35,6 @@ from esper.leyline import SeedStage, SeedTelemetry, TelemetryEvent, TelemetryEve
 from esper.leyline.actions import get_blueprint_from_action, is_germinate_action
 from esper.simic.features import compute_action_mask
 from esper.simic.gradient_collector import (
-    collect_seed_gradients_async,
-    materialize_grad_stats,
     collect_dual_gradients_async,
     materialize_dual_grad_stats,
 )
@@ -147,7 +145,6 @@ def _advance_active_seed(model) -> bool:
         # Gate check failure is normal; reward shaping will penalize
         return False
     return False
-    # else: TRAINING/BLENDING handled mechanically via SeedSlot.step_epoch
 
 
 # =============================================================================
@@ -879,11 +876,7 @@ def train_ppo_vectorized(
                         masks_batch,
                         hidden=(batch_h, batch_c),
                     )
-                    deterministic = False
-                    if deterministic:
-                        actions = dist.probs.argmax(dim=-1)
-                    else:
-                        actions = dist.sample()
+                    actions = dist.sample()
                     log_probs = dist.log_prob(actions)
 
                 # Store new hidden per-env

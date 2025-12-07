@@ -461,7 +461,6 @@ def train_ppo(
     entropy_anneal_episodes: int = 0,
     gamma: float = 0.99,
     save_path: str | None = None,
-    resume_path: str | None = None,
     seed: int | None = None,
     telemetry_config: "TelemetryConfig | None" = None,
 ):
