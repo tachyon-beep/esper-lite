@@ -50,14 +50,24 @@ class ConsoleOutput(OutputBackend):
     Args:
         verbose: If True, show full event details. If False, show summary.
         use_color: If True, use ANSI color codes for formatting.
+        min_severity: Minimum severity level to display (debug, info, warning, error, critical).
     """
 
-    def __init__(self, verbose: bool = False, use_color: bool = True):
+    # Severity levels ordered by increasing importance
+    _SEVERITY_ORDER = {"debug": 0, "info": 1, "warning": 2, "error": 3, "critical": 4}
+
+    def __init__(self, verbose: bool = False, use_color: bool = True, min_severity: str = "info"):
         self.verbose = verbose
         self.use_color = use_color
+        self.min_severity = min_severity
 
     def emit(self, event: TelemetryEvent) -> None:
-        """Emit event to console."""
+        """Emit event to console if it meets minimum severity threshold."""
+        # Filter by severity - debug events are suppressed by default
+        event_severity = getattr(event, 'severity', 'info')
+        if self._SEVERITY_ORDER.get(event_severity, 1) < self._SEVERITY_ORDER.get(self.min_severity, 1):
+            return
+
         if self.verbose:
             self._emit_verbose(event)
         else:
