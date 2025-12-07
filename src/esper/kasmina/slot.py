@@ -177,6 +177,7 @@ class SeedState:
 
     stage: SeedStage = SeedStage.DORMANT
     previous_stage: SeedStage = SeedStage.UNKNOWN
+    previous_epochs_in_stage: int = 0  # Epochs in previous stage at transition (for PBRS)
     stage_entered_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     alpha: float = 0.0
@@ -245,6 +246,7 @@ class SeedState:
             return False
 
         self.previous_stage = self.stage
+        self.previous_epochs_in_stage = self.metrics.epochs_in_current_stage  # For PBRS telescoping
         self.stage = new_stage
         self.stage_entered_at = datetime.now(timezone.utc)
         self.stage_history.append((new_stage, self.stage_entered_at))
@@ -273,6 +275,7 @@ class SeedState:
             blueprint_id=self.blueprint_id,
             stage=self.stage,
             previous_stage=self.previous_stage,
+            previous_epochs_in_stage=self.previous_epochs_in_stage,
             stage_entered_at=self.stage_entered_at,
             metrics=self.metrics.to_leyline(),
             is_healthy=self.is_healthy,

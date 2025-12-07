@@ -272,6 +272,7 @@ class SeedInfo(NamedTuple):
     epochs_in_stage: int
     seed_params: int = 0  # Trainable params of active seed
     previous_stage: int = 0  # For PBRS stage bonus calculation
+    previous_epochs_in_stage: int = 0  # Epochs in previous stage at transition (for PBRS telescoping)
     seed_age_epochs: int = 0  # Total epochs since germination (for rent grace)
 
     @staticmethod
@@ -302,6 +303,7 @@ class SeedInfo(NamedTuple):
             epochs_in_stage=seed_state.epochs_in_stage,
             seed_params=seed_params,
             previous_stage=seed_state.previous_stage.value,
+            previous_epochs_in_stage=seed_state.previous_epochs_in_stage,
             seed_age_epochs=seed_age,
         )
 
@@ -421,19 +423,17 @@ def compute_shaped_reward(
         components.stage_bonus = stage_bonus
 
     # Potential-based reward shaping for lifecycle progression
+    # PBRS telescoping: F(s,a,s') = gamma * phi(s') - phi(s)
+    # We must ensure phi(s') at timestep t equals phi(s) at timestep t+1.
     pbrs_bonus = 0.0
     if seed_info is not None:
-        # Reconstruct previous timestep state:
-        # - If epochs_in_stage == 0, we just transitioned this epoch, so the
-        #   previous state was the previous_stage at some terminal epoch count.
-        #   We approximate this as epoch 0 in that stage, which is sufficient
-        #   for PBRS telescoping.
-        # - If epochs_in_stage > 0, we remained in the same stage, so the
-        #   previous state was this stage with epochs_in_stage - 1.
+        # Reconstruct previous timestep state using actual epoch counts
         if seed_info.epochs_in_stage == 0:
+            # Just transitioned - use actual previous epoch count for correct telescoping
             prev_stage = seed_info.previous_stage
-            prev_epochs = 0
+            prev_epochs = seed_info.previous_epochs_in_stage
         else:
+            # Same stage, one fewer epoch
             prev_stage = seed_info.stage
             prev_epochs = seed_info.epochs_in_stage - 1
 
@@ -871,6 +871,10 @@ def _contribution_pbrs_bonus(
 
     Uses flattened potentials to prevent fossilization farming while
     still incentivizing lifecycle progression.
+
+    PBRS telescoping property: F(s,a,s') = gamma * phi(s') - phi(s)
+    Over a trajectory, intermediate potentials cancel, so we must ensure
+    phi(s') at timestep t equals phi(s) at timestep t+1.
     """
     # Current potential
     phi_current = STAGE_POTENTIALS.get(seed_info.stage, 0.0)
@@ -881,9 +885,12 @@ def _contribution_pbrs_bonus(
 
     # Previous potential (reconstruct previous state)
     if seed_info.epochs_in_stage == 0:
-        # Just transitioned - previous was end of last stage
+        # Just transitioned - use actual previous epoch count for correct telescoping
         phi_prev = STAGE_POTENTIALS.get(seed_info.previous_stage, 0.0)
-        phi_prev += config.max_progress_bonus  # Was at max progress in prev stage
+        phi_prev += min(
+            seed_info.previous_epochs_in_stage * config.epoch_progress_bonus,
+            config.max_progress_bonus,
+        )
     else:
         # Same stage, one fewer epoch
         phi_prev = STAGE_POTENTIALS.get(seed_info.stage, 0.0)

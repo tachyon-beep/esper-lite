@@ -332,16 +332,30 @@ def reward_configs(draw):
 def seed_infos(draw):
     """Generate SeedInfo instances.
 
-    Used for reward computation testing.
+    Used for reward computation testing. Generates realistic combinations
+    of epochs_in_stage and previous_epochs_in_stage for PBRS testing.
     """
     from esper.simic.rewards import SeedInfo
 
     improvement = draw(bounded_floats(-10.0, 10.0))
+    epochs = draw(st.integers(min_value=0, max_value=100))
+
+    # For transition cases (epochs_in_stage == 0), generate realistic previous counts
+    # For non-transition cases, previous_epochs_in_stage is irrelevant (defaults to 0)
+    if epochs == 0:
+        previous_epochs = draw(st.integers(min_value=0, max_value=100))
+        previous_stage = draw(seed_stages())
+    else:
+        previous_epochs = 0
+        previous_stage = 0
+
     return SeedInfo(
         stage=draw(seed_stages()),
         improvement_since_stage_start=improvement,
         total_improvement=draw(bounded_floats(-10.0, 10.0)),
-        epochs_in_stage=draw(st.integers(min_value=0, max_value=100)),
+        epochs_in_stage=epochs,
+        previous_stage=previous_stage,
+        previous_epochs_in_stage=previous_epochs,
     )
 
 

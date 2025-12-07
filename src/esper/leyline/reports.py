@@ -68,6 +68,7 @@ class SeedStateReport:
     # Lifecycle
     stage: SeedStage = SeedStage.UNKNOWN
     previous_stage: SeedStage = SeedStage.UNKNOWN
+    previous_epochs_in_stage: int = 0  # Epochs in previous stage at transition (for PBRS)
     stage_entered_at: datetime = field(default_factory=_utc_now)
 
     # Metrics
