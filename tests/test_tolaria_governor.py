@@ -542,3 +542,51 @@ class TestTolariaGovernor:
         assert is_panic is True, (
             "Should detect lobotomy even with larger absolute tolerance for high-entropy tasks"
         )
+
+    def test_rollback_uses_nonblocking_transfer(self):
+        """Test that rollback transfers use non_blocking for efficiency."""
+        from esper.tolaria import TolariaGovernor
+
+        # This test verifies the rollback completes correctly with non_blocking
+        # (actual performance benefit requires CUDA)
+        model = DummyModel()
+        gov = TolariaGovernor(model)
+
+        original_weight = model.linear.weight.data.clone()
+        gov.snapshot()
+
+        model.linear.weight.data.fill_(999.0)
+
+        # Build history
+        for i in range(5):
+            gov.loss_history.append(1.0)
+
+        report = gov.execute_rollback()
+
+        # Verify rollback still works correctly
+        assert torch.allclose(model.linear.weight.data, original_weight)
+        assert report.rollback_occurred is True
+
+    def test_rollback_handles_parameterless_model(self):
+        """Test that rollback handles models with no parameters gracefully."""
+        from esper.tolaria import TolariaGovernor
+
+        class EmptyModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                # No parameters, just a buffer
+                self.register_buffer('counter', torch.tensor(0))
+
+            def forward(self, x):
+                return x
+
+        model = EmptyModel()
+        gov = TolariaGovernor(model)
+
+        # Build history
+        for i in range(5):
+            gov.loss_history.append(1.0)
+
+        # Should not raise StopIteration
+        report = gov.execute_rollback()
+        assert report.rollback_occurred is True

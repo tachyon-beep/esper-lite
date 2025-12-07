@@ -186,11 +186,23 @@ class TolariaGovernor:
         # Restore host + fossilized seeds (strict=True ensures complete restoration)
         # Move all tensors to model device in one batch before loading, avoiding
         # individual CPU->GPU transfers for each parameter.
-        device = next(self.model.parameters()).device
+        # Get device from parameters, falling back to CPU if no parameters
+        try:
+            device = next(self.model.parameters()).device
+        except StopIteration:
+            device = torch.device('cpu')
+
+        # Use non_blocking=True for async CPU->GPU transfer
         state_on_device = {
-            k: v.to(device) if isinstance(v, torch.Tensor) else v
+            k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v
             for k, v in self.last_good_state.items()
         }
+
+        # CRITICAL: Synchronize CUDA stream before load_state_dict
+        # load_state_dict() does NOT synchronize - without this, we load garbage
+        if device.type == 'cuda':
+            torch.cuda.synchronize(device)
+
         self.model.load_state_dict(state_on_device, strict=True)
 
         # Reset panic counter after successful rollback to allow fresh recovery
