@@ -299,6 +299,8 @@ def validate_with_attribution(
     Returns:
         AttributionResult with real and baseline accuracies plus seed_contribution.
     """
+    # Save original training mode to restore after validation
+    was_training = model.training
     model.eval()
 
     def _run_validation_pass() -> tuple[float, float]:
@@ -328,19 +330,23 @@ def validate_with_attribution(
         accuracy = 100.0 * correct_tensor.item() / total if total > 0 else 0.0
         return avg_loss, accuracy
 
-    # Pass 1: Real validation with current alpha
-    real_loss, real_accuracy = _run_validation_pass()
+    try:
+        # Pass 1: Real validation with current alpha
+        real_loss, real_accuracy = _run_validation_pass()
 
-    # Pass 2: Baseline validation with alpha=0 (host-only)
-    # Use force_alpha context manager to temporarily override alpha
-    seed_slot = model.seed_slot
-    with seed_slot.force_alpha(0.0):
-        baseline_loss, baseline_accuracy = _run_validation_pass()
+        # Pass 2: Baseline validation with alpha=0 (host-only)
+        # Use force_alpha context manager to temporarily override alpha
+        seed_slot = model.seed_slot
+        with seed_slot.force_alpha(0.0):
+            baseline_loss, baseline_accuracy = _run_validation_pass()
 
-    return AttributionResult(
-        real_accuracy=real_accuracy,
-        baseline_accuracy=baseline_accuracy,
-        seed_contribution=real_accuracy - baseline_accuracy,
-        real_loss=real_loss,
-        baseline_loss=baseline_loss,
-    )
+        return AttributionResult(
+            real_accuracy=real_accuracy,
+            baseline_accuracy=baseline_accuracy,
+            seed_contribution=real_accuracy - baseline_accuracy,
+            real_loss=real_loss,
+            baseline_loss=baseline_loss,
+        )
+    finally:
+        # Restore original training mode
+        model.train(was_training)
