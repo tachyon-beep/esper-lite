@@ -789,15 +789,18 @@ class PPOAgent:
                 surr2 = torch.clamp(ratio, 1 - self.clip_ratio, 1 + self.clip_ratio) * advantages_valid
                 policy_loss = -torch.min(surr1, surr2).mean()
 
-                # Value loss with clipping (parity with feedforward PPO)
-                values_clipped = old_values_valid + torch.clamp(
-                    values_valid - old_values_valid,
-                    -self.clip_ratio,
-                    self.clip_ratio,
-                )
-                value_loss_unclipped = (values_valid - returns_valid) ** 2
-                value_loss_clipped = (values_clipped - returns_valid) ** 2
-                value_loss = 0.5 * torch.max(value_loss_unclipped, value_loss_clipped).mean()
+                # Value loss (with optional clipping, matching feedforward PPO)
+                if self.clip_value:
+                    values_clipped = old_values_valid + torch.clamp(
+                        values_valid - old_values_valid,
+                        -self.clip_ratio,
+                        self.clip_ratio,
+                    )
+                    value_loss_unclipped = (values_valid - returns_valid) ** 2
+                    value_loss_clipped = (values_clipped - returns_valid) ** 2
+                    value_loss = 0.5 * torch.max(value_loss_unclipped, value_loss_clipped).mean()
+                else:
+                    value_loss = F.mse_loss(values_valid, returns_valid)
 
                 # Entropy bonus
                 entropy_loss = -entropy_valid.mean()

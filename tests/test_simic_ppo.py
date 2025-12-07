@@ -391,6 +391,33 @@ class TestRecurrentPPOAgent:
         )
         assert agent.value_coef == 0.25
 
+    def test_clip_value_false_uses_mse_loss(self):
+        """Recurrent PPO with clip_value=False should use plain MSE loss."""
+        agent = PPOAgent(
+            state_dim=30, action_dim=7, recurrent=True, device='cpu',
+            chunk_length=4, lstm_hidden_dim=64,
+            clip_value=False,  # Disable value clipping
+        )
+        assert agent.clip_value is False
+
+        # Add episode
+        agent.recurrent_buffer.start_episode(env_id=0)
+        hidden = None
+        for i in range(4):
+            state = torch.randn(30)
+            mask = torch.ones(7, dtype=torch.bool)
+            action, log_prob, value, hidden = agent.get_action(state, mask, hidden)
+            agent.store_recurrent_transition(
+                state=state, action=action, log_prob=log_prob, value=value,
+                reward=0.1, done=(i == 3), action_mask=mask, env_id=0,
+            )
+        agent.recurrent_buffer.end_episode(env_id=0)
+
+        # Should run without error and return metrics
+        metrics = agent.update_recurrent()
+        assert 'value_loss' in metrics
+        assert metrics['value_loss'] >= 0.0
+
 
 class TestPPOAnomalyTelemetry:
     """Test that PPO emits anomaly telemetry events."""
