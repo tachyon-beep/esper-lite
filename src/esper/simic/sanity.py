@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import logging
-import os
 
 import torch
 
 logger = logging.getLogger(__name__)
-
-SANITY_CHECKS_ENABLED = os.getenv("ESPER_SANITY_CHECKS", "0") == "1"
 
 
 def check_reward_magnitude(reward: float, epoch: int, max_epochs: int, threshold: float = 10.0) -> None:
