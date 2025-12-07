@@ -101,3 +101,84 @@ class TestRunningMeanStd:
 
         assert normalized.device.type == "cpu"
         assert normalized.shape == states.shape
+
+
+class TestRewardNormalizer:
+    """Tests for RewardNormalizer (scalar reward normalization)."""
+
+    def test_first_sample_returns_clipped_raw(self):
+        """First sample should return clipped raw reward (can't compute std from 1 sample)."""
+        from esper.simic.normalization import RewardNormalizer
+
+        normalizer = RewardNormalizer(clip=10.0)
+
+        # First sample: should return clipped raw reward
+        result = normalizer.update_and_normalize(5.0)
+        assert result == 5.0  # Within clip range, returned as-is
+
+        # Large first sample should be clipped
+        normalizer2 = RewardNormalizer(clip=10.0)
+        result2 = normalizer2.update_and_normalize(100.0)
+        assert result2 == 10.0  # Clipped to max
+
+    def test_second_sample_uses_variance(self):
+        """Second sample should normalize using computed std."""
+        from esper.simic.normalization import RewardNormalizer
+
+        normalizer = RewardNormalizer(clip=10.0)
+
+        # First sample
+        normalizer.update_and_normalize(10.0)
+
+        # Second sample - now we have variance
+        result = normalizer.update_and_normalize(10.0)
+
+        # With two identical samples, std should be ~0, so result is clipped
+        # Actually with identical samples, m2=0, so std=epsilon, result=10/epsilon (huge), clipped
+        assert result == 10.0  # Clipped
+
+    def test_normalization_with_variance(self):
+        """After enough samples, normalization should scale by std."""
+        from esper.simic.normalization import RewardNormalizer
+
+        normalizer = RewardNormalizer(clip=10.0)
+
+        # Add samples with known mean=5, std~2.9
+        samples = [2.0, 4.0, 6.0, 8.0]
+        for s in samples:
+            normalizer.update_and_normalize(s)
+
+        # Check stats are reasonable
+        assert abs(normalizer.mean - 5.0) < 0.01
+
+        # Normalize a new value without updating
+        normalized = normalizer.normalize_only(5.0)
+        # 5.0 / std where std ~ 2.58 -> ~ 1.94
+        assert 1.0 < normalized < 3.0
+
+    def test_count_starts_at_zero(self):
+        """Count should start at 0, not epsilon."""
+        from esper.simic.normalization import RewardNormalizer
+
+        normalizer = RewardNormalizer()
+        assert normalizer.count == 0
+
+        normalizer.update_and_normalize(1.0)
+        assert normalizer.count == 1
+
+        normalizer.update_and_normalize(2.0)
+        assert normalizer.count == 2
+
+    def test_normalize_only_before_enough_samples(self):
+        """normalize_only should return clipped raw if < 2 samples."""
+        from esper.simic.normalization import RewardNormalizer
+
+        normalizer = RewardNormalizer(clip=5.0)
+
+        # No samples yet
+        assert normalizer.normalize_only(3.0) == 3.0
+        assert normalizer.normalize_only(10.0) == 5.0  # Clipped
+
+        # One sample
+        normalizer.update_and_normalize(1.0)
+        assert normalizer.normalize_only(3.0) == 3.0  # Still not enough for variance

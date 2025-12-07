@@ -144,7 +144,7 @@ class RewardNormalizer:
     def __init__(self, clip: float = 10.0, epsilon: float = 1e-8):
         self.mean = 0.0
         self.m2 = 0.0  # Sum of squared deviations (Welford's M2)
-        self.count = epsilon
+        self.count = 0  # Start at 0, not epsilon
         self.clip = clip
         self.epsilon = epsilon
 
@@ -153,6 +153,9 @@ class RewardNormalizer:
 
         Uses Welford's online algorithm for numerical stability.
         Returns reward / std (no mean subtraction for critic stability).
+
+        For the first sample, returns clipped raw reward since variance
+        cannot be computed from a single sample.
         """
         self.count += 1
         delta = reward - self.mean
@@ -160,15 +163,21 @@ class RewardNormalizer:
         delta2 = reward - self.mean
         self.m2 += delta * delta2
 
+        # Need at least 2 samples to compute sample variance
+        if self.count < 2:
+            return max(-self.clip, min(self.clip, reward))
+
         # Normalize by std only (no mean subtraction)
         # variance = m2 / (count - 1) for sample variance
-        std = max(self.epsilon, (self.m2 / max(1, self.count - 1)) ** 0.5)
+        std = max(self.epsilon, (self.m2 / (self.count - 1)) ** 0.5)
         normalized = reward / std
         return max(-self.clip, min(self.clip, normalized))
 
     def normalize_only(self, reward: float) -> float:
         """Normalize without updating stats (for evaluation)."""
-        std = max(self.epsilon, (self.m2 / max(1, self.count - 1)) ** 0.5)
+        if self.count < 2:
+            return max(-self.clip, min(self.clip, reward))
+        std = max(self.epsilon, (self.m2 / (self.count - 1)) ** 0.5)
         normalized = reward / std
         return max(-self.clip, min(self.clip, normalized))
 
