@@ -30,13 +30,12 @@ logger = logging.getLogger(__name__)
 # Feature Extraction (PPO-specific wrapper)
 # =============================================================================
 
-def signals_to_features(signals, model, tracker=None, use_telemetry: bool = True, max_epochs: int = 200) -> list[float]:
+def signals_to_features(signals, model, use_telemetry: bool = True, max_epochs: int = 200) -> list[float]:
     """Convert training signals to feature vector.
 
     Args:
         signals: TrainingSignals from tamiyo
         model: MorphogeneticModel
-        tracker: Optional tracker (unused, kept for API compatibility)
         use_telemetry: Whether to include telemetry features
         max_epochs: Maximum epochs for learning phase normalization
 
@@ -861,6 +860,15 @@ class PPOAgent:
                 'value_coef': self.value_coef,
                 'clip_value': self.clip_value,
                 'target_kl': self.target_kl,
+                'recurrent': self.recurrent,
+                'lstm_hidden_dim': self.lstm_hidden_dim,
+                'chunk_length': self.chunk_length,
+            },
+            # Architecture info for load-time reconstruction
+            'architecture': {
+                'recurrent': self.recurrent,
+                'state_dim': self.network.state_dim if self.recurrent else None,
+                'action_dim': self.network.action_dim,
             }
         }
         if metadata:
@@ -873,8 +881,20 @@ class PPOAgent:
         """Load agent from file."""
         checkpoint = torch.load(path, map_location=device, weights_only=False)
 
-        state_dim = checkpoint['network_state_dict']['shared.0.weight'].shape[1]
-        action_dim = checkpoint['network_state_dict']['actor.2.weight'].shape[0]
+        state_dict = checkpoint['network_state_dict']
+        arch = checkpoint.get('architecture', {})
+        is_recurrent = arch.get('recurrent', False)
+
+        # Infer dimensions from state_dict keys
+        if is_recurrent:
+            # RecurrentActorCritic: encoder.0.weight has shape [hidden_dim, state_dim]
+            state_dim = state_dict['encoder.0.weight'].shape[1]
+            # actor.2.weight has shape [action_dim, lstm_hidden_dim // 2]
+            action_dim = state_dict['actor.2.weight'].shape[0]
+        else:
+            # ActorCritic: shared.0.weight has shape [hidden_dim, state_dim]
+            state_dim = state_dict['shared.0.weight'].shape[1]
+            action_dim = state_dict['actor.2.weight'].shape[0]
 
         agent = cls(
             state_dim=state_dim,
@@ -883,7 +903,7 @@ class PPOAgent:
             **checkpoint.get('config', {})
         )
 
-        agent.network.load_state_dict(checkpoint['network_state_dict'])
+        agent.network.load_state_dict(state_dict)
         agent.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         agent.train_steps = checkpoint.get('train_steps', 0)
 

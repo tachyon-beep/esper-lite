@@ -360,7 +360,7 @@ def run_ppo_episode(
 
         # Get features and action
         # Note: tracker would provide DiagnosticTracker telemetry if available
-        features = signals_to_features(signals, model, tracker=None, use_telemetry=use_telemetry)
+        features = signals_to_features(signals, model, use_telemetry=use_telemetry)
         state = torch.tensor([features], dtype=torch.float32, device=device)
 
         # Compute action mask for valid actions

@@ -120,9 +120,16 @@ def test_pbrs_stage_bonus():
     assert bonus > 0
 
 
-def test_pbrs_stage_bonus_fossilized_highest():
-    """FOSSILIZED has highest potential (terminal success)."""
-    from esper.simic.rewards import compute_pbrs_stage_bonus, LossRewardConfig
+def test_pbrs_stage_bonus_fossilized_small_increment():
+    """FOSSILIZED transition has small increment to prevent fossilization farming.
+
+    The PBRS design intentionally gives smaller transition bonuses for reaching
+    FOSSILIZED than for reaching productive stages like BLENDING. This prevents
+    agents from rushing to fossilize without creating real value.
+
+    FOSSILIZED has highest absolute potential, but smallest incremental bonus.
+    """
+    from esper.simic.rewards import compute_pbrs_stage_bonus, LossRewardConfig, STAGE_POTENTIALS
     from esper.simic.rewards import SeedInfo
     from esper.leyline import SeedStage
 
@@ -150,4 +157,9 @@ def test_pbrs_stage_bonus_fossilized_highest():
         config,
     )
 
-    assert fossilized_bonus > blending_bonus
+    # FOSSILIZED has highest absolute potential
+    assert STAGE_POTENTIALS[SeedStage.FOSSILIZED.value] > STAGE_POTENTIALS[SeedStage.BLENDING.value]
+
+    # But BLENDING transition gives larger bonus (prevents fossilization farming)
+    assert blending_bonus > fossilized_bonus
+    assert fossilized_bonus > 0  # Still positive, just small

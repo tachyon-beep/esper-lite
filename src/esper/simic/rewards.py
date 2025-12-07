@@ -38,6 +38,32 @@ from esper.simic.reward_telemetry import RewardComponentsTelemetry
 
 
 # =============================================================================
+# Stage Potentials for PBRS (Potential-Based Reward Shaping)
+# =============================================================================
+#
+# PBRS guarantees policy invariance when shaping rewards use: F(s,a,s') = γΦ(s') - Φ(s)
+# All reward functions MUST use this single potential dictionary for consistency.
+# Using different potentials across reward functions breaks the telescoping property.
+#
+# Design rationale:
+# - Monotonically increasing toward FOSSILIZED (successful integration)
+# - Diminishing returns: BLENDING has largest increment (+1.5), FOSSILIZED smallest (+0.5)
+# - Small FOSSILIZED increment prevents "fossilization farming" (rushing to completion)
+# - DORMANT/UNKNOWN have zero potential (no reward for inactive states)
+
+STAGE_POTENTIALS = {
+    0: 0.0,   # UNKNOWN
+    1: 0.0,   # DORMANT
+    2: 1.0,   # GERMINATED
+    3: 2.0,   # TRAINING
+    4: 3.5,   # BLENDING (largest increment - this is where value is created)
+    5: 4.5,   # SHADOWING
+    6: 5.5,   # PROBATIONARY
+    7: 6.0,   # FOSSILIZED (smallest increment - not a farming target)
+}
+
+
+# =============================================================================
 # Reward Configuration
 # =============================================================================
 
@@ -171,19 +197,6 @@ class ContributionRewardConfig:
     def default() -> "ContributionRewardConfig":
         """Return default configuration."""
         return ContributionRewardConfig()
-
-
-# Stage potentials for contribution-based PBRS (flattened to prevent farming)
-_CONTRIBUTION_STAGE_POTENTIALS = {
-    0: 0.0,   # UNKNOWN
-    1: 0.0,   # DORMANT
-    2: 1.0,   # GERMINATED
-    3: 2.0,   # TRAINING
-    4: 3.5,   # BLENDING
-    5: 4.5,   # SHADOWING
-    6: 5.5,   # PROBATIONARY
-    7: 6.0,   # FOSSILIZED (small increase - not a farming target)
-}
 
 
 @dataclass(slots=True)
@@ -497,8 +510,8 @@ def _germinate_shaping(
 
         # PBRS bonus for germination: gamma * phi(GERMINATED) - phi(no_seed)
         # This balances the PBRS penalty applied when culling seeds.
-        # phi(no_seed) = 0, phi(GERMINATED) = 2.0 (from stage_potentials)
-        # PBRS: 0.99 * 2.0 - 0.0 = 1.98
+        # phi(no_seed) = 0, phi(GERMINATED) = 1.0 (from STAGE_POTENTIALS)
+        # PBRS: 0.99 * 1.0 - 0.0 = 0.99
         germinated_obs = {
             "has_active_seed": 1,
             "seed_stage": STAGE_GERMINATED,
@@ -816,7 +829,7 @@ def compute_contribution_reward(
         else:
             # PBRS bonus for successful germination (no existing seed)
             # Balances the PBRS penalty applied when culling seeds
-            phi_germinated = _CONTRIBUTION_STAGE_POTENTIALS.get(STAGE_GERMINATED, 0.0)
+            phi_germinated = STAGE_POTENTIALS.get(STAGE_GERMINATED, 0.0)
             phi_no_seed = 0.0
             pbrs_germinate = config.gamma * phi_germinated - phi_no_seed
             action_shaping += config.pbrs_weight * pbrs_germinate
@@ -860,7 +873,7 @@ def _contribution_pbrs_bonus(
     still incentivizing lifecycle progression.
     """
     # Current potential
-    phi_current = _CONTRIBUTION_STAGE_POTENTIALS.get(seed_info.stage, 0.0)
+    phi_current = STAGE_POTENTIALS.get(seed_info.stage, 0.0)
     phi_current += min(
         seed_info.epochs_in_stage * config.epoch_progress_bonus,
         config.max_progress_bonus,
@@ -869,11 +882,11 @@ def _contribution_pbrs_bonus(
     # Previous potential (reconstruct previous state)
     if seed_info.epochs_in_stage == 0:
         # Just transitioned - previous was end of last stage
-        phi_prev = _CONTRIBUTION_STAGE_POTENTIALS.get(seed_info.previous_stage, 0.0)
+        phi_prev = STAGE_POTENTIALS.get(seed_info.previous_stage, 0.0)
         phi_prev += config.max_progress_bonus  # Was at max progress in prev stage
     else:
         # Same stage, one fewer epoch
-        phi_prev = _CONTRIBUTION_STAGE_POTENTIALS.get(seed_info.stage, 0.0)
+        phi_prev = STAGE_POTENTIALS.get(seed_info.stage, 0.0)
         phi_prev += min(
             (seed_info.epochs_in_stage - 1) * config.epoch_progress_bonus,
             config.max_progress_bonus,
@@ -1018,19 +1031,8 @@ def compute_seed_potential(obs: dict) -> float:
     if not has_active or seed_stage <= 1:
         return 0.0
 
-    # Stage-based potential values (matching SeedStage enum values)
-    # Monotonically increasing toward FOSSILIZED with diminishing returns.
-    # Flattened to prevent fossilization farming (was 5→35, now 2→7.5).
-    stage_potentials = {
-        2: 2.0,  # GERMINATED - just started
-        3: 4.0,  # TRAINING - actively learning
-        4: 5.5,  # BLENDING - about to integrate
-        5: 6.5,  # SHADOWING - monitoring integration
-        6: 7.0,  # PROBATIONARY - almost done
-        7: 7.5,  # FOSSILIZED - small bonus, not a farming target
-    }
-
-    base_potential = stage_potentials.get(seed_stage, 0.0)
+    # Use unified STAGE_POTENTIALS for PBRS consistency across all reward functions
+    base_potential = STAGE_POTENTIALS.get(seed_stage, 0.0)
     progress_bonus = min(epochs_in_stage * 0.5, 3.0)
 
     return base_potential + progress_bonus
@@ -1040,29 +1042,20 @@ def compute_seed_potential(obs: dict) -> float:
 # Loss-Primary Reward (Phase 2)
 # =============================================================================
 
-# Stage potentials for PBRS (monotonically increasing toward FOSSILIZED)
-_STAGE_POTENTIALS = {
-    0: 0.0,  # UNKNOWN
-    1: 0.0,  # DORMANT
-    2: 1.0,  # GERMINATED
-    3: 2.0,  # TRAINING
-    4: 3.0,  # BLENDING
-    5: 4.0,  # SHADOWING
-    6: 5.0,  # PROBATIONARY
-    7: 7.0,  # FOSSILIZED (highest)
-}
-
 
 def compute_pbrs_stage_bonus(
     seed_info: SeedInfo,
     config: LossRewardConfig,
     gamma: float = 0.99,
 ) -> float:
-    """PBRS-compatible stage bonus using potential function."""
+    """PBRS-compatible stage bonus using potential function.
+
+    Uses unified STAGE_POTENTIALS for consistency across all reward functions.
+    """
     previous_stage = seed_info.previous_stage
 
-    current_potential = _STAGE_POTENTIALS.get(seed_info.stage, 0.0)
-    previous_potential = _STAGE_POTENTIALS.get(previous_stage, 0.0)
+    current_potential = STAGE_POTENTIALS.get(seed_info.stage, 0.0)
+    previous_potential = STAGE_POTENTIALS.get(previous_stage, 0.0)
 
     return config.stage_potential_weight * (
         gamma * current_potential - previous_potential

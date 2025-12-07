@@ -809,3 +809,142 @@ def test_recurrent_ppo_epochs_safety_cap():
     # n_epochs > 4 should be capped (hard limit)
     with pytest.warns(RuntimeWarning, match="n_epochs.*capped"):
         metrics = agent.update_recurrent(n_epochs=10)
+
+
+class TestPPOSaveLoad:
+    """Tests for PPOAgent save/load functionality."""
+
+    def test_feedforward_save_load_roundtrip(self, tmp_path):
+        """Feedforward PPOAgent should save and load correctly."""
+        agent = PPOAgent(
+            state_dim=35,
+            action_dim=7,
+            gamma=0.95,
+            entropy_coef=0.1,
+            recurrent=False,
+            device='cpu'
+        )
+        agent.train_steps = 42
+
+        # Get initial weights for comparison
+        initial_weights = {
+            k: v.clone() for k, v in agent.network.state_dict().items()
+        }
+
+        # Save
+        save_path = tmp_path / "feedforward_agent.pt"
+        agent.save(save_path)
+
+        # Load into new agent
+        loaded = PPOAgent.load(save_path, device='cpu')
+
+        # Verify config
+        assert loaded.gamma == 0.95
+        assert loaded.entropy_coef == 0.1
+        assert loaded.recurrent is False
+        assert loaded.train_steps == 42
+
+        # Verify weights match
+        for key, original in initial_weights.items():
+            loaded_weight = loaded.network.state_dict()[key]
+            assert torch.allclose(original, loaded_weight), f"Mismatch in {key}"
+
+    def test_recurrent_save_load_roundtrip(self, tmp_path):
+        """Recurrent PPOAgent should save and load correctly."""
+        agent = PPOAgent(
+            state_dim=35,
+            action_dim=7,
+            gamma=0.98,
+            entropy_coef=0.05,
+            recurrent=True,
+            lstm_hidden_dim=64,
+            chunk_length=20,
+            device='cpu'
+        )
+        agent.train_steps = 100
+
+        # Get initial weights for comparison
+        initial_weights = {
+            k: v.clone() for k, v in agent.network.state_dict().items()
+        }
+
+        # Save
+        save_path = tmp_path / "recurrent_agent.pt"
+        agent.save(save_path)
+
+        # Load into new agent
+        loaded = PPOAgent.load(save_path, device='cpu')
+
+        # Verify config
+        assert loaded.gamma == 0.98
+        assert loaded.entropy_coef == 0.05
+        assert loaded.recurrent is True
+        assert loaded.lstm_hidden_dim == 64
+        assert loaded.chunk_length == 20
+        assert loaded.train_steps == 100
+
+        # Verify network type
+        assert isinstance(loaded.network, RecurrentActorCritic)
+
+        # Verify weights match
+        for key, original in initial_weights.items():
+            loaded_weight = loaded.network.state_dict()[key]
+            assert torch.allclose(original, loaded_weight), f"Mismatch in {key}"
+
+    def test_recurrent_save_load_preserves_inference_behavior(self, tmp_path):
+        """Loaded recurrent agent should produce same outputs as original."""
+        agent = PPOAgent(
+            state_dim=35,
+            action_dim=7,
+            recurrent=True,
+            lstm_hidden_dim=64,
+            device='cpu'
+        )
+
+        # Get action for a fixed state
+        torch.manual_seed(42)
+        state = torch.randn(1, 35)
+        action_mask = torch.ones(7)
+
+        with torch.no_grad():
+            original_dist, original_value, _ = agent.network(state, action_mask)
+            original_probs = original_dist.probs
+
+        # Save and reload
+        save_path = tmp_path / "recurrent_inference.pt"
+        agent.save(save_path)
+        loaded = PPOAgent.load(save_path, device='cpu')
+
+        # Same inference
+        with torch.no_grad():
+            loaded_dist, loaded_value, _ = loaded.network(state, action_mask)
+            loaded_probs = loaded_dist.probs
+
+        assert torch.allclose(original_probs, loaded_probs), "Action probs differ after load"
+        assert torch.allclose(original_value, loaded_value), "Value differs after load"
+
+    def test_load_detects_architecture_from_checkpoint(self, tmp_path):
+        """Load should correctly detect recurrent vs feedforward from saved checkpoint."""
+        # Save recurrent
+        recurrent_agent = PPOAgent(
+            state_dim=35, action_dim=7, recurrent=True, device='cpu'
+        )
+        recurrent_path = tmp_path / "recurrent.pt"
+        recurrent_agent.save(recurrent_path)
+
+        # Save feedforward
+        feedforward_agent = PPOAgent(
+            state_dim=35, action_dim=7, recurrent=False, device='cpu'
+        )
+        feedforward_path = tmp_path / "feedforward.pt"
+        feedforward_agent.save(feedforward_path)
+
+        # Load both and verify correct type detection
+        loaded_recurrent = PPOAgent.load(recurrent_path, device='cpu')
+        loaded_feedforward = PPOAgent.load(feedforward_path, device='cpu')
+
+        assert loaded_recurrent.recurrent is True
+        assert isinstance(loaded_recurrent.network, RecurrentActorCritic)
+
+        assert loaded_feedforward.recurrent is False
+        assert isinstance(loaded_feedforward.network, ActorCritic)

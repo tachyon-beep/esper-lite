@@ -42,7 +42,7 @@ class TestComputeSeedPotential:
         """Test GERMINATED stage (2) has low potential."""
         obs = {'has_active_seed': 1, 'seed_stage': 2, 'seed_epochs_in_stage': 0}
         potential = compute_seed_potential(obs)
-        assert potential == 2.0  # Flattened to prevent fossilization farming
+        assert potential == 1.0  # From unified STAGE_POTENTIALS
 
     def test_training_has_higher_potential(self):
         """Test TRAINING stage (3) has higher potential than GERMINATED (2)."""
@@ -55,26 +55,26 @@ class TestComputeSeedPotential:
         """Test BLENDING stage (4) has higher potential than earlier stages."""
         obs = {'has_active_seed': 1, 'seed_stage': 4, 'seed_epochs_in_stage': 0}
         potential = compute_seed_potential(obs)
-        assert potential == 5.5  # Flattened BLENDING potential
+        assert potential == 3.5  # From unified STAGE_POTENTIALS
 
     def test_probationary_has_highest_potential(self):
         """Test PROBATIONARY stage (6) has high potential before FOSSILIZED."""
         obs = {'has_active_seed': 1, 'seed_stage': 6, 'seed_epochs_in_stage': 0}
         potential = compute_seed_potential(obs)
-        assert potential == 7.0  # Flattened PROBATIONARY potential
+        assert potential == 5.5  # From unified STAGE_POTENTIALS
 
     def test_fossilized_has_highest_potential(self):
         """Test FOSSILIZED stage (7) has slightly higher potential than PROBATIONARY."""
         obs = {'has_active_seed': 1, 'seed_stage': 7, 'seed_epochs_in_stage': 0}
         potential = compute_seed_potential(obs)
-        assert potential == 7.5  # Small bonus over PROBATIONARY, not a farming target
+        assert potential == 6.0  # Small +0.5 over PROBATIONARY, not a farming target
 
     def test_progress_bonus_capped(self):
         """Test that progress bonus is capped at 3.0."""
         obs = {'has_active_seed': 1, 'seed_stage': 3, 'seed_epochs_in_stage': 100}
         potential = compute_seed_potential(obs)
-        # Base 4.0 (TRAINING) + max 3.0 progress = 7.0
-        assert potential == 7.0
+        # Base 2.0 (TRAINING) + max 3.0 progress = 5.0
+        assert potential == 5.0
 
     def test_stage_progression_increases_potential(self):
         """Test that potential generally increases through stages until FOSSILIZED."""
