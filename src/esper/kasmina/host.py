@@ -20,15 +20,30 @@ class CNNHost(nn.Module):
 
     Mirrors TransformerHost's pattern: a ModuleList of blocks, a ModuleDict of slots keyed
     by block index, and a simple looped forward that applies slots as identities when unused.
+
+    Args:
+        num_classes: Number of output classes (default 10 for CIFAR-10)
+        n_blocks: Number of conv blocks (default 3, minimum 2)
+        base_channels: Initial channel count, doubles each block (default 32)
+        memory_format: Memory layout for conv operations (default channels_last).
+            channels_last provides 10-20% speedup on Ampere/Hopper GPUs with Tensor Cores.
+            Use contiguous_format for older GPUs or debugging.
     """
 
-    def __init__(self, num_classes: int = 10, n_blocks: int = 3, base_channels: int = 32):
+    def __init__(
+        self,
+        num_classes: int = 10,
+        n_blocks: int = 3,
+        base_channels: int = 32,
+        memory_format: torch.memory_format = torch.channels_last,
+    ):
         super().__init__()
         if n_blocks < 2:
             raise ValueError("CNNHost requires at least 2 blocks to expose an injection point")
 
         self.n_blocks = n_blocks
         self.base_channels = base_channels
+        self._memory_format = memory_format
 
         # Build blocks with doubling channels each stage
         blocks: list[nn.Module] = []
@@ -68,6 +83,11 @@ class CNNHost(nn.Module):
         self.slots[slot_id] = nn.Identity()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Convert to channels_last ONCE before processing for Tensor Core optimization
+        # Conv2d, BatchNorm2d, MaxPool2d all preserve channels_last format
+        if self._memory_format == torch.channels_last:
+            x = x.to(memory_format=torch.channels_last)
+
         slot_idx = 0
         for idx, block in enumerate(self.blocks):
             x = self.pool(block(x))
@@ -76,6 +96,7 @@ class CNNHost(nn.Module):
                 x = self.slots[self._slot_keys[slot_idx]](x)
                 slot_idx += 1
 
+        # flatten() handles memory format conversion automatically (returns contiguous)
         x = F.adaptive_avg_pool2d(x, 1).flatten(1)
         return self.classifier(x)
 

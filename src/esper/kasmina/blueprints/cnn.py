@@ -26,14 +26,29 @@ def get_num_groups(channels: int, target_group_size: int = 16) -> int:
 
 
 class ConvBlock(nn.Module):
-    """Standard conv-bn-relu block."""
+    """Standard conv-bn-relu block.
 
-    def __init__(self, in_channels: int, out_channels: int, kernel_size: int = 3):
+    Args:
+        in_channels: Input channel count
+        out_channels: Output channel count
+        kernel_size: Convolution kernel size (default 3)
+        track_running_stats: Whether BatchNorm tracks running mean/var (default True).
+            Set False for DTensor/FSDP2 distributed training compatibility.
+            When False, uses batch statistics in both train and eval modes.
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int = 3,
+        track_running_stats: bool = True,
+    ):
         super().__init__()
         self.conv = nn.Conv2d(
             in_channels, out_channels, kernel_size, padding=kernel_size // 2, bias=False
         )
-        self.bn = nn.BatchNorm2d(out_channels)
+        self.bn = nn.BatchNorm2d(out_channels, track_running_stats=track_running_stats)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return F.relu(self.bn(self.conv(x)))
@@ -90,8 +105,8 @@ def create_attention_seed(channels: int, reduction: int = 4) -> nn.Module:
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             b, c, _, _ = x.size()
-            y = self.avg_pool(x).view(b, c)
-            y = self.fc(y).view(b, c, 1, 1)
+            y = self.avg_pool(x).reshape(b, c)
+            y = self.fc(y).reshape(b, c, 1, 1)
             return x * y.expand_as(x)
 
     return AttentionSeed(channels, reduction)

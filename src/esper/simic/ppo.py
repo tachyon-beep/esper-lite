@@ -135,7 +135,10 @@ class PPOAgent:
         gamma: float = 0.99,
         gae_lambda: float = 0.95,
         clip_ratio: float = 0.2,
-        entropy_coef: float = 0.05,  # Unified default (validated in for_tinystories preset)
+        # Entropy coef operates on NORMALIZED entropy [0, 1] from MaskedCategorical.
+        # See MaskedCategorical.entropy() docstring for normalization details.
+        # 0.05 normalized ≈ 0.098 raw nats with 7 actions (log(7) ≈ 1.95)
+        entropy_coef: float = 0.05,
         entropy_coef_start: float | None = None,
         entropy_coef_end: float | None = None,
         entropy_coef_min: float = 0.01,  # Unified minimum for exploration floor

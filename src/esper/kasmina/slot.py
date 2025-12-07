@@ -2,6 +2,22 @@
 
 The SeedSlot manages a single seed module through its lifecycle:
 germination -> training -> blending -> fossilization/culling.
+
+torch.compile Strategy
+----------------------
+The SeedSlot.forward() method is decorated with @torch.compiler.disable because:
+
+1. Stage-dependent control flow (self.state.stage) causes graph specialization -
+   Dynamo would create multiple compiled versions, one per stage
+2. The STE path and blend path have genuinely different computation graphs
+3. The overhead of guard checks + potential recompilation outweighs benefits
+
+The underlying tensor operations (ste_forward, blend_with_isolation) in
+isolation.py ARE compile-compatible and will be traced correctly when called
+from compiled code paths. The @torch.compiler.disable creates a "firewall"
+that prevents control flow from causing graph breaks in callers.
+
+This is an intentional architectural decision, not a workaround.
 """
 
 from __future__ import annotations

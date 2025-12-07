@@ -117,9 +117,16 @@ if _HAS_FLEX_ATTENTION:
         description="FlexAttention with causal mask (PyTorch 2.5+)"
     )
     def create_flex_attention_seed(dim: int, n_head: int = 4) -> nn.Module:
-        """FlexAttention seed with customizable attention patterns."""
+        """FlexAttention seed with customizable attention patterns.
+
+        Uses block mask caching for improved performance on repeated sequence lengths.
+        Cache keys include (seq_len, device_str, dtype) for correctness across
+        devices and mixed-precision scenarios.
+        """
 
         class FlexAttentionSeed(nn.Module):
+            _MAX_CACHE_SIZE = 8  # LRU-style bound on cached masks
+
             def __init__(self, dim: int, n_head: int):
                 super().__init__()
                 self.n_head = n_head
@@ -130,6 +137,35 @@ if _HAS_FLEX_ATTENTION:
                 nn.init.zeros_(self.proj.weight)
                 nn.init.zeros_(self.proj.bias)
 
+                # Cache for block masks: (seq_len, device_str, dtype_str) -> BlockMask
+                self._block_mask_cache: dict[tuple[int, str, str], object] = {}
+
+            def _get_causal_block_mask(
+                self, seq_len: int, device: torch.device, dtype: torch.dtype
+            ):
+                """Get or create cached causal block mask."""
+                # Use str(device) and str(dtype) for reliable dict equality
+                key = (seq_len, str(device), str(dtype))
+                if key not in self._block_mask_cache:
+                    # LRU eviction if cache is full
+                    if len(self._block_mask_cache) >= self._MAX_CACHE_SIZE:
+                        oldest_key = next(iter(self._block_mask_cache))
+                        del self._block_mask_cache[oldest_key]
+
+                    # create_block_mask uses boolean mask function (no score param)
+                    def causal(b, h, q_idx, kv_idx):
+                        return q_idx >= kv_idx
+
+                    self._block_mask_cache[key] = create_block_mask(
+                        causal,
+                        B=None,  # Batch-independent
+                        H=None,  # Head-independent
+                        Q_LEN=seq_len,
+                        KV_LEN=seq_len,
+                        device=device,
+                    )
+                return self._block_mask_cache[key]
+
             def forward(self, x: torch.Tensor) -> torch.Tensor:
                 b, t, c = x.shape
 
@@ -137,12 +173,9 @@ if _HAS_FLEX_ATTENTION:
                 qkv = qkv.permute(2, 0, 3, 1, 4)
                 q, k, v = qkv[0], qkv[1], qkv[2]
 
-                # FlexAttention with causal mask
-                # score_mod signature: (score, batch, head, q_idx, kv_idx) -> score
-                def causal_mask(score, b, h, q_idx, kv_idx):
-                    return torch.where(q_idx >= kv_idx, score, float('-inf'))
-
-                out = flex_attention(q, k, v, score_mod=causal_mask)
+                # Use cached block mask for efficient causal attention
+                block_mask = self._get_causal_block_mask(t, x.device, x.dtype)
+                out = flex_attention(q, k, v, block_mask=block_mask)
 
                 out = out.transpose(1, 2).reshape(b, t, c)
                 return x + self.proj(out)
