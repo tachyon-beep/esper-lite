@@ -34,6 +34,7 @@ from typing import NamedTuple
 
 from esper.leyline import SeedStage, MIN_CULL_AGE, MIN_PROBATION_EPOCHS
 from esper.leyline.actions import is_germinate_action
+from esper.simic.reward_telemetry import RewardComponentsTelemetry
 
 
 # =============================================================================
@@ -697,7 +698,8 @@ def compute_contribution_reward(
     host_params: int = 1,
     config: ContributionRewardConfig | None = None,
     acc_at_germination: float | None = None,
-) -> float:
+    return_components: bool = False,
+) -> float | tuple[float, RewardComponentsTelemetry]:
     """Compute reward using bounded attribution (ransomware-resistant).
 
     This function uses counterfactual validation but prevents "ransomware"
@@ -724,22 +726,35 @@ def compute_contribution_reward(
         host_params: Baseline host model params (for normalization)
         config: Reward configuration (uses default if None)
         acc_at_germination: Accuracy when seed was planted (for progress calc)
+        return_components: If True, return (reward, components) tuple
 
     Returns:
-        Shaped reward value
+        Shaped reward value, or (reward, components) if return_components=True
     """
     if config is None:
         config = _DEFAULT_CONTRIBUTION_CONFIG
+
+    # Track components if requested (no import needed - already at module level)
+    components = RewardComponentsTelemetry() if return_components else None
+    if components:
+        components.action_name = action.name
+        components.epoch = epoch
+        components.seed_stage = seed_info.stage if seed_info else None
+        # DRL Expert recommended diagnostic fields
+        components.val_acc = val_acc
+        components.acc_at_germination = acc_at_germination
 
     reward = 0.0
 
     # === 1. PRIMARY: Bounded Attribution (Ransomware-Resistant) ===
     # Pay for min(progress, contribution) to prevent dependency exploitation
+    bounded_attribution = 0.0
+    progress = None
     if seed_contribution is not None:
         if seed_contribution < 0:
             # Toxic seed - counterfactual shows it actively hurts
             # Pay the negative contribution as penalty
-            reward += config.contribution_weight * seed_contribution
+            bounded_attribution = config.contribution_weight * seed_contribution
         else:
             # Positive contribution - bound by actual progress
             if acc_at_germination is not None:
@@ -751,52 +766,79 @@ def compute_contribution_reward(
             else:
                 # No baseline available - discount contribution
                 attributed = seed_contribution * 0.5
-            reward += config.contribution_weight * attributed
+            bounded_attribution = config.contribution_weight * attributed
+        reward += bounded_attribution
+
+    if components:
+        components.seed_contribution = seed_contribution
+        components.bounded_attribution = bounded_attribution
+        components.progress_since_germination = progress
 
     # === 2. PBRS: Stage Progression ===
     # Potential-based shaping preserves optimal policy (Ng et al., 1999)
+    pbrs_bonus = 0.0
     if seed_info is not None:
-        reward += _contribution_pbrs_bonus(seed_info, config)
+        pbrs_bonus = _contribution_pbrs_bonus(seed_info, config)
+        reward += pbrs_bonus
+    if components:
+        components.pbrs_bonus = pbrs_bonus
 
     # === 3. RENT: Compute Cost ===
     # Logarithmic penalty on parameter bloat
+    rent_penalty = 0.0
+    growth_ratio = 0.0
     if host_params > 0 and total_params > 0:
         growth_ratio = total_params / host_params
         # Guard against negative ratios (defensive - shouldn't happen in practice)
         scaled_cost = math.log(1.0 + max(0.0, growth_ratio))
-        rent_penalty = config.rent_weight * scaled_cost
-        reward -= min(rent_penalty, config.max_rent)
+        rent_penalty = min(config.rent_weight * scaled_cost, config.max_rent)
+        reward -= rent_penalty
+    if components:
+        components.compute_rent = -rent_penalty  # Negative because it's a penalty
+        components.growth_ratio = growth_ratio  # DRL Expert diagnostic field
 
     # === 4. ACTION SHAPING ===
     # Minimal - just state machine enforcement and intervention costs
+    action_shaping = 0.0
     action_name = action.name
 
     if is_germinate_action(action):
         if seed_info is not None:
-            reward += config.germinate_with_seed_penalty
+            action_shaping += config.germinate_with_seed_penalty
         else:
             # PBRS bonus for successful germination (no existing seed)
             # Balances the PBRS penalty applied when culling seeds
             phi_germinated = _CONTRIBUTION_STAGE_POTENTIALS.get(STAGE_GERMINATED, 0.0)
             phi_no_seed = 0.0
-            pbrs_bonus = config.gamma * phi_germinated - phi_no_seed
-            reward += config.pbrs_weight * pbrs_bonus
-        reward += config.germinate_cost
+            pbrs_germinate = config.gamma * phi_germinated - phi_no_seed
+            action_shaping += config.pbrs_weight * pbrs_germinate
+        action_shaping += config.germinate_cost
 
     elif action_name == "FOSSILIZE":
-        reward += _contribution_fossilize_shaping(seed_info, seed_contribution, config)
-        reward += config.fossilize_cost
+        action_shaping += _contribution_fossilize_shaping(seed_info, seed_contribution, config)
+        action_shaping += config.fossilize_cost
 
     elif action_name == "CULL":
-        reward += _contribution_cull_shaping(seed_info, seed_contribution, config)
-        reward += config.cull_cost
+        action_shaping += _contribution_cull_shaping(seed_info, seed_contribution, config)
+        action_shaping += config.cull_cost
 
     # WAIT: No additional shaping (correct default action)
 
-    # === 5. TERMINAL BONUS ===
-    if epoch == max_epochs:
-        reward += val_acc * config.terminal_acc_weight
+    reward += action_shaping
+    if components:
+        components.action_shaping = action_shaping
 
+    # === 5. TERMINAL BONUS ===
+    terminal_bonus = 0.0
+    if epoch == max_epochs:
+        terminal_bonus = val_acc * config.terminal_acc_weight
+        reward += terminal_bonus
+    if components:
+        components.terminal_bonus = terminal_bonus
+
+    if components:
+        components.total_reward = reward
+        return reward, components
     return reward
 
 

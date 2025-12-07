@@ -452,3 +452,162 @@ class TestCullLateStageHealthScaling:
         # Culling a good seed should be penalized
         # health_factor only applies when improvement < 0
         assert shaping < 0, "Culling a good seed should be penalized"
+
+
+class TestContributionRewardComponents:
+    """Tests for compute_contribution_reward return_components."""
+
+    def test_return_components_returns_tuple(self):
+        """Test that return_components=True returns (reward, components) tuple."""
+        from esper.simic.rewards import compute_contribution_reward, SeedInfo
+        from esper.simic.reward_telemetry import RewardComponentsTelemetry
+        from esper.leyline import SeedStage
+
+        # Create a mock action enum
+        from enum import IntEnum
+        class MockAction(IntEnum):
+            WAIT = 0
+
+        seed_info = SeedInfo(
+            stage=SeedStage.TRAINING.value,
+            improvement_since_stage_start=1.0,
+            total_improvement=1.0,
+            epochs_in_stage=5,
+            seed_params=1000,
+            previous_stage=SeedStage.GERMINATED.value,
+            seed_age_epochs=5,
+        )
+
+        result = compute_contribution_reward(
+            action=MockAction.WAIT,
+            seed_contribution=2.0,
+            val_acc=70.0,
+            seed_info=seed_info,
+            epoch=10,
+            max_epochs=25,
+            total_params=1000,
+            host_params=10000,
+            acc_at_germination=65.0,
+            return_components=True,
+        )
+
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+        reward, components = result
+        assert isinstance(reward, float)
+        # Use isinstance instead of hasattr (per CLAUDE.md policy)
+        assert isinstance(components, RewardComponentsTelemetry)
+
+    def test_components_sum_to_total(self):
+        """Test that component values sum to total_reward."""
+        from esper.simic.rewards import compute_contribution_reward, SeedInfo
+        from esper.leyline import SeedStage
+
+        from enum import IntEnum
+        class MockAction(IntEnum):
+            WAIT = 0
+
+        seed_info = SeedInfo(
+            stage=SeedStage.BLENDING.value,
+            improvement_since_stage_start=2.0,
+            total_improvement=3.0,
+            epochs_in_stage=3,
+            seed_params=5000,
+            previous_stage=SeedStage.TRAINING.value,
+            seed_age_epochs=8,
+        )
+
+        reward, components = compute_contribution_reward(
+            action=MockAction.WAIT,
+            seed_contribution=3.0,
+            val_acc=72.0,
+            seed_info=seed_info,
+            epoch=15,
+            max_epochs=25,
+            total_params=5000,
+            host_params=20000,
+            acc_at_germination=68.0,
+            return_components=True,
+        )
+
+        # Components should sum to total (within floating point tolerance)
+        component_sum = (
+            (components.bounded_attribution or 0.0)
+            + components.compute_rent
+            + components.pbrs_bonus
+            + components.action_shaping
+            + components.terminal_bonus
+        )
+        assert abs(reward - component_sum) < 0.001, f"Sum {component_sum} != total {reward}"
+        assert components.total_reward == reward
+
+    def test_components_track_context(self):
+        """Test that components include action and epoch context."""
+        from esper.simic.rewards import compute_contribution_reward, SeedInfo
+        from esper.leyline import SeedStage
+
+        from enum import IntEnum
+        class MockAction(IntEnum):
+            CULL = 1
+
+        seed_info = SeedInfo(
+            stage=SeedStage.TRAINING.value,
+            improvement_since_stage_start=-1.0,
+            total_improvement=-1.0,
+            epochs_in_stage=10,
+            seed_params=1000,
+            previous_stage=SeedStage.GERMINATED.value,
+            seed_age_epochs=10,
+        )
+
+        reward, components = compute_contribution_reward(
+            action=MockAction.CULL,
+            seed_contribution=-0.5,
+            val_acc=68.0,
+            seed_info=seed_info,
+            epoch=12,
+            max_epochs=25,
+            return_components=True,
+        )
+
+        assert components.action_name == "CULL"
+        assert components.epoch == 12
+        assert components.seed_stage == SeedStage.TRAINING.value
+
+    def test_components_include_diagnostic_fields(self):
+        """Test that components include DRL Expert recommended diagnostic fields."""
+        from esper.simic.rewards import compute_contribution_reward, SeedInfo
+        from esper.leyline import SeedStage
+
+        from enum import IntEnum
+        class MockAction(IntEnum):
+            WAIT = 0
+
+        seed_info = SeedInfo(
+            stage=SeedStage.BLENDING.value,
+            improvement_since_stage_start=1.5,
+            total_improvement=2.0,
+            epochs_in_stage=5,
+            seed_params=5000,
+            previous_stage=SeedStage.TRAINING.value,
+            seed_age_epochs=10,
+        )
+
+        reward, components = compute_contribution_reward(
+            action=MockAction.WAIT,
+            seed_contribution=2.5,
+            val_acc=72.0,
+            seed_info=seed_info,
+            epoch=15,
+            max_epochs=25,
+            total_params=5000,
+            host_params=20000,
+            acc_at_germination=68.0,
+            return_components=True,
+        )
+
+        # DRL Expert recommended fields
+        assert components.val_acc == 72.0
+        assert components.acc_at_germination == 68.0
+        assert components.growth_ratio == 5000 / 20000  # 0.25
+        assert components.progress_since_germination == 72.0 - 68.0  # 4.0
