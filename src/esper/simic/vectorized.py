@@ -919,31 +919,66 @@ def train_ppo_vectorized(
                     if seed_state and seed_state.metrics:
                         seed_state.metrics.counterfactual_contribution = seed_contribution
 
+                # Determine if we need reward components (only at debug level)
+                collect_reward_telemetry = (
+                    telemetry_config is not None and telemetry_config.should_collect("debug")
+                )
+
                 # Use contribution-primary reward when counterfactual is available
+                reward_components = None
                 if seed_contribution is not None:
-                    reward = compute_contribution_reward(
-                        action=action,
-                        seed_contribution=seed_contribution,
-                        val_acc=env_state.val_acc,
-                        seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
-                        epoch=epoch,
-                        max_epochs=max_epochs,
-                        total_params=total_params,
-                        host_params=host_params,
-                        acc_at_germination=env_state.acc_at_germination,
-                    )
+                    if collect_reward_telemetry:
+                        reward, reward_components = compute_contribution_reward(
+                            action=action,
+                            seed_contribution=seed_contribution,
+                            val_acc=env_state.val_acc,
+                            seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
+                            epoch=epoch,
+                            max_epochs=max_epochs,
+                            total_params=total_params,
+                            host_params=host_params,
+                            acc_at_germination=env_state.acc_at_germination,
+                            return_components=True,
+                        )
+                        # Add host_baseline_acc from counterfactual (DRL Expert)
+                        reward_components.host_baseline_acc = baseline_accs[env_idx]
+                    else:
+                        reward = compute_contribution_reward(
+                            action=action,
+                            seed_contribution=seed_contribution,
+                            val_acc=env_state.val_acc,
+                            seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
+                            epoch=epoch,
+                            max_epochs=max_epochs,
+                            total_params=total_params,
+                            host_params=host_params,
+                            acc_at_germination=env_state.acc_at_germination,
+                        )
                 else:
                     # Fallback to legacy reward (no counterfactual available)
-                    reward = compute_shaped_reward(
-                        action=action,
-                        acc_delta=signals.metrics.accuracy_delta,
-                        val_acc=env_state.val_acc,
-                        seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
-                        epoch=epoch,
-                        max_epochs=max_epochs,
-                        total_params=total_params,
-                        host_params=host_params,
-                    )
+                    if collect_reward_telemetry:
+                        reward, reward_components = compute_shaped_reward(
+                            action=action,
+                            acc_delta=signals.metrics.accuracy_delta,
+                            val_acc=env_state.val_acc,
+                            seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
+                            epoch=epoch,
+                            max_epochs=max_epochs,
+                            total_params=total_params,
+                            host_params=host_params,
+                            return_components=True,
+                        )
+                    else:
+                        reward = compute_shaped_reward(
+                            action=action,
+                            acc_delta=signals.metrics.accuracy_delta,
+                            val_acc=env_state.val_acc,
+                            seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
+                            epoch=epoch,
+                            max_epochs=max_epochs,
+                            total_params=total_params,
+                            host_params=host_params,
+                        )
 
                 # Governor punishment: inject negative reward if rollback occurred
                 if env_idx in governor_panic_envs:
@@ -983,6 +1018,20 @@ def train_ppo_vectorized(
 
                 if action_success:
                     env_state.successful_action_counts[action.name] += 1
+
+                # Emit reward telemetry if collecting (after action execution so we have action_success)
+                if reward_components is not None:
+                    reward_components.action_success = action_success
+                    hub.emit(TelemetryEvent(
+                        event_type=TelemetryEventType.REWARD_COMPUTED,
+                        seed_id=seed_state.seed_id if seed_state else None,
+                        epoch=epoch,
+                        data={
+                            "env_id": env_idx,
+                            **reward_components.to_dict(),
+                        },
+                        severity="debug",
+                    ))
 
                 # Normalize reward for critic stability (prevents value loss explosion)
                 # Keep raw reward for episode_rewards display
