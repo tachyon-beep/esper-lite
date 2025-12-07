@@ -103,9 +103,6 @@ from esper.simic.debug_telemetry import (
     check_numerical_stability,
     RatioExplosionDiagnostic,
 )
-from esper.simic.action_telemetry import (
-    ActionTelemetry,
-)
 from esper.simic.anomaly_detector import (
     AnomalyDetector,
     AnomalyReport,
@@ -184,7 +181,6 @@ __all__ = [
     "NumericalStabilityReport",
     "check_numerical_stability",
     "RatioExplosionDiagnostic",
-    "ActionTelemetry",
     "AnomalyDetector",
     "AnomalyReport",
 ]
