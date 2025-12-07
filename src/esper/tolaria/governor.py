@@ -187,7 +187,8 @@ class TolariaGovernor:
         }
         self.model.load_state_dict(state_on_device, strict=True)
 
-        self.consecutive_panics += 1
+        # Reset panic counter after successful rollback to allow fresh recovery
+        self.consecutive_panics = 0
 
         # Calculate what the threshold was
         history = list(self.loss_history)

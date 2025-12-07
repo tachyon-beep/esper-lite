@@ -309,12 +309,12 @@ class TestTolariaGovernor:
 
         assert report.reason == "Structural Collapse"
         assert report.rollback_occurred is True
-        assert report.consecutive_panics == 1
+        assert report.consecutive_panics == 0  # Reset after rollback
         assert report.loss_threshold > 0.0
         assert math.isnan(report.loss_at_panic)
 
-    def test_execute_rollback_increments_consecutive_panics(self):
-        """Test that multiple rollbacks increment panic counter."""
+    def test_execute_rollback_resets_consecutive_panics_each_time(self):
+        """Test that each rollback resets panic counter (not increments)."""
         from esper.tolaria import TolariaGovernor
 
         model = DummyModel()
@@ -326,17 +326,16 @@ class TestTolariaGovernor:
         for i in range(5):
             gov.loss_history.append(1.0)
 
-        # First rollback
+        # First rollback - should reset to 0
         report1 = gov.execute_rollback()
-        assert report1.consecutive_panics == 1
+        assert gov.consecutive_panics == 0
 
-        # Second rollback
+        # Manually set panics to simulate another panic event
+        gov.consecutive_panics = 2
+
+        # Second rollback - should reset to 0 again
         report2 = gov.execute_rollback()
-        assert report2.consecutive_panics == 2
-
-        # Third rollback
-        report3 = gov.execute_rollback()
-        assert report3.consecutive_panics == 3
+        assert gov.consecutive_panics == 0
 
     def test_get_punishment_reward(self):
         """Test that punishment reward matches death penalty."""
@@ -476,3 +475,28 @@ class TestTolariaGovernor:
         assert model.seed_slot.seed is None
         assert model.seed_slot.state is None
         assert report.rollback_occurred is True
+
+    def test_execute_rollback_resets_consecutive_panics(self):
+        """Test that rollback resets consecutive_panics to allow fresh start."""
+        from esper.tolaria import TolariaGovernor
+
+        model = DummyModel()
+        gov = TolariaGovernor(model)
+
+        # Build history for statistical detection
+        for i in range(15):
+            gov.check_vital_signs(1.0)
+
+        # Simulate panic buildup (2 consecutive anomalies trigger rollback)
+        gov.consecutive_panics = 2
+        gov._panic_loss = 50.0
+
+        # Execute rollback
+        report = gov.execute_rollback()
+        assert report.rollback_occurred is True
+
+        # After rollback, consecutive_panics should reset to 0
+        # This allows training to recover without escalating panic detection
+        assert gov.consecutive_panics == 0, (
+            f"consecutive_panics should be 0 after rollback, got {gov.consecutive_panics}"
+        )
