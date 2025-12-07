@@ -716,6 +716,27 @@ class PPOAgent:
         # This prevents per-batch normalization variance in gradient updates
         self.recurrent_buffer.normalize_advantages()
 
+        # Compute explained variance BEFORE any gradient updates
+        # This measures how well the pre-update value function predicted returns
+        all_returns = []
+        all_old_values = []
+        for chunk in self.recurrent_buffer.get_chunks(device=self.device):
+            valid = chunk['valid_mask'].squeeze(0)  # [seq]
+            all_returns.append(chunk['returns'].squeeze(0)[valid])
+            all_old_values.append(chunk['old_values'].squeeze(0)[valid])
+
+        if all_returns:
+            returns_tensor = torch.cat(all_returns)
+            values_tensor = torch.cat(all_old_values)
+            var_returns = returns_tensor.var()
+            if var_returns > 1e-8:
+                explained_variance = 1.0 - (returns_tensor - values_tensor).var() / var_returns
+                explained_variance = float(torch.clamp(explained_variance, -1.0, 1.0).item())
+            else:
+                explained_variance = 0.0
+        else:
+            explained_variance = 0.0
+
         total_policy_loss = 0.0
         total_value_loss = 0.0
         total_entropy = 0.0
@@ -823,6 +844,7 @@ class PPOAgent:
             'value_loss': total_value_loss / max(n_updates, 1),
             'entropy': total_entropy / max(n_updates, 1),
             'approx_kl': avg_approx_kl,
+            'explained_variance': explained_variance,
         }
 
         if all_ratios:
