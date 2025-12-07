@@ -500,3 +500,22 @@ class TestTolariaGovernor:
         assert gov.consecutive_panics == 0, (
             f"consecutive_panics should be 0 after rollback, got {gov.consecutive_panics}"
         )
+
+    def test_snapshot_does_not_track_gradients(self):
+        """Test that snapshot() does not create tensors that track gradients."""
+        from esper.tolaria import TolariaGovernor
+
+        model = DummyModel()
+        gov = TolariaGovernor(model)
+
+        # Ensure model has gradients enabled
+        model.linear.weight.requires_grad_(True)
+
+        gov.snapshot()
+
+        # Snapshot tensors should NOT require gradients
+        for key, value in gov.last_good_state.items():
+            if isinstance(value, torch.Tensor):
+                assert not value.requires_grad, (
+                    f"Snapshot tensor '{key}' should not require gradients"
+                )

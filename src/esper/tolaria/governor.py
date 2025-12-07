@@ -80,10 +80,12 @@ class TolariaGovernor:
             self.last_good_state = None
 
         # Store on CPU to save GPU memory (rollback is rare, memory savings are constant)
-        self.last_good_state = {
-            k: v.detach().cpu().clone() if isinstance(v, torch.Tensor) else copy.deepcopy(v)
-            for k, v in self.model.state_dict().items()
-        }
+        # Use no_grad() to prevent any autograd overhead during state extraction
+        with torch.no_grad():
+            self.last_good_state = {
+                k: v.detach().cpu().clone() if isinstance(v, torch.Tensor) else copy.deepcopy(v)
+                for k, v in self.model.state_dict().items()
+            }
 
     def check_vital_signs(self, current_loss: float) -> bool:
         """Check if the system is irreparably damaged.
