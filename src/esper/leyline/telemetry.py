@@ -54,6 +54,7 @@ class TelemetryEventType(Enum):
     PPO_UPDATE_COMPLETED = auto()
     MEMORY_WARNING = auto()  # TODO: Wire up GPU memory monitoring
     REWARD_HACKING_SUSPECTED = auto()  # TODO: Wire up reward hacking detection
+    REWARD_COMPUTED = auto()  # Per-step reward breakdown for debugging
 
     # === NEW: Debug Events (triggered by anomalies) ===
     RATIO_EXPLOSION_DETECTED = auto()
