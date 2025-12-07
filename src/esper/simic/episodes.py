@@ -16,7 +16,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from esper.leyline import SeedStage, FieldReport as LeylineFieldReport
+from esper.leyline import FieldReport as LeylineFieldReport
+from esper.simic.features import safe
 
 
 # =============================================================================
@@ -66,13 +67,6 @@ class TrainingSnapshot:
 
     def to_vector(self) -> list[float]:
         """Convert to flat vector for neural network input."""
-        # Helper to clamp inf/nan to safe values
-        def safe(v: float, default: float = 0.0, max_val: float = 100.0) -> float:
-            import math
-            if math.isnan(v) or math.isinf(v):
-                return default
-            return max(-max_val, min(v, max_val))
-
         return [
             float(self.epoch),
             float(self.global_step),
