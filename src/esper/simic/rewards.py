@@ -350,6 +350,12 @@ def compute_shaped_reward(
 
     # Track components if requested
     components = RewardComponentsTelemetry() if return_components else None
+    if components:
+        # Populate diagnostic fields (same as compute_contribution_reward)
+        components.action_name = action.name
+        components.epoch = epoch
+        components.seed_stage = seed_info.stage if seed_info else None
+        components.val_acc = val_acc
 
     reward = 0.0
 
@@ -365,6 +371,7 @@ def compute_shaped_reward(
     # - But removes the 50x cliff between small (2K) and large (74K) seeds
     # - Allows conv_enhance seeds to be viable despite higher param count
     rent_penalty = 0.0
+    growth_ratio = 0.0
     if host_params > 0 and total_params > 0:
         # total_params currently passed as added params; convert to growth ratio
         growth_ratio = total_params / host_params
@@ -375,6 +382,7 @@ def compute_shaped_reward(
         reward -= rent_penalty
     if components:
         components.compute_rent = -rent_penalty
+        components.growth_ratio = growth_ratio
 
     # Lifecycle stage rewards
     stage_bonus = 0.0
