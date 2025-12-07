@@ -151,3 +151,105 @@ class TestAttributionResult:
         )
 
         assert result.seed_contribution == result.real_accuracy - result.baseline_accuracy
+
+
+class TestValidateWithAttributionIntegration:
+    """Integration tests for validate_with_attribution with real MorphogeneticModel."""
+
+    @pytest.fixture
+    def model_with_seed(self):
+        """Create MorphogeneticModel with an active seed."""
+        from esper.kasmina import MorphogeneticModel, CNNHost
+
+        host = CNNHost(num_classes=10)
+        model = MorphogeneticModel(host, device="cpu")
+        model.germinate_seed("conv_light", "test_seed")
+
+        # Advance to BLENDING stage so alpha > 0
+        model.seed_slot.state.stage = 4  # SeedStage.BLENDING
+        model.seed_slot._alpha = 0.5
+
+        return model
+
+    @pytest.fixture
+    def test_data(self):
+        """Create CIFAR-10-like test data."""
+        # 8 samples of 3x32x32 images
+        inputs = torch.randn(8, 3, 32, 32)
+        labels = torch.randint(0, 10, (8,))
+        dataset = TensorDataset(inputs, labels)
+        return DataLoader(dataset, batch_size=4)
+
+    def test_attribution_with_active_seed(self, model_with_seed, test_data):
+        """Test attribution validation with an active seed."""
+        from esper.tolaria.trainer import validate_with_attribution
+
+        criterion = nn.CrossEntropyLoss()
+
+        result = validate_with_attribution(
+            model_with_seed, test_data, criterion, "cpu"
+        )
+
+        # Result should have valid structure
+        assert isinstance(result.real_accuracy, float)
+        assert isinstance(result.baseline_accuracy, float)
+        assert isinstance(result.seed_contribution, float)
+        assert result.seed_contribution == result.real_accuracy - result.baseline_accuracy
+
+    def test_attribution_contribution_sign(self, model_with_seed, test_data):
+        """Test that seed_contribution can be positive or negative."""
+        from esper.tolaria.trainer import validate_with_attribution
+
+        criterion = nn.CrossEntropyLoss()
+
+        result = validate_with_attribution(
+            model_with_seed, test_data, criterion, "cpu"
+        )
+
+        # Contribution can be any value (positive = seed helps, negative = seed hurts)
+        assert isinstance(result.seed_contribution, float)
+        # Both accuracies should be in [0, 100] range
+        assert 0.0 <= result.real_accuracy <= 100.0
+        assert 0.0 <= result.baseline_accuracy <= 100.0
+
+    def test_force_alpha_context_restores_alpha(self, model_with_seed, test_data):
+        """Test that force_alpha context manager properly restores original alpha."""
+        from esper.tolaria.trainer import validate_with_attribution
+
+        criterion = nn.CrossEntropyLoss()
+
+        original_alpha = model_with_seed.seed_slot.alpha
+
+        result = validate_with_attribution(
+            model_with_seed, test_data, criterion, "cpu"
+        )
+
+        # Alpha should be restored after validation
+        assert model_with_seed.seed_slot.alpha == original_alpha
+
+    def test_attribution_with_empty_loader(self):
+        """Test attribution handles empty dataloader gracefully."""
+        from esper.tolaria.trainer import validate_with_attribution
+        from esper.kasmina import MorphogeneticModel, CNNHost
+
+        host = CNNHost(num_classes=10)
+        model = MorphogeneticModel(host, device="cpu")
+        model.germinate_seed("conv_light", "test_seed")
+        model.seed_slot.state.stage = 4
+        model.seed_slot._alpha = 0.5
+
+        # Empty dataset
+        empty_dataset = TensorDataset(
+            torch.randn(0, 3, 32, 32),
+            torch.randint(0, 10, (0,))
+        )
+        empty_loader = DataLoader(empty_dataset, batch_size=4)
+
+        criterion = nn.CrossEntropyLoss()
+
+        result = validate_with_attribution(model, empty_loader, criterion, "cpu")
+
+        # Should return 0 accuracy for empty loader
+        assert result.real_accuracy == 0.0
+        assert result.baseline_accuracy == 0.0
+        assert result.seed_contribution == 0.0
