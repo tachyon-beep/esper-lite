@@ -37,3 +37,5 @@ data/
 *.sqlite3
 *.db
 var/
+
+telemetry/
