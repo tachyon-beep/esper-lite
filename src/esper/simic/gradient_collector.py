@@ -310,3 +310,118 @@ def collect_seed_gradients_async(
         exploding_threshold=exploding_threshold,
     )
     return collector.collect_async(seed_parameters)
+
+
+# =============================================================================
+# Dual Gradient Collection (Host + Seed) for G2 Gate
+# =============================================================================
+
+@dataclass(slots=True)
+class DualGradientStats:
+    """Gradient statistics for both host and seed networks.
+
+    Used to compute the seed_gradient_norm_ratio metric for the G2 gate,
+    which detects if a seed is actively learning vs. riding host improvements.
+    """
+    host_grad_norm: float
+    host_param_count: int
+    seed_grad_norm: float
+    seed_param_count: int
+
+    @property
+    def normalized_ratio(self) -> float:
+        """Parameter-normalized gradient ratio (seed intensity / host intensity).
+
+        Formula: (seed_norm / host_norm) * sqrt(host_params / seed_params)
+
+        This normalizes by sqrt(param_count) because for i.i.d. gradient elements
+        with variance σ², the expected L2 norm is σ√n. Normalizing removes the
+        parameter count bias so small seeds aren't penalized for having fewer params.
+
+        Returns:
+            Ratio >= 0. Values around 0.05-0.2 indicate healthy seed activity.
+            Values < 0.01 suggest the seed is dormant or riding host improvements.
+        """
+        eps = 1e-8
+        if self.host_grad_norm < eps or self.seed_grad_norm < eps:
+            return 0.0
+        if self.host_param_count == 0 or self.seed_param_count == 0:
+            return 0.0
+
+        # Normalize by sqrt(param_count) to remove scale bias
+        seed_intensity = self.seed_grad_norm / (self.seed_param_count ** 0.5)
+        host_intensity = self.host_grad_norm / (self.host_param_count ** 0.5)
+
+        return seed_intensity / (host_intensity + eps)
+
+
+def collect_dual_gradients_async(
+    host_parameters: Iterator[nn.Parameter],
+    seed_parameters: Iterator[nn.Parameter],
+) -> dict:
+    """Collect gradient norms for both host and seed (async-safe).
+
+    Call this after loss.backward() but before optimizer.step() to capture
+    gradient norms from both networks in the same training step.
+
+    Args:
+        host_parameters: Iterator of host network parameters
+        seed_parameters: Iterator of seed module parameters
+
+    Returns:
+        Dict with tensor values; call materialize_dual_grad_stats() after
+        stream.synchronize() to get DualGradientStats.
+    """
+    host_grads = [p.grad for p in host_parameters if p.grad is not None]
+    seed_grads = [p.grad for p in seed_parameters if p.grad is not None]
+
+    result = {'_dual': True}
+
+    # Host gradients
+    if host_grads:
+        host_norms = torch._foreach_norm(host_grads, ord=2)
+        # Sum of squared norms for total norm via Pythagorean theorem
+        result['_host_squared_sum'] = sum(n**2 for n in host_norms)
+        result['_host_param_count'] = sum(g.numel() for g in host_grads)
+    else:
+        result['_host_squared_sum'] = 0.0
+        result['_host_param_count'] = 0
+
+    # Seed gradients
+    if seed_grads:
+        seed_norms = torch._foreach_norm(seed_grads, ord=2)
+        result['_seed_squared_sum'] = sum(n**2 for n in seed_norms)
+        result['_seed_param_count'] = sum(g.numel() for g in seed_grads)
+    else:
+        result['_seed_squared_sum'] = 0.0
+        result['_seed_param_count'] = 0
+
+    return result
+
+
+def materialize_dual_grad_stats(async_stats: dict) -> DualGradientStats:
+    """Convert async dual gradient stats to DualGradientStats.
+
+    Call this AFTER stream.synchronize() to safely extract .item() values.
+
+    Args:
+        async_stats: Dict from collect_dual_gradients_async()
+
+    Returns:
+        DualGradientStats with computed norms and param counts
+    """
+    host_squared = async_stats['_host_squared_sum']
+    seed_squared = async_stats['_seed_squared_sum']
+
+    # Handle tensor vs float (depends on whether collected in stream)
+    if isinstance(host_squared, torch.Tensor):
+        host_squared = host_squared.item()
+    if isinstance(seed_squared, torch.Tensor):
+        seed_squared = seed_squared.item()
+
+    return DualGradientStats(
+        host_grad_norm=host_squared ** 0.5,
+        host_param_count=async_stats['_host_param_count'],
+        seed_grad_norm=seed_squared ** 0.5,
+        seed_param_count=async_stats['_seed_param_count'],
+    )

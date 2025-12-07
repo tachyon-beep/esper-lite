@@ -34,7 +34,12 @@ from esper.runtime import get_task_spec
 from esper.leyline import SeedStage, SeedTelemetry, TelemetryEvent, TelemetryEventType
 from esper.leyline.actions import get_blueprint_from_action, is_germinate_action
 from esper.simic.features import compute_action_mask
-from esper.simic.gradient_collector import collect_seed_gradients_async, materialize_grad_stats
+from esper.simic.gradient_collector import (
+    collect_seed_gradients_async,
+    materialize_grad_stats,
+    collect_dual_gradients_async,
+    materialize_dual_grad_stats,
+)
 from esper.simic.normalization import RunningMeanStd, RewardNormalizer
 from esper.simic.ppo import PPOAgent, signals_to_features
 from esper.simic.rewards import compute_shaped_reward, compute_contribution_reward, SeedInfo
@@ -90,6 +95,10 @@ class ParallelEnvState:
     # (Batched to [num_layers, num_envs, hidden_dim] during forward pass)
     # None = fresh episode (initialized on first action selection)
     lstm_hidden: tuple[torch.Tensor, torch.Tensor] | None = None
+    # EMA tracking for seed gradient ratio (for G2 gate)
+    # Smooths per-step ratio noise with momentum=0.9
+    gradient_ratio_ema: float = 0.0
+    gradient_ratio_ema_initialized: bool = False
 
     def __post_init__(self) -> None:
         if not self.action_counts and self.action_enum is not None:
@@ -490,8 +499,12 @@ def train_ppo_vectorized(
 
             # Collect gradient stats for telemetry (after backward, before step)
             # Use async version to avoid .item() sync inside stream context
+            # Collect DUAL gradients (host + seed) to compute gradient ratio for G2 gate
             if use_telemetry and seed_state and seed_state.stage in (SeedStage.TRAINING, SeedStage.BLENDING):
-                grad_stats = collect_seed_gradients_async(model.get_seed_parameters())
+                grad_stats = collect_dual_gradients_async(
+                    model.get_host_parameters(),
+                    model.get_seed_parameters(),
+                )
 
             optimizer.step()
             if (
@@ -717,13 +730,27 @@ def train_ppo_vectorized(
                 seed_state = model.seed_state
 
                 if use_telemetry and seed_state and env_grad_stats[env_idx]:
-                    # Materialize async grad stats NOW (after stream sync, safe to call .item())
-                    grad_stats = materialize_grad_stats(env_grad_stats[env_idx])
+                    # Materialize async dual grad stats NOW (after stream sync, safe to call .item())
+                    dual_stats = materialize_dual_grad_stats(env_grad_stats[env_idx])
+
+                    # Update gradient ratio EMA for G2 gate
+                    current_ratio = dual_stats.normalized_ratio
+                    if not env_state.gradient_ratio_ema_initialized:
+                        env_state.gradient_ratio_ema = current_ratio
+                        env_state.gradient_ratio_ema_initialized = True
+                    else:
+                        # EMA with momentum=0.9 to smooth per-step noise
+                        env_state.gradient_ratio_ema = 0.9 * env_state.gradient_ratio_ema + 0.1 * current_ratio
+
+                    # Sync ratio to SeedMetrics for G2 gate evaluation
+                    seed_state.metrics.seed_gradient_norm_ratio = env_state.gradient_ratio_ema
+
+                    # Sync telemetry using seed gradient stats from dual collection
                     seed_state.sync_telemetry(
-                        gradient_norm=grad_stats['gradient_norm'],
-                        gradient_health=grad_stats['gradient_health'],
-                        has_vanishing=grad_stats['has_vanishing'],
-                        has_exploding=grad_stats['has_exploding'],
+                        gradient_norm=dual_stats.seed_grad_norm,
+                        gradient_health=1.0,  # Simplified: dual stats don't compute health
+                        has_vanishing=dual_stats.seed_grad_norm < 1e-7,
+                        has_exploding=dual_stats.seed_grad_norm > 100.0,
                         epoch=epoch,
                         max_epochs=max_epochs,
                     )
