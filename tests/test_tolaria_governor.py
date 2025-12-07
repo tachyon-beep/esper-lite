@@ -519,3 +519,26 @@ class TestTolariaGovernor:
                 assert not value.requires_grad, (
                     f"Snapshot tensor '{key}' should not require gradients"
                 )
+
+    def test_lobotomy_detection_scales_with_task(self):
+        """Test that lobotomy tolerance scales with random_guess_loss."""
+        from esper.tolaria import TolariaGovernor
+        import math
+
+        model = DummyModel()
+
+        # Test with TinyStories-like task (50257 classes)
+        tinystories_loss = math.log(50257)  # ~10.82
+        gov = TolariaGovernor(model, random_guess_loss=tinystories_loss)
+
+        # Build healthy history (loss ~3.0, well below random guess)
+        for _ in range(15):
+            gov.check_vital_signs(3.0)
+
+        # Jump to near random guess loss - should detect lobotomy
+        # With relative tolerance of ~6.5%, threshold is ~0.7 for TinyStories
+        # (vs fixed 0.15 which is too tight)
+        is_panic = gov.check_vital_signs(tinystories_loss + 0.5)
+        assert is_panic is True, (
+            "Should detect lobotomy even with larger absolute tolerance for high-entropy tasks"
+        )

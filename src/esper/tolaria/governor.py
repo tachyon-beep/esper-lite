@@ -108,10 +108,14 @@ class TolariaGovernor:
         # This catches "silent failures" where model outputs uniform probabilities
         if len(self.loss_history) >= 10:
             avg = sum(self.loss_history) / len(self.loss_history)
+            # Relative tolerance: ~6.5% of random guess loss
+            # - CIFAR-10 (ln(10)=2.3): tolerance = 0.15
+            # - TinyStories (ln(50257)=10.8): tolerance = 0.70
+            lobotomy_tolerance = 0.065 * self.random_guess_loss
             # If we were doing well (loss < 60% of random guess) and suddenly
-            # hit exactly the random guess loss (±0.15), that's a lobotomy
+            # hit exactly the random guess loss (±tolerance), that's a lobotomy
             if (avg < self.random_guess_loss * 0.6 and
-                abs(current_loss - self.random_guess_loss) < 0.15):
+                abs(current_loss - self.random_guess_loss) < lobotomy_tolerance):
                 self._pending_panic = False
                 self._panic_loss = current_loss
                 self.consecutive_panics = self.min_panics_before_rollback
