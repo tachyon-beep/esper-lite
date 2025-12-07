@@ -101,15 +101,6 @@ class TrainingConfig:
     stabilization_threshold: float = 0.03  # 3% relative improvement
     stabilization_epochs: int = 3  # Consecutive stable epochs required
 
-    # === Anomaly Detection Thresholds ===
-    # Ratio explosion/collapse detection
-    anomaly_max_ratio_threshold: float = 5.0
-    anomaly_min_ratio_threshold: float = 0.1
-    # Value function collapse detection
-    # Lower threshold = triggers only at very poor EV = LESS SENSITIVE (default 0.1)
-    # Higher threshold = triggers at mediocre EV = MORE SENSITIVE (e.g., 0.3)
-    anomaly_min_explained_variance: float = 0.1
-
     # === Telemetry ===
     use_telemetry: bool = True
 
@@ -239,14 +230,6 @@ class TrainingConfig:
         return {
             "stabilization_threshold": self.stabilization_threshold,
             "stabilization_epochs": self.stabilization_epochs,
-        }
-
-    def to_anomaly_kwargs(self) -> dict[str, Any]:
-        """Extract AnomalyDetector constructor kwargs."""
-        return {
-            "max_ratio_threshold": self.anomaly_max_ratio_threshold,
-            "min_ratio_threshold": self.anomaly_min_ratio_threshold,
-            "min_explained_variance": self.anomaly_min_explained_variance,
         }
 
     def to_dict(self) -> dict[str, Any]:

@@ -83,33 +83,3 @@ class TestTrainingConfig:
         assert "MLP" in summary
         # Should not show hidden/chunk details
         assert "hidden=" not in summary
-
-
-def test_anomaly_thresholds_in_config():
-    """TrainingConfig should include anomaly detection thresholds."""
-    from esper.simic.config import TrainingConfig
-
-    config = TrainingConfig()
-
-    # Should have configurable thresholds with correct defaults
-    assert config.anomaly_max_ratio_threshold == 5.0
-    assert config.anomaly_min_ratio_threshold == 0.1
-    assert config.anomaly_min_explained_variance == 0.1
-
-    # Should be able to override (0.3 = more sensitive to value collapse)
-    sensitive_config = TrainingConfig(anomaly_min_explained_variance=0.3)
-    assert sensitive_config.anomaly_min_explained_variance == 0.3
-
-
-def test_to_anomaly_kwargs():
-    """TrainingConfig.to_anomaly_kwargs() should extract anomaly detection parameters."""
-    from esper.simic.config import TrainingConfig
-
-    config = TrainingConfig()
-    kwargs = config.to_anomaly_kwargs()
-
-    assert kwargs == {
-        'max_ratio_threshold': 5.0,
-        'min_ratio_threshold': 0.1,
-        'min_explained_variance': 0.1,
-    }
