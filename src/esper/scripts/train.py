@@ -93,11 +93,15 @@ def main():
     }
     telemetry_config = TelemetryConfig(level=level_map[args.telemetry_level])
 
+    # Map telemetry level to console severity filter
+    # debug level -> show debug events, normal/minimal -> show info+ only
+    console_min_severity = "debug" if args.telemetry_level == "debug" else "info"
+
     # Wire Nissa console telemetry to the global hub so all
     # lifecycle events (including fossilization) are visible
     # alongside training logs.
     hub = get_hub()
-    hub.add_backend(ConsoleOutput())
+    hub.add_backend(ConsoleOutput(min_severity=console_min_severity))
 
     # Add file output if requested
     file_backend = None
