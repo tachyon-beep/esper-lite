@@ -45,10 +45,10 @@ from esper.simic.curriculum import BlueprintCurriculum, BlueprintStats
 
 # Rewards
 from esper.simic.rewards import (
-    RewardConfig,
     LossRewardConfig,
+    ContributionRewardConfig,
     SeedInfo,
-    compute_shaped_reward,
+    compute_contribution_reward,
     compute_potential,
     compute_pbrs_bonus,
     compute_pbrs_stage_bonus,
@@ -140,10 +140,10 @@ __all__ = [
     "BlueprintStats",
 
     # Rewards
-    "RewardConfig",
     "LossRewardConfig",
+    "ContributionRewardConfig",
     "SeedInfo",
-    "compute_shaped_reward",
+    "compute_contribution_reward",
     "compute_potential",
     "compute_pbrs_bonus",
     "compute_pbrs_stage_bonus",
