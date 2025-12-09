@@ -49,6 +49,53 @@ def _compute_loss(
     return criterion(outputs, labels)
 
 
+def _run_validation_pass(
+    model: nn.Module,
+    testloader: DataLoader,
+    criterion: nn.Module,
+    device: str,
+    task_type: str,
+) -> tuple[float, float]:
+    """Run a single validation pass.
+
+    Extracted from validate_with_attribution to enable reuse and testing.
+
+    Args:
+        model: The model to evaluate (in eval mode)
+        testloader: Validation data loader
+        criterion: Loss function
+        device: Device to evaluate on
+        task_type: "classification" or "lm"
+
+    Returns:
+        Tuple of (average_loss, accuracy)
+    """
+    loss_tensor = torch.tensor(0.0, device=device)
+    correct_tensor = torch.tensor(0, dtype=torch.long, device=device)
+    total = 0
+
+    with torch.no_grad():
+        for inputs, labels in testloader:
+            inputs = inputs.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
+            outputs = model(inputs)
+            loss = _compute_loss(outputs, labels, criterion, task_type)
+            loss_tensor += loss
+
+            if task_type == "lm":
+                predicted = outputs.argmax(dim=-1)
+                total += labels.numel()
+                correct_tensor += (predicted == labels).sum()
+            else:
+                _, predicted = outputs.max(1)
+                total += labels.size(0)
+                correct_tensor += predicted.eq(labels).sum()
+
+    avg_loss = loss_tensor.item() / max(len(testloader), 1)
+    accuracy = 100.0 * correct_tensor.item() / total if total > 0 else 0.0
+    return avg_loss, accuracy
+
+
 def train_epoch_normal(
     model: nn.Module,
     trainloader: DataLoader,
@@ -303,42 +350,19 @@ def validate_with_attribution(
     was_training = model.training
     model.eval()
 
-    def _run_validation_pass() -> tuple[float, float]:
-        """Run a single validation pass, return (loss, accuracy)."""
-        loss_tensor = torch.tensor(0.0, device=device)
-        correct_tensor = torch.tensor(0, dtype=torch.long, device=device)
-        total = 0
-
-        with torch.no_grad():
-            for inputs, labels in testloader:
-                inputs = inputs.to(device, non_blocking=True)
-                labels = labels.to(device, non_blocking=True)
-                outputs = model(inputs)
-                loss = _compute_loss(outputs, labels, criterion, task_type)
-                loss_tensor += loss
-
-                if task_type == "lm":
-                    predicted = outputs.argmax(dim=-1)
-                    total += labels.numel()
-                    correct_tensor += (predicted == labels).sum()
-                else:
-                    _, predicted = outputs.max(1)
-                    total += labels.size(0)
-                    correct_tensor += predicted.eq(labels).sum()
-
-        avg_loss = loss_tensor.item() / max(len(testloader), 1)
-        accuracy = 100.0 * correct_tensor.item() / total if total > 0 else 0.0
-        return avg_loss, accuracy
-
     try:
         # Pass 1: Real validation with current alpha
-        real_loss, real_accuracy = _run_validation_pass()
+        real_loss, real_accuracy = _run_validation_pass(
+            model, testloader, criterion, device, task_type
+        )
 
         # Pass 2: Baseline validation with alpha=0 (host-only)
         # Use force_alpha context manager to temporarily override alpha
         seed_slot = model.seed_slot
         with seed_slot.force_alpha(0.0):
-            baseline_loss, baseline_accuracy = _run_validation_pass()
+            baseline_loss, baseline_accuracy = _run_validation_pass(
+                model, testloader, criterion, device, task_type
+            )
 
         return AttributionResult(
             real_accuracy=real_accuracy,
