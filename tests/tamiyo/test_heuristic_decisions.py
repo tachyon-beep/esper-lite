@@ -269,22 +269,6 @@ class TestWaitDecisions:
         assert decision.action.name == "WAIT"
         assert "Blending" in decision.reason
 
-    def test_wait_during_shadowing(self):
-        """Should WAIT during SHADOWING stage (auto-advance handles it)."""
-        policy = HeuristicTamiyo(topology="cnn")
-
-        seed = MockSeedState(
-            stage=SeedStage.SHADOWING,
-            epochs_in_stage=2,
-            improvement=1.0,
-        )
-        signals = MockTrainingSignals(MockTrainingMetrics(epoch=25))
-
-        decision = policy.decide(signals, active_seeds=[seed])
-
-        assert decision.action.name == "WAIT"
-        assert "Shadowing" in decision.reason
-
     def test_wait_for_germinated_seed(self):
         """Should WAIT for GERMINATED seed to auto-advance to TRAINING."""
         policy = HeuristicTamiyo(topology="cnn")

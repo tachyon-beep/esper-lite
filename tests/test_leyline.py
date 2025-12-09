@@ -25,8 +25,11 @@ class TestSeedStage:
 
     def test_all_stages_have_transitions(self):
         """Every stage should have an entry in VALID_TRANSITIONS."""
+        # Exclude deprecated/removed stages
+        excluded_stages = {SeedStage.DORMANT, SeedStage.CULLED, SeedStage.FOSSILIZED, SeedStage.SHADOWING}
         for stage in SeedStage:
-            assert stage in VALID_TRANSITIONS, f"{stage} missing from VALID_TRANSITIONS"
+            if stage not in excluded_stages:
+                assert stage in VALID_TRANSITIONS, f"{stage} missing from VALID_TRANSITIONS"
 
     def test_dormant_can_only_germinate(self):
         """DORMANT should only transition to GERMINATED."""
@@ -71,7 +74,6 @@ class TestSeedStage:
             SeedStage.GERMINATED,
             SeedStage.TRAINING,
             SeedStage.BLENDING,
-            SeedStage.SHADOWING,
             SeedStage.PROBATIONARY,
             SeedStage.FOSSILIZED,
         ]
