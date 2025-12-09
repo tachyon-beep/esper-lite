@@ -384,10 +384,7 @@ def run_diagnostic_episode(
                 seed_optimizer = None
 
         elif action == ActionEnum.FOSSILIZE:
-            if model.has_active_seed and model.seed_state.stage in (
-                SeedStage.PROBATIONARY,
-                SeedStage.SHADOWING,
-            ):
+            if model.has_active_seed and model.seed_state.stage == SeedStage.PROBATIONARY:
                 # Use SeedSlot.advance_stage so fossilization respects gates
                 # and emits telemetry via Nissa.
                 gate_result = model.seed_slot.advance_stage(SeedStage.FOSSILIZED)
