@@ -26,6 +26,7 @@ import torch
 import torch.nn as nn
 
 from esper.runtime import TaskSpec, get_task_spec
+from esper.utils.loss import compute_task_loss_with_metrics
 from esper.leyline import SeedStage
 from esper.leyline.actions import get_blueprint_from_action, is_germinate_action
 
@@ -131,27 +132,6 @@ def classify_phase(epoch: int, max_epochs: int) -> str:
         return "late"
 
 
-def _loss_and_correct(
-    outputs: torch.Tensor,
-    targets: torch.Tensor,
-    criterion: nn.Module,
-    task_type: str,
-) -> tuple[torch.Tensor, float, int]:
-    """Compute loss and accuracy counts for classification or LM tasks."""
-    if task_type == "lm":
-        vocab = outputs.size(-1)
-        loss = criterion(outputs.view(-1, vocab), targets.view(-1))
-        predicted = outputs.argmax(dim=-1)
-        correct = float(predicted.eq(targets).sum().item())
-        total = targets.numel()
-    else:
-        loss = criterion(outputs, targets)
-        _, predicted = outputs.max(1)
-        correct = float(predicted.eq(targets).sum().item())
-        total = targets.size(0)
-    return loss, correct, total
-
-
 def run_diagnostic_episode(
     agent,
     trainloader,
@@ -172,7 +152,7 @@ def run_diagnostic_episode(
     model = create_model(task=task_spec, device=device)
     criterion = nn.CrossEntropyLoss()
     host_optimizer = torch.optim.SGD(
-        model.get_host_parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4
+        model.get_host_parameters(), lr=task_spec.host_lr, momentum=0.9, weight_decay=5e-4
     )
     seed_optimizer = None
     signal_tracker = SignalTracker()
@@ -200,7 +180,7 @@ def run_diagnostic_episode(
                 inputs, targets = inputs.to(device), targets.to(device)
                 host_optimizer.zero_grad()
                 outputs = model(inputs)
-                loss, correct_batch, batch_total = _loss_and_correct(
+                loss, correct_batch, batch_total = compute_task_loss_with_metrics(
                     outputs, targets, criterion, task_type
                 )
                 loss.backward()
@@ -212,13 +192,13 @@ def run_diagnostic_episode(
         elif seed_state.stage == SeedStage.GERMINATED:
             seed_state.transition(SeedStage.TRAINING)
             seed_optimizer = torch.optim.SGD(
-                model.get_seed_parameters(), lr=0.01, momentum=0.9
+                model.get_seed_parameters(), lr=task_spec.seed_lr, momentum=0.9
             )
             for inputs, targets in trainloader:
                 inputs, targets = inputs.to(device), targets.to(device)
                 seed_optimizer.zero_grad()
                 outputs = model(inputs)
-                loss, correct_batch, batch_total = _loss_and_correct(
+                loss, correct_batch, batch_total = compute_task_loss_with_metrics(
                     outputs, targets, criterion, task_type
                 )
                 loss.backward()
@@ -230,13 +210,13 @@ def run_diagnostic_episode(
         elif seed_state.stage == SeedStage.TRAINING:
             if seed_optimizer is None:
                 seed_optimizer = torch.optim.SGD(
-                    model.get_seed_parameters(), lr=0.01, momentum=0.9
+                    model.get_seed_parameters(), lr=task_spec.seed_lr, momentum=0.9
                 )
             for inputs, targets in trainloader:
                 inputs, targets = inputs.to(device), targets.to(device)
                 seed_optimizer.zero_grad()
                 outputs = model(inputs)
-                loss, correct_batch, batch_total = _loss_and_correct(
+                loss, correct_batch, batch_total = compute_task_loss_with_metrics(
                     outputs, targets, criterion, task_type
                 )
                 loss.backward()
@@ -252,7 +232,7 @@ def run_diagnostic_episode(
                 if seed_optimizer:
                     seed_optimizer.zero_grad()
                 outputs = model(inputs)
-                loss, correct_batch, batch_total = _loss_and_correct(
+                loss, correct_batch, batch_total = compute_task_loss_with_metrics(
                     outputs, targets, criterion, task_type
                 )
                 loss.backward()
@@ -268,7 +248,7 @@ def run_diagnostic_episode(
                 inputs, targets = inputs.to(device), targets.to(device)
                 host_optimizer.zero_grad()
                 outputs = model(inputs)
-                loss, correct_batch, batch_total = _loss_and_correct(
+                loss, correct_batch, batch_total = compute_task_loss_with_metrics(
                     outputs, targets, criterion, task_type
                 )
                 loss.backward()
@@ -282,7 +262,7 @@ def run_diagnostic_episode(
                 inputs, targets = inputs.to(device), targets.to(device)
                 host_optimizer.zero_grad()
                 outputs = model(inputs)
-                loss, correct_batch, batch_total = _loss_and_correct(
+                loss, correct_batch, batch_total = compute_task_loss_with_metrics(
                     outputs, targets, criterion, task_type
                 )
                 loss.backward()
@@ -304,7 +284,7 @@ def run_diagnostic_episode(
             for inputs, targets in testloader:
                 inputs, targets = inputs.to(device), targets.to(device)
                 outputs = model(inputs)
-                loss, correct_batch, batch_total = _loss_and_correct(
+                loss, correct_batch, batch_total = compute_task_loss_with_metrics(
                     outputs, targets, criterion, task_type
                 )
                 val_loss += loss.item()

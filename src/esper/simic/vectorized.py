@@ -385,7 +385,7 @@ def train_ppo_vectorized(
         params_added_baseline = analytics._get_scoreboard(env_idx).params_added
 
         host_optimizer = torch.optim.SGD(
-            model.get_host_parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4
+            model.get_host_parameters(), lr=task_spec.host_lr, momentum=0.9, weight_decay=5e-4
         )
 
         # Create CUDA stream for this environment
@@ -466,7 +466,7 @@ def train_ppo_vectorized(
                         raise RuntimeError(f"G1 gate failed during TRAINING entry: {gate_result}")
                 if env_state.seed_optimizer is None:
                     env_state.seed_optimizer = torch.optim.SGD(
-                        model.get_seed_parameters(), lr=0.01, momentum=0.9
+                        model.get_seed_parameters(), lr=task_spec.seed_lr, momentum=0.9
                     )
                 # Host optimizer remains primary; seed optimizer is stepped separately.
                 optimizer = env_state.host_optimizer

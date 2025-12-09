@@ -70,11 +70,11 @@ class TestComputeSeedPotential:
         assert potential == 6.0  # Small +0.5 over PROBATIONARY, not a farming target
 
     def test_progress_bonus_capped(self):
-        """Test that progress bonus is capped at 3.0."""
+        """Test that progress bonus is capped at 2.0."""
         obs = {'has_active_seed': 1, 'seed_stage': 3, 'seed_epochs_in_stage': 100}
         potential = compute_seed_potential(obs)
-        # Base 2.0 (TRAINING) + max 3.0 progress = 5.0
-        assert potential == 5.0
+        # Base 2.0 (TRAINING) + max 2.0 progress = 4.0
+        assert potential == 4.0
 
     def test_stage_progression_increases_potential(self):
         """Test that potential generally increases through stages until FOSSILIZED."""
