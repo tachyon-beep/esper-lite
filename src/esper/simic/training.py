@@ -108,6 +108,75 @@ def _loss_and_correct(
     return loss, correct, total
 
 
+def _train_one_epoch(
+    model: nn.Module,
+    trainloader: "torch.utils.data.DataLoader",
+    criterion: nn.Module,
+    host_optimizer: torch.optim.Optimizer,
+    seed_optimizer: torch.optim.Optimizer | None,
+    device: str,
+    task_type: str,
+    collect_gradients: bool = False,
+) -> tuple[float, float, int, dict | None]:
+    """Unified training loop for all seed stages.
+
+    This function extracts the repeated inline loop pattern. Callers use
+    returned values to compute metrics:
+        train_loss = running_loss / len(trainloader)
+        train_acc = 100.0 * correct / total
+
+    Args:
+        model: The model to train
+        trainloader: Training data loader
+        criterion: Loss function
+        host_optimizer: Optimizer for host parameters
+        seed_optimizer: Optimizer for seed parameters (optional)
+        device: Device to train on
+        task_type: "classification" or "lm"
+        collect_gradients: If True, collect gradient stats for telemetry
+
+    Returns:
+        Tuple of (running_loss, correct_count, total_count, grad_stats)
+        - running_loss: Sum of loss.item() across batches (float)
+        - correct_count: Sum of correct predictions (float, from _loss_and_correct)
+        - total_count: Total samples processed (int)
+        - grad_stats: Gradient statistics dict if collect_gradients=True, else None
+    """
+    model.train()
+
+    running_loss = 0.0
+    correct = 0.0
+    total = 0
+    grad_stats = None
+
+    for inputs, targets in trainloader:
+        inputs = inputs.to(device, non_blocking=True)
+        targets = targets.to(device, non_blocking=True)
+        host_optimizer.zero_grad(set_to_none=True)
+        if seed_optimizer:
+            seed_optimizer.zero_grad(set_to_none=True)
+
+        outputs = model(inputs)
+        loss, correct_batch, batch_total = _loss_and_correct(
+            outputs, targets, criterion, task_type
+        )
+        loss.backward()
+
+        # Collect gradient stats (overwrites each batch; final value returned)
+        if collect_gradients:
+            grad_stats = collect_seed_gradients(model.get_seed_parameters())
+
+        host_optimizer.step()
+        if seed_optimizer:
+            seed_optimizer.step()
+
+        running_loss += loss.item()
+        correct += correct_batch
+        total += batch_total
+
+    return running_loss, correct, total, grad_stats
+
+
 # =============================================================================
 # PPO Episode Runner
 # =============================================================================
@@ -178,129 +247,44 @@ def run_ppo_episode(
 
     for epoch in range(1, max_epochs + 1):
         seed_state = model.seed_state
-        grad_stats = None  # Will collect gradient stats if use_telemetry and seed active
 
-        # Training phase
-        model.train()
-        running_loss = 0.0
-        correct = 0
-        total = 0
-
-        if seed_state is None:
-            for inputs, targets in trainloader:
-                inputs, targets = inputs.to(device), targets.to(device)
-                host_optimizer.zero_grad()
-                outputs = model(inputs)
-                loss, correct_batch, batch_total = _loss_and_correct(outputs, targets, criterion, task_type)
-                loss.backward()
-                host_optimizer.step()
-                running_loss += loss.item()
-                total += batch_total
-                correct += correct_batch
-
-        elif seed_state.stage == SeedStage.GERMINATED:
+        # Handle GERMINATED→TRAINING transition
+        if seed_state and seed_state.stage == SeedStage.GERMINATED:
             gate_result = model.seed_slot.advance_stage(SeedStage.TRAINING)
             if not gate_result.passed:
                 raise RuntimeError(f"G1 gate failed during TRAINING entry: {gate_result}")
-            if seed_optimizer is None:
-                seed_optimizer = torch.optim.SGD(
-                    model.get_seed_parameters(), lr=0.01, momentum=0.9
-                )
-            for inputs, targets in trainloader:
-                inputs, targets = inputs.to(device), targets.to(device)
-                host_optimizer.zero_grad()
-                seed_optimizer.zero_grad()
-                outputs = model(inputs)
-                loss, correct_batch, batch_total = _loss_and_correct(outputs, targets, criterion, task_type)
-                loss.backward()
 
-                # Collect gradient stats for telemetry (once per epoch, last batch)
-                if use_telemetry:
-                    grad_stats = collect_seed_gradients(model.get_seed_parameters())
+        # Initialize seed optimizer if needed (active seed, not fossilized)
+        needs_seed_optimizer = (
+            seed_state is not None
+            and seed_state.stage not in (SeedStage.DORMANT, SeedStage.FOSSILIZED)
+        )
+        if needs_seed_optimizer and seed_optimizer is None:
+            seed_optimizer = torch.optim.SGD(
+                model.get_seed_parameters(), lr=0.01, momentum=0.9
+            )
 
-                host_optimizer.step()
-                seed_optimizer.step()
-                running_loss += loss.item()
-                total += batch_total
-                correct += correct_batch
+        # Determine if we should collect gradients (active training seed)
+        should_collect_gradients = (
+            use_telemetry
+            and seed_state is not None
+            and seed_state.stage in (
+                SeedStage.TRAINING, SeedStage.BLENDING,
+                SeedStage.SHADOWING, SeedStage.PROBATIONARY
+            )
+        )
 
-        elif seed_state.stage == SeedStage.TRAINING:
-            if seed_optimizer is None:
-                seed_optimizer = torch.optim.SGD(
-                    model.get_seed_parameters(), lr=0.01, momentum=0.9
-                )
-            for inputs, targets in trainloader:
-                inputs, targets = inputs.to(device), targets.to(device)
-                host_optimizer.zero_grad()
-                seed_optimizer.zero_grad()
-                outputs = model(inputs)
-                loss, correct_batch, batch_total = _loss_and_correct(outputs, targets, criterion, task_type)
-                loss.backward()
-
-                # Collect gradient stats for telemetry (once per epoch, last batch)
-                if use_telemetry:
-                    grad_stats = collect_seed_gradients(model.get_seed_parameters())
-
-                host_optimizer.step()
-                seed_optimizer.step()
-                running_loss += loss.item()
-                total += batch_total
-                correct += correct_batch
-
-        elif seed_state.stage == SeedStage.BLENDING:
-            # Alpha progression handled by model.seed_slot.step_epoch()
-            for inputs, targets in trainloader:
-                inputs, targets = inputs.to(device), targets.to(device)
-                host_optimizer.zero_grad()
-                if seed_optimizer:
-                    seed_optimizer.zero_grad()
-                outputs = model(inputs)
-                loss, correct_batch, batch_total = _loss_and_correct(outputs, targets, criterion, task_type)
-                loss.backward()
-
-                # Collect gradient stats for telemetry (once per epoch, last batch)
-                if use_telemetry:
-                    grad_stats = collect_seed_gradients(model.get_seed_parameters())
-
-                host_optimizer.step()
-                if seed_optimizer:
-                    seed_optimizer.step()
-                running_loss += loss.item()
-                total += batch_total
-                correct += correct_batch
-
-        elif seed_state.stage in (SeedStage.SHADOWING, SeedStage.PROBATIONARY):
-            # Seed fully blended; continue joint training without alpha ramp
-            if seed_optimizer is None:
-                seed_optimizer = torch.optim.SGD(model.get_seed_parameters(), lr=0.01, momentum=0.9)
-            for inputs, targets in trainloader:
-                inputs, targets = inputs.to(device), targets.to(device)
-                host_optimizer.zero_grad()
-                seed_optimizer.zero_grad()
-                outputs = model(inputs)
-                loss, correct_batch, batch_total = _loss_and_correct(outputs, targets, criterion, task_type)
-                loss.backward()
-
-                if use_telemetry:
-                    grad_stats = collect_seed_gradients(model.get_seed_parameters())
-
-                host_optimizer.step()
-                seed_optimizer.step()
-                running_loss += loss.item()
-                total += batch_total
-                correct += correct_batch
-
-        elif seed_state.stage == SeedStage.FOSSILIZED:
-            for inputs, targets in trainloader:
-                inputs, targets = inputs.to(device), targets.to(device)
-                host_optimizer.zero_grad()
-                outputs = model(inputs)
-                loss, correct_batch, batch_total = _loss_and_correct(outputs, targets, criterion, task_type)
-                loss.backward()
-                host_optimizer.step()
-                running_loss += loss.item()
-                total += batch_total
-                correct += correct_batch
+        # Single unified training call
+        running_loss, correct, total, grad_stats = _train_one_epoch(
+            model=model,
+            trainloader=trainloader,
+            criterion=criterion,
+            host_optimizer=host_optimizer,
+            seed_optimizer=seed_optimizer if needs_seed_optimizer else None,
+            device=device,
+            task_type=task_type,
+            collect_gradients=should_collect_gradients,
+        )
 
         train_loss = running_loss / len(trainloader) if len(trainloader) > 0 else 0.0
         train_acc = 100.0 * correct / total if total > 0 else 0.0
