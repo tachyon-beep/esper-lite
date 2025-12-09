@@ -38,18 +38,51 @@ from esper.simic.reward_telemetry import RewardComponentsTelemetry
 
 
 # =============================================================================
-# Stage Potentials for PBRS (Potential-Based Reward Shaping)
+# POTENTIAL-BASED REWARD SHAPING (PBRS) - DESIGN RATIONALE
 # =============================================================================
 #
-# PBRS guarantees policy invariance when shaping rewards use: F(s,a,s') = γΦ(s') - Φ(s)
-# All reward functions MUST use this single potential dictionary for consistency.
-# Using different potentials across reward functions breaks the telescoping property.
+# These values implement Ng et al. (1999) potential-based shaping:
+#   F(s, s') = gamma * phi(s') - phi(s)
 #
-# Design rationale:
-# - Monotonically increasing toward FOSSILIZED (successful integration)
-# - Diminishing returns: BLENDING has largest increment (+1.5), FOSSILIZED smallest (+0.5)
-# - Small FOSSILIZED increment prevents "fossilization farming" (rushing to completion)
-# - DORMANT/UNKNOWN have zero potential (no reward for inactive states)
+# KEY PROPERTIES MAINTAINED:
+# 1. Bounded Effect: Adding PBRS to discounted returns affects value by exactly
+#    gamma^T * phi(s_T) - phi(s_0), ensuring the optimal policy is preserved.
+#    (The undiscounted sum of per-step PBRS bonuses differs from this value
+#    when gamma < 1, but the effect on optimal actions is unchanged.)
+#
+# 2. Policy Invariance: Optimal policy unchanged by shaping (Ng et al., 1999).
+#    Adding PBRS to any reward function preserves the optimal policy
+#    because the shaping is purely potential-based.
+#
+# VALUE RATIONALE (actual values):
+# - UNKNOWN (0.0): Fallback/error state - no reward
+# - DORMANT (0.0): Baseline state before germination - no reward
+# - GERMINATED (1.0): +1.0 for initiating growth
+# - TRAINING (2.0): +1.0 for successful G1 gate passage
+# - BLENDING (3.5): +1.5 (LARGEST delta) - critical integration phase
+#   This is where value is actually created; alpha ramp merges seed contribution
+# - SHADOWING (4.5): +1.0 for surviving blending without regression
+# - PROBATIONARY (5.5): +1.0 for stability validation
+# - FOSSILIZED (6.0): +0.5 (SMALLEST delta) - terminal bonus
+#   Small to prevent "fossilization farming" (rushing to completion)
+#
+# TUNING HISTORY:
+# - v1: Linear progression (1.0 increments each stage)
+#       Problem: Insufficient BLENDING incentive; seeds stalled at TRAINING
+# - v2: Current values with BLENDING emphasis (+1.5)
+#       Result: Improved seed integration success rate
+#
+# VALIDATION:
+# Property-based tests in tests/properties/test_pbrs_telescoping.py verify:
+# - Telescoping property holds for arbitrary stage sequences
+# - Potentials are monotonically increasing toward FOSSILIZED
+# - BLENDING has largest increment (value creation phase)
+# - FOSSILIZED has smallest increment (anti-farming)
+# - DORMANT/UNKNOWN have zero potential
+#
+# All reward functions MUST use this single STAGE_POTENTIALS dictionary.
+# Using different potentials across reward functions breaks telescoping.
+# =============================================================================
 
 STAGE_POTENTIALS = {
     0: 0.0,   # UNKNOWN
