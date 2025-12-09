@@ -275,7 +275,7 @@ def run_ppo_episode(
             and seed_state is not None
             and seed_state.stage in (
                 SeedStage.TRAINING, SeedStage.BLENDING,
-                SeedStage.SHADOWING, SeedStage.PROBATIONARY
+                SeedStage.PROBATIONARY
             )
         )
 
@@ -393,10 +393,8 @@ def run_ppo_episode(
                 seed_optimizer = None
 
         elif action == ActionEnum.FOSSILIZE:
-            # NOTE: Only PROBATIONARY → FOSSILIZED is a valid lifecycle
-            # transition per Leyline. From SHADOWING this advance_stage call
-            # will fail the transition and return passed=False (no change).
-            if model.has_active_seed and model.seed_state.stage in (SeedStage.PROBATIONARY, SeedStage.SHADOWING):
+            # NOTE: Only PROBATIONARY → FOSSILIZED is a valid lifecycle transition.
+            if model.has_active_seed and model.seed_state.stage == SeedStage.PROBATIONARY:
                 gate_result = model.seed_slot.advance_stage(SeedStage.FOSSILIZED)
                 if gate_result.passed:
                     params_added += model.active_seed_params

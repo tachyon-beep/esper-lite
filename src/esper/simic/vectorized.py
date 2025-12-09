@@ -134,9 +134,7 @@ def _advance_active_seed(model) -> bool:
 
     # Tamiyo only finalizes; mechanical blending/advancement handled by Kasmina.
     # NOTE: Leyline VALID_TRANSITIONS only allow PROBATIONARY → FOSSILIZED.
-    # From SHADOWING this advance_stage call will fail the transition and
-    # return a GateResult with passed=False (no lifecycle change).
-    if current_stage in (SeedStage.PROBATIONARY, SeedStage.SHADOWING):
+    if current_stage == SeedStage.PROBATIONARY:
         gate_result = model.seed_slot.advance_stage(SeedStage.FOSSILIZED)
         if gate_result.passed:
             model.seed_slot.set_alpha(1.0)
@@ -525,7 +523,7 @@ def train_ppo_vectorized(
                 # Note: Alpha is driven by step_epoch() once per epoch, not per batch
                 # This keeps alpha progression in sync with the auto-advance counter
                 optimizer = env_state.host_optimizer
-            elif seed_state.stage in (SeedStage.SHADOWING, SeedStage.PROBATIONARY):
+            elif seed_state.stage == SeedStage.PROBATIONARY:
                 # Post-blending validation - alpha locked at 1.0, joint training
                 optimizer = env_state.host_optimizer
             else:
