@@ -177,8 +177,8 @@ def run_diagnostic_episode(
 
         if seed_state is None:
             for inputs, targets in trainloader:
-                inputs, targets = inputs.to(device), targets.to(device)
-                host_optimizer.zero_grad()
+                inputs, targets = inputs.to(device, non_blocking=True), targets.to(device, non_blocking=True)
+                host_optimizer.zero_grad(set_to_none=True)
                 outputs = model(inputs)
                 loss, correct_batch, batch_total = compute_task_loss_with_metrics(
                     outputs, targets, criterion, task_type
@@ -195,8 +195,8 @@ def run_diagnostic_episode(
                 model.get_seed_parameters(), lr=task_spec.seed_lr, momentum=0.9
             )
             for inputs, targets in trainloader:
-                inputs, targets = inputs.to(device), targets.to(device)
-                seed_optimizer.zero_grad()
+                inputs, targets = inputs.to(device, non_blocking=True), targets.to(device, non_blocking=True)
+                seed_optimizer.zero_grad(set_to_none=True)
                 outputs = model(inputs)
                 loss, correct_batch, batch_total = compute_task_loss_with_metrics(
                     outputs, targets, criterion, task_type
@@ -213,8 +213,8 @@ def run_diagnostic_episode(
                     model.get_seed_parameters(), lr=task_spec.seed_lr, momentum=0.9
                 )
             for inputs, targets in trainloader:
-                inputs, targets = inputs.to(device), targets.to(device)
-                seed_optimizer.zero_grad()
+                inputs, targets = inputs.to(device, non_blocking=True), targets.to(device, non_blocking=True)
+                seed_optimizer.zero_grad(set_to_none=True)
                 outputs = model(inputs)
                 loss, correct_batch, batch_total = compute_task_loss_with_metrics(
                     outputs, targets, criterion, task_type
@@ -227,10 +227,10 @@ def run_diagnostic_episode(
 
         elif seed_state.stage == SeedStage.BLENDING:
             for inputs, targets in trainloader:
-                inputs, targets = inputs.to(device), targets.to(device)
-                host_optimizer.zero_grad()
+                inputs, targets = inputs.to(device, non_blocking=True), targets.to(device, non_blocking=True)
+                host_optimizer.zero_grad(set_to_none=True)
                 if seed_optimizer:
-                    seed_optimizer.zero_grad()
+                    seed_optimizer.zero_grad(set_to_none=True)
                 outputs = model(inputs)
                 loss, correct_batch, batch_total = compute_task_loss_with_metrics(
                     outputs, targets, criterion, task_type
@@ -245,8 +245,8 @@ def run_diagnostic_episode(
 
         elif seed_state.stage == SeedStage.FOSSILIZED:
             for inputs, targets in trainloader:
-                inputs, targets = inputs.to(device), targets.to(device)
-                host_optimizer.zero_grad()
+                inputs, targets = inputs.to(device, non_blocking=True), targets.to(device, non_blocking=True)
+                host_optimizer.zero_grad(set_to_none=True)
                 outputs = model(inputs)
                 loss, correct_batch, batch_total = compute_task_loss_with_metrics(
                     outputs, targets, criterion, task_type
@@ -259,8 +259,8 @@ def run_diagnostic_episode(
         else:
             # Fallback
             for inputs, targets in trainloader:
-                inputs, targets = inputs.to(device), targets.to(device)
-                host_optimizer.zero_grad()
+                inputs, targets = inputs.to(device, non_blocking=True), targets.to(device, non_blocking=True)
+                host_optimizer.zero_grad(set_to_none=True)
                 outputs = model(inputs)
                 loss, correct_batch, batch_total = compute_task_loss_with_metrics(
                     outputs, targets, criterion, task_type
@@ -280,9 +280,9 @@ def run_diagnostic_episode(
         correct = 0
         total = 0
 
-        with torch.no_grad():
+        with torch.inference_mode():
             for inputs, targets in testloader:
-                inputs, targets = inputs.to(device), targets.to(device)
+                inputs, targets = inputs.to(device, non_blocking=True), targets.to(device, non_blocking=True)
                 outputs = model(inputs)
                 loss, correct_batch, batch_total = compute_task_loss_with_metrics(
                     outputs, targets, criterion, task_type
@@ -324,7 +324,7 @@ def run_diagnostic_episode(
         state = torch.tensor([features], dtype=torch.float32, device=device)
 
         # Get action with full distribution info
-        with torch.no_grad():
+        with torch.inference_mode():
             dist, value = agent.network(state)
             entropy = dist.entropy().item()
 
