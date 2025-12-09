@@ -188,7 +188,7 @@ class LossRewardConfig:
     regression_penalty_scale: float = 0.5  # Asymmetric clipping
     typical_loss_delta_std: float = 0.1  # Task-specific normalization
 
-    # Compute rent (logarithmic scaling like RewardConfig)
+    # Compute rent (logarithmic scaling)
     compute_rent_weight: float = 0.05
     max_rent_penalty: float = 5.0
     grace_epochs: int = 3  # Rent-free grace period for new seeds
