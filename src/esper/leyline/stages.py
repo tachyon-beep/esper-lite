@@ -1,9 +1,9 @@
 """Leyline Stages - Seed lifecycle stages and transitions.
 
 Defines the state machine for seed development:
-DORMANT -> GERMINATED -> TRAINING -> BLENDING -> SHADOWING -> PROBATIONARY -> FOSSILIZED
-                              |          |           |             |
-                              v          v           v             v
+DORMANT -> GERMINATED -> TRAINING -> BLENDING -> PROBATIONARY -> FOSSILIZED
+                              |          |           |
+                              v          v           v
                             CULLED <- EMBARGOED <- RESETTING <- DORMANT
 """
 
@@ -15,10 +15,10 @@ class SeedStage(IntEnum):
 
     The full lifecycle represents a trust escalation model:
 
-    DORMANT ──► GERMINATED ──► TRAINING ──► BLENDING ──► SHADOWING
+    DORMANT ──► GERMINATED ──► TRAINING ──► BLENDING ──► PROBATIONARY
                     │              │            │            │
                     ▼              ▼            ▼            ▼
-                 CULLED ◄──────────────────────────────────────
+                 CULLED ◄───────────────────────────────────────
                     │
                     ▼
                EMBARGOED ──► RESETTING ──► DORMANT (slot recycled)
@@ -33,7 +33,6 @@ class SeedStage(IntEnum):
     - GERMINATED: Seed attached, sanity checks passed, ready to train
     - TRAINING: Isolated training with gradient isolation from host
     - BLENDING: Alpha-managed grafting, gradually blending into host
-    - SHADOWING: Running in shadow mode, comparing outputs without affecting host
     - PROBATIONARY: Final validation period before permanent integration
     - FOSSILIZED: Permanently integrated into the model (terminal success)
     - CULLED: Removed due to failure or poor performance
@@ -46,7 +45,7 @@ class SeedStage(IntEnum):
     GERMINATED = 2
     TRAINING = 3
     BLENDING = 4
-    SHADOWING = 5
+    SHADOWING = 5       # DEPRECATED: No longer used in lifecycle (kept for serialization compat)
     PROBATIONARY = 6
     FOSSILIZED = 7      # Terminal state (success)
     CULLED = 8          # Failure state
@@ -60,8 +59,7 @@ VALID_TRANSITIONS: dict[SeedStage, tuple[SeedStage, ...]] = {
     SeedStage.DORMANT: (SeedStage.GERMINATED,),
     SeedStage.GERMINATED: (SeedStage.TRAINING, SeedStage.CULLED),
     SeedStage.TRAINING: (SeedStage.BLENDING, SeedStage.CULLED),
-    SeedStage.BLENDING: (SeedStage.SHADOWING, SeedStage.CULLED),
-    SeedStage.SHADOWING: (SeedStage.PROBATIONARY, SeedStage.CULLED),
+    SeedStage.BLENDING: (SeedStage.PROBATIONARY, SeedStage.CULLED),
     SeedStage.PROBATIONARY: (SeedStage.FOSSILIZED, SeedStage.CULLED),
     SeedStage.FOSSILIZED: (),  # Terminal - no transitions out
     SeedStage.CULLED: (SeedStage.EMBARGOED,),
@@ -85,7 +83,6 @@ def is_active_stage(stage: SeedStage) -> bool:
     return stage in (
         SeedStage.TRAINING,
         SeedStage.BLENDING,
-        SeedStage.SHADOWING,
         SeedStage.PROBATIONARY,
         SeedStage.FOSSILIZED,
     )
