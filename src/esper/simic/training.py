@@ -17,6 +17,7 @@ from esper.simic.rewards import compute_shaped_reward, SeedInfo
 from esper.simic.gradient_collector import collect_seed_gradients
 from esper.simic.features import compute_action_mask
 from esper.nissa import get_hub
+from esper.utils.loss import compute_task_loss_with_metrics
 
 
 # =============================================================================
@@ -87,26 +88,6 @@ def compiled_train_step(
 # PPO helpers
 # =============================================================================
 
-def _loss_and_correct(
-    outputs: torch.Tensor,
-    targets: torch.Tensor,
-    criterion: nn.Module,
-    task_type: str,
-) -> tuple[torch.Tensor, float, int]:
-    """Compute loss and token/sample accuracy counts for classification or LM."""
-    if task_type == "lm":
-        vocab = outputs.size(-1)
-        loss = criterion(outputs.view(-1, vocab), targets.view(-1))
-        predicted = outputs.argmax(dim=-1)
-        correct = float(predicted.eq(targets).sum().item())
-        total = targets.numel()
-    else:
-        loss = criterion(outputs, targets)
-        _, predicted = outputs.max(1)
-        correct = float(predicted.eq(targets).sum().item())
-        total = targets.size(0)
-    return loss, correct, total
-
 
 def _train_one_epoch(
     model: nn.Module,
@@ -138,7 +119,7 @@ def _train_one_epoch(
     Returns:
         Tuple of (running_loss, correct_count, total_count, grad_stats)
         - running_loss: Sum of loss.item() across batches (float)
-        - correct_count: Sum of correct predictions (float, from _loss_and_correct)
+        - correct_count: Sum of correct predictions (float)
         - total_count: Total samples processed (int)
         - grad_stats: Gradient statistics dict if collect_gradients=True, else None
     """
@@ -157,7 +138,7 @@ def _train_one_epoch(
             seed_optimizer.zero_grad(set_to_none=True)
 
         outputs = model(inputs)
-        loss, correct_batch, batch_total = _loss_and_correct(
+        loss, correct_batch, batch_total = compute_task_loss_with_metrics(
             outputs, targets, criterion, task_type
         )
         loss.backward()
@@ -228,7 +209,7 @@ def run_ppo_episode(
 
     criterion = nn.CrossEntropyLoss()
     host_optimizer = torch.optim.SGD(
-        model.get_host_parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4
+        model.get_host_parameters(), lr=task_spec.host_lr, momentum=0.9, weight_decay=5e-4
     )
     seed_optimizer = None
     signal_tracker = SignalTracker()
@@ -261,7 +242,7 @@ def run_ppo_episode(
         )
         if needs_seed_optimizer and seed_optimizer is None:
             seed_optimizer = torch.optim.SGD(
-                model.get_seed_parameters(), lr=0.01, momentum=0.9
+                model.get_seed_parameters(), lr=task_spec.seed_lr, momentum=0.9
             )
 
         # Determine if we should collect gradients (active training seed)
@@ -297,9 +278,10 @@ def run_ppo_episode(
 
         with torch.no_grad():
             for inputs, targets in testloader:
-                inputs, targets = inputs.to(device), targets.to(device)
+                inputs = inputs.to(device, non_blocking=True)
+                targets = targets.to(device, non_blocking=True)
                 outputs = model(inputs)
-                loss, correct_batch, batch_total = _loss_and_correct(outputs, targets, criterion, task_type)
+                loss, correct_batch, batch_total = compute_task_loss_with_metrics(outputs, targets, criterion, task_type)
                 val_loss += loss.item()
                 total += batch_total
                 correct += correct_batch
@@ -611,7 +593,7 @@ def run_heuristic_episode(
 
     criterion = nn.CrossEntropyLoss()
     host_optimizer = torch.optim.SGD(
-        model.get_host_parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4
+        model.get_host_parameters(), lr=task_spec.host_lr, momentum=0.9, weight_decay=5e-4
     )
     seed_optimizer = None
     signal_tracker = SignalTracker()
@@ -638,13 +620,14 @@ def run_heuristic_episode(
                 break
             batch_count += 1
 
-            inputs, targets = inputs.to(device), targets.to(device)
-            host_optimizer.zero_grad()
+            inputs = inputs.to(device, non_blocking=True)
+            targets = targets.to(device, non_blocking=True)
+            host_optimizer.zero_grad(set_to_none=True)
             if seed_optimizer:
-                seed_optimizer.zero_grad()
+                seed_optimizer.zero_grad(set_to_none=True)
 
             outputs = model(inputs)
-            loss, correct_batch, batch_total = _loss_and_correct(outputs, targets, criterion, task_type)
+            loss, correct_batch, batch_total = compute_task_loss_with_metrics(outputs, targets, criterion, task_type)
             loss.backward()
 
             host_optimizer.step()
@@ -671,9 +654,10 @@ def run_heuristic_episode(
                     break
                 batch_count += 1
 
-                inputs, targets = inputs.to(device), targets.to(device)
+                inputs = inputs.to(device, non_blocking=True)
+                targets = targets.to(device, non_blocking=True)
                 outputs = model(inputs)
-                loss, correct_batch, batch_total = _loss_and_correct(outputs, targets, criterion, task_type)
+                loss, correct_batch, batch_total = compute_task_loss_with_metrics(outputs, targets, criterion, task_type)
                 val_loss += loss.item()
                 total += batch_total
                 correct += correct_batch
@@ -732,7 +716,7 @@ def run_heuristic_episode(
                 model.germinate_seed(blueprint_id, seed_id)
                 seeds_created += 1
                 seed_optimizer = torch.optim.SGD(
-                    model.get_seed_parameters(), lr=0.01, momentum=0.9
+                    model.get_seed_parameters(), lr=task_spec.seed_lr, momentum=0.9
                 )
 
         elif action.name == "FOSSILIZE":

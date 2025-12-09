@@ -95,6 +95,10 @@ STAGE_POTENTIALS = {
     7: 6.0,   # FOSSILIZED (smallest increment - not a farming target)
 }
 
+# Default discount factor for PBRS. All reward configs should use this value
+# to ensure consistent telescoping properties across the codebase.
+DEFAULT_GAMMA = 0.99
+
 
 # =============================================================================
 # Reward Configuration
@@ -223,8 +227,8 @@ class ContributionRewardConfig:
     # Terminal bonus
     terminal_acc_weight: float = 0.05
 
-    # Gamma for PBRS
-    gamma: float = 0.99
+    # Gamma for PBRS (uses module constant for consistency)
+    gamma: float = DEFAULT_GAMMA
 
     @staticmethod
     def default() -> "ContributionRewardConfig":
@@ -482,7 +486,7 @@ def compute_shaped_reward(
         }
         phi_t = compute_seed_potential(current_obs)
         phi_t_prev = compute_seed_potential(prev_obs)
-        pb_bonus = compute_pbrs_bonus(phi_t_prev, phi_t, gamma=0.99)
+        pb_bonus = compute_pbrs_bonus(phi_t_prev, phi_t, gamma=DEFAULT_GAMMA)
         pbrs_bonus = config.seed_potential_weight * pb_bonus
         reward += pbrs_bonus
     if components:
@@ -552,7 +556,7 @@ def _germinate_shaping(
         }
         phi_germinated = compute_seed_potential(germinated_obs)
         phi_no_seed = 0.0
-        pbrs_bonus = compute_pbrs_bonus(phi_no_seed, phi_germinated, gamma=0.99)
+        pbrs_bonus = compute_pbrs_bonus(phi_no_seed, phi_germinated, gamma=DEFAULT_GAMMA)
         bonus += config.seed_potential_weight * pbrs_bonus
 
         return bonus
@@ -1030,7 +1034,7 @@ def compute_potential(val_acc: float, epoch: int, max_epochs: int) -> float:
 def compute_pbrs_bonus(
     potential_prev: float,
     potential_next: float,
-    gamma: float = 0.99,
+    gamma: float = DEFAULT_GAMMA,
 ) -> float:
     """Compute potential-based reward shaping bonus.
 
@@ -1073,7 +1077,10 @@ def compute_seed_potential(obs: dict) -> float:
 
     # Use unified STAGE_POTENTIALS for PBRS consistency across all reward functions
     base_potential = STAGE_POTENTIALS.get(seed_stage, 0.0)
-    progress_bonus = min(epochs_in_stage * 0.5, 3.0)
+
+    # Progress bonus matches ContributionRewardConfig defaults for PBRS consistency
+    # epoch_progress_bonus=0.3, max_progress_bonus=2.0
+    progress_bonus = min(epochs_in_stage * 0.3, 2.0)
 
     return base_potential + progress_bonus
 
@@ -1086,7 +1093,7 @@ def compute_seed_potential(obs: dict) -> float:
 def compute_pbrs_stage_bonus(
     seed_info: SeedInfo,
     config: LossRewardConfig,
-    gamma: float = 0.99,
+    gamma: float = DEFAULT_GAMMA,
 ) -> float:
     """PBRS-compatible stage bonus using potential function.
 
@@ -1200,7 +1207,9 @@ __all__ = [
     # Intervention costs
     "get_intervention_cost",
     "INTERVENTION_COSTS_BY_NAME",
-    # Stage constants
+    # Stage constants and PBRS configuration
+    "DEFAULT_GAMMA",
+    "STAGE_POTENTIALS",
     "STAGE_TRAINING",
     "STAGE_BLENDING",
     "STAGE_FOSSILIZED",

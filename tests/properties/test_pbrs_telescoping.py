@@ -382,3 +382,183 @@ class TestSeedPotentialConsistency:
         potential = compute_seed_potential(obs)
 
         assert potential == 0.0, "DORMANT should have zero potential"
+
+
+class TestCullGerminationTransitions:
+    """Tests for PBRS behavior during cull and germination transitions.
+
+    These transitions involve going to/from no-seed states and need special
+    attention to ensure PBRS properties are maintained.
+    """
+
+    def test_germination_transition_pbrs(self):
+        """Germinating a seed should give positive PBRS bonus.
+
+        Transition: no_seed (potential=0) -> GERMINATED (potential>0)
+        Expected: gamma * phi(GERMINATED) - 0 > 0
+        """
+        gamma = 0.99
+
+        # No seed state
+        obs_no_seed = {"has_active_seed": 0, "seed_stage": 0, "seed_epochs_in_stage": 0}
+        # Just germinated
+        obs_germinated = {"has_active_seed": 1, "seed_stage": 2, "seed_epochs_in_stage": 0}
+
+        phi_no_seed = compute_seed_potential(obs_no_seed)
+        phi_germinated = compute_seed_potential(obs_germinated)
+
+        assert phi_no_seed == 0.0, "No seed should have zero potential"
+        assert phi_germinated > 0.0, "GERMINATED should have positive potential"
+
+        bonus = compute_pbrs_bonus(phi_no_seed, phi_germinated, gamma)
+        expected = gamma * phi_germinated - phi_no_seed
+
+        assert bonus == expected, f"PBRS formula should hold: {bonus} != {expected}"
+        assert bonus > 0, f"Germination should give positive bonus: {bonus}"
+
+    def test_cull_transition_pbrs(self):
+        """Culling a seed should give negative PBRS penalty.
+
+        Transition: TRAINING (potential>0) -> no_seed (potential=0)
+        Expected: gamma * 0 - phi(TRAINING) < 0
+        """
+        gamma = 0.99
+
+        # Active seed in TRAINING
+        obs_training = {"has_active_seed": 1, "seed_stage": 3, "seed_epochs_in_stage": 5}
+        # After cull
+        obs_culled = {"has_active_seed": 0, "seed_stage": 0, "seed_epochs_in_stage": 0}
+
+        phi_training = compute_seed_potential(obs_training)
+        phi_culled = compute_seed_potential(obs_culled)
+
+        assert phi_training > 0.0, "TRAINING should have positive potential"
+        assert phi_culled == 0.0, "Culled state should have zero potential"
+
+        bonus = compute_pbrs_bonus(phi_training, phi_culled, gamma)
+        expected = gamma * phi_culled - phi_training
+
+        assert bonus == expected, f"PBRS formula should hold: {bonus} != {expected}"
+        assert bonus < 0, f"Culling should give negative penalty: {bonus}"
+
+    def test_germinate_cull_cycle_telescoping(self):
+        """Germinate -> progress -> cull cycle should telescope correctly.
+
+        Even with lifecycle interruption via cull, the PBRS sums should be consistent.
+        """
+        gamma = 0.99
+
+        # Trajectory: no_seed -> GERMINATED -> TRAINING (3 epochs) -> cull -> no_seed
+        trajectory = [
+            {"has_active_seed": 0, "seed_stage": 0, "seed_epochs_in_stage": 0},  # Start
+            {"has_active_seed": 1, "seed_stage": 2, "seed_epochs_in_stage": 0},  # Germinate
+            {"has_active_seed": 1, "seed_stage": 3, "seed_epochs_in_stage": 0},  # Enter TRAINING
+            {"has_active_seed": 1, "seed_stage": 3, "seed_epochs_in_stage": 1},  # Epoch 1
+            {"has_active_seed": 1, "seed_stage": 3, "seed_epochs_in_stage": 2},  # Epoch 2
+            {"has_active_seed": 0, "seed_stage": 0, "seed_epochs_in_stage": 0},  # Culled
+        ]
+
+        potentials = [compute_seed_potential(obs) for obs in trajectory]
+
+        # Sum of PBRS bonuses
+        total_shaping = sum(
+            compute_pbrs_bonus(potentials[i], potentials[i + 1], gamma)
+            for i in range(len(potentials) - 1)
+        )
+
+        # Direct calculation
+        expected = 0.0
+        for i in range(len(potentials) - 1):
+            expected += gamma * potentials[i + 1] - potentials[i]
+
+        assert abs(total_shaping - expected) < 1e-9, (
+            f"Cull cycle telescoping: {total_shaping} != {expected}"
+        )
+
+        # End state same as start (both zero potential), so total should be near-zero
+        # but accounting for gamma discounting
+        # With gamma < 1, we don't get exact cancellation
+        assert abs(total_shaping) < max(potentials) * 0.1, (
+            f"Cull cycle should have bounded total shaping: {total_shaping}"
+        )
+
+    def test_multiple_germinate_cull_cycles(self):
+        """Multiple germinate-cull cycles should maintain PBRS properties."""
+        gamma = 0.99
+
+        # Two complete cycles
+        trajectory = [
+            # Cycle 1
+            {"has_active_seed": 0, "seed_stage": 0, "seed_epochs_in_stage": 0},
+            {"has_active_seed": 1, "seed_stage": 2, "seed_epochs_in_stage": 0},
+            {"has_active_seed": 1, "seed_stage": 3, "seed_epochs_in_stage": 0},
+            {"has_active_seed": 0, "seed_stage": 0, "seed_epochs_in_stage": 0},  # Cull
+            # Cycle 2
+            {"has_active_seed": 1, "seed_stage": 2, "seed_epochs_in_stage": 0},
+            {"has_active_seed": 1, "seed_stage": 3, "seed_epochs_in_stage": 0},
+            {"has_active_seed": 1, "seed_stage": 4, "seed_epochs_in_stage": 0},  # BLENDING
+            {"has_active_seed": 0, "seed_stage": 0, "seed_epochs_in_stage": 0},  # Cull
+        ]
+
+        potentials = [compute_seed_potential(obs) for obs in trajectory]
+
+        # Verify telescoping formula holds
+        total_shaping = sum(
+            compute_pbrs_bonus(potentials[i], potentials[i + 1], gamma)
+            for i in range(len(potentials) - 1)
+        )
+
+        expected = 0.0
+        for i in range(len(potentials) - 1):
+            expected += gamma * potentials[i + 1] - potentials[i]
+
+        assert abs(total_shaping - expected) < 1e-9, (
+            f"Multi-cycle telescoping: {total_shaping} != {expected}"
+        )
+
+    def test_full_lifecycle_vs_culled_comparison(self):
+        """Compare PBRS totals for successful vs culled seed lifecycles.
+
+        A seed that reaches FOSSILIZED should accumulate more PBRS reward
+        than one that gets culled early.
+        """
+        gamma = 0.99
+
+        # Successful lifecycle
+        successful_trajectory = [
+            {"has_active_seed": 0, "seed_stage": 0, "seed_epochs_in_stage": 0},
+            {"has_active_seed": 1, "seed_stage": 2, "seed_epochs_in_stage": 0},  # GERMINATED
+            {"has_active_seed": 1, "seed_stage": 3, "seed_epochs_in_stage": 0},  # TRAINING
+            {"has_active_seed": 1, "seed_stage": 4, "seed_epochs_in_stage": 0},  # BLENDING
+            {"has_active_seed": 1, "seed_stage": 5, "seed_epochs_in_stage": 0},  # SHADOWING
+            {"has_active_seed": 1, "seed_stage": 6, "seed_epochs_in_stage": 0},  # PROBATIONARY
+            {"has_active_seed": 1, "seed_stage": 7, "seed_epochs_in_stage": 0},  # FOSSILIZED
+        ]
+
+        # Culled early
+        culled_trajectory = [
+            {"has_active_seed": 0, "seed_stage": 0, "seed_epochs_in_stage": 0},
+            {"has_active_seed": 1, "seed_stage": 2, "seed_epochs_in_stage": 0},  # GERMINATED
+            {"has_active_seed": 1, "seed_stage": 3, "seed_epochs_in_stage": 0},  # TRAINING
+            {"has_active_seed": 0, "seed_stage": 0, "seed_epochs_in_stage": 0},  # Culled
+        ]
+
+        # Calculate totals
+        successful_potentials = [compute_seed_potential(obs) for obs in successful_trajectory]
+        culled_potentials = [compute_seed_potential(obs) for obs in culled_trajectory]
+
+        successful_total = sum(
+            compute_pbrs_bonus(successful_potentials[i], successful_potentials[i + 1], gamma)
+            for i in range(len(successful_potentials) - 1)
+        )
+
+        culled_total = sum(
+            compute_pbrs_bonus(culled_potentials[i], culled_potentials[i + 1], gamma)
+            for i in range(len(culled_potentials) - 1)
+        )
+
+        # Successful should accumulate significantly more PBRS reward
+        assert successful_total > culled_total, (
+            f"Successful lifecycle ({successful_total}) should earn more than "
+            f"culled lifecycle ({culled_total})"
+        )

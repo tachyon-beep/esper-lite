@@ -20,6 +20,8 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
+from esper.utils.loss import compute_task_loss
+
 
 @dataclass
 class AttributionResult:
@@ -34,19 +36,6 @@ class AttributionResult:
     seed_contribution: float  # real - baseline (positive = seed helps)
     real_loss: float
     baseline_loss: float
-
-
-def _compute_loss(
-    outputs: torch.Tensor,
-    labels: torch.Tensor,
-    criterion: nn.Module,
-    task_type: str,
-) -> torch.Tensor:
-    """Compute loss for classification or language modeling."""
-    if task_type == "lm":
-        vocab = outputs.size(-1)
-        return criterion(outputs.view(-1, vocab), labels.view(-1))
-    return criterion(outputs, labels)
 
 
 def _run_validation_pass(
@@ -79,7 +68,7 @@ def _run_validation_pass(
             inputs = inputs.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
             outputs = model(inputs)
-            loss = _compute_loss(outputs, labels, criterion, task_type)
+            loss = compute_task_loss(outputs, labels, criterion, task_type)
             loss_tensor += loss
 
             if task_type == "lm":
@@ -120,7 +109,7 @@ def train_epoch_normal(
         inputs, labels = inputs.to(device, non_blocking=True), labels.to(device, non_blocking=True)
         optimizer.zero_grad(set_to_none=True)
         outputs = model(inputs)
-        loss = _compute_loss(outputs, labels, criterion, task_type)
+        loss = compute_task_loss(outputs, labels, criterion, task_type)
         loss.backward()
         optimizer.step()
 
@@ -161,7 +150,7 @@ def train_epoch_incubator_mode(
         host_optimizer.zero_grad(set_to_none=True)
         seed_optimizer.zero_grad(set_to_none=True)
         outputs = model(inputs)
-        loss = _compute_loss(outputs, labels, criterion, task_type)
+        loss = compute_task_loss(outputs, labels, criterion, task_type)
         loss.backward()
         host_optimizer.step()
         seed_optimizer.step()
@@ -196,7 +185,7 @@ def train_epoch_blended(
         if seed_optimizer:
             seed_optimizer.zero_grad(set_to_none=True)
         outputs = model(inputs)
-        loss = _compute_loss(outputs, labels, criterion, task_type)
+        loss = compute_task_loss(outputs, labels, criterion, task_type)
         loss.backward()
         host_optimizer.step()
         if seed_optimizer:
@@ -246,7 +235,7 @@ def validate_and_get_metrics(
         for inputs, labels in testloader:
             inputs, labels = inputs.to(device, non_blocking=True), labels.to(device, non_blocking=True)
             outputs = model(inputs)
-            loss = _compute_loss(outputs, labels, criterion, task_type)
+            loss = compute_task_loss(outputs, labels, criterion, task_type)
             val_loss_tensor += loss
             if task_type == "lm":
                 predicted = outputs.argmax(dim=-1)
@@ -292,7 +281,7 @@ def validate_and_get_metrics(
         for inputs, labels in itertools.islice(trainloader, 10):
             inputs, labels = inputs.to(device, non_blocking=True), labels.to(device, non_blocking=True)
             outputs = model(inputs)
-            loss = _compute_loss(outputs, labels, criterion, task_type)
+            loss = compute_task_loss(outputs, labels, criterion, task_type)
             train_loss_tensor += loss
             train_batches += 1
             if task_type == "lm":
