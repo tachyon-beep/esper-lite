@@ -312,23 +312,6 @@ def action_members(draw):
 
 
 @st.composite
-def reward_configs(draw):
-    """Generate RewardConfig instances with valid hyperparameters.
-
-    All weights are randomized within reasonable bounds.
-    """
-    from esper.simic.rewards import RewardConfig
-
-    return RewardConfig(
-        acc_delta_weight=draw(bounded_floats(0.0, 2.0)),
-        training_bonus=draw(bounded_floats(0.0, 1.0)),
-        blending_bonus=draw(bounded_floats(0.0, 1.0)),
-        fossilized_bonus=draw(bounded_floats(0.0, 2.0)),
-        stage_improvement_weight=draw(bounded_floats(0.0, 0.5)),
-    )
-
-
-@st.composite
 def seed_infos(draw):
     """Generate SeedInfo instances.
 
@@ -453,7 +436,6 @@ __all__ = [
     "training_snapshots",
     # Simic
     "action_members",
-    "reward_configs",
     "seed_infos",
     # Networks
     "simple_network_configs",
