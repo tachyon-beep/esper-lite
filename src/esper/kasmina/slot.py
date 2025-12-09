@@ -1207,7 +1207,7 @@ class SeedSlot(nn.Module):
             self.start_blending(total_steps=total_steps, temperature=1.0)
             return
 
-        # BLENDING → SHADOWING when alpha ramp completes and gate passes
+        # BLENDING → PROBATIONARY when alpha ramp completes and gate passes
         if stage == SeedStage.BLENDING:
             self.state.blending_steps_done += 1
 
@@ -1216,46 +1216,20 @@ class SeedSlot(nn.Module):
 
             if self.state.blending_steps_done >= self.state.blending_steps_total:
                 self.set_alpha(1.0)  # Ensure fully blended
-                gate_result = self.gates.check_gate(self.state, SeedStage.SHADOWING)
+                gate_result = self.gates.check_gate(self.state, SeedStage.PROBATIONARY)
                 self._sync_gate_decision(gate_result)
                 if not gate_result.passed:
                     return
                 old_stage = self.state.stage
-                ok = self.state.transition(SeedStage.SHADOWING)
+                ok = self.state.transition(SeedStage.PROBATIONARY)
                 if not ok:
                     raise RuntimeError(
-                        f"Illegal lifecycle transition {self.state.stage} → SHADOWING"
+                        f"Illegal lifecycle transition {self.state.stage} → PROBATIONARY"
                     )
                 self._emit_telemetry(
                     TelemetryEventType.SEED_STAGE_CHANGED,
                     data={"from": old_stage.name, "to": self.state.stage.name},
                 )
-            return
-
-        # SHADOWING → PROBATIONARY after dwell and gate
-        if stage == SeedStage.SHADOWING:
-            dwell_epochs = 1
-            if self.task_config:
-                dwell_epochs = max(
-                    1, int(self.task_config.max_epochs * self.task_config.shadowing_fraction)
-                )
-            if self.state.metrics.epochs_in_current_stage < dwell_epochs:
-                return
-
-            gate_result = self.gates.check_gate(self.state, SeedStage.PROBATIONARY)
-            self._sync_gate_decision(gate_result)
-            if not gate_result.passed:
-                return
-            old_stage = self.state.stage
-            ok = self.state.transition(SeedStage.PROBATIONARY)
-            if not ok:
-                raise RuntimeError(
-                    f"Illegal lifecycle transition {self.state.stage} → PROBATIONARY"
-                )
-            self._emit_telemetry(
-                TelemetryEventType.SEED_STAGE_CHANGED,
-                data={"from": old_stage.name, "to": self.state.stage.name},
-            )
             return
 
         # PROBATIONARY → FOSSILIZED or CULLED
