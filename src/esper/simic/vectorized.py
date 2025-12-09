@@ -1146,12 +1146,16 @@ def train_ppo_vectorized(
                     if update_metrics.get('early_stopped'):
                         break
 
-        # NOW update the observation normalizer with all raw states from this batch.
-        # This ensures the next batch will use updated statistics, but all states
-        # within the same batch used identical normalization parameters.
-        if raw_states_for_normalizer_update:
-            all_raw_states = torch.cat(raw_states_for_normalizer_update, dim=0)
-            obs_normalizer.update(all_raw_states)
+            # NOW update the observation normalizer with all raw states from this batch.
+            # This ensures the next batch will use updated statistics, but all states
+            # within the same batch used identical normalization parameters.
+            #
+            # [Code Review Fix] Only update normalizer when PPO update succeeds.
+            # If Governor rolled back, normalizer stats would be contaminated with
+            # observations from a bad model state, causing distribution shift.
+            if raw_states_for_normalizer_update:
+                all_raw_states = torch.cat(raw_states_for_normalizer_update, dim=0)
+                obs_normalizer.update(all_raw_states)
 
         # Track results
         avg_acc = sum(env_final_accs) / len(env_final_accs)

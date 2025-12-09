@@ -122,6 +122,7 @@ def train_epoch_incubator_mode(
     seed_optimizer: torch.optim.Optimizer,
     device: str,
     task_type: str = "classification",
+    gradient_telemetry_stride: int = 10,
 ) -> None:
     """Train one epoch with seed in isolation (seed output doesn't affect forward pass).
 
@@ -135,23 +136,32 @@ def train_epoch_incubator_mode(
     never train.
 
     Args:
-        model: The model to train.
+        model: The model to train (must have seed_slot attribute).
         trainloader: Training data loader.
         criterion: Loss function.
         host_optimizer: Optimizer for host parameters.
         seed_optimizer: Optimizer for seed parameters.
         device: Device to train on.
         task_type: Task type (classification or lm).
+        gradient_telemetry_stride: Capture gradient telemetry every N steps.
+            Set to 0 to disable. Default 10 balances accuracy with GPU pipeline
+            efficiency (each capture triggers a device-to-host sync).
     """
     model.train()
+    seed_slot = model.seed_slot
 
-    for inputs, labels in trainloader:
+    for step, (inputs, labels) in enumerate(trainloader):
         inputs, labels = inputs.to(device, non_blocking=True), labels.to(device, non_blocking=True)
         host_optimizer.zero_grad(set_to_none=True)
         seed_optimizer.zero_grad(set_to_none=True)
         outputs = model(inputs)
         loss = compute_task_loss(outputs, labels, criterion, task_type)
         loss.backward()
+
+        # Capture gradient telemetry for G2 gate (strided to avoid GPU stalls)
+        if gradient_telemetry_stride > 0 and step % gradient_telemetry_stride == 0:
+            seed_slot.capture_gradient_telemetry()
+
         host_optimizer.step()
         seed_optimizer.step()
 

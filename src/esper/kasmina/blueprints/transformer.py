@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -137,20 +139,27 @@ if _HAS_FLEX_ATTENTION:
                 nn.init.zeros_(self.proj.weight)
                 nn.init.zeros_(self.proj.bias)
 
-                # Cache for block masks: (seq_len, device_str, dtype_str) -> BlockMask
-                self._block_mask_cache: dict[tuple[int, str, str], object] = {}
+                # LRU cache for block masks: (seq_len, device_str, dtype_str) -> BlockMask
+                self._block_mask_cache: OrderedDict[tuple[int, str, str], object] = OrderedDict()
+
+            def _apply(self, fn):
+                """Clear block mask cache on device/dtype transfer to prevent stale masks."""
+                self._block_mask_cache.clear()
+                return super()._apply(fn)
 
             def _get_causal_block_mask(
                 self, seq_len: int, device: torch.device, dtype: torch.dtype
             ):
-                """Get or create cached causal block mask."""
+                """Get or create cached causal block mask with LRU eviction."""
                 # Use str(device) and str(dtype) for reliable dict equality
                 key = (seq_len, str(device), str(dtype))
-                if key not in self._block_mask_cache:
-                    # LRU eviction if cache is full
+                if key in self._block_mask_cache:
+                    # Cache hit: mark as recently used
+                    self._block_mask_cache.move_to_end(key)
+                else:
+                    # Cache miss: evict LRU entry if full
                     if len(self._block_mask_cache) >= self._MAX_CACHE_SIZE:
-                        oldest_key = next(iter(self._block_mask_cache))
-                        del self._block_mask_cache[oldest_key]
+                        self._block_mask_cache.popitem(last=False)
 
                     # create_block_mask uses boolean mask function (no score param)
                     def causal(b, h, q_idx, kv_idx):

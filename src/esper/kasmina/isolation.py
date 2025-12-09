@@ -103,13 +103,13 @@ class GradientIsolationMonitor:
         if host_grads:
             # torch._foreach_norm returns list of norms per tensor
             norms = torch._foreach_norm(host_grads)
-            host_norm = torch.stack(norms).pow(2).sum().sqrt().item()
+            host_norm = torch.linalg.vector_norm(torch.stack(norms)).item()
         else:
             host_norm = 0.0
 
         if seed_grads:
             norms = torch._foreach_norm(seed_grads)
-            seed_norm = torch.stack(norms).pow(2).sum().sqrt().item()
+            seed_norm = torch.linalg.vector_norm(torch.stack(norms)).item()
         else:
             seed_norm = 0.0
 

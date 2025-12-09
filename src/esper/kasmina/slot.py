@@ -97,8 +97,14 @@ class SeedMetrics:
     # This is the TRUE causal attribution: real_acc - baseline_acc(alpha=0)
     counterfactual_contribution: float | None = None
 
-    # Gradient-based seed activity metric
-    seed_gradient_norm_ratio: float = 0.0  # seed_grad_norm / (host_grad_norm + eps)
+    # Gradient-based seed activity metric (parameter-normalized)
+    # Formula: (seed_norm / host_norm) * sqrt(host_params / seed_params)
+    # This measures per-parameter gradient intensity, scale-invariant across architectures
+    seed_gradient_norm_ratio: float = 0.0
+
+    # Parameter counts for normalization (set once at germination)
+    host_param_count: int = 0
+    seed_param_count: int = 0
 
     def record_accuracy(self, accuracy: float | torch.Tensor) -> None:
         """Record a new accuracy measurement.
@@ -731,6 +737,16 @@ class SeedSlot(nn.Module):
             stage=SeedStage.DORMANT,
         )
 
+        # Capture param counts once for gradient normalization (G2 gate)
+        # This enables scale-invariant comparison across different host/seed sizes
+        self.state.metrics.seed_param_count = sum(
+            p.numel() for p in self.seed.parameters() if p.requires_grad
+        )
+        if host_module is not None:
+            self.state.metrics.host_param_count = sum(
+                p.numel() for p in host_module.parameters() if p.requires_grad
+            )
+
         # Check G0 gate and transition to GERMINATED
         gate_result = self.gates.check_gate(self.state, SeedStage.GERMINATED)
         if gate_result.passed:
@@ -899,6 +915,54 @@ class SeedSlot(nn.Module):
         if self.isolation_monitor is not None:
             self.isolation_monitor.reset()
         return True
+
+    def capture_gradient_telemetry(self) -> None:
+        """Calculate gradient norms via the isolation monitor and update internal metrics.
+
+        CRITICAL: Call this from Tolaria after loss.backward() to enable the G2 gate.
+        Without this, seed_gradient_norm_ratio remains 0.0 and G2 always fails.
+
+        Performance note: This triggers a device-to-host sync (GPU pipeline stall).
+        Use a stride in the training loop (e.g., every 10 steps) to minimize overhead.
+        The EMA smoothing makes sparse sampling acceptable for gate decisions.
+        """
+        # Fast exit if no monitor (fast_mode) or no active seed
+        if self.isolation_monitor is None or not self.is_active:
+            return
+
+        if not self.state:
+            return
+
+        # Ask monitor to calculate gradient norms
+        _, stats = self.isolation_monitor.check_isolation()
+
+        host_norm = stats.get("host_grad_norm", 0.0)
+        seed_norm = stats.get("seed_grad_norm", 0.0)
+
+        # Update isolation violation count if host received unexpected gradients
+        if self.isolate_gradients and host_norm > 1e-6:
+            self.state.metrics.isolation_violations += 1
+
+        # Compute parameter-normalized seed gradient ratio
+        # Formula: (seed_norm / host_norm) * sqrt(host_params / seed_params)
+        # This measures per-parameter gradient intensity, scale-invariant across architectures
+        eps = 1e-8
+        raw_ratio = seed_norm / (host_norm + eps)
+
+        # Apply parameter normalization if counts are available
+        host_params = self.state.metrics.host_param_count
+        seed_params = self.state.metrics.seed_param_count
+        if host_params > 0 and seed_params > 0:
+            # sqrt(host/seed) scales up small seeds, scales down large seeds
+            normalization_factor = (host_params / seed_params) ** 0.5
+            self.state.metrics.seed_gradient_norm_ratio = raw_ratio * normalization_factor
+        else:
+            # Fallback to raw ratio if param counts unavailable (e.g., fast_mode)
+            self.state.metrics.seed_gradient_norm_ratio = raw_ratio
+
+        # Update EMA of gradient norm for monitoring
+        current_avg = self.state.metrics.gradient_norm_avg
+        self.state.metrics.gradient_norm_avg = 0.9 * current_avg + 0.1 * seed_norm
 
     @torch.compiler.disable
     def forward(self, host_features: torch.Tensor) -> torch.Tensor:
@@ -1110,7 +1174,51 @@ class SeedSlot(nn.Module):
                 TelemetryEventType.SEED_STAGE_CHANGED,
                 data={"from": old_stage.name, "to": self.state.stage.name},
             )
-            # Do not immediately collapse; dwell handled above on next epochs
+            return
+
+        # PROBATIONARY → FOSSILIZED or CULLED
+        # This is the final decision point: prove worth or be removed
+        if stage == SeedStage.PROBATIONARY:
+            # Calculate probation timeout (default 5 epochs, or 10% of max_epochs)
+            max_probation_epochs = 5
+            if self.task_config:
+                max_probation_epochs = max(3, int(self.task_config.max_epochs * 0.1))
+
+            # Path 1: Check if we should FOSSILIZE (success case)
+            # G5 requires counterfactual validation - no shortcuts
+            if self.state.metrics.counterfactual_contribution is not None:
+                gate_result = self.gates.check_gate(self.state, SeedStage.FOSSILIZED)
+                if gate_result.passed:
+                    old_stage = self.state.stage
+                    ok = self.state.transition(SeedStage.FOSSILIZED)
+                    if not ok:
+                        raise RuntimeError(
+                            f"Illegal lifecycle transition {self.state.stage} → FOSSILIZED"
+                        )
+                    self._emit_telemetry(
+                        TelemetryEventType.SEED_STAGE_CHANGED,
+                        data={"from": old_stage.name, "to": self.state.stage.name},
+                    )
+                    self._emit_telemetry(
+                        TelemetryEventType.SEED_FOSSILIZED,
+                        data={
+                            "seed_id": self.state.seed_id,
+                            "blueprint_id": self.state.blueprint_id,
+                            "contribution": self.state.metrics.counterfactual_contribution,
+                            "epochs_total": self.state.metrics.epochs_total,
+                        },
+                    )
+                    return
+                elif self.state.metrics.counterfactual_contribution <= 0:
+                    # Negative contribution = seed hurts performance, cull immediately
+                    self.cull(reason="negative_counterfactual")
+                    return
+
+            # Path 2: Check for timeout (failure case)
+            # Seed failed to prove its worth within the probation window
+            if self.state.metrics.epochs_in_current_stage >= max_probation_epochs:
+                self.cull(reason="probation_timeout")
+                return
 
     def get_state_report(self) -> SeedStateReport | None:
         """Get current state as Leyline report."""
