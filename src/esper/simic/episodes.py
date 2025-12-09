@@ -218,7 +218,7 @@ class StepOutcome:
     seed_still_alive: bool = True
     seed_stage_after: int = 0
 
-    # Computed reward (populated by compute_shaped_reward from simic.rewards)
+    # Computed reward (populated by compute_contribution_reward from simic.rewards)
     reward: float = 0.0
 
     def to_dict(self) -> dict:
