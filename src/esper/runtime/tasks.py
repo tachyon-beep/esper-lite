@@ -14,7 +14,17 @@ from esper.utils.data import load_cifar10, load_tinystories
 
 @dataclass(slots=True)
 class TaskSpec:
-    """Task-specific wiring for hosts, dataloaders, and action enums."""
+    """Task-specific wiring for hosts, dataloaders, and action enums.
+
+    Learning rate fields allow task-specific tuning without code changes:
+    - host_lr: Learning rate for host model parameters (backbone)
+    - seed_lr: Learning rate for seed module parameters (new capacity)
+
+    Common patterns:
+    - Same LR for both (default): Simple baseline
+    - Lower seed_lr: More conservative seed training for stability
+    - Lower host_lr for transformers: Typical for attention models
+    """
 
     name: str
     topology: str
@@ -27,6 +37,11 @@ class TaskSpec:
     vocab_size: int | None = None
     num_classes: int | None = None
     block_size: int | None = None
+
+    # Learning rates (previously hardcoded as 0.01 throughout training code)
+    host_lr: float = 0.01
+    seed_lr: float = 0.01
+
     action_enum: Any = field(init=False)
 
     def __post_init__(self) -> None:
