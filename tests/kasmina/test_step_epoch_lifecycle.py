@@ -3,8 +3,7 @@
 Covers all stage transitions in the seed lifecycle state machine:
 - GERMINATED → TRAINING
 - TRAINING → BLENDING (with dwell time)
-- BLENDING → SHADOWING (with blending steps)
-- SHADOWING → PROBATIONARY (with dwell time)
+- BLENDING → PROBATIONARY (with blending steps)
 - PROBATIONARY → FOSSILIZED (positive counterfactual)
 - PROBATIONARY → CULLED (negative counterfactual or timeout)
 """
@@ -35,8 +34,7 @@ class MockGates(QualityGates):
             SeedStage.GERMINATED: GateLevel.G0,
             SeedStage.TRAINING: GateLevel.G1,
             SeedStage.BLENDING: GateLevel.G2,
-            SeedStage.SHADOWING: GateLevel.G3,
-            SeedStage.PROBATIONARY: GateLevel.G4,
+            SeedStage.PROBATIONARY: GateLevel.G3,
             SeedStage.FOSSILIZED: GateLevel.G5,
         }.get(target_stage, GateLevel.G0)
 
@@ -178,8 +176,8 @@ class TestStepEpochTrainingToBlending:
         assert slot.state.stage == SeedStage.TRAINING
 
 
-class TestStepEpochBlendingToShadowing:
-    """Test BLENDING → SHADOWING transition."""
+class TestStepEpochBlendingToProbationary:
+    """Test BLENDING → PROBATIONARY transition."""
 
     def test_blending_increments_steps(self):
         """BLENDING should increment blending_steps_done each epoch."""
@@ -195,7 +193,7 @@ class TestStepEpochBlendingToShadowing:
     def test_blending_stays_until_steps_complete(self):
         """BLENDING should not advance until all blending steps complete."""
         gates = MockGates()
-        gates.set_gate_result(SeedStage.SHADOWING, True)
+        gates.set_gate_result(SeedStage.PROBATIONARY, True)
         slot = create_test_slot(gates)
         setup_state_at_stage(slot, SeedStage.BLENDING)
         slot.state.blending_steps_done = 2
@@ -206,10 +204,10 @@ class TestStepEpochBlendingToShadowing:
         assert slot.state.stage == SeedStage.BLENDING
         assert slot.state.blending_steps_done == 3
 
-    def test_blending_advances_to_shadowing_when_complete(self):
-        """BLENDING should advance to SHADOWING when steps complete and G3 passes."""
+    def test_blending_advances_to_probationary_when_complete(self):
+        """BLENDING should advance to PROBATIONARY when steps complete and G3 passes."""
         gates = MockGates()
-        gates.set_gate_result(SeedStage.SHADOWING, True)
+        gates.set_gate_result(SeedStage.PROBATIONARY, True)
         slot = create_test_slot(gates)
         setup_state_at_stage(slot, SeedStage.BLENDING)
         slot.state.blending_steps_done = 4  # Will become 5 (== total)
@@ -217,12 +215,12 @@ class TestStepEpochBlendingToShadowing:
 
         slot.step_epoch()
 
-        assert slot.state.stage == SeedStage.SHADOWING
+        assert slot.state.stage == SeedStage.PROBATIONARY
 
     def test_blending_stays_when_gate_fails(self):
         """BLENDING should not advance if G3 fails even when steps complete."""
         gates = MockGates()
-        gates.set_gate_result(SeedStage.SHADOWING, False)
+        gates.set_gate_result(SeedStage.PROBATIONARY, False)
         slot = create_test_slot(gates)
         setup_state_at_stage(slot, SeedStage.BLENDING)
         slot.state.blending_steps_done = 4
@@ -231,46 +229,6 @@ class TestStepEpochBlendingToShadowing:
         slot.step_epoch()
 
         assert slot.state.stage == SeedStage.BLENDING
-
-
-class TestStepEpochShadowingToProbationary:
-    """Test SHADOWING → PROBATIONARY transition."""
-
-    def test_shadowing_stays_during_dwell(self):
-        """SHADOWING should not advance before dwell period completes."""
-        gates = MockGates()
-        gates.set_gate_result(SeedStage.PROBATIONARY, True)
-        slot = create_test_slot(gates)
-        setup_state_at_stage(slot, SeedStage.SHADOWING)
-        slot.state.metrics.epochs_in_current_stage = 0
-
-        slot.step_epoch()
-
-        assert slot.state.stage == SeedStage.SHADOWING
-
-    def test_shadowing_advances_to_probationary_after_dwell(self):
-        """SHADOWING should advance to PROBATIONARY after dwell when G4 passes."""
-        gates = MockGates()
-        gates.set_gate_result(SeedStage.PROBATIONARY, True)
-        slot = create_test_slot(gates)
-        setup_state_at_stage(slot, SeedStage.SHADOWING)
-        slot.state.metrics.epochs_in_current_stage = 1  # Meets default dwell
-
-        slot.step_epoch()
-
-        assert slot.state.stage == SeedStage.PROBATIONARY
-
-    def test_shadowing_stays_when_gate_fails(self):
-        """SHADOWING should not advance if G4 fails."""
-        gates = MockGates()
-        gates.set_gate_result(SeedStage.PROBATIONARY, False)
-        slot = create_test_slot(gates)
-        setup_state_at_stage(slot, SeedStage.SHADOWING)
-        slot.state.metrics.epochs_in_current_stage = 10
-
-        slot.step_epoch()
-
-        assert slot.state.stage == SeedStage.SHADOWING
 
 
 class TestStepEpochProbationaryOutcomes:
