@@ -182,7 +182,7 @@ class PolicyNetwork:
             avg_train_loss = total_loss / n_batches
             self.train_losses.append(avg_train_loss)
 
-            # Validation
+            # Validation (once per epoch - sync overhead negligible)
             self.model.eval()
             with torch.no_grad():
                 val_outputs = self.model(X_val)
@@ -527,7 +527,9 @@ if TORCH_AVAILABLE:
                 else:
                     action = dist.sample()
                 log_prob = dist.log_prob(action)
-                return action.item(), log_prob.item(), value.item(), None
+                # Non-vectorized path - sync-bound anyway, clarity over micro-optimization
+                # Use get_action_batch() for compiled/vectorized inference
+                return int(action[0].item()), log_prob[0].item(), value[0].item(), None
 
         def get_action_batch(
             self,
@@ -790,7 +792,8 @@ if TORCH_AVAILABLE:
                     new_hidden[1].detach().clone(),
                 )
 
-                return action.item(), log_prob.item(), value.item(), detached_hidden
+                # Non-vectorized path - sync-bound anyway, clarity over micro-optimization
+                return int(action[0].item()), log_prob[0].item(), value[0].item(), detached_hidden
 
         def evaluate_actions(
             self,

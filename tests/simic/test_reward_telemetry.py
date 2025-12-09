@@ -4,10 +4,8 @@ import pytest
 
 from esper.simic.reward_telemetry import RewardComponentsTelemetry
 from esper.simic.rewards import (
-    compute_shaped_reward,
     compute_contribution_reward,
     SeedInfo,
-    RewardConfig,
     ContributionRewardConfig,
 )
 
@@ -15,8 +13,8 @@ from esper.simic.rewards import (
 class TestRewardComponentsTelemetry:
     """Tests for RewardComponentsTelemetry."""
 
-    def test_from_shaped_reward(self):
-        """Can capture components from compute_shaped_reward."""
+    def test_from_contribution_reward(self):
+        """Can capture components from compute_contribution_reward."""
         # Create a mock action enum
         from enum import IntEnum
 
@@ -37,20 +35,21 @@ class TestRewardComponentsTelemetry:
         )
 
         # Use the extended version that returns components
-        reward, components = compute_shaped_reward(
+        # seed_contribution=None uses proxy signal path
+        reward, components = compute_contribution_reward(
             action=MockAction.WAIT,
-            acc_delta=0.5,
+            seed_contribution=None,
             val_acc=65.0,
             seed_info=seed_info,
             epoch=10,
             max_epochs=25,
             total_params=10000,
             host_params=100000,
+            acc_delta=0.5,  # Proxy signal
             return_components=True,
         )
 
         assert isinstance(components, RewardComponentsTelemetry)
-        assert components.base_acc_delta != 0.0
         assert components.total_reward == reward
 
     def test_components_sum_to_total(self):
@@ -70,22 +69,23 @@ class TestRewardComponentsTelemetry:
             seed_age_epochs=5,
         )
 
-        reward, components = compute_shaped_reward(
+        reward, components = compute_contribution_reward(
             action=MockAction.WAIT,
-            acc_delta=0.3,
+            seed_contribution=None,
             val_acc=60.0,
             seed_info=seed_info,
             epoch=5,
             max_epochs=25,
             total_params=5000,
             host_params=100000,
+            acc_delta=0.3,  # Proxy signal
             return_components=True,
         )
 
+        # ContributionReward uses bounded_attribution instead of base_acc_delta
         computed_sum = (
-            components.base_acc_delta
+            components.bounded_attribution
             + components.compute_rent
-            + components.stage_bonus
             + components.pbrs_bonus
             + components.action_shaping
             + components.terminal_bonus

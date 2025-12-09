@@ -102,9 +102,11 @@ class RolloutBuffer:
                 # For naturally terminated episodes, use 0.0
                 if step.truncated:
                     next_value = step.bootstrap_value
+                    # Continue GAE chain - truncation is artificial, not true terminal
                 else:
                     next_value = 0.0
-                last_gae = 0.0
+                    # Reset GAE only for true terminal states
+                    last_gae = 0.0
 
             delta = step.reward + gamma * next_value - step.value
             advantages[t] = last_gae = delta + gamma * gae_lambda * last_gae
@@ -229,18 +231,23 @@ class RecurrentRolloutBuffer:
         truncated: bool = False,
         bootstrap_value: float = 0.0,
     ) -> None:
-        """Add a step to the correct environment's list."""
+        """Add a step to the correct environment's list.
+
+        Note: Tensors kept on original device until get_chunks() for performance.
+        The .detach() prevents gradient graph retention without forcing GPU sync.
+        Transfer to target device happens in batch during get_chunks().
+        """
         if env_id not in self.env_steps:
             self.env_steps[env_id] = []
 
         self.env_steps[env_id].append(RecurrentRolloutStep(
-            state=state.cpu(),  # Store on CPU to save GPU memory
+            state=state.detach(),  # Keep on GPU, detach from graph (no sync)
             action=action,
             log_prob=log_prob,
             value=value,
             reward=reward,
             done=done,
-            action_mask=action_mask.cpu(),
+            action_mask=action_mask.detach(),  # Keep on GPU, detach from graph (no sync)
             truncated=truncated,
             bootstrap_value=bootstrap_value,
         ))
@@ -290,9 +297,11 @@ class RecurrentRolloutBuffer:
                         # For naturally terminated episodes, use 0.0
                         if step.truncated:
                             next_value = step.bootstrap_value
+                            # Continue GAE chain - truncation is artificial, not true terminal
                         else:
                             next_value = 0.0
-                        last_gae = 0.0
+                            # Reset GAE only for true terminal states
+                            last_gae = 0.0
 
                     delta = step.reward + gamma * next_value - step.value
                     advantages[t] = last_gae = delta + gamma * gae_lambda * last_gae

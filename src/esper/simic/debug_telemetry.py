@@ -70,19 +70,41 @@ def collect_per_layer_gradients(
         grad = param.grad.detach()
         flat = grad.view(-1)
 
+        # Batch all stats into single GPU sync per layer (11 .item() → 1 .tolist())
+        # Use correction=0 for std to avoid division by zero on single-element tensors
+        if flat.numel() > 0:
+            batch_stats = torch.stack([
+                grad.norm(),
+                flat.mean(),
+                flat.std(correction=0),
+                flat.min(),
+                flat.max(),
+                (flat == 0).float().mean(),
+                (flat.abs() < small_threshold).float().mean(),
+                (flat.abs() > large_threshold).float().mean(),
+                torch.isnan(flat).sum().float(),
+                torch.isinf(flat).sum().float(),
+            ])
+            (grad_norm, grad_mean, grad_std, grad_min, grad_max,
+             zero_frac, small_frac, large_frac, nan_cnt, inf_cnt) = batch_stats.tolist()
+        else:
+            grad_norm = grad_mean = grad_std = grad_min = grad_max = 0.0
+            zero_frac = small_frac = large_frac = 0.0
+            nan_cnt = inf_cnt = 0.0
+
         layer_stats = LayerGradientStats(
             layer_name=name,
             param_count=param.numel(),
-            grad_norm=grad.norm().item(),
-            grad_mean=flat.mean().item(),
-            grad_std=flat.std().item(),
-            grad_min=flat.min().item(),
-            grad_max=flat.max().item(),
-            zero_fraction=(flat == 0).float().mean().item(),
-            small_fraction=(flat.abs() < small_threshold).float().mean().item(),
-            large_fraction=(flat.abs() > large_threshold).float().mean().item(),
-            nan_count=int(torch.isnan(flat).sum().item()),
-            inf_count=int(torch.isinf(flat).sum().item()),
+            grad_norm=grad_norm,
+            grad_mean=grad_mean,
+            grad_std=grad_std,
+            grad_min=grad_min,
+            grad_max=grad_max,
+            zero_fraction=zero_frac,
+            small_fraction=small_frac,
+            large_fraction=large_frac,
+            nan_count=int(nan_cnt),
+            inf_count=int(inf_cnt),
         )
         stats.append(layer_stats)
 
@@ -142,16 +164,18 @@ def check_numerical_stability(
     nan_grads = []
     inf_weights = []
     inf_grads = []
-    max_weight = 0.0
-    max_grad = 0.0
+
+    # Collect max values as tensors, then sync once at the end
+    weight_maxes = []
+    grad_maxes = []
 
     for name, param in model.named_parameters():
-        # Check weights
+        # Check weights (these are boolean checks, no sync needed)
         if torch.isnan(param.data).any():
             nan_weights.append(name)
         if torch.isinf(param.data).any():
             inf_weights.append(name)
-        max_weight = max(max_weight, param.data.abs().max().item())
+        weight_maxes.append(param.data.abs().max())
 
         # Check gradients
         if param.grad is not None:
@@ -159,7 +183,11 @@ def check_numerical_stability(
                 nan_grads.append(name)
             if torch.isinf(param.grad).any():
                 inf_grads.append(name)
-            max_grad = max(max_grad, param.grad.abs().max().item())
+            grad_maxes.append(param.grad.abs().max())
+
+    # Single sync for all max values
+    max_weight = torch.stack(weight_maxes).max().item() if weight_maxes else 0.0
+    max_grad = torch.stack(grad_maxes).max().item() if grad_maxes else 0.0
 
     # Check loss
     loss_val = 0.0
@@ -232,10 +260,10 @@ class RatioExplosionDiagnostic:
         worst_values = ratio[bad_indices].tolist() if bad_indices else []
         worst_actions = actions[bad_indices].tolist() if bad_indices else []
 
-        # Compute log prob divergence
+        # Compute log prob divergence (batch into single sync)
         logit_diff = (new_log_probs - old_log_probs).abs()
-        logit_diff_mean = logit_diff.mean().item()
-        logit_diff_max = logit_diff.max().item()
+        diff_stats = torch.stack([logit_diff.mean(), logit_diff.max()])
+        logit_diff_mean, logit_diff_max = diff_stats.tolist()
 
         return cls(
             worst_ratio_indices=bad_indices,

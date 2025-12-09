@@ -171,37 +171,58 @@ class DiagnosticTracker:
                 self._hooks.append(hook)
 
     def _record_grad(self, name: str, grad: torch.Tensor):
-        """Record gradient statistics for a layer."""
+        """Record gradient statistics for a layer.
+
+        Uses batched tensor ops with single .tolist() sync to avoid
+        per-metric GPU synchronization in this hot path (called every backward).
+        """
         if grad is None:
             return
 
         cfg = self.config.gradients
-        grad_flat = grad.detach().abs().flatten()
+        # Detach once at entry for consistency (no-op if already detached in hook context)
+        grad = grad.detach()
+        grad_flat = grad.abs().flatten()
 
-        # Compute all tensor ops first, then single sync at end
-        norm_t = grad.norm()
-        std_t = grad.std()
-        mean_t = grad.mean()
-        vanishing_t = (grad_flat < cfg.vanishing_threshold).float().mean() if cfg.detect_vanishing else None
-        exploding_t = (grad_flat > cfg.exploding_threshold).float().mean() if cfg.detect_exploding else None
+        # Batch all scalar computations into a single tensor for one sync
+        stats_tensors = [
+            grad.norm(),
+            grad.std(),
+            grad.mean(),
+        ]
 
-        percentile_tensors = {}
+        if cfg.detect_vanishing:
+            stats_tensors.append((grad_flat < cfg.vanishing_threshold).float().mean())
+        if cfg.detect_exploding:
+            stats_tensors.append((grad_flat > cfg.exploding_threshold).float().mean())
+
+        # Percentiles (expensive, only if configured)
+        percentile_keys = []
         if cfg.percentiles:
             grad_float = grad_flat.float()
             for p in cfg.percentiles:
-                percentile_tensors[p] = torch.quantile(grad_float, p / 100)
+                stats_tensors.append(torch.quantile(grad_float, p / 100))
+                percentile_keys.append(p)
 
-        # Single sync point - all .item() calls together
+        # Single GPU sync for all stats
+        all_values = torch.stack(stats_tensors).tolist()
+
+        # Unpack values
         stats = GradientStats(layer_name=name)
-        stats.norm = norm_t.item()
-        stats.std = std_t.item()
-        stats.mean = mean_t.item()
-        if vanishing_t is not None:
-            stats.vanishing_pct = vanishing_t.item()
-        if exploding_t is not None:
-            stats.exploding_pct = exploding_t.item()
-        for p, t in percentile_tensors.items():
-            stats.percentiles[p] = t.item()
+        stats.norm = all_values[0]
+        stats.std = all_values[1]
+        stats.mean = all_values[2]
+
+        idx = 3
+        if cfg.detect_vanishing:
+            stats.vanishing_pct = all_values[idx]
+            idx += 1
+        if cfg.detect_exploding:
+            stats.exploding_pct = all_values[idx]
+            idx += 1
+        for p in percentile_keys:
+            stats.percentiles[p] = all_values[idx]
+            idx += 1
 
         self._grad_stats[name] = stats
 
@@ -301,15 +322,24 @@ class DiagnosticTracker:
         return total_loss.item() / max(n_batches, 1)
 
     def _compute_weight_norms(self) -> dict[str, float]:
-        """Compute weight norms per layer."""
+        """Compute weight norms per layer (single sync for all layers)."""
         if not self.config.track_weight_norms:
             return {}
 
-        norms = {}
+        # Collect all norms as tensors first
+        names = []
+        norm_tensors = []
         for name, param in self.model.named_parameters():
             if "weight" in name:
-                norms[name] = param.norm().item()
-        return norms
+                names.append(name)
+                norm_tensors.append(param.norm())
+
+        if not norm_tensors:
+            return {}
+
+        # Single sync for all weight norms
+        all_norms = torch.stack(norm_tensors).tolist()
+        return dict(zip(names, all_norms))
 
     def end_epoch(
         self,

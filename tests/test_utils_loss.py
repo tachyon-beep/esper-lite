@@ -75,7 +75,11 @@ class TestComputeTaskLossWithMetrics:
     """Tests for compute_task_loss_with_metrics function."""
 
     def test_returns_correct_types(self):
-        """Should return (Tensor, float, int) tuple."""
+        """Should return (Tensor, Tensor, int) tuple.
+
+        Note: correct is now a Tensor (not float) to enable deferred .item()
+        calls and avoid CUDA sync overhead in hot paths.
+        """
         from esper.utils.loss import compute_task_loss_with_metrics
 
         outputs = torch.randn(8, 10)
@@ -87,7 +91,7 @@ class TestComputeTaskLossWithMetrics:
         )
 
         assert isinstance(loss, torch.Tensor)
-        assert isinstance(correct, float)
+        assert isinstance(correct, torch.Tensor)
         assert isinstance(total, int)
 
     def test_correct_count_accuracy(self):
@@ -193,6 +197,104 @@ class TestComputeTaskLossWithMetrics:
         loss.backward()
 
         assert outputs.grad is not None
+
+
+class TestAsyncSafeMetrics:
+    """Tests for async-safe (tensor return) behavior to avoid CUDA sync overhead.
+
+    These tests verify that compute_task_loss_with_metrics returns a tensor
+    for the correct count instead of a float, allowing deferred .item() calls.
+    """
+
+    def test_correct_is_tensor(self):
+        """correct should be a Tensor, not float, to avoid .item() sync per batch."""
+        from esper.utils.loss import compute_task_loss_with_metrics
+
+        outputs = torch.randn(8, 10)
+        targets = torch.randint(0, 10, (8,))
+        criterion = nn.CrossEntropyLoss()
+
+        loss, correct, total = compute_task_loss_with_metrics(
+            outputs, targets, criterion, "classification"
+        )
+
+        assert isinstance(correct, torch.Tensor), f"Expected Tensor, got {type(correct)}"
+        assert correct.ndim == 0, "correct should be a scalar tensor"
+
+    def test_correct_tensor_on_same_device_as_outputs(self):
+        """correct tensor should stay on the same device as outputs."""
+        from esper.utils.loss import compute_task_loss_with_metrics
+
+        outputs = torch.randn(8, 10)  # CPU
+        targets = torch.randint(0, 10, (8,))
+        criterion = nn.CrossEntropyLoss()
+
+        loss, correct, total = compute_task_loss_with_metrics(
+            outputs, targets, criterion, "classification"
+        )
+
+        assert correct.device == outputs.device
+
+    def test_correct_tensor_value_matches_float(self):
+        """correct.item() should give the same value as the old float return."""
+        from esper.utils.loss import compute_task_loss_with_metrics
+
+        # Deterministic outputs for predictable results
+        outputs = torch.tensor([
+            [10.0, 0.0],  # Predicts 0
+            [0.0, 10.0],  # Predicts 1
+            [10.0, 0.0],  # Predicts 0
+            [0.0, 10.0],  # Predicts 1
+        ])
+        targets = torch.tensor([0, 1, 1, 0])  # 2 correct, 2 wrong
+        criterion = nn.CrossEntropyLoss()
+
+        loss, correct, total = compute_task_loss_with_metrics(
+            outputs, targets, criterion, "classification"
+        )
+
+        assert correct.item() == 2.0
+
+    def test_correct_tensor_accumulation_pattern(self):
+        """Verify tensor accumulation works for deferred sync pattern."""
+        from esper.utils.loss import compute_task_loss_with_metrics
+
+        criterion = nn.CrossEntropyLoss()
+
+        # Simulate accumulation loop (the hot path optimization)
+        running_correct = torch.zeros(1, dtype=torch.long)
+        running_total = 0
+
+        for _ in range(3):
+            outputs = torch.randn(8, 10)
+            targets = torch.randint(0, 10, (8,))
+
+            loss, correct, total = compute_task_loss_with_metrics(
+                outputs, targets, criterion, "classification"
+            )
+
+            # This is the optimized pattern: tensor += tensor (no .item())
+            running_correct.add_(correct)
+            running_total += total
+
+        # Single sync at end
+        assert running_total == 24
+        assert 0 <= running_correct.item() <= 24
+
+    def test_lm_correct_is_tensor(self):
+        """LM task should also return tensor for correct count."""
+        from esper.utils.loss import compute_task_loss_with_metrics
+
+        outputs = torch.randn(2, 4, 100)  # batch=2, seq=4, vocab=100
+        targets = torch.randint(0, 100, (2, 4))
+        criterion = nn.CrossEntropyLoss()
+
+        loss, correct, total = compute_task_loss_with_metrics(
+            outputs, targets, criterion, "lm"
+        )
+
+        assert isinstance(correct, torch.Tensor), f"Expected Tensor, got {type(correct)}"
+        assert correct.ndim == 0
 
 
 class TestBackwardsCompatibility:

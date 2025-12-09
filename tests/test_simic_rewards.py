@@ -5,7 +5,6 @@ from enum import IntEnum
 
 from esper.leyline import MIN_CULL_AGE
 from esper.simic.rewards import (
-    RewardConfig,
     SeedInfo,
     STAGE_BLENDING,
     STAGE_GERMINATED,
@@ -14,9 +13,10 @@ from esper.simic.rewards import (
     STAGE_PROBATIONARY,
     STAGE_FOSSILIZED,
     compute_seed_potential,
-    compute_shaped_reward,
-    _cull_shaping,
-    _wait_shaping,
+    compute_contribution_reward,
+    _contribution_cull_shaping,
+    _contribution_fossilize_shaping,
+    ContributionRewardConfig,
 )
 
 
@@ -89,30 +89,16 @@ class TestComputeSeedPotential:
 
 
 class TestPBRSStageBonus:
-    """Tests for PBRS stage bonus behaviour."""
+    """Tests for PBRS stage bonus behaviour using unified reward."""
 
     class _TestAction(IntEnum):
         NOOP = 0
 
-    def _make_config_with_pbrs_only(self) -> RewardConfig:
-        config = RewardConfig()
-        config.acc_delta_weight = 0.0
-        config.training_bonus = 0.0
-        config.blending_bonus = 0.0
-        config.fossilized_bonus = 0.0
-        config.stage_improvement_weight = 0.0
-        config.blending_improvement_bonus = 0.0
-        config.compute_rent_weight = 0.0
-        config.terminal_acc_weight = 0.0
-        config.seed_potential_weight = 1.0
-        return config
-
     def test_transition_bonus_not_repeated_in_stage(self):
-        """PBRS bonus for TRAINING→BLENDING transition should not repeat every epoch."""
-        config = self._make_config_with_pbrs_only()
+        """PBRS bonus for TRAINING->BLENDING transition should not repeat every epoch."""
         action = self._TestAction.NOOP
 
-        # Step immediately after TRAINING→BLENDING transition
+        # Step immediately after TRAINING->BLENDING transition
         seed_step1 = SeedInfo(
             stage=STAGE_BLENDING,
             improvement_since_stage_start=0.0,
@@ -123,30 +109,30 @@ class TestPBRSStageBonus:
             seed_age_epochs=0,
         )
 
-        r1 = compute_shaped_reward(
+        r1 = compute_contribution_reward(
             action=action,
-            acc_delta=0.0,
+            seed_contribution=None,  # Proxy signal path
             val_acc=0.0,
             seed_info=seed_step1,
             epoch=0,
             max_epochs=10,
             total_params=0,
             host_params=1,
-            config=config,
+            acc_delta=0.0,
         )
 
         # Next epoch staying in BLENDING (no new transition)
         seed_step2 = seed_step1._replace(epochs_in_stage=1)
-        r2 = compute_shaped_reward(
+        r2 = compute_contribution_reward(
             action=action,
-            acc_delta=0.0,
+            seed_contribution=None,
             val_acc=0.0,
             seed_info=seed_step2,
             epoch=1,
             max_epochs=10,
             total_params=0,
             host_params=1,
-            config=config,
+            acc_delta=0.0,
         )
 
         # Transition bonus should be strictly positive and strictly larger than
@@ -155,8 +141,8 @@ class TestPBRSStageBonus:
         assert 0.0 < r2 < r1
 
 
-class TestCullAgeProtection:
-    """Tests for CULL age penalty to prevent immediate germinate-cull."""
+class TestCullContributionShaping:
+    """Tests for CULL action shaping in contribution reward."""
 
     def _make_seed_info(self, stage: int, age: int, improvement: float = 0.0) -> SeedInfo:
         return SeedInfo(
@@ -169,64 +155,36 @@ class TestCullAgeProtection:
             seed_age_epochs=age,
         )
 
-    def test_cull_at_age_zero_heavily_penalized(self):
-        """Culling immediately after germination should be heavily penalized."""
-        config = RewardConfig.default()
-        seed_info = self._make_seed_info(STAGE_GERMINATED, age=0)
+    def test_cull_toxic_seed_rewarded(self):
+        """Culling a toxic seed (negative contribution) should be rewarded."""
+        config = ContributionRewardConfig()
+        # Use age >= MIN_CULL_AGE to avoid age penalty
+        seed_info = self._make_seed_info(STAGE_BLENDING, age=MIN_CULL_AGE, improvement=-1.0)
 
-        shaping = _cull_shaping(seed_info, config)
+        # Toxic seed: contribution < hurting_threshold (-0.5)
+        shaping = _contribution_cull_shaping(seed_info, seed_contribution=-1.0, config=config)
 
-        # Age penalty: -0.3 * (MIN_CULL_AGE - 0)
-        expected = -0.3 * MIN_CULL_AGE
-        assert shaping == pytest.approx(expected)
+        # Should get positive shaping (reward for culling toxic seed)
+        assert shaping > 0, f"Culling toxic seed should be rewarded: {shaping}"
 
-    def test_cull_at_age_one_penalized(self):
-        """Culling at age 1 should still be penalized."""
-        config = RewardConfig.default()
-        seed_info = self._make_seed_info(STAGE_TRAINING, age=1)
+    def test_cull_good_seed_penalized(self):
+        """Culling a good seed (positive contribution) should be penalized."""
+        config = ContributionRewardConfig()
+        # Use age >= MIN_CULL_AGE to avoid age penalty interfering with test
+        seed_info = self._make_seed_info(STAGE_BLENDING, age=MIN_CULL_AGE, improvement=2.0)
 
-        shaping = _cull_shaping(seed_info, config)
+        # Good seed: contribution > 0
+        shaping = _contribution_cull_shaping(seed_info, seed_contribution=2.0, config=config)
 
-        # Age penalty: -0.3 * (MIN_CULL_AGE - 1)
-        expected = -0.3 * (MIN_CULL_AGE - 1)
-        assert shaping == pytest.approx(expected)
-
-    def test_cull_at_min_age_no_age_penalty(self):
-        """Culling at MIN_CULL_AGE should have no age penalty."""
-        config = RewardConfig.default()
-        seed_info = self._make_seed_info(STAGE_TRAINING, age=MIN_CULL_AGE, improvement=0.0)
-
-        shaping = _cull_shaping(seed_info, config)
-
-        # No age penalty, but base shaping kicks in (promising seed = -0.3)
-        # Plus PBRS correction for destroying the seed
-        age_zero_penalty = -0.3 * MIN_CULL_AGE
-        assert shaping != pytest.approx(age_zero_penalty)  # Not the age-0 penalty
-
-    def test_age_penalty_only_for_early_stages(self):
-        """Age penalty should only apply to GERMINATED and TRAINING."""
-        config = RewardConfig.default()
-
-        # BLENDING at age 0 should NOT get age penalty
-        seed_info = SeedInfo(
-            stage=STAGE_BLENDING,
-            improvement_since_stage_start=0.0,
-            total_improvement=0.0,
-            epochs_in_stage=0,
-            seed_params=1000,
-            previous_stage=STAGE_TRAINING,
-            seed_age_epochs=0,  # Age 0 but in BLENDING
-        )
-
-        shaping = _cull_shaping(seed_info, config)
-
-        # Should NOT be the age-0 penalty (only applies to GERMINATED/TRAINING)
-        age_zero_penalty = -0.3 * MIN_CULL_AGE
-        assert shaping != pytest.approx(age_zero_penalty)
+        # Should get negative shaping (penalty for culling good seed)
+        assert shaping < 0, f"Culling good seed should be penalized: {shaping}"
 
 
 class TestWaitBlendingShaping:
-    """Tests for WAIT action shaping at BLENDING stage."""
+    """Tests for WAIT action at BLENDING stage using unified reward."""
+
+    class _TestAction(IntEnum):
+        WAIT = 0
 
     def _make_seed_info(self, stage: int, improvement: float, epochs: int = 1) -> SeedInfo:
         return SeedInfo(
@@ -239,53 +197,22 @@ class TestWaitBlendingShaping:
             seed_age_epochs=epochs,
         )
 
-    def test_wait_at_blending_with_improvement_rewarded(self):
-        """WAIT at BLENDING with improvement should get patience bonus."""
-        config = RewardConfig.default()
+    def test_wait_at_blending_with_positive_contribution(self):
+        """WAIT at BLENDING with positive contribution should be positive reward."""
         seed_info = self._make_seed_info(STAGE_BLENDING, improvement=1.0)
 
-        shaping = _wait_shaping(seed_info, acc_delta=0.0, config=config)
+        reward = compute_contribution_reward(
+            action=self._TestAction.WAIT,
+            seed_contribution=1.0,  # Positive contribution
+            val_acc=70.0,
+            seed_info=seed_info,
+            epoch=5,
+            max_epochs=25,
+            acc_at_germination=65.0,  # 5% progress
+        )
 
-        assert shaping == pytest.approx(config.wait_patience_bonus)
-
-    def test_wait_at_blending_no_improvement_neutral(self):
-        """WAIT at BLENDING without improvement should be neutral (not penalized)."""
-        config = RewardConfig.default()
-        seed_info = self._make_seed_info(STAGE_BLENDING, improvement=0.0)
-
-        shaping = _wait_shaping(seed_info, acc_delta=0.0, config=config)
-
-        # BLENDING is mechanical - no stagnant penalty
-        assert shaping == pytest.approx(0.0)
-
-    def test_wait_at_blending_no_stagnant_penalty(self):
-        """WAIT at BLENDING should never get stagnant penalty (even after many epochs)."""
-        config = RewardConfig.default()
-        seed_info = self._make_seed_info(STAGE_BLENDING, improvement=0.0, epochs=10)
-
-        shaping = _wait_shaping(seed_info, acc_delta=0.0, config=config)
-
-        # Even after 10 epochs, no penalty for BLENDING (unlike TRAINING)
-        assert shaping >= 0.0
-
-    def test_wait_at_shadowing_rewarded(self):
-        """WAIT at SHADOWING with improvement should get patience bonus."""
-        config = RewardConfig.default()
-        seed_info = self._make_seed_info(STAGE_SHADOWING, improvement=0.5)
-
-        shaping = _wait_shaping(seed_info, acc_delta=0.0, config=config)
-
-        assert shaping == pytest.approx(config.wait_patience_bonus)
-
-    def test_wait_at_probationary_neutral_without_improvement(self):
-        """WAIT at PROBATIONARY without improvement should be neutral."""
-        config = RewardConfig.default()
-        seed_info = self._make_seed_info(STAGE_PROBATIONARY, improvement=0.0)
-
-        shaping = _wait_shaping(seed_info, acc_delta=0.0, config=config)
-
-        # PROBATIONARY is hands-off, WAIT is always acceptable
-        assert shaping == pytest.approx(0.0)
+        # Positive contribution + PBRS should give positive reward
+        assert reward > 0, f"WAIT with positive contribution should be positive: {reward}"
 
 
 class TestFossilizeLegitimacyDiscount:
@@ -293,12 +220,6 @@ class TestFossilizeLegitimacyDiscount:
 
     def test_short_probation_gets_discounted(self):
         """Seeds with short PROBATIONARY get reduced fossilize bonus."""
-        from esper.simic.rewards import (
-            _contribution_fossilize_shaping,
-            ContributionRewardConfig,
-            SeedInfo,
-            STAGE_PROBATIONARY,
-        )
         from esper.leyline import MIN_PROBATION_EPOCHS
 
         config = ContributionRewardConfig()
@@ -335,13 +256,6 @@ class TestFossilizeLegitimacyDiscount:
 
     def test_zero_probation_gets_zero_bonus(self):
         """Seeds with 0 epochs in PROBATIONARY get no bonus."""
-        from esper.simic.rewards import (
-            _contribution_fossilize_shaping,
-            ContributionRewardConfig,
-            SeedInfo,
-            STAGE_PROBATIONARY,
-        )
-
         config = ContributionRewardConfig()
         seed = SeedInfo(
             stage=STAGE_PROBATIONARY,
@@ -357,109 +271,11 @@ class TestFossilizeLegitimacyDiscount:
         assert bonus <= 0, f"Zero probation should not get positive bonus: {bonus}"
 
 
-class TestCullLateStageHealthScaling:
-    """Tests for CULL PBRS penalty scaling by health_factor in late stages."""
-
-    def test_cull_shaping_late_stage_not_excessive(self):
-        """CULL penalty for late-stage failing seeds should not be excessive."""
-        config = RewardConfig()
-
-        # Failing seed in BLENDING stage
-        seed_info = SeedInfo(
-            stage=STAGE_BLENDING,
-            improvement_since_stage_start=-2.0,  # Clearly failing
-            total_improvement=-1.0,
-            epochs_in_stage=5,
-            seed_params=2000,
-            previous_stage=STAGE_TRAINING,
-            seed_age_epochs=8,
-        )
-
-        shaping = _cull_shaping(seed_info, config)
-
-        # Should be positive (reward for culling failing seed) or only mildly negative
-        # The old behavior gave ~-1.65 which is too harsh
-        assert shaping > -1.0, f"CULL penalty too harsh for failing seed: {shaping}"
-
-    def test_early_stage_pbrs_unaffected(self):
-        """CULL PBRS penalty in early stages should NOT be scaled by health."""
-        config = RewardConfig()
-
-        # Failing seed in TRAINING stage (early)
-        seed_info = SeedInfo(
-            stage=STAGE_TRAINING,
-            improvement_since_stage_start=-2.0,  # Failing
-            total_improvement=-2.0,
-            epochs_in_stage=3,
-            seed_params=2000,
-            previous_stage=STAGE_GERMINATED,
-            seed_age_epochs=5,
-        )
-
-        shaping = _cull_shaping(seed_info, config)
-
-        # Early stages should not get health scaling - preserve full PBRS incentives
-        # The PBRS penalty will be smaller for TRAINING anyway (lower potential)
-        # We just verify it doesn't have the health_factor applied
-
-        # Calculate expected components:
-        # - base_shaping: config.cull_failing_bonus (0.3)
-        # - param_recovery_bonus: (2000/10000) * 0.1 = 0.02
-        # - terminal_pbrs: no health scaling for TRAINING (stage < BLENDING)
-
-        # This is more of a regression test - ensure early stages work
-        assert isinstance(shaping, float)
-
-    def test_health_factor_floor_at_30_percent(self):
-        """Health factor should not go below 0.3 even for very bad seeds."""
-        config = RewardConfig()
-
-        # Extremely failing seed in SHADOWING stage
-        seed_info = SeedInfo(
-            stage=STAGE_SHADOWING,
-            improvement_since_stage_start=-10.0,  # Catastrophically bad
-            total_improvement=-10.0,
-            epochs_in_stage=3,
-            seed_params=2000,
-            previous_stage=STAGE_BLENDING,
-            seed_age_epochs=10,
-        )
-
-        shaping = _cull_shaping(seed_info, config)
-
-        # Even with -10% improvement, health_factor floors at 0.3
-        # So PBRS penalty is scaled to 30% of original
-        # Seed is failing badly, so culling should be rewarded
-        assert shaping > -0.8, f"CULL with catastrophic seed should not be harshly penalized: {shaping}"
-
-    def test_positive_improvement_no_health_scaling(self):
-        """Seeds with positive improvement don't get health_factor (it only applies to failing seeds)."""
-        config = RewardConfig()
-
-        # Good seed in BLENDING stage
-        seed_info = SeedInfo(
-            stage=STAGE_BLENDING,
-            improvement_since_stage_start=2.0,  # Doing well
-            total_improvement=3.0,
-            epochs_in_stage=5,
-            seed_params=2000,
-            previous_stage=STAGE_TRAINING,
-            seed_age_epochs=8,
-        )
-
-        shaping = _cull_shaping(seed_info, config)
-
-        # Culling a good seed should be penalized
-        # health_factor only applies when improvement < 0
-        assert shaping < 0, "Culling a good seed should be penalized"
-
-
 class TestContributionRewardComponents:
     """Tests for compute_contribution_reward return_components."""
 
     def test_return_components_returns_tuple(self):
         """Test that return_components=True returns (reward, components) tuple."""
-        from esper.simic.rewards import compute_contribution_reward, SeedInfo
         from esper.simic.reward_telemetry import RewardComponentsTelemetry
         from esper.leyline import SeedStage
 
@@ -500,7 +316,6 @@ class TestContributionRewardComponents:
 
     def test_components_sum_to_total(self):
         """Test that component values sum to total_reward."""
-        from esper.simic.rewards import compute_contribution_reward, SeedInfo
         from esper.leyline import SeedStage
 
         from enum import IntEnum
@@ -543,7 +358,6 @@ class TestContributionRewardComponents:
 
     def test_components_track_context(self):
         """Test that components include action and epoch context."""
-        from esper.simic.rewards import compute_contribution_reward, SeedInfo
         from esper.leyline import SeedStage
 
         from enum import IntEnum
@@ -576,7 +390,6 @@ class TestContributionRewardComponents:
 
     def test_components_include_diagnostic_fields(self):
         """Test that components include DRL Expert recommended diagnostic fields."""
-        from esper.simic.rewards import compute_contribution_reward, SeedInfo
         from esper.leyline import SeedStage
 
         from enum import IntEnum
@@ -611,3 +424,91 @@ class TestContributionRewardComponents:
         assert components.acc_at_germination == 68.0
         assert components.growth_ratio == 5000 / 20000  # 0.25
         assert components.progress_since_germination == 72.0 - 68.0  # 4.0
+
+
+class TestProxySignalPath:
+    """Tests for the proxy signal path (when seed_contribution is None)."""
+
+    class _TestAction(IntEnum):
+        WAIT = 0
+
+    def test_positive_acc_delta_gives_reward(self):
+        """Positive acc_delta should give positive bounded_attribution."""
+        seed_info = SeedInfo(
+            stage=STAGE_TRAINING,
+            improvement_since_stage_start=1.0,
+            total_improvement=1.0,
+            epochs_in_stage=3,
+            seed_params=1000,
+            previous_stage=STAGE_GERMINATED,
+            seed_age_epochs=3,
+        )
+
+        reward, components = compute_contribution_reward(
+            action=self._TestAction.WAIT,
+            seed_contribution=None,  # Proxy path
+            val_acc=65.0,
+            seed_info=seed_info,
+            epoch=5,
+            max_epochs=25,
+            acc_delta=1.5,  # Positive delta
+            return_components=True,
+        )
+
+        # Should have positive bounded_attribution from proxy signal
+        assert components.bounded_attribution > 0, "Positive acc_delta should give positive attribution"
+        # Should equal proxy_weight * acc_delta
+        config = ContributionRewardConfig()
+        expected = config.proxy_contribution_weight * 1.5
+        assert components.bounded_attribution == pytest.approx(expected)
+
+    def test_negative_acc_delta_gives_zero(self):
+        """Negative acc_delta should give zero bounded_attribution (no penalty)."""
+        seed_info = SeedInfo(
+            stage=STAGE_TRAINING,
+            improvement_since_stage_start=-0.5,
+            total_improvement=-0.5,
+            epochs_in_stage=3,
+            seed_params=1000,
+            previous_stage=STAGE_GERMINATED,
+            seed_age_epochs=3,
+        )
+
+        reward, components = compute_contribution_reward(
+            action=self._TestAction.WAIT,
+            seed_contribution=None,  # Proxy path
+            val_acc=64.0,
+            seed_info=seed_info,
+            epoch=5,
+            max_epochs=25,
+            acc_delta=-0.5,  # Negative delta
+            return_components=True,
+        )
+
+        # No penalty for negative delta in proxy path
+        assert components.bounded_attribution == 0.0
+
+    def test_none_acc_delta_gives_zero(self):
+        """None acc_delta should give zero bounded_attribution."""
+        seed_info = SeedInfo(
+            stage=STAGE_TRAINING,
+            improvement_since_stage_start=0.0,
+            total_improvement=0.0,
+            epochs_in_stage=3,
+            seed_params=1000,
+            previous_stage=STAGE_GERMINATED,
+            seed_age_epochs=3,
+        )
+
+        reward, components = compute_contribution_reward(
+            action=self._TestAction.WAIT,
+            seed_contribution=None,
+            val_acc=65.0,
+            seed_info=seed_info,
+            epoch=5,
+            max_epochs=25,
+            acc_delta=None,  # No delta provided
+            return_components=True,
+        )
+
+        assert components.bounded_attribution == 0.0

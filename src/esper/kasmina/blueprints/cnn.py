@@ -79,7 +79,8 @@ def create_norm_seed(channels: int) -> nn.Module:
             self.scale = nn.Parameter(torch.ones(1))
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
-            return x + self.scale * (self.norm(x) - x)
+            # Bound scale to [-1, 1] via tanh to prevent gradient explosion
+            return x + torch.tanh(self.scale) * (self.norm(x) - x)
 
     return NormSeed(channels)
 
@@ -88,7 +89,23 @@ def create_norm_seed(channels: int) -> nn.Module:
     "attention", "cnn", param_estimate=2000, description="SE-style channel attention"
 )
 def create_attention_seed(channels: int, reduction: int = 4) -> nn.Module:
-    """Channel attention seed (SE-style)."""
+    """Channel attention seed using Squeeze-and-Excitation (SE) pattern.
+
+    This implements the canonical SE block from Hu et al. 2018 ("Squeeze-and-Excitation
+    Networks"). Unlike additive residual seeds (norm, depthwise, conv_*), SE uses
+    multiplicative channel-wise gating: output = x * sigmoid(fc(pool(x))).
+
+    Design notes:
+    - Multiplicative gating is intentional, not a bug. SE learns to recalibrate
+      channel importance rather than adding learned features.
+    - Sigmoid outputs are in [0, 1], theoretically allowing channels to be zeroed.
+      In practice, standard initialization keeps outputs near 0.5 (neutral scaling).
+    - No residual connection needed: the multiplication preserves spatial structure
+      and gradient flow through x. Unlike additive seeds, SE modulates existing
+      features rather than injecting new ones.
+
+    Reference: https://arxiv.org/abs/1709.01507
+    """
 
     class AttentionSeed(nn.Module):
         def __init__(self, channels: int, reduction: int):
@@ -104,9 +121,12 @@ def create_attention_seed(channels: int, reduction: int = 4) -> nn.Module:
             )
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
+            # Squeeze: global average pooling to channel descriptor
             b, c, _, _ = x.size()
             y = self.avg_pool(x).reshape(b, c)
+            # Excitation: channel-wise attention weights via FC bottleneck
             y = self.fc(y).reshape(b, c, 1, 1)
+            # Scale: multiplicative recalibration (canonical SE formulation)
             return x * y.expand_as(x)
 
     return AttentionSeed(channels, reduction)

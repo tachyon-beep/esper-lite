@@ -260,6 +260,10 @@ class ContributionRewardConfig:
     # Primary signal: seed contribution weight
     contribution_weight: float = 3.0
 
+    # Proxy signal for pre-blending stages (when counterfactual unavailable)
+    # Lower weight than contribution_weight since it's noisier and conflated with host drift
+    proxy_contribution_weight: float = 1.0
+
     # PBRS stage progression
     pbrs_weight: float = 0.3
     epoch_progress_bonus: float = 0.3
@@ -739,7 +743,23 @@ def _cull_shaping(seed_info: SeedInfo | None, config: RewardConfig) -> float:
     }
     phi_current = compute_seed_potential(current_obs)
 
-    # Health discount: failing seeds in LATE STAGES get reduced PBRS penalty
+    # INTENTIONAL PBRS DEVIATION: health_factor breaks strict policy invariance
+    #
+    # Standard PBRS (Ng et al., 1999) guarantees that shaped rewards preserve
+    # the optimal policy when: F(s,a,s') = gamma * phi(s') - phi(s)
+    #
+    # We deliberately violate this by scaling the terminal PBRS correction:
+    #
+    # Justification:
+    #   1. PBRS assumes stationary MDPs - seed lifecycle is non-stationary
+    #   2. A failing seed (improvement < 0) in late stages has already consumed
+    #      resources; penalizing its cull equally to a healthy seed's cull
+    #      discourages appropriate cleanup
+    #   3. The health_factor is bounded [0.3, 1.0] to limit deviation magnitude
+    #
+    # Effect: Reduces cull penalty for failing late-stage seeds, encouraging
+    # the agent to cut losses rather than holding onto bad seeds.
+    #
     # (DRL Expert recommendation: only apply for stage >= BLENDING to preserve
     # early-stage PBRS incentives where the penalty is smaller anyway)
     health_factor = 1.0
@@ -748,6 +768,7 @@ def _cull_shaping(seed_info: SeedInfo | None, config: RewardConfig) -> float:
         health_factor = max(0.3, 1.0 + improvement / 3.0)
 
     # PBRS: gamma * phi(next) - phi(current) where next = no seed (phi=0)
+    # Note: health_factor applied here deviates from pure PBRS (see above)
     pbrs_correction = DEFAULT_GAMMA * 0.0 - phi_current  # = -phi_current
     terminal_pbrs = config.seed_potential_weight * pbrs_correction * health_factor
 
@@ -822,6 +843,7 @@ def compute_contribution_reward(
     host_params: int = 1,
     config: ContributionRewardConfig | None = None,
     acc_at_germination: float | None = None,
+    acc_delta: float | None = None,
     return_components: bool = False,
 ) -> float | tuple[float, RewardComponentsTelemetry]:
     """Compute reward using bounded attribution (ransomware-resistant).
@@ -830,18 +852,22 @@ def compute_contribution_reward(
     rewards where seeds create structural dependencies that inflate their
     apparent contribution beyond actual value added.
 
+    For pre-blending stages where counterfactual is unavailable, uses acc_delta
+    as a proxy signal with lower weight to maintain reward continuity.
+
     Key insight: A seed cannot create more value than the progress actually
     observed. The counterfactual measures "removal cost" not "value added".
 
-    Solution: reward = min(progress, contribution)
+    Attribution logic:
     - If seed_contribution < 0: Toxic seed, penalize
-    - If seed_contribution > progress: Dependency created, pay for progress only
-    - If progress > seed_contribution: Host learning inflated progress, pay for contribution
+    - If seed_contribution >= progress: High causal, use geometric mean
+    - If seed_contribution < progress: Low causal, cap at contribution
+    - If seed_contribution is None: Use acc_delta as proxy (pre-blending)
 
     Args:
         action: Action taken (IntEnum member)
         seed_contribution: Counterfactual delta (real_acc - baseline_acc).
-                          None if alpha=0 or no seed.
+                          None if alpha=0 or no seed (pre-blending stages).
         val_acc: Current validation accuracy
         seed_info: Seed state info (None if no active seed)
         epoch: Current epoch
@@ -850,6 +876,7 @@ def compute_contribution_reward(
         host_params: Baseline host model params (for normalization)
         config: Reward configuration (uses default if None)
         acc_at_germination: Accuracy when seed was planted (for progress calc)
+        acc_delta: Per-epoch accuracy change (proxy signal for pre-blending)
         return_components: If True, return (reward, components) tuple
 
     Returns:
@@ -870,28 +897,42 @@ def compute_contribution_reward(
 
     reward = 0.0
 
-    # === 1. PRIMARY: Bounded Attribution (Ransomware-Resistant) ===
-    # Pay for min(progress, contribution) to prevent dependency exploitation
+    # === 1. PRIMARY: Contribution or Proxy Signal ===
+    # Uses counterfactual when available, falls back to acc_delta proxy for pre-blending
     bounded_attribution = 0.0
     progress = None
     if seed_contribution is not None:
+        # Counterfactual available (BLENDING+ stages)
         if seed_contribution < 0:
             # Toxic seed - counterfactual shows it actively hurts
             # Pay the negative contribution as penalty
             bounded_attribution = config.contribution_weight * seed_contribution
         else:
-            # Positive contribution - bound by actual progress
+            # Positive contribution - asymmetric handling preserves causal signal
             if acc_at_germination is not None:
                 progress = val_acc - acc_at_germination
-                # Pay for whichever is SMALLER:
-                # - Prevents ransomware (high contribution, low progress)
-                # - Prevents free-riding (high progress, low contribution)
-                attributed = min(max(0.0, progress), seed_contribution)
+                if progress <= 0:
+                    # Anti-ransomware: no reward without actual progress
+                    attributed = 0.0
+                elif seed_contribution >= progress:
+                    # High causal, low progress: timing mismatch, seed is valuable
+                    # Geometric mean recovers signal: sqrt(5% * 47%) = 15.3% vs min = 5%
+                    attributed = math.sqrt(progress * seed_contribution)
+                else:
+                    # Low causal, high progress: host did the work
+                    # Cap at actual contribution to prevent free-riding
+                    attributed = seed_contribution
             else:
                 # No baseline available - discount contribution
                 attributed = seed_contribution * 0.5
             bounded_attribution = config.contribution_weight * attributed
-        reward += bounded_attribution
+    else:
+        # Pre-blending: use accuracy delta as proxy signal (lower weight)
+        # This maintains reward continuity without imputing fake counterfactual.
+        # No penalty for negative delta - we don't have causal data yet.
+        if acc_delta is not None and acc_delta > 0:
+            bounded_attribution = config.proxy_contribution_weight * acc_delta
+    reward += bounded_attribution
 
     if components:
         components.seed_contribution = seed_contribution

@@ -145,7 +145,7 @@ def run_diagnostic_episode(
     from esper.tolaria import create_model
     from esper.tamiyo import SignalTracker
     from esper.simic.ppo import signals_to_features
-    from esper.simic.rewards import compute_shaped_reward, SeedInfo
+    from esper.simic.rewards import compute_contribution_reward, SeedInfo
 
     torch.manual_seed(episode_id * 1000)
 
@@ -169,10 +169,10 @@ def run_diagnostic_episode(
     for epoch in range(1, max_epochs + 1):
         seed_state = model.seed_state
 
-        # Training phase
+        # Training phase - use tensor accumulation for deferred sync
         model.train()
-        running_loss = 0.0
-        correct = 0
+        running_loss = torch.zeros(1, device=device)
+        running_correct = torch.zeros(1, device=device, dtype=torch.long)
         total = 0
 
         if seed_state is None:
@@ -185,9 +185,9 @@ def run_diagnostic_episode(
                 )
                 loss.backward()
                 host_optimizer.step()
-                running_loss += loss.item()
+                running_loss.add_(loss.detach())
+                running_correct.add_(correct_batch)
                 total += batch_total
-                correct += correct_batch
 
         elif seed_state.stage == SeedStage.GERMINATED:
             seed_state.transition(SeedStage.TRAINING)
@@ -203,9 +203,9 @@ def run_diagnostic_episode(
                 )
                 loss.backward()
                 seed_optimizer.step()
-                running_loss += loss.item()
+                running_loss.add_(loss.detach())
+                running_correct.add_(correct_batch)
                 total += batch_total
-                correct += correct_batch
 
         elif seed_state.stage == SeedStage.TRAINING:
             if seed_optimizer is None:
@@ -221,9 +221,9 @@ def run_diagnostic_episode(
                 )
                 loss.backward()
                 seed_optimizer.step()
-                running_loss += loss.item()
+                running_loss.add_(loss.detach())
+                running_correct.add_(correct_batch)
                 total += batch_total
-                correct += correct_batch
 
         elif seed_state.stage == SeedStage.BLENDING:
             for inputs, targets in trainloader:
@@ -239,9 +239,9 @@ def run_diagnostic_episode(
                 host_optimizer.step()
                 if seed_optimizer:
                     seed_optimizer.step()
-                running_loss += loss.item()
+                running_loss.add_(loss.detach())
+                running_correct.add_(correct_batch)
                 total += batch_total
-                correct += correct_batch
 
         elif seed_state.stage == SeedStage.FOSSILIZED:
             for inputs, targets in trainloader:
@@ -253,9 +253,9 @@ def run_diagnostic_episode(
                 )
                 loss.backward()
                 host_optimizer.step()
-                running_loss += loss.item()
+                running_loss.add_(loss.detach())
+                running_correct.add_(correct_batch)
                 total += batch_total
-                correct += correct_batch
         else:
             # Fallback
             for inputs, targets in trainloader:
@@ -267,17 +267,18 @@ def run_diagnostic_episode(
                 )
                 loss.backward()
                 host_optimizer.step()
-                running_loss += loss.item()
+                running_loss.add_(loss.detach())
+                running_correct.add_(correct_batch)
                 total += batch_total
-                correct += correct_batch
 
-        train_loss = running_loss / len(trainloader)
-        train_acc = 100.0 * correct / total if total > 0 else 0.0
+        # Single sync at end of training
+        train_loss = running_loss.item() / len(trainloader)
+        train_acc = 100.0 * running_correct.item() / total if total > 0 else 0.0
 
-        # Validation
+        # Validation - use tensor accumulation for deferred sync
         model.eval()
-        val_loss = 0.0
-        correct = 0
+        val_loss_accum = torch.zeros(1, device=device)
+        val_correct_accum = torch.zeros(1, device=device, dtype=torch.long)
         total = 0
 
         with torch.inference_mode():
@@ -287,12 +288,13 @@ def run_diagnostic_episode(
                 loss, correct_batch, batch_total = compute_task_loss_with_metrics(
                     outputs, targets, criterion, task_type
                 )
-                val_loss += loss.item()
+                val_loss_accum.add_(loss)
+                val_correct_accum.add_(correct_batch)
                 total += batch_total
-                correct += correct_batch
 
-        val_loss /= len(testloader)
-        val_acc = 100.0 * correct / total if total > 0 else 0.0
+        # Single sync at end of validation
+        val_loss = val_loss_accum.item() / len(testloader)
+        val_acc = 100.0 * val_correct_accum.item() / total if total > 0 else 0.0
         record.accuracy_curve.append(val_acc)
 
         # Update signals
@@ -337,15 +339,16 @@ def run_diagnostic_episode(
         # Compute reward with cost params
         acc_delta = signals.metrics.accuracy_delta
         total_params = params_added + model.active_seed_params
-        reward = compute_shaped_reward(
-            action=action,  # Pass Enum Member
-            acc_delta=acc_delta,
+        reward = compute_contribution_reward(
+            action=action,
+            seed_contribution=None,  # No counterfactual in evaluation path
             val_acc=val_acc,
             seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
             epoch=epoch,
             max_epochs=max_epochs,
             total_params=total_params,
             host_params=host_params,
+            acc_delta=acc_delta,  # Used as proxy signal
         )
         record.total_return += reward
 

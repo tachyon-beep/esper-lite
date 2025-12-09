@@ -22,7 +22,13 @@ class TestTrainOneEpoch:
         return DataLoader(TensorDataset(X, y), batch_size=8)
 
     def test_returns_correct_tuple_types(self, simple_model, simple_dataloader):
-        """Should return (float, float, int, None) tuple without gradient collection."""
+        """Should return (float, float, int, None) tuple without gradient collection.
+
+        Note: running_loss and correct are floats because _train_one_epoch
+        accumulates tensors internally and calls .item() at the end for the
+        caller's convenience. The optimization is that .item() is called once
+        per epoch, not once per batch.
+        """
         from esper.simic.training import _train_one_epoch
 
         criterion = nn.CrossEntropyLoss()
@@ -42,7 +48,7 @@ class TestTrainOneEpoch:
         assert len(result) == 4
         running_loss, correct, total, grad_stats = result
         assert isinstance(running_loss, float)
-        assert isinstance(correct, float)
+        assert isinstance(correct, (float, int))  # Tensor.item() returns int for long tensors
         assert isinstance(total, int)
         assert grad_stats is None  # Not collected by default
 

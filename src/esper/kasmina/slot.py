@@ -5,19 +5,18 @@ germination -> training -> blending -> fossilization/culling.
 
 torch.compile Strategy
 ----------------------
-The SeedSlot.forward() method is decorated with @torch.compiler.disable because:
+SeedSlot.forward() is compile-compatible. Dynamo creates ~6-8 specialized
+graphs (one per stage/config combination). This is acceptable because:
 
-1. Stage-dependent control flow (self.state.stage) causes graph specialization -
-   Dynamo would create multiple compiled versions, one per stage
-2. The STE path and blend path have genuinely different computation graphs
-3. The overhead of guard checks + potential recompilation outweighs benefits
+1. Stage transitions happen once per epoch, not per forward pass
+2. After warmup, no recompilation occurs within an epoch
+3. Allowing compilation enables fusion with surrounding host network ops
+4. The FOSSILIZED steady-state (dominant runtime) benefits most from compilation
 
 The underlying tensor operations (ste_forward, blend_with_isolation) in
-isolation.py ARE compile-compatible and will be traced correctly when called
-from compiled code paths. The @torch.compiler.disable creates a "firewall"
-that prevents control flow from causing graph breaks in callers.
+isolation.py are pure tensor ops that compile efficiently.
 
-This is an intentional architectural decision, not a workaround.
+Use TORCH_LOGS=guards to monitor graph specialization during training.
 """
 
 from __future__ import annotations
@@ -31,6 +30,19 @@ from typing import Callable, TYPE_CHECKING
 
 # Debug flag for STE gradient assertions (set ESPER_DEBUG_STE=1 to enable)
 _DEBUG_STE = os.environ.get("ESPER_DEBUG_STE", "").lower() in ("1", "true", "yes")
+
+# Gradient telemetry constants
+# Minimum parameter-normalized gradient ratio for G2 gate (seed must be "awake")
+DEFAULT_GRADIENT_RATIO_THRESHOLD: float = 0.05
+# Epsilon for numerical stability in gradient ratio computation
+GRADIENT_EPSILON: float = 1e-8
+# EMA decay factor for gradient norm averaging (higher = slower adaptation)
+GRADIENT_EMA_DECAY: float = 0.9
+# Maximum gradient ratio to prevent outliers from skewing G2 gate decisions.
+# Value of 10.0 corresponds to "seed has 100x higher per-parameter gradient intensity
+# than host" after sqrt normalization - an extreme value indicating either a very
+# small seed or numerical anomaly.
+MAX_GRADIENT_RATIO: float = 10.0
 
 import torch
 import torch.nn as nn
@@ -62,8 +74,10 @@ if TYPE_CHECKING:
 
 # Canonical feature-shape probes for seed shape validation.
 # These are smoke tests: seeds must be shape-preserving for arbitrary H/W or seq_len.
-CNN_SHAPE_PROBE_SPATIAL = 8
-TRANSFORMER_SHAPE_PROBE_SEQ_LEN = 4
+# 32x32 chosen to match post-stride-32 dimensions (ResNet layer4) and CIFAR input size,
+# while avoiding excessive memory for high-channel probes during torch.compile tracing.
+CNN_SHAPE_PROBE_SPATIAL = 32
+TRANSFORMER_SHAPE_PROBE_SEQ_LEN = 8  # Increased for windowed attention edge cases
 
 
 # =============================================================================
@@ -307,7 +321,7 @@ class QualityGates:
         max_isolation_violations: int = 10,
         min_shadowing_correlation: float = 0.9,
         min_probation_stability: float = 0.95,
-        min_seed_gradient_ratio: float = 0.05,
+        min_seed_gradient_ratio: float = DEFAULT_GRADIENT_RATIO_THRESHOLD,
     ):
         self.min_training_improvement = min_training_improvement
         self.min_blending_epochs = min_blending_epochs
@@ -538,6 +552,36 @@ class SeedSlot(nn.Module):
     """A slot in the model where a seed can be attached.
 
     Manages the full lifecycle of a seed with quality gates.
+
+    Gradient Isolation Strategy:
+        There are two gradient paths through a slot during BLENDING+:
+
+        1. DIRECT PATH (host ← loss):
+           Host receives (1-α) weighted gradients from task loss.
+           Always active - enables host backbone to continue learning.
+
+        2. SEED PATH (host ← seed ← loss):
+           Controlled by `isolate_gradients` flag at seed INPUT.
+           - True: seed gradients don't backprop into host params
+           - False: host co-adapts to support seed representations
+
+        Topology-aware defaults at TRAINING → BLENDING transition:
+        - CNN: isolate_gradients=True (stable spatial hierarchies)
+        - Transformer: isolate_gradients=False (co-adaptation benefits)
+
+        Diagram:
+            Loss
+              │
+              ▼
+            Output = lerp(host, seed, α)
+              │                    │
+              │ (1-α) gradient     │ α gradient
+              ▼                    ▼
+            Host Features         Seed Features
+              ▲                    │
+              │ (blocked if        │
+              │  isolate_gradients)│
+              └────────────────────┘
 
     Args:
         slot_id: Unique identifier for this slot.
@@ -818,12 +862,20 @@ class SeedSlot(nn.Module):
                 # Stage-specific gradient isolation hooks:
                 # - GERMINATED → TRAINING: enable Incubator isolation so the seed
                 #   sees detached host features during its training phase.
-                # - TRAINING → BLENDING: disable isolation so blended seeds can
-                #   co-adapt with the host trunk.
+                # - TRAINING → BLENDING: topology-aware isolation decision
+                #   (CNNs keep isolation, Transformers allow co-adaptation)
                 if old_stage == SeedStage.GERMINATED and target_stage == SeedStage.TRAINING:
                     self.isolate_gradients = True
                 elif old_stage == SeedStage.TRAINING and target_stage == SeedStage.BLENDING:
-                    self.isolate_gradients = False
+                    # Topology-aware gradient isolation:
+                    # - CNNs: keep isolation (host learns from loss, not seed feedback)
+                    #   Rationale: CNNs have rigid spatial hierarchies where co-adaptation
+                    #   risks destabilizing learned features.
+                    # - Transformers: allow co-adaptation (host receives seed gradients)
+                    #   Rationale: Transformers benefit from host adjusting to seed
+                    #   representations during blending.
+                    topology = self.task_config.topology if self.task_config else "cnn"
+                    self.isolate_gradients = (topology == "cnn")
                     # Snapshot accuracy at blending start for true causal attribution
                     # This is when the seed starts actually affecting network output
                     self.state.metrics.accuracy_at_blending_start = self.state.metrics.current_val_accuracy
@@ -946,8 +998,16 @@ class SeedSlot(nn.Module):
         # Compute parameter-normalized seed gradient ratio
         # Formula: (seed_norm / host_norm) * sqrt(host_params / seed_params)
         # This measures per-parameter gradient intensity, scale-invariant across architectures
-        eps = 1e-8
-        raw_ratio = seed_norm / (host_norm + eps)
+        #
+        # Edge case handling (DRL Expert review 2025-12-09):
+        # - When host_norm < epsilon: host has no gradients, ratio is meaningless (set to 0)
+        # - Upper bound clamp (10.0): prevents astronomically large ratios from dominating metrics
+        if host_norm < GRADIENT_EPSILON:
+            # Host has no gradients - cannot compute meaningful ratio
+            # This can happen with frozen host, gradient accumulation before backward, etc.
+            raw_ratio = 0.0
+        else:
+            raw_ratio = seed_norm / host_norm
 
         # Apply parameter normalization if counts are available
         host_params = self.state.metrics.host_param_count
@@ -955,26 +1015,33 @@ class SeedSlot(nn.Module):
         if host_params > 0 and seed_params > 0:
             # sqrt(host/seed) scales up small seeds, scales down large seeds
             normalization_factor = (host_params / seed_params) ** 0.5
-            self.state.metrics.seed_gradient_norm_ratio = raw_ratio * normalization_factor
+            ratio = raw_ratio * normalization_factor
         else:
             # Fallback to raw ratio if param counts unavailable (e.g., fast_mode)
-            self.state.metrics.seed_gradient_norm_ratio = raw_ratio
+            ratio = raw_ratio
+
+        # Clamp to reasonable range to prevent outliers from skewing G2 gate decisions
+        self.state.metrics.seed_gradient_norm_ratio = min(MAX_GRADIENT_RATIO, ratio)
 
         # Update EMA of gradient norm for monitoring
         current_avg = self.state.metrics.gradient_norm_avg
-        self.state.metrics.gradient_norm_avg = 0.9 * current_avg + 0.1 * seed_norm
+        self.state.metrics.gradient_norm_avg = (
+            GRADIENT_EMA_DECAY * current_avg + (1 - GRADIENT_EMA_DECAY) * seed_norm
+        )
 
-    @torch.compiler.disable
     def forward(self, host_features: torch.Tensor) -> torch.Tensor:
         """Process features through this slot.
 
-        Note: torch.compile is disabled for this method because:
-        1. Stage-dependent control flow (self.state.stage) causes graph specialization
-        2. The STE path and blend path have different computation graphs
-        3. The overhead of recompilation per-stage outweighs benefits
+        torch.compile behavior:
+        Dynamo creates specialized graphs for each stage/config combination
+        (~6-8 graphs total). Guard failures occur at stage transitions (once
+        per epoch), triggering recompilation. After warmup, execution stays
+        within a single specialized graph per epoch with no recompilation.
 
-        If profiling shows this is a bottleneck, consider separating fast-path
-        (no active seed) from slow-path (active seed with stage logic).
+        DO NOT use @torch.compiler.disable here - it completely opts out of
+        compilation, which is worse than allowing graph specialization. The
+        stage-dependent control flow causes specialization overhead during
+        warmup, but steady-state performance benefits from end-to-end fusion.
         """
         # blend_with_isolation imported at module level for torch.compile compatibility
 
@@ -1004,24 +1071,20 @@ class SeedSlot(nn.Module):
                 )
             return ste_forward(host_features, seed_features)
 
-        # 4. BLENDING and later stages: topology-aware host isolation.
-        detach_host = True
-        topology = self.task_config.topology if self.task_config is not None else None
-        if topology == "transformer" and self.state is not None:
-            if self.state.stage in (
-                SeedStage.BLENDING,
-                SeedStage.SHADOWING,
-                SeedStage.PROBATIONARY,
-                SeedStage.FOSSILIZED,
-            ):
-                detach_host = False
-
-        return blend_with_isolation(
-            host_features,
-            seed_features,
-            self.alpha,
-            detach_host=detach_host,
-        )
+        # 4. BLENDING and later stages: standard lerp with proper gradient flow.
+        #
+        # Gradient isolation strategy (updated 2025-12-10):
+        # - DIRECT PATH (host ← loss): Host receives (1-α) weighted gradients.
+        #   Always active - enables host backbone to continue learning.
+        # - SEED PATH (host ← seed ← loss): Controlled by isolate_gradients
+        #   at the seed INPUT (line 1024), not here in the blend output.
+        #   CNNs: blocked (isolate_gradients=True) to prevent co-adaptation
+        #   Transformers: allowed (isolate_gradients=False) for co-adaptation
+        #
+        # Impact on credit assignment: Transformer improvements during BLENDING+
+        # may come from seed OR host adaptation. Use counterfactual_contribution
+        # (not blending_delta) for causal attribution.
+        return blend_with_isolation(host_features, seed_features, self.alpha)
 
     def get_parameters(self):
         """Get trainable parameters of the seed."""
@@ -1061,6 +1124,34 @@ class SeedSlot(nn.Module):
             return alpha
         return self.alpha
 
+    def _sync_gate_decision(self, gate_result: GateResult) -> None:
+        """Ensure all DDP ranks agree on lifecycle transitions (Unanimous Consensus).
+
+        We use ReduceOp.MIN (Logical AND) for all transitions.
+        - Advancement: Everyone must be ready.
+        - Culling: If one rank votes to keep, we wait (conservative).
+
+        This prevents Architecture Divergence, where ranks typically crash
+        if parameter shapes mismatch during the next forward pass.
+
+        COLLECTIVE OPERATION: All ranks MUST call this in identical order
+        for each gate check, or deadlock will occur.
+        """
+        if not (torch.distributed.is_available() and torch.distributed.is_initialized()):
+            return
+
+        # 1 = Passed, 0 = Failed; MIN gives unanimous consensus
+        decision = torch.tensor([int(gate_result.passed)], device=self.device, dtype=torch.int)
+        torch.distributed.all_reduce(decision, op=torch.distributed.ReduceOp.MIN)
+
+        is_passed = bool(decision.item())
+
+        if gate_result.passed and not is_passed:
+            gate_result.message += " (Vetoed by DDP consensus)"
+            gate_result.checks_failed.append("ddp_veto")
+
+        gate_result.passed = is_passed
+
     def step_epoch(self) -> None:
         """Advance lifecycle mechanically once per epoch (Kasmina timekeeper)."""
         if not self.state:
@@ -1071,6 +1162,7 @@ class SeedSlot(nn.Module):
         # GERMINATED → TRAINING: immediate advance (no dwell required)
         if stage == SeedStage.GERMINATED:
             gate_result = self.gates.check_gate(self.state, SeedStage.TRAINING)
+            self._sync_gate_decision(gate_result)
             if not gate_result.passed:
                 return
 
@@ -1099,6 +1191,7 @@ class SeedSlot(nn.Module):
                 return
 
             gate_result = self.gates.check_gate(self.state, SeedStage.BLENDING)
+            self._sync_gate_decision(gate_result)
             if not gate_result.passed:
                 return
 
@@ -1108,9 +1201,11 @@ class SeedSlot(nn.Module):
                 raise RuntimeError(
                     f"Illegal lifecycle transition {self.state.stage} → BLENDING"
                 )
-            # Leaving TRAINING: disable Incubator isolation so BLENDING/SHADOWING/
-            # FOSSILIZED can drive host trunk updates via the seed branch.
-            self.isolate_gradients = False
+            # Topology-aware gradient isolation at TRAINING → BLENDING:
+            # - CNNs: keep isolation (host learns from loss, not seed feedback)
+            # - Transformers: allow co-adaptation (host receives seed gradients)
+            topology = self.task_config.topology if self.task_config else "cnn"
+            self.isolate_gradients = (topology == "cnn")
             # Snapshot accuracy at blending start for true causal attribution
             # This is when the seed starts actually affecting network output
             self.state.metrics.accuracy_at_blending_start = self.state.metrics.current_val_accuracy
@@ -1137,6 +1232,7 @@ class SeedSlot(nn.Module):
             if self.state.blending_steps_done >= self.state.blending_steps_total:
                 self.set_alpha(1.0)  # Ensure fully blended
                 gate_result = self.gates.check_gate(self.state, SeedStage.SHADOWING)
+                self._sync_gate_decision(gate_result)
                 if not gate_result.passed:
                     return
                 old_stage = self.state.stage
@@ -1162,6 +1258,7 @@ class SeedSlot(nn.Module):
                 return
 
             gate_result = self.gates.check_gate(self.state, SeedStage.PROBATIONARY)
+            self._sync_gate_decision(gate_result)
             if not gate_result.passed:
                 return
             old_stage = self.state.stage
@@ -1180,14 +1277,17 @@ class SeedSlot(nn.Module):
         # This is the final decision point: prove worth or be removed
         if stage == SeedStage.PROBATIONARY:
             # Calculate probation timeout (default 5 epochs, or 10% of max_epochs)
+            # Minimum of 5 epochs ensures sufficient time for counterfactual validation
+            # (DRL Expert review 2025-12-09: 3 epochs was insufficient for reliable metrics)
             max_probation_epochs = 5
             if self.task_config:
-                max_probation_epochs = max(3, int(self.task_config.max_epochs * 0.1))
+                max_probation_epochs = max(5, int(self.task_config.max_epochs * 0.1))
 
             # Path 1: Check if we should FOSSILIZE (success case)
             # G5 requires counterfactual validation - no shortcuts
             if self.state.metrics.counterfactual_contribution is not None:
                 gate_result = self.gates.check_gate(self.state, SeedStage.FOSSILIZED)
+                self._sync_gate_decision(gate_result)
                 if gate_result.passed:
                     old_stage = self.state.stage
                     ok = self.state.transition(SeedStage.FOSSILIZED)
@@ -1247,16 +1347,19 @@ class SeedSlot(nn.Module):
         self.on_telemetry(event)
 
     def get_extra_state(self):
-        """Persist SeedState and alpha schedule in checkpoints."""
+        """Persist SeedState, alpha schedule, and gradient isolation in checkpoints."""
         return {
             "seed_state": self.state,
             "alpha_schedule": self.alpha_schedule,
+            "isolate_gradients": self.isolate_gradients,
         }
 
     def set_extra_state(self, state: dict) -> None:
-        """Restore SeedState and alpha schedule from checkpoints."""
+        """Restore SeedState, alpha schedule, and gradient isolation from checkpoints."""
         self.state = state.get("seed_state")
         self.alpha_schedule = state.get("alpha_schedule")
+        # Default to True (safe/isolated) if not present in old checkpoints
+        self.isolate_gradients = state.get("isolate_gradients", True)
 
 
 __all__ = [

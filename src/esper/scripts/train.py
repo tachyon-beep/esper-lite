@@ -42,7 +42,8 @@ def main():
     heur_parser.add_argument("--episodes", type=int, default=1)
     heur_parser.add_argument("--max-epochs", type=int, default=75)
     heur_parser.add_argument("--max-batches", type=int, default=50, help="Batches per epoch (None=all)")
-    heur_parser.add_argument("--task", default="cifar10")
+    heur_parser.add_argument("--task", default="cifar10",
+                              choices=["cifar10", "cifar10_deep", "tinystories"])
     heur_parser.add_argument("--device", default="cuda:0")
     heur_parser.add_argument("--seed", type=int, default=42)
 
@@ -64,7 +65,9 @@ def main():
     ppo_parser.add_argument("--entropy-anneal-episodes", type=int, default=0,
         help="Episodes over which to anneal entropy (0=fixed, no annealing)")
     ppo_parser.add_argument("--gamma", type=float, default=0.99)
-    ppo_parser.add_argument("--task", default="cifar10", help="Task preset (cifar10 or tinystories)")
+    ppo_parser.add_argument("--task", default="cifar10",
+                             choices=["cifar10", "cifar10_deep", "tinystories"],
+                             help="Task preset")
     ppo_parser.add_argument("--save", help="Path to save model")
     ppo_parser.add_argument("--resume", help="Path to checkpoint to resume from")
     ppo_parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
@@ -79,6 +82,8 @@ def main():
         help="DataLoader workers per environment (overrides task default)",
     )
     ppo_parser.add_argument("--no-telemetry", action="store_true", help="Disable telemetry features (27-dim instead of 37-dim)")
+    ppo_parser.add_argument("--gpu-preload", action="store_true",
+        help="Preload dataset to GPU for 8x faster data loading (CIFAR-10 only, uses ~0.75GB VRAM)")
 
     args = parser.parse_args()
 
@@ -152,6 +157,7 @@ def main():
                 resume_path=args.resume,
                 seed=args.seed,
                 num_workers=args.num_workers,
+                gpu_preload=args.gpu_preload,
                 telemetry_config=telemetry_config,
             )
         else:

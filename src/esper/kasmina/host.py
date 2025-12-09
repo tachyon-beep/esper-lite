@@ -6,6 +6,8 @@ It manages the injection points where seeds can be attached.
 
 from __future__ import annotations
 
+from typing import override
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -25,6 +27,9 @@ class CNNHost(nn.Module):
         num_classes: Number of output classes (default 10 for CIFAR-10)
         n_blocks: Number of conv blocks (default 3, minimum 2)
         base_channels: Initial channel count, doubles each block (default 32)
+        pool_layers: Number of blocks that apply max pooling (default: all blocks).
+            For CIFAR-10 (32x32), max 5 pool layers (32→16→8→4→2→1).
+            Extra blocks after pool_layers add depth without reducing spatial size.
         memory_format: Memory layout for conv operations (default channels_last).
             channels_last provides 10-20% speedup on Ampere/Hopper GPUs with Tensor Cores.
             Use contiguous_format for older GPUs or debugging.
@@ -35,6 +40,7 @@ class CNNHost(nn.Module):
         num_classes: int = 10,
         n_blocks: int = 3,
         base_channels: int = 32,
+        pool_layers: int | None = None,
         memory_format: torch.memory_format = torch.channels_last,
     ):
         super().__init__()
@@ -44,6 +50,9 @@ class CNNHost(nn.Module):
         self.n_blocks = n_blocks
         self.base_channels = base_channels
         self._memory_format = memory_format
+        # Default: pool on all layers (original behavior)
+        # For deep networks on small images, limit pooling to avoid 0x0 spatial
+        self._pool_layers = pool_layers if pool_layers is not None else n_blocks
 
         # Build blocks with doubling channels each stage
         blocks: list[nn.Module] = []
@@ -65,10 +74,12 @@ class CNNHost(nn.Module):
         self.classifier = nn.Linear(in_c, num_classes)
 
     @property
+    @override
     def injection_points(self) -> dict[str, int]:
         """Map of slot_id -> channel dimension."""
         return {k: self.blocks[idx].conv.out_channels for k, idx in zip(self._slot_keys, self._slot_indices)}
 
+    @override
     def register_slot(self, slot_id: str, slot: nn.Module) -> None:
         """Attach a seed module at the specified injection point."""
         if slot_id not in self.slots:
@@ -76,6 +87,7 @@ class CNNHost(nn.Module):
         device = next(self.parameters()).device
         self.slots[slot_id] = slot.to(device)
 
+    @override
     def unregister_slot(self, slot_id: str) -> None:
         """Remove a seed module from the specified injection point."""
         if slot_id not in self.slots:
@@ -90,7 +102,10 @@ class CNNHost(nn.Module):
 
         slot_idx = 0
         for idx, block in enumerate(self.blocks):
-            x = self.pool(block(x))
+            x = block(x)
+            # Only pool on first pool_layers blocks (avoids 0x0 spatial on deep nets)
+            if idx < self._pool_layers:
+                x = self.pool(x)
             # Use pre-computed _slot_indices instead of string formatting
             if idx in self._slot_indices:
                 x = self.slots[self._slot_keys[slot_idx]](x)
@@ -212,10 +227,12 @@ class TransformerHost(nn.Module):
         self.slots = nn.ModuleDict({k: nn.Identity() for k in self._slot_keys})
 
     @property
+    @override
     def injection_points(self) -> dict[str, int]:
         """Map of slot_id -> embedding dimension."""
         return {k: self.n_embd for k in self._slot_keys}
 
+    @override
     def register_slot(self, slot_id: str, slot: nn.Module) -> None:
         """Attach a seed module at the specified injection point."""
         if slot_id not in self.slots:
@@ -223,6 +240,7 @@ class TransformerHost(nn.Module):
         device = self.tok_emb.weight.device
         self.slots[slot_id] = slot.to(device)
 
+    @override
     def unregister_slot(self, slot_id: str) -> None:
         """Remove a seed module from the specified injection point."""
         if slot_id not in self.slots:

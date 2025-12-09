@@ -31,7 +31,8 @@ def create_transformer_norm_seed(dim: int) -> nn.Module:
             self.scale = nn.Parameter(torch.ones(1))
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
-            return x + self.scale * (self.norm(x) - x)
+            # Bound scale to [-1, 1] via tanh to prevent gradient explosion
+            return x + torch.tanh(self.scale) * (self.norm(x) - x)
 
     return TransformerNormSeed(dim)
 
@@ -77,8 +78,9 @@ def create_transformer_attention_seed(dim: int, n_head: int = 4) -> nn.Module:
             qkv = qkv.permute(2, 0, 3, 1, 4)
             q, k, v = qkv[0], qkv[1], qkv[2]
 
-            # Use SDPA for automatic Flash Attention optimization
-            out = F.scaled_dot_product_attention(q, k, v)
+            # Use SDPA with causal mask to match host's autoregressive attention
+            # (PyTorch Expert review 2025-12-09: enables Flash Attention causal kernel)
+            out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
 
             out = out.transpose(1, 2).reshape(b, t, c)
             return x + self.proj(out)

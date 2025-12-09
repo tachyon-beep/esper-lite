@@ -4,12 +4,16 @@ This module implements high-performance vectorized PPO training using:
 - Multiple parallel environments
 - CUDA streams for async GPU execution
 - Inverted control flow (batch-first iteration)
-- Independent DataLoaders per environment to avoid GIL contention
+- SharedBatchIterator: Single DataLoader serving all environments
 
 Key Architecture:
-Instead of iterating environments then dataloaders, we iterate dataloader
-batches FIRST, then run all environments in parallel using CUDA streams.
-This ensures both GPUs are working simultaneously.
+Instead of N independent DataLoaders (N × workers = massive IPC overhead),
+we use ONE SharedBatchIterator with combined batch size, then split batches
+across environments. This reduces worker processes from N×M to just M.
+
+Performance comparison (4 envs, 4 workers each):
+- Old (independent): 16 worker processes, 16× IPC overhead
+- New (shared): 4 worker processes, 1× IPC overhead
 
 Usage:
     from esper.simic.vectorized import train_ppo_vectorized
@@ -31,6 +35,7 @@ import torch
 import torch.nn as nn
 
 from esper.runtime import get_task_spec
+from esper.utils.data import SharedBatchIterator
 from esper.leyline import SeedStage, SeedTelemetry, TelemetryEvent, TelemetryEventType
 from esper.leyline.actions import get_blueprint_from_action, is_germinate_action
 from esper.simic.features import compute_action_mask
@@ -40,7 +45,7 @@ from esper.simic.gradient_collector import (
 )
 from esper.simic.normalization import RunningMeanStd, RewardNormalizer
 from esper.simic.ppo import PPOAgent, signals_to_features
-from esper.simic.rewards import compute_shaped_reward, compute_contribution_reward, SeedInfo
+from esper.simic.rewards import compute_contribution_reward, SeedInfo
 from esper.nissa import get_hub, BlueprintAnalytics
 from esper.tolaria import TolariaGovernor
 
@@ -53,9 +58,8 @@ from esper.tolaria import TolariaGovernor
 class ParallelEnvState:
     """State for a single parallel environment with CUDA stream for async execution.
 
-    Each environment has its own DataLoader instances to avoid GIL contention
-    when multiple environments iterate in parallel. This eliminates the bottleneck
-    of a shared iterator being accessed from multiple CUDA streams.
+    DataLoaders are now SHARED via SharedBatchIterator - batches are pre-split
+    and data is pre-moved to each env's device with non_blocking=True.
     """
     model: nn.Module
     host_optimizer: torch.optim.Optimizer
@@ -64,11 +68,6 @@ class ParallelEnvState:
     governor: TolariaGovernor  # Fail-safe watchdog for catastrophic failure detection
     env_device: str = "cuda:0"  # Device this env runs on
     stream: torch.cuda.Stream | None = None  # CUDA stream for async execution
-    # Independent DataLoaders per env to avoid GIL contention
-    trainloader: any = None  # Environment's own trainloader
-    testloader: any = None   # Environment's own testloader
-    train_iter: any = None  # Persistent dataloader iterator
-    test_iter: any = None   # Persistent testloader iterator
     seeds_created: int = 0
     episode_rewards: list = field(default_factory=list)
     action_counts: dict = field(default_factory=dict)
@@ -173,6 +172,7 @@ def train_ppo_vectorized(
     resume_path: str = None,
     seed: int = 42,
     num_workers: int | None = None,
+    gpu_preload: bool = False,
     recurrent: bool = False,
     lstm_hidden_dim: int = 128,
     chunk_length: int = 25,  # Must match max_epochs default (25)
@@ -240,32 +240,86 @@ def train_ppo_vectorized(
         print(f"Entropy coef: {entropy_coef} (fixed)")
     print(f"Learning rate: {lr}")
     print(f"Telemetry features: {'ENABLED' if use_telemetry else 'DISABLED'}")
+    if gpu_preload:
+        print(f"GPU preload: ENABLED (8x faster data loading)")
     print()
 
-    # Create independent DataLoaders per environment to avoid GIL contention.
-    # When multiple CUDA streams try to iterate a shared DataLoader, the GIL
-    # serializes access. Independent DataLoaders with unique random seeds
-    # allow true parallel data loading.
-    print(f"Loading {task_spec.name} ({n_envs} independent DataLoaders)...")
+    # Map environments to devices in round-robin (needed for SharedBatchIterator)
+    env_device_map = [devices[i % len(devices)] for i in range(n_envs)]
 
-    def create_env_dataloaders(env_idx: int, base_seed: int):
-        """Create DataLoaders with unique random seed for this environment."""
-        loader_kwargs: dict = {}
-        if "generator" in task_spec.dataloader_defaults:
-            gen = torch.Generator()
-            gen.manual_seed(base_seed + env_idx * 7919)  # Prime spacing for seeds
-            loader_kwargs["generator"] = gen
+    # Create SharedBatchIterator - single DataLoader serving all environments
+    # This eliminates the N×M worker overhead from N independent DataLoaders
+    if gpu_preload:
+        # GPU-resident data loading: 8x faster than CPU DataLoader workers
+        # Data is loaded once to GPU and reused across all environments
+        # NOTE: GPU preload doesn't use SharedBatchIterator (data already on GPU)
+        from esper.utils.data import load_cifar10_gpu
+        print(f"Preloading {task_spec.name} to GPU (one-time cost)...")
+
+        def create_env_dataloaders(env_idx: int, base_seed: int):
+            """Create GPU-resident DataLoaders."""
+            gen = torch.Generator(device='cpu')  # Generator for shuffle
+            gen.manual_seed(base_seed + env_idx * 7919)
+            env_device = devices[env_idx % len(devices)]
+            return load_cifar10_gpu(
+                batch_size=512,
+                generator=gen,
+                device=env_device,
+            )
+
+        # Create DataLoaders once and reuse across all batches
+        env_dataloaders = [create_env_dataloaders(i, seed) for i in range(n_envs)]
+        num_train_batches = len(env_dataloaders[0][0])
+        num_test_batches = len(env_dataloaders[0][1])
+        shared_train_iter = None  # Not using SharedBatchIterator for GPU preload
+        shared_test_iter = None
+    else:
+        # SharedBatchIterator: Single DataLoader with combined batch size
+        # Splits batches across environments and moves to correct devices
+        print(f"Loading {task_spec.name} (SharedBatchIterator, 1 DataLoader for {n_envs} envs)...")
+
+        # Get raw datasets from task spec
+        train_dataset, test_dataset = task_spec.get_datasets()
+
+        # Determine batch size and workers
+        batch_size_per_env = task_spec.dataloader_defaults.get("batch_size", 128)
         if task_spec.name == "cifar10":
-            loader_kwargs["batch_size"] = 512  # Preserve high-throughput setting
-        if num_workers is not None:
-            loader_kwargs["num_workers"] = num_workers
-        return task_spec.create_dataloaders(**loader_kwargs)
+            batch_size_per_env = 512  # High-throughput setting for CIFAR
+        effective_workers = num_workers if num_workers is not None else 4
 
-    # Create DataLoaders once and reuse across all batches
-    # This allows persistent_workers to actually persist
-    env_dataloaders = [create_env_dataloaders(i, seed) for i in range(n_envs)]
-    num_train_batches = len(env_dataloaders[0][0])
-    num_test_batches = len(env_dataloaders[0][1])
+        # Create generator for reproducible shuffling
+        gen = torch.Generator()
+        gen.manual_seed(seed)
+
+        # Create shared iterators for train and test
+        shared_train_iter = SharedBatchIterator(
+            dataset=train_dataset,
+            batch_size_per_env=batch_size_per_env,
+            n_envs=n_envs,
+            env_devices=env_device_map,
+            num_workers=effective_workers,
+            shuffle=True,
+            pin_memory=True,
+            drop_last=True,
+            generator=gen,
+        )
+
+        # Test iterator: num_workers=0 because validation is infrequent (once per epoch)
+        # No point spawning persistent workers for ~2% of total iteration time
+        shared_test_iter = SharedBatchIterator(
+            dataset=test_dataset,
+            batch_size_per_env=batch_size_per_env,
+            n_envs=n_envs,
+            env_devices=env_device_map,
+            num_workers=0,  # Validation is fast enough without workers
+            shuffle=False,
+            pin_memory=True,
+            drop_last=True,
+        )
+
+        num_train_batches = len(shared_train_iter)
+        num_test_batches = len(shared_test_iter)
+        env_dataloaders = None  # Not using per-env dataloaders
 
     def loss_and_correct(outputs: torch.Tensor, targets: torch.Tensor, criterion: nn.Module):
         """Compute loss and correct counts for classification or LM."""
@@ -358,11 +412,11 @@ def train_ppo_vectorized(
 
         return callback
 
-    # Map environments to devices in round-robin
-    env_device_map = [devices[i % len(devices)] for i in range(n_envs)]
+    def create_env_state(env_idx: int, base_seed: int) -> ParallelEnvState:
+        """Create environment state with CUDA stream.
 
-    def create_env_state(env_idx: int, base_seed: int, trainloader, testloader) -> ParallelEnvState:
-        """Create environment state with CUDA stream, reusing pre-created DataLoaders."""
+        DataLoaders are now shared via SharedBatchIterator, not per-env.
+        """
         env_device = env_device_map[env_idx]
         torch.manual_seed(base_seed + env_idx * 1000)
         random.seed(base_seed + env_idx * 1000)
@@ -414,10 +468,6 @@ def train_ppo_vectorized(
             governor=governor,
             env_device=env_device,
             stream=stream,
-            trainloader=trainloader,
-            testloader=testloader,
-            train_iter=None,  # Will be set per epoch
-            test_iter=None,
             seeds_created=0,
             episode_rewards=[],
             action_enum=ActionEnum,
@@ -553,10 +603,11 @@ def train_ppo_vectorized(
         remaining = total_episodes - episodes_completed
         envs_this_batch = min(n_envs, remaining)
 
-        # Create fresh environments for this batch, reusing persistent DataLoaders
+        # Create fresh environments for this batch
+        # DataLoaders are shared via SharedBatchIterator (not per-env)
         base_seed = seed + batch_idx * 10000
         env_states = [
-            create_env_state(i, base_seed, env_dataloaders[i][0], env_dataloaders[i][1])
+            create_env_state(i, base_seed)
             for i in range(envs_this_batch)
         ]
         criterion = nn.CrossEntropyLoss()
@@ -592,8 +643,8 @@ def train_ppo_vectorized(
                 env_state.zero_accumulators()
 
             # ===== TRAINING: Iterate batches first, launch all envs via CUDA streams =====
-            # Each env has its own DataLoader with independent shuffling
-            # DataLoader workers (num_workers=4) provide parallel prefetching
+            # SharedBatchIterator: single DataLoader, batches pre-split and moved to devices
+            # GPU preload fallback: per-env DataLoaders (data already on GPU)
 
             # Issue one wait_stream per env BEFORE the loop starts (not per-batch).
             # This syncs the accumulator zeroing on default stream before we write.
@@ -604,33 +655,59 @@ def train_ppo_vectorized(
                     env_state.train_correct_accum.record_stream(env_state.stream)
                     env_state.stream.wait_stream(torch.cuda.default_stream(env_state.env_device))
 
-            train_iters = [iter(env_state.trainloader) for env_state in env_states]
-            for batch_step in range(num_train_batches):
-                # Get batch from each env's own dataloader (independent shuffling)
-                env_batches = []
-                for i, train_iter in enumerate(train_iters):
+            # Choose iteration strategy based on data loading mode
+            if shared_train_iter is not None:
+                # SharedBatchIterator: single iterator yields list of (inputs, targets) per env
+                train_iter = iter(shared_train_iter)
+                for batch_step in range(num_train_batches):
                     try:
-                        inputs, targets = next(train_iter)
-                        env_batches.append((inputs, targets))
+                        env_batches = next(train_iter)  # List of (inputs, targets), already on devices
                     except StopIteration:
-                        env_batches.append(None)
+                        break
 
-                # Launch all environments in their respective CUDA streams (async)
-                # Accumulate on GPU inside stream context - no sync until epoch end
-                for i, env_state in enumerate(env_states):
-                    if env_batches[i] is None:
-                        continue
-                    inputs, targets = env_batches[i]
-                    loss_tensor, correct_tensor, total, grad_stats = process_train_batch(
-                        env_state, inputs, targets, criterion, use_telemetry=use_telemetry
-                    )
-                    if grad_stats is not None:
-                        env_grad_stats[i] = grad_stats  # Keep last batch's grad stats
-                    stream_ctx = torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
-                    with stream_ctx:
-                        env_state.train_loss_accum.add_(loss_tensor)
-                        env_state.train_correct_accum.add_(correct_tensor)
-                    train_totals[i] += total
+                    # Launch all environments in their respective CUDA streams (async)
+                    # Data already moved to correct device by SharedBatchIterator
+                    for i, env_state in enumerate(env_states):
+                        if i >= len(env_batches):
+                            continue
+                        inputs, targets = env_batches[i]
+                        loss_tensor, correct_tensor, total, grad_stats = process_train_batch(
+                            env_state, inputs, targets, criterion, use_telemetry=use_telemetry
+                        )
+                        if grad_stats is not None:
+                            env_grad_stats[i] = grad_stats  # Keep last batch's grad stats
+                        stream_ctx = torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
+                        with stream_ctx:
+                            env_state.train_loss_accum.add_(loss_tensor)
+                            env_state.train_correct_accum.add_(correct_tensor)
+                        train_totals[i] += total
+            else:
+                # GPU preload fallback: per-env DataLoaders (data already on GPU)
+                train_iters = [iter(env_dataloaders[i][0]) for i in range(envs_this_batch)]
+                for batch_step in range(num_train_batches):
+                    env_batches = []
+                    for i, train_iter_i in enumerate(train_iters):
+                        try:
+                            inputs, targets = next(train_iter_i)
+                            env_batches.append((inputs, targets))
+                        except StopIteration:
+                            env_batches.append(None)
+
+                    # Launch all environments in their respective CUDA streams (async)
+                    for i, env_state in enumerate(env_states):
+                        if env_batches[i] is None:
+                            continue
+                        inputs, targets = env_batches[i]
+                        loss_tensor, correct_tensor, total, grad_stats = process_train_batch(
+                            env_state, inputs, targets, criterion, use_telemetry=use_telemetry
+                        )
+                        if grad_stats is not None:
+                            env_grad_stats[i] = grad_stats  # Keep last batch's grad stats
+                        stream_ctx = torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
+                        with stream_ctx:
+                            env_state.train_loss_accum.add_(loss_tensor)
+                            env_state.train_correct_accum.add_(correct_tensor)
+                        train_totals[i] += total
 
             # Sync all streams ONCE at epoch end
             for env_state in env_states:
@@ -672,40 +749,76 @@ def train_ppo_vectorized(
                     if i in envs_needing_counterfactual:
                         env_state.cf_correct_accum.record_stream(env_state.stream)
 
-            test_iters = [iter(env_state.testloader) for env_state in env_states]
-            for batch_step in range(num_test_batches):
-                env_batches = []
-                for i, test_iter in enumerate(test_iters):
+            # Choose iteration strategy based on data loading mode
+            if shared_test_iter is not None:
+                # SharedBatchIterator: single iterator yields list of (inputs, targets) per env
+                test_iter = iter(shared_test_iter)
+                for batch_step in range(num_test_batches):
                     try:
-                        inputs, targets = next(test_iter)
-                        env_batches.append((inputs, targets))
+                        env_batches = next(test_iter)  # List of (inputs, targets), already on devices
                     except StopIteration:
-                        env_batches.append(None)
+                        break
 
-                # Launch all environments: MAIN VALIDATION + COUNTERFACTUAL on same batch
-                for i, env_state in enumerate(env_states):
-                    if env_batches[i] is None:
-                        continue
-                    inputs, targets = env_batches[i]
+                    # Launch all environments: MAIN VALIDATION + COUNTERFACTUAL on same batch
+                    for i, env_state in enumerate(env_states):
+                        if i >= len(env_batches):
+                            continue
+                        inputs, targets = env_batches[i]
 
-                    # MAIN VALIDATION (real alpha)
-                    loss_tensor, correct_tensor, total = process_val_batch(env_state, inputs, targets, criterion)
-                    stream_ctx = torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
-                    with stream_ctx:
-                        env_state.val_loss_accum.add_(loss_tensor)
-                        env_state.val_correct_accum.add_(correct_tensor)
-                    val_totals[i] += total
-
-                    # COUNTERFACTUAL (alpha=0) - SAME BATCH, no DataLoader reload!
-                    # Data is already on GPU from the main validation pass.
-                    if i in envs_needing_counterfactual:
-                        with env_state.model.seed_slot.force_alpha(0.0):
-                            _, cf_correct_tensor, cf_total = process_val_batch(
-                                env_state, inputs, targets, criterion
-                            )
+                        # MAIN VALIDATION (real alpha)
+                        loss_tensor, correct_tensor, total = process_val_batch(env_state, inputs, targets, criterion)
+                        stream_ctx = torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
                         with stream_ctx:
-                            env_state.cf_correct_accum.add_(cf_correct_tensor)
-                        cf_totals[i] += cf_total
+                            env_state.val_loss_accum.add_(loss_tensor)
+                            env_state.val_correct_accum.add_(correct_tensor)
+                        val_totals[i] += total
+
+                        # COUNTERFACTUAL (alpha=0) - SAME BATCH, no DataLoader reload!
+                        # Data is already on GPU from the main validation pass.
+                        if i in envs_needing_counterfactual:
+                            with env_state.model.seed_slot.force_alpha(0.0):
+                                _, cf_correct_tensor, cf_total = process_val_batch(
+                                    env_state, inputs, targets, criterion
+                                )
+                            with stream_ctx:
+                                env_state.cf_correct_accum.add_(cf_correct_tensor)
+                            cf_totals[i] += cf_total
+            else:
+                # GPU preload fallback: per-env DataLoaders (data already on GPU)
+                test_iters = [iter(env_dataloaders[i][1]) for i in range(envs_this_batch)]
+                for batch_step in range(num_test_batches):
+                    env_batches = []
+                    for i, test_iter_i in enumerate(test_iters):
+                        try:
+                            inputs, targets = next(test_iter_i)
+                            env_batches.append((inputs, targets))
+                        except StopIteration:
+                            env_batches.append(None)
+
+                    # Launch all environments: MAIN VALIDATION + COUNTERFACTUAL on same batch
+                    for i, env_state in enumerate(env_states):
+                        if env_batches[i] is None:
+                            continue
+                        inputs, targets = env_batches[i]
+
+                        # MAIN VALIDATION (real alpha)
+                        loss_tensor, correct_tensor, total = process_val_batch(env_state, inputs, targets, criterion)
+                        stream_ctx = torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
+                        with stream_ctx:
+                            env_state.val_loss_accum.add_(loss_tensor)
+                            env_state.val_correct_accum.add_(correct_tensor)
+                        val_totals[i] += total
+
+                        # COUNTERFACTUAL (alpha=0) - SAME BATCH, no DataLoader reload!
+                        # Data is already on GPU from the main validation pass.
+                        if i in envs_needing_counterfactual:
+                            with env_state.model.seed_slot.force_alpha(0.0):
+                                _, cf_correct_tensor, cf_total = process_val_batch(
+                                    env_state, inputs, targets, criterion
+                                )
+                            with stream_ctx:
+                                env_state.cf_correct_accum.add_(cf_correct_tensor)
+                            cf_totals[i] += cf_total
 
             # Single sync point at end (not once per pass)
             for env_state in env_states:
@@ -799,10 +912,7 @@ def train_ppo_vectorized(
                             print(f"  [ENV {env_idx}] Counterfactual: {val_acc:.1f}% real, "
                                   f"{baseline_accs[env_idx]:.1f}% baseline, "
                                   f"Δ={cf_contribution:+.2f}% seed contribution")
-
-                    # Auto-advance blending lifecycle AFTER recording accuracy
-                    # This ensures accuracy_at_blending_start snapshot uses current val_acc
-                    model.seed_slot.step_epoch()
+                    # NOTE: step_epoch() moved to AFTER transition storage for state/action alignment
 
                 # Update signal tracker
                 active_seeds = [seed_state] if seed_state else []
@@ -900,6 +1010,10 @@ def train_ppo_vectorized(
                 actions, log_probs, values = agent.network.get_action_batch(
                     states_batch_normalized, masks_batch, deterministic=False
                 )
+                # Convert to Python lists to avoid per-element .item() syncs in loop below
+                actions = actions.tolist()
+                log_probs = log_probs.tolist()
+                values = values.tolist()
 
             # Execute actions and store transitions for each environment
             for env_idx, env_state in enumerate(env_states):
@@ -907,9 +1021,10 @@ def train_ppo_vectorized(
                 seed_state = model.seed_state
                 signals = all_signals[env_idx]
 
-                action_idx = actions[env_idx].item()
-                log_prob = log_probs[env_idx].item()
-                value = values[env_idx].item()
+                # Now Python floats/ints - no GPU sync
+                action_idx = int(actions[env_idx])
+                log_prob = log_probs[env_idx]
+                value = values[env_idx]
 
                 action = ActionEnum(action_idx)
                 env_state.action_counts[action.name] += 1
@@ -944,61 +1059,38 @@ def train_ppo_vectorized(
                     telemetry_config is not None and telemetry_config.should_collect("debug")
                 )
 
-                # Use contribution-primary reward when counterfactual is available
+                # Unified reward computation - always use compute_contribution_reward
+                # For pre-blending stages, seed_contribution is None and acc_delta is used as proxy
                 reward_components = None
-                if seed_contribution is not None:
-                    if collect_reward_telemetry:
-                        reward, reward_components = compute_contribution_reward(
-                            action=action,
-                            seed_contribution=seed_contribution,
-                            val_acc=env_state.val_acc,
-                            seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
-                            epoch=epoch,
-                            max_epochs=max_epochs,
-                            total_params=total_params,
-                            host_params=host_params,
-                            acc_at_germination=env_state.acc_at_germination,
-                            return_components=True,
-                        )
-                        # Add host_baseline_acc from counterfactual (DRL Expert)
+                if collect_reward_telemetry:
+                    reward, reward_components = compute_contribution_reward(
+                        action=action,
+                        seed_contribution=seed_contribution,
+                        val_acc=env_state.val_acc,
+                        seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
+                        epoch=epoch,
+                        max_epochs=max_epochs,
+                        total_params=total_params,
+                        host_params=host_params,
+                        acc_at_germination=env_state.acc_at_germination,
+                        acc_delta=signals.metrics.accuracy_delta,
+                        return_components=True,
+                    )
+                    if baseline_accs[env_idx] is not None:
                         reward_components.host_baseline_acc = baseline_accs[env_idx]
-                    else:
-                        reward = compute_contribution_reward(
-                            action=action,
-                            seed_contribution=seed_contribution,
-                            val_acc=env_state.val_acc,
-                            seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
-                            epoch=epoch,
-                            max_epochs=max_epochs,
-                            total_params=total_params,
-                            host_params=host_params,
-                            acc_at_germination=env_state.acc_at_germination,
-                        )
                 else:
-                    # Fallback to legacy reward (no counterfactual available)
-                    if collect_reward_telemetry:
-                        reward, reward_components = compute_shaped_reward(
-                            action=action,
-                            acc_delta=signals.metrics.accuracy_delta,
-                            val_acc=env_state.val_acc,
-                            seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
-                            epoch=epoch,
-                            max_epochs=max_epochs,
-                            total_params=total_params,
-                            host_params=host_params,
-                            return_components=True,
-                        )
-                    else:
-                        reward = compute_shaped_reward(
-                            action=action,
-                            acc_delta=signals.metrics.accuracy_delta,
-                            val_acc=env_state.val_acc,
-                            seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
-                            epoch=epoch,
-                            max_epochs=max_epochs,
-                            total_params=total_params,
-                            host_params=host_params,
-                        )
+                    reward = compute_contribution_reward(
+                        action=action,
+                        seed_contribution=seed_contribution,
+                        val_acc=env_state.val_acc,
+                        seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
+                        epoch=epoch,
+                        max_epochs=max_epochs,
+                        total_params=total_params,
+                        host_params=host_params,
+                        acc_at_germination=env_state.acc_at_germination,
+                        acc_delta=signals.metrics.accuracy_delta,
+                    )
 
                 # Governor punishment: inject negative reward if rollback occurred
                 if env_idx in governor_panic_envs:
@@ -1098,6 +1190,12 @@ def train_ppo_vectorized(
                     env_state.lstm_hidden = None  # Reset for next episode
 
                 env_state.episode_rewards.append(raw_reward)  # Display raw for interpretability
+
+                # Mechanical lifecycle advance (blending/shadowing dwell) AFTER RL transition
+                # This ensures state/action/reward alignment - advance happens after the step is recorded
+                # Must check seed_state exists since actions may have culled it
+                if model.seed_state:
+                    model.seed_slot.step_epoch()
 
                 if epoch == max_epochs:
                     env_final_accs[env_idx] = env_state.val_acc

@@ -13,8 +13,11 @@ import torch.nn as nn
 from esper.leyline.actions import get_blueprint_from_action, is_germinate_action
 from esper.leyline import SeedTelemetry
 from esper.runtime import get_task_spec
-from esper.simic.rewards import compute_shaped_reward, SeedInfo
-from esper.simic.gradient_collector import collect_seed_gradients
+from esper.simic.rewards import compute_contribution_reward, SeedInfo
+from esper.simic.gradient_collector import (
+    collect_seed_gradients_async,
+    materialize_grad_stats,
+)
 from esper.simic.features import compute_action_mask
 from esper.nissa import get_hub
 from esper.utils.loss import compute_task_loss_with_metrics
@@ -118,15 +121,21 @@ def _train_one_epoch(
 
     Returns:
         Tuple of (running_loss, correct_count, total_count, grad_stats)
-        - running_loss: Sum of loss.item() across batches (float)
-        - correct_count: Sum of correct predictions (float)
+        - running_loss: Sum of loss values across batches (float)
+        - correct_count: Sum of correct predictions (float/int)
         - total_count: Total samples processed (int)
         - grad_stats: Gradient statistics dict if collect_gradients=True, else None
+
+    Note:
+        Uses tensor accumulation internally with a single .item() sync at epoch end
+        to avoid CUDA synchronization overhead in the hot path.
     """
     model.train()
 
-    running_loss = 0.0
-    correct = 0.0
+    # Pre-allocate accumulators on device to avoid .item() sync per batch
+    # This is the key optimization: accumulate as tensors, sync once at epoch end
+    running_loss = torch.zeros(1, device=device)
+    running_correct = torch.zeros(1, device=device, dtype=torch.long)
     total = 0
     grad_stats = None
 
@@ -137,25 +146,40 @@ def _train_one_epoch(
         if seed_optimizer:
             seed_optimizer.zero_grad(set_to_none=True)
 
-        outputs = model(inputs)
-        loss, correct_batch, batch_total = compute_task_loss_with_metrics(
-            outputs, targets, criterion, task_type
-        )
+        loss, outputs = compiled_train_step(model, inputs, targets, criterion)
+        # Compute metrics from outputs (compiled_train_step already computed loss)
+        if task_type == "classification":
+            _, predicted = outputs.max(1)
+            correct_batch = predicted.eq(targets).sum()
+            batch_total = targets.size(0)
+        else:  # LM task
+            correct_batch = torch.tensor(0, device=outputs.device)
+            batch_total = targets.numel()
         loss.backward()
 
-        # Collect gradient stats (overwrites each batch; final value returned)
+        # Collect gradient stats as tensors (async-safe, no .item() sync)
+        # Overwrites each batch; final value materialized after loop
         if collect_gradients:
-            grad_stats = collect_seed_gradients(model.get_seed_parameters())
+            grad_stats = collect_seed_gradients_async(model.get_seed_parameters())
 
         host_optimizer.step()
         if seed_optimizer:
             seed_optimizer.step()
 
-        running_loss += loss.item()
-        correct += correct_batch
+        # Accumulate on device - no .item() sync in hot path
+        running_loss.add_(loss.detach())
+        running_correct.add_(correct_batch)
         total += batch_total
 
-    return running_loss, correct, total, grad_stats
+    # Single sync at epoch end (forces all CUDA ops to complete)
+    epoch_loss = running_loss.item()
+    epoch_correct = running_correct.item()
+
+    # Now safe to materialize gradient tensors (after implicit sync above)
+    if grad_stats is not None and not grad_stats.get('_empty', False):
+        grad_stats = materialize_grad_stats(grad_stats)
+
+    return epoch_loss, epoch_correct, total, grad_stats
 
 
 # =============================================================================
@@ -270,10 +294,10 @@ def run_ppo_episode(
         train_loss = running_loss / len(trainloader) if len(trainloader) > 0 else 0.0
         train_acc = 100.0 * correct / total if total > 0 else 0.0
 
-        # Validate
+        # Validate - use tensor accumulation for deferred sync
         model.eval()
-        val_loss = 0.0
-        correct = 0
+        val_loss_accum = torch.zeros(1, device=device)
+        val_correct_accum = torch.zeros(1, device=device, dtype=torch.long)
         total = 0
 
         with torch.no_grad():
@@ -282,12 +306,13 @@ def run_ppo_episode(
                 targets = targets.to(device, non_blocking=True)
                 outputs = model(inputs)
                 loss, correct_batch, batch_total = compute_task_loss_with_metrics(outputs, targets, criterion, task_type)
-                val_loss += loss.item()
+                val_loss_accum.add_(loss)
+                val_correct_accum.add_(correct_batch)
                 total += batch_total
-                correct += correct_batch
 
-        val_loss = val_loss / len(testloader) if len(testloader) > 0 else 0.0
-        val_acc = 100.0 * correct / total if total > 0 else 0.0
+        # Single sync at end of validation
+        val_loss = val_loss_accum.item() / len(testloader) if len(testloader) > 0 else 0.0
+        val_acc = 100.0 * val_correct_accum.item() / total if total > 0 else 0.0
 
         # Record accuracy in seed metrics for reward shaping
         if seed_state and seed_state.metrics:
@@ -320,11 +345,8 @@ def run_ppo_episode(
 
         acc_delta = signals.metrics.accuracy_delta
 
-        # Mechanical lifecycle advance (blending/shadowing dwell)
-        model.seed_slot.step_epoch()
-        seed_state = model.seed_state
-
-        # Get features and action
+        # Get features and action BEFORE step_epoch() to maintain state/action alignment
+        # The RL transition (s, a, r, s') must use consistent state for observation and reward
         # Note: tracker would provide DiagnosticTracker telemetry if available
         features = signals_to_features(signals, model, use_telemetry=use_telemetry)
         state = torch.tensor([features], dtype=torch.float32, device=device)
@@ -348,15 +370,16 @@ def run_ppo_episode(
 
         # Compute total params for rent (fossilized + active)
         total_params = params_added + model.active_seed_params
-        reward = compute_shaped_reward(
+        reward = compute_contribution_reward(
             action=action,
-            acc_delta=acc_delta,
+            seed_contribution=None,  # No counterfactual in non-vectorized path
             val_acc=val_acc,
             seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
             epoch=epoch,
             max_epochs=max_epochs,
             total_params=total_params,
             host_params=host_params,
+            acc_delta=acc_delta,  # Used as proxy signal
         )
 
         # Execute action
@@ -402,6 +425,12 @@ def run_ppo_episode(
             )
 
         episode_rewards.append(reward)
+
+        # Mechanical lifecycle advance (blending/shadowing dwell) AFTER RL transition
+        # This ensures state/action/reward alignment - advance happens after the step is recorded
+        # Must check seed_state exists since actions may have culled it
+        if model.seed_state:
+            model.seed_slot.step_epoch()
 
     return val_acc, action_counts, episode_rewards
 
@@ -608,10 +637,10 @@ def run_heuristic_episode(
     for epoch in range(1, max_epochs + 1):
         seed_state = model.seed_state
 
-        # Training phase
+        # Training phase - use tensor accumulation for deferred sync
         model.train()
-        running_loss = 0.0
-        correct = 0
+        running_loss = torch.zeros(1, device=device)
+        running_correct = torch.zeros(1, device=device, dtype=torch.long)
         total = 0
         batch_count = 0
 
@@ -634,17 +663,19 @@ def run_heuristic_episode(
             if seed_optimizer:
                 seed_optimizer.step()
 
-            running_loss += loss.item()
+            # Accumulate on device - no .item() sync in hot path
+            running_loss.add_(loss.detach())
+            running_correct.add_(correct_batch)
             total += batch_total
-            correct += correct_batch
 
-        train_loss = running_loss / max(1, batch_count)
-        train_acc = 100.0 * correct / total if total > 0 else 0.0
+        # Single sync at end of training
+        train_loss = running_loss.item() / max(1, batch_count)
+        train_acc = 100.0 * running_correct.item() / total if total > 0 else 0.0
 
-        # Validation
+        # Validation - use tensor accumulation for deferred sync
         model.eval()
-        val_loss = 0.0
-        correct = 0
+        val_loss_accum = torch.zeros(1, device=device)
+        val_correct_accum = torch.zeros(1, device=device, dtype=torch.long)
         total = 0
         batch_count = 0
 
@@ -658,12 +689,13 @@ def run_heuristic_episode(
                 targets = targets.to(device, non_blocking=True)
                 outputs = model(inputs)
                 loss, correct_batch, batch_total = compute_task_loss_with_metrics(outputs, targets, criterion, task_type)
-                val_loss += loss.item()
+                val_loss_accum.add_(loss)
+                val_correct_accum.add_(correct_batch)
                 total += batch_total
-                correct += correct_batch
 
-        val_loss = val_loss / max(1, batch_count)
-        val_acc = 100.0 * correct / total if total > 0 else 0.0
+        # Single sync at end of validation
+        val_loss = val_loss_accum.item() / max(1, batch_count)
+        val_acc = 100.0 * val_correct_accum.item() / total if total > 0 else 0.0
 
         # Record accuracy in seed metrics
         if seed_state and seed_state.metrics:
@@ -696,15 +728,16 @@ def run_heuristic_episode(
 
         # Compute reward (for comparison with PPO)
         total_params = params_added + model.active_seed_params
-        reward = compute_shaped_reward(
+        reward = compute_contribution_reward(
             action=action,
-            acc_delta=acc_delta,
+            seed_contribution=None,  # No counterfactual in heuristic path
             val_acc=val_acc,
             seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
             epoch=epoch,
             max_epochs=max_epochs,
             total_params=total_params,
             host_params=host_params,
+            acc_delta=acc_delta,  # Used as proxy signal
         )
         episode_rewards.append(reward)
 

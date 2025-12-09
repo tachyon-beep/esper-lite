@@ -16,17 +16,15 @@ from tests.strategies import (
     accuracies,
     action_members,
     seed_infos,
-    reward_configs,
     seed_stages,
 )
 
 from esper.simic.rewards import (
-    compute_shaped_reward,
+    compute_contribution_reward,
     compute_potential,
     compute_pbrs_bonus,
     compute_seed_potential,
     get_intervention_cost,
-    RewardConfig,
 )
 
 
@@ -49,13 +47,14 @@ class TestRewardBounds:
         """
         assume(epoch <= max_epochs)  # Invariant: epoch <= max_epochs
 
-        reward = compute_shaped_reward(
+        reward = compute_contribution_reward(
             action=action,
-            acc_delta=acc_delta,
+            seed_contribution=None,  # Use proxy signal path
             val_acc=val_acc,
             seed_info=seed_info,
             epoch=epoch,
             max_epochs=max_epochs,
+            acc_delta=acc_delta,
         )
 
         # Reward should be bounded (conservative bounds for safety)
@@ -76,13 +75,14 @@ class TestRewardBounds:
         """
         assume(epoch <= max_epochs)
 
-        reward = compute_shaped_reward(
+        reward = compute_contribution_reward(
             action=action,
-            acc_delta=acc_delta,
+            seed_contribution=None,
             val_acc=val_acc,
             seed_info=None,
             epoch=epoch,
             max_epochs=max_epochs,
+            acc_delta=acc_delta,
         )
 
         assert not math.isnan(reward), "Reward is NaN"
@@ -90,9 +90,9 @@ class TestRewardBounds:
 
 
 class TestRewardMonotonicity:
-    """Test that better performance → better reward."""
+    """Test that better performance → better reward (proxy signal path)."""
 
-    delta_pairs = bounded_floats(-5.0, 4.9).flatmap(
+    delta_pairs = bounded_floats(0.01, 4.9).flatmap(
         lambda d1: st.tuples(st.just(d1), bounded_floats(min_value=d1 + 0.01, max_value=5.0))
     )
 
@@ -106,13 +106,18 @@ class TestRewardMonotonicity:
     def test_higher_acc_delta_better_reward(self, action, deltas, val_acc, epoch, max_epochs):
         """Property: Higher accuracy improvement → higher reward.
 
-        This is the core signal for the RL agent.
+        This is the core signal for the RL agent (proxy signal path).
+        Note: Only positive deltas are rewarded in proxy path.
         """
         assume(epoch <= max_epochs)
         acc_delta1, acc_delta2 = deltas
 
-        r1 = compute_shaped_reward(action, acc_delta1, val_acc, None, epoch, max_epochs)
-        r2 = compute_shaped_reward(action, acc_delta2, val_acc, None, epoch, max_epochs)
+        r1 = compute_contribution_reward(
+            action, None, val_acc, None, epoch, max_epochs, acc_delta=acc_delta1
+        )
+        r2 = compute_contribution_reward(
+            action, None, val_acc, None, epoch, max_epochs, acc_delta=acc_delta2
+        )
 
         # Higher accuracy improvement should give higher reward
         # (allow small epsilon for floating point)

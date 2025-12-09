@@ -69,7 +69,7 @@ def compute_task_loss_with_metrics(
     targets: torch.Tensor,
     criterion: nn.Module,
     task_type: str,
-) -> tuple[torch.Tensor, float, int]:
+) -> tuple[torch.Tensor, torch.Tensor, int]:
     """Compute loss and accuracy metrics for classification or LM task.
 
     Use when you need both loss and accuracy (e.g., training loops with logging).
@@ -87,31 +87,36 @@ def compute_task_loss_with_metrics(
     Returns:
         Tuple of (loss, correct_count, total_count):
         - loss: CrossEntropyLoss tensor (differentiable, for backprop)
-        - correct_count: Number of correct predictions (float)
+        - correct_count: Tensor on same device (call .item() after stream sync)
         - total_count: Total samples/tokens in batch (int)
 
     Example:
-        >>> running_loss, running_correct, running_total = 0.0, 0.0, 0
+        Hot path - tensor accumulation, no sync:
+        >>> running_loss = torch.zeros(1, device=device)
+        >>> running_correct = torch.zeros(1, device=device, dtype=torch.long)
+        >>> running_total = 0
         >>> for inputs, targets in dataloader:
         ...     loss, correct, total = compute_task_loss_with_metrics(
         ...         model(inputs), targets, criterion, "classification"
         ...     )
         ...     loss.backward()
-        ...     running_loss += loss.item()
-        ...     running_correct += correct
+        ...     running_loss.add_(loss.detach())
+        ...     running_correct.add_(correct)
         ...     running_total += total
-        >>> accuracy = 100.0 * running_correct / running_total
+        >>> # Single sync at end of epoch
+        >>> accuracy = 100.0 * running_correct.item() / running_total
     """
     loss = compute_task_loss(outputs, targets, criterion, task_type)
 
-    if task_type == "lm":
-        predicted = outputs.argmax(dim=-1)
-        correct = float((predicted == targets).sum().item())
-        total = targets.numel()
-    else:
-        predicted = outputs.argmax(dim=1)
-        correct = float((predicted == targets).sum().item())
-        total = targets.size(0)
+    with torch.no_grad():
+        if task_type == "lm":
+            # Fused eq().sum() - stays on device, no .item() sync
+            correct = outputs.argmax(dim=-1).eq(targets).sum()
+            total = targets.numel()
+        else:
+            # Fused eq().sum() - stays on device, no .item() sync
+            correct = outputs.argmax(dim=1).eq(targets).sum()
+            total = targets.size(0)
 
     return loss, correct, total
 

@@ -381,7 +381,8 @@ def collect_dual_gradients_async(
     if host_grads:
         host_norms = torch._foreach_norm(host_grads, ord=2)
         # Sum of squared norms for total norm via Pythagorean theorem
-        result['_host_squared_sum'] = sum(n**2 for n in host_norms)
+        # Use torch.stack to keep in tensor domain - avoids Python loop serialization
+        result['_host_squared_sum'] = torch.stack(host_norms).pow(2).sum()
         result['_host_param_count'] = sum(g.numel() for g in host_grads)
     else:
         result['_host_squared_sum'] = 0.0
@@ -390,7 +391,8 @@ def collect_dual_gradients_async(
     # Seed gradients
     if seed_grads:
         seed_norms = torch._foreach_norm(seed_grads, ord=2)
-        result['_seed_squared_sum'] = sum(n**2 for n in seed_norms)
+        # Use torch.stack to keep in tensor domain - avoids Python loop serialization
+        result['_seed_squared_sum'] = torch.stack(seed_norms).pow(2).sum()
         result['_seed_param_count'] = sum(g.numel() for g in seed_grads)
     else:
         result['_seed_squared_sum'] = 0.0

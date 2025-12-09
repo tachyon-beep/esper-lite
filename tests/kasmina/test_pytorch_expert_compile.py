@@ -12,7 +12,7 @@ PyTorch Expert Notes:
 Coverage:
 - isolation.py: ste_forward, blend_with_isolation (confirmed compile-safe)
 - host.py: CNNHost.forward, TransformerHost.forward (confirmed compile-safe)
-- slot.py: SeedSlot.forward uses @torch.compiler.disable (intentional)
+- slot.py: SeedSlot.forward uses @torch.compiler.disable (REQUIRED for CUDA graphs)
 - networks.py: MaskedCategorical validation uses @torch.compiler.disable (intentional)
 """
 import pytest
@@ -67,30 +67,37 @@ class TestIsolationCompileCompatibility:
 
         # Test boundary and mid values
         for alpha in [0.0, 0.5, 1.0]:
-            result = compiled_blend(host, seed, alpha, detach_host=True)
+            result = compiled_blend(host, seed, alpha)
             assert result.shape == host.shape
 
             # Verify blend formula: host + alpha * (seed - host)
-            expected = torch.lerp(host.detach(), seed, alpha)
+            expected = torch.lerp(host, seed, alpha)
             assert torch.allclose(result, expected, atol=1e-6)
 
-    def test_blend_compiles_with_detach_host_both_modes(self):
-        """Blend should compile with both detach_host=True and False."""
+    def test_blend_gradient_flow_to_both_inputs(self):
+        """Blend should allow gradients to flow to both host and seed.
+
+        This verifies the fix for the gradient flow bug where detach_host=True
+        previously zeroed ALL host gradients. Now blend_with_isolation always
+        allows gradients proportional to contribution: host gets (1-alpha),
+        seed gets alpha.
+        """
         compiled_blend = torch.compile(blend_with_isolation, fullgraph=True)
 
         host = torch.randn(2, 32, requires_grad=True)
         seed = torch.randn(2, 32, requires_grad=True)
 
-        # detach_host=True (default)
-        result_detached = compiled_blend(host, seed, 0.5, detach_host=True)
-        assert result_detached.shape == host.shape
-
-        # detach_host=False - gradients flow to host
-        result_attached = compiled_blend(host, seed, 0.5, detach_host=False)
-        loss = result_attached.sum()
+        result = compiled_blend(host, seed, 0.5)
+        loss = result.sum()
         loss.backward()
 
-        assert host.grad is not None  # Gradient flows when not detached
+        # Both host and seed should receive gradients
+        assert host.grad is not None, "Host should receive gradients"
+        assert seed.grad is not None, "Seed should receive gradients"
+
+        # Gradients should be proportional to alpha weighting
+        # With alpha=0.5, both should receive equal gradients
+        assert torch.allclose(host.grad, seed.grad, atol=1e-6)
 
 
 class TestHostCompileCompatibility:
@@ -202,20 +209,32 @@ class TestDynamicShapeHandling:
 
 
 class TestCompilerDisabledPaths:
-    """Document intentionally non-compiled code paths.
+    """Document compile strategy for control-flow-heavy methods.
 
-    These tests verify that @torch.compiler.disable is correctly applied
-    to methods with control flow that would cause excessive graph specialization.
+    These tests verify compile decorators are correctly applied (or intentionally
+    omitted) based on PyTorch expert analysis.
     """
 
-    def test_seed_slot_forward_has_compiler_disable(self):
-        """SeedSlot.forward should have @torch.compiler.disable decorator."""
+    def test_seed_slot_forward_allows_compilation(self):
+        """SeedSlot.forward should NOT have @torch.compiler.disable.
+
+        Design decision (updated 2025-12-10):
+        - @torch.compiler.disable completely opts out of compilation, which is
+          WORSE than allowing Dynamo to specialize into multiple graphs
+        - Stage-dependent control flow causes graph specialization (~6-8 graphs),
+          but stage transitions are rare (once per epoch)
+        - After warmup, execution stays within a single specialized graph
+        - End-to-end compilation provides fusion benefits that outweigh
+          warmup specialization costs
+
+        DO NOT add @torch.compiler.disable to SeedSlot.forward.
+        """
         from esper.kasmina.slot import SeedSlot
 
-        # torch.compiler.disable sets _torchdynamo_disable = True
+        # Verify forward is NOT disabled from compilation
         forward_method = SeedSlot.forward
-        assert getattr(forward_method, '_torchdynamo_disable', False), \
-            "SeedSlot.forward should have @torch.compiler.disable"
+        assert not getattr(forward_method, '_torchdynamo_disable', False), \
+            "SeedSlot.forward should NOT have @torch.compiler.disable - allow graph specialization"
 
     def test_validate_action_mask_has_compiler_disable(self):
         """_validate_action_mask should have @torch.compiler.disable decorator."""

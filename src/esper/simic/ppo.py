@@ -147,6 +147,7 @@ class PPOAgent:
         clip_value: bool = True,
         max_grad_norm: float = 0.5,
         n_epochs: int = 10,
+        recurrent_n_epochs: int | None = None,  # Default 1 for recurrent (hidden state safety)
         batch_size: int = 64,
         target_kl: float | None = 0.015,
         weight_decay: float = 0.0,  # Applied to critic only (RL best practice)
@@ -159,6 +160,10 @@ class PPOAgent:
         self.recurrent = recurrent
         self.chunk_length = chunk_length
         self.gamma = gamma
+        # Separate epoch defaults: feedforward uses n_epochs, recurrent defaults to 1
+        # Recurrent PPO with multiple epochs causes hidden state staleness (policy drift)
+        # See update_recurrent() docstring for detailed explanation
+        self.recurrent_n_epochs = recurrent_n_epochs if recurrent_n_epochs is not None else 1
         self.gae_lambda = gae_lambda
         self.clip_ratio = clip_ratio
         self.entropy_coef = entropy_coef
@@ -496,11 +501,13 @@ class PPOAgent:
                         flags['ratio_has_nan'] = torch.isnan(ratio).any().item()
                         flags['ratio_has_inf'] = torch.isinf(ratio).any().item()
 
-                # Track ratio statistics for telemetry
-                metrics['ratio_mean'].append(ratio.mean().item())
-                metrics['ratio_std'].append(ratio.std().item())
-                metrics['ratio_max'].append(ratio.max().item())
-                metrics['ratio_min'].append(ratio.min().item())
+                # Track ratio statistics for telemetry (single sync for all 4 stats)
+                ratio_stats = torch.stack([ratio.mean(), ratio.std(), ratio.max(), ratio.min()])
+                r_mean, r_std, r_max, r_min = ratio_stats.tolist()
+                metrics['ratio_mean'].append(r_mean)
+                metrics['ratio_std'].append(r_std)
+                metrics['ratio_max'].append(r_max)
+                metrics['ratio_min'].append(r_min)
 
                 surr1 = ratio * batch_advantages
                 surr2 = torch.clamp(ratio, 1 - self.clip_ratio, 1 + self.clip_ratio) * batch_advantages
@@ -556,15 +563,19 @@ class PPOAgent:
                 # matches stable-baselines3 and other PPO implementations for early
                 # stopping diagnostics. Positive values indicate the new policy assigns
                 # lower probability than old to sampled actions.
-                batch_kl = (old_log_probs - log_probs).mean().item()
+                batch_kl_tensor = (old_log_probs - log_probs).mean()
+                clip_frac_tensor = ((ratio - 1).abs() > self.clip_ratio).float().mean()
 
-                metrics['policy_loss'].append(policy_loss.item())
-                metrics['value_loss'].append(value_loss.item())
-                metrics['entropy'].append(-entropy_loss.item())
+                # Single sync for all 5 metrics
+                batch_metrics = torch.stack([
+                    policy_loss, value_loss, -entropy_loss, batch_kl_tensor, clip_frac_tensor
+                ])
+                pl, vl, ent, batch_kl, cf = batch_metrics.tolist()
+                metrics['policy_loss'].append(pl)
+                metrics['value_loss'].append(vl)
+                metrics['entropy'].append(ent)
                 metrics['approx_kl'].append(batch_kl)
-                metrics['clip_fraction'].append(
-                    ((ratio - 1).abs() > self.clip_ratio).float().mean().item()
-                )
+                metrics['clip_fraction'].append(cf)
 
                 epoch_kl_sum += batch_kl
                 epoch_kl_count += 1
@@ -675,13 +686,13 @@ class PPOAgent:
         7. train_steps incremented for entropy annealing
 
         Args:
-            n_epochs: Number of PPO epochs. Default 1 for recurrent (safest).
+            n_epochs: Number of PPO epochs. Default uses self.recurrent_n_epochs (1).
                       Higher values (2-4) work due to PPO clipping but emit warning.
             chunk_batch_size: Number of chunks per batch for GPU efficiency.
         """
-        # Default to 1 epoch for recurrent (safest)
+        # Use instance default (recurrent_n_epochs=1) when not specified
         if n_epochs is None:
-            n_epochs = 1
+            n_epochs = self.recurrent_n_epochs
 
         # [DRL Best Practice] Two-tier warnings for recurrent PPO n_epochs
         # After gradient updates, policy changes, so recomputed log_probs differ
@@ -818,11 +829,16 @@ class PPOAgent:
                 nn.utils.clip_grad_norm_(self.network.parameters(), self.max_grad_norm)
                 self.optimizer.step()
 
-                # Track metrics
-                total_policy_loss += policy_loss.item()
-                total_value_loss += value_loss.item()
-                total_entropy += entropy_valid.mean().item()
-                total_approx_kl += (old_log_probs_valid - log_probs_valid).mean().item()
+                # Track metrics (single sync for all 4)
+                approx_kl_tensor = (old_log_probs_valid - log_probs_valid).mean()
+                batch_metrics = torch.stack([
+                    policy_loss, value_loss, entropy_valid.mean(), approx_kl_tensor
+                ])
+                pl, vl, ent, kl = batch_metrics.tolist()
+                total_policy_loss += pl
+                total_value_loss += vl
+                total_entropy += ent
+                total_approx_kl += kl
                 n_updates += 1
 
         # Increment train_steps for entropy annealing (CRITICAL for get_entropy_coef)
@@ -852,9 +868,12 @@ class PPOAgent:
 
         if all_ratios:
             stacked = torch.cat(all_ratios)
-            metrics['ratio_max'] = [stacked.max().item()]
-            metrics['ratio_min'] = [stacked.min().item()]
-            metrics['ratio_std'] = [stacked.std().item()]
+            # Single sync for all 3 ratio stats
+            ratio_stats = torch.stack([stacked.max(), stacked.min(), stacked.std()])
+            r_max, r_min, r_std = ratio_stats.tolist()
+            metrics['ratio_max'] = [r_max]
+            metrics['ratio_min'] = [r_min]
+            metrics['ratio_std'] = [r_std]
 
             # Check for NaN/Inf in ratios - single fused check
             # Store in separate dict to avoid type conflict with list-based metrics
@@ -886,6 +905,7 @@ class PPOAgent:
                 'clip_value': self.clip_value,
                 'target_kl': self.target_kl,
                 'recurrent': self.recurrent,
+                'recurrent_n_epochs': self.recurrent_n_epochs,  # Epoch default for recurrent PPO
                 'lstm_hidden_dim': self.lstm_hidden_dim,
                 'chunk_length': self.chunk_length,
             },

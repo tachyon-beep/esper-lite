@@ -42,6 +42,6 @@ class TestCompilableTensorOps:
         host = torch.randn(2, 32, 8, 8)
         seed = torch.randn(2, 32, 8, 8)
 
-        result = compiled_blend(host, seed, 0.5, detach_host=True)
+        result = compiled_blend(host, seed, 0.5)
 
         assert result.shape == host.shape

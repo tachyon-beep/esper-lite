@@ -102,25 +102,34 @@ class ValueFunctionTelemetry:
         # Explained variance: 1 - Var(returns - values) / Var(returns)
         var_returns = returns.var()
         if var_returns > 1e-8:
-            explained_var = 1.0 - (returns - values).var() / var_returns
-            explained_var = explained_var.item()
+            explained_var_tensor = 1.0 - (returns - values).var() / var_returns
         else:
-            explained_var = 0.0
+            explained_var_tensor = torch.tensor(0.0, device=returns.device)
 
-        # Advantage stats
+        # Batch all stats into single GPU sync (8 .item() calls → 1 .tolist())
         if advantages is not None:
-            adv_mean = advantages.mean().item()
-            adv_std = advantages.std().item()
+            stats = torch.stack([
+                explained_var_tensor,
+                values.mean(), values.std(),
+                returns.mean(), returns.std(),
+                advantages.mean(), advantages.std(),
+            ])
+            ev, v_mean, v_std, r_mean, r_std, adv_mean, adv_std = stats.tolist()
         else:
-            adv_mean = 0.0
-            adv_std = 1.0
+            stats = torch.stack([
+                explained_var_tensor,
+                values.mean(), values.std(),
+                returns.mean(), returns.std(),
+            ])
+            ev, v_mean, v_std, r_mean, r_std = stats.tolist()
+            adv_mean, adv_std = 0.0, 1.0
 
         return cls(
-            explained_variance=explained_var,
-            value_mean=values.mean().item(),
-            value_std=values.std().item(),
-            return_mean=returns.mean().item(),
-            return_std=returns.std().item(),
+            explained_variance=ev,
+            value_mean=v_mean,
+            value_std=v_std,
+            return_mean=r_mean,
+            return_std=r_std,
             advantage_mean=adv_mean,
             advantage_std=adv_std,
         )
