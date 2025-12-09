@@ -313,7 +313,6 @@ class TaskConfig:
     typical_loss_delta_std: float
     max_epochs: int
     max_steps: int = 10000
-    shadowing_fraction: float = 0.1  # Fraction of max_epochs to dwell in SHADOWING (min 1 epoch)
     train_to_blend_fraction: float = 0.1  # Fraction of max_epochs to stay in TRAINING before blending
     blending_steps: int = 5  # Steps for alpha ramp during blending
 
