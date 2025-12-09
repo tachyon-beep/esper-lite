@@ -319,14 +319,12 @@ class QualityGates:
         min_training_improvement: float = 0.5,
         min_blending_epochs: int = 3,
         max_isolation_violations: int = 10,
-        min_shadowing_correlation: float = 0.9,
         min_probation_stability: float = 0.95,
         min_seed_gradient_ratio: float = DEFAULT_GRADIENT_RATIO_THRESHOLD,
     ):
         self.min_training_improvement = min_training_improvement
         self.min_blending_epochs = min_blending_epochs
         self.max_isolation_violations = max_isolation_violations
-        self.min_shadowing_correlation = min_shadowing_correlation
         self.min_probation_stability = min_probation_stability
         self.min_seed_gradient_ratio = min_seed_gradient_ratio
 
@@ -342,8 +340,6 @@ class QualityGates:
                 return self._check_g2(state)
             case GateLevel.G3:
                 return self._check_g3(state)
-            case GateLevel.G4:
-                return self._check_g4(state)
             case GateLevel.G5:
                 return self._check_g5(state)
             case gate:
@@ -356,8 +352,7 @@ class QualityGates:
             SeedStage.GERMINATED: GateLevel.G0,
             SeedStage.TRAINING: GateLevel.G1,
             SeedStage.BLENDING: GateLevel.G2,
-            SeedStage.SHADOWING: GateLevel.G3,
-            SeedStage.PROBATIONARY: GateLevel.G4,
+            SeedStage.PROBATIONARY: GateLevel.G3,  # Was G4, now G3 (direct from BLENDING)
             SeedStage.FOSSILIZED: GateLevel.G5,
         }
         return mapping.get(target_stage, GateLevel.G0)
@@ -467,15 +462,17 @@ class QualityGates:
         )
 
     def _check_g3(self, state: SeedState) -> GateResult:
-        """G3: Shadowing readiness - blending completed."""
+        """G3: Probation readiness - blending completed with stable integration."""
         checks_passed = []
         checks_failed = []
 
+        # Check blending duration
         if state.metrics.epochs_in_current_stage >= self.min_blending_epochs:
             checks_passed.append("blending_complete")
         else:
             checks_failed.append(f"blending_incomplete_{state.metrics.epochs_in_current_stage}")
 
+        # Check alpha reached target
         if state.alpha >= 0.95:
             checks_passed.append("alpha_high")
         else:
@@ -488,18 +485,6 @@ class QualityGates:
             score=state.alpha,
             checks_passed=checks_passed,
             checks_failed=checks_failed,
-        )
-
-    def _check_g4(self, state: SeedState) -> GateResult:
-        """G4: Probation readiness - shadowing validated."""
-        # For now, just check shadowing was done
-        passed = state.stage == SeedStage.SHADOWING
-        return GateResult(
-            gate=GateLevel.G4,
-            passed=passed,
-            score=1.0 if passed else 0.0,
-            checks_passed=["shadowing_complete"] if passed else [],
-            checks_failed=[] if passed else ["shadowing_incomplete"],
         )
 
     def _check_g5(self, state: SeedState) -> GateResult:
