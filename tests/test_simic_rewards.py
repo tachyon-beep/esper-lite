@@ -9,7 +9,6 @@ from esper.simic.rewards import (
     STAGE_BLENDING,
     STAGE_GERMINATED,
     STAGE_TRAINING,
-    STAGE_SHADOWING,
     STAGE_PROBATIONARY,
     STAGE_FOSSILIZED,
     compute_seed_potential,
