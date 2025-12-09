@@ -126,11 +126,12 @@ class ContributionRewardConfig:
     """
 
     # Primary signal: seed contribution weight
-    contribution_weight: float = 3.0
+    # Reduced from 3.0 to 1.0 for stable PPO (per-step rewards should be in [-10, +10])
+    contribution_weight: float = 1.0
 
     # Proxy signal for pre-blending stages (when counterfactual unavailable)
-    # Lower weight than contribution_weight since it's noisier and conflated with host drift
-    proxy_contribution_weight: float = 1.0
+    # Proportionally reduced from 1.0 to 0.3 (maintains 3:1 ratio with contribution_weight)
+    proxy_contribution_weight: float = 0.3
 
     # PBRS stage progression
     pbrs_weight: float = 0.3
