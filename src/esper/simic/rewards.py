@@ -60,7 +60,7 @@ from esper.simic.reward_telemetry import RewardComponentsTelemetry
 # - TRAINING (2.0): +1.0 for successful G1 gate passage
 # - BLENDING (3.5): +1.5 (LARGEST delta) - critical integration phase
 #   This is where value is actually created; alpha ramp merges seed contribution
-# - SHADOWING (4.5): +1.0 for surviving blending without regression
+# - (5 was SHADOWING, now unused - kept for serialization)
 # - PROBATIONARY (5.5): +1.0 for stability validation
 # - FOSSILIZED (6.0): +0.5 (SMALLEST delta) - terminal bonus
 #   Small to prevent "fossilization farming" (rushing to completion)
@@ -89,7 +89,7 @@ STAGE_POTENTIALS = {
     2: 1.0,   # GERMINATED
     3: 2.0,   # TRAINING
     4: 3.5,   # BLENDING (largest increment - this is where value is created)
-    5: 4.5,   # SHADOWING
+    5: 4.5,   # (was SHADOWING - kept for serialization, unused in new lifecycle)
     6: 5.5,   # PROBATIONARY
     7: 6.0,   # FOSSILIZED (smallest increment - not a farming target)
 }
@@ -238,7 +238,7 @@ class SeedInfo(NamedTuple):
     Designed to avoid importing heavy classes in the hot path.
     Stage values match SeedStage IntEnum:
         0=UNKNOWN, 1=DORMANT, 2=GERMINATED, 3=TRAINING,
-        4=BLENDING, 5=SHADOWING, 6=PROBATIONARY, 7=FOSSILIZED, etc.
+        4=BLENDING, 5=(deprecated SHADOWING), 6=PROBATIONARY, 7=FOSSILIZED, etc.
     """
 
     stage: int  # SeedStage.value
@@ -288,7 +288,6 @@ STAGE_GERMINATED = SeedStage.GERMINATED.value
 STAGE_TRAINING = SeedStage.TRAINING.value
 STAGE_BLENDING = SeedStage.BLENDING.value
 STAGE_FOSSILIZED = SeedStage.FOSSILIZED.value
-STAGE_SHADOWING = SeedStage.SHADOWING.value
 STAGE_PROBATIONARY = SeedStage.PROBATIONARY.value
 
 
@@ -529,7 +528,7 @@ def _contribution_fossilize_shaping(
 
     Rapid fossilization (short PROBATIONARY period) is discounted to prevent
     dependency gaming where seeds create artificial dependencies during
-    BLENDING/SHADOWING that inflate metrics.
+    BLENDING that inflate metrics.
     """
     if seed_info is None:
         return config.invalid_fossilize_penalty
@@ -646,7 +645,7 @@ def compute_seed_potential(obs: dict) -> float:
     Note:
         seed_stage values match SeedStage enum from leyline:
         - DORMANT=1, GERMINATED=2, TRAINING=3, BLENDING=4
-        - SHADOWING=5, PROBATIONARY=6, FOSSILIZED=7
+        - PROBATIONARY=6, FOSSILIZED=7
     """
     has_active = obs.get("has_active_seed", 0)
     seed_stage = obs.get("seed_stage", 0)
@@ -792,6 +791,5 @@ __all__ = [
     "STAGE_TRAINING",
     "STAGE_BLENDING",
     "STAGE_FOSSILIZED",
-    "STAGE_SHADOWING",
     "STAGE_PROBATIONARY",
 ]
