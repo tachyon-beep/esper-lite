@@ -682,7 +682,7 @@ def _cull_shaping(seed_info: SeedInfo | None, config: RewardConfig) -> float:
         health_factor = max(0.3, 1.0 + improvement / 3.0)
 
     # PBRS: gamma * phi(next) - phi(current) where next = no seed (phi=0)
-    pbrs_correction = 0.99 * 0.0 - phi_current  # = -phi_current
+    pbrs_correction = DEFAULT_GAMMA * 0.0 - phi_current  # = -phi_current
     terminal_pbrs = config.seed_potential_weight * pbrs_correction * health_factor
 
     return base_shaping + param_recovery_bonus + terminal_pbrs
