@@ -351,7 +351,6 @@ def run_diagnostic_episode(
 
         # Classify state for contingency analysis
         loss_trend = classify_loss_trend(list(signals.loss_history))
-        loss_trend = classify_loss_trend(list(signals.loss_history))
 
         # Record step
         step = StepRecord(
