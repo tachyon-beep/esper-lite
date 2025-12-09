@@ -6,22 +6,21 @@ This module consolidates reward functions used across:
 - Offline RL (simic/iql.py)
 
 The reward design follows these principles:
-1. Accuracy improvement is the primary signal
-2. Lifecycle progression bonuses encourage exploration
-3. Action-specific shaping guides decision making
+1. Counterfactual validation is the primary signal (seed_contribution)
+2. Lifecycle progression bonuses encourage exploration (PBRS)
+3. Compute rent penalizes parameter bloat
 4. Potential-based shaping maintains optimal policy invariance
 
 Usage:
-    from esper.simic.rewards import compute_shaped_reward, RewardConfig
+    from esper.simic.rewards import compute_contribution_reward, ContributionRewardConfig
 
-    reward = compute_shaped_reward(
-        action=ActionEnum.GERMINATE_CONV,  # Pass Enum member
-        acc_delta=0.5,
+    reward = compute_contribution_reward(
+        action=ActionEnum.GERMINATE_CONV,
+        seed_contribution=0.05,
         val_acc=65.0,
         seed_info=SeedInfo(...),
         epoch=10,
         max_epochs=25,
-        action_enum=ActionEnum, # Required context
     )
 """
 
@@ -296,169 +295,6 @@ STAGE_PROBATIONARY = SeedStage.PROBATIONARY.value
 # =============================================================================
 # Core Reward Functions
 # =============================================================================
-
-
-def compute_shaped_reward(
-    action: IntEnum,  # dynamic action enum member (e.g., WAIT, GERMINATE_X, FOSSILIZE, CULL)
-    acc_delta: float,
-    val_acc: float,
-    seed_info: SeedInfo | None,
-    epoch: int,
-    max_epochs: int,
-    total_params: int = 0,
-    host_params: int = 1,
-    config: RewardConfig | None = None,
-    action_enum: type | None = None,  # <--- NEW: Added this argument to fix TypeError
-    return_components: bool = False,
-) -> float | tuple[float, "RewardComponentsTelemetry"]:
-    """Compute shaped reward for seed lifecycle control.
-
-    This function is designed for high-throughput use:
-    - Uses primitive types and NamedTuples (no heavy objects)
-    - All configuration is explicit (no global state)
-    - Zero allocations in hot path
-
-    Args:
-        action: Action taken (dynamic IntEnum member)
-        acc_delta: Accuracy improvement this step
-        val_acc: Current validation accuracy
-        seed_info: Seed state info (None if no active seed)
-        epoch: Current epoch
-        max_epochs: Maximum epochs in episode
-        total_params: Extra params added (fossilized + active seed)
-        host_params: Baseline host model params (for normalization)
-        config: Reward configuration (uses default if None)
-        action_enum: Optional Enum class for validating integer actions (legacy compat)
-        return_components: If True, return (reward, RewardComponentsTelemetry) tuple
-
-    Returns:
-        Shaped reward value, or (reward, components) if return_components=True
-    """
-    from esper.simic.reward_telemetry import RewardComponentsTelemetry
-
-    if config is None:
-        config = _DEFAULT_CONFIG
-
-    # Track components if requested
-    components = RewardComponentsTelemetry() if return_components else None
-    if components:
-        # Populate diagnostic fields (same as compute_contribution_reward)
-        components.action_name = action.name
-        components.epoch = epoch
-        components.seed_stage = seed_info.stage if seed_info else None
-        components.val_acc = val_acc
-
-    reward = 0.0
-
-    # Base: accuracy improvement
-    base_acc = acc_delta * config.acc_delta_weight
-    reward += base_acc
-    if components:
-        components.base_acc_delta = base_acc
-
-    # Compute rent: penalize excess params with logarithmic scaling
-    # log(1 + growth_ratio) provides diminishing marginal penalty:
-    # - Still penalizes large param counts
-    # - But removes the 50x cliff between small (2K) and large (74K) seeds
-    # - Allows conv_enhance seeds to be viable despite higher param count
-    rent_penalty = 0.0
-    growth_ratio = 0.0
-    if host_params > 0 and total_params > 0:
-        # total_params currently passed as added params; convert to growth ratio
-        growth_ratio = total_params / host_params
-        # Guard against negative ratios (defensive - shouldn't happen in practice)
-        scaled_cost = math.log(1.0 + max(0.0, growth_ratio))
-        rent_penalty = config.compute_rent_weight * scaled_cost
-        rent_penalty = min(rent_penalty, config.max_rent_penalty)
-        reward -= rent_penalty
-    if components:
-        components.compute_rent = -rent_penalty
-        components.growth_ratio = growth_ratio
-
-    # Lifecycle stage rewards
-    stage_bonus = 0.0
-    if seed_info is not None:
-        stage = seed_info.stage
-        improvement = seed_info.improvement_since_stage_start
-
-        if stage == STAGE_TRAINING:
-            stage_bonus += config.training_bonus
-            if improvement > 0:
-                stage_bonus += improvement * config.stage_improvement_weight
-
-        elif stage == STAGE_BLENDING:
-            stage_bonus += config.blending_bonus
-            if acc_delta > 0:
-                stage_bonus += config.blending_improvement_bonus
-
-        elif stage == STAGE_FOSSILIZED:
-            stage_bonus += config.fossilized_bonus
-
-    reward += stage_bonus
-    if components:
-        components.stage_bonus = stage_bonus
-
-    # Potential-based reward shaping for lifecycle progression
-    # PBRS telescoping: F(s,a,s') = gamma * phi(s') - phi(s)
-    # We must ensure phi(s') at timestep t equals phi(s) at timestep t+1.
-    pbrs_bonus = 0.0
-    if seed_info is not None:
-        # Reconstruct previous timestep state using actual epoch counts
-        if seed_info.epochs_in_stage == 0:
-            # Just transitioned - use actual previous epoch count for correct telescoping
-            prev_stage = seed_info.previous_stage
-            prev_epochs = seed_info.previous_epochs_in_stage
-        else:
-            # Same stage, one fewer epoch
-            prev_stage = seed_info.stage
-            prev_epochs = seed_info.epochs_in_stage - 1
-
-        current_obs = {
-            "has_active_seed": 1,
-            "seed_stage": seed_info.stage,
-            "seed_epochs_in_stage": seed_info.epochs_in_stage,
-        }
-        prev_obs = {
-            "has_active_seed": 1,
-            "seed_stage": prev_stage,
-            "seed_epochs_in_stage": prev_epochs,
-        }
-        phi_t = compute_seed_potential(current_obs)
-        phi_t_prev = compute_seed_potential(prev_obs)
-        pb_bonus = compute_pbrs_bonus(phi_t_prev, phi_t, gamma=DEFAULT_GAMMA)
-        pbrs_bonus = config.seed_potential_weight * pb_bonus
-        reward += pbrs_bonus
-    if components:
-        components.pbrs_bonus = pbrs_bonus
-
-    # Action-specific shaping (semantic, enum-based)
-    # We rely on action.name (IntEnum member)
-    action_shaping = 0.0
-    action_name = action.name
-    if is_germinate_action(action):
-        action_shaping = _germinate_shaping(seed_info, epoch, max_epochs, config)
-    elif action_name == "FOSSILIZE":
-        action_shaping = _advance_shaping(seed_info, config)
-    elif action_name == "CULL":
-        action_shaping = _cull_shaping(seed_info, config)
-    elif action_name == "WAIT":
-        action_shaping = _wait_shaping(seed_info, acc_delta, config)
-    reward += action_shaping
-    if components:
-        components.action_shaping = action_shaping
-
-    # Terminal bonus
-    terminal_bonus = 0.0
-    if epoch == max_epochs:
-        terminal_bonus = val_acc * config.terminal_acc_weight
-        reward += terminal_bonus
-    if components:
-        components.terminal_bonus = terminal_bonus
-        components.total_reward = reward
-
-    if return_components:
-        return reward, components
-    return reward
 
 
 # Default config singleton (avoid repeated allocations)
@@ -935,14 +771,12 @@ def get_intervention_cost(action: IntEnum) -> float:
 
 __all__ = [
     # Config classes
-    "RewardConfig",
     "LossRewardConfig",
     "ContributionRewardConfig",
     # Seed info
     "SeedInfo",
     # Reward functions
-    "compute_shaped_reward",  # Legacy: uses acc_delta (conflated signal)
-    "compute_contribution_reward",  # NEW: uses seed_contribution (causal)
+    "compute_contribution_reward",
     "compute_loss_reward",
     # PBRS utilities
     "compute_potential",
