@@ -189,16 +189,6 @@ class HeuristicTamiyo:
                     reason=f"Blending: alpha={seed.alpha:.2f}"
                 )
 
-            # SHADOWING: check for failure, otherwise wait for auto-advance
-            if stage == SeedStage.SHADOWING:
-                if self._should_cull(improvement, epochs_in_stage):
-                    return self._cull_seed(signals, seed, "Failing in SHADOWING")
-                return TamiyoDecision(
-                    action=Action.WAIT,
-                    target_seed_id=seed.seed_id,
-                    reason="Shadowing in progress"
-                )
-
             # PROBATIONARY: decision point - fossilize or cull
             if stage == SeedStage.PROBATIONARY:
                 # Prefer counterfactual contribution (true causal impact) when available
