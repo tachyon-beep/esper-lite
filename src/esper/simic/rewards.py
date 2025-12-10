@@ -32,6 +32,7 @@ from enum import IntEnum
 from typing import NamedTuple
 
 from esper.leyline import SeedStage, MIN_CULL_AGE, MIN_PROBATION_EPOCHS
+from esper.kasmina.slot import MIN_FOSSILIZE_CONTRIBUTION
 from esper.leyline.actions import is_germinate_action
 from esper.simic.reward_telemetry import RewardComponentsTelemetry
 
@@ -543,7 +544,9 @@ def _contribution_fossilize_shaping(
     legitimacy_discount = min(1.0, seed_info.epochs_in_stage / MIN_PROBATION_EPOCHS)
 
     # Use seed_contribution to determine if fossilization is earned
-    if seed_contribution is not None and seed_contribution > 0:
+    # Aligned with G5 gate: require MIN_FOSSILIZE_CONTRIBUTION to get bonus
+    # This prevents reward leak from low-contribution FOSSILIZE attempts
+    if seed_contribution is not None and seed_contribution >= MIN_FOSSILIZE_CONTRIBUTION:
         # Bonus scales with actual contribution AND legitimacy
         base_bonus = (
             config.fossilize_base_bonus
@@ -551,7 +554,7 @@ def _contribution_fossilize_shaping(
         )
         return base_bonus * legitimacy_discount
 
-    # Non-contributing or no counterfactual - penalty (no discount on penalties)
+    # Below threshold or no counterfactual - penalty (no discount on penalties)
     return config.fossilize_noncontributing_penalty
 
 
