@@ -708,18 +708,20 @@ class TestRansomwareSeedDetection:
             )
             return components.attribution_discount
 
-        # Test specific values from softened sigmoid (-5 coefficient)
-        # At -0.5%, expect ~0.076
+        # Test specific values from steepened sigmoid (-10 coefficient)
+        # DRL Expert review 2025-12-10: steepened from -5 to -10 to reduce
+        # reward leakage for ransomware seeds
+        # At -0.5%, expect ~0.007 (was ~0.076 at -5)
         discount_05 = get_discount(-0.5)
-        assert 0.05 < discount_05 < 0.15, f"At -0.5%: {discount_05}"
+        assert discount_05 < 0.02, f"At -0.5%: {discount_05}"
 
-        # At -0.2%, expect ~0.27
+        # At -0.2%, expect ~0.12 (was ~0.27 at -5)
         discount_02 = get_discount(-0.2)
-        assert 0.2 < discount_02 < 0.4, f"At -0.2%: {discount_02}"
+        assert 0.08 < discount_02 < 0.20, f"At -0.2%: {discount_02}"
 
-        # At -1.0%, expect ~0.007
+        # At -1.0%, expect ~0.00005 (essentially zero)
         discount_10 = get_discount(-1.0)
-        assert discount_10 < 0.02, f"At -1.0%: {discount_10}"
+        assert discount_10 < 0.001, f"At -1.0%: {discount_10}"
 
     def test_fossilized_seeds_get_no_attribution(self):
         """FOSSILIZED seeds should not receive attribution rewards.
@@ -1040,4 +1042,204 @@ class TestSeedlessAttribution:
         # Should get proxy attribution (proxy_contribution_weight * acc_delta = 0.3 * 2.0 = 0.6)
         assert components.bounded_attribution == pytest.approx(0.6), (
             f"Pre-blending seed should get proxy attribution: {components.bounded_attribution}"
+        )
+
+
+class TestRatioPenalty:
+    """Test contribution/improvement ratio penalty for ransomware detection.
+
+    DRL Expert review 2025-12-10: High causal contribution with low/negative
+    improvement indicates structural entanglement - the "ransomware signature".
+    """
+
+    def test_no_penalty_for_low_contribution(self):
+        """Contribution < 1.0 should not trigger ratio penalty."""
+        from enum import IntEnum
+        class MockAction(IntEnum):
+            WAIT = 0
+
+        seed = SeedInfo(
+            stage=STAGE_BLENDING,
+            improvement_since_stage_start=-0.5,
+            total_improvement=-0.5,
+            epochs_in_stage=3,
+            seed_age_epochs=8,
+        )
+
+        _, components = compute_contribution_reward(
+            action=MockAction.WAIT,
+            seed_contribution=0.5,  # Low contribution (below 1.0 threshold)
+            val_acc=65.0,
+            seed_info=seed,
+            epoch=8,
+            max_epochs=25,
+            acc_at_germination=65.5,
+            return_components=True,
+        )
+
+        assert components.ratio_penalty == 0.0, (
+            f"Low contribution should have no ratio penalty: {components.ratio_penalty}"
+        )
+
+    def test_penalty_for_high_contribution_negative_improvement(self):
+        """High contribution with negative improvement should trigger max penalty."""
+        from enum import IntEnum
+        class MockAction(IntEnum):
+            WAIT = 0
+
+        # Classic ransomware signature: high contribution, negative improvement
+        seed = SeedInfo(
+            stage=STAGE_BLENDING,
+            improvement_since_stage_start=-2.0,
+            total_improvement=-2.0,
+            epochs_in_stage=5,
+            seed_age_epochs=10,
+        )
+
+        _, components = compute_contribution_reward(
+            action=MockAction.WAIT,
+            seed_contribution=37.5,  # Very high contribution (like conv_heavy)
+            val_acc=62.0,
+            seed_info=seed,
+            epoch=10,
+            max_epochs=25,
+            acc_at_germination=64.0,
+            return_components=True,
+        )
+
+        # With 37.5% contribution and negative improvement:
+        # ratio_penalty = -0.3 * min(1.0, 37.5/10.0) = -0.3 * 1.0 = -0.3
+        assert components.ratio_penalty == pytest.approx(-0.3), (
+            f"High contribution + negative improvement should have -0.3 penalty: {components.ratio_penalty}"
+        )
+
+    def test_penalty_for_high_contribution_low_improvement(self):
+        """High contribution with very low improvement should trigger penalty."""
+        from enum import IntEnum
+        class MockAction(IntEnum):
+            WAIT = 0
+
+        # Suspicious: high contribution but marginal improvement (<=0.1%)
+        seed = SeedInfo(
+            stage=STAGE_BLENDING,
+            improvement_since_stage_start=0.05,
+            total_improvement=0.05,  # Very low (below 0.1 threshold)
+            epochs_in_stage=4,
+            seed_age_epochs=9,
+        )
+
+        _, components = compute_contribution_reward(
+            action=MockAction.WAIT,
+            seed_contribution=15.0,  # High contribution
+            val_acc=64.0,
+            seed_info=seed,
+            epoch=9,
+            max_epochs=25,
+            acc_at_germination=63.95,
+            return_components=True,
+        )
+
+        # With 15% contribution and total_imp=0.05 (<=0.1):
+        # ratio_penalty = -0.3 * min(1.0, 15/10.0) = -0.3 * 1.0 = -0.3
+        assert components.ratio_penalty == pytest.approx(-0.3), (
+            f"High contribution + low improvement should have penalty: {components.ratio_penalty}"
+        )
+
+    def test_penalty_scales_with_contribution_magnitude(self):
+        """Ratio penalty should scale with contribution when below cap."""
+        from enum import IntEnum
+        class MockAction(IntEnum):
+            WAIT = 0
+
+        def get_penalty(contribution: float) -> float:
+            seed = SeedInfo(
+                stage=STAGE_BLENDING,
+                improvement_since_stage_start=-1.0,
+                total_improvement=-1.0,
+                epochs_in_stage=3,
+                seed_age_epochs=8,
+            )
+            _, components = compute_contribution_reward(
+                action=MockAction.WAIT,
+                seed_contribution=contribution,
+                val_acc=63.0,
+                seed_info=seed,
+                epoch=8,
+                max_epochs=25,
+                acc_at_germination=64.0,
+                return_components=True,
+            )
+            return components.ratio_penalty
+
+        # At 5% contribution: -0.3 * (5/10) = -0.15
+        penalty_5 = get_penalty(5.0)
+        assert penalty_5 == pytest.approx(-0.15), f"5% contribution: {penalty_5}"
+
+        # At 10%+ contribution: capped at -0.3
+        penalty_10 = get_penalty(10.0)
+        assert penalty_10 == pytest.approx(-0.3), f"10% contribution: {penalty_10}"
+
+        # At 20% contribution: still capped at -0.3
+        penalty_20 = get_penalty(20.0)
+        assert penalty_20 == pytest.approx(-0.3), f"20% contribution: {penalty_20}"
+
+    def test_no_penalty_for_healthy_ratio(self):
+        """Healthy seeds (contribution <= 5x improvement) should have no penalty."""
+        from enum import IntEnum
+        class MockAction(IntEnum):
+            WAIT = 0
+
+        # Healthy seed: contribution is 2x improvement (well below 5x threshold)
+        seed = SeedInfo(
+            stage=STAGE_BLENDING,
+            improvement_since_stage_start=3.0,
+            total_improvement=3.0,
+            epochs_in_stage=5,
+            seed_age_epochs=10,
+        )
+
+        _, components = compute_contribution_reward(
+            action=MockAction.WAIT,
+            seed_contribution=6.0,  # 2x improvement - healthy ratio
+            val_acc=68.0,
+            seed_info=seed,
+            epoch=10,
+            max_epochs=25,
+            acc_at_germination=65.0,
+            return_components=True,
+        )
+
+        assert components.ratio_penalty == 0.0, (
+            f"Healthy ratio should have no penalty: {components.ratio_penalty}"
+        )
+
+    def test_penalty_for_suspicious_high_ratio(self):
+        """Ratio > 5x should trigger escalating penalty."""
+        from enum import IntEnum
+        class MockAction(IntEnum):
+            WAIT = 0
+
+        # Suspicious: contribution is 10x improvement
+        seed = SeedInfo(
+            stage=STAGE_BLENDING,
+            improvement_since_stage_start=1.0,
+            total_improvement=1.0,
+            epochs_in_stage=4,
+            seed_age_epochs=9,
+        )
+
+        _, components = compute_contribution_reward(
+            action=MockAction.WAIT,
+            seed_contribution=10.0,  # 10x improvement - suspicious
+            val_acc=66.0,
+            seed_info=seed,
+            epoch=9,
+            max_epochs=25,
+            acc_at_germination=65.0,
+            return_components=True,
+        )
+
+        # ratio = 10/1 = 10, penalty = -min(0.3, 0.1*(10-5)/5) = -min(0.3, 0.1) = -0.1
+        assert components.ratio_penalty == pytest.approx(-0.1), (
+            f"10x ratio should have -0.1 penalty: {components.ratio_penalty}"
         )

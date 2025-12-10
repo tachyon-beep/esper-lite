@@ -25,6 +25,7 @@ class RewardComponentsTelemetry:
     bounded_attribution: float | None = None
     progress_since_germination: float | None = None
     attribution_discount: float = 1.0  # Sigmoid discount for negative total_improvement
+    ratio_penalty: float = 0.0  # Penalty for high contribution with low/negative improvement (ransomware)
 
     # Penalties
     compute_rent: float = 0.0
@@ -62,6 +63,7 @@ class RewardComponentsTelemetry:
             "bounded_attribution": self.bounded_attribution,
             "progress_since_germination": self.progress_since_germination,
             "attribution_discount": self.attribution_discount,
+            "ratio_penalty": self.ratio_penalty,
             "compute_rent": self.compute_rent,
             "blending_warning": self.blending_warning,
             "probation_warning": self.probation_warning,
