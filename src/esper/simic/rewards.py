@@ -482,6 +482,13 @@ def compute_contribution_reward(
         if seed_info.total_improvement < 0:
             bounded_attribution = 0.0
 
+    # CULL: Invert attribution signal to align incentives correctly
+    # - Culling a GOOD seed (positive contribution) = BAD decision → negative reward
+    # - Culling a BAD seed (negative contribution) = GOOD decision → positive reward
+    # Without this, the policy learns "CULL everything for +attribution rewards"
+    if action_name == "CULL":
+        bounded_attribution = -bounded_attribution
+
     reward += bounded_attribution
 
     if components:

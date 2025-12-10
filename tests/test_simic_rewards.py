@@ -178,6 +178,62 @@ class TestCullContributionShaping:
         # Should get negative shaping (penalty for culling good seed)
         assert shaping < 0, f"Culling good seed should be penalized: {shaping}"
 
+    def test_cull_good_seed_inverts_attribution(self):
+        """Culling a good seed should invert attribution to negative total reward."""
+
+        class _CullAction(IntEnum):
+            CULL = 1
+
+        seed_info = self._make_seed_info(STAGE_BLENDING, age=MIN_CULL_AGE, improvement=3.0)
+
+        reward, components = compute_contribution_reward(
+            action=_CullAction.CULL,
+            seed_contribution=3.52,  # Good seed with +3.52% contribution
+            val_acc=68.0,
+            seed_info=seed_info,
+            epoch=10,
+            max_epochs=25,
+            acc_at_germination=65.0,
+            return_components=True,
+        )
+
+        # Attribution should be NEGATIVE (inverted) for culling good seed
+        assert components.bounded_attribution < 0, (
+            f"CULL of good seed should have negative attribution: {components.bounded_attribution}"
+        )
+        # Total reward should be negative
+        assert reward < 0, (
+            f"CULL of good seed should have negative total reward: {reward}"
+        )
+
+    def test_cull_bad_seed_inverts_attribution_to_positive(self):
+        """Culling a bad seed should invert negative attribution to positive."""
+
+        class _CullAction(IntEnum):
+            CULL = 1
+
+        seed_info = self._make_seed_info(STAGE_BLENDING, age=MIN_CULL_AGE, improvement=-1.0)
+
+        reward, components = compute_contribution_reward(
+            action=_CullAction.CULL,
+            seed_contribution=-2.0,  # Bad seed hurting accuracy
+            val_acc=63.0,
+            seed_info=seed_info,
+            epoch=10,
+            max_epochs=25,
+            acc_at_germination=65.0,
+            return_components=True,
+        )
+
+        # Attribution should be POSITIVE (inverted from negative)
+        assert components.bounded_attribution > 0, (
+            f"CULL of bad seed should have positive attribution: {components.bounded_attribution}"
+        )
+        # Total reward should be positive (good decision to remove harmful seed)
+        assert reward > 0, (
+            f"CULL of bad seed should have positive total reward: {reward}"
+        )
+
 
 class TestWaitBlendingShaping:
     """Tests for WAIT action at BLENDING stage using unified reward."""
