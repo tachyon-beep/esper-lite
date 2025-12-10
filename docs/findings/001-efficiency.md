@@ -1,14 +1,18 @@
 # Case Study: Emergent Efficiency in Morphogenetic Networks
 
-**Subtitle:** How the Esper Framework Independently Rediscovered Depthwise Separable Convolutions
+**Subtitle:** How a Morphogenetic RL Architect Recovers Known Depthwise Efficiency Patterns
 
 ## 1. Executive Summary
 
-Esper is a morphogenetic training framework that lets an RL controller grow and prune modules during training. During the validation phase of the **Esper** framework on CIFAR-10, the reinforcement learning agent (**Tamiyo**) demonstrated an emergent ability to distinguish between neural architectures based on their "Reward Velocity"—the ratio of accuracy gain to training time.
+Esper is a morphogenetic training framework that lets an RL controller grow and prune modules during training. During validation on CIFAR-10, the reinforcement learning agent (Tamiyo) demonstrated an emergent ability to distinguish between neural architectures based on their "Reward Velocity": the ratio of accuracy gain to training time.
 
 In other words, Tamiyo was not just asking "Does this blueprint eventually help?" but implicitly asking "How quickly does this blueprint pay me back for the optimisation effort I spend on it?" That distinction only appears once the agent has enough telemetry to see beyond raw accuracy and into the dynamics of training itself.
 
-Without explicit instruction or hardcoded biases, the agent independently "rediscovered" the efficiency principles of **Depthwise Separable Convolutions** (MobileNet [1]) when operating under implicit compute constraints. Under short training horizons and tight budgets, `depthwise` modules consistently emerged as the best trade-off between cost and reward. Under generous horizons and unconstrained compute, Tamiyo rationally switched to favour heavier `conv_enhance` blocks.
+In early experiments, we noticed a curious pattern: under short training horizons and implicit compute limits, Esper’s architect consistently preferred a lightweight depthwise blueprint over heavier convolutional blocks with far more parameters. At the time, this behaviour was surprising to us – why favour a tiny module when a much larger one is available?
+
+After investigating, we realised this pattern mirrors the efficiency principles behind depthwise separable convolutions as used in MobileNet-style architectures [1]. In other words, Esper had learned, purely from telemetry and reward, to exploit a known accuracy–compute trade-off that we had not explicitly built in.
+
+We do not claim any novelty for depthwise convolutions themselves. Instead, we treat this as a positive control: if Esper can recover known efficiency patterns in simple settings, that increases our confidence that the same machinery can discover less obvious architectural regularities when given richer blueprints or new domains.
 
 This behaviour validates the core hypothesis of the Esper architecture: that structural optimisation is a learnable policy given sufficient telemetry and a reward that reflects the underlying economics of training.
 
@@ -19,14 +23,14 @@ At a high level, the Esper stack combines a host wrapper, a training engine, an 
 | Subsystem           | Role                      | Notes                                                                                                                                                 |
 |---------------------|---------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------|
 | **Kasmina (Cells)** | Morphogenetic host wrapper around a task model | In this case study, the task model is a small CNN for CIFAR-10, but Kasmina can equally host transformers, MLPs, or other architectures. It provides `SeedSlot` injection points and manages per-seed lifecycle state such as `TRAINING`, `BLENDING`, and `FOSSILIZED`. |
-| **Tolaria (Body)**  | Training execution engine | Runs host + seed forward/backward passes and applies optimisers. Exposes hooks for gradient isolation and blended training regimes.                  |
+| **Tolaria (Body)**  | Training execution engine | Runs host (known as Model Alpha) + seed forward/backward passes and applies optimisers. Exposes hooks for gradient isolation and blended training regimes.                  |
 | **Simic (Gym)**     | RL gym and trainer        | Vectorised PPO environments using inverted control flow. Treats each training run as an RL episode where architectural decisions affect future rewards. |
 | **Tamiyo (Brain)**  | Policy / architect        | Decides when to `GERMINATE`, `ADVANCE`, or `CULL` seeds. Receives a structured observation including accuracy deltas, gradient statistics, seed stage, and simple budget signals. |
 | **Nissa (Senses)**  | Telemetry hub             | Collects and routes observability signals (accuracy deltas, gradient health, lifecycle metrics, budget signals) and feeds them into Simic/Tamiyo and analytics components. |
 
 ### **Blueprint library used in this case study**
 
-- `conv_enhance`: Standard residual-style conv block (~74k params), heavy but expressive.  
+- `conv_enhance`: Standard residual-style conv block (~74k params), heavy but expressive.  Comes in light and heavy variants.
 - `depthwise`: Depthwise separable block (~4.8k params), lightweight but efficient.  
 - `attention`: Squeeze-and-Excitation-style block (~2k params), cheap contextual reweighting.  
 
@@ -122,10 +126,15 @@ By penalising the parameter ratio ($P_{total} / P_{host}$), we explicitly encode
 
 Over time, this should in principle produce architectures that are both high performing and lean, mirroring the human-driven evolution from VGG-style stacks to MobileNet-style efficient networks [1].
 
-## 6. Conclusion
+## 6. Scope and relation to prior work
+
+Depthwise separable convolutions and their efficiency benefits are thoroughly documented in prior work such as MobileNet [1].[2]. Our contribution here is not a new architectural building block, but an existence proof that a morphogenetic RL controller with suitable telemetry can recover these known efficiency patterns from first principles. We use this as a sanity check on the Esper framework and as a motivation to apply the same machinery to less charted architectural spaces.
+
+## 7. Conclusion
 
 The Esper framework has proven it can learn architectural efficiency principles from first principles. The agent's preference for Depthwise Convolutions under constraint mirrors the human-driven evolution from VGG to MobileNet [1,2], providing high confidence that the system can generalise to new domains where the "right" architectural trade-offs are not known in advance.
 
 Most importantly, this case study shows that **morphogenetic control is a learnable skill**: given the right telemetry and a reward that reflects both benefit and cost, an RL agent can discover and exploit structural regularities that were previously the domain of hand-designed architectures.
 
 [1]: https://arxiv.org/pdf/1704.04861?utm_source=chatgpt.com "arXiv:1704.04861v1 [cs.CV] 17 Apr 2017"
+[2]: https://arxiv.org/pdf/1801.04381 "arXiv:1801.04381v2 [cs.CV] 10 Apr 2018"
