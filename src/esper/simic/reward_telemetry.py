@@ -37,6 +37,8 @@ class RewardComponentsTelemetry:
     pbrs_bonus: float = 0.0
     action_shaping: float = 0.0
     terminal_bonus: float = 0.0
+    fossilize_terminal_bonus: float = 0.0  # Terminal bonus from fossilized seed count
+    num_fossilized_seeds: int = 0  # Current count for debugging
 
     # Context (for debugging) - DRL Expert recommended fields
     action_name: str = ""
@@ -71,6 +73,8 @@ class RewardComponentsTelemetry:
             "pbrs_bonus": self.pbrs_bonus,
             "action_shaping": self.action_shaping,
             "terminal_bonus": self.terminal_bonus,
+            "fossilize_terminal_bonus": self.fossilize_terminal_bonus,
+            "num_fossilized_seeds": self.num_fossilized_seeds,
             "action_name": self.action_name,
             "action_success": self.action_success,
             "seed_stage": self.seed_stage,

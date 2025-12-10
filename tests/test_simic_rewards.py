@@ -831,7 +831,10 @@ class TestProbationaryIndecisionPenalty:
         )
 
     def test_penalty_starts_epoch_2(self):
-        """Epoch 2 in PROBATIONARY should have WAIT penalty (-0.10)."""
+        """Epoch 2 in PROBATIONARY should have WAIT penalty (-1.0).
+
+        DRL Expert review 2025-12-10: exponential penalty to overcome +7.5 attribution.
+        """
         from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
@@ -855,13 +858,17 @@ class TestProbationaryIndecisionPenalty:
             return_components=True,
         )
 
-        # Epoch 2: -0.05 - (2-1)*0.05 = -0.10
-        assert components.probation_warning == -0.10, (
-            f"Epoch 2 should have -0.10 penalty: {components.probation_warning}"
+        # Epoch 2: -1.0 * (3 ** 0) = -1.0
+        assert components.probation_warning == -1.0, (
+            f"Epoch 2 should have -1.0 penalty: {components.probation_warning}"
         )
 
     def test_penalty_escalates_over_epochs(self):
-        """WAIT penalty should escalate each epoch in PROBATIONARY."""
+        """WAIT penalty should escalate exponentially each epoch in PROBATIONARY.
+
+        DRL Expert review 2025-12-10: exponential to overcome +7.5 attribution.
+        Schedule: epoch 2 -> -1.0, epoch 3 -> -3.0, epoch 4 -> -9.0, capped at -10.0
+        """
         from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
@@ -886,15 +893,14 @@ class TestProbationaryIndecisionPenalty:
             )
             return components.probation_warning
 
-        # Verify escalation: 0, -0.10, -0.15, -0.20, -0.25, -0.30 (capped)
-        # Use pytest.approx for floating point comparison
-        assert get_penalty(1) == 0.0  # Grace
-        assert get_penalty(2) == pytest.approx(-0.10)
-        assert get_penalty(3) == pytest.approx(-0.15)
-        assert get_penalty(4) == pytest.approx(-0.20)
-        assert get_penalty(5) == pytest.approx(-0.25)
-        assert get_penalty(6) == pytest.approx(-0.30)  # Capped
-        assert get_penalty(10) == pytest.approx(-0.30)  # Still capped
+        # Verify exponential escalation: 0, -1.0, -3.0, -9.0, -10.0 (capped)
+        # Formula: -1.0 * (3 ** (epochs_waiting - 1)), capped at -10.0
+        assert get_penalty(1) == 0.0  # Grace period
+        assert get_penalty(2) == pytest.approx(-1.0)   # 3^0 = 1
+        assert get_penalty(3) == pytest.approx(-3.0)   # 3^1 = 3
+        assert get_penalty(4) == pytest.approx(-9.0)   # 3^2 = 9
+        assert get_penalty(5) == pytest.approx(-10.0)  # 3^3 = 27, capped at -10
+        assert get_penalty(10) == pytest.approx(-10.0) # Still capped
 
     def test_no_penalty_for_fossilize_action(self):
         """FOSSILIZE action should not receive WAIT penalty."""
@@ -1243,3 +1249,113 @@ class TestRatioPenalty:
         assert components.ratio_penalty == pytest.approx(-0.1), (
             f"10x ratio should have -0.1 penalty: {components.ratio_penalty}"
         )
+
+
+class TestFossilizeTerminalBonus:
+    """Test terminal bonus for fossilized seeds.
+
+    DRL Expert review 2025-12-10: Terminal bonus makes FOSSILIZE NPV-positive
+    vs WAIT-farming in PROBATIONARY. Addresses H4 (terminating action problem).
+    """
+
+    def test_terminal_bonus_scales_with_fossilized_count(self):
+        """Terminal bonus should scale with number of fossilized seeds."""
+        from enum import IntEnum
+        class MockAction(IntEnum):
+            WAIT = 0
+
+        def get_terminal_bonus(num_fossilized: int) -> tuple[float, float]:
+            _, components = compute_contribution_reward(
+                action=MockAction.WAIT,
+                seed_contribution=None,
+                val_acc=70.0,
+                seed_info=None,
+                epoch=25,  # Terminal epoch
+                max_epochs=25,
+                acc_at_germination=None,
+                return_components=True,
+                num_fossilized_seeds=num_fossilized,
+            )
+            return components.terminal_bonus, components.fossilize_terminal_bonus
+
+        # Default fossilize_terminal_scale = 3.0
+        # terminal_bonus = val_acc * 0.05 + num_fossilized * 3.0
+        # Base: 70 * 0.05 = 3.5
+        total_0, fossil_0 = get_terminal_bonus(0)
+        assert fossil_0 == 0.0
+        assert total_0 == pytest.approx(3.5)  # Base only
+
+        total_1, fossil_1 = get_terminal_bonus(1)
+        assert fossil_1 == pytest.approx(3.0)  # 1 * 3.0
+        assert total_1 == pytest.approx(6.5)  # 3.5 + 3.0
+
+        total_5, fossil_5 = get_terminal_bonus(5)
+        assert fossil_5 == pytest.approx(15.0)  # 5 * 3.0
+        assert total_5 == pytest.approx(18.5)  # 3.5 + 15.0
+
+    def test_no_terminal_bonus_before_max_epoch(self):
+        """Terminal bonus should only apply at max_epochs."""
+        from enum import IntEnum
+        class MockAction(IntEnum):
+            WAIT = 0
+
+        _, components = compute_contribution_reward(
+            action=MockAction.WAIT,
+            seed_contribution=None,
+            val_acc=70.0,
+            seed_info=None,
+            epoch=20,  # Not terminal
+            max_epochs=25,
+            acc_at_germination=None,
+            return_components=True,
+            num_fossilized_seeds=5,
+        )
+
+        assert components.terminal_bonus == 0.0
+        assert components.fossilize_terminal_bonus == 0.0
+
+    def test_telemetry_tracks_fossilized_count(self):
+        """Telemetry should track num_fossilized_seeds for debugging."""
+        from enum import IntEnum
+        class MockAction(IntEnum):
+            WAIT = 0
+
+        _, components = compute_contribution_reward(
+            action=MockAction.WAIT,
+            seed_contribution=None,
+            val_acc=70.0,
+            seed_info=None,
+            epoch=25,
+            max_epochs=25,
+            acc_at_germination=None,
+            return_components=True,
+            num_fossilized_seeds=3,
+        )
+
+        assert components.num_fossilized_seeds == 3
+
+    def test_terminal_bonus_config_override(self):
+        """Custom config should allow adjusting fossilize_terminal_scale."""
+        from enum import IntEnum
+        class MockAction(IntEnum):
+            WAIT = 0
+
+        custom_config = ContributionRewardConfig(fossilize_terminal_scale=5.0)
+
+        _, components = compute_contribution_reward(
+            action=MockAction.WAIT,
+            seed_contribution=None,
+            val_acc=70.0,
+            seed_info=None,
+            epoch=25,
+            max_epochs=25,
+            config=custom_config,
+            acc_at_germination=None,
+            return_components=True,
+            num_fossilized_seeds=2,
+        )
+
+        # 2 * 5.0 = 10.0 fossilize bonus
+        assert components.fossilize_terminal_bonus == pytest.approx(10.0)
+        # Total: 70 * 0.05 + 10.0 = 13.5
+        assert components.terminal_bonus == pytest.approx(13.5)

@@ -136,6 +136,10 @@ class ConsoleOutput(OutputBackend):
             blending_warning = data.get("blending_warning", 0.0)
             probation_warning = data.get("probation_warning", 0.0)
             attribution_discount = data.get("attribution_discount", 1.0)
+            ratio_penalty = data.get("ratio_penalty", 0.0)
+            # Terminal bonus telemetry
+            fossilize_terminal_bonus = data.get("fossilize_terminal_bonus", 0.0)
+            num_fossilized_seeds = data.get("num_fossilized_seeds", 0)
             # Format: env, action, total reward, and key breakdown
             # Note: rent is stored as negative (penalty), display as positive cost
             rent_display = abs(rent)
@@ -147,6 +151,10 @@ class ConsoleOutput(OutputBackend):
                 extra += f" PROB={probation_warning:.2f}"
             if attribution_discount < 1.0:
                 extra += f" disc={attribution_discount:.2f}"
+            if ratio_penalty < 0:
+                extra += f" ratio={ratio_penalty:.2f}"
+            if fossilize_terminal_bonus > 0:
+                extra += f" fossil_term={fossilize_terminal_bonus:+.1f}({num_fossilized_seeds})"
             if bounded is not None:
                 # Contribution-primary reward
                 print(f"[{timestamp}] env{env_id} | {action}: r={total:+.2f} (attr={bounded:+.2f}, rent={rent_display:.2f}{extra}) acc={val_acc:.1f}%")

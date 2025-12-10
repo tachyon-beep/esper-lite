@@ -166,6 +166,9 @@ class ContributionRewardConfig:
 
     # Terminal bonus
     terminal_acc_weight: float = 0.05
+    # Terminal bonus per fossilized seed (incentivizes completion over farming)
+    # DRL Expert review 2025-12-10: set to 3.0 to compete with post-scale attribution
+    fossilize_terminal_scale: float = 3.0
 
     # Gamma for PBRS (uses module constant for consistency)
     gamma: float = DEFAULT_GAMMA
@@ -320,6 +323,7 @@ def compute_contribution_reward(
     acc_at_germination: float | None = None,
     acc_delta: float | None = None,
     return_components: bool = False,
+    num_fossilized_seeds: int = 0,
 ) -> float | tuple[float, RewardComponentsTelemetry]:
     """Compute reward using bounded attribution (ransomware-resistant).
 
@@ -353,6 +357,7 @@ def compute_contribution_reward(
         acc_at_germination: Accuracy when seed was planted (for progress calc)
         acc_delta: Per-epoch accuracy change (proxy signal for pre-blending)
         return_components: If True, return (reward, components) tuple
+        num_fossilized_seeds: Count of fossilized seeds for terminal bonus
 
     Returns:
         Shaped reward value, or (reward, components) if return_components=True
@@ -492,23 +497,27 @@ def compute_contribution_reward(
         components.blending_warning = blending_warning
 
     # === 1c. PROBATIONARY INDECISION PENALTY ===
-    # Escalating penalty for WAITing too long in PROBATIONARY
-    # Creates pressure to make FOSSILIZE/CULL decision before timeout
-    # (DRL Expert review 2025-12-10: prevents reward farming until timeout)
+    # Exponential escalation for WAITing too long in PROBATIONARY
+    # Creates urgency to make FOSSILIZE/CULL decision before timeout
+    # DRL Expert review 2025-12-10: steepened to overcome +7.5 attribution
+    # Note: Orthogonal to blending_warning (different stage, different pathology)
     probation_warning = 0.0
     if seed_info is not None and seed_info.stage == STAGE_PROBATIONARY:
         if action_name == "WAIT":
             # Only penalize if counterfactual data is available (agent has info to act)
-            # Grace period: epoch 1 is free (gathering information)
-            # Epoch 2: -0.10, Epoch 3: -0.15, Epoch 4: -0.20, Epoch 5+: -0.30
+            # Grace period: epoch 1 is free (information gathering)
             if seed_info.epochs_in_stage >= 2:
                 has_counterfactual = (
                     seed_info.total_improvement is not None
                     or seed_info.improvement_since_stage_start is not None
                 )
                 if has_counterfactual:
-                    escalation = min((seed_info.epochs_in_stage - 1) * 0.05, 0.25)
-                    probation_warning = -0.05 - escalation
+                    # Exponential: epoch 2 -> -1.0, epoch 3 -> -3.0, epoch 4 -> -9.0
+                    # Formula: -1.0 * (3 ** (epochs_waiting - 1))
+                    epochs_waiting = seed_info.epochs_in_stage - 1
+                    probation_warning = -1.0 * (3 ** (epochs_waiting - 1))
+                    # Cap at -10.0 (clip boundary) to avoid extreme penalties
+                    probation_warning = max(probation_warning, -10.0)
                     reward += probation_warning
     if components:
         components.probation_warning = probation_warning
@@ -569,11 +578,20 @@ def compute_contribution_reward(
 
     # === 5. TERMINAL BONUS ===
     terminal_bonus = 0.0
+    fossilize_terminal_bonus = 0.0
     if epoch == max_epochs:
+        # Base accuracy bonus
         terminal_bonus = val_acc * config.terminal_acc_weight
+        # Bonus per fossilized seed to incentivize completion over farming
+        # This makes FOSSILIZE NPV-positive vs WAIT-farming in PROBATIONARY
+        # DRL Expert review 2025-12-10: addresses H4 (terminating action problem)
+        fossilize_terminal_bonus = num_fossilized_seeds * config.fossilize_terminal_scale
+        terminal_bonus += fossilize_terminal_bonus
         reward += terminal_bonus
     if components:
         components.terminal_bonus = terminal_bonus
+        components.fossilize_terminal_bonus = fossilize_terminal_bonus
+        components.num_fossilized_seeds = num_fossilized_seeds
 
     if components:
         components.total_reward = reward
