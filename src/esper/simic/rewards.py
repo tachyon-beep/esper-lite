@@ -425,12 +425,14 @@ def compute_contribution_reward(
                 components.attribution_discount = attribution_discount
 
             bounded_attribution = config.contribution_weight * attributed
-    else:
+    elif seed_info is not None:
         # Pre-blending: use accuracy delta as proxy signal (lower weight)
         # This maintains reward continuity without imputing fake counterfactual.
         # No penalty for negative delta - we don't have causal data yet.
+        # NOTE: Only applies when seed exists - seedless states get zero attribution
         if acc_delta is not None and acc_delta > 0:
             bounded_attribution = config.proxy_contribution_weight * acc_delta
+    # else: No seed exists - zero attribution (host-only learning is not credited)
     # === FOSSILIZE-SPECIFIC ATTRIBUTION OVERRIDE ===
     # Zero attribution for fossilizing negative-improvement seeds.
     # The fossilize shaping penalty handles the negative signal - we shouldn't

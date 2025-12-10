@@ -952,3 +952,92 @@ class TestProbationaryIndecisionPenalty:
         assert components.probation_warning == 0.0, (
             f"No penalty without counterfactual data: {components.probation_warning}"
         )
+
+
+class TestSeedlessAttribution:
+    """Test that seedless states get zero attribution."""
+
+    def test_seedless_wait_gets_no_attribution(self):
+        """WAIT with no seed should get zero attribution, even with positive acc_delta.
+
+        Host-only learning shouldn't be credited as if a seed contributed.
+        """
+        from enum import IntEnum
+        class MockAction(IntEnum):
+            WAIT = 0
+
+        # No seed_info means no seed exists
+        _, components = compute_contribution_reward(
+            action=MockAction.WAIT,
+            seed_contribution=None,  # No counterfactual
+            val_acc=45.0,
+            seed_info=None,  # NO SEED
+            epoch=3,
+            max_epochs=25,
+            acc_at_germination=None,
+            acc_delta=10.0,  # Big accuracy improvement (host learning)
+            return_components=True,
+        )
+
+        # Should get zero attribution despite positive acc_delta
+        assert components.bounded_attribution == 0.0, (
+            f"Seedless state should get no attribution: {components.bounded_attribution}"
+        )
+
+    def test_seedless_germinate_gets_no_attribution(self):
+        """GERMINATE with no existing seed should get zero attribution."""
+        from enum import IntEnum
+        class MockAction(IntEnum):
+            GERMINATE_NORM = 1
+
+        _, components = compute_contribution_reward(
+            action=MockAction.GERMINATE_NORM,
+            seed_contribution=None,
+            val_acc=50.0,
+            seed_info=None,  # No seed yet (germinating creates one)
+            epoch=5,
+            max_epochs=25,
+            acc_at_germination=None,
+            acc_delta=5.0,  # Host learning
+            return_components=True,
+        )
+
+        assert components.bounded_attribution == 0.0, (
+            f"Seedless germinate should get no attribution: {components.bounded_attribution}"
+        )
+
+    def test_pre_blending_seed_still_gets_proxy_attribution(self):
+        """Pre-blending seed (no counterfactual) should still get proxy attribution.
+
+        This is different from seedless - a seed exists but hasn't reached
+        BLENDING yet, so we use acc_delta as a proxy signal.
+        """
+        from enum import IntEnum
+        class MockAction(IntEnum):
+            WAIT = 0
+
+        # Seed exists but in TRAINING (no counterfactual yet)
+        training_seed = SeedInfo(
+            stage=STAGE_TRAINING,
+            improvement_since_stage_start=0.5,
+            total_improvement=0.5,
+            epochs_in_stage=2,
+            seed_age_epochs=3,
+        )
+
+        _, components = compute_contribution_reward(
+            action=MockAction.WAIT,
+            seed_contribution=None,  # No counterfactual yet
+            val_acc=45.0,
+            seed_info=training_seed,  # SEED EXISTS
+            epoch=3,
+            max_epochs=25,
+            acc_at_germination=40.0,
+            acc_delta=2.0,  # Positive delta
+            return_components=True,
+        )
+
+        # Should get proxy attribution (proxy_contribution_weight * acc_delta = 0.3 * 2.0 = 0.6)
+        assert components.bounded_attribution == pytest.approx(0.6), (
+            f"Pre-blending seed should get proxy attribution: {components.bounded_attribution}"
+        )
