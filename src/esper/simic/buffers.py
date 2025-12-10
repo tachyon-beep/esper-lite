@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Iterator, NamedTuple
 
@@ -411,7 +412,6 @@ class RecurrentRolloutBuffer:
                     # but won't crash. For best results, set chunk_length >= episode_length.
                     is_episode_start = (chunk_start == 0)
                     if not is_episode_start:
-                        import warnings
                         warnings.warn(
                             f"Mid-episode chunking detected (chunk_start={chunk_start}). "
                             f"Using zeros for initial hidden state, which loses temporal "

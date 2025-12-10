@@ -74,7 +74,15 @@ class SumTree:
 
         Returns:
             Data index in the experience buffer
+
+        Raises:
+            RuntimeError: If total priority is too small to sample from
         """
+        # Guard against empty/near-empty tree
+        if self.total <= 1e-8:
+            raise RuntimeError(
+                f"Cannot sample from SumTree with near-zero total priority ({self.total})"
+            )
         # Clamp cumsum to valid range for numeric stability
         cumsum = max(0.0, min(cumsum, self.total - 1e-8))
         tree_idx = 0  # Start at root

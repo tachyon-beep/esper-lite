@@ -537,7 +537,7 @@ class PPOAgent:
                     + entropy_coef * entropy_loss
                 )
 
-                self.optimizer.zero_grad()
+                self.optimizer.zero_grad(set_to_none=True)
                 loss.backward()
 
                 # === DEBUG TELEMETRY: Collect expensive diagnostics if enabled ===
@@ -824,7 +824,7 @@ class PPOAgent:
                 # Total loss (using agent's value_coef, not hardcoded)
                 loss = policy_loss + self.value_coef * value_loss + entropy_coef * entropy_loss
 
-                self.optimizer.zero_grad()
+                self.optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 nn.utils.clip_grad_norm_(self.network.parameters(), self.max_grad_norm)
                 self.optimizer.step()

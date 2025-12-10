@@ -83,7 +83,8 @@ class BlueprintCurriculum:
 
     def _normalize_reward(self, reward: float) -> float:
         """Normalize reward to [0, 1] range and clip."""
-        if self._reward_max == self._reward_min:
+        # Use epsilon comparison to avoid division by near-zero
+        if abs(self._reward_max - self._reward_min) < 1e-8:
             return 0.5
         normalized = (reward - self._reward_min) / (self._reward_max - self._reward_min)
         return max(0.0, min(1.0, normalized))
