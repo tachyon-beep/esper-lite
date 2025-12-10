@@ -30,14 +30,58 @@ class AnomalyDetector:
 
     Thresholds are configurable but have sensible defaults based on
     typical PPO training behavior.
+
+    Value collapse detection uses phase-dependent thresholds because:
+    - Early training: Critic hasn't learned yet, low EV is expected
+    - Late training: Critic should correlate with returns, low EV is concerning
+
+    Phase boundaries are proportions of total_episodes (configurable):
+    - Warmup (0-10%): Allow anti-correlated predictions (EV < -0.5)
+    - Early (10-25%): Expect some signal (EV < -0.2)
+    - Mid (25-75%): Expect positive correlation (EV < 0.0)
+    - Late (75%+): Expect useful predictions (EV < 0.1)
     """
 
     # Ratio thresholds
     max_ratio_threshold: float = 5.0
     min_ratio_threshold: float = 0.1
 
-    # Value function thresholds
-    min_explained_variance: float = 0.1
+    # Value function thresholds by training phase (proportions of total_episodes)
+    # Phase boundaries as fractions of total training
+    warmup_fraction: float = 0.10   # 0-10% of training
+    early_fraction: float = 0.25    # 10-25% of training
+    mid_fraction: float = 0.75      # 25-75% of training
+    # Late is implicitly 75%+
+
+    # EV thresholds for each phase
+    ev_threshold_warmup: float = -0.5   # Allow anti-correlated (random init)
+    ev_threshold_early: float = -0.2    # Expect some learning
+    ev_threshold_mid: float = 0.0       # Expect positive correlation
+    ev_threshold_late: float = 0.1      # Expect useful predictions
+
+    def get_ev_threshold(self, current_episode: int, total_episodes: int) -> float:
+        """Get explained variance threshold based on training progress.
+
+        Args:
+            current_episode: Current episode number (1-indexed)
+            total_episodes: Total episodes configured for training
+
+        Returns:
+            Appropriate EV threshold for current training phase
+        """
+        if total_episodes <= 0:
+            return self.ev_threshold_late  # Fallback to strictest
+
+        progress = current_episode / total_episodes
+
+        if progress < self.warmup_fraction:
+            return self.ev_threshold_warmup
+        elif progress < self.early_fraction:
+            return self.ev_threshold_early
+        elif progress < self.mid_fraction:
+            return self.ev_threshold_mid
+        else:
+            return self.ev_threshold_late
 
     def check_ratios(
         self,
@@ -72,21 +116,37 @@ class AnomalyDetector:
     def check_value_function(
         self,
         explained_variance: float,
+        current_episode: int = 0,
+        total_episodes: int = 0,
     ) -> AnomalyReport:
-        """Check for value function collapse.
+        """Check for value function collapse with phase-dependent thresholds.
+
+        Early in training, low explained variance is expected (critic learning).
+        Later in training, low EV indicates the critic isn't providing useful
+        signal for policy updates.
 
         Args:
-            explained_variance: Explained variance metric
+            explained_variance: Explained variance metric (1 - Var(returns-values)/Var(returns))
+            current_episode: Current episode number for phase detection (0 = use static threshold)
+            total_episodes: Total configured episodes (0 = use static threshold)
 
         Returns:
             AnomalyReport with any detected issues
         """
         report = AnomalyReport()
 
-        if explained_variance < self.min_explained_variance:
+        # Use phase-dependent threshold if episode info provided
+        if current_episode > 0 and total_episodes > 0:
+            threshold = self.get_ev_threshold(current_episode, total_episodes)
+        else:
+            # Fallback to late-phase threshold (strictest) for backwards compatibility
+            threshold = self.ev_threshold_late
+
+        if explained_variance < threshold:
+            progress_pct = (current_episode / total_episodes * 100) if total_episodes > 0 else 0
             report.add_anomaly(
                 "value_collapse",
-                f"explained_variance={explained_variance:.3f} < {self.min_explained_variance}",
+                f"explained_variance={explained_variance:.3f} < {threshold} (at {progress_pct:.0f}% training)",
             )
 
         return report
@@ -127,6 +187,8 @@ class AnomalyDetector:
         explained_variance: float,
         has_nan: bool = False,
         has_inf: bool = False,
+        current_episode: int = 0,
+        total_episodes: int = 0,
     ) -> AnomalyReport:
         """Run all anomaly checks and combine results.
 
@@ -136,6 +198,8 @@ class AnomalyDetector:
             explained_variance: Explained variance metric
             has_nan: Whether NaN values were detected
             has_inf: Whether Inf values were detected
+            current_episode: Current episode for phase-dependent value collapse threshold
+            total_episodes: Total configured episodes for phase detection
 
         Returns:
             Combined AnomalyReport
@@ -144,7 +208,7 @@ class AnomalyDetector:
 
         for check_report in [
             self.check_ratios(ratio_max, ratio_min),
-            self.check_value_function(explained_variance),
+            self.check_value_function(explained_variance, current_episode, total_episodes),
             self.check_numerical_stability(has_nan, has_inf),
         ]:
             if check_report.has_anomaly:

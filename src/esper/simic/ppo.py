@@ -395,6 +395,8 @@ class PPOAgent:
         last_value: float = 0.0,
         clear_buffer: bool = True,
         telemetry_config: "TelemetryConfig | None" = None,
+        current_episode: int = 0,
+        total_episodes: int = 0,
     ) -> dict:
         """Perform PPO update.
 
@@ -405,6 +407,8 @@ class PPOAgent:
                 (e.g., for higher sample efficiency via ppo_updates_per_batch).
             telemetry_config: Optional telemetry configuration for diagnostic collection.
                 If None, creates default TelemetryConfig(level=TelemetryLevel.NORMAL).
+            current_episode: Current episode number for phase-dependent anomaly thresholds.
+            total_episodes: Total configured episodes for phase detection.
 
         Returns:
             Dictionary of training metrics.
@@ -631,6 +635,8 @@ class PPOAgent:
                 explained_variance=explained_variance,
                 has_nan=flags.get('ratio_has_nan', has_numerical_issue),
                 has_inf=flags.get('ratio_has_inf', has_numerical_issue),
+                current_episode=current_episode,
+                total_episodes=total_episodes,
             )
 
             if anomaly_report.has_anomaly:
