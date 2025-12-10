@@ -234,8 +234,12 @@ class TestStepEpochBlendingToProbationary:
 class TestStepEpochProbationaryOutcomes:
     """Test PROBATIONARY → FOSSILIZED or CULLED transitions."""
 
-    def test_probationary_fossilizes_with_positive_counterfactual(self):
-        """PROBATIONARY should FOSSILIZE when counterfactual is positive and G5 passes."""
+    def test_probationary_stays_with_positive_counterfactual(self):
+        """PROBATIONARY should STAY (not auto-fossilize) when counterfactual is positive.
+
+        Fossilization requires explicit FOSSILIZE action from Tamiyo, not auto-advance.
+        (DRL Expert review 2025-12-10: auto-fossilize violated credit assignment)
+        """
         gates = MockGates()
         gates.set_gate_result(SeedStage.FOSSILIZED, True)
         slot = create_test_slot(gates)
@@ -244,7 +248,8 @@ class TestStepEpochProbationaryOutcomes:
 
         slot.step_epoch()
 
-        assert slot.state.stage == SeedStage.FOSSILIZED
+        # Should stay in PROBATIONARY - fossilization requires explicit action
+        assert slot.state.stage == SeedStage.PROBATIONARY
 
     def test_probationary_culls_with_negative_counterfactual(self):
         """PROBATIONARY should CULL immediately when counterfactual is negative."""

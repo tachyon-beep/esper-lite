@@ -463,6 +463,28 @@ def compute_contribution_reward(
     if components:
         components.blending_warning = blending_warning
 
+    # === 1c. PROBATIONARY INDECISION PENALTY ===
+    # Escalating penalty for WAITing too long in PROBATIONARY
+    # Creates pressure to make FOSSILIZE/CULL decision before timeout
+    # (DRL Expert review 2025-12-10: prevents reward farming until timeout)
+    probation_warning = 0.0
+    if seed_info is not None and seed_info.stage == STAGE_PROBATIONARY:
+        if action_name == "WAIT":
+            # Only penalize if counterfactual data is available (agent has info to act)
+            # Grace period: epoch 1 is free (gathering information)
+            # Epoch 2: -0.10, Epoch 3: -0.15, Epoch 4: -0.20, Epoch 5+: -0.30
+            if seed_info.epochs_in_stage >= 2:
+                has_counterfactual = (
+                    seed_info.total_improvement is not None
+                    or seed_info.improvement_since_stage_start is not None
+                )
+                if has_counterfactual:
+                    escalation = min((seed_info.epochs_in_stage - 1) * 0.05, 0.25)
+                    probation_warning = -0.05 - escalation
+                    reward += probation_warning
+    if components:
+        components.probation_warning = probation_warning
+
     # === 2. PBRS: Stage Progression ===
     # Potential-based shaping preserves optimal policy (Ng et al., 1999)
     pbrs_bonus = 0.0

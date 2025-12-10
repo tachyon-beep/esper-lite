@@ -132,16 +132,19 @@ class ConsoleOutput(OutputBackend):
             base = data.get("base_acc_delta", 0.0)
             rent = data.get("compute_rent", 0.0)
             val_acc = data.get("val_acc", 0.0)
-            # Ransomware detection telemetry
+            # Warning signals telemetry
             blending_warning = data.get("blending_warning", 0.0)
+            probation_warning = data.get("probation_warning", 0.0)
             attribution_discount = data.get("attribution_discount", 1.0)
             # Format: env, action, total reward, and key breakdown
             # Note: rent is stored as negative (penalty), display as positive cost
             rent_display = abs(rent)
-            # Build extra info for ransomware signals
+            # Build extra info for warning signals
             extra = ""
             if blending_warning < 0:
-                extra += f" WARN={blending_warning:.2f}"
+                extra += f" BLEND={blending_warning:.2f}"
+            if probation_warning < 0:
+                extra += f" PROB={probation_warning:.2f}"
             if attribution_discount < 1.0:
                 extra += f" disc={attribution_discount:.2f}"
             if bounded is not None:

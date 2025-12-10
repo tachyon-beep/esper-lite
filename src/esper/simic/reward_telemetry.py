@@ -29,6 +29,7 @@ class RewardComponentsTelemetry:
     # Penalties
     compute_rent: float = 0.0
     blending_warning: float = 0.0  # Escalating penalty for negative trajectory during BLENDING
+    probation_warning: float = 0.0  # Escalating penalty for WAITing in PROBATIONARY
 
     # Bonuses
     stage_bonus: float = 0.0
@@ -63,6 +64,7 @@ class RewardComponentsTelemetry:
             "attribution_discount": self.attribution_discount,
             "compute_rent": self.compute_rent,
             "blending_warning": self.blending_warning,
+            "probation_warning": self.probation_warning,
             "stage_bonus": self.stage_bonus,
             "pbrs_bonus": self.pbrs_bonus,
             "action_shaping": self.action_shaping,

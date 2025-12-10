@@ -1242,8 +1242,10 @@ class SeedSlot(nn.Module):
                 )
             return
 
-        # PROBATIONARY → FOSSILIZED or CULLED
-        # This is the final decision point: prove worth or be removed
+        # PROBATIONARY: Decision point for Tamiyo
+        # Fossilization requires explicit FOSSILIZE action - NO auto-advance
+        # (DRL Expert review 2025-12-10: auto-fossilize violated credit assignment)
+        # Only handle safety auto-culls and timeout
         if stage == SeedStage.PROBATIONARY:
             # Calculate probation timeout (default 5 epochs, or 10% of max_epochs)
             # Minimum of 5 epochs ensures sufficient time for counterfactual validation
@@ -1252,39 +1254,17 @@ class SeedSlot(nn.Module):
             if self.task_config:
                 max_probation_epochs = max(5, int(self.task_config.max_epochs * 0.1))
 
-            # Path 1: Check if we should FOSSILIZE (success case)
-            # G5 requires counterfactual validation - no shortcuts
+            # Safety auto-cull: negative counterfactual means seed actively hurts performance
+            # This is a safety mechanism, not a decision bypass - Tamiyo should learn to
+            # cull these earlier via the attribution penalty, but we don't let obviously
+            # harmful seeds persist indefinitely
             if self.state.metrics.counterfactual_contribution is not None:
-                gate_result = self.gates.check_gate(self.state, SeedStage.FOSSILIZED)
-                self._sync_gate_decision(gate_result)
-                if gate_result.passed:
-                    old_stage = self.state.stage
-                    ok = self.state.transition(SeedStage.FOSSILIZED)
-                    if not ok:
-                        raise RuntimeError(
-                            f"Illegal lifecycle transition {self.state.stage} → FOSSILIZED"
-                        )
-                    self._emit_telemetry(
-                        TelemetryEventType.SEED_STAGE_CHANGED,
-                        data={"from": old_stage.name, "to": self.state.stage.name},
-                    )
-                    self._emit_telemetry(
-                        TelemetryEventType.SEED_FOSSILIZED,
-                        data={
-                            "seed_id": self.state.seed_id,
-                            "blueprint_id": self.state.blueprint_id,
-                            "contribution": self.state.metrics.counterfactual_contribution,
-                            "epochs_total": self.state.metrics.epochs_total,
-                        },
-                    )
-                    return
-                elif self.state.metrics.counterfactual_contribution <= 0:
-                    # Negative contribution = seed hurts performance, cull immediately
+                if self.state.metrics.counterfactual_contribution <= 0:
                     self.cull(reason="negative_counterfactual")
                     return
 
-            # Path 2: Check for timeout (failure case)
-            # Seed failed to prove its worth within the probation window
+            # Timeout: Tamiyo failed to decide in time
+            # The escalating WAIT penalty in rewards.py creates pressure to decide sooner
             if self.state.metrics.epochs_in_current_stage >= max_probation_epochs:
                 self.cull(reason="probation_timeout")
                 return

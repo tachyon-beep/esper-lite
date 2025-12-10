@@ -794,3 +794,161 @@ class TestRansomwareSeedDetection:
         )
         # Total reward should be negative (penalty only)
         assert reward < 0, f"Should be penalized for fossilizing negative-delta seed: {reward}"
+
+
+class TestProbationaryIndecisionPenalty:
+    """Test escalating WAIT penalty in PROBATIONARY stage."""
+
+    def test_no_penalty_epoch_1_grace_period(self):
+        """Epoch 1 in PROBATIONARY should have no WAIT penalty (grace period)."""
+        from enum import IntEnum
+        class MockAction(IntEnum):
+            WAIT = 0
+
+        probationary_seed = SeedInfo(
+            stage=STAGE_PROBATIONARY,
+            improvement_since_stage_start=1.0,
+            total_improvement=2.0,
+            epochs_in_stage=1,  # First epoch - grace period
+            seed_age_epochs=10,
+        )
+
+        _, components = compute_contribution_reward(
+            action=MockAction.WAIT,
+            seed_contribution=5.0,
+            val_acc=65.0,
+            seed_info=probationary_seed,
+            epoch=10,
+            max_epochs=25,
+            acc_at_germination=63.0,
+            return_components=True,
+        )
+
+        assert components.probation_warning == 0.0, (
+            f"Epoch 1 should have no penalty: {components.probation_warning}"
+        )
+
+    def test_penalty_starts_epoch_2(self):
+        """Epoch 2 in PROBATIONARY should have WAIT penalty (-0.10)."""
+        from enum import IntEnum
+        class MockAction(IntEnum):
+            WAIT = 0
+
+        probationary_seed = SeedInfo(
+            stage=STAGE_PROBATIONARY,
+            improvement_since_stage_start=1.0,
+            total_improvement=2.0,
+            epochs_in_stage=2,  # Second epoch
+            seed_age_epochs=11,
+        )
+
+        _, components = compute_contribution_reward(
+            action=MockAction.WAIT,
+            seed_contribution=5.0,
+            val_acc=65.0,
+            seed_info=probationary_seed,
+            epoch=11,
+            max_epochs=25,
+            acc_at_germination=63.0,
+            return_components=True,
+        )
+
+        # Epoch 2: -0.05 - (2-1)*0.05 = -0.10
+        assert components.probation_warning == -0.10, (
+            f"Epoch 2 should have -0.10 penalty: {components.probation_warning}"
+        )
+
+    def test_penalty_escalates_over_epochs(self):
+        """WAIT penalty should escalate each epoch in PROBATIONARY."""
+        from enum import IntEnum
+        class MockAction(IntEnum):
+            WAIT = 0
+
+        def get_penalty(epochs_in_stage: int) -> float:
+            seed = SeedInfo(
+                stage=STAGE_PROBATIONARY,
+                improvement_since_stage_start=1.0,
+                total_improvement=2.0,
+                epochs_in_stage=epochs_in_stage,
+                seed_age_epochs=10 + epochs_in_stage,
+            )
+            _, components = compute_contribution_reward(
+                action=MockAction.WAIT,
+                seed_contribution=5.0,
+                val_acc=65.0,
+                seed_info=seed,
+                epoch=10 + epochs_in_stage,
+                max_epochs=25,
+                acc_at_germination=63.0,
+                return_components=True,
+            )
+            return components.probation_warning
+
+        # Verify escalation: 0, -0.10, -0.15, -0.20, -0.25, -0.30 (capped)
+        # Use pytest.approx for floating point comparison
+        assert get_penalty(1) == 0.0  # Grace
+        assert get_penalty(2) == pytest.approx(-0.10)
+        assert get_penalty(3) == pytest.approx(-0.15)
+        assert get_penalty(4) == pytest.approx(-0.20)
+        assert get_penalty(5) == pytest.approx(-0.25)
+        assert get_penalty(6) == pytest.approx(-0.30)  # Capped
+        assert get_penalty(10) == pytest.approx(-0.30)  # Still capped
+
+    def test_no_penalty_for_fossilize_action(self):
+        """FOSSILIZE action should not receive WAIT penalty."""
+        from enum import IntEnum
+        class MockAction(IntEnum):
+            FOSSILIZE = 1
+
+        probationary_seed = SeedInfo(
+            stage=STAGE_PROBATIONARY,
+            improvement_since_stage_start=1.0,
+            total_improvement=2.0,
+            epochs_in_stage=5,  # Would have penalty if WAIT
+            seed_age_epochs=15,
+        )
+
+        _, components = compute_contribution_reward(
+            action=MockAction.FOSSILIZE,
+            seed_contribution=5.0,
+            val_acc=65.0,
+            seed_info=probationary_seed,
+            epoch=15,
+            max_epochs=25,
+            acc_at_germination=63.0,
+            return_components=True,
+        )
+
+        assert components.probation_warning == 0.0, (
+            f"FOSSILIZE should have no indecision penalty: {components.probation_warning}"
+        )
+
+    def test_no_penalty_without_counterfactual_data(self):
+        """No penalty if counterfactual data not yet available."""
+        from enum import IntEnum
+        class MockAction(IntEnum):
+            WAIT = 0
+
+        # Seed with no improvement data (waiting for counterfactual)
+        probationary_seed = SeedInfo(
+            stage=STAGE_PROBATIONARY,
+            improvement_since_stage_start=None,  # No data yet
+            total_improvement=None,  # No data yet
+            epochs_in_stage=3,  # Would have penalty if data available
+            seed_age_epochs=13,
+        )
+
+        _, components = compute_contribution_reward(
+            action=MockAction.WAIT,
+            seed_contribution=None,  # No counterfactual
+            val_acc=65.0,
+            seed_info=probationary_seed,
+            epoch=13,
+            max_epochs=25,
+            acc_at_germination=63.0,
+            return_components=True,
+        )
+
+        assert components.probation_warning == 0.0, (
+            f"No penalty without counterfactual data: {components.probation_warning}"
+        )
