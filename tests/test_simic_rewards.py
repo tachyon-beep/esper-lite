@@ -1088,7 +1088,12 @@ class TestRatioPenalty:
         )
 
     def test_penalty_for_high_contribution_negative_improvement(self):
-        """High contribution with negative improvement should trigger max penalty."""
+        """High contribution with negative improvement - ratio penalty SKIPPED to avoid stacking.
+
+        When total_improvement is negative, the attribution_discount sigmoid zeros the
+        attribution. The ratio_penalty is then skipped (attribution_discount < 0.5) to
+        avoid penalty stacking where the same ransomware seed is punished multiple times.
+        """
         from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
@@ -1113,10 +1118,14 @@ class TestRatioPenalty:
             return_components=True,
         )
 
-        # With 37.5% contribution and negative improvement:
-        # ratio_penalty = -0.3 * min(1.0, 37.5/10.0) = -0.3 * 1.0 = -0.3
-        assert components.ratio_penalty == pytest.approx(-0.3), (
-            f"High contribution + negative improvement should have -0.3 penalty: {components.ratio_penalty}"
+        # With negative total_improvement, attribution_discount ≈ 0 (sigmoid zeros it).
+        # ratio_penalty is skipped when attribution_discount < 0.5 to avoid stacking.
+        assert components.ratio_penalty == 0.0, (
+            f"Ratio penalty should be skipped when attribution_discount < 0.5: {components.ratio_penalty}"
+        )
+        # But the ransomware IS penalized via attribution_discount
+        assert components.attribution_discount < 0.5, (
+            f"Attribution discount should handle ransomware: {components.attribution_discount}"
         )
 
     def test_penalty_for_high_contribution_low_improvement(self):
@@ -1152,27 +1161,34 @@ class TestRatioPenalty:
         )
 
     def test_penalty_scales_with_contribution_magnitude(self):
-        """Ratio penalty should scale with contribution when below cap."""
+        """Ratio penalty scales with contribution when NOT masked by attribution_discount.
+
+        The ratio penalty only fires when attribution_discount >= 0.5 (positive trajectory).
+        This test uses low positive improvement (0.05) which keeps attribution_discount=1.0
+        but still triggers the ratio penalty for suspiciously high contribution.
+        """
         from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
 
         def get_penalty(contribution: float) -> float:
+            # Use low positive improvement (<=0.1) - triggers ratio penalty zone
+            # but keeps attribution_discount = 1.0 (no sigmoid discount for positive)
             seed = SeedInfo(
                 stage=STAGE_BLENDING,
-                improvement_since_stage_start=-1.0,
-                total_improvement=-1.0,
+                improvement_since_stage_start=0.05,
+                total_improvement=0.05,  # Low positive, not negative
                 epochs_in_stage=3,
                 seed_age_epochs=8,
             )
             _, components = compute_contribution_reward(
                 action=MockAction.WAIT,
                 seed_contribution=contribution,
-                val_acc=63.0,
+                val_acc=64.0,
                 seed_info=seed,
                 epoch=8,
                 max_epochs=25,
-                acc_at_germination=64.0,
+                acc_at_germination=63.95,  # Small positive progress
                 return_components=True,
             )
             return components.ratio_penalty
@@ -1248,6 +1264,108 @@ class TestRatioPenalty:
         # ratio = 10/1 = 10, penalty = -min(0.3, 0.1*(10-5)/5) = -min(0.3, 0.1) = -0.1
         assert components.ratio_penalty == pytest.approx(-0.1), (
             f"10x ratio should have -0.1 penalty: {components.ratio_penalty}"
+        )
+
+
+class TestPenaltyAntiStacking:
+    """Test that penalties don't stack on ransomware seeds.
+
+    Fix for training collapse: when attribution_discount zeros attribution,
+    ratio_penalty and probation_warning should NOT add additional penalties.
+    This prevents an unlearnable reward landscape.
+    """
+
+    def test_ransomware_seed_no_penalty_stacking(self):
+        """Ransomware seed: attribution_discount should be sole penalty mechanism.
+
+        When a seed has negative total_improvement (ransomware pattern), the
+        attribution_discount zeros the attribution. Additional penalties via
+        ratio_penalty or probation_warning create an unlearnable landscape.
+        """
+        from enum import IntEnum
+        class MockAction(IntEnum):
+            WAIT = 0
+
+        # Classic ransomware: high contribution but negative trajectory
+        ransomware_seed = SeedInfo(
+            stage=STAGE_PROBATIONARY,
+            improvement_since_stage_start=-1.0,
+            total_improvement=-2.0,  # Negative = ransomware
+            epochs_in_stage=3,  # Would normally trigger PROB penalty
+            seed_age_epochs=12,
+        )
+
+        _, components = compute_contribution_reward(
+            action=MockAction.WAIT,
+            seed_contribution=25.0,  # High contribution (would trigger ratio penalty)
+            val_acc=62.0,
+            seed_info=ransomware_seed,
+            epoch=12,
+            max_epochs=25,
+            acc_at_germination=64.0,  # Negative progress
+            return_components=True,
+        )
+
+        # Attribution discount should be near-zero (handling ransomware)
+        assert components.attribution_discount < 0.01, (
+            f"Attribution discount should handle ransomware: {components.attribution_discount}"
+        )
+
+        # Ratio penalty should be SKIPPED (attribution_discount < 0.5)
+        assert components.ratio_penalty == 0.0, (
+            f"Ratio penalty should be skipped to avoid stacking: {components.ratio_penalty}"
+        )
+
+        # PROB penalty should be SKIPPED (bounded_attribution <= 0)
+        assert components.probation_warning == 0.0, (
+            f"PROB penalty should be skipped to avoid stacking: {components.probation_warning}"
+        )
+
+        # bounded_attribution should be near-zero (not negative)
+        assert abs(components.bounded_attribution) < 0.1, (
+            f"Attribution should be zeroed, not heavily negative: {components.bounded_attribution}"
+        )
+
+    def test_legitimate_seed_still_gets_probation_penalty(self):
+        """Legitimate seed farming should still receive PROB penalty."""
+        from enum import IntEnum
+        class MockAction(IntEnum):
+            WAIT = 0
+
+        # Good seed being farmed in PROBATIONARY
+        good_seed = SeedInfo(
+            stage=STAGE_PROBATIONARY,
+            improvement_since_stage_start=2.0,
+            total_improvement=5.0,  # Positive trajectory
+            epochs_in_stage=3,  # Should trigger PROB penalty
+            seed_age_epochs=12,
+        )
+
+        _, components = compute_contribution_reward(
+            action=MockAction.WAIT,
+            seed_contribution=8.0,  # Good contribution
+            val_acc=68.0,
+            seed_info=good_seed,
+            epoch=12,
+            max_epochs=25,
+            acc_at_germination=63.0,
+            return_components=True,
+        )
+
+        # Attribution discount should be 1.0 (no discount for good seeds)
+        assert components.attribution_discount == 1.0, (
+            f"Good seed should have no attribution discount: {components.attribution_discount}"
+        )
+
+        # bounded_attribution should be positive
+        assert components.bounded_attribution > 0, (
+            f"Good seed should have positive attribution: {components.bounded_attribution}"
+        )
+
+        # PROB penalty SHOULD fire (bounded_attribution > 0, epoch 3)
+        # Epoch 3: -1.0 * (3 ** 1) = -3.0
+        assert components.probation_warning == pytest.approx(-3.0), (
+            f"Good seed farming should receive PROB penalty: {components.probation_warning}"
         )
 
 

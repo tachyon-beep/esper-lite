@@ -435,8 +435,13 @@ def compute_contribution_reward(
             # This directly penalizes the ransomware signature where seeds create
             # dependencies that inflate their apparent value beyond actual contribution.
             # DRL Expert review 2025-12-10: targets conv_heavy pattern specifically.
+            #
+            # IMPORTANT: Skip when attribution_discount < 0.5 to avoid penalty stacking.
+            # The attribution discount already zeros rewards for ransomware seeds;
+            # ratio_penalty is only for edge cases where discount alone is insufficient
+            # (e.g., high contribution with small positive improvement near threshold).
             ratio_penalty = 0.0
-            if seed_contribution > 1.0:
+            if seed_contribution > 1.0 and attribution_discount >= 0.5:
                 total_imp = seed_info.total_improvement if seed_info else 0.0
                 if total_imp > 0.1:
                     # Safe zone: actual improvement exists
@@ -501,12 +506,20 @@ def compute_contribution_reward(
     # Creates urgency to make FOSSILIZE/CULL decision before timeout
     # DRL Expert review 2025-12-10: steepened to overcome +7.5 attribution
     # Note: Orthogonal to blending_warning (different stage, different pathology)
+    #
+    # IMPORTANT: Only apply when bounded_attribution > 0 (legitimate seed being farmed).
+    # For ransomware seeds (attr ~= 0 due to discount), the agent's correct action is
+    # CULL, not FOSSILIZE. Penalizing WAIT in this case provides no useful gradient -
+    # the attribution discount already zeroed rewards. Penalty stacking creates an
+    # unlearnable reward landscape where every action is punished.
     probation_warning = 0.0
     if seed_info is not None and seed_info.stage == STAGE_PROBATIONARY:
         if action_name == "WAIT":
-            # Only penalize if counterfactual data is available (agent has info to act)
-            # Grace period: epoch 1 is free (information gathering)
-            if seed_info.epochs_in_stage >= 2:
+            # Only penalize when:
+            # 1. Counterfactual data is available (agent has info to act)
+            # 2. Attribution is positive (legitimate seed being farmed)
+            # 3. Past grace period (epoch 1 is free for information gathering)
+            if seed_info.epochs_in_stage >= 2 and bounded_attribution > 0:
                 has_counterfactual = (
                     seed_info.total_improvement is not None
                     or seed_info.improvement_since_stage_start is not None
