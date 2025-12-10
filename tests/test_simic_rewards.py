@@ -720,3 +720,39 @@ class TestRansomwareSeedDetection:
         # At -1.0%, expect ~0.007
         discount_10 = get_discount(-1.0)
         assert discount_10 < 0.02, f"At -1.0%: {discount_10}"
+
+    def test_fossilized_seeds_get_no_attribution(self):
+        """FOSSILIZED seeds should not receive attribution rewards.
+
+        After fossilization, the seed is permanent - no decision to be made.
+        Continuing to reward based on counterfactual would inflate rewards
+        indefinitely for envs with successful fossilized seeds.
+        """
+        from enum import IntEnum
+        class MockAction(IntEnum):
+            WAIT = 0
+
+        # FOSSILIZED seed with high contribution
+        fossilized_seed = SeedInfo(
+            stage=STAGE_FOSSILIZED,
+            improvement_since_stage_start=0.0,
+            total_improvement=8.0,
+            epochs_in_stage=10,
+            seed_age_epochs=30,
+        )
+
+        _, components = compute_contribution_reward(
+            action=MockAction.WAIT,
+            seed_contribution=40.0,  # Very high contribution
+            val_acc=75.0,
+            seed_info=fossilized_seed,
+            epoch=35,
+            max_epochs=50,
+            acc_at_germination=67.0,
+            return_components=True,
+        )
+
+        # Should get zero attribution despite high seed_contribution
+        assert components.bounded_attribution == 0.0, (
+            f"FOSSILIZED seed should get no attribution: {components.bounded_attribution}"
+        )

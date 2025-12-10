@@ -376,7 +376,12 @@ def compute_contribution_reward(
     # Uses counterfactual when available, falls back to acc_delta proxy for pre-blending
     bounded_attribution = 0.0
     progress = None
-    if seed_contribution is not None:
+
+    # Skip attribution for FOSSILIZED seeds - no decision to be made, seed is permanent
+    # Without this check, fossilized seeds continue generating high rewards indefinitely
+    seed_is_fossilized = seed_info is not None and seed_info.stage == STAGE_FOSSILIZED
+
+    if seed_contribution is not None and not seed_is_fossilized:
         # Counterfactual available (BLENDING+ stages)
         if seed_contribution < 0:
             # Toxic seed - counterfactual shows it actively hurts
