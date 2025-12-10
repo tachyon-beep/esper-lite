@@ -132,15 +132,24 @@ class ConsoleOutput(OutputBackend):
             base = data.get("base_acc_delta", 0.0)
             rent = data.get("compute_rent", 0.0)
             val_acc = data.get("val_acc", 0.0)
+            # Ransomware detection telemetry
+            blending_warning = data.get("blending_warning", 0.0)
+            attribution_discount = data.get("attribution_discount", 1.0)
             # Format: env, action, total reward, and key breakdown
             # Note: rent is stored as negative (penalty), display as positive cost
             rent_display = abs(rent)
+            # Build extra info for ransomware signals
+            extra = ""
+            if blending_warning < 0:
+                extra += f" WARN={blending_warning:.2f}"
+            if attribution_discount < 1.0:
+                extra += f" disc={attribution_discount:.2f}"
             if bounded is not None:
                 # Contribution-primary reward
-                print(f"[{timestamp}] env{env_id} | {action}: r={total:+.2f} (attr={bounded:+.2f}, rent={rent_display:.2f}) acc={val_acc:.1f}%")
+                print(f"[{timestamp}] env{env_id} | {action}: r={total:+.2f} (attr={bounded:+.2f}, rent={rent_display:.2f}{extra}) acc={val_acc:.1f}%")
             else:
                 # Legacy shaped reward
-                print(f"[{timestamp}] env{env_id} | {action}: r={total:+.2f} (Δacc={base:+.2f}, rent={rent_display:.2f}) acc={val_acc:.1f}%")
+                print(f"[{timestamp}] env{env_id} | {action}: r={total:+.2f} (Δacc={base:+.2f}, rent={rent_display:.2f}{extra}) acc={val_acc:.1f}%")
         else:
             msg = event.message or event_type
             print(f"[{timestamp}] {seed_id} | {msg}")
