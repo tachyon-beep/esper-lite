@@ -156,6 +156,8 @@ class PPOAgent:
         recurrent: bool = False,
         lstm_hidden_dim: int = 128,
         chunk_length: int = 25,  # Must match max_epochs to avoid hidden state issues
+        # Compilation
+        compile_network: bool = True,  # Use torch.compile() for 10-30% speedup
     ):
         self.recurrent = recurrent
         self.chunk_length = chunk_length
@@ -195,6 +197,12 @@ class PPOAgent:
         else:
             self.network = ActorCritic(state_dim, action_dim, hidden_dim).to(device)
 
+        # [PyTorch 2.9] Compile network for 10-30% speedup on forward/backward
+        # mode="default" is safest for networks with MaskedCategorical
+        # MaskedCategorical._validate_action_mask has @torch.compiler.disable
+        if compile_network:
+            self.network = torch.compile(self.network, mode="default")
+
         # [PyTorch 2.9] Use fused=True for CUDA, foreach=True for CPU
         use_cuda = device.startswith("cuda")
         optimizer_kwargs = {'lr': lr, 'eps': 1e-5}
@@ -231,6 +239,20 @@ class PPOAgent:
             )
         self.buffer = RolloutBuffer()
         self.train_steps = 0
+
+    @property
+    def _base_network(self):
+        """Get the original (uncompiled) network module.
+
+        torch.compile() wraps the network in OptimizedModule. This property
+        provides consistent access to the underlying network for save/load
+        and architecture introspection.
+        """
+        # hasattr AUTHORIZED by John on 2025-12-10 21:30:00 UTC
+        # Justification: torch.compile() wraps modules in OptimizedModule which has _orig_mod
+        if hasattr(self.network, '_orig_mod'):
+            return self.network._orig_mod
+        return self.network
 
     def get_entropy_coef(self, action_mask: torch.Tensor | None = None) -> float:
         """Get current entropy coefficient with optional adaptive floor.
@@ -887,8 +909,10 @@ class PPOAgent:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
 
+        # Use _base_network to get uncompiled module for consistent state dict keys
+        base_net = self._base_network
         save_dict = {
-            'network_state_dict': self.network.state_dict(),
+            'network_state_dict': base_net.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'train_steps': self.train_steps,
             'config': {
@@ -912,8 +936,8 @@ class PPOAgent:
             # Architecture info for load-time reconstruction
             'architecture': {
                 'recurrent': self.recurrent,
-                'state_dim': self.network.state_dim if self.recurrent else None,
-                'action_dim': self.network.action_dim,
+                'state_dim': base_net.state_dim if self.recurrent else None,
+                'action_dim': base_net.action_dim,
             }
         }
         if metadata:
@@ -948,7 +972,8 @@ class PPOAgent:
             **checkpoint.get('config', {})
         )
 
-        agent.network.load_state_dict(state_dict)
+        # Load into base network (handles compiled modules)
+        agent._base_network.load_state_dict(state_dict)
         agent.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         agent.train_steps = checkpoint.get('train_steps', 0)
 

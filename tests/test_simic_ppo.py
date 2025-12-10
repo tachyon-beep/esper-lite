@@ -84,8 +84,9 @@ class TestPPOFeatureDimensions:
     def test_ppo_agent_rejects_wrong_dimension(self):
         """PPO agent should fail with clear error when given wrong input dimension."""
         # Create agent expecting 45-dim input
+        # Use compile_network=False to test raw network error (Dynamo produces different message)
         state_dim = 45
-        agent = PPOAgent(state_dim=state_dim, action_dim=7, device='cpu')
+        agent = PPOAgent(state_dim=state_dim, action_dim=7, device='cpu', compile_network=False)
 
         # Try to feed 54-dim input (old incorrect dimension)
         wrong_state = torch.randn(1, 54)
@@ -306,13 +307,15 @@ class TestRecurrentPPOAgent:
     def test_init_with_recurrent_creates_lstm_network(self):
         """PPOAgent(recurrent=True) should use RecurrentActorCritic."""
         agent = PPOAgent(state_dim=30, action_dim=7, recurrent=True, lstm_hidden_dim=128)
-        assert isinstance(agent.network, RecurrentActorCritic)
+        # Use _base_network to check type (handles torch.compile wrapper)
+        assert isinstance(agent._base_network, RecurrentActorCritic)
         assert agent.recurrent is True
 
     def test_init_without_recurrent_uses_mlp(self):
         """PPOAgent(recurrent=False) should use standard ActorCritic."""
         agent = PPOAgent(state_dim=30, action_dim=7, recurrent=False)
-        assert isinstance(agent.network, ActorCritic)
+        # Use _base_network to check type (handles torch.compile wrapper)
+        assert isinstance(agent._base_network, ActorCritic)
         assert agent.recurrent is False
 
     def test_get_action_returns_hidden_when_recurrent(self):
@@ -853,9 +856,9 @@ class TestPPOSaveLoad:
         )
         agent.train_steps = 42
 
-        # Get initial weights for comparison
+        # Get initial weights for comparison (use _base_network for torch.compile compatibility)
         initial_weights = {
-            k: v.clone() for k, v in agent.network.state_dict().items()
+            k: v.clone() for k, v in agent._base_network.state_dict().items()
         }
 
         # Save
@@ -873,7 +876,7 @@ class TestPPOSaveLoad:
 
         # Verify weights match
         for key, original in initial_weights.items():
-            loaded_weight = loaded.network.state_dict()[key]
+            loaded_weight = loaded._base_network.state_dict()[key]
             assert torch.allclose(original, loaded_weight), f"Mismatch in {key}"
 
     def test_recurrent_save_load_roundtrip(self, tmp_path):
@@ -890,9 +893,9 @@ class TestPPOSaveLoad:
         )
         agent.train_steps = 100
 
-        # Get initial weights for comparison
+        # Get initial weights for comparison (use _base_network for torch.compile compatibility)
         initial_weights = {
-            k: v.clone() for k, v in agent.network.state_dict().items()
+            k: v.clone() for k, v in agent._base_network.state_dict().items()
         }
 
         # Save
@@ -910,12 +913,12 @@ class TestPPOSaveLoad:
         assert loaded.chunk_length == 20
         assert loaded.train_steps == 100
 
-        # Verify network type
-        assert isinstance(loaded.network, RecurrentActorCritic)
+        # Verify network type (use _base_network for torch.compile compatibility)
+        assert isinstance(loaded._base_network, RecurrentActorCritic)
 
         # Verify weights match
         for key, original in initial_weights.items():
-            loaded_weight = loaded.network.state_dict()[key]
+            loaded_weight = loaded._base_network.state_dict()[key]
             assert torch.allclose(original, loaded_weight), f"Mismatch in {key}"
 
     def test_recurrent_save_load_preserves_inference_behavior(self, tmp_path):
@@ -971,7 +974,7 @@ class TestPPOSaveLoad:
         loaded_feedforward = PPOAgent.load(feedforward_path, device='cpu')
 
         assert loaded_recurrent.recurrent is True
-        assert isinstance(loaded_recurrent.network, RecurrentActorCritic)
+        assert isinstance(loaded_recurrent._base_network, RecurrentActorCritic)
 
         assert loaded_feedforward.recurrent is False
-        assert isinstance(loaded_feedforward.network, ActorCritic)
+        assert isinstance(loaded_feedforward._base_network, ActorCritic)
