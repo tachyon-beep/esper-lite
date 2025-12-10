@@ -222,7 +222,7 @@ class TestG5RequiresCounterfactual:
         result = gates._check_g5(state)
 
         assert result.passed, f"G5 should pass: {result.checks_failed}"
-        assert "positive_contribution" in str(result.checks_passed)
+        assert "sufficient_contribution" in str(result.checks_passed)
 
     def test_g5_fails_with_negative_counterfactual(self):
         """G5 should fail with negative counterfactual contribution."""
@@ -241,7 +241,7 @@ class TestG5RequiresCounterfactual:
         result = gates._check_g5(state)
 
         assert not result.passed
-        assert "non_positive_contribution" in result.checks_failed
+        assert any("insufficient_contribution" in c for c in result.checks_failed)
 
     def test_g5_fails_with_zero_counterfactual(self):
         """G5 should fail with zero counterfactual contribution (no value added)."""
@@ -260,7 +260,7 @@ class TestG5RequiresCounterfactual:
         result = gates._check_g5(state)
 
         assert not result.passed, "Zero contribution should not pass G5"
-        assert "non_positive_contribution" in result.checks_failed  # 0 is not > 0
+        assert any("insufficient_contribution" in c for c in result.checks_failed)
 
 
 class TestShapeProbeCacheDeviceTransfer:
