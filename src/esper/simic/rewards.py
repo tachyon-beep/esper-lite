@@ -400,6 +400,25 @@ def compute_contribution_reward(
             else:
                 # No baseline available - discount contribution
                 attributed = seed_contribution * 0.5
+
+            # === ATTRIBUTION DISCOUNT: Reduce rewards when total trajectory is negative ===
+            # Prevents rewarding seeds that show good per-step counterfactual but
+            # have negative total_improvement (the ransomware buildup pattern).
+            # Sigmoid smoothly transitions: ~0.5 at total_imp=0, →0 as total_imp→-∞
+            attribution_discount = 1.0
+            if seed_info is not None:
+                total_imp = seed_info.total_improvement
+                if total_imp < 0:
+                    # Discount factor: 1/(1 + e^(-5*x)) gives smooth 0→1 transition
+                    # Softened from -10 to -5 to avoid zeroing rewards at small negatives
+                    # At total_imp=-0.5%, discount ≈ 0.076 (7.6% of reward)
+                    # At total_imp=-0.2%, discount ≈ 0.27
+                    # At total_imp=-1.0%, discount ≈ 0.007 (essentially zero)
+                    attribution_discount = 1.0 / (1.0 + math.exp(-5 * total_imp))
+                    attributed *= attribution_discount
+            if components:
+                components.attribution_discount = attribution_discount
+
             bounded_attribution = config.contribution_weight * attributed
     else:
         # Pre-blending: use accuracy delta as proxy signal (lower weight)
@@ -413,6 +432,21 @@ def compute_contribution_reward(
         components.seed_contribution = seed_contribution
         components.bounded_attribution = bounded_attribution
         components.progress_since_germination = progress
+
+    # === 1b. BLENDING WARNING: Escalating penalty for negative trajectory ===
+    # Provides early signal to CULL seeds that are hurting performance
+    # Credit assignment: penalize during BLENDING so policy learns to cull early
+    blending_warning = 0.0
+    if seed_info is not None and seed_info.stage == STAGE_BLENDING:
+        total_imp = seed_info.total_improvement
+        if total_imp < 0:
+            # Escalating penalty: longer negative trajectory = stronger signal to cull
+            # Epoch 1: -0.15, Epoch 3: -0.25, Epoch 6+: -0.40
+            escalation = min(seed_info.epochs_in_stage * 0.05, 0.3)
+            blending_warning = -0.1 - escalation
+            reward += blending_warning
+    if components:
+        components.blending_warning = blending_warning
 
     # === 2. PBRS: Stage Progression ===
     # Potential-based shaping preserves optimal policy (Ng et al., 1999)
@@ -526,11 +560,16 @@ def _contribution_fossilize_shaping(
     seed_contribution: float | None,
     config: ContributionRewardConfig,
 ) -> float:
-    """Shaping for FOSSILIZE action - with legitimacy discount.
+    """Shaping for FOSSILIZE action - with legitimacy and ransomware checks.
 
     Rapid fossilization (short PROBATIONARY period) is discounted to prevent
     dependency gaming where seeds create artificial dependencies during
     BLENDING that inflate metrics.
+
+    Ransomware check: Seeds with negative total_improvement are penalized
+    regardless of counterfactual contribution. High causal contribution with
+    negative total delta indicates the seed created dependencies without
+    adding value - the "ransomware" pattern.
     """
     if seed_info is None:
         return config.invalid_fossilize_penalty
@@ -538,6 +577,25 @@ def _contribution_fossilize_shaping(
     # FOSSILIZE only valid from PROBATIONARY
     if seed_info.stage != STAGE_PROBATIONARY:
         return config.invalid_fossilize_penalty
+
+    # === RANSOMWARE CHECK: total_improvement must be non-negative ===
+    # A seed that hurt total performance should be penalized for fossilizing
+    total_delta = seed_info.total_improvement
+    if total_delta < 0:
+        # Base penalty + scaled by damage done (capped at 1.0 extra)
+        base_penalty = -0.5
+        damage_scale = min(abs(total_delta) * 0.2, 1.0)
+
+        # Extra penalty for ransomware signature: high contribution + negative total
+        # This seed created dependencies without adding value
+        ransomware_signature = (
+            seed_contribution is not None
+            and seed_contribution > 0.1
+            and total_delta < -0.2
+        )
+        ransomware_penalty = -0.3 if ransomware_signature else 0.0
+
+        return base_penalty - damage_scale + ransomware_penalty
 
     # Legitimacy discount: must have spent time in PROBATIONARY to earn full bonus
     # This prevents rapid fossilization gaming

@@ -24,9 +24,11 @@ class RewardComponentsTelemetry:
     seed_contribution: float | None = None
     bounded_attribution: float | None = None
     progress_since_germination: float | None = None
+    attribution_discount: float = 1.0  # Sigmoid discount for negative total_improvement
 
     # Penalties
     compute_rent: float = 0.0
+    blending_warning: float = 0.0  # Escalating penalty for negative trajectory during BLENDING
 
     # Bonuses
     stage_bonus: float = 0.0
@@ -58,7 +60,9 @@ class RewardComponentsTelemetry:
             "seed_contribution": self.seed_contribution,
             "bounded_attribution": self.bounded_attribution,
             "progress_since_germination": self.progress_since_germination,
+            "attribution_discount": self.attribution_discount,
             "compute_rent": self.compute_rent,
+            "blending_warning": self.blending_warning,
             "stage_bonus": self.stage_bonus,
             "pbrs_bonus": self.pbrs_bonus,
             "action_shaping": self.action_shaping,

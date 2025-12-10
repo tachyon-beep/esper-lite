@@ -511,3 +511,212 @@ class TestProxySignalPath:
         )
 
         assert components.bounded_attribution == 0.0
+
+
+class TestRansomwareSeedDetection:
+    """Tests for ransomware seed detection mechanisms.
+
+    Ransomware pattern: seed has high counterfactual contribution (entangled)
+    but negative total_improvement (hurt overall performance).
+    """
+
+    class _TestAction(IntEnum):
+        WAIT = 0
+        FOSSILIZE = 1
+
+    def test_fossilize_penalty_for_negative_total_delta(self):
+        """FOSSILIZE with negative total_improvement should be penalized."""
+        config = ContributionRewardConfig()
+
+        # Ransomware seed: high contribution but negative total delta
+        ransomware_seed = SeedInfo(
+            stage=STAGE_PROBATIONARY,
+            improvement_since_stage_start=-0.3,
+            total_improvement=-0.48,  # Hurt performance
+            epochs_in_stage=3,
+            seed_params=2000,
+            previous_stage=STAGE_BLENDING,
+            seed_age_epochs=15,
+        )
+
+        # High counterfactual contribution (entangled)
+        penalty = _contribution_fossilize_shaping(ransomware_seed, 25.35, config)
+
+        # Should get penalty, not bonus
+        assert penalty < 0, f"Ransomware seed should get penalty: {penalty}"
+        # Should be significant penalty (ransomware signature triggers)
+        assert penalty < -0.5, f"Penalty should be significant: {penalty}"
+
+    def test_fossilize_ransomware_signature_extra_penalty(self):
+        """High contribution + negative delta should trigger extra ransomware penalty."""
+        config = ContributionRewardConfig()
+
+        # Ransomware signature: contribution > 0.1 and total_delta < -0.2
+        ransomware_seed = SeedInfo(
+            stage=STAGE_PROBATIONARY,
+            improvement_since_stage_start=-0.5,
+            total_improvement=-0.5,  # < -0.2 threshold
+            epochs_in_stage=3,
+            seed_age_epochs=15,
+        )
+
+        # Non-ransomware: same negative delta but low contribution
+        non_ransomware_seed = SeedInfo(
+            stage=STAGE_PROBATIONARY,
+            improvement_since_stage_start=-0.5,
+            total_improvement=-0.5,
+            epochs_in_stage=3,
+            seed_age_epochs=15,
+        )
+
+        ransomware_penalty = _contribution_fossilize_shaping(ransomware_seed, 15.0, config)  # High contribution
+        regular_penalty = _contribution_fossilize_shaping(non_ransomware_seed, 0.05, config)  # Low contribution
+
+        # Ransomware should get extra -0.3 penalty
+        assert ransomware_penalty < regular_penalty, (
+            f"Ransomware ({ransomware_penalty}) should be worse than regular ({regular_penalty})"
+        )
+
+    def test_blending_warning_escalates_over_epochs(self):
+        """Blending warning should escalate as seed stays with negative trajectory."""
+        from enum import IntEnum
+        class MockAction(IntEnum):
+            WAIT = 0
+
+        def get_blending_warning(epochs_in_stage: int) -> float:
+            seed_info = SeedInfo(
+                stage=STAGE_BLENDING,
+                improvement_since_stage_start=-0.3,
+                total_improvement=-0.3,  # Negative trajectory
+                epochs_in_stage=epochs_in_stage,
+                seed_age_epochs=10 + epochs_in_stage,
+            )
+            _, components = compute_contribution_reward(
+                action=MockAction.WAIT,
+                seed_contribution=5.0,
+                val_acc=60.0,
+                seed_info=seed_info,
+                epoch=10,
+                max_epochs=25,
+                acc_at_germination=60.5,
+                return_components=True,
+            )
+            return components.blending_warning
+
+        # Warning should escalate
+        warning_epoch_1 = get_blending_warning(1)
+        warning_epoch_3 = get_blending_warning(3)
+        warning_epoch_6 = get_blending_warning(6)
+
+        assert warning_epoch_1 < 0, "Should have negative warning"
+        assert warning_epoch_3 < warning_epoch_1, "Warning should escalate"
+        assert warning_epoch_6 < warning_epoch_3, "Warning should continue escalating"
+        # Should cap at -0.4
+        assert warning_epoch_6 >= -0.5, f"Warning should cap around -0.4: {warning_epoch_6}"
+
+    def test_no_blending_warning_for_positive_trajectory(self):
+        """No blending warning when total_improvement is positive."""
+        from enum import IntEnum
+        class MockAction(IntEnum):
+            WAIT = 0
+
+        seed_info = SeedInfo(
+            stage=STAGE_BLENDING,
+            improvement_since_stage_start=1.0,
+            total_improvement=2.0,  # Positive trajectory
+            epochs_in_stage=5,
+            seed_age_epochs=15,
+        )
+
+        _, components = compute_contribution_reward(
+            action=MockAction.WAIT,
+            seed_contribution=5.0,
+            val_acc=65.0,
+            seed_info=seed_info,
+            epoch=10,
+            max_epochs=25,
+            acc_at_germination=63.0,
+            return_components=True,
+        )
+
+        assert components.blending_warning == 0.0, "No warning for positive trajectory"
+
+    def test_attribution_discount_for_negative_total_improvement(self):
+        """Attribution should be discounted when total_improvement is negative."""
+        from enum import IntEnum
+        class MockAction(IntEnum):
+            WAIT = 0
+
+        def get_attribution_and_discount(total_improvement: float) -> tuple[float, float]:
+            seed_info = SeedInfo(
+                stage=STAGE_BLENDING,
+                improvement_since_stage_start=1.0,
+                total_improvement=total_improvement,
+                epochs_in_stage=5,
+                seed_age_epochs=15,
+            )
+            _, components = compute_contribution_reward(
+                action=MockAction.WAIT,
+                seed_contribution=5.0,  # High contribution
+                val_acc=65.0,
+                seed_info=seed_info,
+                epoch=10,
+                max_epochs=25,
+                acc_at_germination=60.0,  # 5% progress
+                return_components=True,
+            )
+            return components.bounded_attribution, components.attribution_discount
+
+        # Positive trajectory - no discount
+        attr_positive, discount_positive = get_attribution_and_discount(2.0)
+        assert discount_positive == 1.0, "No discount for positive trajectory"
+
+        # Slightly negative - partial discount
+        attr_slight_neg, discount_slight_neg = get_attribution_and_discount(-0.2)
+        assert 0 < discount_slight_neg < 1.0, f"Should have partial discount: {discount_slight_neg}"
+        assert attr_slight_neg < attr_positive, "Attribution should be reduced"
+
+        # Very negative - heavy discount
+        attr_very_neg, discount_very_neg = get_attribution_and_discount(-1.0)
+        assert discount_very_neg < 0.1, f"Should have heavy discount: {discount_very_neg}"
+        assert attr_very_neg < attr_slight_neg, "Attribution should be further reduced"
+
+    def test_attribution_discount_sigmoid_values(self):
+        """Verify sigmoid discount values at specific total_improvement levels."""
+        import math
+        from enum import IntEnum
+        class MockAction(IntEnum):
+            WAIT = 0
+
+        def get_discount(total_improvement: float) -> float:
+            seed_info = SeedInfo(
+                stage=STAGE_BLENDING,
+                improvement_since_stage_start=1.0,
+                total_improvement=total_improvement,
+                epochs_in_stage=5,
+                seed_age_epochs=15,
+            )
+            _, components = compute_contribution_reward(
+                action=MockAction.WAIT,
+                seed_contribution=5.0,
+                val_acc=65.0,
+                seed_info=seed_info,
+                epoch=10,
+                max_epochs=25,
+                acc_at_germination=60.0,
+                return_components=True,
+            )
+            return components.attribution_discount
+
+        # Test specific values from softened sigmoid (-5 coefficient)
+        # At -0.5%, expect ~0.076
+        discount_05 = get_discount(-0.5)
+        assert 0.05 < discount_05 < 0.15, f"At -0.5%: {discount_05}"
+
+        # At -0.2%, expect ~0.27
+        discount_02 = get_discount(-0.2)
+        assert 0.2 < discount_02 < 0.4, f"At -0.2%: {discount_02}"
+
+        # At -1.0%, expect ~0.007
+        discount_10 = get_discount(-1.0)
+        assert discount_10 < 0.02, f"At -1.0%: {discount_10}"
