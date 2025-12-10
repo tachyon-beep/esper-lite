@@ -756,3 +756,41 @@ class TestRansomwareSeedDetection:
         assert components.bounded_attribution == 0.0, (
             f"FOSSILIZED seed should get no attribution: {components.bounded_attribution}"
         )
+
+    def test_fossilize_negative_delta_gets_no_attribution(self):
+        """FOSSILIZE with negative total_improvement should get zero attribution.
+
+        This is the "ransomware edge case" - seed has high counterfactual
+        contribution but the host actually declined. The agent shouldn't get
+        credit for fossilizing such a seed.
+        """
+        from enum import IntEnum
+        class MockAction(IntEnum):
+            FOSSILIZE = 1
+
+        # PROBATIONARY seed with high contribution but negative total improvement
+        ransomware_seed = SeedInfo(
+            stage=STAGE_PROBATIONARY,
+            improvement_since_stage_start=-0.5,
+            total_improvement=-0.02,  # Negative!
+            epochs_in_stage=3,
+            seed_age_epochs=15,
+        )
+
+        reward, components = compute_contribution_reward(
+            action=MockAction.FOSSILIZE,
+            seed_contribution=17.51,  # High counterfactual
+            val_acc=60.0,
+            seed_info=ransomware_seed,
+            epoch=15,
+            max_epochs=25,
+            acc_at_germination=60.02,
+            return_components=True,
+        )
+
+        # Attribution should be zero despite high seed_contribution
+        assert components.bounded_attribution == 0.0, (
+            f"FOSSILIZE with negative delta should get no attribution: {components.bounded_attribution}"
+        )
+        # Total reward should be negative (penalty only)
+        assert reward < 0, f"Should be penalized for fossilizing negative-delta seed: {reward}"

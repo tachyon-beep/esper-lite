@@ -431,6 +431,16 @@ def compute_contribution_reward(
         # No penalty for negative delta - we don't have causal data yet.
         if acc_delta is not None and acc_delta > 0:
             bounded_attribution = config.proxy_contribution_weight * acc_delta
+    # === FOSSILIZE-SPECIFIC ATTRIBUTION OVERRIDE ===
+    # Zero attribution for fossilizing negative-improvement seeds.
+    # The fossilize shaping penalty handles the negative signal - we shouldn't
+    # ALSO give attribution credit for counterfactual "contribution" that
+    # represents entanglement rather than value creation.
+    action_name = action.name
+    if action_name == "FOSSILIZE" and seed_info is not None:
+        if seed_info.total_improvement < 0:
+            bounded_attribution = 0.0
+
     reward += bounded_attribution
 
     if components:
@@ -479,7 +489,7 @@ def compute_contribution_reward(
     # === 4. ACTION SHAPING ===
     # Minimal - just state machine enforcement and intervention costs
     action_shaping = 0.0
-    action_name = action.name
+    # action_name already computed above for FOSSILIZE attribution override
 
     if is_germinate_action(action):
         if seed_info is not None:
