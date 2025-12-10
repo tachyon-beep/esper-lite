@@ -308,6 +308,13 @@ class SeedState:
 # Quality Gates
 # =============================================================================
 
+# Minimum counterfactual contribution required for fossilization.
+# Prevents "free rider" seeds that provide negligible value from becoming permanent.
+# DRL rationale: seeds must provide economically significant contribution to justify
+# their parameter cost. A 1% threshold ensures measurable causal impact.
+MIN_FOSSILIZE_CONTRIBUTION = 1.0  # 1% minimum causal contribution
+
+
 class QualityGates:
     """Quality gate checks for stage transitions.
 
@@ -507,11 +514,14 @@ class QualityGates:
                 checks_failed=["counterfactual_not_available"],
             )
 
-        # Check contribution is positive
-        if contribution > 0:
-            checks_passed.append(f"positive_contribution_{contribution:.2f}%")
+        # Check contribution meets minimum threshold
+        # Prevents zero/negligible contribution seeds from fossilizing
+        if contribution >= MIN_FOSSILIZE_CONTRIBUTION:
+            checks_passed.append(f"sufficient_contribution_{contribution:.2f}%")
         else:
-            checks_failed.append("non_positive_contribution")
+            checks_failed.append(
+                f"insufficient_contribution_{contribution:.2f}%_below_{MIN_FOSSILIZE_CONTRIBUTION}%"
+            )
 
         # Check health
         if state.is_healthy:
