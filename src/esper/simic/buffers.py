@@ -102,11 +102,11 @@ class RolloutBuffer:
                 # For naturally terminated episodes, use 0.0
                 if step.truncated:
                     next_value = step.bootstrap_value
-                    # Continue GAE chain - truncation is artificial, not true terminal
                 else:
                     next_value = 0.0
-                    # Reset GAE only for true terminal states
-                    last_gae = 0.0
+                # Reset GAE at ALL episode boundaries
+                # bootstrap_value handles value continuation; GAE chain should not span episodes
+                last_gae = 0.0
 
             delta = step.reward + gamma * next_value - step.value
             advantages[t] = last_gae = delta + gamma * gae_lambda * last_gae

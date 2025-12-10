@@ -302,7 +302,9 @@ class PolicyNetwork:
     def load(self, path: str | Path) -> None:
         """Load model weights."""
         import torch
-        self.model.load_state_dict(torch.load(path, map_location=self.device))
+        self.model.load_state_dict(
+            torch.load(path, map_location=self.device, weights_only=True)
+        )
 
 
 def print_confusion_matrix(eval_result: dict) -> None:

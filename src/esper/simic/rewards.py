@@ -26,10 +26,13 @@ Usage:
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 from enum import IntEnum
 from typing import NamedTuple
+
+_logger = logging.getLogger(__name__)
 
 from esper.leyline import SeedStage, MIN_CULL_AGE, MIN_PROBATION_EPOCHS
 from esper.kasmina.slot import MIN_FOSSILIZE_CONTRIBUTION
@@ -635,6 +638,12 @@ def _contribution_pbrs_bonus(
     # Previous potential (reconstruct previous state)
     if seed_info.epochs_in_stage == 0:
         # Just transitioned - use actual previous epoch count for correct telescoping
+        if seed_info.previous_epochs_in_stage == 0 and seed_info.previous_stage != 0:
+            _logger.warning(
+                "PBRS telescoping risk: transition from stage %d with previous_epochs_in_stage=0. "
+                "phi_prev will be underestimated. This indicates SeedInfo was constructed incorrectly.",
+                seed_info.previous_stage,
+            )
         phi_prev = STAGE_POTENTIALS.get(seed_info.previous_stage, 0.0)
         phi_prev += min(
             seed_info.previous_epochs_in_stage * config.epoch_progress_bonus,
