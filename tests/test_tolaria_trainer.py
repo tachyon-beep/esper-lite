@@ -45,7 +45,7 @@ class DummyModelWithSlot(nn.Module):
     def __init__(self):
         super().__init__()
         self.linear = nn.Linear(10, 2)
-        self.seed_slot = MockSeedSlot()
+        self.seed_slots = {"mid": MockSeedSlot()}
 
     def forward(self, x):
         return self.linear(x)
@@ -162,12 +162,12 @@ class TestValidateWithAttributionIntegration:
         from esper.kasmina import MorphogeneticModel, CNNHost
 
         host = CNNHost(num_classes=10)
-        model = MorphogeneticModel(host, device="cpu")
-        model.germinate_seed("conv_light", "test_seed")
+        model = MorphogeneticModel(host, device="cpu", slots=["mid"])
+        model.germinate_seed("conv_light", "test_seed", slot="mid")
 
         # Advance to BLENDING stage so alpha > 0
-        model.seed_slot.state.stage = 4  # SeedStage.BLENDING
-        model.seed_slot._alpha = 0.5
+        model.seed_slots["mid"].state.stage = 4  # SeedStage.BLENDING
+        model.seed_slots["mid"]._alpha = 0.5
 
         return model
 
@@ -218,14 +218,14 @@ class TestValidateWithAttributionIntegration:
 
         criterion = nn.CrossEntropyLoss()
 
-        original_alpha = model_with_seed.seed_slot.alpha
+        original_alpha = model_with_seed.seed_slots["mid"].alpha
 
         result = validate_with_attribution(
             model_with_seed, test_data, criterion, "cpu"
         )
 
         # Alpha should be restored after validation
-        assert model_with_seed.seed_slot.alpha == original_alpha
+        assert model_with_seed.seed_slots["mid"].alpha == original_alpha
 
     def test_attribution_with_empty_loader(self):
         """Test attribution handles empty dataloader gracefully."""
@@ -233,10 +233,10 @@ class TestValidateWithAttributionIntegration:
         from esper.kasmina import MorphogeneticModel, CNNHost
 
         host = CNNHost(num_classes=10)
-        model = MorphogeneticModel(host, device="cpu")
-        model.germinate_seed("conv_light", "test_seed")
-        model.seed_slot.state.stage = 4
-        model.seed_slot._alpha = 0.5
+        model = MorphogeneticModel(host, device="cpu", slots=["mid"])
+        model.germinate_seed("conv_light", "test_seed", slot="mid")
+        model.seed_slots["mid"].state.stage = 4
+        model.seed_slots["mid"]._alpha = 0.5
 
         # Empty dataset
         empty_dataset = TensorDataset(

@@ -123,6 +123,7 @@ def train_epoch_incubator_mode(
     device: str,
     task_type: str = "classification",
     gradient_telemetry_stride: int = 10,
+    slot: str = "mid",
 ) -> None:
     """Train one epoch with seed in isolation (seed output doesn't affect forward pass).
 
@@ -136,7 +137,7 @@ def train_epoch_incubator_mode(
     never train.
 
     Args:
-        model: The model to train (must have seed_slot attribute).
+        model: The model to train (must have seed_slots attribute).
         trainloader: Training data loader.
         criterion: Loss function.
         host_optimizer: Optimizer for host parameters.
@@ -146,9 +147,10 @@ def train_epoch_incubator_mode(
         gradient_telemetry_stride: Capture gradient telemetry every N steps.
             Set to 0 to disable. Default 10 balances accuracy with GPU pipeline
             efficiency (each capture triggers a device-to-host sync).
+        slot: Which slot to train (default "mid").
     """
     model.train()
-    seed_slot = model.seed_slot
+    seed_slot = model.seed_slots[slot]
 
     for step, (inputs, labels) in enumerate(trainloader):
         inputs, labels = inputs.to(device, non_blocking=True), labels.to(device, non_blocking=True)
@@ -321,6 +323,7 @@ def validate_with_attribution(
     criterion: nn.Module,
     device: str,
     task_type: str = "classification",
+    slot: str = "mid",
 ) -> AttributionResult:
     """Counterfactual validation for true seed contribution measurement.
 
@@ -336,11 +339,12 @@ def validate_with_attribution(
     for host accuracy changes during TRAINING stage when they had zero impact.
 
     Args:
-        model: The model to evaluate (must have seed_slot with force_alpha()).
+        model: The model to evaluate (must have seed_slots attribute with force_alpha()).
         testloader: Validation data loader.
         criterion: Loss function.
         device: Device to evaluate on.
         task_type: Task type ("classification" or "lm").
+        slot: Which slot to validate (default "mid").
 
     Returns:
         AttributionResult with real and baseline accuracies plus seed_contribution.
@@ -357,7 +361,7 @@ def validate_with_attribution(
 
         # Pass 2: Baseline validation with alpha=0 (host-only)
         # Use force_alpha context manager to temporarily override alpha
-        seed_slot = model.seed_slot
+        seed_slot = model.seed_slots[slot]
         with seed_slot.force_alpha(0.0):
             baseline_loss, baseline_accuracy = _run_validation_pass(
                 model, testloader, criterion, device, task_type
