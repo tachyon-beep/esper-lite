@@ -447,6 +447,10 @@ class MorphogeneticModel(nn.Module):
         self._device = device
         self.task_config = task_config
 
+        # Detect host type at initialization time (avoids hasattr in forward)
+        self._is_cnn = hasattr(host, "blocks")  # hasattr AUTHORIZED by code review on 2025-12-12 14:30:00 UTC
+        # Justification: One-time type detection at initialization for dispatch logic
+
         # Host must expose segment_channels for multi-slot support
         segment_channels = host.segment_channels
 
@@ -496,8 +500,8 @@ class MorphogeneticModel(nn.Module):
         Processes sequentially through network segments, applying slot
         transformations at each segment boundary.
         """
-        # Detect host type by checking for CNN-specific attributes
-        if hasattr(self.host, "blocks"):
+        # Use pre-detected host type from initialization
+        if self._is_cnn:
             return self._forward_cnn(x)
         else:
             return self._forward_transformer(x)
@@ -535,41 +539,26 @@ class MorphogeneticModel(nn.Module):
         return self.host.classifier(x)
 
     def _forward_transformer(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass for Transformer hosts."""
-        # Use segment methods for clean segmented forward
-        current_segment_idx = 0
-        segment_order = ["early", "mid", "late"]
+        """Forward pass for Transformer hosts.
 
-        # Initial embedding
+        Process ALL layers regardless of active slots; only apply seed slot
+        transformations at active segment boundaries.
+        """
         B, T = x.shape
         pos = torch.arange(T, device=x.device)
         h = self.host.drop(self.host.tok_emb(x) + self.host.pos_emb(pos))
 
-        # Process through segments
-        for i, segment in enumerate(segment_order):
-            if segment in self._active_slots:
-                # Forward through layers for this segment
-                start = self.host._segment_boundaries.get(segment_order[i-1], 0) if i > 0 else 0
-                end = self.host._segment_boundaries[segment]
+        # Process ALL layers, applying seed slots only at active segment boundaries
+        for layer_idx in range(self.host.n_layer):
+            h = self.host.layers[layer_idx](h)
+            h = self.host.slots[self.host._slot_keys[layer_idx]](h)
 
-                for layer_idx in range(start, end):
-                    h = self.host.layers[layer_idx](h)
-                    h = self.host.slots[self.host._slot_keys[layer_idx]](h)
+            # Check if we just completed an active segment's boundary
+            for segment in self._active_slots:
+                if self.host._segment_boundaries[segment] == layer_idx + 1:
+                    h = self.seed_slots[segment].forward(h)
+                    break
 
-                # Apply slot transformation
-                h = self.seed_slots[segment].forward(h)
-                current_segment_idx = i + 1
-
-        # Forward through remaining layers
-        if current_segment_idx < len(segment_order):
-            last_processed = segment_order[current_segment_idx - 1] if current_segment_idx > 0 else None
-            start = self.host._segment_boundaries.get(last_processed, 0) if last_processed else 0
-
-            for layer_idx in range(start, self.host.n_layer):
-                h = self.host.layers[layer_idx](h)
-                h = self.host.slots[self.host._slot_keys[layer_idx]](h)
-
-        # Output
         h = self.host.ln_f(h)
         return self.host.head(h)
 

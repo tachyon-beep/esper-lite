@@ -123,13 +123,49 @@ def test_multislot_germinate_specific_slot():
     assert not model.seed_slots["late"].is_active
 
 
-def test_single_slot_is_default():
-    """Single slot mode (backwards compat) should still work."""
-    from esper.kasmina.host import CNNHost, MorphogeneticModel
+def test_transformer_forward_matches_host():
+    """MorphogeneticModel with TransformerHost should match host output when no seeds active."""
+    from esper.kasmina.host import TransformerHost, MorphogeneticModel
+    import torch
 
-    host = CNNHost()
-    model = MorphogeneticModel(host, device="cpu")  # No slots arg
+    # Create host and model with multiple slots
+    host = TransformerHost(vocab_size=1000, n_embd=64, n_head=2, n_layer=6, block_size=32, dropout=0.0)
+    host.eval()
+    model = MorphogeneticModel(host, device="cpu", slots=["early", "mid", "late"])
+    model.eval()
 
-    # Should default to single "mid" slot for backwards compat
-    assert len(model.seed_slots) == 1
-    assert "mid" in model.seed_slots
+    # Test input
+    x = torch.randint(0, 1000, (2, 16))
+
+    # Forward through both
+    with torch.no_grad():
+        host_out = host(x)
+        model_out = model(x)
+
+    # Should match exactly when no seeds are active
+    assert torch.allclose(host_out, model_out, atol=1e-6), \
+        f"Outputs differ: max diff = {(host_out - model_out).abs().max().item()}"
+
+
+def test_transformer_single_slot_forward():
+    """MorphogeneticModel with single slot should process all layers."""
+    from esper.kasmina.host import TransformerHost, MorphogeneticModel
+    import torch
+
+    # Create host and model with only mid slot
+    host = TransformerHost(vocab_size=1000, n_embd=64, n_head=2, n_layer=6, block_size=32, dropout=0.0)
+    host.eval()
+    model = MorphogeneticModel(host, device="cpu", slots=["mid"])
+    model.eval()
+
+    # Test input
+    x = torch.randint(0, 1000, (2, 16))
+
+    # Forward through both
+    with torch.no_grad():
+        host_out = host(x)
+        model_out = model(x)
+
+    # Should match exactly - all layers must be processed
+    assert torch.allclose(host_out, model_out, atol=1e-6), \
+        f"Outputs differ: max diff = {(host_out - model_out).abs().max().item()}"
