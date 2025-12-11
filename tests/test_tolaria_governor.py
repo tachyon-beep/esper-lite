@@ -452,16 +452,16 @@ class TestTolariaGovernor:
 
         # Create a real MorphogeneticModel with seed slot
         host = CNNHost()
-        model = MorphogeneticModel(host, device="cpu")
+        model = MorphogeneticModel(host, device="cpu", slots=["mid"])
         gov = TolariaGovernor(model)
 
         # Take snapshot
         gov.snapshot()
 
         # Germinate a seed (simulates live/experimental seed)
-        model.seed_slot.germinate("conv_heavy", "test_seed")
-        assert model.seed_slot.is_active
-        assert model.seed_slot.state is not None
+        model.seed_slots["mid"].germinate("conv_heavy", "test_seed")
+        assert model.seed_slots["mid"].is_active
+        assert model.seed_slots["mid"].state is not None
 
         # Build minimal history
         for i in range(5):
@@ -471,9 +471,9 @@ class TestTolariaGovernor:
         report = gov.execute_rollback()
 
         # Seed slot should be cleared (experimental seeds discarded)
-        assert not model.seed_slot.is_active
-        assert model.seed_slot.seed is None
-        assert model.seed_slot.state is None
+        assert not model.seed_slots["mid"].is_active
+        assert model.seed_slots["mid"].seed is None
+        assert model.seed_slots["mid"].state is None
         assert report.rollback_occurred is True
 
     def test_execute_rollback_resets_consecutive_panics(self):

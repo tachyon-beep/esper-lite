@@ -179,9 +179,11 @@ class TolariaGovernor:
         # Clear any live (non-fossilized) seeds FIRST
         # This removes seed parameters so state_dict keys match snapshot
         # Implements "revert to stable organism, dump all temporary grafts"
-        if hasattr(self.model, 'seed_slot'):  # hasattr AUTHORIZED by John on 2025-12-01 16:30:00 UTC
-                                              # Justification: Feature detection - MorphogeneticModel has seed_slot, base models may not
-            self.model.seed_slot.cull("governor_rollback")
+        # hasattr AUTHORIZED by John on 2025-12-01 16:30:00 UTC
+        # Justification: Feature detection - MorphogeneticModel has seed_slots, base models may not
+        if hasattr(self.model, 'seed_slots'):
+            for slot in self.model.seed_slots.values():
+                slot.cull("governor_rollback")
 
         # Restore host + fossilized seeds (strict=True ensures complete restoration)
         # Move all tensors to model device in one batch before loading, avoiding
