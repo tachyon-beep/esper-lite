@@ -49,9 +49,14 @@ class TaskSpec:
     def __post_init__(self) -> None:
         self.action_enum = build_action_enum(self.topology)
 
-    def create_model(self, device: str = "cuda:0") -> MorphogeneticModel:
-        """Instantiate model for this task on the target device."""
-        return self.model_factory(device)
+    def create_model(self, device: str = "cuda:0", slots: list[str] | None = None) -> MorphogeneticModel:
+        """Instantiate model for this task on the target device.
+
+        Args:
+            device: Target device for the model.
+            slots: Seed slots to enable. If None, uses task default ["mid"].
+        """
+        return self.model_factory(device, slots=slots)
 
     def create_dataloaders(self, **overrides):
         """Instantiate dataloaders with defaults merged with overrides."""
@@ -91,11 +96,11 @@ def _cifar10_spec() -> TaskSpec:
     cifar_config = TaskConfig.for_cifar10()
     loss_cfg = LossRewardConfig.for_cifar10()
 
-    def _make_model(device: str) -> MorphogeneticModel:
+    def _make_model(device: str, slots: list[str] | None = None) -> MorphogeneticModel:
         # Deliberately weak host (8 base channels vs default 32) to leave
         # headroom for seeds to demonstrate value. Expected accuracy ~40-50%.
         host = CNNHost(num_classes=10, base_channels=8)
-        return MorphogeneticModel(host, device=device, slots=["mid"], task_config=cifar_config)
+        return MorphogeneticModel(host, device=device, slots=slots or ["mid"], task_config=cifar_config)
 
     return TaskSpec(
         name="cifar10",
@@ -129,14 +134,14 @@ def _cifar10_deep_spec() -> TaskSpec:
     cifar_config = TaskConfig.for_cifar10()
     loss_cfg = LossRewardConfig.for_cifar10()
 
-    def _make_model(device: str) -> MorphogeneticModel:
+    def _make_model(device: str, slots: list[str] | None = None) -> MorphogeneticModel:
         # Deep but narrow: 5 blocks with 8 base channels (8→16→32→64→128)
         # 5 pools → spatial: 32→16→8→4→2→1
         # 4 injection points at 4 distinct spatial resolutions (8×8, 4×4, 2×2, 1×1).
         # Despite 100K params, baseline accuracy is only ~42% due to aggressive
         # downsampling - seeds have plenty of room to contribute.
         host = CNNHost(num_classes=10, base_channels=8, n_blocks=5, pool_layers=5)
-        return MorphogeneticModel(host, device=device, slots=["mid"], task_config=cifar_config)
+        return MorphogeneticModel(host, device=device, slots=slots or ["mid"], task_config=cifar_config)
 
     return TaskSpec(
         name="cifar10_deep",
@@ -164,7 +169,7 @@ def _tinystories_spec() -> TaskSpec:
     block_size = 256
     vocab_size = 50257
 
-    def _make_model(device: str) -> MorphogeneticModel:
+    def _make_model(device: str, slots: list[str] | None = None) -> MorphogeneticModel:
         host = TransformerHost(
             vocab_size=vocab_size,
             n_embd=384,
@@ -173,7 +178,7 @@ def _tinystories_spec() -> TaskSpec:
             block_size=block_size,
             dropout=0.1,
         )
-        return MorphogeneticModel(host, device=device, slots=["mid"], task_config=ts_config)
+        return MorphogeneticModel(host, device=device, slots=slots or ["mid"], task_config=ts_config)
 
     return TaskSpec(
         name="tinystories",
