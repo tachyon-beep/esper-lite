@@ -9,6 +9,21 @@ import torch.nn.functional as F
 from .registry import BlueprintRegistry
 
 
+@BlueprintRegistry.register("noop", "cnn", param_estimate=0, description="Identity seed - placeholder before bursting")
+def create_noop_seed(channels: int) -> nn.Module:
+    """Identity seed - no-op placeholder."""
+
+    class NoopSeed(nn.Module):
+        def __init__(self, channels: int):
+            super().__init__()
+            # No parameters - pure pass-through
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            return x
+
+    return NoopSeed(channels)
+
+
 def get_num_groups(channels: int, target_group_size: int = 16) -> int:
     """Select optimal num_groups for GroupNorm.
 
