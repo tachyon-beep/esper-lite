@@ -393,20 +393,22 @@ class MorphogeneticModel(nn.Module):
             slot_names = ["mid"]
             self._legacy_single_slot = True
 
-        # Create seed slots dict
-        self.seed_slots: dict[str, SeedSlot] = {}
+        # Create seed slots as ModuleDict for proper submodule registration
+        # This ensures .to() moves all slots and state_dict() captures their weights
+        slots_dict = {}
         for slot_name in slot_names:
             if slot_name not in segment_channels:
                 raise ValueError(
                     f"Unknown slot: {slot_name}. Available: {list(segment_channels.keys())}"
                 )
-            self.seed_slots[slot_name] = SeedSlot(
+            slots_dict[slot_name] = SeedSlot(
                 slot_id=slot_name,
                 channels=segment_channels[slot_name],
                 device=device,
                 task_config=task_config,
                 fast_mode=fast_mode,
             )
+        self.seed_slots = nn.ModuleDict(slots_dict)
 
         # Track slot order for forward pass
         self._slot_order = ["early", "mid", "late"]
@@ -577,7 +579,7 @@ class MorphogeneticModel(nn.Module):
                 return slot.state
         return None
 
-    def get_slot_states(self) -> dict[str, any]:
+    def get_slot_states(self) -> dict:
         """Get state of all slots."""
         return {
             slot_id: slot.state
