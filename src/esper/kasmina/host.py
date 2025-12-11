@@ -73,6 +73,14 @@ class CNNHost(nn.Module):
         # Classifier maps final channels → logits
         self.classifier = nn.Linear(in_c, num_classes)
 
+        # Segment channel counts for multi-slot support
+        # Map named segments to their channel dimensions at injection points
+        self.segment_channels = {
+            "early": self.blocks[0].conv.out_channels,    # After block1 (32 by default)
+            "mid": self.blocks[1].conv.out_channels,      # After block2 (64 by default)
+            "late": self.blocks[2].conv.out_channels,     # After block3 (128 by default)
+        }
+
     @property
     @override
     def injection_points(self) -> dict[str, int]:
@@ -93,6 +101,72 @@ class CNNHost(nn.Module):
         if slot_id not in self.slots:
             raise ValueError(f"Unknown injection point: {slot_id}")
         self.slots[slot_id] = nn.Identity()
+
+    def forward_to_segment(self, segment: str, x: torch.Tensor) -> torch.Tensor:
+        """Forward through network up to and including a segment.
+
+        Args:
+            segment: Target segment name ("early", "mid", or "late")
+            x: Input tensor
+
+        Returns:
+            Feature map at the specified segment boundary
+        """
+        if segment not in self.segment_channels:
+            raise ValueError(f"Unknown segment: {segment}. Available: {list(self.segment_channels.keys())}")
+
+        # Convert to channels_last ONCE before processing for Tensor Core optimization
+        if self._memory_format == torch.channels_last:
+            x = x.to(memory_format=torch.channels_last)
+
+        # Map segment names to block indices (0-indexed)
+        segment_to_block = {
+            "early": 0,  # After block 0 (block1)
+            "mid": 1,    # After block 1 (block2)
+            "late": 2,   # After block 2 (block3)
+        }
+        target_block = segment_to_block[segment]
+
+        # Forward through blocks up to and including target
+        for idx in range(target_block + 1):
+            x = self.blocks[idx](x)
+            # Only pool on first pool_layers blocks
+            if idx < self._pool_layers:
+                x = self.pool(x)
+
+        return x
+
+    def forward_from_segment(self, segment: str, x: torch.Tensor) -> torch.Tensor:
+        """Forward from a segment to output.
+
+        Args:
+            segment: Starting segment name ("early", "mid", or "late")
+            x: Feature map at segment boundary
+
+        Returns:
+            Classification logits
+        """
+        if segment not in self.segment_channels:
+            raise ValueError(f"Unknown segment: {segment}. Available: {list(self.segment_channels.keys())}")
+
+        # Map segment names to block indices
+        segment_to_block = {
+            "early": 0,
+            "mid": 1,
+            "late": 2,
+        }
+        start_block = segment_to_block[segment]
+
+        # Forward through remaining blocks
+        for idx in range(start_block + 1, self.n_blocks):
+            x = self.blocks[idx](x)
+            # Only pool on first pool_layers blocks
+            if idx < self._pool_layers:
+                x = self.pool(x)
+
+        # Global average pooling and classification
+        x = F.adaptive_avg_pool2d(x, 1).flatten(1)
+        return self.classifier(x)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Convert to channels_last ONCE before processing for Tensor Core optimization
