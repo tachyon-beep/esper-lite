@@ -28,6 +28,10 @@ MIN_PROBATION_EPOCHS = 5
 MIN_GERMINATE_EPOCH = 5        # Let host get easy wins first
 MIN_PLATEAU_TO_GERMINATE = 3   # Consecutive epochs with <0.5% improvement
 
+# Seed limits (None = unlimited)
+DEFAULT_MAX_SEEDS = None           # Global limit across all slots
+DEFAULT_MAX_SEEDS_PER_SLOT = None  # Per-slot limit
+
 # Actions
 from esper.leyline.actions import (
     Action,
@@ -95,6 +99,8 @@ __all__ = [
     "MIN_PROBATION_EPOCHS",
     "MIN_GERMINATE_EPOCH",
     "MIN_PLATEAU_TO_GERMINATE",
+    "DEFAULT_MAX_SEEDS",
+    "DEFAULT_MAX_SEEDS_PER_SLOT",
 
     # Actions
     "Action",
