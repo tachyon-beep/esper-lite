@@ -34,6 +34,8 @@ __all__ = [
     "safe",
     "obs_to_base_features",
     "obs_to_base_features_tensor",
+    "obs_to_multislot_features",
+    "MULTISLOT_FEATURE_SIZE",
     "compute_action_mask",
     "TaskConfig",
     "normalize_observation",
@@ -215,6 +217,85 @@ def obs_to_base_features_tensor(
         out[29 + blueprint_id] = 1.0
 
     return out
+
+
+# =============================================================================
+# Multi-Slot Features (V4 - 34 dimensions)
+# =============================================================================
+
+# Feature size: 22 base + 3 slots * 4 features per slot = 34
+MULTISLOT_FEATURE_SIZE = 34
+
+
+def obs_to_multislot_features(obs: dict) -> list[float]:
+    """Extract features including per-slot state (34 dims).
+
+    Base features (22 dims) - training state without seed telemetry:
+    - Timing: epoch, global_step (2)
+    - Losses: train_loss, val_loss, loss_delta (3)
+    - Accuracies: train_accuracy, val_accuracy, accuracy_delta (3)
+    - Trends: plateau_epochs, best_val_accuracy, best_val_loss (3)
+    - History: loss_history_5 (5), accuracy_history_5 (5)
+    - Total params: total_params (1) [new - for size awareness]
+
+    Per-slot features (4 dims each, 3 slots = 12 dims):
+    - is_active: 1.0 if seed active, 0.0 otherwise
+    - stage: seed lifecycle stage (0-7)
+    - alpha: blending alpha (0.0-1.0)
+    - improvement: counterfactual contribution delta
+
+    This keeps each slot's local state visible, while still giving Tamiyo
+    a single flat observation vector that standard PPO implementations
+    can consume without custom architecture changes.
+
+    Feature Layout:
+    [0-1]   Timing (epoch, global_step)
+    [2-4]   Losses (train, val, delta)
+    [5-7]   Accuracies (train, val, delta)
+    [8-10]  Trends (plateau_epochs, best_val_acc, best_val_loss)
+    [11-15] Loss history (5 values)
+    [16-20] Accuracy history (5 values)
+    [21]    Total params
+    [22-25] Early slot (is_active, stage, alpha, improvement)
+    [26-29] Mid slot (is_active, stage, alpha, improvement)
+    [30-33] Late slot (is_active, stage, alpha, improvement)
+
+    Args:
+        obs: Observation dictionary with optional 'slots' key
+
+    Returns:
+        List of 34 floats
+    """
+    # Base features (22 dims) - simplified from V3, no seed state
+    base = [
+        float(obs['epoch']),
+        float(obs['global_step']),
+        safe(obs['train_loss'], 10.0),
+        safe(obs['val_loss'], 10.0),
+        safe(obs['loss_delta'], 0.0),
+        obs['train_accuracy'],
+        obs['val_accuracy'],
+        safe(obs['accuracy_delta'], 0.0),
+        float(obs['plateau_epochs']),
+        obs['best_val_accuracy'],
+        safe(obs['best_val_loss'], 10.0),
+        *[safe(v, 10.0) for v in obs['loss_history_5']],
+        *obs['accuracy_history_5'],
+        float(obs.get('total_params', 0)),  # New: total model params
+    ]
+
+    # Per-slot features (4 dims per slot, 3 slots = 12 dims)
+    slot_features = []
+    for slot_id in ['early', 'mid', 'late']:
+        slot = obs.get('slots', {}).get(slot_id, {})
+        slot_features.extend([
+            float(slot.get('is_active', 0)),
+            float(slot.get('stage', 0)),
+            float(slot.get('alpha', 0.0)),
+            float(slot.get('improvement', 0.0)),
+        ])
+
+    return base + slot_features
 
 
 # =============================================================================
