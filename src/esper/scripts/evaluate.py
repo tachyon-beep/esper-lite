@@ -148,6 +148,7 @@ def run_diagnostic_episode(
     task_spec: TaskSpec,
     max_epochs: int = 25,
     device: str = "cuda:0",
+    slots: list[str] | None = None,
 ) -> EpisodeRecord:
     """Run a single episode collecting diagnostic data."""
     from esper.tolaria import create_model
@@ -157,7 +158,7 @@ def run_diagnostic_episode(
 
     torch.manual_seed(episode_id * 1000)
 
-    model = create_model(task=task_spec, device=device)
+    model = create_model(task=task_spec, device=device, slots=slots)
     criterion = nn.CrossEntropyLoss()
     host_optimizer = torch.optim.SGD(
         model.get_host_parameters(), lr=task_spec.host_lr, momentum=0.9, weight_decay=5e-4
@@ -791,6 +792,7 @@ Examples:
             task_spec=task_spec,
             max_epochs=args.max_epochs,
             device=args.device,
+            slots=args.slots,
         )
         records.append(record)
 
