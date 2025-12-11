@@ -75,11 +75,18 @@ class CNNHost(nn.Module):
 
         # Segment channel counts for multi-slot support
         # Map named segments to their channel dimensions at injection points
-        self.segment_channels = {
-            "early": self.blocks[0].conv.out_channels,    # After block1 (32 by default)
-            "mid": self.blocks[1].conv.out_channels,      # After block2 (64 by default)
-            "late": self.blocks[2].conv.out_channels,     # After block3 (128 by default)
-        }
+        # Requires at least 3 blocks for full early/mid/late segment support
+        if n_blocks >= 3:
+            self.segment_channels = {
+                "early": self.blocks[0].conv.out_channels,    # After block1 (32 by default)
+                "mid": self.blocks[1].conv.out_channels,      # After block2 (64 by default)
+                "late": self.blocks[2].conv.out_channels,     # After block3 (128 by default)
+            }
+        else:
+            # Fallback for shallow networks - only expose available segments
+            self.segment_channels = {
+                f"block{i}": self.blocks[i].conv.out_channels for i in range(n_blocks)
+            }
 
     @property
     @override
@@ -141,13 +148,17 @@ class CNNHost(nn.Module):
 
         Args:
             segment: Starting segment name ("early", "mid", or "late")
-            x: Feature map at segment boundary
+            x: Feature map at segment boundary (should already be channels_last if from forward_to_segment)
 
         Returns:
             Classification logits
         """
         if segment not in self.segment_channels:
             raise ValueError(f"Unknown segment: {segment}. Available: {list(self.segment_channels.keys())}")
+
+        # Ensure channels_last format for Tensor Core optimization (safe even if already in format)
+        if self._memory_format == torch.channels_last:
+            x = x.to(memory_format=torch.channels_last)
 
         # Map segment names to block indices
         segment_to_block = {

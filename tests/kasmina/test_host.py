@@ -10,8 +10,7 @@ def test_host_segment_channels():
 
     host = CNNHost()
 
-    # Should expose channels at each injection point
-    assert hasattr(host, 'segment_channels')
+    # Should expose channels at each injection point (access directly - AttributeError if missing)
     assert host.segment_channels == {
         "early": 32,   # After block1
         "mid": 64,     # After block2
