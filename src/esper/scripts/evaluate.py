@@ -753,6 +753,13 @@ Examples:
         "--verbose", action="store_true", help="Print detailed per-episode info"
     )
     parser.add_argument("--output", type=str, default=None, help="Save report to file")
+    parser.add_argument("--slots", nargs="+", default=["mid"],
+        choices=["early", "mid", "late"],
+        help="Seed slots to enable (default: mid)")
+    parser.add_argument("--max-seeds", type=int, default=None,
+        help="Maximum total seeds across all slots (default: unlimited)")
+    parser.add_argument("--max-seeds-per-slot", type=int, default=None,
+        help="Maximum seeds per slot (default: unlimited)")
 
     args = parser.parse_args()
 

@@ -46,6 +46,13 @@ def main():
                               choices=["cifar10", "cifar10_deep", "tinystories"])
     heur_parser.add_argument("--device", default="cuda:0")
     heur_parser.add_argument("--seed", type=int, default=42)
+    heur_parser.add_argument("--slots", nargs="+", default=["mid"],
+        choices=["early", "mid", "late"],
+        help="Seed slots to enable (default: mid)")
+    heur_parser.add_argument("--max-seeds", type=int, default=None,
+        help="Maximum total seeds across all slots (default: unlimited)")
+    heur_parser.add_argument("--max-seeds-per-slot", type=int, default=None,
+        help="Maximum seeds per slot (default: unlimited)")
 
     # PPO subcommand
     ppo_parser = subparsers.add_parser("ppo", help="Train PPO agent",
@@ -84,6 +91,13 @@ def main():
     ppo_parser.add_argument("--no-telemetry", action="store_true", help="Disable telemetry features (27-dim instead of 37-dim)")
     ppo_parser.add_argument("--gpu-preload", action="store_true",
         help="Preload dataset to GPU for 8x faster data loading (CIFAR-10 only, uses ~0.75GB VRAM)")
+    ppo_parser.add_argument("--slots", nargs="+", default=["mid"],
+        choices=["early", "mid", "late"],
+        help="Seed slots to enable (default: mid)")
+    ppo_parser.add_argument("--max-seeds", type=int, default=None,
+        help="Maximum total seeds across all slots (default: unlimited)")
+    ppo_parser.add_argument("--max-seeds-per-slot", type=int, default=None,
+        help="Maximum seeds per slot (default: unlimited)")
 
     args = parser.parse_args()
 
