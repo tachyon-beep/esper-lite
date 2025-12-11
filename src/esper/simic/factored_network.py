@@ -114,16 +114,17 @@ class FactoredActorCritic(nn.Module):
         blend_logits = self.blend_head(features)
         op_logits = self.op_head(features)
 
-        # Apply masks if provided (set invalid actions to -inf)
+        # Apply masks if provided (use dtype-safe min value for mixed precision compatibility)
         if masks:
+            mask_value = torch.finfo(slot_logits.dtype).min
             if "slot" in masks:
-                slot_logits = slot_logits.masked_fill(~masks["slot"], float("-inf"))
+                slot_logits = slot_logits.masked_fill(~masks["slot"], mask_value)
             if "blueprint" in masks:
-                blueprint_logits = blueprint_logits.masked_fill(~masks["blueprint"], float("-inf"))
+                blueprint_logits = blueprint_logits.masked_fill(~masks["blueprint"], mask_value)
             if "blend" in masks:
-                blend_logits = blend_logits.masked_fill(~masks["blend"], float("-inf"))
+                blend_logits = blend_logits.masked_fill(~masks["blend"], mask_value)
             if "op" in masks:
-                op_logits = op_logits.masked_fill(~masks["op"], float("-inf"))
+                op_logits = op_logits.masked_fill(~masks["op"], mask_value)
 
         dists = {
             "slot": Categorical(logits=slot_logits),
