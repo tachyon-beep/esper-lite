@@ -1432,13 +1432,18 @@ class TestFossilizeTerminalBonus:
     vs WAIT-farming in PROBATIONARY. Addresses H4 (terminating action problem).
     """
 
-    def test_terminal_bonus_scales_with_fossilized_count(self):
-        """Terminal bonus should scale with number of fossilized seeds."""
+    def test_terminal_bonus_scales_with_contributing_fossilized_count(self):
+        """Terminal bonus should scale with number of CONTRIBUTING fossilized seeds.
+
+        DRL Expert review 2025-12-11: Only contributing fossilized seeds (those with
+        total_improvement >= MIN_FOSSILIZE_CONTRIBUTION) get terminal bonus. This
+        prevents bad fossilizations from being NPV-positive.
+        """
         from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
 
-        def get_terminal_bonus(num_fossilized: int) -> tuple[float, float]:
+        def get_terminal_bonus(num_contributing: int, num_total: int = 0) -> tuple[float, float]:
             _, components = compute_contribution_reward(
                 action=MockAction.WAIT,
                 seed_contribution=None,
@@ -1448,12 +1453,13 @@ class TestFossilizeTerminalBonus:
                 max_epochs=25,
                 acc_at_germination=None,
                 return_components=True,
-                num_fossilized_seeds=num_fossilized,
+                num_fossilized_seeds=num_total if num_total else num_contributing,
+                num_contributing_fossilized=num_contributing,
             )
             return components.terminal_bonus, components.fossilize_terminal_bonus
 
         # Default fossilize_terminal_scale = 3.0
-        # terminal_bonus = val_acc * 0.05 + num_fossilized * 3.0
+        # terminal_bonus = val_acc * 0.05 + num_contributing * 3.0
         # Base: 70 * 0.05 = 3.5
         total_0, fossil_0 = get_terminal_bonus(0)
         assert fossil_0 == 0.0
@@ -1466,6 +1472,12 @@ class TestFossilizeTerminalBonus:
         total_5, fossil_5 = get_terminal_bonus(5)
         assert fossil_5 == pytest.approx(15.0)  # 5 * 3.0
         assert total_5 == pytest.approx(18.5)  # 3.5 + 15.0
+
+        # Test asymmetric case: 3 total fossilized but only 1 contributing
+        # Only the contributing one should get terminal bonus
+        total_asym, fossil_asym = get_terminal_bonus(num_contributing=1, num_total=3)
+        assert fossil_asym == pytest.approx(3.0)  # Only 1 contributing * 3.0
+        assert total_asym == pytest.approx(6.5)  # 3.5 + 3.0
 
     def test_no_terminal_bonus_before_max_epoch(self):
         """Terminal bonus should only apply at max_epochs."""
@@ -1527,9 +1539,10 @@ class TestFossilizeTerminalBonus:
             acc_at_germination=None,
             return_components=True,
             num_fossilized_seeds=2,
+            num_contributing_fossilized=2,  # Both contributing
         )
 
-        # 2 * 5.0 = 10.0 fossilize bonus
+        # 2 * 5.0 = 10.0 fossilize bonus (only contributing seeds count)
         assert components.fossilize_terminal_bonus == pytest.approx(10.0)
         # Total: 70 * 0.05 + 10.0 = 13.5
         assert components.terminal_bonus == pytest.approx(13.5)

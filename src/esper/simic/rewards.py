@@ -327,6 +327,7 @@ def compute_contribution_reward(
     acc_delta: float | None = None,
     return_components: bool = False,
     num_fossilized_seeds: int = 0,
+    num_contributing_fossilized: int = 0,
 ) -> float | tuple[float, RewardComponentsTelemetry]:
     """Compute reward using bounded attribution (ransomware-resistant).
 
@@ -360,7 +361,9 @@ def compute_contribution_reward(
         acc_at_germination: Accuracy when seed was planted (for progress calc)
         acc_delta: Per-epoch accuracy change (proxy signal for pre-blending)
         return_components: If True, return (reward, components) tuple
-        num_fossilized_seeds: Count of fossilized seeds for terminal bonus
+        num_fossilized_seeds: Count of all fossilized seeds (for telemetry)
+        num_contributing_fossilized: Count of fossilized seeds with total_improvement >= MIN_FOSSILIZE_CONTRIBUTION.
+            Only these seeds receive terminal bonus. This prevents bad fossilizations from being NPV-positive.
 
     Returns:
         Shaped reward value, or (reward, components) if return_components=True
@@ -605,16 +608,18 @@ def compute_contribution_reward(
     if epoch == max_epochs:
         # Base accuracy bonus
         terminal_bonus = val_acc * config.terminal_acc_weight
-        # Bonus per fossilized seed to incentivize completion over farming
-        # This makes FOSSILIZE NPV-positive vs WAIT-farming in PROBATIONARY
-        # DRL Expert review 2025-12-10: addresses H4 (terminating action problem)
-        fossilize_terminal_bonus = num_fossilized_seeds * config.fossilize_terminal_scale
+        # ASYMMETRIC TERMINAL BONUS: Only reward CONTRIBUTING fossilized seeds
+        # Seeds with total_improvement < MIN_FOSSILIZE_CONTRIBUTION get no terminal bonus.
+        # This makes bad fossilizations NPV-negative (immediate penalty not offset by terminal).
+        # DRL Expert review 2025-12-11: prevents ransomware seeds from being NPV-positive
+        fossilize_terminal_bonus = num_contributing_fossilized * config.fossilize_terminal_scale
         terminal_bonus += fossilize_terminal_bonus
         reward += terminal_bonus
     if components:
         components.terminal_bonus = terminal_bonus
         components.fossilize_terminal_bonus = fossilize_terminal_bonus
         components.num_fossilized_seeds = num_fossilized_seeds
+        components.num_contributing_fossilized = num_contributing_fossilized
 
     if components:
         components.total_reward = reward

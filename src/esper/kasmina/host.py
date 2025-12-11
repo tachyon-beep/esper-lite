@@ -357,13 +357,17 @@ class TransformerHost(nn.Module):
 
 
 class MorphogeneticModel(nn.Module):
-    """Model with Kasmina seed slot registered into host injection points."""
+    """Model with Kasmina seed slots registered into host injection points.
+
+    Supports both single-slot (legacy) and multi-slot architectures.
+    """
 
     def __init__(
         self,
         host: nn.Module,
         device: str = "cpu",
         slot_id: str | None = None,
+        slots: list[str] | None = None,
         task_config=None,
         fast_mode: bool = False,
     ):
@@ -372,46 +376,67 @@ class MorphogeneticModel(nn.Module):
         self._device = device
         self.task_config = task_config
 
-        # Host must expose a concrete injection_points mapping for seed slots.
-        try:
-            injection_points = host.injection_points
-        except AttributeError as exc:
-            raise ValueError("Host must expose injection_points mapping for seed slots") from exc
-        if not injection_points:
-            raise ValueError("Host injection_points mapping must not be empty")
+        # Host must expose segment_channels for multi-slot support
+        segment_channels = host.segment_channels
 
-        self.slot_id = slot_id or next(iter(injection_points))
-        if self.slot_id not in injection_points:
-            raise ValueError(
-                f"Slot '{self.slot_id}' not found in host injection points: {list(injection_points.keys())}"
+        # Determine which slots to create
+        if slots is not None:
+            # Multi-slot mode
+            slot_names = slots
+            self._legacy_single_slot = False
+        elif slot_id is not None:
+            # Legacy single-slot mode with explicit slot_id
+            slot_names = [slot_id]
+            self._legacy_single_slot = True
+        else:
+            # Legacy single-slot mode, default to "mid"
+            slot_names = ["mid"]
+            self._legacy_single_slot = True
+
+        # Create seed slots dict
+        self.seed_slots: dict[str, SeedSlot] = {}
+        for slot_name in slot_names:
+            if slot_name not in segment_channels:
+                raise ValueError(
+                    f"Unknown slot: {slot_name}. Available: {list(segment_channels.keys())}"
+                )
+            self.seed_slots[slot_name] = SeedSlot(
+                slot_id=slot_name,
+                channels=segment_channels[slot_name],
+                device=device,
+                task_config=task_config,
+                fast_mode=fast_mode,
             )
 
-        channels = injection_points[self.slot_id]
-        self.seed_slot = SeedSlot(
-            slot_id=self.slot_id,
-            channels=channels,
-            device=device,
-            task_config=task_config,
-            fast_mode=fast_mode,
-        )
+        # Track slot order for forward pass
+        self._slot_order = ["early", "mid", "late"]
+        self._active_slots = [s for s in self._slot_order if s in self.seed_slots]
 
-        # Host must implement register_slot(slot_id, module).
-        try:
-            register_slot = self.host.register_slot
-        except AttributeError as exc:
-            raise ValueError("Host must implement register_slot(slot_id, module)") from exc
-
-        # Move host to device BEFORE registering slot. register_slot() queries
-        # next(self.parameters()).device to place the slot, so host must already
-        # be on the target device to avoid corrupting SeedSlot.device to CPU.
+        # Move host to device BEFORE registering slots
         self.host = self.host.to(device)
-        register_slot(self.slot_id, self.seed_slot)
+
+        # For legacy single-slot mode, register with host's injection_points system
+        # For multi-slot mode, we'll use segment-based forward passes
+        if self._legacy_single_slot:
+            # Legacy path: register single slot with host's injection system
+            try:
+                injection_points = host.injection_points
+                register_slot = self.host.register_slot
+            except AttributeError as exc:
+                raise ValueError("Host must expose injection_points and register_slot") from exc
+
+            legacy_slot_id = slot_names[0]
+            # Map segment name to injection point if needed
+            if legacy_slot_id == "mid" and legacy_slot_id not in injection_points:
+                # Try block2_post as fallback
+                legacy_slot_id = "block2_post"
+            register_slot(legacy_slot_id, self.seed_slots[slot_names[0]])
 
     def to(self, *args, **kwargs):
         """Override to() to update device tracking after transfer.
 
         Note: super().to() already moves all registered submodules including
-        seed_slot and its seed. We only update our device tracking string.
+        all seed slots and their seeds. We only update our device tracking string.
 
         Implementation note (PyTorch Expert review): Query device from parameters
         AFTER super().to() completes rather than parsing args. This is simpler,
@@ -428,29 +453,105 @@ class MorphogeneticModel(nn.Module):
             # No parameters - keep existing device tracking
             return result
 
-        # Update tracking (seed already moved by super().to())
-        self.seed_slot.device = actual_device
+        # Update tracking for all slots (seeds already moved by super().to())
+        for slot in self.seed_slots.values():
+            slot.device = actual_device
         self._device = str(actual_device)
 
         return result
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.host(x)
+        """Forward pass through host with all active slots.
 
-    def germinate_seed(self, blueprint_id: str, seed_id: str) -> None:
-        """Germinate a new seed."""
-        self.seed_slot.germinate(
+        For legacy single-slot mode, uses host's built-in injection system.
+        For multi-slot mode, processes sequentially through segments.
+        """
+        if self._legacy_single_slot:
+            # Legacy path: host handles slot injection internally
+            return self.host(x)
+
+        # Multi-slot path: process through network segment by segment
+        # Map segment names to block indices
+        segment_to_block = {"early": 0, "mid": 1, "late": 2}
+
+        # Convert to channels_last for Tensor Core optimization
+        if self.host._memory_format == torch.channels_last:
+            x = x.to(memory_format=torch.channels_last)
+
+        current_block = 0
+        for slot_id in self._active_slots:
+            target_block = segment_to_block[slot_id]
+
+            # Forward through blocks up to this segment
+            for idx in range(current_block, target_block + 1):
+                x = self.host.blocks[idx](x)
+                # Only pool on first pool_layers blocks
+                if idx < self.host._pool_layers:
+                    x = self.host.pool(x)
+
+            # Apply slot transformation
+            x = self.seed_slots[slot_id].forward(x)
+
+            # Update current position
+            current_block = target_block + 1
+
+        # Forward through remaining blocks after last slot
+        for idx in range(current_block, self.host.n_blocks):
+            x = self.host.blocks[idx](x)
+            if idx < self.host._pool_layers:
+                x = self.host.pool(x)
+
+        # Final classification
+        x = F.adaptive_avg_pool2d(x, 1).flatten(1)
+        return self.host.classifier(x)
+
+    @property
+    def seed_slot(self) -> SeedSlot:
+        """Legacy property for single-slot access."""
+        if self._legacy_single_slot:
+            return next(iter(self.seed_slots.values()))
+        raise AttributeError("Use seed_slots dict for multi-slot access")
+
+    def germinate_seed(
+        self,
+        blueprint_id: str,
+        seed_id: str,
+        slot: str | None = None,
+    ) -> None:
+        """Germinate a new seed in a specific slot."""
+        if slot is None:
+            # Legacy mode: use the single slot
+            if self._legacy_single_slot:
+                slot = next(iter(self.seed_slots.keys()))
+            else:
+                slot = "mid"  # Default for backwards compat
+
+        if slot not in self.seed_slots:
+            raise ValueError(f"Unknown slot: {slot}")
+
+        self.seed_slots[slot].germinate(
             blueprint_id=blueprint_id,
             seed_id=seed_id,
             host_module=self.host,
         )
 
-    def cull_seed(self) -> None:
-        """Cull the current seed."""
-        self.seed_slot.cull()
+    def cull_seed(self, slot: str | None = None) -> None:
+        """Cull the seed in a specific slot."""
+        if slot is None:
+            # Legacy mode: use the single slot
+            if self._legacy_single_slot:
+                slot = next(iter(self.seed_slots.keys()))
+            else:
+                slot = "mid"
+        self.seed_slots[slot].cull()
 
-    def get_seed_parameters(self):
-        return self.seed_slot.get_parameters()
+    def get_seed_parameters(self, slot: str | None = None):
+        """Get seed parameters from specific slot or all slots."""
+        if slot:
+            return self.seed_slots[slot].get_parameters()
+        # Return all seed params from all slots
+        for s in self.seed_slots.values():
+            yield from s.get_parameters()
 
     def get_host_parameters(self):
         """Return host backbone parameters only (exclude seed slots)."""
@@ -461,16 +562,32 @@ class MorphogeneticModel(nn.Module):
 
     @property
     def has_active_seed(self) -> bool:
-        return self.seed_slot.is_active
+        """Check if any slot has an active seed."""
+        return any(s.is_active for s in self.seed_slots.values())
+
+    def has_active_seed_in_slot(self, slot: str) -> bool:
+        """Check if specific slot has active seed."""
+        return self.seed_slots[slot].is_active
 
     @property
     def seed_state(self):
-        return self.seed_slot.state
+        """Legacy property - returns first active seed state."""
+        for slot in self.seed_slots.values():
+            if slot.is_active:
+                return slot.state
+        return None
+
+    def get_slot_states(self) -> dict[str, any]:
+        """Get state of all slots."""
+        return {
+            slot_id: slot.state
+            for slot_id, slot in self.seed_slots.items()
+        }
 
     @property
     def active_seed_params(self) -> int:
-        """Return trainable params of active seed."""
-        return self.seed_slot.active_seed_params
+        """Total trainable params across all active seeds."""
+        return sum(s.active_seed_params for s in self.seed_slots.values())
 
 
 __all__ = [

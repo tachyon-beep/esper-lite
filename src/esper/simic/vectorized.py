@@ -46,6 +46,7 @@ from esper.simic.gradient_collector import (
 from esper.simic.normalization import RunningMeanStd, RewardNormalizer
 from esper.simic.ppo import PPOAgent, signals_to_features
 from esper.simic.rewards import compute_contribution_reward, SeedInfo
+from esper.kasmina.slot import MIN_FOSSILIZE_CONTRIBUTION
 from esper.nissa import get_hub, BlueprintAnalytics
 from esper.tolaria import TolariaGovernor
 
@@ -69,6 +70,8 @@ class ParallelEnvState:
     env_device: str = "cuda:0"  # Device this env runs on
     stream: torch.cuda.Stream | None = None  # CUDA stream for async execution
     seeds_created: int = 0
+    seeds_fossilized: int = 0  # Total seeds fossilized this episode
+    contributing_fossilized: int = 0  # Seeds with total_improvement >= MIN_FOSSILIZE_CONTRIBUTION
     episode_rewards: list = field(default_factory=list)
     action_counts: dict = field(default_factory=dict)
     successful_action_counts: dict = field(default_factory=dict)
@@ -202,12 +205,12 @@ def train_ppo_vectorized(
         save_path: Optional path to save model
         resume_path: Optional path to resume from checkpoint
         seed: Random seed for reproducibility
-        plateau_threshold: Absolute delta threshold below which training is considered
-            plateaued (emits PLATEAU_DETECTED event). Scale-dependent: adjust for
-            different accuracy scales (e.g., 0-1 vs 0-100).
-        improvement_threshold: Delta threshold above which training shows significant
-            improvement/degradation (emits IMPROVEMENT_DETECTED/DEGRADATION_DETECTED
-            events). Scale-dependent: adjust for different accuracy scales.
+        plateau_threshold: Rolling average delta threshold below which training is considered
+            plateaued (emits PLATEAU_DETECTED event). Compares current vs previous batch's
+            rolling average. Scale-dependent: adjust for accuracy scales (e.g., 0-1 vs 0-100).
+        improvement_threshold: Rolling average delta threshold above which training shows
+            significant improvement/degradation (emits IMPROVEMENT_DETECTED/DEGRADATION_DETECTED).
+            Events align with displayed rolling_avg_accuracy trend.
 
     Returns:
         Tuple of (trained_agent, training_history)
@@ -591,6 +594,7 @@ def train_ppo_vectorized(
     best_state = None
     recent_accuracies = []
     recent_rewards = []
+    prev_rolling_avg_acc: float | None = None  # Track previous rolling avg for trend detection
 
     episodes_completed = start_episode
     total_episodes = n_episodes + start_episode  # Total target including resumed episodes
@@ -1073,6 +1077,8 @@ def train_ppo_vectorized(
                         acc_at_germination=env_state.acc_at_germination,
                         acc_delta=signals.metrics.accuracy_delta,
                         return_components=True,
+                        num_fossilized_seeds=env_state.seeds_fossilized,
+                        num_contributing_fossilized=env_state.contributing_fossilized,
                     )
                     if baseline_accs[env_idx] is not None:
                         reward_components.host_baseline_acc = baseline_accs[env_idx]
@@ -1088,6 +1094,8 @@ def train_ppo_vectorized(
                         host_params=host_params,
                         acc_at_germination=env_state.acc_at_germination,
                         acc_delta=signals.metrics.accuracy_delta,
+                        num_fossilized_seeds=env_state.seeds_fossilized,
+                        num_contributing_fossilized=env_state.contributing_fossilized,
                     )
 
                 # Governor punishment: inject negative reward if rollback occurred
@@ -1109,8 +1117,19 @@ def train_ppo_vectorized(
                         action_success = True
 
                 elif action == ActionEnum.FOSSILIZE:
+                    # Capture total_improvement BEFORE state transition
+                    seed_total_improvement = (
+                        seed_state.metrics.total_improvement
+                        if seed_state and seed_state.metrics else 0.0
+                    )
                     action_success = _advance_active_seed(model)
                     if action_success:
+                        # Track fossilization for terminal bonus calculation
+                        env_state.seeds_fossilized += 1
+                        # Only count as "contributing" if meets MIN_FOSSILIZE_CONTRIBUTION threshold
+                        # This aligns with G5 gate and prevents terminal bonus for bad fossilizations
+                        if seed_total_improvement >= MIN_FOSSILIZE_CONTRIBUTION:
+                            env_state.contributing_fossilized += 1
                         # Seed is permanent now, clear germination baseline
                         env_state.acc_at_germination = None
 
@@ -1326,50 +1345,45 @@ def train_ppo_vectorized(
             )
             hub.emit(ppo_event)
 
-            # Emit training progress events
-            # Use smoothed delta instead of consecutive batch comparison to avoid noise
-            if len(recent_accuracies) >= 6:
-                # Compare rolling window averages (need at least 6 samples for meaningful comparison)
-                recent_avg = sum(recent_accuracies[-3:]) / 3
-                older_avg = sum(recent_accuracies[-6:-3]) / 3
-                smoothed_delta = recent_avg - older_avg
+            # Emit training progress events based on actual rolling average trend
+            # This aligns events with the displayed rolling_avg_accuracy
+            if prev_rolling_avg_acc is not None:
+                rolling_delta = rolling_avg_acc - prev_rolling_avg_acc
 
-                if abs(smoothed_delta) < plateau_threshold:  # True plateau - no significant change either direction
+                if abs(rolling_delta) < plateau_threshold:  # True plateau - no significant change
                     hub.emit(TelemetryEvent(
                         event_type=TelemetryEventType.PLATEAU_DETECTED,
                         data={
                             "batch": batch_idx + 1,
-                            "smoothed_delta": smoothed_delta,
-                            "recent_avg": recent_avg,
-                            "older_avg": older_avg,
+                            "rolling_delta": rolling_delta,
                             "rolling_avg_accuracy": rolling_avg_acc,
+                            "prev_rolling_avg_accuracy": prev_rolling_avg_acc,
                             "episodes_completed": episodes_completed,
                         },
                     ))
-                elif smoothed_delta < -improvement_threshold:  # Significant degradation
+                elif rolling_delta < -improvement_threshold:  # Significant degradation
                     hub.emit(TelemetryEvent(
                         event_type=TelemetryEventType.DEGRADATION_DETECTED,
                         data={
                             "batch": batch_idx + 1,
-                            "smoothed_delta": smoothed_delta,
-                            "recent_avg": recent_avg,
-                            "older_avg": older_avg,
+                            "rolling_delta": rolling_delta,
                             "rolling_avg_accuracy": rolling_avg_acc,
+                            "prev_rolling_avg_accuracy": prev_rolling_avg_acc,
                             "episodes_completed": episodes_completed,
                         },
                     ))
-                elif smoothed_delta > improvement_threshold:  # Significant improvement
+                elif rolling_delta > improvement_threshold:  # Significant improvement
                     hub.emit(TelemetryEvent(
                         event_type=TelemetryEventType.IMPROVEMENT_DETECTED,
                         data={
                             "batch": batch_idx + 1,
-                            "smoothed_delta": smoothed_delta,
-                            "recent_avg": recent_avg,
-                            "older_avg": older_avg,
+                            "rolling_delta": rolling_delta,
                             "rolling_avg_accuracy": rolling_avg_acc,
+                            "prev_rolling_avg_accuracy": prev_rolling_avg_acc,
                             "episodes_completed": episodes_completed,
                         },
                     ))
+            prev_rolling_avg_acc = rolling_avg_acc
 
         # Print analytics summary every 5 episodes
         if episodes_completed % 5 == 0 and len(analytics.stats) > 0:

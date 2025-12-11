@@ -75,3 +75,61 @@ def test_segment_channels_match_injection_points():
     # Both should expose the same channel information
     assert "block2_post" in host.injection_points
     assert host.injection_points["block2_post"] == host.segment_channels["mid"]
+
+
+def test_multislot_model_creation():
+    """MorphogeneticModel should support multiple slots."""
+    from esper.kasmina.host import CNNHost, MorphogeneticModel
+
+    host = CNNHost()
+    model = MorphogeneticModel(host, device="cpu", slots=["early", "mid", "late"])
+
+    assert len(model.seed_slots) == 3
+    assert "early" in model.seed_slots
+    assert "mid" in model.seed_slots
+    assert "late" in model.seed_slots
+
+    # Each slot should have correct channels
+    assert model.seed_slots["early"].channels == 32
+    assert model.seed_slots["mid"].channels == 64
+    assert model.seed_slots["late"].channels == 128
+
+
+def test_multislot_forward_pass():
+    """Multi-slot model forward should pass through all slots."""
+    from esper.kasmina.host import CNNHost, MorphogeneticModel
+    import torch
+
+    host = CNNHost()
+    model = MorphogeneticModel(host, device="cpu", slots=["early", "mid", "late"])
+
+    x = torch.randn(2, 3, 32, 32)
+    out = model(x)
+    assert out.shape == (2, 10)
+
+
+def test_multislot_germinate_specific_slot():
+    """Should germinate seed in specific slot."""
+    from esper.kasmina.host import CNNHost, MorphogeneticModel
+
+    host = CNNHost()
+    model = MorphogeneticModel(host, device="cpu", slots=["early", "mid", "late"])
+
+    # Germinate in mid slot (use actual blueprint name)
+    model.germinate_seed("conv_light", "test_seed", slot="mid")
+
+    assert model.seed_slots["mid"].is_active
+    assert not model.seed_slots["early"].is_active
+    assert not model.seed_slots["late"].is_active
+
+
+def test_single_slot_is_default():
+    """Single slot mode (backwards compat) should still work."""
+    from esper.kasmina.host import CNNHost, MorphogeneticModel
+
+    host = CNNHost()
+    model = MorphogeneticModel(host, device="cpu")  # No slots arg
+
+    # Should default to single "mid" slot for backwards compat
+    assert len(model.seed_slots) == 1
+    assert "mid" in model.seed_slots

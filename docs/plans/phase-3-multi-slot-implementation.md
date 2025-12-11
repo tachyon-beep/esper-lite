@@ -1313,194 +1313,256 @@ git commit -m "feat(simic): add obs_to_multislot_features with per-slot state"
 
 ---
 
-## Task 8: Per-Slot Reward Shaping
+## Task 8: Simplified Multi-Slot Reward Function
+
+**DESIGN PRINCIPLE:** The old reward function was 975 lines of incomprehensible complexity. The agent should LEARN behavior, not have it hard-coded. This task REPLACES the existing reward system with something simple enough to fit in your head.
 
 **Files:**
-- Modify: `src/esper/simic/rewards.py`
-- Test: `tests/simic/test_rewards.py`
+- Create: `src/esper/simic/simple_rewards.py` (NEW FILE - don't touch old rewards.py yet)
+- Test: `tests/simic/test_simple_rewards.py`
 
-**Step 1: Write the failing test**
+**Step 1: Write the failing tests**
 
 ```python
-# tests/simic/test_rewards.py
-def test_multislot_reward():
-    """compute_multislot_reward should shape rewards per-slot."""
-    from esper.simic.rewards import compute_multislot_reward
-    from esper.leyline.factored_actions import LifecycleOp, SlotAction
+# tests/simic/test_simple_rewards.py
+"""Tests for simplified multi-slot reward function.
 
-    # Germinate in empty slot should get bonus
-    reward = compute_multislot_reward(
-        op=LifecycleOp.GERMINATE,
-        slot=SlotAction.MID,
-        acc_delta=0.5,
-        val_acc=65.0,
-        slot_states={
-            "early": None,
-            "mid": None,  # Empty slot
-            "late": None,
-        },
-        epoch=5,
-        max_epochs=25,
+Design principle: contribution good, bloat bad, that's it.
+Let the agent learn everything else.
+"""
+import math
+import pytest
+
+
+def test_positive_contribution_gives_positive_reward():
+    """Seeds that help should get positive reward."""
+    from esper.simic.simple_rewards import compute_simple_reward
+
+    reward = compute_simple_reward(
+        seed_contributions={"mid": 5.0},  # 5% improvement from seed
+        total_params=100_000,
+        host_params=100_000,
+        is_terminal=False,
+        val_acc=70.0,
     )
 
-    assert reward > 0, "Germinating in empty slot should be positive"
+    assert reward > 0, "Positive contribution should give positive reward"
 
 
-def test_multislot_reward_germinate_occupied():
-    """Germinating in occupied slot should be penalized."""
-    from esper.simic.rewards import compute_multislot_reward, SeedInfo
-    from esper.leyline.factored_actions import LifecycleOp, SlotAction
-    from esper.leyline import SeedStage
+def test_negative_contribution_gives_negative_reward():
+    """Seeds that hurt should get negative reward."""
+    from esper.simic.simple_rewards import compute_simple_reward
 
-    reward = compute_multislot_reward(
-        op=LifecycleOp.GERMINATE,
-        slot=SlotAction.MID,
-        acc_delta=0.5,
-        val_acc=65.0,
-        slot_states={
-            "early": None,
-            "mid": SeedInfo(stage=SeedStage.TRAINING.value, improvement_since_stage_start=1.0, epochs_in_stage=5),
-            "late": None,
-        },
-        epoch=5,
-        max_epochs=25,
+    reward = compute_simple_reward(
+        seed_contributions={"mid": -3.0},  # Seed hurts by 3%
+        total_params=100_000,
+        host_params=100_000,
+        is_terminal=False,
+        val_acc=70.0,
     )
 
-    assert reward < 0, "Germinating in occupied slot should be negative"
+    assert reward < 0, "Negative contribution should give negative reward"
+
+
+def test_bloat_is_penalized():
+    """More parameters = more penalty."""
+    from esper.simic.simple_rewards import compute_simple_reward
+
+    # Same contribution, different sizes
+    reward_small = compute_simple_reward(
+        seed_contributions={"mid": 2.0},
+        total_params=100_000,  # No bloat
+        host_params=100_000,
+        is_terminal=False,
+        val_acc=70.0,
+    )
+
+    reward_bloated = compute_simple_reward(
+        seed_contributions={"mid": 2.0},
+        total_params=200_000,  # 2x bloat
+        host_params=100_000,
+        is_terminal=False,
+        val_acc=70.0,
+    )
+
+    assert reward_small > reward_bloated, "Bloat should reduce reward"
+
+
+def test_multiple_slots_sum_contributions():
+    """Multiple active slots should sum their contributions."""
+    from esper.simic.simple_rewards import compute_simple_reward
+
+    reward_single = compute_simple_reward(
+        seed_contributions={"mid": 3.0},
+        total_params=100_000,
+        host_params=100_000,
+        is_terminal=False,
+        val_acc=70.0,
+    )
+
+    reward_multi = compute_simple_reward(
+        seed_contributions={"early": 1.0, "mid": 1.0, "late": 1.0},  # Same total
+        total_params=100_000,
+        host_params=100_000,
+        is_terminal=False,
+        val_acc=70.0,
+    )
+
+    assert abs(reward_single - reward_multi) < 0.01, "Same total contribution = same reward"
+
+
+def test_terminal_bonus_for_accuracy():
+    """Terminal state should add accuracy bonus."""
+    from esper.simic.simple_rewards import compute_simple_reward
+
+    reward_mid = compute_simple_reward(
+        seed_contributions={},
+        total_params=100_000,
+        host_params=100_000,
+        is_terminal=False,
+        val_acc=80.0,
+    )
+
+    reward_terminal = compute_simple_reward(
+        seed_contributions={},
+        total_params=100_000,
+        host_params=100_000,
+        is_terminal=True,
+        val_acc=80.0,
+    )
+
+    assert reward_terminal > reward_mid, "Terminal should have accuracy bonus"
+
+
+def test_none_contributions_ignored():
+    """None contributions (no counterfactual available) should be ignored."""
+    from esper.simic.simple_rewards import compute_simple_reward
+
+    reward = compute_simple_reward(
+        seed_contributions={"early": None, "mid": 2.0, "late": None},
+        total_params=100_000,
+        host_params=100_000,
+        is_terminal=False,
+        val_acc=70.0,
+    )
+
+    # Should only count the mid slot's 2.0 contribution
+    reward_explicit = compute_simple_reward(
+        seed_contributions={"mid": 2.0},
+        total_params=100_000,
+        host_params=100_000,
+        is_terminal=False,
+        val_acc=70.0,
+    )
+
+    assert abs(reward - reward_explicit) < 0.01, "None contributions should be ignored"
+
+
+def test_zero_params_no_crash():
+    """Should handle edge case of zero params gracefully."""
+    from esper.simic.simple_rewards import compute_simple_reward
+
+    # Should not crash
+    reward = compute_simple_reward(
+        seed_contributions={"mid": 1.0},
+        total_params=0,
+        host_params=0,
+        is_terminal=False,
+        val_acc=70.0,
+    )
+
+    assert reward == 1.0, "Zero params should give no rent penalty"
 ```
 
-**Step 2: Run test to verify it fails**
+**Step 2: Run tests to verify they fail**
 
-Run: `PYTHONPATH=src pytest tests/simic/test_rewards.py::test_multislot_reward -v`
-Expected: FAIL with "cannot import name 'compute_multislot_reward'"
+Run: `PYTHONPATH=src pytest tests/simic/test_simple_rewards.py -v`
+Expected: FAIL with "No module named 'esper.simic.simple_rewards'"
 
 **Step 3: Write implementation**
 
-Add to `src/esper/simic/rewards.py`:
-
 ```python
-def compute_multislot_reward(
-    op: "LifecycleOp",
-    slot: "SlotAction",
-    acc_delta: float,
-    val_acc: float,
-    slot_states: dict[str, SeedInfo | None],
-    epoch: int,
-    max_epochs: int,
-    config: RewardConfig | None = None,
-) -> float:
-    """Compute reward for multi-slot action.
+# src/esper/simic/simple_rewards.py
+"""Simplified Reward Function for Multi-Slot Seed Control.
 
-    The reward remains primarily global (accuracy deltas are shared),
-    but we add light slot-specific shaping so Tamiyo has a clearer
-    signal about good/bad interventions per location.
+Design principle: The agent should LEARN behavior, not have it hard-coded.
+
+Three signals only:
+1. Contribution: did the seed help or hurt? (counterfactual)
+2. Size: big = bad (logarithmic parameter penalty)
+3. Terminal: final accuracy matters
+
+That's it. ~30 lines. No hard gates, no ransomware detection, no PBRS farming
+prevention, no ratio penalties, no legitimacy discounts. Let the agent learn.
+"""
+
+from __future__ import annotations
+
+import math
+
+
+def compute_simple_reward(
+    seed_contributions: dict[str, float | None],
+    total_params: int,
+    host_params: int,
+    is_terminal: bool,
+    val_acc: float,
+    contribution_scale: float = 1.0,
+    rent_scale: float = 0.1,
+    terminal_acc_scale: float = 0.05,
+) -> float:
+    """Compute reward with minimal shaping.
 
     Args:
-        op: Lifecycle operation (WAIT, GERMINATE, ADVANCE, CULL)
-        slot: Target slot
-        acc_delta: Accuracy improvement this step
+        seed_contributions: Per-slot counterfactual deltas (real_acc - baseline_acc).
+                           None means no counterfactual available for that slot.
+        total_params: Total model params (host + all seeds)
+        host_params: Baseline host params (for computing bloat ratio)
+        is_terminal: Whether this is the final step
         val_acc: Current validation accuracy
-        slot_states: Dict mapping slot_id to SeedInfo or None
-        epoch: Current epoch
-        max_epochs: Maximum epochs
-        config: Reward configuration
+        contribution_scale: Weight for contribution signal (default 1.0)
+        rent_scale: Weight for parameter rent penalty (default 0.1)
+        terminal_acc_scale: Weight for terminal accuracy bonus (default 0.05)
 
     Returns:
-        Shaped reward value
+        Reward value (unbounded, but typically in [-10, +10])
     """
-    from esper.leyline.factored_actions import LifecycleOp, SlotAction
-
-    if config is None:
-        config = _DEFAULT_CONFIG
-
-    slot_id = slot.to_slot_id() if hasattr(slot, 'to_slot_id') else str(slot)
-    seed_info = slot_states.get(slot_id)
-
     reward = 0.0
 
-    # Base: accuracy improvement (global)
-    reward += acc_delta * config.acc_delta_weight
+    # 1. Contribution: sum across all slots (help = positive, hurt = negative)
+    for contrib in seed_contributions.values():
+        if contrib is not None:
+            reward += contribution_scale * contrib
 
-    # Lifecycle stage rewards (for target slot)
-    if seed_info is not None:
-        stage = seed_info.stage
-        improvement = seed_info.improvement_since_stage_start
+    # 2. Size penalty: logarithmic so first params matter more than 10th million
+    if total_params > 0 and host_params > 0:
+        growth_ratio = total_params / host_params
+        reward -= rent_scale * math.log(1.0 + growth_ratio)
 
-        if stage == STAGE_TRAINING:
-            reward += config.training_bonus
-            if improvement > 0:
-                reward += improvement * config.stage_improvement_weight
-        elif stage == STAGE_BLENDING:
-            reward += config.blending_bonus
-        elif stage == STAGE_FOSSILIZED:
-            reward += config.fossilized_bonus
-
-    # Operation-specific shaping
-    if op == LifecycleOp.GERMINATE:
-        if seed_info is None:
-            # Bonus for germinating empty slot
-            reward += config.germinate_no_seed_bonus
-            if epoch < max_epochs * config.early_epoch_fraction:
-                reward += config.germinate_early_bonus
-        else:
-            # Penalty for germinating occupied slot
-            reward += config.germinate_with_seed_penalty
-
-    elif op == LifecycleOp.ADVANCE:
-        if seed_info is None:
-            reward += config.advance_no_seed_penalty
-        else:
-            stage = seed_info.stage
-            improvement = seed_info.improvement_since_stage_start
-            if stage == STAGE_TRAINING:
-                if improvement > 0:
-                    reward += config.advance_good_bonus
-                else:
-                    reward += config.advance_premature_penalty
-            elif stage == STAGE_BLENDING:
-                reward += config.advance_blending_bonus
-
-    elif op == LifecycleOp.CULL:
-        if seed_info is None:
-            reward += config.cull_no_seed_penalty
-        else:
-            improvement = seed_info.improvement_since_stage_start
-            if improvement < config.cull_failing_threshold:
-                reward += config.cull_failing_bonus
-            elif improvement < 0:
-                reward += config.cull_acceptable_bonus
-            else:
-                reward += config.cull_promising_penalty
-
-    elif op == LifecycleOp.WAIT:
-        reward += _wait_shaping(seed_info, acc_delta, config)
-
-    # Terminal bonus
-    if epoch == max_epochs:
-        reward += val_acc * config.terminal_acc_weight
+    # 3. Terminal: final accuracy matters
+    if is_terminal:
+        reward += terminal_acc_scale * val_acc
 
     return reward
-```
 
-Also add to __all__:
-```python
-__all__ = [
-    ...
-    "compute_multislot_reward",
-]
+
+__all__ = ["compute_simple_reward"]
 ```
 
 **Step 4: Run tests to verify they pass**
 
-Run: `PYTHONPATH=src pytest tests/simic/test_rewards.py -v`
+Run: `PYTHONPATH=src pytest tests/simic/test_simple_rewards.py -v`
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-git add src/esper/simic/rewards.py tests/simic/test_rewards.py
-git commit -m "feat(simic): add compute_multislot_reward for per-slot shaping"
+git add src/esper/simic/simple_rewards.py tests/simic/test_simple_rewards.py
+git commit -m "feat(simic): add simple_rewards.py - contribution + rent + terminal only"
 ```
+
+**IMPORTANT NOTE FOR FUTURE TASKS:**
+The old `rewards.py` (975 lines) is NOT deleted yet. Task 10 integration tests should use `simple_rewards.py`. After multi-slot is working end-to-end, a separate cleanup task should migrate all callers from `rewards.py` to `simple_rewards.py` and delete the old file.
 
 ---
 
