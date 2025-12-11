@@ -620,6 +620,33 @@ class MorphogeneticModel(nn.Module):
         """Total trainable params across all active seeds."""
         return sum(s.active_seed_params for s in self.seed_slots.values())
 
+    def count_active_seeds(self) -> int:
+        """Count seeds currently active (not fossilized)."""
+        return sum(1 for s in self.seed_slots.values() if s.is_active)
+
+    def count_fossilized_seeds(self) -> int:
+        """Count fossilized seeds across all slots."""
+        from esper.leyline import SeedStage
+        return sum(
+            1 for s in self.seed_slots.values()
+            if s.state and s.state.stage == SeedStage.FOSSILIZED
+        )
+
+    def total_seeds(self) -> int:
+        """Count all seeds (active + fossilized)."""
+        return self.count_active_seeds() + self.count_fossilized_seeds()
+
+    def count_seeds_in_slot(self, slot: str) -> int:
+        """Count seeds in a specific slot (0 or 1 since one seed per slot)."""
+        s = self.seed_slots[slot]
+        if s.is_active:
+            return 1
+        if s.state:
+            from esper.leyline import SeedStage
+            if s.state.stage == SeedStage.FOSSILIZED:
+                return 1
+        return 0
+
 
 __all__ = [
     "ConvBlock",
