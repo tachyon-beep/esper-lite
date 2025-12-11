@@ -26,7 +26,7 @@ class _StubSeedState:
 
 class _StubSeedSlot:
     def __init__(self, seed_state: _StubSeedState, gate_result: _StubGateResult | None = None):
-        self.seed_state = seed_state
+        self.state = seed_state
         self.gate_result = gate_result or _StubGateResult()
         self.advance_calls: list[SeedStage] = []
         self.set_alpha_calls: list[float] = []
@@ -34,7 +34,7 @@ class _StubSeedSlot:
 
     def advance_stage(self, target_stage: SeedStage | None = None) -> _StubGateResult:
         self.advance_calls.append(target_stage)
-        self.seed_state.stage = target_stage
+        self.state.stage = target_stage
         return self.gate_result
 
     def set_alpha(self, alpha: float) -> None:
@@ -47,8 +47,9 @@ class _StubSeedSlot:
 class _StubModel:
     def __init__(self, seed_stage: SeedStage, gate_result: _StubGateResult | None = None):
         self.has_active_seed = True
-        self.seed_state = _StubSeedState(seed_stage)
-        self.seed_slot = _StubSeedSlot(self.seed_state, gate_result=gate_result)
+        seed_state = _StubSeedState(seed_stage)
+        seed_slot = _StubSeedSlot(seed_state, gate_result=gate_result)
+        self.seed_slots = {"mid": seed_slot}
 
 
 def test_advance_active_seed_fossilizes_via_seed_slot():
@@ -57,11 +58,11 @@ def test_advance_active_seed_fossilizes_via_seed_slot():
 
     _advance_active_seed(model)
 
-    assert model.seed_slot.advance_calls == [SeedStage.FOSSILIZED]
-    assert model.seed_slot.set_alpha_calls == [1.0]
-    assert model.seed_state.stage == SeedStage.FOSSILIZED
+    assert model.seed_slots["mid"].advance_calls == [SeedStage.FOSSILIZED]
+    assert model.seed_slots["mid"].set_alpha_calls == [1.0]
+    assert model.seed_slots["mid"].state.stage == SeedStage.FOSSILIZED
     # Transition should happen inside advance_stage, not direct transition
-    assert model.seed_state.transition_calls == []
+    assert model.seed_slots["mid"].state.transition_calls == []
 
 
 def test_advance_active_seed_noop_on_failed_fossilization_gate():
@@ -73,8 +74,8 @@ def test_advance_active_seed_noop_on_failed_fossilization_gate():
     _advance_active_seed(model)
 
     # Gate was checked but transition didn't happen
-    assert model.seed_slot.advance_calls == [SeedStage.FOSSILIZED]
-    assert model.seed_slot.set_alpha_calls == []  # No alpha change on failed gate
+    assert model.seed_slots["mid"].advance_calls == [SeedStage.FOSSILIZED]
+    assert model.seed_slots["mid"].set_alpha_calls == []  # No alpha change on failed gate
     # Stage should NOT change (stub's advance_stage still sets it, but in real code it wouldn't)
 
 
@@ -84,9 +85,9 @@ def test_advance_active_seed_noop_from_training_stage():
 
     _advance_active_seed(model)
 
-    assert model.seed_state.transition_calls == []
-    assert model.seed_slot.start_blending_calls == []
-    assert model.seed_state.stage == SeedStage.TRAINING
+    assert model.seed_slots["mid"].state.transition_calls == []
+    assert model.seed_slots["mid"].start_blending_calls == []
+    assert model.seed_slots["mid"].state.stage == SeedStage.TRAINING
 
 
 def test_custom_thresholds_respected():

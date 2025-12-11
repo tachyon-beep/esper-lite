@@ -77,9 +77,9 @@ def signals_to_features(signals, model, use_telemetry: bool = True, max_epochs: 
 
     # Seed state features
     # NOTE: TrainingSignals.active_seeds is a list of seed IDs (strings),
-    # not SeedState objects. Use model.seed_state to access full seed state.
+    # not SeedState objects. Use model.seed_slots["mid"].state to access full seed state.
     if model and model.has_active_seed:
-        seed_state = model.seed_state
+        seed_state = model.seed_slots["mid"].state
         obs['seed_stage'] = seed_state.stage.value
         obs['seed_epochs_in_stage'] = seed_state.metrics.epochs_in_current_stage
         obs['seed_alpha'] = seed_state.alpha
@@ -106,10 +106,10 @@ def signals_to_features(signals, model, use_telemetry: bool = True, max_epochs: 
     features = obs_to_base_features(obs)
 
     if use_telemetry:
-        # Use real telemetry from model.seed_state when available
+        # Use real telemetry from model.seed_slots["mid"].state when available
         from esper.leyline import SeedTelemetry
         if model and model.has_active_seed:
-            seed_state = model.seed_state
+            seed_state = model.seed_slots["mid"].state
             # SeedState always has telemetry field (initialized in __post_init__)
             features.extend(seed_state.telemetry.to_features())
         else:

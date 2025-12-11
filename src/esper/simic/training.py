@@ -223,13 +223,13 @@ def run_ppo_episode(
         event.data.setdefault("env_id", 0)
         hub.emit(event)
 
-    model.seed_slot.on_telemetry = telemetry_callback
-    model.seed_slot.fast_mode = False
+    model.seed_slots["mid"].on_telemetry = telemetry_callback
+    model.seed_slots["mid"].fast_mode = False
     # Incubator mode gradient isolation: detach host input into the seed path so host
     # gradients match the baseline model while the seed trickle-learns via STE.
     # Host optimizer still steps every batch; isolation only affects gradients
     # flowing through the seed branch.
-    model.seed_slot.isolate_gradients = True
+    model.seed_slots["mid"].isolate_gradients = True
 
     criterion = nn.CrossEntropyLoss()
     host_optimizer = torch.optim.SGD(
@@ -251,11 +251,11 @@ def run_ppo_episode(
     num_germinate_actions = len([a for a in ActionEnum if a.name.startswith("GERMINATE_")])
 
     for epoch in range(1, max_epochs + 1):
-        seed_state = model.seed_state
+        seed_state = model.seed_slots["mid"].state if model.has_active_seed else None
 
         # Handle GERMINATED→TRAINING transition
         if seed_state and seed_state.stage == SeedStage.GERMINATED:
-            gate_result = model.seed_slot.advance_stage(SeedStage.TRAINING)
+            gate_result = model.seed_slots["mid"].advance_stage(SeedStage.TRAINING)
             if not gate_result.passed:
                 raise RuntimeError(f"G1 gate failed during TRAINING entry: {gate_result}")
 
@@ -387,22 +387,22 @@ def run_ppo_episode(
             if not model.has_active_seed:
                 blueprint_id = get_blueprint_from_action(action)
                 seed_id = f"seed_{seeds_created}"
-                model.germinate_seed(blueprint_id, seed_id)
+                model.germinate_seed(blueprint_id, seed_id, slot="mid")
                 seeds_created += 1
                 seed_created_epoch = epoch  # Track when seed was created for age computation
                 seed_optimizer = None
 
         elif action == ActionEnum.FOSSILIZE:
             # NOTE: Only PROBATIONARY → FOSSILIZED is a valid lifecycle transition.
-            if model.has_active_seed and model.seed_state.stage == SeedStage.PROBATIONARY:
-                gate_result = model.seed_slot.advance_stage(SeedStage.FOSSILIZED)
+            if model.has_active_seed and model.seed_slots["mid"].state.stage == SeedStage.PROBATIONARY:
+                gate_result = model.seed_slots["mid"].advance_stage(SeedStage.FOSSILIZED)
                 if gate_result.passed:
                     params_added += model.active_seed_params
-                    model.seed_slot.set_alpha(1.0)
+                    model.seed_slots["mid"].set_alpha(1.0)
 
         elif action == ActionEnum.CULL:
             if model.has_active_seed:
-                model.cull_seed()
+                model.cull_seed(slot="mid")
                 seed_optimizer = None
 
         done = (epoch == max_epochs)
@@ -427,8 +427,8 @@ def run_ppo_episode(
         # Mechanical lifecycle advance (blending/shadowing dwell) AFTER RL transition
         # This ensures state/action/reward alignment - advance happens after the step is recorded
         # Must check seed_state exists since actions may have culled it
-        if model.seed_state:
-            model.seed_slot.step_epoch()
+        if model.has_active_seed:
+            model.seed_slots["mid"].step_epoch()
 
     return val_acc, action_counts, episode_rewards
 
@@ -619,9 +619,9 @@ def run_heuristic_episode(
         event.data.setdefault("env_id", 0)
         hub.emit(event)
 
-    model.seed_slot.on_telemetry = telemetry_callback
-    model.seed_slot.fast_mode = False
-    model.seed_slot.isolate_gradients = True
+    model.seed_slots["mid"].on_telemetry = telemetry_callback
+    model.seed_slots["mid"].fast_mode = False
+    model.seed_slots["mid"].isolate_gradients = True
 
     criterion = nn.CrossEntropyLoss()
     host_optimizer = torch.optim.SGD(
@@ -638,7 +638,7 @@ def run_heuristic_episode(
     params_added = 0
 
     for epoch in range(1, max_epochs + 1):
-        seed_state = model.seed_state
+        seed_state = model.seed_slots["mid"].state if model.has_active_seed else None
 
         # Training phase - use tensor accumulation for deferred sync
         model.train()
@@ -721,8 +721,9 @@ def run_heuristic_episode(
         acc_delta = signals.metrics.accuracy_delta
 
         # Mechanical lifecycle advance
-        model.seed_slot.step_epoch()
-        seed_state = model.seed_state
+        if model.has_active_seed:
+            model.seed_slots["mid"].step_epoch()
+        seed_state = model.seed_slots["mid"].state if model.has_active_seed else None
 
         # Get heuristic decision
         decision = policy.decide(signals, active_seeds)
@@ -749,22 +750,22 @@ def run_heuristic_episode(
             if not model.has_active_seed:
                 blueprint_id = get_blueprint_from_action(action)
                 seed_id = f"seed_{seeds_created}"
-                model.germinate_seed(blueprint_id, seed_id)
+                model.germinate_seed(blueprint_id, seed_id, slot="mid")
                 seeds_created += 1
                 seed_optimizer = torch.optim.SGD(
                     model.get_seed_parameters(), lr=task_spec.seed_lr, momentum=0.9
                 )
 
         elif action.name == "FOSSILIZE":
-            if model.has_active_seed and model.seed_state.stage == SeedStage.PROBATIONARY:
-                gate_result = model.seed_slot.advance_stage(SeedStage.FOSSILIZED)
+            if model.has_active_seed and model.seed_slots["mid"].state.stage == SeedStage.PROBATIONARY:
+                gate_result = model.seed_slots["mid"].advance_stage(SeedStage.FOSSILIZED)
                 if gate_result.passed:
                     params_added += model.active_seed_params
-                    model.seed_slot.set_alpha(1.0)
+                    model.seed_slots["mid"].set_alpha(1.0)
 
         elif action.name == "CULL":
             if model.has_active_seed:
-                model.cull_seed()
+                model.cull_seed(slot="mid")
                 seed_optimizer = None
 
         # Print progress every 10 epochs
