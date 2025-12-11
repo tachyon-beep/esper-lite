@@ -312,21 +312,21 @@ def test_morphogenetic_model_to_device_consistency():
     from esper.kasmina.host import CNNHost, MorphogeneticModel
 
     host = CNNHost(num_classes=10)
-    model = MorphogeneticModel(host, device="cpu")
+    model = MorphogeneticModel(host, device="cpu", slots=["mid"])
 
     # Germinate a seed
-    model.germinate_seed("norm", "test-seed")
-    assert model.seed_slot.seed is not None
+    model.germinate_seed("norm", "test-seed", slot="mid")
+    assert model.seed_slots["mid"].seed is not None
 
     # Transfer to CPU (no-op but exercises the code path)
     model = model.to("cpu")
 
     # Verify consistency
     assert str(model._device) == "cpu"
-    assert model.seed_slot.device == torch.device("cpu")
+    assert model.seed_slots["mid"].device == torch.device("cpu")
 
     # Verify seed is on correct device
-    seed_param = next(model.seed_slot.seed.parameters())
+    seed_param = next(model.seed_slots["mid"].seed.parameters())
     assert seed_param.device == torch.device("cpu")
 
 
