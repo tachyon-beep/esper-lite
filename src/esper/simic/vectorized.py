@@ -180,6 +180,7 @@ def train_ppo_vectorized(
     telemetry_config: "TelemetryConfig | None" = None,
     plateau_threshold: float = 0.5,
     improvement_threshold: float = 2.0,
+    slots: list[str] | None = None,
 ) -> tuple[PPOAgent, list[dict]]:
     """Train PPO with vectorized environments using INVERTED CONTROL FLOW.
 
@@ -422,16 +423,17 @@ def train_ppo_vectorized(
         torch.manual_seed(base_seed + env_idx * 1000)
         random.seed(base_seed + env_idx * 1000)
 
-        model = create_model(task=task_spec, device=env_device)
+        model = create_model(task=task_spec, device=env_device, slots=slots)
 
-        # Wire telemetry callback with env_id injection
-        model.seed_slots["mid"].on_telemetry = make_telemetry_callback(env_idx)
-        model.seed_slots["mid"].fast_mode = False  # Enable telemetry
+        # Wire telemetry callback with env_id injection - use first available slot
+        first_slot = list(model.seed_slots.keys())[0]
+        model.seed_slots[first_slot].on_telemetry = make_telemetry_callback(env_idx)
+        model.seed_slots[first_slot].fast_mode = False  # Enable telemetry
         # Incubator mode gradient isolation: detach host input into the seed path so
         # host gradients remain identical to the host-only model while the seed
         # trickle-learns via STE in TRAINING. The host optimizer still steps
         # every batch; isolation only affects gradients through the seed branch.
-        model.seed_slots["mid"].isolate_gradients = True
+        model.seed_slots[first_slot].isolate_gradients = True
 
         # Set host_params baseline for scoreboard via Nissa analytics
         host_params = sum(p.numel() for p in model.host.parameters() if p.requires_grad)

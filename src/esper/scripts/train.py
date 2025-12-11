@@ -173,6 +173,7 @@ def main():
                 num_workers=args.num_workers,
                 gpu_preload=args.gpu_preload,
                 telemetry_config=telemetry_config,
+                slots=args.slots,
             )
         else:
             from esper.simic.training import train_ppo
@@ -192,9 +193,9 @@ def main():
                 entropy_anneal_episodes=args.entropy_anneal_episodes,
                 gamma=args.gamma,
                 save_path=args.save,
-                resume_path=args.resume,
                 seed=args.seed,
                 telemetry_config=telemetry_config,
+                slots=args.slots,
             )
 
 if __name__ == "__main__":

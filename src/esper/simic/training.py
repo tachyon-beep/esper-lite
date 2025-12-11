@@ -197,6 +197,7 @@ def run_ppo_episode(
     use_telemetry: bool = True,
     collect_rollout: bool = True,
     deterministic: bool = False,
+    slots: list[str] | None = None,
 ) -> tuple[float, dict[str, int], list[float]]:
     """Run a single training episode with the PPO agent."""
     from esper.leyline import SeedStage
@@ -212,7 +213,7 @@ def run_ppo_episode(
     torch.manual_seed(base_seed)
     random.seed(base_seed)
 
-    model = create_model(task=task_spec, device=device)
+    model = create_model(task=task_spec, device=device, slots=slots)
 
     # Wire Kasmina telemetry into global Nissa hub so fossilization and
     # lifecycle events propagate to configured backends (console, analytics).
@@ -456,6 +457,7 @@ def train_ppo(
     save_path: str | None = None,
     seed: int | None = None,
     telemetry_config: "TelemetryConfig | None" = None,
+    slots: list[str] | None = None,
 ):
     """Train PPO agent."""
     from esper.simic.ppo import PPOAgent
@@ -517,6 +519,7 @@ def train_ppo(
             use_telemetry=use_telemetry,
             collect_rollout=True,
             deterministic=False,
+            slots=slots,
         )
 
         total_reward = sum(rewards)
@@ -583,6 +586,7 @@ def run_heuristic_episode(
     base_seed: int = 42,
     device: str = "cuda:0",
     task_spec=None,
+    slots: list[str] | None = None,
 ) -> tuple[float, dict[str, int], list[float]]:
     """Run a single training episode with heuristic policy.
 
@@ -611,17 +615,18 @@ def run_heuristic_episode(
     torch.manual_seed(base_seed)
     random.seed(base_seed)
 
-    model = create_model(task=task_spec, device=device)
+    model = create_model(task=task_spec, device=device, slots=slots)
 
-    # Wire telemetry
+    # Wire telemetry - use first available slot
+    first_slot = list(model.seed_slots.keys())[0]
     hub = get_hub()
     def telemetry_callback(event):
         event.data.setdefault("env_id", 0)
         hub.emit(event)
 
-    model.seed_slots["mid"].on_telemetry = telemetry_callback
-    model.seed_slots["mid"].fast_mode = False
-    model.seed_slots["mid"].isolate_gradients = True
+    model.seed_slots[first_slot].on_telemetry = telemetry_callback
+    model.seed_slots[first_slot].fast_mode = False
+    model.seed_slots[first_slot].isolate_gradients = True
 
     criterion = nn.CrossEntropyLoss()
     host_optimizer = torch.optim.SGD(
