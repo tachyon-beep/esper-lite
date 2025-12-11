@@ -311,6 +311,24 @@ class TransformerHost(nn.Module):
         self._slot_keys = tuple(f"layer_{i}_post_block" for i in range(n_layer))
         self.slots = nn.ModuleDict({k: nn.Identity() for k in self._slot_keys})
 
+        # Segment channel counts for multi-slot support
+        # For transformers, all segments have the same embedding dimension
+        # Segments map to layer ranges: early (0-1), mid (2-3), late (4-5)
+        self.segment_channels = {
+            "early": n_embd,
+            "mid": n_embd,
+            "late": n_embd,
+        }
+
+        # Layer range boundaries for segments (layer index where segment ENDS)
+        # For n_layer=6: early=0-1, mid=2-3, late=4-5
+        third = n_layer // 3
+        self._segment_boundaries = {
+            "early": third,           # Layers 0 to third-1
+            "mid": 2 * third,         # Layers third to 2*third-1
+            "late": n_layer,          # Layers 2*third to n_layer-1
+        }
+
     @property
     @override
     def injection_points(self) -> dict[str, int]:
@@ -331,6 +349,58 @@ class TransformerHost(nn.Module):
         if slot_id not in self.slots:
             raise ValueError(f"Unknown injection point: {slot_id}")
         self.slots[slot_id] = nn.Identity()
+
+    def forward_to_segment(self, segment: str, x: torch.Tensor) -> torch.Tensor:
+        """Forward through network up to and including a segment.
+
+        Args:
+            segment: Target segment name ("early", "mid", or "late")
+            x: Input token indices (B, T)
+
+        Returns:
+            Hidden states at the specified segment boundary (B, T, n_embd)
+        """
+        if segment not in self.segment_channels:
+            raise ValueError(f"Unknown segment: {segment}. Available: {list(self.segment_channels.keys())}")
+
+        B, T = x.shape
+        if T > self.block_size:
+            raise ValueError(f"Sequence length {T} exceeds block_size {self.block_size}")
+
+        # Embeddings
+        pos = torch.arange(T, device=x.device)
+        h = self.drop(self.tok_emb(x) + self.pos_emb(pos))
+
+        # Forward through layers up to segment boundary
+        end_layer = self._segment_boundaries[segment]
+        for i in range(end_layer):
+            h = self.layers[i](h)
+            h = self.slots[self._slot_keys[i]](h)
+
+        return h
+
+    def forward_from_segment(self, segment: str, h: torch.Tensor) -> torch.Tensor:
+        """Forward from a segment boundary to output logits.
+
+        Args:
+            segment: Starting segment name ("early", "mid", or "late")
+            h: Hidden states at segment boundary (B, T, n_embd)
+
+        Returns:
+            Output logits (B, T, vocab_size)
+        """
+        if segment not in self.segment_channels:
+            raise ValueError(f"Unknown segment: {segment}. Available: {list(self.segment_channels.keys())}")
+
+        # Forward through remaining layers
+        start_layer = self._segment_boundaries[segment]
+        for i in range(start_layer, self.n_layer):
+            h = self.layers[i](h)
+            h = self.slots[self._slot_keys[i]](h)
+
+        # Output
+        h = self.ln_f(h)
+        return self.head(h)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, T = x.shape
