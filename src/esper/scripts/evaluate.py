@@ -31,6 +31,14 @@ from esper.leyline import SeedStage
 from esper.leyline.actions import get_blueprint_from_action, is_germinate_action
 
 
+def get_active_seed_state(model):
+    """Get the first active seed state from any slot, or None."""
+    for slot in model.seed_slots.values():
+        if slot.is_active:
+            return slot.state
+    return None
+
+
 class StepRecord(NamedTuple):
     """Record of a single decision step."""
 
@@ -167,7 +175,7 @@ def run_diagnostic_episode(
     params_added = 0  # Accumulates when seeds are fossilized
 
     for epoch in range(1, max_epochs + 1):
-        seed_state = model.seed_state
+        seed_state = get_active_seed_state(model)
 
         # Training phase - use tensor accumulation for deferred sync
         model.train()
@@ -316,8 +324,8 @@ def run_diagnostic_episode(
             seed_state.metrics.record_accuracy(val_acc)
 
         # Mechanical lifecycle advance (blending/shadowing dwell)
-        model.seed_slot.step_epoch()
-        seed_state = model.seed_state
+        model.seed_slots["mid"].step_epoch()
+        seed_state = get_active_seed_state(model)
 
         # Get features and query policy
         features = signals_to_features(
@@ -378,24 +386,24 @@ def run_diagnostic_episode(
             if not model.has_active_seed:
                 blueprint_id = get_blueprint_from_action(action)
                 seed_id = f"seed_{record.seeds_created}"
-                model.germinate_seed(blueprint_id, seed_id)
+                model.germinate_seed(blueprint_id, seed_id, slot="mid")
                 record.seeds_created += 1
                 seed_birth_epoch = epoch
                 seed_optimizer = None
 
         elif action == ActionEnum.FOSSILIZE:
-            if model.has_active_seed and model.seed_state.stage == SeedStage.PROBATIONARY:
+            if model.has_active_seed and get_active_seed_state(model).stage == SeedStage.PROBATIONARY:
                 # Use SeedSlot.advance_stage so fossilization respects gates
                 # and emits telemetry via Nissa.
-                gate_result = model.seed_slot.advance_stage(SeedStage.FOSSILIZED)
+                gate_result = model.seed_slots["mid"].advance_stage(SeedStage.FOSSILIZED)
                 if gate_result.passed:
                     params_added += model.active_seed_params
-                    model.seed_slot.set_alpha(1.0)
+                    model.seed_slots["mid"].set_alpha(1.0)
                     record.seeds_fossilized += 1
 
         elif action == ActionEnum.CULL:
             if model.has_active_seed:
-                model.cull_seed()
+                model.cull_seed(slot="mid")
                 record.seeds_culled += 1
                 seed_optimizer = None
 
