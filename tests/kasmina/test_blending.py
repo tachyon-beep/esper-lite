@@ -1,4 +1,3 @@
-import pytest
 import torch
 
 
@@ -42,7 +41,7 @@ def test_gated_blend_schedule():
     # Should produce valid alpha tensor
     x = torch.randn(2, 64, 8, 8)
     alpha = blend.get_alpha_tensor(x)
-    assert alpha.shape == (2, 64, 1, 1) or alpha.shape == (2, 1, 1, 1)
+    assert alpha.shape == (2, 1, 1, 1)  # (batch, 1, 1, 1) for broadcasting
     assert (alpha >= 0).all() and (alpha <= 1).all()
 
 
