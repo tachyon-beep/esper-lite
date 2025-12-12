@@ -2,7 +2,6 @@
 
 Only masks PHYSICALLY IMPOSSIBLE actions:
 - GERMINATE: blocked if slot occupied OR at seed limit
-- ADVANCE: blocked if not in advanceable stage (GERMINATED/TRAINING/BLENDING)
 - FOSSILIZE: blocked if not PROBATIONARY
 - CULL: blocked if no seed OR seed_age < MIN_CULL_AGE
 - WAIT: always valid
@@ -31,12 +30,6 @@ if TYPE_CHECKING:
     from esper.kasmina.host import MorphogeneticModel
 
 # Stage sets for validation
-_ADVANCEABLE_STAGES = frozenset({
-    SeedStage.GERMINATED.value,
-    SeedStage.TRAINING.value,
-    SeedStage.BLENDING.value,
-})
-
 _FOSSILIZABLE_STAGES = frozenset({
     SeedStage.PROBATIONARY.value,
 })
@@ -131,14 +124,10 @@ def compute_action_masks(
         if not seed_limit_reached:
             op_mask[LifecycleOp.GERMINATE] = True
 
-    # ADVANCE/FOSSILIZE/CULL: valid based on active seed state
+    # FOSSILIZE/CULL: valid based on active seed state
     if active_seed_info is not None:
         stage = active_seed_info.stage
         age = active_seed_info.seed_age_epochs
-
-        # ADVANCE: only from GERMINATED, TRAINING, BLENDING
-        if stage in _ADVANCEABLE_STAGES:
-            op_mask[LifecycleOp.ADVANCE] = True
 
         # FOSSILIZE: only from PROBATIONARY
         if stage in _FOSSILIZABLE_STAGES:
@@ -200,13 +189,10 @@ def compute_batch_masks(
             if not seed_limit_reached:
                 op_masks[i, LifecycleOp.GERMINATE] = True
 
-        # ADVANCE/FOSSILIZE/CULL
+        # FOSSILIZE/CULL
         if active_seed_info is not None:
             stage = active_seed_info.stage
             age = active_seed_info.seed_age_epochs
-
-            if stage in _ADVANCEABLE_STAGES:
-                op_masks[i, LifecycleOp.ADVANCE] = True
 
             if stage in _FOSSILIZABLE_STAGES:
                 op_masks[i, LifecycleOp.FOSSILIZE] = True
