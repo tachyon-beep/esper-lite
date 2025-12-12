@@ -367,6 +367,7 @@ def run_ppo_episode(
         slot_states = build_slot_states(model, [target_slot])
         masks = compute_action_masks(
             slot_states=slot_states,
+            target_slot=target_slot,
             total_seeds=model.count_active_seeds() if model else 0,
             max_seeds=max_seeds,
             device=torch.device(device),

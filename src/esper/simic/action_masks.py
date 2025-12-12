@@ -74,6 +74,7 @@ def build_slot_states(
 
 def compute_action_masks(
     slot_states: dict[str, MaskSeedInfo | None],
+    target_slot: str,
     total_seeds: int = 0,
     max_seeds: int = 0,
     device: torch.device | None = None,
@@ -84,6 +85,7 @@ def compute_action_masks(
 
     Args:
         slot_states: Dict mapping slot_id to MaskSeedInfo or None
+        target_slot: Slot ID to evaluate FOSSILIZE/CULL against (REQUIRED)
         total_seeds: Total number of active seeds across all slots
         max_seeds: Maximum allowed seeds (0 = unlimited)
         device: Torch device for tensors
@@ -109,14 +111,10 @@ def compute_action_masks(
     op_mask[LifecycleOp.WAIT] = True  # WAIT always valid
 
     # Check slot states
-    has_empty_slot = False
-    active_seed_info: MaskSeedInfo | None = None
+    has_empty_slot = any(info is None for info in slot_states.values())
 
-    for info in slot_states.values():
-        if info is None:
-            has_empty_slot = True
-        elif active_seed_info is None:
-            active_seed_info = info
+    # Get target slot's seed info for FOSSILIZE/CULL decisions
+    target_seed_info = slot_states.get(target_slot)
 
     # GERMINATE: valid if empty slot exists AND under seed limit
     if has_empty_slot:
@@ -124,10 +122,10 @@ def compute_action_masks(
         if not seed_limit_reached:
             op_mask[LifecycleOp.GERMINATE] = True
 
-    # FOSSILIZE/CULL: valid based on active seed state
-    if active_seed_info is not None:
-        stage = active_seed_info.stage
-        age = active_seed_info.seed_age_epochs
+    # FOSSILIZE/CULL: valid based on TARGET seed state
+    if target_seed_info is not None:
+        stage = target_seed_info.stage
+        age = target_seed_info.seed_age_epochs
 
         # FOSSILIZE: only from PROBATIONARY
         if stage in _FOSSILIZABLE_STAGES:
