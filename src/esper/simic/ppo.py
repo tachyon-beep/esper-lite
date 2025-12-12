@@ -30,7 +30,15 @@ logger = logging.getLogger(__name__)
 # Feature Extraction (PPO-specific wrapper)
 # =============================================================================
 
-def signals_to_features(signals, model, use_telemetry: bool = True, max_epochs: int = 200, slots: list[str] | None = None) -> list[float]:
+def signals_to_features(
+    signals,
+    model,
+    use_telemetry: bool = True,
+    max_epochs: int = 200,
+    slots: list[str] | None = None,
+    total_seeds: int = 0,
+    max_seeds: int = 0,
+) -> list[float]:
     """Convert training signals to feature vector.
 
     Args:
@@ -39,9 +47,11 @@ def signals_to_features(signals, model, use_telemetry: bool = True, max_epochs: 
         use_telemetry: Whether to include telemetry features
         max_epochs: Maximum epochs for learning phase normalization
         slots: List of slot names to extract features from (uses first slot)
+        total_seeds: Current total seeds across all slots (for utilization calc)
+        max_seeds: Maximum allowed seeds (for utilization calc)
 
     Returns:
-        Feature vector (30 dims base, +10 if telemetry = 40 dims total)
+        Feature vector (35 dims base, +10 if telemetry = 45 dims total)
 
     Note:
         TrainingSignals.active_seeds contains seed IDs (strings), not SeedState
@@ -51,7 +61,7 @@ def signals_to_features(signals, model, use_telemetry: bool = True, max_epochs: 
         raise ValueError("signals_to_features: slots parameter is required and cannot be empty")
 
     target_slot = slots[0]
-    from esper.simic.features import obs_to_base_features
+    from esper.simic.features import obs_to_multislot_features
 
     # Build observation dict
     loss_hist = list(signals.loss_history[-5:]) if signals.loss_history else []
@@ -76,39 +86,29 @@ def signals_to_features(signals, model, use_telemetry: bool = True, max_epochs: 
         'best_val_loss': signals.metrics.best_val_loss,
         'loss_history_5': loss_hist,
         'accuracy_history_5': acc_hist,
-        'has_active_seed': 1.0 if signals.active_seeds else 0.0,
-        'available_slots': signals.available_slots,
+        'total_params': model.total_params if model else 0,
     }
 
-    # Seed state features
-    # NOTE: TrainingSignals.active_seeds is a list of seed IDs (strings),
-    # not SeedState objects. Use model.seed_slots[target_slot].state to access full seed state.
-    if model and model.has_active_seed:
-        seed_state = model.seed_slots[target_slot].state
-        obs['seed_stage'] = seed_state.stage.value
-        obs['seed_epochs_in_stage'] = seed_state.metrics.epochs_in_current_stage
-        obs['seed_alpha'] = seed_state.alpha
-        obs['seed_improvement'] = seed_state.metrics.improvement_since_stage_start
-        obs['seed_counterfactual'] = seed_state.metrics.counterfactual_contribution or 0.0
-        obs['host_grad_norm'] = signals.metrics.grad_norm_host
-        obs['host_learning_phase'] = signals.metrics.epoch / max(1, max_epochs)
-        # Blueprint one-hot encoding (DRL Expert recommendation for categorical data)
-        # Convert blueprint_id string to integer index for one-hot encoding
-        # Standard blueprint order: conv_light=1, conv_heavy=2, attention=3, depthwise=4, norm=5
-        blueprint_map = {'conv_light': 1, 'conv_heavy': 2, 'attention': 3, 'depthwise': 4, 'norm': 5}
-        obs['seed_blueprint_id'] = blueprint_map.get(seed_state.blueprint_id, 0)
-    else:
-        # Use TrainingSignals context when no live model is available (offline/replay)
-        obs['seed_stage'] = signals.seed_stage
-        obs['seed_epochs_in_stage'] = signals.seed_epochs_in_stage
-        obs['seed_alpha'] = signals.seed_alpha
-        obs['seed_improvement'] = signals.seed_improvement
-        obs['seed_counterfactual'] = signals.seed_counterfactual
-        obs['host_grad_norm'] = signals.metrics.grad_norm_host
-        obs['host_learning_phase'] = signals.metrics.epoch / max(1, max_epochs)
-        obs['seed_blueprint_id'] = 0  # No active seed
+    # Build per-slot state dict
+    slot_states = {}
+    for slot_id in ['early', 'mid', 'late']:
+        if model and slot_id in model.seed_slots:
+            slot = model.seed_slots[slot_id]
+            if slot.is_active and slot.state:
+                slot_states[slot_id] = {
+                    'is_active': 1.0,
+                    'stage': slot.state.stage.value,
+                    'alpha': slot.state.alpha,
+                    'improvement': slot.state.metrics.improvement_since_stage_start,
+                }
+            else:
+                slot_states[slot_id] = {'is_active': 0.0, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0}
+        else:
+            slot_states[slot_id] = {'is_active': 0.0, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0}
 
-    features = obs_to_base_features(obs)
+    obs['slots'] = slot_states
+
+    features = obs_to_multislot_features(obs, total_seeds=total_seeds, max_seeds=max_seeds)
 
     if use_telemetry:
         # Use real telemetry from model.seed_slots[target_slot].state when available
