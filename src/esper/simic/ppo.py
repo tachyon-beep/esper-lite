@@ -51,7 +51,7 @@ def signals_to_features(
         max_seeds: Maximum allowed seeds (for utilization calc)
 
     Returns:
-        Feature vector (35 dims base, +10 if telemetry = 45 dims total)
+        Feature vector (50 dims base, +10 if telemetry = 60 dims total)
 
     Note:
         TrainingSignals.active_seeds contains seed IDs (strings), not SeedState
@@ -100,11 +100,12 @@ def signals_to_features(
                     'stage': slot.state.stage.value,
                     'alpha': slot.state.alpha,
                     'improvement': slot.state.metrics.improvement_since_stage_start,
+                    'blueprint_id': slot.state.blueprint_id,
                 }
             else:
-                slot_states[slot_id] = {'is_active': 0.0, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0}
+                slot_states[slot_id] = {'is_active': 0.0, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0, 'blueprint_id': None}
         else:
-            slot_states[slot_id] = {'is_active': 0.0, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0}
+            slot_states[slot_id] = {'is_active': 0.0, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0, 'blueprint_id': None}
 
     obs['slots'] = slot_states
 

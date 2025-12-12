@@ -86,10 +86,10 @@ class TestPPOFeatureCompatibility:
 
         # Stack into batch
         batch_tensor = torch.tensor(all_features, dtype=torch.float32)
-        assert batch_tensor.shape == (batch_size, 35)
+        assert batch_tensor.shape == (batch_size, 50)
 
         # Create agent
-        agent = PPOAgent(state_dim=35, action_dim=7, device='cpu')
+        agent = PPOAgent(state_dim=50, action_dim=7, device='cpu')
         mask = _all_valid_mask(batch_size)
 
         # Should handle batch without errors
@@ -343,10 +343,10 @@ class TestPPOEndToEnd:
 
         # Extract features with telemetry (will be zero-padded)
         features = signals_to_features(signals, model=None, use_telemetry=True, slots=["mid"])
-        assert len(features) == 45, "Should have 45 features with telemetry"
+        assert len(features) == 60, "Should have 60 features with telemetry (50 base + 10 telemetry)"
 
         # Create agent
-        agent = PPOAgent(state_dim=45, action_dim=7, device='cpu')
+        agent = PPOAgent(state_dim=60, action_dim=7, device='cpu')
 
         # Get action
         state_tensor = torch.tensor([features], dtype=torch.float32)

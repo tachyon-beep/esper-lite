@@ -120,17 +120,17 @@ def test_feature_extraction_to_network_flow():
     # Verify feature structure
     # Base features: 23
     assert len(features[:23]) == 23
-    # Per-slot features: 3 slots * 4 features = 12
-    assert len(features[23:]) == 12
+    # Per-slot features: 3 slots * 9 features (4 state + 5 blueprint one-hot) = 27
+    assert len(features[23:]) == 27
 
-    # Verify slot features
-    early_features = features[23:27]
-    mid_features = features[27:31]
-    late_features = features[31:35]
+    # Verify slot state features (first 4 of each 9-dim slot block)
+    early_state = features[23:27]
+    mid_state = features[32:36]  # 23 + 9 = 32
+    late_state = features[41:45]  # 23 + 18 = 41
 
-    assert early_features == [0.0, 0.0, 0.0, 0.0], "Early slot inactive"
-    assert mid_features == [1.0, 3.0, 0.5, 2.5], "Mid slot active"
-    assert late_features == [0.0, 0.0, 0.0, 0.0], "Late slot inactive"
+    assert early_state == [0.0, 0.0, 0.0, 0.0], "Early slot inactive"
+    assert mid_state == [1.0, 3.0, 0.5, 2.5], "Mid slot active"
+    assert late_state == [0.0, 0.0, 0.0, 0.0], "Late slot inactive"
 
 
 def test_action_masking_integration():
@@ -406,7 +406,7 @@ def test_multislot_action_execution_flow():
     # Verify action is valid
     assert factored_action.slot_id in ["early", "mid", "late"]
     # Note: factored_actions uses old names but they map to actual blueprints
-    assert factored_action.blueprint_id in ["noop", "conv_enhance", "attention", "norm", "depthwise"]
+    assert factored_action.blueprint_id in ["noop", "conv_light", "attention", "norm", "depthwise"]
     assert factored_action.blend_algorithm_id in ["linear", "sigmoid", "gated"]
 
     # Execute GERMINATE action

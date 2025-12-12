@@ -17,41 +17,41 @@ class TestPPOFeatureDimensions:
     """Test that PPO network state_dim matches signals_to_features output."""
 
     def test_signals_to_features_without_telemetry_is_28_dim(self):
-        """Feature vector without telemetry must be exactly 35 dimensions."""
+        """Feature vector without telemetry must be exactly 50 dimensions."""
         signals = TrainingSignals()
         signals.metrics.epoch = 10
         signals.metrics.val_accuracy = 75.0
 
         features = signals_to_features(signals, model=None, use_telemetry=False, slots=["mid"])
 
-        assert len(features) == 35, (
-            f"Expected 35 base features, got {len(features)}. "
+        assert len(features) == 50, (
+            f"Expected 50 base features, got {len(features)}. "
             "This is the base feature dimension without telemetry."
         )
 
     def test_signals_to_features_with_telemetry_is_40_dim(self):
-        """Feature vector with telemetry must be 35 base + 10 telemetry = 45 dimensions."""
+        """Feature vector with telemetry must be 50 base + 10 telemetry = 60 dimensions."""
         signals = TrainingSignals()
         signals.metrics.epoch = 10
         signals.metrics.val_accuracy = 75.0
 
         features = signals_to_features(signals, model=None, use_telemetry=True, slots=["mid"])
 
-        expected_dim = 35 + SeedTelemetry.feature_dim()  # 35 + 10 = 45
+        expected_dim = 50 + SeedTelemetry.feature_dim()  # 50 + 10 = 60
         assert len(features) == expected_dim, (
-            f"Expected {expected_dim} features (35 base + {SeedTelemetry.feature_dim()} telemetry), "
+            f"Expected {expected_dim} features (50 base + {SeedTelemetry.feature_dim()} telemetry), "
             f"got {len(features)}. Telemetry adds {SeedTelemetry.feature_dim()} dimensions."
         )
 
     def test_ppo_agent_state_dim_without_telemetry_matches_features(self):
-        """PPO agent created with use_telemetry=False must accept 35-dim vectors."""
-        BASE_FEATURE_DIM = 35
+        """PPO agent created with use_telemetry=False must accept 50-dim vectors."""
+        BASE_FEATURE_DIM = 50
         state_dim = BASE_FEATURE_DIM
 
         agent = PPOAgent(state_dim=state_dim, action_dim=7, device='cpu')
 
-        # Create dummy 35-dim state tensor and all-valid action mask
-        dummy_state = torch.randn(1, 35)
+        # Create dummy 50-dim state tensor and all-valid action mask
+        dummy_state = torch.randn(1, 50)
         dummy_mask = torch.ones(1, 7)  # All actions valid
 
         # Forward pass should work without shape errors
@@ -63,14 +63,14 @@ class TestPPOFeatureDimensions:
         assert value.shape == (1,), "Value should be (batch_size,)"
 
     def test_ppo_agent_state_dim_with_telemetry_matches_features(self):
-        """PPO agent created with use_telemetry=True must accept 45-dim vectors."""
-        BASE_FEATURE_DIM = 35
-        state_dim = BASE_FEATURE_DIM + SeedTelemetry.feature_dim()  # 35 + 10 = 45
+        """PPO agent created with use_telemetry=True must accept 60-dim vectors."""
+        BASE_FEATURE_DIM = 50
+        state_dim = BASE_FEATURE_DIM + SeedTelemetry.feature_dim()  # 50 + 10 = 60
 
         agent = PPOAgent(state_dim=state_dim, action_dim=7, device='cpu')
 
-        # Create dummy 45-dim state tensor and all-valid action mask
-        dummy_state = torch.randn(1, 45)
+        # Create dummy 60-dim state tensor and all-valid action mask
+        dummy_state = torch.randn(1, 60)
         dummy_mask = torch.ones(1, 7)  # All actions valid
 
         # Forward pass should work without shape errors

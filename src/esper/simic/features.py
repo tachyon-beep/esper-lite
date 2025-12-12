@@ -216,15 +216,27 @@ def obs_to_base_features_tensor(
 
 
 # =============================================================================
-# Multi-Slot Features (V4 - 35 dimensions)
+# Multi-Slot Features (V4 - 50 dimensions)
 # =============================================================================
 
-# Feature size: 23 base + 3 slots * 4 features per slot = 35
-MULTISLOT_FEATURE_SIZE = 35
+# Feature size: 23 base + 3 slots * 9 features per slot = 50
+# Per-slot: 4 state (is_active, stage, alpha, improvement) + 5 blueprint one-hot
+MULTISLOT_FEATURE_SIZE = 50
+
+
+# Blueprint string ID to index mapping (matches BlueprintAction enum)
+_BLUEPRINT_TO_INDEX = {
+    "noop": 0,
+    "conv_light": 1,
+    "attention": 2,
+    "norm": 3,
+    "depthwise": 4,
+}
+_NUM_BLUEPRINT_TYPES = 5
 
 
 def obs_to_multislot_features(obs: dict, total_seeds: int = 0, max_seeds: int = 1) -> list[float]:
-    """Extract features including per-slot state (35 dims).
+    """Extract features including per-slot state (50 dims).
 
     Base features (23 dims) - training state without seed telemetry:
     - Timing: epoch, global_step (2)
@@ -288,16 +300,25 @@ def obs_to_multislot_features(obs: dict, total_seeds: int = 0, max_seeds: int = 
         float(seed_utilization),  # New: resource management
     ]
 
-    # Per-slot features (4 dims per slot, 3 slots = 12 dims)
+    # Per-slot features (9 dims per slot, 3 slots = 27 dims)
+    # 4 state features + 5 blueprint one-hot
     slot_features = []
     for slot_id in ['early', 'mid', 'late']:
         slot = obs.get('slots', {}).get(slot_id, {})
+        # State features (4 dims)
         slot_features.extend([
             float(slot.get('is_active', 0)),
             float(slot.get('stage', 0)),
             float(slot.get('alpha', 0.0)),
             float(slot.get('improvement', 0.0)),
         ])
+        # Blueprint one-hot (5 dims)
+        blueprint_id = slot.get('blueprint_id', None)
+        blueprint_idx = _BLUEPRINT_TO_INDEX.get(blueprint_id, -1) if blueprint_id else -1
+        blueprint_one_hot = [0.0] * _NUM_BLUEPRINT_TYPES
+        if 0 <= blueprint_idx < _NUM_BLUEPRINT_TYPES:
+            blueprint_one_hot[blueprint_idx] = 1.0
+        slot_features.extend(blueprint_one_hot)
 
     return base + slot_features
 
