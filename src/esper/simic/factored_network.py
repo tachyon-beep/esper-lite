@@ -13,6 +13,7 @@ import torch.nn as nn
 from torch.distributions import Categorical
 
 from esper.leyline.factored_actions import NUM_SLOTS, NUM_BLUEPRINTS, NUM_BLENDS, NUM_OPS
+from esper.simic.networks import InvalidStateMachineError
 
 
 class FactoredActorCritic(nn.Module):
@@ -127,6 +128,17 @@ class FactoredActorCritic(nn.Module):
                 blend_logits = blend_logits.masked_fill(~masks["blend"], mask_value)
             if "op" in masks:
                 op_logits = op_logits.masked_fill(~masks["op"], mask_value)
+
+            # Validate masks - at least one action must be valid per head per env
+            for key, mask in masks.items():
+                # Check each env in batch
+                valid_per_env = mask.any(dim=-1)  # (batch,)
+                if not valid_per_env.all():
+                    invalid_envs = (~valid_per_env).nonzero(as_tuple=True)[0]
+                    raise InvalidStateMachineError(
+                        f"All actions masked for '{key}' head in env {invalid_envs[0].item()}. "
+                        f"This indicates a bug in mask computation."
+                    )
 
         dists = {
             "slot": Categorical(logits=slot_logits),

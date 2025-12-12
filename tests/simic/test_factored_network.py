@@ -1,5 +1,6 @@
 # tests/simic/test_factored_network.py
 import torch
+import pytest
 
 
 def test_factored_actor_critic_forward():
@@ -116,3 +117,46 @@ def test_factored_actor_critic_deterministic():
     assert (actions1["blueprint"] == actions2["blueprint"]).all()
     assert (actions1["blend"] == actions2["blend"]).all()
     assert (actions1["op"] == actions2["op"]).all()
+
+
+def test_factored_actor_critic_raises_on_all_masked():
+    """Should raise error if all actions in a head are masked."""
+    from esper.simic.factored_network import FactoredActorCritic
+    from esper.simic.networks import InvalidStateMachineError
+
+    net = FactoredActorCritic(state_dim=30, num_slots=3, num_blueprints=5, num_blends=3, num_ops=4)
+
+    obs = torch.randn(4, 30)
+
+    # Create masks that block ALL ops
+    masks = {
+        "slot": torch.ones(4, 3, dtype=torch.bool),
+        "blueprint": torch.ones(4, 5, dtype=torch.bool),
+        "blend": torch.ones(4, 3, dtype=torch.bool),
+        "op": torch.zeros(4, 4, dtype=torch.bool),  # All ops masked!
+    }
+
+    with pytest.raises(InvalidStateMachineError, match="op"):
+        net(obs, masks=masks)
+
+
+def test_factored_actor_critic_raises_on_single_env_all_masked():
+    """Should raise error if any single env has all actions masked."""
+    from esper.simic.factored_network import FactoredActorCritic
+    from esper.simic.networks import InvalidStateMachineError
+
+    net = FactoredActorCritic(state_dim=30, num_slots=3, num_blueprints=5, num_blends=3, num_ops=4)
+
+    obs = torch.randn(4, 30)
+
+    # Create masks where env 2 has all ops masked
+    masks = {
+        "slot": torch.ones(4, 3, dtype=torch.bool),
+        "blueprint": torch.ones(4, 5, dtype=torch.bool),
+        "blend": torch.ones(4, 3, dtype=torch.bool),
+        "op": torch.ones(4, 4, dtype=torch.bool),
+    }
+    masks["op"][2, :] = False  # Env 2 has all ops masked
+
+    with pytest.raises(InvalidStateMachineError, match="op.*env 2"):
+        net(obs, masks=masks)
