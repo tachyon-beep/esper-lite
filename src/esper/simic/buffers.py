@@ -478,9 +478,202 @@ class RecurrentRolloutBuffer:
             yield batch
 
 
+# =============================================================================
+# Factored Action Space Buffers
+# =============================================================================
+
+class FactoredTransition(NamedTuple):
+    """Single transition with factored action.
+
+    Uses NamedTuple for immutability and _replace() support.
+    """
+
+    state: torch.Tensor
+    slot_action: int
+    blueprint_action: int
+    blend_action: int
+    op_action: int
+    log_prob: float
+    value: float
+    reward: float
+    done: bool
+    slot_mask: torch.Tensor
+    blueprint_mask: torch.Tensor
+    blend_mask: torch.Tensor
+    op_mask: torch.Tensor
+    truncated: bool = False
+    bootstrap_value: float = 0.0
+
+
+class FactoredRolloutBuffer:
+    """Rollout buffer for factored action space.
+
+    Stores transitions with dict-based actions and returns batched
+    factored tensors for PPO updates.
+    """
+
+    def __init__(self):
+        self.steps: list[FactoredTransition] = []
+
+    def add(
+        self,
+        state: torch.Tensor,
+        action: dict[str, int],
+        log_prob: float,
+        value: float,
+        reward: float,
+        done: bool,
+        action_masks: dict[str, torch.Tensor],
+        truncated: bool = False,
+        bootstrap_value: float = 0.0,
+    ) -> None:
+        """Add transition to buffer.
+
+        Args:
+            state: Observation tensor (detached automatically)
+            action: Dict with keys {slot, blueprint, blend, op}
+            log_prob: Log probability of joint action
+            value: Value estimate
+            reward: Reward received
+            done: Whether episode ended
+            action_masks: Dict of boolean mask tensors per head
+            truncated: Whether episode ended due to time limit
+            bootstrap_value: Value to bootstrap from if truncated
+        """
+        self.steps.append(FactoredTransition(
+            state=state.detach(),  # Prevent gradient graph retention
+            slot_action=action["slot"],
+            blueprint_action=action["blueprint"],
+            blend_action=action["blend"],
+            op_action=action["op"],
+            log_prob=log_prob,
+            value=value,
+            reward=reward,
+            done=done,
+            slot_mask=action_masks["slot"].detach(),
+            blueprint_mask=action_masks["blueprint"].detach(),
+            blend_mask=action_masks["blend"].detach(),
+            op_mask=action_masks["op"].detach(),
+            truncated=truncated,
+            bootstrap_value=bootstrap_value,
+        ))
+
+    def __len__(self) -> int:
+        return len(self.steps)
+
+    def clear(self) -> None:
+        self.steps.clear()
+
+    def compute_returns_and_advantages(
+        self,
+        last_value: float,
+        gamma: float,
+        gae_lambda: float,
+        device: str | torch.device = "cpu",
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute GAE returns and advantages.
+
+        CRITICAL: Resets advantage chain at episode boundaries (done=True).
+        """
+        n = len(self.steps)
+
+        # Create tensors on device
+        rewards = torch.tensor([t.reward for t in self.steps], device=device)
+        values = torch.tensor([t.value for t in self.steps], device=device)
+
+        returns = torch.zeros(n, device=device)
+        advantages = torch.zeros(n, device=device)
+
+        # GAE computation (reversed)
+        next_value = last_value
+        next_advantage = 0.0
+
+        for i in reversed(range(n)):
+            step = self.steps[i]
+
+            # CRITICAL: Reset at episode boundaries
+            if step.done:
+                if step.truncated:
+                    next_value = step.bootstrap_value
+                else:
+                    next_value = 0.0
+                next_advantage = 0.0  # Reset GAE chain
+
+            delta = rewards[i] + gamma * next_value - values[i]
+            advantages[i] = delta + gamma * gae_lambda * next_advantage
+            returns[i] = advantages[i] + values[i]
+
+            next_value = values[i].item()
+            next_advantage = advantages[i].item()
+
+        return returns, advantages
+
+    def get_batches(
+        self,
+        batch_size: int,
+        device: str | torch.device = "cpu",
+    ):
+        """Yield batches of transitions.
+
+        Pre-stacks all data once for efficiency, then slices for batches.
+        """
+        n = len(self.steps)
+        indices = torch.randperm(n)
+
+        # Pre-stack ALL data once (not per-batch) for efficiency
+        all_states = torch.stack([t.state for t in self.steps]).to(device)
+        all_slot_actions = torch.tensor(
+            [t.slot_action for t in self.steps], dtype=torch.long, device=device
+        )
+        all_blueprint_actions = torch.tensor(
+            [t.blueprint_action for t in self.steps], dtype=torch.long, device=device
+        )
+        all_blend_actions = torch.tensor(
+            [t.blend_action for t in self.steps], dtype=torch.long, device=device
+        )
+        all_op_actions = torch.tensor(
+            [t.op_action for t in self.steps], dtype=torch.long, device=device
+        )
+        all_log_probs = torch.tensor(
+            [t.log_prob for t in self.steps], dtype=torch.float32, device=device
+        )
+        all_values = torch.tensor(
+            [t.value for t in self.steps], dtype=torch.float32, device=device
+        )
+
+        # Pre-stack masks
+        all_slot_masks = torch.stack([t.slot_mask for t in self.steps]).to(device)
+        all_blueprint_masks = torch.stack([t.blueprint_mask for t in self.steps]).to(device)
+        all_blend_masks = torch.stack([t.blend_mask for t in self.steps]).to(device)
+        all_op_masks = torch.stack([t.op_mask for t in self.steps]).to(device)
+
+        for start in range(0, n, batch_size):
+            batch_idx = indices[start:start + batch_size]
+
+            yield {
+                "states": all_states[batch_idx],
+                "actions": {
+                    "slot": all_slot_actions[batch_idx],
+                    "blueprint": all_blueprint_actions[batch_idx],
+                    "blend": all_blend_actions[batch_idx],
+                    "op": all_op_actions[batch_idx],
+                },
+                "old_log_probs": all_log_probs[batch_idx],
+                "values": all_values[batch_idx],
+                "action_masks": {
+                    "slot": all_slot_masks[batch_idx],
+                    "blueprint": all_blueprint_masks[batch_idx],
+                    "blend": all_blend_masks[batch_idx],
+                    "op": all_op_masks[batch_idx],
+                },
+            }, batch_idx
+
+
 __all__ = [
     "RolloutStep",
     "RolloutBuffer",
     "RecurrentRolloutStep",
     "RecurrentRolloutBuffer",
+    "FactoredTransition",
+    "FactoredRolloutBuffer",
 ]
