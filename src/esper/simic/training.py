@@ -216,6 +216,8 @@ def run_ppo_episode(
     model = create_model(task=task_spec, device=device, slots=slots)
 
     # Determine target slot from slots parameter
+    if not slots:
+        raise ValueError("slots parameter is required and cannot be empty")
     target_slot = slots[0]
 
     # Wire Kasmina telemetry into global Nissa hub so fossilization and
@@ -621,6 +623,8 @@ def run_heuristic_episode(
     model = create_model(task=task_spec, device=device, slots=slots)
 
     # Determine target slot from slots parameter
+    if not slots:
+        raise ValueError("slots parameter is required and cannot be empty")
     target_slot = slots[0]
 
     # Wire telemetry
@@ -793,6 +797,7 @@ def train_heuristic(
     device: str = "cuda:0",
     task: str = "cifar10",
     seed: int = 42,
+    slots: list[str] | None = None,
 ):
     """Train with heuristic policy.
 
@@ -838,6 +843,7 @@ def train_heuristic(
             base_seed=base_seed,
             device=device,
             task_spec=task_spec,
+            slots=slots,
         )
 
         total_reward = sum(rewards)
