@@ -156,6 +156,10 @@ def run_diagnostic_episode(
     from esper.simic.ppo import signals_to_features
     from esper.simic.rewards import compute_contribution_reward, SeedInfo
 
+    if not slots:
+        raise ValueError("slots parameter is required and cannot be empty")
+    target_slot = slots[0]
+
     torch.manual_seed(episode_id * 1000)
 
     model = create_model(task=task_spec, device=device, slots=slots)
@@ -325,7 +329,7 @@ def run_diagnostic_episode(
             seed_state.metrics.record_accuracy(val_acc)
 
         # Mechanical lifecycle advance (blending/shadowing dwell)
-        model.seed_slots["mid"].step_epoch()
+        model.seed_slots[target_slot].step_epoch()
         seed_state = get_active_seed_state(model)
 
         # Get features and query policy
@@ -387,7 +391,7 @@ def run_diagnostic_episode(
             if not model.has_active_seed:
                 blueprint_id = get_blueprint_from_action(action)
                 seed_id = f"seed_{record.seeds_created}"
-                model.germinate_seed(blueprint_id, seed_id, slot="mid")
+                model.germinate_seed(blueprint_id, seed_id, slot=target_slot)
                 record.seeds_created += 1
                 seed_birth_epoch = epoch
                 seed_optimizer = None
@@ -396,15 +400,15 @@ def run_diagnostic_episode(
             if model.has_active_seed and get_active_seed_state(model).stage == SeedStage.PROBATIONARY:
                 # Use SeedSlot.advance_stage so fossilization respects gates
                 # and emits telemetry via Nissa.
-                gate_result = model.seed_slots["mid"].advance_stage(SeedStage.FOSSILIZED)
+                gate_result = model.seed_slots[target_slot].advance_stage(SeedStage.FOSSILIZED)
                 if gate_result.passed:
                     params_added += model.active_seed_params
-                    model.seed_slots["mid"].set_alpha(1.0)
+                    model.seed_slots[target_slot].set_alpha(1.0)
                     record.seeds_fossilized += 1
 
         elif action == ActionEnum.CULL:
             if model.has_active_seed:
-                model.cull_seed(slot="mid")
+                model.cull_seed(slot=target_slot)
                 record.seeds_culled += 1
                 seed_optimizer = None
 
