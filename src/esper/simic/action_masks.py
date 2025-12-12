@@ -74,7 +74,7 @@ def build_slot_states(
         else:
             slot_states[slot_id] = MaskSeedInfo(
                 stage=seed_slot.state.stage.value,
-                seed_age_epochs=seed_slot.state.seed_age_epochs,
+                seed_age_epochs=seed_slot.state.metrics.epochs_total,
             )
     return slot_states
 
