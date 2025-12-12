@@ -233,6 +233,10 @@ def train_ppo_vectorized(
     if not slots:
         raise ValueError("slots parameter is required and cannot be empty")
 
+    # Compute effective seed limit
+    # max_seeds=None means unlimited (use 0 to indicate no limit)
+    effective_max_seeds = max_seeds if max_seeds is not None else 0
+
     if devices is None:
         devices = [device]
 
@@ -974,15 +978,22 @@ def train_ppo_vectorized(
                 )
                 all_signals.append(signals)
 
-                features = signals_to_features(signals, model, use_telemetry=use_telemetry, slots=slots)
+                features = signals_to_features(
+                    signals,
+                    model,
+                    use_telemetry=use_telemetry,
+                    slots=slots,
+                    total_seeds=model.count_active_seeds() if model else 0,
+                    max_seeds=effective_max_seeds,
+                )
                 all_features.append(features)
 
                 # Compute action mask based on current state (physical constraints only)
                 slot_states = build_slot_states(model, [target_slot])
                 mask = compute_flat_action_mask(
                     slot_states=slot_states,
-                    total_seeds=1 if model.has_active_seed else 0,
-                    max_seeds=0,  # Seed limits handled in reward function
+                    total_seeds=model.count_active_seeds() if model else 0,
+                    max_seeds=effective_max_seeds,
                     num_germinate_actions=num_germinate_actions,
                 )
                 all_masks.append(mask)
