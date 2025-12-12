@@ -220,23 +220,24 @@ def obs_to_base_features_tensor(
 
 
 # =============================================================================
-# Multi-Slot Features (V4 - 34 dimensions)
+# Multi-Slot Features (V4 - 35 dimensions)
 # =============================================================================
 
-# Feature size: 22 base + 3 slots * 4 features per slot = 34
-MULTISLOT_FEATURE_SIZE = 34
+# Feature size: 23 base + 3 slots * 4 features per slot = 35
+MULTISLOT_FEATURE_SIZE = 35
 
 
-def obs_to_multislot_features(obs: dict) -> list[float]:
-    """Extract features including per-slot state (34 dims).
+def obs_to_multislot_features(obs: dict, total_seeds: int = 0, max_seeds: int = 1) -> list[float]:
+    """Extract features including per-slot state (35 dims).
 
-    Base features (22 dims) - training state without seed telemetry:
+    Base features (23 dims) - training state without seed telemetry:
     - Timing: epoch, global_step (2)
     - Losses: train_loss, val_loss, loss_delta (3)
     - Accuracies: train_accuracy, val_accuracy, accuracy_delta (3)
     - Trends: plateau_epochs, best_val_accuracy, best_val_loss (3)
     - History: loss_history_5 (5), accuracy_history_5 (5)
-    - Total params: total_params (1) [new - for size awareness]
+    - Total params: total_params (1)
+    - Resource management: seed_utilization (1) [new - for resource awareness]
 
     Per-slot features (4 dims each, 3 slots = 12 dims):
     - is_active: 1.0 if seed active, 0.0 otherwise
@@ -256,17 +257,23 @@ def obs_to_multislot_features(obs: dict) -> list[float]:
     [11-15] Loss history (5 values)
     [16-20] Accuracy history (5 values)
     [21]    Total params
-    [22-25] Early slot (is_active, stage, alpha, improvement)
-    [26-29] Mid slot (is_active, stage, alpha, improvement)
-    [30-33] Late slot (is_active, stage, alpha, improvement)
+    [22]    Seed utilization
+    [23-26] Early slot (is_active, stage, alpha, improvement)
+    [27-30] Mid slot (is_active, stage, alpha, improvement)
+    [31-34] Late slot (is_active, stage, alpha, improvement)
 
     Args:
         obs: Observation dictionary with optional 'slots' key
+        total_seeds: Current total seeds across all slots (default 0)
+        max_seeds: Maximum allowed seeds (default 1)
 
     Returns:
-        List of 34 floats
+        List of 35 floats
     """
-    # Base features (22 dims) - simplified from V3, no seed state
+    # Compute seed utilization
+    seed_utilization = total_seeds / max_seeds if max_seeds > 0 else 0.0
+
+    # Base features (23 dims) - simplified from V3, no seed state
     base = [
         float(obs['epoch']),
         float(obs['global_step']),
@@ -281,7 +288,8 @@ def obs_to_multislot_features(obs: dict) -> list[float]:
         safe(obs['best_val_loss'], 10.0),
         *[safe(v, 10.0) for v in obs['loss_history_5']],
         *obs['accuracy_history_5'],
-        float(obs.get('total_params', 0)),  # New: total model params
+        float(obs.get('total_params', 0)),  # Total model params
+        float(seed_utilization),  # New: resource management
     ]
 
     # Per-slot features (4 dims per slot, 3 slots = 12 dims)

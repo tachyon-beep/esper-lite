@@ -108,7 +108,7 @@ def test_feature_extraction_to_network_flow():
 
     # Extract features
     features = obs_to_multislot_features(obs)
-    assert len(features) == MULTISLOT_FEATURE_SIZE, "Should extract 34 features"
+    assert len(features) == MULTISLOT_FEATURE_SIZE, "Should extract 35 features"
 
     # Convert to tensor and feed to network
     features_tensor = torch.tensor([features], dtype=torch.float32)
@@ -118,15 +118,15 @@ def test_feature_extraction_to_network_flow():
     assert values.shape == (1,)
 
     # Verify feature structure
-    # Base features: 22
-    assert len(features[:22]) == 22
+    # Base features: 23
+    assert len(features[:23]) == 23
     # Per-slot features: 3 slots * 4 features = 12
-    assert len(features[22:]) == 12
+    assert len(features[23:]) == 12
 
     # Verify slot features
-    early_features = features[22:26]
-    mid_features = features[26:30]
-    late_features = features[30:34]
+    early_features = features[23:27]
+    mid_features = features[27:31]
+    late_features = features[31:35]
 
     assert early_features == [0.0, 0.0, 0.0, 0.0], "Early slot inactive"
     assert mid_features == [1.0, 3.0, 0.5, 2.5], "Mid slot active"
