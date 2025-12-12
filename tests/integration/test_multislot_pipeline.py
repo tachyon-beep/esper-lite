@@ -135,32 +135,31 @@ def test_feature_extraction_to_network_flow():
 
 def test_action_masking_integration():
     """Action masking → Network forward with masks → Valid action sampling."""
-    from esper.simic.action_masks import compute_action_masks
+    from esper.simic.action_masks import compute_action_masks, MaskSeedInfo
     from esper.simic.factored_network import FactoredActorCritic
     from esper.simic.features import MULTISLOT_FEATURE_SIZE
-    from esper.simic.rewards import SeedInfo
     from esper.leyline import SeedStage
+    from esper.leyline.factored_actions import LifecycleOp
 
-    # Create slot states
+    # Create slot states using MaskSeedInfo (new interface)
     slot_states = {
         "early": None,  # Empty
-        "mid": SeedInfo(
+        "mid": MaskSeedInfo(
             stage=SeedStage.TRAINING.value,
-            improvement_since_stage_start=1.5,
-            total_improvement=1.5,
-            epochs_in_stage=3
+            seed_age_epochs=3,
         ),  # Occupied
         "late": None,  # Empty
     }
 
-    # Compute masks
-    masks_single = compute_action_masks(slot_states, target_slot="mid")
+    # Compute masks (no target_slot needed)
+    masks_single = compute_action_masks(slot_states)
 
-    # Verify masks are correct
-    assert masks_single["op"][0] == True, "WAIT always valid"
-    assert masks_single["op"][1] == False, "Can't GERMINATE in occupied slot"
-    assert masks_single["op"][2] == True, "Can ADVANCE in occupied slot"
-    assert masks_single["op"][3] == True, "Can CULL in occupied slot"
+    # Verify masks are correct (NUM_OPS=5 now: WAIT, GERMINATE, ADVANCE, CULL, FOSSILIZE)
+    assert masks_single["op"][LifecycleOp.WAIT] == True, "WAIT always valid"
+    assert masks_single["op"][LifecycleOp.GERMINATE] == True, "Can GERMINATE (other slots empty)"
+    assert masks_single["op"][LifecycleOp.ADVANCE] == True, "Can ADVANCE in TRAINING"
+    assert masks_single["op"][LifecycleOp.CULL] == True, "Can CULL (seed_age >= MIN_CULL_AGE)"
+    assert masks_single["op"][LifecycleOp.FOSSILIZE] == False, "Can't FOSSILIZE (not PROBATIONARY)"
 
     # Create batch masks for network
     batch_size = 4
@@ -178,9 +177,12 @@ def test_action_masking_integration():
     dists, values = policy(obs, masks=masks_batch)
 
     # Verify masked actions have zero probability
-    assert (dists["op"].probs[:, 1] == 0).all(), "GERMINATE should be masked"
-    assert (dists["op"].probs[:, 2] > 0).all(), "ADVANCE should be valid"
-    assert (dists["op"].probs[:, 3] > 0).all(), "CULL should be valid"
+    # Note: GERMINATE is valid because other slots (early, late) are empty
+    from esper.leyline.factored_actions import LifecycleOp
+    assert (dists["op"].probs[:, LifecycleOp.GERMINATE] > 0).all(), "GERMINATE should be valid (empty slots)"
+    assert (dists["op"].probs[:, LifecycleOp.ADVANCE] > 0).all(), "ADVANCE should be valid"
+    assert (dists["op"].probs[:, LifecycleOp.CULL] > 0).all(), "CULL should be valid"
+    assert (dists["op"].probs[:, LifecycleOp.FOSSILIZE] == 0).all(), "FOSSILIZE should be masked (not PROBATIONARY)"
 
 
 def test_simple_reward_computation_multislot():
@@ -291,9 +293,8 @@ def test_multislot_with_all_components_integrated():
     from esper.kasmina.host import CNNHost, MorphogeneticModel
     from esper.simic.factored_network import FactoredActorCritic
     from esper.simic.features import obs_to_multislot_features, MULTISLOT_FEATURE_SIZE
-    from esper.simic.action_masks import compute_action_masks
+    from esper.simic.action_masks import compute_action_masks, MaskSeedInfo
     from esper.simic.simple_rewards import compute_simple_reward
-    from esper.simic.rewards import SeedInfo
     from esper.leyline import SeedStage
 
     # 1. Create multi-slot model
@@ -337,8 +338,8 @@ def test_multislot_with_all_components_integrated():
 
     # 6. Compute action masks
     slot_states = {
-        "early": SeedInfo(stage=SeedStage.TRAINING.value, improvement_since_stage_start=1.2, total_improvement=1.2, epochs_in_stage=3),
-        "mid": SeedInfo(stage=SeedStage.TRAINING.value, improvement_since_stage_start=2.1, total_improvement=2.1, epochs_in_stage=5),
+        "early": MaskSeedInfo(stage=SeedStage.TRAINING.value, seed_age_epochs=3),
+        "mid": MaskSeedInfo(stage=SeedStage.TRAINING.value, seed_age_epochs=5),
         "late": None,
     }
     masks_single = compute_action_masks(slot_states)
@@ -444,9 +445,9 @@ def test_multislot_batch_processing():
     """Test batch processing through all components."""
     from esper.simic.factored_network import FactoredActorCritic
     from esper.simic.features import MULTISLOT_FEATURE_SIZE
-    from esper.simic.action_masks import compute_batch_masks
-    from esper.simic.rewards import SeedInfo
+    from esper.simic.action_masks import compute_batch_masks, MaskSeedInfo
     from esper.leyline import SeedStage
+    from esper.leyline.factored_actions import LifecycleOp, NUM_OPS
 
     batch_size = 8
 
@@ -457,10 +458,10 @@ def test_multislot_batch_processing():
     batch_slot_states = []
     for i in range(batch_size):
         if i % 2 == 0:
-            # Even indices: mid slot occupied
+            # Even indices: mid slot occupied, early/late empty
             batch_slot_states.append({
                 "early": None,
-                "mid": SeedInfo(stage=SeedStage.TRAINING.value, improvement_since_stage_start=1.0, total_improvement=1.0, epochs_in_stage=3),
+                "mid": MaskSeedInfo(stage=SeedStage.TRAINING.value, seed_age_epochs=3),
                 "late": None,
             })
         else:
@@ -476,25 +477,28 @@ def test_multislot_batch_processing():
     assert masks["slot"].shape == (batch_size, 3)
     assert masks["blueprint"].shape == (batch_size, 5)
     assert masks["blend"].shape == (batch_size, 3)
-    assert masks["op"].shape == (batch_size, 4)
+    assert masks["op"].shape == (batch_size, NUM_OPS)  # NUM_OPS=5
 
     # Verify masks are different for even/odd indices
-    # Even: can't GERMINATE (slot occupied)
-    # Odd: can GERMINATE (slots empty)
+    # Even: GERMINATE allowed (empty slots), ADVANCE allowed (has seed)
+    # Odd: GERMINATE allowed (empty slots), ADVANCE blocked (no seed)
     for i in range(batch_size):
         if i % 2 == 0:
-            assert masks["op"][i, 1] == False, "Can't GERMINATE in occupied slot"
-            assert masks["op"][i, 2] == True, "Can ADVANCE"
+            # Has seed in mid, empty slots in early/late
+            assert masks["op"][i, LifecycleOp.GERMINATE] == True, "Can GERMINATE (empty slots)"
+            assert masks["op"][i, LifecycleOp.ADVANCE] == True, "Can ADVANCE (has seed in TRAINING)"
+            assert masks["op"][i, LifecycleOp.FOSSILIZE] == False, "Can't FOSSILIZE (not PROBATIONARY)"
         else:
-            assert masks["op"][i, 1] == True, "Can GERMINATE in empty slot"
-            assert masks["op"][i, 2] == False, "Can't ADVANCE in empty slot"
+            # All slots empty
+            assert masks["op"][i, LifecycleOp.GERMINATE] == True, "Can GERMINATE in empty slot"
+            assert masks["op"][i, LifecycleOp.ADVANCE] == False, "Can't ADVANCE in empty slot"
 
     # Forward through network with batch masks
     policy = FactoredActorCritic(state_dim=MULTISLOT_FEATURE_SIZE)
     dists, values = policy(obs_batch, masks=masks)
 
     assert values.shape == (batch_size,)
-    assert dists["op"].probs.shape == (batch_size, 4)
+    assert dists["op"].probs.shape == (batch_size, NUM_OPS)  # NUM_OPS=5
 
     # Sample actions for entire batch
     actions, log_probs, action_values = policy.get_action_batch(obs_batch, masks=masks)
