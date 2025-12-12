@@ -98,12 +98,8 @@ class Action(IntEnum):
         return legacy_map.get(action)
 
 
-SimicAction = Action
-
-
 __all__ = [
     "Action",
-    "SimicAction",
     "build_action_enum",
     "get_blueprint_from_action",
     "is_germinate_action",

@@ -330,7 +330,7 @@ class TestPolicyNetwork:
         return PolicyNetwork()
 
     def test_predict_returns_action(self, policy):
-        """Test that predict returns a SimicAction."""
+        """Test that predict returns an Action."""
         snap = TrainingSnapshot(epoch=10, val_accuracy=70.0)
         action = policy.predict(snap)
         assert isinstance(action, type(policy.action_enum.WAIT))

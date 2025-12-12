@@ -4,7 +4,7 @@ Leyline defines the data contracts that flow between all Esper components.
 Import from here for the public API.
 
 Example:
-    from esper.leyline import SimicAction, SeedStage, TrainingSignals
+    from esper.leyline import Action, SeedStage, TrainingSignals
 """
 
 # Version
@@ -31,7 +31,6 @@ DEFAULT_MAX_SEEDS_PER_SLOT = None  # Per-slot limit
 # Actions
 from esper.leyline.actions import (
     Action,
-    SimicAction,  # SimicAction is alias
     build_action_enum,
     get_blueprint_from_action,
     is_germinate_action,
@@ -98,7 +97,6 @@ __all__ = [
 
     # Actions
     "Action",
-    "SimicAction",  # deprecated alias
     "build_action_enum",
     "get_blueprint_from_action",
     "is_germinate_action",
