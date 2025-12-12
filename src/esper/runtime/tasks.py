@@ -54,8 +54,10 @@ class TaskSpec:
 
         Args:
             device: Target device for the model.
-            slots: Seed slots to enable. If None, uses task default ["mid"].
+            slots: Seed slots to enable. Required - cannot be None or empty.
         """
+        if not slots:
+            raise ValueError("slots parameter is required and cannot be empty")
         return self.model_factory(device, slots=slots)
 
     def create_dataloaders(self, **overrides):
@@ -99,8 +101,10 @@ def _cifar10_spec() -> TaskSpec:
     def _make_model(device: str, slots: list[str] | None = None) -> MorphogeneticModel:
         # Deliberately weak host (8 base channels vs default 32) to leave
         # headroom for seeds to demonstrate value. Expected accuracy ~40-50%.
+        if not slots:
+            raise ValueError("slots parameter is required and cannot be empty")
         host = CNNHost(num_classes=10, base_channels=8)
-        return MorphogeneticModel(host, device=device, slots=slots or ["mid"], task_config=cifar_config)
+        return MorphogeneticModel(host, device=device, slots=slots, task_config=cifar_config)
 
     return TaskSpec(
         name="cifar10",
@@ -140,8 +144,10 @@ def _cifar10_deep_spec() -> TaskSpec:
         # 4 injection points at 4 distinct spatial resolutions (8×8, 4×4, 2×2, 1×1).
         # Despite 100K params, baseline accuracy is only ~42% due to aggressive
         # downsampling - seeds have plenty of room to contribute.
+        if not slots:
+            raise ValueError("slots parameter is required and cannot be empty")
         host = CNNHost(num_classes=10, base_channels=8, n_blocks=5, pool_layers=5)
-        return MorphogeneticModel(host, device=device, slots=slots or ["mid"], task_config=cifar_config)
+        return MorphogeneticModel(host, device=device, slots=slots, task_config=cifar_config)
 
     return TaskSpec(
         name="cifar10_deep",
@@ -170,6 +176,8 @@ def _tinystories_spec() -> TaskSpec:
     vocab_size = 50257
 
     def _make_model(device: str, slots: list[str] | None = None) -> MorphogeneticModel:
+        if not slots:
+            raise ValueError("slots parameter is required and cannot be empty")
         host = TransformerHost(
             vocab_size=vocab_size,
             n_embd=384,
@@ -178,7 +186,7 @@ def _tinystories_spec() -> TaskSpec:
             block_size=block_size,
             dropout=0.1,
         )
-        return MorphogeneticModel(host, device=device, slots=slots or ["mid"], task_config=ts_config)
+        return MorphogeneticModel(host, device=device, slots=slots, task_config=ts_config)
 
     return TaskSpec(
         name="tinystories",

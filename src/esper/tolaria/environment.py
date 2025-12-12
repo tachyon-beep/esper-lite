@@ -17,7 +17,7 @@ def create_model(task: TaskSpec | str = "cifar10", device: str = "cuda", slots: 
     Args:
         task: Task specification or name.
         device: Target device for the model.
-        slots: Seed slots to enable. If None, uses task default ["mid"].
+        slots: Seed slots to enable. If None, defaults to ["mid"] for convenience.
     """
     if isinstance(task, str):
         task_spec = get_task_spec(task)
@@ -29,5 +29,8 @@ def create_model(task: TaskSpec | str = "cifar10", device: str = "cuda", slots: 
             f"CUDA device '{device}' requested but CUDA is not available. "
             f"Use device='cpu' or check your CUDA installation."
         )
+
+    if slots is None:
+        slots = ["mid"]
 
     return task_spec.create_model(device=device, slots=slots)
