@@ -14,9 +14,8 @@ from esper.simic.action_masks import (
     MaskSeedInfo,
     compute_action_masks,
     compute_batch_masks,
-    MIN_CULL_AGE,
 )
-from esper.leyline import SeedStage
+from esper.leyline import SeedStage, MIN_CULL_AGE
 from esper.leyline.factored_actions import LifecycleOp, NUM_OPS
 
 
