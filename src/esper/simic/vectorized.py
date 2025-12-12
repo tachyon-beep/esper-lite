@@ -437,7 +437,7 @@ def train_ppo_vectorized(
         model = create_model(task=task_spec, device=env_device, slots=slots)
 
         # Wire telemetry callback with env_id injection - use first available slot
-        first_slot = list(model.seed_slots.keys())[0]
+        first_slot = next(iter(model.seed_slots.keys()))
         model.seed_slots[first_slot].on_telemetry = make_telemetry_callback(env_idx)
         model.seed_slots[first_slot].fast_mode = False  # Enable telemetry
         # Incubator mode gradient isolation: detach host input into the seed path so
