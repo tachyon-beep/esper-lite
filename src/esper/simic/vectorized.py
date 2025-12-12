@@ -123,24 +123,32 @@ class ParallelEnvState:
         self.cf_correct_accum.zero_()
 
 
-def _advance_active_seed(model) -> bool:
+def _advance_active_seed(model, slots: list[str]) -> bool:
     """Advance lifecycle for the active seed, emitting telemetry via SeedSlot.
+
+    Args:
+        model: MorphogeneticModel instance
+        slots: List of slot names (uses first slot)
 
     Returns:
         True if the seed successfully fossilized, False otherwise.
     """
+    if not slots:
+        raise ValueError("slots parameter is required and cannot be empty")
+    target_slot = slots[0]
+
     if not model.has_active_seed:
         return False
 
-    seed_state = model.seed_slots["mid"].state
+    seed_state = model.seed_slots[target_slot].state
     current_stage = seed_state.stage
 
     # Tamiyo only finalizes; mechanical blending/advancement handled by Kasmina.
     # NOTE: Leyline VALID_TRANSITIONS only allow PROBATIONARY → FOSSILIZED.
     if current_stage == SeedStage.PROBATIONARY:
-        gate_result = model.seed_slots["mid"].advance_stage(SeedStage.FOSSILIZED)
+        gate_result = model.seed_slots[target_slot].advance_stage(SeedStage.FOSSILIZED)
         if gate_result.passed:
-            model.seed_slots["mid"].set_alpha(1.0)
+            model.seed_slots[target_slot].set_alpha(1.0)
             return True
         # Gate check failure is normal; reward shaping will penalize
         return False
@@ -482,18 +490,30 @@ def train_ppo_vectorized(
 
     def process_train_batch(env_state: ParallelEnvState, inputs: torch.Tensor,
                             targets: torch.Tensor, criterion: nn.Module,
-                            use_telemetry: bool = False) -> tuple[torch.Tensor, torch.Tensor, int, dict | None]:
+                            use_telemetry: bool = False, slots: list[str] | None = None) -> tuple[torch.Tensor, torch.Tensor, int, dict | None]:
         """Process a single training batch for one environment (runs in CUDA stream).
 
         Returns TENSORS (not floats) to avoid blocking .item() calls inside stream context.
         Call .item() only AFTER synchronizing all streams.
 
+        Args:
+            env_state: Parallel environment state
+            inputs: Input tensor
+            targets: Target tensor
+            criterion: Loss criterion
+            use_telemetry: Whether to collect telemetry
+            slots: List of slot names (uses first slot)
+
         Returns:
             Tuple of (loss_tensor, correct_tensor, total, grad_stats)
             grad_stats is None if use_telemetry=False or no active seed in TRAINING stage
         """
+        if not slots:
+            raise ValueError("slots parameter is required and cannot be empty")
+        target_slot = slots[0]
+
         model = env_state.model
-        seed_state = model.seed_slots["mid"].state if model.has_active_seed else None
+        seed_state = model.seed_slots[target_slot].state if model.has_active_seed else None
         env_dev = env_state.env_device
         grad_stats = None
 
@@ -514,7 +534,7 @@ def train_ppo_vectorized(
             elif seed_state.stage in (SeedStage.GERMINATED, SeedStage.TRAINING):
                 # Incubator/isolated seed training: train host + seed in lockstep.
                 if seed_state.stage == SeedStage.GERMINATED:
-                    gate_result = model.seed_slots["mid"].advance_stage(SeedStage.TRAINING)
+                    gate_result = model.seed_slots[target_slot].advance_stage(SeedStage.TRAINING)
                     if not gate_result.passed:
                         raise RuntimeError(f"G1 gate failed during TRAINING entry: {gate_result}")
                 if env_state.seed_optimizer is None:
@@ -568,11 +588,18 @@ def train_ppo_vectorized(
             return loss.detach(), correct_tensor, total, grad_stats
 
     def process_val_batch(env_state: ParallelEnvState, inputs: torch.Tensor,
-                          targets: torch.Tensor, criterion: nn.Module) -> tuple[torch.Tensor, torch.Tensor, int]:
+                          targets: torch.Tensor, criterion: nn.Module, slots: list[str] | None = None) -> tuple[torch.Tensor, torch.Tensor, int]:
         """Process a validation batch for one environment.
 
         Returns TENSORS (not floats) to avoid blocking .item() calls inside stream context.
         Call .item() only AFTER synchronizing all streams.
+
+        Args:
+            env_state: Parallel environment state
+            inputs: Input tensor
+            targets: Target tensor
+            criterion: Loss criterion
+            slots: List of slot names (not used in this function but kept for API consistency)
         """
         model = env_state.model
         env_dev = env_state.env_device
@@ -676,7 +703,7 @@ def train_ppo_vectorized(
                             continue
                         inputs, targets = env_batches[i]
                         loss_tensor, correct_tensor, total, grad_stats = process_train_batch(
-                            env_state, inputs, targets, criterion, use_telemetry=use_telemetry
+                            env_state, inputs, targets, criterion, use_telemetry=use_telemetry, slots=slots
                         )
                         if grad_stats is not None:
                             env_grad_stats[i] = grad_stats  # Keep last batch's grad stats
@@ -703,7 +730,7 @@ def train_ppo_vectorized(
                             continue
                         inputs, targets = env_batches[i]
                         loss_tensor, correct_tensor, total, grad_stats = process_train_batch(
-                            env_state, inputs, targets, criterion, use_telemetry=use_telemetry
+                            env_state, inputs, targets, criterion, use_telemetry=use_telemetry, slots=slots
                         )
                         if grad_stats is not None:
                             env_grad_stats[i] = grad_stats  # Keep last batch's grad stats
@@ -738,7 +765,8 @@ def train_ppo_vectorized(
             for i, env_state in enumerate(env_states):
                 model = env_state.model
                 if model.has_active_seed:
-                    seed_state = model.seed_slots["mid"].state
+                    target_slot = slots[0]
+                    seed_state = model.seed_slots[target_slot].state
                     if seed_state and seed_state.alpha > 0:
                         envs_needing_counterfactual.add(i)
 
@@ -772,7 +800,7 @@ def train_ppo_vectorized(
                         inputs, targets = env_batches[i]
 
                         # MAIN VALIDATION (real alpha)
-                        loss_tensor, correct_tensor, total = process_val_batch(env_state, inputs, targets, criterion)
+                        loss_tensor, correct_tensor, total = process_val_batch(env_state, inputs, targets, criterion, slots=slots)
                         stream_ctx = torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
                         with stream_ctx:
                             env_state.val_loss_accum.add_(loss_tensor)
@@ -782,9 +810,10 @@ def train_ppo_vectorized(
                         # COUNTERFACTUAL (alpha=0) - SAME BATCH, no DataLoader reload!
                         # Data is already on GPU from the main validation pass.
                         if i in envs_needing_counterfactual:
-                            with env_state.model.seed_slots["mid"].force_alpha(0.0):
+                            target_slot = slots[0]
+                            with env_state.model.seed_slots[target_slot].force_alpha(0.0):
                                 _, cf_correct_tensor, cf_total = process_val_batch(
-                                    env_state, inputs, targets, criterion
+                                    env_state, inputs, targets, criterion, slots=slots
                                 )
                             with stream_ctx:
                                 env_state.cf_correct_accum.add_(cf_correct_tensor)
@@ -808,7 +837,7 @@ def train_ppo_vectorized(
                         inputs, targets = env_batches[i]
 
                         # MAIN VALIDATION (real alpha)
-                        loss_tensor, correct_tensor, total = process_val_batch(env_state, inputs, targets, criterion)
+                        loss_tensor, correct_tensor, total = process_val_batch(env_state, inputs, targets, criterion, slots=slots)
                         stream_ctx = torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
                         with stream_ctx:
                             env_state.val_loss_accum.add_(loss_tensor)
@@ -818,9 +847,10 @@ def train_ppo_vectorized(
                         # COUNTERFACTUAL (alpha=0) - SAME BATCH, no DataLoader reload!
                         # Data is already on GPU from the main validation pass.
                         if i in envs_needing_counterfactual:
-                            with env_state.model.seed_slots["mid"].force_alpha(0.0):
+                            target_slot = slots[0]
+                            with env_state.model.seed_slots[target_slot].force_alpha(0.0):
                                 _, cf_correct_tensor, cf_total = process_val_batch(
-                                    env_state, inputs, targets, criterion
+                                    env_state, inputs, targets, criterion, slots=slots
                                 )
                             with stream_ctx:
                                 env_state.cf_correct_accum.add_(cf_correct_tensor)
@@ -843,7 +873,8 @@ def train_ppo_vectorized(
             # First, sync telemetry for envs with active seeds (must happen BEFORE feature extraction)
             for env_idx, env_state in enumerate(env_states):
                 model = env_state.model
-                seed_state = model.seed_slots["mid"].state if model.has_active_seed else None
+                target_slot = slots[0]
+                seed_state = model.seed_slots[target_slot].state if model.has_active_seed else None
 
                 if use_telemetry and seed_state and env_grad_stats[env_idx]:
                     # Materialize async dual grad stats NOW (after stream sync, safe to call .item())
@@ -885,7 +916,8 @@ def train_ppo_vectorized(
 
             for env_idx, env_state in enumerate(env_states):
                 model = env_state.model
-                seed_state = model.seed_slots["mid"].state if model.has_active_seed else None
+                target_slot = slots[0]
+                seed_state = model.seed_slots[target_slot].state if model.has_active_seed else None
 
                 train_loss = train_losses[env_idx] / num_train_batches
                 train_acc = 100.0 * train_corrects[env_idx] / max(train_totals[env_idx], 1)
@@ -1024,7 +1056,8 @@ def train_ppo_vectorized(
             # Execute actions and store transitions for each environment
             for env_idx, env_state in enumerate(env_states):
                 model = env_state.model
-                seed_state = model.seed_slots["mid"].state if model.has_active_seed else None
+                target_slot = slots[0]
+                seed_state = model.seed_slots[target_slot].state if model.has_active_seed else None
                 signals = all_signals[env_idx]
 
                 # Now Python floats/ints - no GPU sync
@@ -1115,7 +1148,7 @@ def train_ppo_vectorized(
                         env_state.acc_at_germination = env_state.val_acc
                         blueprint_id = get_blueprint_from_action(action)
                         seed_id = f"env{env_idx}_seed_{env_state.seeds_created}"
-                        model.germinate_seed(blueprint_id, seed_id, slot="mid")
+                        model.germinate_seed(blueprint_id, seed_id, slot=target_slot)
                         env_state.seeds_created += 1
                         env_state.seed_optimizer = None
                         action_success = True
@@ -1126,7 +1159,7 @@ def train_ppo_vectorized(
                         seed_state.metrics.total_improvement
                         if seed_state and seed_state.metrics else 0.0
                     )
-                    action_success = _advance_active_seed(model)
+                    action_success = _advance_active_seed(model, slots)
                     if action_success:
                         # Track fossilization for terminal bonus calculation
                         env_state.seeds_fossilized += 1
@@ -1139,7 +1172,7 @@ def train_ppo_vectorized(
 
                 elif action == ActionEnum.CULL:
                     if model.has_active_seed:
-                        model.cull_seed(slot="mid")
+                        model.cull_seed(slot=target_slot)
                         env_state.seed_optimizer = None
                         # Reset germination baseline on cull
                         env_state.acc_at_germination = None
@@ -1216,7 +1249,7 @@ def train_ppo_vectorized(
                 # This ensures state/action/reward alignment - advance happens after the step is recorded
                 # Must check seed_state exists since actions may have culled it
                 if model.has_active_seed:
-                    model.seed_slots["mid"].step_epoch()
+                    model.seed_slots[target_slot].step_epoch()
 
                 if epoch == max_epochs:
                     env_final_accs[env_idx] = env_state.val_acc
