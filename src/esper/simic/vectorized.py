@@ -970,7 +970,7 @@ def train_ppo_vectorized(
                 )
                 all_signals.append(signals)
 
-                features = signals_to_features(signals, model, use_telemetry=use_telemetry)
+                features = signals_to_features(signals, model, use_telemetry=use_telemetry, slots=slots)
                 all_features.append(features)
 
                 # Compute action mask based on current state

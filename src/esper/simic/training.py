@@ -354,7 +354,7 @@ def run_ppo_episode(
         # Get features and action BEFORE step_epoch() to maintain state/action alignment
         # The RL transition (s, a, r, s') must use consistent state for observation and reward
         # Note: tracker would provide DiagnosticTracker telemetry if available
-        features = signals_to_features(signals, model, use_telemetry=use_telemetry)
+        features = signals_to_features(signals, model, use_telemetry=use_telemetry, slots=slots)
         state = torch.tensor([features], dtype=torch.float32, device=device)
 
         # Compute action mask for valid actions

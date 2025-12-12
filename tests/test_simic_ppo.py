@@ -22,7 +22,7 @@ class TestPPOFeatureDimensions:
         signals.metrics.epoch = 10
         signals.metrics.val_accuracy = 75.0
 
-        features = signals_to_features(signals, model=None, use_telemetry=False)
+        features = signals_to_features(signals, model=None, use_telemetry=False, slots=["mid"])
 
         assert len(features) == 35, (
             f"Expected 35 base features, got {len(features)}. "
@@ -35,7 +35,7 @@ class TestPPOFeatureDimensions:
         signals.metrics.epoch = 10
         signals.metrics.val_accuracy = 75.0
 
-        features = signals_to_features(signals, model=None, use_telemetry=True)
+        features = signals_to_features(signals, model=None, use_telemetry=True, slots=["mid"])
 
         expected_dim = 35 + SeedTelemetry.feature_dim()  # 35 + 10 = 45
         assert len(features) == expected_dim, (
@@ -126,7 +126,7 @@ class TestPPOFeatureDimensions:
         signals.metrics.val_accuracy = 70.0
 
         # Test WITHOUT telemetry
-        features_no_tel = signals_to_features(signals, model=None, use_telemetry=False)
+        features_no_tel = signals_to_features(signals, model=None, use_telemetry=False, slots=["mid"])
         agent_no_tel = PPOAgent(state_dim=len(features_no_tel), action_dim=7, device='cpu')
         state_tensor_no_tel = torch.tensor([features_no_tel], dtype=torch.float32)
         dummy_mask = torch.ones(1, 7)  # All actions valid
@@ -137,7 +137,7 @@ class TestPPOFeatureDimensions:
         assert dist.probs.shape == (1, 7), "No-telemetry path should work"
 
         # Test WITH telemetry
-        features_tel = signals_to_features(signals, model=None, use_telemetry=True)
+        features_tel = signals_to_features(signals, model=None, use_telemetry=True, slots=["mid"])
         agent_tel = PPOAgent(state_dim=len(features_tel), action_dim=7, device='cpu')
         state_tensor_tel = torch.tensor([features_tel], dtype=torch.float32)
 

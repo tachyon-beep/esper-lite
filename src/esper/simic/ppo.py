@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 # Feature Extraction (PPO-specific wrapper)
 # =============================================================================
 
-def signals_to_features(signals, model, use_telemetry: bool = True, max_epochs: int = 200) -> list[float]:
+def signals_to_features(signals, model, use_telemetry: bool = True, max_epochs: int = 200, slots: list[str] | None = None) -> list[float]:
     """Convert training signals to feature vector.
 
     Args:
@@ -38,6 +38,7 @@ def signals_to_features(signals, model, use_telemetry: bool = True, max_epochs: 
         model: MorphogeneticModel
         use_telemetry: Whether to include telemetry features
         max_epochs: Maximum epochs for learning phase normalization
+        slots: List of slot names to extract features from (uses first slot)
 
     Returns:
         Feature vector (30 dims base, +10 if telemetry = 40 dims total)
@@ -46,6 +47,10 @@ def signals_to_features(signals, model, use_telemetry: bool = True, max_epochs: 
         TrainingSignals.active_seeds contains seed IDs (strings), not SeedState
         objects, so seed-specific features and telemetry are always zero-padded.
     """
+    if not slots:
+        raise ValueError("signals_to_features: slots parameter is required and cannot be empty")
+
+    target_slot = slots[0]
     from esper.simic.features import obs_to_base_features
 
     # Build observation dict
@@ -77,9 +82,9 @@ def signals_to_features(signals, model, use_telemetry: bool = True, max_epochs: 
 
     # Seed state features
     # NOTE: TrainingSignals.active_seeds is a list of seed IDs (strings),
-    # not SeedState objects. Use model.seed_slots["mid"].state to access full seed state.
+    # not SeedState objects. Use model.seed_slots[target_slot].state to access full seed state.
     if model and model.has_active_seed:
-        seed_state = model.seed_slots["mid"].state
+        seed_state = model.seed_slots[target_slot].state
         obs['seed_stage'] = seed_state.stage.value
         obs['seed_epochs_in_stage'] = seed_state.metrics.epochs_in_current_stage
         obs['seed_alpha'] = seed_state.alpha
@@ -106,10 +111,10 @@ def signals_to_features(signals, model, use_telemetry: bool = True, max_epochs: 
     features = obs_to_base_features(obs)
 
     if use_telemetry:
-        # Use real telemetry from model.seed_slots["mid"].state when available
+        # Use real telemetry from model.seed_slots[target_slot].state when available
         from esper.leyline import SeedTelemetry
         if model and model.has_active_seed:
-            seed_state = model.seed_slots["mid"].state
+            seed_state = model.seed_slots[target_slot].state
             # SeedState always has telemetry field (initialized in __post_init__)
             features.extend(seed_state.telemetry.to_features())
         else:

@@ -31,7 +31,7 @@ class TestPPOFeatureCompatibility:
         signals.metrics.val_loss = 1.7
 
         # Extract features
-        features = signals_to_features(signals, model=None, use_telemetry=False)
+        features = signals_to_features(signals, model=None, use_telemetry=False, slots=["mid"])
 
         # Create PPO agent with matching dimensions
         agent = PPOAgent(state_dim=len(features), action_dim=7, device='cpu')
@@ -55,7 +55,7 @@ class TestPPOFeatureCompatibility:
         signals.metrics.val_accuracy = 70.0
 
         # Extract features with telemetry
-        features = signals_to_features(signals, model=None, use_telemetry=True)
+        features = signals_to_features(signals, model=None, use_telemetry=True, slots=["mid"])
 
         # Create PPO agent with matching dimensions
         agent = PPOAgent(state_dim=len(features), action_dim=7, device='cpu')
@@ -81,7 +81,7 @@ class TestPPOFeatureCompatibility:
             signals = TrainingSignals()
             signals.metrics.epoch = i
             signals.metrics.val_accuracy = 50.0 + i
-            features = signals_to_features(signals, model=None, use_telemetry=False)
+            features = signals_to_features(signals, model=None, use_telemetry=False, slots=["mid"])
             all_features.append(features)
 
         # Stack into batch
@@ -320,7 +320,7 @@ class TestPPOEndToEnd:
         signals.metrics.plateau_epochs = 3
 
         # Extract features
-        features = signals_to_features(signals, model=None, use_telemetry=False)
+        features = signals_to_features(signals, model=None, use_telemetry=False, slots=["mid"])
 
         # Create agent
         agent = PPOAgent(state_dim=len(features), action_dim=7, device='cpu')
@@ -342,7 +342,7 @@ class TestPPOEndToEnd:
         signals.metrics.val_accuracy = 75.0
 
         # Extract features with telemetry (will be zero-padded)
-        features = signals_to_features(signals, model=None, use_telemetry=True)
+        features = signals_to_features(signals, model=None, use_telemetry=True, slots=["mid"])
         assert len(features) == 45, "Should have 45 features with telemetry"
 
         # Create agent

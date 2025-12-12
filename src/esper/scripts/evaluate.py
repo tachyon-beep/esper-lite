@@ -334,7 +334,7 @@ def run_diagnostic_episode(
 
         # Get features and query policy
         features = signals_to_features(
-            signals, model, use_telemetry=False
+            signals, model, use_telemetry=False, slots=slots
         )
         state = torch.tensor([features], dtype=torch.float32, device=device)
 
