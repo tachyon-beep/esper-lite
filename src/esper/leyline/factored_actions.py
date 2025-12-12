@@ -60,9 +60,8 @@ class LifecycleOp(IntEnum):
     """Lifecycle operation."""
     WAIT = 0
     GERMINATE = 1
-    ADVANCE = 2
-    CULL = 3
-    FOSSILIZE = 4
+    CULL = 2       # was 3
+    FOSSILIZE = 3  # was 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,10 +75,6 @@ class FactoredAction:
     @property
     def is_germinate(self) -> bool:
         return self.op == LifecycleOp.GERMINATE
-
-    @property
-    def is_advance(self) -> bool:
-        return self.op == LifecycleOp.ADVANCE
 
     @property
     def is_cull(self) -> bool:

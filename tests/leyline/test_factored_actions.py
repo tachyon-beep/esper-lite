@@ -33,10 +33,9 @@ def test_lifecycle_op_enum():
 
     assert LifecycleOp.WAIT.value == 0
     assert LifecycleOp.GERMINATE.value == 1
-    assert LifecycleOp.ADVANCE.value == 2
-    assert LifecycleOp.CULL.value == 3
-    assert LifecycleOp.FOSSILIZE.value == 4
-    assert len(LifecycleOp) == 5
+    assert LifecycleOp.CULL.value == 2
+    assert LifecycleOp.FOSSILIZE.value == 3
+    assert len(LifecycleOp) == 4
 
 
 def test_factored_action_composition():
@@ -85,7 +84,3 @@ def test_factored_action_execution_properties():
     # WAIT action
     wait = FactoredAction(SlotAction.MID, BlueprintAction.NOOP, BlendAction.LINEAR, LifecycleOp.WAIT)
     assert wait.is_wait
-
-    # ADVANCE action (mechanical, maps to wait in execution)
-    advance = FactoredAction(SlotAction.MID, BlueprintAction.NOOP, BlendAction.LINEAR, LifecycleOp.ADVANCE)
-    assert advance.is_advance
