@@ -109,18 +109,26 @@ class CNNHost(nn.Module):
             raise ValueError(f"Unknown injection point: {slot_id}")
         self.slots[slot_id] = nn.Identity()
 
-    def forward_to_segment(self, segment: str, x: torch.Tensor) -> torch.Tensor:
-        """Forward through network up to and including a segment.
+    def forward_to_segment(
+        self,
+        segment: str,
+        x: torch.Tensor,
+        from_segment: str | None = None
+    ) -> torch.Tensor:
+        """Forward from one segment boundary to another.
 
         Args:
-            segment: Target segment name ("early", "mid", or "late")
-            x: Input tensor
+            segment: Target segment (e.g., "early", "mid", "late")
+            x: Raw input if from_segment is None, else features at from_segment boundary
+            from_segment: Starting point (None = network input)
 
         Returns:
-            Feature map at the specified segment boundary
+            Features at segment boundary
         """
         if segment not in self.segment_channels:
             raise ValueError(f"Unknown segment: {segment}. Available: {list(self.segment_channels.keys())}")
+        if from_segment is not None and from_segment not in self.segment_channels:
+            raise ValueError(f"Unknown from_segment: {from_segment}. Available: {list(self.segment_channels.keys())}")
 
         # Convert to channels_last ONCE before processing for Tensor Core optimization
         if self._memory_format == torch.channels_last:
@@ -133,9 +141,10 @@ class CNNHost(nn.Module):
             "late": 2,   # After block 2 (block3)
         }
         target_block = segment_to_block[segment]
+        start_block = 0 if from_segment is None else segment_to_block[from_segment] + 1
 
-        # Forward through blocks up to and including target
-        for idx in range(target_block + 1):
+        # Forward through blocks in range [start_block, target_block]
+        for idx in range(start_block, target_block + 1):
             x = self.blocks[idx](x)
             # Only pool on first pool_layers blocks
             if idx < self._pool_layers:
@@ -350,30 +359,44 @@ class TransformerHost(nn.Module):
             raise ValueError(f"Unknown injection point: {slot_id}")
         self.slots[slot_id] = nn.Identity()
 
-    def forward_to_segment(self, segment: str, x: torch.Tensor) -> torch.Tensor:
-        """Forward through network up to and including a segment.
+    def forward_to_segment(
+        self,
+        segment: str,
+        x: torch.Tensor,
+        from_segment: str | None = None
+    ) -> torch.Tensor:
+        """Forward from one segment boundary to another.
 
         Args:
-            segment: Target segment name ("early", "mid", or "late")
-            x: Input token indices (B, T)
+            segment: Target segment (e.g., "early", "mid", "late")
+            x: Raw input if from_segment is None (B, T token indices),
+               else features at from_segment boundary (B, T, n_embd)
+            from_segment: Starting point (None = network input)
 
         Returns:
-            Hidden states at the specified segment boundary (B, T, n_embd)
+            Hidden states at segment boundary (B, T, n_embd)
         """
         if segment not in self.segment_channels:
             raise ValueError(f"Unknown segment: {segment}. Available: {list(self.segment_channels.keys())}")
+        if from_segment is not None and from_segment not in self.segment_channels:
+            raise ValueError(f"Unknown from_segment: {from_segment}. Available: {list(self.segment_channels.keys())}")
 
-        B, T = x.shape
-        if T > self.block_size:
-            raise ValueError(f"Sequence length {T} exceeds block_size {self.block_size}")
+        # If starting from network input, apply embeddings
+        if from_segment is None:
+            B, T = x.shape
+            if T > self.block_size:
+                raise ValueError(f"Sequence length {T} exceeds block_size {self.block_size}")
+            pos = torch.arange(T, device=x.device)
+            h = self.drop(self.tok_emb(x) + self.pos_emb(pos))
+            start_layer = 0
+        else:
+            # x is already embedded features
+            h = x
+            start_layer = self._segment_boundaries[from_segment]
 
-        # Embeddings
-        pos = torch.arange(T, device=x.device)
-        h = self.drop(self.tok_emb(x) + self.pos_emb(pos))
-
-        # Forward through layers up to segment boundary
+        # Forward through layers in range [start_layer, end_layer)
         end_layer = self._segment_boundaries[segment]
-        for i in range(end_layer):
+        for i in range(start_layer, end_layer):
             h = self.layers[i](h)
             h = self.slots[self._slot_keys[i]](h)
 
@@ -447,10 +470,6 @@ class MorphogeneticModel(nn.Module):
         self._device = device
         self.task_config = task_config
 
-        # Detect host type at initialization time (avoids hasattr in forward)
-        self._is_cnn = hasattr(host, "blocks")  # hasattr AUTHORIZED by code review on 2025-12-12 14:30:00 UTC
-        # Justification: One-time type detection at initialization for dispatch logic
-
         # Host must expose segment_channels for multi-slot support
         segment_channels = host.segment_channels
 
@@ -500,67 +519,17 @@ class MorphogeneticModel(nn.Module):
         Processes sequentially through network segments, applying slot
         transformations at each segment boundary.
         """
-        # Use pre-detected host type from initialization
-        if self._is_cnn:
-            return self._forward_cnn(x)
-        else:
-            return self._forward_transformer(x)
+        # If no active slots, use host's forward directly
+        if not self._active_slots:
+            return self.host(x)
 
-    def _forward_cnn(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass for CNN hosts."""
-        segment_to_block = {"early": 0, "mid": 1, "late": 2}
-
-        # Convert to channels_last for Tensor Core optimization
-        if self.host._memory_format == torch.channels_last:
-            x = x.to(memory_format=torch.channels_last)
-
-        current_block = 0
+        # Process through active slots
+        prev_segment = None
         for slot_id in self._active_slots:
-            target_block = segment_to_block[slot_id]
-
-            # Forward through blocks up to this segment
-            for idx in range(current_block, target_block + 1):
-                x = self.host.blocks[idx](x)
-                if idx < self.host._pool_layers:
-                    x = self.host.pool(x)
-
-            # Apply slot transformation
+            x = self.host.forward_to_segment(slot_id, x, from_segment=prev_segment)
             x = self.seed_slots[slot_id].forward(x)
-            current_block = target_block + 1
-
-        # Forward through remaining blocks
-        for idx in range(current_block, self.host.n_blocks):
-            x = self.host.blocks[idx](x)
-            if idx < self.host._pool_layers:
-                x = self.host.pool(x)
-
-        # Final classification
-        x = F.adaptive_avg_pool2d(x, 1).flatten(1)
-        return self.host.classifier(x)
-
-    def _forward_transformer(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass for Transformer hosts.
-
-        Process ALL layers regardless of active slots; only apply seed slot
-        transformations at active segment boundaries.
-        """
-        B, T = x.shape
-        pos = torch.arange(T, device=x.device)
-        h = self.host.drop(self.host.tok_emb(x) + self.host.pos_emb(pos))
-
-        # Process ALL layers, applying seed slots only at active segment boundaries
-        for layer_idx in range(self.host.n_layer):
-            h = self.host.layers[layer_idx](h)
-            h = self.host.slots[self.host._slot_keys[layer_idx]](h)
-
-            # Check if we just completed an active segment's boundary
-            for segment in self._active_slots:
-                if self.host._segment_boundaries[segment] == layer_idx + 1:
-                    h = self.seed_slots[segment].forward(h)
-                    break
-
-        h = self.host.ln_f(h)
-        return self.host.head(h)
+            prev_segment = slot_id
+        return self.host.forward_from_segment(prev_segment, x)
 
     def germinate_seed(
         self,
