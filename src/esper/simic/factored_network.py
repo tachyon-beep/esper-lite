@@ -193,18 +193,44 @@ class FactoredActorCritic(nn.Module):
         Returns:
             log_probs: Sum of log probs across heads
             values: Value estimates
-            entropy: Sum of entropies across heads
+            entropy: Sum of NORMALIZED entropies across heads (each in [0, 1])
+
+        Note on entropy normalization:
+            We normalize by FULL action space (log(num_actions)), not by valid
+            actions under the mask. This means:
+            - "Uniform over 2 valid actions" reports ~50% entropy (not 100%)
+            - entropy_coef has consistent meaning across mask states
+            - Exploration bonus is weaker when fewer actions available
+
+            This is intentional: we want consistent regularization strength
+            regardless of how restrictive the mask is.
         """
         dists, values = self.forward(states, masks)
 
         log_probs_list = []
         entropy_list = []
 
+        # Max entropies for normalization (full action space, not masked)
+        # See docstring for design rationale
+        max_entropies = {
+            "slot": math.log(self.num_slots),
+            "blueprint": math.log(self.num_blueprints),
+            "blend": math.log(self.num_blends),
+            "op": math.log(self.num_ops),
+        }
+
         for key, dist in dists.items():
             log_probs_list.append(dist.log_prob(actions[key]))
-            entropy_list.append(dist.entropy())
+
+            # Normalize entropy to [0, 1] by full action space
+            raw_entropy = dist.entropy()
+            max_ent = max_entropies[key]
+            normalized_entropy = raw_entropy / max(max_ent, 1e-8)
+            entropy_list.append(normalized_entropy)
 
         log_probs = torch.stack(log_probs_list, dim=-1).sum(dim=-1)
+        # Sum normalized entropies (not mean) - each head contributes equally
+        # to the exploration budget. Range: [0, num_heads] (here [0, 4])
         entropy = torch.stack(entropy_list, dim=-1).sum(dim=-1)
 
         return log_probs, values, entropy

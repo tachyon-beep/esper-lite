@@ -14,7 +14,7 @@ class AnomalyReport:
 
     has_anomaly: bool = False
     anomaly_types: list[str] = field(default_factory=list)
-    details: dict = field(default_factory=dict)
+    details: dict[str, str] = field(default_factory=dict)
 
     def add_anomaly(self, anomaly_type: str, detail: str | None = None) -> None:
         """Add an anomaly to the report."""
@@ -143,10 +143,14 @@ class AnomalyDetector:
             threshold = self.ev_threshold_late
 
         if explained_variance < threshold:
-            progress_pct = (current_episode / total_episodes * 100) if total_episodes > 0 else 0
+            if total_episodes > 0:
+                progress_pct = current_episode / total_episodes * 100
+                progress_str = f"{progress_pct:.0f}%"
+            else:
+                progress_str = "unknown"
             report.add_anomaly(
                 "value_collapse",
-                f"explained_variance={explained_variance:.3f} < {threshold} (at {progress_pct:.0f}% training)",
+                f"explained_variance={explained_variance:.3f} < {threshold} (at {progress_str} training)",
             )
 
         return report

@@ -160,3 +160,25 @@ def test_factored_actor_critic_raises_on_single_env_all_masked():
 
     with pytest.raises(InvalidStateMachineError, match="op.*env 2"):
         net(obs, masks=masks)
+
+
+def test_factored_actor_critic_entropy_normalized():
+    """Entropy should be normalized to [0, 1] range per head, then summed."""
+    from esper.simic.factored_network import FactoredActorCritic
+
+    net = FactoredActorCritic(state_dim=30, num_slots=3, num_blueprints=5, num_blends=3, num_ops=4)
+
+    obs = torch.randn(4, 30)
+    actions = {
+        "slot": torch.randint(0, 3, (4,)),
+        "blueprint": torch.randint(0, 5, (4,)),
+        "blend": torch.randint(0, 3, (4,)),
+        "op": torch.randint(0, 4, (4,)),
+    }
+
+    _, _, entropy = net.evaluate_actions(obs, actions)
+
+    # With 4 heads, normalized entropy should be in [0, 4]
+    # (each head contributes 0-1)
+    assert (entropy >= 0).all()
+    assert (entropy <= 4.0).all()

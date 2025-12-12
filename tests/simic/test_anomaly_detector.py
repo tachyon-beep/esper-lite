@@ -118,3 +118,14 @@ class TestAnomalyDetector:
         )
         assert report.has_anomaly is True
         assert "ratio_explosion" in report.anomaly_types
+
+    def test_value_collapse_detail_shows_unknown_when_no_total(self):
+        """Should show 'unknown' progress when total_episodes is 0."""
+        detector = AnomalyDetector()
+        report = detector.check_value_function(
+            explained_variance=0.05,  # Below threshold
+            current_episode=10,
+            total_episodes=0,  # Unknown total
+        )
+        assert report.has_anomaly is True
+        assert "unknown" in report.details["value_collapse"].lower()
