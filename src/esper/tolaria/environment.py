@@ -11,8 +11,14 @@ import torch
 from esper.runtime import TaskSpec, get_task_spec
 
 
-def create_model(task: TaskSpec | str = "cifar10", device: str = "cuda") -> torch.nn.Module:
-    """Create a MorphogeneticModel for the given task on device."""
+def create_model(task: TaskSpec | str = "cifar10", device: str = "cuda", slots: list[str] | None = None) -> torch.nn.Module:
+    """Create a MorphogeneticModel for the given task on device.
+
+    Args:
+        task: Task specification or name.
+        device: Target device for the model.
+        slots: Seed slots to enable. If None, uses task default ["mid"].
+    """
     if isinstance(task, str):
         task_spec = get_task_spec(task)
     else:
@@ -24,4 +30,4 @@ def create_model(task: TaskSpec | str = "cifar10", device: str = "cuda") -> torc
             f"Use device='cpu' or check your CUDA installation."
         )
 
-    return task_spec.create_model(device=device)
+    return task_spec.create_model(device=device, slots=slots)

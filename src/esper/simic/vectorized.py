@@ -227,6 +227,9 @@ def train_ppo_vectorized(
     from esper.tolaria import create_model
     from esper.tamiyo import SignalTracker
 
+    if not slots:
+        raise ValueError("slots parameter is required and cannot be empty")
+
     if devices is None:
         devices = [device]
 
