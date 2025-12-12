@@ -121,9 +121,9 @@ def train_epoch_incubator_mode(
     host_optimizer: torch.optim.Optimizer,
     seed_optimizer: torch.optim.Optimizer,
     device: str,
+    slot: str,
     task_type: str = "classification",
     gradient_telemetry_stride: int = 10,
-    slot: str = "mid",
 ) -> None:
     """Train one epoch with seed in isolation (seed output doesn't affect forward pass).
 
@@ -143,11 +143,11 @@ def train_epoch_incubator_mode(
         host_optimizer: Optimizer for host parameters.
         seed_optimizer: Optimizer for seed parameters.
         device: Device to train on.
+        slot: Which slot to train (required parameter).
         task_type: Task type (classification or lm).
         gradient_telemetry_stride: Capture gradient telemetry every N steps.
             Set to 0 to disable. Default 10 balances accuracy with GPU pipeline
             efficiency (each capture triggers a device-to-host sync).
-        slot: Which slot to train (default "mid").
     """
     model.train()
     seed_slot = model.seed_slots[slot]
@@ -322,8 +322,8 @@ def validate_with_attribution(
     testloader: DataLoader,
     criterion: nn.Module,
     device: str,
+    slot: str,
     task_type: str = "classification",
-    slot: str = "mid",
 ) -> AttributionResult:
     """Counterfactual validation for true seed contribution measurement.
 
@@ -343,8 +343,8 @@ def validate_with_attribution(
         testloader: Validation data loader.
         criterion: Loss function.
         device: Device to evaluate on.
+        slot: Which slot to validate (required parameter).
         task_type: Task type ("classification" or "lm").
-        slot: Which slot to validate (default "mid").
 
     Returns:
         AttributionResult with real and baseline accuracies plus seed_contribution.

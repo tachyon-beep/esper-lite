@@ -72,7 +72,7 @@ class TestTrainer:
         seed_optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
 
         # Should not raise
-        train_epoch_incubator_mode(model, mini_train, criterion, host_optimizer, seed_optimizer, "cpu")
+        train_epoch_incubator_mode(model, mini_train, criterion, host_optimizer, seed_optimizer, "cpu", slot="mid")
 
     def test_train_epoch_blended_runs(self, model_and_loader):
         """Smoke test for train_epoch_blended."""

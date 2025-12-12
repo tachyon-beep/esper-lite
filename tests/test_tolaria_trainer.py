@@ -72,7 +72,7 @@ class TestValidateWithAttribution:
         assert model.training is True
 
         # Run attribution validation
-        result = validate_with_attribution(model, testloader, criterion, "cpu")
+        result = validate_with_attribution(model, testloader, criterion, "cpu", slot="mid")
 
         # Model should be back in training mode
         assert model.training is True, (
@@ -95,7 +95,7 @@ class TestValidateWithAttribution:
         model.eval()
         assert model.training is False
 
-        result = validate_with_attribution(model, testloader, criterion, "cpu")
+        result = validate_with_attribution(model, testloader, criterion, "cpu", slot="mid")
 
         # Model should still be in eval mode
         assert model.training is False, (
@@ -187,7 +187,7 @@ class TestValidateWithAttributionIntegration:
         criterion = nn.CrossEntropyLoss()
 
         result = validate_with_attribution(
-            model_with_seed, test_data, criterion, "cpu"
+            model_with_seed, test_data, criterion, "cpu", slot="mid"
         )
 
         # Result should have valid structure
@@ -203,7 +203,7 @@ class TestValidateWithAttributionIntegration:
         criterion = nn.CrossEntropyLoss()
 
         result = validate_with_attribution(
-            model_with_seed, test_data, criterion, "cpu"
+            model_with_seed, test_data, criterion, "cpu", slot="mid"
         )
 
         # Contribution can be any value (positive = seed helps, negative = seed hurts)
@@ -221,7 +221,7 @@ class TestValidateWithAttributionIntegration:
         original_alpha = model_with_seed.seed_slots["mid"].alpha
 
         result = validate_with_attribution(
-            model_with_seed, test_data, criterion, "cpu"
+            model_with_seed, test_data, criterion, "cpu", slot="mid"
         )
 
         # Alpha should be restored after validation
@@ -247,7 +247,7 @@ class TestValidateWithAttributionIntegration:
 
         criterion = nn.CrossEntropyLoss()
 
-        result = validate_with_attribution(model, empty_loader, criterion, "cpu")
+        result = validate_with_attribution(model, empty_loader, criterion, "cpu", slot="mid")
 
         # Should return 0 accuracy for empty loader
         assert result.real_accuracy == 0.0
