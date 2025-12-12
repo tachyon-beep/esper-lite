@@ -20,9 +20,6 @@ import torch
 from esper.leyline import (
     TensorSchema,
     TENSOR_SCHEMA_SIZE,
-    MIN_CULL_AGE,
-    MIN_GERMINATE_EPOCH,
-    MIN_PLATEAU_TO_GERMINATE,
 )
 
 if TYPE_CHECKING:
@@ -36,7 +33,6 @@ __all__ = [
     "obs_to_base_features_tensor",
     "obs_to_multislot_features",
     "MULTISLOT_FEATURE_SIZE",
-    "compute_action_mask",
     "TaskConfig",
     "normalize_observation",
 ]
@@ -304,86 +300,6 @@ def obs_to_multislot_features(obs: dict, total_seeds: int = 0, max_seeds: int = 
         ])
 
     return base + slot_features
-
-
-# =============================================================================
-# Action Masking
-# =============================================================================
-
-# SeedStage.PROBATIONARY = 6 (hardcoded to avoid kasmina import on hot path)
-_PROBATIONARY_STAGE = 6
-
-
-def compute_action_mask(
-    has_active_seed: float,
-    seed_stage: int,
-    num_germinate_actions: int,
-    seed_age_epochs: int = 0,
-    epoch: int = 0,
-    plateau_epochs: int = 0,
-    host_stabilized: bool = False,
-) -> list[float]:
-    """Compute valid action mask based on current state.
-
-    This enforces the Kasmina state machine rules plus stabilization gating:
-    - GERMINATE_*: Allowed only if no active seed AND host stabilized AND plateau detected
-    - FOSSILIZE: Allowed only if seed is in PROBATIONARY stage
-    - CULL: Allowed only if active seed AND seed_age >= MIN_CULL_AGE
-    - WAIT: Always allowed
-
-    Stabilization gating ensures seeds only get credit for improvements AFTER
-    the explosive growth phase ends and natural training gains have exhausted.
-    This matches h-tamiyo behavior and fixes reward misattribution from early
-    germination.
-
-    Args:
-        has_active_seed: 1.0 if seed is active, 0.0 otherwise
-        seed_stage: Current seed stage (SeedStage enum value)
-        num_germinate_actions: Number of germinate actions (blueprint count)
-        seed_age_epochs: Total epochs since seed germination (default 0)
-        epoch: Current training epoch (default 0)
-        plateau_epochs: Consecutive epochs with <0.5% improvement (default 0)
-        host_stabilized: True if explosive growth phase has ended (default False)
-
-    Returns:
-        Binary mask list [WAIT, GERMINATE_0..N, FOSSILIZE, CULL]
-        where 1.0 = valid, 0.0 = invalid
-
-    Action layout (matches build_action_enum):
-        0: WAIT
-        1-N: GERMINATE_<BLUEPRINT>
-        N+1: FOSSILIZE
-        N+2: CULL
-    """
-    # Total actions: WAIT + germinate actions + FOSSILIZE + CULL
-    num_actions = 1 + num_germinate_actions + 2
-    mask = [0.0] * num_actions
-
-    # WAIT (index 0): Always valid
-    mask[0] = 1.0
-
-    # GERMINATE_* (indices 1 to num_germinate_actions):
-    # Only if no active seed AND host stabilized AND plateau detected
-    # This ensures seeds only get credit for improvements AFTER explosive growth ends
-    if has_active_seed < 0.5:  # No active seed
-        plateau_met = (
-            epoch >= MIN_GERMINATE_EPOCH and
-            plateau_epochs >= MIN_PLATEAU_TO_GERMINATE
-        )
-        if host_stabilized and plateau_met:
-            for i in range(1, num_germinate_actions + 1):
-                mask[i] = 1.0
-
-    # FOSSILIZE (index num_germinate_actions + 1): Only if PROBATIONARY
-    if seed_stage == _PROBATIONARY_STAGE:
-        mask[num_germinate_actions + 1] = 1.0
-
-    # CULL (index num_germinate_actions + 2): Only if active seed AND old enough
-    # MIN_CULL_AGE prevents "germinate-then-cull" churn exploitation
-    if has_active_seed >= 0.5 and seed_age_epochs >= MIN_CULL_AGE:
-        mask[num_germinate_actions + 2] = 1.0
-
-    return mask
 
 
 # =============================================================================

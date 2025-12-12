@@ -18,7 +18,7 @@ from esper.simic.gradient_collector import (
     collect_seed_gradients_async,
     materialize_grad_stats,
 )
-from esper.simic.features import compute_action_mask
+from esper.simic.action_masks import build_slot_states, compute_flat_action_mask
 from esper.nissa import get_hub
 from esper.utils.loss import compute_task_loss_with_metrics
 
@@ -358,16 +358,13 @@ def run_ppo_episode(
         features = signals_to_features(signals, model, use_telemetry=use_telemetry, slots=slots)
         state = torch.tensor([features], dtype=torch.float32, device=device)
 
-        # Compute action mask for valid actions
-        seed_age = (epoch - seed_created_epoch) if model.has_active_seed else 0
-        action_mask_list = compute_action_mask(
-            has_active_seed=1.0 if model.has_active_seed else 0.0,
-            seed_stage=seed_state.stage.value if seed_state else 0,
+        # Compute action mask for valid actions (physical constraints only)
+        slot_states = build_slot_states(model, [target_slot])
+        action_mask_list = compute_flat_action_mask(
+            slot_states=slot_states,
+            total_seeds=1 if model.has_active_seed else 0,
+            max_seeds=0,  # No limit in non-vectorized path
             num_germinate_actions=num_germinate_actions,
-            seed_age_epochs=seed_age,
-            epoch=epoch,
-            plateau_epochs=signals.metrics.plateau_epochs,
-            host_stabilized=signal_tracker.is_stabilized,
         )
         action_mask = torch.tensor(action_mask_list, dtype=torch.float32, device=device)
 

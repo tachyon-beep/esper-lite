@@ -38,7 +38,7 @@ from esper.runtime import get_task_spec
 from esper.utils.data import SharedBatchIterator
 from esper.leyline import SeedStage, SeedTelemetry, TelemetryEvent, TelemetryEventType
 from esper.leyline.actions import get_blueprint_from_action, is_germinate_action
-from esper.simic.features import compute_action_mask
+from esper.simic.action_masks import build_slot_states, compute_flat_action_mask
 from esper.simic.gradient_collector import (
     collect_dual_gradients_async,
     materialize_dual_grad_stats,
@@ -975,18 +975,13 @@ def train_ppo_vectorized(
                 features = signals_to_features(signals, model, use_telemetry=use_telemetry, slots=slots)
                 all_features.append(features)
 
-                # Compute action mask based on current state
-                has_active = 1.0 if model.has_active_seed else 0.0
-                seed_stage = seed_state.stage.value if seed_state else 0
-                seed_age = seed_state.metrics.epochs_total if seed_state else 0
-                mask = compute_action_mask(
-                    has_active_seed=has_active,
-                    seed_stage=seed_stage,
+                # Compute action mask based on current state (physical constraints only)
+                slot_states = build_slot_states(model, [target_slot])
+                mask = compute_flat_action_mask(
+                    slot_states=slot_states,
+                    total_seeds=1 if model.has_active_seed else 0,
+                    max_seeds=0,  # Seed limits handled in reward function
                     num_germinate_actions=num_germinate_actions,
-                    seed_age_epochs=seed_age,
-                    epoch=signals.metrics.epoch,
-                    plateau_epochs=signals.metrics.plateau_epochs,
-                    host_stabilized=bool(signals.metrics.host_stabilized),
                 )
                 all_masks.append(mask)
 
