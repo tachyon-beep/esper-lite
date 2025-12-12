@@ -17,8 +17,8 @@ class TestBlueprintAnalyticsIntegration:
         hub = NissaHub()
         hub.add_backend(analytics)
 
-        # Create model with telemetry callback (create_model returns model with slots=["mid"])
-        model = create_model(device="cpu")
+        # Create model with telemetry callback
+        model = create_model(device="cpu", slots=["mid"])
 
         def callback(event: TelemetryEvent):
             event.data["env_id"] = 0

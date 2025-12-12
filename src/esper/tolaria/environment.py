@@ -17,7 +17,7 @@ def create_model(task: TaskSpec | str = "cifar10", device: str = "cuda", slots: 
     Args:
         task: Task specification or name.
         device: Target device for the model.
-        slots: Seed slots to enable. If None, defaults to ["mid"] for convenience.
+        slots: Seed slots to enable. Required and cannot be empty.
     """
     if isinstance(task, str):
         task_spec = get_task_spec(task)
@@ -30,7 +30,7 @@ def create_model(task: TaskSpec | str = "cifar10", device: str = "cuda", slots: 
             f"Use device='cpu' or check your CUDA installation."
         )
 
-    if slots is None:
-        slots = ["mid"]
+    if not slots:
+        raise ValueError("slots parameter is required and cannot be empty")
 
     return task_spec.create_model(device=device, slots=slots)

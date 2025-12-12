@@ -20,13 +20,13 @@ class TestEnvironment:
 
     def test_create_model_cpu(self):
         """Test model creation on CPU."""
-        model = create_model(device="cpu")
+        model = create_model(device="cpu", slots=["mid"])
         assert not next(model.parameters()).is_cuda
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
     def test_create_model_cuda(self):
         """Test model creation on CUDA."""
-        model = create_model(device="cuda")
+        model = create_model(device="cuda", slots=["mid"])
         assert next(model.parameters()).is_cuda
 
     def test_create_model_invalid_cuda_raises(self):
@@ -35,7 +35,7 @@ class TestEnvironment:
             pytest.skip("CUDA is available, cannot test error case")
 
         with pytest.raises(RuntimeError, match="CUDA.*not available"):
-            create_model(device="cuda")
+            create_model(device="cuda", slots=["mid"])
 
 
 class TestTrainer:
@@ -44,7 +44,7 @@ class TestTrainer:
     @pytest.fixture
     def model_and_loader(self):
         """Create model and minimal data loader for testing."""
-        model = create_model(device="cpu")
+        model = create_model(device="cpu", slots=["mid"])
         x = torch.randn(64, 3, 32, 32)
         y = torch.randint(0, 10, (64,))
         dataset = TensorDataset(x, y)
