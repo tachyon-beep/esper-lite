@@ -174,6 +174,8 @@ def main():
                 gpu_preload=args.gpu_preload,
                 telemetry_config=telemetry_config,
                 slots=args.slots,
+                max_seeds=args.max_seeds,
+                max_seeds_per_slot=args.max_seeds_per_slot,
             )
         else:
             from esper.simic.training import train_ppo

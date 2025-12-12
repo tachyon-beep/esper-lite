@@ -190,6 +190,8 @@ def train_ppo_vectorized(
     plateau_threshold: float = 0.5,
     improvement_threshold: float = 2.0,
     slots: list[str] | None = None,
+    max_seeds: int | None = None,
+    max_seeds_per_slot: int | None = None,
 ) -> tuple[PPOAgent, list[dict]]:
     """Train PPO with vectorized environments using INVERTED CONTROL FLOW.
 
