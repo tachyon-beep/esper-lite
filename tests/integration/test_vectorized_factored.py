@@ -17,6 +17,7 @@ class TestFactoredActionMasksInVectorized:
 
         masks = compute_action_masks(
             slot_states=slot_states,
+            target_slot="slot_0",
             total_seeds=0,
             max_seeds=0,
             device=torch.device("cpu"),
@@ -40,6 +41,7 @@ class TestFactoredActionMasksInVectorized:
             slot_states = {f"slot_{env_idx}": None}
             masks = compute_action_masks(
                 slot_states=slot_states,
+                target_slot=f"slot_{env_idx}",
                 total_seeds=0,
                 max_seeds=0,
                 device=torch.device("cpu"),

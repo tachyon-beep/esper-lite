@@ -87,7 +87,7 @@ def test_compute_action_masks_probationary_stage():
 
 
 def test_compute_action_masks_fossilized_stage():
-    """FOSSILIZED stage should not allow GERMINATE or FOSSILIZE."""
+    """FOSSILIZED stage should not allow GERMINATE, FOSSILIZE, or CULL."""
     slot_states = {
         "mid": MaskSeedInfo(
             stage=SeedStage.FOSSILIZED.value,
@@ -106,8 +106,8 @@ def test_compute_action_masks_fossilized_stage():
     # No FOSSILIZE (already fossilized)
     assert masks["op"][LifecycleOp.FOSSILIZE] == False
 
-    # CULL still valid (can remove fossilized seed)
-    assert masks["op"][LifecycleOp.CULL] == True
+    # No CULL - FOSSILIZED is terminal success, cannot be removed
+    assert masks["op"][LifecycleOp.CULL] == False
 
 
 def test_compute_action_masks_wait_always_valid():

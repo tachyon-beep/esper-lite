@@ -151,8 +151,8 @@ def test_action_masking_integration():
         "late": None,  # Empty
     }
 
-    # Compute masks (no target_slot needed)
-    masks_single = compute_action_masks(slot_states)
+    # Compute masks for the mid slot (where our seed is)
+    masks_single = compute_action_masks(slot_states, target_slot="mid")
 
     # Verify masks are correct (NUM_OPS=4 now: WAIT, GERMINATE, CULL, FOSSILIZE)
     assert masks_single["op"][LifecycleOp.WAIT] == True, "WAIT always valid"
@@ -340,7 +340,7 @@ def test_multislot_with_all_components_integrated():
         "mid": MaskSeedInfo(stage=SeedStage.TRAINING.value, seed_age_epochs=5),
         "late": None,
     }
-    masks_single = compute_action_masks(slot_states)
+    masks_single = compute_action_masks(slot_states, target_slot="mid")
     masks_batch = {k: v.unsqueeze(0) for k, v in masks_single.items()}
 
     # 7. Policy forward with masks

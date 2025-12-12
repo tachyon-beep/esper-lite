@@ -34,6 +34,18 @@ _FOSSILIZABLE_STAGES = frozenset({
     SeedStage.PROBATIONARY.value,
 })
 
+# Stages from which a seed can be culled
+# Derived as: active stages that have CULLED in VALID_TRANSITIONS
+# Equivalently: set(active_stages) - {FOSSILIZED} (terminal success)
+# See stages.py VALID_TRANSITIONS for authoritative source
+_CULLABLE_STAGES = frozenset({
+    SeedStage.GERMINATED.value,
+    SeedStage.TRAINING.value,
+    SeedStage.BLENDING.value,
+    SeedStage.PROBATIONARY.value,
+    # NOT FOSSILIZED - terminal success, no outgoing transitions
+})
+
 
 @dataclass(frozen=True, slots=True)
 class MaskSeedInfo:
@@ -131,8 +143,8 @@ def compute_action_masks(
         if stage in _FOSSILIZABLE_STAGES:
             op_mask[LifecycleOp.FOSSILIZE] = True
 
-        # CULL: only if seed age >= MIN_CULL_AGE
-        if age >= MIN_CULL_AGE:
+        # CULL: only from cullable stages AND if seed age >= MIN_CULL_AGE
+        if stage in _CULLABLE_STAGES and age >= MIN_CULL_AGE:
             op_mask[LifecycleOp.CULL] = True
 
     return {
