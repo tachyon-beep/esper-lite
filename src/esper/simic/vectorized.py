@@ -140,15 +140,16 @@ def _advance_active_seed(model, slots: list[str]) -> bool:
     if not model.has_active_seed:
         return False
 
-    seed_state = model.seed_slots[target_slot].state
+    slot = model.seed_slots[target_slot]
+    seed_state = slot.state
     current_stage = seed_state.stage
 
     # Tamiyo only finalizes; mechanical blending/advancement handled by Kasmina.
     # NOTE: Leyline VALID_TRANSITIONS only allow PROBATIONARY → FOSSILIZED.
     if current_stage == SeedStage.PROBATIONARY:
-        gate_result = model.seed_slots[target_slot].advance_stage(SeedStage.FOSSILIZED)
+        gate_result = slot.advance_stage(SeedStage.FOSSILIZED)
         if gate_result.passed:
-            model.seed_slots[target_slot].set_alpha(1.0)
+            slot.set_alpha(1.0)
             return True
         # Gate check failure is normal; reward shaping will penalize
         return False
@@ -438,13 +439,14 @@ def train_ppo_vectorized(
 
         # Wire telemetry callback with env_id injection - use first available slot
         first_slot = next(iter(model.seed_slots.keys()))
-        model.seed_slots[first_slot].on_telemetry = make_telemetry_callback(env_idx)
-        model.seed_slots[first_slot].fast_mode = False  # Enable telemetry
+        slot = model.seed_slots[first_slot]
+        slot.on_telemetry = make_telemetry_callback(env_idx)
+        slot.fast_mode = False  # Enable telemetry
         # Incubator mode gradient isolation: detach host input into the seed path so
         # host gradients remain identical to the host-only model while the seed
         # trickle-learns via STE in TRAINING. The host optimizer still steps
         # every batch; isolation only affects gradients through the seed branch.
-        model.seed_slots[first_slot].isolate_gradients = True
+        slot.isolate_gradients = True
 
         # Set host_params baseline for scoreboard via Nissa analytics
         host_params = sum(p.numel() for p in model.host.parameters() if p.requires_grad)

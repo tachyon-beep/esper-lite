@@ -229,13 +229,14 @@ def run_ppo_episode(
         event.data.setdefault("env_id", 0)
         hub.emit(event)
 
-    model.seed_slots[target_slot].on_telemetry = telemetry_callback
-    model.seed_slots[target_slot].fast_mode = False
+    slot = model.seed_slots[target_slot]
+    slot.on_telemetry = telemetry_callback
+    slot.fast_mode = False
     # Incubator mode gradient isolation: detach host input into the seed path so host
     # gradients match the baseline model while the seed trickle-learns via STE.
     # Host optimizer still steps every batch; isolation only affects gradients
     # flowing through the seed branch.
-    model.seed_slots[target_slot].isolate_gradients = True
+    slot.isolate_gradients = True
 
     criterion = nn.CrossEntropyLoss()
     host_optimizer = torch.optim.SGD(
@@ -401,10 +402,11 @@ def run_ppo_episode(
         elif action == ActionEnum.FOSSILIZE:
             # NOTE: Only PROBATIONARY → FOSSILIZED is a valid lifecycle transition.
             if model.has_active_seed and model.seed_slots[target_slot].state.stage == SeedStage.PROBATIONARY:
-                gate_result = model.seed_slots[target_slot].advance_stage(SeedStage.FOSSILIZED)
+                slot = model.seed_slots[target_slot]
+                gate_result = slot.advance_stage(SeedStage.FOSSILIZED)
                 if gate_result.passed:
                     params_added += model.active_seed_params
-                    model.seed_slots[target_slot].set_alpha(1.0)
+                    slot.set_alpha(1.0)
 
         elif action == ActionEnum.CULL:
             if model.has_active_seed:
@@ -633,9 +635,10 @@ def run_heuristic_episode(
         event.data.setdefault("env_id", 0)
         hub.emit(event)
 
-    model.seed_slots[target_slot].on_telemetry = telemetry_callback
-    model.seed_slots[target_slot].fast_mode = False
-    model.seed_slots[target_slot].isolate_gradients = True
+    slot = model.seed_slots[target_slot]
+    slot.on_telemetry = telemetry_callback
+    slot.fast_mode = False
+    slot.isolate_gradients = True
 
     criterion = nn.CrossEntropyLoss()
     host_optimizer = torch.optim.SGD(
@@ -772,10 +775,11 @@ def run_heuristic_episode(
 
         elif action.name == "FOSSILIZE":
             if model.has_active_seed and model.seed_slots[target_slot].state.stage == SeedStage.PROBATIONARY:
-                gate_result = model.seed_slots[target_slot].advance_stage(SeedStage.FOSSILIZED)
+                slot = model.seed_slots[target_slot]
+                gate_result = slot.advance_stage(SeedStage.FOSSILIZED)
                 if gate_result.passed:
                     params_added += model.active_seed_params
-                    model.seed_slots[target_slot].set_alpha(1.0)
+                    slot.set_alpha(1.0)
 
         elif action.name == "CULL":
             if model.has_active_seed:
