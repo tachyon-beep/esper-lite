@@ -198,6 +198,7 @@ def run_ppo_episode(
     collect_rollout: bool = True,
     deterministic: bool = False,
     slots: list[str] | None = None,
+    max_seeds: int = 0,
 ) -> tuple[float, dict[str, int], list[float]]:
     """Run a single training episode with the PPO agent."""
     from esper.leyline import SeedStage
@@ -355,15 +356,22 @@ def run_ppo_episode(
         # Get features and action BEFORE step_epoch() to maintain state/action alignment
         # The RL transition (s, a, r, s') must use consistent state for observation and reward
         # Note: tracker would provide DiagnosticTracker telemetry if available
-        features = signals_to_features(signals, model, use_telemetry=use_telemetry, slots=slots)
+        features = signals_to_features(
+            signals,
+            model,
+            use_telemetry=use_telemetry,
+            slots=slots,
+            total_seeds=model.count_active_seeds() if model else 0,
+            max_seeds=max_seeds,
+        )
         state = torch.tensor([features], dtype=torch.float32, device=device)
 
         # Compute action mask for valid actions (physical constraints only)
         slot_states = build_slot_states(model, [target_slot])
         action_mask_list = compute_flat_action_mask(
             slot_states=slot_states,
-            total_seeds=1 if model.has_active_seed else 0,
-            max_seeds=0,  # No limit in non-vectorized path
+            total_seeds=model.count_active_seeds() if model else 0,
+            max_seeds=max_seeds,
             num_germinate_actions=num_germinate_actions,
         )
         action_mask = torch.tensor(action_mask_list, dtype=torch.float32, device=device)
@@ -505,6 +513,10 @@ def train_ppo(
         device=device,
     )
 
+    # Compute effective seed limit
+    # max_seeds=None means unlimited (use 0 to indicate no limit)
+    effective_max_seeds = max_seeds if max_seeds is not None else 0
+
     history = []
     best_avg_acc = 0.0
     best_state = None
@@ -526,6 +538,7 @@ def train_ppo(
             collect_rollout=True,
             deterministic=False,
             slots=slots,
+            max_seeds=effective_max_seeds,
         )
 
         total_reward = sum(rewards)
