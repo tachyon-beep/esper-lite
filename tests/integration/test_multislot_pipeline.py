@@ -154,10 +154,9 @@ def test_action_masking_integration():
     # Compute masks (no target_slot needed)
     masks_single = compute_action_masks(slot_states)
 
-    # Verify masks are correct (NUM_OPS=5 now: WAIT, GERMINATE, ADVANCE, CULL, FOSSILIZE)
+    # Verify masks are correct (NUM_OPS=4 now: WAIT, GERMINATE, CULL, FOSSILIZE)
     assert masks_single["op"][LifecycleOp.WAIT] == True, "WAIT always valid"
     assert masks_single["op"][LifecycleOp.GERMINATE] == True, "Can GERMINATE (other slots empty)"
-    assert masks_single["op"][LifecycleOp.ADVANCE] == True, "Can ADVANCE in TRAINING"
     assert masks_single["op"][LifecycleOp.CULL] == True, "Can CULL (seed_age >= MIN_CULL_AGE)"
     assert masks_single["op"][LifecycleOp.FOSSILIZE] == False, "Can't FOSSILIZE (not PROBATIONARY)"
 
@@ -180,7 +179,6 @@ def test_action_masking_integration():
     # Note: GERMINATE is valid because other slots (early, late) are empty
     from esper.leyline.factored_actions import LifecycleOp
     assert (dists["op"].probs[:, LifecycleOp.GERMINATE] > 0).all(), "GERMINATE should be valid (empty slots)"
-    assert (dists["op"].probs[:, LifecycleOp.ADVANCE] > 0).all(), "ADVANCE should be valid"
     assert (dists["op"].probs[:, LifecycleOp.CULL] > 0).all(), "CULL should be valid"
     assert (dists["op"].probs[:, LifecycleOp.FOSSILIZE] == 0).all(), "FOSSILIZE should be masked (not PROBATIONARY)"
 
@@ -477,28 +475,28 @@ def test_multislot_batch_processing():
     assert masks["slot"].shape == (batch_size, 3)
     assert masks["blueprint"].shape == (batch_size, 5)
     assert masks["blend"].shape == (batch_size, 3)
-    assert masks["op"].shape == (batch_size, NUM_OPS)  # NUM_OPS=5
+    assert masks["op"].shape == (batch_size, NUM_OPS)  # NUM_OPS=4
 
     # Verify masks are different for even/odd indices
-    # Even: GERMINATE allowed (empty slots), ADVANCE allowed (has seed)
-    # Odd: GERMINATE allowed (empty slots), ADVANCE blocked (no seed)
+    # Even: has seed, CULL allowed
+    # Odd: empty slots, CULL blocked
     for i in range(batch_size):
         if i % 2 == 0:
             # Has seed in mid, empty slots in early/late
             assert masks["op"][i, LifecycleOp.GERMINATE] == True, "Can GERMINATE (empty slots)"
-            assert masks["op"][i, LifecycleOp.ADVANCE] == True, "Can ADVANCE (has seed in TRAINING)"
+            assert masks["op"][i, LifecycleOp.CULL] == True, "Can CULL (has seed in TRAINING)"
             assert masks["op"][i, LifecycleOp.FOSSILIZE] == False, "Can't FOSSILIZE (not PROBATIONARY)"
         else:
             # All slots empty
             assert masks["op"][i, LifecycleOp.GERMINATE] == True, "Can GERMINATE in empty slot"
-            assert masks["op"][i, LifecycleOp.ADVANCE] == False, "Can't ADVANCE in empty slot"
+            assert masks["op"][i, LifecycleOp.CULL] == False, "Can't CULL in empty slot"
 
     # Forward through network with batch masks
     policy = FactoredActorCritic(state_dim=MULTISLOT_FEATURE_SIZE)
     dists, values = policy(obs_batch, masks=masks)
 
     assert values.shape == (batch_size,)
-    assert dists["op"].probs.shape == (batch_size, NUM_OPS)  # NUM_OPS=5
+    assert dists["op"].probs.shape == (batch_size, NUM_OPS)  # NUM_OPS=4
 
     # Sample actions for entire batch
     actions, log_probs, action_values = policy.get_action_batch(obs_batch, masks=masks)
