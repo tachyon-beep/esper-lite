@@ -21,12 +21,16 @@ from esper.leyline.factored_actions import NUM_SLOTS, NUM_BLUEPRINTS, NUM_BLENDS
 def compute_action_masks(
     slot_states: dict[str, SeedInfo | None],
     target_slot: str | None = None,
+    total_seeds: int = 0,
+    max_seeds: int = 1,
 ) -> dict[str, torch.Tensor]:
     """Compute action masks based on slot states.
 
     Args:
         slot_states: Dict mapping slot_id to SeedInfo or None
         target_slot: If provided, compute op mask for this specific slot
+        total_seeds: Total number of seeds germinated so far
+        max_seeds: Maximum allowed seeds per epoch
 
     Returns:
         Dict of boolean tensors for each action head
@@ -68,6 +72,10 @@ def compute_action_masks(
         op_mask[2] = True   # ADVANCE
         op_mask[3] = True   # CULL
 
+    # Mask GERMINATE when at hard limit
+    if total_seeds >= max_seeds:
+        op_mask[1] = False  # GERMINATE
+
     masks["op"] = op_mask
 
     return masks
@@ -76,12 +84,16 @@ def compute_action_masks(
 def compute_batch_masks(
     batch_slot_states: list[dict[str, SeedInfo | None]],
     target_slots: list[str] | None = None,
+    total_seeds: list[int] | None = None,
+    max_seeds: int = 1,
 ) -> dict[str, torch.Tensor]:
     """Compute action masks for a batch of observations.
 
     Args:
         batch_slot_states: List of slot state dicts, one per env
         target_slots: Optional list of target slots per env
+        total_seeds: Optional list of total seeds per env
+        max_seeds: Maximum allowed seeds per epoch
 
     Returns:
         Dict of boolean tensors (batch_size, num_actions) for each head
@@ -96,6 +108,7 @@ def compute_batch_masks(
 
     for i, slot_states in enumerate(batch_slot_states):
         target_slot = target_slots[i] if target_slots else None
+        env_total_seeds = total_seeds[i] if total_seeds else 0
 
         if target_slot:
             seed_info = slot_states.get(target_slot)
@@ -107,6 +120,10 @@ def compute_batch_masks(
         else:
             op_masks[i, 2] = True   # ADVANCE
             op_masks[i, 3] = True   # CULL
+
+        # Mask GERMINATE when at hard limit
+        if env_total_seeds >= max_seeds:
+            op_masks[i, 1] = False  # GERMINATE
 
     return {
         "slot": slot_masks,
