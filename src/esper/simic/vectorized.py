@@ -37,8 +37,8 @@ import torch.nn as nn
 from esper.runtime import get_task_spec
 from esper.utils.data import SharedBatchIterator
 from esper.leyline import SeedStage, SeedTelemetry, TelemetryEvent, TelemetryEventType
-from esper.leyline.actions import get_blueprint_from_action, is_germinate_action
-from esper.simic.action_masks import build_slot_states, compute_flat_action_mask
+from esper.leyline.factored_actions import FactoredAction, LifecycleOp
+from esper.simic.action_masks import build_slot_states, compute_action_masks
 from esper.simic.gradient_collector import (
     collect_dual_gradients_async,
     materialize_dual_grad_stats,
@@ -233,6 +233,9 @@ def train_ppo_vectorized(
     if not slots:
         raise ValueError("slots parameter is required and cannot be empty")
 
+    if recurrent:
+        raise ValueError("recurrent=True is not compatible with factored actions (not yet implemented)")
+
     # Compute effective seed limit
     # max_seeds=None means unlimited (use 0 to indicate no limit)
     effective_max_seeds = max_seeds if max_seeds is not None else 0
@@ -411,9 +414,10 @@ def train_ppo_vectorized(
             entropy_anneal_steps=entropy_anneal_steps,
             gamma=gamma,
             device=device,
-            recurrent=recurrent,
+            recurrent=False,  # Recurrent mode not supported with factored actions
             lstm_hidden_dim=lstm_hidden_dim,
             chunk_length=chunk_length,
+            factored=True,  # Always use factored action space
         )
 
     # ==========================================================================
@@ -990,17 +994,21 @@ def train_ppo_vectorized(
 
                 # Compute action mask based on current state (physical constraints only)
                 slot_states = build_slot_states(model, [target_slot])
-                mask = compute_flat_action_mask(
+                mask = compute_action_masks(
                     slot_states=slot_states,
                     total_seeds=model.count_active_seeds() if model else 0,
                     max_seeds=effective_max_seeds,
-                    num_germinate_actions=num_germinate_actions,
+                    device=torch.device(device),
                 )
                 all_masks.append(mask)
 
             # Batch all states and masks into tensors
             states_batch = torch.tensor(all_features, dtype=torch.float32, device=device)
-            masks_batch = torch.tensor(all_masks, dtype=torch.float32, device=device)
+            # Stack dict masks into batched dict: {key: [n_envs, head_dim]}
+            masks_batch = {
+                key: torch.stack([m[key] for m in all_masks]).to(device)
+                for key in all_masks[0].keys()
+            }
 
             # Accumulate raw states for deferred normalizer update
             raw_states_for_normalizer_update.append(states_batch.detach())
@@ -1014,57 +1022,18 @@ def train_ppo_vectorized(
             states_batch_normalized = obs_normalizer.normalize(states_batch)
 
             # Get BATCHED actions from policy network with action masking (single forward pass!)
-            if recurrent:
-                # Collect and batch hidden states from all envs
-                hiddens_h = []
-                hiddens_c = []
-                for env_state in env_states:
-                    if env_state.lstm_hidden is None:
-                        h, c = agent.network.get_initial_hidden(1, device)
-                    else:
-                        h, c = env_state.lstm_hidden
-                    hiddens_h.append(h)
-                    hiddens_c.append(c)
-
-                # Batch hidden: [num_layers, n_envs, hidden]
-                batch_h = torch.cat(hiddens_h, dim=1)
-                batch_c = torch.cat(hiddens_c, dim=1)
-
-                # Batched forward (no per-env loop!)
-                with torch.inference_mode():
-                    dist, values, (new_h, new_c) = agent.network.forward(
-                        states_batch_normalized,
-                        masks_batch,
-                        hidden=(batch_h, batch_c),
-                    )
-                    actions = dist.sample()
-                    log_probs = dist.log_prob(actions)
-
-                # Store new hidden per-env
-                # CRITICAL: .clone() is essential to avoid memory retention
-                # - Slicing new_h[:, i:i+1, :] creates a VIEW into the batched tensor
-                # - Views keep the entire parent tensor alive, preventing garbage collection
-                # - .clone() creates an independent copy that allows the batch to be freed
-                # - .detach() is technically redundant under inference_mode but defensive
-                for i, env_state in enumerate(env_states):
-                    env_state.lstm_hidden = (
-                        new_h[:, i:i+1, :].detach().clone(),
-                        new_c[:, i:i+1, :].detach().clone(),
-                    )
-
-                # Convert to lists for existing loop
-                actions = actions.tolist()
-                log_probs = log_probs.tolist()
-                values = values.tolist()
-            else:
-                # Existing non-recurrent batched action selection
-                actions, log_probs, values = agent.network.get_action_batch(
-                    states_batch_normalized, masks_batch, deterministic=False
-                )
-                # Convert to Python lists to avoid per-element .item() syncs in loop below
-                actions = actions.tolist()
-                log_probs = log_probs.tolist()
-                values = values.tolist()
+            # Factored action selection - returns dict of actions per head
+            actions_dict, log_probs_tensor, values_tensor = agent.network.get_action_batch(
+                states_batch_normalized, masks_batch, deterministic=False
+            )
+            # Convert to list of dicts for per-env processing
+            # actions_dict is {key: [n_envs]} tensor -> list of {key: int}
+            actions = [
+                {key: actions_dict[key][i].item() for key in actions_dict}
+                for i in range(len(env_states))
+            ]
+            log_probs = log_probs_tensor.tolist()
+            values = values_tensor.tolist()
 
             # Execute actions and store transitions for each environment
             for env_idx, env_state in enumerate(env_states):
@@ -1074,12 +1043,22 @@ def train_ppo_vectorized(
                 signals = all_signals[env_idx]
 
                 # Now Python floats/ints - no GPU sync
-                action_idx = int(actions[env_idx])
                 log_prob = log_probs[env_idx]
                 value = values[env_idx]
 
-                action = ActionEnum(action_idx)
-                env_state.action_counts[action.name] += 1
+                # Parse factored action
+                action_dict = actions[env_idx]  # {slot: int, blueprint: int, blend: int, op: int}
+                factored_action = FactoredAction.from_indices(
+                    slot_idx=action_dict["slot"],
+                    blueprint_idx=action_dict["blueprint"],
+                    blend_idx=action_dict["blend"],
+                    op_idx=action_dict["op"],
+                )
+                # Use op name for action counting
+                env_state.action_counts[factored_action.op.name] = env_state.action_counts.get(factored_action.op.name, 0) + 1
+                # For reward computation, use LifecycleOp (IntEnum compatible)
+                action_for_reward = factored_action.op
+
                 action_success = False
 
                 # Governor rollback: execute if this env panicked
@@ -1116,7 +1095,7 @@ def train_ppo_vectorized(
                 reward_components = None
                 if collect_reward_telemetry:
                     reward, reward_components = compute_contribution_reward(
-                        action=action,
+                        action=action_for_reward,
                         seed_contribution=seed_contribution,
                         val_acc=env_state.val_acc,
                         seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
@@ -1134,7 +1113,7 @@ def train_ppo_vectorized(
                         reward_components.host_baseline_acc = baseline_accs[env_idx]
                 else:
                     reward = compute_contribution_reward(
-                        action=action,
+                        action=action_for_reward,
                         seed_contribution=seed_contribution,
                         val_acc=env_state.val_acc,
                         seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
@@ -1154,49 +1133,42 @@ def train_ppo_vectorized(
                     reward += punishment
                     print(f"  [ENV {env_idx}] Punishment reward: {punishment:.1f} (final reward: {reward:.1f})")
 
-                # Execute action
-                if is_germinate_action(action):
+                # Execute action using FactoredAction properties
+                if factored_action.is_germinate:
                     if not model.has_active_seed:
-                        # Record baseline accuracy for ransomware-resistant reward
                         env_state.acc_at_germination = env_state.val_acc
-                        blueprint_id = get_blueprint_from_action(action)
+                        blueprint_id = factored_action.blueprint_id
                         seed_id = f"env{env_idx}_seed_{env_state.seeds_created}"
                         model.germinate_seed(blueprint_id, seed_id, slot=target_slot)
                         env_state.seeds_created += 1
                         env_state.seed_optimizer = None
                         action_success = True
 
-                elif action == ActionEnum.FOSSILIZE:
-                    # Capture total_improvement BEFORE state transition
+                elif factored_action.is_fossilize:
                     seed_total_improvement = (
                         seed_state.metrics.total_improvement
                         if seed_state and seed_state.metrics else 0.0
                     )
                     action_success = _advance_active_seed(model, slots)
                     if action_success:
-                        # Track fossilization for terminal bonus calculation
                         env_state.seeds_fossilized += 1
-                        # Only count as "contributing" if meets MIN_FOSSILIZE_CONTRIBUTION threshold
-                        # This aligns with G5 gate and prevents terminal bonus for bad fossilizations
                         if seed_total_improvement >= MIN_FOSSILIZE_CONTRIBUTION:
                             env_state.contributing_fossilized += 1
-                        # Seed is permanent now, clear germination baseline
                         env_state.acc_at_germination = None
 
-                elif action == ActionEnum.CULL:
+                elif factored_action.is_cull:
                     if model.has_active_seed:
                         model.cull_seed(slot=target_slot)
                         env_state.seed_optimizer = None
-                        # Reset germination baseline on cull
                         env_state.acc_at_germination = None
                         action_success = True
 
                 else:
-                    # WAIT or any other no-op action always "succeeds"
+                    # WAIT always succeeds
                     action_success = True
 
                 if action_success:
-                    env_state.successful_action_counts[action.name] += 1
+                    env_state.successful_action_counts[factored_action.op.name] = env_state.successful_action_counts.get(factored_action.op.name, 0) + 1
 
                 # Emit reward telemetry if collecting (after action execution so we have action_success)
                 if reward_components is not None:
@@ -1225,36 +1197,19 @@ def train_ppo_vectorized(
                 truncated = done  # All episodes end at max_epochs (time limit truncation)
                 bootstrap_value = value if truncated else 0.0  # Bootstrap from V(s_final) for truncation
 
-                if recurrent:
-                    agent.store_recurrent_transition(
-                        state=states_batch_normalized[env_idx],
-                        action=action_idx,
-                        log_prob=log_prob,
-                        value=value,
-                        reward=normalized_reward,
-                        done=done,
-                        action_mask=masks_batch[env_idx],
-                        env_id=env_idx,
-                        truncated=truncated,
-                        bootstrap_value=bootstrap_value,
-                    )
-                else:
-                    agent.store_transition(
-                        states_batch_normalized[env_idx],
-                        action_idx,
-                        log_prob,
-                        value,
-                        normalized_reward,  # Use normalized reward for critic training
-                        done,
-                        masks_batch[env_idx],
-                        truncated=truncated,
-                        bootstrap_value=bootstrap_value,
-                    )
-
-                # Handle episode boundaries for recurrent policy
-                if done and recurrent:
-                    agent.recurrent_buffer.end_episode(env_id=env_idx)
-                    env_state.lstm_hidden = None  # Reset for next episode
+                # Store factored transition with per-head masks
+                env_masks = {key: masks_batch[key][env_idx] for key in masks_batch}
+                agent.store_factored_transition(
+                    state=states_batch_normalized[env_idx],
+                    action=action_dict,
+                    log_prob=log_prob,
+                    value=value,
+                    reward=normalized_reward,
+                    done=done,
+                    action_masks=env_masks,
+                    truncated=truncated,
+                    bootstrap_value=bootstrap_value,
+                )
 
                 env_state.episode_rewards.append(raw_reward)  # Display raw for interpretability
 
@@ -1283,39 +1238,12 @@ def train_ppo_vectorized(
         # a different model state - training on them would cause distribution shift.
         # Clear the buffer and skip this PPO update.
         if batch_rollback_occurred:
-            if recurrent:
-                agent.recurrent_buffer.clear()
-            else:
-                agent.buffer.clear()
+            agent.factored_buffer.clear()
             print("[PPO] Buffer cleared due to Governor rollback - skipping update")
         else:
-            if recurrent:
-                # Single epoch for recurrent to avoid hidden state drift
-                # (Multiple epochs would cause ratio bias as policy changes between epochs)
-                update_metrics = agent.update_recurrent(n_epochs=1)
-                metrics = update_metrics
-            else:
-                for update_i in range(ppo_updates_per_batch):
-                    is_last_update = (update_i == ppo_updates_per_batch - 1)
-                    update_metrics = agent.update(
-                        last_value=0.0,
-                        clear_buffer=is_last_update,
-                        telemetry_config=telemetry_config,
-                        current_episode=episodes_completed,
-                        total_episodes=total_episodes,
-                    )
-                    if update_i == 0:
-                        metrics = update_metrics
-                    else:
-                        # Aggregate metrics across updates (average)
-                        for k, v in update_metrics.items():
-                            if k in metrics:
-                                metrics[k] = (metrics[k] + v) / 2
-                            else:
-                                metrics[k] = v
-                    # Early exit if KL triggered early stopping
-                    if update_metrics.get('early_stopped'):
-                        break
+            # Factored mode: use update_factored with factored buffer
+            update_metrics = agent.update_factored(last_value=0.0)
+            metrics = update_metrics
 
             # NOW update the observation normalizer with all raw states from this batch.
             # This ensures the next batch will use updated statistics, but all states

@@ -208,62 +208,10 @@ def compute_batch_masks(
     }
 
 
-def compute_flat_action_mask(
-    slot_states: dict[str, MaskSeedInfo | None],
-    total_seeds: int = 0,
-    max_seeds: int = 0,
-    num_germinate_actions: int = 5,
-) -> list[float]:
-    """Convert per-head masks to flat mask for existing Action enum.
-
-    Bridge function to support existing ActorCritic with flat action space
-    while using physical-constraint-only masking logic.
-
-    Flat Action enum layout:
-        0: WAIT
-        1-N: GERMINATE_* (N = num_germinate_actions, default 5)
-        N+1: FOSSILIZE
-        N+2: CULL
-
-    Args:
-        slot_states: Dict mapping slot_id to MaskSeedInfo or None
-        total_seeds: Total number of active seeds across all slots
-        max_seeds: Maximum allowed seeds (0 = unlimited)
-        num_germinate_actions: Number of germinate variants in flat action space
-
-    Returns:
-        List of floats (1.0 = valid, 0.0 = invalid) matching flat Action enum
-    """
-    # Get per-head masks
-    masks = compute_action_masks(slot_states, total_seeds, max_seeds)
-    op_mask = masks["op"]
-
-    # Build flat mask
-    # Action indices: WAIT=0, GERMINATE_*=1..N, FOSSILIZE=N+1, CULL=N+2
-    flat_mask = [0.0] * (num_germinate_actions + 3)  # WAIT + germinates + FOSSILIZE + CULL
-
-    # WAIT (flat 0) = op WAIT (head 0)
-    flat_mask[0] = 1.0 if op_mask[LifecycleOp.WAIT].item() else 0.0
-
-    # GERMINATE_* (flat 1..N) = op GERMINATE (head 1)
-    germinate_valid = 1.0 if op_mask[LifecycleOp.GERMINATE].item() else 0.0
-    for i in range(1, num_germinate_actions + 1):
-        flat_mask[i] = germinate_valid
-
-    # FOSSILIZE (flat N+1) = op FOSSILIZE (head 4)
-    flat_mask[num_germinate_actions + 1] = 1.0 if op_mask[LifecycleOp.FOSSILIZE].item() else 0.0
-
-    # CULL (flat N+2) = op CULL (head 3)
-    flat_mask[num_germinate_actions + 2] = 1.0 if op_mask[LifecycleOp.CULL].item() else 0.0
-
-    return flat_mask
-
-
 __all__ = [
     "MaskSeedInfo",
     "build_slot_states",
     "compute_action_masks",
     "compute_batch_masks",
-    "compute_flat_action_mask",
     "MIN_CULL_AGE",
 ]

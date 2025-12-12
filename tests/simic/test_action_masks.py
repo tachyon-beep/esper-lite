@@ -14,7 +14,6 @@ from esper.simic.action_masks import (
     MaskSeedInfo,
     compute_action_masks,
     compute_batch_masks,
-    compute_flat_action_mask,
     MIN_CULL_AGE,
 )
 from esper.leyline import SeedStage
@@ -337,101 +336,6 @@ def test_min_cull_age_constant():
     assert MIN_CULL_AGE == 1
 
 
-# =============================================================================
-# Tests for compute_flat_action_mask (bridge to flat Action enum)
-# =============================================================================
-
-
-def test_compute_flat_action_mask_empty_slots():
-    """Flat mask should allow WAIT and all GERMINATE variants when slots empty."""
-    slot_states = {
-        "early": None,
-        "mid": None,
-        "late": None,
-    }
-
-    # Default 5 germinate variants: WAIT=0, GERM_*=1-5, FOSSILIZE=6, CULL=7
-    mask = compute_flat_action_mask(slot_states, num_germinate_actions=5)
-
-    # Should be list of 8 floats
-    assert len(mask) == 8  # WAIT + 5 germinates + FOSSILIZE + CULL
-    assert mask[0] == 1.0  # WAIT
-    assert mask[1] == 1.0  # GERMINATE_NORM
-    assert mask[2] == 1.0  # GERMINATE_ATTENTION
-    assert mask[3] == 1.0  # GERMINATE_DEPTHWISE
-    assert mask[4] == 1.0  # GERMINATE_CONV_LIGHT
-    assert mask[5] == 1.0  # GERMINATE_CONV_HEAVY
-    assert mask[6] == 0.0  # FOSSILIZE (no seed to fossilize)
-    assert mask[7] == 0.0  # CULL (no seed to cull)
-
-
-def test_compute_flat_action_mask_active_training_seed():
-    """Flat mask should block GERMINATE and FOSSILIZE when seed in TRAINING."""
-    slot_states = {
-        "early": None,
-        "mid": MaskSeedInfo(
-            stage=SeedStage.TRAINING.value,
-            seed_age_epochs=5,
-        ),
-        "late": None,
-    }
-
-    mask = compute_flat_action_mask(slot_states, num_germinate_actions=5)
-
-    assert len(mask) == 8
-    assert mask[0] == 1.0  # WAIT - always valid
-    # GERMINATE - blocked because slot has active seed (in this single-slot model)
-    # Note: compute_flat_action_mask passes total_seeds=1 when has_active_seed
-    # But we pass total_seeds=0 here, so GERMINATE should be allowed based on slot emptiness
-    # Wait, let me re-read compute_flat_action_mask...
-    # Actually the slot_states dict has MaskSeedInfo in "mid", so:
-    # has_empty_slot = True (early and late are None)
-    # So GERMINATE is allowed
-    assert mask[1] == 1.0  # GERMINATE_NORM (empty slots available)
-    assert mask[6] == 0.0  # FOSSILIZE (TRAINING != PROBATIONARY)
-    assert mask[7] == 1.0  # CULL (seed_age 5 >= MIN_CULL_AGE 1)
-
-
-def test_compute_flat_action_mask_probationary_seed():
-    """Flat mask should allow FOSSILIZE when seed is PROBATIONARY."""
-    slot_states = {
-        "early": None,
-        "mid": MaskSeedInfo(
-            stage=SeedStage.PROBATIONARY.value,
-            seed_age_epochs=10,
-        ),
-        "late": None,
-    }
-
-    mask = compute_flat_action_mask(slot_states, num_germinate_actions=5)
-
-    assert mask[0] == 1.0  # WAIT
-    assert mask[1] == 1.0  # GERMINATE (empty slots)
-    assert mask[6] == 1.0  # FOSSILIZE (PROBATIONARY stage)
-    assert mask[7] == 1.0  # CULL (seed_age >= MIN_CULL_AGE)
-
-
-def test_compute_flat_action_mask_at_seed_limit():
-    """Flat mask should block GERMINATE when at seed limit."""
-    slot_states = {
-        "early": None,
-        "mid": None,
-        "late": None,
-    }
-
-    mask = compute_flat_action_mask(
-        slot_states,
-        total_seeds=10,
-        max_seeds=10,
-        num_germinate_actions=5,
-    )
-
-    assert mask[0] == 1.0  # WAIT - always valid
-    # All GERMINATE variants should be blocked
-    for i in range(1, 6):
-        assert mask[i] == 0.0, f"GERMINATE_{i} should be blocked at seed limit"
-    assert mask[6] == 0.0  # FOSSILIZE (no seed)
-    assert mask[7] == 0.0  # CULL (no seed)
 
 
 # =============================================================================

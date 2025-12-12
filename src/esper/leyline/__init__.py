@@ -4,7 +4,8 @@ Leyline defines the data contracts that flow between all Esper components.
 Import from here for the public API.
 
 Example:
-    from esper.leyline import Action, SeedStage, TrainingSignals
+    from esper.leyline import SeedStage, TrainingSignals
+    from esper.leyline.factored_actions import FactoredAction, LifecycleOp
 """
 
 # Version
@@ -28,13 +29,8 @@ MIN_PROBATION_EPOCHS = 5
 DEFAULT_MAX_SEEDS = None           # Global limit across all slots
 DEFAULT_MAX_SEEDS_PER_SLOT = None  # Per-slot limit
 
-# Actions
-from esper.leyline.actions import (
-    Action,
-    build_action_enum,
-    get_blueprint_from_action,
-    is_germinate_action,
-)
+# Actions (build_action_enum used by HeuristicTamiyo for flat action mapping)
+from esper.leyline.actions import build_action_enum
 
 # Stages and transitions
 from esper.leyline.stages import (
@@ -95,11 +91,8 @@ __all__ = [
     "DEFAULT_MAX_SEEDS",
     "DEFAULT_MAX_SEEDS_PER_SLOT",
 
-    # Actions
-    "Action",
+    # Actions (build_action_enum used by HeuristicTamiyo)
     "build_action_enum",
-    "get_blueprint_from_action",
-    "is_germinate_action",
 
     # Stages
     "SeedStage",

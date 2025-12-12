@@ -10,15 +10,15 @@ import random
 import torch
 import torch.nn as nn
 
-from esper.leyline.actions import get_blueprint_from_action, is_germinate_action
 from esper.leyline import SeedTelemetry
+from esper.leyline.factored_actions import FactoredAction, LifecycleOp
 from esper.runtime import get_task_spec
 from esper.simic.rewards import compute_contribution_reward, SeedInfo
 from esper.simic.gradient_collector import (
     collect_seed_gradients_async,
     materialize_grad_stats,
 )
-from esper.simic.action_masks import build_slot_states, compute_flat_action_mask
+from esper.simic.action_masks import build_slot_states, compute_action_masks
 from esper.nissa import get_hub
 from esper.utils.loss import compute_task_loss_with_metrics
 
@@ -208,7 +208,6 @@ def run_ppo_episode(
 
     if task_spec is None:
         task_spec = get_task_spec("cifar10")
-    ActionEnum = task_spec.action_enum
     task_type = task_spec.task_type
 
     torch.manual_seed(base_seed)
@@ -248,15 +247,13 @@ def run_ppo_episode(
 
     seeds_created = 0
     seed_created_epoch = 0  # Track when current seed was created for age computation
-    action_counts = {a.name: 0 for a in ActionEnum}
+    # Track ops by LifecycleOp enum value
+    action_counts = {op.name: 0 for op in LifecycleOp}
     episode_rewards = []
 
     # Track host params and added params for compute rent
     host_params = sum(p.numel() for p in model.get_host_parameters() if p.requires_grad)
     params_added = 0  # Accumulates when seeds are fossilized
-
-    # Number of germinate actions for action mask computation
-    num_germinate_actions = len([a for a in ActionEnum if a.name.startswith("GERMINATE_")])
 
     for epoch in range(1, max_epochs + 1):
         seed_state = model.seed_slots[target_slot].state if model.has_active_seed else None
@@ -368,22 +365,34 @@ def run_ppo_episode(
 
         # Compute action mask for valid actions (physical constraints only)
         slot_states = build_slot_states(model, [target_slot])
-        action_mask_list = compute_flat_action_mask(
+        masks = compute_action_masks(
             slot_states=slot_states,
             total_seeds=model.count_active_seeds() if model else 0,
             max_seeds=max_seeds,
-            num_germinate_actions=num_germinate_actions,
+            device=torch.device(device),
         )
-        action_mask = torch.tensor(action_mask_list, dtype=torch.float32, device=device)
 
-        action_idx, log_prob, value, _ = agent.get_action(state, action_mask, deterministic=deterministic)
-        action = ActionEnum(action_idx)
-        action_counts[action.name] += 1
+        # Get factored action from agent
+        action_dict, log_prob, value = agent.network.get_action_batch(
+            state,
+            {k: v.unsqueeze(0) for k, v in masks.items()},  # Add batch dim
+            deterministic=deterministic,
+        )
+        # Extract single action from batch
+        factored_action = FactoredAction.from_indices(
+            slot_idx=action_dict["slot"][0].item(),
+            blueprint_idx=action_dict["blueprint"][0].item(),
+            blend_idx=action_dict["blend"][0].item(),
+            op_idx=action_dict["op"][0].item(),
+        )
+        log_prob = log_prob[0].item()
+        value = value[0].item()
+        action_counts[factored_action.op.name] += 1
 
         # Compute total params for rent (fossilized + active)
         total_params = params_added + model.active_seed_params
         reward = compute_contribution_reward(
-            action=action,
+            action=factored_action.op,  # Pass the LifecycleOp enum
             seed_contribution=None,  # No counterfactual in non-vectorized path
             val_acc=val_acc,
             seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
@@ -394,17 +403,17 @@ def run_ppo_episode(
             acc_delta=acc_delta,  # Used as proxy signal
         )
 
-        # Execute action
-        if is_germinate_action(action):
+        # Execute action using FactoredAction properties
+        if factored_action.is_germinate:
             if not model.has_active_seed:
-                blueprint_id = get_blueprint_from_action(action)
+                blueprint_id = factored_action.blueprint_id
                 seed_id = f"seed_{seeds_created}"
                 model.germinate_seed(blueprint_id, seed_id, slot=target_slot)
                 seeds_created += 1
                 seed_created_epoch = epoch  # Track when seed was created for age computation
                 seed_optimizer = None
 
-        elif action == ActionEnum.FOSSILIZE:
+        elif factored_action.is_fossilize:
             # NOTE: Only PROBATIONARY → FOSSILIZED is a valid lifecycle transition.
             if model.has_active_seed and model.seed_slots[target_slot].state.stage == SeedStage.PROBATIONARY:
                 slot = model.seed_slots[target_slot]
@@ -413,7 +422,7 @@ def run_ppo_episode(
                     params_added += model.active_seed_params
                     slot.set_alpha(1.0)
 
-        elif action == ActionEnum.CULL:
+        elif factored_action.is_cull:
             if model.has_active_seed:
                 model.cull_seed(slot=target_slot)
                 seed_optimizer = None
@@ -423,14 +432,21 @@ def run_ppo_episode(
         bootstrap_value = value if truncated else 0.0  # Bootstrap from V(s_final) for truncation
 
         if collect_rollout:
-            agent.store_transition(
-                state.squeeze(0).cpu(),
-                action_idx,
-                log_prob,
-                value,
-                reward,
-                done,
-                action_mask.cpu(),
+            # Build action dict for factored storage
+            action_dict_for_storage = {
+                "slot": action_dict["slot"][0].item(),
+                "blueprint": action_dict["blueprint"][0].item(),
+                "blend": action_dict["blend"][0].item(),
+                "op": action_dict["op"][0].item(),
+            }
+            agent.store_factored_transition(
+                state=state.squeeze(0).cpu(),
+                action=action_dict_for_storage,
+                log_prob=log_prob,
+                value=value,
+                reward=reward,
+                done=done,
+                action_masks={k: v.cpu() for k, v in masks.items()},
                 truncated=truncated,
                 bootstrap_value=bootstrap_value,
             )
@@ -476,9 +492,9 @@ def train_ppo(
     """Train PPO agent."""
     from esper.simic.ppo import PPOAgent
     from esper.utils import load_cifar10
+    from esper.simic.features import MULTISLOT_FEATURE_SIZE
 
     task_spec = get_task_spec(task)
-    ActionEnum = task_spec.action_enum
 
     print("=" * 60)
     print("PPO Training for Tamiyo")
@@ -488,9 +504,8 @@ def train_ppo(
     print(f"Device: {device}, Telemetry: {use_telemetry}")
 
     trainloader, testloader = task_spec.create_dataloaders()
-    # State dimension: 35 base features + 10 telemetry features if enabled
-    BASE_FEATURE_DIM = 35
-    state_dim = BASE_FEATURE_DIM + (SeedTelemetry.feature_dim() if use_telemetry else 0)
+    # State dimension uses MULTISLOT_FEATURE_SIZE for factored actions
+    state_dim = MULTISLOT_FEATURE_SIZE
 
     # Convert episode-based annealing to step-based
     # CRITICAL: Non-vectorized training only updates every `update_every` episodes
@@ -500,7 +515,6 @@ def train_ppo(
 
     agent = PPOAgent(
         state_dim=state_dim,
-        action_dim=len(ActionEnum),
         lr=lr,
         clip_ratio=clip_ratio,
         entropy_coef=entropy_coef,
@@ -511,6 +525,7 @@ def train_ppo(
         entropy_anneal_steps=entropy_anneal_steps,
         gamma=gamma,
         device=device,
+        factored=True,  # Use factored action space
     )
 
     # Compute effective seed limit
@@ -550,12 +565,7 @@ def train_ppo(
             recent_rewards.pop(0)
 
         if ep % update_every == 0 or ep == n_episodes:
-            metrics = agent.update(
-                last_value=0.0,
-                telemetry_config=telemetry_config,
-                current_episode=ep,
-                total_episodes=n_episodes,
-            )
+            metrics = agent.update_factored(last_value=0.0)
 
             avg_acc = sum(recent_accuracies) / len(recent_accuracies)
             avg_reward = sum(recent_rewards) / len(recent_rewards)
@@ -596,6 +606,53 @@ def train_ppo(
 # Heuristic Training
 # =============================================================================
 
+def _convert_flat_to_factored(action, topology: str = "cnn") -> FactoredAction:
+    """Convert flat action enum to FactoredAction for heuristic path.
+
+    Maps flat action names to factored action components.
+    """
+    from esper.leyline.factored_actions import (
+        LifecycleOp,
+        BLUEPRINT_IDS,
+        BLEND_IDS,
+        SLOT_IDS,
+    )
+
+    action_name = action.name
+
+    if action_name.startswith("GERMINATE_"):
+        # Extract blueprint from action name like "GERMINATE_BOTTLENECK"
+        blueprint_name = action_name.replace("GERMINATE_", "").lower()
+        blueprint_idx = BLUEPRINT_IDS.index(blueprint_name) if blueprint_name in BLUEPRINT_IDS else 0
+        return FactoredAction.from_indices(
+            slot_idx=0,  # Default to first slot
+            blueprint_idx=blueprint_idx,
+            blend_idx=0,  # Default blend
+            op_idx=LifecycleOp.GERMINATE,
+        )
+    elif action_name == "FOSSILIZE":
+        return FactoredAction.from_indices(
+            slot_idx=0,
+            blueprint_idx=0,
+            blend_idx=0,
+            op_idx=LifecycleOp.FOSSILIZE,
+        )
+    elif action_name == "CULL":
+        return FactoredAction.from_indices(
+            slot_idx=0,
+            blueprint_idx=0,
+            blend_idx=0,
+            op_idx=LifecycleOp.CULL,
+        )
+    else:  # WAIT or unknown
+        return FactoredAction.from_indices(
+            slot_idx=0,
+            blueprint_idx=0,
+            blend_idx=0,
+            op_idx=LifecycleOp.WAIT,
+        )
+
+
 def run_heuristic_episode(
     policy,
     trainloader,
@@ -628,7 +685,6 @@ def run_heuristic_episode(
 
     if task_spec is None:
         task_spec = get_task_spec("cifar10")
-    ActionEnum = task_spec.action_enum
     task_type = task_spec.task_type
 
     torch.manual_seed(base_seed)
@@ -660,7 +716,8 @@ def run_heuristic_episode(
     signal_tracker = SignalTracker()
 
     seeds_created = 0
-    action_counts = {a.name: 0 for a in ActionEnum}
+    # Track ops by LifecycleOp enum value
+    action_counts = {op.name: 0 for op in LifecycleOp}
     episode_rewards = []
 
     host_params = sum(p.numel() for p in model.get_host_parameters() if p.requires_grad)
@@ -754,15 +811,16 @@ def run_heuristic_episode(
             model.seed_slots[target_slot].step_epoch()
         seed_state = model.seed_slots[target_slot].state if model.has_active_seed else None
 
-        # Get heuristic decision
+        # Get heuristic decision and convert to factored action
         decision = policy.decide(signals, active_seeds)
-        action = decision.action
-        action_counts[action.name] += 1
+        flat_action = decision.action
+        factored_action = _convert_flat_to_factored(flat_action, task_spec.topology)
+        action_counts[factored_action.op.name] += 1
 
         # Compute reward (for comparison with PPO)
         total_params = params_added + model.active_seed_params
         reward = compute_contribution_reward(
-            action=action,
+            action=factored_action.op,  # Pass the LifecycleOp enum
             seed_contribution=None,  # No counterfactual in heuristic path
             val_acc=val_acc,
             seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
@@ -774,10 +832,10 @@ def run_heuristic_episode(
         )
         episode_rewards.append(reward)
 
-        # Execute action
-        if is_germinate_action(action):
+        # Execute action using FactoredAction properties
+        if factored_action.is_germinate:
             if not model.has_active_seed:
-                blueprint_id = get_blueprint_from_action(action)
+                blueprint_id = factored_action.blueprint_id
                 seed_id = f"seed_{seeds_created}"
                 model.germinate_seed(blueprint_id, seed_id, slot=target_slot)
                 seeds_created += 1
@@ -785,7 +843,7 @@ def run_heuristic_episode(
                     model.get_seed_parameters(), lr=task_spec.seed_lr, momentum=0.9
                 )
 
-        elif action.name == "FOSSILIZE":
+        elif factored_action.is_fossilize:
             if model.has_active_seed and model.seed_slots[target_slot].state.stage == SeedStage.PROBATIONARY:
                 slot = model.seed_slots[target_slot]
                 gate_result = slot.advance_stage(SeedStage.FOSSILIZED)
@@ -793,7 +851,7 @@ def run_heuristic_episode(
                     params_added += model.active_seed_params
                     slot.set_alpha(1.0)
 
-        elif action.name == "CULL":
+        elif factored_action.is_cull:
             if model.has_active_seed:
                 model.cull_seed(slot=target_slot)
                 seed_optimizer = None
@@ -801,7 +859,7 @@ def run_heuristic_episode(
         # Print progress every 10 epochs
         if epoch % 10 == 0 or epoch == max_epochs:
             seed_info = f"seed={seed_state.stage.name}" if seed_state else "no seed"
-            print(f"  Epoch {epoch:3d}/{max_epochs}: acc={val_acc:.1f}%, {seed_info}, action={action.name}")
+            print(f"  Epoch {epoch:3d}/{max_epochs}: acc={val_acc:.1f}%, {seed_info}, action={factored_action.op.name}")
 
     return val_acc, action_counts, episode_rewards
 

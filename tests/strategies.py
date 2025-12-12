@@ -376,7 +376,7 @@ def full_episodes(draw, num_steps: int | None = None):
         Episode with DecisionPoints and StepOutcomes
     """
     from esper.simic.episodes import Episode, DecisionPoint, StepOutcome, ActionTaken
-    from esper.leyline import Action
+    from esper.leyline.factored_actions import LifecycleOp
 
     if num_steps is None:
         num_steps = draw(st.integers(min_value=1, max_value=10))
@@ -387,7 +387,8 @@ def full_episodes(draw, num_steps: int | None = None):
         # Generate consistent state transition
         snapshot_before = draw(training_snapshots())
 
-        action = draw(st.sampled_from(list(Action)))
+        # Use LifecycleOp enum (factored action space)
+        action = draw(st.sampled_from(list(LifecycleOp)))
         action_taken = ActionTaken(
             action=action,
             confidence=draw(probabilities()),

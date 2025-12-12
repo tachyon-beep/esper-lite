@@ -3,8 +3,9 @@ import pytest
 import torch
 
 from esper.simic.ppo import signals_to_features
-from esper.simic.action_masks import compute_flat_action_mask
+from esper.simic.action_masks import compute_action_masks
 from esper.simic.features import MULTISLOT_FEATURE_SIZE
+from esper.leyline.factored_actions import LifecycleOp
 
 
 class TestMaxSeedsWiring:
@@ -54,23 +55,18 @@ class TestMaxSeedsWiring:
 
     def test_germinate_masked_at_limit(self):
         """Verify GERMINATE is masked when at seed limit."""
-        from esper.simic.action_masks import MaskSeedInfo
-        from esper.leyline import SeedStage
-
         # No active seed (empty slot)
         slot_states = {"mid": None}
 
         # At limit: 3 seeds out of 3 max
-        mask = compute_flat_action_mask(
+        masks = compute_action_masks(
             slot_states=slot_states,
             total_seeds=3,
             max_seeds=3,
-            num_germinate_actions=5,
         )
 
-        # GERMINATE actions (indices 1-5) should all be masked (0.0)
-        for i in range(1, 6):
-            assert mask[i] == 0.0, f"GERMINATE action {i} should be masked at seed limit"
+        # GERMINATE op should be masked (False)
+        assert masks["op"][LifecycleOp.GERMINATE].item() is False, "GERMINATE should be masked at seed limit"
 
     def test_germinate_allowed_under_limit(self):
         """Verify GERMINATE is allowed when under seed limit."""
@@ -78,30 +74,26 @@ class TestMaxSeedsWiring:
         slot_states = {"mid": None}
 
         # Under limit: 2 seeds out of 3 max
-        mask = compute_flat_action_mask(
+        masks = compute_action_masks(
             slot_states=slot_states,
             total_seeds=2,
             max_seeds=3,
-            num_germinate_actions=5,
         )
 
-        # GERMINATE actions (indices 1-5) should be allowed (1.0)
-        for i in range(1, 6):
-            assert mask[i] == 1.0, f"GERMINATE action {i} should be allowed under limit"
+        # GERMINATE op should be allowed (True)
+        assert masks["op"][LifecycleOp.GERMINATE].item() is True, "GERMINATE should be allowed under limit"
 
     def test_unlimited_seeds_when_max_zero(self):
-        """Verify max_seeds=0 means unlimited (legacy behavior)."""
+        """Verify max_seeds=0 means unlimited."""
         # No active seed (empty slot)
         slot_states = {"mid": None}
 
         # max_seeds=0 means unlimited
-        mask = compute_flat_action_mask(
+        masks = compute_action_masks(
             slot_states=slot_states,
             total_seeds=100,  # Many seeds
             max_seeds=0,      # Unlimited
-            num_germinate_actions=5,
         )
 
         # GERMINATE should still be allowed (slot is empty)
-        for i in range(1, 6):
-            assert mask[i] == 1.0, f"GERMINATE should be allowed with max_seeds=0"
+        assert masks["op"][LifecycleOp.GERMINATE].item() is True, "GERMINATE should be allowed with max_seeds=0"

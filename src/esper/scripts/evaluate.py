@@ -28,7 +28,19 @@ import torch.nn as nn
 from esper.runtime import TaskSpec, get_task_spec
 from esper.utils.loss import compute_task_loss_with_metrics
 from esper.leyline import SeedStage
-from esper.leyline.actions import get_blueprint_from_action, is_germinate_action
+
+
+def _is_germinate_action(action) -> bool:
+    """Check if action is a germinate action (by name convention)."""
+    return action.name.startswith("GERMINATE_")
+
+
+def _get_blueprint_from_action(action) -> str | None:
+    """Get blueprint name from a germinate action."""
+    name = action.name
+    if name.startswith("GERMINATE_"):
+        return name[len("GERMINATE_"):].lower()
+    return None
 
 
 def get_active_seed_state(model):
@@ -387,9 +399,9 @@ def run_diagnostic_episode(
         record.steps.append(step)
 
         # Execute action
-        if is_germinate_action(action):
+        if _is_germinate_action(action):
             if not model.has_active_seed:
-                blueprint_id = get_blueprint_from_action(action)
+                blueprint_id = _get_blueprint_from_action(action)
                 seed_id = f"seed_{record.seeds_created}"
                 model.germinate_seed(blueprint_id, seed_id, slot=target_slot)
                 record.seeds_created += 1

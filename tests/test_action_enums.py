@@ -3,6 +3,14 @@
 from enum import IntEnum
 
 
+def _get_blueprint_from_action(action) -> str | None:
+    """Get blueprint name from a germinate action (local helper)."""
+    name = action.name
+    if name.startswith("GERMINATE_"):
+        return name[len("GERMINATE_"):].lower()
+    return None
+
+
 def test_build_action_enum_cnn():
     """build_action_enum creates CNN action enum."""
     from esper.leyline.actions import build_action_enum
@@ -50,13 +58,13 @@ def test_action_enum_cull_is_last():
 
 def test_get_blueprint_from_action():
     """Can get blueprint name from germinate action."""
-    from esper.leyline.actions import build_action_enum, get_blueprint_from_action
+    from esper.leyline.actions import build_action_enum
 
     Action = build_action_enum("cnn")
 
-    blueprint = get_blueprint_from_action(Action.GERMINATE_NORM)
+    blueprint = _get_blueprint_from_action(Action.GERMINATE_NORM)
     assert blueprint == "norm"
 
-    assert get_blueprint_from_action(Action.WAIT) is None
-    assert get_blueprint_from_action(Action.FOSSILIZE) is None
-    assert get_blueprint_from_action(Action.CULL) is None
+    assert _get_blueprint_from_action(Action.WAIT) is None
+    assert _get_blueprint_from_action(Action.FOSSILIZE) is None
+    assert _get_blueprint_from_action(Action.CULL) is None

@@ -14,9 +14,6 @@ the Tamiyo seed lifecycle controller:
 - vectorized: Multi-GPU training
 """
 
-# Actions
-from esper.leyline import Action
-
 # Core data structures
 from esper.simic.episodes import (
     TrainingSnapshot,
@@ -114,9 +111,6 @@ from esper.simic.anomaly_detector import (
 #   from esper.simic.vectorized import train_ppo_vectorized
 
 __all__ = [
-    # Actions
-    "Action",
-
     # Episodes
     "TrainingSnapshot",
     "ActionTaken",

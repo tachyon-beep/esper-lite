@@ -36,8 +36,20 @@ _logger = logging.getLogger(__name__)
 
 from esper.leyline import SeedStage, MIN_CULL_AGE, MIN_PROBATION_EPOCHS
 from esper.kasmina.slot import MIN_FOSSILIZE_CONTRIBUTION
-from esper.leyline.actions import is_germinate_action
+from esper.leyline.factored_actions import LifecycleOp
 from esper.simic.reward_telemetry import RewardComponentsTelemetry
+
+
+def _is_germinate_action(action) -> bool:
+    """Check if action is a germinate action.
+
+    Handles both LifecycleOp (factored) and flat action enums (heuristic baseline).
+    """
+    # Factored action: LifecycleOp.GERMINATE
+    if isinstance(action, LifecycleOp):
+        return action == LifecycleOp.GERMINATE
+    # Flat action: action.name starts with "GERMINATE_"
+    return action.name.startswith("GERMINATE_")
 
 
 # =============================================================================
@@ -576,7 +588,7 @@ def compute_contribution_reward(
     action_shaping = 0.0
     # action_name already computed above for FOSSILIZE attribution override
 
-    if is_germinate_action(action):
+    if _is_germinate_action(action):
         if seed_info is not None:
             action_shaping += config.germinate_with_seed_penalty
         else:
@@ -938,7 +950,7 @@ def get_intervention_cost(action: IntEnum) -> float:
     Small negative costs discourage unnecessary interventions,
     encouraging the agent to only act when beneficial.
     """
-    if is_germinate_action(action):
+    if _is_germinate_action(action):
         return GERMINATE_INTERVENTION_COST
     return INTERVENTION_COSTS_BY_NAME.get(action.name, 0.0)
 
