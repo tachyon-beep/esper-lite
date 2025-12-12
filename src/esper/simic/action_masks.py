@@ -157,14 +157,19 @@ def compute_action_masks(
 
 def compute_batch_masks(
     batch_slot_states: list[dict[str, MaskSeedInfo | None]],
+    target_slots: list[str],
     total_seeds_list: list[int] | None = None,
     max_seeds: int = 0,
     device: torch.device | None = None,
 ) -> dict[str, torch.Tensor]:
     """Compute action masks for a batch of observations.
 
+    Delegates to compute_action_masks for each env, then stacks results.
+    This ensures single source of truth for masking logic.
+
     Args:
         batch_slot_states: List of slot state dicts, one per env
+        target_slots: List of target slot IDs per env (REQUIRED)
         total_seeds_list: List of total seeds per env (None = all 0)
         max_seeds: Maximum allowed seeds (0 = unlimited)
         device: Torch device for tensors
@@ -173,48 +178,23 @@ def compute_batch_masks(
         Dict of boolean tensors (batch_size, num_actions) for each head
     """
     device = device or torch.device("cpu")
-    batch_size = len(batch_slot_states)
 
-    slot_masks = torch.ones(batch_size, NUM_SLOTS, dtype=torch.bool, device=device)
-    blueprint_masks = torch.ones(batch_size, NUM_BLUEPRINTS, dtype=torch.bool, device=device)
-    blend_masks = torch.ones(batch_size, NUM_BLENDS, dtype=torch.bool, device=device)
-    op_masks = torch.zeros(batch_size, NUM_OPS, dtype=torch.bool, device=device)
-    op_masks[:, LifecycleOp.WAIT] = True  # WAIT always valid
+    # Delegate to compute_action_masks for each env
+    masks_list = [
+        compute_action_masks(
+            slot_states=slot_states,
+            target_slot=target_slots[i],
+            total_seeds=total_seeds_list[i] if total_seeds_list else 0,
+            max_seeds=max_seeds,
+            device=device,
+        )
+        for i, slot_states in enumerate(batch_slot_states)
+    ]
 
-    for i, slot_states in enumerate(batch_slot_states):
-        env_total_seeds = total_seeds_list[i] if total_seeds_list else 0
-
-        has_empty_slot = False
-        active_seed_info: MaskSeedInfo | None = None
-
-        for info in slot_states.values():
-            if info is None:
-                has_empty_slot = True
-            elif active_seed_info is None:
-                active_seed_info = info
-
-        # GERMINATE
-        if has_empty_slot:
-            seed_limit_reached = max_seeds > 0 and env_total_seeds >= max_seeds
-            if not seed_limit_reached:
-                op_masks[i, LifecycleOp.GERMINATE] = True
-
-        # FOSSILIZE/CULL
-        if active_seed_info is not None:
-            stage = active_seed_info.stage
-            age = active_seed_info.seed_age_epochs
-
-            if stage in _FOSSILIZABLE_STAGES:
-                op_masks[i, LifecycleOp.FOSSILIZE] = True
-
-            if age >= MIN_CULL_AGE:
-                op_masks[i, LifecycleOp.CULL] = True
-
+    # Stack into batch tensors
     return {
-        "slot": slot_masks,
-        "blueprint": blueprint_masks,
-        "blend": blend_masks,
-        "op": op_masks,
+        key: torch.stack([m[key] for m in masks_list])
+        for key in masks_list[0]
     }
 
 

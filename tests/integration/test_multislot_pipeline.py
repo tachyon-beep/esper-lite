@@ -471,7 +471,8 @@ def test_multislot_batch_processing():
             })
 
     # Compute batch masks
-    masks = compute_batch_masks(batch_slot_states)
+    target_slots = ["mid"] * batch_size
+    masks = compute_batch_masks(batch_slot_states, target_slots=target_slots)
     assert masks["slot"].shape == (batch_size, 3)
     assert masks["blueprint"].shape == (batch_size, 5)
     assert masks["blend"].shape == (batch_size, 3)

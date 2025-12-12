@@ -176,7 +176,7 @@ def test_compute_batch_masks():
         },
     ]
 
-    masks = compute_batch_masks(batch_slot_states)
+    masks = compute_batch_masks(batch_slot_states, target_slots=["mid", "mid"])
 
     # Check shapes (NUM_OPS=4 now)
     assert masks["slot"].shape == (2, 3)
@@ -287,8 +287,9 @@ def test_compute_batch_masks_with_seed_limits():
 
     masks = compute_batch_masks(
         batch_slot_states,
+        target_slots=["mid", "mid", "mid"],
         total_seeds_list=[5, 10, 15],
-        max_seeds=10
+        max_seeds=10,
     )
 
     # Env 0: under limit, can GERMINATE
@@ -313,7 +314,7 @@ def test_compute_batch_masks_seed_limit_default():
     ]
 
     # No total_seeds_list provided - should default to 0
-    masks = compute_batch_masks(batch_slot_states, max_seeds=10)
+    masks = compute_batch_masks(batch_slot_states, target_slots=["mid"], max_seeds=10)
 
     # Should allow GERMINATE (0 < 10)
     assert masks["op"][0, LifecycleOp.GERMINATE] == True
@@ -415,6 +416,54 @@ def test_compute_action_masks_target_slot_required():
     with pytest.raises(TypeError):
         compute_action_masks(slot_states)  # Missing target_slot
 
+
+# =============================================================================
+# Tests for compute_batch_masks with target_slots (P1-001, P1-002 continued)
+# =============================================================================
+
+
+def test_compute_batch_masks_with_target_slots():
+    """Batch masks should respect per-env target slots."""
+    batch_slot_states = [
+        # Env 0: mid is TRAINING, target mid
+        {
+            "early": None,
+            "mid": MaskSeedInfo(stage=SeedStage.TRAINING.value, seed_age_epochs=5),
+        },
+        # Env 1: mid is PROBATIONARY, target mid
+        {
+            "early": None,
+            "mid": MaskSeedInfo(stage=SeedStage.PROBATIONARY.value, seed_age_epochs=5),
+        },
+        # Env 2: mid is FOSSILIZED, target mid
+        {
+            "early": None,
+            "mid": MaskSeedInfo(stage=SeedStage.FOSSILIZED.value, seed_age_epochs=20),
+        },
+    ]
+    target_slots = ["mid", "mid", "mid"]
+
+    masks = compute_batch_masks(batch_slot_states, target_slots=target_slots)
+
+    # Env 0: TRAINING - can CULL, not FOSSILIZE
+    assert masks["op"][0, LifecycleOp.CULL] == True
+    assert masks["op"][0, LifecycleOp.FOSSILIZE] == False
+
+    # Env 1: PROBATIONARY - can CULL and FOSSILIZE
+    assert masks["op"][1, LifecycleOp.CULL] == True
+    assert masks["op"][1, LifecycleOp.FOSSILIZE] == True
+
+    # Env 2: FOSSILIZED - cannot CULL or FOSSILIZE
+    assert masks["op"][2, LifecycleOp.CULL] == False
+    assert masks["op"][2, LifecycleOp.FOSSILIZE] == False
+
+
+def test_compute_batch_masks_target_slots_required():
+    """target_slots is required - raises TypeError if not provided."""
+    batch_slot_states = [{"mid": None}]
+
+    with pytest.raises(TypeError):
+        compute_batch_masks(batch_slot_states)  # Missing target_slots
 
 
 

@@ -16,6 +16,23 @@ from esper.leyline.factored_actions import NUM_SLOTS, NUM_BLUEPRINTS, NUM_BLENDS
 from esper.simic.networks import InvalidStateMachineError
 
 
+@torch.compiler.disable
+def _validate_factored_masks(masks: dict[str, torch.Tensor]) -> None:
+    """Validate factored action masks have at least one valid action per head per env.
+
+    Isolated from torch.compile to prevent graph breaks in the main forward path.
+    The .any() call forces CPU sync, but this safety check is worth the cost.
+    """
+    for key, mask in masks.items():
+        valid_per_env = mask.any(dim=-1)
+        if not valid_per_env.all():
+            invalid_envs = (~valid_per_env).nonzero(as_tuple=True)[0]
+            raise InvalidStateMachineError(
+                f"All actions masked for '{key}' head in env {invalid_envs[0].item()}. "
+                f"This indicates a bug in mask computation."
+            )
+
+
 class FactoredActorCritic(nn.Module):
     """Actor-Critic with factored action heads.
 
@@ -130,15 +147,7 @@ class FactoredActorCritic(nn.Module):
                 op_logits = op_logits.masked_fill(~masks["op"], mask_value)
 
             # Validate masks - at least one action must be valid per head per env
-            for key, mask in masks.items():
-                # Check each env in batch
-                valid_per_env = mask.any(dim=-1)  # (batch,)
-                if not valid_per_env.all():
-                    invalid_envs = (~valid_per_env).nonzero(as_tuple=True)[0]
-                    raise InvalidStateMachineError(
-                        f"All actions masked for '{key}' head in env {invalid_envs[0].item()}. "
-                        f"This indicates a bug in mask computation."
-                    )
+            _validate_factored_masks(masks)
 
         dists = {
             "slot": Categorical(logits=slot_logits),
