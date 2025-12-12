@@ -14,9 +14,9 @@ LEYLINE_VERSION = "0.2.0"
 # Lifecycle Constants (shared across simic modules)
 # =============================================================================
 
-# Minimum seed age before CULL is allowed (structural fix for uninformed culls)
-# 10 epochs gives enough signal to evaluate seed quality
-MIN_CULL_AGE = 10
+# Minimum seed age before CULL is allowed (need at least one counterfactual measurement)
+# Reduced from 10 to 1: let agent LEARN optimal timing via rewards, not hard masks
+MIN_CULL_AGE = 1
 
 # Epochs needed for confident seed quality assessment
 FULL_EVALUATION_AGE = 10

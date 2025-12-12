@@ -32,9 +32,13 @@ class BlueprintAction(IntEnum):
     DEPTHWISE = 4
 
     def to_blueprint_id(self) -> str | None:
+        """Map to registered blueprint name.
+
+        CONV_ENHANCE maps to "conv_light" (the registered blueprint).
+        """
         mapping = {
             0: "noop",
-            1: "conv_enhance",
+            1: "conv_light",  # CONV_ENHANCE → conv_light (registered name)
             2: "attention",
             3: "norm",
             4: "depthwise",
@@ -58,6 +62,7 @@ class LifecycleOp(IntEnum):
     GERMINATE = 1
     ADVANCE = 2
     CULL = 3
+    FOSSILIZE = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +84,10 @@ class FactoredAction:
     @property
     def is_cull(self) -> bool:
         return self.op == LifecycleOp.CULL
+
+    @property
+    def is_fossilize(self) -> bool:
+        return self.op == LifecycleOp.FOSSILIZE
 
     @property
     def is_wait(self) -> bool:

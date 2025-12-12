@@ -35,6 +35,8 @@ def test_lifecycle_op_enum():
     assert LifecycleOp.GERMINATE.value == 1
     assert LifecycleOp.ADVANCE.value == 2
     assert LifecycleOp.CULL.value == 3
+    assert LifecycleOp.FOSSILIZE.value == 4
+    assert len(LifecycleOp) == 5
 
 
 def test_factored_action_composition():
@@ -53,4 +55,37 @@ def test_factored_action_composition():
     assert action.slot == SlotAction.MID
     assert action.blueprint == BlueprintAction.CONV_ENHANCE
     assert action.is_germinate
-    assert action.blueprint_id == "conv_enhance"
+    # CONV_ENHANCE maps to "conv_light" (the registered blueprint name)
+    assert action.blueprint_id == "conv_light"
+
+
+def test_factored_action_execution_properties():
+    """FactoredAction properties should provide everything needed for execution."""
+    from esper.leyline.factored_actions import (
+        FactoredAction, SlotAction, BlueprintAction, BlendAction, LifecycleOp,
+    )
+
+    # GERMINATE action has all info for execution
+    germ = FactoredAction(SlotAction.EARLY, BlueprintAction.CONV_ENHANCE, BlendAction.SIGMOID, LifecycleOp.GERMINATE)
+    assert germ.is_germinate
+    assert germ.slot_id == "early"
+    assert germ.blueprint_id == "conv_light"  # CONV_ENHANCE maps to registered name
+    assert germ.blend_algorithm_id == "sigmoid"
+
+    # CULL action
+    cull = FactoredAction(SlotAction.MID, BlueprintAction.NOOP, BlendAction.LINEAR, LifecycleOp.CULL)
+    assert cull.is_cull
+    assert cull.slot_id == "mid"
+
+    # FOSSILIZE action
+    fossilize = FactoredAction(SlotAction.LATE, BlueprintAction.NOOP, BlendAction.LINEAR, LifecycleOp.FOSSILIZE)
+    assert fossilize.is_fossilize
+    assert fossilize.slot_id == "late"
+
+    # WAIT action
+    wait = FactoredAction(SlotAction.MID, BlueprintAction.NOOP, BlendAction.LINEAR, LifecycleOp.WAIT)
+    assert wait.is_wait
+
+    # ADVANCE action (mechanical, maps to wait in execution)
+    advance = FactoredAction(SlotAction.MID, BlueprintAction.NOOP, BlendAction.LINEAR, LifecycleOp.ADVANCE)
+    assert advance.is_advance

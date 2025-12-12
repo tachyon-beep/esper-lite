@@ -12,6 +12,8 @@ import torch
 import torch.nn as nn
 from torch.distributions import Categorical
 
+from esper.leyline.factored_actions import NUM_SLOTS, NUM_BLUEPRINTS, NUM_BLENDS, NUM_OPS
+
 
 class FactoredActorCritic(nn.Module):
     """Actor-Critic with factored action heads.
@@ -26,10 +28,10 @@ class FactoredActorCritic(nn.Module):
     def __init__(
         self,
         state_dim: int,
-        num_slots: int = 3,
-        num_blueprints: int = 5,
-        num_blends: int = 3,
-        num_ops: int = 4,
+        num_slots: int = NUM_SLOTS,
+        num_blueprints: int = NUM_BLUEPRINTS,
+        num_blends: int = NUM_BLENDS,
+        num_ops: int = NUM_OPS,
         hidden_dim: int = 256,
     ):
         super().__init__()
