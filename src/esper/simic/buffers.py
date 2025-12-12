@@ -577,34 +577,39 @@ class FactoredRolloutBuffer:
         """
         n = len(self.steps)
 
-        # Create tensors on device
-        rewards = torch.tensor([t.reward for t in self.steps], device=device)
-        values = torch.tensor([t.value for t in self.steps], device=device)
+        with torch.no_grad():
+            # Create tensors on device
+            rewards = torch.tensor(
+                [t.reward for t in self.steps], dtype=torch.float32, device=device
+            )
+            values = torch.tensor(
+                [t.value for t in self.steps], dtype=torch.float32, device=device
+            )
 
-        returns = torch.zeros(n, device=device)
-        advantages = torch.zeros(n, device=device)
+            returns = torch.zeros(n, dtype=torch.float32, device=device)
+            advantages = torch.zeros(n, dtype=torch.float32, device=device)
 
-        # GAE computation (reversed)
-        next_value = last_value
-        next_advantage = 0.0
+            # GAE computation (reversed)
+            next_value = last_value
+            next_advantage = 0.0
 
-        for i in reversed(range(n)):
-            step = self.steps[i]
+            for i in reversed(range(n)):
+                step = self.steps[i]
 
-            # CRITICAL: Reset at episode boundaries
-            if step.done:
-                if step.truncated:
-                    next_value = step.bootstrap_value
-                else:
-                    next_value = 0.0
-                next_advantage = 0.0  # Reset GAE chain
+                # CRITICAL: Reset at episode boundaries
+                if step.done:
+                    if step.truncated:
+                        next_value = step.bootstrap_value
+                    else:
+                        next_value = 0.0
+                    next_advantage = 0.0  # Reset GAE chain
 
-            delta = rewards[i] + gamma * next_value - values[i]
-            advantages[i] = delta + gamma * gae_lambda * next_advantage
-            returns[i] = advantages[i] + values[i]
+                delta = rewards[i] + gamma * next_value - values[i]
+                advantages[i] = delta + gamma * gae_lambda * next_advantage
+                returns[i] = advantages[i] + values[i]
 
-            next_value = values[i].item()
-            next_advantage = advantages[i].item()
+                next_value = values[i].item()
+                next_advantage = advantages[i].item()
 
         return returns, advantages
 
