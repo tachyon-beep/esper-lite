@@ -595,7 +595,6 @@ class MorphogeneticModel(nn.Module):
 
     def count_fossilized_seeds(self) -> int:
         """Count fossilized seeds across all slots."""
-        from esper.leyline import SeedStage
         return sum(
             1 for s in self.seed_slots.values()
             if s.state and s.state.stage == SeedStage.FOSSILIZED
@@ -611,7 +610,6 @@ class MorphogeneticModel(nn.Module):
         if s.is_active:
             return 1
         if s.state:
-            from esper.leyline import SeedStage
             if s.state.stage == SeedStage.FOSSILIZED:
                 return 1
         return 0
