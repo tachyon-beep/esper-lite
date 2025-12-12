@@ -462,6 +462,8 @@ def train_ppo(
     seed: int | None = None,
     telemetry_config: "TelemetryConfig | None" = None,
     slots: list[str] | None = None,
+    max_seeds: int | None = None,
+    max_seeds_per_slot: int | None = None,
 ):
     """Train PPO agent."""
     from esper.simic.ppo import PPOAgent

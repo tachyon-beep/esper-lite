@@ -196,6 +196,8 @@ def main():
                 seed=args.seed,
                 telemetry_config=telemetry_config,
                 slots=args.slots,
+                max_seeds=args.max_seeds,
+                max_seeds_per_slot=args.max_seeds_per_slot,
             )
 
 if __name__ == "__main__":
