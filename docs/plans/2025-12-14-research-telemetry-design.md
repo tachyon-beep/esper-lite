@@ -85,6 +85,7 @@ class EpisodeContext:
     # Training config
     max_epochs: int
     task_type: str               # "classification" / "lm"
+    reward_mode: str             # "shaped" / "sparse" / "minimal"
     hyperparameters: dict        # lr, batch_size, etc.
 
 
@@ -549,6 +550,7 @@ class MorphogeneticAnalytics:
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  KARN · MORPHOGENETIC TRAINING MONITOR             Epoch 47/100 │
+│  Mode: SHAPED                                                   │
 ├─────────────────────────────────────────────────────────────────┤
 │  ACCURACY        67.2% (+4.9% vs host-only)              ✓ WIN │
 │  PARAM RATIO     1.23x host params                             │
