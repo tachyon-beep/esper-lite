@@ -354,11 +354,11 @@ class PPOAgent:
         action, log_prob, value, _ = self.network.get_action(state, action_mask, deterministic)
         return action, log_prob, value
 
-    def update_tamiyo(
+    def update(
         self,
         clear_buffer: bool = True,
     ) -> dict:
-        """PPO update for Tamiyo (factored + recurrent).
+        """PPO update (factored + recurrent).
 
         Uses per-head advantages with causal masking and LSTM hidden states.
 
@@ -368,17 +368,17 @@ class PPOAgent:
         Returns:
             Dict of training metrics
         """
-        if len(self.tamiyo_buffer) == 0:
+        if len(self.buffer) == 0:
             return {}
 
         # Compute GAE per-environment (fixes P0 bug)
-        self.tamiyo_buffer.compute_advantages_and_returns(
+        self.buffer.compute_advantages_and_returns(
             gamma=self.gamma, gae_lambda=self.gae_lambda
         )
-        self.tamiyo_buffer.normalize_advantages()
+        self.buffer.normalize_advantages()
 
         # Get batched data
-        data = self.tamiyo_buffer.get_batched_sequences(device=self.device)
+        data = self.buffer.get_batched_sequences(device=self.device)
         valid_mask = data["valid_mask"]
 
         # Compute explained variance before updates
@@ -493,342 +493,13 @@ class PPOAgent:
         self.train_steps += 1
 
         if clear_buffer:
-            self.tamiyo_buffer.reset()
+            self.buffer.reset()
 
         # Aggregate
         result = {}
         for k, v in metrics.items():
             result[k] = sum(v) / len(v) if v else 0.0
 
-        return result
-
-    def update(
-        self,
-        last_value: float = 0.0,
-        clear_buffer: bool = True,
-        telemetry_config: "TelemetryConfig | None" = None,
-        current_episode: int = 0,
-        total_episodes: int = 0,
-    ) -> dict:
-        """Perform PPO update.
-
-        Args:
-            last_value: Value estimate for bootstrapping (0.0 for terminal states)
-            clear_buffer: Whether to clear the rollout buffer after update.
-                Set to False if calling multiple times on the same data
-                (e.g., for higher sample efficiency via ppo_updates_per_batch).
-            telemetry_config: Optional telemetry configuration for diagnostic collection.
-                If None, creates default TelemetryConfig(level=TelemetryLevel.NORMAL).
-            current_episode: Current episode number for phase-dependent anomaly thresholds.
-            total_episodes: Total configured episodes for phase detection.
-
-        Returns:
-            Dictionary of training metrics.
-        """
-        from esper.simic.telemetry_config import TelemetryConfig, TelemetryLevel
-
-        if telemetry_config is None:
-            telemetry_config = TelemetryConfig(level=TelemetryLevel.NORMAL)
-        if len(self.buffer) == 0:
-            return {}
-
-        # Compute returns and advantages directly on device (avoids CPU->GPU transfer)
-        returns, advantages = self.buffer.compute_returns_and_advantages(
-            last_value, self.gamma, self.gae_lambda, device=self.device
-        )
-
-        # Compute explained variance for value function diagnostics
-        # Uses values from buffer before any updates
-        values_tensor = torch.tensor(
-            [t.value for t in self.buffer.steps],
-            device=self.device,
-        )
-        var_returns = returns.var()
-        if var_returns > 1e-8:
-            explained_variance = 1.0 - (returns - values_tensor).var() / var_returns
-            explained_variance = explained_variance.item()
-        else:
-            explained_variance = 0.0
-
-        metrics = defaultdict(list)
-        metrics['explained_variance'] = [explained_variance]  # Single value, not per-batch
-        flags = {}  # Non-list metrics (boolean flags)
-        early_stopped = False
-
-        # Normalize advantages once over full buffer (before batching)
-        # This prevents per-batch normalization variance in gradient updates
-        # Store pre-normalization stats for stability diagnostics (BEFORE normalization)
-        advantages_prenorm_mean = advantages.mean()
-        advantages_prenorm_std = advantages.std()
-
-        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-
-        # === Value Function Diagnostics (DRL Expert recommendations) ===
-        # Compute all stats as a single tensor for batched extraction (fewer CPU syncs)
-        # [PyTorch Expert] Cast to float32 for stable statistics under mixed precision
-        with torch.no_grad():
-            v = values_tensor.float() if values_tensor.dtype != torch.float32 else values_tensor
-            r = returns.float() if returns.dtype != torch.float32 else returns
-
-            value_stats = torch.stack([
-                v.mean(),
-                v.std(),
-                r.mean(),
-                r.std(),
-                r.min(),
-                r.max(),
-                F.mse_loss(v, r),  # Critic error before update
-                advantages_prenorm_mean,  # Pre-normalization (critical for stability debugging)
-                advantages_prenorm_std,   # If very small, normalization amplifies noise
-            ])
-
-        # Single CPU sync to extract all values
-        stats_list = value_stats.tolist()
-
-        metrics['value_pred_mean'] = [stats_list[0]]
-        metrics['value_pred_std'] = [stats_list[1]]
-        metrics['return_mean'] = [stats_list[2]]
-        metrics['return_std'] = [stats_list[3]]
-        metrics['return_min'] = [stats_list[4]]
-        metrics['return_max'] = [stats_list[5]]
-        metrics['value_mse_before'] = [stats_list[6]]
-        metrics['advantage_mean_prenorm'] = [stats_list[7]]
-        metrics['advantage_std_prenorm'] = [stats_list[8]]
-
-        # [DRL Expert] Warn when advantage std is very low - normalization amplifies noise
-        if stats_list[8] < 0.1:
-            logger.warning(
-                f"Very low advantage std ({stats_list[8]:.4f}) before normalization. "
-                f"Normalization may amplify noise. Consider reducing gamma or checking reward scale."
-            )
-
-        # === AUTO-ESCALATION: Check for anomalies and escalate if needed ===
-        from esper.simic.anomaly_detector import AnomalyDetector
-        from esper.simic.debug_telemetry import RatioExplosionDiagnostic
-
-        anomaly_detector = AnomalyDetector()
-        anomaly_detected = False
-        ratio_diagnostic: RatioExplosionDiagnostic | None = None
-
-        for epoch_i in range(self.n_epochs):
-            if early_stopped:
-                break
-
-            batches = self.buffer.get_batches(self.batch_size, self.device)
-            epoch_kl_sum = 0.0
-            epoch_kl_count = 0
-
-            for batch, batch_idx in batches:
-                states = batch['states']
-                actions = batch['actions']
-                old_log_probs = batch['old_log_probs']
-                old_values = batch['values']
-                action_masks = batch['action_masks']
-                batch_returns = returns[batch_idx]  # Already on device
-                batch_advantages = advantages[batch_idx]  # Already on device (pre-normalized)
-
-                log_probs, values, entropy = self.network.evaluate_actions(states, actions, action_masks)
-
-                # PPO-Clip loss
-                ratio = torch.exp(log_probs - old_log_probs)
-
-                # Check ratio for numerical issues - single fused kernel
-                # isfinite() combines isnan + isinf into one kernel, all() is single reduction
-                if not torch.isfinite(ratio).all():
-                    flags['ratio_has_numerical_issue'] = True
-                    # Debug breakdown only when telemetry requests it (avoids extra syncs)
-                    if telemetry_config.should_collect("debug"):
-                        flags['ratio_has_nan'] = torch.isnan(ratio).any().item()
-                        flags['ratio_has_inf'] = torch.isinf(ratio).any().item()
-
-                # Track ratio statistics for telemetry (single sync for all 4 stats)
-                ratio_stats = torch.stack([ratio.mean(), ratio.std(), ratio.max(), ratio.min()])
-                r_mean, r_std, r_max, r_min = ratio_stats.tolist()
-                metrics['ratio_mean'].append(r_mean)
-                metrics['ratio_std'].append(r_std)
-                metrics['ratio_max'].append(r_max)
-                metrics['ratio_min'].append(r_min)
-
-                # Collect ratio explosion diagnostic when thresholds exceeded
-                # Only collect first occurrence to capture the triggering batch
-                if ratio_diagnostic is None:
-                    if r_max > anomaly_detector.max_ratio_threshold or r_min < anomaly_detector.min_ratio_threshold:
-                        ratio_diagnostic = RatioExplosionDiagnostic.from_batch(
-                            ratio=ratio,
-                            old_log_probs=old_log_probs,
-                            new_log_probs=log_probs,
-                            actions=actions,
-                            max_threshold=anomaly_detector.max_ratio_threshold,
-                            min_threshold=anomaly_detector.min_ratio_threshold,
-                        )
-
-                surr1 = ratio * batch_advantages
-                surr2 = torch.clamp(ratio, 1 - self.clip_ratio, 1 + self.clip_ratio) * batch_advantages
-                policy_loss = -torch.min(surr1, surr2).mean()
-
-                # Value function loss (with optional clipping)
-                if self.clip_value:
-                    values_clipped = old_values + torch.clamp(
-                        values - old_values, -self.clip_ratio, self.clip_ratio
-                    )
-                    value_loss_unclipped = (values - batch_returns) ** 2
-                    value_loss_clipped = (values_clipped - batch_returns) ** 2
-                    value_loss = 0.5 * torch.max(value_loss_unclipped, value_loss_clipped).mean()
-                else:
-                    value_loss = F.mse_loss(values, batch_returns)
-                entropy_loss = -entropy.mean()
-
-                # Get entropy coefficient with adaptive floor
-                # Use batch's action mask for floor computation
-                # For batched masks, use the most restrictive (min valid actions)
-                representative_mask = action_masks[0] if action_masks is not None else None
-                entropy_coef = self.get_entropy_coef(representative_mask)
-
-                loss = (
-                    policy_loss
-                    + self.value_coef * value_loss
-                    + entropy_coef * entropy_loss
-                )
-
-                self.optimizer.zero_grad(set_to_none=True)
-                loss.backward()
-
-                # === DEBUG TELEMETRY: Collect expensive diagnostics if enabled ===
-                if telemetry_config.should_collect("debug"):
-                    from esper.simic.debug_telemetry import (
-                        collect_per_layer_gradients,
-                        check_numerical_stability,
-                    )
-                    # Collect once per update (first batch only) to limit overhead
-                    if 'debug_gradient_stats' not in metrics:
-                        layer_stats = collect_per_layer_gradients(self.network)
-                        metrics['debug_gradient_stats'] = [
-                            [s.to_dict() for s in layer_stats]
-                        ]
-                        stability = check_numerical_stability(self.network, loss)
-                        metrics['debug_numerical_stability'] = [stability.to_dict()]
-
-                nn.utils.clip_grad_norm_(self.network.parameters(), self.max_grad_norm)
-                self.optimizer.step()
-
-                # KL(old||new) first-order approximation: E[log(p_old) - log(p_new)]
-                # Note: This is KL(old||new), not KL(new||old). The sign convention
-                # matches stable-baselines3 and other PPO implementations for early
-                # stopping diagnostics. Positive values indicate the new policy assigns
-                # lower probability than old to sampled actions.
-                batch_kl_tensor = (old_log_probs - log_probs).mean()
-                clip_frac_tensor = ((ratio - 1).abs() > self.clip_ratio).float().mean()
-
-                # Single sync for all 5 metrics
-                batch_metrics = torch.stack([
-                    policy_loss, value_loss, -entropy_loss, batch_kl_tensor, clip_frac_tensor
-                ])
-                pl, vl, ent, batch_kl, cf = batch_metrics.tolist()
-                metrics['policy_loss'].append(pl)
-                metrics['value_loss'].append(vl)
-                metrics['entropy'].append(ent)
-                metrics['approx_kl'].append(batch_kl)
-                metrics['clip_fraction'].append(cf)
-
-                epoch_kl_sum += batch_kl
-                epoch_kl_count += 1
-
-            # KL-based early stopping: stop if average KL exceeds 1.5 * target_kl
-            # This prevents the policy from diverging too far from the data collection policy,
-            # which can destabilize training. (Schulman et al., 2017)
-            if self.target_kl is not None and epoch_kl_count > 0:
-                epoch_kl_avg = epoch_kl_sum / epoch_kl_count
-                if epoch_kl_avg > 1.5 * self.target_kl:
-                    early_stopped = True
-                    metrics['early_stop_epoch'] = [epoch_i + 1]
-
-        self.train_steps += 1
-
-        # === AUTO-ESCALATION: Analyze collected metrics for anomalies ===
-        if metrics['ratio_max']:  # Only if we have ratio data
-            max_ratio = max(metrics['ratio_max'])
-            min_ratio = min(metrics['ratio_min'])
-
-            # Check for NaN/Inf in all loss values from the mini-batches
-            all_losses = metrics['policy_loss'] + metrics['value_loss']
-            loss_has_issue = any(math.isnan(v) or math.isinf(v) for v in all_losses)
-            ratio_has_issue = flags.get('ratio_has_numerical_issue', False)
-            has_numerical_issue = loss_has_issue or ratio_has_issue
-
-            # Use debug breakdown values when available for accurate anomaly reporting
-            anomaly_report = anomaly_detector.check_all(
-                ratio_max=max_ratio,
-                ratio_min=min_ratio,
-                explained_variance=explained_variance,
-                has_nan=flags.get('ratio_has_nan', has_numerical_issue),
-                has_inf=flags.get('ratio_has_inf', has_numerical_issue),
-                current_episode=current_episode,
-                total_episodes=total_episodes,
-            )
-
-            if anomaly_report.has_anomaly:
-                anomaly_detected = True
-                if telemetry_config.auto_escalate_on_anomaly:
-                    telemetry_config.escalate_temporarily()
-
-                # Emit specific anomaly events
-                hub = get_hub()
-                for anomaly_type in anomaly_report.anomaly_types:
-                    if anomaly_type == "ratio_explosion":
-                        event_type = TelemetryEventType.RATIO_EXPLOSION_DETECTED
-                    elif anomaly_type == "ratio_collapse":
-                        event_type = TelemetryEventType.RATIO_COLLAPSE_DETECTED
-                    elif anomaly_type == "value_collapse":
-                        event_type = TelemetryEventType.VALUE_COLLAPSE_DETECTED
-                    elif anomaly_type == "numerical_instability":
-                        event_type = TelemetryEventType.NUMERICAL_INSTABILITY_DETECTED
-                    else:
-                        event_type = TelemetryEventType.GRADIENT_ANOMALY
-
-                    event_data = {
-                        "anomaly_type": anomaly_type,
-                        "detail": anomaly_report.details.get(anomaly_type, ""),
-                        "ratio_max": max_ratio,
-                        "ratio_min": min_ratio,
-                        "explained_variance": explained_variance,
-                        "train_steps": self.train_steps,
-                        "approx_kl": sum(metrics['approx_kl']) / len(metrics['approx_kl']) if metrics['approx_kl'] else 0.0,
-                        "clip_fraction": sum(metrics['clip_fraction']) / len(metrics['clip_fraction']) if metrics['clip_fraction'] else 0.0,
-                        "entropy": sum(metrics['entropy']) / len(metrics['entropy']) if metrics['entropy'] else 0.0,
-                    }
-
-                    # Include detailed diagnostic for ratio anomalies
-                    if anomaly_type in ("ratio_explosion", "ratio_collapse") and ratio_diagnostic is not None:
-                        event_data["diagnostic"] = ratio_diagnostic.to_dict()
-
-                    hub.emit(TelemetryEvent(
-                        event_type=event_type,
-                        data=event_data,
-                        severity="warning",
-                    ))
-
-        # Tick escalation countdown
-        telemetry_config.tick_escalation()
-
-        if clear_buffer:
-            self.buffer.clear()
-
-        # Build result dict, handling special debug telemetry
-        result = {}
-        for k, v in metrics.items():
-            if k in ('debug_gradient_stats', 'debug_numerical_stability'):
-                # Debug metrics are already in final form (list of dicts)
-                result[k] = v[0] if v else None
-            else:
-                # Regular metrics are lists of scalars that need averaging
-                result[k] = sum(v) / len(v)
-
-        # Merge in boolean flags from separate dict
-        result.update(flags)
-
-        result['anomaly_detected'] = 1.0 if anomaly_detected else 0.0
-        if early_stopped:
-            result['early_stopped'] = 1.0
         return result
 
     def save(self, path: str | Path, metadata: dict = None) -> None:
