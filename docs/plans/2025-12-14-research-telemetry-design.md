@@ -275,11 +275,54 @@ From the matrix, compute:
 
 ### Scaling Strategy
 
+**Default behavior** (optimized for reasonable compute):
+
 | Active Seeds | Configurations | Strategy |
 |--------------|----------------|----------|
 | 1-2          | 2-4            | Full factorial (always) |
 | 3-4          | 8-16           | Full factorial |
 | 5+           | 32+            | Shapley sampling (~20 samples) |
+
+**Configuration:** The scaling strategy is fully configurable. If you need full factorial on 100 seeds (2^100 configurations) and have the compute budget, that's your choice.
+
+```python
+@dataclass
+class CounterfactualConfig:
+    """User-configurable counterfactual strategy."""
+
+    # Strategy selection
+    strategy: Literal["auto", "full_factorial", "shapley", "ablation_only"] = "auto"
+
+    # Auto-strategy thresholds (only used when strategy="auto")
+    full_factorial_max_seeds: int = 4      # Switch to Shapley above this
+    shapley_samples: int = 20              # Permutation samples for Shapley
+
+    # Force full factorial regardless of seed count (use with caution)
+    force_full_factorial: bool = False     # Override auto thresholds
+
+    # Compute budget controls
+    max_configurations: int | None = None  # Hard cap, None = unlimited
+    timeout_seconds: float | None = None   # Abort if exceeded
+
+    def effective_strategy(self, n_active_seeds: int) -> str:
+        """Determine strategy based on config and seed count."""
+        if self.force_full_factorial:
+            return "full_factorial"
+        if self.strategy != "auto":
+            return self.strategy
+        if n_active_seeds <= self.full_factorial_max_seeds:
+            return "full_factorial"
+        return "shapley"
+```
+
+**Example: Force full factorial for publication-grade results**
+```python
+# Warning: 2^10 = 1024 validation passes per epoch
+config = CounterfactualConfig(
+    force_full_factorial=True,
+    timeout_seconds=3600.0,  # 1 hour safety cap
+)
+```
 
 ### Data Structures
 
