@@ -109,15 +109,16 @@ We iterate **DataLoaders first** (batches), dispatch to **environments second** 
 
 ---
 
-### 8. The Narset Hierarchy (Future Scaling)
+### 8. The Biological Hierarchy (Future Scaling)
 
 **Concept:** A single brain cannot micro-manage a billion cells.
 
 **Hierarchy:**
 
-* **Kasmina** – the Cell / local mechanics
-* **Narset** – the Organ Manager / tactical decisions (future)
-* **Tamiyo** – the Organism Controller / strategic decisions (future)
+* **Kasmina** – the Cell / local mechanics (growth, division, death)
+* **Narset** – the Endocrine System / hormonal coordination (resource allocation signals between organ clusters)
+* **Emrakul** – the Immune System / phagocytes (identifies and removes parasitic or damaged components)
+* **Tamiyo** – the Nervous System / strategic control (high-level decision making)
 
 **Design Rule:** Scale **Out** (harder problems) and **In** (recursion, multi-slot) before scaling **Up** (billions of seeds).
 
@@ -238,25 +239,29 @@ python -m esper.scripts.train ppo --reward-mode minimal
 
 ---
 
-### Phase 4: The Ecological Check (Emrakul) 🔮
+### Phase 4: The Immune System (Emrakul) 🔮
 
 **Target:** Long-horizon training runs (>100 epochs) with multi-slot and rent enabled.
+
+**Biological Analogy:** Emrakul acts as the immune system's phagocytes – identifying and removing parasitic or damaged components that consume resources without contributing value.
 
 **Objective:**
 
 * Implement withering (alpha → 0) to audit seed importance
-* Use churn (loss/accuracy change on removal) to classify seeds
+* Use churn (loss/accuracy change on removal) to classify seeds as essential vs parasitic
 * Show "eagerness repair": growth slows or reverses when rent > benefit
 
 **Status:** PLANNED
 
 ---
 
-### Phase 5: The Hierarchy (Narset) 🔮
+### Phase 5: The Endocrine System (Narset) 🔮
 
 **Target:** Lattice scale (>50 seeds across many slots and layers).
 
-**Objective:** Introduce Narset as intermediate controller for tactical slot management.
+**Biological Analogy:** Narset acts as the endocrine system – sending hormonal signals to coordinate resource allocation across organ clusters without micro-managing individual cells.
+
+**Objective:** Introduce Narset as intermediate controller for tactical slot management, managing budgets and coordination between slot clusters.
 
 **Status:** PLANNED
 
@@ -274,13 +279,13 @@ python -m esper.scripts.train ppo --reward-mode minimal
 
 ## Part III: System Components
 
-| Component   | Role       | Description                            | Status |
-| ----------- | ---------- | -------------------------------------- | ------ |
-| **Kasmina** | Body       | Model & slot mechanics, seed lifecycle | Active |
-| **Leyline** | Contracts  | Shared types, enums, tensor schemas    | Active |
-| **Tamiyo**  | Brain      | Heuristic decision logic               | Active |
-| **Tolaria** | Hands      | PyTorch training loops, execution      | Active |
-| **Simic**   | Gym        | RL infrastructure (PPO, rewards)       | Active |
-| **Nissa**   | Senses     | Telemetry hub, observability           | Active |
-| **Emrakul** | Reaper     | Efficiency auditing (withering/churn)  | Future |
-| **Narset**  | Manager    | Hierarchical slot coordination         | Future |
+| Component   | Biological Role     | Description                                        | Status |
+| ----------- | ------------------- | -------------------------------------------------- | ------ |
+| **Kasmina** | Cell                | Model & slot mechanics, seed lifecycle             | Active |
+| **Leyline** | DNA/Proteins        | Shared types, enums, tensor schemas (contracts)    | Active |
+| **Tamiyo**  | Nervous System      | Heuristic decision logic, strategic control        | Active |
+| **Tolaria** | Metabolism          | PyTorch training loops, energy conversion          | Active |
+| **Simic**   | Evolution           | RL infrastructure (PPO, rewards), adaptation       | Active |
+| **Nissa**   | Sensory Organs      | Telemetry hub, observability                       | Active |
+| **Emrakul** | Immune System       | Efficiency auditing, removes parasitic components  | Future |
+| **Narset**  | Endocrine System    | Hormonal coordination, resource allocation signals | Future |
