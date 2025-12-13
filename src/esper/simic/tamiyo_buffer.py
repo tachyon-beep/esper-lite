@@ -342,39 +342,42 @@ class TamiyoRolloutBuffer:
         """
         device = torch.device(device) if isinstance(device, str) else device
 
-        # Build valid mask
-        valid_mask = torch.zeros(
-            self.num_envs, self.max_steps_per_env, dtype=torch.bool, device=device
-        )
-        for env_id in range(self.num_envs):
-            valid_mask[env_id, : self.step_counts[env_id]] = True
+        # Build valid mask - vectorized (avoids Python loop)
+        # step_idx < step_counts[env_id] using broadcasting
+        step_counts_tensor = torch.tensor(self.step_counts, device=device).unsqueeze(1)
+        step_indices = torch.arange(self.max_steps_per_env, device=device).unsqueeze(0)
+        valid_mask = step_indices < step_counts_tensor  # [num_envs, max_steps]
+
+        # Use non_blocking=True for async CPU->GPU transfer (overlaps with computation)
+        # This only helps when transferring TO CUDA - CPU transfers ignore it
+        nb = device.type == "cuda"
 
         return {
-            "states": self.states.to(device),
-            "slot_actions": self.slot_actions.to(device),
-            "blueprint_actions": self.blueprint_actions.to(device),
-            "blend_actions": self.blend_actions.to(device),
-            "op_actions": self.op_actions.to(device),
-            "slot_log_probs": self.slot_log_probs.to(device),
-            "blueprint_log_probs": self.blueprint_log_probs.to(device),
-            "blend_log_probs": self.blend_log_probs.to(device),
-            "op_log_probs": self.op_log_probs.to(device),
-            "values": self.values.to(device),
-            "rewards": self.rewards.to(device),
-            "advantages": self.advantages.to(device),
-            "returns": self.returns.to(device),
-            "slot_masks": self.slot_masks.to(device),
-            "blueprint_masks": self.blueprint_masks.to(device),
-            "blend_masks": self.blend_masks.to(device),
-            "op_masks": self.op_masks.to(device),
-            "hidden_h": self.hidden_h.to(device),
-            "hidden_c": self.hidden_c.to(device),
+            "states": self.states.to(device, non_blocking=nb),
+            "slot_actions": self.slot_actions.to(device, non_blocking=nb),
+            "blueprint_actions": self.blueprint_actions.to(device, non_blocking=nb),
+            "blend_actions": self.blend_actions.to(device, non_blocking=nb),
+            "op_actions": self.op_actions.to(device, non_blocking=nb),
+            "slot_log_probs": self.slot_log_probs.to(device, non_blocking=nb),
+            "blueprint_log_probs": self.blueprint_log_probs.to(device, non_blocking=nb),
+            "blend_log_probs": self.blend_log_probs.to(device, non_blocking=nb),
+            "op_log_probs": self.op_log_probs.to(device, non_blocking=nb),
+            "values": self.values.to(device, non_blocking=nb),
+            "rewards": self.rewards.to(device, non_blocking=nb),
+            "advantages": self.advantages.to(device, non_blocking=nb),
+            "returns": self.returns.to(device, non_blocking=nb),
+            "slot_masks": self.slot_masks.to(device, non_blocking=nb),
+            "blueprint_masks": self.blueprint_masks.to(device, non_blocking=nb),
+            "blend_masks": self.blend_masks.to(device, non_blocking=nb),
+            "op_masks": self.op_masks.to(device, non_blocking=nb),
+            "hidden_h": self.hidden_h.to(device, non_blocking=nb),
+            "hidden_c": self.hidden_c.to(device, non_blocking=nb),
             "valid_mask": valid_mask,
             # Initial hidden states for each env (first timestep)
             # Buffer stores [num_envs, max_steps, lstm_layers, hidden_dim]
             # LSTM expects [lstm_layers, batch, hidden_dim], so permute after slicing
-            "initial_hidden_h": self.hidden_h[:, 0, :, :].permute(1, 0, 2).contiguous().to(device),
-            "initial_hidden_c": self.hidden_c[:, 0, :, :].permute(1, 0, 2).contiguous().to(device),
+            "initial_hidden_h": self.hidden_h[:, 0, :, :].permute(1, 0, 2).contiguous().to(device, non_blocking=nb),
+            "initial_hidden_c": self.hidden_c[:, 0, :, :].permute(1, 0, 2).contiguous().to(device, non_blocking=nb),
         }
 
     def reset(self) -> None:
