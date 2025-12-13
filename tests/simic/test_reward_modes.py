@@ -26,3 +26,9 @@ def test_config_has_sparse_fields():
     # Minimal mode parameters
     assert config.early_cull_threshold == 5
     assert config.early_cull_penalty == -0.1
+
+
+def test_reward_mode_exported():
+    """RewardMode is in module __all__."""
+    from esper.simic import rewards
+    assert "RewardMode" in rewards.__all__

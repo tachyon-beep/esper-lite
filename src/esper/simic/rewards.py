@@ -967,6 +967,7 @@ __all__ = [
     # Config classes
     "LossRewardConfig",
     "ContributionRewardConfig",
+    "RewardMode",
     # Seed info
     "SeedInfo",
     # Reward functions
