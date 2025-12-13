@@ -299,7 +299,7 @@ From the matrix, compute:
 **Configuration:** The scaling strategy is fully configurable. If you need full factorial on 100 seeds (2^100 configurations) and have the compute budget, that's your choice.
 
 ```python
-@dataclass
+@dataclass(frozen=True)  # Immutable to prevent mid-run mutations
 class CounterfactualConfig:
     """User-configurable counterfactual strategy."""
 
@@ -315,7 +315,7 @@ class CounterfactualConfig:
 
     # Compute budget controls
     max_configurations: int | None = None  # Hard cap, None = unlimited
-    timeout_seconds: float | None = None   # Abort if exceeded
+    timeout_seconds: float | None = None   # Abort if exceeded (see safety notes below)
 
     def effective_strategy(self, n_active_seeds: int) -> str:
         """Determine strategy based on config and seed count."""
@@ -336,6 +336,42 @@ config = CounterfactualConfig(
     timeout_seconds=3600.0,  # 1 hour safety cap
 )
 ```
+
+**⚠️ Timeout Safety Pattern (CUDA-aware):**
+
+Timeout must be checked *between* configurations, never during CUDA operations:
+
+```python
+def run_counterfactual_with_timeout(
+    config: CounterfactualConfig,
+    model: nn.Module,
+    val_loader: DataLoader,
+) -> CounterfactualMatrix:
+    """Timeout-safe counterfactual computation."""
+    start_time = time.monotonic()
+    results = []
+
+    for cfg in configurations:
+        # Check timeout BETWEEN configs, not during CUDA ops
+        if config.timeout_seconds:
+            elapsed = time.monotonic() - start_time
+            if elapsed > config.timeout_seconds:
+                torch.cuda.synchronize()  # Complete pending ops before exit
+                raise TimeoutError(
+                    f"Counterfactual exceeded {config.timeout_seconds}s "
+                    f"({len(results)}/{len(configurations)} configs completed)"
+                )
+
+        result = evaluate_single_config(model, val_loader, cfg)
+        results.append(result)
+
+    return CounterfactualMatrix(results)
+```
+
+**Never do:**
+- `signal.alarm()` with CUDA operations — interrupts leave device inconsistent
+- Force-terminate threads doing CUDA work — causes memory leaks
+- Skip `torch.cuda.synchronize()` before timeout — pending ops may corrupt next run
 
 ### Data Structures
 
@@ -392,6 +428,7 @@ class ControlRunConfig:
     disabled_slots: frozenset[str]        # {"early"}, {"mid"}, etc.
     base_seed: int                        # Same random seed as main run
     description: str
+    cuda_visible_devices: str | None = None  # Pin to specific GPU for parallel execution
 
 
 @dataclass
@@ -403,6 +440,13 @@ class CausalContributionResult:
     causal_contribution: float            # main - control (unconfounded)
     removal_cost: float                   # From factorial matrix (confounded)
     confounding_gap: float                # causal - removal (adaptation effect)
+    std_error: float                      # Standard error across runs
+    is_significant: bool                  # abs(causal_contribution) > 2 * std_error
+
+    # confounding_gap sign convention:
+    #   > 0: Host adapted to RELY on seed — removal cost underestimates true contribution
+    #   < 0: Host adapted to COMPENSATE — removal cost overestimates true contribution
+    #   ~ 0: Minimal co-adaptation — removal cost is a good proxy
 
 
 @dataclass
@@ -417,6 +461,14 @@ class CausalAttributionReport:
     confidence_level: float               # 0.95 for publication
     contribution_ci: dict[str, tuple[float, float]]  # {slot: (lower, upper)}
 ```
+
+**Interpreting confounding_gap:**
+
+| Gap Magnitude | Interpretation | Action |
+|---------------|----------------|--------|
+| `\|gap\| < 1%` | Minimal co-adaptation | Removal cost is reliable |
+| `1% ≤ \|gap\| < 3%` | Moderate co-adaptation | Note in analysis |
+| `\|gap\| ≥ 3%` | Strong co-adaptation | **Investigate** — removal cost unreliable |
 
 **Usage:**
 
@@ -444,6 +496,7 @@ report = karn.compute_causal_attribution(
 | Live training monitoring | ✅ | ❌ (too slow) |
 | Quick iteration | ✅ | ❌ |
 | Debugging seed behavior | ✅ | ❌ |
+| Hyperparameter search | ✅ (relative comparison) | ❌ |
 | Publication claims | ⚠️ (cite limitation) | ✅ |
 | Comparing architectures | ❌ | ✅ |
 
