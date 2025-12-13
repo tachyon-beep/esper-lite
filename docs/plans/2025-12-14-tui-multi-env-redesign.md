@@ -1,6 +1,8 @@
 # TUI Multi-Environment Redesign Implementation Plan
 
 > **Status:** ✅ **COMPLETED** on 2025-12-14
+>
+> **Post-completion enhancement (2025-12-14):** Added slot stage/blueprint columns to env overview table showing lifecycle state (Train:conv, Foss:norm, etc.) with color coding per stage.
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
