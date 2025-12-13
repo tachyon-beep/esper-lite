@@ -1393,9 +1393,9 @@ def train_ppo_vectorized(
             # === Anomaly Detection ===
             # Use check_all() for comprehensive anomaly detection
             anomaly_report = anomaly_detector.check_all(
-                ratio_max=metrics.get("ratio_max", [1.0])[-1],
-                ratio_min=metrics.get("ratio_min", [1.0])[-1],
-                explained_variance=metrics.get("explained_variance", [0.0])[-1],
+                ratio_max=metrics.get("ratio_max", 1.0),
+                ratio_min=metrics.get("ratio_min", 1.0),
+                explained_variance=metrics.get("explained_variance", 0.0),
                 current_episode=episodes_completed,
                 total_episodes=total_episodes,
             )
