@@ -191,9 +191,9 @@ class KarnCollector:
             reward_mode=data.get("reward_mode", "shaped"),
             max_epochs=data.get("max_epochs", 75),
         )
-        # P0 Fix: Must start epoch 0 so store.current_epoch exists for subsequent events
-        self.store.start_epoch(0)
-        _logger.debug(f"Auto-started episode and epoch 0 from TRAINING_STARTED: {episode_id}")
+        # Start at epoch 1 to match Simic's range(1, max_epochs + 1)
+        self.store.start_epoch(1)
+        _logger.debug(f"Auto-started episode and epoch 1 from TRAINING_STARTED: {episode_id}")
 
     def _handle_epoch_completed(self, event: "TelemetryEvent") -> None:
         """Handle EPOCH_COMPLETED event."""

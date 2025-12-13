@@ -1477,9 +1477,10 @@ def train_ppo_vectorized(
             if hub:
                 hub.emit(TelemetryEvent(
                     event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+                    epoch=episodes_completed,  # Monotonic batch counter
                     severity="warning",
                     message="Buffer cleared due to Governor rollback - skipping update",
-                    data={"reason": "governor_rollback", "skipped": True},
+                    data={"reason": "governor_rollback", "skipped": True, "inner_epoch": epoch},
                 ))
         else:
             update_metrics = agent.update(clear_buffer=True)
@@ -1584,7 +1585,9 @@ def train_ppo_vectorized(
             # Note: clip_fraction, ratio_*, explained_variance not available in recurrent path
             ppo_event = TelemetryEvent(
                 event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+                epoch=episodes_completed,  # Monotonic batch counter (NOT inner epoch!)
                 data={
+                    "inner_epoch": epoch,  # Final inner epoch (typically max_epochs)
                     "batch": batch_idx + 1,
                     "episodes_completed": episodes_completed,
                     "train_steps": agent.train_steps,
@@ -1618,7 +1621,9 @@ def train_ppo_vectorized(
             total_seeds_fossilized = sum(es.seeds_fossilized for es in env_states)
             hub.emit(TelemetryEvent(
                 event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+                epoch=episodes_completed,  # Monotonic batch counter
                 data={
+                    "inner_epoch": epoch,  # Final inner epoch
                     "accuracy": rolling_avg_acc,
                     "host_accuracy": avg_acc,  # Per-batch accuracy
                     "entropy": metrics.get("entropy", 0.0),
