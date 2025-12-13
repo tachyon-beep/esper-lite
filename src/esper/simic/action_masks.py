@@ -2,12 +2,17 @@
 
 Only masks PHYSICALLY IMPOSSIBLE actions:
 - GERMINATE: blocked if slot occupied OR at seed limit
-- FOSSILIZE: blocked if not PROBATIONARY
-- CULL: blocked if no seed OR seed_age < MIN_CULL_AGE
+- FOSSILIZE: blocked if target slot not PROBATIONARY
+- CULL: blocked if target slot has no seed OR seed_age < MIN_CULL_AGE
+        OR target slot is FOSSILIZED (terminal state)
 - WAIT: always valid
 
 Does NOT mask timing heuristics (epoch, plateau, stabilization).
 Tamiyo learns optimal timing from counterfactual reward signals.
+
+The target_slot parameter determines which slot's state is used for
+FOSSILIZE/CULL validity checks. This is critical for multi-slot scenarios
+where different slots may have seeds at different lifecycle stages.
 """
 
 from __future__ import annotations
