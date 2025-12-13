@@ -2,6 +2,15 @@
 
 This file contains mandatory rules for Claude Code when working on this codebase.
 
+## First Steps
+
+**On session start, read these files for project context:**
+
+1. **`README.md`** - Project overview, architecture, CLI reference with all flags
+2. **`ROADMAP.md`** - Architecture principles (the "Nine Commandments"), execution phases, and biological component roles
+
+These documents are kept current and provide essential context for understanding the codebase.
+
 ## No Legacy Code Policy
 
 **STRICT REQUIREMENT:** Legacy code, backwards compatibility, and compatibility shims are strictly forbidden.
@@ -109,23 +118,28 @@ The only legitimate uses of `hasattr()` are:
 
 Even these cases require authorization and documentation.
 
-## Archive Directory Policy
+## Archive Policy
 
-**The `_archive/` directory contains old, broken, failed implementations.**
+**The `docs/plans/archive/` directory contains completed or superseded implementation plans.**
 
 ### What It Contains
-- Previous architectural attempts that were abandoned
-- Prototype code that was never production-ready
-- Historical artifacts from earlier project phases
+- Implementation plans that have been executed
+- Plans superseded by architectural changes
+- Historical decision records
 
 ### How to Treat It
-- **Interesting to look at** for historical context or understanding past decisions
-- **Otherwise meaningless** for current development
-- **DO NOT** use as reference for implementing current features
-- **DO NOT** attempt to port or adapt archive code to current architecture
-- **DO NOT** rely on patterns or interfaces found in archive code
+- **Reference for understanding past decisions** and why certain approaches were taken
+- **DO NOT** implement tasks from archived plans without checking if they're still relevant
+- **DO NOT** assume archived plans reflect current architecture
 
 ### The Rule
 
-The archive exists solely as a git-preserved history. Current implementations should be built fresh using the active codebase patterns, not retrofitted from archive code.
-- Whenever we make an active design decision to defer functionality due to complexity, you must add a TODO comment in the most logical place in this format # TODO: [FUTURE FUNCTIONALITY] - Xyz aaaa bbb ccccc.
+When a plan is completed or superseded, move it to the archive. Keep `docs/plans/` lean with only active/future work.
+
+## Deferred Functionality
+
+Whenever we make an active design decision to defer functionality due to complexity, add a TODO comment in the most logical place:
+
+```python
+# TODO: [FUTURE FUNCTIONALITY] - Brief description of what was deferred and why
+```
