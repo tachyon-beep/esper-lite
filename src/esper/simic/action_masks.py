@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import torch
+from torch.distributions import Categorical
 
 from esper.leyline import SeedStage, MIN_CULL_AGE
 from esper.leyline.factored_actions import (
@@ -245,4 +246,87 @@ __all__ = [
     "compute_action_masks",
     "compute_batch_masks",
     "slot_id_to_index",
+    "MaskedCategorical",
+    "InvalidStateMachineError",
 ]
+
+
+# =============================================================================
+# Masked Distribution (moved from networks.py during dead code cleanup)
+# =============================================================================
+
+class InvalidStateMachineError(RuntimeError):
+    """Raised when action mask has no valid actions (state machine bug)."""
+    pass
+
+
+@torch.compiler.disable
+def _validate_action_mask(mask: torch.Tensor) -> None:
+    """Validate that at least one action is valid per batch element.
+
+    Isolated from torch.compile to prevent graph breaks in the main forward path.
+    The .any() call forces CPU sync, but this safety check is worth the cost.
+    """
+    valid_count = mask.sum(dim=-1)
+    if (valid_count == 0).any():
+        raise InvalidStateMachineError(
+            f"No valid actions available. Mask: {mask}. "
+            "This indicates a bug in the Kasmina state machine."
+        )
+
+
+class MaskedCategorical:
+    """Categorical distribution with action masking and correct entropy calculation.
+
+    Masks invalid actions by setting their logits to dtype minimum before softmax.
+    Uses torch.finfo().min for float16/bfloat16 compatibility.
+    Computes entropy only over valid actions to avoid penalizing restricted states.
+    """
+
+    def __init__(self, logits: torch.Tensor, mask: torch.Tensor):
+        """Initialize masked categorical distribution.
+
+        Args:
+            logits: Raw policy logits [batch, num_actions]
+            mask: Binary mask, 1.0 = valid, 0.0 = invalid [batch, num_actions]
+
+        Raises:
+            InvalidStateMachineError: If any batch element has no valid actions
+
+        Note:
+            The validation check is isolated via @torch.compiler.disable to prevent
+            graph breaks in the main forward path while preserving safety checks.
+        """
+        _validate_action_mask(mask)
+
+        self.mask = mask
+        mask_value = torch.finfo(logits.dtype).min
+        self.masked_logits = logits.masked_fill(mask < 0.5, mask_value)
+        self._dist = Categorical(logits=self.masked_logits)
+
+    @property
+    def probs(self) -> torch.Tensor:
+        """Action probabilities (masked actions have ~0 probability)."""
+        return self._dist.probs
+
+    def sample(self) -> torch.Tensor:
+        """Sample actions from the masked distribution."""
+        return self._dist.sample()
+
+    def log_prob(self, actions: torch.Tensor) -> torch.Tensor:
+        """Compute log probability of actions."""
+        return self._dist.log_prob(actions)
+
+    def entropy(self) -> torch.Tensor:
+        """Compute normalized entropy over valid actions.
+
+        Returns entropy normalized to [0, 1] by dividing by max entropy
+        (log of number of valid actions). This makes exploration incentives
+        comparable across states with different action restrictions.
+        """
+        probs = self._dist.probs
+        log_probs = self._dist.logits - self._dist.logits.logsumexp(dim=-1, keepdim=True)
+        raw_entropy = -(probs * log_probs * self.mask).sum(dim=-1)
+        num_valid = self.mask.sum(dim=-1).clamp(min=1)
+        max_entropy = torch.log(num_valid)
+        return raw_entropy / max_entropy.clamp(min=1e-8)
