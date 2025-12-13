@@ -1242,23 +1242,69 @@ class TUIOutput:
 
         return Panel(table, title="[bold]PERFORMANCE[/bold]", border_style="cyan")
 
+    # Stage color mapping for slot display
+    _STAGE_STYLES: dict[str, str] = {
+        "DORMANT": "dim",
+        "GERMINATED": "cyan",
+        "TRAINING": "yellow",
+        "BLENDING": "magenta",
+        "PROBATIONARY": "blue",
+        "FOSSILIZED": "green",
+        "CULLED": "red dim",
+        "RESETTING": "dim",
+        "EMBARGOED": "red",
+    }
+
+    # Short stage names for compact display
+    _STAGE_SHORT: dict[str, str] = {
+        "DORMANT": "Dorm",
+        "GERMINATED": "Germ",
+        "TRAINING": "Train",
+        "BLENDING": "Blend",
+        "PROBATIONARY": "Prob",
+        "FOSSILIZED": "Foss",
+        "CULLED": "Cull",
+        "RESETTING": "Reset",
+        "EMBARGOED": "Embg",
+    }
+
+    def _format_slot_cell(self, env: EnvState, slot_name: str) -> str:
+        """Format a slot cell showing stage and blueprint.
+
+        Returns styled string like "[cyan]Train:conv[/cyan]" or "[dim]─[/dim]".
+        """
+        seed = env.seeds.get(slot_name)
+        if not seed or seed.stage == "DORMANT":
+            return "[dim]─[/dim]"
+
+        stage_short = self._STAGE_SHORT.get(seed.stage, seed.stage[:4])
+        style = self._STAGE_STYLES.get(seed.stage, "white")
+
+        # Get blueprint abbreviation (first 4 chars)
+        blueprint = seed.blueprint_id or "?"
+        if len(blueprint) > 4:
+            blueprint = blueprint[:4]
+
+        return f"[{style}]{stage_short}:{blueprint}[/{style}]"
+
     def _render_env_overview(self) -> Panel:
         """Render per-environment overview table.
 
-        Shows a row per environment with key metrics and status.
+        Shows a row per environment with key metrics, slot states, and status.
         Only rendered when n_envs > 1.
         """
         table = Table(show_header=True, box=None, padding=(0, 1), expand=True)
 
-        # Columns: ID, Accuracy, Reward, Epoch, Seeds, Status
-        table.add_column("Env", style="cyan", justify="center", width=4)
-        table.add_column("Accuracy", justify="right", width=10)
-        table.add_column("Acc▁▃▅", justify="left", width=8)  # Sparkline
-        table.add_column("Reward", justify="right", width=8)
-        table.add_column("Rew▁▃▅", justify="left", width=8)  # Sparkline
-        table.add_column("Epoch", justify="right", width=6)
-        table.add_column("Seeds", justify="center", width=6)
-        table.add_column("Status", justify="center", width=10)
+        # Columns: ID, Accuracy, Sparkline, Reward, Sparkline, Early, Mid, Late, Status
+        table.add_column("Env", style="cyan", justify="center", width=3)
+        table.add_column("Acc", justify="right", width=6)
+        table.add_column("▁▃▅", justify="left", width=8)  # Sparkline
+        table.add_column("Reward", justify="right", width=7)
+        table.add_column("▁▃▅", justify="left", width=8)  # Sparkline
+        table.add_column("Early", justify="center", width=10)
+        table.add_column("Mid", justify="center", width=10)
+        table.add_column("Late", justify="center", width=10)
+        table.add_column("Status", justify="center", width=9)
 
         # Status color mapping
         status_styles = {
@@ -1287,10 +1333,10 @@ class TUIOutput:
             elif env.current_reward < -0.5:
                 reward_str = f"[red]{reward_str}[/red]"
 
-            # Seeds summary: Active/Fossil/Culled
-            seeds_str = f"{env.active_seed_count}A"
-            if env.fossilized_count > 0:
-                seeds_str += f" {env.fossilized_count}F"
+            # Format each slot
+            early_str = self._format_slot_cell(env, "early")
+            mid_str = self._format_slot_cell(env, "mid")
+            late_str = self._format_slot_cell(env, "late")
 
             # Status with styling
             status_style = status_styles.get(env.status, "white")
@@ -1302,8 +1348,9 @@ class TUIOutput:
                 env.accuracy_sparkline,
                 reward_str,
                 env.reward_sparkline,
-                str(env.current_epoch),
-                seeds_str,
+                early_str,
+                mid_str,
+                late_str,
                 status_str,
             )
 
@@ -1311,23 +1358,35 @@ class TUIOutput:
         if len(self.state.env_states) > 1:
             best_acc, best_env, best_epoch = self.state.aggregate_best_accuracy
             table.add_row(
-                "─" * 3,
-                "─" * 8,
-                "─" * 6,
-                "─" * 6,
-                "─" * 6,
-                "─" * 4,
+                "─" * 2,
                 "─" * 5,
+                "─" * 6,
+                "─" * 6,
+                "─" * 6,
                 "─" * 8,
+                "─" * 8,
+                "─" * 8,
+                "─" * 7,
             )
+            # Count slots by stage across all envs
+            stage_counts: dict[str, int] = {}
+            for env in self.state.env_states.values():
+                for seed in env.seeds.values():
+                    if seed.stage != "DORMANT":
+                        stage_counts[seed.stage] = stage_counts.get(seed.stage, 0) + 1
+            stage_summary = " ".join(
+                f"{self._STAGE_SHORT.get(s, s[:3])}:{c}"
+                for s, c in sorted(stage_counts.items())
+            ) or "─"
             table.add_row(
                 "[bold]Σ[/bold]",
                 f"[bold]{self.state.aggregate_mean_accuracy:.1f}%[/bold]",
-                "",  # No sparkline for aggregate
+                "",
                 f"[bold]{self.state.aggregate_mean_reward:+.2f}[/bold]",
                 "",
-                f"[dim]best@{best_env}[/dim]",
-                f"{self.state.active_seed_count}A",
+                f"[dim]{stage_summary}[/dim]",
+                "",
+                "",
                 f"[dim]{best_acc:.1f}%[/dim]",
             )
 
