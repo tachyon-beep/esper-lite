@@ -530,6 +530,10 @@ class TUIOutput:
 
         data = event.data or {}
 
+        # Extract env_id for prefix (multi-env tracking)
+        env_id = data.get("env_id")
+        env_prefix = f"[{env_id}] " if env_id is not None else ""
+
         # Format message based on event type
         if "EPOCH" in event_type:
             loss = data.get("val_loss", "?")
@@ -542,24 +546,24 @@ class TUIOutput:
         elif event_type == "REWARD_COMPUTED":
             action = data.get("action_name", "?")
             total = data.get("total_reward", 0.0)
-            msg = f"{action} r={total:+.3f}"
+            msg = f"{env_prefix}{action} r={total:+.3f}"
         elif event_type.startswith("SEED_"):
             seed_id = event.seed_id or "?"
             if event_type == "SEED_GERMINATED":
                 blueprint_id = data.get("blueprint_id", "?")
-                msg = f"{seed_id} germinated ({blueprint_id})"
+                msg = f"{env_prefix}{seed_id} germinated ({blueprint_id})"
             elif event_type == "SEED_STAGE_CHANGED":
                 from_stage = data.get("from", "?")
                 to_stage = data.get("to", "?")
-                msg = f"{seed_id} {from_stage}->{to_stage}"
+                msg = f"{env_prefix}{seed_id} {from_stage}->{to_stage}"
             elif event_type == "SEED_FOSSILIZED":
                 improvement = data.get("improvement", 0)
-                msg = f"{seed_id} fossilized (+{improvement:.2f}%)"
+                msg = f"{env_prefix}{seed_id} fossilized (+{improvement:.2f}%)"
             elif event_type == "SEED_CULLED":
                 reason = data.get("reason", "")
-                msg = f"{seed_id} culled" + (f" ({reason})" if reason else "")
+                msg = f"{env_prefix}{seed_id} culled" + (f" ({reason})" if reason else "")
             else:
-                msg = f"{seed_id}"
+                msg = f"{env_prefix}{seed_id}"
         elif event_type == "PPO_UPDATE_COMPLETED":
             if data.get("skipped"):
                 msg = "skipped (buffer rollback)"

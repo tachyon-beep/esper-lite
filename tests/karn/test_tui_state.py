@@ -155,3 +155,27 @@ class TestTUIOutputEventHandlers:
         assert tui.state.env_states[1].action_counts["WAIT"] == 1
         assert tui.state.aggregate_action_counts["GERMINATE"] == 1
         assert tui.state.aggregate_action_counts["WAIT"] == 1
+
+
+class TestEventLogFormatting:
+    """Tests for event log formatting with env IDs."""
+
+    def test_event_log_includes_env_id(self):
+        """Formatted event log entries include env prefix."""
+        from esper.karn.tui import TUIOutput
+
+        tui = TUIOutput()
+
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.REWARD_COMPUTED,
+            data={
+                "env_id": 3,
+                "action_name": "GERMINATE",
+                "total_reward": 0.5,
+            }
+        )
+
+        formatted = tui._format_event_for_log(event)
+        assert formatted is not None
+        timestamp, event_type, msg = formatted
+        assert "[3]" in msg or "3" in msg
