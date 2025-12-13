@@ -172,9 +172,14 @@ def main():
     # alongside training logs.
     hub = get_hub()
 
-    # Use TUI by default, Console if --no-tui
+    # Use TUI by default, Console if --no-tui or non-TTY
+    import sys
     tui_backend = None
-    use_tui = not args.no_tui
+    is_tty = sys.stdout.isatty()
+    use_tui = not args.no_tui and is_tty
+
+    if not is_tty and not args.no_tui:
+        print("Non-TTY detected, using console output instead of TUI")
 
     if use_tui:
         from esper.karn import TUIOutput
