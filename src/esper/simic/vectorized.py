@@ -90,6 +90,8 @@ class ParallelEnvState:
     params_added_baseline: int = 0
     # Ransomware-resistant reward: track accuracy at germination for progress calculation
     acc_at_germination: float | None = None
+    # Maximum accuracy achieved during episode (for sparse reward)
+    host_max_acc: float = 0.0
     # Pre-allocated accumulators to avoid per-epoch tensor allocation churn
     train_loss_accum: torch.Tensor | None = None
     train_correct_accum: torch.Tensor | None = None

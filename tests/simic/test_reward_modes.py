@@ -235,3 +235,13 @@ def test_compute_reward_minimal_mode():
 
     # Should get early-cull penalty
     assert reward == -0.1
+
+
+def test_parallel_env_state_has_host_max_acc():
+    """ParallelEnvState tracks host_max_acc."""
+    from esper.simic.vectorized import ParallelEnvState
+    import inspect
+
+    # Check the dataclass has the field
+    hints = inspect.get_annotations(ParallelEnvState)
+    assert "host_max_acc" in hints, "ParallelEnvState should have host_max_acc field"
