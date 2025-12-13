@@ -102,16 +102,122 @@ class SeedState:
     accuracy_delta: float = 0.0
 
 
+def _make_sparkline_static(values: list[float], width: int = 8) -> str:
+    """Create a sparkline from values (static helper)."""
+    if not values:
+        return "─" * width
+
+    min_val = min(values)
+    max_val = max(values)
+    range_val = max_val - min_val if max_val != min_val else 1.0
+
+    blocks = "▁▂▃▄▅▆▇█"
+    values = values[-width:]
+
+    result = ""
+    for v in values:
+        normalized = (v - min_val) / range_val
+        idx = min(int(normalized * (len(blocks) - 1)), len(blocks) - 1)
+        result += blocks[idx]
+
+    return result.ljust(width, "─")
+
+
 @dataclass
 class EnvState:
     """Per-environment state for multi-env tracking."""
     env_id: int = 0
     current_epoch: int = 0
     host_accuracy: float = 0.0
+    host_loss: float = 0.0
     seeds: dict[str, SeedState] = field(default_factory=dict)
     active_seed_count: int = 0
     fossilized_count: int = 0
     culled_count: int = 0
+
+    # Per-env reward tracking
+    reward_history: deque[float] = field(default_factory=lambda: deque(maxlen=50))
+    best_reward: float = float('-inf')
+    best_reward_epoch: int = 0
+
+    # Per-env accuracy tracking
+    accuracy_history: deque[float] = field(default_factory=lambda: deque(maxlen=50))
+    best_accuracy: float = 0.0
+    best_accuracy_epoch: int = 0
+
+    # Per-env action tracking
+    action_history: deque[str] = field(default_factory=lambda: deque(maxlen=10))
+    action_counts: dict[str, int] = field(default_factory=lambda: {
+        "WAIT": 0, "GERMINATE": 0, "CULL": 0, "FOSSILIZE": 0
+    })
+    total_actions: int = 0
+
+    # Status tracking
+    status: str = "initializing"
+    last_update: datetime | None = None
+    epochs_since_improvement: int = 0
+
+    @property
+    def current_reward(self) -> float:
+        """Get most recent reward."""
+        return self.reward_history[-1] if self.reward_history else 0.0
+
+    @property
+    def mean_reward(self) -> float:
+        """Mean reward over history."""
+        if not self.reward_history:
+            return 0.0
+        return sum(self.reward_history) / len(self.reward_history)
+
+    @property
+    def reward_sparkline(self) -> str:
+        """Generate sparkline from reward history."""
+        return _make_sparkline_static(list(self.reward_history), width=8)
+
+    @property
+    def accuracy_sparkline(self) -> str:
+        """Generate sparkline from accuracy history."""
+        return _make_sparkline_static(list(self.accuracy_history), width=8)
+
+    def add_reward(self, reward: float, epoch: int) -> None:
+        """Add reward and update best tracking."""
+        self.reward_history.append(reward)
+        if reward > self.best_reward:
+            self.best_reward = reward
+            self.best_reward_epoch = epoch
+
+    def add_accuracy(self, accuracy: float, epoch: int) -> None:
+        """Add accuracy and update best/status tracking."""
+        prev_acc = self.accuracy_history[-1] if self.accuracy_history else 0.0
+        self.accuracy_history.append(accuracy)
+        self.host_accuracy = accuracy
+
+        if accuracy > self.best_accuracy:
+            self.best_accuracy = accuracy
+            self.best_accuracy_epoch = epoch
+            self.epochs_since_improvement = 0
+        else:
+            self.epochs_since_improvement += 1
+
+        self._update_status(prev_acc, accuracy)
+
+    def add_action(self, action_name: str) -> None:
+        """Track action taken."""
+        self.action_history.append(action_name)
+        if action_name in self.action_counts:
+            self.action_counts[action_name] += 1
+            self.total_actions += 1
+
+    def _update_status(self, prev_acc: float, curr_acc: float) -> None:
+        """Update env status based on metrics."""
+        if self.epochs_since_improvement > 10:
+            self.status = "stalled"
+        elif curr_acc < prev_acc - 1.0:
+            self.status = "degraded"
+        elif curr_acc > 80.0:
+            self.status = "excellent"
+        elif self.current_epoch > 0:
+            self.status = "healthy"
 
 
 @dataclass
