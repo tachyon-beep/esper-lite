@@ -2,11 +2,11 @@
 """Training CLI for Simic RL algorithms.
 
 Usage:
-    # Train PPO
-    PYTHONPATH=src python -m esper.scripts.train ppo --episodes 100 --device cuda:0
+    # Train PPO (vectorized by default)
+    PYTHONPATH=src python -m esper.scripts.train ppo --episodes 100 --n-envs 4
 
-    # Vectorized PPO
-    PYTHONPATH=src python -m esper.scripts.train ppo --vectorized --n-envs 4 --devices cuda:0 cuda:1
+    # Multi-GPU PPO
+    PYTHONPATH=src python -m esper.scripts.train ppo --n-envs 4 --devices cuda:0 cuda:1
 
     # Heuristic (h-esper)
     PYTHONPATH=src python -m esper.scripts.train heuristic --max-epochs 75 --max-batches 50
@@ -79,7 +79,6 @@ def main():
     ppo_parser.add_argument("--resume", help="Path to checkpoint to resume from")
     ppo_parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     ppo_parser.add_argument("--device", default="cuda:0")
-    ppo_parser.add_argument("--vectorized", action="store_true")
     ppo_parser.add_argument("--n-envs", type=int, default=4)
     ppo_parser.add_argument("--devices", nargs="+")
     ppo_parser.add_argument(
@@ -149,58 +148,33 @@ def main():
 
     elif args.algorithm == "ppo":
         use_telemetry = not args.no_telemetry
-        if args.vectorized:
-            from esper.simic.vectorized import train_ppo_vectorized
-            train_ppo_vectorized(
-                n_episodes=args.episodes,
-                n_envs=args.n_envs,
-                max_epochs=args.max_epochs,
-                device=args.device,
-                devices=args.devices,
-                task=args.task,
-                use_telemetry=use_telemetry,
-                lr=args.lr,
-                clip_ratio=args.clip_ratio,
-                entropy_coef=args.entropy_coef,
-                entropy_coef_start=args.entropy_coef_start,
-                entropy_coef_end=args.entropy_coef_end,
-                entropy_coef_min=args.entropy_coef_min,
-                entropy_anneal_episodes=args.entropy_anneal_episodes,
-                gamma=args.gamma,
-                save_path=args.save,
-                resume_path=args.resume,
-                seed=args.seed,
-                num_workers=args.num_workers,
-                gpu_preload=args.gpu_preload,
-                telemetry_config=telemetry_config,
-                slots=args.slots,
-                max_seeds=args.max_seeds,
-                max_seeds_per_slot=args.max_seeds_per_slot,
-            )
-        else:
-            from esper.simic.training import train_ppo
-            train_ppo(
-                n_episodes=args.episodes,
-                max_epochs=args.max_epochs,
-                update_every=args.update_every,
-                device=args.device,
-                task=args.task,
-                use_telemetry=use_telemetry,
-                lr=args.lr,
-                clip_ratio=args.clip_ratio,
-                entropy_coef=args.entropy_coef,
-                entropy_coef_start=args.entropy_coef_start,
-                entropy_coef_end=args.entropy_coef_end,
-                entropy_coef_min=args.entropy_coef_min,
-                entropy_anneal_episodes=args.entropy_anneal_episodes,
-                gamma=args.gamma,
-                save_path=args.save,
-                seed=args.seed,
-                telemetry_config=telemetry_config,
-                slots=args.slots,
-                max_seeds=args.max_seeds,
-                max_seeds_per_slot=args.max_seeds_per_slot,
-            )
+        from esper.simic.vectorized import train_ppo_vectorized
+        train_ppo_vectorized(
+            n_episodes=args.episodes,
+            n_envs=args.n_envs,
+            max_epochs=args.max_epochs,
+            device=args.device,
+            devices=args.devices,
+            task=args.task,
+            use_telemetry=use_telemetry,
+            lr=args.lr,
+            clip_ratio=args.clip_ratio,
+            entropy_coef=args.entropy_coef,
+            entropy_coef_start=args.entropy_coef_start,
+            entropy_coef_end=args.entropy_coef_end,
+            entropy_coef_min=args.entropy_coef_min,
+            entropy_anneal_episodes=args.entropy_anneal_episodes,
+            gamma=args.gamma,
+            save_path=args.save,
+            resume_path=args.resume,
+            seed=args.seed,
+            num_workers=args.num_workers,
+            gpu_preload=args.gpu_preload,
+            telemetry_config=telemetry_config,
+            slots=args.slots,
+            max_seeds=args.max_seeds,
+            max_seeds_per_slot=args.max_seeds_per_slot,
+        )
 
 if __name__ == "__main__":
     main()
