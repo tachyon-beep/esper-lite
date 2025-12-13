@@ -820,13 +820,27 @@ class TUIOutput:
         """
         layout = Layout()
 
-        # Create main sections with event log and performance stats
-        layout.split_column(
-            Layout(name="header", size=3),
-            Layout(name="main", ratio=1),
-            Layout(name="bottom", size=12),
-            Layout(name="footer", size=3),
-        )
+        # Determine if we need env overview panel (multi-env mode)
+        show_env_overview = self.state.n_envs > 1
+
+        if show_env_overview:
+            # Multi-env layout with env overview
+            layout.split_column(
+                Layout(name="header", size=3),
+                Layout(name="env_overview", size=8),  # NEW: Env overview table
+                Layout(name="main", ratio=1),
+                Layout(name="bottom", size=12),
+                Layout(name="footer", size=3),
+            )
+            layout["env_overview"].update(self._render_env_overview())
+        else:
+            # Single-env layout (original)
+            layout.split_column(
+                Layout(name="header", size=3),
+                Layout(name="main", ratio=1),
+                Layout(name="bottom", size=12),
+                Layout(name="footer", size=3),
+            )
 
         # Split bottom into event log (left) and performance stats (right)
         layout["bottom"].split_row(
@@ -1227,6 +1241,101 @@ class TUIOutput:
             )
 
         return Panel(table, title="[bold]PERFORMANCE[/bold]", border_style="cyan")
+
+    def _render_env_overview(self) -> Panel:
+        """Render per-environment overview table.
+
+        Shows a row per environment with key metrics and status.
+        Only rendered when n_envs > 1.
+        """
+        table = Table(show_header=True, box=None, padding=(0, 1), expand=True)
+
+        # Columns: ID, Accuracy, Reward, Epoch, Seeds, Status
+        table.add_column("Env", style="cyan", justify="center", width=4)
+        table.add_column("Accuracy", justify="right", width=10)
+        table.add_column("Acc▁▃▅", justify="left", width=8)  # Sparkline
+        table.add_column("Reward", justify="right", width=8)
+        table.add_column("Rew▁▃▅", justify="left", width=8)  # Sparkline
+        table.add_column("Epoch", justify="right", width=6)
+        table.add_column("Seeds", justify="center", width=6)
+        table.add_column("Status", justify="center", width=10)
+
+        # Status color mapping
+        status_styles = {
+            "excellent": "bold green",
+            "healthy": "green",
+            "initializing": "dim",
+            "stalled": "yellow",
+            "degraded": "red",
+        }
+
+        for env_id in sorted(self.state.env_states.keys()):
+            env = self.state.env_states[env_id]
+
+            # Accuracy with delta indicator
+            acc_str = f"{env.host_accuracy:.1f}%"
+            if env.best_accuracy > 0:
+                if env.host_accuracy >= env.best_accuracy:
+                    acc_str = f"[green]{acc_str}[/green]"
+                elif env.epochs_since_improvement > 5:
+                    acc_str = f"[yellow]{acc_str}[/yellow]"
+
+            # Reward
+            reward_str = f"{env.current_reward:+.2f}"
+            if env.current_reward > 0:
+                reward_str = f"[green]{reward_str}[/green]"
+            elif env.current_reward < -0.5:
+                reward_str = f"[red]{reward_str}[/red]"
+
+            # Seeds summary: Active/Fossil/Culled
+            seeds_str = f"{env.active_seed_count}A"
+            if env.fossilized_count > 0:
+                seeds_str += f" {env.fossilized_count}F"
+
+            # Status with styling
+            status_style = status_styles.get(env.status, "white")
+            status_str = f"[{status_style}]{env.status.upper()}[/{status_style}]"
+
+            table.add_row(
+                str(env_id),
+                acc_str,
+                env.accuracy_sparkline,
+                reward_str,
+                env.reward_sparkline,
+                str(env.current_epoch),
+                seeds_str,
+                status_str,
+            )
+
+        # Add aggregate row if multiple envs
+        if len(self.state.env_states) > 1:
+            best_acc, best_env, best_epoch = self.state.aggregate_best_accuracy
+            table.add_row(
+                "─" * 3,
+                "─" * 8,
+                "─" * 6,
+                "─" * 6,
+                "─" * 6,
+                "─" * 4,
+                "─" * 5,
+                "─" * 8,
+            )
+            table.add_row(
+                "[bold]Σ[/bold]",
+                f"[bold]{self.state.aggregate_mean_accuracy:.1f}%[/bold]",
+                "",  # No sparkline for aggregate
+                f"[bold]{self.state.aggregate_mean_reward:+.2f}[/bold]",
+                "",
+                f"[dim]best@{best_env}[/dim]",
+                f"{self.state.active_seed_count}A",
+                f"[dim]{best_acc:.1f}%[/dim]",
+            )
+
+        return Panel(
+            table,
+            title="[bold]ENVIRONMENT OVERVIEW[/bold]",
+            border_style="cyan",
+        )
 
     # =========================================================================
     # System Monitoring
