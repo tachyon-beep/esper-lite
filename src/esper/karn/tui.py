@@ -854,28 +854,21 @@ class TUIOutput:
             Layout(name="right", ratio=1),
         )
 
-        # Left column: rewards and seeds
+        # Left column: rewards, seeds, reward components
         layout["left"].split_column(
             Layout(name="rewards", ratio=1),
             Layout(name="seeds", ratio=1),
             Layout(name="reward_components", ratio=1),
         )
 
-        # Right column: policy health and actions
-        layout["right"].split_column(
-            Layout(name="policy_health", ratio=1),
-            Layout(name="actions", ratio=1),
-            Layout(name="losses", ratio=1),
-        )
+        # Right column: combined policy stats panel (actions + health + losses)
+        layout["right"].update(self._render_policy_stats())
 
         # Render each section
         layout["header"].update(self._render_header())
         layout["rewards"].update(self._render_rewards())
         layout["seeds"].update(self._render_seeds())
         layout["reward_components"].update(self._render_reward_components())
-        layout["policy_health"].update(self._render_policy_health())
-        layout["actions"].update(self._render_actions())
-        layout["losses"].update(self._render_losses())
         layout["event_log"].update(self._render_event_log(max_lines=8))
         layout["perf_stats"].update(self._render_performance())
         layout["footer"].update(self._render_footer())
@@ -934,56 +927,6 @@ class TUIOutput:
         table.add_row("History:", sparkline)
 
         return Panel(table, title="[bold]REWARDS[/bold]", border_style="cyan")
-
-    def _render_policy_health(self) -> Panel:
-        """Render the policy health panel with status indicators."""
-        table = Table(show_header=False, box=None, padding=(0, 1))
-        table.add_column("Metric", style="dim")
-        table.add_column("Value", justify="right")
-        table.add_column("Bar", width=12)
-        table.add_column("Status", justify="center")
-
-        # Entropy
-        entropy_pct = min(self.state.entropy / self.thresholds.entropy_max, 1.0) * 100
-        entropy_status = self._get_entropy_status(self.state.entropy)
-        table.add_row(
-            "Entropy:",
-            f"{self.state.entropy:.2f}",
-            self._make_bar(entropy_pct),
-            self._status_text(entropy_status)
-        )
-
-        # Clip fraction
-        clip_pct = min(self.state.clip_fraction / 0.5, 1.0) * 100
-        clip_status = self._get_clip_status(self.state.clip_fraction)
-        table.add_row(
-            "Clip Frac:",
-            f"{self.state.clip_fraction:.2f}",
-            self._make_bar(clip_pct),
-            self._status_text(clip_status)
-        )
-
-        # KL divergence
-        kl_pct = min(self.state.kl_divergence / 0.1, 1.0) * 100
-        kl_status = self._get_kl_status(self.state.kl_divergence)
-        table.add_row(
-            "KL Div:",
-            f"{self.state.kl_divergence:.4f}",
-            self._make_bar(kl_pct),
-            self._status_text(kl_status)
-        )
-
-        # Explained variance
-        ev_pct = self.state.explained_variance * 100
-        ev_status = self._get_explained_var_status(self.state.explained_variance)
-        table.add_row(
-            "Expl Var:",
-            f"{self.state.explained_variance:.2f}",
-            self._make_bar(max(0, ev_pct)),
-            self._status_text(ev_status)
-        )
-
-        return Panel(table, title="[bold]POLICY HEALTH[/bold]", border_style="cyan")
 
     # Stage name abbreviations for compact multi-env display
     _STAGE_ABBREV: dict[str, str] = {
@@ -1071,17 +1014,16 @@ class TUIOutput:
         content = Group(main_table, agg_text)
         return Panel(content, title="[bold]SEED STATE[/bold]", border_style="cyan")
 
-    def _render_actions(self) -> Panel:
-        """Render the action distribution panel."""
-        table = Table(show_header=False, box=None, padding=(0, 1))
-        table.add_column("Action", style="dim")
-        table.add_column("Bar", width=15)
-        table.add_column("Pct", justify="right")
+    def _render_actions_table(self) -> Table:
+        """Render action distribution as a table (for combined panel)."""
+        table = Table(show_header=False, box=None, padding=(0, 0))
+        table.add_column("Action", style="dim", width=8)
+        table.add_column("Bar", width=8)
+        table.add_column("%", justify="right", width=4)
 
         percentages = self.state.get_action_percentages()
 
         for action, pct in sorted(percentages.items(), key=lambda x: -x[1]):
-            # Color based on action type
             action_style = {
                 "WAIT": "dim",
                 "GERMINATE": "green",
@@ -1089,16 +1031,77 @@ class TUIOutput:
                 "FOSSILIZE": "blue",
             }.get(action, "white")
 
-            # Warning if WAIT is too high
             pct_style = "yellow bold" if action == "WAIT" and pct > self.thresholds.wait_warning * 100 else ""
 
             table.add_row(
                 Text(action, style=action_style),
-                self._make_bar(pct),
+                self._make_bar(pct, width=8),
                 Text(f"{pct:.0f}%", style=pct_style)
             )
 
-        return Panel(table, title="[bold]ACTION DISTRIBUTION[/bold]", border_style="cyan")
+        return table
+
+    def _render_policy_health_table(self) -> Table:
+        """Render policy health as a table (for combined panel)."""
+        table = Table(show_header=False, box=None, padding=(0, 0))
+        table.add_column("Metric", style="dim", width=8)
+        table.add_column("Val", justify="right", width=5)
+        table.add_column("St", justify="center", width=4)
+
+        # Entropy
+        entropy_status = self._get_entropy_status(self.state.entropy)
+        table.add_row("Entropy", f"{self.state.entropy:.2f}", self._status_text(entropy_status))
+
+        # Clip fraction
+        clip_status = self._get_clip_status(self.state.clip_fraction)
+        table.add_row("Clip", f"{self.state.clip_fraction:.2f}", self._status_text(clip_status))
+
+        # KL divergence
+        kl_status = self._get_kl_status(self.state.kl_divergence)
+        table.add_row("KL", f"{self.state.kl_divergence:.3f}", self._status_text(kl_status))
+
+        # Explained variance
+        ev_status = self._get_explained_var_status(self.state.explained_variance)
+        table.add_row("ExplVar", f"{self.state.explained_variance:.2f}", self._status_text(ev_status))
+
+        return table
+
+    def _render_losses_table(self) -> Table:
+        """Render losses as a table (for combined panel)."""
+        table = Table(show_header=False, box=None, padding=(0, 0))
+        table.add_column("Loss", style="dim", width=7)
+        table.add_column("Value", justify="right", width=8)
+
+        table.add_row("Policy", f"{self.state.policy_loss:.4f}")
+        table.add_row("Value", f"{self.state.value_loss:.4f}")
+        table.add_row("Entropy", f"{self.state.entropy_loss:.4f}")
+
+        # Gradient norm with status
+        grad_status = self._get_grad_norm_status(self.state.grad_norm)
+        grad_style = {
+            HealthStatus.OK: "green",
+            HealthStatus.WARNING: "yellow",
+            HealthStatus.CRITICAL: "red bold",
+        }[grad_status]
+        table.add_row("GradNorm", Text(f"{self.state.grad_norm:.2f}", style=grad_style))
+
+        return table
+
+    def _render_policy_stats(self) -> Panel:
+        """Render combined policy stats panel with three sub-columns."""
+        # Create outer table with 3 columns
+        outer = Table(show_header=True, box=None, padding=(0, 1), expand=True)
+        outer.add_column("[bold]Actions[/bold]", justify="center", ratio=1)
+        outer.add_column("[bold]Policy Health[/bold]", justify="center", ratio=1)
+        outer.add_column("[bold]Losses[/bold]", justify="center", ratio=1)
+
+        outer.add_row(
+            self._render_actions_table(),
+            self._render_policy_health_table(),
+            self._render_losses_table(),
+        )
+
+        return Panel(outer, title="[bold]POLICY STATS[/bold]", border_style="cyan")
 
     def _render_reward_components(self) -> Panel:
         """Render the reward components breakdown."""
@@ -1149,35 +1152,6 @@ class TUIOutput:
         table.add_row("Total:", Text(f"{total:+.2f}", style=style))
 
         return Panel(table, title="[bold]REWARD COMPONENTS[/bold]", border_style="cyan")
-
-    def _render_losses(self) -> Panel:
-        """Render the losses panel."""
-        table = Table(show_header=False, box=None, padding=(0, 1))
-        table.add_column("Loss", style="dim")
-        table.add_column("Value", justify="right")
-
-        table.add_row("Policy:", f"{self.state.policy_loss:.4f}")
-        table.add_row("Value:", f"{self.state.value_loss:.4f}")
-        table.add_row("Entropy:", f"{self.state.entropy_loss:.4f}")
-        table.add_row("Total:", f"{self.state.policy_loss + self.state.value_loss + self.state.entropy_loss:.4f}")
-
-        table.add_row("", "")
-
-        # Gradient norm with status
-        grad_status = self._get_grad_norm_status(self.state.grad_norm)
-        grad_style = {
-            HealthStatus.OK: "green",
-            HealthStatus.WARNING: "yellow",
-            HealthStatus.CRITICAL: "red bold",
-        }[grad_status]
-        table.add_row("Grad Norm:", Text(f"{self.state.grad_norm:.2f}", style=grad_style))
-
-        # Advantage stats
-        table.add_row("", "")
-        table.add_row("Adv Mean:", f"{self.state.advantage_mean:+.3f}")
-        table.add_row("Adv Std:", f"{self.state.advantage_std:.3f}")
-
-        return Panel(table, title="[bold]LOSSES[/bold]", border_style="cyan")
 
     def _render_footer(self) -> Panel:
         """Render the footer with key bindings hint."""
