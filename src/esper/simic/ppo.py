@@ -354,33 +354,6 @@ class PPOAgent:
         action, log_prob, value, _ = self.network.get_action(state, action_mask, deterministic)
         return action, log_prob, value
 
-    def store_transition(
-        self,
-        state: torch.Tensor,
-        action: int,
-        log_prob: float,
-        value: float,
-        reward: float,
-        done: bool,
-        action_mask: torch.Tensor,
-        truncated: bool = False,
-        bootstrap_value: float = 0.0,
-    ) -> None:
-        """Store transition in buffer.
-
-        Args:
-            state: Observation tensor
-            action: Action taken
-            log_prob: Log probability of action
-            value: Value estimate
-            reward: Reward received
-            done: Whether episode ended
-            action_mask: Binary mask of valid actions (stored for PPO update)
-            truncated: Whether episode ended due to time limit
-            bootstrap_value: Value to bootstrap from if truncated
-        """
-        self.buffer.add(state, action, log_prob, value, reward, done, action_mask, truncated, bootstrap_value)
-
     def update_tamiyo(
         self,
         clear_buffer: bool = True,
