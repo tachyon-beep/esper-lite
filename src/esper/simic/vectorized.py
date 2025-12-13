@@ -39,6 +39,11 @@ from esper.utils.data import SharedBatchIterator
 from esper.leyline import SeedStage, SeedTelemetry, TelemetryEvent, TelemetryEventType
 from esper.leyline.factored_actions import FactoredAction, LifecycleOp
 from esper.simic.action_masks import build_slot_states, compute_action_masks
+from esper.simic.anomaly_detector import AnomalyDetector
+from esper.simic.debug_telemetry import (
+    collect_per_layer_gradients,
+    check_numerical_stability,
+)
 from esper.simic.gradient_collector import (
     collect_dual_gradients_async,
     materialize_dual_grad_stats,
@@ -435,6 +440,9 @@ def train_ppo_vectorized(
     analytics = BlueprintAnalytics()
     hub = get_hub()
     hub.add_backend(analytics)
+
+    # Initialize anomaly detector for automatic diagnostics
+    anomaly_detector = AnomalyDetector()
 
     def make_telemetry_callback(env_idx: int):
         """Create callback that injects env_id before emitting to hub."""
@@ -1381,6 +1389,61 @@ def train_ppo_vectorized(
             if raw_states_for_normalizer_update:
                 all_raw_states = torch.cat(raw_states_for_normalizer_update, dim=0)
                 obs_normalizer.update(all_raw_states)
+
+            # === Anomaly Detection ===
+            # Use check_all() for comprehensive anomaly detection
+            anomaly_report = anomaly_detector.check_all(
+                ratio_max=metrics.get("ratio_max", [1.0])[-1],
+                ratio_min=metrics.get("ratio_min", [1.0])[-1],
+                explained_variance=metrics.get("explained_variance", [0.0])[-1],
+                current_episode=episodes_completed,
+                total_episodes=total_episodes,
+            )
+
+            if anomaly_report.has_anomaly:
+                print(f"\n⚠️  TRAINING ANOMALY DETECTED at episode {episodes_completed}:")
+                for anomaly_type in anomaly_report.anomaly_types:
+                    print(f"   - {anomaly_type}: {anomaly_report.details.get(anomaly_type, '')}")
+
+                # Escalate to debug telemetry - collect diagnostic data
+                print("   📊 Collecting debug diagnostics...")
+                gradient_stats = collect_per_layer_gradients(agent.network)
+                stability_report = check_numerical_stability(agent.network)
+
+                # Log gradient health summary
+                vanishing = sum(1 for gs in gradient_stats if gs.zero_fraction > 0.5)
+                exploding = sum(1 for gs in gradient_stats if gs.large_fraction > 0.1)
+                if vanishing > 0:
+                    print(f"   ⚠️  {vanishing} layers with vanishing gradients (>50% zeros)")
+                if exploding > 0:
+                    print(f"   ⚠️  {exploding} layers with exploding gradients (>10% large values)")
+                if stability_report.has_issues():
+                    print(f"   🔥 NUMERICAL INSTABILITY detected in weights/gradients")
+
+                # Emit specific telemetry events (use existing event types)
+                if hub:
+                    # Map anomaly types to specific event types
+                    event_type_map = {
+                        "ratio_explosion": TelemetryEventType.RATIO_EXPLOSION_DETECTED,
+                        "ratio_collapse": TelemetryEventType.RATIO_COLLAPSE_DETECTED,
+                        "value_collapse": TelemetryEventType.VALUE_COLLAPSE_DETECTED,
+                        "numerical_instability": TelemetryEventType.NUMERICAL_INSTABILITY_DETECTED,
+                    }
+
+                    for anomaly_type in anomaly_report.anomaly_types:
+                        event_type = event_type_map.get(
+                            anomaly_type,
+                            TelemetryEventType.GRADIENT_ANOMALY  # fallback
+                        )
+                        hub.emit(TelemetryEvent(
+                            event_type=event_type,
+                            data={
+                                "episode": episodes_completed,
+                                "detail": anomaly_report.details.get(anomaly_type, ""),
+                                "gradient_stats": [gs.to_dict() for gs in gradient_stats[:5]],
+                                "stability": stability_report.to_dict(),
+                            }
+                        ))
 
         # Track results
         avg_acc = sum(env_final_accs) / len(env_final_accs)
