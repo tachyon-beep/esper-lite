@@ -395,28 +395,40 @@ class TelemetryStore:
                 return list(obj)
             return obj
 
+        def json_default(obj):
+            """Handle non-serializable types for json.dumps."""
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            if isinstance(obj, Path):
+                return str(obj)
+            # hasattr AUTHORIZED by John on 2025-12-14 15:00:00 UTC
+            # Justification: Serialization - handle Enum values in JSON export
+            if hasattr(obj, "name") and hasattr(obj, "value"):
+                return obj.name  # Serialize enum as name string
+            raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
         path = Path(path)
         count = 0
 
         with open(path, "w") as f:
             # Write context
             if self.context:
-                f.write(json.dumps({"type": "context", "data": serialize(self.context)}) + "\n")
+                f.write(json.dumps({"type": "context", "data": serialize(self.context)}, default=json_default) + "\n")
                 count += 1
 
             # Write baseline
             if self.baseline:
-                f.write(json.dumps({"type": "baseline", "data": serialize(self.baseline)}) + "\n")
+                f.write(json.dumps({"type": "baseline", "data": serialize(self.baseline)}, default=json_default) + "\n")
                 count += 1
 
             # Write epochs
             for epoch in self.epoch_snapshots:
-                f.write(json.dumps({"type": "epoch", "data": serialize(epoch)}) + "\n")
+                f.write(json.dumps({"type": "epoch", "data": serialize(epoch)}, default=json_default) + "\n")
                 count += 1
 
             # Write dense traces
             for trace in self.dense_traces:
-                f.write(json.dumps({"type": "dense_trace", "data": serialize(trace)}) + "\n")
+                f.write(json.dumps({"type": "dense_trace", "data": serialize(trace)}, default=json_default) + "\n")
                 count += 1
 
         return count
