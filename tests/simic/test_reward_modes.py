@@ -145,3 +145,93 @@ def test_minimal_reward_penalty_for_young_cull():
 
     # Non-terminal but penalty applies -> -0.1
     assert reward == config.early_cull_penalty
+
+
+def test_compute_reward_shaped_mode():
+    """compute_reward dispatches to shaped reward by default."""
+    from esper.simic.rewards import compute_reward, SeedInfo
+    config = ContributionRewardConfig(reward_mode=RewardMode.SHAPED)
+
+    reward = compute_reward(
+        action=LifecycleOp.WAIT,
+        seed_contribution=None,
+        val_acc=70.0,
+        host_max_acc=70.0,
+        seed_info=None,
+        epoch=10,
+        max_epochs=25,
+        total_params=100_000,
+        host_params=100_000,
+        acc_at_germination=None,
+        acc_delta=0.0,
+        config=config,
+    )
+
+    # Shaped reward with no seed should be non-zero (rent, etc.)
+    assert isinstance(reward, float)
+
+
+def test_compute_reward_sparse_mode():
+    """compute_reward dispatches to sparse reward when mode is SPARSE."""
+    from esper.simic.rewards import compute_reward
+    config = ContributionRewardConfig(reward_mode=RewardMode.SPARSE)
+
+    # Non-terminal epoch
+    reward = compute_reward(
+        action=LifecycleOp.WAIT,
+        seed_contribution=None,
+        val_acc=70.0,
+        host_max_acc=70.0,
+        seed_info=None,
+        epoch=10,
+        max_epochs=25,
+        total_params=100_000,
+        host_params=100_000,
+        acc_at_germination=None,
+        acc_delta=0.0,
+        config=config,
+    )
+
+    # Sparse reward at non-terminal = 0.0
+    assert reward == 0.0
+
+
+def test_compute_reward_minimal_mode():
+    """compute_reward dispatches to minimal reward when mode is MINIMAL."""
+    from esper.simic.rewards import compute_reward, SeedInfo
+    config = ContributionRewardConfig(
+        reward_mode=RewardMode.MINIMAL,
+        early_cull_threshold=5,
+        early_cull_penalty=-0.1,
+    )
+
+    # Create a young seed
+    seed_info = SeedInfo(
+        stage=3,  # TRAINING
+        improvement_since_stage_start=0.0,
+        total_improvement=0.0,
+        epochs_in_stage=2,
+        seed_params=10_000,
+        previous_stage=2,
+        previous_epochs_in_stage=1,
+        seed_age_epochs=3,  # Young seed
+    )
+
+    # Cull action on young seed
+    reward = compute_reward(
+        action=LifecycleOp.CULL,
+        seed_contribution=None,
+        val_acc=70.0,
+        host_max_acc=70.0,
+        seed_info=seed_info,
+        epoch=10,
+        max_epochs=25,
+        total_params=110_000,
+        host_params=100_000,
+        acc_at_germination=65.0,
+        acc_delta=0.5,
+        config=config,
+    )
+
+    # Should get early-cull penalty
+    assert reward == -0.1

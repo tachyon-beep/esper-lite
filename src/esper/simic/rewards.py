@@ -30,7 +30,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, IntEnum
 from typing import NamedTuple
 
 _logger = logging.getLogger(__name__)
@@ -740,6 +740,109 @@ def compute_minimal_reward(
     return reward
 
 
+def compute_reward(
+    action: IntEnum,
+    seed_contribution: float | None,
+    val_acc: float,
+    host_max_acc: float,
+    seed_info: SeedInfo | None,
+    epoch: int,
+    max_epochs: int,
+    total_params: int,
+    host_params: int,
+    acc_at_germination: float | None,
+    acc_delta: float,
+    num_fossilized_seeds: int = 0,
+    num_contributing_fossilized: int = 0,
+    config: ContributionRewardConfig | None = None,
+    return_components: bool = False,
+) -> float | tuple[float, "RewardComponentsTelemetry"]:
+    """Unified reward computation dispatcher.
+
+    Routes to the appropriate reward function based on config.reward_mode:
+    - SHAPED: Dense shaping with PBRS, attribution, warnings (default)
+    - SPARSE: Terminal-only ground truth reward
+    - MINIMAL: Sparse + early-cull penalty
+
+    Args:
+        action: Action taken (LifecycleOp or similar IntEnum)
+        seed_contribution: Counterfactual contribution (None if unavailable)
+        val_acc: Current validation accuracy
+        host_max_acc: Maximum accuracy achieved during episode
+        seed_info: Seed state info (None if no active seed)
+        epoch: Current epoch
+        max_epochs: Maximum epochs in episode
+        total_params: Total parameters (host + seeds)
+        host_params: Host model parameters
+        acc_at_germination: Accuracy when seed was planted
+        acc_delta: Per-epoch accuracy change
+        num_fossilized_seeds: Count of fossilized seeds
+        num_contributing_fossilized: Count of contributing fossilized seeds
+        config: Reward configuration (uses default if None)
+        return_components: If True, return (reward, components) tuple
+
+    Returns:
+        Reward value, or (reward, components) if return_components=True
+    """
+    if config is None:
+        config = ContributionRewardConfig()
+
+    # Dispatch based on reward mode
+    if config.reward_mode == RewardMode.SHAPED:
+        return compute_contribution_reward(
+            action=action,
+            seed_contribution=seed_contribution,
+            val_acc=val_acc,
+            seed_info=seed_info,
+            epoch=epoch,
+            max_epochs=max_epochs,
+            total_params=total_params,
+            host_params=host_params,
+            config=config,
+            acc_at_germination=acc_at_germination,
+            acc_delta=acc_delta,
+            return_components=return_components,
+            num_fossilized_seeds=num_fossilized_seeds,
+            num_contributing_fossilized=num_contributing_fossilized,
+        )
+
+    elif config.reward_mode == RewardMode.SPARSE:
+        reward = compute_sparse_reward(
+            host_max_acc=host_max_acc,
+            total_params=total_params,
+            epoch=epoch,
+            max_epochs=max_epochs,
+            config=config,
+        )
+
+    elif config.reward_mode == RewardMode.MINIMAL:
+        seed_age = seed_info.seed_age_epochs if seed_info else None
+        reward = compute_minimal_reward(
+            host_max_acc=host_max_acc,
+            total_params=total_params,
+            epoch=epoch,
+            max_epochs=max_epochs,
+            action=action,
+            seed_age=seed_age,
+            config=config,
+        )
+
+    else:
+        raise ValueError(f"Unknown reward mode: {config.reward_mode}")
+
+    # Handle return_components for sparse/minimal modes
+    if return_components:
+        components = RewardComponentsTelemetry()
+        components.total_reward = reward
+        components.action_name = action.name
+        components.epoch = epoch
+        components.seed_stage = seed_info.stage if seed_info else None
+        components.val_acc = val_acc
+        return reward, components
+
+    return reward
+
+
 def _contribution_pbrs_bonus(
     seed_info: SeedInfo,
     config: ContributionRewardConfig,
@@ -1065,7 +1168,10 @@ __all__ = [
     # Seed info
     "SeedInfo",
     # Reward functions
+    "compute_reward",
     "compute_contribution_reward",
+    "compute_sparse_reward",
+    "compute_minimal_reward",
     "compute_loss_reward",
     # PBRS utilities
     "compute_potential",
