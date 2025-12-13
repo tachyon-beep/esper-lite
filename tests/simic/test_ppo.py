@@ -89,6 +89,33 @@ def test_kl_early_stopping_triggers():
         "Either early stopping triggered or KL was computed"
 
 
+def test_value_clipping_uses_appropriate_range():
+    """Verify value clipping doesn't use the policy clip ratio."""
+    agent = PPOAgent(
+        state_dim=35,
+        clip_ratio=0.2,  # Policy clip
+        clip_value=True,
+        value_clip=10.0,  # Should exist and be separate
+        compile_network=False,
+        device="cpu",
+    )
+
+    # Value clip should be much larger than policy clip
+    assert agent.value_clip == 10.0, "Agent should have value_clip=10.0"
+    assert agent.value_clip > agent.clip_ratio, "Value clip should be larger than policy clip"
+
+
+def test_value_clipping_disabled_option():
+    """Verify clip_value=False disables value clipping entirely."""
+    agent = PPOAgent(
+        state_dim=35,
+        clip_value=False,
+        compile_network=False,
+        device="cpu",
+    )
+    assert agent.clip_value is False, "clip_value should be configurable to False"
+
+
 def test_signals_to_features_with_multislot_params():
     """Test signals_to_features accepts total_seeds and max_seeds params."""
     from esper.leyline import SeedTelemetry

@@ -152,6 +152,10 @@ class PPOAgent:
         entropy_anneal_steps: int = 0,
         value_coef: float = 0.5,
         clip_value: bool = True,
+        # Separate clip range for value function (larger than policy clip_ratio)
+        # Note: Some research (Engstrom et al., 2020) suggests value clipping often
+        # hurts performance. Consider clip_value=False if value learning is slow.
+        value_clip: float = 10.0,
         max_grad_norm: float = 0.5,
         n_epochs: int = 10,
         recurrent_n_epochs: int | None = None,  # Default 1 for recurrent (hidden state safety)
@@ -184,6 +188,7 @@ class PPOAgent:
         self.entropy_anneal_steps = entropy_anneal_steps
         self.value_coef = value_coef
         self.clip_value = clip_value
+        self.value_clip = value_clip
         self.max_grad_norm = max_grad_norm
         self.lstm_hidden_dim = lstm_hidden_dim
         self.n_epochs = n_epochs
@@ -431,8 +436,10 @@ class PPOAgent:
             # Value loss
             valid_old_values = data["values"][valid_mask]
             if self.clip_value:
+                # Use separate value_clip (not policy clip_ratio) since value scale differs
+                # Value predictions can range from -10 to +50, so clip_ratio=0.2 is too tight
                 values_clipped = valid_old_values + torch.clamp(
-                    values - valid_old_values, -self.clip_ratio, self.clip_ratio
+                    values - valid_old_values, -self.value_clip, self.value_clip
                 )
                 value_loss_unclipped = (values - valid_returns) ** 2
                 value_loss_clipped = (values_clipped - valid_returns) ** 2
@@ -520,6 +527,7 @@ class PPOAgent:
                 'entropy_anneal_steps': self.entropy_anneal_steps,
                 'value_coef': self.value_coef,
                 'clip_value': self.clip_value,
+                'value_clip': self.value_clip,
                 'target_kl': self.target_kl,
                 'recurrent_n_epochs': self.recurrent_n_epochs,
                 'lstm_hidden_dim': self.lstm_hidden_dim,
