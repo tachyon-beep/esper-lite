@@ -24,11 +24,6 @@ from esper.simic.episodes import (
     DatasetManager,
 )
 
-# Buffers
-from esper.simic.buffers import (
-    RolloutStep,
-    RolloutBuffer,
-)
 from esper.simic.prioritized_buffer import (
     SumTree,
     PrioritizedReplayBuffer,
@@ -120,8 +115,6 @@ __all__ = [
     "DatasetManager",
 
     # Buffers
-    "RolloutStep",
-    "RolloutBuffer",
     "SumTree",
     "PrioritizedReplayBuffer",
 
