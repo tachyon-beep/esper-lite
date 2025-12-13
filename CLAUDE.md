@@ -9,7 +9,10 @@ This file contains mandatory rules for Claude Code when working on this codebase
 1. **`README.md`** - Project overview, architecture, CLI reference with all flags
 2. **`ROADMAP.md`** - Architecture principles (the "Nine Commandments"), execution phases, and biological component roles
 
-These documents are kept current and provide essential context for understanding the codebase.
+**If more detailed context is needed at any time, read:**
+3. **`docs/arch-analysis-*/*.md`** - Select the most recent in-depth architecture analysis and design rationale. Includes architectural diagrams and component descriptions.
+
+These documents MUST be kept current and provide essential context for understanding the codebase.
 
 ## No Legacy Code Policy
 
@@ -51,6 +54,7 @@ The following are **strictly prohibited** under all circumstances:
 ### Rationale
 
 Legacy code and backwards compatibility create:
+
 - **Complexity:** Multiple code paths doing the same thing
 - **Confusion:** Unclear which version is "correct"
 - **Technical Debt:** Old code that never gets removed
@@ -73,6 +77,7 @@ Legacy code and backwards compatibility create:
 ### Authorization Requirements
 
 Every `hasattr()` call in the codebase MUST be accompanied by an inline comment containing:
+
 1. Explicit authorization from the operator
 2. Date and time of authorization (ISO 8601 format)
 3. Justification for why hasattr is necessary
@@ -97,6 +102,7 @@ event_type = event.event_type.name if hasattr(event.event_type, 'name') else str
 ### Rationale
 
 The `hasattr()` function is often used to mask integration flaws:
+
 - Checking for attributes that should always exist (poor type contracts)
 - Checking for attributes that never exist (actual bugs)
 - Duck typing that should be formalized with Protocols or ABCs
@@ -112,6 +118,7 @@ The `hasattr()` function is often used to mask integration flaws:
 ### Exceptions
 
 The only legitimate uses of `hasattr()` are:
+
 1. **Serialization/Deserialization:** Handling polymorphic data from external sources
 2. **Cleanup Guards:** Defensive programming in `__del__`/`close()` methods
 3. **Feature Detection:** When integrating with external libraries where feature availability varies
@@ -123,11 +130,13 @@ Even these cases require authorization and documentation.
 **The `docs/plans/archive/` directory contains completed or superseded implementation plans.**
 
 ### What It Contains
+
 - Implementation plans that have been executed
 - Plans superseded by architectural changes
 - Historical decision records
 
 ### How to Treat It
+
 - **Reference for understanding past decisions** and why certain approaches were taken
 - **DO NOT** implement tasks from archived plans without checking if they're still relevant
 - **DO NOT** assume archived plans reflect current architecture
@@ -143,3 +152,4 @@ Whenever we make an active design decision to defer functionality due to complex
 ```python
 # TODO: [FUTURE FUNCTIONALITY] - Brief description of what was deferred and why
 ```
+- remember that we use UV in this project and use it as the preferred way to execute pythonc ode

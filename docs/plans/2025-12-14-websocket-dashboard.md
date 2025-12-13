@@ -350,6 +350,8 @@ git commit -m "feat(karn): add WebSocketOutput backend for real-time dashboard"
 
 **Step 1: Write implementation**
 
+**Note:** The dashboard HTML is in `src/esper/karn/dashboard.html` (not embedded inline). The server reads this file at startup.
+
 ```python
 # src/esper/karn/dashboard_server.py
 """FastAPI server for Karn dashboard.
@@ -374,7 +376,19 @@ from fastapi.staticfiles import StaticFiles
 
 _logger = logging.getLogger(__name__)
 
-# Dashboard HTML (embedded for simplicity)
+# Load dashboard HTML from file
+_DASHBOARD_PATH = Path(__file__).parent / "dashboard.html"
+
+
+def _load_dashboard_html() -> str:
+    """Load dashboard HTML from file, with fallback for missing file."""
+    if _DASHBOARD_PATH.exists():
+        return _DASHBOARD_PATH.read_text()
+    return "<html><body><h1>Dashboard not found</h1><p>Missing: dashboard.html</p></body></html>"
+
+
+# NOTE: The full dashboard HTML is in src/esper/karn/dashboard.html
+# This inline version is a minimal fallback only.
 DASHBOARD_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -829,7 +843,7 @@ def create_app(telemetry_queue: asyncio.Queue | None = None) -> FastAPI:
     @app.get("/", response_class=HTMLResponse)
     async def get_dashboard():
         """Serve the dashboard HTML."""
-        return DASHBOARD_HTML
+        return _load_dashboard_html()
 
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):

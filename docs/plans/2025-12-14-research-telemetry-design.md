@@ -731,15 +731,28 @@ def get_collector() -> KarnCollector:
 
 ### Phase 2: Shadow Validation
 
-Run both systems simultaneously to validate Karn captures everything Nissa does, plus more.
+Run both systems simultaneously to validate Karn is operational.
 
 **Validation criteria:**
+
+Karn is considered validated when training completes successfully with telemetry output that is directionally consistent (e.g., accuracy improves over epochs, rewards correlate with performance). Exact numeric match with Nissa is **not required** due to known measurement issues in the legacy system — the goal is operational validation, not behavioral equivalence.
+
 | Check | Method |
 |-------|--------|
-| Event parity | Assert every Nissa event has Karn equivalent |
-| Metric consistency | Compare epoch-level metrics (loss, accuracy) |
-| No regression | Karn overhead ≤ Nissa overhead |
-| New capabilities | Counterfactual matrix produces valid Shapley values |
+| Events flow | Training runs complete with telemetry appearing in console/logs |
+| No crashes | Karn doesn't break the training loop or cause exceptions |
+| Smells right | Metrics are directionally correct (accuracy up, rewards correlate) |
+| New capabilities | Counterfactual matrix produces plausible Shapley values |
+
+**TODO: [FUTURE FUNCTIONALITY] - Correctness Validation**
+
+After Karn is operationally stable, implement ground-truth validation for publication-grade claims:
+- Cross-check accuracy metrics against manual `torch.no_grad()` evaluation
+- Validate parameter accounting (`total_params == host_params + seed_params`)
+- Assert counterfactual baseline (α=0 everywhere) matches host-only accuracy
+- Add plausibility bounds checking for computed metrics
+
+This is deferred because: (1) the current goal is operational replacement of a known-broken system, and (2) correctness validation requires stable infrastructure to test against.
 
 **Shadow mode implementation:**
 ```python
