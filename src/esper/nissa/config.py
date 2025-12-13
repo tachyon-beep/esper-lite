@@ -178,7 +178,7 @@ class TelemetryConfig(BaseModel):
 
     def feature_count_estimate(self) -> int:
         """Estimate total feature count for this configuration."""
-        count = 27  # Base features from TrainingSnapshot
+        count = 35  # Base training signals features (see leyline.TensorSchema)
 
         if self.gradients.enabled:
             # Assume ~4 tracked layers, 3 stats each

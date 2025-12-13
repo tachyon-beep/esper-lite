@@ -9,7 +9,7 @@ Esper is a framework for **Morphogenetic AI**—neural networks that dynamically
 * **🛡️ Gradient Isolation:** Seeds train in an "incubator" state, learning from the host's errors without destabilizing its existing knowledge (catastrophic forgetting prevention).
 * **🧠 Dual-Mode Control:**
   * **Tamiyo (Heuristic):** A rule-based baseline controller for stable, predictable growth.
-  * **Simic (RL):** A PPO/IQL reinforcement learning agent that learns optimal growth strategies by observing training dynamics.
+  * **Simic (RL):** A PPO reinforcement learning agent that learns optimal growth strategies by observing training dynamics.
 * **⚡ Vectorized Training:** High-performance, multi-GPU RL environment using CUDA streams and inverted control flow for massive parallel throughput.
 * **🔍 Rich Telemetry:** The **Nissa** subsystem provides profile-based diagnostics (gradient health, loss landscape sharpness) for deep debugging.
 
@@ -17,7 +17,7 @@ Esper is a framework for **Morphogenetic AI**—neural networks that dynamically
 
 ## 🏗️ Architecture
 
-The system is organized into five decoupled domains:
+The system is organized into six decoupled domains:
 
 | Domain | Role | Analogy | Description |
 | :--- | :--- | :--- | :--- |
@@ -34,26 +34,23 @@ The system is organized into five decoupled domains:
 
 ### 1. Installation
 
-Requires Python 3.10+ and PyTorch.
+Requires Python 3.11+ and PyTorch.
 
 ```bash
 # Clone and setup
-git clone [https://github.com/yourusername/esper.git](https://github.com/yourusername/esper.git)
+git clone https://github.com/yourusername/esper.git
 cd esper
-python -m venv .venv
-source .venv/bin/activate
 
-# Install in editable mode with dev dependencies
-pip install -e ".[dev]"
-````
+# Recommended: use uv
+uv sync
+```
 
 ### 2\. Run a Heuristic Baseline
 
 Train a CIFAR-10 model where `Tamiyo` (the rule-based system) manages the growth.
 
 ```bash
-# Run on CPU/GPU automatically
-PYTHONPATH=src python src/esper/poc_tamiyo.py
+PYTHONPATH=src uv run python -m esper.scripts.train heuristic --task cifar10 --episodes 1
 ```
 
 ### 3\. Train the Brain (Reinforcement Learning)
@@ -61,14 +58,12 @@ PYTHONPATH=src python src/esper/poc_tamiyo.py
 Train the **Simic** agent using PPO to discover better growth strategies than the heuristic.
 
 ```bash
-# Vectorized PPO training (Recommended for GPU)
-# Runs 4 parallel environments on cuda:0
-PYTHONPATH=src python -m esper.scripts.train ppo \
-    --vectorized \
+PYTHONPATH=src uv run python -m esper.scripts.train ppo \
+    --task cifar10 \
+    --episodes 100 \
     --n-envs 4 \
     --device cuda:0 \
-    --episodes 100 \
-    --max-epochs 75 \
+    --max-epochs 25 \
     --entropy-coef 0.05
 ```
 
@@ -130,5 +125,5 @@ src/esper/
 **Run Tests:**
 
 ```bash
-pytest src/tests
+uv run pytest -q
 ```

@@ -4,8 +4,8 @@
 - `src/esper/leyline`: Shared contracts (stages, commands, telemetry).
 - `src/esper/kasmina`: Seed mechanics and host models (blueprints, slots, isolation, blending).
 - `src/esper/tamiyo`: Strategic controller logic (heuristics, tracking).
-- `src/esper/simic`: Policy learning (features, rewards, PPO/IQL); `src/esper/simic_overnight.py` is the batch runner.
-- `src/esper/nissa`: Telemetry profiles/configuration; `src/esper/scripts/` and `scripts/` hold CLIs (e.g., `train_ppo.sh`).
+- `src/esper/simic`: Policy learning (features, rewards, PPO); main runner is `python -m esper.scripts.train ppo` (vectorized).
+- `src/esper/nissa`: Telemetry profiles/configuration; `src/esper/scripts/` and `scripts/` hold CLIs (e.g., `scripts/train_cifar.sh`).
 - Tests live in `tests/`; `docs/` + `notebooks/` are research notes; `data/` holds generated artifacts—avoid committing large outputs.
 
 ## Architecture Notes
@@ -16,12 +16,12 @@
 - Preferred env/tooling: **use `uv`** (fast, isolated, no system-site-packages edits).
   - First time: `uv sync` (optional; `uv run` will also resolve deps).
   - Run tests: `uv run pytest -q` from repo root.
-  - Run scripts: `uv run python src/esper/poc.py`, `uv run python src/esper/poc_tamiyo.py`, etc.
+  - Run scripts: `PYTHONPATH=src uv run python -m esper.scripts.train heuristic ...` or `PYTHONPATH=src uv run python -m esper.scripts.train ppo ...`.
 - Legacy/manual env (only if you really need it):
   - Create env: `python -m venv .venv && source .venv/bin/activate`.
   - Install: `pip install -e .[dev]` (pytest, jupyter; Python 3.11+).
-- Policy training: `./scripts/train_ppo.sh -e 50 --single` (writes `data/models/ppo_tamiyo.pt`; `--help` for options); GPU recommended, CPU supported but slower.
-- Batch policy learning: `PYTHONPATH=src python src/esper/simic_overnight.py --episodes 50`.
+- Policy training: `./scripts/train_cifar.sh --episodes 50 --n-envs 4 --device cuda:0 --save data/models/ppo_tamiyo.pt` (`--help` for options); GPU recommended, CPU supported but slower.
+- Batch policy learning: `PYTHONPATH=src uv run python -m esper.scripts.train ppo --task cifar10 --episodes 50 --n-envs 4`.
 - Tests (non-uv): `PYTHONPATH=src pytest -q` before PRs.
 
 ## Coding Style & Naming Conventions

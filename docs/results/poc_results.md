@@ -1,3 +1,6 @@
+> NOTE: Historical log. The old `scripts/train_ppo.sh` / `esper.simic_ppo` runner has been removed.
+> Use `scripts/train_cifar.sh` (or `python -m esper.scripts.train ppo ...`) for current runs.
+
 john@nyx:~/esper-lite$  ./scripts/train_ppo.sh -e 60 -n 6 -m 50 -o data/models/ppo_vec_50ep.pt 2>&1 | tee /tmp/ppo_run.log
 ========================================
 

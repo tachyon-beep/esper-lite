@@ -131,6 +131,9 @@ class SlotSnapshot:
     last_gate_attempted: str | None   # "G2", "G3", etc.
     last_gate_passed: bool | None
     last_gate_reason: str | None      # Why it passed/failed
+
+    # Traffic proxy (basic utilization signal)
+    activation_magnitude: float       # Mean absolute activation through seed path
 ```
 
 **Host State:**
@@ -396,6 +399,88 @@ class CounterfactualMatrix:
     interaction_effects: dict[tuple, float]
     shapley_values: dict[str, float] | None
 ```
+
+### Interaction Decomposition (Regime Detection)
+
+For n ≤ 3 active seeds, compute **interaction terms** that reveal whether seeds are cooperating (synergy) or fighting (interference). This is distinct from Shapley values — interaction terms measure *deviation from additivity*.
+
+**Why it matters:** The research paper's central claim is that parasitism vs metamorphosis is **trajectory-separable via interaction derivative**:
+- **Parasitism:** interaction stays persistently negative (seeds interfering)
+- **Metamorphosis:** interaction is negative-but-recovering (derivative > 0)
+
+**Pairwise Interaction Term:**
+
+For seeds i and j, the interaction term is:
+```
+I_ij = f({i,j}) - f({i}) - f({j}) + f(∅)
+```
+Where f(S) is accuracy with seed set S enabled.
+
+- `I_ij > 0`: Synergy — seeds together are better than sum of parts
+- `I_ij < 0`: Interference — seeds are fighting
+- `I_ij ≈ 0`: Independence — seeds don't interact
+
+**Data Structures:**
+
+```python
+@dataclass
+class InteractionDecomposition:
+    """Pairwise interaction analysis for regime detection (n ≤ 3)."""
+    epoch: int
+    n_active_seeds: int
+
+    # Raw interaction terms
+    pairwise_interactions: dict[tuple[str, str], float]  # I_ij per pair
+    third_order_interaction: float | None  # I_123 if 3 seeds active
+
+    # Trajectory tracking (for regime detection)
+    smoothed_interactions: dict[tuple[str, str], float]  # EMA of I_ij
+    interaction_derivatives: dict[tuple[str, str], float]  # ΔĨ_ij (change rate)
+
+    # Regime indicators
+    regime_signal: Literal["synergy", "interference", "recovering", "independent"]
+
+
+@dataclass
+class InteractionTrajectory:
+    """Time series of interaction terms for a seed pair."""
+    slot_pair: tuple[str, str]
+    max_history_length: int = 200  # Bound memory growth (~200 epochs retained)
+
+    # Use deque for automatic FIFO eviction (prevents memory leak on long runs)
+    history: deque[tuple[int, float]] = field(
+        default_factory=lambda: deque(maxlen=200)
+    )  # (epoch, I_ij)
+    smoothed_history: deque[tuple[int, float]] = field(
+        default_factory=lambda: deque(maxlen=200)
+    )  # (epoch, Ĩ_ij)
+    derivative_history: deque[tuple[int, float]] = field(
+        default_factory=lambda: deque(maxlen=200)
+    )  # (epoch, ΔĨ_ij)
+
+    def is_recovering(self, window: int = 5, epsilon: float = 0.001) -> bool:
+        """True if interaction derivative is positive over recent window.
+
+        Args:
+            window: Number of recent epochs to check
+            epsilon: Minimum magnitude to count as "positive" (filters noise around zero)
+        """
+        if len(self.derivative_history) < window:
+            return False
+        recent = [d for _, d in list(self.derivative_history)[-window:]]
+        return sum(1 for d in recent if d > epsilon) >= window * 0.6
+```
+
+**Interpretation:**
+
+| Pattern | Interaction | Derivative | Regime |
+|---------|-------------|------------|--------|
+| Cooperative | I > 0 | any | Symbiosis |
+| Sticky negative | I < 0 | ≤ 0 | **Parasitism** (cull candidate) |
+| Negative-but-recovering | I < 0 | > 0 | **Metamorphosis** (allow turbulence) |
+| Near-zero | I ≈ 0 | any | Independence |
+
+**Compute Cost:** O(2^n) for n seeds. Only enable for n ≤ 3.
 
 ### Parallel Control Runs (Causal Contribution)
 
@@ -725,10 +810,48 @@ assert_metrics_match(nissa_hub.epoch_summary(), karn_collector.epoch_snapshot())
 
 ## Future Extensions (Not in Scope Now)
 
+### Infrastructure
 - **File persistence**: Parquet/JSONL for post-hoc analysis
 - **W&B integration**: Experiment tracking across runs
 - **Distributed telemetry**: Aggregation across DDP ranks
 - **Scaling optimizations**: Sampling strategies for 80B+ models
+
+### TODO: [FUTURE FUNCTIONALITY] Research Paper Compliance (002-seedinteractions.md)
+
+The following features are required for full compliance with the research paper but are deferred until current-scale validation is complete:
+
+#### TODO: [FUTURE] Full Traffic Telemetry
+Currently we capture `activation_magnitude` as a basic traffic proxy. The paper requires:
+- `routing_share: float` — fraction of forward pass using this seed
+- `gradient_flow_share: float` — gradient norm entering/leaving seed
+- `seed_vs_host_traffic: float` — traffic ratio within slot
+- Slot-stratified traffic trajectories for depth-ordering analysis
+
+#### TODO: [FUTURE] Emrakul Hygiene Integration
+Karn does not currently emit hygiene events. The paper requires:
+- `HygieneMetrics` dataclass with: `disconnected_mass`, `low_traffic_mass`, `detritus_ratio`
+- Pre/post hygiene delta reporting (efficiency, attribution stability)
+- Hygiene event emissions when Emrakul prunes components
+- Coordination with Emrakul's low-traffic threshold decisions
+
+#### TODO: [FUTURE] Stability Signal and Shared Energy Budget
+The paper proposes stability-coupled resource allocation between Tamiyo (growth) and Emrakul (pruning):
+- `StabilitySnapshot` with: `stability_estimate` S_t ∈ [0,1], `tamiyo_budget`, `emrakul_budget`
+- Stability components: `loss_variance_window`, `improvement_slope`, `gradient_spike_count`
+- Energy allocation rule: E_tamiyo = E·(1-S_t), E_emrakul = E·S_t
+
+#### TODO: [FUTURE] Turbulence Budget and Governor Events
+The DRL expert review mentioned Governor events. The paper requires:
+- Turbulence budget tracking for high-risk integration bets
+- Governor event emissions (stability interventions, emergency culls)
+- Checkpoint cadence tied to stability signal
+- Rollback event logging for trajectory replay
+
+#### TODO: [FUTURE] Extended Interaction Decomposition
+Current implementation covers n ≤ 3. Future scaling may require:
+- Shapley-based interaction decomposition (SHAP-IQ) for larger seed counts
+- Sampled interaction estimation when 2^n is prohibitive
+- Interaction-stratified analysis by slot depth pairs
 
 ---
 
@@ -960,3 +1083,42 @@ Fumagalli et al. (2023) — decomposes Shapley values into pairwise interactions
 | DDP Readiness | N/A | Add schema fields now |
 
 **Bottom Line:** The design is a strong foundation that needs PPO diagnostic augmentation (DRL) and performance/compatibility mitigations (PyTorch) before implementation.
+
+---
+
+### Expert Review: Interaction Decomposition Addition (2025-12-14)
+
+**Reviewers:** DRL Specialist, PyTorch Specialist
+**Scope:** Review of new Interaction Decomposition section and traffic proxy
+
+#### DRL Specialist Assessment: APPROVED WITH NOTES
+
+| Item | Assessment |
+|------|------------|
+| Interaction derivative approach | Theoretically sound (standard cooperative game theory formulation) |
+| `is_recovering()` 60% threshold | Reasonable for current scale; now includes epsilon filter |
+| `activation_magnitude` traffic proxy | Sufficient for current-scale experiments |
+| Future Extensions prioritization | Correctly prioritized |
+
+**Notes incorporated:**
+- Added `epsilon` parameter to `is_recovering()` to filter noise around zero
+- EMA coefficient for smoothing should be 0.1-0.3 (implementation detail)
+- Consider hysteresis for regime transitions (implementation detail)
+
+#### PyTorch Specialist Assessment: APPROVED WITH NOTES
+
+| Item | Assessment |
+|------|------------|
+| O(2^n) for n ≤ 3 | Acceptable (~700% val overhead, but val is 10-20% of epoch) |
+| `activation_magnitude` | Good sync-free choice |
+| `InteractionTrajectory` memory | **Fixed** — now uses bounded `deque(maxlen=200)` |
+| Future `gradient_flow_share` | Needs careful hook management (documented in TODO) |
+
+**Changes made:**
+- `InteractionTrajectory.history` now uses `deque(maxlen=200)` to prevent memory leak
+- Same for `smoothed_history` and `derivative_history`
+
+**Implementation notes for future:**
+- Consider computing interaction decomposition every K epochs (e.g., K=5) for production
+- Use `@torch.compiler.disable` for alpha-setting loops
+- When implementing `gradient_flow_share`, use context manager pattern for hook lifecycle

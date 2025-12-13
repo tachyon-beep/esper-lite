@@ -128,3 +128,4 @@ Even these cases require authorization and documentation.
 ### The Rule
 
 The archive exists solely as a git-preserved history. Current implementations should be built fresh using the active codebase patterns, not retrofitted from archive code.
+- Whenever we make an active design decision to defer functionality due to complexity, you must add a TODO comment in the most logical place in this format # TODO: [FUTURE FUNCTIONALITY] - Xyz aaaa bbb ccccc.
