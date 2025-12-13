@@ -5,6 +5,7 @@ from collections import deque
 import pytest
 
 from esper.karn.tui import EnvState, TUIState
+from esper.leyline import TelemetryEvent, TelemetryEventType
 
 
 class TestEnvState:
@@ -48,3 +49,53 @@ class TestEnvState:
         assert isinstance(sparkline, str)
         assert len(sparkline) > 0
         assert any(c in sparkline for c in "▁▂▃▄▅▆▇█")
+
+
+class TestTUIStateAggregation:
+    """Tests for TUIState aggregate calculations."""
+
+    def test_aggregate_mean_reward_from_envs(self):
+        """TUIState.aggregate_mean_reward averages across all envs."""
+        state = TUIState()
+        state.n_envs = 3
+
+        for i in range(3):
+            env = state.get_or_create_env(i)
+            env.reward_history.append(float(i + 1) * 0.1)
+
+        assert abs(state.aggregate_mean_reward - 0.2) < 0.001
+
+    def test_aggregate_best_accuracy_tracks_source_env(self):
+        """TUIState.aggregate_best_accuracy returns best across envs with source."""
+        state = TUIState()
+        state.n_envs = 3
+
+        env0 = state.get_or_create_env(0)
+        env0.best_accuracy = 75.0
+        env0.best_accuracy_epoch = 10
+
+        env1 = state.get_or_create_env(1)
+        env1.best_accuracy = 85.0
+        env1.best_accuracy_epoch = 15
+
+        env2 = state.get_or_create_env(2)
+        env2.best_accuracy = 70.0
+
+        best_acc, best_env, best_epoch = state.aggregate_best_accuracy
+        assert best_acc == 85.0
+        assert best_env == 1
+        assert best_epoch == 15
+
+    def test_aggregate_action_counts(self):
+        """TUIState.aggregate_action_counts sums across all envs."""
+        state = TUIState()
+
+        env0 = state.get_or_create_env(0)
+        env0.action_counts = {"WAIT": 10, "GERMINATE": 2, "CULL": 1, "FOSSILIZE": 0}
+
+        env1 = state.get_or_create_env(1)
+        env1.action_counts = {"WAIT": 5, "GERMINATE": 3, "CULL": 0, "FOSSILIZE": 2}
+
+        counts = state.aggregate_action_counts
+        assert counts["WAIT"] == 15
+        assert counts["GERMINATE"] == 5

@@ -350,6 +350,61 @@ class TUIState:
         self.fossilized_count = sum(e.fossilized_count for e in self.env_states.values())
         self.culled_count = sum(e.culled_count for e in self.env_states.values())
 
+    # =========================================================================
+    # Aggregate Properties (cross-env calculations)
+    # =========================================================================
+
+    # Track which env last emitted reward (for detail view focus)
+    last_reward_env_id: int = 0
+
+    @property
+    def aggregate_mean_reward(self) -> float:
+        """Mean of current rewards across all envs."""
+        if not self.env_states:
+            return 0.0
+        rewards = [e.current_reward for e in self.env_states.values()]
+        return sum(rewards) / len(rewards) if rewards else 0.0
+
+    @property
+    def aggregate_mean_accuracy(self) -> float:
+        """Mean of current accuracies across all envs."""
+        if not self.env_states:
+            return 0.0
+        accs = [e.host_accuracy for e in self.env_states.values()]
+        return sum(accs) / len(accs) if accs else 0.0
+
+    @property
+    def aggregate_best_accuracy(self) -> tuple[float, int, int]:
+        """Best accuracy across all envs: (accuracy, env_id, epoch)."""
+        if not self.env_states:
+            return (0.0, -1, 0)
+        best_env = max(self.env_states.values(), key=lambda e: e.best_accuracy)
+        return (best_env.best_accuracy, best_env.env_id, best_env.best_accuracy_epoch)
+
+    @property
+    def aggregate_action_counts(self) -> dict[str, int]:
+        """Sum action counts across all envs."""
+        totals: dict[str, int] = {"WAIT": 0, "GERMINATE": 0, "CULL": 0, "FOSSILIZE": 0}
+        for env in self.env_states.values():
+            for action, count in env.action_counts.items():
+                totals[action] = totals.get(action, 0) + count
+        return totals
+
+    @property
+    def aggregate_total_actions(self) -> int:
+        """Total actions across all envs."""
+        return sum(e.total_actions for e in self.env_states.values())
+
+    @property
+    def envs_by_status(self) -> dict[str, list[int]]:
+        """Group env IDs by status."""
+        by_status: dict[str, list[int]] = {}
+        for env_id, env in self.env_states.items():
+            if env.status not in by_status:
+                by_status[env.status] = []
+            by_status[env.status].append(env_id)
+        return by_status
+
 
 # =============================================================================
 # TUI Output Backend
