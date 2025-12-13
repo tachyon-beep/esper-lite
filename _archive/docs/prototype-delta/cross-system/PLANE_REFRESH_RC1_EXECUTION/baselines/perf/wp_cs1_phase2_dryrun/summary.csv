@@ -1,2 +1,0 @@
-scenario,accuracy_final,epochs,latency_mean_ms,latency_p95_ms,loss_final
-steady_train,0.000000,1.000000,5.532378,10.511518,0.000000

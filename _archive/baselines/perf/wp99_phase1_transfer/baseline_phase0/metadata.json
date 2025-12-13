@@ -1,7 +1,0 @@
-{
-  "cpu_count": 24,
-  "cuda_devices": 2,
-  "cuda_name": "NVIDIA GeForce RTX 4060 Ti",
-  "platform": "Linux-6.8.0-84-generic-x86_64-with-glibc2.39",
-  "python_version": "3.12.3"
-}

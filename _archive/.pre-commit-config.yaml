@@ -1,9 +1,0 @@
-repos:
-  - repo: local
-    hooks:
-      - id: check-shared-types-no-shadow-enums
-        name: Check: No Shadow Enums (Leyline contracts)
-        entry: python3 scripts/check_shared_types.py --root src/esper
-        language: system
-        types: [python]
-        pass_filenames: false
