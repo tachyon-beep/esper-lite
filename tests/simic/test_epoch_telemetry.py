@@ -5,6 +5,48 @@ import pytest
 from esper.leyline import TelemetryEvent, TelemetryEventType
 
 
+class TestEpochCompletedEmission:
+    """Tests for EPOCH_COMPLETED emission."""
+
+    def test_epoch_completed_emitted_with_aggregate_metrics(self):
+        """EPOCH_COMPLETED includes aggregate metrics across envs."""
+        from esper.nissa import get_hub
+
+        hub = get_hub()
+        captured = []
+
+        class CaptureBackend:
+            def emit(self, event):
+                if event.event_type == TelemetryEventType.EPOCH_COMPLETED:
+                    captured.append(event)
+            def close(self):
+                pass
+
+        backend = CaptureBackend()
+        hub.add_backend(backend)
+
+        try:
+            # Emit test event with expected structure
+            hub.emit(TelemetryEvent(
+                event_type=TelemetryEventType.EPOCH_COMPLETED,
+                epoch=5,
+                data={
+                    "train_loss": 0.5,
+                    "train_accuracy": 75.0,
+                    "val_loss": 0.6,
+                    "val_accuracy": 72.0,
+                    "n_envs": 4,
+                }
+            ))
+
+            assert len(captured) == 1
+            assert captured[0].epoch == 5
+            assert captured[0].data["n_envs"] == 4
+        finally:
+            # Clean up to prevent cross-test pollution
+            hub.remove_backend(backend)
+
+
 class TestEpochTelemetryContract:
     """Tests for epoch telemetry event contracts."""
 

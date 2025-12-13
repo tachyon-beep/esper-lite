@@ -1637,6 +1637,33 @@ def train_ppo_vectorized(
                 },
             ))
 
+            # EPOCH_COMPLETED: Commit barrier for Karn
+            # This MUST be emitted LAST for each batch, after PPO_UPDATE and ANALYTICS_SNAPSHOT
+            # Karn will commit the epoch snapshot and advance to epoch+1
+            #
+            # epoch=episodes_completed is monotonic (never repeats) so Karn's
+            # commit/advance logic works correctly across batches.
+            #
+            # IMPORTANT: Aggregate accuracy is sum(correct)/sum(total)*100, NOT mean of per-env
+            # percentages. This avoids weighting bugs when per-env sample counts diverge.
+            total_train_correct = sum(train_corrects)
+            total_train_samples = sum(train_totals)
+            total_val_correct = sum(val_corrects)
+            total_val_samples = sum(val_totals)
+
+            hub.emit(TelemetryEvent(
+                event_type=TelemetryEventType.EPOCH_COMPLETED,
+                epoch=episodes_completed,  # Monotonic batch counter (NOT inner epoch!)
+                data={
+                    "inner_epoch": epoch,  # Final inner epoch (typically max_epochs)
+                    "train_loss": sum(train_losses) / max(len(env_states) * num_train_batches, 1),
+                    "train_accuracy": 100.0 * total_train_correct / max(total_train_samples, 1),
+                    "val_loss": sum(val_losses) / max(len(env_states) * num_test_batches, 1),
+                    "val_accuracy": 100.0 * total_val_correct / max(total_val_samples, 1),
+                    "n_envs": len(env_states),
+                },
+            ))
+
             # Emit training progress events based on actual rolling average trend
             # This aligns events with the displayed rolling_avg_accuracy
             if prev_rolling_avg_acc is not None:
