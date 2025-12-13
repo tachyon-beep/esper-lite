@@ -384,3 +384,153 @@ class TelemetryStore:
     def latest_epoch(self) -> EpochSnapshot | None:
         """Get the most recent committed epoch."""
         return self.epoch_snapshots[-1] if self.epoch_snapshots else None
+
+    def export_jsonl(self, path: Path | str) -> int:
+        """Export store contents to JSONL file.
+
+        Args:
+            path: Path to output JSONL file
+
+        Returns:
+            Number of records written
+        """
+        import json
+        from dataclasses import asdict, is_dataclass
+
+        def serialize(obj):
+            """Serialize dataclass or primitive to JSON-safe dict."""
+            if is_dataclass(obj) and not isinstance(obj, type):
+                return asdict(obj)
+            elif isinstance(obj, deque):
+                return list(obj)
+            return obj
+
+        path = Path(path)
+        count = 0
+
+        with open(path, "w") as f:
+            # Write context
+            if self.context:
+                f.write(json.dumps({"type": "context", "data": serialize(self.context)}) + "\n")
+                count += 1
+
+            # Write baseline
+            if self.baseline:
+                f.write(json.dumps({"type": "baseline", "data": serialize(self.baseline)}) + "\n")
+                count += 1
+
+            # Write epochs
+            for epoch in self.epoch_snapshots:
+                f.write(json.dumps({"type": "epoch", "data": serialize(epoch)}) + "\n")
+                count += 1
+
+            # Write dense traces
+            for trace in self.dense_traces:
+                f.write(json.dumps({"type": "dense_trace", "data": serialize(trace)}) + "\n")
+                count += 1
+
+        return count
+
+    @classmethod
+    def import_jsonl(cls, path: Path | str) -> "TelemetryStore":
+        """Import store contents from JSONL file.
+
+        Args:
+            path: Path to JSONL file created by export_jsonl()
+
+        Returns:
+            TelemetryStore populated from file
+        """
+        import json
+
+        path = Path(path)
+        store = cls()
+
+        with open(path) as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                record = json.loads(line)
+                record_type = record.get("type")
+                data = record.get("data", {})
+
+                if record_type == "context":
+                    store.context = EpisodeContext(**data)
+                elif record_type == "baseline":
+                    store.baseline = HostBaseline(**data)
+                elif record_type == "epoch":
+                    # Reconstruct nested dataclasses
+                    if "host" in data:
+                        data["host"] = HostSnapshot(**data["host"])
+                    if "policy" in data and data["policy"]:
+                        data["policy"] = PolicySnapshot(**data["policy"])
+                    if "slots" in data:
+                        data["slots"] = {k: SlotSnapshot(**v) for k, v in data["slots"].items()}
+                    store.epoch_snapshots.append(EpochSnapshot(**data))
+                elif record_type == "dense_trace":
+                    store.dense_traces.append(DenseTrace(**data))
+
+        return store
+
+    @classmethod
+    def import_from_nissa_dir(cls, dir_path: Path | str) -> "TelemetryStore":
+        """Import events from a Nissa DirectoryOutput folder.
+
+        Nissa DirectoryOutput creates timestamped folders with events.jsonl.
+        This method reads those events and reconstructs a TelemetryStore.
+
+        Args:
+            dir_path: Path to Nissa output directory (contains events.jsonl)
+
+        Returns:
+            TelemetryStore populated from the events
+        """
+        import json
+
+        dir_path = Path(dir_path)
+        events_file = dir_path / "events.jsonl"
+
+        if not events_file.exists():
+            raise FileNotFoundError(f"No events.jsonl found in {dir_path}")
+
+        store = cls()
+        current_epoch_num = -1
+
+        with open(events_file) as f:
+            for line in f:
+                if not line.strip():
+                    continue
+
+                record = json.loads(line)
+                event_type = record.get("event_type", "")
+                data = record.get("data", {})
+                epoch = record.get("epoch") or data.get("epoch", 0)
+
+                # Reconstruct store from events
+                if event_type == "TRAINING_STARTED":
+                    store.context = EpisodeContext(
+                        episode_id=data.get("episode_id", "imported"),
+                        seeds=data.get("seeds", []),
+                        hyperparams=data.get("hyperparams", {}),
+                    )
+                elif event_type == "EPOCH_COMPLETED":
+                    if epoch != current_epoch_num:
+                        if store.current_epoch:
+                            store.commit_epoch()
+                        store.start_epoch(epoch)
+                        current_epoch_num = epoch
+                    if store.current_epoch:
+                        store.current_epoch.host.val_loss = data.get("val_loss", 0.0)
+                        store.current_epoch.host.val_accuracy = data.get("val_accuracy", 0.0)
+                elif event_type == "REWARD_COMPUTED":
+                    if store.current_epoch and not store.current_epoch.policy:
+                        store.current_epoch.policy = PolicySnapshot()
+                    if store.current_epoch and store.current_epoch.policy:
+                        store.current_epoch.policy.reward_total = data.get("total_reward", 0.0)
+                        store.current_epoch.policy.action_op = data.get("action_name", "")
+
+        # Commit final epoch
+        if store.current_epoch:
+            store.commit_epoch()
+
+        return store
