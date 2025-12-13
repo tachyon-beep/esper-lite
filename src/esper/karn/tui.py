@@ -245,6 +245,7 @@ class TUIOutput:
         """Emit a telemetry event to update the TUI.
 
         Thread-safe - can be called from training loop.
+        All events are logged to the event log panel; specific events also update metrics.
         """
         # Auto-start on first event
         if not self._started:
@@ -259,7 +260,12 @@ class TUIOutput:
             else str(event.event_type)
         )
 
-        # Route to appropriate handler
+        # Buffer ALL events to the event log (P1 - TUI/Nissa integration)
+        formatted = self._format_event_for_log(event)
+        if formatted:
+            self.state.event_log.append(formatted)
+
+        # Route to appropriate handler for metrics updates
         with self._lock:
             if event_type == "TRAINING_STARTED":
                 self._handle_training_started(event)
