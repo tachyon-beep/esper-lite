@@ -244,18 +244,26 @@ class KarnCollector:
             _logger.info(f"Dense trace completed: {completed_trace.trigger_reason}")
 
     def _handle_seed_event(self, event: "TelemetryEvent") -> None:
-        """Handle seed lifecycle events."""
+        """Handle seed lifecycle events with env-namespaced slots."""
         if not self.store.current_epoch:
             return
 
-        slot_id = event.slot_id or event.data.get("slot_id", "unknown")
         data = event.data or {}
 
-        # Get or create slot snapshot
-        if slot_id not in self.store.current_epoch.slots:
-            self.store.current_epoch.slots[slot_id] = SlotSnapshot(slot_id=slot_id)
+        # Extract env_id (standardize on env_id, but accept env_idx for backwards compat)
+        env_id = data.get("env_id", data.get("env_idx", 0))
 
-        slot = self.store.current_epoch.slots[slot_id]
+        # Get raw slot_id
+        raw_slot_id = event.slot_id or data.get("slot_id", "unknown")
+
+        # Namespace slot key by env_id to prevent multi-env collisions
+        slot_key = f"env{env_id}:{raw_slot_id}"
+
+        # Get or create slot snapshot with namespaced key
+        if slot_key not in self.store.current_epoch.slots:
+            self.store.current_epoch.slots[slot_key] = SlotSnapshot(slot_id=slot_key)
+
+        slot = self.store.current_epoch.slots[slot_key]
 
         # Update based on event type
         # hasattr AUTHORIZED by John on 2025-12-14 03:30:00 UTC
