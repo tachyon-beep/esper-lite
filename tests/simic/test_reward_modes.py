@@ -1,6 +1,7 @@
 """Tests for reward mode enum and sparse reward functions."""
 
 import pytest
+from esper.leyline.factored_actions import LifecycleOp
 from esper.simic.rewards import RewardMode, ContributionRewardConfig
 
 
@@ -96,3 +97,51 @@ def test_sparse_reward_with_scale():
     # But if we want scale to help, clamp should be [-scale, +scale]
     # Let's verify behavior matches implementation
     assert reward == 1.0  # Clamped at upper bound
+
+
+def test_minimal_reward_no_penalty_for_old_cull():
+    """MINIMAL mode: no penalty for culling old seeds."""
+    from esper.simic.rewards import compute_minimal_reward
+    config = ContributionRewardConfig(
+        reward_mode=RewardMode.MINIMAL,
+        early_cull_threshold=5,
+        early_cull_penalty=-0.1,
+    )
+
+    # Cull a seed that's old enough (age >= threshold)
+    reward = compute_minimal_reward(
+        host_max_acc=75.0,
+        total_params=100_000,
+        epoch=10,
+        max_epochs=25,
+        action=LifecycleOp.CULL,
+        seed_age=5,  # Exactly at threshold
+        config=config,
+    )
+
+    # Non-terminal, no penalty -> 0.0
+    assert reward == 0.0
+
+
+def test_minimal_reward_penalty_for_young_cull():
+    """MINIMAL mode: penalty for culling young seeds."""
+    from esper.simic.rewards import compute_minimal_reward
+    config = ContributionRewardConfig(
+        reward_mode=RewardMode.MINIMAL,
+        early_cull_threshold=5,
+        early_cull_penalty=-0.1,
+    )
+
+    # Cull a seed that's too young
+    reward = compute_minimal_reward(
+        host_max_acc=75.0,
+        total_params=100_000,
+        epoch=10,
+        max_epochs=25,
+        action=LifecycleOp.CULL,
+        seed_age=3,  # Below threshold
+        config=config,
+    )
+
+    # Non-terminal but penalty applies -> -0.1
+    assert reward == config.early_cull_penalty

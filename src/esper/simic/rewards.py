@@ -691,6 +691,55 @@ def compute_sparse_reward(
     return max(-1.0, min(1.0, reward))
 
 
+def compute_minimal_reward(
+    host_max_acc: float,
+    total_params: int,
+    epoch: int,
+    max_epochs: int,
+    action: IntEnum,
+    seed_age: int | None,
+    config: ContributionRewardConfig,
+) -> float:
+    """Compute minimal reward (sparse + early-cull penalty).
+
+    This is a fallback if pure sparse rewards fail to learn. It adds
+    a single shaping signal: penalize culling seeds before they've had
+    a chance to prove themselves.
+
+    Design rationale:
+    - Sparse base: Preserves most of the credit assignment challenge
+    - Early-cull penalty: Prevents degenerate "cull everything" policy
+    - No other shaping: Tests if minimal guidance is sufficient
+
+    Args:
+        host_max_acc: Maximum accuracy achieved during episode
+        total_params: Total parameters at episode end
+        epoch: Current epoch
+        max_epochs: Maximum epochs in episode
+        action: Action taken this timestep
+        seed_age: Age of the seed in epochs (None if no seed)
+        config: Reward configuration
+
+    Returns:
+        Sparse reward + early-cull penalty if applicable
+    """
+    # Start with sparse reward
+    reward = compute_sparse_reward(
+        host_max_acc=host_max_acc,
+        total_params=total_params,
+        epoch=epoch,
+        max_epochs=max_epochs,
+        config=config,
+    )
+
+    # Add early-cull penalty if applicable
+    if action == LifecycleOp.CULL and seed_age is not None:
+        if seed_age < config.early_cull_threshold:
+            reward += config.early_cull_penalty
+
+    return reward
+
+
 def _contribution_pbrs_bonus(
     seed_info: SeedInfo,
     config: ContributionRewardConfig,
