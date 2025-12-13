@@ -723,6 +723,11 @@ def train_ppo_vectorized(
                     for i, env_state in enumerate(env_states):
                         if i >= len(env_batches):
                             continue
+                        # CRITICAL: SharedBatchIterator does non_blocking transfers on the default stream.
+                        # We must sync env_state.stream with default stream before using the data,
+                        # otherwise we may access partially-transferred data (race condition).
+                        if env_state.stream:
+                            env_state.stream.wait_stream(torch.cuda.default_stream(env_state.env_device))
                         inputs, targets = env_batches[i]
                         loss_tensor, correct_tensor, total, grad_stats = process_train_batch(
                             env_state, inputs, targets, criterion, use_telemetry=use_telemetry, slots=slots
@@ -819,6 +824,11 @@ def train_ppo_vectorized(
                     for i, env_state in enumerate(env_states):
                         if i >= len(env_batches):
                             continue
+                        # CRITICAL: SharedBatchIterator does non_blocking transfers on the default stream.
+                        # We must sync env_state.stream with default stream before using the data,
+                        # otherwise we may access partially-transferred data (race condition).
+                        if env_state.stream:
+                            env_state.stream.wait_stream(torch.cuda.default_stream(env_state.env_device))
                         inputs, targets = env_batches[i]
 
                         # MAIN VALIDATION (real alpha)
