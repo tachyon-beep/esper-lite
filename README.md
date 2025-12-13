@@ -25,7 +25,7 @@ The system is organized into six decoupled domains:
 | **Leyline** | **Nervous System** | Signals | Shared data contracts, enums (`SeedStage`), and tensor schemas. |
 | **Tamiyo** | **Brain** | The Gardener | Strategic decision-making logic (heuristic or neural policy). |
 | **Tolaria** | **Hands** | Tools | Execution engine that runs the PyTorch training loops and optimizers. |
-| **Simic** | **Gym** | Simulator | RL infrastructure (PPO, IQL) for training the strategic brain. |
+| **Simic** | **Gym** | Simulator | RL infrastructure (PPO) for training the strategic brain. |
 | **Nissa** | **Senses** | Sensors | Observability hub for routing telemetry and generating narratives. |
 
 ---
@@ -117,7 +117,7 @@ src/esper/
 ├── leyline/      # Shared types & contracts
 ├── tamiyo/       # Decision logic
 ├── tolaria/      # PyTorch training loops
-├── simic/        # RL Algorithms (PPO, IQL)
+├── simic/        # RL Algorithms (PPO)
 ├── nissa/        # Telemetry & Logging
 └── scripts/      # CLI Entry points
 ```
