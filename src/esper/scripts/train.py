@@ -56,6 +56,13 @@ def main():
         default="auto",
         help="TUI layout mode: compact (< 100 cols), standard (100-150), wide (150+), auto (detect)",
     )
+    telemetry_parent.add_argument(
+        "--export-karn",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Export Karn telemetry store to JSONL file after training",
+    )
 
     subparsers = parser.add_subparsers(dest="algorithm", required=True)
 
@@ -205,6 +212,13 @@ def main():
         hub.add_backend(dir_backend)
         print(f"Telemetry will be saved to: {dir_backend.output_dir}")
 
+    # Setup Karn collector for stateful telemetry (P1-04)
+    karn_collector = None
+    if args.export_karn:
+        from esper.karn import KarnCollector
+        karn_collector = KarnCollector()
+        hub.add_backend(karn_collector)
+
     # Add WebSocket dashboard if requested
     dashboard_backend = None
     if args.dashboard:
@@ -316,6 +330,13 @@ def main():
                 sparse_reward_scale=args.sparse_scale,
             )
     finally:
+        # Export Karn telemetry if requested (P1-04)
+        if karn_collector and args.export_karn:
+            from pathlib import Path
+            export_path = Path(args.export_karn)
+            count = karn_collector.store.export_jsonl(export_path)
+            print(f"Exported {count} Karn records to {export_path}")
+
         # Clean up TUI backend if used
         if tui_backend is not None:
             tui_backend.close()
