@@ -45,3 +45,5 @@ var/
 
 telemetry/*
 !telemetry/.gitkeep
+# Mutation testing output
+mutants/
