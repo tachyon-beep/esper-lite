@@ -658,9 +658,9 @@ def train_ppo_vectorized(
         ]
         criterion = nn.CrossEntropyLoss()
 
-        # Initialize episode: tamiyo mode is required for vectorized training
+        # Initialize episode for vectorized training
         for env_idx in range(envs_this_batch):
-            agent.tamiyo_buffer.start_episode(env_id=env_idx)
+            agent.buffer.start_episode(env_id=env_idx)
             env_states[env_idx].lstm_hidden = None  # Fresh hidden for new episode
 
         # Per-env accumulators
@@ -1248,7 +1248,7 @@ def train_ppo_vectorized(
                 # the action, enabling proper BPTT reconstruction during training.
                 hidden_h, hidden_c = pre_step_hiddens[env_idx]
 
-                agent.tamiyo_buffer.add(
+                agent.buffer.add(
                     env_id=env_idx,
                     state=states_batch_normalized[env_idx],
                     slot_action=action_dict["slot"],
@@ -1274,7 +1274,7 @@ def train_ppo_vectorized(
 
                 # Episode boundary: end episode on done
                 if done:
-                    agent.tamiyo_buffer.end_episode(env_id=env_idx)
+                    agent.buffer.end_episode(env_id=env_idx)
 
                 env_state.episode_rewards.append(raw_reward)  # Display raw for interpretability
 
@@ -1303,10 +1303,10 @@ def train_ppo_vectorized(
         # a different model state - training on them would cause distribution shift.
         # Clear the buffer and skip this PPO update.
         if batch_rollback_occurred:
-            agent.tamiyo_buffer.reset()
+            agent.buffer.reset()
             print("[PPO] Buffer cleared due to Governor rollback - skipping update")
         else:
-            update_metrics = agent.update_tamiyo(clear_buffer=True)
+            update_metrics = agent.update(clear_buffer=True)
             metrics = update_metrics
 
             # NOW update the observation normalizer with all raw states from this batch.
