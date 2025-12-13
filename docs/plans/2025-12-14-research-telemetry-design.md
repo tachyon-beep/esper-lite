@@ -1,7 +1,8 @@
-# Research Telemetry System Design
+# Karn: Research Telemetry System Design
 
 **Date:** 2025-12-14
 **Status:** Draft
+**Subsystem:** Karn (replaces Nissa)
 **Goal:** World-class telemetry for proving morphogenetic superiority over traditional training
 
 ---
@@ -28,11 +29,12 @@ Design a telemetry system that enables:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                         TELEMETRY SYSTEM                                │
+│                              KARN                                       │
+│                    (Research Telemetry System)                          │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
 │  ┌─────────────┐     ┌─────────────┐     ┌─────────────────────────┐   │
-│  │  Emitters   │────▶│  Collector  │────▶│   Analytics Engine      │   │
+│  │  Emitters   │────▶│ Collector   │────▶│   Analytics Engine      │   │
 │  │             │     │             │     │                         │   │
 │  │ - Kasmina   │     │ - Validates │     │ - MorphogeneticAnalytics│   │
 │  │ - Simic     │     │ - Timestamps│     │ - CounterfactualEngine  │   │
@@ -350,7 +352,7 @@ class MorphogeneticAnalytics:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  MORPHOGENETIC TRAINING MONITOR                    Epoch 47/100 │
+│  KARN · MORPHOGENETIC TRAINING MONITOR             Epoch 47/100 │
 ├─────────────────────────────────────────────────────────────────┤
 │  ACCURACY        67.2% (+4.9% vs host-only)              ✓ WIN │
 │  PARAM RATIO     1.23x host params                             │
@@ -383,12 +385,122 @@ class MorphogeneticAnalytics:
 | **Tamiyo** (tracker.py) | Signals | + Shadow heuristic for comparison, decision explanations |
 | **Tolaria** (trainer.py) | Loss/acc | + Gradient health, per-component attribution |
 
-### Replaces Nissa
+### Karn: Nissa's Replacement
 
-The new telemetry system replaces Nissa's hub with:
+The new telemetry subsystem is named **Karn** (the silver golem with perfect memory who witnessed millennia of multiverse history — fitting for a system that captures and recalls every training event).
+
+**Karn improves on Nissa with:**
 - **Stateful analytics** (running averages, trajectory tracking)
 - **Counterfactual engine** as first-class component
 - **Typed contracts** for all emissions (Leyline-style dataclasses)
+- **Tiered capture** (adaptive fidelity based on training phase)
+- **Research-focused metrics** (Shapley attribution, parameter efficiency)
+
+---
+
+## Nissa → Karn Migration Plan
+
+### Strategy: A/B Cutover
+
+Build Karn as a complete, parallel subsystem. Both coexist during development. Cut over entirely when Karn is validated. Delete Nissa completely (no legacy shims).
+
+```
+Phase 1: BUILD          Phase 2: VALIDATE       Phase 3: CUTOVER
+─────────────────       ─────────────────       ─────────────────
+[Nissa: ACTIVE  ]       [Nissa: ACTIVE  ]       [Nissa: DELETED ]
+[Karn:  BUILDING]  ──▶  [Karn:  SHADOW  ]  ──▶  [Karn:  ACTIVE  ]
+                        (both emit, compare)
+```
+
+### Phase 1: Build Karn (esper/karn/)
+
+**New module structure:**
+```
+src/esper/karn/
+├── __init__.py           # Public API
+├── collector.py          # Event collection, validation, routing
+├── store.py              # EpisodeContext, EpochSnapshots, DenseTraces
+├── counterfactual.py     # Factorial matrix, Shapley estimation
+├── analytics.py          # MorphogeneticAnalytics, live computations
+├── health.py             # HealthMonitor, anomaly detection
+├── output.py             # Console, structured log, future backends
+└── triggers.py           # DenseTraceTrigger conditions
+```
+
+**API Design:**
+```python
+# esper/karn/__init__.py
+from esper.karn.collector import KarnCollector, emit
+from esper.karn.store import EpisodeContext, EpochSnapshot, DenseTrace
+from esper.karn.analytics import MorphogeneticAnalytics
+from esper.karn.counterfactual import CounterfactualMatrix, CounterfactualResult
+from esper.karn.output import ConsoleOutput, StructuredLogOutput
+from esper.karn.health import HealthMonitor, HealthReport
+
+def configure(config: KarnConfig) -> KarnCollector:
+    """Initialize Karn telemetry for a training run."""
+    ...
+
+def get_collector() -> KarnCollector:
+    """Get the active collector (analogous to Nissa's get_hub)."""
+    ...
+```
+
+### Phase 2: Shadow Validation
+
+Run both systems simultaneously to validate Karn captures everything Nissa does, plus more.
+
+**Validation criteria:**
+| Check | Method |
+|-------|--------|
+| Event parity | Assert every Nissa event has Karn equivalent |
+| Metric consistency | Compare epoch-level metrics (loss, accuracy) |
+| No regression | Karn overhead ≤ Nissa overhead |
+| New capabilities | Counterfactual matrix produces valid Shapley values |
+
+**Shadow mode implementation:**
+```python
+# In training loop during Phase 2
+nissa_hub = nissa.get_hub()
+karn_collector = karn.get_collector()
+
+# Emit to both
+nissa_hub.emit(event)
+karn_collector.emit(event)  # Karn converts to its schema
+
+# End of epoch: compare
+assert_metrics_match(nissa_hub.epoch_summary(), karn_collector.epoch_snapshot())
+```
+
+### Phase 3: Cutover & Nissa Retirement
+
+**Callsite migration (5 files):**
+
+| File | Current | After Cutover |
+|------|---------|---------------|
+| `tamiyo/tracker.py:13` | `from esper.nissa import get_hub` | `from esper.karn import get_collector` |
+| `scripts/train.py:17` | `from esper.nissa import get_hub, ConsoleOutput, ...` | `from esper.karn import configure, ConsoleOutput, ...` |
+| `simic/training.py:21` | `from esper.nissa import get_hub` | `from esper.karn import get_collector` |
+| `simic/vectorized.py:56` | `from esper.nissa import get_hub, BlueprintAnalytics` | `from esper.karn import get_collector, MorphogeneticAnalytics` |
+| `simic/ppo.py:24` | `from esper.nissa import get_hub` | `from esper.karn import get_collector` |
+
+**Retirement steps:**
+1. Update all 5 callsites in single PR
+2. Run full test suite with Karn-only
+3. Delete `src/esper/nissa/` directory entirely
+4. Delete `tests/nissa/` directory entirely
+5. Remove Nissa from documentation
+6. Update architecture docs to reflect Karn
+
+**No transition period.** Once Phase 2 validates Karn, cut over completely. Per project policy: no legacy code, no compatibility shims.
+
+### Timeline
+
+| Phase | Duration | Exit Criteria |
+|-------|----------|---------------|
+| **Phase 1: Build** | ~1 week | Karn module complete, unit tests pass |
+| **Phase 2: Shadow** | ~3-5 training runs | All validation criteria met |
+| **Phase 3: Cutover** | 1 PR | Tests green, Nissa deleted |
 
 ---
 
