@@ -159,26 +159,20 @@ class PPOAgent:
         target_kl: float | None = 0.015,
         weight_decay: float = 0.0,  # Applied to critic only (RL best practice)
         device: str = "cuda:0",
-        # Recurrence params
-        recurrent: bool = False,
+        # LSTM configuration (unified architecture always uses LSTM)
         lstm_hidden_dim: int = 128,
         chunk_length: int = 25,  # Must match max_epochs to avoid hidden state issues
-        # Factored action space
-        factored: bool = False,  # Use FactoredActorCritic with multi-head actions
         num_envs: int = 4,  # For TamiyoRolloutBuffer
         max_steps_per_env: int = 25,  # For TamiyoRolloutBuffer (matches max_epochs)
         # Compilation
         compile_network: bool = True,  # Use torch.compile() for 10-30% speedup
     ):
-        self.recurrent = recurrent
-        self.factored = factored
         self.num_envs = num_envs
         self.max_steps_per_env = max_steps_per_env
         self.chunk_length = chunk_length
         self.gamma = gamma
-        # Separate epoch defaults: feedforward uses n_epochs, recurrent defaults to 1
-        # Recurrent PPO with multiple epochs causes hidden state staleness (policy drift)
-        # See update_recurrent() docstring for detailed explanation
+        # Recurrent PPO with multiple epochs can cause hidden state staleness (policy drift)
+        # Default to 1 epoch for LSTM safety; increase with caution
         self.recurrent_n_epochs = recurrent_n_epochs if recurrent_n_epochs is not None else 1
         self.gae_lambda = gae_lambda
         self.clip_ratio = clip_ratio
@@ -332,27 +326,6 @@ class PPOAgent:
 
         return self.entropy_coef_min * scale_factor
 
-    def get_action(
-        self,
-        state: torch.Tensor,
-        action_mask: torch.Tensor,
-        deterministic: bool = False,
-    ) -> tuple[int, float, float]:
-        """Get action from policy.
-
-        Args:
-            state: Observation tensor
-            action_mask: Binary mask of valid actions (1=valid, 0=invalid)
-            deterministic: If True, return argmax instead of sampling
-
-        Returns:
-            action: Selected action index
-            log_prob: Log probability of action
-            value: State value estimate
-        """
-        action, log_prob, value, _ = self.network.get_action(state, action_mask, deterministic)
-        return action, log_prob, value
-
     def update(
         self,
         clear_buffer: bool = True,
@@ -488,6 +461,29 @@ class PPOAgent:
             metrics["entropy"].append(-entropy_loss.item())
             metrics["ratio_mean"].append(joint_ratio.mean().item())
             metrics["ratio_max"].append(joint_ratio.max().item())
+
+            # Compute approximate KL divergence using the log-ratio trick:
+            # KL(old||new) ≈ E[(ratio - 1) - log(ratio)]
+            # This is the "KL3" estimator from Schulman's TRPO/PPO papers
+            # Average across all heads for factored policy (PyTorch expert review)
+            with torch.no_grad():
+                head_kls = []
+                for key in ["slot", "blueprint", "blend", "op"]:
+                    log_ratio = log_probs[key] - old_log_probs[key]
+                    head_kl = ((torch.exp(log_ratio) - 1) - log_ratio).mean()
+                    head_kls.append(head_kl)
+                approx_kl = torch.stack(head_kls).mean().item()
+                metrics["approx_kl"].append(approx_kl)
+
+                # Clip fraction: how often clipping was active
+                clip_fraction = ((joint_ratio - 1.0).abs() > self.clip_ratio).float().mean().item()
+                metrics["clip_fraction"].append(clip_fraction)
+
+                # Early stopping if KL divergence exceeds threshold
+                # 1.5x multiplier is standard (OpenAI baselines, Stable-Baselines3)
+                if self.target_kl is not None and approx_kl > 1.5 * self.target_kl:
+                    early_stopped = True
+                    metrics["early_stop_epoch"] = [epoch_i]
 
         self.train_steps += 1
 
