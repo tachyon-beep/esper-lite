@@ -528,13 +528,14 @@ class TUIOutput:
     # =========================================================================
 
     def _render(self) -> Panel:
-        """Render the full TUI layout."""
+        """Render the full TUI layout with event log."""
         layout = Layout()
 
-        # Create main sections
+        # Create main sections with event log
         layout.split_column(
             Layout(name="header", size=3),
             Layout(name="main", ratio=1),
+            Layout(name="event_log", size=14),  # Event log panel
             Layout(name="footer", size=3),
         )
 
@@ -566,6 +567,7 @@ class TUIOutput:
         layout["policy_health"].update(self._render_policy_health())
         layout["actions"].update(self._render_actions())
         layout["losses"].update(self._render_losses())
+        layout["event_log"].update(self._render_event_log(max_lines=10))
         layout["footer"].update(self._render_footer())
 
         return Panel(
