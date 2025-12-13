@@ -109,6 +109,9 @@ class TrainingConfig:
     lstm_hidden_dim: int = 128
     chunk_length: int | None = None  # None = auto-match max_epochs; set explicitly if different
 
+    # === Tamiyo Mode (Unified Factored + Recurrent) ===
+    tamiyo: bool = False  # Use FactoredRecurrentActorCritic + TamiyoRolloutBuffer
+
     def __post_init__(self):
         """Validate and set defaults for recurrent config."""
         import logging
@@ -170,6 +173,37 @@ class TrainingConfig:
             max_epochs=50,  # More epochs for larger dataset
         )
 
+    @staticmethod
+    def for_tamiyo() -> "TrainingConfig":
+        """Configuration for Tamiyo seed lifecycle controller.
+
+        Optimized for:
+        - 10-20 epoch seed learning cycles
+        - 25 epoch episodes
+        - Long-horizon credit assignment
+
+        Hyperparameters (DRL expert recommendations):
+        - gamma=0.995: gamma^25 ~ 0.88 (preserves end-of-episode signal)
+        - gae_lambda=0.97: Less bias for long delays
+        - Entropy schedule: 0.05 -> 0.005 over 10k steps (matches training duration)
+        """
+        return TrainingConfig(
+            tamiyo=True,
+            recurrent=False,
+            gamma=0.995,
+            gae_lambda=0.97,
+            entropy_coef=0.01,  # Base (used when schedule disabled)
+            entropy_coef_start=0.05,
+            entropy_coef_end=0.005,
+            # entropy_anneal_steps: 4 envs x 100 episodes x 25 epochs = 10000
+            entropy_anneal_episodes=400,  # 400 episodes * 25 epochs = 10000 steps
+            n_epochs=10,  # PPO epochs
+            lstm_hidden_dim=128,
+            chunk_length=25,  # Full episode
+            max_epochs=25,
+            n_envs=4,
+        )
+
     def to_ppo_kwargs(self) -> dict[str, Any]:
         """Extract PPOAgent constructor kwargs."""
         return {
@@ -192,6 +226,10 @@ class TrainingConfig:
             "recurrent": self.recurrent,
             "lstm_hidden_dim": self.lstm_hidden_dim,
             "chunk_length": self.chunk_length,
+            # Tamiyo mode
+            "tamiyo": self.tamiyo,
+            "num_envs": self.n_envs,
+            "max_steps_per_env": self.max_epochs,
         }
 
     def to_train_kwargs(self) -> dict[str, Any]:
@@ -214,6 +252,8 @@ class TrainingConfig:
             "recurrent": self.recurrent,
             "lstm_hidden_dim": self.lstm_hidden_dim,
             "chunk_length": self.chunk_length,
+            # Tamiyo mode
+            "tamiyo": self.tamiyo,
         }
 
     def to_governor_kwargs(self) -> dict[str, Any]:

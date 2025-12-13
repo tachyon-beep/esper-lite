@@ -658,11 +658,10 @@ def train_ppo_vectorized(
         ]
         criterion = nn.CrossEntropyLoss()
 
-        # Initialize episode for recurrent policy
-        if recurrent:
-            for env_idx in range(envs_this_batch):
-                agent.recurrent_buffer.start_episode(env_id=env_idx)
-                env_states[env_idx].lstm_hidden = None  # Fresh hidden for new episode
+        # Initialize episode: tamiyo mode is required for vectorized training
+        for env_idx in range(envs_this_batch):
+            agent.tamiyo_buffer.start_episode(env_id=env_idx)
+            env_states[env_idx].lstm_hidden = None  # Fresh hidden for new episode
 
         # Per-env accumulators
         env_final_accs = [0.0] * envs_this_batch
@@ -1023,18 +1022,62 @@ def train_ppo_vectorized(
             states_batch_normalized = obs_normalizer.normalize(states_batch)
 
             # Get BATCHED actions from policy network with action masking (single forward pass!)
-            # Factored action selection - returns dict of actions per head
-            actions_dict, log_probs_tensor, values_tensor = agent.network.get_action_batch(
-                states_batch_normalized, masks_batch, deterministic=False
+            # Tamiyo mode: LSTM with per-head log_probs
+            # Batch hidden states together: [num_layers, batch, hidden_dim]
+            #
+            # IMPORTANT: Capture PRE-STEP hidden states for buffer storage.
+            # The hidden state stored with a transition should be the INPUT to the network
+            # when selecting the action, not the OUTPUT. This enables proper BPTT during
+            # training by reconstructing the exact forward pass.
+            pre_step_hiddens: list[tuple[torch.Tensor, torch.Tensor]] = []
+            batched_hidden = None
+            if env_states[0].lstm_hidden is not None:
+                # Concatenate per-env hidden states along batch dimension
+                h_list = [env_state.lstm_hidden[0] for env_state in env_states]
+                c_list = [env_state.lstm_hidden[1] for env_state in env_states]
+                # Clone pre-step hidden states for buffer storage
+                pre_step_hiddens = [(h.clone(), c.clone()) for h, c in zip(h_list, c_list)]
+                batched_h = torch.cat(h_list, dim=1)  # [layers, batch, hidden]
+                batched_c = torch.cat(c_list, dim=1)
+                batched_hidden = (batched_h, batched_c)
+            else:
+                # First step of episode - use initial hidden state for all envs
+                init_hidden = agent.network.get_initial_hidden(len(env_states), agent.device)
+                # Unbatch to per-env for storage
+                init_h, init_c = init_hidden
+                for env_idx in range(len(env_states)):
+                    env_h = init_h[:, env_idx:env_idx+1, :].clone()
+                    env_c = init_c[:, env_idx:env_idx+1, :].clone()
+                    pre_step_hiddens.append((env_h, env_c))
+
+            # get_action returns per-head log_probs as dict
+            actions_dict, head_log_probs, values_tensor, new_hidden = agent.network.get_action(
+                states_batch_normalized,
+                hidden=batched_hidden,
+                slot_mask=masks_batch["slot"],
+                blueprint_mask=masks_batch["blueprint"],
+                blend_mask=masks_batch["blend"],
+                op_mask=masks_batch["op"],
+                deterministic=False,
             )
+
+            # Unbatch new hidden states back to per-env
+            # new_hidden is (h, c) each [num_layers, batch, hidden_dim]
+            new_h, new_c = new_hidden
+            for env_idx, env_state in enumerate(env_states):
+                # Extract this env's hidden: [num_layers, 1, hidden_dim]
+                env_h = new_h[:, env_idx:env_idx+1, :].contiguous()
+                env_c = new_c[:, env_idx:env_idx+1, :].contiguous()
+                env_state.lstm_hidden = (env_h, env_c)
+
             # Convert to list of dicts for per-env processing
-            # actions_dict is {key: [n_envs]} tensor -> list of {key: int}
             actions = [
                 {key: actions_dict[key][i].item() for key in actions_dict}
                 for i in range(len(env_states))
             ]
-            log_probs = log_probs_tensor.tolist()
             values = values_tensor.tolist()
+            # head_log_probs is dict of tensors {key: [batch]}
+            # Keep as-is for tamiyo buffer storage
 
             # Execute actions and store transitions for each environment
             for env_idx, env_state in enumerate(env_states):
@@ -1044,7 +1087,6 @@ def train_ppo_vectorized(
                 signals = all_signals[env_idx]
 
                 # Now Python floats/ints - no GPU sync
-                log_prob = log_probs[env_idx]
                 value = values[env_idx]
 
                 # Parse factored action
@@ -1198,19 +1240,41 @@ def train_ppo_vectorized(
                 truncated = done  # All episodes end at max_epochs (time limit truncation)
                 bootstrap_value = value if truncated else 0.0  # Bootstrap from V(s_final) for truncation
 
-                # Store factored transition with per-head masks
+                # Store transition with per-head masks and LSTM states
                 env_masks = {key: masks_batch[key][env_idx] for key in masks_batch}
-                agent.store_factored_transition(
+
+                # Use PRE-STEP hidden states (captured before get_action)
+                # This is the hidden state that was INPUT to the network when selecting
+                # the action, enabling proper BPTT reconstruction during training.
+                hidden_h, hidden_c = pre_step_hiddens[env_idx]
+
+                agent.tamiyo_buffer.add(
+                    env_id=env_idx,
                     state=states_batch_normalized[env_idx],
-                    action=action_dict,
-                    log_prob=log_prob,
+                    slot_action=action_dict["slot"],
+                    blueprint_action=action_dict["blueprint"],
+                    blend_action=action_dict["blend"],
+                    op_action=action_dict["op"],
+                    slot_log_prob=head_log_probs["slot"][env_idx].item(),
+                    blueprint_log_prob=head_log_probs["blueprint"][env_idx].item(),
+                    blend_log_prob=head_log_probs["blend"][env_idx].item(),
+                    op_log_prob=head_log_probs["op"][env_idx].item(),
                     value=value,
                     reward=normalized_reward,
                     done=done,
-                    action_masks=env_masks,
+                    slot_mask=env_masks["slot"],
+                    blueprint_mask=env_masks["blueprint"],
+                    blend_mask=env_masks["blend"],
+                    op_mask=env_masks["op"],
+                    hidden_h=hidden_h,
+                    hidden_c=hidden_c,
                     truncated=truncated,
                     bootstrap_value=bootstrap_value,
                 )
+
+                # Episode boundary: end episode on done
+                if done:
+                    agent.tamiyo_buffer.end_episode(env_id=env_idx)
 
                 env_state.episode_rewards.append(raw_reward)  # Display raw for interpretability
 
@@ -1239,11 +1303,10 @@ def train_ppo_vectorized(
         # a different model state - training on them would cause distribution shift.
         # Clear the buffer and skip this PPO update.
         if batch_rollback_occurred:
-            agent.factored_buffer.clear()
+            agent.tamiyo_buffer.reset()
             print("[PPO] Buffer cleared due to Governor rollback - skipping update")
         else:
-            # Factored mode: use update_factored with factored buffer
-            update_metrics = agent.update_factored(last_value=0.0)
+            update_metrics = agent.update_tamiyo(clear_buffer=True)
             metrics = update_metrics
 
             # NOW update the observation normalizer with all raw states from this batch.

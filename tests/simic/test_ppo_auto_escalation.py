@@ -25,7 +25,7 @@ class TestPPOAutoEscalation:
         for _ in range(20):
             state = torch.randn(10)
             action_mask = torch.ones(4)
-            action, log_prob, value, _ = agent.get_action(state, action_mask)
+            action, log_prob, value = agent.get_action(state, action_mask)
             agent.store_transition(
                 state=state,
                 action=action,
@@ -85,7 +85,7 @@ class TestPPOAutoEscalation:
         for _ in range(20):
             state = torch.randn(10)
             action_mask = torch.ones(4)
-            action, log_prob, value, _ = agent.get_action(state, action_mask)
+            action, log_prob, value = agent.get_action(state, action_mask)
             agent.store_transition(
                 state=state, action=action, log_prob=log_prob,
                 value=value, reward=0.1, done=False, action_mask=action_mask,

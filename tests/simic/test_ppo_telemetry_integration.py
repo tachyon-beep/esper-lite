@@ -26,7 +26,7 @@ class TestPPOTelemetryIntegration:
         for _ in range(20):
             state = torch.randn(10)
             action_mask = torch.ones(4)
-            action, log_prob, value, _ = agent.get_action(state, action_mask)
+            action, log_prob, value = agent.get_action(state, action_mask)
             agent.store_transition(
                 state=state,
                 action=action,

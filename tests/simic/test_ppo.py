@@ -2,8 +2,27 @@
 import pytest
 import torch
 
-from esper.simic.ppo import signals_to_features
+from esper.simic.ppo import signals_to_features, PPOAgent
 from esper.simic.features import MULTISLOT_FEATURE_SIZE
+
+
+def test_ppo_agent_tamiyo_mode():
+    """PPOAgent in tamiyo mode should use FactoredRecurrentActorCritic."""
+    from esper.simic.tamiyo_buffer import TamiyoRolloutBuffer
+    from esper.simic.tamiyo_network import FactoredRecurrentActorCritic
+
+    agent = PPOAgent(
+        state_dim=50,
+        tamiyo=True,  # New unified mode
+        num_envs=4,
+        max_steps_per_env=25,
+        device="cpu",
+        compile_network=False,  # Avoid compilation overhead in test
+    )
+
+    # Direct type checks - if tamiyo=True, these types are guaranteed
+    assert isinstance(agent.tamiyo_buffer, TamiyoRolloutBuffer)
+    assert isinstance(agent._base_network, FactoredRecurrentActorCritic)
 
 
 def test_signals_to_features_with_multislot_params():

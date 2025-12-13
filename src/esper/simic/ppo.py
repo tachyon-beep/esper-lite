@@ -16,9 +16,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from esper.simic.buffers import RolloutBuffer, RecurrentRolloutBuffer, FactoredRolloutBuffer
-from esper.simic.networks import ActorCritic, RecurrentActorCritic
-from esper.simic.factored_network import FactoredActorCritic
+from esper.simic.buffers import RolloutBuffer
+from esper.simic.networks import ActorCritic
+from esper.simic.tamiyo_buffer import TamiyoRolloutBuffer
+from esper.simic.tamiyo_network import FactoredRecurrentActorCritic
+from esper.simic.advantages import compute_per_head_advantages
 from esper.simic.features import safe
 from esper.leyline import TelemetryEvent, TelemetryEventType
 from esper.nissa import get_hub
@@ -165,11 +167,18 @@ class PPOAgent:
         chunk_length: int = 25,  # Must match max_epochs to avoid hidden state issues
         # Factored action space
         factored: bool = False,  # Use FactoredActorCritic with multi-head actions
+        # Tamiyo mode (unified factored + recurrent)
+        tamiyo: bool = False,  # Use FactoredRecurrentActorCritic + TamiyoRolloutBuffer
+        num_envs: int = 4,  # For TamiyoRolloutBuffer
+        max_steps_per_env: int = 25,  # For TamiyoRolloutBuffer (matches max_epochs)
         # Compilation
         compile_network: bool = True,  # Use torch.compile() for 10-30% speedup
     ):
         self.recurrent = recurrent
         self.factored = factored
+        self.tamiyo = tamiyo
+        self.num_envs = num_envs
+        self.max_steps_per_env = max_steps_per_env
         self.chunk_length = chunk_length
         self.gamma = gamma
         # Separate epoch defaults: feedforward uses n_epochs, recurrent defaults to 1
@@ -194,18 +203,21 @@ class PPOAgent:
         self.weight_decay = weight_decay
         self.device = device
 
-        if factored:
-            self.network = FactoredActorCritic(state_dim=state_dim).to(device)
-            self.factored_buffer = FactoredRolloutBuffer()
-        elif recurrent:
-            self.network = RecurrentActorCritic(
+        # Initialize buffer attributes to None (guard against AttributeError)
+        self.tamiyo_buffer = None
+
+        if tamiyo:
+            # Unified factored + recurrent mode
+            self.network = FactoredRecurrentActorCritic(
                 state_dim=state_dim,
-                action_dim=action_dim,
                 lstm_hidden_dim=lstm_hidden_dim,
             ).to(device)
-            self.recurrent_buffer = RecurrentRolloutBuffer(
-                chunk_length=chunk_length,
+            self.tamiyo_buffer = TamiyoRolloutBuffer(
+                num_envs=num_envs,
+                max_steps_per_env=max_steps_per_env,
+                state_dim=state_dim,
                 lstm_hidden_dim=lstm_hidden_dim,
+                device=torch.device(device),
             )
         else:
             self.network = ActorCritic(state_dim, action_dim, hidden_dim).to(device)
@@ -230,22 +242,20 @@ class PPOAgent:
             # smaller logits = sharper softmax), which kills exploration.
             # Shared layers feed into actor, so they must also have wd=0.
             # Reference: SAC, TD3 implementations apply WD only to critic.
-            if self.factored:
-                # FactoredActorCritic: slot_head, blueprint_head, blend_head, op_head are actors
+            if self.tamiyo:
+                # FactoredRecurrentActorCritic: slot_head, blueprint_head, blend_head, op_head are actors
                 actor_params = (
                     list(self._base_network.slot_head.parameters()) +
                     list(self._base_network.blueprint_head.parameters()) +
                     list(self._base_network.blend_head.parameters()) +
                     list(self._base_network.op_head.parameters())
                 )
-                critic_params = list(self._base_network.critic.parameters())
-                shared_params = list(self._base_network.shared.parameters())
-            elif self.recurrent:
-                actor_params = list(self._base_network.actor.parameters())
-                critic_params = list(self._base_network.critic.parameters())
-                # RecurrentActorCritic: encoder + lstm feed into actor, must be wd=0
-                shared_params = (list(self._base_network.encoder.parameters()) +
-                                list(self._base_network.lstm.parameters()))
+                critic_params = list(self._base_network.value_head.parameters())
+                shared_params = (
+                    list(self._base_network.feature_net.parameters()) +
+                    list(self._base_network.lstm.parameters()) +
+                    list(self._base_network.lstm_ln.parameters())  # Include LayerNorm
+                )
             else:
                 # ActorCritic: shared feeds into actor
                 actor_params = list(self._base_network.actor.parameters())
@@ -261,7 +271,7 @@ class PPOAgent:
             self.optimizer = torch.optim.Adam(
                 self.network.parameters(), **optimizer_kwargs
             )
-        if not self.factored:
+        if not self.tamiyo:
             self.buffer = RolloutBuffer()
         self.train_steps = 0
 
@@ -345,28 +355,22 @@ class PPOAgent:
         self,
         state: torch.Tensor,
         action_mask: torch.Tensor,
-        hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
         deterministic: bool = False,
-    ) -> tuple[int, float, float, tuple | None]:
-        """Get action, optionally with hidden state for recurrent policy.
+    ) -> tuple[int, float, float]:
+        """Get action from policy.
 
         Args:
             state: Observation tensor
             action_mask: Binary mask of valid actions (1=valid, 0=invalid)
-            hidden: LSTM hidden state (h, c) for recurrent policy, None for MLP
             deterministic: If True, return argmax instead of sampling
 
         Returns:
             action: Selected action index
             log_prob: Log probability of action
             value: State value estimate
-            hidden: Updated hidden state (recurrent) or None (non-recurrent)
         """
-        if self.recurrent:
-            return self.network.get_action(state, action_mask, hidden, deterministic)
-        else:
-            action, log_prob, value, _ = self.network.get_action(state, action_mask, deterministic)
-            return action, log_prob, value, None
+        action, log_prob, value, _ = self.network.get_action(state, action_mask, deterministic)
+        return action, log_prob, value
 
     def store_transition(
         self,
@@ -395,230 +399,151 @@ class PPOAgent:
         """
         self.buffer.add(state, action, log_prob, value, reward, done, action_mask, truncated, bootstrap_value)
 
-    def store_recurrent_transition(
+    def update_tamiyo(
         self,
-        state: torch.Tensor,
-        action: int,
-        log_prob: float,
-        value: float,
-        reward: float,
-        done: bool,
-        action_mask: torch.Tensor,
-        env_id: int,
-        truncated: bool = False,
-        bootstrap_value: float = 0.0,
-    ) -> None:
-        """Store transition for recurrent policy (no hidden stored per-step)."""
-        self.recurrent_buffer.add(
-            state=state, action=action, log_prob=log_prob, value=value,
-            reward=reward, done=done, action_mask=action_mask, env_id=env_id,
-            truncated=truncated, bootstrap_value=bootstrap_value,
-        )
-
-    def get_factored_action(
-        self,
-        state: torch.Tensor,
-        action_masks: dict[str, torch.Tensor],
-        deterministic: bool = False,
-    ) -> tuple[dict[str, int], float, float]:
-        """Get factored action from policy.
-
-        Args:
-            state: Observation tensor
-            action_masks: Dict of boolean masks per head {slot, blueprint, blend, op}
-            deterministic: If True, return argmax instead of sampling
-
-        Returns:
-            action: Dict with action indices {slot, blueprint, blend, op}
-            log_prob: Log probability of joint action
-            value: State value estimate
-        """
-        # Add batch dimension for network
-        state_batch = state.unsqueeze(0).to(self.device)
-        masks_batch = {k: v.unsqueeze(0).to(self.device) for k, v in action_masks.items()}
-
-        actions_batch, log_probs, values = self.network.get_action_batch(
-            state_batch, masks_batch, deterministic
-        )
-
-        # Extract single sample
-        action = {k: v[0].item() for k, v in actions_batch.items()}
-        log_prob = log_probs[0].item()
-        value = values[0].item()
-
-        return action, log_prob, value
-
-    def store_factored_transition(
-        self,
-        state: torch.Tensor,
-        action: dict[str, int],
-        log_prob: float,
-        value: float,
-        reward: float,
-        done: bool,
-        action_masks: dict[str, torch.Tensor],
-        truncated: bool = False,
-        bootstrap_value: float = 0.0,
-    ) -> None:
-        """Store factored transition in buffer."""
-        self.factored_buffer.add(
-            state=state,
-            action=action,
-            log_prob=log_prob,
-            value=value,
-            reward=reward,
-            done=done,
-            action_masks=action_masks,
-            truncated=truncated,
-            bootstrap_value=bootstrap_value,
-        )
-
-    def update_factored(
-        self,
-        last_value: float = 0.0,
         clear_buffer: bool = True,
     ) -> dict:
-        """PPO update for factored action space.
+        """PPO update for Tamiyo (factored + recurrent).
+
+        Uses per-head advantages with causal masking and LSTM hidden states.
 
         Args:
-            last_value: Value estimate for bootstrapping
             clear_buffer: Whether to clear buffer after update
 
         Returns:
             Dict of training metrics
         """
-        if len(self.factored_buffer) == 0:
+        if len(self.tamiyo_buffer) == 0:
             return {}
 
-        # Compute returns and advantages
-        returns, advantages = self.factored_buffer.compute_returns_and_advantages(
-            last_value, self.gamma, self.gae_lambda, device=self.device
+        # Compute GAE per-environment (fixes P0 bug)
+        self.tamiyo_buffer.compute_advantages_and_returns(
+            gamma=self.gamma, gae_lambda=self.gae_lambda
         )
+        self.tamiyo_buffer.normalize_advantages()
 
-        # Compute explained variance BEFORE updates
-        values_tensor = torch.tensor(
-            [t.value for t in self.factored_buffer.steps],
-            device=self.device,
-        )
-        var_returns = returns.var()
+        # Get batched data
+        data = self.tamiyo_buffer.get_batched_sequences(device=self.device)
+        valid_mask = data["valid_mask"]
+
+        # Compute explained variance before updates
+        valid_values = data["values"][valid_mask]
+        valid_returns = data["returns"][valid_mask]
+        var_returns = valid_returns.var()
         if var_returns > 1e-8:
-            explained_variance = 1.0 - (returns - values_tensor).var() / var_returns
+            explained_variance = 1.0 - (valid_returns - valid_values).var() / var_returns
             explained_variance = explained_variance.item()
         else:
             explained_variance = 0.0
-
-        # Normalize advantages globally
-        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
         metrics = defaultdict(list)
         metrics["explained_variance"] = [explained_variance]
         early_stopped = False
 
-        for epoch_i in range(self.n_epochs):
+        for epoch_i in range(self.recurrent_n_epochs):
             if early_stopped:
                 break
 
-            epoch_kl_sum = 0.0
-            epoch_kl_count = 0
+            # Forward pass through network
+            actions = {
+                "slot": data["slot_actions"],
+                "blueprint": data["blueprint_actions"],
+                "blend": data["blend_actions"],
+                "op": data["op_actions"],
+            }
 
-            for batch, batch_idx in self.factored_buffer.get_batches(
-                self.batch_size, self.device
-            ):
-                states = batch["states"]
-                actions = batch["actions"]
-                old_log_probs = batch["old_log_probs"]
-                old_values = batch["values"]
-                action_masks = batch["action_masks"]
-                batch_returns = returns[batch_idx]
-                batch_advantages = advantages[batch_idx]
+            log_probs, values, entropy, _ = self.network.evaluate_actions(
+                data["states"],
+                actions,
+                slot_mask=data["slot_masks"],
+                blueprint_mask=data["blueprint_masks"],
+                blend_mask=data["blend_masks"],
+                op_mask=data["op_masks"],
+                hidden=(data["initial_hidden_h"], data["initial_hidden_c"]),
+            )
 
-                # Evaluate actions
-                log_probs, values, entropy = self.network.evaluate_actions(
-                    states, actions, action_masks
+            # Extract valid timesteps
+            for key in log_probs:
+                log_probs[key] = log_probs[key][valid_mask]
+            values = values[valid_mask]
+            for key in entropy:
+                entropy[key] = entropy[key][valid_mask]
+
+            valid_advantages = data["advantages"][valid_mask]
+            valid_returns = data["returns"][valid_mask]
+
+            # Compute per-head advantages with causal masking
+            valid_op_actions = data["op_actions"][valid_mask]
+            per_head_advantages = compute_per_head_advantages(
+                valid_advantages, valid_op_actions
+            )
+
+            # Compute per-head ratios
+            old_log_probs = {
+                "slot": data["slot_log_probs"][valid_mask],
+                "blueprint": data["blueprint_log_probs"][valid_mask],
+                "blend": data["blend_log_probs"][valid_mask],
+                "op": data["op_log_probs"][valid_mask],
+            }
+
+            per_head_ratios = {}
+            for key in ["slot", "blueprint", "blend", "op"]:
+                per_head_ratios[key] = torch.exp(log_probs[key] - old_log_probs[key])
+
+            # Compute policy loss per head and sum
+            policy_loss = 0.0
+            for key in ["slot", "blueprint", "blend", "op"]:
+                ratio = per_head_ratios[key]
+                adv = per_head_advantages[key]
+
+                surr1 = ratio * adv
+                surr2 = torch.clamp(ratio, 1 - self.clip_ratio, 1 + self.clip_ratio) * adv
+                head_loss = -torch.min(surr1, surr2).mean()
+                policy_loss = policy_loss + head_loss
+
+            # Value loss
+            valid_old_values = data["values"][valid_mask]
+            if self.clip_value:
+                values_clipped = valid_old_values + torch.clamp(
+                    values - valid_old_values, -self.clip_ratio, self.clip_ratio
                 )
+                value_loss_unclipped = (values - valid_returns) ** 2
+                value_loss_clipped = (values_clipped - valid_returns) ** 2
+                value_loss = 0.5 * torch.max(value_loss_unclipped, value_loss_clipped).mean()
+            else:
+                value_loss = F.mse_loss(values, valid_returns)
 
-                # PPO clipped objective
-                ratio = torch.exp(log_probs - old_log_probs)
+            # Entropy loss (sum across heads, each normalized)
+            entropy_loss = 0.0
+            for key, ent in entropy.items():
+                entropy_loss = entropy_loss - ent.mean()
 
-                surr1 = ratio * batch_advantages
-                surr2 = torch.clamp(
-                    ratio, 1 - self.clip_ratio, 1 + self.clip_ratio
-                ) * batch_advantages
-                policy_loss = -torch.min(surr1, surr2).mean()
+            entropy_coef = self.get_entropy_coef()
 
-                # Value loss with clipping
-                if self.clip_value:
-                    values_clipped = old_values + torch.clamp(
-                        values - old_values, -self.clip_ratio, self.clip_ratio
-                    )
-                    value_loss_unclipped = (values - batch_returns) ** 2
-                    value_loss_clipped = (values_clipped - batch_returns) ** 2
-                    value_loss = 0.5 * torch.max(
-                        value_loss_unclipped, value_loss_clipped
-                    ).mean()
-                else:
-                    value_loss = F.mse_loss(values, batch_returns)
+            loss = policy_loss + self.value_coef * value_loss + entropy_coef * entropy_loss
 
-                entropy_loss = -entropy.mean()
+            self.optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            nn.utils.clip_grad_norm_(self.network.parameters(), self.max_grad_norm)
+            self.optimizer.step()
 
-                # Get entropy coefficient (use op mask for adaptive floor)
-                representative_mask = action_masks["op"][0]
-                entropy_coef = self.get_entropy_coef(representative_mask)
-
-                loss = (
-                    policy_loss
-                    + self.value_coef * value_loss
-                    + entropy_coef * entropy_loss
-                )
-
-                self.optimizer.zero_grad(set_to_none=True)
-                loss.backward()
-                nn.utils.clip_grad_norm_(self.network.parameters(), self.max_grad_norm)
-                self.optimizer.step()
-
-                # Track metrics
-                batch_kl = (old_log_probs - log_probs).mean()
-                clip_frac = ((ratio - 1).abs() > self.clip_ratio).float().mean()
-
-                # Single sync for all metrics
-                batch_metrics = torch.stack([
-                    policy_loss, value_loss, -entropy_loss, batch_kl, clip_frac,
-                    ratio.mean(), ratio.std(), ratio.max(), ratio.min()
-                ])
-                pl, vl, ent, kl, cf, r_mean, r_std, r_max, r_min = batch_metrics.tolist()
-
-                metrics["policy_loss"].append(pl)
-                metrics["value_loss"].append(vl)
-                metrics["entropy"].append(ent)
-                metrics["approx_kl"].append(kl)
-                metrics["clip_fraction"].append(cf)
-                metrics["ratio_mean"].append(r_mean)
-                metrics["ratio_std"].append(r_std)
-                metrics["ratio_max"].append(r_max)
-                metrics["ratio_min"].append(r_min)
-
-                epoch_kl_sum += kl
-                epoch_kl_count += 1
-
-            # KL-based early stopping
-            if self.target_kl is not None and epoch_kl_count > 0:
-                epoch_kl_avg = epoch_kl_sum / epoch_kl_count
-                if epoch_kl_avg > 1.5 * self.target_kl:
-                    early_stopped = True
-                    metrics["early_stop_epoch"] = [epoch_i + 1]
+            # Track metrics
+            joint_ratio = per_head_ratios["op"]  # Use op ratio as representative
+            metrics["policy_loss"].append(policy_loss.item())
+            metrics["value_loss"].append(value_loss.item())
+            metrics["entropy"].append(-entropy_loss.item())
+            metrics["ratio_mean"].append(joint_ratio.mean().item())
+            metrics["ratio_max"].append(joint_ratio.max().item())
 
         self.train_steps += 1
 
         if clear_buffer:
-            self.factored_buffer.clear()
+            self.tamiyo_buffer.reset()
 
-        # Aggregate metrics
+        # Aggregate
         result = {}
         for k, v in metrics.items():
             result[k] = sum(v) / len(v) if v else 0.0
-
-        if early_stopped:
-            result["early_stopped"] = 1.0
 
         return result
 
@@ -951,218 +876,6 @@ class PPOAgent:
             result['early_stopped'] = 1.0
         return result
 
-    def update_recurrent(self, n_epochs: int | None = None, chunk_batch_size: int = 8) -> dict:
-        """PPO update for recurrent policy using batched sequences.
-
-        Key design decisions (from reviewer feedback):
-        1. GAE computed once, distributed to chunks
-        2. Batched chunk processing for GPU efficiency
-        3. SINGLE EPOCH (n_epochs=1) default to avoid hidden state drift between epochs
-           - After gradient updates, policy changes, so recomputed log_probs differ
-           - With multiple epochs, ratio = new_log_prob / old_log_prob becomes biased
-           - Single epoch is standard practice for recurrent PPO (OpenAI Five, CleanRL)
-        4. value_coef from agent, not hardcoded
-        5. Value clipping for training stability (parity with feedforward)
-        6. Gradient clipping at max_grad_norm
-        7. train_steps incremented for entropy annealing
-
-        Args:
-            n_epochs: Number of PPO epochs. Default uses self.recurrent_n_epochs (1).
-                      Higher values (2-4) work due to PPO clipping but emit warning.
-            chunk_batch_size: Number of chunks per batch for GPU efficiency.
-        """
-        # Use instance default (recurrent_n_epochs=1) when not specified
-        if n_epochs is None:
-            n_epochs = self.recurrent_n_epochs
-
-        # [DRL Best Practice] Two-tier warnings for recurrent PPO n_epochs
-        # After gradient updates, policy changes, so recomputed log_probs differ
-        # from stored log_probs. With multiple epochs, this staleness compounds.
-
-        WARN_THRESHOLD = 2   # Warn when > 2 (early warning)
-        MAX_RECURRENT_EPOCHS = 4  # Hard cap
-
-        if n_epochs > MAX_RECURRENT_EPOCHS:
-            warnings.warn(
-                f"n_epochs={n_epochs} is too high for recurrent PPO and has been capped "
-                f"to {MAX_RECURRENT_EPOCHS}. Values > {MAX_RECURRENT_EPOCHS} cause severe "
-                f"policy drift due to hidden state staleness.",
-                RuntimeWarning,
-            )
-            n_epochs = MAX_RECURRENT_EPOCHS
-        elif n_epochs > WARN_THRESHOLD:
-            warnings.warn(
-                f"n_epochs={n_epochs} is elevated for recurrent PPO. "
-                f"Values > {WARN_THRESHOLD} risk policy drift due to hidden state staleness. "
-                f"Consider n_epochs=1-2 for maximum stability.",
-                RuntimeWarning,
-            )
-
-        # Compute GAE for all episodes
-        self.recurrent_buffer.compute_gae(
-            gamma=self.gamma,
-            gae_lambda=self.gae_lambda,
-        )
-
-        # Normalize advantages once over full buffer (before batching)
-        # This prevents per-batch normalization variance in gradient updates
-        self.recurrent_buffer.normalize_advantages()
-
-        # Compute explained variance BEFORE any gradient updates
-        # This measures how well the pre-update value function predicted returns
-        all_returns = []
-        all_old_values = []
-        for chunk in self.recurrent_buffer.get_chunks(device=self.device):
-            valid = chunk['valid_mask'].squeeze(0)  # [seq]
-            all_returns.append(chunk['returns'].squeeze(0)[valid])
-            all_old_values.append(chunk['old_values'].squeeze(0)[valid])
-
-        if all_returns:
-            returns_tensor = torch.cat(all_returns)
-            values_tensor = torch.cat(all_old_values)
-            var_returns = returns_tensor.var()
-            if var_returns > 1e-8:
-                explained_variance = 1.0 - (returns_tensor - values_tensor).var() / var_returns
-                explained_variance = float(torch.clamp(explained_variance, -1.0, 1.0).item())
-            else:
-                explained_variance = 0.0
-        else:
-            explained_variance = 0.0
-
-        total_policy_loss = 0.0
-        total_value_loss = 0.0
-        total_entropy = 0.0
-        total_approx_kl = 0.0  # For diagnostics
-        n_updates = 0
-        all_ratios = []  # Track ratio statistics for anomaly detection
-
-        for epoch in range(n_epochs):
-            # Process chunks in batches
-            for batch in self.recurrent_buffer.get_batched_chunks(
-                device=self.device,
-                batch_size=chunk_batch_size,
-            ):
-                batch_size = batch['states'].size(0)
-                seq_len = batch['states'].size(1)
-
-                # Get initial hidden [num_layers, batch, hidden]
-                initial_hidden = (
-                    batch['initial_hidden_h'],
-                    batch['initial_hidden_c'],
-                )
-
-                # Forward through sequences
-                log_probs, values, entropy, _ = self.network.evaluate_actions(
-                    batch['states'],
-                    batch['actions'],
-                    batch['action_masks'],
-                    hidden=initial_hidden,
-                )
-
-                # Get valid mask and flatten
-                valid = batch['valid_mask']  # [batch, seq]
-
-                # Extract valid timesteps
-                log_probs_valid = log_probs[valid]
-                values_valid = values[valid]
-                entropy_valid = entropy[valid]
-                old_log_probs_valid = batch['old_log_probs'][valid]
-                old_values_valid = batch['old_values'][valid]
-                returns_valid = batch['returns'][valid]
-                advantages_valid = batch['advantages'][valid]  # Already normalized globally
-
-                # PPO clipped objective
-                ratio = torch.exp(log_probs_valid - old_log_probs_valid)
-
-                # Track ratio for anomaly detection
-                all_ratios.append(ratio.detach())
-
-                surr1 = ratio * advantages_valid
-                surr2 = torch.clamp(ratio, 1 - self.clip_ratio, 1 + self.clip_ratio) * advantages_valid
-                policy_loss = -torch.min(surr1, surr2).mean()
-
-                # Value loss (with optional clipping, matching feedforward PPO)
-                if self.clip_value:
-                    values_clipped = old_values_valid + torch.clamp(
-                        values_valid - old_values_valid,
-                        -self.clip_ratio,
-                        self.clip_ratio,
-                    )
-                    value_loss_unclipped = (values_valid - returns_valid) ** 2
-                    value_loss_clipped = (values_clipped - returns_valid) ** 2
-                    value_loss = 0.5 * torch.max(value_loss_unclipped, value_loss_clipped).mean()
-                else:
-                    value_loss = F.mse_loss(values_valid, returns_valid)
-
-                # Entropy bonus
-                entropy_loss = -entropy_valid.mean()
-
-                # Get entropy coefficient with adaptive floor
-                # Use first action mask from batch as representative
-                representative_mask = batch['action_masks'][0, 0] if batch['action_masks'] is not None else None
-                entropy_coef = self.get_entropy_coef(representative_mask)
-
-                # Total loss (using agent's value_coef, not hardcoded)
-                loss = policy_loss + self.value_coef * value_loss + entropy_coef * entropy_loss
-
-                self.optimizer.zero_grad(set_to_none=True)
-                loss.backward()
-                nn.utils.clip_grad_norm_(self.network.parameters(), self.max_grad_norm)
-                self.optimizer.step()
-
-                # Track metrics (single sync for all 4)
-                approx_kl_tensor = (old_log_probs_valid - log_probs_valid).mean()
-                batch_metrics = torch.stack([
-                    policy_loss, value_loss, entropy_valid.mean(), approx_kl_tensor
-                ])
-                pl, vl, ent, kl = batch_metrics.tolist()
-                total_policy_loss += pl
-                total_value_loss += vl
-                total_entropy += ent
-                total_approx_kl += kl
-                n_updates += 1
-
-        # Increment train_steps for entropy annealing (CRITICAL for get_entropy_coef)
-        # Must be AFTER epoch/batch loops to match update() behavior (was at line 565, causing ~8x too fast annealing)
-        self.train_steps += 1
-
-        self.recurrent_buffer.clear()
-
-        # Compute final metrics
-        avg_approx_kl = total_approx_kl / max(n_updates, 1)
-
-        # Warn if KL divergence is high (indicates policy changing too fast)
-        if avg_approx_kl > 0.03:
-            logger.warning(
-                f"High KL divergence ({avg_approx_kl:.4f}) during recurrent update. "
-                f"Consider reducing lr or n_epochs to stabilize training."
-            )
-
-        # Compute ratio statistics for anomaly detection
-        metrics = {
-            'policy_loss': total_policy_loss / max(n_updates, 1),
-            'value_loss': total_value_loss / max(n_updates, 1),
-            'entropy': total_entropy / max(n_updates, 1),
-            'approx_kl': avg_approx_kl,
-            'explained_variance': explained_variance,
-        }
-
-        if all_ratios:
-            stacked = torch.cat(all_ratios)
-            # Single sync for all 3 ratio stats
-            ratio_stats = torch.stack([stacked.max(), stacked.min(), stacked.std()])
-            r_max, r_min, r_std = ratio_stats.tolist()
-            metrics['ratio_max'] = [r_max]
-            metrics['ratio_min'] = [r_min]
-            metrics['ratio_std'] = [r_std]
-
-            # Check for NaN/Inf in ratios - single fused check
-            # Store in separate dict to avoid type conflict with list-based metrics
-            if not torch.isfinite(stacked).all():
-                metrics['ratio_has_numerical_issue'] = True
-
-        return metrics
-
     def save(self, path: str | Path, metadata: dict = None) -> None:
         """Save agent to file."""
         path = Path(path)
@@ -1187,16 +900,16 @@ class PPOAgent:
                 'value_coef': self.value_coef,
                 'clip_value': self.clip_value,
                 'target_kl': self.target_kl,
-                'recurrent': self.recurrent,
-                'recurrent_n_epochs': self.recurrent_n_epochs,  # Epoch default for recurrent PPO
+                'tamiyo': self.tamiyo,
+                'recurrent_n_epochs': self.recurrent_n_epochs,
                 'lstm_hidden_dim': self.lstm_hidden_dim,
                 'chunk_length': self.chunk_length,
             },
             # Architecture info for load-time reconstruction
             'architecture': {
-                'recurrent': self.recurrent,
-                'state_dim': base_net.state_dim if self.recurrent else None,
-                'action_dim': base_net.action_dim,
+                'tamiyo': self.tamiyo,
+                'state_dim': base_net.state_dim if self.tamiyo else None,
+                'action_dim': base_net.action_dim if not self.tamiyo else None,
             }
         }
         if metadata:
@@ -1211,14 +924,13 @@ class PPOAgent:
 
         state_dict = checkpoint['network_state_dict']
         arch = checkpoint.get('architecture', {})
-        is_recurrent = arch.get('recurrent', False)
+        is_tamiyo = arch.get('tamiyo', False)
 
         # Infer dimensions from state_dict keys
-        if is_recurrent:
-            # RecurrentActorCritic: encoder.0.weight has shape [hidden_dim, state_dim]
-            state_dim = state_dict['encoder.0.weight'].shape[1]
-            # actor.2.weight has shape [action_dim, lstm_hidden_dim // 2]
-            action_dim = state_dict['actor.2.weight'].shape[0]
+        if is_tamiyo:
+            # FactoredRecurrentActorCritic: feature_net.0.weight has shape [hidden_dim, state_dim]
+            state_dim = state_dict['feature_net.0.weight'].shape[1]
+            action_dim = 7  # Not used for tamiyo
         else:
             # ActorCritic: shared.0.weight has shape [hidden_dim, state_dim]
             state_dim = state_dict['shared.0.weight'].shape[1]
