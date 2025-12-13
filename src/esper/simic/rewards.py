@@ -30,7 +30,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from enum import Enum, IntEnum
+from enum import Enum
 from typing import NamedTuple
 
 _logger = logging.getLogger(__name__)
@@ -696,7 +696,7 @@ def compute_minimal_reward(
     total_params: int,
     epoch: int,
     max_epochs: int,
-    action: IntEnum,
+    action: LifecycleOp,
     seed_age: int | None,
     config: ContributionRewardConfig,
 ) -> float:
@@ -741,7 +741,7 @@ def compute_minimal_reward(
 
 
 def compute_reward(
-    action: IntEnum,
+    action: LifecycleOp,
     seed_contribution: float | None,
     val_acc: float,
     host_max_acc: float,
