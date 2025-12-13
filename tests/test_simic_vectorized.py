@@ -59,9 +59,9 @@ class _StubModel:
 def test_advance_active_seed_fossilizes_via_seed_slot():
     """PROBATIONARY seeds should fossilize through SeedSlot.advance_stage (emits telemetry)."""
     model = _StubModel(SeedStage.PROBATIONARY)
-    slots = ["mid"]
+    slot_id = "mid"
 
-    _advance_active_seed(model, slots)
+    _advance_active_seed(model, slot_id)
 
     assert model.seed_slots["mid"].advance_calls == [SeedStage.FOSSILIZED]
     assert model.seed_slots["mid"].set_alpha_calls == [1.0]
@@ -74,10 +74,10 @@ def test_advance_active_seed_noop_on_failed_fossilization_gate():
     """Failed fossilization gate should be a no-op (Tamiyo learns from failed attempts)."""
     gate_result = _StubGateResult(passed=False, checks_failed=["no_improvement"])
     model = _StubModel(SeedStage.PROBATIONARY, gate_result=gate_result)
-    slots = ["mid"]
+    slot_id = "mid"
 
     # Should not raise - failed gate is normal RL outcome
-    _advance_active_seed(model, slots)
+    _advance_active_seed(model, slot_id)
 
     # Gate was checked but transition didn't happen
     assert model.seed_slots["mid"].advance_calls == [SeedStage.FOSSILIZED]
@@ -88,9 +88,9 @@ def test_advance_active_seed_noop_on_failed_fossilization_gate():
 def test_advance_active_seed_noop_from_training_stage():
     """TRAINING seeds are handled mechanically; fossilize action should do nothing."""
     model = _StubModel(SeedStage.TRAINING)
-    slots = ["mid"]
+    slot_id = "mid"
 
-    _advance_active_seed(model, slots)
+    _advance_active_seed(model, slot_id)
 
     assert model.seed_slots["mid"].state.transition_calls == []
     assert model.seed_slots["mid"].start_blending_calls == []

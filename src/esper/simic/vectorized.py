@@ -90,7 +90,9 @@ class ParallelEnvState:
     train_correct_accum: torch.Tensor | None = None
     val_loss_accum: torch.Tensor | None = None
     val_correct_accum: torch.Tensor | None = None
-    cf_correct_accum: torch.Tensor | None = None  # Counterfactual accumulator
+    # Per-slot counterfactual accumulators for multi-slot reward attribution
+    cf_correct_accums: dict[str, torch.Tensor] = field(default_factory=dict)
+    cf_totals: dict[str, int] = field(default_factory=dict)
     # LSTM hidden state for recurrent policy
     # Shape: (h, c) where each is [num_layers, 1, hidden_dim] for this single env
     # (Batched to [num_layers, num_envs, hidden_dim] during forward pass)
@@ -109,13 +111,21 @@ class ParallelEnvState:
             self.action_counts = base_counts.copy()
             self.successful_action_counts = base_counts.copy()
 
-    def init_accumulators(self) -> None:
-        """Initialize pre-allocated accumulators on the environment's device."""
+    def init_accumulators(self, slots: list[str]) -> None:
+        """Initialize pre-allocated accumulators on the environment's device.
+
+        Args:
+            slots: List of enabled slot IDs for per-slot counterfactual tracking
+        """
         self.train_loss_accum = torch.zeros(1, device=self.env_device)
         self.train_correct_accum = torch.zeros(1, device=self.env_device)
         self.val_loss_accum = torch.zeros(1, device=self.env_device)
         self.val_correct_accum = torch.zeros(1, device=self.env_device)
-        self.cf_correct_accum = torch.zeros(1, device=self.env_device)
+        # Per-slot counterfactual accumulators for multi-slot reward attribution
+        self.cf_correct_accums: dict[str, torch.Tensor] = {
+            slot_id: torch.zeros(1, device=self.env_device) for slot_id in slots
+        }
+        self.cf_totals: dict[str, int] = {slot_id: 0 for slot_id in slots}
 
     def zero_accumulators(self) -> None:
         """Zero accumulators at the start of each epoch (faster than reallocating)."""
@@ -123,27 +133,27 @@ class ParallelEnvState:
         self.train_correct_accum.zero_()
         self.val_loss_accum.zero_()
         self.val_correct_accum.zero_()
-        self.cf_correct_accum.zero_()
+        # Zero per-slot counterfactual accumulators
+        for slot_id in self.cf_correct_accums:
+            self.cf_correct_accums[slot_id].zero_()
+        for slot_id in self.cf_totals:
+            self.cf_totals[slot_id] = 0
 
 
-def _advance_active_seed(model, slots: list[str]) -> bool:
-    """Advance lifecycle for the active seed, emitting telemetry via SeedSlot.
+def _advance_active_seed(model, slot_id: str) -> bool:
+    """Advance lifecycle for the active seed in the specified slot.
 
     Args:
         model: MorphogeneticModel instance
-        slots: List of slot names (uses first slot)
+        slot_id: Target slot ID (e.g., "early", "mid", "late")
 
     Returns:
         True if the seed successfully fossilized, False otherwise.
     """
-    if not slots:
-        raise ValueError("slots parameter is required and cannot be empty")
-    target_slot = slots[0]
-
-    if not model.has_active_seed_in_slot(target_slot):
+    if not model.has_active_seed_in_slot(slot_id):
         return False
 
-    slot = model.seed_slots[target_slot]
+    slot = model.seed_slots[slot_id]
     seed_state = slot.state
     current_stage = seed_state.stage
 
@@ -499,7 +509,7 @@ def train_ppo_vectorized(
             params_added_baseline=params_added_baseline,
         )
         # Pre-allocate accumulators to avoid per-epoch allocation churn
-        env_state.init_accumulators()
+        env_state.init_accumulators(slots)
         return env_state
 
     def process_train_batch(env_state: ParallelEnvState, inputs: torch.Tensor,
@@ -780,25 +790,29 @@ def train_ppo_vectorized(
             # Instead of iterating test data twice (once for main validation, once for
             # counterfactual), we fuse both into a single loop. For each batch, we run:
             # 1. Main validation (real alpha) - accumulates val_correct_accum
-            # 2. Counterfactual (alpha=0) - accumulates cf_correct_accum (same batch!)
-            # This eliminates DataLoader overhead and halves test iteration time.
+            # 2. Per-slot counterfactual (alpha=0) - accumulates cf_correct_accums[slot_id]
+            # This eliminates DataLoader overhead and enables multi-slot reward attribution.
             # Note: val/cf accumulators were already zeroed by zero_accumulators() above
 
             val_totals = [0] * envs_this_batch
 
-            # Determine which envs need counterfactual BEFORE the loop
+            # Determine which slots need counterfactual BEFORE the loop
             # (seed with alpha > 0 means the seed is contributing to output)
-            envs_needing_counterfactual = set()
+            # slots_needing_counterfactual[env_idx] = set of slot_ids with active seeds
+            slots_needing_counterfactual: dict[int, set[str]] = {}
             for i, env_state in enumerate(env_states):
                 model = env_state.model
-                target_slot = slots[0]
-                if model.has_active_seed_in_slot(target_slot):
-                    seed_state = model.seed_slots[target_slot].state
-                    if seed_state and seed_state.alpha > 0:
-                        envs_needing_counterfactual.add(i)
+                active_slots: set[str] = set()
+                for slot_id in slots:
+                    if model.has_active_seed_in_slot(slot_id):
+                        seed_state = model.seed_slots[slot_id].state
+                        if seed_state and seed_state.alpha > 0:
+                            active_slots.add(slot_id)
+                if active_slots:
+                    slots_needing_counterfactual[i] = active_slots
 
-            cf_totals = {i: 0 for i in envs_needing_counterfactual}
-            baseline_accs = [None] * envs_this_batch
+            # baseline_accs[env_idx][slot_id] = accuracy with that slot's seed disabled
+            baseline_accs: list[dict[str, float]] = [{} for _ in range(envs_this_batch)]
 
             # Issue one wait_stream per env before the loop starts (not per-batch)
             # This syncs the accumulator zeroing on default stream before we write.
@@ -807,8 +821,10 @@ def train_ppo_vectorized(
                     env_state.val_loss_accum.record_stream(env_state.stream)
                     env_state.val_correct_accum.record_stream(env_state.stream)
                     env_state.stream.wait_stream(torch.cuda.default_stream(env_state.env_device))
-                    if i in envs_needing_counterfactual:
-                        env_state.cf_correct_accum.record_stream(env_state.stream)
+                    # Register per-slot counterfactual accumulators with stream
+                    if i in slots_needing_counterfactual:
+                        for slot_id in slots_needing_counterfactual[i]:
+                            env_state.cf_correct_accums[slot_id].record_stream(env_state.stream)
 
             # Choose iteration strategy based on data loading mode
             if shared_test_iter is not None:
@@ -841,15 +857,17 @@ def train_ppo_vectorized(
 
                         # COUNTERFACTUAL (alpha=0) - SAME BATCH, no DataLoader reload!
                         # Data is already on GPU from the main validation pass.
-                        if i in envs_needing_counterfactual:
-                            target_slot = slots[0]
-                            with env_state.model.seed_slots[target_slot].force_alpha(0.0):
-                                _, cf_correct_tensor, cf_total = process_val_batch(
-                                    env_state, inputs, targets, criterion, slots=slots
-                                )
-                            with stream_ctx:
-                                env_state.cf_correct_accum.add_(cf_correct_tensor)
-                            cf_totals[i] += cf_total
+                        # Compute per-slot counterfactual for multi-slot reward attribution
+                        if i in slots_needing_counterfactual:
+                            for slot_id in slots_needing_counterfactual[i]:
+                                # Entire counterfactual pass in stream_ctx (PyTorch specialist fix)
+                                with stream_ctx:
+                                    with env_state.model.seed_slots[slot_id].force_alpha(0.0):
+                                        _, cf_correct_tensor, cf_total = process_val_batch(
+                                            env_state, inputs, targets, criterion, slots=slots
+                                        )
+                                    env_state.cf_correct_accums[slot_id].add_(cf_correct_tensor)
+                                env_state.cf_totals[slot_id] += cf_total
             else:
                 # GPU preload fallback: per-env DataLoaders (data already on GPU)
                 test_iters = [iter(env_dataloaders[i][1]) for i in range(envs_this_batch)]
@@ -878,15 +896,17 @@ def train_ppo_vectorized(
 
                         # COUNTERFACTUAL (alpha=0) - SAME BATCH, no DataLoader reload!
                         # Data is already on GPU from the main validation pass.
-                        if i in envs_needing_counterfactual:
-                            target_slot = slots[0]
-                            with env_state.model.seed_slots[target_slot].force_alpha(0.0):
-                                _, cf_correct_tensor, cf_total = process_val_batch(
-                                    env_state, inputs, targets, criterion, slots=slots
-                                )
-                            with stream_ctx:
-                                env_state.cf_correct_accum.add_(cf_correct_tensor)
-                            cf_totals[i] += cf_total
+                        # Compute per-slot counterfactual for multi-slot reward attribution
+                        if i in slots_needing_counterfactual:
+                            for slot_id in slots_needing_counterfactual[i]:
+                                # Entire counterfactual pass in stream_ctx (PyTorch specialist fix)
+                                with stream_ctx:
+                                    with env_state.model.seed_slots[slot_id].force_alpha(0.0):
+                                        _, cf_correct_tensor, cf_total = process_val_batch(
+                                            env_state, inputs, targets, criterion, slots=slots
+                                        )
+                                    env_state.cf_correct_accums[slot_id].add_(cf_correct_tensor)
+                                env_state.cf_totals[slot_id] += cf_total
 
             # Single sync point at end (not once per pass)
             for env_state in env_states:
@@ -897,9 +917,14 @@ def train_ppo_vectorized(
             val_losses = [env_state.val_loss_accum.item() for env_state in env_states]
             val_corrects = [env_state.val_correct_accum.item() for env_state in env_states]
 
-            # Compute baseline accuracies for counterfactual envs
-            for i in envs_needing_counterfactual:
-                baseline_accs[i] = 100.0 * env_states[i].cf_correct_accum.item() / max(cf_totals[i], 1)
+            # Compute per-slot baseline accuracies from counterfactual accumulators
+            for i in slots_needing_counterfactual:
+                for slot_id in slots_needing_counterfactual[i]:
+                    cf_total = env_states[i].cf_totals[slot_id]
+                    if cf_total > 0:
+                        baseline_accs[i][slot_id] = (
+                            100.0 * env_states[i].cf_correct_accums[slot_id].item() / cf_total
+                        )
 
             # ===== Compute epoch metrics and get BATCHED actions =====
             # First, sync telemetry for envs with active seeds (must happen BEFORE feature extraction)
@@ -975,13 +1000,13 @@ def train_ppo_vectorized(
                 if seed_state and seed_state.metrics:
                     seed_state.metrics.record_accuracy(val_acc)
 
-                    # Log counterfactual contribution if available
-                    if baseline_accs[env_idx] is not None:
-                        cf_contribution = val_acc - baseline_accs[env_idx]
-                        if epoch == max_epochs:  # Only log at episode end to reduce noise
-                            print(f"  [ENV {env_idx}] Counterfactual: {val_acc:.1f}% real, "
-                                  f"{baseline_accs[env_idx]:.1f}% baseline, "
-                                  f"Δ={cf_contribution:+.2f}% seed contribution")
+                    # Log counterfactual contribution if available (for all active slots)
+                    if baseline_accs[env_idx] and epoch == max_epochs:
+                        for slot_id, baseline_acc in baseline_accs[env_idx].items():
+                            cf_contribution = val_acc - baseline_acc
+                            print(f"  [ENV {env_idx}] Slot {slot_id} counterfactual: "
+                                  f"{val_acc:.1f}% real, {baseline_acc:.1f}% baseline, "
+                                  f"Δ={cf_contribution:+.2f}% contribution")
                     # NOTE: step_epoch() moved to AFTER transition storage for state/action alignment
 
                 # Update signal tracker
@@ -1146,10 +1171,11 @@ def train_ppo_vectorized(
                 params_added_delta = max(0, scoreboard.params_added - env_state.params_added_baseline)
                 total_params = params_added_delta + model.active_seed_params
 
-                # Compute seed_contribution from counterfactual if available
+                # Compute seed_contribution from counterfactual for the SAMPLED slot
+                # (multi-slot reward attribution: use the slot the policy chose)
                 seed_contribution = None
-                if baseline_accs[env_idx] is not None:
-                    seed_contribution = env_state.val_acc - baseline_accs[env_idx]
+                if target_slot in baseline_accs[env_idx]:
+                    seed_contribution = env_state.val_acc - baseline_accs[env_idx][target_slot]
                     # Store in metrics for telemetry at fossilize/cull
                     if seed_state and seed_state.metrics:
                         seed_state.metrics.counterfactual_contribution = seed_contribution
@@ -1178,8 +1204,8 @@ def train_ppo_vectorized(
                         num_fossilized_seeds=env_state.seeds_fossilized,
                         num_contributing_fossilized=env_state.contributing_fossilized,
                     )
-                    if baseline_accs[env_idx] is not None:
-                        reward_components.host_baseline_acc = baseline_accs[env_idx]
+                    if target_slot in baseline_accs[env_idx]:
+                        reward_components.host_baseline_acc = baseline_accs[env_idx][target_slot]
                 else:
                     reward = compute_contribution_reward(
                         action=action_for_reward,
@@ -1227,7 +1253,7 @@ def train_ppo_vectorized(
                         if seed_state and seed_state.metrics else 0.0
                     )
                     # _advance_active_seed handles the actual fossilization
-                    action_success = _advance_active_seed(model, [target_slot])
+                    action_success = _advance_active_seed(model, target_slot)
                     if action_success:
                         env_state.seeds_fossilized += 1
                         if seed_total_improvement >= MIN_FOSSILIZE_CONTRIBUTION:
