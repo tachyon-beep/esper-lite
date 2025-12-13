@@ -7,11 +7,12 @@ and flips a latch once improvement drops below 5% for 3 consecutive epochs.
 
 import pytest
 
-from esper.tamiyo.tracker import (
-    SignalTracker,
-    STABILIZATION_THRESHOLD,
-    STABILIZATION_EPOCHS,
-)
+from esper.tamiyo.tracker import SignalTracker
+from esper.leyline import DEFAULT_STABILIZATION_THRESHOLD, DEFAULT_STABILIZATION_EPOCHS
+
+# Backwards compatibility aliases
+STABILIZATION_THRESHOLD = DEFAULT_STABILIZATION_THRESHOLD
+STABILIZATION_EPOCHS = DEFAULT_STABILIZATION_EPOCHS
 
 
 class TestStabilizationTracking:

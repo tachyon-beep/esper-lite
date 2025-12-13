@@ -23,6 +23,7 @@ import torch
 import torch.nn as nn
 from torch.distributions import Categorical
 
+from esper.leyline import DEFAULT_LSTM_HIDDEN_DIM, DEFAULT_FEATURE_DIM
 from esper.leyline.factored_actions import (
     NUM_SLOTS,
     NUM_BLUEPRINTS,
@@ -52,8 +53,8 @@ class FactoredRecurrentActorCritic(nn.Module):
         num_blueprints: int = NUM_BLUEPRINTS,
         num_blends: int = NUM_BLENDS,
         num_ops: int = NUM_OPS,
-        feature_dim: int = 128,
-        lstm_hidden_dim: int = 128,
+        feature_dim: int = DEFAULT_FEATURE_DIM,
+        lstm_hidden_dim: int = DEFAULT_LSTM_HIDDEN_DIM,
         lstm_layers: int = 1,
     ):
         super().__init__()

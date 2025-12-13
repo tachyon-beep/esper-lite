@@ -19,15 +19,17 @@ Esper is a framework for **Morphogenetic AI**—neural networks that dynamically
 
 The system is organized into seven decoupled domains:
 
-| Domain | Role | Analogy | Description |
-| :--- | :--- | :--- | :--- |
-| **Kasmina** | **Body** | The Plant | The neural network model, slot management, and grafting mechanics. |
-| **Leyline** | **Nervous System** | Signals | Shared data contracts, enums (`SeedStage`), and tensor schemas. |
-| **Tamiyo** | **Brain** | The Gardener | Strategic decision-making logic (heuristic or neural policy). |
-| **Tolaria** | **Hands** | Tools | Execution engine that runs the PyTorch training loops and optimizers. |
-| **Simic** | **Gym** | Simulator | RL infrastructure (PPO) for training the strategic brain. |
-| **Nissa** | **Senses** | Sensors | Observability hub for routing telemetry and generating narratives. |
-| **Karn** | **Memory** | Archivist | Research telemetry system with analytics, health monitoring, TUI, and web dashboard. |
+| Domain | Biological Role | Description |
+| :--- | :--- | :--- |
+| **Kasmina** | Stem Cells | Pluripotent slots that differentiate into neural modules. Manages grafting mechanics. |
+| **Leyline** | DNA/Genome | Shared data contracts, enums (`SeedStage`), tensor schemas — the genetic code. |
+| **Tamiyo** | Brain/Cortex | Strategic decision-making logic (heuristic or neural policy). |
+| **Tolaria** | Metabolism | Execution engine that converts data into trained weights (energy conversion). |
+| **Simic** | Evolution | RL infrastructure (PPO) enabling adaptation through selection pressure. |
+| **Nissa** | Sensory Organs | Observability hub — perceives training dynamics and routes telemetry. |
+| **Karn** | Memory | Research telemetry system with analytics, health monitoring, TUI, and web dashboard. |
+
+> **📝 Metaphor Note:** Esper uses *body/organism* terminology for system architecture (domains as organs) and *botanical* terminology for seed lifecycle (germinate, graft, cull). Think of it as: "The organism's stem cells undergo a botanical development process."
 
 ---
 

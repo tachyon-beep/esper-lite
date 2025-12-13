@@ -115,10 +115,10 @@ We iterate **DataLoaders first** (batches), dispatch to **environments second** 
 
 **Hierarchy:**
 
-* **Kasmina** – the Stem Cell / pluripotent mechanics (can differentiate into any blueprint)
-* **Narset** – the Endocrine System / hormonal coordination (resource allocation signals between organ clusters)
-* **Emrakul** – the Immune System / phagocytes (identifies and removes parasitic or damaged components)
-* **Tamiyo** – the Nervous System / strategic control (high-level decision making)
+* **Kasmina** – Stem Cells / pluripotent mechanics (can differentiate into any blueprint)
+* **Tamiyo** – Brain/Cortex / strategic control (high-level decision making)
+* **Narset** – Endocrine System / hormonal coordination (resource allocation signals between organ clusters)
+* **Emrakul** – Immune System / phagocytes (identifies and removes parasitic or damaged components)
 
 **Design Rule:** Scale **Out** (harder problems) and **In** (recursion, multi-slot) before scaling **Up** (billions of seeds).
 
@@ -281,11 +281,12 @@ python -m esper.scripts.train ppo --reward-mode minimal
 
 | Component   | Biological Role     | Description                                        | Status |
 | ----------- | ------------------- | -------------------------------------------------- | ------ |
-| **Kasmina** | Stem Cell           | Pluripotent slots that differentiate into blueprints | Active |
-| **Leyline** | DNA/Proteins        | Shared types, enums, tensor schemas (contracts)    | Active |
-| **Tamiyo**  | Nervous System      | Heuristic decision logic, strategic control        | Active |
+| **Kasmina** | Stem Cells          | Pluripotent slots that differentiate into blueprints | Active |
+| **Leyline** | DNA/Genome          | Shared types, enums, tensor schemas (genetic code) | Active |
+| **Tamiyo**  | Brain/Cortex        | Heuristic decision logic, strategic control        | Active |
 | **Tolaria** | Metabolism          | PyTorch training loops, energy conversion          | Active |
 | **Simic**   | Evolution           | RL infrastructure (PPO, rewards), adaptation       | Active |
 | **Nissa**   | Sensory Organs      | Telemetry hub, observability                       | Active |
+| **Karn**    | Memory              | Research telemetry, analytics, historical records  | Active |
 | **Emrakul** | Immune System       | Efficiency auditing, removes parasitic components  | Future |
 | **Narset**  | Endocrine System    | Hormonal coordination, resource allocation signals | Future |

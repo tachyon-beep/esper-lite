@@ -127,11 +127,15 @@ class BlueprintAnalytics(OutputBackend):
     Tracks:
     - Per-blueprint stats (germinated, fossilized, culled, accuracy)
     - Per-environment scoreboards (params, compute cost, distribution)
+
+    Args:
+        quiet: Suppress console output (use when TUI is active).
     """
 
-    def __init__(self):
+    def __init__(self, quiet: bool = False):
         self.stats: dict[str, BlueprintStats] = defaultdict(BlueprintStats)
         self.scoreboards: dict[int, SeedScoreboard] = {}
+        self.quiet = quiet
 
     def set_host_params(self, env_id: int, host_params: int) -> None:
         """Initialize or update host parameter count for an environment."""
@@ -151,7 +155,8 @@ class BlueprintAnalytics(OutputBackend):
             sb.total_germinated += 1
             sb.live_blueprint = bp_id
 
-            print(f"    [env{env_id}] Germinated '{seed_id}' ({bp_id}, {params/1000:.1f}K params)")
+            if not self.quiet:
+                print(f"    [env{env_id}] Germinated '{seed_id}' ({bp_id}, {params/1000:.1f}K params)")
 
         elif event.event_type == TelemetryEventType.SEED_FOSSILIZED:
             bp_id = event.data.get("blueprint_id", "unknown")
@@ -177,9 +182,10 @@ class BlueprintAnalytics(OutputBackend):
             sb.live_blueprint = None
 
             # Show total improvement, blending delta, and causal contribution
-            causal_str = f", causal Δ {counterfactual:+.2f}%" if counterfactual is not None else ""
-            print(f"    [env{env_id}] Fossilized '{seed_id}' ({bp_id}, "
-                  f"total Δacc {improvement:+.2f}%, blending Δ {blending_delta:+.2f}%{causal_str})")
+            if not self.quiet:
+                causal_str = f", causal Δ {counterfactual:+.2f}%" if counterfactual is not None else ""
+                print(f"    [env{env_id}] Fossilized '{seed_id}' ({bp_id}, "
+                      f"total Δacc {improvement:+.2f}%, blending Δ {blending_delta:+.2f}%{causal_str})")
 
         elif event.event_type == TelemetryEventType.SEED_CULLED:
             bp_id = event.data.get("blueprint_id", "unknown")
@@ -202,11 +208,12 @@ class BlueprintAnalytics(OutputBackend):
             sb.total_cull_age_epochs += int(epochs_total)
             sb.live_blueprint = None
 
-            reason_str = f" ({reason})" if reason else ""
             # Show total improvement, blending delta, and causal contribution
-            causal_str = f", causal Δ {counterfactual:+.2f}%" if counterfactual is not None else ""
-            print(f"    [env{env_id}] Culled '{seed_id}' ({bp_id}, "
-                  f"total Δacc {improvement:+.2f}%, blending Δ {blending_delta:+.2f}%{causal_str}){reason_str}")
+            if not self.quiet:
+                reason_str = f" ({reason})" if reason else ""
+                causal_str = f", causal Δ {counterfactual:+.2f}%" if counterfactual is not None else ""
+                print(f"    [env{env_id}] Culled '{seed_id}' ({bp_id}, "
+                      f"total Δacc {improvement:+.2f}%, blending Δ {blending_delta:+.2f}%{causal_str}){reason_str}")
 
     def _get_scoreboard(self, env_id: int) -> SeedScoreboard:
         """Get or create scoreboard for environment."""

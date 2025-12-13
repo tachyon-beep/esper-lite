@@ -152,4 +152,77 @@ Whenever we make an active design decision to defer functionality due to complex
 ```python
 # TODO: [FUTURE FUNCTIONALITY] - Brief description of what was deferred and why
 ```
-- remember that we use UV in this project and use it as the preferred way to execute pythonc ode
+
+## Development Conventions
+
+### Package Manager: UV
+
+This project uses **UV** as the preferred package manager and Python executor.
+
+```bash
+# Install dependencies
+uv sync
+
+# Run Python code
+uv run python -m esper.scripts.train ppo --episodes 100
+
+# Run tests
+uv run pytest
+```
+
+### Leyline: The Shared Contracts Module
+
+**All new constants, enums, and shared types MUST be placed in `leyline`.**
+
+The `leyline` module is the project's "DNA" — it defines the contracts that all other domains depend on:
+
+- **Enums:** `SeedStage`, `ActionType`, `SlotPosition`, etc.
+- **Constants:** Thresholds, defaults, magic numbers with semantic names
+- **Type definitions:** Shared dataclasses, TypedDicts, Protocols
+- **Tensor schemas:** Observation/action space definitions
+
+**Rationale:** Leyline prevents circular imports and ensures all domains share a single source of truth for fundamental types. If you're defining something that multiple domains will import, it belongs in leyline.
+
+### Documentation Metaphors
+
+**IMPORTANT:** Esper uses two complementary metaphors. Do NOT mix them or invent alternatives.
+
+#### 1. Body/Organism Metaphor — For System Architecture
+
+The seven domains are organs/systems within a single organism:
+
+| Domain | Biological Role | Description |
+|--------|-----------------|-------------|
+| **Kasmina** | Stem Cells | Pluripotent slots that differentiate into modules |
+| **Leyline** | DNA/Genome | Shared contracts, types, the "genetic code" |
+| **Tamiyo** | Brain/Cortex | Strategic decision-making, high-level control |
+| **Tolaria** | Metabolism | Energy conversion, training execution |
+| **Simic** | Evolution | Adaptation through reinforcement learning |
+| **Nissa** | Sensory Organs | Telemetry, observation, perception |
+| **Karn** | Memory | Historical records, analytics, recall |
+| **Narset** *(future)* | Endocrine System | Hormonal coordination between regions |
+| **Emrakul** *(future)* | Immune System | Identifying and removing parasitic components |
+
+#### 2. Plant/Botanical Metaphor — For Seed Lifecycle Only
+
+The lifecycle of individual neural modules uses botanical terms:
+
+| Stage | Meaning |
+|-------|---------|
+| **Dormant** | Inactive, waiting to be activated |
+| **Germinated** | Module created and beginning to develop |
+| **Training** | Growing, learning from host errors |
+| **Blending** | Being integrated into the host |
+| **Grafted/Fossilized** | Permanently fused with host |
+| **Culled** | Removed due to poor performance |
+
+#### The Framing
+
+Think of it as: **"The organism's stem cells undergo a botanical development process."** The body metaphor describes *what the system is*; the plant metaphor describes *how individual modules mature*.
+
+#### Enforcement
+
+- Claude Code MUST NOT introduce new metaphors (no "factory", "pipeline", "machine" language)
+- Claude Code MUST NOT use body terms for seed states (no "seed is metabolizing")
+- Claude Code MUST NOT use plant terms for system architecture (no "Tamiyo is the gardener")
+- When in doubt, refer to the tables above

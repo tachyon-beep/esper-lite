@@ -2,7 +2,7 @@
 
 import pytest
 
-from esper.leyline import SeedStage
+from esper.leyline import SeedStage, DEFAULT_BLUEPRINT_PENALTY_THRESHOLD
 from esper.tamiyo.heuristic import HeuristicTamiyo, HeuristicPolicyConfig
 
 
@@ -313,7 +313,7 @@ class TestBlueprintRotation:
         """Should avoid heavily penalized blueprints."""
         config = HeuristicPolicyConfig(
             blueprint_rotation=["conv_light", "conv_heavy"],
-            blueprint_penalty_threshold=3.0,
+            blueprint_penalty_threshold=DEFAULT_BLUEPRINT_PENALTY_THRESHOLD,
         )
         policy = HeuristicTamiyo(config=config, topology="cnn")
 

@@ -34,8 +34,8 @@ from typing import NamedTuple
 
 _logger = logging.getLogger(__name__)
 
-from esper.leyline import SeedStage, MIN_CULL_AGE, MIN_PROBATION_EPOCHS
-from esper.kasmina.slot import MIN_FOSSILIZE_CONTRIBUTION
+from esper.leyline import SeedStage, MIN_CULL_AGE, MIN_PROBATION_EPOCHS, DEFAULT_GAMMA
+from esper.leyline import DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
 from esper.leyline.factored_actions import LifecycleOp
 from esper.simic.reward_telemetry import RewardComponentsTelemetry
 
@@ -109,11 +109,9 @@ STAGE_POTENTIALS = {
     7: 6.0,   # FOSSILIZED (smallest increment - not a farming target)
 }
 
-# Default discount factor for PBRS. MUST match SimicConfig.gamma (0.995)!
-# PBRS theory requires gamma_pbrs == gamma_ppo for policy invariance.
-# If they differ, reward shaping can change the optimal policy.
-# This value is optimized for 25-epoch episodes: gamma^25 ~ 0.88
-DEFAULT_GAMMA = 0.995
+# DEFAULT_GAMMA imported from leyline - single source of truth for PPO/PBRS gamma.
+# PBRS theory requires gamma_pbrs == gamma_ppo for policy invariance (Ng et al., 1999).
+# See leyline/__init__.py for value rationale.
 
 
 # =============================================================================
@@ -393,7 +391,7 @@ def compute_contribution_reward(
         acc_delta: Per-epoch accuracy change (proxy signal for pre-blending)
         return_components: If True, return (reward, components) tuple
         num_fossilized_seeds: Count of all fossilized seeds (for telemetry)
-        num_contributing_fossilized: Count of fossilized seeds with total_improvement >= MIN_FOSSILIZE_CONTRIBUTION.
+        num_contributing_fossilized: Count of fossilized seeds with total_improvement >= DEFAULT_MIN_FOSSILIZE_CONTRIBUTION.
             Only these seeds receive terminal bonus. This prevents bad fossilizations from being NPV-positive.
 
     Returns:
@@ -627,7 +625,7 @@ def compute_contribution_reward(
         # Base accuracy bonus
         terminal_bonus = val_acc * config.terminal_acc_weight
         # ASYMMETRIC TERMINAL BONUS: Only reward CONTRIBUTING fossilized seeds
-        # Seeds with total_improvement < MIN_FOSSILIZE_CONTRIBUTION get no terminal bonus.
+        # Seeds with total_improvement < DEFAULT_MIN_FOSSILIZE_CONTRIBUTION get no terminal bonus.
         # This makes bad fossilizations NPV-negative (immediate penalty not offset by terminal).
         # DRL Expert review 2025-12-11: prevents ransomware seeds from being NPV-positive
         fossilize_terminal_bonus = num_contributing_fossilized * config.fossilize_terminal_scale
@@ -934,9 +932,9 @@ def _contribution_fossilize_shaping(
     legitimacy_discount = min(1.0, seed_info.epochs_in_stage / MIN_PROBATION_EPOCHS)
 
     # Use seed_contribution to determine if fossilization is earned
-    # Aligned with G5 gate: require MIN_FOSSILIZE_CONTRIBUTION to get bonus
+    # Aligned with G5 gate: require DEFAULT_MIN_FOSSILIZE_CONTRIBUTION to get bonus
     # This prevents reward leak from low-contribution FOSSILIZE attempts
-    if seed_contribution is not None and seed_contribution >= MIN_FOSSILIZE_CONTRIBUTION:
+    if seed_contribution is not None and seed_contribution >= DEFAULT_MIN_FOSSILIZE_CONTRIBUTION:
         # Bonus scales with actual contribution AND legitimacy
         base_bonus = (
             config.fossilize_base_bonus

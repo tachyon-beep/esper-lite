@@ -14,7 +14,16 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 
-from esper.leyline import TelemetryEvent, TelemetryEventType
+from esper.leyline import (
+    TelemetryEvent,
+    TelemetryEventType,
+    DEFAULT_GOVERNOR_SENSITIVITY,
+    DEFAULT_GOVERNOR_ABSOLUTE_THRESHOLD,
+    DEFAULT_GOVERNOR_DEATH_PENALTY,
+    DEFAULT_GOVERNOR_HISTORY_WINDOW,
+    DEFAULT_MIN_PANICS_BEFORE_ROLLBACK,
+    DEFAULT_GOVERNOR_LOSS_MULTIPLIER,
+)
 from esper.nissa import get_hub
 
 
@@ -43,12 +52,12 @@ class TolariaGovernor:
     def __init__(
         self,
         model: nn.Module,
-        sensitivity: float = 6.0,  # 6 sigma = very rare
-        multiplier: float = 3.0,   # Loss must be 3x average
-        absolute_threshold: float = 10.0,  # Loss must exceed this absolute value
-        death_penalty: float = 10.0,
-        history_window: int = 20,  # Longer window for stable estimates
-        min_panics_before_rollback: int = 2,  # Require consecutive panics
+        sensitivity: float = DEFAULT_GOVERNOR_SENSITIVITY,  # 6 sigma = very rare
+        multiplier: float = DEFAULT_GOVERNOR_LOSS_MULTIPLIER,   # Loss must be Nx average
+        absolute_threshold: float = DEFAULT_GOVERNOR_ABSOLUTE_THRESHOLD,  # From leyline
+        death_penalty: float = DEFAULT_GOVERNOR_DEATH_PENALTY,
+        history_window: int = DEFAULT_GOVERNOR_HISTORY_WINDOW,  # From leyline
+        min_panics_before_rollback: int = DEFAULT_MIN_PANICS_BEFORE_ROLLBACK,  # From leyline
         random_guess_loss: float | None = None,  # Task-specific baseline (default: ln(10) for CIFAR-10)
     ):
         self.model = model

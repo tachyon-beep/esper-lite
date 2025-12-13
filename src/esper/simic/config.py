@@ -31,6 +31,27 @@ import math
 from dataclasses import dataclass, field, asdict
 from typing import Any
 
+from esper.leyline import (
+    DEFAULT_GAMMA,
+    DEFAULT_EPISODE_LENGTH,
+    DEFAULT_LSTM_HIDDEN_DIM,
+    DEFAULT_N_ENVS,
+    DEFAULT_LEARNING_RATE,
+    DEFAULT_CLIP_RATIO,
+    DEFAULT_GAE_LAMBDA,
+    DEFAULT_VALUE_COEF,
+    DEFAULT_MAX_GRAD_NORM,
+    DEFAULT_N_PPO_EPOCHS,
+    DEFAULT_BATCH_SIZE,
+    DEFAULT_ENTROPY_COEF,
+    DEFAULT_ENTROPY_COEF_MIN,
+    DEFAULT_STABILIZATION_THRESHOLD,
+    DEFAULT_STABILIZATION_EPOCHS,
+    DEFAULT_GOVERNOR_SENSITIVITY,
+    DEFAULT_GOVERNOR_ABSOLUTE_THRESHOLD,
+    DEFAULT_GOVERNOR_DEATH_PENALTY,
+)
+
 
 @dataclass
 class TrainingConfig:
@@ -48,25 +69,25 @@ class TrainingConfig:
     Use class methods for task-specific presets.
     """
 
-    # === PPO Core ===
-    lr: float = 3e-4
-    gamma: float = 0.995  # Optimized for 25-epoch episodes (gamma^25 ~ 0.88)
-    gae_lambda: float = 0.97  # Less bias for long delays
-    clip_ratio: float = 0.2
-    value_coef: float = 0.5
-    max_grad_norm: float = 0.5
-    n_epochs: int = 10
-    batch_size: int = 64
+    # === PPO Core (defaults from leyline) ===
+    lr: float = DEFAULT_LEARNING_RATE
+    gamma: float = DEFAULT_GAMMA  # From leyline - MUST match PBRS gamma
+    gae_lambda: float = DEFAULT_GAE_LAMBDA  # Less bias for long delays
+    clip_ratio: float = DEFAULT_CLIP_RATIO
+    value_coef: float = DEFAULT_VALUE_COEF
+    max_grad_norm: float = DEFAULT_MAX_GRAD_NORM
+    n_epochs: int = DEFAULT_N_PPO_EPOCHS
+    batch_size: int = DEFAULT_BATCH_SIZE
     clip_value: bool = True
     # Weight decay (L2 regularization) - applied to critic only
     # Actor weight decay is disabled to preserve exploration (RL best practice)
     weight_decay: float = 0.0
 
-    # === Entropy (Exploration) ===
-    entropy_coef: float = 0.05  # Unified default (validated in for_tinystories preset)
+    # === Entropy (Exploration, defaults from leyline) ===
+    entropy_coef: float = DEFAULT_ENTROPY_COEF  # Unified default
     entropy_coef_start: float | None = None
     entropy_coef_end: float | None = None
-    entropy_coef_min: float = 0.01
+    entropy_coef_min: float = DEFAULT_ENTROPY_COEF_MIN
     # Scale entropy floor with valid action count (information-theoretic)
     adaptive_entropy_floor: bool = False
     entropy_anneal_episodes: int = 0
@@ -84,29 +105,29 @@ class TrainingConfig:
 
     # === Training Scale ===
     n_episodes: int = 100
-    n_envs: int = 4
-    max_epochs: int = 25
+    n_envs: int = DEFAULT_N_ENVS
+    max_epochs: int = DEFAULT_EPISODE_LENGTH
 
-    # === Task-Specific: Governor ===
+    # === Task-Specific: Governor (defaults from leyline) ===
     # Random guess loss for lobotomy detection
     # CIFAR-10: ln(10) ≈ 2.3, TinyStories: ln(50257) ≈ 10.8
     random_guess_loss: float = field(default_factory=lambda: math.log(10))
-    governor_sensitivity: float = 6.0
-    governor_absolute_threshold: float = 12.0
-    governor_death_penalty: float = 10.0
+    governor_sensitivity: float = DEFAULT_GOVERNOR_SENSITIVITY
+    governor_absolute_threshold: float = DEFAULT_GOVERNOR_ABSOLUTE_THRESHOLD
+    governor_death_penalty: float = DEFAULT_GOVERNOR_DEATH_PENALTY
 
-    # === Task-Specific: Stabilization ===
+    # === Task-Specific: Stabilization (defaults from leyline) ===
     # Block germination until host training stabilizes
     # Lower threshold = stricter = stabilizes later
-    stabilization_threshold: float = 0.03  # 3% relative improvement
-    stabilization_epochs: int = 3  # Consecutive stable epochs required
+    stabilization_threshold: float = DEFAULT_STABILIZATION_THRESHOLD
+    stabilization_epochs: int = DEFAULT_STABILIZATION_EPOCHS
 
     # === Telemetry ===
     use_telemetry: bool = True
 
     # === LSTM Configuration ===
     # The unified architecture always uses LSTM (FactoredRecurrentActorCritic)
-    lstm_hidden_dim: int = 128
+    lstm_hidden_dim: int = DEFAULT_LSTM_HIDDEN_DIM
     chunk_length: int | None = None  # None = auto-match max_epochs; set explicitly if different
 
     def __post_init__(self):

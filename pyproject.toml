@@ -31,3 +31,8 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.mutmut]
+paths-to-mutate = "src/esper/tamiyo/"
+tests_dir = "tests/tamiyo/"
+runner = "uv run pytest -q -x"

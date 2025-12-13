@@ -3,11 +3,10 @@
 import pytest
 from esper.kasmina.slot import (
     QualityGates,
-    MIN_FOSSILIZE_CONTRIBUTION,
     SeedState,
     SeedMetrics,
 )
-from esper.leyline import SeedStage
+from esper.leyline import SeedStage, DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
 
 
 def create_probationary_state(contribution: float, healthy: bool = True) -> SeedState:
@@ -83,5 +82,5 @@ class TestG5MinimumContribution:
         assert any("sufficient_contribution" in c for c in result.checks_passed)
 
     def test_min_fossilize_contribution_constant(self):
-        """MIN_FOSSILIZE_CONTRIBUTION should be 1.0%."""
-        assert MIN_FOSSILIZE_CONTRIBUTION == 1.0
+        """DEFAULT_MIN_FOSSILIZE_CONTRIBUTION should be 1.0%."""
+        assert DEFAULT_MIN_FOSSILIZE_CONTRIBUTION == 1.0

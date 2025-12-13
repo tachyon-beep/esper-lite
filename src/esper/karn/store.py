@@ -84,15 +84,22 @@ class HostBaseline:
 
 
 class SeedStage(Enum):
-    """Seed lifecycle stages (mirrors Kasmina's SeedStage)."""
+    """Seed lifecycle stages (mirrors leyline.SeedStage).
 
+    NOTE: Values must match leyline/stages.py exactly for correct deserialization.
+    """
+
+    UNKNOWN = 0
     DORMANT = 1
     GERMINATED = 2
-    BLENDING = 3
-    PROBATION = 4
-    INTEGRATED = 5
-    FOSSILIZED = 6
-    CULLED = 7
+    TRAINING = 3       # Isolated training with gradient isolation
+    BLENDING = 4       # Alpha-managed grafting
+    # Value 5 intentionally skipped (was SHADOWING, removed)
+    PROBATIONARY = 6   # Final validation before fossilization
+    FOSSILIZED = 7     # Terminal success state
+    CULLED = 8         # Failure state
+    EMBARGOED = 9      # Post-cull cooldown
+    RESETTING = 10     # Cleanup before reuse
 
 
 @dataclass
@@ -191,6 +198,7 @@ class PolicySnapshot:
     # PPO diagnostics (from expert review P0/P1)
     kl_divergence: float | None = None  # KL(old || new)
     explained_variance: float | None = None  # 1 - Var(returns - values) / Var(returns)
+    entropy: float | None = None  # Policy entropy (exploration health)
 
 
 @dataclass
@@ -508,10 +516,16 @@ class TelemetryStore:
 
                 # Reconstruct store from events
                 if event_type == "TRAINING_STARTED":
+                    # Convert hyperparams dict to tuple of pairs for frozen dataclass
+                    hyperparams = data.get("hyperparams", {})
+                    hyperparameters = tuple(hyperparams.items()) if isinstance(hyperparams, dict) else ()
                     store.context = EpisodeContext(
                         episode_id=data.get("episode_id", "imported"),
-                        seeds=data.get("seeds", []),
-                        hyperparams=data.get("hyperparams", {}),
+                        base_seed=data.get("seed", 42),
+                        task_type=data.get("task", "classification"),
+                        reward_mode=data.get("reward_mode", "shaped"),
+                        max_epochs=data.get("max_epochs", 75),
+                        hyperparameters=hyperparameters,
                     )
                 elif event_type == "EPOCH_COMPLETED":
                     if epoch != current_epoch_num:

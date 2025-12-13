@@ -36,7 +36,25 @@ import torch.nn as nn
 
 from esper.runtime import get_task_spec
 from esper.utils.data import SharedBatchIterator
-from esper.leyline import SeedStage, SeedTelemetry, TelemetryEvent, TelemetryEventType
+from esper.leyline import (
+    SeedStage,
+    SeedTelemetry,
+    TelemetryEvent,
+    TelemetryEventType,
+    DEFAULT_GAMMA,
+    DEFAULT_EPISODE_LENGTH,
+    DEFAULT_LSTM_HIDDEN_DIM,
+    DEFAULT_N_ENVS,
+    DEFAULT_LEARNING_RATE,
+    DEFAULT_CLIP_RATIO,
+    DEFAULT_ENTROPY_COEF,
+    DEFAULT_ENTROPY_COEF_MIN,
+    DEFAULT_GOVERNOR_SENSITIVITY,
+    DEFAULT_GOVERNOR_ABSOLUTE_THRESHOLD,
+    DEFAULT_GOVERNOR_DEATH_PENALTY,
+    DEFAULT_GOVERNOR_HISTORY_WINDOW,
+    DEFAULT_MIN_PANICS_BEFORE_ROLLBACK,
+)
 from esper.leyline.factored_actions import FactoredAction, LifecycleOp
 from esper.simic.action_masks import build_slot_states, compute_action_masks
 from esper.simic.anomaly_detector import AnomalyDetector
@@ -52,7 +70,7 @@ from esper.simic.normalization import RunningMeanStd, RewardNormalizer
 from esper.simic.features import MULTISLOT_FEATURE_SIZE
 from esper.simic.ppo import PPOAgent, signals_to_features
 from esper.simic.rewards import compute_reward, RewardMode, ContributionRewardConfig, SeedInfo
-from esper.kasmina.slot import MIN_FOSSILIZE_CONTRIBUTION
+from esper.leyline import DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
 from esper.nissa import get_hub, BlueprintAnalytics
 from esper.tolaria import TolariaGovernor
 
@@ -77,7 +95,7 @@ class ParallelEnvState:
     stream: torch.cuda.Stream | None = None  # CUDA stream for async execution
     seeds_created: int = 0
     seeds_fossilized: int = 0  # Total seeds fossilized this episode
-    contributing_fossilized: int = 0  # Seeds with total_improvement >= MIN_FOSSILIZE_CONTRIBUTION
+    contributing_fossilized: int = 0  # Seeds with total_improvement >= DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
     episode_rewards: list = field(default_factory=list)
     action_counts: dict = field(default_factory=dict)
     successful_action_counts: dict = field(default_factory=dict)
@@ -182,29 +200,29 @@ def _advance_active_seed(model, slot_id: str) -> bool:
 
 def train_ppo_vectorized(
     n_episodes: int = 100,
-    n_envs: int = 4,
-    max_epochs: int = 25,
+    n_envs: int = DEFAULT_N_ENVS,
+    max_epochs: int = DEFAULT_EPISODE_LENGTH,
     device: str = "cuda:0",
     devices: list[str] | None = None,
     task: str = "cifar10",
     use_telemetry: bool = True,
-    lr: float = 3e-4,
-    clip_ratio: float = 0.2,
-    entropy_coef: float = 0.05,  # Unified default
+    lr: float = DEFAULT_LEARNING_RATE,
+    clip_ratio: float = DEFAULT_CLIP_RATIO,
+    entropy_coef: float = DEFAULT_ENTROPY_COEF,  # From leyline
     entropy_coef_start: float | None = None,
     entropy_coef_end: float | None = None,
-    entropy_coef_min: float = 0.01,  # Unified minimum
+    entropy_coef_min: float = DEFAULT_ENTROPY_COEF_MIN,  # From leyline
     adaptive_entropy_floor: bool = False,
     entropy_anneal_episodes: int = 0,
-    gamma: float = 0.99,
+    gamma: float = DEFAULT_GAMMA,
     ppo_updates_per_batch: int = 1,
     save_path: str = None,
     resume_path: str = None,
     seed: int = 42,
     num_workers: int | None = None,
     gpu_preload: bool = False,
-    lstm_hidden_dim: int = 128,
-    chunk_length: int = 25,  # Must match max_epochs default (25)
+    lstm_hidden_dim: int = DEFAULT_LSTM_HIDDEN_DIM,
+    chunk_length: int = DEFAULT_EPISODE_LENGTH,  # Must match max_epochs (from leyline)
     telemetry_config: "TelemetryConfig | None" = None,
     plateau_threshold: float = 0.5,
     improvement_threshold: float = 2.0,
@@ -215,6 +233,7 @@ def train_ppo_vectorized(
     param_budget: int = 500_000,
     param_penalty_weight: float = 0.1,
     sparse_reward_scale: float = 1.0,
+    quiet_analytics: bool = False,
 ) -> tuple[PPOAgent, list[dict]]:
     """Train PPO with vectorized environments using INVERTED CONTROL FLOW.
 
@@ -462,9 +481,23 @@ def train_ppo_vectorized(
     # ==========================================================================
     # Blueprint Analytics + Nissa Hub Wiring
     # ==========================================================================
-    analytics = BlueprintAnalytics()
     hub = get_hub()
+    analytics = BlueprintAnalytics(quiet=quiet_analytics)
     hub.add_backend(analytics)
+
+    # Emit TRAINING_STARTED so Karn collector activates episode tracking
+    hub.emit(TelemetryEvent(
+        event_type=TelemetryEventType.TRAINING_STARTED,
+        data={
+            "episode_id": f"ppo_{seed}_{n_episodes}ep",
+            "seed": seed,
+            "task": task,
+            "reward_mode": reward_mode,
+            "max_epochs": max_epochs,
+            "n_envs": n_envs,
+            "n_episodes": n_episodes,
+        }
+    ))
 
     # Initialize anomaly detector for automatic diagnostics
     anomaly_detector = AnomalyDetector()
@@ -520,11 +553,11 @@ def train_ppo_vectorized(
         # - min_panics=3: require 3 consecutive anomalies before rollback
         governor = TolariaGovernor(
             model=model,
-            sensitivity=6.0,
-            absolute_threshold=12.0,
-            death_penalty=10.0,
-            history_window=20,
-            min_panics_before_rollback=3,
+            sensitivity=DEFAULT_GOVERNOR_SENSITIVITY,
+            absolute_threshold=DEFAULT_GOVERNOR_ABSOLUTE_THRESHOLD,
+            death_penalty=DEFAULT_GOVERNOR_DEATH_PENALTY,
+            history_window=DEFAULT_GOVERNOR_HISTORY_WINDOW,
+            min_panics_before_rollback=DEFAULT_MIN_PANICS_BEFORE_ROLLBACK,
         )
         governor.snapshot()  # Ensure rollback is always possible before first panic
 
@@ -1331,7 +1364,7 @@ def train_ppo_vectorized(
                     action_success = _advance_active_seed(model, target_slot)
                     if action_success:
                         env_state.seeds_fossilized += 1
-                        if seed_total_improvement >= MIN_FOSSILIZE_CONTRIBUTION:
+                        if seed_total_improvement >= DEFAULT_MIN_FOSSILIZE_CONTRIBUTION:
                             env_state.contributing_fossilized += 1
                         env_state.acc_at_germination = None
 
@@ -1497,8 +1530,10 @@ def train_ppo_vectorized(
                         )
                         hub.emit(TelemetryEvent(
                             event_type=event_type,
+                            epoch=max_epochs,  # Anomalies detected at episode boundary
                             data={
                                 "episode": episodes_completed,
+                                "epoch": max_epochs,  # P1-06: Include epoch for Karn dense trace
                                 "detail": anomaly_report.details.get(anomaly_type, ""),
                                 "gradient_stats": [gs.to_dict() for gs in gradient_stats[:5]],
                                 "stability": stability_report.to_dict(),
@@ -1558,8 +1593,8 @@ def train_ppo_vectorized(
                     "value_loss": metrics.get("value_loss", 0.0),
                     "entropy": metrics.get("entropy", 0.0),
                     "entropy_coef": current_entropy_coef,
-                    # PPO health (KL, clipping)
-                    "approx_kl": metrics.get("approx_kl", 0.0),
+                    # PPO health (KL, clipping) - normalized to kl_divergence for Karn
+                    "kl_divergence": metrics.get("approx_kl", 0.0),
                     "clip_fraction": metrics.get("clip_fraction", 0.0),
                     # Ratio statistics (early warning for policy collapse)
                     "ratio_max": metrics.get("ratio_max", 1.0),
@@ -1576,6 +1611,26 @@ def train_ppo_vectorized(
                 },
             )
             hub.emit(ppo_event)
+
+            # Emit ANALYTICS_SNAPSHOT for dashboard full-state sync (P1-07)
+            # Aggregate seed metrics across all environments
+            total_seeds_created = sum(es.seeds_created for es in env_states)
+            total_seeds_fossilized = sum(es.seeds_fossilized for es in env_states)
+            hub.emit(TelemetryEvent(
+                event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+                data={
+                    "accuracy": rolling_avg_acc,
+                    "host_accuracy": avg_acc,  # Per-batch accuracy
+                    "entropy": metrics.get("entropy", 0.0),
+                    "kl_divergence": metrics.get("approx_kl", 0.0),
+                    "value_variance": metrics.get("explained_variance", 0.0),
+                    "seeds": {
+                        "total_created": total_seeds_created,
+                        "total_fossilized": total_seeds_fossilized,
+                    },
+                    "episodes_completed": episodes_completed,
+                },
+            ))
 
             # Emit training progress events based on actual rolling average trend
             # This aligns events with the displayed rolling_avg_accuracy

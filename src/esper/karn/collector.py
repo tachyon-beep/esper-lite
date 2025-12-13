@@ -40,6 +40,19 @@ if TYPE_CHECKING:
 
 _logger = logging.getLogger(__name__)
 
+# Simic anomaly event types that should trigger dense trace capture
+_ANOMALY_EVENT_TYPES = frozenset({
+    "RATIO_EXPLOSION_DETECTED",
+    "RATIO_COLLAPSE_DETECTED",
+    "VALUE_COLLAPSE_DETECTED",
+    "ENTROPY_COLLAPSE_DETECTED",
+    "GRADIENT_EXPLOSION_DETECTED",
+    "KL_DIVERGENCE_SPIKE",
+    # Additional Simic anomaly types
+    "NUMERICAL_INSTABILITY_DETECTED",
+    "GRADIENT_ANOMALY",
+})
+
 
 class OutputBackend(Protocol):
     """Protocol for Karn output backends."""
@@ -164,10 +177,11 @@ class KarnCollector:
             self._handle_reward_computed(event)
         elif event_type == "COUNTERFACTUAL_COMPUTED":
             self._handle_counterfactual_computed(event)
-        # Add more handlers as needed
+        elif event_type in _ANOMALY_EVENT_TYPES:
+            self._handle_anomaly_event(event, event_type)
 
     def _handle_training_started(self, event: "TelemetryEvent") -> None:
-        """Handle TRAINING_STARTED event - auto-initialize episode."""
+        """Handle TRAINING_STARTED event - auto-initialize episode AND first epoch."""
         data = event.data or {}
         episode_id = data.get("episode_id") or event.event_id
         self.start_episode(
@@ -177,7 +191,9 @@ class KarnCollector:
             reward_mode=data.get("reward_mode", "shaped"),
             max_epochs=data.get("max_epochs", 75),
         )
-        _logger.debug(f"Auto-started episode from TRAINING_STARTED: {episode_id}")
+        # P0 Fix: Must start epoch 0 so store.current_epoch exists for subsequent events
+        self.store.start_epoch(0)
+        _logger.debug(f"Auto-started episode and epoch 0 from TRAINING_STARTED: {episode_id}")
 
     def _handle_epoch_completed(self, event: "TelemetryEvent") -> None:
         """Handle EPOCH_COMPLETED event."""
@@ -195,6 +211,11 @@ class KarnCollector:
         self.store.current_epoch.host.train_loss = data.get("train_loss", 0.0)
         self.store.current_epoch.host.train_accuracy = data.get("train_accuracy", 0.0)
         self.store.current_epoch.host.host_grad_norm = data.get("grad_norm", 0.0)
+
+        # P0 Fix: Increment epochs_in_stage for all active slots
+        for slot in self.store.current_epoch.slots.values():
+            if slot.stage not in (SeedStage.DORMANT, SeedStage.CULLED, SeedStage.FOSSILIZED):
+                slot.epochs_in_stage += 1
 
         # Tier 3: Check for anomalies before committing
         if self.config.capture_dense_traces:
@@ -276,6 +297,7 @@ class KarnCollector:
         policy = self.store.current_epoch.policy
         policy.kl_divergence = data.get("kl_divergence")
         policy.explained_variance = data.get("explained_variance")
+        policy.entropy = data.get("entropy")
 
     def _handle_reward_computed(self, event: "TelemetryEvent") -> None:
         """Handle REWARD_COMPUTED event."""
@@ -304,6 +326,27 @@ class KarnCollector:
             slot.counterfactual_contribution = data.get("contribution", 0.0)
             slot.total_improvement = data.get("total_improvement")
             slot.improvement_this_epoch = data.get("improvement_this_epoch", 0.0)
+
+    def _handle_anomaly_event(self, event: "TelemetryEvent", event_type: str) -> None:
+        """Handle Simic anomaly events for dense trace capture.
+
+        P1-06 Fix: Use epoch (not episode) for trace windowing.
+        """
+        if not self.store.current_epoch:
+            return
+
+        # P1-06: Prefer epoch field over episode for trace windowing
+        data = event.data or {}
+        epoch = event.epoch or data.get("epoch", self.store.current_epoch.epoch)
+
+        # Skip if anomaly detection disabled
+        if not self.config.capture_dense_traces:
+            return
+
+        # Trigger dense trace if not already capturing
+        if not self._anomaly_detector.is_capturing:
+            trace = self._anomaly_detector.start_trace(epoch, event_type)
+            _logger.info(f"Dense trace triggered by {event_type} at epoch {epoch}")
 
     def _handle_backend_error(self, backend: OutputBackend, error: Exception) -> None:
         """Handle error from output backend."""

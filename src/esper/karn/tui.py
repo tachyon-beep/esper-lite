@@ -103,6 +103,18 @@ class SeedState:
 
 
 @dataclass
+class EnvState:
+    """Per-environment state for multi-env tracking."""
+    env_id: int = 0
+    current_epoch: int = 0
+    host_accuracy: float = 0.0
+    seeds: dict[str, SeedState] = field(default_factory=dict)
+    active_seed_count: int = 0
+    fossilized_count: int = 0
+    culled_count: int = 0
+
+
+@dataclass
 class TUIState:
     """Thread-safe state for the TUI display."""
 
@@ -116,10 +128,12 @@ class TUIState:
     best_reward: float = float('-inf')
     best_episode: int = 0
 
-    # Host metrics
+    # Host metrics (aggregated across all envs)
     host_accuracy: float = 0.0
     host_accuracy_delta: float = 0.0
     host_loss: float = 0.0
+    best_accuracy: float = 0.0  # Best accuracy seen across all envs
+    best_accuracy_episode: int = 0  # Episode when best was achieved
 
     # Policy health (P0 Critical)
     entropy: float = 0.0
@@ -148,8 +162,11 @@ class TUIState:
     )  # (timestamp, event_type, formatted_message)
     event_log_min_severity: str = "info"
 
-    # Seed states
-    seeds: dict[str, SeedState] = field(default_factory=dict)
+    # Per-environment state (for multi-env vectorized training)
+    env_states: dict[int, EnvState] = field(default_factory=dict)
+    n_envs: int = 1  # Number of environments (updated from TRAINING_STARTED)
+
+    # Aggregate seed stats (summed across all envs)
     active_seed_count: int = 0
     fossilized_count: int = 0
     culled_count: int = 0
@@ -165,6 +182,21 @@ class TUIState:
 
     # Red flags
     reward_hacking_detected: bool = False
+
+    # Performance metrics
+    start_time: datetime | None = None
+    last_batch_time: datetime | None = None
+    batches_completed: int = 0
+    epochs_completed: int = 0
+    epochs_per_second: float = 0.0
+    batches_per_hour: float = 0.0
+    gpu_memory_used_gb: float = 0.0
+    gpu_memory_total_gb: float = 0.0
+    gpu_utilization: float = 0.0
+    gpu_temperature: float = 0.0
+    cpu_percent: float = 0.0
+    ram_used_gb: float = 0.0
+    ram_total_gb: float = 0.0
 
     # Lock for thread safety
     _lock: threading.Lock = field(default_factory=threading.Lock)
@@ -199,6 +231,18 @@ class TUIState:
         if self.total_actions == 0:
             return {k: 0.0 for k in self.action_counts}
         return {k: v / self.total_actions * 100 for k, v in self.action_counts.items()}
+
+    def get_or_create_env(self, env_id: int) -> EnvState:
+        """Get or create an environment state."""
+        if env_id not in self.env_states:
+            self.env_states[env_id] = EnvState(env_id=env_id)
+        return self.env_states[env_id]
+
+    def update_aggregate_seed_counts(self) -> None:
+        """Recalculate aggregate seed counts from all envs."""
+        self.active_seed_count = sum(e.active_seed_count for e in self.env_states.values())
+        self.fossilized_count = sum(e.fossilized_count for e in self.env_states.values())
+        self.culled_count = sum(e.culled_count for e in self.env_states.values())
 
 
 # =============================================================================
@@ -437,6 +481,20 @@ class TUIOutput:
         data = event.data or {}
         self.state.current_episode = data.get("episode", 0)
         self.state.current_epoch = 0
+        self.state.n_envs = data.get("n_envs", 1)
+
+        # Initialize performance tracking
+        self.state.start_time = datetime.now()
+        self.state.batches_completed = 0
+        self.state.best_accuracy = 0.0
+        self.state.best_accuracy_episode = 0
+
+        # Pre-create env states
+        for i in range(self.state.n_envs):
+            self.state.get_or_create_env(i)
+
+        # Initial system stats
+        self._update_system_stats()
 
     def _handle_epoch_completed(self, event: "TelemetryEvent") -> None:
         """Handle EPOCH_COMPLETED event."""
@@ -506,54 +564,95 @@ class TUIOutput:
         self.state.host_accuracy = data.get("val_acc", self.state.host_accuracy)
 
     def _handle_seed_event(self, event: "TelemetryEvent", event_type: str) -> None:
-        """Handle seed lifecycle events."""
+        """Handle seed lifecycle events with per-env tracking."""
         data = event.data or {}
         slot_id = event.slot_id or data.get("slot_id", "unknown")
+        env_id = data.get("env_id", 0)
 
-        if slot_id not in self.state.seeds:
-            self.state.seeds[slot_id] = SeedState(slot_id=slot_id)
+        # Get or create env state
+        env_state = self.state.get_or_create_env(env_id)
 
-        seed = self.state.seeds[slot_id]
+        # Get or create seed state within this env
+        if slot_id not in env_state.seeds:
+            env_state.seeds[slot_id] = SeedState(slot_id=slot_id)
+
+        seed = env_state.seeds[slot_id]
 
         if event_type == "SEED_GERMINATED":
             seed.stage = "GERMINATED"
             seed.blueprint_id = data.get("blueprint_id")
-            self.state.active_seed_count += 1
+            env_state.active_seed_count += 1
         elif event_type == "SEED_STAGE_CHANGED":
             seed.stage = data.get("to", seed.stage)
             seed.alpha = data.get("alpha", seed.alpha)
         elif event_type == "SEED_FOSSILIZED":
             seed.stage = "FOSSILIZED"
-            self.state.fossilized_count += 1
-            self.state.active_seed_count = max(0, self.state.active_seed_count - 1)
+            env_state.fossilized_count += 1
+            env_state.active_seed_count = max(0, env_state.active_seed_count - 1)
         elif event_type == "SEED_CULLED":
             seed.stage = "CULLED"
-            self.state.culled_count += 1
-            self.state.active_seed_count = max(0, self.state.active_seed_count - 1)
+            env_state.culled_count += 1
+            env_state.active_seed_count = max(0, env_state.active_seed_count - 1)
+
+        # Update aggregate counts
+        self.state.update_aggregate_seed_counts()
 
     def _handle_batch_completed(self, event: "TelemetryEvent") -> None:
         """Handle BATCH_COMPLETED event (episode completion)."""
         data = event.data or {}
         self.state.current_episode = data.get("episodes_completed", self.state.current_episode)
+        self.state.batches_completed += 1
+
+        # Track best accuracy across all envs
+        current_acc = data.get("rolling_avg_accuracy", data.get("avg_accuracy", 0.0))
+        self.state.host_accuracy = current_acc
+        if current_acc > self.state.best_accuracy:
+            self.state.best_accuracy = current_acc
+            self.state.best_accuracy_episode = self.state.current_episode
+
+        # Calculate throughput
+        now = datetime.now()
+        if self.state.start_time:
+            elapsed = (now - self.state.start_time).total_seconds()
+            if elapsed > 0:
+                # epochs_completed = episodes * epochs_per_episode
+                total_epochs = data.get("total_epochs", self.state.batches_completed * 75)
+                self.state.epochs_per_second = total_epochs / elapsed
+                self.state.batches_per_hour = (self.state.batches_completed / elapsed) * 3600
+
+        self.state.last_batch_time = now
 
         # Add to episode rewards for sparkline
         avg_reward = data.get("avg_reward", 0.0)
         self.state.episode_rewards.append(avg_reward)
 
+        # Update GPU stats if available
+        self._update_system_stats()
+
     # =========================================================================
     # Rendering
     # =========================================================================
 
-    def _render(self) -> Panel:
-        """Render the full TUI layout with event log."""
+    def _render(self) -> Layout:
+        """Render the full TUI layout with event log.
+
+        Returns Layout directly (not wrapped in Panel) to avoid
+        off-by-one height issues from extra border lines.
+        """
         layout = Layout()
 
-        # Create main sections with event log
+        # Create main sections with event log and performance stats
         layout.split_column(
             Layout(name="header", size=3),
             Layout(name="main", ratio=1),
-            Layout(name="event_log", size=14),  # Event log panel
+            Layout(name="bottom", size=12),
             Layout(name="footer", size=3),
+        )
+
+        # Split bottom into event log (left) and performance stats (right)
+        layout["bottom"].split_row(
+            Layout(name="event_log", ratio=2),
+            Layout(name="perf_stats", ratio=1),
         )
 
         # Split main into two columns
@@ -584,31 +683,35 @@ class TUIOutput:
         layout["policy_health"].update(self._render_policy_health())
         layout["actions"].update(self._render_actions())
         layout["losses"].update(self._render_losses())
-        layout["event_log"].update(self._render_event_log(max_lines=10))
+        layout["event_log"].update(self._render_event_log(max_lines=8))
+        layout["perf_stats"].update(self._render_performance())
         layout["footer"].update(self._render_footer())
 
-        return Panel(
-            layout,
-            title="[bold blue]ESPER-LITE PPO Training Monitor[/bold blue]",
-            border_style="blue",
-        )
+        return layout
 
     def _render_header(self) -> Panel:
-        """Render the header with episode info."""
+        """Render the header with episode info and multi-env summary."""
         text = Text()
         text.append(f"Episode: ", style="dim")
         text.append(f"{self.state.current_episode}", style="bold cyan")
-        text.append(f"  |  Epoch: ", style="dim")
-        text.append(f"{self.state.current_epoch}", style="bold cyan")
-        text.append(f"  |  Host Accuracy: ", style="dim")
-        text.append(f"{self.state.host_accuracy:.1f}%", style="bold green")
+        text.append(f"  |  Batches: ", style="dim")
+        text.append(f"{self.state.batches_completed}", style="bold cyan")
+        text.append(f"  |  Best Acc: ", style="dim")
+        text.append(f"{self.state.best_accuracy:.1f}%", style="bold green")
+        text.append(f" (ep {self.state.best_accuracy_episode})", style="dim")
+        text.append(f"  |  Current: ", style="dim")
+        text.append(f"{self.state.host_accuracy:.1f}%", style="cyan")
 
         # Add reward hacking warning
         if self.state.reward_hacking_detected:
             text.append("  |  ", style="dim")
             text.append("REWARD HACKING SUSPECTED", style="bold red blink")
 
-        return Panel(text, border_style="dim")
+        return Panel(
+            text,
+            title="[bold blue]ESPER-LITE PPO Training Monitor[/bold blue]",
+            border_style="blue",
+        )
 
     def _render_rewards(self) -> Panel:
         """Render the rewards panel."""
@@ -689,30 +792,91 @@ class TUIOutput:
 
         return Panel(table, title="[bold]POLICY HEALTH[/bold]", border_style="cyan")
 
-    def _render_seeds(self) -> Panel:
-        """Render the seed state panel."""
-        table = Table(show_header=False, box=None, padding=(0, 1))
-        table.add_column("Info", style="dim")
-        table.add_column("Value", justify="right")
+    # Stage name abbreviations for compact multi-env display
+    _STAGE_ABBREV: dict[str, str] = {
+        "GERMINATED": "Germ",
+        "TRAINING": "Train",
+        "BLENDING": "Blend",
+        "PROBATIONARY": "Prob",
+        "FOSSILIZED": "Fossil",
+        "RESETTING": "Reset",
+        "EMBARGOED": "Embg",
+    }
 
-        table.add_row("Active:", f"{self.state.active_seed_count} seeds")
+    def _render_single_env_seeds(self, env_state: EnvState) -> Table:
+        """Render seed state table for a single environment."""
+        table = Table(show_header=False, box=None, padding=(0, 0), expand=True)
+        table.add_column("Info", style="dim", ratio=1)
+        table.add_column("Value", justify="right", ratio=1)
 
-        # Show individual seed states
+        # Count stages
         stage_counts: dict[str, int] = {}
-        for seed in self.state.seeds.values():
+        for seed in env_state.seeds.values():
             stage_counts[seed.stage] = stage_counts.get(seed.stage, 0) + 1
 
+        # Compact stage display with readable abbreviations
         for stage, count in sorted(stage_counts.items()):
             if stage not in ("DORMANT", "CULLED"):
                 marker = self._get_stage_marker(stage)
-                table.add_row(f"  {marker} {stage}", f"({count})")
+                abbrev = self._STAGE_ABBREV.get(stage, stage[:5])
+                table.add_row(f"{marker}{abbrev}", f"{count}")
 
-        table.add_row("", "")
-        table.add_row("Fossilized:", f"{self.state.fossilized_count}")
-        table.add_row("Culled:", f"{self.state.culled_count}")
-        table.add_row("Host Acc:", f"{self.state.host_accuracy:.1f}%")
+        table.add_row("Fossil", f"{env_state.fossilized_count}")
+        table.add_row("Culled", f"{env_state.culled_count}")
 
-        return Panel(table, title="[bold]SEED STATE[/bold]", border_style="cyan")
+        return table
+
+    def _render_seeds(self) -> Panel:
+        """Render the seed state panel with per-env breakdown."""
+        n_envs = max(1, self.state.n_envs)
+
+        if n_envs == 1:
+            # Single env: simple layout
+            env_state = self.state.get_or_create_env(0)
+            table = Table(show_header=False, box=None, padding=(0, 1))
+            table.add_column("Info", style="dim")
+            table.add_column("Value", justify="right")
+
+            table.add_row("Active:", f"{self.state.active_seed_count} seeds")
+
+            stage_counts: dict[str, int] = {}
+            for seed in env_state.seeds.values():
+                stage_counts[seed.stage] = stage_counts.get(seed.stage, 0) + 1
+
+            for stage, count in sorted(stage_counts.items()):
+                if stage not in ("DORMANT", "CULLED"):
+                    marker = self._get_stage_marker(stage)
+                    table.add_row(f"  {marker} {stage}", f"({count})")
+
+            table.add_row("Fossilized:", f"{self.state.fossilized_count}")
+            table.add_row("Culled:", f"{self.state.culled_count}")
+
+            return Panel(table, title="[bold]SEED STATE[/bold]", border_style="cyan")
+
+        # Multi-env: per-env columns
+        main_table = Table(show_header=True, box=None, padding=(0, 1), expand=True)
+
+        # Add header columns for each env
+        for i in range(n_envs):
+            main_table.add_column(f"Env{i}", justify="center", style="cyan")
+
+        # Build rows by collecting data from each env
+        env_tables = [
+            self._render_single_env_seeds(self.state.get_or_create_env(i))
+            for i in range(n_envs)
+        ]
+
+        main_table.add_row(*env_tables)
+
+        # Add aggregate totals
+        agg_text = Text()
+        agg_text.append(f"Total: ", style="dim")
+        agg_text.append(f"{self.state.active_seed_count}A ", style="green")
+        agg_text.append(f"{self.state.fossilized_count}F ", style="blue")
+        agg_text.append(f"{self.state.culled_count}C", style="red")
+
+        content = Group(main_table, agg_text)
+        return Panel(content, title="[bold]SEED STATE[/bold]", border_style="cyan")
 
     def _render_actions(self) -> Panel:
         """Render the action distribution panel."""
@@ -824,12 +988,105 @@ class TUIOutput:
 
     def _render_footer(self) -> Panel:
         """Render the footer with key bindings hint."""
-        text = Text()
-        text.append("[q] ", style="bold")
+        text = Text(justify="center")
+        text.append("[q] ", style="bold cyan")
         text.append("Quit  ", style="dim")
-        text.append("[Ctrl+C] ", style="bold")
+        text.append("[Ctrl+C] ", style="bold cyan")
         text.append("Stop Training", style="dim")
         return Panel(text, border_style="dim")
+
+    def _render_performance(self) -> Panel:
+        """Render performance statistics panel."""
+        table = Table(show_header=False, box=None, padding=(0, 1))
+        table.add_column("Metric", style="dim")
+        table.add_column("Value", justify="right")
+
+        # Throughput
+        table.add_row("Epochs/sec:", f"{self.state.epochs_per_second:.2f}")
+        table.add_row("Batches/hr:", f"{self.state.batches_per_hour:.0f}")
+
+        # Runtime
+        if self.state.start_time:
+            elapsed = datetime.now() - self.state.start_time
+            hours, remainder = divmod(int(elapsed.total_seconds()), 3600)
+            minutes, seconds = divmod(remainder, 60)
+            table.add_row("Runtime:", f"{hours}h {minutes}m {seconds}s")
+        else:
+            table.add_row("Runtime:", "-")
+
+        table.add_row("", "")
+
+        # GPU stats
+        if self.state.gpu_memory_total_gb > 0:
+            gpu_pct = (self.state.gpu_memory_used_gb / self.state.gpu_memory_total_gb) * 100
+            mem_style = "red" if gpu_pct > 90 else "yellow" if gpu_pct > 75 else "green"
+            table.add_row(
+                "GPU Mem:",
+                Text(f"{self.state.gpu_memory_used_gb:.1f}/{self.state.gpu_memory_total_gb:.1f}GB", style=mem_style)
+            )
+        else:
+            table.add_row("GPU Mem:", "-")
+
+        if self.state.gpu_utilization > 0:
+            util_style = "green" if self.state.gpu_utilization > 80 else "yellow" if self.state.gpu_utilization > 50 else "dim"
+            table.add_row("GPU Util:", Text(f"{self.state.gpu_utilization:.0f}%", style=util_style))
+
+        if self.state.gpu_temperature > 0:
+            temp_style = "red" if self.state.gpu_temperature > 85 else "yellow" if self.state.gpu_temperature > 75 else "green"
+            table.add_row("GPU Temp:", Text(f"{self.state.gpu_temperature:.0f}°C", style=temp_style))
+
+        # CPU/RAM
+        if self.state.cpu_percent > 0:
+            table.add_row("CPU:", f"{self.state.cpu_percent:.0f}%")
+
+        if self.state.ram_total_gb > 0:
+            ram_pct = (self.state.ram_used_gb / self.state.ram_total_gb) * 100
+            ram_style = "red" if ram_pct > 90 else "yellow" if ram_pct > 75 else "dim"
+            table.add_row(
+                "RAM:",
+                Text(f"{self.state.ram_used_gb:.1f}/{self.state.ram_total_gb:.0f}GB", style=ram_style)
+            )
+
+        return Panel(table, title="[bold]PERFORMANCE[/bold]", border_style="cyan")
+
+    # =========================================================================
+    # System Monitoring
+    # =========================================================================
+
+    def _update_system_stats(self) -> None:
+        """Update GPU and CPU statistics."""
+        # GPU stats via PyTorch
+        try:
+            import torch
+            if torch.cuda.is_available():
+                # Memory
+                self.state.gpu_memory_used_gb = torch.cuda.memory_allocated() / (1024**3)
+                self.state.gpu_memory_total_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+
+                # Try to get utilization and temp via pynvml
+                try:
+                    import pynvml
+                    pynvml.nvmlInit()
+                    handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+                    util = pynvml.nvmlDeviceGetUtilizationRates(handle)
+                    self.state.gpu_utilization = util.gpu
+                    self.state.gpu_temperature = pynvml.nvmlDeviceGetTemperature(
+                        handle, pynvml.NVML_TEMPERATURE_GPU
+                    )
+                except Exception:
+                    pass  # pynvml not available
+        except Exception:
+            pass  # No GPU or error
+
+        # CPU/RAM stats
+        try:
+            import psutil
+            self.state.cpu_percent = psutil.cpu_percent()
+            mem = psutil.virtual_memory()
+            self.state.ram_used_gb = mem.used / (1024**3)
+            self.state.ram_total_gb = mem.total / (1024**3)
+        except Exception:
+            pass  # psutil not available
 
     # =========================================================================
     # Helper Methods

@@ -2,6 +2,7 @@
 import pytest
 import torch
 
+from esper.leyline import DEFAULT_EPISODE_LENGTH, DEFAULT_VALUE_CLIP
 from esper.simic.ppo import signals_to_features, PPOAgent
 from esper.simic.features import MULTISLOT_FEATURE_SIZE
 
@@ -14,7 +15,7 @@ def test_ppo_agent_architecture():
     agent = PPOAgent(
         state_dim=50,
         num_envs=4,
-        max_steps_per_env=25,
+        max_steps_per_env=DEFAULT_EPISODE_LENGTH,
         device="cpu",
         compile_network=False,  # Avoid compilation overhead in test
     )
@@ -95,13 +96,13 @@ def test_value_clipping_uses_appropriate_range():
         state_dim=35,
         clip_ratio=0.2,  # Policy clip
         clip_value=True,
-        value_clip=10.0,  # Should exist and be separate
+        value_clip=DEFAULT_VALUE_CLIP,
         compile_network=False,
         device="cpu",
     )
 
     # Value clip should be much larger than policy clip
-    assert agent.value_clip == 10.0, "Agent should have value_clip=10.0"
+    assert agent.value_clip == DEFAULT_VALUE_CLIP, "Agent should have value_clip matching leyline default"
     assert agent.value_clip > agent.clip_ratio, "Value clip should be larger than policy clip"
 
 

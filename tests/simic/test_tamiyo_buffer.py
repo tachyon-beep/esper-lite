@@ -3,6 +3,7 @@
 import pytest
 import torch
 
+from esper.leyline import DEFAULT_LSTM_HIDDEN_DIM
 from esper.simic.tamiyo_buffer import TamiyoRolloutBuffer, TamiyoRolloutStep
 
 
@@ -19,7 +20,7 @@ class TestTamiyoRolloutBuffer:
             num_envs=2,
             max_steps_per_env=5,
             state_dim=50,
-            lstm_hidden_dim=128,
+            lstm_hidden_dim=DEFAULT_LSTM_HIDDEN_DIM,
         )
 
         # Env 0: low rewards (1.0)
@@ -95,7 +96,7 @@ class TestTamiyoRolloutBuffer:
             num_envs=1,
             max_steps_per_env=5,
             state_dim=50,
-            lstm_hidden_dim=128,
+            lstm_hidden_dim=DEFAULT_LSTM_HIDDEN_DIM,
         )
 
         buffer.start_episode(env_id=0)
@@ -134,7 +135,7 @@ class TestTamiyoRolloutBuffer:
             num_envs=1,
             max_steps_per_env=5,
             state_dim=50,
-            lstm_hidden_dim=128,
+            lstm_hidden_dim=DEFAULT_LSTM_HIDDEN_DIM,
         )
 
         hidden_h = torch.randn(1, 1, 128)
@@ -175,7 +176,7 @@ class TestTamiyoRolloutBuffer:
             num_envs=2,
             max_steps_per_env=5,
             state_dim=50,
-            lstm_hidden_dim=128,
+            lstm_hidden_dim=DEFAULT_LSTM_HIDDEN_DIM,
         )
 
         # Should not crash - returns without computing anything
@@ -188,7 +189,7 @@ class TestTamiyoRolloutBuffer:
             num_envs=1,
             max_steps_per_env=2,  # Very small
             state_dim=50,
-            lstm_hidden_dim=128,
+            lstm_hidden_dim=DEFAULT_LSTM_HIDDEN_DIM,
         )
 
         buffer.start_episode(env_id=0)

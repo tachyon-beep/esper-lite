@@ -31,23 +31,18 @@ from typing import Callable, TYPE_CHECKING
 # Debug flag for STE gradient assertions (set ESPER_DEBUG_STE=1 to enable)
 _DEBUG_STE = os.environ.get("ESPER_DEBUG_STE", "").lower() in ("1", "true", "yes")
 
-# Gradient telemetry constants
-# Minimum parameter-normalized gradient ratio for G2 gate (seed must be "awake")
-DEFAULT_GRADIENT_RATIO_THRESHOLD: float = 0.05
+# Gradient telemetry constants (hyperparameters imported from leyline, internals stay local)
 # Epsilon for numerical stability in gradient ratio computation
 GRADIENT_EPSILON: float = 1e-8
-# EMA decay factor for gradient norm averaging (higher = slower adaptation)
-GRADIENT_EMA_DECAY: float = 0.9
 # Maximum gradient ratio to prevent outliers from skewing G2 gate decisions.
 # Value of 10.0 corresponds to "seed has 100x higher per-parameter gradient intensity
 # than host" after sqrt normalization - an extreme value indicating either a very
 # small seed or numerical anomaly.
 MAX_GRADIENT_RATIO: float = 10.0
 
-# Probation stage constants
+# Probation stage constants (internal implementation details)
 PROBATION_HISTORY_MAXLEN: int = 100  # Rolling window for stage history
-MIN_PROBATION_STABILITY: float = 0.95  # Threshold for fossilization stability
-MAX_PROBATION_EPOCHS: int = 5  # Timeout before auto-cull (or 10% of max_epochs)
+# MAX_PROBATION_EPOCHS now imported from leyline as DEFAULT_MAX_PROBATION_EPOCHS
 
 import torch
 import torch.nn as nn
@@ -72,6 +67,19 @@ from esper.leyline import (
     TelemetryEvent,
     TelemetryEventType,
     SeedTelemetry,
+    # Gate Thresholds (from leyline - single source of truth)
+    DEFAULT_MIN_FOSSILIZE_CONTRIBUTION,
+    DEFAULT_GRADIENT_RATIO_THRESHOLD,
+    DEFAULT_MIN_PROBATION_STABILITY,
+    DEFAULT_GRADIENT_EMA_DECAY,
+    # Blending default
+    DEFAULT_BLENDING_TOTAL_STEPS,
+    # QualityGates thresholds
+    DEFAULT_MIN_TRAINING_IMPROVEMENT,
+    DEFAULT_MIN_BLENDING_EPOCHS,
+    DEFAULT_MAX_ISOLATION_VIOLATIONS,
+    DEFAULT_ALPHA_COMPLETE_THRESHOLD,
+    DEFAULT_MAX_PROBATION_EPOCHS,
 )
 
 if TYPE_CHECKING:
@@ -316,11 +324,7 @@ class SeedState:
 # Quality Gates
 # =============================================================================
 
-# Minimum counterfactual contribution required for fossilization.
-# Prevents "free rider" seeds that provide negligible value from becoming permanent.
-# DRL rationale: seeds must provide economically significant contribution to justify
-# their parameter cost. A 1% threshold ensures measurable causal impact.
-MIN_FOSSILIZE_CONTRIBUTION = 1.0  # 1% minimum causal contribution
+# MIN_FOSSILIZE_CONTRIBUTION imported from leyline as DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
 
 
 class QualityGates:
@@ -331,10 +335,10 @@ class QualityGates:
 
     def __init__(
         self,
-        min_training_improvement: float = 0.5,
-        min_blending_epochs: int = 3,
-        max_isolation_violations: int = 10,
-        min_probation_stability: float = MIN_PROBATION_STABILITY,
+        min_training_improvement: float = DEFAULT_MIN_TRAINING_IMPROVEMENT,
+        min_blending_epochs: int = DEFAULT_MIN_BLENDING_EPOCHS,
+        max_isolation_violations: int = DEFAULT_MAX_ISOLATION_VIOLATIONS,
+        min_probation_stability: float = DEFAULT_MIN_PROBATION_STABILITY,
         min_seed_gradient_ratio: float = DEFAULT_GRADIENT_RATIO_THRESHOLD,
     ):
         self.min_training_improvement = min_training_improvement
@@ -487,8 +491,8 @@ class QualityGates:
         else:
             checks_failed.append(f"blending_incomplete_{state.metrics.epochs_in_current_stage}")
 
-        # Check alpha reached target
-        if state.alpha >= 0.95:
+        # Check alpha reached target (from leyline)
+        if state.alpha >= DEFAULT_ALPHA_COMPLETE_THRESHOLD:
             checks_passed.append("alpha_high")
         else:
             checks_failed.append(f"alpha_low_{state.alpha:.2f}")
@@ -524,11 +528,11 @@ class QualityGates:
 
         # Check contribution meets minimum threshold
         # Prevents zero/negligible contribution seeds from fossilizing
-        if contribution >= MIN_FOSSILIZE_CONTRIBUTION:
+        if contribution >= DEFAULT_MIN_FOSSILIZE_CONTRIBUTION:
             checks_passed.append(f"sufficient_contribution_{contribution:.2f}%")
         else:
             checks_failed.append(
-                f"insufficient_contribution_{contribution:.2f}%_below_{MIN_FOSSILIZE_CONTRIBUTION}%"
+                f"insufficient_contribution_{contribution:.2f}%_below_{DEFAULT_MIN_FOSSILIZE_CONTRIBUTION}%"
             )
 
         # Check health
@@ -1070,7 +1074,7 @@ class SeedSlot(nn.Module):
         # Update EMA of gradient norm for monitoring
         current_avg = self.state.metrics.gradient_norm_avg
         self.state.metrics.gradient_norm_avg = (
-            GRADIENT_EMA_DECAY * current_avg + (1 - GRADIENT_EMA_DECAY) * seed_norm
+            DEFAULT_GRADIENT_EMA_DECAY * current_avg + (1 - DEFAULT_GRADIENT_EMA_DECAY) * seed_norm
         )
 
     def forward(self, host_features: torch.Tensor) -> torch.Tensor:
@@ -1305,8 +1309,8 @@ class SeedSlot(nn.Module):
                 TelemetryEventType.SEED_STAGE_CHANGED,
                 data={"from": old_stage.name, "to": self.state.stage.name},
             )
-            # Use explicit task_config.blending_steps if provided, otherwise default to 5.
-            total_steps = 5
+            # Use explicit task_config.blending_steps if provided, otherwise use leyline default.
+            total_steps = DEFAULT_BLENDING_TOTAL_STEPS
             if self.task_config is not None:
                 configured_steps = self.task_config.blending_steps
                 if isinstance(configured_steps, int) and configured_steps > 0:
@@ -1344,10 +1348,10 @@ class SeedSlot(nn.Module):
         # (DRL Expert review 2025-12-10: auto-fossilize violated credit assignment)
         # Only handle safety auto-culls and timeout
         if stage == SeedStage.PROBATIONARY:
-            # Calculate probation timeout (default MAX_PROBATION_EPOCHS, or 10% of max_epochs)
+            # Calculate probation timeout (default DEFAULT_MAX_PROBATION_EPOCHS, or 10% of max_epochs)
             # Minimum of 5 epochs ensures sufficient time for counterfactual validation
             # (DRL Expert review 2025-12-09: 3 epochs was insufficient for reliable metrics)
-            max_probation_epochs = MAX_PROBATION_EPOCHS
+            max_probation_epochs = DEFAULT_MAX_PROBATION_EPOCHS
             if self.task_config:
                 max_probation_epochs = max(5, int(self.task_config.max_epochs * 0.1))
 

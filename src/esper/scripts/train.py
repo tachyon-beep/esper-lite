@@ -14,6 +14,14 @@ Usage:
 
 import argparse
 
+from esper.leyline import (
+    DEFAULT_GAMMA,
+    DEFAULT_N_ENVS,
+    DEFAULT_LEARNING_RATE,
+    DEFAULT_CLIP_RATIO,
+    DEFAULT_ENTROPY_COEF,
+    DEFAULT_ENTROPY_COEF_MIN,
+)
 from esper.nissa import get_hub, ConsoleOutput, FileOutput, DirectoryOutput
 
 
@@ -90,18 +98,18 @@ def main():
     ppo_parser.add_argument("--episodes", type=int, default=100)
     ppo_parser.add_argument("--max-epochs", type=int, default=75)  # Increased from 25 to allow seed fossilization
     ppo_parser.add_argument("--update-every", type=int, default=5)
-    ppo_parser.add_argument("--lr", type=float, default=3e-4)
-    ppo_parser.add_argument("--clip-ratio", type=float, default=0.2)
-    ppo_parser.add_argument("--entropy-coef", type=float, default=0.05)  # Increased from 0.01 to prevent premature convergence
+    ppo_parser.add_argument("--lr", type=float, default=DEFAULT_LEARNING_RATE)
+    ppo_parser.add_argument("--clip-ratio", type=float, default=DEFAULT_CLIP_RATIO)
+    ppo_parser.add_argument("--entropy-coef", type=float, default=DEFAULT_ENTROPY_COEF)
     ppo_parser.add_argument("--entropy-coef-start", type=float, default=None,
         help="Initial entropy coefficient (default: use --entropy-coef)")
     ppo_parser.add_argument("--entropy-coef-end", type=float, default=None,
         help="Final entropy coefficient (default: use --entropy-coef)")
-    ppo_parser.add_argument("--entropy-coef-min", type=float, default=0.1,
-        help="Minimum entropy coefficient floor to prevent exploration collapse (default: 0.1)")
+    ppo_parser.add_argument("--entropy-coef-min", type=float, default=DEFAULT_ENTROPY_COEF_MIN,
+        help="Minimum entropy coefficient floor to prevent exploration collapse")
     ppo_parser.add_argument("--entropy-anneal-episodes", type=int, default=0,
         help="Episodes over which to anneal entropy (0=fixed, no annealing)")
-    ppo_parser.add_argument("--gamma", type=float, default=0.99)
+    ppo_parser.add_argument("--gamma", type=float, default=DEFAULT_GAMMA)
     ppo_parser.add_argument("--task", default="cifar10",
                              choices=["cifar10", "cifar10_deep", "tinystories"],
                              help="Task preset")
@@ -109,7 +117,7 @@ def main():
     ppo_parser.add_argument("--resume", help="Path to checkpoint to resume from")
     ppo_parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     ppo_parser.add_argument("--device", default="cuda:0")
-    ppo_parser.add_argument("--n-envs", type=int, default=4)
+    ppo_parser.add_argument("--n-envs", type=int, default=DEFAULT_N_ENVS)
     ppo_parser.add_argument("--devices", nargs="+")
     ppo_parser.add_argument(
         "--num-workers",
@@ -328,6 +336,7 @@ def main():
                 param_budget=args.param_budget,
                 param_penalty_weight=args.param_penalty,
                 sparse_reward_scale=args.sparse_scale,
+                quiet_analytics=use_tui,
             )
     finally:
         # Export Karn telemetry if requested (P1-04)

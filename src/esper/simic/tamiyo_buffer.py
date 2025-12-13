@@ -21,6 +21,7 @@ from typing import NamedTuple
 
 import torch
 
+from esper.leyline import DEFAULT_GAMMA, DEFAULT_LSTM_HIDDEN_DIM
 from esper.leyline.factored_actions import (
     NUM_SLOTS,
     NUM_BLUEPRINTS,
@@ -91,7 +92,7 @@ class TamiyoRolloutBuffer:
     num_envs: int
     max_steps_per_env: int
     state_dim: int
-    lstm_hidden_dim: int = 128
+    lstm_hidden_dim: int = DEFAULT_LSTM_HIDDEN_DIM
     lstm_layers: int = 1
     num_slots: int = NUM_SLOTS
     num_blueprints: int = NUM_BLUEPRINTS
@@ -255,7 +256,7 @@ class TamiyoRolloutBuffer:
     @torch.compiler.disable  # Python loops cause graph breaks; runs once per rollout
     def compute_advantages_and_returns(
         self,
-        gamma: float = 0.99,
+        gamma: float = DEFAULT_GAMMA,
         gae_lambda: float = 0.95,
     ) -> None:
         """Compute GAE advantages per-environment (no cross-contamination).

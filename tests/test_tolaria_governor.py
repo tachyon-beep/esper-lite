@@ -5,6 +5,14 @@ import pytest
 import torch
 import torch.nn as nn
 
+from esper.leyline import (
+    DEFAULT_GOVERNOR_SENSITIVITY,
+    DEFAULT_GOVERNOR_LOSS_MULTIPLIER,
+    DEFAULT_GOVERNOR_ABSOLUTE_THRESHOLD,
+    DEFAULT_GOVERNOR_DEATH_PENALTY,
+    DEFAULT_MIN_PANICS_BEFORE_ROLLBACK,
+)
+
 
 class DummyModel(nn.Module):
     """Minimal model for testing."""
@@ -33,11 +41,11 @@ class TestTolariaGovernor:
         gov = TolariaGovernor(model)
 
         assert gov.model is model
-        assert gov.sensitivity == 6.0  # Conservative default
-        assert gov.multiplier == 3.0   # Loss must be 3x average
-        assert gov.absolute_threshold == 10.0  # Minimum loss threshold
-        assert gov.death_penalty == 10.0
-        assert gov.min_panics_before_rollback == 2  # Require consecutive
+        assert gov.sensitivity == DEFAULT_GOVERNOR_SENSITIVITY
+        assert gov.multiplier == DEFAULT_GOVERNOR_LOSS_MULTIPLIER
+        assert gov.absolute_threshold == DEFAULT_GOVERNOR_ABSOLUTE_THRESHOLD
+        assert gov.death_penalty == DEFAULT_GOVERNOR_DEATH_PENALTY
+        assert gov.min_panics_before_rollback == DEFAULT_MIN_PANICS_BEFORE_ROLLBACK
         assert len(gov.loss_history) == 0
         assert gov.last_good_state is not None
         assert 'linear.weight' in gov.last_good_state

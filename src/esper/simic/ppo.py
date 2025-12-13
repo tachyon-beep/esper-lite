@@ -20,7 +20,24 @@ from esper.simic.tamiyo_buffer import TamiyoRolloutBuffer
 from esper.simic.tamiyo_network import FactoredRecurrentActorCritic
 from esper.simic.advantages import compute_per_head_advantages
 from esper.simic.features import safe
-from esper.leyline import TelemetryEvent, TelemetryEventType
+from esper.leyline import (
+    TelemetryEvent,
+    TelemetryEventType,
+    DEFAULT_GAMMA,
+    DEFAULT_EPISODE_LENGTH,
+    DEFAULT_LSTM_HIDDEN_DIM,
+    DEFAULT_N_ENVS,
+    DEFAULT_LEARNING_RATE,
+    DEFAULT_CLIP_RATIO,
+    DEFAULT_GAE_LAMBDA,
+    DEFAULT_VALUE_COEF,
+    DEFAULT_MAX_GRAD_NORM,
+    DEFAULT_N_PPO_EPOCHS,
+    DEFAULT_BATCH_SIZE,
+    DEFAULT_ENTROPY_COEF,
+    DEFAULT_ENTROPY_COEF_MIN,
+    DEFAULT_VALUE_CLIP,
+)
 from esper.nissa import get_hub
 import logging
 
@@ -137,37 +154,37 @@ class PPOAgent:
         state_dim: int,
         action_dim: int = 7,
         hidden_dim: int = 256,
-        lr: float = 3e-4,
-        gamma: float = 0.99,
-        gae_lambda: float = 0.95,
-        clip_ratio: float = 0.2,
+        lr: float = DEFAULT_LEARNING_RATE,
+        gamma: float = DEFAULT_GAMMA,
+        gae_lambda: float = DEFAULT_GAE_LAMBDA,
+        clip_ratio: float = DEFAULT_CLIP_RATIO,
         # Entropy coef operates on NORMALIZED entropy [0, 1] from MaskedCategorical.
         # See MaskedCategorical.entropy() docstring for normalization details.
         # 0.05 normalized ≈ 0.098 raw nats with 7 actions (log(7) ≈ 1.95)
-        entropy_coef: float = 0.05,
+        entropy_coef: float = DEFAULT_ENTROPY_COEF,
         entropy_coef_start: float | None = None,
         entropy_coef_end: float | None = None,
-        entropy_coef_min: float = 0.01,  # Unified minimum for exploration floor
+        entropy_coef_min: float = DEFAULT_ENTROPY_COEF_MIN,  # Exploration floor (from leyline)
         adaptive_entropy_floor: bool = False,  # Scale floor with valid action count
         entropy_anneal_steps: int = 0,
-        value_coef: float = 0.5,
+        value_coef: float = DEFAULT_VALUE_COEF,
         clip_value: bool = True,
         # Separate clip range for value function (larger than policy clip_ratio)
         # Note: Some research (Engstrom et al., 2020) suggests value clipping often
         # hurts performance. Consider clip_value=False if value learning is slow.
-        value_clip: float = 10.0,
-        max_grad_norm: float = 0.5,
-        n_epochs: int = 10,
+        value_clip: float = DEFAULT_VALUE_CLIP,
+        max_grad_norm: float = DEFAULT_MAX_GRAD_NORM,
+        n_epochs: int = DEFAULT_N_PPO_EPOCHS,
         recurrent_n_epochs: int | None = None,  # Default 1 for recurrent (hidden state safety)
-        batch_size: int = 64,
+        batch_size: int = DEFAULT_BATCH_SIZE,
         target_kl: float | None = 0.015,
         weight_decay: float = 0.0,  # Applied to critic only (RL best practice)
         device: str = "cuda:0",
         # LSTM configuration (unified architecture always uses LSTM)
-        lstm_hidden_dim: int = 128,
-        chunk_length: int = 25,  # Must match max_epochs to avoid hidden state issues
-        num_envs: int = 4,  # For TamiyoRolloutBuffer
-        max_steps_per_env: int = 25,  # For TamiyoRolloutBuffer (matches max_epochs)
+        lstm_hidden_dim: int = DEFAULT_LSTM_HIDDEN_DIM,
+        chunk_length: int = DEFAULT_EPISODE_LENGTH,  # Must match max_epochs (from leyline)
+        num_envs: int = DEFAULT_N_ENVS,  # For TamiyoRolloutBuffer
+        max_steps_per_env: int = DEFAULT_EPISODE_LENGTH,  # For TamiyoRolloutBuffer (from leyline)
         # Compilation
         compile_network: bool = True,  # Use torch.compile() for 10-30% speedup
     ):

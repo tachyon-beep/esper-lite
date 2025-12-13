@@ -34,6 +34,40 @@ settings.register_profile(
     deadline=None,
 )
 
+# Module-specific profiles for more thorough testing
+# These follow the pattern: {module}_{level}
+settings.register_profile(
+    "tamiyo_ci",
+    max_examples=200,
+    deadline=None,
+    suppress_health_check=[HealthCheck.too_slow],
+)
+
+settings.register_profile(
+    "tamiyo_dev",
+    max_examples=20,
+    deadline=500,
+)
+
+settings.register_profile(
+    "tamiyo_thorough",
+    max_examples=1000,
+    deadline=None,
+)
+
+settings.register_profile(
+    "simic_ci",
+    max_examples=200,
+    deadline=None,
+    suppress_health_check=[HealthCheck.too_slow],
+)
+
+settings.register_profile(
+    "simic_dev",
+    max_examples=20,
+    deadline=500,
+)
+
 # Load profile based on environment variable
 import os
 settings.load_profile(os.getenv("HYPOTHESIS_PROFILE", "dev"))

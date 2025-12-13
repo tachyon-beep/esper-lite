@@ -13,7 +13,7 @@ import torch
 import torch.nn as nn
 
 from esper.kasmina.slot import SeedSlot, SeedState, SeedMetrics, QualityGates, GateResult, GateLevel
-from esper.leyline import SeedStage
+from esper.leyline import SeedStage, DEFAULT_MAX_PROBATION_EPOCHS
 
 
 class MockGates(QualityGates):
@@ -284,7 +284,7 @@ class TestStepEpochProbationaryOutcomes:
         slot = create_test_slot()
         setup_state_at_stage(slot, SeedStage.PROBATIONARY)
         slot.state.metrics.counterfactual_contribution = None  # Not yet evaluated
-        slot.state.metrics.epochs_in_current_stage = 5  # Default timeout
+        slot.state.metrics.epochs_in_current_stage = DEFAULT_MAX_PROBATION_EPOCHS
 
         slot.step_epoch()
 

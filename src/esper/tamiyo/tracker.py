@@ -9,7 +9,14 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from esper.leyline import TrainingSignals, TrainingMetrics, TelemetryEvent, TelemetryEventType
+from esper.leyline import (
+    TrainingSignals,
+    TrainingMetrics,
+    TelemetryEvent,
+    TelemetryEventType,
+    DEFAULT_STABILIZATION_THRESHOLD,
+    DEFAULT_STABILIZATION_EPOCHS,
+)
 from esper.nissa import get_hub
 
 if TYPE_CHECKING:
@@ -23,11 +30,9 @@ if TYPE_CHECKING:
 # (before alpha > 0) where germination during explosive growth can cause credit
 # misattribution. Re-enabled per DRL expert review recommendation.
 #
-# Default values (can be overridden per-tracker):
+# Default values imported from leyline (can be overridden per-tracker):
 # - CIFAR-10: 3% threshold, 3 epochs (standard)
-# - TinyStories/LLMs: Consider lower threshold (~1%) since relative improvements are naturally smaller
-STABILIZATION_THRESHOLD = 0.03  # 3% relative improvement (lower = stricter = stabilizes later)
-STABILIZATION_EPOCHS = 3        # Require 3 consecutive stable epochs before germination allowed
+# - TinyStories/LLMs: Consider lower threshold (~1%) since relative improvements are smaller
 
 
 @dataclass
@@ -47,9 +52,9 @@ class SignalTracker:
     history_window: int = 10
     env_id: int | None = None  # Optional environment identifier for telemetry
 
-    # Stabilization parameters (task-specific tuning)
-    stabilization_threshold: float = STABILIZATION_THRESHOLD
-    stabilization_epochs: int = STABILIZATION_EPOCHS
+    # Stabilization parameters (from leyline, task-specific overrides allowed)
+    stabilization_threshold: float = DEFAULT_STABILIZATION_THRESHOLD
+    stabilization_epochs: int = DEFAULT_STABILIZATION_EPOCHS
 
     # History windows (initialized in __post_init__ with history_window)
     _loss_history: deque[float] = field(default_factory=deque)
@@ -207,6 +212,5 @@ class SignalTracker:
 
 __all__ = [
     "SignalTracker",
-    "STABILIZATION_THRESHOLD",
-    "STABILIZATION_EPOCHS",
+    # STABILIZATION_THRESHOLD and STABILIZATION_EPOCHS now in leyline as DEFAULT_*
 ]

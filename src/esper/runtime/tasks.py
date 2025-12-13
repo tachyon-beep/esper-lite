@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from esper.kasmina.host import CNNHost, MorphogeneticModel, TransformerHost
 from esper.leyline.actions import build_action_enum
+from esper.leyline import DEFAULT_HOST_LR, DEFAULT_SEED_LR, DEFAULT_BATCH_SIZE_TRAINING, DEFAULT_DROPOUT
 from esper.simic.features import TaskConfig
 from esper.simic.rewards import LossRewardConfig
 from torch.utils.data import Dataset
@@ -40,9 +41,9 @@ class TaskSpec:
     num_classes: int | None = None
     block_size: int | None = None
 
-    # Learning rates (previously hardcoded as 0.01 throughout training code)
-    host_lr: float = 0.01
-    seed_lr: float = 0.01
+    # Learning rates (from leyline - single source of truth)
+    host_lr: float = DEFAULT_HOST_LR
+    seed_lr: float = DEFAULT_SEED_LR
 
     action_enum: Any = field(init=False)
 
@@ -113,7 +114,7 @@ def _cifar10_spec() -> TaskSpec:
         model_factory=_make_model,
         dataloader_factory=load_cifar10,
         dataloader_defaults={
-            "batch_size": 128,
+            "batch_size": DEFAULT_BATCH_SIZE_TRAINING,
             "data_root": "./data",
             "num_workers": 4,
             "mock": False,
@@ -156,7 +157,7 @@ def _cifar10_deep_spec() -> TaskSpec:
         model_factory=_make_model,
         dataloader_factory=load_cifar10,
         dataloader_defaults={
-            "batch_size": 128,
+            "batch_size": DEFAULT_BATCH_SIZE_TRAINING,
             "data_root": "./data",
             "num_workers": 4,
             "mock": False,
@@ -184,7 +185,7 @@ def _tinystories_spec() -> TaskSpec:
             n_head=6,
             n_layer=6,
             block_size=block_size,
-            dropout=0.1,
+            dropout=DEFAULT_DROPOUT,
         )
         return MorphogeneticModel(host, device=device, slots=slots, task_config=ts_config)
 

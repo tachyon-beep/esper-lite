@@ -84,6 +84,9 @@ class TelemetryEventType(Enum):
     # === Counterfactual Attribution Events ===
     COUNTERFACTUAL_COMPUTED = auto()  # Per-slot counterfactual contribution measured
 
+    # === Analytics Events ===
+    ANALYTICS_SNAPSHOT = auto()       # Full state snapshot for dashboard sync
+
 
 @dataclass
 class TelemetryEvent:

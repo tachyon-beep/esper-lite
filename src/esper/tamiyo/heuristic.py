@@ -13,7 +13,20 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol, TYPE_CHECKING
 
-from esper.leyline import SeedStage, is_terminal_stage, is_failure_stage, TrainingSignals
+from esper.leyline import (
+    SeedStage,
+    is_terminal_stage,
+    is_failure_stage,
+    TrainingSignals,
+    DEFAULT_PLATEAU_EPOCHS_TO_GERMINATE,
+    DEFAULT_MIN_EPOCHS_BEFORE_GERMINATE,
+    DEFAULT_CULL_AFTER_EPOCHS_WITHOUT_IMPROVEMENT,
+    DEFAULT_CULL_IF_ACCURACY_DROPS_BY,
+    DEFAULT_EMBARGO_EPOCHS_AFTER_CULL,
+    DEFAULT_BLUEPRINT_PENALTY_ON_CULL,
+    DEFAULT_BLUEPRINT_PENALTY_DECAY,
+    DEFAULT_BLUEPRINT_PENALTY_THRESHOLD,
+)
 from esper.leyline.actions import build_action_enum
 from esper.tamiyo.decisions import TamiyoDecision
 
@@ -37,27 +50,27 @@ class TamiyoPolicy(Protocol):
 class HeuristicPolicyConfig:
     """Configuration for the heuristic policy."""
 
-    # Germination triggers
-    plateau_epochs_to_germinate: int = 3
-    min_epochs_before_germinate: int = 5
+    # Germination triggers (from leyline)
+    plateau_epochs_to_germinate: int = DEFAULT_PLATEAU_EPOCHS_TO_GERMINATE
+    min_epochs_before_germinate: int = DEFAULT_MIN_EPOCHS_BEFORE_GERMINATE
 
-    # Culling thresholds
-    cull_after_epochs_without_improvement: int = 5
-    cull_if_accuracy_drops_by: float = 2.0  # % drop triggers cull
+    # Culling thresholds (from leyline)
+    cull_after_epochs_without_improvement: int = DEFAULT_CULL_AFTER_EPOCHS_WITHOUT_IMPROVEMENT
+    cull_if_accuracy_drops_by: float = DEFAULT_CULL_IF_ACCURACY_DROPS_BY  # % drop triggers cull
 
     # Fossilization threshold
     min_improvement_to_fossilize: float = 0.0  # Any positive improvement
 
-    # Anti-thrashing: cooldown after cull
-    embargo_epochs_after_cull: int = 5
+    # Anti-thrashing: cooldown after cull (from leyline)
+    embargo_epochs_after_cull: int = DEFAULT_EMBARGO_EPOCHS_AFTER_CULL
 
-    # Blueprint selection with penalty tracking
+    # Blueprint selection with penalty tracking (from leyline)
     blueprint_rotation: list[str] = field(
         default_factory=lambda: ["conv_light", "conv_heavy", "attention", "norm", "depthwise"]
     )
-    blueprint_penalty_on_cull: float = 2.0
-    blueprint_penalty_decay: float = 0.5
-    blueprint_penalty_threshold: float = 3.0
+    blueprint_penalty_on_cull: float = DEFAULT_BLUEPRINT_PENALTY_ON_CULL
+    blueprint_penalty_decay: float = DEFAULT_BLUEPRINT_PENALTY_DECAY
+    blueprint_penalty_threshold: float = DEFAULT_BLUEPRINT_PENALTY_THRESHOLD
 
 
 class HeuristicTamiyo:
