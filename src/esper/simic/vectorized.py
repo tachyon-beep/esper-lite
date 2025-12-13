@@ -51,7 +51,7 @@ from esper.simic.gradient_collector import (
 from esper.simic.normalization import RunningMeanStd, RewardNormalizer
 from esper.simic.features import MULTISLOT_FEATURE_SIZE
 from esper.simic.ppo import PPOAgent, signals_to_features
-from esper.simic.rewards import compute_contribution_reward, SeedInfo
+from esper.simic.rewards import compute_reward, RewardMode, ContributionRewardConfig, SeedInfo
 from esper.kasmina.slot import MIN_FOSSILIZE_CONTRIBUTION
 from esper.nissa import get_hub, BlueprintAnalytics
 from esper.tolaria import TolariaGovernor
@@ -211,6 +211,10 @@ def train_ppo_vectorized(
     slots: list[str] | None = None,
     max_seeds: int | None = None,
     max_seeds_per_slot: int | None = None,
+    reward_mode: str = "shaped",
+    param_budget: int = 500_000,
+    param_penalty_weight: float = 0.1,
+    sparse_reward_scale: float = 1.0,
 ) -> tuple[PPOAgent, list[dict]]:
     """Train PPO with vectorized environments using INVERTED CONTROL FLOW.
 
@@ -282,6 +286,16 @@ def train_ppo_vectorized(
     if gpu_preload:
         print(f"GPU preload: ENABLED (8x faster data loading)")
     print()
+
+    # Create reward config based on mode
+    reward_mode_enum = RewardMode(reward_mode)
+    reward_config = ContributionRewardConfig(
+        reward_mode=reward_mode_enum,
+        param_budget=param_budget,
+        param_penalty_weight=param_penalty_weight,
+        sparse_reward_scale=sparse_reward_scale,
+    )
+    _logger.info(f"Reward mode: {reward_mode} (param_budget={param_budget}, penalty_weight={param_penalty_weight}, scale={sparse_reward_scale})")
 
     # Map environments to devices in round-robin (needed for SharedBatchIterator)
     env_device_map = [devices[i % len(devices)] for i in range(n_envs)]
