@@ -16,7 +16,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from esper.simic.networks import ActorCritic
 from esper.simic.tamiyo_buffer import TamiyoRolloutBuffer
 from esper.simic.tamiyo_network import FactoredRecurrentActorCritic
 from esper.simic.advantages import compute_per_head_advantages
@@ -526,16 +525,13 @@ class PPOAgent:
                 'value_coef': self.value_coef,
                 'clip_value': self.clip_value,
                 'target_kl': self.target_kl,
-                'tamiyo': self.tamiyo,
                 'recurrent_n_epochs': self.recurrent_n_epochs,
                 'lstm_hidden_dim': self.lstm_hidden_dim,
                 'chunk_length': self.chunk_length,
             },
             # Architecture info for load-time reconstruction
             'architecture': {
-                'tamiyo': self.tamiyo,
-                'state_dim': base_net.state_dim if self.tamiyo else None,
-                'action_dim': base_net.action_dim if not self.tamiyo else None,
+                'state_dim': base_net.state_dim,
             }
         }
         if metadata:
@@ -549,22 +545,13 @@ class PPOAgent:
         checkpoint = torch.load(path, map_location=device, weights_only=False)
 
         state_dict = checkpoint['network_state_dict']
-        arch = checkpoint.get('architecture', {})
-        is_tamiyo = arch.get('tamiyo', False)
 
-        # Infer dimensions from state_dict keys
-        if is_tamiyo:
-            # FactoredRecurrentActorCritic: feature_net.0.weight has shape [hidden_dim, state_dim]
-            state_dim = state_dict['feature_net.0.weight'].shape[1]
-            action_dim = 7  # Not used for tamiyo
-        else:
-            # ActorCritic: shared.0.weight has shape [hidden_dim, state_dim]
-            state_dim = state_dict['shared.0.weight'].shape[1]
-            action_dim = state_dict['actor.2.weight'].shape[0]
+        # Infer state_dim from FactoredRecurrentActorCritic state dict
+        # feature_net.0.weight has shape [hidden_dim, state_dim]
+        state_dim = state_dict['feature_net.0.weight'].shape[1]
 
         agent = cls(
             state_dim=state_dim,
-            action_dim=action_dim,
             device=device,
             **checkpoint.get('config', {})
         )
