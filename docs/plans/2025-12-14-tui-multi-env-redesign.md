@@ -498,7 +498,7 @@ EOF
 
 ---
 
-### Task 3: Fix Multi-Env Slot Collision in Karn Collector
+### Task 4: Fix Multi-Env Slot Collision in Karn Collector
 
 **Files:**
 - Modify: `src/esper/karn/collector.py:246-258`
@@ -667,7 +667,7 @@ EOF
 
 ---
 
-### Task 4: Add TRAINING_STARTED Emission to Heuristic Path
+### Task 5: Add TRAINING_STARTED Emission to Heuristic Path
 
 **Files:**
 - Modify: `src/esper/simic/training.py:278-286`
@@ -771,7 +771,7 @@ EOF
 
 ## Phase 1: TUI Data Structure Fixes
 
-### Task 5: Add Per-Env Reward Tracking to EnvState
+### Task 6: Add Per-Env Reward Tracking to EnvState
 
 **Files:**
 - Modify: `src/esper/karn/tui.py:105-114`
@@ -997,7 +997,7 @@ EOF
 
 ---
 
-### Task 6: Add TUIState Aggregate Calculations
+### Task 7: Add TUIState Aggregate Calculations
 
 **Files:**
 - Modify: `src/esper/karn/tui.py` (TUIState class)
@@ -1148,7 +1148,7 @@ EOF
 
 ## Phase 2: TUI Event Handler Fixes
 
-### Task 7: Fix REWARD_COMPUTED Handler for Per-Env Routing
+### Task 8: Fix REWARD_COMPUTED Handler for Per-Env Routing
 
 **Files:**
 - Modify: `src/esper/karn/tui.py:535-564`
@@ -1292,7 +1292,7 @@ EOF
 
 ---
 
-### Task 8: Add Env ID to Event Log Display
+### Task 9: Add Env ID to Event Log Display
 
 **Files:**
 - Modify: `src/esper/karn/tui.py:352-428`
@@ -1369,7 +1369,7 @@ EOF
 
 ## Phase 3: Env Overview Table Rendering
 
-### Task 9: Create and Integrate Env Overview Table
+### Task 10: Create and Integrate Env Overview Table
 
 **Files:**
 - Modify: `src/esper/karn/tui.py` (add `_render_env_overview`, modify `_render`)
@@ -1455,7 +1455,7 @@ EOF
 
 ## Phase 4: Final Integration Testing
 
-### Task 10: Run Full Test Suite
+### Task 11: Run Full Test Suite
 
 **Step 1: Run all new tests**
 
@@ -1500,15 +1500,16 @@ EOF
 
 | Task | Priority | Description | Files |
 |------|----------|-------------|-------|
-| 1 | P0 | Emit EPOCH_COMPLETED in vectorized | `vectorized.py` |
-| 2 | P0 | Fix JSON serialization crash | `store.py` |
-| 3 | P0 | Namespace slots by env_id | `collector.py` |
-| 4 | P1 | TRAINING_STARTED in heuristic | `training.py` |
-| 5 | P0 | EnvState per-env tracking | `tui.py` |
-| 6 | P0 | TUIState aggregates | `tui.py` |
-| 7 | P0 | REWARD_COMPUTED per-env routing | `tui.py` |
-| 8 | P2 | Event log env ID prefix | `tui.py` |
-| 9 | P1 | Env overview table | `tui.py` |
-| 10 | - | Integration testing | All |
+| 1 | P0 | Fix epoch numbering (Karn→1) + add epoch to PPO events | `collector.py`, `vectorized.py` |
+| 2 | P0 | Emit EPOCH_COMPLETED as commit barrier | `vectorized.py` |
+| 3 | P0 | Fix JSON serialization crash (datetime/Path/Enum) | `store.py` |
+| 4 | P0 | Namespace slots by env_id | `collector.py` |
+| 5 | P1 | TRAINING_STARTED in heuristic | `training.py` |
+| 6 | P0 | EnvState per-env tracking | `tui.py` |
+| 7 | P0 | TUIState aggregates | `tui.py` |
+| 8 | P0 | REWARD_COMPUTED per-env routing | `tui.py` |
+| 9 | P2 | Event log env ID prefix | `tui.py` |
+| 10 | P1 | Env overview table | `tui.py` |
+| 11 | - | Integration testing | All |
 
-**Total estimated time:** 60-90 minutes following TDD.
+**Total estimated time:** 75-100 minutes following TDD.
