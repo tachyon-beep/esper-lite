@@ -249,7 +249,20 @@ class BatchMetrics:
 
 The key mechanism for proving causality with multiple seeds.
 
-### Full Factorial Matrix
+### Two Types of Attribution
+
+| Metric | What It Measures | How to Compute |
+|--------|------------------|----------------|
+| **Removal Cost** | "How much worse if we disable seed A now?" | Alpha=0 ablation at epoch T |
+| **Causal Contribution** | "How much did seed A actually add?" | Parallel control run without seed A |
+
+**Why both matter:**
+- **Removal cost** is fast (single forward pass) but confounded — host adapted assuming seed was present
+- **Causal contribution** is expensive (full training run) but unconfounded — true counterfactual
+
+The factorial matrix below measures **removal cost**. For publication-grade causal claims, use **parallel control runs**.
+
+### Full Factorial Matrix (Removal Cost)
 
 For a 3-slot host, capture 8 configurations:
 
@@ -341,11 +354,98 @@ class CounterfactualMatrix:
     epoch: int
     configs: list[CounterfactualResult]
 
-    # Derived metrics
+    # Derived metrics (removal cost)
     marginal_contributions: dict[str, float]
     interaction_effects: dict[tuple, float]
     shapley_values: dict[str, float] | None
 ```
+
+### Parallel Control Runs (Causal Contribution)
+
+For true causal attribution, run parallel training experiments with seeds disabled from the start.
+
+**Experiment Matrix:**
+
+```
+Run ID  | Early | Mid  | Late | Description
+--------|-------|------|------|---------------------------
+main    |  ON   | ON   | ON   | Primary morphogenetic run
+ctrl-0  |  OFF  | OFF  | OFF  | Host-only baseline
+ctrl-E  |  OFF  | ON   | ON   | Early seed never present
+ctrl-M  |  ON   | OFF  | ON   | Mid seed never present
+ctrl-L  |  ON   | ON   | OFF  | Late seed never present
+```
+
+**Causal contribution** = `acc(main) - acc(ctrl-X)` where seed X was never present.
+
+This is different from removal cost because:
+- In removal cost: host trained WITH seed, then seed disabled → confounded by adaptation
+- In causal contribution: host trained WITHOUT seed → true counterfactual
+
+**Data Structures:**
+
+```python
+@dataclass
+class ControlRunConfig:
+    """Configuration for a parallel control run."""
+    run_id: str                           # "ctrl-E", "ctrl-M", etc.
+    disabled_slots: frozenset[str]        # {"early"}, {"mid"}, etc.
+    base_seed: int                        # Same random seed as main run
+    description: str
+
+
+@dataclass
+class CausalContributionResult:
+    """True causal contribution from parallel control runs."""
+    slot_id: str
+    main_run_accuracy: float              # Accuracy with seed present
+    control_run_accuracy: float           # Accuracy with seed never present
+    causal_contribution: float            # main - control (unconfounded)
+    removal_cost: float                   # From factorial matrix (confounded)
+    confounding_gap: float                # causal - removal (adaptation effect)
+
+
+@dataclass
+class CausalAttributionReport:
+    """Publication-grade causal attribution across all seeds."""
+    episode_id: str
+    control_runs: list[ControlRunConfig]
+    contributions: dict[str, CausalContributionResult]
+
+    # Statistical validity
+    n_runs_per_config: int                # Recommend ≥5 for confidence intervals
+    confidence_level: float               # 0.95 for publication
+    contribution_ci: dict[str, tuple[float, float]]  # {slot: (lower, upper)}
+```
+
+**Usage:**
+
+```python
+# Launch parallel control runs for causal attribution
+control_configs = [
+    ControlRunConfig("ctrl-0", frozenset(), seed, "Host-only baseline"),
+    ControlRunConfig("ctrl-E", frozenset({"early"}), seed, "No early seed"),
+    ControlRunConfig("ctrl-M", frozenset({"mid"}), seed, "No mid seed"),
+    ControlRunConfig("ctrl-L", frozenset({"late"}), seed, "No late seed"),
+]
+
+# After all runs complete, compute causal contributions
+report = karn.compute_causal_attribution(
+    main_episode_id="main-run-uuid",
+    control_episodes=["ctrl-0-uuid", "ctrl-E-uuid", ...],
+    confidence_level=0.95,
+)
+```
+
+**When to Use Each:**
+
+| Scenario | Use Removal Cost | Use Causal Contribution |
+|----------|------------------|-------------------------|
+| Live training monitoring | ✅ | ❌ (too slow) |
+| Quick iteration | ✅ | ❌ |
+| Debugging seed behavior | ✅ | ❌ |
+| Publication claims | ⚠️ (cite limitation) | ✅ |
+| Comparing architectures | ❌ | ✅ |
 
 ---
 
