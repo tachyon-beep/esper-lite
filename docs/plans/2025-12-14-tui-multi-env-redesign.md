@@ -1,5 +1,7 @@
 # TUI Multi-Environment Redesign Implementation Plan
 
+> **Status:** ✅ **COMPLETED** on 2025-12-14
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Fix the Karn TUI and telemetry pipeline to properly support multi-environment PPO training with per-env tracking, aggregate views, correct event emission, and robust serialization.
