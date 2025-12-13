@@ -112,15 +112,7 @@ class SignalTracker:
                     self._stable_count += 1
                     if self._stable_count >= self.stabilization_epochs:
                         self._is_stabilized = True
-                        env_str = f"ENV {self.env_id}" if self.env_id is not None else "Tamiyo"
-                        if self.stabilization_epochs == 0:
-                            # Stabilization disabled - just note when it happened
-                            print(f"[{env_str}] Host stabilized at epoch {epoch} - germination now allowed")
-                        else:
-                            print(f"[{env_str}] Host stabilized at epoch {epoch} "
-                                  f"({self._stable_count}/{self.stabilization_epochs} stable) - germination now allowed")
-
-                        # Emit TAMIYO_INITIATED telemetry
+                        # Emit TAMIYO_INITIATED telemetry (console output via Nissa backend)
                         hub = get_hub()
                         hub.emit(TelemetryEvent(
                             event_type=TelemetryEventType.TAMIYO_INITIATED,
