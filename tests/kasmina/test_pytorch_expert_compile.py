@@ -238,7 +238,7 @@ class TestCompilerDisabledPaths:
 
     def test_validate_action_mask_has_compiler_disable(self):
         """_validate_action_mask should have @torch.compiler.disable decorator."""
-        from esper.simic.networks import _validate_action_mask
+        from esper.simic.action_masks import _validate_action_mask
 
         assert getattr(_validate_action_mask, '_torchdynamo_disable', False), \
             "_validate_action_mask should have @torch.compiler.disable"
