@@ -646,6 +646,51 @@ def compute_contribution_reward(
     return reward
 
 
+def compute_sparse_reward(
+    host_max_acc: float,
+    total_params: int,
+    epoch: int,
+    max_epochs: int,
+    config: ContributionRewardConfig,
+) -> float:
+    """Compute sparse (terminal-only) reward.
+
+    This reward function returns 0.0 for all non-terminal timesteps,
+    forcing the LSTM policy to perform genuine temporal credit assignment
+    over the full episode. At terminal, it rewards accuracy and penalizes
+    parameter count.
+
+    Design rationale:
+    - Terminal-only: Forces credit assignment, tests if shaping is necessary
+    - Accuracy-primary: The true objective is host performance
+    - Param penalty: Efficiency matters, but less than accuracy
+    - Scale factor: DRL Expert recommends 2.0-3.0 if learning fails
+
+    Args:
+        host_max_acc: Maximum accuracy achieved during episode (0-100)
+        total_params: Total parameters (host + seeds) at episode end
+        epoch: Current epoch (1-indexed)
+        max_epochs: Maximum epochs in episode
+        config: Reward configuration with param_budget, param_penalty_weight, sparse_reward_scale
+
+    Returns:
+        0.0 for non-terminal epochs, scaled reward at terminal (clamped to [-1, 1])
+    """
+    # Non-terminal: return 0.0 (the defining property of sparse rewards)
+    if epoch != max_epochs:
+        return 0.0
+
+    # Terminal reward: accuracy minus parameter cost
+    accuracy_reward = host_max_acc / 100.0
+    param_cost = config.param_penalty_weight * (total_params / config.param_budget)
+
+    # Apply scale for better gradient signal (DRL Expert recommendation)
+    reward = config.sparse_reward_scale * (accuracy_reward - param_cost)
+
+    # Clamp to [-1.0, 1.0] for stable learning
+    return max(-1.0, min(1.0, reward))
+
+
 def _contribution_pbrs_bonus(
     seed_info: SeedInfo,
     config: ContributionRewardConfig,
