@@ -1123,15 +1123,11 @@ Add:
                 env_state.host_max_acc = max(env_state.host_max_acc, env_state.val_acc)
 ```
 
-**Step 2: Verify reset happens implicitly**
+**Step 2: Reset handled by dataclass default**
 
-The `host_max_acc` field defaults to `0.0` in the dataclass. Fresh `ParallelEnvState` objects are created via `create_env_state()` at **line 680-684** for each batch, so reset happens automatically.
+The `host_max_acc` field defaults to `0.0` in the dataclass. Fresh `ParallelEnvState` objects are created via `create_env_state()` at **line 680-684** for each batch.
 
-However, for episode boundaries within a batch, add explicit reset. Find where `seeds_fossilized = 0` is set (episode reset, around **line 1310**) and add:
-
-```python
-                    env_state.host_max_acc = 0.0
-```
+**Key insight:** Each batch IS one complete episode (max_epochs timesteps). There are no episode boundaries within a batch - when a batch ends, new `ParallelEnvState` objects are created for the next batch, automatically resetting `host_max_acc` to `0.0`. No explicit reset code is needed.
 
 **Step 3: Verify with grep**
 
@@ -1140,7 +1136,6 @@ Expected output:
 ```
 93:    host_max_acc: float = 0.0
 997:                env_state.host_max_acc = max(env_state.host_max_acc, env_state.val_acc)
-1310:                    env_state.host_max_acc = 0.0
 ```
 
 **Step 4: Commit**
