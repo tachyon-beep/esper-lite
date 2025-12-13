@@ -362,63 +362,6 @@ def simple_network_configs(draw, state_dim: int = 28, action_dim: int = 7):
 
 
 # =============================================================================
-# Composite Strategies for Integration Tests
-# =============================================================================
-
-@st.composite
-def full_episodes(draw, num_steps: int | None = None):
-    """Generate complete Episode instances with consistent state transitions.
-
-    Args:
-        num_steps: Number of steps (None = random 1-10)
-
-    Returns:
-        Episode with DecisionPoints and StepOutcomes
-    """
-    from esper.simic.episodes import Episode, DecisionPoint, StepOutcome, ActionTaken
-    from esper.leyline.factored_actions import LifecycleOp
-
-    if num_steps is None:
-        num_steps = draw(st.integers(min_value=1, max_value=10))
-
-    episode = Episode(episode_id=draw(st.text(min_size=1, max_size=32)))
-
-    for step in range(num_steps):
-        # Generate consistent state transition
-        snapshot_before = draw(training_snapshots())
-
-        # Use LifecycleOp enum (factored action space)
-        action = draw(st.sampled_from(list(LifecycleOp)))
-        action_taken = ActionTaken(
-            action=action,
-            confidence=draw(probabilities()),
-        )
-
-        reward = draw(bounded_floats(-5.0, 5.0))
-
-        # Generate outcome with actual fields
-        outcome = StepOutcome(
-            accuracy_after=draw(accuracies()),
-            accuracy_change=draw(bounded_floats(-10.0, 10.0)),
-            loss_after=draw(bounded_floats(0.0, 10.0)),
-            loss_change=draw(bounded_floats(-5.0, 5.0)),
-            seed_still_alive=draw(st.booleans()),
-            seed_stage_after=draw(st.integers(min_value=0, max_value=7)),
-            reward=reward,
-        )
-
-        decision_point = DecisionPoint(
-            observation=snapshot_before,
-            action=action_taken,
-            outcome=outcome,
-        )
-
-        episode.decisions.append(decision_point)
-
-    return episode
-
-
-# =============================================================================
 # Exports
 # =============================================================================
 
@@ -440,6 +383,4 @@ __all__ = [
     "seed_infos",
     # Networks
     "simple_network_configs",
-    # Composite
-    "full_episodes",
 ]
