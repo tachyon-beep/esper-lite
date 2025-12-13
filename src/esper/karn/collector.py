@@ -61,9 +61,6 @@ class KarnConfig:
     capture_dense_traces: bool = True
     dense_trigger: DenseTraceTrigger = field(default_factory=DenseTraceTrigger)
 
-    # Output settings
-    emit_to_nissa: bool = True  # Forward events to Nissa hub during migration
-
     # Fault tolerance
     on_emission_error: str = "warn"  # "ignore", "warn", "halt"
 
