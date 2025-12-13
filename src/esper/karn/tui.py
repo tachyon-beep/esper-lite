@@ -366,6 +366,51 @@ class TUIOutput:
 
         return (timestamp, event_type, msg)
 
+    def _render_event_log(self, max_lines: int = 12) -> Panel:
+        """Render the event log panel."""
+        # Get recent events
+        events = list(self.state.event_log)[-max_lines:]
+
+        if not events:
+            content = Text("Waiting for events...", style="dim")
+        else:
+            lines = []
+            for timestamp, event_type, msg in events:
+                # Color code by event type
+                if "ERROR" in event_type or "PANIC" in event_type or "COLLAPSE" in event_type:
+                    style = "red"
+                elif "WARNING" in event_type or "ROLLBACK" in event_type:
+                    style = "yellow"
+                elif "FOSSILIZED" in event_type:
+                    style = "green"
+                elif "CULLED" in event_type:
+                    style = "red dim"
+                elif "GERMINATED" in event_type:
+                    style = "cyan"
+                elif "CHECKPOINT" in event_type:
+                    style = "blue"
+                else:
+                    style = "white"
+
+                # Truncate message if too long
+                max_msg_len = 50
+                if len(msg) > max_msg_len:
+                    msg = msg[:max_msg_len-3] + "..."
+
+                line = Text()
+                line.append(f"{timestamp} ", style="dim")
+                line.append(f"{event_type:<25} ", style=style)
+                line.append(msg, style="white")
+                lines.append(line)
+
+            content = Group(*lines)
+
+        return Panel(
+            content,
+            title="[bold]Event Log[/bold]",
+            border_style="cyan",
+        )
+
     # =========================================================================
     # Event Handlers
     # =========================================================================
