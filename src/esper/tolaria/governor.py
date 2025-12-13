@@ -14,6 +14,9 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 
+from esper.leyline import TelemetryEvent, TelemetryEventType
+from esper.nissa import get_hub
+
 
 @dataclass
 class GovernorReport:
@@ -171,7 +174,18 @@ class TolariaGovernor:
         experimental hypotheses - a catastrophic event means they failed
         the safety test and should be discarded.
         """
-        print(f"[GOVERNOR] CRITICAL INSTABILITY DETECTED. INITIATING ROLLBACK.")
+        # Emit telemetry event (replaces print)
+        hub = get_hub()
+        hub.emit(TelemetryEvent(
+            event_type=TelemetryEventType.GOVERNOR_ROLLBACK,
+            severity="critical",
+            message="Critical instability detected - initiating rollback",
+            data={
+                "reason": "Structural Collapse",
+                "loss_at_panic": self._panic_loss,
+                "consecutive_panics": self.consecutive_panics,
+            },
+        ))
 
         if self.last_good_state is None:
             raise RuntimeError("Governor panic before first snapshot!")
