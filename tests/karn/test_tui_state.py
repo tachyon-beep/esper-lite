@@ -99,3 +99,59 @@ class TestTUIStateAggregation:
         counts = state.aggregate_action_counts
         assert counts["WAIT"] == 15
         assert counts["GERMINATE"] == 5
+
+
+class TestTUIOutputEventHandlers:
+    """Tests for TUIOutput event routing."""
+
+    def test_reward_computed_routes_to_correct_env(self):
+        """REWARD_COMPUTED updates the correct env's reward history."""
+        from esper.karn.tui import TUIOutput
+
+        tui = TUIOutput()
+        tui.state.n_envs = 4
+        for i in range(4):
+            tui.state.get_or_create_env(i)
+
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.REWARD_COMPUTED,
+            epoch=10,
+            data={
+                "env_id": 2,
+                "total_reward": 0.75,
+                "action_name": "GERMINATE",
+                "val_acc": 82.5,
+            }
+        )
+        tui._handle_reward_computed(event)
+
+        env2 = tui.state.env_states[2]
+        assert env2.current_reward == 0.75
+        assert env2.action_history[-1] == "GERMINATE"
+        assert env2.host_accuracy == 82.5
+
+        assert tui.state.env_states[0].current_reward == 0.0
+        assert tui.state.env_states[1].current_reward == 0.0
+
+    def test_action_distribution_per_env(self):
+        """Actions are tracked per-env, not globally."""
+        from esper.karn.tui import TUIOutput
+
+        tui = TUIOutput()
+        tui.state.n_envs = 2
+        for i in range(2):
+            tui.state.get_or_create_env(i)
+
+        tui._handle_reward_computed(TelemetryEvent(
+            event_type=TelemetryEventType.REWARD_COMPUTED,
+            data={"env_id": 0, "total_reward": 0.1, "action_name": "GERMINATE"}
+        ))
+        tui._handle_reward_computed(TelemetryEvent(
+            event_type=TelemetryEventType.REWARD_COMPUTED,
+            data={"env_id": 1, "total_reward": 0.1, "action_name": "WAIT"}
+        ))
+
+        assert tui.state.env_states[0].action_counts["GERMINATE"] == 1
+        assert tui.state.env_states[1].action_counts["WAIT"] == 1
+        assert tui.state.aggregate_action_counts["GERMINATE"] == 1
+        assert tui.state.aggregate_action_counts["WAIT"] == 1

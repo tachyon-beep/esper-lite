@@ -694,19 +694,31 @@ class TUIOutput:
         self.state.advantage_max = data.get("advantage_max", 0.0)
 
     def _handle_reward_computed(self, event: "TelemetryEvent") -> None:
-        """Handle REWARD_COMPUTED event."""
+        """Handle REWARD_COMPUTED event with per-env routing."""
         data = event.data or {}
+        env_id = data.get("env_id", 0)
+        epoch = event.epoch or 0
 
+        # Get or create per-env state
+        env_state = self.state.get_or_create_env(env_id)
+
+        # Update per-env reward tracking
         total_reward = data.get("total_reward", 0.0)
-        self.state.update_reward(total_reward)
+        env_state.add_reward(total_reward, epoch)
 
-        # Track action distribution
+        # Update per-env action tracking
         action_name = data.get("action_name", "WAIT")
-        if action_name in self.state.action_counts:
-            self.state.action_counts[action_name] += 1
-            self.state.total_actions += 1
+        env_state.add_action(action_name)
 
-        # Reward components for breakdown
+        # Update per-env accuracy if provided
+        val_acc = data.get("val_acc")
+        if val_acc is not None:
+            env_state.add_accuracy(val_acc, epoch)
+
+        env_state.current_epoch = epoch
+        env_state.last_update = datetime.now()
+
+        # Update global state for header display
         self.state.reward_components = {
             "accuracy_delta": data.get("base_acc_delta", 0.0),
             "bounded_attr": data.get("bounded_attribution", 0.0),
@@ -715,13 +727,15 @@ class TUIOutput:
             "probation_warn": data.get("probation_warning", 0.0),
             "terminal_bonus": data.get("fossilize_terminal_bonus", 0.0),
         }
+        self.state.last_reward_env_id = env_id
 
         # Red flag: reward hacking detection
         acc_delta = data.get("base_acc_delta", 0.0)
         if acc_delta < 0 and total_reward > 0:
             self.state.reward_hacking_detected = True
 
-        # Host accuracy from reward event
+        # Update global metrics for backward compatibility
+        self.state.current_reward = total_reward
         self.state.host_accuracy = data.get("val_acc", self.state.host_accuracy)
 
     def _handle_seed_event(self, event: "TelemetryEvent", event_type: str) -> None:
