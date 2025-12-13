@@ -431,3 +431,222 @@ The telemetry system is successful if it can answer:
 3. **"Why did it fail?"** — Dense traces around anomalies with root cause
 4. **"Can we reproduce this?"** — Episode context enables exact replay
 5. **"What would have happened without seeds?"** — Host baseline comparison
+
+---
+
+## Additional Requirements (Expert Review Findings)
+
+**Review Date:** 2025-12-14
+**Reviewers:** DRL Specialist, PyTorch Engineering Specialist
+
+### P0 — Critical (Fix Before Implementation)
+
+#### 1. Add PPO Diagnostic Stats to PolicySnapshot
+
+The design captures `advantage: float` but not aggregate statistics essential for PPO debugging.
+
+```python
+@dataclass
+class AdvantageStats:
+    mean: float
+    std: float
+    min: float
+    max: float
+    fraction_clipped: float  # |A| > clip_threshold
+
+@dataclass
+class RatioStats:
+    mean: float
+    fraction_clipped_high: float  # ratio > 1 + eps
+    fraction_clipped_low: float   # ratio < 1 - eps
+    per_head_clip_rates: dict[str, float]
+```
+
+**Rationale:** Without ratio/advantage visibility, PPO debugging is "flying blind." These are the primary health indicators.
+
+#### 2. Add DDP Forward Compatibility Fields
+
+Add rank awareness to telemetry events now to prevent schema migration pain later.
+
+```python
+@dataclass
+class TelemetryEvent:
+    event_type: TelemetryEventType
+    rank: int = 0              # Add NOW
+    world_size: int = 1        # Add NOW
+    is_reduced: bool = False   # True if aggregated across ranks
+```
+
+#### 3. Document Counterfactual Validity Scope
+
+The counterfactual matrix measures **removal cost**, not **causal contribution**. This is an important distinction:
+
+- **What we measure:** "How much worse is accuracy when seed A is disabled at epoch T?"
+- **What this is NOT:** "How much value did seed A add?" (requires parallel training without seed A)
+
+Add a `CounterfactualValidityNote` to documentation explaining this limitation. The host and other seeds have adapted *assuming all seeds were present*, creating confounding that cannot be eliminated without parallel control runs.
+
+---
+
+### P1 — High Priority (Add During Implementation)
+
+#### 4. Specify Shapley Sampling Algorithm
+
+The design mentions "~20 samples" for 5+ seeds but doesn't specify the algorithm.
+
+**Recommendation:** Use permutation sampling with antithetic pairing (sample permutation and its reverse) for 2x variance reduction.
+
+```python
+@dataclass
+class ShapleyEstimate:
+    mean: float
+    std: float  # Required for confidence intervals
+    n_samples: int
+    algorithm: str = "permutation_antithetic"
+```
+
+**Research claims require:** `shapley_mean - 2*shapley_std > 0` before claiming positive contribution.
+
+#### 5. Switch to O(n) Counterfactual Strategy for 3+ Slots
+
+Full factorial at 3 slots = 8x validation overhead (~700% increase). Use single-slot ablation + Shapley:
+
+```python
+# O(n) instead of O(2^n)
+for slot_id in active_slots:
+    with model.seed_slots[slot_id].force_alpha(0.0):
+        slot_contribution = val_acc - ablated_acc
+
+# Derive interaction effects from marginal contributions
+# using inclusion-exclusion for 2-way interactions only
+```
+
+#### 6. Add KL Divergence and Explained Variance
+
+Essential PPO diagnostics missing from the design:
+
+```python
+@dataclass
+class PolicySnapshot:
+    # ... existing fields ...
+
+    # Add these:
+    kl_divergence: float  # KL(old || new), critical for LR calibration
+    explained_variance: float  # 1 - Var(returns - values) / Var(returns)
+    per_head_kl: dict[str, float]  # Per-head KL for factored actions
+```
+
+**Thresholds:**
+- `KL > 0.1` per update → learning rate too high
+- `KL ~ 0` → learning rate too low or degenerate gradients
+- `explained_variance < 0` → value function is worse than mean prediction
+
+#### 7. Wrap Dense Trace Collection to Prevent Graph Breaks
+
+Dense trace activation hooks can break `torch.compile` graphs. Use explicit disable:
+
+```python
+@torch.compiler.disable
+def collect_dense_trace(model: nn.Module, batch_metrics: list) -> DenseTrace:
+    """Dense trace collection - explicitly disable compilation."""
+    # This prevents graph breaks from propagating to main training loop
+    ...
+```
+
+#### 8. Use Async Gradient Histogram Collection
+
+Avoid `.item()` sync points in gradient telemetry:
+
+```python
+def collect_gradient_histogram_async(grads: list[Tensor], bins: int = 50) -> Tensor:
+    """Collect histogram as tensor buckets - no .item() sync."""
+    flat = torch.cat([g.view(-1) for g in grads])
+    return torch.histc(flat, bins=bins, min=-1.0, max=1.0)  # Returns tensor
+```
+
+---
+
+### P2 — Medium Priority (Polish Phase)
+
+#### 9. Add LSTM Hidden State Diagnostics
+
+Recurrent policies have unique failure modes not covered by standard PPO diagnostics:
+
+```python
+@dataclass
+class LSTMHealth:
+    hidden_mean: float
+    hidden_std: float
+    cell_mean: float
+    cell_std: float
+    saturation_fraction: float  # |h| > 0.9, indicates potential vanishing gradients
+```
+
+#### 10. Store Checkpoints as Paths, Not Bytes
+
+`initial_checkpoint: bytes` could be 50-200MB. Store as path reference instead:
+
+```python
+initial_checkpoint: Path  # Reference to torch.save() output
+checkpoint_retention_policy: Literal["keep_all", "keep_last", "delete_after_run"]
+```
+
+#### 11. Add Ringbuffer for Dense Traces
+
+Bound memory growth from triggered dense traces:
+
+```python
+class TelemetryStore:
+    def __init__(self, max_dense_traces: int = 10):
+        self.dense_traces = deque(maxlen=max_dense_traces)  # Auto-evicts oldest
+```
+
+#### 12. Expose Existing GradientIsolationMonitor
+
+Don't duplicate isolation leakage detection — the existing `GradientIsolationMonitor` in `kasmina/isolation.py` already implements this correctly. Route its output through the telemetry system.
+
+---
+
+### P3 — Low Priority (Future Enhancement)
+
+#### 13. Add Cross-Run Statistical Aggregation
+
+For publication-grade claims, need multi-run statistics:
+
+```python
+@dataclass
+class ExperimentAggregation:
+    run_ids: list[str]
+    mean_delta: float
+    std_delta: float
+    p_value: float       # vs null hypothesis of no improvement
+    cohens_d: float      # Effect size
+```
+
+#### 14. Add Contribution Onset Tracking
+
+Track when seeds start helping, not just current contribution:
+
+```python
+def contribution_onset_epoch(self, slot_id: str, threshold: float = 0.5) -> int | None:
+    """First epoch where seed's Shapley value exceeded threshold."""
+```
+
+#### 15. Consider SHAP-IQ for Interaction Decomposition
+
+Fumagalli et al. (2023) — decomposes Shapley values into pairwise interactions, directly answering "Do early+mid synergize?"
+
+---
+
+### Summary of Expert Assessments
+
+| Aspect | DRL Specialist | PyTorch Specialist |
+|--------|---------------|-------------------|
+| Overall Rating | GOOD with improvements needed | Architecturally sound |
+| Counterfactual Design | Sound but overclaims validity | O(2^n) overhead concern |
+| PPO Diagnostics | Critical gaps (ratio/advantage/KL) | N/A |
+| Performance | N/A | Manageable with mitigations |
+| torch.compile | N/A | Needs explicit disable zones |
+| DDP Readiness | N/A | Add schema fields now |
+
+**Bottom Line:** The design is a strong foundation that needs PPO diagnostic augmentation (DRL) and performance/compatibility mitigations (PyTorch) before implementation.
