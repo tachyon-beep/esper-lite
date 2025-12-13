@@ -215,6 +215,15 @@ class HeuristicTamiyo:
                 else:
                     improvement = seed.metrics.total_improvement  # Fallback
 
+                # TODO: [FUTURE FUNCTIONALITY] - Ransomware detection
+                # Currently we only check counterfactual contribution for fossilization.
+                # "Ransomware" seeds have high counterfactual (model needs them) but
+                # negative total_improvement (model is worse overall). These seeds
+                # created dependencies without adding value. The reward system in
+                # simic/rewards.py handles this, but HeuristicTamiyo should also
+                # detect and cull ransomware patterns. See test:
+                # tests/tamiyo/properties/test_decision_antigaming.py::TestRansomwareDetection
+
                 if improvement > self.config.min_improvement_to_fossilize:
                     return TamiyoDecision(
                         action=Action.FOSSILIZE,

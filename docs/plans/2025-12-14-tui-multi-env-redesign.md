@@ -41,6 +41,110 @@
 
 ---
 
+### Task 0: Remove Duplicate SeedStage Enum from Karn (Contract Violation)
+
+**Files:**
+- Modify: `src/esper/karn/store.py` (delete lines 86-102, add import)
+- Modify: `src/esper/karn/__init__.py` (re-export from leyline, not store)
+
+**Problem:** Karn defines its own `SeedStage(Enum)` that "mirrors" leyline's `SeedStage(IntEnum)`. This violates CLAUDE.md's No Legacy Code Policy ("No adapter classes to support old interfaces").
+
+**Step 1: Write the failing test**
+
+Create `tests/karn/test_leyline_contracts.py`:
+
+```python
+"""Tests for Karn's use of leyline contracts."""
+
+import pytest
+
+
+class TestSeedStageContract:
+    """Tests for SeedStage contract compliance."""
+
+    def test_karn_uses_leyline_seedstage(self):
+        """Karn should use leyline.SeedStage, not define its own."""
+        from esper.leyline import SeedStage as LeylineSeedStage
+        from esper.karn.store import SlotSnapshot
+
+        # SlotSnapshot.stage should use the leyline enum
+        slot = SlotSnapshot(slot_id="mid")
+        assert type(slot.stage).__module__ == "esper.leyline.stages"
+        assert isinstance(slot.stage.value, int)  # IntEnum, not Enum
+
+    def test_karn_exports_leyline_seedstage(self):
+        """Karn's re-export should be the same as leyline's."""
+        from esper.leyline import SeedStage as LeylineSeedStage
+        from esper.karn import SeedStage as KarnSeedStage
+
+        assert LeylineSeedStage is KarnSeedStage
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `PYTHONPATH=src pytest tests/karn/test_leyline_contracts.py -v`
+Expected: FAIL (Karn's SeedStage is from `esper.karn.store`, not `esper.leyline.stages`)
+
+**Step 3: Delete local SeedStage and import from leyline**
+
+In `src/esper/karn/store.py`:
+
+1. Add import at top:
+```python
+from esper.leyline import SeedStage
+```
+
+2. Delete the local `class SeedStage(Enum)` definition (lines 86-102).
+
+**Step 4: Update Karn's __init__.py to re-export from leyline**
+
+In `src/esper/karn/__init__.py`, change the import:
+
+```python
+# Before:
+from esper.karn.store import (
+    ...
+    SeedStage,
+)
+
+# After:
+from esper.karn.store import (
+    ...
+    # SeedStage removed - now from leyline
+)
+from esper.leyline import SeedStage  # Re-export authoritative definition
+```
+
+**Step 5: Run test to verify it passes**
+
+Run: `PYTHONPATH=src pytest tests/karn/test_leyline_contracts.py -v`
+Expected: PASS
+
+**Step 6: Commit**
+
+```bash
+git add tests/karn/test_leyline_contracts.py src/esper/karn/store.py src/esper/karn/__init__.py
+git commit -m "$(cat <<'EOF'
+fix(karn): remove duplicate SeedStage, use leyline contract
+
+CLAUDE.md violation: Karn defined its own SeedStage(Enum) that
+"mirrored" leyline's SeedStage(IntEnum). This is exactly the kind
+of compatibility shim the No Legacy Code Policy forbids.
+
+Fixed by:
+- Deleting local SeedStage class from store.py
+- Importing from esper.leyline instead
+- Re-exporting leyline's SeedStage from karn.__init__
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+EOF
+)"
+```
+
+---
+
 ### Task 1: Fix Epoch Numbering and Add epoch Field to PPO Events
 
 **Files:**
@@ -1500,6 +1604,7 @@ EOF
 
 | Task | Priority | Description | Files |
 |------|----------|-------------|-------|
+| 0 | P0 | Remove duplicate SeedStage (use leyline contract) | `store.py`, `__init__.py` |
 | 1 | P0 | Fix epoch numbering (Karn→1) + add epoch to PPO events | `collector.py`, `vectorized.py` |
 | 2 | P0 | Emit EPOCH_COMPLETED as commit barrier | `vectorized.py` |
 | 3 | P0 | Fix JSON serialization crash (datetime/Path/Enum) | `store.py` |
@@ -1512,4 +1617,5 @@ EOF
 | 10 | P1 | Env overview table | `tui.py` |
 | 11 | - | Integration testing | All |
 
-**Total estimated time:** 75-100 minutes following TDD.
+**Total tasks:** 12 (Task 0-11)
+**Total estimated time:** 80-110 minutes following TDD.
