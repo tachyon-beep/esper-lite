@@ -996,6 +996,8 @@ def train_ppo_vectorized(
                 env_state.train_acc = train_acc
                 env_state.val_loss = val_loss
                 env_state.val_acc = val_acc
+                # Track maximum accuracy for sparse reward
+                env_state.host_max_acc = max(env_state.host_max_acc, env_state.val_acc)
 
                 # Governor watchdog: snapshot when loss is stable (every 5 epochs)
                 if epoch % 5 == 0:
