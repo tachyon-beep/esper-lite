@@ -4,7 +4,7 @@
 
 **Goal:** Replace example-based reward tests with property-based tests using Hypothesis to catch "missed scenarios" before they reach production.
 
-**Architecture:** Four-tier property hierarchy (Mathematical → Semantic → Anti-Gaming → Stateful) with composite Hypothesis strategies for generating valid reward inputs. Tests organized by property category, not by function.
+**Architecture:** Five-tier property hierarchy (Mathematical → Semantic → Anti-Gaming → PBRS → Warnings) with composite Hypothesis strategies for generating valid reward inputs. Tests organized by property category, not by function.
 
 **Tech Stack:** Hypothesis 6.148.3+, pytest with `@pytest.mark.property` marker
 
@@ -15,6 +15,7 @@
 **Files:**
 - Create: `tests/simic/strategies/__init__.py`
 - Create: `tests/simic/strategies/reward_strategies.py`
+- Create: `tests/simic/strategies/test_strategies.py` (smoke tests)
 
 **Step 1: Create strategies package**
 
@@ -374,12 +375,71 @@ def stage_sequences(draw, min_length: int = 3, max_length: int = 15):
     return sequence
 ```
 
-**Step 3: Verify strategies work**
+**Step 3: Create smoke test for strategies**
+
+```python
+# tests/simic/strategies/test_strategies.py
+"""Smoke tests to verify strategies generate valid inputs.
+
+If SeedInfo or ContributionRewardConfig fields change, these tests
+will fail immediately rather than causing silent strategy breakage.
+"""
+
+import pytest
+from hypothesis import given, settings
+
+from esper.simic.rewards import compute_contribution_reward
+
+from tests.simic.strategies import (
+    reward_inputs,
+    reward_inputs_with_seed,
+    ransomware_seed_inputs,
+    fossilize_inputs,
+    cull_inputs,
+)
+
+
+class TestStrategiesGenerateValidInputs:
+    """Verify all strategies produce inputs that compute_contribution_reward accepts."""
+
+    @given(inputs=reward_inputs())
+    @settings(max_examples=50)
+    def test_reward_inputs_valid(self, inputs):
+        """reward_inputs() generates valid inputs."""
+        # Should not raise
+        compute_contribution_reward(**inputs)
+
+    @given(inputs=reward_inputs_with_seed())
+    @settings(max_examples=50)
+    def test_reward_inputs_with_seed_valid(self, inputs):
+        """reward_inputs_with_seed() generates valid inputs."""
+        compute_contribution_reward(**inputs)
+
+    @given(inputs=ransomware_seed_inputs())
+    @settings(max_examples=50)
+    def test_ransomware_inputs_valid(self, inputs):
+        """ransomware_seed_inputs() generates valid inputs."""
+        compute_contribution_reward(**inputs)
+
+    @given(inputs=fossilize_inputs(valid=True))
+    @settings(max_examples=50)
+    def test_fossilize_inputs_valid(self, inputs):
+        """fossilize_inputs() generates valid inputs."""
+        compute_contribution_reward(**inputs)
+
+    @given(inputs=cull_inputs(valid=True))
+    @settings(max_examples=50)
+    def test_cull_inputs_valid(self, inputs):
+        """cull_inputs() generates valid inputs."""
+        compute_contribution_reward(**inputs)
+```
+
+**Step 4: Verify strategies import**
 
 Run: `python -c "from tests.simic.strategies import seed_infos, reward_inputs; print('Strategies OK')"`
 Expected: `Strategies OK`
 
-**Step 4: Commit**
+**Step 5: Commit**
 
 ```bash
 git add tests/simic/strategies/
@@ -598,8 +658,8 @@ class TestCullBehavior:
         _, comp_wait = compute_contribution_reward(**wait_inputs, return_components=True)
 
         # Get attribution with CULL
-        cull_inputs = {**inputs, "action": LifecycleOp.CULL}
-        _, comp_cull = compute_contribution_reward(**cull_inputs, return_components=True)
+        cull_test_inputs = {**inputs, "action": LifecycleOp.CULL}
+        _, comp_cull = compute_contribution_reward(**cull_test_inputs, return_components=True)
 
         # If WAIT gave positive attribution, CULL should give negative (and vice versa)
         if abs(comp_wait.bounded_attribution) > 0.01:
@@ -986,10 +1046,18 @@ class TestPBRSTelescoping:
         T = cumulative_epochs
         expected = (gamma ** T) * phi_final - phi_initial
 
-        # Allow for floating point accumulation errors
-        # Note: Due to per-step gamma application, exact telescoping may not hold
-        # but the bounded difference is what matters for policy invariance
-        assert abs(total_pbrs) < 100, f"PBRS accumulated to unreasonable value: {total_pbrs}"
+        # Verify telescoping: total_pbrs should approximate expected
+        # Allow tolerance for floating point accumulation over many steps
+        # and the per-step gamma application pattern
+        tolerance = 0.5 + 0.1 * T  # Scale tolerance with trajectory length
+
+        assert abs(total_pbrs - expected) < tolerance, (
+            f"PBRS telescoping violated: sum={total_pbrs:.4f}, expected={expected:.4f}, "
+            f"diff={abs(total_pbrs - expected):.4f}, T={T}"
+        )
+
+        # Also verify boundedness as secondary check
+        assert abs(total_pbrs) < 50, f"PBRS accumulated to unreasonable value: {total_pbrs}"
 
 
 @pytest.mark.property
@@ -1354,6 +1422,8 @@ Expected: Shows `property: marks tests as property-based tests`
 # tests/simic/properties/conftest.py
 """Pytest configuration for property-based tests."""
 
+import os
+
 import pytest
 from hypothesis import settings, Verbosity
 
@@ -1374,7 +1444,8 @@ settings.register_profile(
 )
 
 # Load profile from env or default to dev
-settings.load_profile("dev")
+# Usage: HYPOTHESIS_PROFILE=ci pytest tests/simic/properties/
+settings.load_profile(os.getenv("HYPOTHESIS_PROFILE", "dev"))
 ```
 
 **Step 3: Commit**
@@ -1391,6 +1462,7 @@ git commit -m "feat(tests): add Hypothesis profiles for property tests"
 **Total files created:**
 - `tests/simic/strategies/__init__.py`
 - `tests/simic/strategies/reward_strategies.py`
+- `tests/simic/strategies/test_strategies.py` (smoke tests)
 - `tests/simic/properties/__init__.py`
 - `tests/simic/properties/test_reward_invariants.py`
 - `tests/simic/properties/test_reward_semantics.py`

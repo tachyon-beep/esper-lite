@@ -406,6 +406,33 @@ def compute_contribution_reward(
     # Without this check, fossilized seeds continue generating high rewards indefinitely
     seed_is_fossilized = seed_info is not None and seed_info.stage == STAGE_FOSSILIZED
 
+    # Pre-compute attribution_discount and ratio_penalty for ALL seeds (including fossilized)
+    # These are needed for telemetry and property tests even if we skip attribution rewards
+    attribution_discount = 1.0
+    ratio_penalty = 0.0
+    if seed_contribution is not None and seed_info is not None:
+        total_imp = seed_info.total_improvement
+
+        # Attribution discount applies to all seeds with negative total_improvement
+        if total_imp < 0:
+            attribution_discount = 1.0 / (1.0 + math.exp(-10 * total_imp))
+
+        # Ratio penalty only for high contribution (> 1.0) to avoid noise
+        # Only calculate when attribution_discount >= 0.5 (avoid penalty stacking)
+        if seed_contribution > 1.0 and attribution_discount >= 0.5:
+            if total_imp > 0.1:
+                # Safe zone: actual improvement exists
+                # Check if contribution vastly exceeds improvement (suspicious)
+                ratio = seed_contribution / total_imp
+                if ratio > 5.0:
+                    # Contribution > 5x improvement - possible dependency gaming
+                    # Escalating penalty: 0 at ratio 5, -0.1 at ratio 10, -0.3 at ratio 20+
+                    ratio_penalty = -min(0.3, 0.1 * (ratio - 5) / 5)
+            elif total_imp <= 0.1:
+                # Dangerous: high contribution but no real improvement
+                # Scale penalty by contribution magnitude (cap at 10%)
+                ratio_penalty = -0.3 * min(1.0, seed_contribution / 10.0)
+
     if seed_contribution is not None and not seed_is_fossilized:
         # Counterfactual available (BLENDING+ stages)
         if seed_contribution < 0:
@@ -431,54 +458,14 @@ def compute_contribution_reward(
                 # No baseline available - discount contribution
                 attributed = seed_contribution * 0.5
 
-            # === ATTRIBUTION DISCOUNT: Reduce rewards when total trajectory is negative ===
+            # Apply attribution discount (pre-computed above)
             # Prevents rewarding seeds that show good per-step counterfactual but
             # have negative total_improvement (the ransomware buildup pattern).
-            # Sigmoid smoothly transitions: ~0.5 at total_imp=0, →0 as total_imp→-∞
-            attribution_discount = 1.0
-            if seed_info is not None:
-                total_imp = seed_info.total_improvement
-                if total_imp < 0:
-                    # Discount factor: 1/(1 + e^(-10*x)) gives smooth 0→1 transition
-                    # Steepened from -5 to -10 per DRL Expert review (2025-12-10)
-                    # to reduce reward leakage for ransomware seeds
-                    # At total_imp=-0.2%, discount ≈ 0.12 (was 0.27 at -5)
-                    # At total_imp=-0.5%, discount ≈ 0.007 (was 0.076 at -5)
-                    # At total_imp=-1.0%, discount ≈ 0.00005 (essentially zero)
-                    attribution_discount = 1.0 / (1.0 + math.exp(-10 * total_imp))
-                    attributed *= attribution_discount
-            if components:
-                components.attribution_discount = attribution_discount
+            attributed *= attribution_discount
 
-            # === RANSOMWARE RATIO PENALTY ===
-            # High causal contribution with low/negative improvement = structural entanglement
-            # This directly penalizes the ransomware signature where seeds create
-            # dependencies that inflate their apparent value beyond actual contribution.
-            # DRL Expert review 2025-12-10: targets conv_heavy pattern specifically.
-            #
-            # IMPORTANT: Skip when attribution_discount < 0.5 to avoid penalty stacking.
-            # The attribution discount already zeros rewards for ransomware seeds;
-            # ratio_penalty is only for edge cases where discount alone is insufficient
-            # (e.g., high contribution with small positive improvement near threshold).
-            ratio_penalty = 0.0
-            if seed_contribution > 1.0 and attribution_discount >= 0.5:
-                total_imp = seed_info.total_improvement if seed_info else 0.0
-                if total_imp > 0.1:
-                    # Safe zone: actual improvement exists
-                    # Check if contribution vastly exceeds improvement (suspicious)
-                    ratio = seed_contribution / total_imp
-                    if ratio > 5.0:
-                        # Contribution > 5x improvement - possible dependency gaming
-                        # Escalating penalty: 0 at ratio 5, -0.1 at ratio 10, -0.3 at ratio 20+
-                        ratio_penalty = -min(0.3, 0.1 * (ratio - 5) / 5)
-                elif total_imp <= 0.1:
-                    # Dangerous: high contribution but no real improvement
-                    # Scale penalty by contribution magnitude (cap at 10%)
-                    ratio_penalty = -0.3 * min(1.0, seed_contribution / 10.0)
-                attributed += ratio_penalty / config.contribution_weight  # Apply before weight
-
-            if components:
-                components.ratio_penalty = ratio_penalty
+            # Apply ratio penalty (pre-computed above)
+            # High causal contribution with low improvement = structural entanglement
+            attributed += ratio_penalty / config.contribution_weight  # Apply before weight
 
             bounded_attribution = config.contribution_weight * attributed
     elif seed_info is not None and not seed_is_fossilized:
@@ -512,6 +499,8 @@ def compute_contribution_reward(
         components.seed_contribution = seed_contribution
         components.bounded_attribution = bounded_attribution
         components.progress_since_germination = progress
+        components.attribution_discount = attribution_discount
+        components.ratio_penalty = ratio_penalty
 
     # === 1b. BLENDING WARNING: Escalating penalty for negative trajectory ===
     # Provides early signal to CULL seeds that are hurting performance

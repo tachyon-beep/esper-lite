@@ -87,7 +87,11 @@ def main():
         default=None,
         help="DataLoader workers per environment (overrides task default)",
     )
-    ppo_parser.add_argument("--no-telemetry", action="store_true", help="Disable telemetry features (27-dim instead of 37-dim)")
+    ppo_parser.add_argument(
+        "--no-telemetry",
+        action="store_true",
+        help="Disable telemetry features (50-dim instead of 60-dim)",
+    )
     ppo_parser.add_argument("--gpu-preload", action="store_true",
         help="Preload dataset to GPU for 8x faster data loading (CIFAR-10 only, uses ~0.75GB VRAM)")
     ppo_parser.add_argument("--slots", nargs="+", default=["mid"],
