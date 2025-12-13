@@ -30,6 +30,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
+from enum import Enum
 from typing import NamedTuple
 
 _logger = logging.getLogger(__name__)
@@ -38,6 +39,18 @@ from esper.leyline import SeedStage, MIN_CULL_AGE, MIN_PROBATION_EPOCHS
 from esper.kasmina.slot import MIN_FOSSILIZE_CONTRIBUTION
 from esper.leyline.factored_actions import LifecycleOp
 from esper.simic.reward_telemetry import RewardComponentsTelemetry
+
+
+class RewardMode(Enum):
+    """Reward function variant for experimentation.
+
+    SHAPED: Current dense shaping with PBRS, attribution, warnings (default)
+    SPARSE: Terminal-only ground truth (accuracy - param_cost)
+    MINIMAL: Sparse + early-cull penalty only
+    """
+    SHAPED = "shaped"
+    SPARSE = "sparse"
+    MINIMAL = "minimal"
 
 
 # =============================================================================
