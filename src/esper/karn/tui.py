@@ -141,6 +141,12 @@ class TUIState:
     # Reward components
     reward_components: dict[str, float] = field(default_factory=dict)
 
+    # Event log for TUI display (P1 - TUI/Nissa integration)
+    event_log: deque[tuple[str, str, str]] = field(
+        default_factory=lambda: deque(maxlen=100)
+    )  # (timestamp, event_type, formatted_message)
+    event_log_min_severity: str = "info"
+
     # Seed states
     seeds: dict[str, SeedState] = field(default_factory=dict)
     active_seed_count: int = 0
