@@ -295,7 +295,7 @@ def train_ppo_vectorized(
         param_penalty_weight=param_penalty_weight,
         sparse_reward_scale=sparse_reward_scale,
     )
-    _logger.info(f"Reward mode: {reward_mode} (param_budget={param_budget}, penalty_weight={param_penalty_weight}, scale={sparse_reward_scale})")
+    print(f"Reward mode: {reward_mode} (param_budget={param_budget}, penalty_weight={param_penalty_weight}, scale={sparse_reward_scale})")
 
     # Map environments to devices in round-robin (needed for SharedBatchIterator)
     env_device_map = [devices[i % len(devices)] for i in range(n_envs)]
