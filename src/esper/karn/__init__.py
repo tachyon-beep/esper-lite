@@ -41,8 +41,8 @@ from esper.karn.store import (
     DenseTraceTrigger,
     BatchMetrics,
     GateEvaluationTrace,
-    SeedStage,
 )
+from esper.leyline import SeedStage  # Re-export authoritative definition
 
 # Collector (event handling)
 from esper.karn.collector import (

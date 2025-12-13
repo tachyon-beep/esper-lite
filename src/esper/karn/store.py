@@ -13,10 +13,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from enum import Enum, auto
 from pathlib import Path
 from typing import Any
 from collections import deque
+
+from esper.leyline import SeedStage
 
 
 def _utc_now() -> datetime:
@@ -81,25 +82,6 @@ class HostBaseline:
 # =============================================================================
 # Tier 2: Epoch Snapshots (Every Epoch)
 # =============================================================================
-
-
-class SeedStage(Enum):
-    """Seed lifecycle stages (mirrors leyline.SeedStage).
-
-    NOTE: Values must match leyline/stages.py exactly for correct deserialization.
-    """
-
-    UNKNOWN = 0
-    DORMANT = 1
-    GERMINATED = 2
-    TRAINING = 3       # Isolated training with gradient isolation
-    BLENDING = 4       # Alpha-managed grafting
-    # Value 5 intentionally skipped (was SHADOWING, removed)
-    PROBATIONARY = 6   # Final validation before fossilization
-    FOSSILIZED = 7     # Terminal success state
-    CULLED = 8         # Failure state
-    EMBARGOED = 9      # Post-cull cooldown
-    RESETTING = 10     # Cleanup before reuse
 
 
 @dataclass
