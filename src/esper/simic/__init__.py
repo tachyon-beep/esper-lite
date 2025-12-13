@@ -64,7 +64,6 @@ from esper.simic.features import (
 from esper.simic.networks import (
     PolicyNetwork,
     print_confusion_matrix,
-    ActorCritic,
     QNetwork,
     VNetwork,
 )
@@ -149,7 +148,6 @@ __all__ = [
     # Networks
     "PolicyNetwork",
     "print_confusion_matrix",
-    "ActorCritic",
     "QNetwork",
     "VNetwork",
 
