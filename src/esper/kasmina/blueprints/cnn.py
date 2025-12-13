@@ -9,6 +9,13 @@ import torch.nn.functional as F
 from .registry import BlueprintRegistry
 
 
+# GroupNorm heuristic: target 16 channels per group for statistical stability.
+# This follows the GroupNorm paper (Wu & He, 2018) recommendation that each
+# group should have enough channels for reliable batch statistics.
+# Falls back to fewer channels per group if needed for divisibility.
+TARGET_CHANNELS_PER_GROUP: int = 16
+
+
 @BlueprintRegistry.register("noop", "cnn", param_estimate=0, description="Identity seed - placeholder before bursting")
 def create_noop_seed(channels: int) -> nn.Module:
     """Identity seed - no-op placeholder."""
@@ -24,7 +31,7 @@ def create_noop_seed(channels: int) -> nn.Module:
     return NoopSeed(channels)
 
 
-def get_num_groups(channels: int, target_group_size: int = 16) -> int:
+def get_num_groups(channels: int, target_group_size: int = TARGET_CHANNELS_PER_GROUP) -> int:
     """Select optimal num_groups for GroupNorm.
 
     Prefers 32 groups, falls back to smaller counts if channels isn't divisible.

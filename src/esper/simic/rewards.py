@@ -13,9 +13,10 @@ The reward design follows these principles:
 
 Usage:
     from esper.simic.rewards import compute_contribution_reward, ContributionRewardConfig
+    from esper.leyline.factored_actions import LifecycleOp
 
     reward = compute_contribution_reward(
-        action=ActionEnum.GERMINATE_CONV,
+        action=LifecycleOp.GERMINATE,
         seed_contribution=0.05,
         val_acc=65.0,
         seed_info=SeedInfo(...),
@@ -29,7 +30,6 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from enum import IntEnum
 from typing import NamedTuple
 
 _logger = logging.getLogger(__name__)
@@ -38,18 +38,6 @@ from esper.leyline import SeedStage, MIN_CULL_AGE, MIN_PROBATION_EPOCHS
 from esper.kasmina.slot import MIN_FOSSILIZE_CONTRIBUTION
 from esper.leyline.factored_actions import LifecycleOp
 from esper.simic.reward_telemetry import RewardComponentsTelemetry
-
-
-def _is_germinate_action(action) -> bool:
-    """Check if action is a germinate action.
-
-    Handles both LifecycleOp (factored) and flat action enums (heuristic baseline).
-    """
-    # Factored action: LifecycleOp.GERMINATE
-    if isinstance(action, LifecycleOp):
-        return action == LifecycleOp.GERMINATE
-    # Flat action: action.name starts with "GERMINATE_"
-    return action.name.startswith("GERMINATE_")
 
 
 # =============================================================================
@@ -76,8 +64,7 @@ def _is_germinate_action(action) -> bool:
 # - TRAINING (2.0): +1.0 for successful G1 gate passage
 # - BLENDING (3.5): +1.5 (LARGEST delta) - critical integration phase
 #   This is where value is actually created; alpha ramp merges seed contribution
-# - (5 was SHADOWING, now unused - kept for serialization)
-# - PROBATIONARY (5.5): +1.0 for stability validation
+# - PROBATIONARY (5.5): +2.0 for stability validation (value 5 skipped)
 # - FOSSILIZED (6.0): +0.5 (SMALLEST delta) - terminal bonus
 #   Small to prevent "fossilization farming" (rushing to completion)
 #
@@ -105,7 +92,7 @@ STAGE_POTENTIALS = {
     2: 1.0,   # GERMINATED
     3: 2.0,   # TRAINING
     4: 3.5,   # BLENDING (largest increment - this is where value is created)
-    5: 4.5,   # (was SHADOWING - kept for serialization, unused in new lifecycle)
+    # Value 5 intentionally skipped (was SHADOWING, removed)
     6: 5.5,   # PROBATIONARY
     7: 6.0,   # FOSSILIZED (smallest increment - not a farming target)
 }
@@ -260,7 +247,7 @@ class SeedInfo(NamedTuple):
     Designed to avoid importing heavy classes in the hot path.
     Stage values match SeedStage IntEnum:
         0=UNKNOWN, 1=DORMANT, 2=GERMINATED, 3=TRAINING,
-        4=BLENDING, 5=(deprecated SHADOWING), 6=PROBATIONARY, 7=FOSSILIZED, etc.
+        4=BLENDING, 6=PROBATIONARY, 7=FOSSILIZED, etc. (5 skipped)
     """
 
     stage: int  # SeedStage.value
@@ -328,7 +315,7 @@ _DEFAULT_CONTRIBUTION_CONFIG = ContributionRewardConfig()
 
 
 def compute_contribution_reward(
-    action: IntEnum,
+    action: LifecycleOp,
     seed_contribution: float | None,
     val_acc: float,
     seed_info: SeedInfo | None,
@@ -362,7 +349,7 @@ def compute_contribution_reward(
     - If seed_contribution is None: Use acc_delta as proxy (pre-blending)
 
     Args:
-        action: Action taken (IntEnum member)
+        action: Action taken (LifecycleOp enum member)
         seed_contribution: Counterfactual delta (real_acc - baseline_acc).
                           None if alpha=0 or no seed (pre-blending stages).
         val_acc: Current validation accuracy
@@ -481,8 +468,7 @@ def compute_contribution_reward(
     # The fossilize shaping penalty handles the negative signal - we shouldn't
     # ALSO give attribution credit for counterfactual "contribution" that
     # represents entanglement rather than value creation.
-    action_name = action.name
-    if action_name == "FOSSILIZE" and seed_info is not None:
+    if action == LifecycleOp.FOSSILIZE and seed_info is not None:
         if seed_info.total_improvement < 0:
             bounded_attribution = 0.0
 
@@ -490,7 +476,7 @@ def compute_contribution_reward(
     # - Culling a GOOD seed (positive contribution) = BAD decision → negative reward
     # - Culling a BAD seed (negative contribution) = GOOD decision → positive reward
     # Without this, the policy learns "CULL everything for +attribution rewards"
-    if action_name == "CULL":
+    if action == LifecycleOp.CULL:
         bounded_attribution = -bounded_attribution
 
     reward += bounded_attribution
@@ -530,7 +516,7 @@ def compute_contribution_reward(
     # unlearnable reward landscape where every action is punished.
     probation_warning = 0.0
     if seed_info is not None and seed_info.stage == STAGE_PROBATIONARY:
-        if action_name == "WAIT":
+        if action == LifecycleOp.WAIT:
             # Only penalize when:
             # 1. Counterfactual data is available (agent has info to act)
             # 2. Attribution is positive (legitimate seed being farmed)
@@ -577,9 +563,8 @@ def compute_contribution_reward(
     # === 4. ACTION SHAPING ===
     # Minimal - just state machine enforcement and intervention costs
     action_shaping = 0.0
-    # action_name already computed above for FOSSILIZE attribution override
 
-    if _is_germinate_action(action):
+    if action == LifecycleOp.GERMINATE:
         if seed_info is not None:
             action_shaping += config.germinate_with_seed_penalty
         else:
@@ -591,11 +576,11 @@ def compute_contribution_reward(
             action_shaping += config.pbrs_weight * pbrs_germinate
         action_shaping += config.germinate_cost
 
-    elif action_name == "FOSSILIZE":
+    elif action == LifecycleOp.FOSSILIZE:
         action_shaping += _contribution_fossilize_shaping(seed_info, seed_contribution, config)
         action_shaping += config.fossilize_cost
 
-    elif action_name == "CULL":
+    elif action == LifecycleOp.CULL:
         action_shaping += _contribution_cull_shaping(seed_info, seed_contribution, config)
         action_shaping += config.cull_cost
 
@@ -926,24 +911,21 @@ def compute_loss_reward(
 # Intervention Costs
 # =============================================================================
 
-GERMINATE_INTERVENTION_COST = -0.02
-
-INTERVENTION_COSTS_BY_NAME = {
-    "WAIT": 0.0,
-    "FOSSILIZE": -0.01,
-    "CULL": -0.005,
+INTERVENTION_COSTS: dict[LifecycleOp, float] = {
+    LifecycleOp.WAIT: 0.0,
+    LifecycleOp.GERMINATE: -0.02,
+    LifecycleOp.FOSSILIZE: -0.01,
+    LifecycleOp.CULL: -0.005,
 }
 
 
-def get_intervention_cost(action: IntEnum) -> float:
+def get_intervention_cost(action: LifecycleOp) -> float:
     """Get intervention cost for an action.
 
     Small negative costs discourage unnecessary interventions,
     encouraging the agent to only act when beneficial.
     """
-    if _is_germinate_action(action):
-        return GERMINATE_INTERVENTION_COST
-    return INTERVENTION_COSTS_BY_NAME.get(action.name, 0.0)
+    return INTERVENTION_COSTS.get(action, 0.0)
 
 
 # =============================================================================
@@ -966,7 +948,7 @@ __all__ = [
     "compute_seed_potential",
     # Intervention costs
     "get_intervention_cost",
-    "INTERVENTION_COSTS_BY_NAME",
+    "INTERVENTION_COSTS",
     # Stage constants and PBRS configuration
     "DEFAULT_GAMMA",
     "STAGE_POTENTIALS",

@@ -11,38 +11,13 @@ import torch
 import torch.nn as nn
 
 
+# Numerical stability constant for gradient ratio computation
+GRAD_RATIO_EPSILON: float = 1e-8
+
+
 # =============================================================================
 # Alpha Blending
 # =============================================================================
-
-class AlphaSchedule:
-    """Sigmoid-based alpha schedule for smooth blending."""
-
-    def __init__(
-        self,
-        total_steps: int,
-        start: float = 0.0,
-        end: float = 1.0,
-        temperature: float = 1.0,
-    ):
-        self.total_steps = max(1, total_steps)
-        self.start = start
-        self.end = end
-        self.temperature = max(temperature, 1e-6)
-
-    def __call__(self, step: int) -> float:
-        """Get alpha value at given step."""
-        if step <= 0:
-            return self.start
-        if step >= self.total_steps:
-            return self.end
-
-        midpoint = self.total_steps / 2
-        scaled = (step - midpoint) / self.temperature
-        sigmoid = 0.5 * (1.0 + math.tanh(scaled * 0.5))
-
-        return self.start + (self.end - self.start) * sigmoid
-
 
 def blend_with_isolation(
     host_features: torch.Tensor,
@@ -77,8 +52,12 @@ def blend_with_isolation(
     should always allow gradients to both direct inputs.
     """
     # torch.lerp is a fused operation: lerp(a, b, w) = a + w * (b - a)
-    # Clamp alpha to [0, 1] for safety
-    return torch.lerp(host_features, seed_features, max(0.0, min(1.0, alpha)))
+    # Clamp alpha to [0, 1] for safety - works for both scalar and tensor alpha
+    if isinstance(alpha, torch.Tensor):
+        alpha = torch.clamp(alpha, 0.0, 1.0)
+    else:
+        alpha = max(0.0, min(1.0, alpha))
+    return torch.lerp(host_features, seed_features, alpha)
 
 
 def ste_forward(host_features: torch.Tensor, seed_features: torch.Tensor) -> torch.Tensor:
@@ -142,6 +121,8 @@ class GradientIsolationMonitor:
 
         if host_grads:
             # torch._foreach_norm returns list of norms per tensor
+            # NOTE: torch._foreach_norm is a private API but stable since PyTorch 1.9.
+            # If removed in future PyTorch, fallback: torch.stack([p.norm() for p in grads])
             norms = torch._foreach_norm(host_grads)
             # Sum of squared norms for total norm via Pythagorean theorem
             result['_host_norm_sq'] = torch.stack(norms).pow(2).sum()
@@ -194,7 +175,7 @@ class GradientIsolationMonitor:
             self.violations += 1
 
         # Compute gradient ratio: seed_norm / (host_norm + eps)
-        ratio = seed_norm / (host_norm + 1e-8) if host_norm > 0 else 0.0
+        ratio = seed_norm / (host_norm + GRAD_RATIO_EPSILON) if host_norm > 0 else 0.0
 
         return is_isolated, {
             "host_grad_norm": host_norm,
@@ -214,7 +195,6 @@ class GradientIsolationMonitor:
 
 
 __all__ = [
-    "AlphaSchedule",
     "blend_with_isolation",
     "ste_forward",
     "GradientIsolationMonitor",

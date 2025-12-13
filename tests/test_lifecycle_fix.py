@@ -171,7 +171,6 @@ class TestStrategicFossilizeOnly:
         model.germinate_seed("conv_heavy", "test_seed", slot="mid")
         model.seed_slots["mid"].state.transition(SeedStage.TRAINING)
         model.seed_slots["mid"].state.transition(SeedStage.BLENDING)
-        model.seed_slots["mid"].state.transition(SeedStage.SHADOWING)
         model.seed_slots["mid"].state.transition(SeedStage.PROBATIONARY)
 
         # FOSSILIZE from PROBATIONARY should work

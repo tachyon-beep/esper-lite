@@ -25,8 +25,8 @@ class TestSeedStage:
 
     def test_all_stages_have_transitions(self):
         """Every stage should have an entry in VALID_TRANSITIONS."""
-        # Exclude deprecated/removed stages
-        excluded_stages = {SeedStage.DORMANT, SeedStage.CULLED, SeedStage.FOSSILIZED, SeedStage.SHADOWING}
+        # Exclude terminal/special stages that have no outgoing transitions
+        excluded_stages = {SeedStage.DORMANT, SeedStage.CULLED, SeedStage.FOSSILIZED}
         for stage in SeedStage:
             if stage not in excluded_stages:
                 assert stage in VALID_TRANSITIONS, f"{stage} missing from VALID_TRANSITIONS"

@@ -14,7 +14,7 @@ def test_blueprint_action_enum():
     from esper.leyline.factored_actions import BlueprintAction
 
     assert BlueprintAction.NOOP.value == 0
-    assert BlueprintAction.CONV_ENHANCE.value == 1
+    assert BlueprintAction.CONV_LIGHT.value == 1
     assert len(BlueprintAction) >= 5  # noop + 4 blueprints
 
 
@@ -46,15 +46,15 @@ def test_factored_action_composition():
 
     action = FactoredAction(
         slot=SlotAction.MID,
-        blueprint=BlueprintAction.CONV_ENHANCE,
+        blueprint=BlueprintAction.CONV_LIGHT,
         blend=BlendAction.LINEAR,
         op=LifecycleOp.GERMINATE,
     )
 
     assert action.slot == SlotAction.MID
-    assert action.blueprint == BlueprintAction.CONV_ENHANCE
+    assert action.blueprint == BlueprintAction.CONV_LIGHT
     assert action.is_germinate
-    # CONV_ENHANCE maps to "conv_light" (the registered blueprint name)
+    # CONV_LIGHT maps to "conv_light" (the registered blueprint name)
     assert action.blueprint_id == "conv_light"
 
 
@@ -65,10 +65,10 @@ def test_factored_action_execution_properties():
     )
 
     # GERMINATE action has all info for execution
-    germ = FactoredAction(SlotAction.EARLY, BlueprintAction.CONV_ENHANCE, BlendAction.SIGMOID, LifecycleOp.GERMINATE)
+    germ = FactoredAction(SlotAction.EARLY, BlueprintAction.CONV_LIGHT, BlendAction.SIGMOID, LifecycleOp.GERMINATE)
     assert germ.is_germinate
     assert germ.slot_id == "early"
-    assert germ.blueprint_id == "conv_light"  # CONV_ENHANCE maps to registered name
+    assert germ.blueprint_id == "conv_light"  # CONV_LIGHT maps to registered name
     assert germ.blend_algorithm_id == "sigmoid"
 
     # CULL action

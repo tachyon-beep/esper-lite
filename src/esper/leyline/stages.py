@@ -45,7 +45,7 @@ class SeedStage(IntEnum):
     GERMINATED = 2
     TRAINING = 3
     BLENDING = 4
-    SHADOWING = 5       # DEPRECATED: No longer used in lifecycle (kept for serialization compat)
+    # Value 5 intentionally skipped (was SHADOWING, removed)
     PROBATIONARY = 6
     FOSSILIZED = 7      # Terminal state (success)
     CULLED = 8          # Failure state

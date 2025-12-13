@@ -19,6 +19,13 @@ from typing import Any
 from uuid import uuid4
 
 
+# Feature normalization constants for RL observation space
+# These define the expected ranges for seed telemetry values
+_GRADIENT_NORM_MAX: float = 10.0  # 99th percentile typical gradient norm
+_EPOCHS_IN_STAGE_MAX: int = 50  # Typical max epochs in single stage
+_ACCURACY_DELTA_SCALE: float = 10.0  # Scale factor for accuracy deltas
+
+
 def _utc_now() -> datetime:
     """Return current UTC time (timezone-aware)."""
     return datetime.now(timezone.utc)
@@ -154,15 +161,16 @@ class SeedTelemetry:
         """Convert to 10-dim feature vector for RL policies.
 
         All features normalized to approximately [0, 1] range.
+        Uses module constants for normalization bounds.
         """
         return [
-            min(self.gradient_norm, 10.0) / 10.0,
+            min(self.gradient_norm, _GRADIENT_NORM_MAX) / _GRADIENT_NORM_MAX,
             self.gradient_health,
             float(self.has_vanishing),
             float(self.has_exploding),
-            min(self.epochs_in_stage, 50) / 50.0,
+            min(self.epochs_in_stage, _EPOCHS_IN_STAGE_MAX) / _EPOCHS_IN_STAGE_MAX,
             self.accuracy / 100.0,
-            max(-1.0, min(1.0, self.accuracy_delta / 10.0)),
+            max(-1.0, min(1.0, self.accuracy_delta / _ACCURACY_DELTA_SCALE)),
             min((self.stage - 1) / 6.0, 1.0),  # stages 1-7 -> [0, 1], clamp overflow
             self.alpha,
             self.epoch / max(self.max_epochs, 1),  # temporal position

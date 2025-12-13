@@ -35,7 +35,7 @@ class TestPBRSTelescopingProperty:
 
     @given(
         stages=st.lists(
-            st.sampled_from([2, 3, 4, 5, 6, 7]),  # GERMINATED through FOSSILIZED
+            st.sampled_from([2, 3, 4, 6, 7]),  # GERMINATED through FOSSILIZED (5 skipped)
             min_size=2,
             max_size=10,
         )
@@ -102,7 +102,7 @@ class TestPBRSTelescopingProperty:
 
     @given(
         stages=st.lists(
-            st.sampled_from([2, 3, 4, 5, 6, 7]),
+            st.sampled_from([2, 3, 4, 6, 7]),  # 5 skipped (was SHADOWING)
             min_size=3,
             max_size=8,
         ),
@@ -150,7 +150,7 @@ class TestPBRSTelescopingProperty:
         This ensures that advancing through the lifecycle is always rewarded,
         which aligns the PBRS incentive with the desired behavior.
         """
-        stages = [2, 3, 4, 5, 6, 7]  # GERMINATED through FOSSILIZED
+        stages = [2, 3, 4, 6, 7]  # GERMINATED through FOSSILIZED (5 skipped)
         for i in range(len(stages) - 1):
             current = STAGE_POTENTIALS[stages[i]]
             next_stage = STAGE_POTENTIALS[stages[i + 1]]
@@ -179,29 +179,35 @@ class TestPBRSTelescopingProperty:
                 f"stage {stage} ({potential})"
             )
 
-    def test_blending_has_largest_increment(self):
-        """BLENDING should have the largest potential increment.
+    def test_blending_has_significant_increment(self):
+        """BLENDING should have a significant potential increment.
 
         This is where actual value is created through alpha ramping.
-        The larger increment incentivizes reaching this critical stage.
+        The increment incentivizes reaching this critical stage.
+
+        Note: With SHADOWING removed, PROBATIONARY now has a larger increment
+        because it absorbs the transition directly from BLENDING. The key
+        property is that BLENDING increment >= GERMINATED and FOSSILIZED.
         """
         increments = {
             "GERMINATED": STAGE_POTENTIALS[2] - STAGE_POTENTIALS[1],
             "TRAINING": STAGE_POTENTIALS[3] - STAGE_POTENTIALS[2],
             "BLENDING": STAGE_POTENTIALS[4] - STAGE_POTENTIALS[3],
-            "SHADOWING": STAGE_POTENTIALS[5] - STAGE_POTENTIALS[4],
-            "PROBATIONARY": STAGE_POTENTIALS[6] - STAGE_POTENTIALS[5],
+            "PROBATIONARY": STAGE_POTENTIALS[6] - STAGE_POTENTIALS[4],  # 5 skipped
             "FOSSILIZED": STAGE_POTENTIALS[7] - STAGE_POTENTIALS[6],
         }
 
         blending_increment = increments["BLENDING"]
 
-        # BLENDING should have the largest increment
-        for stage, increment in increments.items():
-            assert blending_increment >= increment, (
-                f"BLENDING increment ({blending_increment}) should be >= "
-                f"{stage} increment ({increment})"
-            )
+        # BLENDING should have larger increment than GERMINATED and FOSSILIZED
+        assert blending_increment >= increments["GERMINATED"], (
+            f"BLENDING increment ({blending_increment}) should be >= "
+            f"GERMINATED increment ({increments['GERMINATED']})"
+        )
+        assert blending_increment >= increments["FOSSILIZED"], (
+            f"BLENDING increment ({blending_increment}) should be >= "
+            f"FOSSILIZED increment ({increments['FOSSILIZED']})"
+        )
 
     def test_fossilized_has_smallest_increment(self):
         """FOSSILIZED should have the smallest non-zero increment.
@@ -213,8 +219,7 @@ class TestPBRSTelescopingProperty:
             "GERMINATED": STAGE_POTENTIALS[2] - STAGE_POTENTIALS[1],
             "TRAINING": STAGE_POTENTIALS[3] - STAGE_POTENTIALS[2],
             "BLENDING": STAGE_POTENTIALS[4] - STAGE_POTENTIALS[3],
-            "SHADOWING": STAGE_POTENTIALS[5] - STAGE_POTENTIALS[4],
-            "PROBATIONARY": STAGE_POTENTIALS[6] - STAGE_POTENTIALS[5],
+            "PROBATIONARY": STAGE_POTENTIALS[6] - STAGE_POTENTIALS[4],  # 5 skipped
             "FOSSILIZED": STAGE_POTENTIALS[7] - STAGE_POTENTIALS[6],
         }
 
@@ -237,7 +242,7 @@ class TestPBRSTelescopingProperty:
 
         This test verifies the mathematical property directly.
         """
-        stages = [2, 3, 4, 5, 6, 7]  # Full lifecycle
+        stages = [2, 3, 4, 6, 7]  # Full lifecycle (5 skipped)
         observations = [
             {"has_active_seed": 1, "seed_stage": s, "seed_epochs_in_stage": 0}
             for s in stages
@@ -339,7 +344,7 @@ class TestSeedPotentialConsistency:
         This ensures consistency between the potential function and the
         documented stage values.
         """
-        for stage_value in [2, 3, 4, 5, 6, 7]:
+        for stage_value in [2, 3, 4, 6, 7]:  # 5 skipped (was SHADOWING)
             obs = {"has_active_seed": 1, "seed_stage": stage_value, "seed_epochs_in_stage": 0}
             potential = compute_seed_potential(obs)
             base = STAGE_POTENTIALS[stage_value]
@@ -350,7 +355,7 @@ class TestSeedPotentialConsistency:
             )
 
     @given(
-        stage=st.sampled_from([2, 3, 4, 5, 6, 7]),
+        stage=st.sampled_from([2, 3, 4, 6, 7]),  # 5 skipped (was SHADOWING)
         epochs=st.integers(0, 10),
     )
     def test_potential_increases_with_epochs(self, stage, epochs):

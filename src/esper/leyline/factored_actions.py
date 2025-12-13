@@ -26,19 +26,16 @@ class SlotAction(IntEnum):
 class BlueprintAction(IntEnum):
     """Blueprint selection for germination."""
     NOOP = 0
-    CONV_ENHANCE = 1
+    CONV_LIGHT = 1  # Matches registry name "conv_light"
     ATTENTION = 2
     NORM = 3
     DEPTHWISE = 4
 
     def to_blueprint_id(self) -> str | None:
-        """Map to registered blueprint name.
-
-        CONV_ENHANCE maps to "conv_light" (the registered blueprint).
-        """
+        """Map to registered blueprint name."""
         mapping = {
             0: "noop",
-            1: "conv_light",  # CONV_ENHANCE → conv_light (registered name)
+            1: "conv_light",
             2: "attention",
             3: "norm",
             4: "depthwise",

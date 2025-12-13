@@ -190,22 +190,21 @@ def _convert_flat_to_factored(action, topology: str = "cnn") -> FactoredAction:
 
     Maps flat action names to factored action components.
     """
-    from esper.leyline.factored_actions import (
-        LifecycleOp,
-        BLUEPRINT_IDS,
-        BLEND_IDS,
-        SLOT_IDS,
-    )
+    from esper.leyline.factored_actions import BlueprintAction
 
     action_name = action.name
 
     if action_name.startswith("GERMINATE_"):
-        # Extract blueprint from action name like "GERMINATE_BOTTLENECK"
-        blueprint_name = action_name.replace("GERMINATE_", "").lower()
-        blueprint_idx = BLUEPRINT_IDS.index(blueprint_name) if blueprint_name in BLUEPRINT_IDS else 0
+        # Extract blueprint from action name like "GERMINATE_CONV_LIGHT"
+        blueprint_name_upper = action_name.replace("GERMINATE_", "")
+        # Look up BlueprintAction by name, default to NOOP for unknown blueprints
+        try:
+            blueprint = BlueprintAction[blueprint_name_upper]
+        except KeyError:
+            blueprint = BlueprintAction.NOOP
         return FactoredAction.from_indices(
             slot_idx=0,  # Default to first slot
-            blueprint_idx=blueprint_idx,
+            blueprint_idx=blueprint.value,
             blend_idx=0,  # Default blend
             op_idx=LifecycleOp.GERMINATE,
         )

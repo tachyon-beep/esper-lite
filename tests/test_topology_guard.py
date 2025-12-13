@@ -16,7 +16,7 @@ def test_germinate_wrong_topology_raises():
         task_config=config,
     )
 
-    with pytest.raises(AssertionError, match="topology"):
+    with pytest.raises(ValueError, match="not available for topology"):
         slot.germinate("lora", "bad-seed")
 
 
@@ -57,5 +57,5 @@ def test_germinate_unknown_topology_fails_loudly():
         task_config=config,
     )
 
-    with pytest.raises(AssertionError, match="Unknown topology"):
+    with pytest.raises(ValueError, match="Unknown topology"):
         slot.germinate("norm", "weird-seed")

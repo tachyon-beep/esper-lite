@@ -160,7 +160,7 @@ def test_compute_action_masks_blueprint_blend_masks():
 
     # NOOP is masked (0 trainable parameters), others are valid
     assert masks["blueprint"][BlueprintAction.NOOP] == False
-    assert masks["blueprint"][BlueprintAction.CONV_ENHANCE] == True
+    assert masks["blueprint"][BlueprintAction.CONV_LIGHT] == True
     assert masks["blueprint"][BlueprintAction.ATTENTION] == True
     assert masks["blueprint"][BlueprintAction.NORM] == True
     assert masks["blueprint"][BlueprintAction.DEPTHWISE] == True

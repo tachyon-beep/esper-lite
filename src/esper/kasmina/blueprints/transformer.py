@@ -129,6 +129,14 @@ if _HAS_FLEX_ATTENTION:
         """
 
         class FlexAttentionSeed(nn.Module):
+            """Flexible attention with block-sparse patterns.
+
+            Warning:
+                The block_mask cache uses OrderedDict operations that cause graph breaks
+                under torch.compile. Consider pre-computing masks or using
+                mode="reduce-overhead" if compilation is critical.
+            """
+
             _MAX_CACHE_SIZE = 8  # LRU-style bound on cached masks
 
             def __init__(self, dim: int, n_head: int):
@@ -192,6 +200,15 @@ if _HAS_FLEX_ATTENTION:
                 return x + self.proj(out)
 
         return FlexAttentionSeed(dim, n_head)
+
+
+@BlueprintRegistry.register("noop", "transformer", param_estimate=0, description="Identity seed")
+def create_transformer_noop_seed(dim: int) -> nn.Module:
+    """No-op blueprint for transformer (identity function).
+
+    Used when the agent selects NOOP blueprint for a transformer host.
+    """
+    return nn.Identity()
 
 
 __all__ = []

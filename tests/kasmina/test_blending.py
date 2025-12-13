@@ -38,9 +38,9 @@ def test_gated_blend_schedule():
     # Should have learnable parameters
     assert sum(p.numel() for p in blend.parameters()) > 0
 
-    # Should produce valid alpha tensor
+    # Should produce valid alpha tensor via unified interface
     x = torch.randn(2, 64, 8, 8)
-    alpha = blend.get_alpha_tensor(x)
+    alpha = blend.get_alpha_for_blend(x)
     assert alpha.shape == (2, 1, 1, 1)  # (batch, 1, 1, 1) for broadcasting
     assert (alpha >= 0).all() and (alpha <= 1).all()
 

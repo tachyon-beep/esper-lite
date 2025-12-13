@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Callable
 
 import torch.nn as nn
+
+_logger = logging.getLogger(__name__)
 
 
 def _invalidate_action_cache(topology: str | None = None) -> None:
@@ -19,6 +22,7 @@ def _invalidate_action_cache(topology: str | None = None) -> None:
     try:
         from esper.leyline import actions as leyline_actions
     except ImportError:
+        _logger.debug("Cache invalidation skipped: leyline.actions not yet imported")
         return
 
     try:
@@ -27,7 +31,8 @@ def _invalidate_action_cache(topology: str | None = None) -> None:
         else:
             leyline_actions._action_enum_cache.pop(topology, None)
     except AttributeError:
-        pass  # Cache doesn't exist yet
+        _logger.debug("Cache invalidation skipped: cache not initialized")
+        pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,10 +105,15 @@ class BlueprintRegistry:
         """Create a module from a registered blueprint.
 
         Args:
-            topology: The topology type (e.g., "transformer", "cnn")
-            name: The blueprint name (e.g., "mlp", "attention")
-            dim: The dimension parameter
-            **kwargs: Additional keyword arguments passed to the factory function
+            topology: The topology type ("cnn" or "transformer")
+            name: The blueprint name (e.g., "norm", "lora", "attention")
+            dim: Channel dimension (CNN) or embed dimension (transformer)
+            **kwargs: Blueprint-specific options:
+                - lora: rank (int, default 8)
+                - attention: num_heads (int, auto-calculated if omitted)
+
+        Returns:
+            Instantiated nn.Module ready for seed injection.
         """
         spec = cls.get(topology, name)
         return spec.factory(dim, **kwargs)

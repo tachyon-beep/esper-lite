@@ -12,7 +12,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from esper.leyline import SeedStage
+from esper.leyline import SeedStage, is_terminal_stage
 from esper.kasmina.slot import SeedSlot
 from esper.kasmina.blueprints.cnn import ConvBlock  # Reuse shared building block
 
@@ -108,6 +108,13 @@ class CNNHost(nn.Module):
         if slot_id not in self.slots:
             raise ValueError(f"Unknown injection point: {slot_id}")
         self.slots[slot_id] = nn.Identity()
+
+    # NOTE: forward_to_segment() is intentionally duplicated between CNNHost
+    # and TransformerHost. While the structure is similar, the details differ:
+    # - CNN: handles pool_layers, uses spatial features (B, C, H, W)
+    # - Transformer: handles sequence features (B, T, n_embd), no pooling
+    # Extracting to shared base would require topology-specific conditionals,
+    # reducing clarity. Duplication is acceptable given distinct semantics.
 
     def forward_to_segment(
         self,
@@ -359,6 +366,13 @@ class TransformerHost(nn.Module):
             raise ValueError(f"Unknown injection point: {slot_id}")
         self.slots[slot_id] = nn.Identity()
 
+    # NOTE: forward_to_segment() is intentionally duplicated between CNNHost
+    # and TransformerHost. While the structure is similar, the details differ:
+    # - CNN: handles pool_layers, uses spatial features (B, C, H, W)
+    # - Transformer: handles sequence features (B, T, n_embd), no pooling
+    # Extracting to shared base would require topology-specific conditionals,
+    # reducing clarity. Duplication is acceptable given distinct semantics.
+
     def forward_to_segment(
         self,
         segment: str,
@@ -537,8 +551,16 @@ class MorphogeneticModel(nn.Module):
         seed_id: str,
         *,
         slot: str,
+        blend_algorithm_id: str = "sigmoid",
     ) -> None:
-        """Germinate a new seed in a specific slot."""
+        """Germinate a new seed in a specific slot.
+
+        Args:
+            blueprint_id: Blueprint to instantiate (e.g., "norm", "attention")
+            seed_id: Unique identifier for the seed
+            slot: Target slot ("early", "mid", "late")
+            blend_algorithm_id: Blending algorithm ("linear", "sigmoid", "gated")
+        """
         if slot not in self.seed_slots:
             raise ValueError(f"Unknown slot: {slot}. Available: {list(self.seed_slots.keys())}")
 
@@ -546,6 +568,7 @@ class MorphogeneticModel(nn.Module):
             blueprint_id=blueprint_id,
             seed_id=seed_id,
             host_module=self.host,
+            blend_algorithm_id=blend_algorithm_id,
         )
 
     def cull_seed(self, *, slot: str) -> None:
@@ -599,8 +622,15 @@ class MorphogeneticModel(nn.Module):
         return host_params + self.active_seed_params
 
     def count_active_seeds(self) -> int:
-        """Count seeds currently active (not fossilized)."""
-        return sum(1 for s in self.seed_slots.values() if s.is_active)
+        """Count seeds currently active (not fossilized or terminal).
+
+        Uses is_terminal_stage to exclude FOSSILIZED and failure stages,
+        preventing double-counting in total_seeds().
+        """
+        return sum(
+            1 for s in self.seed_slots.values()
+            if s.is_active and s.state and not is_terminal_stage(s.state.stage)
+        )
 
     def count_fossilized_seeds(self) -> int:
         """Count fossilized seeds across all slots."""

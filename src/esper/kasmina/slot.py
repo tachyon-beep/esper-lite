@@ -44,6 +44,11 @@ GRADIENT_EMA_DECAY: float = 0.9
 # small seed or numerical anomaly.
 MAX_GRADIENT_RATIO: float = 10.0
 
+# Probation stage constants
+PROBATION_HISTORY_MAXLEN: int = 100  # Rolling window for stage history
+MIN_PROBATION_STABILITY: float = 0.95  # Threshold for fossilization stability
+MAX_PROBATION_EPOCHS: int = 5  # Timeout before auto-cull (or 10% of max_epochs)
+
 import torch
 import torch.nn as nn
 
@@ -111,6 +116,9 @@ class SeedMetrics:
     # This is the TRUE causal attribution: real_acc - baseline_acc(alpha=0)
     counterfactual_contribution: float | None = None
 
+    # Flag to distinguish "never reached blending" from "started blending at 0% accuracy"
+    _blending_started: bool = False
+
     # Gradient-based seed activity metric (parameter-normalized)
     # Formula: (seed_norm / host_norm) * sqrt(host_params / seed_params)
     # This measures per-parameter gradient intensity, scale-invariant across architectures
@@ -156,7 +164,7 @@ class SeedMetrics:
 
         Returns 0 if seed never reached BLENDING.
         """
-        if self.accuracy_at_blending_start == 0.0:
+        if not self._blending_started:
             return 0.0
         return self.current_val_accuracy - self.accuracy_at_blending_start
 
@@ -187,7 +195,7 @@ class SeedMetrics:
 # Seed State
 # =============================================================================
 
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, slots=True)
 class SeedState:
     """Complete state of a seed through its lifecycle."""
 
@@ -212,7 +220,7 @@ class SeedState:
     is_paused: bool = False
 
     # History (bounded to prevent unbounded memory growth in long-running training)
-    stage_history: deque = field(default_factory=lambda: deque(maxlen=100))
+    stage_history: deque = field(default_factory=lambda: deque(maxlen=PROBATION_HISTORY_MAXLEN))
 
     # Telemetry (initialized in __post_init__)
     telemetry: SeedTelemetry | None = field(default=None)
@@ -326,7 +334,7 @@ class QualityGates:
         min_training_improvement: float = 0.5,
         min_blending_epochs: int = 3,
         max_isolation_violations: int = 10,
-        min_probation_stability: float = 0.95,
+        min_probation_stability: float = MIN_PROBATION_STABILITY,
         min_seed_gradient_ratio: float = DEFAULT_GRADIENT_RATIO_THRESHOLD,
     ):
         self.min_training_improvement = min_training_improvement
@@ -728,9 +736,20 @@ class SeedSlot(nn.Module):
         blueprint_id: str,
         seed_id: str | None = None,
         host_module: nn.Module | None = None,
+        blend_algorithm_id: str = "sigmoid",
     ) -> SeedState:
-        """Germinate a new seed in this slot."""
+        """Germinate a new seed in this slot.
+
+        Args:
+            blueprint_id: Blueprint to instantiate (e.g., "norm", "attention")
+            seed_id: Optional unique identifier for the seed
+            host_module: Host network for gradient isolation (optional)
+            blend_algorithm_id: Blending algorithm ("linear", "sigmoid", "gated")
+        """
         from esper.kasmina.blueprints import BlueprintRegistry
+
+        # Store blend algorithm for later use in start_blending()
+        self._blend_algorithm_id = blend_algorithm_id
 
         if self.is_active and not is_failure_stage(self.state.stage):
             raise RuntimeError(f"Slot {self.slot_id} already has active seed")
@@ -738,13 +757,13 @@ class SeedSlot(nn.Module):
         # Default to "cnn" when no TaskConfig is provided to match legacy CNN tests.
         topology = self.task_config.topology if self.task_config is not None else "cnn"
         if topology not in ("cnn", "transformer"):
-            raise AssertionError(f"Unknown topology '{topology}' for SeedSlot.germinate")
+            raise ValueError(f"Unknown topology '{topology}' for SeedSlot.germinate")
         try:
             self.seed = BlueprintRegistry.create(topology, blueprint_id, self.channels)
         except ValueError as exc:
             available = BlueprintRegistry.list_for_topology(topology)
             names = [s.name for s in available]
-            raise AssertionError(
+            raise ValueError(
                 f"Blueprint '{blueprint_id}' not available for topology '{topology}'. Available: {names}"
             ) from exc
         self.seed = self.seed.to(self.device)
@@ -969,7 +988,11 @@ class SeedSlot(nn.Module):
         CRITICAL: Call this from Tolaria after loss.backward() to enable the G2 gate.
         Without this, seed_gradient_norm_ratio remains 0.0 and G2 always fails.
 
-        Performance note: This triggers a device-to-host sync (GPU pipeline stall).
+        Performance note: Calls check_isolation() which internally performs .item() sync.
+        The actual CUDA→CPU transfer happens in materialize_isolation_stats() within
+        check_isolation(), not directly in this method. For fully async capture, use
+        check_isolation_async() and defer materialization.
+
         Use a stride in the training loop (e.g., every 10 steps) to minimize overhead.
         The EMA smoothing makes sparse sampling acceptable for gate decisions.
         """
@@ -1005,6 +1028,10 @@ class SeedSlot(nn.Module):
             raw_ratio = seed_norm / host_norm
 
         # Apply parameter normalization if counts are available
+        # Note: If host_module was not provided to germinate(), host_param_count=0
+        # and we fall back to raw (unnormalized) gradient ratio. This is acceptable
+        # for single-seed scenarios but may cause inconsistent G2 gate behavior
+        # in multi-seed comparisons where seeds have different host architectures.
         host_params = self.state.metrics.host_param_count
         seed_params = self.state.metrics.seed_param_count
         if host_params > 0 and seed_params > 0:
@@ -1079,7 +1106,15 @@ class SeedSlot(nn.Module):
         # Impact on credit assignment: Transformer improvements during BLENDING+
         # may come from seed OR host adaptation. Use counterfactual_contribution
         # (not blending_delta) for causal attribution.
-        return blend_with_isolation(host_features, seed_features, self.alpha)
+
+        # Get alpha from blend algorithm's unified interface
+        # All BlendAlgorithm subclasses implement get_alpha_for_blend(x) -> Tensor
+        if self.alpha_schedule is not None:
+            alpha = self.alpha_schedule.get_alpha_for_blend(host_features)
+        else:
+            alpha = self.alpha
+
+        return blend_with_isolation(host_features, seed_features, alpha)
 
     def get_parameters(self):
         """Get trainable parameters of the seed."""
@@ -1094,32 +1129,53 @@ class SeedSlot(nn.Module):
             self.state.metrics.current_alpha = self.state.alpha
 
     def start_blending(self, total_steps: int, temperature: float = 1.0) -> None:
-        """Initialize alpha schedule for blending phase."""
-        from esper.kasmina.isolation import AlphaSchedule
+        """Initialize blending with selected algorithm.
+
+        Uses blend_algorithm_id set during germinate(). Falls back to sigmoid
+        if not specified.
+        """
+        from esper.kasmina.blending import BlendCatalog
 
         # Initialize blending progress tracking
         if self.state:
             self.state.blending_steps_total = total_steps
             self.state.blending_steps_done = 0
 
-        self.alpha_schedule = AlphaSchedule(
-            total_steps=total_steps,
-            start=0.0,
-            end=1.0,
-            temperature=temperature,
-        )
+        algorithm_id = getattr(self, "_blend_algorithm_id", "sigmoid")
+        topology = self.task_config.topology if self.task_config else "cnn"
+
+        # Create blend algorithm with appropriate kwargs
+        if algorithm_id == "gated":
+            # GatedBlend needs channels and topology
+            self.alpha_schedule = BlendCatalog.create(
+                algorithm_id, channels=self.channels, topology=topology
+            )
+            # Move gated blend to same device as seed
+            if isinstance(self.alpha_schedule, nn.Module):
+                self.alpha_schedule = self.alpha_schedule.to(self.device)
+        elif algorithm_id in ("linear", "sigmoid"):
+            self.alpha_schedule = BlendCatalog.create(
+                algorithm_id, total_steps=total_steps
+            )
+        else:
+            raise ValueError(
+                f"Unknown blend algorithm: {algorithm_id}. "
+                f"Valid options: linear, sigmoid, gated"
+            )
 
     def update_alpha_for_step(self, step: int) -> float:
         """Update alpha based on schedule."""
         if self.alpha_schedule is not None:
-            alpha = self.alpha_schedule(step)
+            self.alpha_schedule.step(step)
+            alpha = self.alpha_schedule.get_alpha(step)
+
             self.set_alpha(alpha)
             if self.state:
                 self.state.metrics.alpha_ramp_step = step
             return alpha
         return self.alpha
 
-    def _sync_gate_decision(self, gate_result: GateResult) -> None:
+    def _sync_gate_decision(self, gate_result: GateResult) -> GateResult:
         """Ensure all DDP ranks agree on lifecycle transitions (Unanimous Consensus).
 
         We use ReduceOp.MIN (Logical AND) for all transitions.
@@ -1131,9 +1187,12 @@ class SeedSlot(nn.Module):
 
         COLLECTIVE OPERATION: All ranks MUST call this in identical order
         for each gate check, or deadlock will occur.
+
+        Returns:
+            New GateResult with synchronized pass/fail decision (immutable pattern).
         """
         if not (torch.distributed.is_available() and torch.distributed.is_initialized()):
-            return
+            return gate_result
 
         # 1 = Passed, 0 = Failed; MIN gives unanimous consensus
         decision = torch.tensor([int(gate_result.passed)], device=self.device, dtype=torch.int)
@@ -1142,10 +1201,25 @@ class SeedSlot(nn.Module):
         is_passed = bool(decision.item())
 
         if gate_result.passed and not is_passed:
-            gate_result.message += " (Vetoed by DDP consensus)"
-            gate_result.checks_failed.append("ddp_veto")
+            # Vetoed by DDP consensus - create new result with updated status
+            return GateResult(
+                gate=gate_result.gate,
+                passed=False,
+                score=gate_result.score,
+                checks_passed=gate_result.checks_passed,
+                checks_failed=gate_result.checks_failed + ["ddp_veto"],
+                message=gate_result.message + " (Vetoed by DDP consensus)",
+            )
 
-        gate_result.passed = is_passed
+        # Either already failed locally or passed consensus
+        return GateResult(
+            gate=gate_result.gate,
+            passed=is_passed,
+            score=gate_result.score,
+            checks_passed=gate_result.checks_passed,
+            checks_failed=gate_result.checks_failed,
+            message=gate_result.message,
+        )
 
     def step_epoch(self) -> None:
         """Advance lifecycle mechanically once per epoch (Kasmina timekeeper)."""
@@ -1157,7 +1231,7 @@ class SeedSlot(nn.Module):
         # GERMINATED → TRAINING: immediate advance (no dwell required)
         if stage == SeedStage.GERMINATED:
             gate_result = self.gates.check_gate(self.state, SeedStage.TRAINING)
-            self._sync_gate_decision(gate_result)
+            gate_result = self._sync_gate_decision(gate_result)
             if not gate_result.passed:
                 return
 
@@ -1186,7 +1260,7 @@ class SeedSlot(nn.Module):
                 return
 
             gate_result = self.gates.check_gate(self.state, SeedStage.BLENDING)
-            self._sync_gate_decision(gate_result)
+            gate_result = self._sync_gate_decision(gate_result)
             if not gate_result.passed:
                 return
 
@@ -1204,6 +1278,7 @@ class SeedSlot(nn.Module):
             # Snapshot accuracy at blending start for true causal attribution
             # This is when the seed starts actually affecting network output
             self.state.metrics.accuracy_at_blending_start = self.state.metrics.current_val_accuracy
+            self.state.metrics._blending_started = True
             self._emit_telemetry(
                 TelemetryEventType.SEED_STAGE_CHANGED,
                 data={"from": old_stage.name, "to": self.state.stage.name},
@@ -1227,7 +1302,7 @@ class SeedSlot(nn.Module):
             if self.state.blending_steps_done >= self.state.blending_steps_total:
                 self.set_alpha(1.0)  # Ensure fully blended
                 gate_result = self.gates.check_gate(self.state, SeedStage.PROBATIONARY)
-                self._sync_gate_decision(gate_result)
+                gate_result = self._sync_gate_decision(gate_result)
                 if not gate_result.passed:
                     return
                 old_stage = self.state.stage
@@ -1247,10 +1322,10 @@ class SeedSlot(nn.Module):
         # (DRL Expert review 2025-12-10: auto-fossilize violated credit assignment)
         # Only handle safety auto-culls and timeout
         if stage == SeedStage.PROBATIONARY:
-            # Calculate probation timeout (default 5 epochs, or 10% of max_epochs)
+            # Calculate probation timeout (default MAX_PROBATION_EPOCHS, or 10% of max_epochs)
             # Minimum of 5 epochs ensures sufficient time for counterfactual validation
             # (DRL Expert review 2025-12-09: 3 epochs was insufficient for reliable metrics)
-            max_probation_epochs = 5
+            max_probation_epochs = MAX_PROBATION_EPOCHS
             if self.task_config:
                 max_probation_epochs = max(5, int(self.task_config.max_epochs * 0.1))
 

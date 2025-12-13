@@ -1248,8 +1248,14 @@ def train_ppo_vectorized(
                     if not model.has_active_seed_in_slot(target_slot):
                         env_state.acc_at_germination = env_state.val_acc
                         blueprint_id = factored_action.blueprint_id
+                        blend_algorithm_id = factored_action.blend_algorithm_id
                         seed_id = f"env{env_idx}_seed_{env_state.seeds_created}"
-                        model.germinate_seed(blueprint_id, seed_id, slot=target_slot)
+                        model.germinate_seed(
+                            blueprint_id,
+                            seed_id,
+                            slot=target_slot,
+                            blend_algorithm_id=blend_algorithm_id,
+                        )
                         env_state.seeds_created += 1
                         env_state.seed_optimizer = None
                         action_success = True

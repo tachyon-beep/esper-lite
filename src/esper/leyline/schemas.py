@@ -83,7 +83,7 @@ class GateLevel(IntEnum):
     G1 = 1  # Training readiness (GERMINATED → TRAINING)
     G2 = 2  # Blending readiness (TRAINING → BLENDING)
     G3 = 3  # Probation readiness (BLENDING → PROBATIONARY)
-    G4 = 4  # DEPRECATED: Was SHADOWING → PROBATIONARY (kept for compat)
+    # Value 4 intentionally skipped (was G4/SHADOWING gate, removed)
     G5 = 5  # Fossilization readiness (PROBATIONARY → FOSSILIZED)
 
 

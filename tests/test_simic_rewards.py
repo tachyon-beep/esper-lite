@@ -4,6 +4,7 @@ import pytest
 from enum import IntEnum
 
 from esper.leyline import MIN_CULL_AGE
+from esper.leyline.factored_actions import LifecycleOp
 from esper.simic.rewards import (
     SeedInfo,
     STAGE_BLENDING,
@@ -24,7 +25,7 @@ class TestComputeSeedPotential:
 
     SeedStage enum values (from leyline):
     - DORMANT=1, GERMINATED=2, TRAINING=3, BLENDING=4
-    - SHADOWING=5, PROBATIONARY=6, FOSSILIZED=7
+    - PROBATIONARY=6, FOSSILIZED=7 (5 skipped)
     """
 
     def test_no_seed_returns_zero(self):
@@ -78,7 +79,7 @@ class TestComputeSeedPotential:
     def test_stage_progression_increases_potential(self):
         """Test that potential generally increases through stages until FOSSILIZED."""
         potentials = []
-        for stage in [2, 3, 4, 5, 6]:  # GERMINATED through PROBATIONARY
+        for stage in [2, 3, 4, 6]:  # GERMINATED through PROBATIONARY (5 skipped)
             obs = {'has_active_seed': 1, 'seed_stage': stage, 'seed_epochs_in_stage': 0}
             potentials.append(compute_seed_potential(obs))
 
@@ -180,14 +181,10 @@ class TestCullContributionShaping:
 
     def test_cull_good_seed_inverts_attribution(self):
         """Culling a good seed should invert attribution to negative total reward."""
-
-        class _CullAction(IntEnum):
-            CULL = 1
-
         seed_info = self._make_seed_info(STAGE_BLENDING, age=MIN_CULL_AGE, improvement=3.0)
 
         reward, components = compute_contribution_reward(
-            action=_CullAction.CULL,
+            action=LifecycleOp.CULL,
             seed_contribution=3.52,  # Good seed with +3.52% contribution
             val_acc=68.0,
             seed_info=seed_info,
@@ -208,14 +205,10 @@ class TestCullContributionShaping:
 
     def test_cull_bad_seed_inverts_attribution_to_positive(self):
         """Culling a bad seed should invert negative attribution to positive."""
-
-        class _CullAction(IntEnum):
-            CULL = 1
-
         seed_info = self._make_seed_info(STAGE_BLENDING, age=MIN_CULL_AGE, improvement=-1.0)
 
         reward, components = compute_contribution_reward(
-            action=_CullAction.CULL,
+            action=LifecycleOp.CULL,
             seed_contribution=-2.0,  # Bad seed hurting accuracy
             val_acc=63.0,
             seed_info=seed_info,

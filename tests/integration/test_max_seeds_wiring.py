@@ -61,7 +61,7 @@ class TestMaxSeedsWiring:
         # At limit: 3 seeds out of 3 max
         masks = compute_action_masks(
             slot_states=slot_states,
-            target_slot="mid",
+            enabled_slots=["mid"],
             total_seeds=3,
             max_seeds=3,
         )
@@ -77,7 +77,7 @@ class TestMaxSeedsWiring:
         # Under limit: 2 seeds out of 3 max
         masks = compute_action_masks(
             slot_states=slot_states,
-            target_slot="mid",
+            enabled_slots=["mid"],
             total_seeds=2,
             max_seeds=3,
         )
@@ -93,7 +93,7 @@ class TestMaxSeedsWiring:
         # max_seeds=0 means unlimited
         masks = compute_action_masks(
             slot_states=slot_states,
-            target_slot="mid",
+            enabled_slots=["mid"],
             total_seeds=100,  # Many seeds
             max_seeds=0,      # Unlimited
         )
