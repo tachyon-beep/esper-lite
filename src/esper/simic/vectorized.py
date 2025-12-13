@@ -1211,14 +1211,15 @@ def train_ppo_vectorized(
                     telemetry_config is not None and telemetry_config.should_collect("debug")
                 )
 
-                # Unified reward computation - always use compute_contribution_reward
+                # Unified reward computation - always use compute_reward dispatcher
                 # For pre-blending stages, seed_contribution is None and acc_delta is used as proxy
                 reward_components = None
                 if collect_reward_telemetry:
-                    reward, reward_components = compute_contribution_reward(
+                    reward, reward_components = compute_reward(
                         action=action_for_reward,
                         seed_contribution=seed_contribution,
                         val_acc=env_state.val_acc,
+                        host_max_acc=env_state.host_max_acc,
                         seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
                         epoch=epoch,
                         max_epochs=max_epochs,
@@ -1229,14 +1230,16 @@ def train_ppo_vectorized(
                         return_components=True,
                         num_fossilized_seeds=env_state.seeds_fossilized,
                         num_contributing_fossilized=env_state.contributing_fossilized,
+                        config=reward_config,
                     )
                     if target_slot in baseline_accs[env_idx]:
                         reward_components.host_baseline_acc = baseline_accs[env_idx][target_slot]
                 else:
-                    reward = compute_contribution_reward(
+                    reward = compute_reward(
                         action=action_for_reward,
                         seed_contribution=seed_contribution,
                         val_acc=env_state.val_acc,
+                        host_max_acc=env_state.host_max_acc,
                         seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
                         epoch=epoch,
                         max_epochs=max_epochs,
@@ -1246,6 +1249,7 @@ def train_ppo_vectorized(
                         acc_delta=signals.metrics.accuracy_delta,
                         num_fossilized_seeds=env_state.seeds_fossilized,
                         num_contributing_fossilized=env_state.contributing_fossilized,
+                        config=reward_config,
                     )
 
                 # Governor punishment: inject negative reward if rollback occurred
