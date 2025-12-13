@@ -1030,9 +1030,18 @@ def train_ppo_vectorized(
                     if baseline_accs[env_idx] and epoch == max_epochs:
                         for slot_id, baseline_acc in baseline_accs[env_idx].items():
                             cf_contribution = val_acc - baseline_acc
-                            print(f"  [ENV {env_idx}] Slot {slot_id} counterfactual: "
-                                  f"{val_acc:.1f}% real, {baseline_acc:.1f}% baseline, "
-                                  f"Δ={cf_contribution:+.2f}% contribution")
+                            if hub:
+                                hub.emit(TelemetryEvent(
+                                    event_type=TelemetryEventType.COUNTERFACTUAL_COMPUTED,
+                                    slot_id=slot_id,
+                                    data={
+                                        "env_idx": env_idx,
+                                        "slot_id": slot_id,
+                                        "real_accuracy": val_acc,
+                                        "baseline_accuracy": baseline_acc,
+                                        "contribution": cf_contribution,
+                                    },
+                                ))
                     # NOTE: step_epoch() moved to AFTER transition storage for state/action alignment
 
                 # Update signal tracker
@@ -1185,8 +1194,18 @@ def train_ppo_vectorized(
                 if env_idx in governor_panic_envs:
                     report = env_state.governor.execute_rollback()
                     batch_rollback_occurred = True  # Mark batch as having stale transitions
-                    print(f"  [ENV {env_idx}] Governor rollback: {report.reason} "
-                          f"(threshold={report.loss_threshold:.4f}, panics={report.consecutive_panics})")
+                    if hub:
+                        hub.emit(TelemetryEvent(
+                            event_type=TelemetryEventType.GOVERNOR_ROLLBACK,
+                            severity="warning",
+                            data={
+                                "env_idx": env_idx,
+                                "reason": report.reason,
+                                "loss_at_panic": report.loss_at_panic,
+                                "loss_threshold": report.loss_threshold,
+                                "consecutive_panics": report.consecutive_panics,
+                            },
+                        ))
 
                 # Compute reward with cost params
                 # Derive cost from CURRENT architecture, not cumulative scoreboard
@@ -1256,7 +1275,18 @@ def train_ppo_vectorized(
                 if env_idx in governor_panic_envs:
                     punishment = env_state.governor.get_punishment_reward()
                     reward += punishment
-                    print(f"  [ENV {env_idx}] Punishment reward: {punishment:.1f} (final reward: {reward:.1f})")
+                    if hub:
+                        hub.emit(TelemetryEvent(
+                            event_type=TelemetryEventType.REWARD_COMPUTED,
+                            severity="warning",
+                            data={
+                                "env_id": env_idx,
+                                "action_name": "PUNISHMENT",
+                                "total_reward": reward,
+                                "punishment": punishment,
+                                "reason": "governor_rollback",
+                            },
+                        ))
 
                 # Execute action using FactoredAction properties
                 # Validate sampled slot is in enabled slots (masking should prevent this, but safety check)
@@ -1402,7 +1432,13 @@ def train_ppo_vectorized(
         # Clear the buffer and skip this PPO update.
         if batch_rollback_occurred:
             agent.buffer.reset()
-            print("[PPO] Buffer cleared due to Governor rollback - skipping update")
+            if hub:
+                hub.emit(TelemetryEvent(
+                    event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+                    severity="warning",
+                    message="Buffer cleared due to Governor rollback - skipping update",
+                    data={"reason": "governor_rollback", "skipped": True},
+                ))
         else:
             update_metrics = agent.update(clear_buffer=True)
             metrics = update_metrics
@@ -1429,24 +1465,11 @@ def train_ppo_vectorized(
             )
 
             if anomaly_report.has_anomaly:
-                print(f"\n⚠️  TRAINING ANOMALY DETECTED at episode {episodes_completed}:")
-                for anomaly_type in anomaly_report.anomaly_types:
-                    print(f"   - {anomaly_type}: {anomaly_report.details.get(anomaly_type, '')}")
-
-                # Escalate to debug telemetry - collect diagnostic data
-                print("   📊 Collecting debug diagnostics...")
+                # Collect diagnostic data for telemetry
                 gradient_stats = collect_per_layer_gradients(agent.network)
                 stability_report = check_numerical_stability(agent.network)
-
-                # Log gradient health summary
                 vanishing = sum(1 for gs in gradient_stats if gs.zero_fraction > 0.5)
                 exploding = sum(1 for gs in gradient_stats if gs.large_fraction > 0.1)
-                if vanishing > 0:
-                    print(f"   ⚠️  {vanishing} layers with vanishing gradients (>50% zeros)")
-                if exploding > 0:
-                    print(f"   ⚠️  {exploding} layers with exploding gradients (>10% large values)")
-                if stability_report.has_issues():
-                    print(f"   🔥 NUMERICAL INSTABILITY detected in weights/gradients")
 
                 # Emit specific telemetry events (use existing event types)
                 if hub:
@@ -1486,10 +1509,19 @@ def train_ppo_vectorized(
         rolling_avg_acc = sum(recent_accuracies) / len(recent_accuracies)
 
         episodes_completed += envs_this_batch
-        print(f"Batch {batch_idx + 1}: Episodes {episodes_completed}/{n_episodes}")
-        print(f"  Env accuracies: {[f'{a:.1f}%' for a in env_final_accs]}")
-        print(f"  Avg acc: {avg_acc:.1f}% (rolling: {rolling_avg_acc:.1f}%)")
-        print(f"  Avg reward: {avg_reward:.1f}")
+        if hub:
+            hub.emit(TelemetryEvent(
+                event_type=TelemetryEventType.BATCH_COMPLETED,
+                data={
+                    "batch_idx": batch_idx + 1,
+                    "episodes_completed": episodes_completed,
+                    "total_episodes": n_episodes,
+                    "env_accuracies": env_final_accs,
+                    "avg_accuracy": avg_acc,
+                    "rolling_accuracy": rolling_avg_acc,
+                    "avg_reward": avg_reward,
+                },
+            ))
 
         total_actions = {op.name: 0 for op in LifecycleOp}
         successful_actions = {op.name: 0 for op in LifecycleOp}
@@ -1498,15 +1530,11 @@ def train_ppo_vectorized(
                 total_actions[a] += c
             for a, c in env_state.successful_action_counts.items():
                 successful_actions[a] += c
-        print(f"  Actions: {total_actions}")
-        print(f"  Successful: {successful_actions}")
+        # Action distribution removed - already visible in analytics.summary_table()
 
         if metrics:
             current_entropy_coef = agent.get_entropy_coef()
-            print(f"  Policy loss: {metrics['policy_loss']:.4f}, "
-                  f"Value loss: {metrics['value_loss']:.4f}, "
-                  f"Entropy: {metrics['entropy']:.4f}, "
-                  f"Entropy coef: {current_entropy_coef:.4f}")
+            # PPO loss metrics removed - already in PPO_UPDATE_COMPLETED telemetry
 
             # Emit PPO telemetry
             # Note: clip_fraction, ratio_*, explained_variance not available in recurrent path
@@ -1610,7 +1638,12 @@ def train_ppo_vectorized(
 
     if best_state:
         agent.network.load_state_dict(best_state)
-        print(f"\nLoaded best weights (avg_acc={best_avg_acc:.1f}%)")
+        if hub:
+            hub.emit(TelemetryEvent(
+                event_type=TelemetryEventType.CHECKPOINT_LOADED,
+                message="Loaded best weights",
+                data={"source": "best_state", "avg_accuracy": best_avg_acc},
+            ))
 
     if save_path:
         agent.save(save_path, metadata={
@@ -1625,7 +1658,12 @@ def train_ppo_vectorized(
             'obs_normalizer_count': obs_normalizer.count.item(),
             'obs_normalizer_momentum': obs_normalizer.momentum,
         })
-        print(f"Model saved to {save_path}")
+        if hub:
+            hub.emit(TelemetryEvent(
+                event_type=TelemetryEventType.CHECKPOINT_SAVED,
+                message=f"Model saved to {save_path}",
+                data={"path": str(save_path), "avg_accuracy": best_avg_acc},
+            ))
 
     # Add analytics to final history entry
     if history:
