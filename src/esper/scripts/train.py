@@ -33,6 +33,22 @@ def main():
         default="normal",
         help="Telemetry verbosity level (default: normal)",
     )
+    telemetry_parent.add_argument(
+        "--dashboard",
+        action="store_true",
+        help="Enable real-time WebSocket dashboard (requires: pip install esper-lite[dashboard])",
+    )
+    telemetry_parent.add_argument(
+        "--dashboard-port",
+        type=int,
+        default=8000,
+        help="Dashboard server port (default: 8000)",
+    )
+    telemetry_parent.add_argument(
+        "--tui",
+        action="store_true",
+        help="Enable Rich terminal UI for live training monitoring (replaces console output)",
+    )
 
     subparsers = parser.add_subparsers(dest="algorithm", required=True)
 
@@ -144,11 +160,20 @@ def main():
     # debug level -> show debug events, normal/minimal -> show info+ only
     console_min_severity = "debug" if args.telemetry_level == "debug" else "info"
 
-    # Wire Nissa console telemetry to the global hub so all
+    # Wire Nissa telemetry to the global hub so all
     # lifecycle events (including fossilization) are visible
     # alongside training logs.
     hub = get_hub()
-    hub.add_backend(ConsoleOutput(min_severity=console_min_severity))
+
+    # Use TUI or Console output based on --tui flag
+    tui_backend = None
+    if args.tui:
+        from esper.karn import TUIOutput
+        tui_backend = TUIOutput()
+        hub.add_backend(tui_backend)
+        # TUI auto-starts on first event, no startup message needed
+    else:
+        hub.add_backend(ConsoleOutput(min_severity=console_min_severity))
 
     # Add file output if requested
     file_backend = None
@@ -164,51 +189,122 @@ def main():
         hub.add_backend(dir_backend)
         print(f"Telemetry will be saved to: {dir_backend.output_dir}")
 
-    if args.algorithm == "heuristic":
-        from esper.simic.training import train_heuristic
-        train_heuristic(
-            n_episodes=args.episodes,
-            max_epochs=args.max_epochs,
-            max_batches=args.max_batches if args.max_batches > 0 else None,
-            device=args.device,
-            task=args.task,
-            seed=args.seed,
-            slots=args.slots,
-        )
+    # Add WebSocket dashboard if requested
+    dashboard_backend = None
+    if args.dashboard:
+        try:
+            from esper.karn import DashboardServer
 
-    elif args.algorithm == "ppo":
-        use_telemetry = not args.no_telemetry
-        from esper.simic.vectorized import train_ppo_vectorized
-        train_ppo_vectorized(
-            n_episodes=args.episodes,
-            n_envs=args.n_envs,
-            max_epochs=args.max_epochs,
-            device=args.device,
-            devices=args.devices,
-            task=args.task,
-            use_telemetry=use_telemetry,
-            lr=args.lr,
-            clip_ratio=args.clip_ratio,
-            entropy_coef=args.entropy_coef,
-            entropy_coef_start=args.entropy_coef_start,
-            entropy_coef_end=args.entropy_coef_end,
-            entropy_coef_min=args.entropy_coef_min,
-            entropy_anneal_episodes=args.entropy_anneal_episodes,
-            gamma=args.gamma,
-            save_path=args.save,
-            resume_path=args.resume,
-            seed=args.seed,
-            num_workers=args.num_workers,
-            gpu_preload=args.gpu_preload,
-            telemetry_config=telemetry_config,
-            slots=args.slots,
-            max_seeds=args.max_seeds,
-            max_seeds_per_slot=args.max_seeds_per_slot,
-            reward_mode=args.reward_mode,
-            param_budget=args.param_budget,
-            param_penalty_weight=args.param_penalty,
-            sparse_reward_scale=args.sparse_scale,
-        )
+            # DashboardServer provides integrated HTTP + WebSocket:
+            # - Serves dashboard HTML at http://localhost:PORT/
+            # - WebSocket telemetry at ws://localhost:PORT/ws
+            # - Queues events from sync training loop
+            dashboard_backend = DashboardServer(port=args.dashboard_port)
+            dashboard_backend.start()
+            hub.add_backend(dashboard_backend)
+
+            # Get all network interfaces for dashboard URLs
+            def get_network_interfaces():
+                """Get all network interface IPs."""
+                interfaces = ["localhost", "127.0.0.1"]
+                try:
+                    import socket
+                    hostname = socket.gethostname()
+                    # Get all IPs for this host
+                    for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
+                        ip = info[4][0]
+                        if ip not in interfaces and not ip.startswith("127."):
+                            interfaces.append(ip)
+                    # Also try to get the primary LAN IP
+                    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    try:
+                        s.connect(("8.8.8.8", 80))
+                        lan_ip = s.getsockname()[0]
+                        if lan_ip not in interfaces:
+                            interfaces.insert(2, lan_ip)  # Put after localhost
+                    except Exception:
+                        pass
+                    finally:
+                        s.close()
+                except Exception:
+                    pass
+                return interfaces
+
+            # Print clickable dashboard links (OSC 8 hyperlinks for modern terminals)
+            interfaces = get_network_interfaces()
+            print()
+            print(f"  \033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m")
+            print(f"  \033[1m🔬 Live Dashboard\033[0m (listening on all interfaces)")
+            for iface in interfaces:
+                url = f"http://{iface}:{args.dashboard_port}"
+                # OSC 8 format: \033]8;;URL\033\\TEXT\033]8;;\033\\
+                hyperlink = f"\033]8;;{url}\033\\{url}\033]8;;\033\\"
+                label = " (local)" if iface in ("localhost", "127.0.0.1") else " (LAN)" if not iface.startswith("127.") else ""
+                print(f"     → {hyperlink}\033[90m{label}\033[0m")
+            print(f"  \033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m")
+            print()
+        except ImportError:
+            print("Warning: Dashboard dependencies not installed.")
+            print("  Install with: pip install esper-lite[dashboard]")
+
+    # Add Karn research telemetry collector
+    # KarnCollector captures events into typed store for research analytics
+    from esper.karn import get_collector
+    karn_collector = get_collector()
+    hub.add_backend(karn_collector)
+
+    try:
+        if args.algorithm == "heuristic":
+            from esper.simic.training import train_heuristic
+            train_heuristic(
+                n_episodes=args.episodes,
+                max_epochs=args.max_epochs,
+                max_batches=args.max_batches if args.max_batches > 0 else None,
+                device=args.device,
+                task=args.task,
+                seed=args.seed,
+                slots=args.slots,
+            )
+
+        elif args.algorithm == "ppo":
+            use_telemetry = not args.no_telemetry
+            from esper.simic.vectorized import train_ppo_vectorized
+            train_ppo_vectorized(
+                n_episodes=args.episodes,
+                n_envs=args.n_envs,
+                max_epochs=args.max_epochs,
+                device=args.device,
+                devices=args.devices,
+                task=args.task,
+                use_telemetry=use_telemetry,
+                lr=args.lr,
+                clip_ratio=args.clip_ratio,
+                entropy_coef=args.entropy_coef,
+                entropy_coef_start=args.entropy_coef_start,
+                entropy_coef_end=args.entropy_coef_end,
+                entropy_coef_min=args.entropy_coef_min,
+                entropy_anneal_episodes=args.entropy_anneal_episodes,
+                gamma=args.gamma,
+                save_path=args.save,
+                resume_path=args.resume,
+                seed=args.seed,
+                num_workers=args.num_workers,
+                gpu_preload=args.gpu_preload,
+                telemetry_config=telemetry_config,
+                slots=args.slots,
+                max_seeds=args.max_seeds,
+                max_seeds_per_slot=args.max_seeds_per_slot,
+                reward_mode=args.reward_mode,
+                param_budget=args.param_budget,
+                param_penalty_weight=args.param_penalty,
+                sparse_reward_scale=args.sparse_scale,
+            )
+    finally:
+        # Clean up TUI backend if used
+        if tui_backend is not None:
+            tui_backend.close()
+        # Close all hub backends
+        hub.close()
 
 if __name__ == "__main__":
     main()

@@ -697,6 +697,10 @@ class SeedSlot(nn.Module):
         Used for differential validation to measure true seed contribution
         by comparing real output (current alpha) vs host-only (alpha=0).
 
+        This method temporarily disables any active alpha_schedule to ensure
+        forward() uses the forced value. This is essential for correct
+        counterfactual attribution during BLENDING stage.
+
         Warning:
             NOT THREAD-SAFE. Do not use during concurrent forward passes
             or with DataParallel/DistributedDataParallel. Use model.eval()
@@ -704,6 +708,11 @@ class SeedSlot(nn.Module):
 
             Nested calls are NOT supported - the inner override will be
             clobbered when the outer context exits.
+
+        Note:
+            When using torch.compile, this will cause graph specialization
+            for the alpha_schedule=None path. This is acceptable as
+            counterfactual evaluation runs once per epoch in eval mode.
 
         Args:
             value: Alpha value to force (typically 0.0 for host-only baseline)
@@ -716,13 +725,26 @@ class SeedSlot(nn.Module):
             yield
             return
 
-        # Store previous alpha and override
+        # Store previous state
         prev_alpha = self.state.alpha
+        prev_schedule = self.alpha_schedule
+
+        # Override alpha AND disable schedule to force forward() to use state.alpha
         self.state.alpha = value
+        self.alpha_schedule = None
+
         try:
             yield
         finally:
             self.state.alpha = prev_alpha
+            self.alpha_schedule = prev_schedule
+
+    # TODO: [FUTURE ENHANCEMENT] - DDP support for force_alpha
+    # Current implementation mutates instance state which is incompatible with
+    # DistributedDataParallel. For DDP-safe counterfactual evaluation, consider:
+    # 1. A separate "counterfactual forward" method that takes alpha as parameter
+    # 2. Rank-local state override with barrier synchronization
+    # 3. Functional approach that doesn't mutate module state
 
     @property
     def active_seed_params(self) -> int:

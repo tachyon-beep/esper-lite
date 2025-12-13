@@ -17,7 +17,7 @@ Esper is a framework for **Morphogenetic AI**—neural networks that dynamically
 
 ## 🏗️ Architecture
 
-The system is organized into six decoupled domains:
+The system is organized into seven decoupled domains:
 
 | Domain | Role | Analogy | Description |
 | :--- | :--- | :--- | :--- |
@@ -27,6 +27,7 @@ The system is organized into six decoupled domains:
 | **Tolaria** | **Hands** | Tools | Execution engine that runs the PyTorch training loops and optimizers. |
 | **Simic** | **Gym** | Simulator | RL infrastructure (PPO) for training the strategic brain. |
 | **Nissa** | **Senses** | Sensors | Observability hub for routing telemetry and generating narratives. |
+| **Karn** | **Memory** | Archivist | Research telemetry system with analytics, health monitoring, TUI, and web dashboard. |
 
 ---
 
@@ -119,6 +120,7 @@ src/esper/
 ├── tolaria/      # PyTorch training loops
 ├── simic/        # RL Algorithms (PPO)
 ├── nissa/        # Telemetry & Logging
+├── karn/         # Research telemetry (TUI, dashboard, analytics)
 └── scripts/      # CLI Entry points
 ```
 
@@ -202,7 +204,7 @@ PYTHONPATH=src python -m esper.scripts.train ppo [OPTIONS]
 | `--save` | (none) | Path to save model checkpoint |
 | `--resume` | (none) | Path to checkpoint to resume from |
 
-#### Telemetry
+#### Telemetry & Monitoring
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -210,6 +212,13 @@ PYTHONPATH=src python -m esper.scripts.train ppo [OPTIONS]
 | `--telemetry-dir` | (none) | Save telemetry to timestamped folder |
 | `--telemetry-level` | `normal` | Verbosity: `off`, `minimal`, `normal`, `debug` |
 | `--no-telemetry` | off | Disable telemetry features (50-dim obs instead of 60-dim) |
+| `--tui` | off | Enable Rich terminal UI for live training monitoring |
+| `--dashboard` | off | Enable real-time WebSocket dashboard (requires `pip install esper-lite[dashboard]`) |
+| `--dashboard-port` | 8000 | Dashboard server port |
+
+**Monitoring Interfaces:**
+- **`--tui`**: Full-screen terminal dashboard showing rewards, policy health (entropy, clip fraction, explained variance, KL divergence), seed states, action distribution, reward components, and losses. Color-coded health indicators (green/yellow/red) highlight training issues.
+- **`--dashboard`**: Web-based dashboard accessible at `http://localhost:8000`. Listens on all network interfaces for remote access (e.g., `http://192.168.1.x:8000` on LAN). Displays clickable links for all available interfaces on startup.
 
 ### Heuristic Training (`esper.scripts.train heuristic`)
 
@@ -262,4 +271,22 @@ PYTHONPATH=src python -m esper.scripts.train ppo \
     --gpu-preload \
     --n-envs 8 \
     --episodes 50
+
+# Training with terminal UI (live dashboard in terminal)
+PYTHONPATH=src python -m esper.scripts.train ppo \
+    --tui \
+    --episodes 100 \
+    --n-envs 4
+
+# Training with web dashboard (accessible from browser/remote)
+PYTHONPATH=src python -m esper.scripts.train ppo \
+    --dashboard \
+    --dashboard-port 8080 \
+    --episodes 100
+
+# TUI with telemetry file logging
+PYTHONPATH=src python -m esper.scripts.train ppo \
+    --tui \
+    --telemetry-file training.jsonl \
+    --episodes 100
 ```
