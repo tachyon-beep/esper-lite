@@ -127,3 +127,139 @@ src/esper/
 ```bash
 uv run pytest -q
 ```
+
+---
+
+## 📖 CLI Reference
+
+### PPO Training (`esper.scripts.train ppo`)
+
+Train a PPO agent to learn optimal seed lifecycle management.
+
+```bash
+PYTHONPATH=src python -m esper.scripts.train ppo [OPTIONS]
+```
+
+#### Core Training Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--episodes` | 100 | Number of training episodes |
+| `--max-epochs` | 75 | Maximum epochs per episode |
+| `--n-envs` | 4 | Number of parallel environments |
+| `--update-every` | 5 | PPO update frequency (episodes) |
+| `--seed` | 42 | Random seed for reproducibility |
+
+#### PPO Hyperparameters
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--lr` | 3e-4 | Learning rate |
+| `--clip-ratio` | 0.2 | PPO clipping parameter |
+| `--gamma` | 0.99 | Discount factor |
+| `--entropy-coef` | 0.05 | Entropy bonus coefficient |
+| `--entropy-coef-start` | (uses `--entropy-coef`) | Initial entropy coefficient for annealing |
+| `--entropy-coef-end` | (uses `--entropy-coef`) | Final entropy coefficient for annealing |
+| `--entropy-coef-min` | 0.1 | Minimum entropy floor (prevents collapse) |
+| `--entropy-anneal-episodes` | 0 | Episodes to anneal entropy (0=fixed) |
+
+#### Reward Shaping (Sparse Reward Experiment)
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--reward-mode` | `shaped` | Reward mode: `shaped` (dense), `sparse` (terminal-only), `minimal` (sparse + early-cull penalty) |
+| `--param-budget` | 500000 | Parameter budget for efficiency calculation |
+| `--param-penalty` | 0.1 | Parameter overage penalty weight |
+| `--sparse-scale` | 1.0 | Reward scaling for sparse modes (try 2.0-3.0 if learning is slow) |
+
+**Reward Modes Explained:**
+- **`shaped`** (default): Dense rewards with counterfactual contribution signals at every timestep. Best for initial training.
+- **`sparse`**: Terminal-only rewards based on final accuracy. Tests credit assignment over long horizons.
+- **`minimal`**: Sparse rewards plus penalty for early culling. Discourages wasteful seed germination.
+
+#### Task Configuration
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--task` | `cifar10` | Task preset: `cifar10`, `cifar10_deep`, `tinystories` |
+| `--slots` | `mid` | Seed slots to enable: `early`, `mid`, `late` (space-separated) |
+| `--max-seeds` | unlimited | Maximum total seeds across all slots |
+| `--max-seeds-per-slot` | unlimited | Maximum seeds per slot |
+
+#### Hardware & Performance
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--device` | `cuda:0` | Primary compute device |
+| `--devices` | (none) | Multi-GPU devices (e.g., `cuda:0 cuda:1`) |
+| `--num-workers` | (task default) | DataLoader workers per environment |
+| `--gpu-preload` | off | Preload dataset to GPU (CIFAR-10 only, ~0.75GB VRAM) |
+
+#### Checkpointing
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--save` | (none) | Path to save model checkpoint |
+| `--resume` | (none) | Path to checkpoint to resume from |
+
+#### Telemetry
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--telemetry-file` | (none) | Save telemetry to JSONL file |
+| `--telemetry-dir` | (none) | Save telemetry to timestamped folder |
+| `--telemetry-level` | `normal` | Verbosity: `off`, `minimal`, `normal`, `debug` |
+| `--no-telemetry` | off | Disable telemetry features (50-dim obs instead of 60-dim) |
+
+### Heuristic Training (`esper.scripts.train heuristic`)
+
+Run the rule-based Tamiyo controller as a baseline.
+
+```bash
+PYTHONPATH=src python -m esper.scripts.train heuristic [OPTIONS]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--episodes` | 1 | Number of episodes |
+| `--max-epochs` | 75 | Maximum epochs per episode |
+| `--max-batches` | 50 | Batches per epoch (0=all) |
+| `--task` | `cifar10` | Task preset |
+| `--device` | `cuda:0` | Compute device |
+| `--seed` | 42 | Random seed |
+| `--slots` | `mid` | Seed slots to enable |
+| `--max-seeds` | unlimited | Maximum total seeds |
+| `--max-seeds-per-slot` | unlimited | Maximum seeds per slot |
+
+Telemetry flags (`--telemetry-file`, `--telemetry-dir`, `--telemetry-level`) are also available.
+
+### Example Commands
+
+```bash
+# Basic PPO training
+PYTHONPATH=src python -m esper.scripts.train ppo --episodes 100 --n-envs 4
+
+# Multi-GPU training with telemetry
+PYTHONPATH=src python -m esper.scripts.train ppo \
+    --episodes 200 \
+    --devices cuda:0 cuda:1 \
+    --telemetry-dir ./runs
+
+# Sparse reward experiment (test credit assignment)
+PYTHONPATH=src python -m esper.scripts.train ppo \
+    --reward-mode sparse \
+    --sparse-scale 2.0 \
+    --episodes 100
+
+# Multi-slot training with seed limits
+PYTHONPATH=src python -m esper.scripts.train ppo \
+    --slots early mid late \
+    --max-seeds 5 \
+    --max-seeds-per-slot 2
+
+# Fast iteration with GPU preload
+PYTHONPATH=src python -m esper.scripts.train ppo \
+    --gpu-preload \
+    --n-envs 8 \
+    --episodes 50
+```
