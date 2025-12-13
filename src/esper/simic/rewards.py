@@ -3,7 +3,7 @@
 This module consolidates reward functions used across:
 - Online PPO training (simic/ppo.py)
 - Offline data generation (datagen/generate.py)
-- Offline RL (simic/iql.py)
+- Vectorized PPO training (simic/vectorized.py)
 
 The reward design follows these principles:
 1. Counterfactual validation is the primary signal (seed_contribution)
