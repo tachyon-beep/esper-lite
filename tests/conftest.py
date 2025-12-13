@@ -65,24 +65,6 @@ def telemetry_dir(fixtures_dir):
 # =============================================================================
 
 @pytest.fixture
-def early_training_snapshot(snapshots_dir):
-    """Load early training snapshot (epoch 1)."""
-    with open(snapshots_dir / "early_training_epoch1.json") as f:
-        data = json.load(f)
-    from esper.simic import TrainingSnapshot
-    return TrainingSnapshot.from_dict(data)
-
-
-@pytest.fixture
-def converged_snapshot(snapshots_dir):
-    """Load converged training snapshot (epoch 200)."""
-    with open(snapshots_dir / "converged_epoch200.json") as f:
-        data = json.load(f)
-    from esper.simic import TrainingSnapshot
-    return TrainingSnapshot.from_dict(data)
-
-
-@pytest.fixture
 def healthy_gradients_telemetry(telemetry_dir):
     """Load healthy gradients telemetry."""
     with open(telemetry_dir / "healthy_gradients.json") as f:
