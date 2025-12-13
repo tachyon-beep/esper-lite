@@ -167,8 +167,6 @@ class PPOAgent:
         chunk_length: int = 25,  # Must match max_epochs to avoid hidden state issues
         # Factored action space
         factored: bool = False,  # Use FactoredActorCritic with multi-head actions
-        # Tamiyo mode (unified factored + recurrent)
-        tamiyo: bool = False,  # Use FactoredRecurrentActorCritic + TamiyoRolloutBuffer
         num_envs: int = 4,  # For TamiyoRolloutBuffer
         max_steps_per_env: int = 25,  # For TamiyoRolloutBuffer (matches max_epochs)
         # Compilation
@@ -176,7 +174,6 @@ class PPOAgent:
     ):
         self.recurrent = recurrent
         self.factored = factored
-        self.tamiyo = tamiyo
         self.num_envs = num_envs
         self.max_steps_per_env = max_steps_per_env
         self.chunk_length = chunk_length
@@ -203,24 +200,18 @@ class PPOAgent:
         self.weight_decay = weight_decay
         self.device = device
 
-        # Initialize buffer attributes to None (guard against AttributeError)
-        self.tamiyo_buffer = None
-
-        if tamiyo:
-            # Unified factored + recurrent mode
-            self.network = FactoredRecurrentActorCritic(
-                state_dim=state_dim,
-                lstm_hidden_dim=lstm_hidden_dim,
-            ).to(device)
-            self.tamiyo_buffer = TamiyoRolloutBuffer(
-                num_envs=num_envs,
-                max_steps_per_env=max_steps_per_env,
-                state_dim=state_dim,
-                lstm_hidden_dim=lstm_hidden_dim,
-                device=torch.device(device),
-            )
-        else:
-            self.network = ActorCritic(state_dim, action_dim, hidden_dim).to(device)
+        # Unified factored + recurrent mode
+        self.network = FactoredRecurrentActorCritic(
+            state_dim=state_dim,
+            lstm_hidden_dim=lstm_hidden_dim,
+        ).to(device)
+        self.buffer = TamiyoRolloutBuffer(
+            num_envs=num_envs,
+            max_steps_per_env=max_steps_per_env,
+            state_dim=state_dim,
+            lstm_hidden_dim=lstm_hidden_dim,
+            device=torch.device(device),
+        )
 
         # [PyTorch 2.9] Compile network for 10-30% speedup on forward/backward
         # mode="default" is safest for networks with MaskedCategorical
@@ -242,25 +233,19 @@ class PPOAgent:
             # smaller logits = sharper softmax), which kills exploration.
             # Shared layers feed into actor, so they must also have wd=0.
             # Reference: SAC, TD3 implementations apply WD only to critic.
-            if self.tamiyo:
-                # FactoredRecurrentActorCritic: slot_head, blueprint_head, blend_head, op_head are actors
-                actor_params = (
-                    list(self._base_network.slot_head.parameters()) +
-                    list(self._base_network.blueprint_head.parameters()) +
-                    list(self._base_network.blend_head.parameters()) +
-                    list(self._base_network.op_head.parameters())
-                )
-                critic_params = list(self._base_network.value_head.parameters())
-                shared_params = (
-                    list(self._base_network.feature_net.parameters()) +
-                    list(self._base_network.lstm.parameters()) +
-                    list(self._base_network.lstm_ln.parameters())  # Include LayerNorm
-                )
-            else:
-                # ActorCritic: shared feeds into actor
-                actor_params = list(self._base_network.actor.parameters())
-                critic_params = list(self._base_network.critic.parameters())
-                shared_params = list(self._base_network.shared.parameters())
+            # FactoredRecurrentActorCritic: slot_head, blueprint_head, blend_head, op_head are actors
+            actor_params = (
+                list(self._base_network.slot_head.parameters()) +
+                list(self._base_network.blueprint_head.parameters()) +
+                list(self._base_network.blend_head.parameters()) +
+                list(self._base_network.op_head.parameters())
+            )
+            critic_params = list(self._base_network.value_head.parameters())
+            shared_params = (
+                list(self._base_network.feature_net.parameters()) +
+                list(self._base_network.lstm.parameters()) +
+                list(self._base_network.lstm_ln.parameters())
+            )
 
             self.optimizer = torch.optim.AdamW([
                 {'params': actor_params, 'weight_decay': 0.0, 'name': 'actor'},
@@ -271,8 +256,6 @@ class PPOAgent:
             self.optimizer = torch.optim.Adam(
                 self.network.parameters(), **optimizer_kwargs
             )
-        if not self.tamiyo:
-            self.buffer = RolloutBuffer()
         self.train_steps = 0
 
     @property
