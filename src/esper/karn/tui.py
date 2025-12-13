@@ -210,15 +210,26 @@ class TUIOutput:
 
     Implements the Nissa OutputBackend protocol (emit, close) and displays
     live metrics in a structured terminal dashboard.
+
+    Args:
+        thresholds: Health status thresholds for color coding.
+        force_layout: Force a specific layout mode ('compact', 'standard', 'wide')
+                     instead of auto-detecting from terminal width. Currently unused
+                     but reserved for future multi-layout support.
     """
 
-    def __init__(self, thresholds: ThresholdConfig | None = None):
+    def __init__(
+        self,
+        thresholds: ThresholdConfig | None = None,
+        force_layout: str | None = None,
+    ):
         self.thresholds = thresholds or ThresholdConfig()
         self.state = TUIState()
         self.console = Console()
         self._live: Live | None = None
         self._started = False
         self._lock = threading.Lock()
+        self._force_layout = force_layout  # Reserved for future layout modes
 
     def start(self) -> None:
         """Start the live display."""

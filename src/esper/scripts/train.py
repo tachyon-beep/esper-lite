@@ -45,9 +45,16 @@ def main():
         help="Dashboard server port (default: 8000)",
     )
     telemetry_parent.add_argument(
-        "--tui",
+        "--no-tui",
         action="store_true",
-        help="Enable Rich terminal UI for live training monitoring (replaces console output)",
+        help="Disable Rich terminal UI (uses console output instead)",
+    )
+    telemetry_parent.add_argument(
+        "--tui-layout",
+        type=str,
+        choices=["compact", "standard", "wide", "auto"],
+        default="auto",
+        help="TUI layout mode: compact (< 100 cols), standard (100-150), wide (150+), auto (detect)",
     )
 
     subparsers = parser.add_subparsers(dest="algorithm", required=True)
@@ -165,13 +172,17 @@ def main():
     # alongside training logs.
     hub = get_hub()
 
-    # Use TUI or Console output based on --tui flag
+    # Use TUI by default, Console if --no-tui
     tui_backend = None
-    if args.tui:
+    use_tui = not args.no_tui
+
+    if use_tui:
         from esper.karn import TUIOutput
-        tui_backend = TUIOutput()
+        # Pass layout mode (None for auto-detect)
+        layout = None if args.tui_layout == "auto" else args.tui_layout
+        tui_backend = TUIOutput(force_layout=layout)
         hub.add_backend(tui_backend)
-        # TUI auto-starts on first event, no startup message needed
+        # TUI auto-starts on first event
     else:
         hub.add_backend(ConsoleOutput(min_severity=console_min_severity))
 
