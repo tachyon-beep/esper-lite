@@ -110,9 +110,11 @@ STAGE_POTENTIALS = {
     7: 6.0,   # FOSSILIZED (smallest increment - not a farming target)
 }
 
-# Default discount factor for PBRS. All reward configs should use this value
-# to ensure consistent telescoping properties across the codebase.
-DEFAULT_GAMMA = 0.99
+# Default discount factor for PBRS. MUST match SimicConfig.gamma (0.995)!
+# PBRS theory requires gamma_pbrs == gamma_ppo for policy invariance.
+# If they differ, reward shaping can change the optimal policy.
+# This value is optimized for 25-epoch episodes: gamma^25 ~ 0.88
+DEFAULT_GAMMA = 0.995
 
 
 # =============================================================================
