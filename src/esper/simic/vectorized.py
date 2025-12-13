@@ -406,7 +406,6 @@ def train_ppo_vectorized(
     # Create or resume PPO agent
     start_episode = 0
     if resume_path:
-        print(f"Resuming from checkpoint: {resume_path}")
         checkpoint = torch.load(resume_path, map_location=device, weights_only=False)
         agent = PPOAgent.load(resume_path, device=device)
 
@@ -423,12 +422,22 @@ def train_ppo_vectorized(
             # Restore momentum (critical for EMA mode - affects normalization dynamics)
             if 'obs_normalizer_momentum' in metadata:
                 obs_normalizer.momentum = metadata['obs_normalizer_momentum']
-            print(f"  Restored observation normalizer state (momentum={obs_normalizer.momentum})")
 
         # Calculate starting episode from checkpoint
         if 'n_episodes' in metadata:
             start_episode = metadata['n_episodes']
-            print(f"  Resuming from episode {start_episode}")
+
+        # Emit telemetry for checkpoint resume
+        if hub:
+            hub.emit(TelemetryEvent(
+                event_type=TelemetryEventType.CHECKPOINT_LOADED,
+                message=f"Resumed from checkpoint: {resume_path}",
+                data={
+                    "path": str(resume_path),
+                    "start_episode": start_episode,
+                    "obs_normalizer_momentum": obs_normalizer.momentum if 'obs_normalizer_state' in metadata else None,
+                },
+            ))
     else:
         agent = PPOAgent(
             state_dim=state_dim,
