@@ -11,6 +11,7 @@ import torch
 import torch.nn as nn
 
 from esper.leyline.factored_actions import FactoredAction, LifecycleOp
+from esper.leyline import TelemetryEvent, TelemetryEventType
 from esper.runtime import get_task_spec
 from esper.simic.rewards import compute_contribution_reward, SeedInfo
 from esper.simic.gradient_collector import (
@@ -285,6 +286,18 @@ def run_heuristic_episode(
     slot.on_telemetry = telemetry_callback
     slot.fast_mode = False
     slot.isolate_gradients = True
+
+    # Emit TRAINING_STARTED to activate Karn (P1 fix)
+    hub.emit(TelemetryEvent(
+        event_type=TelemetryEventType.TRAINING_STARTED,
+        data={
+            "episode_id": f"heur_{base_seed}",
+            "seed": base_seed,
+            "max_epochs": max_epochs,
+            "task": task_spec.name,
+            "mode": "heuristic",
+        },
+    ))
 
     criterion = nn.CrossEntropyLoss()
     host_optimizer = torch.optim.SGD(
