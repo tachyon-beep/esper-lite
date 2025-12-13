@@ -175,7 +175,7 @@ def ransomware_seed_inputs(draw):
     seed_contribution = draw(st.floats(1.0, 10.0, allow_nan=False))
 
     val_acc = draw(st.floats(50.0, 90.0, allow_nan=False))
-    acc_at_germination = val_acc + abs(seed_info.total_improvement)  # Was better before
+    acc_at_germination = min(100.0, val_acc + abs(seed_info.total_improvement))  # Was better before
 
     return {
         "action": LifecycleOp.WAIT,  # Default action
@@ -212,7 +212,11 @@ def fossilize_inputs(draw, valid: bool = True):
         ]))
 
     seed_info = draw(seed_infos(stage=stage))
-    seed_contribution = draw(st.floats(-2.0, 10.0, allow_nan=False))
+
+    # Only generate seed_contribution for BLENDING+ stages
+    seed_contribution = None
+    if stage in BLENDING_PLUS_STAGES:
+        seed_contribution = draw(st.floats(-2.0, 10.0, allow_nan=False))
 
     return {
         "action": LifecycleOp.FOSSILIZE,
