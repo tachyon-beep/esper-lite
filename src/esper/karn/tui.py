@@ -23,6 +23,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from rich.console import Console, Group
@@ -280,6 +281,90 @@ class TUIOutput:
     def close(self) -> None:
         """Close the TUI backend."""
         self.stop()
+
+    # =========================================================================
+    # Event Log Formatting (P1 - TUI/Nissa integration)
+    # =========================================================================
+
+    _SEVERITY_ORDER = {"debug": 0, "info": 1, "warning": 2, "error": 3, "critical": 4}
+
+    def _format_event_for_log(self, event: "TelemetryEvent") -> tuple[str, str, str] | None:
+        """Format event for log display, returns (timestamp, event_type, message) or None if filtered."""
+
+        # Filter by severity
+        severity = getattr(event, "severity", "info")
+        if self._SEVERITY_ORDER.get(severity, 1) < self._SEVERITY_ORDER.get(self.state.event_log_min_severity, 1):
+            return None
+
+        timestamp = event.timestamp.strftime("%H:%M:%S") if event.timestamp else datetime.now().strftime("%H:%M:%S")
+
+        # hasattr AUTHORIZED by John on 2025-12-14 12:00:00 UTC
+        # Justification: Serialization - handle both enum and string event_type values
+        event_type = (
+            event.event_type.name
+            if hasattr(event.event_type, "name")
+            else str(event.event_type)
+        )
+
+        data = event.data or {}
+
+        # Format message based on event type
+        if "EPOCH" in event_type:
+            loss = data.get("val_loss", "?")
+            acc = data.get("val_accuracy", "?")
+            epoch = event.epoch or data.get("epoch", "?")
+            if isinstance(loss, float) and isinstance(acc, float):
+                msg = f"epoch={epoch} loss={loss:.4f} acc={acc:.2%}"
+            else:
+                msg = f"epoch={epoch}"
+        elif event_type == "REWARD_COMPUTED":
+            action = data.get("action_name", "?")
+            total = data.get("total_reward", 0.0)
+            msg = f"{action} r={total:+.3f}"
+        elif event_type.startswith("SEED_"):
+            seed_id = event.seed_id or "?"
+            if event_type == "SEED_GERMINATED":
+                blueprint_id = data.get("blueprint_id", "?")
+                msg = f"{seed_id} germinated ({blueprint_id})"
+            elif event_type == "SEED_STAGE_CHANGED":
+                from_stage = data.get("from", "?")
+                to_stage = data.get("to", "?")
+                msg = f"{seed_id} {from_stage}->{to_stage}"
+            elif event_type == "SEED_FOSSILIZED":
+                improvement = data.get("improvement", 0)
+                msg = f"{seed_id} fossilized (+{improvement:.2f}%)"
+            elif event_type == "SEED_CULLED":
+                reason = data.get("reason", "")
+                msg = f"{seed_id} culled" + (f" ({reason})" if reason else "")
+            else:
+                msg = f"{seed_id}"
+        elif event_type == "PPO_UPDATE_COMPLETED":
+            if data.get("skipped"):
+                msg = "skipped (buffer rollback)"
+            else:
+                entropy = data.get("entropy", 0.0)
+                clip = data.get("clip_fraction", 0.0)
+                msg = f"ent={entropy:.3f} clip={clip:.3f}"
+        elif event_type == "CHECKPOINT_SAVED":
+            path = data.get("path", "?")
+            msg = f"saved {Path(path).name}" if path != "?" else "saved"
+        elif event_type == "CHECKPOINT_LOADED":
+            path = data.get("path", "?")
+            msg = f"loaded {Path(path).name}" if path != "?" else "loaded"
+        elif event_type.startswith("GOVERNOR_"):
+            detail = data.get("detail", event_type)
+            msg = str(detail)
+        elif event_type == "TRAINING_STARTED":
+            task = data.get("task", "?")
+            max_epochs = data.get("max_epochs", "?")
+            msg = f"task={task} epochs={max_epochs}"
+        elif event_type == "BATCH_COMPLETED":
+            batch = data.get("batch", "?")
+            msg = f"batch {batch} complete"
+        else:
+            msg = event.message or ""
+
+        return (timestamp, event_type, msg)
 
     # =========================================================================
     # Event Handlers
