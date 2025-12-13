@@ -115,7 +115,7 @@ We iterate **DataLoaders first** (batches), dispatch to **environments second** 
 
 **Hierarchy:**
 
-* **Kasmina** – the Cell / local mechanics (growth, division, death)
+* **Kasmina** – the Stem Cell / pluripotent mechanics (can differentiate into any blueprint)
 * **Narset** – the Endocrine System / hormonal coordination (resource allocation signals between organ clusters)
 * **Emrakul** – the Immune System / phagocytes (identifies and removes parasitic or damaged components)
 * **Tamiyo** – the Nervous System / strategic control (high-level decision making)
@@ -281,7 +281,7 @@ python -m esper.scripts.train ppo --reward-mode minimal
 
 | Component   | Biological Role     | Description                                        | Status |
 | ----------- | ------------------- | -------------------------------------------------- | ------ |
-| **Kasmina** | Cell                | Model & slot mechanics, seed lifecycle             | Active |
+| **Kasmina** | Stem Cell           | Pluripotent slots that differentiate into blueprints | Active |
 | **Leyline** | DNA/Proteins        | Shared types, enums, tensor schemas (contracts)    | Active |
 | **Tamiyo**  | Nervous System      | Heuristic decision logic, strategic control        | Active |
 | **Tolaria** | Metabolism          | PyTorch training loops, energy conversion          | Active |
