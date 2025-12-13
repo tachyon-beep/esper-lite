@@ -435,7 +435,7 @@ def train_ppo_vectorized(
                 data={
                     "path": str(resume_path),
                     "start_episode": start_episode,
-                    "obs_normalizer_momentum": obs_normalizer.momentum if 'obs_normalizer_state' in metadata else None,
+                    "obs_normalizer_momentum": obs_normalizer.momentum if 'obs_normalizer_mean' in metadata else None,
                 },
             ))
     else:
