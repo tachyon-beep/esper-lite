@@ -724,9 +724,11 @@ class PPOAgent:
 
         # === AUTO-ESCALATION: Check for anomalies and escalate if needed ===
         from esper.simic.anomaly_detector import AnomalyDetector
+        from esper.simic.debug_telemetry import RatioExplosionDiagnostic
 
         anomaly_detector = AnomalyDetector()
         anomaly_detected = False
+        ratio_diagnostic: RatioExplosionDiagnostic | None = None
 
         for epoch_i in range(self.n_epochs):
             if early_stopped:
@@ -766,6 +768,19 @@ class PPOAgent:
                 metrics['ratio_std'].append(r_std)
                 metrics['ratio_max'].append(r_max)
                 metrics['ratio_min'].append(r_min)
+
+                # Collect ratio explosion diagnostic when thresholds exceeded
+                # Only collect first occurrence to capture the triggering batch
+                if ratio_diagnostic is None:
+                    if r_max > anomaly_detector.max_ratio_threshold or r_min < anomaly_detector.min_ratio_threshold:
+                        ratio_diagnostic = RatioExplosionDiagnostic.from_batch(
+                            ratio=ratio,
+                            old_log_probs=old_log_probs,
+                            new_log_probs=log_probs,
+                            actions=actions,
+                            max_threshold=anomaly_detector.max_ratio_threshold,
+                            min_threshold=anomaly_detector.min_ratio_threshold,
+                        )
 
                 surr1 = ratio * batch_advantages
                 surr2 = torch.clamp(ratio, 1 - self.clip_ratio, 1 + self.clip_ratio) * batch_advantages
@@ -890,19 +905,25 @@ class PPOAgent:
                     else:
                         event_type = TelemetryEventType.GRADIENT_ANOMALY
 
+                    event_data = {
+                        "anomaly_type": anomaly_type,
+                        "detail": anomaly_report.details.get(anomaly_type, ""),
+                        "ratio_max": max_ratio,
+                        "ratio_min": min_ratio,
+                        "explained_variance": explained_variance,
+                        "train_steps": self.train_steps,
+                        "approx_kl": sum(metrics['approx_kl']) / len(metrics['approx_kl']) if metrics['approx_kl'] else 0.0,
+                        "clip_fraction": sum(metrics['clip_fraction']) / len(metrics['clip_fraction']) if metrics['clip_fraction'] else 0.0,
+                        "entropy": sum(metrics['entropy']) / len(metrics['entropy']) if metrics['entropy'] else 0.0,
+                    }
+
+                    # Include detailed diagnostic for ratio anomalies
+                    if anomaly_type in ("ratio_explosion", "ratio_collapse") and ratio_diagnostic is not None:
+                        event_data["diagnostic"] = ratio_diagnostic.to_dict()
+
                     hub.emit(TelemetryEvent(
                         event_type=event_type,
-                        data={
-                            "anomaly_type": anomaly_type,
-                            "detail": anomaly_report.details.get(anomaly_type, ""),
-                            "ratio_max": max_ratio,
-                            "ratio_min": min_ratio,
-                            "explained_variance": explained_variance,
-                            "train_steps": self.train_steps,
-                            "approx_kl": sum(metrics['approx_kl']) / len(metrics['approx_kl']) if metrics['approx_kl'] else 0.0,
-                            "clip_fraction": sum(metrics['clip_fraction']) / len(metrics['clip_fraction']) if metrics['clip_fraction'] else 0.0,
-                            "entropy": sum(metrics['entropy']) / len(metrics['entropy']) if metrics['entropy'] else 0.0,
-                        },
+                        data=event_data,
                         severity="warning",
                     ))
 

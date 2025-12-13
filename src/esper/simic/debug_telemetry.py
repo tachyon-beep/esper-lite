@@ -8,13 +8,9 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, asdict, field
-from typing import TYPE_CHECKING
 
 import torch
 import torch.nn as nn
-
-if TYPE_CHECKING:
-    pass
 
 
 @dataclass(slots=True)
@@ -61,7 +57,10 @@ def collect_per_layer_gradients(
     Returns:
         List of LayerGradientStats, one per parameter
     """
-    stats = []
+    # Collect all layer stats tensors first, then sync once at the end
+    layer_names: list[str] = []
+    param_counts: list[int] = []
+    stat_tensors: list[torch.Tensor] = []
 
     for name, param in model.named_parameters():
         if param.grad is None:
@@ -70,10 +69,13 @@ def collect_per_layer_gradients(
         grad = param.grad.detach()
         flat = grad.view(-1)
 
-        # Batch all stats into single GPU sync per layer (11 .item() → 1 .tolist())
+        layer_names.append(name)
+        param_counts.append(param.numel())
+
+        # Batch all stats into a single tensor (10 values per layer)
         # Use correction=0 for std to avoid division by zero on single-element tensors
         if flat.numel() > 0:
-            batch_stats = torch.stack([
+            layer_stats = torch.stack([
                 grad.norm(),
                 flat.mean(),
                 flat.std(correction=0),
@@ -85,16 +87,27 @@ def collect_per_layer_gradients(
                 torch.isnan(flat).sum().float(),
                 torch.isinf(flat).sum().float(),
             ])
-            (grad_norm, grad_mean, grad_std, grad_min, grad_max,
-             zero_frac, small_frac, large_frac, nan_cnt, inf_cnt) = batch_stats.tolist()
         else:
-            grad_norm = grad_mean = grad_std = grad_min = grad_max = 0.0
-            zero_frac = small_frac = large_frac = 0.0
-            nan_cnt = inf_cnt = 0.0
+            # Empty tensor: all zeros
+            layer_stats = torch.zeros(10, device=grad.device)
 
-        layer_stats = LayerGradientStats(
+        stat_tensors.append(layer_stats)
+
+    # Single GPU sync: stack all layers and transfer to CPU
+    if not stat_tensors:
+        return []
+
+    all_stats = torch.stack(stat_tensors).tolist()  # [num_layers, 10]
+
+    # Build LayerGradientStats objects from synced data
+    results = []
+    for i, (name, param_count) in enumerate(zip(layer_names, param_counts)):
+        (grad_norm, grad_mean, grad_std, grad_min, grad_max,
+         zero_frac, small_frac, large_frac, nan_cnt, inf_cnt) = all_stats[i]
+
+        results.append(LayerGradientStats(
             layer_name=name,
-            param_count=param.numel(),
+            param_count=param_count,
             grad_norm=grad_norm,
             grad_mean=grad_mean,
             grad_std=grad_std,
@@ -105,10 +118,9 @@ def collect_per_layer_gradients(
             large_fraction=large_frac,
             nan_count=int(nan_cnt),
             inf_count=int(inf_cnt),
-        )
-        stats.append(layer_stats)
+        ))
 
-    return stats
+    return results
 
 
 @dataclass(slots=True)
@@ -170,7 +182,7 @@ def check_numerical_stability(
     grad_maxes = []
 
     for name, param in model.named_parameters():
-        # Check weights (these are boolean checks, no sync needed)
+        # Check weights (.any() triggers GPU sync per param - acceptable for debug)
         if torch.isnan(param.data).any():
             nan_weights.append(name)
         if torch.isinf(param.data).any():
@@ -185,7 +197,7 @@ def check_numerical_stability(
                 inf_grads.append(name)
             grad_maxes.append(param.grad.abs().max())
 
-    # Single sync for all max values
+    # Single sync for all max values (assumes all params on same device)
     max_weight = torch.stack(weight_maxes).max().item() if weight_maxes else 0.0
     max_grad = torch.stack(grad_maxes).max().item() if grad_maxes else 0.0
 
@@ -231,11 +243,11 @@ class RatioExplosionDiagnostic:
         ratio: "torch.Tensor",
         old_log_probs: "torch.Tensor",
         new_log_probs: "torch.Tensor",
-        states: "torch.Tensor",
         actions: "torch.Tensor",
-        action_masks: "torch.Tensor",
         max_threshold: float = 5.0,
         min_threshold: float = 0.1,
+        states: "torch.Tensor | None" = None,
+        action_masks: "torch.Tensor | None" = None,
     ) -> "RatioExplosionDiagnostic":
         """Create diagnostic from batch tensors.
 
@@ -243,11 +255,11 @@ class RatioExplosionDiagnostic:
             ratio: PPO ratio tensor [N]
             old_log_probs: Old log probabilities [N]
             new_log_probs: New log probabilities [N]
-            states: State observations [N, state_dim]
             actions: Actions taken [N]
-            action_masks: Valid action masks [N, action_dim]
             max_threshold: Ratio above this is problematic
             min_threshold: Ratio below this is problematic
+            states: State observations [N, state_dim] (unused, reserved for future)
+            action_masks: Valid action masks [N, action_dim] (unused, reserved for future)
 
         Returns:
             RatioExplosionDiagnostic

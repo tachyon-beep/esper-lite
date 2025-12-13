@@ -10,10 +10,11 @@ class TestBlueprintCurriculum:
     """Verify UCB1 curriculum for blueprint selection."""
 
     def test_default_exploration_weight_is_sqrt2(self):
-        """Default exploration weight should be sqrt(2) for [0,1] rewards."""
+        """Default exploration weight should be sqrt(2) for [0,1] rewards with no penalty."""
         curriculum = BlueprintCurriculum(
             blueprints=["norm", "lora"],
             complexity=[100, 6000],
+            complexity_penalty=0.0,  # No penalty = base sqrt(2)
         )
         assert curriculum.exploration_weight == pytest.approx(math.sqrt(2))
 
@@ -23,9 +24,20 @@ class TestBlueprintCurriculum:
             blueprints=["norm", "lora"],
             complexity=[100, 6000],
             reward_range=(0.0, 10.0),
+            complexity_penalty=0.0,  # No penalty for clean test
         )
         # sqrt(2) * 10 = 14.14...
         assert curriculum.exploration_weight == pytest.approx(math.sqrt(2) * 10)
+
+    def test_exploration_weight_accounts_for_complexity_penalty(self):
+        """Exploration weight should scale with effective reward range including penalty."""
+        curriculum = BlueprintCurriculum(
+            blueprints=["norm", "lora"],
+            complexity=[100, 6000],
+            complexity_penalty=0.1,  # Extends range to [-0.1, 1.0]
+        )
+        # Effective range = 1.0 + 0.1 = 1.1, so weight = sqrt(2) * 1.1
+        assert curriculum.exploration_weight == pytest.approx(math.sqrt(2) * 1.1)
 
     def test_explicit_exploration_weight_overrides_default(self):
         """Explicit exploration_weight should override the default."""

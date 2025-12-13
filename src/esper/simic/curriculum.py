@@ -6,8 +6,12 @@ from dataclasses import dataclass
 
 
 @dataclass
-class BlueprintStats:
-    """Statistics for a single blueprint."""
+class CurriculumStats:
+    """UCB1 statistics for a single blueprint in curriculum selection.
+
+    Note: This is distinct from nissa.analytics.BlueprintStats which tracks
+    fossilization/culling analytics. This class tracks UCB1 bandit statistics.
+    """
     trials: int = 0
     successes: int = 0
     total_reward: float = 0.0
@@ -63,15 +67,19 @@ class BlueprintCurriculum:
         self._reward_min, self._reward_max = reward_range
 
         # Default exploration weight: sqrt(2) (theoretically optimal for [0,1] rewards)
-        # Scale by reward range if rewards aren't normalized
-        reward_scale = self._reward_max - self._reward_min
+        # Scale by effective reward range after complexity adjustment:
+        # - Input rewards normalized to [0, 1]
+        # - Complexity penalty extends range to [-complexity_penalty, 1.0]
+        # - Effective range width = 1.0 + complexity_penalty
+        input_reward_scale = self._reward_max - self._reward_min
+        effective_reward_scale = input_reward_scale * (1.0 + complexity_penalty)
         self.exploration_weight = (
             exploration_weight if exploration_weight is not None
-            else self.SQRT_2 * reward_scale
+            else self.SQRT_2 * effective_reward_scale
         )
 
-        self._stats: dict[str, BlueprintStats] = {
-            name: BlueprintStats() for name in blueprints
+        self._stats: dict[str, CurriculumStats] = {
+            name: CurriculumStats() for name in blueprints
         }
         self._total_trials = 0
 
@@ -121,7 +129,7 @@ class BlueprintCurriculum:
         Returns None for unexplored blueprints (they're selected first
         in the initialization phase, no fake score needed).
         """
-        scores = {}
+        scores: dict[str, float | None] = {}
 
         for name in self.blueprints:
             stats = self._stats[name]
@@ -155,7 +163,7 @@ class BlueprintCurriculum:
         scores = self.get_ucb_scores()
         # Filter to explored only (scores are not None)
         explored_scores = {k: v for k, v in scores.items() if v is not None}
-        return max(explored_scores, key=explored_scores.get)
+        return max(explored_scores, key=lambda k: explored_scores[k])
 
     def get_stats(self, blueprint: str) -> dict:
         """Get statistics for a blueprint.
@@ -170,4 +178,4 @@ class BlueprintCurriculum:
         }
 
 
-__all__ = ["BlueprintCurriculum", "BlueprintStats"]
+__all__ = ["BlueprintCurriculum", "CurriculumStats"]

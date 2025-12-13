@@ -22,11 +22,11 @@ class TestRatioExplosionDiagnostic:
             ratio=ratio,
             old_log_probs=old_log_probs,
             new_log_probs=new_log_probs,
-            states=states,
             actions=actions,
-            action_masks=action_masks,
             max_threshold=5.0,
             min_threshold=0.1,
+            states=states,
+            action_masks=action_masks,
         )
 
         assert len(diag.worst_ratio_indices) == 2  # 6.0 > 5.0, 0.05 < 0.1

@@ -38,7 +38,7 @@ from esper.simic.prioritized_buffer import (
 from esper.simic.normalization import RunningMeanStd
 
 # Curriculum
-from esper.simic.curriculum import BlueprintCurriculum, BlueprintStats
+from esper.simic.curriculum import BlueprintCurriculum, CurriculumStats
 
 # Rewards
 from esper.simic.rewards import (
@@ -130,7 +130,7 @@ __all__ = [
 
     # Curriculum
     "BlueprintCurriculum",
-    "BlueprintStats",
+    "CurriculumStats",
 
     # Rewards
     "LossRewardConfig",
