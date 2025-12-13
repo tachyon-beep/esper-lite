@@ -190,6 +190,24 @@ class ContributionRewardConfig:
     # Gamma for PBRS (uses module constant for consistency)
     gamma: float = DEFAULT_GAMMA
 
+    # === Experiment Mode ===
+    reward_mode: RewardMode = RewardMode.SHAPED
+
+    # === Sparse Reward Parameters ===
+    # Parameter budget for efficiency calculation (sparse/minimal modes)
+    param_budget: int = 500_000
+    # Weight for parameter penalty in sparse reward
+    param_penalty_weight: float = 0.1
+    # Reward scaling factor for sparse mode (DRL Expert: try 2.0-3.0 if learning fails)
+    # Higher scale helps with credit assignment over 25 timesteps
+    sparse_reward_scale: float = 1.0
+
+    # === Minimal Mode Parameters ===
+    # Minimum seed age before cull (epochs)
+    early_cull_threshold: int = 5
+    # Penalty for culling young seeds
+    early_cull_penalty: float = -0.1
+
     @staticmethod
     def default() -> "ContributionRewardConfig":
         """Return default configuration."""
