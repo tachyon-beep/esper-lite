@@ -51,7 +51,7 @@ class TestFactoredRecurrentActorCritic:
         assert not torch.allclose(h1, h2), "Hidden states should change between steps"
 
     def test_masks_applied_correctly(self):
-        """Invalid actions must have -inf logits after masking."""
+        """Invalid actions must have large negative logits after masking."""
         net = FactoredRecurrentActorCritic(state_dim=50)
         state = torch.randn(1, 1, 50)
 
@@ -68,9 +68,10 @@ class TestFactoredRecurrentActorCritic:
         )
 
         slot_logits = output["slot_logits"][0, 0]
-        assert slot_logits[0] == float("-inf")
-        assert slot_logits[1] != float("-inf")
-        assert slot_logits[2] == float("-inf")
+        # Masked actions should have large negative value (not -inf for FP16 safety)
+        assert slot_logits[0] < -1000, "Masked action should have large negative logit"
+        assert slot_logits[1] > -1000, "Valid action should have normal logit"
+        assert slot_logits[2] < -1000, "Masked action should have large negative logit"
 
     def test_per_head_log_probs(self):
         """evaluate_actions must return per-head log probs."""
@@ -146,3 +147,57 @@ class TestFactoredRecurrentActorCritic:
 
         for key in ["slot", "blueprint", "blend", "op"]:
             assert actions1[key] == actions2[key], f"{key} action not deterministic"
+
+
+def test_masking_produces_valid_softmax():
+    """Verify masking produces valid probabilities after softmax.
+
+    Critical test from PyTorch expert review: must verify softmax doesn't
+    produce NaN/Inf, not just that mask value is finite.
+    """
+    net = FactoredRecurrentActorCritic(state_dim=35)
+    state = torch.randn(2, 3, 35)
+
+    # Mask that disables some actions
+    slot_mask = torch.ones(2, 3, 3, dtype=torch.bool)
+    slot_mask[:, :, 1] = False  # Mask out middle action
+
+    output = net.forward(state, slot_mask=slot_mask)
+
+    # Test that _MASK_VALUE produces valid softmax across dtypes
+    for dtype in [torch.float32, torch.float16, torch.bfloat16]:
+        logits = output["slot_logits"].to(dtype)
+        probs = torch.softmax(logits, dim=-1)
+
+        # Masked positions should have ~0 probability
+        assert (probs[:, :, 1] < 1e-3).all(), \
+            f"Masked action should have near-zero probability with {dtype}"
+        # Valid positions should have valid probabilities
+        assert not torch.isnan(probs).any(), \
+            f"Softmax should not produce NaN with {dtype}"
+        assert not torch.isinf(probs).any(), \
+            f"Softmax should not produce Inf with {dtype}"
+        # Probabilities should sum to 1
+        assert torch.allclose(probs.sum(dim=-1), torch.ones(2, 3, dtype=dtype), atol=1e-2), \
+            f"Probabilities should sum to 1 with {dtype}"
+
+
+def test_logits_no_inf_after_masking():
+    """Verify masked logits use large negative value, not -inf.
+
+    This is critical for torch.compile and mixed precision compatibility.
+    """
+    net = FactoredRecurrentActorCritic(state_dim=35)
+    state = torch.randn(2, 3, 35)
+
+    # Mask that disables some actions
+    slot_mask = torch.ones(2, 3, 3, dtype=torch.bool)
+    slot_mask[:, :, 1] = False  # Mask out middle action
+
+    output = net.forward(state, slot_mask=slot_mask)
+
+    # Should not contain inf - masked values should use -1e4, not -inf
+    for key in ["slot_logits", "blueprint_logits", "blend_logits", "op_logits", "value"]:
+        tensor = output[key]
+        assert not torch.isinf(tensor).any(), f"{key} should not contain -inf"
+        assert not torch.isnan(tensor).any(), f"{key} should not contain NaN"

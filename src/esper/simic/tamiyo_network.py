@@ -30,6 +30,13 @@ from esper.leyline.factored_actions import (
     NUM_OPS,
 )
 
+# Mask value for invalid actions. Use -1e4 (not -inf or dtype.min) because:
+# 1. float("-inf") causes FP16 saturation issues
+# 2. torch.finfo(dtype).min can cause softmax overflow after max-subtraction
+# 3. -1e4 is large enough to zero out softmax but small enough to avoid overflow
+# This is the standard practice in HuggingFace Transformers and PyTorch attention.
+_MASK_VALUE = -1e4
+
 
 class FactoredRecurrentActorCritic(nn.Module):
     """Recurrent actor-critic with factored action heads.
@@ -194,15 +201,17 @@ class FactoredRecurrentActorCritic(nn.Module):
         blend_logits = self.blend_head(lstm_out)
         op_logits = self.op_head(lstm_out)
 
-        # Apply masks (set invalid actions to -inf)
+        # Apply masks (set invalid actions to large negative for softmax zeroing)
+        # Using -1e4 instead of -inf or dtype.min to avoid FP16 overflow issues
+        # (PyTorch expert review: dtype.min can cause NaN after softmax normalization)
         if slot_mask is not None:
-            slot_logits = slot_logits.masked_fill(~slot_mask, float("-inf"))
+            slot_logits = slot_logits.masked_fill(~slot_mask, _MASK_VALUE)
         if blueprint_mask is not None:
-            blueprint_logits = blueprint_logits.masked_fill(~blueprint_mask, float("-inf"))
+            blueprint_logits = blueprint_logits.masked_fill(~blueprint_mask, _MASK_VALUE)
         if blend_mask is not None:
-            blend_logits = blend_logits.masked_fill(~blend_mask, float("-inf"))
+            blend_logits = blend_logits.masked_fill(~blend_mask, _MASK_VALUE)
         if op_mask is not None:
-            op_logits = op_logits.masked_fill(~op_mask, float("-inf"))
+            op_logits = op_logits.masked_fill(~op_mask, _MASK_VALUE)
 
         # Value prediction
         value = self.value_head(lstm_out).squeeze(-1)  # [batch, seq_len]
