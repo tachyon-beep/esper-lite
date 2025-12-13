@@ -201,3 +201,50 @@ def test_logits_no_inf_after_masking():
         tensor = output[key]
         assert not torch.isinf(tensor).any(), f"{key} should not contain -inf"
         assert not torch.isnan(tensor).any(), f"{key} should not contain NaN"
+
+
+def test_entropy_normalization_with_single_action():
+    """Verify entropy normalization handles single-action case gracefully."""
+    # Edge case: num_slots=1 means log(1)=0, could cause division issues
+    net = FactoredRecurrentActorCritic(
+        state_dim=35,
+        num_slots=1,  # log(1) = 0!
+        num_blueprints=5,
+        num_blends=3,
+        num_ops=4,
+    )
+
+    state = torch.randn(2, 3, 35)
+    actions = {
+        "slot": torch.zeros(2, 3, dtype=torch.long),  # Only one option
+        "blueprint": torch.randint(0, 5, (2, 3)),
+        "blend": torch.randint(0, 3, (2, 3)),
+        "op": torch.randint(0, 4, (2, 3)),
+    }
+
+    log_probs, values, entropy, hidden = net.evaluate_actions(state, actions)
+
+    # Entropy for single-action head should be 0 (no uncertainty), not inf/nan
+    assert not torch.isnan(entropy["slot"]).any(), "Entropy should not be NaN"
+    assert not torch.isinf(entropy["slot"]).any(), "Entropy should not be Inf"
+    # With single action, normalized entropy should be 0 or 1 (not 1e8)
+    assert entropy["slot"].abs().max() <= 1.0, f"Entropy out of range: {entropy['slot'].max()}"
+
+
+def test_entropy_normalization_in_loss():
+    """Verify entropy normalization doesn't blow up loss values."""
+    net = FactoredRecurrentActorCritic(state_dim=35, num_slots=1)
+
+    state = torch.randn(2, 3, 35)
+    actions = {
+        "slot": torch.zeros(2, 3, dtype=torch.long),
+        "blueprint": torch.randint(0, 5, (2, 3)),
+        "blend": torch.randint(0, 3, (2, 3)),
+        "op": torch.randint(0, 4, (2, 3)),
+    }
+
+    log_probs, values, entropy, _ = net.evaluate_actions(state, actions)
+
+    # Entropy loss should be bounded
+    entropy_loss = sum(-ent.mean() for ent in entropy.values())
+    assert entropy_loss.abs() < 100, f"Entropy loss too large: {entropy_loss}"

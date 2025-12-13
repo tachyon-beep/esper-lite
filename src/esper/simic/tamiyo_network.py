@@ -86,11 +86,15 @@ class FactoredRecurrentActorCritic(nn.Module):
         self.lstm_ln = nn.LayerNorm(lstm_hidden_dim)
 
         # Max entropy for per-head normalization (different cardinalities)
+        # Use max(log(n), 1.0) to prevent division-by-near-zero when n=1
+        # When n=1, there's no uncertainty, so we set max_entropy=1.0 (entropy will be 0)
+        # For n>=3: max_entropy=log(n), normalized entropy in [0, 1]
+        # For n=2: max_entropy clamped to 1.0, normalized entropy in [0, 0.693]
         self.max_entropies = {
-            "slot": math.log(num_slots),
-            "blueprint": math.log(num_blueprints),
-            "blend": math.log(num_blends),
-            "op": math.log(num_ops),
+            "slot": max(math.log(num_slots), 1.0),
+            "blueprint": max(math.log(num_blueprints), 1.0),
+            "blend": max(math.log(num_blends), 1.0),
+            "op": max(math.log(num_ops), 1.0),
         }
 
         # Factored action heads (feedforward on LSTM output)
@@ -320,8 +324,9 @@ class FactoredRecurrentActorCritic(nn.Module):
             dist = Categorical(logits=logits_flat)
             log_probs[key] = dist.log_prob(action_flat).reshape(batch, seq)
             # Normalize entropy by max possible (different head cardinalities)
+            # The max() in __init__ ensures max_entropies[key] >= 1.0
             raw_entropy = dist.entropy().reshape(batch, seq)
-            entropy[key] = raw_entropy / max(self.max_entropies[key], 1e-8)
+            entropy[key] = raw_entropy / self.max_entropies[key]
 
         return log_probs, output["value"], entropy, output["hidden"]
 
