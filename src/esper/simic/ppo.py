@@ -468,6 +468,7 @@ class PPOAgent:
             metrics["entropy"].append(-entropy_loss.item())
             metrics["ratio_mean"].append(joint_ratio.mean().item())
             metrics["ratio_max"].append(joint_ratio.max().item())
+            metrics["ratio_min"].append(joint_ratio.min().item())
 
             # Compute approximate KL divergence using the log-ratio trick:
             # KL(old||new) ≈ E[(ratio - 1) - log(ratio)]
