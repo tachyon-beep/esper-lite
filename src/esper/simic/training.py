@@ -182,46 +182,6 @@ def _train_one_epoch(
 
 
 # =============================================================================
-# PPO Training Loop
-# =============================================================================
-
-def train_ppo(
-    n_episodes: int = 100,
-    max_epochs: int = 25,
-    update_every: int = 5,
-    device: str = "cuda:0",
-    task: str = "cifar10",
-    use_telemetry: bool = True,
-    lr: float = 3e-4,
-    clip_ratio: float = 0.2,
-    entropy_coef: float = 0.05,  # Unified default
-    entropy_coef_start: float | None = None,
-    entropy_coef_end: float | None = None,
-    entropy_coef_min: float = 0.01,  # Unified minimum
-    adaptive_entropy_floor: bool = False,
-    entropy_anneal_episodes: int = 0,
-    gamma: float = 0.99,
-    save_path: str | None = None,
-    seed: int | None = None,
-    telemetry_config: "TelemetryConfig | None" = None,
-    slots: list[str] | None = None,
-    max_seeds: int | None = None,
-    max_seeds_per_slot: int | None = None,
-):
-    """Train PPO agent.
-
-    DEPRECATED: Use train_ppo_vectorized from esper.simic.vectorized instead.
-    Non-vectorized training has been removed in favor of the unified tamiyo mode.
-    """
-    raise NotImplementedError(
-        "Non-vectorized train_ppo has been removed. "
-        "Use 'python -m esper.scripts.train ppo --vectorized' or "
-        "call train_ppo_vectorized() directly from esper.simic.vectorized. "
-        "See docs/plans/2025-12-13-buffers-config-audit-fixes.md for details."
-    )
-
-
-# =============================================================================
 # Heuristic Training
 # =============================================================================
 
@@ -554,8 +514,6 @@ def train_heuristic(
 
 
 __all__ = [
-    "run_ppo_episode",
-    "train_ppo",
     "run_heuristic_episode",
     "train_heuristic",
 ]
