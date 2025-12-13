@@ -481,7 +481,7 @@ def compute_contribution_reward(
                 components.ratio_penalty = ratio_penalty
 
             bounded_attribution = config.contribution_weight * attributed
-    elif seed_info is not None:
+    elif seed_info is not None and not seed_is_fossilized:
         # Pre-blending: use accuracy delta as proxy signal (lower weight)
         # This maintains reward continuity without imputing fake counterfactual.
         # No penalty for negative delta - we don't have causal data yet.
