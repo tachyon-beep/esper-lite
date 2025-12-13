@@ -532,6 +532,9 @@ class PPOAgent:
                 'recurrent_n_epochs': self.recurrent_n_epochs,
                 'lstm_hidden_dim': self.lstm_hidden_dim,
                 'chunk_length': self.chunk_length,
+                # Buffer dimensions (must match training loop)
+                'num_envs': self.num_envs,
+                'max_steps_per_env': self.max_steps_per_env,
             },
             # Architecture info for load-time reconstruction
             'architecture': {

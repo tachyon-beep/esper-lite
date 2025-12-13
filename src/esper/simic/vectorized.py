@@ -414,6 +414,9 @@ def train_ppo_vectorized(
             device=device,
             lstm_hidden_dim=lstm_hidden_dim,
             chunk_length=chunk_length,
+            # Buffer dimensions must match training loop parameters
+            num_envs=n_envs,
+            max_steps_per_env=max_epochs,
         )
 
     # ==========================================================================

@@ -144,6 +144,7 @@ def main():
             device=args.device,
             task=args.task,
             seed=args.seed,
+            slots=args.slots,
         )
 
     elif args.algorithm == "ppo":
