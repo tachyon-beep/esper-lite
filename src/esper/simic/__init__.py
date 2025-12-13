@@ -5,29 +5,15 @@ the Tamiyo seed lifecycle controller:
 
 - buffers: Trajectory buffers
 - normalization: Observation normalization
-- networks: Policy network architectures
+- action_masks: Masked action distributions
 - rewards: Reward computation
 - features: Feature extraction (hot path)
-- episodes: Episode data structures
 - ppo: PPO agent
 - training: Training loops
 - vectorized: Multi-GPU training
+- debug_telemetry: Per-layer gradient debugging
+- anomaly_detector: Phase-dependent anomaly detection
 """
-
-# Core data structures
-from esper.simic.episodes import (
-    TrainingSnapshot,
-    ActionTaken,
-    StepOutcome,
-    DecisionPoint,
-    Episode,
-    DatasetManager,
-)
-
-from esper.simic.prioritized_buffer import (
-    SumTree,
-    PrioritizedReplayBuffer,
-)
 
 # Normalization
 from esper.simic.normalization import RunningMeanStd
@@ -52,17 +38,14 @@ from esper.simic.rewards import (
 # Features (hot path)
 from esper.simic.features import (
     safe,
-    obs_to_base_features,
     TaskConfig,
     normalize_observation,
 )
 
-# Networks
-from esper.simic.networks import (
-    PolicyNetwork,
-    print_confusion_matrix,
-    QNetwork,
-    VNetwork,
+# Action Masks
+from esper.simic.action_masks import (
+    MaskedCategorical,
+    InvalidStateMachineError,
 )
 
 # Telemetry
@@ -70,16 +53,8 @@ from esper.simic.telemetry_config import (
     TelemetryLevel,
     TelemetryConfig,
 )
-from esper.simic.ppo_telemetry import (
-    PPOHealthTelemetry,
-    ValueFunctionTelemetry,
-)
 from esper.simic.reward_telemetry import (
     RewardComponentsTelemetry,
-)
-from esper.simic.memory_telemetry import (
-    MemoryMetrics,
-    collect_memory_metrics,
 )
 from esper.simic.gradient_collector import (
     GradientHealthMetrics,
@@ -102,18 +77,6 @@ from esper.simic.anomaly_detector import (
 #   from esper.simic.vectorized import train_ppo_vectorized
 
 __all__ = [
-    # Episodes
-    "TrainingSnapshot",
-    "ActionTaken",
-    "StepOutcome",
-    "DecisionPoint",
-    "Episode",
-    "DatasetManager",
-
-    # Buffers
-    "SumTree",
-    "PrioritizedReplayBuffer",
-
     # Normalization
     "RunningMeanStd",
 
@@ -134,24 +97,17 @@ __all__ = [
 
     # Features
     "safe",
-    "obs_to_base_features",
     "TaskConfig",
     "normalize_observation",
 
-    # Networks
-    "PolicyNetwork",
-    "print_confusion_matrix",
-    "QNetwork",
-    "VNetwork",
+    # Action Masks
+    "MaskedCategorical",
+    "InvalidStateMachineError",
 
     # Telemetry
     "TelemetryLevel",
     "TelemetryConfig",
-    "PPOHealthTelemetry",
-    "ValueFunctionTelemetry",
     "RewardComponentsTelemetry",
-    "MemoryMetrics",
-    "collect_memory_metrics",
     "GradientHealthMetrics",
     "LayerGradientStats",
     "collect_per_layer_gradients",
