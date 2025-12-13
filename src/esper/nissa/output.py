@@ -160,6 +160,90 @@ class ConsoleOutput(OutputBackend):
             else:
                 # Legacy shaped reward
                 print(f"[{timestamp}] env{env_id} | {action}: r={total:+.2f} (Δacc={base:+.2f}, rent={rent_display:.2f}{extra}) acc={val_acc:.1f}%")
+        elif event_type == "GOVERNOR_ROLLBACK":
+            data = event.data or {}
+            reason = data.get("reason", "unknown")
+            loss = data.get("loss_at_panic", "?")
+            threshold = data.get("loss_threshold", "?")
+            panics = data.get("consecutive_panics", "?")
+            if isinstance(loss, float):
+                loss = f"{loss:.4f}"
+            if isinstance(threshold, float):
+                threshold = f"{threshold:.4f}"
+            print(f"[{timestamp}] GOVERNOR | 🚨 ROLLBACK: {reason} (loss={loss}, threshold={threshold}, panics={panics})")
+        elif event_type == "GOVERNOR_PANIC":
+            data = event.data or {}
+            loss = data.get("current_loss", "?")
+            panics = data.get("consecutive_panics", 0)
+            if isinstance(loss, float):
+                loss = f"{loss:.4f}"
+            print(f"[{timestamp}] GOVERNOR | ⚠️  PANIC #{panics}: loss={loss}")
+        elif event_type == "BATCH_COMPLETED":
+            data = event.data or {}
+            batch_idx = data.get("batch_idx", "?")
+            episodes = data.get("episodes_completed", "?")
+            total = data.get("total_episodes", "?")
+            avg_acc = data.get("avg_accuracy", 0.0)
+            rolling_acc = data.get("rolling_accuracy", 0.0)
+            avg_reward = data.get("avg_reward", 0.0)
+            env_accs = data.get("env_accuracies", [])
+            env_acc_str = ", ".join(f"{a:.1f}%" for a in env_accs) if env_accs else ""
+            print(f"[{timestamp}] BATCH {batch_idx} | Episodes {episodes}/{total}")
+            if env_acc_str:
+                print(f"[{timestamp}]   Env accs: [{env_acc_str}]")
+            print(f"[{timestamp}]   Avg: {avg_acc:.1f}% (rolling: {rolling_acc:.1f}%), reward: {avg_reward:.1f}")
+        elif event_type == "COUNTERFACTUAL_COMPUTED":
+            data = event.data or {}
+            env_idx = data.get("env_idx", "?")
+            slot_id = data.get("slot_id", "?")
+            real_acc = data.get("real_accuracy", 0.0)
+            baseline_acc = data.get("baseline_accuracy", 0.0)
+            contribution = data.get("contribution", 0.0)
+            print(f"[{timestamp}] env{env_idx} | Counterfactual {slot_id}: {real_acc:.1f}% real, {baseline_acc:.1f}% baseline, Δ={contribution:+.1f}%")
+        elif event_type == "CHECKPOINT_SAVED":
+            data = event.data or {}
+            path = data.get("path", "?")
+            avg_acc = data.get("avg_accuracy", 0.0)
+            print(f"[{timestamp}] CHECKPOINT | Saved to {path} (acc={avg_acc:.1f}%)")
+        elif event_type == "CHECKPOINT_LOADED":
+            data = event.data or {}
+            path = data.get("path", "?")
+            episode = data.get("start_episode", 0)
+            source = data.get("source", "")
+            if source:
+                print(f"[{timestamp}] CHECKPOINT | Loaded {source} (acc={data.get('avg_accuracy', 0.0):.1f}%)")
+            else:
+                print(f"[{timestamp}] CHECKPOINT | Loaded from {path} (resuming at episode {episode})")
+        elif event_type == "TAMIYO_INITIATED":
+            data = event.data or {}
+            env_id = data.get("env_id")
+            epoch = data.get("epoch", "?")
+            stable_count = data.get("stable_count", 0)
+            stabilization_epochs = data.get("stabilization_epochs", 0)
+            env_str = f"env{env_id}" if env_id is not None else "Tamiyo"
+            if stabilization_epochs == 0:
+                print(f"[{timestamp}] {env_str} | Host stabilized at epoch {epoch} - germination now allowed")
+            else:
+                print(f"[{timestamp}] {env_str} | Host stabilized at epoch {epoch} ({stable_count}/{stabilization_epochs} stable) - germination now allowed")
+        elif event_type == "PPO_UPDATE_COMPLETED":
+            data = event.data or {}
+            if data.get("skipped"):
+                reason = data.get("reason", "unknown")
+                print(f"[{timestamp}] PPO | Update skipped ({reason})")
+            else:
+                policy_loss = data.get("policy_loss", 0.0)
+                value_loss = data.get("value_loss", 0.0)
+                entropy = data.get("entropy", 0.0)
+                entropy_coef = data.get("entropy_coef", 0.0)
+                print(f"[{timestamp}] PPO | policy={policy_loss:.4f}, value={value_loss:.4f}, entropy={entropy:.3f} (coef={entropy_coef:.4f})")
+        elif event_type in ("RATIO_EXPLOSION_DETECTED", "RATIO_COLLAPSE_DETECTED",
+                           "VALUE_COLLAPSE_DETECTED", "NUMERICAL_INSTABILITY_DETECTED",
+                           "GRADIENT_ANOMALY"):
+            data = event.data or {}
+            episode = data.get("episode", "?")
+            detail = data.get("detail", "")
+            anomaly_name = event_type.replace("_DETECTED", "").replace("_", " ").title()
+            print(f"[{timestamp}] ⚠️  ANOMALY | {anomaly_name} at episode {episode}: {detail}")
         else:
             msg = event.message or event_type
             print(f"[{timestamp}] {seed_id} | {msg}")
