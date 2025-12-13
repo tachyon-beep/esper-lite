@@ -19,35 +19,64 @@
 
 ### ⚠️ Critical: Event Ordering Contract
 
+**Terminology: Inner Epochs vs Episodes/Batches**
+
+In this codebase, there are two levels of iteration:
+
+- **Inner Epoch** = One pass through training data: `for epoch in range(1, max_epochs + 1)`
+- **Episode/Batch** = One complete PPO training cycle (rollout → all inner epochs → PPO update)
+- **episodes_completed** = Monotonic counter incremented after each batch (by `n_envs`)
+
+**Design Decision: `event.epoch` = Monotonic Batch Counter**
+
+EPOCH_COMPLETED uses `episodes_completed` as the `epoch` field (monotonic, never repeats):
+
+```
+Batch 1: episodes_completed = 0 → 4 (n_envs=4)
+  ├── Events during batch have epoch=4
+  └── EPOCH_COMPLETED(epoch=4, data={inner_epoch=75})
+
+Batch 2: episodes_completed = 4 → 8
+  ├── Events during batch have epoch=8
+  └── EPOCH_COMPLETED(epoch=8, data={inner_epoch=75})
+```
+
+This ensures Karn's commit/advance logic works correctly:
+- Batch 1: EPOCH_COMPLETED(4) → Karn commits snapshot 4, advances to 5
+- Batch 2: EPOCH_COMPLETED(8) → Karn commits snapshot 8, advances to 9
+
+The `inner_epoch` field in `event.data` preserves which training epoch was final (always `max_epochs` for normal completion).
+
 **EPOCH_COMPLETED is Karn's commit barrier.** When Karn receives EPOCH_COMPLETED(e), it:
 1. Commits epoch e's snapshot (with all accumulated data)
 2. Immediately advances to epoch e+1
 
 **Any event emitted AFTER EPOCH_COMPLETED(e) goes into epoch e+1, not e.**
 
-**Safe emission order per epoch:**
+**Safe emission order per batch:**
 ```
-1. [Epoch e begins] Karn's current_epoch.epoch == e
-2. [During rollout] SEED_*, REWARD_COMPUTED, COUNTERFACTUAL_COMPUTED (with epoch=e)
-3. [After PPO update] PPO_UPDATE_COMPLETED (with epoch=e)  ← MUST include epoch!
-4. [Optional] ANALYTICS_SNAPSHOT (with epoch=e)
-5. [LAST] EPOCH_COMPLETED(e) ← commits and advances to e+1
+1. [Batch begins] Karn's current_epoch.epoch == episodes_completed
+2. [During rollout] SEED_*, REWARD_COMPUTED (with epoch=episodes_completed)
+3. [After PPO update] PPO_UPDATE_COMPLETED (with epoch=episodes_completed)
+4. [Optional] ANALYTICS_SNAPSHOT (with epoch=episodes_completed)
+5. [LAST] EPOCH_COMPLETED(episodes_completed) ← commits and advances
 ```
 
 **Current bugs:**
-- Karn starts at epoch 0, Simic starts at epoch 1 → off-by-one
-- PPO_UPDATE_COMPLETED missing `epoch=epoch` field
-- ANALYTICS_SNAPSHOT missing `epoch=epoch` field
+- Karn starts at epoch 0, Simic starts at epoch 1 → off-by-one (fix: Karn starts at 1)
+- PPO_UPDATE_COMPLETED missing `epoch=episodes_completed` field
+- ANALYTICS_SNAPSHOT missing `epoch=episodes_completed` field
+- EPOCH_COMPLETED not emitted at all
 
 ---
 
-### Task 0: Remove Duplicate SeedStage Enum from Karn (Contract Violation)
+### Task 0: Remove Duplicate SeedStage Enum from Karn (Contract Cleanup)
 
 **Files:**
 - Modify: `src/esper/karn/store.py` (delete lines 86-102, add import)
 - Modify: `src/esper/karn/__init__.py` (re-export from leyline, not store)
 
-**Problem:** Karn defines its own `SeedStage(Enum)` that "mirrors" leyline's `SeedStage(IntEnum)`. This violates CLAUDE.md's No Legacy Code Policy ("No adapter classes to support old interfaces").
+**Problem:** Karn defines its own `SeedStage(Enum)` that "mirrors" leyline's `SeedStage(IntEnum)`. This is a contract violation—there should be a single source of truth for `SeedStage` in `leyline`. While both enums currently have matching values, maintaining two copies creates drift risk and violates the No Legacy Code Policy's prohibition on compatibility shims.
 
 **Step 1: Write the failing test**
 
@@ -208,19 +237,21 @@ class TestEpochTelemetryContract:
 
     def test_epoch_completed_is_commit_barrier(self):
         """Document that EPOCH_COMPLETED commits and advances epoch."""
-        from esper.karn.collector import TelemetryCollector
-        from esper.karn.store import TelemetryStore
+        from esper.karn.collector import KarnCollector
 
-        store = TelemetryStore()
-        collector = TelemetryCollector(store)
+        # KarnCollector creates its own store internally
+        collector = KarnCollector()
+        store = collector.store
 
         # Start episode (starts at epoch 1 to match Simic)
+        # TRAINING_STARTED handler creates EpisodeContext and calls start_epoch(1)
         collector.emit(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
             data={"episode_id": "test", "max_epochs": 10}
         ))
 
-        # Karn should now be at epoch 1
+        # Karn should now be at epoch 1 (set by _handle_training_started)
+        assert store.current_epoch is not None
         assert store.current_epoch.epoch == 1
 
         # Emit EPOCH_COMPLETED(1)
@@ -259,10 +290,10 @@ Modify `src/esper/simic/vectorized.py` lines 1477-1483:
             if hub:
                 hub.emit(TelemetryEvent(
                     event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
-                    epoch=epoch,  # ADD THIS
+                    epoch=episodes_completed,  # ADD THIS - monotonic batch counter
                     severity="warning",
                     message="Buffer cleared due to Governor rollback - skipping update",
-                    data={"reason": "governor_rollback", "skipped": True},
+                    data={"reason": "governor_rollback", "skipped": True, "inner_epoch": epoch},
                 ))
 ```
 
@@ -273,8 +304,9 @@ Modify `src/esper/simic/vectorized.py` line 1585:
 ```python
             ppo_event = TelemetryEvent(
                 event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
-                epoch=epoch,  # ADD THIS
+                epoch=episodes_completed,  # ADD THIS - monotonic batch counter
                 data={
+                    "inner_epoch": epoch,  # Final inner epoch (typically max_epochs)
                     # ... existing fields ...
 ```
 
@@ -285,8 +317,9 @@ Modify `src/esper/simic/vectorized.py` line 1619:
 ```python
             hub.emit(TelemetryEvent(
                 event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
-                epoch=epoch,  # ADD THIS
+                epoch=episodes_completed,  # ADD THIS - monotonic batch counter
                 data={
+                    "inner_epoch": epoch,  # Final inner epoch
                     # ... existing fields ...
 ```
 
@@ -300,16 +333,17 @@ Expected: PASS
 ```bash
 git add tests/simic/test_epoch_telemetry.py src/esper/karn/collector.py src/esper/simic/vectorized.py
 git commit -m "$(cat <<'EOF'
-fix(simic/karn): align epoch numbering and add epoch to PPO events
+fix(simic/karn): use monotonic episodes_completed for event.epoch
 
 Critical fixes for Karn epoch snapshot consistency:
 
-1. Karn now starts at epoch 1 (was 0) to match Simic's range(1, max_epochs+1)
-2. PPO_UPDATE_COMPLETED now includes epoch=epoch field
-3. ANALYTICS_SNAPSHOT now includes epoch=epoch field
+1. Karn now starts at epoch 1 (was 0)
+2. PPO_UPDATE_COMPLETED now includes epoch=episodes_completed (monotonic)
+3. ANALYTICS_SNAPSHOT now includes epoch=episodes_completed
+4. Inner epoch value preserved in data.inner_epoch
 
-This ensures PPO metrics land in the correct epoch snapshot before
-EPOCH_COMPLETED commits and advances to the next epoch.
+This ensures event.epoch is a monotonic batch counter that Karn can
+use for commit/advance logic without collisions.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
@@ -348,24 +382,29 @@ class TestEpochCompletedEmission:
             def close(self):
                 pass
 
-        hub.add_backend(CaptureBackend())
+        backend = CaptureBackend()
+        hub.add_backend(backend)
 
-        # Emit test event with expected structure
-        hub.emit(TelemetryEvent(
-            event_type=TelemetryEventType.EPOCH_COMPLETED,
-            epoch=5,
-            data={
-                "train_loss": 0.5,
-                "train_accuracy": 75.0,
-                "val_loss": 0.6,
-                "val_accuracy": 72.0,
-                "n_envs": 4,
-            }
-        ))
+        try:
+            # Emit test event with expected structure
+            hub.emit(TelemetryEvent(
+                event_type=TelemetryEventType.EPOCH_COMPLETED,
+                epoch=5,
+                data={
+                    "train_loss": 0.5,
+                    "train_accuracy": 75.0,
+                    "val_loss": 0.6,
+                    "val_accuracy": 72.0,
+                    "n_envs": 4,
+                }
+            ))
 
-        assert len(captured) == 1
-        assert captured[0].epoch == 5
-        assert captured[0].data["n_envs"] == 4
+            assert len(captured) == 1
+            assert captured[0].epoch == 5
+            assert captured[0].data["n_envs"] == 4
+        finally:
+            # Clean up to prevent cross-test pollution
+            hub.remove_backend(backend)
 ```
 
 **Step 2: Run test**
@@ -379,24 +418,34 @@ Add after line 1633 in `src/esper/simic/vectorized.py` (after ANALYTICS_SNAPSHOT
 
 ```python
             # EPOCH_COMPLETED: Commit barrier for Karn
-            # This MUST be emitted LAST for each epoch, after PPO_UPDATE and ANALYTICS_SNAPSHOT
+            # This MUST be emitted LAST for each batch, after PPO_UPDATE and ANALYTICS_SNAPSHOT
             # Karn will commit the epoch snapshot and advance to epoch+1
+            #
+            # epoch=episodes_completed is monotonic (never repeats) so Karn's
+            # commit/advance logic works correctly across batches.
+            #
+            # IMPORTANT: Aggregate accuracy is sum(correct)/sum(total)*100, NOT mean of per-env
+            # percentages. This avoids weighting bugs when per-env sample counts diverge.
+            total_train_correct = sum(train_corrects)
+            total_train_samples = sum(train_totals)
+            total_val_correct = sum(val_corrects)
+            total_val_samples = sum(val_totals)
+
             hub.emit(TelemetryEvent(
                 event_type=TelemetryEventType.EPOCH_COMPLETED,
-                epoch=epoch,
+                epoch=episodes_completed,  # Monotonic batch counter (NOT inner epoch!)
                 data={
+                    "inner_epoch": epoch,  # Final inner epoch (typically max_epochs)
                     "train_loss": sum(train_losses) / max(len(env_states) * num_train_batches, 1),
-                    "train_accuracy": sum(100.0 * train_corrects[i] / max(train_totals[i], 1)
-                                          for i in range(len(env_states))) / len(env_states),
+                    "train_accuracy": 100.0 * total_train_correct / max(total_train_samples, 1),
                     "val_loss": sum(val_losses) / max(len(env_states) * num_test_batches, 1),
-                    "val_accuracy": sum(100.0 * val_corrects[i] / max(val_totals[i], 1)
-                                        for i in range(len(env_states))) / len(env_states),
+                    "val_accuracy": 100.0 * total_val_correct / max(total_val_samples, 1),
                     "n_envs": len(env_states),
                 },
             ))
 ```
 
-**Note:** The placement is critical—EPOCH_COMPLETED must be the LAST event emitted for each epoch. It goes after ANALYTICS_SNAPSHOT (line 1633), which is after PPO_UPDATE_COMPLETED (line 1613).
+**Note:** The placement is critical—EPOCH_COMPLETED must be the LAST event emitted for each batch. It goes after ANALYTICS_SNAPSHOT (line 1633), which is after PPO_UPDATE_COMPLETED (line 1613).
 
 **Step 4: Run test**
 
@@ -408,18 +457,22 @@ Expected: PASS
 ```bash
 git add tests/simic/test_epoch_telemetry.py src/esper/simic/vectorized.py
 git commit -m "$(cat <<'EOF'
-fix(simic): emit EPOCH_COMPLETED as final commit barrier
+fix(simic): emit EPOCH_COMPLETED with monotonic batch counter
 
 EPOCH_COMPLETED is now emitted AFTER PPO_UPDATE and ANALYTICS_SNAPSHOT,
 acting as the commit barrier for Karn's epoch snapshots.
 
-Event ordering per epoch:
+Key design: epoch=episodes_completed (monotonic batch counter, never repeats)
+- This ensures Karn's commit/advance logic works correctly
+- Inner epoch value preserved in data.inner_epoch
+
+Event ordering per batch:
 1. SEED_*, REWARD_COMPUTED (during rollout)
 2. PPO_UPDATE_COMPLETED (after update)
 3. ANALYTICS_SNAPSHOT (dashboard sync)
 4. EPOCH_COMPLETED (commits and advances) ← NEW
 
-Includes aggregate metrics: train/val loss/accuracy, n_envs.
+Includes aggregate metrics: train/val loss/accuracy, n_envs, inner_epoch.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
@@ -496,11 +549,20 @@ class TestExportJsonl:
 
     def test_export_handles_enums(self, tmp_path: Path):
         """export_jsonl correctly serializes Enum values."""
-        from esper.karn.store import SlotSnapshot
+        from esper.karn.store import SlotSnapshot, EpisodeContext
         from esper.leyline import SeedStage
 
         store = TelemetryStore()
-        store.start_episode("test_enum", base_seed=42, max_epochs=10)
+
+        # start_episode takes EpisodeContext, not string args
+        context = EpisodeContext(
+            episode_id="test_enum",
+            base_seed=42,
+        )
+        store.start_episode(context)
+
+        # start_episode doesn't create current_epoch - must call start_epoch explicitly
+        store.start_epoch(1)
 
         # Add a slot with enum stage
         store.current_epoch.slots["mid"] = SlotSnapshot(
@@ -618,7 +680,6 @@ Create `tests/karn/test_collector_multienv.py`:
 import pytest
 
 from esper.leyline import TelemetryEvent, TelemetryEventType
-from esper.karn.collector import TelemetryCollector
 from esper.karn.store import TelemetryStore
 
 
@@ -627,10 +688,13 @@ class TestMultiEnvSlotTracking:
 
     def test_slots_namespaced_by_env_id(self):
         """Slots from different envs don't collide."""
-        store = TelemetryStore()
-        collector = TelemetryCollector(store)
+        from esper.karn.collector import KarnCollector
 
-        # Start episode
+        # KarnCollector creates its own store internally
+        collector = KarnCollector()
+        store = collector.store
+
+        # Start episode - TRAINING_STARTED handler creates context and starts epoch
         collector.emit(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
             data={"episode_id": "test_multi", "max_epochs": 10, "n_envs": 2}
@@ -663,8 +727,11 @@ class TestMultiEnvSlotTracking:
 
     def test_env_id_extracted_from_event_data(self):
         """env_id is correctly extracted from event.data."""
-        store = TelemetryStore()
-        collector = TelemetryCollector(store)
+        from esper.karn.collector import KarnCollector
+
+        # KarnCollector creates its own store internally
+        collector = KarnCollector()
+        store = collector.store
 
         collector.emit(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
@@ -1487,6 +1554,8 @@ Create `tests/karn/test_tui_rendering.py`:
 """Tests for TUI rendering components."""
 
 import pytest
+from rich.console import Console
+from rich.panel import Panel
 from rich.table import Table
 
 from esper.karn.tui import TUIOutput
@@ -1495,8 +1564,8 @@ from esper.karn.tui import TUIOutput
 class TestEnvOverviewTable:
     """Tests for environment overview table rendering."""
 
-    def test_render_env_overview_returns_table(self):
-        """_render_env_overview returns a Rich Table."""
+    def test_render_env_overview_returns_panel(self):
+        """_render_env_overview returns a Rich Panel containing a Table."""
         tui = TUIOutput()
         tui.state.n_envs = 2
 
@@ -1506,11 +1575,11 @@ class TestEnvOverviewTable:
             env.reward_history.append(0.3 + i * 0.1)
             env.status = "healthy"
 
-        table = tui._render_env_overview()
-        assert isinstance(table, Table)
+        panel = tui._render_env_overview()
+        assert isinstance(panel, Panel)
 
     def test_env_overview_shows_all_envs(self):
-        """Table has one row per environment."""
+        """Table has one row per environment plus separator and aggregate."""
         tui = TUIOutput()
         tui.state.n_envs = 4
 
@@ -1518,8 +1587,60 @@ class TestEnvOverviewTable:
             env = tui.state.get_or_create_env(i)
             env.status = "healthy"
 
-        table = tui._render_env_overview()
-        assert table.row_count == 4
+        panel = tui._render_env_overview()
+        # Panel.renderable is the Table
+        table = panel.renderable
+        # 4 envs + separator row + aggregate row = 6 rows
+        assert table.row_count == 6
+
+    def test_env_overview_uses_sparklines(self):
+        """Table uses sparkline properties from EnvState."""
+        tui = TUIOutput()
+        tui.state.n_envs = 2
+
+        env0 = tui.state.get_or_create_env(0)
+        env0.reward_history.extend([0.1, 0.2, 0.3, 0.4, 0.5])
+        env0.accuracy_history.extend([60.0, 65.0, 70.0, 75.0, 80.0])
+        env0.status = "healthy"
+
+        env1 = tui.state.get_or_create_env(1)
+        env1.status = "stalled"
+
+        # Just verify it renders without error (sparklines are visual)
+        panel = tui._render_env_overview()
+        assert panel is not None
+
+    def test_env_overview_status_colors(self):
+        """Different statuses should render (color is visual, verify no crash)."""
+        tui = TUIOutput()
+        tui.state.n_envs = 4
+
+        statuses = ["excellent", "healthy", "stalled", "degraded"]
+        for i, status in enumerate(statuses):
+            env = tui.state.get_or_create_env(i)
+            env.status = status
+
+        # Render to string to verify no errors
+        console = Console(force_terminal=True, width=120)
+        panel = tui._render_env_overview()
+        with console.capture() as capture:
+            console.print(panel)
+        output = capture.get()
+        assert "ENVIRONMENT OVERVIEW" in output
+```
+
+**Visual Mockup (Expected Output):**
+
+```
+┌─────────────────────── ENVIRONMENT OVERVIEW ────────────────────────┐
+│ Env  Accuracy   Acc▁▃▅   Reward   Rew▁▃▅   Epoch  Seeds   Status   │
+│  0     78.5%    ▁▃▅▆▇█    +0.32   ▂▃▄▅▆▇     45    2A 1F  HEALTHY  │
+│  1     72.3%    ▅▅▄▄▃▃    -0.15   ▆▅▄▃▂▁     45    1A     STALLED  │
+│  2     85.1%    ▁▂▄▆▇█    +0.67   ▁▂▃▅▆█     45    3A 2F  EXCELLENT│
+│  3     68.9%    ▃▃▃▂▂▁    -0.42   ▄▃▂▂▁▁     43    1A     DEGRADED │
+│ ───   ────────   ──────   ──────   ──────   ────   ─────   ──────── │
+│  Σ     76.2%              +0.11            best@2   7A    85.1%    │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 **Step 2: Run test to verify it fails**
@@ -1527,16 +1648,189 @@ class TestEnvOverviewTable:
 Run: `PYTHONPATH=src pytest tests/karn/test_tui_rendering.py -v`
 Expected: FAIL (method doesn't exist)
 
-**Step 3: Implement _render_env_overview and integrate into layout**
+**Step 3: Implement _render_env_overview method**
 
-Add `_render_env_overview` method and update `_render` to include it. (See full implementation in original plan Task 6-7.)
+Add this method to the TUIOutput class (after `_render_performance`):
 
-**Step 4: Run test to verify it passes**
+```python
+    def _render_env_overview(self) -> Panel:
+        """Render per-environment overview table.
+
+        Shows a row per environment with key metrics and status.
+        Only rendered when n_envs > 1.
+        """
+        table = Table(show_header=True, box=None, padding=(0, 1), expand=True)
+
+        # Columns: ID, Accuracy, Reward, Epoch, Seeds, Status
+        table.add_column("Env", style="cyan", justify="center", width=4)
+        table.add_column("Accuracy", justify="right", width=10)
+        table.add_column("Acc▁▃▅", justify="left", width=8)  # Sparkline
+        table.add_column("Reward", justify="right", width=8)
+        table.add_column("Rew▁▃▅", justify="left", width=8)  # Sparkline
+        table.add_column("Epoch", justify="right", width=6)
+        table.add_column("Seeds", justify="center", width=6)
+        table.add_column("Status", justify="center", width=10)
+
+        # Status color mapping
+        status_styles = {
+            "excellent": "bold green",
+            "healthy": "green",
+            "initializing": "dim",
+            "stalled": "yellow",
+            "degraded": "red",
+        }
+
+        for env_id in sorted(self.state.env_states.keys()):
+            env = self.state.env_states[env_id]
+
+            # Accuracy with delta indicator
+            acc_str = f"{env.host_accuracy:.1f}%"
+            if env.best_accuracy > 0:
+                if env.host_accuracy >= env.best_accuracy:
+                    acc_str = f"[green]{acc_str}[/green]"
+                elif env.epochs_since_improvement > 5:
+                    acc_str = f"[yellow]{acc_str}[/yellow]"
+
+            # Reward
+            reward_str = f"{env.current_reward:+.2f}"
+            if env.current_reward > 0:
+                reward_str = f"[green]{reward_str}[/green]"
+            elif env.current_reward < -0.5:
+                reward_str = f"[red]{reward_str}[/red]"
+
+            # Seeds summary: Active/Fossil/Culled
+            seeds_str = f"{env.active_seed_count}A"
+            if env.fossilized_count > 0:
+                seeds_str += f" {env.fossilized_count}F"
+
+            # Status with styling
+            status_style = status_styles.get(env.status, "white")
+            status_str = f"[{status_style}]{env.status.upper()}[/{status_style}]"
+
+            table.add_row(
+                str(env_id),
+                acc_str,
+                env.accuracy_sparkline,
+                reward_str,
+                env.reward_sparkline,
+                str(env.current_epoch),
+                seeds_str,
+                status_str,
+            )
+
+        # Add aggregate row if multiple envs
+        if len(self.state.env_states) > 1:
+            best_acc, best_env, best_epoch = self.state.aggregate_best_accuracy
+            table.add_row(
+                "─" * 3,
+                "─" * 8,
+                "─" * 6,
+                "─" * 6,
+                "─" * 6,
+                "─" * 4,
+                "─" * 5,
+                "─" * 8,
+            )
+            table.add_row(
+                "[bold]Σ[/bold]",
+                f"[bold]{self.state.aggregate_mean_accuracy:.1f}%[/bold]",
+                "",  # No sparkline for aggregate
+                f"[bold]{self.state.aggregate_mean_reward:+.2f}[/bold]",
+                "",
+                f"[dim]best@{best_env}[/dim]",
+                f"{self.state.active_seed_count}A",
+                f"[dim]{best_acc:.1f}%[/dim]",
+            )
+
+        return Panel(
+            table,
+            title="[bold]ENVIRONMENT OVERVIEW[/bold]",
+            border_style="cyan",
+        )
+```
+
+**Step 4: Integrate into layout**
+
+Modify `_render()` to include the env overview. Replace the layout setup:
+
+```python
+    def _render(self) -> Layout:
+        """Render the full TUI layout with event log.
+
+        Returns Layout directly (not wrapped in Panel) to avoid
+        off-by-one height issues from extra border lines.
+        """
+        layout = Layout()
+
+        # Determine if we need env overview panel
+        show_env_overview = self.state.n_envs > 1
+
+        if show_env_overview:
+            # Multi-env layout with env overview
+            layout.split_column(
+                Layout(name="header", size=3),
+                Layout(name="env_overview", size=8),  # NEW: Env overview table
+                Layout(name="main", ratio=1),
+                Layout(name="bottom", size=12),
+                Layout(name="footer", size=3),
+            )
+            layout["env_overview"].update(self._render_env_overview())
+        else:
+            # Single-env layout (original)
+            layout.split_column(
+                Layout(name="header", size=3),
+                Layout(name="main", ratio=1),
+                Layout(name="bottom", size=12),
+                Layout(name="footer", size=3),
+            )
+
+        # Split bottom into event log (left) and performance stats (right)
+        layout["bottom"].split_row(
+            Layout(name="event_log", ratio=2),
+            Layout(name="perf_stats", ratio=1),
+        )
+
+        # Split main into two columns
+        layout["main"].split_row(
+            Layout(name="left", ratio=1),
+            Layout(name="right", ratio=1),
+        )
+
+        # Left column: rewards and seeds
+        layout["left"].split_column(
+            Layout(name="rewards", ratio=1),
+            Layout(name="seeds", ratio=1),
+            Layout(name="reward_components", ratio=1),
+        )
+
+        # Right column: policy health and actions
+        layout["right"].split_column(
+            Layout(name="policy_health", ratio=1),
+            Layout(name="actions", ratio=1),
+            Layout(name="losses", ratio=1),
+        )
+
+        # Render each section
+        layout["header"].update(self._render_header())
+        layout["rewards"].update(self._render_rewards())
+        layout["seeds"].update(self._render_seeds())
+        layout["reward_components"].update(self._render_reward_components())
+        layout["policy_health"].update(self._render_policy_health())
+        layout["actions"].update(self._render_actions())
+        layout["losses"].update(self._render_losses())
+        layout["event_log"].update(self._render_event_log(max_lines=8))
+        layout["perf_stats"].update(self._render_performance())
+        layout["footer"].update(self._render_footer())
+
+        return layout
+```
+
+**Step 5: Run test to verify it passes**
 
 Run: `PYTHONPATH=src pytest tests/karn/test_tui_rendering.py -v`
 Expected: PASS
 
-**Step 5: Commit**
+**Step 6: Commit**
 
 ```bash
 git add tests/karn/test_tui_rendering.py src/esper/karn/tui.py
