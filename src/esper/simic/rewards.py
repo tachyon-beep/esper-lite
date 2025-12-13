@@ -1,9 +1,8 @@
 """Reward Computation for Tamiyo Seed Lifecycle Controller.
 
 This module consolidates reward functions used across:
-- Online PPO training (simic/ppo.py)
-- Offline data generation (datagen/generate.py)
-- Vectorized PPO training (simic/vectorized.py)
+- Vectorized PPO training (simic/vectorized.py, simic/ppo.py)
+- Heuristic baseline comparisons (simic/training.py)
 
 The reward design follows these principles:
 1. Counterfactual validation is the primary signal (seed_contribution)

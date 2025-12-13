@@ -5,11 +5,11 @@ of esper-lite types. These strategies are used throughout the property-based
 test suite to generate hundreds of test cases automatically.
 
 Usage:
-    from tests.strategies import training_snapshots, seed_telemetries
+    from tests.strategies import training_signals, seed_telemetries
     from hypothesis import given
 
-    @given(training_snapshots())
-    def test_my_property(snapshot):
+    @given(training_signals())
+    def test_my_property(signals):
         # Test code here
         pass
 
@@ -23,7 +23,6 @@ Design principles:
 from __future__ import annotations
 
 import torch
-from datetime import datetime, timezone
 from enum import IntEnum
 from hypothesis import strategies as st
 from hypothesis.extra.numpy import arrays
@@ -130,7 +129,7 @@ def seed_stages(draw):
 
     Values:
         1=DORMANT, 2=GERMINATED, 3=TRAINING, 4=BLENDING,
-        5=SHADOWING, 6=PROBATIONARY, 7=FOSSILIZED
+        5=SHADOWING (deprecated/reserved), 6=PROBATIONARY, 7=FOSSILIZED
 
     Note: SeedStage is an IntEnum, so we return integers directly.
     """
@@ -237,61 +236,6 @@ def training_signals(draw, has_active_seed: bool | None = None):
     signals.available_slots = draw(st.integers(min_value=0, max_value=10))
 
     return signals
-
-
-@st.composite
-def training_snapshots(draw, has_active_seed: bool | None = None):
-    """Generate TrainingSnapshot instances.
-
-    This is the core state representation for RL algorithms.
-
-    Args:
-        has_active_seed: Force has_active_seed value (None = random)
-
-    Returns:
-        TrainingSnapshot with consistent state
-
-    Example:
-        @given(training_snapshots(has_active_seed=True))
-        def test_snapshot_with_seed(snapshot):
-            assert snapshot.has_active_seed is True
-
-    IMPORTANT: Active seeds cannot be DORMANT (stage 1). They must be
-    GERMINATED (2) or higher. This prevents the "Active but Dormant" bug.
-    """
-    from esper.simic import TrainingSnapshot
-
-    if has_active_seed is None:
-        has_active_seed = draw(st.booleans())
-
-    epoch = draw(st.integers(min_value=0, max_value=1000))
-    val_accuracy = draw(accuracies())
-
-    snapshot = TrainingSnapshot(
-        epoch=epoch,
-        global_step=draw(st.integers(min_value=0, max_value=1000000)),
-        train_loss=draw(bounded_floats(0.0, 10.0)),
-        val_loss=draw(bounded_floats(0.0, 10.0)),
-        val_accuracy=val_accuracy,
-        best_val_accuracy=draw(bounded_floats(val_accuracy, 100.0)),
-        plateau_epochs=draw(st.integers(min_value=0, max_value=50)),
-        loss_history_5=draw(
-            st.tuples(
-                *[bounded_floats(0.0, 10.0) for _ in range(5)]
-            )
-        ),
-        accuracy_history_5=draw(
-            st.tuples(
-                *[accuracies() for _ in range(5)]
-            )
-        ),
-        has_active_seed=has_active_seed,
-        # FIX: Active seeds must be GERMINATED (2+), not DORMANT (1)
-        seed_stage=draw(st.integers(min_value=2, max_value=7)) if has_active_seed else 0,
-        seed_alpha=draw(probabilities()) if has_active_seed else 0.0,
-    )
-
-    return snapshot
 
 
 # =============================================================================

@@ -73,8 +73,8 @@ from esper.simic.anomaly_detector import (
 
 # NOTE: Heavy modules imported on demand:
 #   from esper.simic.ppo import PPOAgent
-#   from esper.simic.training import train_ppo
 #   from esper.simic.vectorized import train_ppo_vectorized
+#   from esper.simic.training import train_heuristic
 
 __all__ = [
     # Normalization

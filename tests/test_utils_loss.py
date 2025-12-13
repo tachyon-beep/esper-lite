@@ -1,8 +1,7 @@
 """Tests for consolidated loss computation utilities.
 
 These utilities replace the duplicate _loss_and_correct and _compute_loss
-functions scattered across simic/training.py, tolaria/trainer.py, and
-scripts/evaluate.py.
+functions scattered across simic/training.py and tolaria/trainer.py.
 """
 
 import pytest

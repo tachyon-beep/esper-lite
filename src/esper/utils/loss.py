@@ -6,10 +6,8 @@ Provides two functions with clear separation of concerns:
 - compute_task_loss: Returns loss tensor only (for validation/inference)
 - compute_task_loss_with_metrics: Returns loss + accuracy metrics (for training)
 
-This module replaces duplicate implementations in:
-- esper.simic.training._loss_and_correct
-- esper.tolaria.trainer._compute_loss
-- esper.scripts.evaluate._loss_and_correct
+This module replaces duplicate loss/metric patterns that previously lived
+inline in Simic/Tolaria training loops.
 
 Usage:
     from esper.utils.loss import compute_task_loss, compute_task_loss_with_metrics
