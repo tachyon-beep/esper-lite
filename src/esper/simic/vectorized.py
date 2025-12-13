@@ -44,6 +44,7 @@ from esper.simic.gradient_collector import (
     materialize_dual_grad_stats,
 )
 from esper.simic.normalization import RunningMeanStd, RewardNormalizer
+from esper.simic.features import MULTISLOT_FEATURE_SIZE
 from esper.simic.ppo import PPOAgent, signals_to_features
 from esper.simic.rewards import compute_contribution_reward, SeedInfo
 from esper.kasmina.slot import MIN_FOSSILIZE_CONTRIBUTION
@@ -101,8 +102,10 @@ class ParallelEnvState:
     gradient_ratio_ema_initialized: bool = False
 
     def __post_init__(self) -> None:
-        if not self.action_counts and self.action_enum is not None:
-            base_counts = {a.name: 0 for a in self.action_enum}
+        # Initialize counters with LifecycleOp names (WAIT, GERMINATE, FOSSILIZE, CULL)
+        # since factored actions use op.name for counting, not flat action enum names
+        if not self.action_counts:
+            base_counts = {op.name: 0 for op in LifecycleOp}
             self.action_counts = base_counts.copy()
             self.successful_action_counts = base_counts.copy()
 
@@ -137,7 +140,7 @@ def _advance_active_seed(model, slots: list[str]) -> bool:
         raise ValueError("slots parameter is required and cannot be empty")
     target_slot = slots[0]
 
-    if not model.has_active_seed:
+    if not model.has_active_seed_in_slot(target_slot):
         return False
 
     slot = model.seed_slots[target_slot]
@@ -183,7 +186,6 @@ def train_ppo_vectorized(
     seed: int = 42,
     num_workers: int | None = None,
     gpu_preload: bool = False,
-    recurrent: bool = False,
     lstm_hidden_dim: int = 128,
     chunk_length: int = 25,  # Must match max_epochs default (25)
     telemetry_config: "TelemetryConfig | None" = None,
@@ -232,9 +234,6 @@ def train_ppo_vectorized(
 
     if not slots:
         raise ValueError("slots parameter is required and cannot be empty")
-
-    if recurrent:
-        raise ValueError("recurrent=True is not compatible with factored actions (not yet implemented)")
 
     # Compute effective seed limit
     # max_seeds=None means unlimited (use 0 to indicate no limit)
@@ -359,9 +358,8 @@ def train_ppo_vectorized(
             total = targets.size(0)
         return loss, correct, total
 
-    # State dimension: 35 base features + 10 telemetry features if enabled
-    BASE_FEATURE_DIM = 35
-    state_dim = BASE_FEATURE_DIM + (SeedTelemetry.feature_dim() if use_telemetry else 0)
+    # State dimension: 50 base features + 10 telemetry features if enabled
+    state_dim = MULTISLOT_FEATURE_SIZE + (SeedTelemetry.feature_dim() if use_telemetry else 0)
     # Use EMA momentum for stable normalization during long training runs
     # (prevents distribution shift that can break PPO ratio calculations)
     obs_normalizer = RunningMeanStd((state_dim,), device=device, momentum=0.99)
@@ -414,10 +412,8 @@ def train_ppo_vectorized(
             entropy_anneal_steps=entropy_anneal_steps,
             gamma=gamma,
             device=device,
-            recurrent=False,  # Recurrent mode not supported with factored actions
             lstm_hidden_dim=lstm_hidden_dim,
             chunk_length=chunk_length,
-            factored=True,  # Always use factored action space
         )
 
     # ==========================================================================
@@ -528,7 +524,8 @@ def train_ppo_vectorized(
         target_slot = slots[0]
 
         model = env_state.model
-        seed_state = model.seed_slots[target_slot].state if model.has_active_seed else None
+        # Use slot-specific check, not any-slot check (has_active_seed checks ALL slots)
+        seed_state = model.seed_slots[target_slot].state if model.has_active_seed_in_slot(target_slot) else None
         env_dev = env_state.env_device
         grad_stats = None
 
@@ -553,8 +550,16 @@ def train_ppo_vectorized(
                     if not gate_result.passed:
                         raise RuntimeError(f"G1 gate failed during TRAINING entry: {gate_result}")
                 if env_state.seed_optimizer is None:
+                    seed_params = list(model.get_seed_parameters(target_slot))
+                    if not seed_params:
+                        raise RuntimeError(
+                            f"Seed in slot '{target_slot}' has no trainable parameters. "
+                            f"Stage: {seed_state.stage.name if seed_state else 'N/A'}, "
+                            f"Blueprint: {seed_state.blueprint_id if seed_state else 'N/A'}, "
+                            f"Slot.seed: {model.seed_slots[target_slot].seed is not None}"
+                        )
                     env_state.seed_optimizer = torch.optim.SGD(
-                        model.get_seed_parameters(), lr=task_spec.seed_lr, momentum=0.9
+                        seed_params, lr=task_spec.seed_lr, momentum=0.9
                     )
                 # Host optimizer remains primary; seed optimizer is stepped separately.
                 optimizer = env_state.host_optimizer
@@ -778,8 +783,8 @@ def train_ppo_vectorized(
             envs_needing_counterfactual = set()
             for i, env_state in enumerate(env_states):
                 model = env_state.model
-                if model.has_active_seed:
-                    target_slot = slots[0]
+                target_slot = slots[0]
+                if model.has_active_seed_in_slot(target_slot):
                     seed_state = model.seed_slots[target_slot].state
                     if seed_state and seed_state.alpha > 0:
                         envs_needing_counterfactual.add(i)
@@ -888,7 +893,7 @@ def train_ppo_vectorized(
             for env_idx, env_state in enumerate(env_states):
                 model = env_state.model
                 target_slot = slots[0]
-                seed_state = model.seed_slots[target_slot].state if model.has_active_seed else None
+                seed_state = model.seed_slots[target_slot].state if model.has_active_seed_in_slot(target_slot) else None
 
                 if use_telemetry and seed_state and env_grad_stats[env_idx]:
                     # Materialize async dual grad stats NOW (after stream sync, safe to call .item())
@@ -931,7 +936,7 @@ def train_ppo_vectorized(
             for env_idx, env_state in enumerate(env_states):
                 model = env_state.model
                 target_slot = slots[0]
-                seed_state = model.seed_slots[target_slot].state if model.has_active_seed else None
+                seed_state = model.seed_slots[target_slot].state if model.has_active_seed_in_slot(target_slot) else None
 
                 train_loss = train_losses[env_idx] / num_train_batches
                 train_acc = 100.0 * train_corrects[env_idx] / max(train_totals[env_idx], 1)
@@ -1083,7 +1088,7 @@ def train_ppo_vectorized(
             for env_idx, env_state in enumerate(env_states):
                 model = env_state.model
                 target_slot = slots[0]
-                seed_state = model.seed_slots[target_slot].state if model.has_active_seed else None
+                seed_state = model.seed_slots[target_slot].state if model.has_active_seed_in_slot(target_slot) else None
                 signals = all_signals[env_idx]
 
                 # Now Python floats/ints - no GPU sync
@@ -1178,7 +1183,8 @@ def train_ppo_vectorized(
 
                 # Execute action using FactoredAction properties
                 if factored_action.is_germinate:
-                    if not model.has_active_seed:
+                    # Check specific slot, not any slot (allows multi-slot germination in future)
+                    if not model.has_active_seed_in_slot(target_slot):
                         env_state.acc_at_germination = env_state.val_acc
                         blueprint_id = factored_action.blueprint_id
                         seed_id = f"env{env_idx}_seed_{env_state.seeds_created}"
@@ -1200,7 +1206,7 @@ def train_ppo_vectorized(
                         env_state.acc_at_germination = None
 
                 elif factored_action.is_cull:
-                    if model.has_active_seed:
+                    if model.has_active_seed_in_slot(target_slot):
                         model.cull_seed(slot=target_slot)
                         env_state.seed_optimizer = None
                         env_state.acc_at_germination = None
@@ -1280,8 +1286,8 @@ def train_ppo_vectorized(
 
                 # Mechanical lifecycle advance (blending/shadowing dwell) AFTER RL transition
                 # This ensures state/action/reward alignment - advance happens after the step is recorded
-                # Must check seed_state exists since actions may have culled it
-                if model.has_active_seed:
+                # Must check specific slot since actions may have culled it
+                if model.has_active_seed_in_slot(target_slot):
                     model.seed_slots[target_slot].step_epoch()
 
                 if epoch == max_epochs:
@@ -1338,8 +1344,8 @@ def train_ppo_vectorized(
         print(f"  Avg acc: {avg_acc:.1f}% (rolling: {rolling_avg_acc:.1f}%)")
         print(f"  Avg reward: {avg_reward:.1f}")
 
-        total_actions = {a.name: 0 for a in ActionEnum}
-        successful_actions = {a.name: 0 for a in ActionEnum}
+        total_actions = {op.name: 0 for op in LifecycleOp}
+        successful_actions = {op.name: 0 for op in LifecycleOp}
         for env_state in env_states:
             for a, c in env_state.action_counts.items():
                 total_actions[a] += c

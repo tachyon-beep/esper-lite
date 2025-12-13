@@ -51,6 +51,10 @@ class _StubModel:
         seed_slot = _StubSeedSlot(seed_state, gate_result=gate_result)
         self.seed_slots = {"mid": seed_slot}
 
+    def has_active_seed_in_slot(self, slot: str) -> bool:
+        """Check if specific slot has an active seed."""
+        return slot in self.seed_slots and self.seed_slots[slot].state is not None
+
 
 def test_advance_active_seed_fossilizes_via_seed_slot():
     """PROBATIONARY seeds should fossilize through SeedSlot.advance_stage (emits telemetry)."""

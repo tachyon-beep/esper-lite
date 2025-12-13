@@ -557,9 +557,12 @@ class MorphogeneticModel(nn.Module):
     def get_seed_parameters(self, slot: str | None = None):
         """Get seed parameters from specific slot or all slots."""
         if slot:
-            return self.seed_slots[slot].get_parameters()
-        for s in self.seed_slots.values():
-            yield from s.get_parameters()
+            # Must use 'yield from' not 'return' - function with yield is a generator,
+            # and 'return' in a generator doesn't return a value, it raises StopIteration
+            yield from self.seed_slots[slot].get_parameters()
+        else:
+            for s in self.seed_slots.values():
+                yield from s.get_parameters()
 
     def get_host_parameters(self):
         """Return host backbone parameters only (exclude seed slots)."""
@@ -588,6 +591,12 @@ class MorphogeneticModel(nn.Module):
     def active_seed_params(self) -> int:
         """Total trainable params across all active seeds."""
         return sum(s.active_seed_params for s in self.seed_slots.values())
+
+    @property
+    def total_params(self) -> int:
+        """Total trainable params (host + active seeds)."""
+        host_params = sum(p.numel() for p in self.host.parameters() if p.requires_grad)
+        return host_params + self.active_seed_params
 
     def count_active_seeds(self) -> int:
         """Count seeds currently active (not fossilized)."""

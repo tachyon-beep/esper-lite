@@ -135,6 +135,10 @@ class HeuristicTamiyo:
         # Check for plateau
         if signals.metrics.plateau_epochs >= self.config.plateau_epochs_to_germinate:
             blueprint_id = self._get_next_blueprint()
+            # getattr AUTHORIZED by John on 2025-12-13 12:00:00 UTC
+            # Justification: Dynamic enum lookup - Action enum is built dynamically via
+            # build_action_enum() with GERMINATE_<BLUEPRINT> members. Standard pattern
+            # for accessing dynamically-named enum members.
             germinate_action = getattr(Action, f"GERMINATE_{blueprint_id.upper()}")
             self._germination_count += 1
             return TamiyoDecision(

@@ -104,38 +104,16 @@ class TrainingConfig:
     # === Telemetry ===
     use_telemetry: bool = True
 
-    # === Recurrence (LSTM Policy) ===
-    recurrent: bool = False
+    # === LSTM Configuration ===
+    # The unified architecture always uses LSTM (FactoredRecurrentActorCritic)
     lstm_hidden_dim: int = 128
     chunk_length: int | None = None  # None = auto-match max_epochs; set explicitly if different
 
     def __post_init__(self):
-        """Validate and set defaults for recurrent config."""
-        import logging
-        import warnings
-
-        logger = logging.getLogger(__name__)
-
+        """Validate and set defaults."""
         # Auto-match chunk_length to max_epochs if not set
         if self.chunk_length is None:
             self.chunk_length = self.max_epochs
-
-        # Warn if chunk_length < max_epochs (will cause mid-episode chunking)
-        if self.recurrent and self.chunk_length < self.max_epochs:
-            warnings.warn(
-                f"chunk_length={self.chunk_length} < max_epochs={self.max_epochs}. "
-                f"Mid-episode chunking will occur, losing temporal context at chunk "
-                f"boundaries. For optimal BPTT, set chunk_length >= max_epochs.",
-                RuntimeWarning,
-            )
-
-        # Note about learning rate for recurrent policies
-        if self.recurrent and self.lr > 2.5e-4:
-            logger.info(
-                f"Using lr={self.lr} with recurrent=True. Recurrent policies can be "
-                f"more sensitive to learning rate. If training is unstable, consider "
-                f"reducing to lr=2.5e-4 or lr=1e-4."
-            )
 
     @staticmethod
     def for_cifar10() -> "TrainingConfig":
@@ -189,7 +167,6 @@ class TrainingConfig:
             "n_epochs": self.n_epochs,
             "batch_size": self.batch_size,
             "target_kl": self.target_kl,
-            "recurrent": self.recurrent,
             "lstm_hidden_dim": self.lstm_hidden_dim,
             "chunk_length": self.chunk_length,
             "num_envs": self.n_envs,
@@ -213,7 +190,6 @@ class TrainingConfig:
             "entropy_anneal_episodes": self.entropy_anneal_episodes,
             "gamma": self.gamma,
             "ppo_updates_per_batch": self.ppo_updates_per_batch,
-            "recurrent": self.recurrent,
             "lstm_hidden_dim": self.lstm_hidden_dim,
             "chunk_length": self.chunk_length,
         }
@@ -252,7 +228,7 @@ class TrainingConfig:
             f"  Entropy: {self.entropy_coef}" + (f" -> {self.entropy_coef_end}" if self.entropy_coef_end else ""),
             f"  KL stopping: {'enabled' if self.target_kl else 'disabled'}" + (f" (target={self.target_kl})" if self.target_kl else ""),
             f"  Updates/batch: {self.ppo_updates_per_batch}",
-            f"  Recurrent: {'LSTM' if self.recurrent else 'MLP'}" + (f" (hidden={self.lstm_hidden_dim}, chunk={self.chunk_length})" if self.recurrent else ""),
+            f"  LSTM: hidden={self.lstm_hidden_dim}, chunk={self.chunk_length}",
             f"  Governor: random_guess_loss={self.random_guess_loss:.2f}",
             f"  Stabilization: threshold={self.stabilization_threshold}, epochs={self.stabilization_epochs}",
         ]

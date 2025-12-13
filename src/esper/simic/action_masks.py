@@ -6,6 +6,7 @@ Only masks PHYSICALLY IMPOSSIBLE actions:
 - CULL: blocked if target slot has no seed OR seed_age < MIN_CULL_AGE
         OR target slot is FOSSILIZED (terminal state)
 - WAIT: always valid
+- BLUEPRINT: NOOP always blocked (0 trainable parameters)
 
 Does NOT mask timing heuristics (epoch, plateau, stabilization).
 Tamiyo learns optimal timing from counterfactual reward signals.
@@ -24,6 +25,7 @@ import torch
 
 from esper.leyline import SeedStage, MIN_CULL_AGE
 from esper.leyline.factored_actions import (
+    BlueprintAction,
     LifecycleOp,
     NUM_SLOTS,
     NUM_BLUEPRINTS,
@@ -79,7 +81,8 @@ def build_slot_states(
     slot_states: dict[str, MaskSeedInfo | None] = {}
     for slot_id in slots:
         seed_slot = model.seed_slots[slot_id]
-        if seed_slot.state.stage == SeedStage.DORMANT:
+        # state is None when slot has no seed, or DORMANT when seed is inactive
+        if seed_slot.state is None or seed_slot.state.stage == SeedStage.DORMANT:
             slot_states[slot_id] = None
         else:
             slot_states[slot_id] = MaskSeedInfo(
@@ -119,8 +122,12 @@ def compute_action_masks(
     # Slot mask: all slots always selectable
     slot_mask = torch.ones(NUM_SLOTS, dtype=torch.bool, device=device)
 
-    # Blueprint/blend: always all valid (network learns preferences)
+    # Blueprint mask: disable zero-parameter blueprints (can't train them)
+    # NOOP is a placeholder seed with no trainable parameters
     blueprint_mask = torch.ones(NUM_BLUEPRINTS, dtype=torch.bool, device=device)
+    blueprint_mask[BlueprintAction.NOOP] = False
+
+    # Blend mask: all blend methods valid (network learns preferences)
     blend_mask = torch.ones(NUM_BLENDS, dtype=torch.bool, device=device)
 
     # Op mask: depends on slot states

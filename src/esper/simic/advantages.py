@@ -70,32 +70,4 @@ def compute_per_head_advantages(
     }
 
 
-def compute_per_head_policy_loss(
-    per_head_advantages: dict[str, torch.Tensor],
-    per_head_ratios: dict[str, torch.Tensor],
-    clip_epsilon: float = 0.2,
-) -> dict[str, torch.Tensor]:
-    """Compute clipped PPO loss per head.
-
-    Args:
-        per_head_advantages: Dict of masked advantages per head
-        per_head_ratios: Dict of probability ratios per head
-        clip_epsilon: PPO clipping parameter
-
-    Returns:
-        Dict of policy losses per head (to be summed)
-    """
-    losses = {}
-
-    for key in ["op", "slot", "blueprint", "blend"]:
-        ratio = per_head_ratios[key]
-        advantages = per_head_advantages[key]
-
-        surr1 = ratio * advantages
-        surr2 = torch.clamp(ratio, 1 - clip_epsilon, 1 + clip_epsilon) * advantages
-        losses[key] = -torch.min(surr1, surr2)
-
-    return losses
-
-
-__all__ = ["compute_per_head_advantages", "compute_per_head_policy_loss"]
+__all__ = ["compute_per_head_advantages"]

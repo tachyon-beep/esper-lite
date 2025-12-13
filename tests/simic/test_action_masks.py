@@ -6,6 +6,7 @@ The new mask system only blocks PHYSICALLY IMPOSSIBLE actions:
 - FOSSILIZE: blocked if not PROBATIONARY
 - CULL: blocked if no seed OR seed_age < MIN_CULL_AGE
 - WAIT: always valid
+- BLUEPRINT: NOOP always blocked (0 trainable parameters)
 """
 import torch
 import pytest
@@ -126,13 +127,21 @@ def test_compute_action_masks_wait_always_valid():
     assert masks_active["op"][LifecycleOp.WAIT] == True
 
 
-def test_compute_action_masks_blueprint_blend_always_valid():
-    """Blueprint and blend masks should always be all-valid (network learns preferences)."""
+def test_compute_action_masks_blueprint_blend_masks():
+    """Blueprint mask excludes NOOP (0 params); blend mask is all-valid."""
+    from esper.leyline.factored_actions import BlueprintAction
+
     slot_states = {"early": None, "mid": None, "late": None}
     masks = compute_action_masks(slot_states, target_slot="mid")
 
-    # All blueprints and blends should be valid
-    assert masks["blueprint"].all()
+    # NOOP is masked (0 trainable parameters), others are valid
+    assert masks["blueprint"][BlueprintAction.NOOP] == False
+    assert masks["blueprint"][BlueprintAction.CONV_ENHANCE] == True
+    assert masks["blueprint"][BlueprintAction.ATTENTION] == True
+    assert masks["blueprint"][BlueprintAction.NORM] == True
+    assert masks["blueprint"][BlueprintAction.DEPTHWISE] == True
+
+    # All blends should be valid
     assert masks["blend"].all()
 
 

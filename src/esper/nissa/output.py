@@ -64,8 +64,7 @@ class ConsoleOutput(OutputBackend):
     def emit(self, event: TelemetryEvent) -> None:
         """Emit event to console if it meets minimum severity threshold."""
         # Filter by severity - debug events are suppressed by default
-        event_severity = getattr(event, 'severity', 'info')
-        if self._SEVERITY_ORDER.get(event_severity, 1) < self._SEVERITY_ORDER.get(self.min_severity, 1):
+        if self._SEVERITY_ORDER.get(event.severity, 1) < self._SEVERITY_ORDER.get(self.min_severity, 1):
             return
 
         if self.verbose:

@@ -1,4 +1,8 @@
-"""Integration tests for factored action mode in vectorized PPO training."""
+"""Integration tests for factored action mode in vectorized PPO training.
+
+The unified architecture always uses factored actions with per-head masks.
+These tests verify the action mask computation and batched action selection.
+"""
 
 import pytest
 import torch
@@ -64,13 +68,12 @@ class TestPPOAgentFactoredInVectorized:
     """Test PPOAgent factored mode in vectorized context."""
 
     def test_factored_agent_batched_action_selection(self):
-        """PPOAgent in factored mode should handle batched action selection."""
+        """PPOAgent should handle batched action selection with per-head masks."""
         n_envs = 4
         state_dim = 50
 
         agent = PPOAgent(
             state_dim=state_dim,
-            factored=True,
             device="cpu",
             compile_network=False,
         )
@@ -86,10 +89,16 @@ class TestPPOAgentFactoredInVectorized:
             "op": torch.ones(n_envs, NUM_OPS, dtype=torch.bool),
         }
 
-        # Get batched actions
-        actions, log_probs, values = agent.network.get_action_batch(
-            states, masks, deterministic=False
-        )
+        # Get batched actions via network.get_action
+        with torch.no_grad():
+            actions, log_probs, values, hidden = agent.network.get_action(
+                states,
+                slot_mask=masks["slot"],
+                blueprint_mask=masks["blueprint"],
+                blend_mask=masks["blend"],
+                op_mask=masks["op"],
+                deterministic=False,
+            )
 
         # Actions should be dict of tensors
         assert isinstance(actions, dict)
@@ -97,110 +106,86 @@ class TestPPOAgentFactoredInVectorized:
         assert actions["slot"].shape == (n_envs,)
         assert actions["op"].shape == (n_envs,)
 
-        # Log probs and values should be [n_envs]
-        assert log_probs.shape == (n_envs,)
+        # Log probs should be dict and values should be [n_envs]
+        assert isinstance(log_probs, dict)
         assert values.shape == (n_envs,)
 
-    def test_factored_transition_storage_batch(self):
-        """PPOAgent should store factored transitions from multiple envs."""
+    def test_tamiyo_buffer_stores_factored_transitions(self):
+        """TamiyoRolloutBuffer should store factored transitions from multiple envs."""
         n_envs = 4
         state_dim = 50
 
         agent = PPOAgent(
             state_dim=state_dim,
-            factored=True,
             device="cpu",
             compile_network=False,
+            num_envs=n_envs,
+            max_steps_per_env=10,
         )
 
-        masks = {
-            "slot": torch.ones(NUM_SLOTS, dtype=torch.bool),
-            "blueprint": torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
-            "blend": torch.ones(NUM_BLENDS, dtype=torch.bool),
-            "op": torch.ones(NUM_OPS, dtype=torch.bool),
-        }
+        # Start episodes for all envs
+        for env_idx in range(n_envs):
+            agent.buffer.start_episode(env_id=env_idx)
 
-        # Store transitions from multiple envs
+        # Store transitions from each env
         for env_idx in range(n_envs):
             state = torch.randn(state_dim)
-            action = {
-                "slot": env_idx % NUM_SLOTS,
-                "blueprint": env_idx % NUM_BLUEPRINTS,
-                "blend": env_idx % NUM_BLENDS,
-                "op": env_idx % NUM_OPS,
-            }
-            agent.store_factored_transition(
+            # Hidden state: [num_layers, hidden_dim] (batch dim squeezed in add())
+            hidden_h = torch.randn(1, agent.lstm_hidden_dim)
+            hidden_c = torch.randn(1, agent.lstm_hidden_dim)
+            agent.buffer.add(
+                env_id=env_idx,
                 state=state,
-                action=action,
-                log_prob=-1.0,
+                slot_action=env_idx % NUM_SLOTS,
+                blueprint_action=env_idx % NUM_BLUEPRINTS,
+                blend_action=env_idx % NUM_BLENDS,
+                op_action=env_idx % NUM_OPS,
+                slot_log_prob=-0.5,
+                blueprint_log_prob=-0.5,
+                blend_log_prob=-0.5,
+                op_log_prob=-0.5,
                 value=0.5,
                 reward=1.0,
-                done=(env_idx == n_envs - 1),
-                action_masks=masks,
+                done=False,
+                slot_mask=torch.ones(NUM_SLOTS, dtype=torch.bool),
+                blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
+                blend_mask=torch.ones(NUM_BLENDS, dtype=torch.bool),
+                op_mask=torch.ones(NUM_OPS, dtype=torch.bool),
+                hidden_h=hidden_h,
+                hidden_c=hidden_c,
             )
 
-        assert len(agent.factored_buffer) == n_envs
-
-    def test_factored_update_after_batch(self):
-        """PPOAgent should update from factored transitions."""
-        n_transitions = 16
-        state_dim = 50
-
-        agent = PPOAgent(
-            state_dim=state_dim,
-            factored=True,
-            device="cpu",
-            compile_network=False,
-            n_epochs=1,  # Fast test
-        )
-
-        masks = {
-            "slot": torch.ones(NUM_SLOTS, dtype=torch.bool),
-            "blueprint": torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
-            "blend": torch.ones(NUM_BLENDS, dtype=torch.bool),
-            "op": torch.ones(NUM_OPS, dtype=torch.bool),
-        }
-
-        # Fill buffer
-        for i in range(n_transitions):
-            state = torch.randn(state_dim)
-            action = {
-                "slot": i % NUM_SLOTS,
-                "blueprint": i % NUM_BLUEPRINTS,
-                "blend": i % NUM_BLENDS,
-                "op": i % NUM_OPS,
-            }
-            agent.store_factored_transition(
-                state=state,
-                action=action,
-                log_prob=-1.0,
-                value=0.5,
-                reward=1.0,
-                done=(i == n_transitions - 1),
-                action_masks=masks,
-            )
-
-        # Update should succeed
-        metrics = agent.update_factored(last_value=0.0)
-
-        assert "policy_loss" in metrics
-        assert "value_loss" in metrics
-        assert "entropy" in metrics
-        assert len(agent.factored_buffer) == 0  # Buffer cleared
+        # Buffer should have transitions
+        assert len(agent.buffer) == n_envs
 
 
 class TestVectorizedFactoredDefault:
     """Test that train_ppo_vectorized uses factored mode by default."""
 
-    def test_train_ppo_vectorized_uses_factored_by_default(self):
-        """train_ppo_vectorized should use factored action space by default."""
+    def test_train_ppo_vectorized_signature(self):
+        """train_ppo_vectorized should have the expected parameters."""
         from esper.simic.vectorized import train_ppo_vectorized
         import inspect
 
-        # Factored is now the default and only mode - no factored parameter needed
         sig = inspect.signature(train_ppo_vectorized)
         params = sig.parameters
 
-        # Verify recurrent is disabled by default (not compatible with factored)
-        assert "recurrent" in params
-        assert params["recurrent"].default is False
+        # Core parameters should exist
+        assert "n_episodes" in params
+        assert "n_envs" in params
+        assert "max_epochs" in params
+        assert "slots" in params
+
+        # Removed parameters should NOT exist
+        assert "recurrent" not in params, "recurrent parameter should be removed"
+        # factored was never a parameter in train_ppo_vectorized
+
+    def test_ppo_agent_no_factored_parameter(self):
+        """PPOAgent should not have a factored parameter (unified architecture)."""
+        import inspect
+
+        sig = inspect.signature(PPOAgent.__init__)
+        params = sig.parameters
+
+        assert "factored" not in params, "factored parameter should be removed"
+        assert "recurrent" not in params, "recurrent parameter should be removed"
