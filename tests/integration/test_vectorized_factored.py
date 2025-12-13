@@ -17,11 +17,11 @@ class TestFactoredActionMasksInVectorized:
 
     def test_compute_action_masks_returns_dict_tensors(self):
         """compute_action_masks should return dict of boolean tensors."""
-        slot_states = {"slot_0": None}  # Empty slot
+        slot_states = {"early": None}  # Empty slot
 
         masks = compute_action_masks(
             slot_states=slot_states,
-            target_slot="slot_0",
+            enabled_slots=["early"],
             total_seeds=0,
             max_seeds=0,
             device=torch.device("cpu"),
@@ -38,14 +38,16 @@ class TestFactoredActionMasksInVectorized:
     def test_factored_masks_batch_stacking(self):
         """Test that factored masks can be batched correctly for vectorized envs."""
         n_envs = 4
+        slot_ids = ["early", "mid", "late"]
 
         # Simulate masks from multiple environments
         all_masks = []
         for env_idx in range(n_envs):
-            slot_states = {f"slot_{env_idx}": None}
+            # Each env has its own slot state, but all use same enabled slots
+            slot_states = {slot_id: None for slot_id in slot_ids}
             masks = compute_action_masks(
                 slot_states=slot_states,
-                target_slot=f"slot_{env_idx}",
+                enabled_slots=slot_ids,
                 total_seeds=0,
                 max_seeds=0,
                 device=torch.device("cpu"),

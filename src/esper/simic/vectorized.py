@@ -1010,10 +1010,11 @@ def train_ppo_vectorized(
                 all_features.append(features)
 
                 # Compute action mask based on current state (physical constraints only)
-                slot_states = build_slot_states(model, [target_slot])
+                # Build slot states for ALL enabled slots (multi-slot masking)
+                slot_states = build_slot_states(model, slots)
                 mask = compute_action_masks(
                     slot_states=slot_states,
-                    target_slot=target_slot,
+                    enabled_slots=slots,
                     total_seeds=model.count_active_seeds() if model else 0,
                     max_seeds=effective_max_seeds,
                     device=torch.device(device),
@@ -1100,20 +1101,27 @@ def train_ppo_vectorized(
             # Execute actions and store transitions for each environment
             for env_idx, env_state in enumerate(env_states):
                 model = env_state.model
-                target_slot = slots[0]
-                seed_state = model.seed_slots[target_slot].state if model.has_active_seed_in_slot(target_slot) else None
                 signals = all_signals[env_idx]
 
                 # Now Python floats/ints - no GPU sync
                 value = values[env_idx]
 
-                # Parse factored action
+                # Parse factored action FIRST to determine target slot
                 action_dict = actions[env_idx]  # {slot: int, blueprint: int, blend: int, op: int}
                 factored_action = FactoredAction.from_indices(
                     slot_idx=action_dict["slot"],
                     blueprint_idx=action_dict["blueprint"],
                     blend_idx=action_dict["blend"],
                     op_idx=action_dict["op"],
+                )
+
+                # Use the SAMPLED slot as target (multi-slot support)
+                target_slot = factored_action.slot_id
+                slot_is_enabled = target_slot in slots
+                seed_state = (
+                    model.seed_slots[target_slot].state
+                    if slot_is_enabled and model.has_active_seed_in_slot(target_slot)
+                    else None
                 )
                 # Use op name for action counting
                 env_state.action_counts[factored_action.op.name] = env_state.action_counts.get(factored_action.op.name, 0) + 1
@@ -1195,8 +1203,14 @@ def train_ppo_vectorized(
                     print(f"  [ENV {env_idx}] Punishment reward: {punishment:.1f} (final reward: {reward:.1f})")
 
                 # Execute action using FactoredAction properties
-                if factored_action.is_germinate:
-                    # Check specific slot, not any slot (allows multi-slot germination in future)
+                # Validate sampled slot is in enabled slots (masking should prevent this, but safety check)
+                if not slot_is_enabled:
+                    # Invalid slot selection - action fails silently
+                    # (should not happen if action masking is working correctly)
+                    action_success = False
+
+                elif factored_action.is_germinate:
+                    # Germinate in the SAMPLED slot (multi-slot support)
                     if not model.has_active_seed_in_slot(target_slot):
                         env_state.acc_at_germination = env_state.val_acc
                         blueprint_id = factored_action.blueprint_id
@@ -1207,11 +1221,13 @@ def train_ppo_vectorized(
                         action_success = True
 
                 elif factored_action.is_fossilize:
+                    # Fossilize the seed in the SAMPLED slot
                     seed_total_improvement = (
                         seed_state.metrics.total_improvement
                         if seed_state and seed_state.metrics else 0.0
                     )
-                    action_success = _advance_active_seed(model, slots)
+                    # _advance_active_seed handles the actual fossilization
+                    action_success = _advance_active_seed(model, [target_slot])
                     if action_success:
                         env_state.seeds_fossilized += 1
                         if seed_total_improvement >= MIN_FOSSILIZE_CONTRIBUTION:
@@ -1219,6 +1235,7 @@ def train_ppo_vectorized(
                         env_state.acc_at_germination = None
 
                 elif factored_action.is_cull:
+                    # Cull the seed in the SAMPLED slot
                     if model.has_active_seed_in_slot(target_slot):
                         model.cull_seed(slot=target_slot)
                         env_state.seed_optimizer = None

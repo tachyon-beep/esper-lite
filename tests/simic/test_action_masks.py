@@ -1,10 +1,11 @@
 # tests/simic/test_action_masks.py
-"""Tests for action masking with physical constraints only.
+"""Tests for action masking with multi-slot support.
 
-The new mask system only blocks PHYSICALLY IMPOSSIBLE actions:
-- GERMINATE: blocked if slot occupied OR at seed limit
-- FOSSILIZE: blocked if not PROBATIONARY
-- CULL: blocked if no seed OR seed_age < MIN_CULL_AGE
+The mask system only blocks PHYSICALLY IMPOSSIBLE actions:
+- SLOT: only enabled slots (from --slots arg) are selectable
+- GERMINATE: blocked if ALL enabled slots occupied OR at seed limit
+- FOSSILIZE: blocked if NO enabled slot has a PROBATIONARY seed
+- CULL: blocked if NO enabled slot has a cullable seed with age >= MIN_CULL_AGE
 - WAIT: always valid
 - BLUEPRINT: NOOP always blocked (0 trainable parameters)
 """
@@ -15,9 +16,10 @@ from esper.simic.action_masks import (
     MaskSeedInfo,
     compute_action_masks,
     compute_batch_masks,
+    slot_id_to_index,
 )
 from esper.leyline import SeedStage, MIN_CULL_AGE
-from esper.leyline.factored_actions import LifecycleOp, NUM_OPS
+from esper.leyline.factored_actions import LifecycleOp, NUM_OPS, SlotAction
 
 
 def test_compute_action_masks_empty_slots():
@@ -28,10 +30,12 @@ def test_compute_action_masks_empty_slots():
         "late": None,
     }
 
-    masks = compute_action_masks(slot_states, target_slot="mid")
+    masks = compute_action_masks(slot_states, enabled_slots=["early", "mid", "late"])
 
-    # All slots should be valid targets
-    assert masks["slot"].all()
+    # All enabled slots should be valid targets
+    assert masks["slot"][SlotAction.EARLY] == True
+    assert masks["slot"][SlotAction.MID] == True
+    assert masks["slot"][SlotAction.LATE] == True
 
     # WAIT and GERMINATE should be valid
     assert masks["op"][LifecycleOp.WAIT] == True
@@ -40,6 +44,23 @@ def test_compute_action_masks_empty_slots():
     # No seed means no CULL/FOSSILIZE
     assert masks["op"][LifecycleOp.CULL] == False
     assert masks["op"][LifecycleOp.FOSSILIZE] == False
+
+
+def test_compute_action_masks_single_slot_enabled():
+    """Only enabled slots should be selectable."""
+    slot_states = {
+        "early": None,
+        "mid": None,
+        "late": None,
+    }
+
+    # Only mid is enabled
+    masks = compute_action_masks(slot_states, enabled_slots=["mid"])
+
+    # Only mid should be selectable
+    assert masks["slot"][SlotAction.EARLY] == False
+    assert masks["slot"][SlotAction.MID] == True
+    assert masks["slot"][SlotAction.LATE] == False
 
 
 def test_compute_action_masks_active_slot_training_stage():
@@ -53,7 +74,7 @@ def test_compute_action_masks_active_slot_training_stage():
         "late": None,
     }
 
-    masks = compute_action_masks(slot_states, target_slot="mid")
+    masks = compute_action_masks(slot_states, enabled_slots=["early", "mid", "late"])
 
     # WAIT always valid
     assert masks["op"][LifecycleOp.WAIT] == True
@@ -61,10 +82,10 @@ def test_compute_action_masks_active_slot_training_stage():
     # GERMINATE still valid (empty slots exist)
     assert masks["op"][LifecycleOp.GERMINATE] == True
 
-    # CULL valid (seed age >= MIN_CULL_AGE)
+    # CULL valid (mid has seed age >= MIN_CULL_AGE)
     assert masks["op"][LifecycleOp.CULL] == True
 
-    # FOSSILIZE not valid (not PROBATIONARY)
+    # FOSSILIZE not valid (no PROBATIONARY seed)
     assert masks["op"][LifecycleOp.FOSSILIZE] == False
 
 
@@ -77,7 +98,7 @@ def test_compute_action_masks_probationary_stage():
         ),
     }
 
-    masks = compute_action_masks(slot_states, target_slot="mid")
+    masks = compute_action_masks(slot_states, enabled_slots=["mid"])
 
     # FOSSILIZE valid from PROBATIONARY
     assert masks["op"][LifecycleOp.FOSSILIZE] == True
@@ -95,7 +116,7 @@ def test_compute_action_masks_fossilized_stage():
         ),
     }
 
-    masks = compute_action_masks(slot_states, target_slot="mid")
+    masks = compute_action_masks(slot_states, enabled_slots=["mid"])
 
     # WAIT always valid
     assert masks["op"][LifecycleOp.WAIT] == True
@@ -113,7 +134,10 @@ def test_compute_action_masks_fossilized_stage():
 def test_compute_action_masks_wait_always_valid():
     """WAIT should be valid in all situations."""
     # Empty slots
-    masks_empty = compute_action_masks({"early": None, "mid": None, "late": None}, target_slot="mid")
+    masks_empty = compute_action_masks(
+        {"early": None, "mid": None, "late": None},
+        enabled_slots=["early", "mid", "late"]
+    )
     assert masks_empty["op"][LifecycleOp.WAIT] == True
 
     # Active slot
@@ -123,7 +147,7 @@ def test_compute_action_masks_wait_always_valid():
             seed_age_epochs=5,
         ),
     }
-    masks_active = compute_action_masks(slot_states, target_slot="mid")
+    masks_active = compute_action_masks(slot_states, enabled_slots=["mid"])
     assert masks_active["op"][LifecycleOp.WAIT] == True
 
 
@@ -132,7 +156,7 @@ def test_compute_action_masks_blueprint_blend_masks():
     from esper.leyline.factored_actions import BlueprintAction
 
     slot_states = {"early": None, "mid": None, "late": None}
-    masks = compute_action_masks(slot_states, target_slot="mid")
+    masks = compute_action_masks(slot_states, enabled_slots=["mid"])
 
     # NOOP is masked (0 trainable parameters), others are valid
     assert masks["blueprint"][BlueprintAction.NOOP] == False
@@ -154,7 +178,7 @@ def test_compute_action_masks_min_cull_age():
             seed_age_epochs=0,
         ),
     }
-    masks_age0 = compute_action_masks(slot_states_age0, target_slot="mid")
+    masks_age0 = compute_action_masks(slot_states_age0, enabled_slots=["mid"])
     assert masks_age0["op"][LifecycleOp.CULL] == False
 
     # Seed age 1 (minimum for cull)
@@ -164,7 +188,7 @@ def test_compute_action_masks_min_cull_age():
             seed_age_epochs=1,
         ),
     }
-    masks_age1 = compute_action_masks(slot_states_age1, target_slot="mid")
+    masks_age1 = compute_action_masks(slot_states_age1, enabled_slots=["mid"])
     assert masks_age1["op"][LifecycleOp.CULL] == True
 
 
@@ -184,7 +208,7 @@ def test_compute_batch_masks():
         },
     ]
 
-    masks = compute_batch_masks(batch_slot_states, target_slots=["mid", "mid"])
+    masks = compute_batch_masks(batch_slot_states, enabled_slots=["early", "mid", "late"])
 
     # Check shapes (NUM_OPS=4 now)
     assert masks["slot"].shape == (2, 3)
@@ -216,7 +240,9 @@ def test_compute_action_masks_at_seed_limit():
     }
 
     # At limit: 10 seeds consumed, max is 10
-    masks = compute_action_masks(slot_states, target_slot="mid", total_seeds=10, max_seeds=10)
+    masks = compute_action_masks(
+        slot_states, enabled_slots=["mid"], total_seeds=10, max_seeds=10
+    )
 
     # GERMINATE should be masked
     assert masks["op"][LifecycleOp.GERMINATE] == False
@@ -235,7 +261,9 @@ def test_compute_action_masks_over_seed_limit():
     }
 
     # Over limit: 15 seeds consumed, max is 10
-    masks = compute_action_masks(slot_states, target_slot="mid", total_seeds=15, max_seeds=10)
+    masks = compute_action_masks(
+        slot_states, enabled_slots=["mid"], total_seeds=15, max_seeds=10
+    )
 
     # GERMINATE should be masked
     assert masks["op"][LifecycleOp.GERMINATE] == False
@@ -251,7 +279,9 @@ def test_compute_action_masks_under_seed_limit():
     }
 
     # Under limit: 5 seeds consumed, max is 10
-    masks = compute_action_masks(slot_states, target_slot="mid", total_seeds=5, max_seeds=10)
+    masks = compute_action_masks(
+        slot_states, enabled_slots=["mid"], total_seeds=5, max_seeds=10
+    )
 
     # GERMINATE should be allowed (empty slot + under limit)
     assert masks["op"][LifecycleOp.GERMINATE] == True
@@ -272,7 +302,9 @@ def test_compute_action_masks_seed_limit_with_active_seed():
     }
 
     # At limit with active slot
-    masks = compute_action_masks(slot_states, target_slot="mid", total_seeds=10, max_seeds=10)
+    masks = compute_action_masks(
+        slot_states, enabled_slots=["early", "mid", "late"], total_seeds=10, max_seeds=10
+    )
 
     # GERMINATE masked due to limit (even though empty slots exist)
     assert masks["op"][LifecycleOp.GERMINATE] == False
@@ -295,7 +327,7 @@ def test_compute_batch_masks_with_seed_limits():
 
     masks = compute_batch_masks(
         batch_slot_states,
-        target_slots=["mid", "mid", "mid"],
+        enabled_slots=["mid"],
         total_seeds_list=[5, 10, 15],
         max_seeds=10,
     )
@@ -322,7 +354,7 @@ def test_compute_batch_masks_seed_limit_default():
     ]
 
     # No total_seeds_list provided - should default to 0
-    masks = compute_batch_masks(batch_slot_states, target_slots=["mid"], max_seeds=10)
+    masks = compute_batch_masks(batch_slot_states, enabled_slots=["mid"], max_seeds=10)
 
     # Should allow GERMINATE (0 < 10)
     assert masks["op"][0, LifecycleOp.GERMINATE] == True
@@ -346,12 +378,12 @@ def test_min_cull_age_constant():
 
 
 # =============================================================================
-# Tests for target_slot parameter (P1-001)
+# Tests for multi-slot semantics (optimistic masking)
 # =============================================================================
 
 
-def test_compute_action_masks_target_slot_determines_fossilize():
-    """FOSSILIZE validity should be based on target_slot, not first active seed."""
+def test_compute_action_masks_fossilize_any_slot():
+    """FOSSILIZE should be valid if ANY enabled slot is PROBATIONARY."""
     slot_states = {
         "early": MaskSeedInfo(
             stage=SeedStage.TRAINING.value,  # Not fossilizable
@@ -363,17 +395,13 @@ def test_compute_action_masks_target_slot_determines_fossilize():
         ),
     }
 
-    # Target the PROBATIONARY slot - FOSSILIZE should be valid
-    masks_mid = compute_action_masks(slot_states, target_slot="mid")
-    assert masks_mid["op"][LifecycleOp.FOSSILIZE] == True
-
-    # Target the TRAINING slot - FOSSILIZE should NOT be valid
-    masks_early = compute_action_masks(slot_states, target_slot="early")
-    assert masks_early["op"][LifecycleOp.FOSSILIZE] == False
+    # Both slots enabled - FOSSILIZE valid because mid is PROBATIONARY
+    masks = compute_action_masks(slot_states, enabled_slots=["early", "mid"])
+    assert masks["op"][LifecycleOp.FOSSILIZE] == True
 
 
-def test_compute_action_masks_target_slot_determines_cull_age():
-    """CULL validity should be based on target_slot's seed age."""
+def test_compute_action_masks_cull_any_slot():
+    """CULL should be valid if ANY enabled slot has a cullable seed."""
     slot_states = {
         "early": MaskSeedInfo(
             stage=SeedStage.TRAINING.value,
@@ -385,34 +413,47 @@ def test_compute_action_masks_target_slot_determines_cull_age():
         ),
     }
 
-    # Target the old seed - CULL should be valid
-    masks_mid = compute_action_masks(slot_states, target_slot="mid")
-    assert masks_mid["op"][LifecycleOp.CULL] == True
-
-    # Target the young seed - CULL should NOT be valid
-    masks_early = compute_action_masks(slot_states, target_slot="early")
-    assert masks_early["op"][LifecycleOp.CULL] == False
+    # Both slots enabled - CULL valid because mid has age >= MIN_CULL_AGE
+    masks = compute_action_masks(slot_states, enabled_slots=["early", "mid"])
+    assert masks["op"][LifecycleOp.CULL] == True
 
 
-def test_compute_action_masks_target_slot_empty():
-    """Targeting empty slot should disable FOSSILIZE/CULL."""
+def test_compute_action_masks_germinate_any_empty_slot():
+    """GERMINATE should be valid if ANY enabled slot is empty."""
     slot_states = {
-        "early": None,  # Empty
-        "mid": MaskSeedInfo(
-            stage=SeedStage.PROBATIONARY.value,
-            seed_age_epochs=10,
+        "early": MaskSeedInfo(
+            stage=SeedStage.TRAINING.value,
+            seed_age_epochs=5,
         ),
+        "mid": None,  # Empty
     }
 
-    # Target the empty slot
-    masks = compute_action_masks(slot_states, target_slot="early")
-    assert masks["op"][LifecycleOp.FOSSILIZE] == False
-    assert masks["op"][LifecycleOp.CULL] == False
+    # Both slots enabled - GERMINATE valid because mid is empty
+    masks = compute_action_masks(slot_states, enabled_slots=["early", "mid"])
     assert masks["op"][LifecycleOp.GERMINATE] == True
 
 
-def test_compute_action_masks_target_slot_required():
-    """target_slot is required - raises TypeError if not provided."""
+def test_compute_action_masks_only_enabled_slots_checked():
+    """Only enabled slots should affect op validity."""
+    slot_states = {
+        "early": None,  # Empty but not enabled
+        "mid": MaskSeedInfo(
+            stage=SeedStage.FOSSILIZED.value,  # Not germinate-able
+            seed_age_epochs=20,
+        ),
+    }
+
+    # Only mid enabled - GERMINATE invalid (mid is occupied)
+    masks = compute_action_masks(slot_states, enabled_slots=["mid"])
+    assert masks["op"][LifecycleOp.GERMINATE] == False
+
+    # Both enabled - GERMINATE valid (early is empty)
+    masks_both = compute_action_masks(slot_states, enabled_slots=["early", "mid"])
+    assert masks_both["op"][LifecycleOp.GERMINATE] == True
+
+
+def test_compute_action_masks_enabled_slots_required():
+    """enabled_slots is required - raises TypeError if not provided."""
     slot_states = {
         "mid": MaskSeedInfo(
             stage=SeedStage.PROBATIONARY.value,
@@ -420,59 +461,27 @@ def test_compute_action_masks_target_slot_required():
         ),
     }
 
-    # target_slot is required, not optional
+    # enabled_slots is required, not optional
     with pytest.raises(TypeError):
-        compute_action_masks(slot_states)  # Missing target_slot
+        compute_action_masks(slot_states)  # Missing enabled_slots
 
 
-# =============================================================================
-# Tests for compute_batch_masks with target_slots (P1-001, P1-002 continued)
-# =============================================================================
-
-
-def test_compute_batch_masks_with_target_slots():
-    """Batch masks should respect per-env target slots."""
-    batch_slot_states = [
-        # Env 0: mid is TRAINING, target mid
-        {
-            "early": None,
-            "mid": MaskSeedInfo(stage=SeedStage.TRAINING.value, seed_age_epochs=5),
-        },
-        # Env 1: mid is PROBATIONARY, target mid
-        {
-            "early": None,
-            "mid": MaskSeedInfo(stage=SeedStage.PROBATIONARY.value, seed_age_epochs=5),
-        },
-        # Env 2: mid is FOSSILIZED, target mid
-        {
-            "early": None,
-            "mid": MaskSeedInfo(stage=SeedStage.FOSSILIZED.value, seed_age_epochs=20),
-        },
-    ]
-    target_slots = ["mid", "mid", "mid"]
-
-    masks = compute_batch_masks(batch_slot_states, target_slots=target_slots)
-
-    # Env 0: TRAINING - can CULL, not FOSSILIZE
-    assert masks["op"][0, LifecycleOp.CULL] == True
-    assert masks["op"][0, LifecycleOp.FOSSILIZE] == False
-
-    # Env 1: PROBATIONARY - can CULL and FOSSILIZE
-    assert masks["op"][1, LifecycleOp.CULL] == True
-    assert masks["op"][1, LifecycleOp.FOSSILIZE] == True
-
-    # Env 2: FOSSILIZED - cannot CULL or FOSSILIZE
-    assert masks["op"][2, LifecycleOp.CULL] == False
-    assert masks["op"][2, LifecycleOp.FOSSILIZE] == False
-
-
-def test_compute_batch_masks_target_slots_required():
-    """target_slots is required - raises TypeError if not provided."""
+def test_compute_batch_masks_enabled_slots_required():
+    """enabled_slots is required for batch masks."""
     batch_slot_states = [{"mid": None}]
 
     with pytest.raises(TypeError):
-        compute_batch_masks(batch_slot_states)  # Missing target_slots
+        compute_batch_masks(batch_slot_states)  # Missing enabled_slots
 
+
+def test_slot_id_to_index():
+    """slot_id_to_index should correctly map slot names to indices."""
+    assert slot_id_to_index("early") == SlotAction.EARLY.value
+    assert slot_id_to_index("mid") == SlotAction.MID.value
+    assert slot_id_to_index("late") == SlotAction.LATE.value
+
+    with pytest.raises(KeyError):
+        slot_id_to_index("invalid")
 
 
 # =============================================================================

@@ -1,19 +1,19 @@
 """Action Masking for Multi-Slot Control.
 
 Only masks PHYSICALLY IMPOSSIBLE actions:
-- GERMINATE: blocked if slot occupied OR at seed limit
-- FOSSILIZE: blocked if target slot not PROBATIONARY
-- CULL: blocked if target slot has no seed OR seed_age < MIN_CULL_AGE
-        OR target slot is FOSSILIZED (terminal state)
+- SLOT: only enabled slots (from --slots arg) are selectable
+- GERMINATE: blocked if ALL enabled slots occupied OR at seed limit
+- FOSSILIZE: blocked if NO enabled slot has a PROBATIONARY seed
+- CULL: blocked if NO enabled slot has a cullable seed with age >= MIN_CULL_AGE
 - WAIT: always valid
 - BLUEPRINT: NOOP always blocked (0 trainable parameters)
 
 Does NOT mask timing heuristics (epoch, plateau, stabilization).
 Tamiyo learns optimal timing from counterfactual reward signals.
 
-The target_slot parameter determines which slot's state is used for
-FOSSILIZE/CULL validity checks. This is critical for multi-slot scenarios
-where different slots may have seeds at different lifecycle stages.
+Multi-slot execution: The sampled slot determines which slot is targeted.
+The op mask is computed optimistically (valid if ANY enabled slot allows it).
+Invalid slot+op combinations are rejected at execution time.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from esper.leyline import SeedStage, MIN_CULL_AGE
 from esper.leyline.factored_actions import (
     BlueprintAction,
     LifecycleOp,
+    SlotAction,
     NUM_SLOTS,
     NUM_BLUEPRINTS,
     NUM_BLENDS,
@@ -35,6 +36,13 @@ from esper.leyline.factored_actions import (
 
 if TYPE_CHECKING:
     from esper.kasmina.host import MorphogeneticModel
+
+# Mapping from slot ID string to SlotAction index
+_SLOT_ID_TO_INDEX: dict[str, int] = {
+    "early": SlotAction.EARLY.value,
+    "mid": SlotAction.MID.value,
+    "late": SlotAction.LATE.value,
+}
 
 # Stage sets for validation
 _FOSSILIZABLE_STAGES = frozenset({
@@ -94,7 +102,7 @@ def build_slot_states(
 
 def compute_action_masks(
     slot_states: dict[str, MaskSeedInfo | None],
-    target_slot: str,
+    enabled_slots: list[str],
     total_seeds: int = 0,
     max_seeds: int = 0,
     device: torch.device | None = None,
@@ -105,22 +113,25 @@ def compute_action_masks(
 
     Args:
         slot_states: Dict mapping slot_id to MaskSeedInfo or None
-        target_slot: Slot ID to evaluate FOSSILIZE/CULL against (REQUIRED)
+        enabled_slots: List of slot IDs that are enabled (from --slots arg)
         total_seeds: Total number of active seeds across all slots
         max_seeds: Maximum allowed seeds (0 = unlimited)
         device: Torch device for tensors
 
     Returns:
         Dict of boolean tensors for each action head:
-        - "slot": [NUM_SLOTS] - which slots can be targeted
+        - "slot": [NUM_SLOTS] - which slots can be targeted (only enabled slots)
         - "blueprint": [NUM_BLUEPRINTS] - which blueprints can be used
         - "blend": [NUM_BLENDS] - which blend methods can be used
-        - "op": [NUM_OPS] - which operations are valid
+        - "op": [NUM_OPS] - which operations are valid (ANY enabled slot)
     """
     device = device or torch.device("cpu")
 
-    # Slot mask: all slots always selectable
-    slot_mask = torch.ones(NUM_SLOTS, dtype=torch.bool, device=device)
+    # Slot mask: only enabled slots are selectable
+    slot_mask = torch.zeros(NUM_SLOTS, dtype=torch.bool, device=device)
+    for slot_id in enabled_slots:
+        if slot_id in _SLOT_ID_TO_INDEX:
+            slot_mask[_SLOT_ID_TO_INDEX[slot_id]] = True
 
     # Blueprint mask: disable zero-parameter blueprints (can't train them)
     # NOOP is a placeholder seed with no trainable parameters
@@ -130,34 +141,37 @@ def compute_action_masks(
     # Blend mask: all blend methods valid (network learns preferences)
     blend_mask = torch.ones(NUM_BLENDS, dtype=torch.bool, device=device)
 
-    # Op mask: depends on slot states
+    # Op mask: depends on slot states across ALL enabled slots
     op_mask = torch.zeros(NUM_OPS, dtype=torch.bool, device=device)
     op_mask[LifecycleOp.WAIT] = True  # WAIT always valid
 
-    # Check slot states
-    has_empty_slot = any(info is None for info in slot_states.values())
+    # Check slot states for enabled slots only
+    has_empty_enabled_slot = any(
+        slot_states.get(slot_id) is None
+        for slot_id in enabled_slots
+    )
 
-    # Get target slot's seed info for FOSSILIZE/CULL decisions
-    target_seed_info = slot_states.get(target_slot)
-
-    # GERMINATE: valid if empty slot exists AND under seed limit
-    if has_empty_slot:
+    # GERMINATE: valid if ANY enabled slot is empty AND under seed limit
+    if has_empty_enabled_slot:
         seed_limit_reached = max_seeds > 0 and total_seeds >= max_seeds
         if not seed_limit_reached:
             op_mask[LifecycleOp.GERMINATE] = True
 
-    # FOSSILIZE/CULL: valid based on TARGET seed state
-    if target_seed_info is not None:
-        stage = target_seed_info.stage
-        age = target_seed_info.seed_age_epochs
+    # FOSSILIZE/CULL: valid if ANY enabled slot has a valid state
+    # (optimistic masking - network learns slot+op associations)
+    for slot_id in enabled_slots:
+        seed_info = slot_states.get(slot_id)
+        if seed_info is not None:
+            stage = seed_info.stage
+            age = seed_info.seed_age_epochs
 
-        # FOSSILIZE: only from PROBATIONARY
-        if stage in _FOSSILIZABLE_STAGES:
-            op_mask[LifecycleOp.FOSSILIZE] = True
+            # FOSSILIZE: only from PROBATIONARY
+            if stage in _FOSSILIZABLE_STAGES:
+                op_mask[LifecycleOp.FOSSILIZE] = True
 
-        # CULL: only from cullable stages AND if seed age >= MIN_CULL_AGE
-        if stage in _CULLABLE_STAGES and age >= MIN_CULL_AGE:
-            op_mask[LifecycleOp.CULL] = True
+            # CULL: only from cullable stages AND if seed age >= MIN_CULL_AGE
+            if stage in _CULLABLE_STAGES and age >= MIN_CULL_AGE:
+                op_mask[LifecycleOp.CULL] = True
 
     return {
         "slot": slot_mask,
@@ -169,7 +183,7 @@ def compute_action_masks(
 
 def compute_batch_masks(
     batch_slot_states: list[dict[str, MaskSeedInfo | None]],
-    target_slots: list[str],
+    enabled_slots: list[str],
     total_seeds_list: list[int] | None = None,
     max_seeds: int = 0,
     device: torch.device | None = None,
@@ -181,7 +195,7 @@ def compute_batch_masks(
 
     Args:
         batch_slot_states: List of slot state dicts, one per env
-        target_slots: List of target slot IDs per env (REQUIRED)
+        enabled_slots: List of enabled slot IDs (same for all envs, from --slots arg)
         total_seeds_list: List of total seeds per env (None = all 0)
         max_seeds: Maximum allowed seeds (0 = unlimited)
         device: Torch device for tensors
@@ -195,7 +209,7 @@ def compute_batch_masks(
     masks_list = [
         compute_action_masks(
             slot_states=slot_states,
-            target_slot=target_slots[i],
+            enabled_slots=enabled_slots,
             total_seeds=total_seeds_list[i] if total_seeds_list else 0,
             max_seeds=max_seeds,
             device=device,
@@ -210,9 +224,25 @@ def compute_batch_masks(
     }
 
 
+def slot_id_to_index(slot_id: str) -> int:
+    """Convert slot ID string to SlotAction index.
+
+    Args:
+        slot_id: Slot name ("early", "mid", "late")
+
+    Returns:
+        Corresponding SlotAction index (0, 1, 2)
+
+    Raises:
+        KeyError: If slot_id is not a valid slot name
+    """
+    return _SLOT_ID_TO_INDEX[slot_id]
+
+
 __all__ = [
     "MaskSeedInfo",
     "build_slot_states",
     "compute_action_masks",
     "compute_batch_masks",
+    "slot_id_to_index",
 ]
