@@ -101,6 +101,31 @@ def main():
         help="Maximum total seeds across all slots (default: unlimited)")
     ppo_parser.add_argument("--max-seeds-per-slot", type=int, default=None,
         help="Maximum seeds per slot (default: unlimited)")
+    ppo_parser.add_argument(
+        "--reward-mode",
+        type=str,
+        choices=["shaped", "sparse", "minimal"],
+        default="shaped",
+        help="Reward mode: shaped (dense, default), sparse (terminal-only), minimal (sparse + early-cull)"
+    )
+    ppo_parser.add_argument(
+        "--param-budget",
+        type=int,
+        default=500_000,
+        help="Parameter budget for sparse reward efficiency calculation (default: 500000)"
+    )
+    ppo_parser.add_argument(
+        "--param-penalty",
+        type=float,
+        default=0.1,
+        help="Parameter penalty weight in sparse reward (default: 0.1)"
+    )
+    ppo_parser.add_argument(
+        "--sparse-scale",
+        type=float,
+        default=1.0,
+        help="Reward scale for sparse mode (DRL Expert: try 2.0-3.0 if learning fails)"
+    )
 
     args = parser.parse_args()
 
@@ -179,6 +204,10 @@ def main():
             slots=args.slots,
             max_seeds=args.max_seeds,
             max_seeds_per_slot=args.max_seeds_per_slot,
+            reward_mode=args.reward_mode,
+            param_budget=args.param_budget,
+            param_penalty_weight=args.param_penalty,
+            sparse_reward_scale=args.sparse_scale,
         )
 
 if __name__ == "__main__":
