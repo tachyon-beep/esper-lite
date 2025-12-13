@@ -70,6 +70,20 @@ class TelemetryEventType(Enum):
     GRADIENT_PATHOLOGY_DETECTED = auto()
     NUMERICAL_INSTABILITY_DETECTED = auto()
 
+    # === Governor Events (Tolaria) ===
+    GOVERNOR_PANIC = auto()           # Vital signs check failed
+    GOVERNOR_ROLLBACK = auto()        # Emergency rollback executed
+    GOVERNOR_SNAPSHOT = auto()        # LKG checkpoint saved
+
+    # === Training Progress Events ===
+    BATCH_COMPLETED = auto()          # PPO batch finished
+    TRAINING_STARTED = auto()         # Training run initialized
+    CHECKPOINT_SAVED = auto()         # Model checkpoint saved
+    CHECKPOINT_LOADED = auto()        # Model checkpoint restored
+
+    # === Counterfactual Attribution Events ===
+    COUNTERFACTUAL_COMPUTED = auto()  # Per-slot counterfactual contribution measured
+
 
 @dataclass
 class TelemetryEvent:
