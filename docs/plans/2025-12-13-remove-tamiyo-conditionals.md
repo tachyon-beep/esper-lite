@@ -706,3 +706,14 @@ Remaining tamiyo references (intentional):
 - Remove `from esper.simic.networks import ActorCritic` from ppo.py
 - Consider removing `ActorCritic` export from `__init__.py` if no external consumers
 - Consider deprecating `ActorCritic` class in networks.py (keep for reference/other uses)
+
+### Rewrite deleted PPO tests for vectorized path
+
+**Context:** The following test files were deleted because they tested the old non-vectorized PPO path (using `store_transition`, old `update()` signature, `RolloutBuffer`):
+
+- `tests/simic/test_ppo_ratio_stats.py` - ratio statistics tests
+- `tests/simic/test_ppo_telemetry_integration.py` - telemetry integration tests
+- `tests/simic/test_ppo_explained_variance.py` - explained variance tests
+- `tests/simic/test_ppo_auto_escalation.py` - auto-escalation tests
+
+**Action:** These tests should be rewritten to use the new vectorized training path with `TamiyoRolloutBuffer` and the new `update()` method. The test coverage for ratio stats, telemetry, explained variance, and auto-escalation should be restored through integration tests or by testing `train_ppo_vectorized()` directly.
