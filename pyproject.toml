@@ -9,8 +9,9 @@ dependencies = [
     "hypothesis>=6.148.3",
     "datasets>=4.4.1",
     "transformers>=4.57.3",
-    "typing_extensions>=4.5.0",  # For override decorator on Python <3.12
-    "rich>=13.0",  # TUI for training monitoring
+    "typing_extensions>=4.5.0", # For override decorator on Python <3.12
+    "rich>=13.0", # TUI for training monitoring
+    "ruff>=0.14.9",
 ]
 
 [project.optional-dependencies]

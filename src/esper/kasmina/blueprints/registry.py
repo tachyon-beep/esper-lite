@@ -125,11 +125,5 @@ class BlueprintRegistry:
         cls._blueprints.pop(key, None)
         _invalidate_action_cache(topology)
 
-    @classmethod
-    def reset(cls) -> None:
-        """Reset registry to empty state (for test cleanup)."""
-        cls._blueprints.clear()
-        _invalidate_action_cache()
-
 
 __all__ = ["BlueprintSpec", "BlueprintRegistry"]

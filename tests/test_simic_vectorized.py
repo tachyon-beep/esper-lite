@@ -30,7 +30,7 @@ class _StubSeedSlot:
         self.gate_result = gate_result or _StubGateResult()
         self.advance_calls: list[SeedStage] = []
         self.set_alpha_calls: list[float] = []
-        self.start_blending_calls: list[tuple[int, float]] = []
+        self.start_blending_calls: list[int] = []
 
     def advance_stage(self, target_stage: SeedStage | None = None) -> _StubGateResult:
         self.advance_calls.append(target_stage)
@@ -40,8 +40,8 @@ class _StubSeedSlot:
     def set_alpha(self, alpha: float) -> None:
         self.set_alpha_calls.append(alpha)
 
-    def start_blending(self, total_steps: int, temperature: float = 1.0) -> None:
-        self.start_blending_calls.append((total_steps, temperature))
+    def start_blending(self, total_steps: int) -> None:
+        self.start_blending_calls.append(total_steps)
 
 
 class _StubModel:

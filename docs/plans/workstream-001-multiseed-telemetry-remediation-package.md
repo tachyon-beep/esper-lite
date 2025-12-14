@@ -124,7 +124,7 @@ Scale:
 - **Action:** Update `SeedStateReport` / `SeedMetrics` to include `counterfactual_contribution`, `seed_gradient_norm_ratio`, `seed_param_count`, `host_param_count`.
 - **Verification:** Unit test confirms fields populate during `to_leyline()`.
 
-### [ ] Step 4: Dead Code Sweep & Blueprint Hardening (Kasmina PR3 + PR5)
+### [x] Step 4: Dead Code Sweep & Blueprint Hardening (Kasmina PR3 + PR5)
 
 - **Pre-flight checklist:**
   - [ ] Confirm Step 3 is merged.

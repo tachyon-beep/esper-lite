@@ -298,15 +298,6 @@ class SeedState:
         """Convenience property for epochs in current stage."""
         return self.metrics.epochs_in_current_stage
 
-    def increment_epoch(self) -> None:
-        """Increment epoch counters (use when accuracy is recorded separately)."""
-        self.metrics.epochs_total += 1
-        self.metrics.epochs_in_current_stage += 1
-
-    def record_epoch(self, accuracy: float) -> None:
-        """Record epoch with accuracy (preferred method)."""
-        self.metrics.record_accuracy(accuracy)
-
     def to_report(self) -> SeedStateReport:
         """Convert to Leyline SeedStateReport."""
         return SeedStateReport(
@@ -1158,7 +1149,7 @@ class SeedSlot(nn.Module):
             self.state.alpha = max(0.0, min(1.0, alpha))
             self.state.metrics.current_alpha = self.state.alpha
 
-    def start_blending(self, total_steps: int, temperature: float = 1.0) -> None:
+    def start_blending(self, total_steps: int) -> None:
         """Initialize blending with selected algorithm.
 
         Uses blend_algorithm_id set during germinate(). Falls back to sigmoid
@@ -1319,7 +1310,7 @@ class SeedSlot(nn.Module):
                 configured_steps = self.task_config.blending_steps
                 if isinstance(configured_steps, int) and configured_steps > 0:
                     total_steps = configured_steps
-            self.start_blending(total_steps=total_steps, temperature=1.0)
+            self.start_blending(total_steps=total_steps)
             return
 
         # BLENDING → PROBATIONARY when alpha ramp completes and gate passes
