@@ -88,9 +88,9 @@ class ParallelEnvState:
     """
     model: nn.Module
     host_optimizer: torch.optim.Optimizer
-    seed_optimizers: dict[str, torch.optim.Optimizer] = field(default_factory=dict)
     signal_tracker: any  # SignalTracker from tamiyo
     governor: TolariaGovernor  # Fail-safe watchdog for catastrophic failure detection
+    seed_optimizers: dict[str, torch.optim.Optimizer] = field(default_factory=dict)
     env_device: str = "cuda:0"  # Device this env runs on
     stream: torch.cuda.Stream | None = None  # CUDA stream for async execution
     seeds_created: int = 0
@@ -105,7 +105,6 @@ class ParallelEnvState:
     train_acc: float = 0.0
     val_loss: float = 0.0
     val_acc: float = 0.0
-    params_added_baseline: int = 0
     # Ransomware-resistant reward: track accuracy at germination for progress calculation
     acc_at_germination: dict[str, float] = field(default_factory=dict)
     # Maximum accuracy achieved during episode (for sparse reward)
@@ -271,6 +270,31 @@ def train_ppo_vectorized(
     from esper.tolaria import create_model
     from esper.tamiyo import SignalTracker
 
+    def _validate_devices(devices_to_check: list[str]) -> None:
+        """Fail fast on invalid CUDA device requests."""
+        if not devices_to_check:
+            return
+
+        cuda_requested = [dev for dev in devices_to_check if dev.startswith("cuda")]
+        if not cuda_requested:
+            return
+
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                f"CUDA device(s) {cuda_requested} requested but CUDA is not available. "
+                "Use CPU devices or install CUDA drivers."
+            )
+
+        available = torch.cuda.device_count()
+        for dev in cuda_requested:
+            index = torch.device(dev).index
+            if index is None:
+                continue
+            if index >= available:
+                raise RuntimeError(
+                    f"CUDA device '{dev}' requested but only {available} device(s) are available."
+                )
+
     if not slots:
         raise ValueError("slots parameter is required and cannot be empty")
 
@@ -280,6 +304,8 @@ def train_ppo_vectorized(
 
     if devices is None:
         devices = [device]
+
+    _validate_devices([device, *devices])
 
     task_spec = get_task_spec(task)
     ActionEnum = task_spec.action_enum
@@ -535,15 +561,14 @@ def train_ppo_vectorized(
         # Set host_params baseline for scoreboard via Nissa analytics
         host_params = sum(p.numel() for p in model.host.parameters() if p.requires_grad)
         analytics.set_host_params(env_idx, host_params)
-        # Snapshot current cumulative params so rent uses per-episode delta.
-        params_added_baseline = analytics._get_scoreboard(env_idx).params_added
 
         host_optimizer = torch.optim.SGD(
             model.get_host_parameters(), lr=task_spec.host_lr, momentum=0.9, weight_decay=5e-4
         )
 
         # Create CUDA stream for this environment
-        stream = torch.cuda.Stream(device=env_device) if 'cuda' in env_device else None
+        env_device_obj = torch.device(env_device)
+        stream = torch.cuda.Stream(device=env_device_obj) if env_device_obj.type == "cuda" else None
 
         # Create Governor for fail-safe watchdog
         # Conservative settings to avoid false positives during seed blending:
@@ -570,7 +595,6 @@ def train_ppo_vectorized(
             seeds_created=0,
             episode_rewards=[],
             action_enum=ActionEnum,
-            params_added_baseline=params_added_baseline,
         )
         # Pre-allocate accumulators to avoid per-epoch allocation churn
         env_state.init_accumulators(slots)
@@ -809,7 +833,7 @@ def train_ppo_vectorized(
                 if env_state.stream:
                     env_state.train_loss_accum.record_stream(env_state.stream)
                     env_state.train_correct_accum.record_stream(env_state.stream)
-                    env_state.stream.wait_stream(torch.cuda.default_stream(env_state.env_device))
+                    env_state.stream.wait_stream(torch.cuda.default_stream(torch.device(env_state.env_device)))
 
             # Choose iteration strategy based on data loading mode
             if shared_train_iter is not None:
@@ -830,7 +854,7 @@ def train_ppo_vectorized(
                         # We must sync env_state.stream with default stream before using the data,
                         # otherwise we may access partially-transferred data (race condition).
                         if env_state.stream:
-                            env_state.stream.wait_stream(torch.cuda.default_stream(env_state.env_device))
+                            env_state.stream.wait_stream(torch.cuda.default_stream(torch.device(env_state.env_device)))
                         inputs, targets = env_batches[i]
                         loss_tensor, correct_tensor, total, grad_stats = process_train_batch(
                             env_state, inputs, targets, criterion, use_telemetry=use_telemetry, slots=slots
@@ -913,7 +937,7 @@ def train_ppo_vectorized(
                 if env_state.stream:
                     env_state.val_loss_accum.record_stream(env_state.stream)
                     env_state.val_correct_accum.record_stream(env_state.stream)
-                    env_state.stream.wait_stream(torch.cuda.default_stream(env_state.env_device))
+                    env_state.stream.wait_stream(torch.cuda.default_stream(torch.device(env_state.env_device)))
                     # Register per-slot counterfactual accumulators with stream
                     if i in slots_needing_counterfactual:
                         for slot_id in slots_needing_counterfactual[i]:
@@ -937,7 +961,7 @@ def train_ppo_vectorized(
                         # We must sync env_state.stream with default stream before using the data,
                         # otherwise we may access partially-transferred data (race condition).
                         if env_state.stream:
-                            env_state.stream.wait_stream(torch.cuda.default_stream(env_state.env_device))
+                            env_state.stream.wait_stream(torch.cuda.default_stream(torch.device(env_state.env_device)))
                         inputs, targets = env_batches[i]
 
                         # MAIN VALIDATION (real alpha)
@@ -1292,12 +1316,10 @@ def train_ppo_vectorized(
 
                 # Compute reward with cost params
                 # Derive cost from CURRENT architecture, not cumulative scoreboard
-                # (scoreboard.params_added persists across episodes, causing stale rent)
+                # (rent should reflect current extra params, not historical totals)
                 scoreboard = analytics._get_scoreboard(env_idx)
                 host_params = scoreboard.host_params
-                # Use env-local params (delta vs baseline) so rent resets with each fresh model.
-                params_added_delta = max(0, scoreboard.params_added - env_state.params_added_baseline)
-                total_params = params_added_delta + model.active_seed_params
+                total_params = model.active_seed_params
 
                 # Compute seed_contribution from counterfactual for the SAMPLED slot
                 # (multi-slot reward attribution: use the slot the policy chose)
@@ -1313,6 +1335,12 @@ def train_ppo_vectorized(
                     telemetry_config is not None and telemetry_config.should_collect("debug")
                 )
 
+                seed_params_for_slot = (
+                    model.seed_slots[target_slot].active_seed_params
+                    if slot_is_enabled
+                    else 0
+                )
+
                 # Unified reward computation - always use compute_reward dispatcher
                 # For pre-blending stages, seed_contribution is None and acc_delta is used as proxy
                 reward_components = None
@@ -1322,7 +1350,7 @@ def train_ppo_vectorized(
                         seed_contribution=seed_contribution,
                         val_acc=env_state.val_acc,
                         host_max_acc=env_state.host_max_acc,
-                        seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
+                        seed_info=SeedInfo.from_seed_state(seed_state, seed_params_for_slot),
                         epoch=epoch,
                         max_epochs=max_epochs,
                         total_params=total_params,
@@ -1342,7 +1370,7 @@ def train_ppo_vectorized(
                         seed_contribution=seed_contribution,
                         val_acc=env_state.val_acc,
                         host_max_acc=env_state.host_max_acc,
-                        seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
+                        seed_info=SeedInfo.from_seed_state(seed_state, seed_params_for_slot),
                         epoch=epoch,
                         max_epochs=max_epochs,
                         total_params=total_params,
@@ -1491,9 +1519,14 @@ def train_ppo_vectorized(
 
                 # Mechanical lifecycle advance (blending/shadowing dwell) AFTER RL transition
                 # This ensures state/action/reward alignment - advance happens after the step is recorded
-                # Must check specific slot since actions may have culled it
-                if model.has_active_seed_in_slot(target_slot):
-                    model.seed_slots[target_slot].step_epoch()
+                # Advance ALL enabled slots so non-targeted seeds still progress mechanically.
+                # Cleanup per-slot bookkeeping if a seed is auto-culled during step_epoch().
+                for slot_id in slots:
+                    model.seed_slots[slot_id].step_epoch()
+                    if not model.has_active_seed_in_slot(slot_id):
+                        env_state.seed_optimizers.pop(slot_id, None)
+                        env_state.acc_at_germination.pop(slot_id, None)
+                        env_state.gradient_ratio_ema.pop(slot_id, None)
 
                 if epoch == max_epochs:
                     env_final_accs[env_idx] = env_state.val_acc

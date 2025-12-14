@@ -312,7 +312,6 @@ def run_heuristic_episode(
     episode_rewards = []
 
     host_params = sum(p.numel() for p in model.get_host_parameters() if p.requires_grad)
-    params_added = 0
 
     for epoch in range(1, max_epochs + 1):
         seed_state = model.seed_slots[target_slot].state if model.has_active_seed else None
@@ -409,12 +408,15 @@ def run_heuristic_episode(
         action_counts[factored_action.op.name] += 1
 
         # Compute reward (for comparison with PPO)
-        total_params = params_added + model.active_seed_params
+        total_params = model.active_seed_params
         reward = compute_contribution_reward(
             action=factored_action.op,  # Pass the LifecycleOp enum
             seed_contribution=None,  # No counterfactual in heuristic path
             val_acc=val_acc,
-            seed_info=SeedInfo.from_seed_state(seed_state, model.active_seed_params),
+            seed_info=SeedInfo.from_seed_state(
+                seed_state,
+                model.seed_slots[target_slot].active_seed_params,
+            ),
             epoch=epoch,
             max_epochs=max_epochs,
             total_params=total_params,
@@ -439,7 +441,6 @@ def run_heuristic_episode(
                 slot = model.seed_slots[target_slot]
                 gate_result = slot.advance_stage(SeedStage.FOSSILIZED)
                 if gate_result.passed:
-                    params_added += model.active_seed_params
                     slot.set_alpha(1.0)
 
         elif factored_action.is_cull:

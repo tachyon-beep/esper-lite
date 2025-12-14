@@ -64,7 +64,7 @@ def signals_to_features(
         model: MorphogeneticModel
         use_telemetry: Whether to include telemetry features
         max_epochs: Maximum epochs for learning phase normalization
-        slots: List of slot names to extract features from (uses first slot)
+        slots: Enabled slot IDs (used to pick telemetry seed deterministically)
         total_seeds: Current total seeds across all slots (for utilization calc)
         max_seeds: Maximum allowed seeds (for utilization calc)
 
@@ -78,7 +78,6 @@ def signals_to_features(
     if not slots:
         raise ValueError("signals_to_features: slots parameter is required and cannot be empty")
 
-    target_slot = slots[0]
     from esper.simic.features import obs_to_multislot_features
 
     # Build observation dict
@@ -113,11 +112,14 @@ def signals_to_features(
         if model and slot_id in model.seed_slots:
             slot = model.seed_slots[slot_id]
             if slot.is_active and slot.state:
+                slot_improvement = slot.state.metrics.counterfactual_contribution
+                if slot_improvement is None:
+                    slot_improvement = slot.state.metrics.improvement_since_stage_start
                 slot_states[slot_id] = {
                     'is_active': 1.0,
                     'stage': slot.state.stage.value,
                     'alpha': slot.state.alpha,
-                    'improvement': slot.state.metrics.improvement_since_stage_start,
+                    'improvement': slot_improvement,
                     'blueprint_id': slot.state.blueprint_id,
                 }
             else:
@@ -132,12 +134,23 @@ def signals_to_features(
     if use_telemetry:
         # Use real telemetry from model.seed_slots[target_slot].state when available
         from esper.leyline import SeedTelemetry
-        if model and model.has_active_seed:
-            seed_state = model.seed_slots[target_slot].state
-            # SeedState always has telemetry field (initialized in __post_init__)
-            features.extend(seed_state.telemetry.to_features())
-        else:
-            features.extend([0.0] * SeedTelemetry.feature_dim())
+        telemetry_features: list[float] | None = None
+        if model:
+            for slot_id in slots:
+                if slot_id not in model.seed_slots:
+                    continue
+                if not model.has_active_seed_in_slot(slot_id):
+                    continue
+                seed_state = model.seed_slots[slot_id].state
+                if seed_state is None:
+                    continue
+                telemetry_features = seed_state.telemetry.to_features()
+                break
+
+        if telemetry_features is None:
+            telemetry_features = [0.0] * SeedTelemetry.feature_dim()
+
+        features.extend(telemetry_features)
 
     return features
 

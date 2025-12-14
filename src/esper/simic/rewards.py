@@ -665,7 +665,7 @@ def compute_sparse_reward(
 
     Args:
         host_max_acc: Maximum accuracy achieved during episode (0-100)
-        total_params: Total parameters (host + seeds) at episode end
+        total_params: Extra seed parameters (active + fossilized) at episode end
         epoch: Current epoch (1-indexed)
         max_epochs: Maximum epochs in episode
         config: Reward configuration with param_budget, param_penalty_weight, sparse_reward_scale
@@ -710,7 +710,7 @@ def compute_minimal_reward(
 
     Args:
         host_max_acc: Maximum accuracy achieved during episode
-        total_params: Total parameters at episode end
+        total_params: Extra seed parameters (active + fossilized) at episode end
         epoch: Current epoch
         max_epochs: Maximum epochs in episode
         action: Action taken this timestep
@@ -769,7 +769,7 @@ def compute_reward(
         seed_info: Seed state info (None if no active seed)
         epoch: Current epoch
         max_epochs: Maximum epochs in episode
-        total_params: Total parameters (host + seeds)
+        total_params: Extra seed parameters (active + fossilized)
         host_params: Host model parameters
         acc_at_germination: Accuracy when seed was planted
         acc_delta: Per-epoch accuracy change

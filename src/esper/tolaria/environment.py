@@ -11,6 +11,33 @@ import torch
 from esper.runtime import TaskSpec, get_task_spec
 
 
+def _validate_device(device: str) -> None:
+    """Validate requested device, especially for multi-GPU setups.
+
+    Raises a clear error when a specific CUDA index is unavailable instead of
+    failing later during model construction.
+    """
+    if not device.startswith("cuda"):
+        return
+
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            f"CUDA device '{device}' requested but CUDA is not available. "
+            f"Use device='cpu' or check your CUDA installation."
+        )
+
+    # torch.device handles bare "cuda" (index=None) which uses the current default
+    requested_index = torch.device(device).index
+    if requested_index is None:
+        return
+
+    available = torch.cuda.device_count()
+    if requested_index >= available:
+        raise RuntimeError(
+            f"CUDA device '{device}' requested but only {available} device(s) are available."
+        )
+
+
 def create_model(task: TaskSpec | str = "cifar10", device: str = "cuda", slots: list[str] | None = None) -> torch.nn.Module:
     """Create a MorphogeneticModel for the given task on device.
 
@@ -24,11 +51,7 @@ def create_model(task: TaskSpec | str = "cifar10", device: str = "cuda", slots: 
     else:
         task_spec = task
 
-    if device.startswith("cuda") and not torch.cuda.is_available():
-        raise RuntimeError(
-            f"CUDA device '{device}' requested but CUDA is not available. "
-            f"Use device='cpu' or check your CUDA installation."
-        )
+    _validate_device(device)
 
     if not slots:
         raise ValueError("slots parameter is required and cannot be empty")

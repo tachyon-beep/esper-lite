@@ -14,7 +14,6 @@ class TestParallelEnvStateRecurrence:
         env_state = ParallelEnvState(
             model=MagicMock(),
             host_optimizer=MagicMock(),
-            seed_optimizer=None,
             signal_tracker=MagicMock(),
             governor=MagicMock(),
         )
@@ -26,7 +25,6 @@ class TestParallelEnvStateRecurrence:
         env_state = ParallelEnvState(
             model=MagicMock(),
             host_optimizer=MagicMock(),
-            seed_optimizer=None,
             signal_tracker=MagicMock(),
             governor=MagicMock(),
         )
@@ -43,7 +41,6 @@ class TestParallelEnvStateRecurrence:
         env_state = ParallelEnvState(
             model=MagicMock(),
             host_optimizer=MagicMock(),
-            seed_optimizer=None,
             signal_tracker=MagicMock(),
             governor=MagicMock(),
         )
