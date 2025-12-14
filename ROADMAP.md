@@ -192,7 +192,7 @@ We iterate **DataLoaders first** (batches), dispatch to **environments second** 
 **Key Features:**
 
 * `--slots early mid late` CLI flag to enable multiple injection points
-* `--max-seeds` and `--max-seeds-per-slot` for seed budget control
+* `--max-seeds` for seed budget control
 * Counterfactual reward attribution per slot
 
 **Status:** COMPLETE

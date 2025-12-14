@@ -339,7 +339,6 @@ Kasmina is the biological machinery for growing new neural tissue. Just as stem 
 |---------|-------|-------------------|
 | `esper ppo` | `--slots early mid late` | Configures which SeedSlots are created |
 | `esper ppo` | `--max-seeds N` | Limits total seeds across all slots |
-| `esper ppo` | `--max-seeds-per-slot N` | Limits seeds per individual slot |
 | `esper ppo` | `--blend-algorithm X` | Sets blend algorithm (linear/sigmoid/gated) |
 
 ---

@@ -62,10 +62,7 @@ from esper.simic.debug_telemetry import (
     collect_per_layer_gradients,
     check_numerical_stability,
 )
-from esper.simic.gradient_collector import (
-    collect_dual_gradients_async,
-    materialize_dual_grad_stats,
-)
+from esper.simic.gradient_collector import materialize_dual_grad_stats
 from esper.simic.normalization import RunningMeanStd, RewardNormalizer
 from esper.simic.features import MULTISLOT_FEATURE_SIZE
 from esper.simic.ppo import PPOAgent, signals_to_features
@@ -226,7 +223,6 @@ def train_ppo_vectorized(
     improvement_threshold: float = 2.0,
     slots: list[str] | None = None,
     max_seeds: int | None = None,
-    max_seeds_per_slot: int | None = None,
     reward_mode: str = "shaped",
     param_budget: int = 500_000,
     param_penalty_weight: float = 0.1,

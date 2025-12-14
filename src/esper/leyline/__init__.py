@@ -27,7 +27,6 @@ MIN_PROBATION_EPOCHS = 5
 
 # Seed limits (None = unlimited)
 DEFAULT_MAX_SEEDS = None           # Global limit across all slots
-DEFAULT_MAX_SEEDS_PER_SLOT = None  # Per-slot limit
 
 # =============================================================================
 # PPO/PBRS Constants (shared between ppo.py, rewards.py, buffer, vectorized)
@@ -336,7 +335,6 @@ __all__ = [
     "FULL_EVALUATION_AGE",
     "MIN_PROBATION_EPOCHS",
     "DEFAULT_MAX_SEEDS",
-    "DEFAULT_MAX_SEEDS_PER_SLOT",
     "DEFAULT_GAMMA",
 
     # Episode & Architecture constants
