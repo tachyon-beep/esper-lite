@@ -52,7 +52,7 @@ def test_vectorized_multi_gpu_smoke(monkeypatch):
         torch.randint(0, 10, (total_batch,), generator=rng),
     )
 
-    def _get_cifar10_datasets(_data_root: str = "./data", mock: bool = False):
+    def _get_cifar10_datasets(data_root: str = "./data", mock: bool = False):
         assert mock is True, "Smoke test must call get_cifar10_datasets(mock=True)"
         return trainset, testset
 
