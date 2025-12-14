@@ -88,7 +88,7 @@ class ParallelEnvState:
     """
     model: nn.Module
     host_optimizer: torch.optim.Optimizer
-    seed_optimizer: torch.optim.Optimizer | None
+    seed_optimizers: dict[str, torch.optim.Optimizer] = field(default_factory=dict)
     signal_tracker: any  # SignalTracker from tamiyo
     governor: TolariaGovernor  # Fail-safe watchdog for catastrophic failure detection
     env_device: str = "cuda:0"  # Device this env runs on
@@ -107,7 +107,7 @@ class ParallelEnvState:
     val_acc: float = 0.0
     params_added_baseline: int = 0
     # Ransomware-resistant reward: track accuracy at germination for progress calculation
-    acc_at_germination: float | None = None
+    acc_at_germination: dict[str, float] = field(default_factory=dict)
     # Maximum accuracy achieved during episode (for sparse reward)
     host_max_acc: float = 0.0
     # Pre-allocated accumulators to avoid per-epoch tensor allocation churn
@@ -123,10 +123,9 @@ class ParallelEnvState:
     # (Batched to [num_layers, num_envs, hidden_dim] during forward pass)
     # None = fresh episode (initialized on first action selection)
     lstm_hidden: tuple[torch.Tensor, torch.Tensor] | None = None
-    # EMA tracking for seed gradient ratio (for G2 gate)
+    # Per-slot EMA tracking for seed gradient ratio (for G2 gate)
     # Smooths per-step ratio noise with momentum=0.9
-    gradient_ratio_ema: float = 0.0
-    gradient_ratio_ema_initialized: bool = False
+    gradient_ratio_ema: dict[str, float] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         # Initialize counters with LifecycleOp names (WAIT, GERMINATE, FOSSILIZE, CULL)
@@ -522,16 +521,16 @@ def train_ppo_vectorized(
 
         model = create_model(task=task_spec, device=env_device, slots=slots)
 
-        # Wire telemetry callback with env_id injection - use first available slot
-        first_slot = next(iter(model.seed_slots.keys()))
-        slot = model.seed_slots[first_slot]
-        slot.on_telemetry = make_telemetry_callback(env_idx)
-        slot.fast_mode = False  # Enable telemetry
-        # Incubator mode gradient isolation: detach host input into the seed path so
-        # host gradients remain identical to the host-only model while the seed
-        # trickle-learns via STE in TRAINING. The host optimizer still steps
-        # every batch; isolation only affects gradients through the seed branch.
-        slot.isolate_gradients = True
+        # Wire telemetry callback with env_id injection for ALL slots (multi-seed support)
+        telemetry_cb = make_telemetry_callback(env_idx)
+        for slot in model.seed_slots.values():
+            slot.on_telemetry = telemetry_cb
+            slot.fast_mode = False  # Enable telemetry
+            # Incubator mode gradient isolation: detach host input into the seed path so
+            # host gradients remain identical to the host-only model while the seed
+            # trickle-learns via STE in TRAINING. The host optimizer still steps
+            # every batch; isolation only affects gradients through the seed branch.
+            slot.isolate_gradients = True
 
         # Set host_params baseline for scoreboard via Nissa analytics
         host_params = sum(p.numel() for p in model.host.parameters() if p.requires_grad)
@@ -564,7 +563,6 @@ def train_ppo_vectorized(
         env_state = ParallelEnvState(
             model=model,
             host_optimizer=host_optimizer,
-            seed_optimizer=None,
             signal_tracker=SignalTracker(env_id=env_idx),
             governor=governor,
             env_device=env_device,
@@ -580,7 +578,7 @@ def train_ppo_vectorized(
 
     def process_train_batch(env_state: ParallelEnvState, inputs: torch.Tensor,
                             targets: torch.Tensor, criterion: nn.Module,
-                            use_telemetry: bool = False, slots: list[str] | None = None) -> tuple[torch.Tensor, torch.Tensor, int, dict | None]:
+                            use_telemetry: bool = False, slots: list[str] | None = None) -> tuple[torch.Tensor, torch.Tensor, int, dict[str, dict] | None]:
         """Process a single training batch for one environment (runs in CUDA stream).
 
         Returns TENSORS (not floats) to avoid blocking .item() calls inside stream context.
@@ -592,21 +590,19 @@ def train_ppo_vectorized(
             targets: Target tensor
             criterion: Loss criterion
             use_telemetry: Whether to collect telemetry
-            slots: List of slot names (uses first slot)
+            slots: Enabled slot IDs (train all active slots)
 
         Returns:
             Tuple of (loss_tensor, correct_tensor, total, grad_stats)
-            grad_stats is None if use_telemetry=False or no active seed in TRAINING stage
+            grad_stats maps slot_id -> async dual-gradient stats dict for that slot.
+            It is None if use_telemetry=False or no slot needs gradient telemetry.
         """
         if not slots:
             raise ValueError("slots parameter is required and cannot be empty")
-        target_slot = slots[0]
 
         model = env_state.model
-        # Use slot-specific check, not any-slot check (has_active_seed checks ALL slots)
-        seed_state = model.seed_slots[target_slot].state if model.has_active_seed_in_slot(target_slot) else None
         env_dev = env_state.env_device
-        grad_stats = None
+        grad_stats_by_slot: dict[str, dict] | None = None
 
         # Use CUDA stream for async execution
         stream_ctx = torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
@@ -618,49 +614,47 @@ def train_ppo_vectorized(
 
             model.train()
 
-            # Determine which optimizer to use based on seed state
-            if seed_state is None or seed_state.stage == SeedStage.FOSSILIZED:
-                # No seed or seed fully integrated - train host only
-                optimizer = env_state.host_optimizer
-            elif seed_state.stage in (SeedStage.GERMINATED, SeedStage.TRAINING):
-                # Incubator/isolated seed training: train host + seed in lockstep.
-                if seed_state.stage == SeedStage.GERMINATED:
-                    gate_result = model.seed_slots[target_slot].advance_stage(SeedStage.TRAINING)
+            # Auto-advance GERMINATED → TRAINING before forward so STE training starts immediately.
+            # Do this per-slot (multi-seed support).
+            for slot_id in slots:
+                if not model.has_active_seed_in_slot(slot_id):
+                    continue
+                slot_state = model.seed_slots[slot_id].state
+                if slot_state and slot_state.stage == SeedStage.GERMINATED:
+                    gate_result = model.seed_slots[slot_id].advance_stage(SeedStage.TRAINING)
                     if not gate_result.passed:
-                        raise RuntimeError(f"G1 gate failed during TRAINING entry: {gate_result}")
-                if env_state.seed_optimizer is None:
-                    seed_params = list(model.get_seed_parameters(target_slot))
+                        raise RuntimeError(
+                            f"G1 gate failed during TRAINING entry for slot '{slot_id}': {gate_result}"
+                        )
+
+            # Ensure per-slot seed optimizers exist for any slot with a live seed.
+            # We keep optimizers per-slot to avoid dynamic param-group surgery.
+            slots_to_step: list[str] = []
+            for slot_id in slots:
+                if not model.has_active_seed_in_slot(slot_id):
+                    continue
+                seed_state = model.seed_slots[slot_id].state
+                if seed_state is None:
+                    continue
+
+                # Seeds can continue training through BLENDING/PROBATIONARY/FOSSILIZED.
+                slots_to_step.append(slot_id)
+                if slot_id not in env_state.seed_optimizers:
+                    seed_params = list(model.get_seed_parameters(slot_id))
                     if not seed_params:
                         raise RuntimeError(
-                            f"Seed in slot '{target_slot}' has no trainable parameters. "
-                            f"Stage: {seed_state.stage.name if seed_state else 'N/A'}, "
-                            f"Blueprint: {seed_state.blueprint_id if seed_state else 'N/A'}, "
-                            f"Slot.seed: {model.seed_slots[target_slot].seed is not None}"
+                            f"Seed in slot '{slot_id}' has no trainable parameters. "
+                            f"Stage: {seed_state.stage.name}, "
+                            f"Blueprint: {seed_state.blueprint_id}, "
+                            f"Slot.seed: {model.seed_slots[slot_id].seed is not None}"
                         )
-                    env_state.seed_optimizer = torch.optim.SGD(
+                    env_state.seed_optimizers[slot_id] = torch.optim.SGD(
                         seed_params, lr=task_spec.seed_lr, momentum=0.9
                     )
-                # Host optimizer remains primary; seed optimizer is stepped separately.
-                optimizer = env_state.host_optimizer
-            elif seed_state.stage == SeedStage.BLENDING:
-                # Active blending - train both host and seed jointly
-                # Note: Alpha is driven by step_epoch() once per epoch, not per batch
-                # This keeps alpha progression in sync with the auto-advance counter
-                optimizer = env_state.host_optimizer
-            elif seed_state.stage == SeedStage.PROBATIONARY:
-                # Post-blending validation - alpha locked at 1.0, joint training
-                optimizer = env_state.host_optimizer
-            else:
-                # Unknown stage - shouldn't happen
-                optimizer = env_state.host_optimizer
 
-            optimizer.zero_grad()
-            if (
-                seed_state
-                and seed_state.stage in (SeedStage.GERMINATED, SeedStage.TRAINING, SeedStage.BLENDING)
-                and env_state.seed_optimizer
-            ):
-                env_state.seed_optimizer.zero_grad()
+            env_state.host_optimizer.zero_grad()
+            for slot_id in slots_to_step:
+                env_state.seed_optimizers[slot_id].zero_grad()
 
             outputs = model(inputs)
             loss, correct_tensor, total = loss_and_correct(outputs, targets, criterion)
@@ -669,22 +663,52 @@ def train_ppo_vectorized(
             # Collect gradient stats for telemetry (after backward, before step)
             # Use async version to avoid .item() sync inside stream context
             # Collect DUAL gradients (host + seed) to compute gradient ratio for G2 gate
-            if use_telemetry and seed_state and seed_state.stage in (SeedStage.TRAINING, SeedStage.BLENDING):
-                grad_stats = collect_dual_gradients_async(
-                    model.get_host_parameters(),
-                    model.get_seed_parameters(),
-                )
+            if use_telemetry:
+                slots_needing_grad_telemetry = []
+                for slot_id in slots:
+                    if not model.has_active_seed_in_slot(slot_id):
+                        continue
+                    seed_state = model.seed_slots[slot_id].state
+                    if seed_state and seed_state.stage in (SeedStage.TRAINING, SeedStage.BLENDING):
+                        slots_needing_grad_telemetry.append(slot_id)
 
-            optimizer.step()
-            if (
-                seed_state
-                and seed_state.stage in (SeedStage.GERMINATED, SeedStage.TRAINING, SeedStage.BLENDING)
-                and env_state.seed_optimizer
-            ):
-                env_state.seed_optimizer.step()
+                if slots_needing_grad_telemetry:
+                    # Compute host gradient norm ONCE, then per-slot seed gradient norms.
+                    host_grads = [p.grad for p in model.get_host_parameters() if p.grad is not None]
+                    if host_grads:
+                        host_norms = torch._foreach_norm(host_grads, ord=2)
+                        host_squared_sum = torch.stack(host_norms).pow(2).sum()
+                        host_param_count = sum(g.numel() for g in host_grads)
+                    else:
+                        host_squared_sum = 0.0
+                        host_param_count = 0
+
+                    grad_stats_by_slot = {}
+                    for slot_id in slots_needing_grad_telemetry:
+                        seed_grads = [
+                            p.grad for p in model.get_seed_parameters(slot_id) if p.grad is not None
+                        ]
+                        if seed_grads:
+                            seed_norms = torch._foreach_norm(seed_grads, ord=2)
+                            seed_squared_sum = torch.stack(seed_norms).pow(2).sum()
+                            seed_param_count = sum(g.numel() for g in seed_grads)
+                        else:
+                            seed_squared_sum = 0.0
+                            seed_param_count = 0
+
+                        grad_stats_by_slot[slot_id] = {
+                            "_host_squared_sum": host_squared_sum,
+                            "_host_param_count": host_param_count,
+                            "_seed_squared_sum": seed_squared_sum,
+                            "_seed_param_count": seed_param_count,
+                        }
+
+            env_state.host_optimizer.step()
+            for slot_id in slots_to_step:
+                env_state.seed_optimizers[slot_id].step()
 
             # Return tensors - .item() called after stream sync
-            return loss.detach(), correct_tensor, total, grad_stats
+            return loss.detach(), correct_tensor, total, grad_stats_by_slot
 
     def process_val_batch(env_state: ParallelEnvState, inputs: torch.Tensor,
                           targets: torch.Tensor, criterion: nn.Module, slots: list[str] | None = None) -> tuple[torch.Tensor, torch.Tensor, int]:
@@ -732,6 +756,9 @@ def train_ppo_vectorized(
         # Determine how many envs to run this batch (may be fewer than n_envs for last batch)
         remaining = total_episodes - episodes_completed
         envs_this_batch = min(n_envs, remaining)
+        # Monotonic epoch id for all per-batch snapshot events (commit barrier, PPO, analytics).
+        # We use "episodes completed after this batch" so resumed runs stay monotonic.
+        batch_epoch_id = episodes_completed + envs_this_batch
 
         # Create fresh environments for this batch
         # DataLoaders are shared via SharedBatchIterator (not per-env)
@@ -993,40 +1020,8 @@ def train_ppo_vectorized(
                         )
 
             # ===== Compute epoch metrics and get BATCHED actions =====
-            # First, sync telemetry for envs with active seeds (must happen BEFORE feature extraction)
-            for env_idx, env_state in enumerate(env_states):
-                model = env_state.model
-                target_slot = slots[0]
-                seed_state = model.seed_slots[target_slot].state if model.has_active_seed_in_slot(target_slot) else None
-
-                if use_telemetry and seed_state and env_grad_stats[env_idx]:
-                    # Materialize async dual grad stats NOW (after stream sync, safe to call .item())
-                    dual_stats = materialize_dual_grad_stats(env_grad_stats[env_idx])
-
-                    # Update gradient ratio EMA for G2 gate
-                    current_ratio = dual_stats.normalized_ratio
-                    if not env_state.gradient_ratio_ema_initialized:
-                        env_state.gradient_ratio_ema = current_ratio
-                        env_state.gradient_ratio_ema_initialized = True
-                    else:
-                        # EMA with momentum=0.9 to smooth per-step noise
-                        env_state.gradient_ratio_ema = 0.9 * env_state.gradient_ratio_ema + 0.1 * current_ratio
-
-                    # Sync ratio to SeedMetrics for G2 gate evaluation
-                    seed_state.metrics.seed_gradient_norm_ratio = env_state.gradient_ratio_ema
-
-                    # Sync telemetry using seed gradient stats from dual collection
-                    seed_state.sync_telemetry(
-                        gradient_norm=dual_stats.seed_grad_norm,
-                        gradient_health=1.0,  # Simplified: dual stats don't compute health
-                        has_vanishing=dual_stats.seed_grad_norm < 1e-7,
-                        has_exploding=dual_stats.seed_grad_norm > 100.0,
-                        epoch=epoch,
-                        max_epochs=max_epochs,
-                    )
-
-                # NOTE: step_epoch() moved to after record_accuracy() to ensure
-                # accuracy_at_blending_start snapshot uses current epoch's val_acc
+            # NOTE: Telemetry sync (gradients/counterfactual) happens after record_accuracy()
+            # so telemetry reflects the current epoch's metrics.
 
             # Collect features and action masks from all environments
             all_features = []
@@ -1039,8 +1034,6 @@ def train_ppo_vectorized(
 
             for env_idx, env_state in enumerate(env_states):
                 model = env_state.model
-                target_slot = slots[0]
-                seed_state = model.seed_slots[target_slot].state if model.has_active_seed_in_slot(target_slot) else None
 
                 train_loss = train_losses[env_idx] / num_train_batches
                 train_acc = 100.0 * train_corrects[env_idx] / max(train_totals[env_idx], 1)
@@ -1064,31 +1057,79 @@ def train_ppo_vectorized(
                 if is_panic:
                     governor_panic_envs.append(env_idx)
 
-                # Record accuracy in seed metrics for reward shaping
-                if seed_state and seed_state.metrics:
-                    seed_state.metrics.record_accuracy(val_acc)
+                # Gather active seeds across ALL enabled slots (multi-seed support)
+                active_seeds = []
+                for slot_id in slots:
+                    if model.has_active_seed_in_slot(slot_id):
+                        seed_state = model.seed_slots[slot_id].state
+                        if seed_state is not None:
+                            active_seeds.append(seed_state)
 
-                    # Log counterfactual contribution if available (for all active slots)
-                    if baseline_accs[env_idx] and epoch == max_epochs:
-                        for slot_id, baseline_acc in baseline_accs[env_idx].items():
-                            cf_contribution = val_acc - baseline_acc
-                            if hub:
-                                hub.emit(TelemetryEvent(
-                                    event_type=TelemetryEventType.COUNTERFACTUAL_COMPUTED,
-                                    slot_id=slot_id,
-                                    data={
-                                        "env_idx": env_idx,
-                                        "slot_id": slot_id,
-                                        "real_accuracy": val_acc,
-                                        "baseline_accuracy": baseline_acc,
-                                        "contribution": cf_contribution,
-                                    },
-                                ))
-                    # NOTE: step_epoch() moved to AFTER transition storage for state/action alignment
+                # Record accuracy for all active seeds (per-slot stage counters + deltas)
+                for seed_state in active_seeds:
+                    if seed_state.metrics:
+                        seed_state.metrics.record_accuracy(val_acc)
+
+                # Update counterfactual contribution for any slot where we computed a baseline this epoch
+                # (used by G5 gate + PROBATIONARY safety auto-cull).
+                if baseline_accs[env_idx]:
+                    for slot_id, baseline_acc in baseline_accs[env_idx].items():
+                        if model.has_active_seed_in_slot(slot_id):
+                            seed_state = model.seed_slots[slot_id].state
+                            if seed_state and seed_state.metrics:
+                                seed_state.metrics.counterfactual_contribution = val_acc - baseline_acc
+
+                # Log counterfactual contribution at terminal epoch (for all active slots)
+                if baseline_accs[env_idx] and epoch == max_epochs and hub:
+                    for slot_id, baseline_acc in baseline_accs[env_idx].items():
+                        hub.emit(TelemetryEvent(
+                            event_type=TelemetryEventType.COUNTERFACTUAL_COMPUTED,
+                            slot_id=slot_id,
+                            data={
+                                "env_idx": env_idx,
+                                "slot_id": slot_id,
+                                "real_accuracy": val_acc,
+                                "baseline_accuracy": baseline_acc,
+                                "contribution": val_acc - baseline_acc,
+                            },
+                        ))
+
+                # Sync gradient telemetry after record_accuracy so telemetry reflects this epoch's metrics.
+                if use_telemetry and env_grad_stats[env_idx]:
+                    for slot_id, async_stats in env_grad_stats[env_idx].items():
+                        if not model.has_active_seed_in_slot(slot_id):
+                            continue
+                        seed_state = model.seed_slots[slot_id].state
+                        if seed_state is None or seed_state.metrics is None:
+                            continue
+
+                        dual_stats = materialize_dual_grad_stats(async_stats)
+                        current_ratio = dual_stats.normalized_ratio
+
+                        prev_ema = env_state.gradient_ratio_ema.get(slot_id)
+                        if prev_ema is None:
+                            ema = current_ratio
+                        else:
+                            ema = 0.9 * prev_ema + 0.1 * current_ratio
+                        env_state.gradient_ratio_ema[slot_id] = ema
+
+                        # Sync ratio to SeedMetrics for G2 gate evaluation
+                        seed_state.metrics.seed_gradient_norm_ratio = ema
+
+                        # Sync telemetry using seed gradient stats from dual collection
+                        seed_state.sync_telemetry(
+                            gradient_norm=dual_stats.seed_grad_norm,
+                            gradient_health=1.0,  # Simplified: dual stats don't compute health
+                            has_vanishing=dual_stats.seed_grad_norm < 1e-7,
+                            has_exploding=dual_stats.seed_grad_norm > 100.0,
+                            epoch=epoch,
+                            max_epochs=max_epochs,
+                        )
 
                 # Update signal tracker
-                active_seeds = [seed_state] if seed_state else []
-                available_slots = 0 if model.has_active_seed else 1
+                available_slots = sum(
+                    1 for slot_id in slots if not model.has_active_seed_in_slot(slot_id)
+                )
                 signals = env_state.signal_tracker.update(
                     epoch=epoch,
                     global_step=epoch * num_train_batches,
@@ -1106,7 +1147,7 @@ def train_ppo_vectorized(
                     model,
                     use_telemetry=use_telemetry,
                     slots=slots,
-                    total_seeds=model.count_active_seeds() if model else 0,
+                    total_seeds=model.total_seeds() if model else 0,
                     max_seeds=effective_max_seeds,
                 )
                 all_features.append(features)
@@ -1117,7 +1158,7 @@ def train_ppo_vectorized(
                 mask = compute_action_masks(
                     slot_states=slot_states,
                     enabled_slots=slots,
-                    total_seeds=model.count_active_seeds() if model else 0,
+                    total_seeds=model.total_seeds() if model else 0,
                     max_seeds=effective_max_seeds,
                     device=torch.device(device),
                 )
@@ -1286,7 +1327,7 @@ def train_ppo_vectorized(
                         max_epochs=max_epochs,
                         total_params=total_params,
                         host_params=host_params,
-                        acc_at_germination=env_state.acc_at_germination,
+                        acc_at_germination=env_state.acc_at_germination.get(target_slot),
                         acc_delta=signals.metrics.accuracy_delta,
                         return_components=True,
                         num_fossilized_seeds=env_state.seeds_fossilized,
@@ -1306,7 +1347,7 @@ def train_ppo_vectorized(
                         max_epochs=max_epochs,
                         total_params=total_params,
                         host_params=host_params,
-                        acc_at_germination=env_state.acc_at_germination,
+                        acc_at_germination=env_state.acc_at_germination.get(target_slot),
                         acc_delta=signals.metrics.accuracy_delta,
                         num_fossilized_seeds=env_state.seeds_fossilized,
                         num_contributing_fossilized=env_state.contributing_fossilized,
@@ -1340,7 +1381,7 @@ def train_ppo_vectorized(
                 elif factored_action.is_germinate:
                     # Germinate in the SAMPLED slot (multi-slot support)
                     if not model.has_active_seed_in_slot(target_slot):
-                        env_state.acc_at_germination = env_state.val_acc
+                        env_state.acc_at_germination[target_slot] = env_state.val_acc
                         blueprint_id = factored_action.blueprint_id
                         blend_algorithm_id = factored_action.blend_algorithm_id
                         seed_id = f"env{env_idx}_seed_{env_state.seeds_created}"
@@ -1351,7 +1392,7 @@ def train_ppo_vectorized(
                             blend_algorithm_id=blend_algorithm_id,
                         )
                         env_state.seeds_created += 1
-                        env_state.seed_optimizer = None
+                        env_state.seed_optimizers.pop(target_slot, None)
                         action_success = True
 
                 elif factored_action.is_fossilize:
@@ -1366,14 +1407,14 @@ def train_ppo_vectorized(
                         env_state.seeds_fossilized += 1
                         if seed_total_improvement >= DEFAULT_MIN_FOSSILIZE_CONTRIBUTION:
                             env_state.contributing_fossilized += 1
-                        env_state.acc_at_germination = None
+                        env_state.acc_at_germination.pop(target_slot, None)
 
                 elif factored_action.is_cull:
                     # Cull the seed in the SAMPLED slot
                     if model.has_active_seed_in_slot(target_slot):
                         model.cull_seed(slot=target_slot)
-                        env_state.seed_optimizer = None
-                        env_state.acc_at_germination = None
+                        env_state.seed_optimizers.pop(target_slot, None)
+                        env_state.acc_at_germination.pop(target_slot, None)
                         action_success = True
 
                 else:
@@ -1477,10 +1518,16 @@ def train_ppo_vectorized(
             if hub:
                 hub.emit(TelemetryEvent(
                     event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
-                    epoch=episodes_completed,  # Monotonic batch counter
+                    epoch=batch_epoch_id,  # Monotonic batch epoch id (post-batch)
                     severity="warning",
                     message="Buffer cleared due to Governor rollback - skipping update",
-                    data={"reason": "governor_rollback", "skipped": True, "inner_epoch": epoch},
+                    data={
+                        "reason": "governor_rollback",
+                        "skipped": True,
+                        "batch": batch_idx + 1,
+                        "episodes_completed": batch_epoch_id,
+                        "inner_epoch": epoch,
+                    },
                 ))
         else:
             update_metrics = agent.update(clear_buffer=True)
@@ -1503,7 +1550,7 @@ def train_ppo_vectorized(
                 ratio_max=metrics.get("ratio_max", 1.0),
                 ratio_min=metrics.get("ratio_min", 1.0),
                 explained_variance=metrics.get("explained_variance", 0.0),
-                current_episode=episodes_completed,
+                current_episode=batch_epoch_id,
                 total_episodes=total_episodes,
             )
 
@@ -1531,10 +1578,12 @@ def train_ppo_vectorized(
                         )
                         hub.emit(TelemetryEvent(
                             event_type=event_type,
-                            epoch=max_epochs,  # Anomalies detected at episode boundary
+                            epoch=batch_epoch_id,  # Anomalies detected at batch boundary
                             data={
-                                "episode": episodes_completed,
-                                "epoch": max_epochs,  # P1-06: Include epoch for Karn dense trace
+                                "episode": batch_epoch_id,
+                                "batch": batch_idx + 1,
+                                "episodes_completed": batch_epoch_id,
+                                "inner_epoch": max_epochs,
                                 "detail": anomaly_report.details.get(anomaly_type, ""),
                                 "gradient_stats": [gs.to_dict() for gs in gradient_stats[:5]],
                                 "stability": stability_report.to_dict(),
@@ -1577,53 +1626,54 @@ def train_ppo_vectorized(
                 successful_actions[a] += c
         # Action distribution removed - already visible in analytics.summary_table()
 
-        if metrics:
-            current_entropy_coef = agent.get_entropy_coef()
-            # PPO loss metrics removed - already in PPO_UPDATE_COMPLETED telemetry
+        if hub:
+            # Emit PPO telemetry (only for non-skipped updates).
+            # Note: clip_fraction, ratio_*, explained_variance not available in recurrent path.
+            if metrics:
+                current_entropy_coef = agent.get_entropy_coef()
+                # PPO loss metrics removed - already in PPO_UPDATE_COMPLETED telemetry
+                ppo_event = TelemetryEvent(
+                    event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+                    epoch=episodes_completed,  # Monotonic per-batch epoch id (NOT inner epoch!)
+                    data={
+                        "inner_epoch": epoch,  # Final inner epoch (typically max_epochs)
+                        "batch": batch_idx + 1,
+                        "episodes_completed": episodes_completed,
+                        "train_steps": agent.train_steps,
+                        # Core losses
+                        "policy_loss": metrics.get("policy_loss", 0.0),
+                        "value_loss": metrics.get("value_loss", 0.0),
+                        "entropy": metrics.get("entropy", 0.0),
+                        "entropy_coef": current_entropy_coef,
+                        # PPO health (KL, clipping) - normalized to kl_divergence for Karn
+                        "kl_divergence": metrics.get("approx_kl", 0.0),
+                        "clip_fraction": metrics.get("clip_fraction", 0.0),
+                        # Ratio statistics (early warning for policy collapse)
+                        "ratio_max": metrics.get("ratio_max", 1.0),
+                        "ratio_min": metrics.get("ratio_min", 1.0),
+                        "ratio_std": metrics.get("ratio_std", 0.0),
+                        # Value function health (negative = critic broken)
+                        "explained_variance": metrics.get("explained_variance", 0.0),
+                        # Early stopping info
+                        "early_stop_epoch": metrics.get("early_stop_epoch"),
+                        # Episode-level metrics
+                        "avg_accuracy": avg_acc,
+                        "avg_reward": avg_reward,
+                        "rolling_avg_accuracy": rolling_avg_acc,
+                    },
+                )
+                hub.emit(ppo_event)
 
-            # Emit PPO telemetry
-            # Note: clip_fraction, ratio_*, explained_variance not available in recurrent path
-            ppo_event = TelemetryEvent(
-                event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
-                epoch=episodes_completed,  # Monotonic batch counter (NOT inner epoch!)
-                data={
-                    "inner_epoch": epoch,  # Final inner epoch (typically max_epochs)
-                    "batch": batch_idx + 1,
-                    "episodes_completed": episodes_completed,
-                    "train_steps": agent.train_steps,
-                    # Core losses
-                    "policy_loss": metrics.get("policy_loss", 0.0),
-                    "value_loss": metrics.get("value_loss", 0.0),
-                    "entropy": metrics.get("entropy", 0.0),
-                    "entropy_coef": current_entropy_coef,
-                    # PPO health (KL, clipping) - normalized to kl_divergence for Karn
-                    "kl_divergence": metrics.get("approx_kl", 0.0),
-                    "clip_fraction": metrics.get("clip_fraction", 0.0),
-                    # Ratio statistics (early warning for policy collapse)
-                    "ratio_max": metrics.get("ratio_max", 1.0),
-                    "ratio_min": metrics.get("ratio_min", 1.0),
-                    "ratio_std": metrics.get("ratio_std", 0.0),
-                    # Value function health (negative = critic broken)
-                    "explained_variance": metrics.get("explained_variance", 0.0),
-                    # Early stopping info
-                    "early_stop_epoch": metrics.get("early_stop_epoch"),
-                    # Episode-level metrics
-                    "avg_accuracy": avg_acc,
-                    "avg_reward": avg_reward,
-                    "rolling_avg_accuracy": rolling_avg_acc,
-                },
-            )
-            hub.emit(ppo_event)
-
-            # Emit ANALYTICS_SNAPSHOT for dashboard full-state sync (P1-07)
-            # Aggregate seed metrics across all environments
+            # Emit ANALYTICS_SNAPSHOT for dashboard full-state sync (P1-07).
+            # Always emitted so dashboards stay in sync even when PPO update is skipped.
             total_seeds_created = sum(es.seeds_created for es in env_states)
             total_seeds_fossilized = sum(es.seeds_fossilized for es in env_states)
             hub.emit(TelemetryEvent(
                 event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
-                epoch=episodes_completed,  # Monotonic batch counter
+                epoch=episodes_completed,
                 data={
-                    "inner_epoch": epoch,  # Final inner epoch
+                    "inner_epoch": epoch,
+                    "batch": batch_idx + 1,
                     "accuracy": rolling_avg_acc,
                     "host_accuracy": avg_acc,  # Per-batch accuracy
                     "entropy": metrics.get("entropy", 0.0),
@@ -1634,38 +1684,12 @@ def train_ppo_vectorized(
                         "total_fossilized": total_seeds_fossilized,
                     },
                     "episodes_completed": episodes_completed,
+                    "skipped_update": batch_rollback_occurred,
                 },
             ))
 
-            # EPOCH_COMPLETED: Commit barrier for Karn
-            # This MUST be emitted LAST for each batch, after PPO_UPDATE and ANALYTICS_SNAPSHOT
-            # Karn will commit the epoch snapshot and advance to epoch+1
-            #
-            # epoch=episodes_completed is monotonic (never repeats) so Karn's
-            # commit/advance logic works correctly across batches.
-            #
-            # IMPORTANT: Aggregate accuracy is sum(correct)/sum(total)*100, NOT mean of per-env
-            # percentages. This avoids weighting bugs when per-env sample counts diverge.
-            total_train_correct = sum(train_corrects)
-            total_train_samples = sum(train_totals)
-            total_val_correct = sum(val_corrects)
-            total_val_samples = sum(val_totals)
-
-            hub.emit(TelemetryEvent(
-                event_type=TelemetryEventType.EPOCH_COMPLETED,
-                epoch=episodes_completed,  # Monotonic batch counter (NOT inner epoch!)
-                data={
-                    "inner_epoch": epoch,  # Final inner epoch (typically max_epochs)
-                    "train_loss": sum(train_losses) / max(len(env_states) * num_train_batches, 1),
-                    "train_accuracy": 100.0 * total_train_correct / max(total_train_samples, 1),
-                    "val_loss": sum(val_losses) / max(len(env_states) * num_test_batches, 1),
-                    "val_accuracy": 100.0 * total_val_correct / max(total_val_samples, 1),
-                    "n_envs": len(env_states),
-                },
-            ))
-
-            # Emit training progress events based on actual rolling average trend
-            # This aligns events with the displayed rolling_avg_accuracy
+            # Emit training progress events BEFORE EPOCH_COMPLETED so they are included
+            # in the committed snapshot for this batch epoch.
             if prev_rolling_avg_acc is not None:
                 rolling_delta = rolling_avg_acc - prev_rolling_avg_acc
 
@@ -1702,6 +1726,29 @@ def train_ppo_vectorized(
                             "episodes_completed": episodes_completed,
                         },
                     ))
+
+            # EPOCH_COMPLETED: Commit barrier for Karn.
+            # This MUST be emitted LAST for each batch epoch.
+            total_train_correct = sum(train_corrects)
+            total_train_samples = sum(train_totals)
+            total_val_correct = sum(val_corrects)
+            total_val_samples = sum(val_totals)
+
+            hub.emit(TelemetryEvent(
+                event_type=TelemetryEventType.EPOCH_COMPLETED,
+                epoch=episodes_completed,
+                data={
+                    "inner_epoch": epoch,
+                    "batch": batch_idx + 1,
+                    "train_loss": sum(train_losses) / max(len(env_states) * num_train_batches, 1),
+                    "train_accuracy": 100.0 * total_train_correct / max(total_train_samples, 1),
+                    "val_loss": sum(val_losses) / max(len(env_states) * num_test_batches, 1),
+                    "val_accuracy": 100.0 * total_val_correct / max(total_val_samples, 1),
+                    "n_envs": len(env_states),
+                    "skipped_update": batch_rollback_occurred,
+                },
+            ))
+
             prev_rolling_avg_acc = rolling_avg_acc
 
         # Print analytics summary every 5 episodes

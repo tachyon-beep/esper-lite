@@ -135,6 +135,9 @@ class EnvState:
     fossilized_count: int = 0
     culled_count: int = 0
 
+    # Most recent reward component breakdown for this env (from REWARD_COMPUTED telemetry)
+    reward_components: dict[str, float | None] = field(default_factory=dict)
+
     # Per-env reward tracking
     reward_history: deque[float] = field(default_factory=lambda: deque(maxlen=50))
     best_reward: float = float('-inf')
@@ -204,8 +207,20 @@ class EnvState:
     def add_action(self, action_name: str) -> None:
         """Track action taken."""
         self.action_history.append(action_name)
-        if action_name in self.action_counts:
-            self.action_counts[action_name] += 1
+
+        # Normalize factored germination actions (e.g., GERMINATE_CONV_LIGHT) to GERMINATE
+        normalized = action_name
+        if action_name.startswith("GERMINATE"):
+            normalized = "GERMINATE"
+        elif action_name.startswith("FOSSILIZE"):
+            normalized = "FOSSILIZE"
+        elif action_name.startswith("CULL"):
+            normalized = "CULL"
+        elif action_name.startswith("WAIT"):
+            normalized = "WAIT"
+
+        if normalized in self.action_counts:
+            self.action_counts[normalized] += 1
             self.total_actions += 1
 
     def _update_status(self, prev_acc: float, curr_acc: float) -> None:
@@ -271,6 +286,7 @@ class TUIState:
     # Per-environment state (for multi-env vectorized training)
     env_states: dict[int, EnvState] = field(default_factory=dict)
     n_envs: int = 1  # Number of environments (updated from TRAINING_STARTED)
+    max_epochs: int = 75  # Inner epochs per batch (from TRAINING_STARTED)
 
     # Aggregate seed stats (summed across all envs)
     active_seed_count: int = 0
@@ -334,9 +350,11 @@ class TUIState:
 
     def get_action_percentages(self) -> dict[str, float]:
         """Get action distribution as percentages."""
-        if self.total_actions == 0:
-            return {k: 0.0 for k in self.action_counts}
-        return {k: v / self.total_actions * 100 for k, v in self.action_counts.items()}
+        counts = self.aggregate_action_counts if self.env_states else self.action_counts
+        total = self.aggregate_total_actions if self.env_states else self.total_actions
+        if total == 0:
+            return {k: 0.0 for k in counts}
+        return {k: v / total * 100 for k, v in counts.items()}
 
     def get_or_create_env(self, env_id: int) -> EnvState:
         """Get or create an environment state."""
@@ -539,10 +557,24 @@ class TUIOutput:
             loss = data.get("val_loss", "?")
             acc = data.get("val_accuracy", "?")
             epoch = event.epoch or data.get("epoch", "?")
-            if isinstance(loss, float) and isinstance(acc, float):
-                msg = f"epoch={epoch} loss={loss:.4f} acc={acc:.2%}"
+            inner_epoch = data.get("inner_epoch")
+            batch = data.get("batch")
+
+            if isinstance(acc, (int, float)):
+                acc_str = f"{acc:.2%}" if 0.0 <= float(acc) <= 1.0 else f"{acc:.1f}%"
             else:
-                msg = f"epoch={epoch}"
+                acc_str = str(acc)
+
+            prefix = f"epoch={epoch}"
+            if batch is not None:
+                prefix += f" b={batch}"
+            if inner_epoch is not None:
+                prefix += f" in={inner_epoch}"
+
+            if isinstance(loss, (int, float)) and isinstance(acc, (int, float)):
+                msg = f"{prefix} loss={float(loss):.4f} acc={acc_str}"
+            else:
+                msg = prefix
         elif event_type == "REWARD_COMPUTED":
             action = data.get("action_name", "?")
             total = data.get("total_reward", 0.0)
@@ -585,8 +617,18 @@ class TUIOutput:
             max_epochs = data.get("max_epochs", "?")
             msg = f"task={task} epochs={max_epochs}"
         elif event_type == "BATCH_COMPLETED":
-            batch = data.get("batch", "?")
-            msg = f"batch {batch} complete"
+            batch_idx = data.get("batch_idx", data.get("batch", "?"))
+            episodes = data.get("episodes_completed", "?")
+            total = data.get("total_episodes", "?")
+            rolling_acc = data.get("rolling_accuracy", data.get("rolling_avg_accuracy", data.get("avg_accuracy")))
+            avg_reward = data.get("avg_reward")
+
+            parts = [f"batch={batch_idx}", f"ep={episodes}/{total}"]
+            if isinstance(rolling_acc, (int, float)):
+                parts.append(f"acc={rolling_acc:.1f}%")
+            if isinstance(avg_reward, (int, float)):
+                parts.append(f"r={avg_reward:+.2f}")
+            msg = " ".join(parts)
         else:
             msg = event.message or ""
 
@@ -647,12 +689,23 @@ class TUIOutput:
         self.state.current_episode = data.get("episode", 0)
         self.state.current_epoch = 0
         self.state.n_envs = data.get("n_envs", 1)
+        self.state.max_epochs = data.get("max_epochs", self.state.max_epochs)
+        self.state.reward_hacking_detected = False
+        self.state.current_reward = 0.0
+        self.state.reward_history.clear()
+        self.state.best_reward = float("-inf")
+        self.state.best_episode = 0
+        self.state.episode_rewards.clear()
+        self.state.last_reward_env_id = 0
 
         # Initialize performance tracking
         self.state.start_time = datetime.now()
         self.state.batches_completed = 0
         self.state.best_accuracy = 0.0
         self.state.best_accuracy_episode = 0
+
+        # Reset multi-env state for a new run
+        self.state.env_states.clear()
 
         # Pre-create env states
         for i in range(self.state.n_envs):
@@ -722,14 +775,24 @@ class TUIOutput:
         env_state.current_epoch = epoch
         env_state.last_update = datetime.now()
 
-        # Update global state for header display
-        self.state.reward_components = {
-            "accuracy_delta": data.get("base_acc_delta", 0.0),
-            "bounded_attr": data.get("bounded_attribution", 0.0),
+        # Store reward component breakdown per environment
+        env_state.reward_components = {
+            "base_acc_delta": data.get("base_acc_delta", 0.0),
+            "seed_contribution": data.get("seed_contribution"),
+            "bounded_attribution": data.get("bounded_attribution"),
+            "progress_since_germination": data.get("progress_since_germination"),
+            "attribution_discount": data.get("attribution_discount", 1.0),
+            "ratio_penalty": data.get("ratio_penalty", 0.0),
             "compute_rent": data.get("compute_rent", 0.0),
-            "blending_warn": data.get("blending_warning", 0.0),
-            "probation_warn": data.get("probation_warning", 0.0),
-            "terminal_bonus": data.get("fossilize_terminal_bonus", 0.0),
+            "blending_warning": data.get("blending_warning", 0.0),
+            "probation_warning": data.get("probation_warning", 0.0),
+            "stage_bonus": data.get("stage_bonus", 0.0),
+            "pbrs_bonus": data.get("pbrs_bonus", 0.0),
+            "action_shaping": data.get("action_shaping", 0.0),
+            "terminal_bonus": data.get("terminal_bonus", 0.0),
+            "fossilize_terminal_bonus": data.get("fossilize_terminal_bonus", 0.0),
+            "growth_ratio": data.get("growth_ratio", 0.0),
+            "val_acc": data.get("val_acc", env_state.host_accuracy),
         }
         self.state.last_reward_env_id = env_id
 
@@ -737,10 +800,6 @@ class TUIOutput:
         acc_delta = data.get("base_acc_delta", 0.0)
         if acc_delta < 0 and total_reward > 0:
             self.state.reward_hacking_detected = True
-
-        # Update global metrics for backward compatibility
-        self.state.current_reward = total_reward
-        self.state.host_accuracy = data.get("val_acc", self.state.host_accuracy)
 
     def _handle_seed_event(self, event: "TelemetryEvent", event_type: str) -> None:
         """Handle seed lifecycle events with per-env tracking."""
@@ -779,30 +838,36 @@ class TUIOutput:
     def _handle_batch_completed(self, event: "TelemetryEvent") -> None:
         """Handle BATCH_COMPLETED event (episode completion)."""
         data = event.data or {}
-        self.state.current_episode = data.get("episodes_completed", self.state.current_episode)
+        episodes_completed = data.get("episodes_completed")
+        if isinstance(episodes_completed, (int, float)):
+            self.state.current_episode = int(episodes_completed)
         self.state.batches_completed += 1
 
         # Track best accuracy across all envs
-        current_acc = data.get("rolling_avg_accuracy", data.get("avg_accuracy", 0.0))
+        current_acc = data.get("rolling_accuracy", data.get("rolling_avg_accuracy", data.get("avg_accuracy", 0.0)))
         self.state.host_accuracy = current_acc
         if current_acc > self.state.best_accuracy:
             self.state.best_accuracy = current_acc
             self.state.best_accuracy_episode = self.state.current_episode
+
+        # Track rewards at the batch/episode level
+        avg_reward = data.get("avg_reward", 0.0)
+        self.state.update_reward(avg_reward)
 
         # Calculate throughput
         now = datetime.now()
         if self.state.start_time:
             elapsed = (now - self.state.start_time).total_seconds()
             if elapsed > 0:
-                # epochs_completed = episodes * epochs_per_episode
-                total_epochs = data.get("total_epochs", self.state.batches_completed * 75)
+                episodes_completed = self.state.current_episode if self.state.current_episode > 0 else self.state.batches_completed
+                total_epochs = episodes_completed * self.state.max_epochs
+                self.state.epochs_completed = total_epochs
                 self.state.epochs_per_second = total_epochs / elapsed
                 self.state.batches_per_hour = (self.state.batches_completed / elapsed) * 3600
 
         self.state.last_batch_time = now
 
         # Add to episode rewards for sparkline
-        avg_reward = data.get("avg_reward", 0.0)
         self.state.episode_rewards.append(avg_reward)
 
         # Update GPU stats if available
@@ -854,19 +919,19 @@ class TUIOutput:
             Layout(name="right", ratio=1),
         )
 
-        # Left column: rewards, seeds, reward components
+        # Left column: per-env rewards, seeds, reward components
         layout["left"].split_column(
-            Layout(name="rewards", ratio=1),
+            Layout(name="env_rewards", ratio=1),
             Layout(name="seeds", ratio=1),
             Layout(name="reward_components", ratio=1),
         )
 
-        # Right column: combined policy stats panel (actions + health + losses)
+        # Right column: combined policy stats panel (actions + health + losses + rewards)
         layout["right"].update(self._render_policy_stats())
 
         # Render each section
         layout["header"].update(self._render_header())
-        layout["rewards"].update(self._render_rewards())
+        layout["env_rewards"].update(self._render_env_rewards())
         layout["seeds"].update(self._render_seeds())
         layout["reward_components"].update(self._render_reward_components())
         layout["event_log"].update(self._render_event_log(max_lines=8))
@@ -877,11 +942,14 @@ class TUIOutput:
 
     def _render_header(self) -> Panel:
         """Render the header with episode info and multi-env summary."""
+        step = max((e.current_epoch for e in self.state.env_states.values()), default=0)
         text = Text()
         text.append(f"Episode: ", style="dim")
         text.append(f"{self.state.current_episode}", style="bold cyan")
         text.append(f"  |  Batches: ", style="dim")
         text.append(f"{self.state.batches_completed}", style="bold cyan")
+        text.append(f"  |  Step: ", style="dim")
+        text.append(f"{step}/{self.state.max_epochs}", style="bold cyan")
         text.append(f"  |  Best Acc: ", style="dim")
         text.append(f"{self.state.best_accuracy:.1f}%", style="bold green")
         text.append(f" (ep {self.state.best_accuracy_episode})", style="dim")
@@ -899,9 +967,9 @@ class TUIOutput:
             border_style="blue",
         )
 
-    def _render_rewards(self) -> Panel:
-        """Render the rewards panel."""
-        table = Table(show_header=False, box=None, padding=(0, 1))
+    def _render_rewards_table(self) -> Table:
+        """Render rewards summary as a table (for combined panels)."""
+        table = Table(show_header=False, box=None, padding=(0, 0))
         table.add_column("Metric", style="dim")
         table.add_column("Value", justify="right")
 
@@ -926,7 +994,109 @@ class TUIOutput:
         sparkline = self._make_sparkline(list(self.state.episode_rewards))
         table.add_row("History:", sparkline)
 
-        return Panel(table, title="[bold]REWARDS[/bold]", border_style="cyan")
+        return table
+
+    def _render_rewards(self) -> Panel:
+        """Render the rewards panel."""
+        return Panel(self._render_rewards_table(), title="[bold]REWARDS[/bold]", border_style="cyan")
+
+    def _render_env_rewards(self) -> Panel:
+        """Render a per-environment reward components summary (all envs at once)."""
+        if not self.state.env_states:
+            return Panel(
+                Text("Waiting for reward telemetry…", style="dim"),
+                title="[bold]ENV REWARDS[/bold]",
+                border_style="cyan",
+            )
+
+        def _fmt_component(value: float | None) -> Text:
+            if not isinstance(value, (int, float)):
+                return Text("─", style="dim")
+            v = float(value)
+            if v > 0:
+                style = "green"
+            elif v < 0:
+                style = "red"
+            else:
+                style = "dim"
+            return Text(f"{v:+.2f}", style=style)
+
+        def _fmt_total(value: float) -> Text:
+            if value > 0:
+                style = "bold green"
+            elif value < 0:
+                style = "bold red"
+            else:
+                style = "dim"
+            return Text(f"{value:+.2f}", style=style)
+
+        def _fmt_warning(value: float | None) -> Text:
+            if not isinstance(value, (int, float)):
+                return Text("─", style="dim")
+            v = float(value)
+            if v < 0:
+                style = "yellow"
+            elif v > 0:
+                style = "green"
+            else:
+                style = "dim"
+            return Text(f"{v:+.2f}", style=style)
+
+        table = Table(show_header=True, box=None, padding=(0, 0), expand=True)
+        table.add_column("Env", style="cyan", justify="center", width=3)
+        table.add_column("Total", justify="right", width=7)
+        table.add_column("ΔAcc", justify="right", width=6)
+        table.add_column("Attr", justify="right", width=6)
+        table.add_column("Rent", justify="right", width=6)
+        table.add_column("Pen", justify="right", width=6)
+        table.add_column("Other", justify="right", width=6)
+        table.add_column("Warn", justify="right", width=6)
+
+        for env_id in sorted(self.state.env_states.keys()):
+            env = self.state.env_states[env_id]
+            components = env.reward_components
+
+            base = components.get("base_acc_delta")
+            attr = components.get("bounded_attribution")
+            rent = components.get("compute_rent")
+            penalty = components.get("ratio_penalty")
+
+            other_total = 0.0
+            other_any = False
+            other_sources = (
+                "stage_bonus",
+                "pbrs_bonus",
+                "action_shaping",
+                "terminal_bonus",
+                "fossilize_terminal_bonus",
+            )
+            for key in other_sources:
+                v = components.get(key)
+                if isinstance(v, (int, float)):
+                    other_total += float(v)
+                    other_any = True
+
+            warn_total = 0.0
+            warn_any = False
+            warn_sources = ("blending_warning", "probation_warning")
+            for key in warn_sources:
+                v = components.get(key)
+                if isinstance(v, (int, float)):
+                    warn_total += float(v)
+                    warn_any = True
+
+            table.add_row(
+                str(env_id),
+                _fmt_total(env.current_reward),
+                _fmt_component(base),
+                _fmt_component(attr),
+                _fmt_component(rent),
+                _fmt_component(penalty),
+                _fmt_component(other_total if other_any else None),
+                _fmt_warning(warn_total if warn_any else None),
+            )
+
+        return Panel(table, title="[bold]ENV REWARDS[/bold]", border_style="cyan")
 
     # Stage name abbreviations for compact multi-env display
     _STAGE_ABBREV: dict[str, str] = {
@@ -1088,70 +1258,96 @@ class TUIOutput:
         return table
 
     def _render_policy_stats(self) -> Panel:
-        """Render combined policy stats panel with three sub-columns."""
-        # Create outer table with 3 columns
+        """Render combined policy stats panel with rewards summary."""
+        # Create outer table with sub-columns
         outer = Table(show_header=True, box=None, padding=(0, 1), expand=True)
         outer.add_column("[bold]Actions[/bold]", justify="center", ratio=1)
         outer.add_column("[bold]Policy Health[/bold]", justify="center", ratio=1)
         outer.add_column("[bold]Losses[/bold]", justify="center", ratio=1)
+        outer.add_column("[bold]Rewards[/bold]", justify="center", ratio=1)
 
         outer.add_row(
             self._render_actions_table(),
             self._render_policy_health_table(),
             self._render_losses_table(),
+            self._render_rewards_table(),
         )
 
         return Panel(outer, title="[bold]POLICY STATS[/bold]", border_style="cyan")
 
     def _render_reward_components(self) -> Panel:
-        """Render the reward components breakdown."""
+        """Render the reward components breakdown for the focused environment."""
         table = Table(show_header=False, box=None, padding=(0, 1))
         table.add_column("Component", style="dim")
         table.add_column("Value", justify="right")
 
-        components = self.state.reward_components
+        env_id = self.state.last_reward_env_id
+        env_state = self.state.get_or_create_env(env_id)
+        components = env_state.reward_components
 
-        # Display key components
-        if "accuracy_delta" in components:
-            val = components["accuracy_delta"]
-            style = "green" if val >= 0 else "red"
-            table.add_row("Accuracy Δ:", Text(f"{val:+.2f}", style=style))
+        # Header context
+        table.add_row("Env:", Text(str(env_id), style="bold cyan"))
+        if env_state.action_history:
+            table.add_row("Action:", env_state.action_history[-1])
+        if "val_acc" in components and isinstance(components.get("val_acc"), (int, float)):
+            table.add_row("Val Acc:", f"{float(components['val_acc']):.1f}%")
 
-        if "bounded_attr" in components and components["bounded_attr"]:
-            val = components["bounded_attr"]
-            style = "green" if val >= 0 else "red"
-            table.add_row("Attribution:", Text(f"{val:+.2f}", style=style))
+        table.add_row("", "")
 
-        if "compute_rent" in components:
-            val = components["compute_rent"]
-            style = "red" if val < 0 else "dim"
-            table.add_row("Compute Rent:", Text(f"{val:+.2f}", style=style))
+        # Base delta (legacy shaped signal)
+        base = components.get("base_acc_delta")
+        if isinstance(base, (int, float)):
+            style = "green" if float(base) >= 0 else "red"
+            table.add_row("ΔAcc:", Text(f"{float(base):+,.2f}", style=style))
 
-        if "terminal_bonus" in components and components["terminal_bonus"]:
-            val = components["terminal_bonus"]
-            table.add_row("Terminal:", Text(f"{val:+.2f}", style="blue"))
+        # Attribution (contribution-primary)
+        bounded = components.get("bounded_attribution")
+        if isinstance(bounded, (int, float)) and float(bounded) != 0.0:
+            style = "green" if float(bounded) >= 0 else "red"
+            table.add_row("Attr:", Text(f"{float(bounded):+,.2f}", style=style))
+
+        # Compute rent (usually negative)
+        rent = components.get("compute_rent")
+        if isinstance(rent, (int, float)):
+            style = "red" if float(rent) < 0 else "dim"
+            table.add_row("Rent:", Text(f"{float(rent):+,.2f}", style=style))
+
+        # Ratio penalty (ransomware / attribution mismatch)
+        ratio_penalty = components.get("ratio_penalty")
+        if isinstance(ratio_penalty, (int, float)) and float(ratio_penalty) != 0.0:
+            style = "red" if float(ratio_penalty) < 0 else "dim"
+            table.add_row("Penalty:", Text(f"{float(ratio_penalty):+,.2f}", style=style))
+
+        # Stage / terminal bonuses
+        stage_bonus = components.get("stage_bonus")
+        if isinstance(stage_bonus, (int, float)) and float(stage_bonus) != 0.0:
+            table.add_row("Stage:", Text(f"{float(stage_bonus):+,.2f}", style="blue"))
+
+        fossil_bonus = components.get("fossilize_terminal_bonus")
+        if isinstance(fossil_bonus, (int, float)) and float(fossil_bonus) != 0.0:
+            table.add_row("Fossil:", Text(f"{float(fossil_bonus):+,.2f}", style="blue"))
 
         # Warnings
-        warnings_shown = False
-        if "blending_warn" in components and components["blending_warn"] < 0:
-            table.add_row("Blending Warn:", Text(f"{components['blending_warn']:.2f}", style="yellow"))
-            warnings_shown = True
-        if "probation_warn" in components and components["probation_warn"] < 0:
-            table.add_row("Probation Warn:", Text(f"{components['probation_warn']:.2f}", style="yellow"))
-            warnings_shown = True
+        blending_warn = components.get("blending_warning")
+        if isinstance(blending_warn, (int, float)) and float(blending_warn) < 0:
+            table.add_row("Blend Warn:", Text(f"{float(blending_warn):.2f}", style="yellow"))
 
-        # Total
-        if not warnings_shown:
-            table.add_row("", "")
-        table.add_row(
-            "───────────",
-            "───────"
-        )
-        total = self.state.current_reward
+        probation_warn = components.get("probation_warning")
+        if isinstance(probation_warn, (int, float)) and float(probation_warn) < 0:
+            table.add_row("Prob Warn:", Text(f"{float(probation_warn):.2f}", style="yellow"))
+
+        # Total (last computed reward for this env)
+        table.add_row("", "")
+        table.add_row("───────────", "───────")
+        total = env_state.current_reward
         style = "bold green" if total >= 0 else "bold red"
         table.add_row("Total:", Text(f"{total:+.2f}", style=style))
 
-        return Panel(table, title="[bold]REWARD COMPONENTS[/bold]", border_style="cyan")
+        return Panel(
+            table,
+            title=f"[bold]REWARD COMPONENTS (env {env_id})[/bold]",
+            border_style="cyan",
+        )
 
     def _render_footer(self) -> Panel:
         """Render the footer with key bindings hint."""
@@ -1269,12 +1465,15 @@ class TUIOutput:
         """
         table = Table(show_header=True, box=None, padding=(0, 1), expand=True)
 
-        # Columns: ID, Accuracy, Sparkline, Reward, Sparkline, Early, Mid, Late, Status
+        # Columns: ID, Step, Accuracy, Sparklines, Reward, Components, Slots, Status
         table.add_column("Env", style="cyan", justify="center", width=3)
+        table.add_column("Step", justify="right", width=7)
         table.add_column("Acc", justify="right", width=6)
         table.add_column("▁▃▅", justify="left", width=8)  # Sparkline
         table.add_column("Reward", justify="right", width=7)
         table.add_column("▁▃▅", justify="left", width=8)  # Sparkline
+        table.add_column("ΔAcc", justify="right", width=6)
+        table.add_column("Rent", justify="right", width=6)
         table.add_column("Early", justify="center", width=10)
         table.add_column("Mid", justify="center", width=10)
         table.add_column("Late", justify="center", width=10)
@@ -1292,6 +1491,8 @@ class TUIOutput:
         for env_id in sorted(self.state.env_states.keys()):
             env = self.state.env_states[env_id]
 
+            step_str = f"{env.current_epoch}/{self.state.max_epochs}"
+
             # Accuracy with delta indicator
             acc_str = f"{env.host_accuracy:.1f}%"
             if env.best_accuracy > 0:
@@ -1307,6 +1508,21 @@ class TUIOutput:
             elif env.current_reward < -0.5:
                 reward_str = f"[red]{reward_str}[/red]"
 
+            # Reward components (from last REWARD_COMPUTED)
+            base_delta = env.reward_components.get("base_acc_delta")
+            if isinstance(base_delta, (int, float)):
+                style = "green" if float(base_delta) >= 0 else "red"
+                delta_str = f"[{style}]{float(base_delta):+,.2f}[/{style}]"
+            else:
+                delta_str = "─"
+
+            rent_val = env.reward_components.get("compute_rent")
+            if isinstance(rent_val, (int, float)):
+                style = "red" if float(rent_val) < 0 else "dim"
+                rent_str = f"[{style}]{float(rent_val):+,.2f}[/{style}]"
+            else:
+                rent_str = "─"
+
             # Format each slot
             early_str = self._format_slot_cell(env, "early")
             mid_str = self._format_slot_cell(env, "mid")
@@ -1318,10 +1534,13 @@ class TUIOutput:
 
             table.add_row(
                 str(env_id),
+                step_str,
                 acc_str,
                 env.accuracy_sparkline,
                 reward_str,
                 env.reward_sparkline,
+                delta_str,
+                rent_str,
                 early_str,
                 mid_str,
                 late_str,
@@ -1331,12 +1550,29 @@ class TUIOutput:
         # Add aggregate row if multiple envs
         if len(self.state.env_states) > 1:
             best_acc, best_env, best_epoch = self.state.aggregate_best_accuracy
+            step = max((e.current_epoch for e in self.state.env_states.values()), default=0)
+            deltas = [
+                float(e.reward_components.get("base_acc_delta"))
+                for e in self.state.env_states.values()
+                if isinstance(e.reward_components.get("base_acc_delta"), (int, float))
+            ]
+            rents = [
+                float(e.reward_components.get("compute_rent"))
+                for e in self.state.env_states.values()
+                if isinstance(e.reward_components.get("compute_rent"), (int, float))
+            ]
+            mean_delta = sum(deltas) / len(deltas) if deltas else 0.0
+            mean_rent = sum(rents) / len(rents) if rents else 0.0
+
             table.add_row(
                 "─" * 2,
+                "─" * 5,
                 "─" * 5,
                 "─" * 6,
                 "─" * 6,
                 "─" * 6,
+                "─" * 5,
+                "─" * 5,
                 "─" * 8,
                 "─" * 8,
                 "─" * 8,
@@ -1354,10 +1590,13 @@ class TUIOutput:
             ) or "─"
             table.add_row(
                 "[bold]Σ[/bold]",
+                f"[dim]{step}/{self.state.max_epochs}[/dim]",
                 f"[bold]{self.state.aggregate_mean_accuracy:.1f}%[/bold]",
                 "",
                 f"[bold]{self.state.aggregate_mean_reward:+.2f}[/bold]",
                 "",
+                f"[dim]{mean_delta:+.2f}[/dim]" if deltas else "─",
+                f"[dim]{mean_rent:+.2f}[/dim]" if rents else "─",
                 f"[dim]{stage_summary}[/dim]",
                 "",
                 "",

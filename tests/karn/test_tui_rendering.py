@@ -103,6 +103,7 @@ class TestEnvOverviewTable:
         output = capture.get()
 
         # Verify slot columns exist in header
+        assert "Step" in output
         assert "Early" in output
         assert "Mid" in output
         assert "Late" in output

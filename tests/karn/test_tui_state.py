@@ -1,6 +1,7 @@
 """Tests for TUI state management."""
 
 from collections import deque
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -156,6 +157,96 @@ class TestTUIOutputEventHandlers:
         assert tui.state.aggregate_action_counts["GERMINATE"] == 1
         assert tui.state.aggregate_action_counts["WAIT"] == 1
 
+    def test_action_names_normalize_germinate_variants(self):
+        """Factored action names like GERMINATE_* count as GERMINATE."""
+        from esper.karn.tui import TUIOutput
+
+        tui = TUIOutput()
+        tui.state.n_envs = 1
+        tui.state.get_or_create_env(0)
+
+        tui._handle_reward_computed(TelemetryEvent(
+            event_type=TelemetryEventType.REWARD_COMPUTED,
+            data={"env_id": 0, "total_reward": 0.1, "action_name": "GERMINATE_CONV_LIGHT"}
+        ))
+
+        assert tui.state.env_states[0].action_counts["GERMINATE"] == 1
+
+    def test_batch_completed_prefers_rolling_accuracy(self):
+        """BATCH_COMPLETED uses rolling_accuracy when present."""
+        from esper.karn.tui import TUIOutput
+
+        tui = TUIOutput()
+        tui._handle_training_started(TelemetryEvent(
+            event_type=TelemetryEventType.TRAINING_STARTED,
+            data={"n_envs": 1, "max_epochs": 10, "task": "cifar10"},
+        ))
+
+        tui._handle_batch_completed(TelemetryEvent(
+            event_type=TelemetryEventType.BATCH_COMPLETED,
+            data={
+                "batch_idx": 1,
+                "episodes_completed": 1,
+                "total_episodes": 10,
+                "avg_accuracy": 50.0,
+                "rolling_accuracy": 60.0,
+                "avg_reward": 0.5,
+            },
+        ))
+
+        assert tui.state.host_accuracy == 60.0
+        assert tui.state.current_reward == 0.5
+
+    def test_batch_completed_throughput_uses_episodes_completed(self):
+        """Throughput uses episodes_completed (multi-env safe)."""
+        from esper.karn.tui import TUIOutput
+
+        tui = TUIOutput()
+        tui._handle_training_started(TelemetryEvent(
+            event_type=TelemetryEventType.TRAINING_STARTED,
+            data={"n_envs": 4, "max_epochs": 10, "task": "cifar10"},
+        ))
+        tui.state.start_time = datetime.now() - timedelta(seconds=100)
+
+        tui._handle_batch_completed(TelemetryEvent(
+            event_type=TelemetryEventType.BATCH_COMPLETED,
+            data={
+                "batch_idx": 1,
+                "episodes_completed": 4,
+                "total_episodes": 10,
+                "avg_accuracy": 50.0,
+                "avg_reward": 0.5,
+            },
+        ))
+
+        assert tui.state.epochs_completed == 40
+
+    def test_batch_completed_throughput_handles_partial_last_batch(self):
+        """Throughput accounts for partial final batches in multi-env runs."""
+        from esper.karn.tui import TUIOutput
+
+        tui = TUIOutput()
+        tui._handle_training_started(TelemetryEvent(
+            event_type=TelemetryEventType.TRAINING_STARTED,
+            data={"n_envs": 4, "max_epochs": 10, "task": "cifar10"},
+        ))
+        tui.state.start_time = datetime.now() - timedelta(seconds=100)
+
+        for batch_idx, episodes_completed in [(1, 4), (2, 8), (3, 10)]:
+            tui._handle_batch_completed(TelemetryEvent(
+                event_type=TelemetryEventType.BATCH_COMPLETED,
+                data={
+                    "batch_idx": batch_idx,
+                    "episodes_completed": episodes_completed,
+                    "total_episodes": 10,
+                    "avg_accuracy": 50.0,
+                    "avg_reward": 0.5,
+                },
+            ))
+
+        assert tui.state.batches_completed == 3
+        assert tui.state.epochs_completed == 100
+
 
 class TestEventLogFormatting:
     """Tests for event log formatting with env IDs."""
@@ -179,3 +270,18 @@ class TestEventLogFormatting:
         assert formatted is not None
         timestamp, event_type, msg = formatted
         assert "[3]" in msg or "3" in msg
+
+    def test_epoch_log_formats_percent_accuracy(self):
+        """EPOCH_COMPLETED log formatting treats 0-100 accuracy as percent points."""
+        from esper.karn.tui import TUIOutput
+
+        tui = TUIOutput()
+        formatted = tui._format_event_for_log(TelemetryEvent(
+            event_type=TelemetryEventType.EPOCH_COMPLETED,
+            epoch=4,
+            data={"batch": 1, "inner_epoch": 10, "val_loss": 0.5, "val_accuracy": 75.0},
+        ))
+
+        assert formatted is not None
+        _, _, msg = formatted
+        assert "75.0%" in msg

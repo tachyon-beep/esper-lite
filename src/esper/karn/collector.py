@@ -205,6 +205,9 @@ class KarnCollector:
             self.store.start_epoch(epoch)
 
         # Update host snapshot
+        # Keep EpochSnapshot.epoch aligned with the commit-barrier epoch identifier.
+        # (HostSnapshot.epoch mirrors this value for convenience.)
+        self.store.current_epoch.epoch = epoch
         self.store.current_epoch.host.epoch = epoch
         self.store.current_epoch.host.val_loss = data.get("val_loss", 0.0)
         self.store.current_epoch.host.val_accuracy = data.get("val_accuracy", 0.0)
