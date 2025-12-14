@@ -101,7 +101,7 @@ Scale:
   - Remove unused imports of this function in `vectorized.py`.
 - **Verification:** `rg "collect_dual_gradients_async"` returns 0 hits.
 
-### [ ] Step 2: Fix CNN Segmented Forward (Kasmina PR0)
+### [x] Step 2: Fix CNN Segmented Forward (Kasmina PR0)
 
 - **Pre-flight checklist:**
   - [ ] Confirm Steps 1–1b are merged.
