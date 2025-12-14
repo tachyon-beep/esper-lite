@@ -153,12 +153,18 @@ class CNNHost(nn.Module):
         target_block = segment_to_block[segment]
         start_block = 0 if from_segment is None else segment_to_block[from_segment] + 1
 
+        # Map block index to registered slot key for slot application
+        slot_by_idx = dict(zip(self._slot_indices, self._slot_keys))
+
         # Forward through blocks in range [start_block, target_block]
         for idx in range(start_block, target_block + 1):
             x = self.blocks[idx](x)
             # Only pool on first pool_layers blocks
             if idx < self._pool_layers:
                 x = self.pool(x)
+            slot_key = slot_by_idx.get(idx)
+            if slot_key:
+                x = self.slots[slot_key](x)
 
         return x
 
@@ -187,12 +193,17 @@ class CNNHost(nn.Module):
         }
         start_block = segment_to_block[segment]
 
+        slot_by_idx = dict(zip(self._slot_indices, self._slot_keys))
+
         # Forward through remaining blocks
         for idx in range(start_block + 1, self.n_blocks):
             x = self.blocks[idx](x)
             # Only pool on first pool_layers blocks
             if idx < self._pool_layers:
                 x = self.pool(x)
+            slot_key = slot_by_idx.get(idx)
+            if slot_key:
+                x = self.slots[slot_key](x)
 
         # Global average pooling and classification
         x = F.adaptive_avg_pool2d(x, 1).flatten(1)

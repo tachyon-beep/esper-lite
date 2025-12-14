@@ -1,7 +1,7 @@
 """Host network tests."""
 
-import pytest
 import torch
+import torch.nn as nn
 
 from esper.kasmina.host import CNNHost, TransformerHost
 
@@ -56,3 +56,37 @@ class TestTransformerHostSegments:
 
         # Should be identical (deterministic with eval mode)
         torch.testing.assert_close(full_out, segment_out, rtol=1e-5, atol=1e-5)
+
+
+class TestCNNHostSegments:
+    """Test CNNHost segment round-trips respect registered slots."""
+
+    def test_cnn_segment_consistency(self):
+        host = CNNHost(num_classes=10, base_channels=8)
+
+        class AddConstant(nn.Module):
+            def __init__(self, value: float):
+                super().__init__()
+                self.value = value
+
+            def forward(self, x: torch.Tensor) -> torch.Tensor:
+                return x + torch.as_tensor(self.value, device=x.device, dtype=x.dtype)
+
+        host.register_slot("block2_post", AddConstant(0.1))
+        host.register_slot("block3_post", AddConstant(0.2))
+        host.eval()
+        x = torch.randn(2, 3, 32, 32)
+
+        with torch.no_grad():
+            full_out = host(x)
+            mid_h = host.forward_to_segment("mid", x)
+            segment_out = host.forward_from_segment("mid", mid_h)
+
+            early_h = host.forward_to_segment("early", x)
+            late_h_direct = host.forward_to_segment("late", x)
+            late_h_from_early = host.forward_to_segment("late", early_h, from_segment="early")
+            late_out_from_early = host.forward_from_segment("late", late_h_from_early)
+
+        torch.testing.assert_close(segment_out, full_out, rtol=1e-5, atol=1e-5)
+        torch.testing.assert_close(late_h_from_early, late_h_direct, rtol=1e-5, atol=1e-5)
+        torch.testing.assert_close(late_out_from_early, full_out, rtol=1e-5, atol=1e-5)
