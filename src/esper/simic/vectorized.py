@@ -57,6 +57,7 @@ from esper.leyline import (
 )
 from esper.leyline.factored_actions import FactoredAction, LifecycleOp
 from esper.simic.action_masks import build_slot_states, compute_action_masks
+from esper.simic.slots import ordered_slots
 from esper.simic.anomaly_detector import AnomalyDetector
 from esper.simic.debug_telemetry import (
     collect_per_layer_gradients,
@@ -429,8 +430,8 @@ def train_ppo_vectorized(
             total = targets.size(0)
         return loss, correct, total
 
-    # State dimension: 50 base features + 10 telemetry features if enabled
-    state_dim = MULTISLOT_FEATURE_SIZE + (SeedTelemetry.feature_dim() if use_telemetry else 0)
+    # State dimension: 50 base features + (3 * 10) telemetry features when enabled
+    state_dim = MULTISLOT_FEATURE_SIZE + (SeedTelemetry.feature_dim() * 3 if use_telemetry else 0)
     # Use EMA momentum for stable normalization during long training runs
     # (prevents distribution shift that can break PPO ratio calculations)
     obs_normalizer = RunningMeanStd((state_dim,), device=device, momentum=0.99)
@@ -1146,6 +1147,27 @@ def train_ppo_vectorized(
                             max_epochs=max_epochs,
                         )
 
+                if use_telemetry:
+                    # Refresh telemetry for ALL active enabled slots each epoch.
+                    # If gradient telemetry isn't available for a slot, preserve the last-known
+                    # gradient fields but keep stage/alpha/accuracy/epochs_in_stage fresh.
+                    for slot_id in slots:
+                        if not model.has_active_seed_in_slot(slot_id):
+                            continue
+                        seed_state = model.seed_slots[slot_id].state
+                        if seed_state is None or seed_state.telemetry is None:
+                            continue
+                        seed_state.sync_telemetry(
+                            gradient_norm=seed_state.telemetry.gradient_norm,
+                            gradient_health=seed_state.telemetry.gradient_health,
+                            has_vanishing=seed_state.telemetry.has_vanishing,
+                            has_exploding=seed_state.telemetry.has_exploding,
+                            epoch=epoch,
+                            max_epochs=max_epochs,
+                        )
+
+                slot_reports = model.get_slot_reports()
+
                 # Update signal tracker
                 available_slots = sum(
                     1 for slot_id in slots if not model.has_active_seed_in_slot(slot_id)
@@ -1164,9 +1186,10 @@ def train_ppo_vectorized(
 
                 features = signals_to_features(
                     signals,
-                    model,
+                    slot_reports=slot_reports,
                     use_telemetry=use_telemetry,
                     slots=slots,
+                    total_params=model.total_params if model else 0,
                     total_seeds=model.total_seeds() if model else 0,
                     max_seeds=effective_max_seeds,
                 )
@@ -1174,10 +1197,11 @@ def train_ppo_vectorized(
 
                 # Compute action mask based on current state (physical constraints only)
                 # Build slot states for ALL enabled slots (multi-slot masking)
-                slot_states = build_slot_states(model, slots)
+                ordered = ordered_slots(slots)
+                slot_states = build_slot_states(slot_reports, list(ordered))
                 mask = compute_action_masks(
                     slot_states=slot_states,
-                    enabled_slots=slots,
+                    enabled_slots=list(ordered),
                     total_seeds=model.total_seeds() if model else 0,
                     max_seeds=effective_max_seeds,
                     device=torch.device(device),

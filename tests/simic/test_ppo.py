@@ -119,8 +119,6 @@ def test_value_clipping_disabled_option():
 
 def test_signals_to_features_with_multislot_params():
     """Test signals_to_features accepts total_seeds and max_seeds params."""
-    from esper.leyline import SeedTelemetry
-
     # Create minimal signals mock
     class MockMetrics:
         epoch = 10
@@ -150,7 +148,7 @@ def test_signals_to_features_with_multislot_params():
 
     features = signals_to_features(
         signals=MockSignals(),
-        model=None,
+        slot_reports={},
         use_telemetry=False,
         slots=["mid"],
         total_seeds=1,  # NEW param
@@ -158,3 +156,72 @@ def test_signals_to_features_with_multislot_params():
     )
 
     assert len(features) == MULTISLOT_FEATURE_SIZE
+
+
+def test_signals_to_features_telemetry_slot_alignment() -> None:
+    """Telemetry slices must align to [early][mid][late], not "first enabled slot"."""
+    from esper.leyline import SeedMetrics, SeedStage, SeedStateReport, SeedTelemetry
+
+    class MockMetrics:
+        epoch = 7
+        global_step = 100
+        train_loss = 0.5
+        val_loss = 0.6
+        loss_delta = -0.1
+        train_accuracy = 85.0
+        val_accuracy = 82.0
+        accuracy_delta = 0.5
+        plateau_epochs = 2
+        best_val_accuracy = 83.0
+        best_val_loss = 0.55
+        grad_norm_host = 1.0
+
+    class MockSignals:
+        metrics = MockMetrics()
+        loss_history = []
+        accuracy_history = []
+        active_seeds = []
+        available_slots = 3
+        seed_stage = 0
+        seed_epochs_in_stage = 0
+        seed_alpha = 0.0
+        seed_improvement = 0.0
+        seed_counterfactual = 0.0
+
+    mid_telemetry = SeedTelemetry(seed_id="s1", blueprint_id="norm")
+    mid_telemetry.gradient_norm = 2.0
+    mid_telemetry.gradient_health = 0.7
+    mid_telemetry.has_vanishing = True
+    mid_telemetry.has_exploding = False
+    mid_telemetry.epochs_in_stage = 4
+    mid_telemetry.accuracy = 65.0
+    mid_telemetry.accuracy_delta = 1.0
+    mid_telemetry.stage = SeedStage.TRAINING.value
+    mid_telemetry.alpha = 0.3
+    mid_telemetry.epoch = 7
+    mid_telemetry.max_epochs = 25
+
+    slot_reports = {
+        "mid": SeedStateReport(
+            seed_id="s1",
+            slot_id="mid",
+            blueprint_id="norm",
+            stage=SeedStage.TRAINING,
+            metrics=SeedMetrics(epochs_total=7),
+            telemetry=mid_telemetry,
+        )
+    }
+
+    features = signals_to_features(
+        signals=MockSignals(),
+        slot_reports=slot_reports,
+        use_telemetry=True,
+        slots=["mid"],
+    )
+
+    base = MULTISLOT_FEATURE_SIZE
+    dim = SeedTelemetry.feature_dim()
+
+    assert features[base:base + dim] == [0.0] * dim  # early (disabled)
+    assert features[base + dim:base + 2 * dim] == pytest.approx(mid_telemetry.to_features())  # mid
+    assert features[base + 2 * dim:base + 3 * dim] == [0.0] * dim  # late (disabled)

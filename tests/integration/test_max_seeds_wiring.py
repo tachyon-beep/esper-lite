@@ -42,7 +42,7 @@ class TestMaxSeedsWiring:
         # With 1 seed out of 3 max -> utilization = 0.333...
         features = signals_to_features(
             signals=MockSignals(),
-            model=None,
+            slot_reports={},
             use_telemetry=False,
             slots=["mid"],
             total_seeds=1,

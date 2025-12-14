@@ -495,44 +495,25 @@ class TestBuildSlotStates:
     def test_empty_model_returns_none_states(self):
         """Empty slots return None for each slot."""
         from esper.simic.action_masks import build_slot_states
-        from esper.leyline import SeedStage
+        from esper.leyline import SeedMetrics, SeedStage, SeedStateReport
 
-        # Mock model with empty slots
-        class MockMetrics:
-            epochs_total = 0
+        slot_reports = {
+            "mid": SeedStateReport(stage=SeedStage.DORMANT, metrics=SeedMetrics(epochs_total=0)),
+        }
 
-        class MockState:
-            stage = SeedStage.DORMANT
-            metrics = MockMetrics()
-
-        class MockSlot:
-            state = MockState()
-
-        class MockModel:
-            seed_slots = {"mid": MockSlot()}
-
-        result = build_slot_states(MockModel(), ["mid"])
+        result = build_slot_states(slot_reports, ["mid"])
         assert result == {"mid": None}
 
     def test_active_seed_returns_mask_seed_info(self):
         """Active seed returns MaskSeedInfo with correct stage and age."""
         from esper.simic.action_masks import build_slot_states, MaskSeedInfo
-        from esper.leyline import SeedStage
+        from esper.leyline import SeedMetrics, SeedStage, SeedStateReport
 
-        class MockMetrics:
-            epochs_total = 5
+        slot_reports = {
+            "mid": SeedStateReport(stage=SeedStage.TRAINING, metrics=SeedMetrics(epochs_total=5)),
+        }
 
-        class MockState:
-            stage = SeedStage.TRAINING
-            metrics = MockMetrics()
-
-        class MockSlot:
-            state = MockState()
-
-        class MockModel:
-            seed_slots = {"mid": MockSlot()}
-
-        result = build_slot_states(MockModel(), ["mid"])
+        result = build_slot_states(slot_reports, ["mid"])
 
         assert "mid" in result
         assert isinstance(result["mid"], MaskSeedInfo)
@@ -542,36 +523,13 @@ class TestBuildSlotStates:
     def test_multiple_slots(self):
         """Multiple slots are all processed."""
         from esper.simic.action_masks import build_slot_states, MaskSeedInfo
-        from esper.leyline import SeedStage
+        from esper.leyline import SeedMetrics, SeedStage, SeedStateReport
 
-        class MockMetricsActive:
-            epochs_total = 3
+        slot_reports = {
+            "mid": SeedStateReport(stage=SeedStage.BLENDING, metrics=SeedMetrics(epochs_total=3)),
+        }
 
-        class MockMetricsDormant:
-            epochs_total = 0
-
-        class MockStateActive:
-            stage = SeedStage.BLENDING
-            metrics = MockMetricsActive()
-
-        class MockStateDormant:
-            stage = SeedStage.DORMANT
-            metrics = MockMetricsDormant()
-
-        class MockActiveSlot:
-            state = MockStateActive()
-
-        class MockEmptySlot:
-            state = MockStateDormant()
-
-        class MockModel:
-            seed_slots = {
-                "early": MockEmptySlot(),
-                "mid": MockActiveSlot(),
-                "late": MockEmptySlot(),
-            }
-
-        result = build_slot_states(MockModel(), ["early", "mid", "late"])
+        result = build_slot_states(slot_reports, ["early", "mid", "late"])
 
         assert result["early"] is None
         assert isinstance(result["mid"], MaskSeedInfo)

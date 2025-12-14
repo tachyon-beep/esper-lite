@@ -24,7 +24,7 @@ from __future__ import annotations
 import os
 from collections import deque
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Callable, TYPE_CHECKING
 
@@ -54,7 +54,6 @@ from esper.leyline import (
     SeedStage,
     VALID_TRANSITIONS,
     is_valid_transition,
-    is_terminal_stage,
     is_active_stage,
     is_failure_stage,
     # Reports
@@ -309,6 +308,7 @@ class SeedState:
             previous_epochs_in_stage=self.previous_epochs_in_stage,
             stage_entered_at=self.stage_entered_at,
             metrics=self.metrics.to_leyline(),
+            telemetry=replace(self.telemetry) if self.telemetry is not None else None,
             is_healthy=self.is_healthy,
             is_improving=self.metrics.improvement_since_stage_start > 0,
             needs_attention=not self.is_healthy or self.metrics.isolation_violations > 0,

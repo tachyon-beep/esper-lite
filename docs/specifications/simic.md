@@ -67,7 +67,7 @@ history = train_ppo_vectorized(
 from esper.simic.ppo import PPOAgent
 
 agent = PPOAgent(
-    state_dim=60,
+    state_dim=80,  # 50 base + 30 telemetry (10 per slot × 3)
     lstm_hidden_dim=128,
     device="cuda:0",
 )
@@ -157,7 +157,7 @@ config = ContributionRewardConfig(reward_mode=RewardMode.MINIMAL)
 ```python
 # FactoredRecurrentActorCritic
 # Input
-state: [batch, seq_len, 60]       # 50 base + 10 telemetry features
+state: [batch, seq_len, 80]       # 50 base + 30 telemetry features (10 per slot × 3)
 
 # Hidden state (LSTM)
 hidden_h: [1, batch, 128]         # [num_layers, batch, hidden_dim]
@@ -182,7 +182,7 @@ value: [batch, seq_len]
 ```python
 # TamiyoRolloutBuffer pre-allocated tensors
 # Shape: [num_envs, max_steps_per_env, ...]
-states: [4, 25, 60]
+states: [4, 25, 80]
 slot_actions: [4, 25]              # dtype=torch.long
 values: [4, 25]
 rewards: [4, 25]
@@ -194,7 +194,8 @@ hidden_h: [4, 25, 1, 128]          # [envs, steps, layers, hidden]
 ### Feature Vector Composition
 
 ```python
-# Total: 60 dimensions (50 base + 10 telemetry)
+# Total: 80 dimensions (50 base + 30 telemetry [10 per slot × 3 slots])
+# Ordering contract: telemetry slices are `[early][mid][late]`; empty/disabled slots are zero-padded.
 
 # Global features (23 dims): vectorized.py:360-380
 - epoch/max_epochs, learning_phase (3)

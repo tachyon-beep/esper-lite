@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections import defaultdict
 from pathlib import Path
 import math
-import warnings
+from typing import TYPE_CHECKING
 
 import torch
 import torch.nn as nn
@@ -19,10 +19,7 @@ import torch.nn.functional as F
 from esper.simic.tamiyo_buffer import TamiyoRolloutBuffer
 from esper.simic.tamiyo_network import FactoredRecurrentActorCritic
 from esper.simic.advantages import compute_per_head_advantages
-from esper.simic.features import safe
 from esper.leyline import (
-    TelemetryEvent,
-    TelemetryEventType,
     DEFAULT_GAMMA,
     DEFAULT_EPISODE_LENGTH,
     DEFAULT_LSTM_HIDDEN_DIM,
@@ -41,6 +38,9 @@ from esper.leyline import (
 from esper.nissa import get_hub
 import logging
 
+if TYPE_CHECKING:
+    from esper.leyline import SeedStateReport
+
 logger = logging.getLogger(__name__)
 
 
@@ -50,10 +50,12 @@ logger = logging.getLogger(__name__)
 
 def signals_to_features(
     signals,
-    model,
+    *,
+    slot_reports: dict[str, "SeedStateReport"],
     use_telemetry: bool = True,
     max_epochs: int = 200,
     slots: list[str] | None = None,
+    total_params: int = 0,
     total_seeds: int = 0,
     max_seeds: int = 0,
 ) -> list[float]:
@@ -61,24 +63,30 @@ def signals_to_features(
 
     Args:
         signals: TrainingSignals from tamiyo
-        model: MorphogeneticModel
+        slot_reports: Slot -> SeedStateReport snapshot for this timestep
         use_telemetry: Whether to include telemetry features
         max_epochs: Maximum epochs for learning phase normalization
         slots: Enabled slot IDs (used to pick telemetry seed deterministically)
+        total_params: Total model params (host + active seeds)
         total_seeds: Current total seeds across all slots (for utilization calc)
         max_seeds: Maximum allowed seeds (for utilization calc)
 
     Returns:
-        Feature vector (50 dims base, +10 if telemetry = 60 dims total)
+        Feature vector: base (50) + telemetry per slot (3 * 10) = 80 when telemetry enabled.
 
     Note:
         TrainingSignals.active_seeds contains seed IDs (strings), not SeedState
-        objects, so seed-specific features and telemetry are always zero-padded.
+        objects, so seed-specific features are zero-padded when slot reports
+        are missing.
     """
     if not slots:
         raise ValueError("signals_to_features: slots parameter is required and cannot be empty")
 
     from esper.simic.features import obs_to_multislot_features
+    from esper.simic.slots import CANONICAL_SLOTS, ordered_slots
+
+    enabled_slots = ordered_slots(slots)
+    enabled_set = set(enabled_slots)
 
     # Build observation dict
     loss_hist = list(signals.loss_history[-5:]) if signals.loss_history else []
@@ -103,27 +111,24 @@ def signals_to_features(
         'best_val_loss': signals.metrics.best_val_loss,
         'loss_history_5': loss_hist,
         'accuracy_history_5': acc_hist,
-        'total_params': model.total_params if model else 0,
+        'total_params': total_params,
     }
 
-    # Build per-slot state dict
+    # Build per-slot state dict from reports
     slot_states = {}
     for slot_id in ['early', 'mid', 'late']:
-        if model and slot_id in model.seed_slots:
-            slot = model.seed_slots[slot_id]
-            if slot.is_active and slot.state:
-                slot_improvement = slot.state.metrics.counterfactual_contribution
-                if slot_improvement is None:
-                    slot_improvement = slot.state.metrics.improvement_since_stage_start
-                slot_states[slot_id] = {
-                    'is_active': 1.0,
-                    'stage': slot.state.stage.value,
-                    'alpha': slot.state.alpha,
-                    'improvement': slot_improvement,
-                    'blueprint_id': slot.state.blueprint_id,
-                }
-            else:
-                slot_states[slot_id] = {'is_active': 0.0, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0, 'blueprint_id': None}
+        report = slot_reports.get(slot_id)
+        if report:
+            contribution = report.metrics.counterfactual_contribution
+            if contribution is None:
+                contribution = report.metrics.improvement_since_stage_start
+            slot_states[slot_id] = {
+                'is_active': 1.0,
+                'stage': report.stage.value,
+                'alpha': report.metrics.current_alpha,
+                'improvement': contribution,
+                'blueprint_id': report.blueprint_id,
+            }
         else:
             slot_states[slot_id] = {'is_active': 0.0, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0, 'blueprint_id': None}
 
@@ -132,23 +137,21 @@ def signals_to_features(
     features = obs_to_multislot_features(obs, total_seeds=total_seeds, max_seeds=max_seeds)
 
     if use_telemetry:
-        # Use real telemetry from model.seed_slots[target_slot].state when available
+        # Deterministic `[early][mid][late]` ordering; zero-pad empty/disabled slots.
         from esper.leyline import SeedTelemetry
-        telemetry_features: list[float] | None = None
-        if model:
-            for slot_id in slots:
-                if slot_id not in model.seed_slots:
-                    continue
-                if not model.has_active_seed_in_slot(slot_id):
-                    continue
-                seed_state = model.seed_slots[slot_id].state
-                if seed_state is None:
-                    continue
-                telemetry_features = seed_state.telemetry.to_features()
-                break
 
-        if telemetry_features is None:
-            telemetry_features = [0.0] * SeedTelemetry.feature_dim()
+        telemetry_features: list[float] = []
+        for slot_id in CANONICAL_SLOTS:
+            if slot_id not in enabled_set:
+                telemetry_features.extend([0.0] * SeedTelemetry.feature_dim())
+                continue
+
+            report = slot_reports.get(slot_id)
+            if report is None or report.telemetry is None:
+                telemetry_features.extend([0.0] * SeedTelemetry.feature_dim())
+                continue
+
+            telemetry_features.extend(report.telemetry.to_features())
 
         features.extend(telemetry_features)
 

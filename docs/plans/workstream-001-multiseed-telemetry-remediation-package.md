@@ -160,7 +160,7 @@ Scale:
   - Assert envs actually map to both GPUs (avoid false-pass “all envs landed on cuda:0”).
 - **Verification:** Test passes on multi-GPU node (or skips on CPU) and demonstrates both GPUs are exercised.
 
-### [ ] Step 6: Per-Slot Telemetry & Report Wiring (Multi‑GPU PR1 + Kasmina PR2)
+### [x] Step 6: Per-Slot Telemetry & Report Wiring (Multi‑GPU PR1 + Kasmina PR2)
 
 - **Pre-flight checklist:**
   - [ ] Confirm Step 5 is merged (or at least the repo has a known-good CUDA gate before touching the hot path).
@@ -178,7 +178,7 @@ Scale:
   - **Ordering function:** one function owns slot ordering (e.g., `ordered_slots(enabled_slots) -> tuple[str, ...]`) and both masking + feature extraction use it; add a unit test that detects regressions in ordering.
   - **Dynamic vs fixed:** slot report APIs remain dynamic (dict keyed by slot); only PPO feature concatenation is fixed-size (3-slot) for now.
   - Expand observation space: `base(50) + (3 * telemetry(10)) = 80`.
-  - Update docs/specs to reflect 80-dim observations when telemetry is enabled (and remove “60-dim” language).
+  - Update docs/specs to reflect 80-dim observations when telemetry is enabled (and remove “60-dim” language). **Done.**
 - **Verification:** PPO runs with `use_telemetry=True`; tensor shapes match 80 dims.
 
 ### [ ] Step 7: Tamiyo Multi-Slot Fix (Multi‑GPU PR2)

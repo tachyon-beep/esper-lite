@@ -25,6 +25,7 @@ import torch
 from torch.distributions import Categorical
 
 from esper.leyline import SeedStage, MIN_CULL_AGE
+from esper.simic.slots import ordered_slots
 from esper.leyline.factored_actions import (
     BlueprintAction,
     LifecycleOp,
@@ -36,7 +37,7 @@ from esper.leyline.factored_actions import (
 )
 
 if TYPE_CHECKING:
-    from esper.kasmina.host import MorphogeneticModel
+    from esper.leyline import SeedStateReport
 
 # Mapping from slot ID string to SlotAction index
 _SLOT_ID_TO_INDEX: dict[str, int] = {
@@ -75,13 +76,13 @@ class MaskSeedInfo:
 
 
 def build_slot_states(
-    model: MorphogeneticModel,
+    slot_reports: dict[str, "SeedStateReport"],
     slots: list[str],
 ) -> dict[str, MaskSeedInfo | None]:
-    """Build slot_states dict for action masking from model state.
+    """Build slot_states dict for action masking from slot reports.
 
     Args:
-        model: The morphogenetic model
+        slot_reports: Slot -> SeedStateReport (active slots only)
         slots: List of slot IDs to check
 
     Returns:
@@ -89,14 +90,13 @@ def build_slot_states(
     """
     slot_states: dict[str, MaskSeedInfo | None] = {}
     for slot_id in slots:
-        seed_slot = model.seed_slots[slot_id]
-        # state is None when slot has no seed, or DORMANT when seed is inactive
-        if seed_slot.state is None or seed_slot.state.stage == SeedStage.DORMANT:
+        report = slot_reports.get(slot_id)
+        if report is None or report.stage == SeedStage.DORMANT:
             slot_states[slot_id] = None
         else:
             slot_states[slot_id] = MaskSeedInfo(
-                stage=seed_slot.state.stage.value,
-                seed_age_epochs=seed_slot.state.metrics.epochs_total,
+                stage=report.stage.value,
+                seed_age_epochs=report.metrics.epochs_total,
             )
     return slot_states
 
@@ -128,9 +128,11 @@ def compute_action_masks(
     """
     device = device or torch.device("cpu")
 
-    # Slot mask: only enabled slots are selectable
+    ordered = ordered_slots(enabled_slots)
+
+    # Slot mask: only enabled slots are selectable in canonical order
     slot_mask = torch.zeros(NUM_SLOTS, dtype=torch.bool, device=device)
-    for slot_id in enabled_slots:
+    for slot_id in ordered:
         if slot_id in _SLOT_ID_TO_INDEX:
             slot_mask[_SLOT_ID_TO_INDEX[slot_id]] = True
 
@@ -149,7 +151,7 @@ def compute_action_masks(
     # Check slot states for enabled slots only
     has_empty_enabled_slot = any(
         slot_states.get(slot_id) is None
-        for slot_id in enabled_slots
+        for slot_id in ordered
     )
 
     # GERMINATE: valid if ANY enabled slot is empty AND under seed limit
@@ -160,7 +162,7 @@ def compute_action_masks(
 
     # FOSSILIZE/CULL: valid if ANY enabled slot has a valid state
     # (optimistic masking - network learns slot+op associations)
-    for slot_id in enabled_slots:
+    for slot_id in ordered:
         seed_info = slot_states.get(slot_id)
         if seed_info is not None:
             stage = seed_info.stage
