@@ -19,6 +19,7 @@ from esper.simic.gradient_collector import (
     materialize_grad_stats,
 )
 from esper.simic.action_masks import build_slot_states, compute_action_masks
+from esper.simic.slots import ordered_slots
 from esper.nissa import get_hub
 from esper.utils.loss import compute_task_loss_with_metrics
 
@@ -269,29 +270,33 @@ def run_heuristic_episode(
     torch.manual_seed(base_seed)
     random.seed(base_seed)
 
+    episode_id = f"heur_{base_seed}"
     model = create_model(task=task_spec, device=device, slots=slots)
 
-    # Determine target slot from slots parameter
     if not slots:
         raise ValueError("slots parameter is required and cannot be empty")
-    target_slot = slots[0]
+    if len(slots) != len(set(slots)):
+        raise ValueError(f"slots contains duplicates: {slots}")
+    enabled_slots = list(ordered_slots(slots))
 
     # Wire telemetry
     hub = get_hub()
+
     def telemetry_callback(event):
         event.data.setdefault("env_id", 0)
         hub.emit(event)
 
-    slot = model.seed_slots[target_slot]
-    slot.on_telemetry = telemetry_callback
-    slot.fast_mode = False
-    slot.isolate_gradients = True
+    for slot_id in enabled_slots:
+        slot = model.seed_slots[slot_id]
+        slot.on_telemetry = telemetry_callback
+        slot.fast_mode = False
+        slot.isolate_gradients = True
 
     # Emit TRAINING_STARTED to activate Karn (P1 fix)
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.TRAINING_STARTED,
         data={
-            "episode_id": f"heur_{base_seed}",
+            "episode_id": episode_id,
             "seed": base_seed,
             "max_epochs": max_epochs,
             "task": task_spec.name,
@@ -314,8 +319,6 @@ def run_heuristic_episode(
     host_params = sum(p.numel() for p in model.get_host_parameters() if p.requires_grad)
 
     for epoch in range(1, max_epochs + 1):
-        seed_state = model.seed_slots[target_slot].state if model.has_active_seed else None
-
         # Training phase - use tensor accumulation for deferred sync
         model.train()
         running_loss = torch.zeros(1, device=device)
@@ -376,13 +379,30 @@ def run_heuristic_episode(
         val_loss = val_loss_accum.item() / max(1, batch_count)
         val_acc = 100.0 * val_correct_accum.item() / total if total > 0 else 0.0
 
-        # Record accuracy in seed metrics
-        if seed_state and seed_state.metrics:
-            seed_state.metrics.record_accuracy(val_acc)
+        # Gather active seeds across ALL enabled slots (multi-slot support).
+        # Assert seed_id uniqueness - duplicate IDs would make target resolution ambiguous.
+        active_seeds = []
+        seed_ids: set[str] = set()
+        for slot_id in enabled_slots:
+            if not model.has_active_seed_in_slot(slot_id):
+                continue
+            state = model.seed_slots[slot_id].state
+            if state is None:
+                continue
+            if state.seed_id in seed_ids:
+                raise RuntimeError(f"Duplicate seed_id '{state.seed_id}' across slots in one env")
+            seed_ids.add(state.seed_id)
+            active_seeds.append(state)
+
+        # Record accuracy in seed metrics (per-slot counters + deltas).
+        for seed_state in active_seeds:
+            if seed_state.metrics:
+                seed_state.metrics.record_accuracy(val_acc)
 
         # Update signal tracker
-        active_seeds = [seed_state] if seed_state else []
-        available_slots = 0 if model.has_active_seed else 1
+        available_slots = sum(
+            1 for slot_id in enabled_slots if not model.has_active_seed_in_slot(slot_id)
+        )
         signals = signal_tracker.update(
             epoch=epoch,
             global_step=epoch * len(trainloader),
@@ -397,9 +417,20 @@ def run_heuristic_episode(
         acc_delta = signals.metrics.accuracy_delta
 
         # Mechanical lifecycle advance
-        if model.has_active_seed:
-            model.seed_slots[target_slot].step_epoch()
-        seed_state = model.seed_slots[target_slot].state if model.has_active_seed else None
+        for slot_id in enabled_slots:
+            model.seed_slots[slot_id].step_epoch()
+
+        def resolve_slot_for_seed_id(seed_id: str) -> str:
+            slot_matches = [
+                slot_id for slot_id in enabled_slots
+                if model.seed_slots[slot_id].state is not None
+                and model.seed_slots[slot_id].state.seed_id == seed_id
+            ]
+            if len(slot_matches) != 1:
+                raise RuntimeError(
+                    f"target_seed_id '{seed_id}' expected in exactly 1 slot, found {slot_matches}"
+                )
+            return slot_matches[0]
 
         # Get heuristic decision and convert to factored action
         decision = policy.decide(signals, active_seeds)
@@ -409,13 +440,19 @@ def run_heuristic_episode(
 
         # Compute reward (for comparison with PPO)
         total_params = model.active_seed_params
+        reward_seed_state = None
+        reward_seed_params = 0
+        if decision.target_seed_id:
+            target_slot = resolve_slot_for_seed_id(decision.target_seed_id)
+            reward_seed_state = model.seed_slots[target_slot].state
+            reward_seed_params = model.seed_slots[target_slot].active_seed_params
         reward = compute_contribution_reward(
             action=factored_action.op,  # Pass the LifecycleOp enum
             seed_contribution=None,  # No counterfactual in heuristic path
             val_acc=val_acc,
             seed_info=SeedInfo.from_seed_state(
-                seed_state,
-                model.seed_slots[target_slot].active_seed_params,
+                reward_seed_state,
+                reward_seed_params,
             ),
             epoch=epoch,
             max_epochs=max_epochs,
@@ -425,33 +462,67 @@ def run_heuristic_episode(
         )
         episode_rewards.append(reward)
 
+        germinate_slot = next(
+            (slot_id for slot_id in enabled_slots if not model.has_active_seed_in_slot(slot_id)),
+            None,
+        )
+
         # Execute action using FactoredAction properties
         if factored_action.is_germinate:
-            if not model.has_active_seed:
+            if germinate_slot is not None:
                 blueprint_id = factored_action.blueprint_id
                 seed_id = f"seed_{seeds_created}"
-                model.germinate_seed(blueprint_id, seed_id, slot=target_slot)
+                model.germinate_seed(blueprint_id, seed_id, slot=germinate_slot)
                 seeds_created += 1
                 seed_optimizer = torch.optim.SGD(
                     model.get_seed_parameters(), lr=task_spec.seed_lr, momentum=0.9
                 )
 
         elif factored_action.is_fossilize:
-            if model.has_active_seed and model.seed_slots[target_slot].state.stage == SeedStage.PROBATIONARY:
-                slot = model.seed_slots[target_slot]
-                gate_result = slot.advance_stage(SeedStage.FOSSILIZED)
-                if gate_result.passed:
-                    slot.set_alpha(1.0)
+            if decision.target_seed_id:
+                target_slot = resolve_slot_for_seed_id(decision.target_seed_id)
+                slot_state = model.seed_slots[target_slot].state
+                if slot_state is not None and slot_state.stage == SeedStage.PROBATIONARY:
+                    slot = model.seed_slots[target_slot]
+                    gate_result = slot.advance_stage(SeedStage.FOSSILIZED)
+                    if gate_result.passed:
+                        slot.set_alpha(1.0)
 
         elif factored_action.is_cull:
-            if model.has_active_seed:
+            if decision.target_seed_id:
+                target_slot = resolve_slot_for_seed_id(decision.target_seed_id)
                 model.cull_seed(slot=target_slot)
-                seed_optimizer = None
+                seed_optimizer = (
+                    torch.optim.SGD(model.get_seed_parameters(), lr=task_spec.seed_lr, momentum=0.9)
+                    if model.has_active_seed else None
+                )
 
-        # Print progress every 10 epochs
-        if epoch % 10 == 0 or epoch == max_epochs:
-            seed_info = f"seed={seed_state.stage.name}" if seed_state else "no seed"
-            print(f"  Epoch {epoch:3d}/{max_epochs}: acc={val_acc:.1f}%, {seed_info}, action={factored_action.op.name}")
+        summary_seed_id = signals.active_seeds[0] if signals.active_seeds else None
+        hub.emit(TelemetryEvent(
+            event_type=TelemetryEventType.EPOCH_COMPLETED,
+            epoch=epoch,
+            seed_id=decision.target_seed_id,
+            data={
+                "env_id": 0,
+                "episode_id": episode_id,
+                "mode": "heuristic",
+                "task": task_spec.name,
+                "device": device,
+                "enabled_slots": enabled_slots,
+                "max_epochs": max_epochs,
+                "train_loss": train_loss,
+                "train_accuracy": train_acc,
+                "val_loss": val_loss,
+                "val_accuracy": val_acc,
+                "available_slots": available_slots,
+                "seeds_active": len(active_seeds),
+                "summary_seed_id": summary_seed_id,
+                "target_seed_id": decision.target_seed_id,
+                "action": decision.action.name,
+                "op": factored_action.op.name,
+                "reward": reward,
+            },
+        ))
 
     return val_acc, action_counts, episode_rewards
 
@@ -479,14 +550,22 @@ def train_heuristic(
 
     task_spec = get_task_spec(task)
 
-    print("=" * 60)
-    print("Heuristic Training (h-esper)")
-    print("=" * 60)
-    print(f"Task: {task_spec.name} (topology={task_spec.topology})")
-    print(f"Episodes: {n_episodes}, Max epochs: {max_epochs}")
-    print(f"Batches per epoch: {max_batches or 'all'}")
-    print(f"Device: {device}")
-    print("=" * 60)
+    hub = get_hub()
+    hub.emit(TelemetryEvent(
+        event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+        data={
+            "env_id": 0,
+            "mode": "heuristic",
+            "task": task_spec.name,
+            "topology": task_spec.topology,
+            "episodes": n_episodes,
+            "max_epochs": max_epochs,
+            "max_batches": max_batches,
+            "device": device,
+            "slots": slots,
+        },
+        message="Heuristic training run configuration",
+    ))
 
     trainloader, testloader = task_spec.create_dataloaders()
 
@@ -494,11 +573,9 @@ def train_heuristic(
     history = []
 
     for ep in range(1, n_episodes + 1):
-        print(f"\nEpisode {ep}/{n_episodes}")
-        print("-" * 40)
-
         policy.reset()
         base_seed = seed + ep * 1000
+        episode_id = f"heur_{base_seed}"
 
         final_acc, action_counts, rewards = run_heuristic_episode(
             policy=policy,
@@ -513,8 +590,22 @@ def train_heuristic(
         )
 
         total_reward = sum(rewards)
-        print(f"\nEpisode {ep} complete: acc={final_acc:.1f}%, reward={total_reward:.1f}")
-        print(f"Actions: {dict(action_counts)}")
+        hub.emit(TelemetryEvent(
+            event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+            data={
+                "env_id": 0,
+                "mode": "heuristic",
+                "task": task_spec.name,
+                "episode_id": episode_id,
+                "episode": ep,
+                "episodes_total": n_episodes,
+                "base_seed": base_seed,
+                "final_accuracy": final_acc,
+                "total_reward": total_reward,
+                "action_counts": dict(action_counts),
+            },
+            message="Heuristic episode completed",
+        ))
 
         history.append({
             'episode': ep,

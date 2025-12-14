@@ -181,7 +181,7 @@ Scale:
   - Update docs/specs to reflect 80-dim observations when telemetry is enabled (and remove “60-dim” language). **Done.**
 - **Verification:** PPO runs with `use_telemetry=True`; tensor shapes match 80 dims.
 
-### [ ] Step 7: Tamiyo Multi-Slot Fix (Multi‑GPU PR2)
+### [x] Step 7: Tamiyo Multi-Slot Fix (Multi‑GPU PR2)
 
 - **Pre-flight checklist:**
   - [ ] Confirm Step 6 is merged (Tamiyo should consume the new “truth” sources, not old internal state).
