@@ -59,6 +59,8 @@ def create_lora_seed(dim: int, rank: int = 8) -> nn.Module:
 )
 def create_transformer_attention_seed(dim: int, n_head: int = 4) -> nn.Module:
     """Additional self-attention head seed."""
+    if dim % n_head != 0:
+        raise ValueError(f"Transformer attention seed requires dim % n_head == 0, got dim={dim}, n_head={n_head}")
 
     class TransformerAttentionSeed(nn.Module):
         def __init__(self, dim: int, n_head: int):
@@ -121,12 +123,11 @@ if _HAS_FLEX_ATTENTION:
         description="FlexAttention with causal mask (PyTorch 2.5+)"
     )
     def create_flex_attention_seed(dim: int, n_head: int = 4) -> nn.Module:
-        """FlexAttention seed with customizable attention patterns.
-
-        Uses block mask caching for improved performance on repeated sequence lengths.
-        Cache keys include (seq_len, device_str, dtype) for correctness across
-        devices and mixed-precision scenarios.
-        """
+        """FlexAttention seed with customizable attention patterns."""
+        if dim % n_head != 0:
+            raise ValueError(
+                f"FlexAttention seed requires dim % n_head == 0, got dim={dim}, n_head={n_head}"
+            )
 
         class FlexAttentionSeed(nn.Module):
             """Flexible attention with block-sparse patterns.

@@ -43,7 +43,7 @@ class TestStartBlendingProgress:
         slot.state.transition(SeedStage.BLENDING)
 
         # Start blending with 5 steps
-        slot.start_blending(total_steps=5, temperature=1.0)
+        slot.start_blending(total_steps=5)
 
         assert slot.state.blending_steps_total == 5
         assert slot.state.blending_steps_done == 0
@@ -63,7 +63,7 @@ class TestStartBlendingProgress:
         slot.state.blending_steps_done = 3
 
         # Start blending should reset
-        slot.start_blending(total_steps=5, temperature=1.0)
+        slot.start_blending(total_steps=5)
 
         assert slot.state.blending_steps_done == 0
 
@@ -81,7 +81,7 @@ class TestStepEpochAutoAdvance:
         slot.germinate(blueprint_id="conv_heavy", seed_id="test_seed", host_module=host)
         slot.state.transition(SeedStage.TRAINING)
         slot.state.transition(SeedStage.BLENDING)
-        slot.start_blending(total_steps=3, temperature=1.0)
+        slot.start_blending(total_steps=3)
 
         return slot
 
@@ -208,7 +208,7 @@ class TestLifecycleIntegration:
 
         # Tamiyo: action triggers blending start (mechanical now)
         model.seed_slots["mid"].state.transition(SeedStage.BLENDING)
-        model.seed_slots["mid"].start_blending(total_steps=3, temperature=1.0)
+        model.seed_slots["mid"].start_blending(total_steps=3)
 
         assert model.seed_slots["mid"].state.stage == SeedStage.BLENDING
 
@@ -285,7 +285,7 @@ class TestLifecycleIntegration:
         model.germinate_seed("conv_heavy", "test_seed", slot="mid")
         model.seed_slots["mid"].state.transition(SeedStage.TRAINING)
         model.seed_slots["mid"].state.transition(SeedStage.BLENDING)
-        model.seed_slots["mid"].start_blending(total_steps=3, temperature=1.0)
+        model.seed_slots["mid"].start_blending(total_steps=3)
 
         # Simulate training/validation metrics to drive dwell counters and gates
         for acc in (60.0, 61.0, 62.0):
@@ -325,7 +325,7 @@ class TestFossilizedCullProtection:
         # Drive through lifecycle to FOSSILIZED
         model.seed_slots["mid"].state.transition(SeedStage.TRAINING)
         model.seed_slots["mid"].state.transition(SeedStage.BLENDING)
-        model.seed_slots["mid"].start_blending(total_steps=3, temperature=1.0)
+        model.seed_slots["mid"].start_blending(total_steps=3)
 
         for acc in (60.0, 61.0, 62.0):
             model.seed_slots["mid"].state.metrics.record_accuracy(acc)

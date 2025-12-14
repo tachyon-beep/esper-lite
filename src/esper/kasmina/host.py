@@ -6,10 +6,7 @@ It manages the injection points where seeds can be attached.
 
 from __future__ import annotations
 
-try:
-    from typing import override
-except ImportError:
-    from typing_extensions import override  # Python <3.12 compatibility
+from typing_extensions import override
 
 import torch
 import torch.nn as nn
@@ -656,17 +653,6 @@ class MorphogeneticModel(nn.Module):
     def total_seeds(self) -> int:
         """Count all seeds (active + fossilized)."""
         return self.count_active_seeds() + self.count_fossilized_seeds()
-
-    def count_seeds_in_slot(self, slot: str) -> int:
-        """Count seeds in a specific slot (0 or 1 since one seed per slot)."""
-        s = self.seed_slots[slot]
-        if s.is_active:
-            return 1
-        if s.state:
-            if s.state.stage == SeedStage.FOSSILIZED:
-                return 1
-        return 0
-
 
 __all__ = [
     "ConvBlock",
