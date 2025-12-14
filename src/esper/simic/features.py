@@ -62,8 +62,9 @@ def safe(v, default: float = 0.0, max_val: float = 100.0) -> float:
 # Multi-Slot Features (V4 - 50 dimensions)
 # =============================================================================
 
-# Feature size: 23 base + 3 slots * 9 features per slot = 50
+# Feature size (with telemetry off): 23 base + 3 slots * 9 features per slot = 50
 # Per-slot: 4 state (is_active, stage, alpha, improvement) + 5 blueprint one-hot
+# With telemetry on: + 3 slots * SeedTelemetry.feature_dim() (10) = 80 total
 MULTISLOT_FEATURE_SIZE = 50
 
 

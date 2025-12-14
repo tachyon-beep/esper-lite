@@ -212,7 +212,7 @@ PYTHONPATH=src python -m esper.scripts.train ppo [OPTIONS]
 | `--telemetry-file` | (none) | Save telemetry to JSONL file |
 | `--telemetry-dir` | (none) | Save telemetry to timestamped folder |
 | `--telemetry-level` | `normal` | Verbosity: `off`, `minimal`, `normal`, `debug` |
-| `--no-telemetry` | off | Disable telemetry features (50-dim obs instead of 60-dim) |
+| `--no-telemetry` | off | Disable telemetry features (50-dim obs instead of 80-dim) |
 | `--tui` | off | Enable Rich terminal UI for live training monitoring |
 | `--dashboard` | off | Enable real-time WebSocket dashboard (requires `pip install esper-lite[dashboard]`) |
 | `--dashboard-port` | 8000 | Dashboard server port |

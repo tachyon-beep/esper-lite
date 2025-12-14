@@ -11,11 +11,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, TYPE_CHECKING
 from uuid import uuid4
 
 from esper.leyline.stages import SeedStage
 from esper.leyline.signals import TrainingSignals
+
+if TYPE_CHECKING:
+    from esper.leyline.telemetry import SeedTelemetry
 
 
 def _utc_now() -> datetime:
@@ -83,6 +86,9 @@ class SeedStateReport:
 
     # Metrics
     metrics: SeedMetrics = field(default_factory=SeedMetrics)
+
+    # Per-seed telemetry snapshot for PPO observations (optional)
+    telemetry: SeedTelemetry | None = None
 
     # Status flags
     is_healthy: bool = True

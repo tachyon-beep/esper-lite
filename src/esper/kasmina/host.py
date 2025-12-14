@@ -6,6 +6,8 @@ It manages the injection points where seeds can be attached.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from typing_extensions import override
 
 import torch
@@ -15,6 +17,9 @@ import torch.nn.functional as F
 from esper.leyline import SeedStage, is_terminal_stage
 from esper.kasmina.slot import SeedSlot
 from esper.kasmina.blueprints.cnn import ConvBlock  # Reuse shared building block
+
+if TYPE_CHECKING:
+    from esper.leyline import SeedStateReport
 
 
 class CNNHost(nn.Module):
@@ -614,12 +619,17 @@ class MorphogeneticModel(nn.Module):
         """Check if specific slot has active seed."""
         return self.seed_slots[slot].is_active
 
-    def get_slot_states(self) -> dict:
-        """Get state of all slots."""
-        return {
-            slot_id: slot.state
-            for slot_id, slot in self.seed_slots.items()
-        }
+    def get_slot_reports(self) -> dict[str, SeedStateReport]:
+        """Return per-slot SeedStateReport for all slots (active or not).
+
+        Slots without an active state will not appear in the dict.
+        """
+        reports: dict[str, SeedStateReport] = {}
+        for slot_id, slot in self.seed_slots.items():
+            if slot.state is None:
+                continue
+            reports[slot_id] = slot.state.to_report()
+        return reports
 
     @property
     def active_seed_params(self) -> int:

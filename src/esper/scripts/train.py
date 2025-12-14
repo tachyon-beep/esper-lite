@@ -126,7 +126,7 @@ def main():
     ppo_parser.add_argument(
         "--no-telemetry",
         action="store_true",
-        help="Disable telemetry features (50-dim instead of 60-dim)",
+        help="Disable telemetry features (50-dim instead of 80-dim)",
     )
     ppo_parser.add_argument("--gpu-preload", action="store_true",
         help="Preload dataset to GPU for 8x faster data loading (CIFAR-10 only, uses ~0.75GB VRAM)")
@@ -267,15 +267,15 @@ def main():
             # Print clickable dashboard links (OSC 8 hyperlinks for modern terminals)
             interfaces = get_network_interfaces()
             print()
-            print(f"  \033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m")
-            print(f"  \033[1m🔬 Live Dashboard\033[0m (listening on all interfaces)")
+            print("  \033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m")
+            print("  \033[1m🔬 Live Dashboard\033[0m (listening on all interfaces)")
             for iface in interfaces:
                 url = f"http://{iface}:{args.dashboard_port}"
                 # OSC 8 format: \033]8;;URL\033\\TEXT\033]8;;\033\\
                 hyperlink = f"\033]8;;{url}\033\\{url}\033]8;;\033\\"
                 label = " (local)" if iface in ("localhost", "127.0.0.1") else " (LAN)" if not iface.startswith("127.") else ""
                 print(f"     → {hyperlink}\033[90m{label}\033[0m")
-            print(f"  \033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m")
+            print("  \033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m")
             print()
         except ImportError:
             print("Warning: Dashboard dependencies not installed.")

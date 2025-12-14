@@ -6,6 +6,7 @@ These tests verify the action mask computation and batched action selection.
 
 import pytest
 import torch
+from esper.simic.features import MULTISLOT_FEATURE_SIZE
 
 from esper.simic.ppo import PPOAgent
 from esper.simic.action_masks import compute_action_masks, MaskSeedInfo
@@ -72,7 +73,7 @@ class TestPPOAgentFactoredInVectorized:
     def test_factored_agent_batched_action_selection(self):
         """PPOAgent should handle batched action selection with per-head masks."""
         n_envs = 4
-        state_dim = 50
+        state_dim = MULTISLOT_FEATURE_SIZE
 
         agent = PPOAgent(
             state_dim=state_dim,
@@ -115,7 +116,7 @@ class TestPPOAgentFactoredInVectorized:
     def test_tamiyo_buffer_stores_factored_transitions(self):
         """TamiyoRolloutBuffer should store factored transitions from multiple envs."""
         n_envs = 4
-        state_dim = 50
+        state_dim = MULTISLOT_FEATURE_SIZE
 
         agent = PPOAgent(
             state_dim=state_dim,

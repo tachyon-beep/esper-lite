@@ -37,7 +37,7 @@ class TestPPOFeatureCompatibility:
         signals.metrics.val_loss = 1.7
 
         # Extract features
-        features = signals_to_features(signals, model=None, use_telemetry=False, slots=["mid"])
+        features = signals_to_features(signals, slot_reports={}, use_telemetry=False, slots=["mid"])
         assert len(features) == MULTISLOT_FEATURE_SIZE, f"Expected {MULTISLOT_FEATURE_SIZE} features, got {len(features)}"
 
         # Create PPO agent with matching dimensions
@@ -70,8 +70,8 @@ class TestPPOFeatureCompatibility:
         signals.metrics.val_accuracy = 70.0
 
         # Extract features with telemetry
-        features = signals_to_features(signals, model=None, use_telemetry=True, slots=["mid"])
-        expected_dim = MULTISLOT_FEATURE_SIZE + SeedTelemetry.feature_dim()
+        features = signals_to_features(signals, slot_reports={}, use_telemetry=True, slots=["mid"])
+        expected_dim = MULTISLOT_FEATURE_SIZE + SeedTelemetry.feature_dim() * 3
         assert len(features) == expected_dim, f"Expected {expected_dim} features, got {len(features)}"
 
         # Create PPO agent with matching dimensions
@@ -102,7 +102,7 @@ class TestPPOFeatureCompatibility:
             signals = TrainingSignals()
             signals.metrics.epoch = i
             signals.metrics.val_accuracy = 50.0 + i
-            features = signals_to_features(signals, model=None, use_telemetry=False, slots=["mid"])
+            features = signals_to_features(signals, slot_reports={}, use_telemetry=False, slots=["mid"])
             all_features.append(features)
 
         # Stack into batch
@@ -133,8 +133,8 @@ class TestPPOForwardPass:
 
     def test_forward_pass_returns_valid_outputs(self):
         """Forward pass should return valid factored outputs."""
-        agent = PPOAgent(state_dim=50, device='cpu', compile_network=False)
-        state = torch.randn(1, 50)
+        agent = PPOAgent(state_dim=MULTISLOT_FEATURE_SIZE, device='cpu', compile_network=False)
+        state = torch.randn(1, MULTISLOT_FEATURE_SIZE)
         masks = _create_all_valid_masks()
 
         with torch.no_grad():
@@ -293,7 +293,7 @@ class TestPPOEndToEnd:
         signals.metrics.plateau_epochs = 3
 
         # Extract features
-        features = signals_to_features(signals, model=None, use_telemetry=False, slots=["mid"])
+        features = signals_to_features(signals, slot_reports={}, use_telemetry=False, slots=["mid"])
 
         # Create agent
         agent = PPOAgent(state_dim=len(features), device='cpu', compile_network=False)
@@ -323,8 +323,8 @@ class TestPPOEndToEnd:
         signals.metrics.val_accuracy = 75.0
 
         # Extract features with telemetry (will be zero-padded)
-        features = signals_to_features(signals, model=None, use_telemetry=True, slots=["mid"])
-        expected_dim = MULTISLOT_FEATURE_SIZE + SeedTelemetry.feature_dim()
+        features = signals_to_features(signals, slot_reports={}, use_telemetry=True, slots=["mid"])
+        expected_dim = MULTISLOT_FEATURE_SIZE + SeedTelemetry.feature_dim() * 3
         assert len(features) == expected_dim, f"Should have {expected_dim} features with telemetry"
 
         # Create agent
