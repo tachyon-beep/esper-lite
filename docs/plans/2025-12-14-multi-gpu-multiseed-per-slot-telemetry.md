@@ -13,14 +13,36 @@ This plan is the shortest path to a credible “sign‑off” that:
 - Vectorized PPO can run across multiple GPUs reliably
 - PPO gets **per‑slot telemetry** in its observation space (original design intent)
 
+## Alignment with Workstream‑001 (Master Plan)
+
+This document is a **detailed supplement** to the canonical master plan:
+`docs/plans/workstream-001-multiseed-telemetry-remediation-package.md`.
+
+Treat the master plan as the authoritative execution order; do not execute this plan independently or out of order.
+
+**Marker mapping (this doc → master plan):**
+- PR0 ↔ Workstream‑001 Step 5
+- PR1 ↔ Workstream‑001 Step 6
+- PR2 ↔ Workstream‑001 Step 7
+- PR3 ↔ Workstream‑001 Step 8
+- PR5 (optional AMP) ↔ Workstream‑001 Step 14
+- DDP v0 is explicitly deferred in Workstream‑001 (see “Explicit Deferrals” below)
+
+## Prerequisites (Workstream‑001 Phase 1)
+
+This plan assumes Steps 1–4 in the master plan are already complete, especially:
+- Step 1: delete `max_seeds_per_slot` everywhere (no lying knobs)
+- Step 3: telemetry/report fields exist on `SeedStateReport` / `SeedMetrics` for Simic to consume
+- Step 4: dead‑code sweep is done so we don’t build on redundant APIs
+
 ## Definitions (so “multi‑GPU” is unambiguous)
 
-This plan treats “multi‑GPU” as **two distinct capabilities**:
+This workstream ships **single‑process multi‑GPU env parallelism**. “Multi‑GPU” can mean two distinct capabilities:
 
 1. **Multi‑GPU env parallelism (P0/P1):** one Python process runs `n_envs` environments, distributing envs across `--devices` (e.g. `cuda:0 cuda:1`) and overlapping work with CUDA streams (`src/esper/simic/vectorized.py`).  
    - This is the fastest path to multi‑GPU throughput and the one we can ship without major rework.
-2. **True DDP model training (P2, optional):** one environment’s host model trains with `torch.distributed` across GPUs (DDP).  
-   - This is *not* currently safe due to dynamic seed parameter creation + counterfactual (`force_alpha`) semantics.
+2. **True DDP model training (deferred; out of scope for Workstream‑001):** one environment’s host model trains with `torch.distributed` across GPUs (DDP).  
+   - This is *not* currently safe due to dynamic seed parameter creation + counterfactual (`force_alpha`) semantics, and is explicitly deferred in the master plan.
 
 ## Current Status (what looks correct vs what blocks sign‑off)
 
@@ -34,16 +56,19 @@ This plan treats “multi‑GPU” as **two distinct capabilities**:
   - Fail‑fast CUDA index validation in vectorized PPO.
   - Model factory checks invalid CUDA device requests early (`src/esper/tolaria/environment.py`).
 
-### Blocks sign‑off today
+### Blocks sign‑off today (Workstream‑001 scope)
 
 1. **Per‑slot telemetry is not in PPO observations yet**
    - `signals_to_features()` appends telemetry for only “first active seed” (`src/esper/simic/ppo.py`).
 2. **Tamiyo multi‑seed is a partial pass**
    - `SignalTracker` collapses seed summary fields to `active_seeds[0]` (`src/esper/tamiyo/tracker.py`).
    - Heuristic baseline is effectively **single‑slot** (`src/esper/simic/training.py:run_heuristic_episode` selects `target_slot = slots[0]`).
-3. **True DDP is not currently safe**
-   - `SeedSlot.force_alpha()` mutates module state and is explicitly “not DDP safe” (`src/esper/kasmina/slot.py`).
-   - Gate consensus uses `all_reduce` and can deadlock if ranks diverge in call order (`src/esper/kasmina/slot.py:_sync_gate_decision`).
+
+### Out of scope / deferred risks (tracked, not sign‑off blockers for Workstream‑001)
+
+- **True DDP is not currently safe**
+  - `SeedSlot.force_alpha()` mutates module state and is explicitly “not DDP safe” (`src/esper/kasmina/slot.py`).
+  - Gate consensus uses `all_reduce` and can deadlock if ranks diverge in call order (`src/esper/kasmina/slot.py:_sync_gate_decision`).
 
 ## Non‑Negotiables (No Legacy / No Redundancy)
 
@@ -74,15 +99,13 @@ After executing this plan:
    - lifecycle stepping for *all* enabled slots
    - germination selects a slot explicitly (deterministic policy)
 3. Multi‑GPU env parallelism is “sign‑off ready” with a runnable smoke test on real hardware.
-4. DDP readiness is either:
-   - explicitly deferred with clear blockers + TODOs, **or**
-   - implemented in a minimal, safe “DDP v0” mode (only if we choose to pay the complexity).
+4. Simic consumes slot state/telemetry via **reports as the single source of truth**, and redundant “internal state readers” are deleted (no parallel representations).
 
 ---
 
 # Work Plan (small PRs, no major rework)
 
-## PR0 — Add a GPU smoke test harness (sign‑off gate for multi‑GPU)
+## PR0 — GPU smoke test harness (Workstream‑001 Step 5)
 
 ### Why
 We need a single command that an operator can run on a 2+ GPU machine to validate the “multi‑GPU env parallelism” path end‑to‑end (streams, transfers, optimizers, reward, telemetry).
@@ -93,9 +116,11 @@ We need a single command that an operator can run on a 2+ GPU machine to validat
 - **Main risks**
   - Flaky/slow GPU tests in CI if not properly skipped or scoped.
   - A “smoke test” that doesn’t actually exercise both GPUs (false confidence).
+  - Non‑hermetic test behavior (dataset download / network) makes validation unreliable.
 - **Mitigations**
   - Hard‑skip when CUDA not available and when `<2` GPUs.
   - Keep runtime tiny (≤1–2 episodes, small batches) and assert device assignment is non‑degenerate (e.g., envs map to both `cuda:0` and `cuda:1`).
+  - Use mock/synthetic datasets (or pre‑seeded local datasets) so the smoke test never depends on network access.
 
 ### Changes
 - Add a pytest that **skips cleanly** when CUDA is unavailable:
@@ -112,7 +137,7 @@ We need a single command that an operator can run on a 2+ GPU machine to validat
 
 ---
 
-## PR1 — Implement **per‑slot telemetry** in the PPO observation space
+## PR1 — Per‑slot telemetry & report wiring in PPO observations (Workstream‑001 Step 6)
 
 ### Why
 Multi‑seed is only learnable if the policy can “see” each slot’s local health/progress. Today telemetry is effectively single‑seed.
@@ -123,27 +148,38 @@ Multi‑seed is only learnable if the policy can “see” each slot’s local h
 - **Main risks**
   - Observation shape change ripples through: PPO network input, rollout buffer, obs normalizer, tests, and checkpoints.
   - “Per‑slot telemetry” can be incorrect or stale if we only refresh telemetry for TRAINING/BLENDING slots (e.g., PROBATIONARY/FOSSILIZED slots might show outdated `stage/alpha/accuracy` if `SeedState.sync_telemetry()` isn’t called).
+  - Two sources of truth (raw internal state vs reports) can drift unless we delete the redundant path.
   - Determinism: slot iteration must be fixed (`early/mid/late`), not dict order.
 - **Mitigations**
   - Update all dimension assertions/tests in the same PR; no compatibility shims.
   - Ensure telemetry snapshots are refreshed for **all active enabled slots** each epoch (even if gradient telemetry is unavailable, update the non‑gradient fields and keep gradient fields at “last known” or explicit zeros).
   - Add a targeted unit/integration test that checks telemetry slices align to the correct slot (not “first active seed”).
+  - Consume **only** `SeedStateReport` / slot reports in Simic (features + masks) and delete the old internal‑state reader APIs.
 
 ### Implementation decisions (keep it simple)
 - Observation layout stays **fixed‑size**:
   - `MULTISLOT_FEATURE_SIZE` is already hardcoded for `early/mid/late` (50 dims).
   - Telemetry becomes `3 * SeedTelemetry.feature_dim()` (30 dims).
   - New `state_dim = 80` when telemetry is enabled.
+- Slot reports must carry the per‑slot telemetry snapshot needed for PPO observations.
+  - Prefer adding an explicit `SeedTelemetry` (or equivalent typed telemetry field) onto `SeedStateReport` in Workstream‑001 Step 3 so Step 6 can remain “reports‑only”.
 - Ordering is deterministic: `[early telemetry][mid telemetry][late telemetry]`.
 - Empty slot telemetry is zero‑padded.
 
 ### Changes
+- `src/esper/kasmina/host.py`
+  - Implement `MorphogeneticModel.get_slot_reports()` (canonical Kasmina → Simic/Tamiyo snapshot API).
+  - Delete `MorphogeneticModel.get_slot_states()` (redundant internal‑state exposure).
+- `src/esper/simic/action_masks.py`
+  - Update `build_slot_states(...)` to build masking inputs from `SeedStateReport` (slot reports), not internal model state.
+  - Delete any redundant “read internal seed slot state” paths once report wiring is in place.
 - `src/esper/simic/ppo.py:signals_to_features()`
-  - Replace “first active seed telemetry” with per‑slot telemetry concatenation.
-  - Ensure it never depends on dict iteration ordering.
+  - Replace “first active seed telemetry” with deterministic per‑slot telemetry concatenation.
+  - Consume `SeedStateReport` (via `model.get_slot_reports()`), not internal slot state.
 - `src/esper/simic/vectorized.py:train_ppo_vectorized()`
   - Update `state_dim` computation accordingly.
   - Ensure observation normalizer shapes and PPOAgent input sizes match.
+  - Build one per‑epoch **slot report snapshot** (after metrics/counterfactual/telemetry sync) and use it for both masking and feature extraction.
 - Tests
   - Update any tests asserting `MULTISLOT_FEATURE_SIZE + SeedTelemetry.feature_dim()` (expected now: `+ 3*feature_dim()`).
   - Add a focused test that asserts:
@@ -157,10 +193,11 @@ Multi‑seed is only learnable if the policy can “see” each slot’s local h
 ### Acceptance criteria
 - PPO rollout collection runs with `use_telemetry=True` and produces tensors of the new dimension.
 - Tests covering observation sizing pass.
+- Action masking behaves correctly when slots are empty/disabled (no implicit reads of internal state).
 
 ---
 
-## PR2 — Fix the Tamiyo multi‑seed “partial pass” (tracker + heuristic baseline)
+## PR2 — Tamiyo multi‑slot fix (Workstream‑001 Step 7)
 
 ### Why
 We need the heuristic baseline and signal summaries to reflect the real multi‑slot world; otherwise comparisons and debugging are misleading.
@@ -201,7 +238,7 @@ We need the heuristic baseline and signal summaries to reflect the real multi‑
 
 ---
 
-## PR3 — Multi‑GPU env parallelism hardening (no DDP yet)
+## PR3 — Multi‑GPU env parallelism hardening (Workstream‑001 Step 8)
 
 ### Why
 We want to be confident that `--devices cuda:0 cuda:1 ...` is robust and fails early when misconfigured.
@@ -217,6 +254,8 @@ We want to be confident that `--devices cuda:0 cuda:1 ...` is robust and fails e
   - Make error messages actionable (requested device vs available device count).
 
 ### Changes
+- Ensure the vectorized training loop is the canonical Step‑8 engine (inverted control flow + `SharedBatchIterator` + CUDA streams).
+  - Delete any redundant/older training paths in the same PR (no parallel engines).
 - Improve device ergonomics + safety (only where it’s low‑risk):
   - Validate that all `--devices` entries are real CUDA indices at startup (already mostly present; tighten if needed).
   - Improve mapping diagnostics: print env→device assignment counts (helps operators catch accidental single‑GPU runs).
@@ -230,50 +269,7 @@ We want to be confident that `--devices cuda:0 cuda:1 ...` is robust and fails e
 
 ---
 
-## PR4 — (Optional) DDP “v0” design decision + blockers (keep it honest)
-
-### Why
-The architecture report correctly flags that **true DDP** is not currently safe. We should either:
-- explicitly defer DDP with clear TODOs and a tracked plan, or
-- implement a constrained DDP v0 with strong invariants.
-
-### Risk / Complexity
-- **Complexity:** High
-- **Risk:** High
-- **Main risks**
-  - **Deadlocks** from divergent collective call ordering (`_sync_gate_decision`).
-  - **Incorrectness** from dynamic parameter sets (seed germination/cull) under DDP.
-  - **Counterfactual eval** is not DDP‑safe (`force_alpha` mutates state).
-  - Hard to validate without multi‑GPU + distributed test harness; “seems fine” is not evidence.
-- **Mitigations**
-  - Treat as a discrete decision point: implement only if we accept the complexity; otherwise defer explicitly.
-  - If implemented, enforce strict invariants: rank0 action broadcast, fixed slot ordering for all collectives, no rank‑local lifecycle divergence.
-  - Prefer “functional counterfactual forward” over mutating `force_alpha`, or disable counterfactual in DDP v0 with a clear TODO (but only if we accept the research trade‑off).
-
-### DDP blockers to resolve (minimum set)
-- **Dynamic parameters:** seeds are created/removed at runtime (DDP hates changing parameter sets).
-- **Counterfactual path:** `force_alpha()` mutates module state and is explicitly unsafe under DDP.
-- **Collective call ordering:** `_sync_gate_decision()` requires identical all‑reduce call ordering across ranks.
-
-### If we choose to implement DDP v0 (still “no major rework”)
-Constrain scope aggressively:
-- DDP is supported only for **single env training** (one model replica across ranks), not multi‑env PPO.
-- Actions are decided on rank0 and **broadcast** to all ranks; all ranks execute identical lifecycle ops.
-- Replace `force_alpha()` usage in counterfactual evaluation with one of:
-  - a functional “counterfactual forward” path (no mutation), or
-  - rank0‑only counterfactual eval with barriers and no gradients (slower, but safe).
-- Move gate synchronization out of per‑slot conditional paths:
-  - execute “sync points” in a fixed slot order (`early/mid/late`) every epoch so collectives can’t diverge.
-
-If we *don’t* choose DDP now:
-- Add explicit TODOs where DDP is blocked and keep DDP as a separate plan.
-
-### Acceptance criteria
-- A written decision (ship DDP v0 vs defer) and an explicit list of invariants either way.
-
----
-
-## PR5 — (Opportunistic) AMP for throughput (cheap win, helps multi‑GPU)
+## PR5 — (Optional) AMP for throughput (Workstream‑001 Step 14)
 
 ### Why
 AMP is a low‑effort throughput boost and synergizes with multi‑GPU env parallelism.
@@ -299,6 +295,11 @@ AMP is a low‑effort throughput boost and synergizes with multi‑GPU env paral
 
 ---
 
+## Explicit Deferrals (Workstream‑001 Alignment)
+
+- **DDP v0:** Out of scope for Workstream‑001 and explicitly deferred in the master plan.
+  - Track only as a risk register: dynamic parameters (germinate/cull), `force_alpha` state mutation, and collective call ordering (`_sync_gate_decision`).
+
 # Sign‑Off Checklist (what we require before calling it “done”)
 
 ## Multi‑Seed
@@ -315,7 +316,5 @@ AMP is a low‑effort throughput boost and synergizes with multi‑GPU env paral
 - Smoke test passes on 2+ GPUs.
 - No cross‑device tensor errors (all env tensors live on their assigned device; policy tensors on policy device).
 
-## DDP (only if we choose to ship it)
-- No DDP deadlocks in gate synchronization.
-- Counterfactual evaluation is DDP‑safe (functional or rank‑coordinated).
-- Seed parameter sets are consistent across ranks (no dynamic divergence).
+## DDP (explicitly deferred)
+- No partial DDP implementation is introduced in this workstream (avoid half‑wired distributed paths).
