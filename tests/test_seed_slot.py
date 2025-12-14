@@ -3,6 +3,8 @@
 import pytest
 import torch
 import torch.nn as nn
+from esper.leyline import SeedStage
+from esper.kasmina.slot import SeedMetrics, SeedState
 
 
 def test_seed_slot_forward_no_seed_identity():
@@ -261,6 +263,33 @@ class TestG5RequiresCounterfactual:
 
         assert not result.passed, "Zero contribution should not pass G5"
         assert any("insufficient_contribution" in c for c in result.checks_failed)
+
+
+def test_seed_state_report_includes_telemetry_fields():
+    """SeedStateReport should carry causal/gradient/param metrics from SeedMetrics."""
+    metrics = SeedMetrics()
+    metrics.counterfactual_contribution = 3.2
+    metrics.seed_gradient_norm_ratio = 0.12
+    metrics.seed_param_count = 123
+    metrics.host_param_count = 456
+    metrics.current_alpha = 0.5
+    metrics.alpha_ramp_step = 7
+
+    state = SeedState(
+        seed_id="seed-1",
+        blueprint_id="bp-1",
+        slot_id="mid",
+        stage=SeedStage.TRAINING,
+        metrics=metrics,
+    )
+
+    report = state.to_report()
+    assert report.metrics.counterfactual_contribution == 3.2
+    assert report.metrics.seed_gradient_norm_ratio == 0.12
+    assert report.metrics.seed_param_count == 123
+    assert report.metrics.host_param_count == 456
+    assert report.metrics.current_alpha == 0.5
+    assert report.metrics.alpha_ramp_step == 7
 
 
 class TestShapeProbeCacheDeviceTransfer:

@@ -44,6 +44,16 @@ class SeedMetrics:
     total_improvement: float = 0.0
     improvement_since_stage_start: float = 0.0
 
+    # Causal attribution (set by counterfactual validation)
+    counterfactual_contribution: float | None = None
+
+    # Gradient activity (parameter-normalized) for G2 gate
+    seed_gradient_norm_ratio: float = 0.0
+
+    # Parameter counts for normalization/analytics
+    seed_param_count: int = 0
+    host_param_count: int = 0
+
     # Health
     isolation_violations: int = 0
     gradient_norm_avg: float = 0.0
