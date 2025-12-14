@@ -188,7 +188,6 @@ PYTHONPATH=src python -m esper.scripts.train ppo [OPTIONS]
 | `--task` | `cifar10` | Task preset: `cifar10`, `cifar10_deep`, `tinystories` |
 | `--slots` | `mid` | Seed slots to enable: `early`, `mid`, `late` (space-separated) |
 | `--max-seeds` | unlimited | Maximum total seeds across all slots |
-| `--max-seeds-per-slot` | unlimited | Maximum seeds per slot |
 
 #### Hardware & Performance
 
@@ -240,7 +239,6 @@ PYTHONPATH=src python -m esper.scripts.train heuristic [OPTIONS]
 | `--seed` | 42 | Random seed |
 | `--slots` | `mid` | Seed slots to enable |
 | `--max-seeds` | unlimited | Maximum total seeds |
-| `--max-seeds-per-slot` | unlimited | Maximum seeds per slot |
 
 Telemetry flags (`--telemetry-file`, `--telemetry-dir`, `--telemetry-level`) are also available.
 
@@ -265,8 +263,7 @@ PYTHONPATH=src python -m esper.scripts.train ppo \
 # Multi-slot training with seed limits
 PYTHONPATH=src python -m esper.scripts.train ppo \
     --slots early mid late \
-    --max-seeds 5 \
-    --max-seeds-per-slot 2
+    --max-seeds 5
 
 # Fast iteration with GPU preload
 PYTHONPATH=src python -m esper.scripts.train ppo \

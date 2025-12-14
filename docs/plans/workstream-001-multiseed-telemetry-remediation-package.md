@@ -77,7 +77,7 @@ Scale:
 
 **Goal:** Fix bugs, establish contracts, and remove dead weight.
 
-### [ ] Step 1: Kill `max_seeds_per_slot` (Simic PR0)
+### [x] Step 1: Kill `max_seeds_per_slot` (Simic PR0)
 
 - **Pre-flight checklist:**
   - [ ] Start from a clean branch at the current `main` head; confirm no other unmerged work touches seed-budget flags/CLI.

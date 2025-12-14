@@ -89,8 +89,6 @@ def main():
         help="Seed slots to enable (default: mid)")
     heur_parser.add_argument("--max-seeds", type=int, default=None,
         help="Maximum total seeds across all slots (default: unlimited)")
-    heur_parser.add_argument("--max-seeds-per-slot", type=int, default=None,
-        help="Maximum seeds per slot (default: unlimited)")
 
     # PPO subcommand
     ppo_parser = subparsers.add_parser("ppo", help="Train PPO agent",
@@ -137,8 +135,6 @@ def main():
         help="Seed slots to enable (default: mid)")
     ppo_parser.add_argument("--max-seeds", type=int, default=None,
         help="Maximum total seeds across all slots (default: unlimited)")
-    ppo_parser.add_argument("--max-seeds-per-slot", type=int, default=None,
-        help="Maximum seeds per slot (default: unlimited)")
     ppo_parser.add_argument(
         "--reward-mode",
         type=str,
@@ -331,7 +327,6 @@ def main():
                 telemetry_config=telemetry_config,
                 slots=args.slots,
                 max_seeds=args.max_seeds,
-                max_seeds_per_slot=args.max_seeds_per_slot,
                 reward_mode=args.reward_mode,
                 param_budget=args.param_budget,
                 param_penalty_weight=args.param_penalty,
