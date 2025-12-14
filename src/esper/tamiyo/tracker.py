@@ -163,13 +163,32 @@ class SignalTracker:
         seed_alpha = 0.0
         seed_improvement = 0.0
 
-        if active_seeds and active_seeds[0] is not None:
-            first_seed = active_seeds[0]
-            seed_stage = int(first_seed.stage)
-            # SeedState contract guarantees metrics and epochs_in_stage integer.
-            seed_epochs_in_stage = first_seed.epochs_in_stage
-            seed_alpha = first_seed.alpha
-            seed_improvement = first_seed.metrics.improvement_since_stage_start
+        if active_seeds:
+            # Multi-slot summary seed selection rule (deterministic, documented):
+            # 1) Prefer highest stage
+            # 2) Tie-break by highest alpha
+            # 3) Tie-break by most negative counterfactual_contribution (safety)
+            # 4) Final tie-break by seed_id for determinism
+            seed_ids = [s.seed_id for s in active_seeds]
+            if len(seed_ids) != len(set(seed_ids)):
+                raise RuntimeError(f"Duplicate seed_id(s) in active_seeds: {seed_ids}")
+
+            def summary_key(seed: "SeedState") -> tuple[int, float, float, str]:
+                stage = int(seed.stage)
+                alpha = float(seed.alpha)
+                counterfactual = float("inf")
+                if seed.metrics and seed.metrics.counterfactual_contribution is not None:
+                    counterfactual = seed.metrics.counterfactual_contribution
+                return (stage, alpha, -counterfactual, seed.seed_id)
+
+            summary_seed = max(active_seeds, key=summary_key)
+            seed_stage = int(summary_seed.stage)
+            seed_epochs_in_stage = summary_seed.epochs_in_stage
+            seed_alpha = summary_seed.alpha
+            seed_improvement = (
+                summary_seed.metrics.improvement_since_stage_start
+                if summary_seed.metrics else 0.0
+            )
 
         # Build TrainingSignals (Leyline format with nested metrics)
         signals = TrainingSignals(

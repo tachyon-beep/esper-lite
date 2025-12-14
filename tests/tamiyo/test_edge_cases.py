@@ -256,8 +256,8 @@ class TestMultipleActiveSeedsHandling:
         assert decision.action.name == "WAIT"
         assert decision.target_seed_id == "seed_1"
 
-    def test_tracker_uses_first_seed_only(self, signal_tracker, mock_seed_factory):
-        """Tracker should only extract info from first seed."""
+    def test_tracker_summary_seed_selection_is_deterministic(self, signal_tracker, mock_seed_factory):
+        """Tracker should select a deterministic summary seed from multiple slots."""
         from esper.leyline import SeedStage
 
         seed1 = mock_seed_factory(
@@ -283,11 +283,81 @@ class TestMultipleActiveSeedsHandling:
             active_seeds=[seed1, seed2],
         )
 
-        # Should use seed1's data
+        # Highest stage wins (BLENDING > TRAINING)
         assert signals.active_seeds == ["first", "second"]
+        assert signals.seed_stage == int(SeedStage.BLENDING)
+        assert signals.seed_epochs_in_stage == 10
+        assert signals.seed_improvement == 5.0
+
+    def test_tracker_summary_seed_tiebreaks_on_alpha(self, signal_tracker, mock_seed_factory) -> None:
+        """When stages tie, higher alpha wins for summary seed selection."""
+        from esper.leyline import SeedStage
+
+        seed_low_alpha = mock_seed_factory(
+            seed_id="low_alpha",
+            stage=SeedStage.TRAINING,
+            epochs_in_stage=5,
+            alpha=0.2,
+            improvement=1.0,
+        )
+        seed_high_alpha = mock_seed_factory(
+            seed_id="high_alpha",
+            stage=SeedStage.TRAINING,
+            epochs_in_stage=3,
+            alpha=0.7,
+            improvement=2.0,
+        )
+
+        signals = signal_tracker.update(
+            epoch=10,
+            global_step=100,
+            train_loss=0.5,
+            train_accuracy=85.0,
+            val_loss=0.6,
+            val_accuracy=83.0,
+            active_seeds=[seed_low_alpha, seed_high_alpha],
+        )
+
         assert signals.seed_stage == int(SeedStage.TRAINING)
-        assert signals.seed_epochs_in_stage == 5
+        assert signals.seed_alpha == 0.7
+        assert signals.seed_epochs_in_stage == 3
         assert signals.seed_improvement == 2.0
+
+    def test_tracker_summary_seed_tiebreaks_on_counterfactual(self, signal_tracker, mock_seed_factory) -> None:
+        """When stage+alpha tie, most negative counterfactual wins (safety)."""
+        from esper.leyline import SeedStage
+
+        seed_hurting_more = mock_seed_factory(
+            seed_id="hurt_more",
+            stage=SeedStage.PROBATIONARY,
+            epochs_in_stage=2,
+            alpha=0.5,
+            improvement=0.1,
+            counterfactual=-1.0,
+        )
+        seed_hurting_less = mock_seed_factory(
+            seed_id="hurt_less",
+            stage=SeedStage.PROBATIONARY,
+            epochs_in_stage=5,
+            alpha=0.5,
+            improvement=0.2,
+            counterfactual=-0.1,
+        )
+
+        signals = signal_tracker.update(
+            epoch=10,
+            global_step=100,
+            train_loss=0.5,
+            train_accuracy=85.0,
+            val_loss=0.6,
+            val_accuracy=83.0,
+            active_seeds=[seed_hurting_less, seed_hurting_more],
+        )
+
+        assert signals.seed_stage == int(SeedStage.PROBATIONARY)
+        assert signals.seed_alpha == 0.5
+        assert signals.seed_epochs_in_stage == 2
+        assert signals.seed_improvement == 0.1
 
 
 @pytest.mark.tamiyo
