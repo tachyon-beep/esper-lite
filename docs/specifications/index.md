@@ -16,7 +16,7 @@
 | [Tolaria](tolaria.md) | Metabolism | Core Logic | Tier-0 | 📝 Pending |
 | [Simic](simic.md) | Evolution | Core Logic | Tier-0 | ✅ Complete |
 | [Nissa](nissa.md) | Sensory Organs | Observation | Tier-2 | 📝 Pending |
-| [Karn](karn.md) | Memory/Archivist | Observation | Tier-2 | 📝 Pending |
+| [Karn](karn.md) | Memory/Archivist | Observation | Tier-2 | 🔄 In Progress |
 
 **Status Legend:**
 - ✅ Complete - Bible written and reviewed
