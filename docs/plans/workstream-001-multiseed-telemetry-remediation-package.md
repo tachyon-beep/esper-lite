@@ -48,6 +48,7 @@ This document implements the combined plans from:
 ## Risk / Complexity Summary (per step)
 
 Scale:
+
 - **Complexity:** S / M / L / XL (engineering surface area)
 - **Risk:** Low / Med / High (runtime correctness + training dynamics + integration/hardware)
 
@@ -88,7 +89,7 @@ Scale:
 - **Action:** Delete `max_seeds_per_slot` / `--max-seeds-per-slot` from CLI, signatures, constants, and current docs/specs.
 - **Verification:** `rg -n "max_seeds_per_slot|max-seeds-per-slot|DEFAULT_MAX_SEEDS_PER_SLOT" src/ tests/ README.md ROADMAP.md docs/specifications/` returns 0 hits.
 
-### [ ] Step 1b: Delete Dead Gradient Collector (Simic PR3)
+### [x] Step 1b: Delete Dead Gradient Collector (Simic PR3)
 
 - **Pre-flight checklist:**
   - [ ] Confirm Step 1 is merged (this step should not be stacked on unrelated churn).
@@ -112,7 +113,7 @@ Scale:
 - **Action:** Update `forward_to_segment`/`forward_from_segment` in `CNNHost` to apply registered injection-point slots.
 - **Verification:** New test `test_cnn_segment_consistency` passes.
 
-### [ ] Step 3: Establish Telemetry Contracts (Kasmina PR1)
+### [x] Step 3: Establish Telemetry Contracts (Kasmina PR1)
 
 - **Pre-flight checklist:**
   - [ ] Confirm Step 2 is merged.
