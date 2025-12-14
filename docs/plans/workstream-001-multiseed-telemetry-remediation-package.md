@@ -145,7 +145,7 @@ Scale:
 
 **Goal:** Build the physical Multi-GPU / Multi-Slot engine.
 
-### [ ] Step 5: GPU Smoke Test Harness (Multi‑GPU PR0)
+### [x] Step 5: GPU Smoke Test Harness (Multi‑GPU PR0)
 
 - **Pre-flight checklist:**
   - [ ] Confirm Steps 1–4 are merged (no stacking on moving contracts).
