@@ -196,6 +196,30 @@ class TestTUIOutputEventHandlers:
         assert tui.state.host_accuracy == 60.0
         assert tui.state.current_reward == 0.5
 
+    def test_batch_completed_does_not_fallback_to_rolling_avg_accuracy(self):
+        """BATCH_COMPLETED should not accept legacy schema keys."""
+        from esper.karn.tui import TUIOutput
+
+        tui = TUIOutput()
+        tui._handle_training_started(TelemetryEvent(
+            event_type=TelemetryEventType.TRAINING_STARTED,
+            data={"n_envs": 1, "max_epochs": 10, "task": "cifar10"},
+        ))
+
+        tui._handle_batch_completed(TelemetryEvent(
+            event_type=TelemetryEventType.BATCH_COMPLETED,
+            data={
+                "batch_idx": 1,
+                "episodes_completed": 1,
+                "total_episodes": 10,
+                "avg_accuracy": 50.0,
+                "rolling_avg_accuracy": 60.0,
+                "avg_reward": 0.5,
+            },
+        ))
+
+        assert tui.state.host_accuracy == 0.0
+
     def test_batch_completed_throughput_uses_episodes_completed(self):
         """Throughput uses episodes_completed (multi-env safe)."""
         from esper.karn.tui import TUIOutput
