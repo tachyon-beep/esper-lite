@@ -149,7 +149,7 @@ class FastTrainingSignals(NamedTuple):
             self.seed_alpha,
             self.seed_improvement,
             float(self.available_slots),
-            self.seed_counterfactual / 10.0,  # Normalize to ~[-1, 1]
+            max(-10.0, min(10.0, self.seed_counterfactual)) / 10.0,  # Clamp and normalize
             min(self.host_grad_norm, 10.0) / 10.0,  # Clamp and normalize
             self.host_learning_phase,  # Already [0, 1]
         ]

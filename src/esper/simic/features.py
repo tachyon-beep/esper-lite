@@ -148,6 +148,9 @@ def obs_to_multislot_features(obs: dict, total_seeds: int = 0, max_seeds: int = 
             float(slot.get('is_active', 0)),
             float(slot.get('stage', 0)),
             float(slot.get('alpha', 0.0)),
+            # TODO: [OBS NORMALIZATION AUDIT] - Audit PPO observation scaling/clamping for
+            # per-slot improvement/counterfactual (currently raw percentage points) and
+            # align with the ~[-1, 1] normalization contract for stable policy learning.
             float(slot.get('improvement', 0.0)),
         ])
         # Blueprint one-hot (5 dims)

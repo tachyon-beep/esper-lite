@@ -40,6 +40,16 @@ class TestCounterfactualInObservation:
         assert len(vec) == 30  # Base features without blueprint one-hot
         assert vec[TensorSchema.SEED_COUNTERFACTUAL] == pytest.approx(1.5 / 10.0, rel=0.01)
 
+    def test_to_vector_clamps_counterfactual(self):
+        """to_vector() should clamp counterfactual to [-1, 1] after scaling."""
+        from esper.leyline.signals import FastTrainingSignals, TensorSchema
+
+        hi = FastTrainingSignals.empty()._replace(seed_counterfactual=1e6).to_vector()
+        lo = FastTrainingSignals.empty()._replace(seed_counterfactual=-1e6).to_vector()
+
+        assert hi[TensorSchema.SEED_COUNTERFACTUAL] == pytest.approx(1.0)
+        assert lo[TensorSchema.SEED_COUNTERFACTUAL] == pytest.approx(-1.0)
+
 
 
 class TestHostStateObservability:
@@ -62,6 +72,5 @@ class TestHostStateObservability:
         empty = FastTrainingSignals.empty()
         assert hasattr(empty, 'host_grad_norm')
         assert hasattr(empty, 'host_learning_phase')
-
 
 
