@@ -70,7 +70,7 @@ class AnomalyDetector:
             Appropriate EV threshold for current training phase
         """
         if total_episodes <= 0:
-            return self.ev_threshold_late  # Fallback to strictest
+            raise ValueError("total_episodes must be > 0 for phase-dependent EV thresholds")
 
         progress = current_episode / total_episodes
 
@@ -135,19 +135,14 @@ class AnomalyDetector:
         """
         report = AnomalyReport()
 
-        # Use phase-dependent threshold if episode info provided
-        if current_episode > 0 and total_episodes > 0:
-            threshold = self.get_ev_threshold(current_episode, total_episodes)
-        else:
-            # Fallback to late-phase threshold (strictest) for backwards compatibility
-            threshold = self.ev_threshold_late
+        if current_episode <= 0 or total_episodes <= 0:
+            raise ValueError("current_episode and total_episodes are required (> 0)")
+
+        threshold = self.get_ev_threshold(current_episode, total_episodes)
 
         if explained_variance < threshold:
-            if total_episodes > 0:
-                progress_pct = current_episode / total_episodes * 100
-                progress_str = f"{progress_pct:.0f}%"
-            else:
-                progress_str = "unknown"
+            progress_pct = current_episode / total_episodes * 100
+            progress_str = f"{progress_pct:.0f}%"
             report.add_anomaly(
                 "value_collapse",
                 f"explained_variance={explained_variance:.3f} < {threshold} (at {progress_str} training)",
