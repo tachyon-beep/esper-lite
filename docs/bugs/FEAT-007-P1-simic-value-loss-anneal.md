@@ -1,0 +1,21 @@
+# FEAT Template
+
+- **Title:** Add value loss annealing/clamp to stabilize PPO critic
+- **Problem Statement:** PPO uses a fixed `value_coef` and large `value_clip=10.0`; expert review flagged risk of value dominance and KL guardrails not engaging (see BUG-003). There’s no mechanism to anneal value loss weight or tighten clipping over training, which can hurt policy learning stability.
+- **Goal:** Introduce optional scheduling for value loss weighting/clipping to reduce critic dominance and improve stability as training progresses.
+- **Scope:** Simic PPO (`src/esper/simic/ppo.py` and wiring in `vectorized.py`/CLI config).
+- **Non-Goals:** Changing default policy loss; no architectural changes to the network.
+- **Requirements:**
+  - Optional schedule for `value_coef` (warmup/decay) and/or `value_clip` tightening over updates/epochs.
+  - Defaults preserve current behavior (no schedule).
+  - Telemetry emission of current value_coef/value_clip for diagnostics.
+  - Configurable via CLI/config surface.
+- **Stakeholders/Owners:** Simic maintainers; RL stability owners.
+- **Design Sketch:** Add scheduler hooks similar to entropy anneal; update PPOAgent to track step/epoch and adjust value_coef/value_clip; thread config through `train_ppo_vectorized`.
+- **Dependencies/Risks:** Interaction with target_kl/early-stop; checkpoint compatibility (must persist schedule state); potential perf impact if schedule logic syncs each batch.
+- **Telemetry Needs:** Include current value_coef/value_clip in analytics snapshots and debug telemetry.
+- **Acceptance Criteria:** PPO runs unchanged when schedule disabled; with schedule enabled, critic loss/ratio stability improves in smoke runs; checkpoints restore schedule state.
+- **Rollout/Backout:** Flag-gated; easy revert to constant values.
+- **Validation Plan:** Add unit test for schedule progression; run short PPO with schedule enabled and confirm telemetry and restored checkpoints reflect schedule state.
+- **Status:** Draft
+- **Links:** `src/esper/simic/ppo.py` (value_clip=10.0), expert review on value dominance
