@@ -70,8 +70,8 @@ class TestMultiEnvSlotTracking:
         slots = store.current_epoch.slots
         assert "env3:early" in slots or "early" in slots
 
-    def test_counterfactual_env_idx_fallback_namespaces_by_env(self):
-        """Counterfactual events accept legacy env_idx for namespacing."""
+    def test_counterfactual_env_idx_is_ignored_to_avoid_misbucketing(self):
+        """env_idx is not a supported telemetry field (no legacy shims)."""
         from esper.karn.collector import KarnCollector
 
         collector = KarnCollector()
@@ -88,20 +88,14 @@ class TestMultiEnvSlotTracking:
             TelemetryEvent(
                 event_type=TelemetryEventType.COUNTERFACTUAL_COMPUTED,
                 slot_id="mid",
-                data={"env_idx": 0, "contribution": 0.1},
-            )
-        )
-        collector.emit(
-            TelemetryEvent(
-                event_type=TelemetryEventType.COUNTERFACTUAL_COMPUTED,
-                slot_id="mid",
                 data={"env_idx": 1, "contribution": 0.9},
             )
         )
 
         slots = store.current_epoch.slots
-        assert slots["env0:mid"].counterfactual_contribution == 0.1
-        assert slots["env1:mid"].counterfactual_contribution == 0.9
+        assert "env0:mid" not in slots
+        assert "env1:mid" not in slots
+        assert "mid" not in slots
 
     def test_gate_event_updates_slot_gate_fields(self):
         """Gate evaluation events populate per-slot gate fields."""
