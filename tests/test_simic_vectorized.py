@@ -432,7 +432,7 @@ def test_handle_telemetry_escalation_escalates_on_anomaly():
     _handle_telemetry_escalation(report, config)
 
     assert config.escalations == 1
-    assert config.ticks == 1
+    assert config.ticks == 0  # tick now happens per-epoch
 
 
 def test_handle_telemetry_escalation_ticks_without_anomaly():
@@ -457,7 +457,7 @@ def test_handle_telemetry_escalation_ticks_without_anomaly():
     _handle_telemetry_escalation(None, config)
 
     assert config.escalations == 0
-    assert config.ticks == 2
+    assert config.ticks == 0  # tick now happens per-epoch
 
 
 def test_handle_telemetry_escalation_respects_opt_out_flag():
@@ -481,7 +481,7 @@ def test_handle_telemetry_escalation_respects_opt_out_flag():
     _handle_telemetry_escalation(report, config)
 
     assert config.escalations == 0
-    assert config.ticks == 1
+    assert config.ticks == 0  # tick now happens per-epoch
 
 
 def test_emit_anomaly_diagnostics_skips_debug_when_disabled(monkeypatch):

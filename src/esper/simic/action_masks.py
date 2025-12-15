@@ -302,7 +302,12 @@ class MaskedCategorical:
         _validate_action_mask(mask)
 
         self.mask = mask
-        mask_value = torch.finfo(logits.dtype).min
+        finfo_min = torch.finfo(logits.dtype).min
+        mask_value = torch.tensor(
+            max(finfo_min, -1e4),
+            device=logits.device,
+            dtype=logits.dtype,
+        )
         self.masked_logits = logits.masked_fill(mask < 0.5, mask_value)
         self._dist = Categorical(logits=self.masked_logits)
 

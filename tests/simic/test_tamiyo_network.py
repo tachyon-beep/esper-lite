@@ -3,6 +3,7 @@
 import pytest
 import torch
 
+from esper.simic.action_masks import InvalidStateMachineError
 from esper.simic.tamiyo_network import FactoredRecurrentActorCritic
 
 
@@ -248,3 +249,37 @@ def test_entropy_normalization_in_loss():
     # Entropy loss should be bounded
     entropy_loss = sum(-ent.mean() for ent in entropy.values())
     assert entropy_loss.abs() < 100, f"Entropy loss too large: {entropy_loss}"
+
+
+def test_get_action_raises_on_all_false_mask():
+    """MaskedCategorical should raise when mask has no valid actions."""
+    net = FactoredRecurrentActorCritic(state_dim=20)
+    state = torch.randn(1, 20)
+    invalid_mask = torch.zeros(1, 3, dtype=torch.bool)
+
+    with pytest.raises(InvalidStateMachineError):
+        net.get_action(state, slot_mask=invalid_mask)
+
+
+def test_entropy_respects_valid_actions_only():
+    """Entropy should be computed over valid actions and remain normalized."""
+    net = FactoredRecurrentActorCritic(state_dim=20)
+    state = torch.randn(1, 2, 20)
+    slot_mask = torch.tensor([[[True, True, False]]])
+    actions = {
+        "slot": torch.zeros(1, 2, dtype=torch.long),
+        "blueprint": torch.zeros(1, 2, dtype=torch.long),
+        "blend": torch.zeros(1, 2, dtype=torch.long),
+        "op": torch.zeros(1, 2, dtype=torch.long),
+    }
+
+    _, _, entropy, _ = net.evaluate_actions(
+        states=state,
+        actions=actions,
+        slot_mask=slot_mask,
+    )
+
+    slot_entropy = entropy["slot"]
+    assert torch.isfinite(slot_entropy).all()
+    assert (slot_entropy >= 0).all()
+    assert (slot_entropy <= 1.01).all()

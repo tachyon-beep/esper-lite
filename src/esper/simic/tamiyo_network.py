@@ -21,7 +21,8 @@ import math
 
 import torch
 import torch.nn as nn
-from torch.distributions import Categorical
+
+from esper.simic.action_masks import MaskedCategorical, InvalidStateMachineError
 
 from esper.leyline import DEFAULT_LSTM_HIDDEN_DIM, DEFAULT_FEATURE_DIM
 from esper.leyline.factored_actions import (
@@ -267,13 +268,23 @@ class FactoredRecurrentActorCritic(nn.Module):
                 state, hidden, slot_mask, blueprint_mask, blend_mask, op_mask
             )
 
-            # Sample from each head
-            actions = {}
-            log_probs = {}
+            # Sample from each head using MaskedCategorical for safety
+            actions: dict[str, torch.Tensor] = {}
+            log_probs: dict[str, torch.Tensor] = {}
+
+            masks = {
+                "slot": slot_mask[:, 0, :] if slot_mask is not None else None,
+                "blueprint": blueprint_mask[:, 0, :] if blueprint_mask is not None else None,
+                "blend": blend_mask[:, 0, :] if blend_mask is not None else None,
+                "op": op_mask[:, 0, :] if op_mask is not None else None,
+            }
 
             for key in ["slot", "blueprint", "blend", "op"]:
                 logits = output[f"{key}_logits"][:, 0, :]  # [batch, action_dim]
-                dist = Categorical(logits=logits)
+                mask = masks[key]
+                if mask is None:
+                    mask = torch.ones_like(logits, dtype=torch.bool)
+                dist = MaskedCategorical(logits=logits, mask=mask)
 
                 if deterministic:
                     action = dist.probs.argmax(dim=-1)
@@ -310,24 +321,34 @@ class FactoredRecurrentActorCritic(nn.Module):
             states, hidden, slot_mask, blueprint_mask, blend_mask, op_mask
         )
 
-        log_probs = {}
-        entropy = {}
+        log_probs: dict[str, torch.Tensor] = {}
+        entropy: dict[str, torch.Tensor] = {}
+
+        masks = {
+            "slot": slot_mask,
+            "blueprint": blueprint_mask,
+            "blend": blend_mask,
+            "op": op_mask,
+        }
 
         for key in ["slot", "blueprint", "blend", "op"]:
             logits = output[f"{key}_logits"]  # [batch, seq_len, action_dim]
             action = actions[key]  # [batch, seq_len]
 
-            # Reshape for Categorical
+            # Reshape for distribution
             batch, seq, action_dim = logits.shape
             logits_flat = logits.reshape(-1, action_dim)
             action_flat = action.reshape(-1)
 
-            dist = Categorical(logits=logits_flat)
+            mask = masks[key]
+            if mask is None:
+                mask_flat = torch.ones_like(logits_flat, dtype=torch.bool)
+            else:
+                mask_flat = mask.reshape(-1, action_dim)
+
+            dist = MaskedCategorical(logits=logits_flat, mask=mask_flat)
             log_probs[key] = dist.log_prob(action_flat).reshape(batch, seq)
-            # Normalize entropy by max possible (different head cardinalities)
-            # The max() in __init__ ensures max_entropies[key] >= 1.0
-            raw_entropy = dist.entropy().reshape(batch, seq)
-            entropy[key] = raw_entropy / self.max_entropies[key]
+            entropy[key] = dist.entropy().reshape(batch, seq)
 
         return log_probs, output["value"], entropy, output["hidden"]
 
