@@ -59,7 +59,7 @@ from esper.leyline import (
 from esper.leyline.factored_actions import FactoredAction, LifecycleOp
 from esper.simic.action_masks import build_slot_states, compute_action_masks
 from esper.simic.slots import ordered_slots
-from esper.simic.anomaly_detector import AnomalyDetector
+from esper.simic.anomaly_detector import AnomalyDetector, AnomalyReport
 from esper.simic.debug_telemetry import (
     collect_per_layer_gradients,
     check_numerical_stability,
@@ -69,6 +69,7 @@ from esper.simic.normalization import RunningMeanStd, RewardNormalizer
 from esper.simic.features import MULTISLOT_FEATURE_SIZE
 from esper.simic.ppo import PPOAgent, signals_to_features
 from esper.simic.rewards import compute_reward, RewardMode, ContributionRewardConfig, SeedInfo
+from esper.simic.telemetry_config import TelemetryConfig
 from esper.leyline import DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
 from esper.nissa import get_hub, BlueprintAnalytics
 from esper.tolaria import TolariaGovernor
@@ -263,6 +264,78 @@ def _run_ppo_updates(
         obs_normalizer.update(all_raw_states)
 
     return aggregated_metrics
+
+
+def _handle_telemetry_escalation(
+    anomaly_report: AnomalyReport | None,
+    telemetry_config: TelemetryConfig | None,
+) -> None:
+    """Escalate telemetry on anomaly and tick down escalation each batch."""
+    if telemetry_config is None:
+        return
+
+    if (
+        telemetry_config.auto_escalate_on_anomaly
+        and anomaly_report is not None
+        and anomaly_report.has_anomaly
+    ):
+        telemetry_config.escalate_temporarily()
+
+    telemetry_config.tick_escalation()
+
+
+def _emit_anomaly_diagnostics(
+    hub: any,
+    anomaly_report: AnomalyReport | None,
+    agent: PPOAgent,
+    batch_epoch_id: int,
+    batch_idx: int,
+    max_epochs: int,
+    total_episodes: int,
+    collect_debug: bool,
+) -> None:
+    """Emit anomaly telemetry, optionally with expensive diagnostics when debug is enabled."""
+    if hub is None or anomaly_report is None or not anomaly_report.has_anomaly:
+        return
+
+    event_type_map = {
+        "ratio_explosion": TelemetryEventType.RATIO_EXPLOSION_DETECTED,
+        "ratio_collapse": TelemetryEventType.RATIO_COLLAPSE_DETECTED,
+        "value_collapse": TelemetryEventType.VALUE_COLLAPSE_DETECTED,
+        "numerical_instability": TelemetryEventType.NUMERICAL_INSTABILITY_DETECTED,
+    }
+
+    gradient_stats = None
+    stability_report = None
+    if collect_debug:
+        gradient_stats = collect_per_layer_gradients(agent.network)
+        stability_report = check_numerical_stability(agent.network)
+
+    for anomaly_type in anomaly_report.anomaly_types:
+        event_type = event_type_map.get(
+            anomaly_type,
+            TelemetryEventType.GRADIENT_ANOMALY,  # fallback
+        )
+
+        data = {
+            "episode": batch_epoch_id,
+            "batch": batch_idx + 1,
+            "episodes_completed": batch_epoch_id,
+            "inner_epoch": max_epochs,
+            "detail": anomaly_report.details.get(anomaly_type, ""),
+            "total_episodes": total_episodes,
+        }
+
+        if collect_debug:
+            data["gradient_stats"] = [gs.to_dict() for gs in gradient_stats[:5]]
+            data["stability"] = stability_report.to_dict()
+
+        hub.emit(TelemetryEvent(
+            event_type=event_type,
+            epoch=batch_epoch_id,  # Anomalies detected at batch boundary
+            data=data,
+            severity="debug" if collect_debug else "warning",
+        ))
 
 
 # =============================================================================
@@ -662,11 +735,14 @@ def train_ppo_vectorized(
 
         model = create_model(task=task_spec, device=env_device, slots=slots)
 
-        # Wire telemetry callback with env_id injection for ALL slots (multi-seed support)
-        telemetry_cb = make_telemetry_callback(env_idx)
+        telemetry_enabled = use_telemetry and (
+            telemetry_config is None or telemetry_config.should_collect("ops_normal")
+        )
+        telemetry_cb = make_telemetry_callback(env_idx) if telemetry_enabled else None
         for slot in model.seed_slots.values():
             slot.on_telemetry = telemetry_cb
-            slot.fast_mode = False  # Enable telemetry
+            # fast_mode disables telemetry/monitoring inside the slot for PPO rollouts
+            slot.fast_mode = not telemetry_enabled
             # Incubator mode gradient isolation: detach host input into the seed path so
             # host gradients remain identical to the host-only model while the seed
             # trickle-learns via STE in TRAINING. The host optimizer still steps
@@ -1692,6 +1768,8 @@ def train_ppo_vectorized(
         # If a Governor rollback occurred, the buffer contains transitions from
         # a different model state - training on them would cause distribution shift.
         # Clear the buffer and skip this PPO update.
+        anomaly_report: AnomalyReport | None = None
+
         if batch_rollback_occurred:
             agent.buffer.reset()
             if hub:
@@ -1718,49 +1796,38 @@ def train_ppo_vectorized(
 
             # === Anomaly Detection ===
             # Use check_all() for comprehensive anomaly detection
+            metric_values = [v for v in metrics.values() if isinstance(v, (int, float))]
+            has_nan = any(math.isnan(v) for v in metric_values)
+            has_inf = any(math.isinf(v) for v in metric_values)
+
             anomaly_report = anomaly_detector.check_all(
                 ratio_max=metrics.get("ratio_max", 1.0),
                 ratio_min=metrics.get("ratio_min", 1.0),
                 explained_variance=metrics.get("explained_variance", 0.0),
+                has_nan=has_nan,
+                has_inf=has_inf,
                 current_episode=batch_epoch_id,
                 total_episodes=total_episodes,
             )
 
-            if anomaly_report.has_anomaly:
-                # Collect diagnostic data for telemetry
-                gradient_stats = collect_per_layer_gradients(agent.network)
-                stability_report = check_numerical_stability(agent.network)
-                vanishing = sum(1 for gs in gradient_stats if gs.zero_fraction > 0.5)
-                exploding = sum(1 for gs in gradient_stats if gs.large_fraction > 0.1)
+            collect_debug_anomaly = (
+                telemetry_config is not None
+                and telemetry_config.should_collect("debug")
+                and telemetry_config.per_layer_gradients
+            )
+            _emit_anomaly_diagnostics(
+                hub=hub,
+                anomaly_report=anomaly_report,
+                agent=agent,
+                batch_epoch_id=batch_epoch_id,
+                batch_idx=batch_idx,
+                max_epochs=max_epochs,
+                total_episodes=total_episodes,
+                collect_debug=collect_debug_anomaly,
+            )
 
-                # Emit specific telemetry events (use existing event types)
-                if hub:
-                    # Map anomaly types to specific event types
-                    event_type_map = {
-                        "ratio_explosion": TelemetryEventType.RATIO_EXPLOSION_DETECTED,
-                        "ratio_collapse": TelemetryEventType.RATIO_COLLAPSE_DETECTED,
-                        "value_collapse": TelemetryEventType.VALUE_COLLAPSE_DETECTED,
-                        "numerical_instability": TelemetryEventType.NUMERICAL_INSTABILITY_DETECTED,
-                    }
-
-                    for anomaly_type in anomaly_report.anomaly_types:
-                        event_type = event_type_map.get(
-                            anomaly_type,
-                            TelemetryEventType.GRADIENT_ANOMALY  # fallback
-                        )
-                        hub.emit(TelemetryEvent(
-                            event_type=event_type,
-                            epoch=batch_epoch_id,  # Anomalies detected at batch boundary
-                            data={
-                                "episode": batch_epoch_id,
-                                "batch": batch_idx + 1,
-                                "episodes_completed": batch_epoch_id,
-                                "inner_epoch": max_epochs,
-                                "detail": anomaly_report.details.get(anomaly_type, ""),
-                                "gradient_stats": [gs.to_dict() for gs in gradient_stats[:5]],
-                                "stability": stability_report.to_dict(),
-                            }
-                        ))
+        # Telemetry escalation countdown happens once per batch
+        _handle_telemetry_escalation(anomaly_report, telemetry_config)
 
         # Track results
         avg_acc = sum(env_final_accs) / len(env_final_accs)
