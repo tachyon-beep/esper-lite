@@ -1,5 +1,7 @@
 # Simic: “Activate or Delete” Dead Code Plan (2025-12-14)
 
+**Status:** ✅ Completed (2025-12-15)
+
 ## Context
 
 We audited `src/esper/simic/` and found two classes of problems:

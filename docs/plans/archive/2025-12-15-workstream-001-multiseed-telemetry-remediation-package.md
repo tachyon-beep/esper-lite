@@ -2,7 +2,7 @@
 
 **Workstream:** 001 (Multi-seed + Telemetry + Remediation Package)
 **Version:** 1.7
-**Status:** 🟢 Ready for Execution
+**Status:** ✅ Completed (2025-12-15)
 **Objective:** Merge three parallel modernization plans (Simic Cleanup, Kasmina Wiring, Multi-GPU Hardening) into a single, conflict-free execution sequence.
 
 ## 🛑 Global Guardrails (Read First)
@@ -18,9 +18,9 @@
 
 This document implements the combined plans from:
 
-- docs/plans/2025-12-14-kasmina-wire-or-delete.md
-- docs/plans/2025-12-14-multi-gpu-multiseed-per-slot-telemetry.md
-- docs/plans/2025-12-14-simic-activate-or-delete.md
+- docs/plans/archive/2025-12-14-kasmina-wire-or-delete.md
+- docs/plans/archive/2025-12-14-multi-gpu-multiseed-per-slot-telemetry.md
+- docs/plans/archive/2025-12-14-simic-activate-or-delete.md
 
 **Hierarchy / precedence**
 

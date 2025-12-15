@@ -1,5 +1,7 @@
 # Multi‑GPU + Multi‑Seed Hardening Plan (2025‑12‑14)
 
+**Status:** ✅ Completed (2025-12-15)
+
 ## Context
 
 We just landed two major capabilities:
@@ -16,7 +18,7 @@ This plan is the shortest path to a credible “sign‑off” that:
 ## Alignment with Workstream‑001 (Master Plan)
 
 This document is a **detailed supplement** to the canonical master plan:
-`docs/plans/workstream-001-multiseed-telemetry-remediation-package.md`.
+`docs/plans/archive/2025-12-15-workstream-001-multiseed-telemetry-remediation-package.md`.
 
 Treat the master plan as the authoritative execution order; do not execute this plan independently or out of order.
 

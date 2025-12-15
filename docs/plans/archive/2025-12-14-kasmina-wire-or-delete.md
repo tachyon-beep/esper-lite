@@ -1,5 +1,7 @@
 # Kasmina: “Wire or Delete” + Bug Fixes Plan (2025-12-14)
 
+**Status:** ✅ Completed (2025-12-15)
+
 ## Context
 
 Kasmina (`src/esper/kasmina/`) matches the intended architecture (slots, lifecycle, blueprints, gradient isolation), but the audit found three concrete issues:
