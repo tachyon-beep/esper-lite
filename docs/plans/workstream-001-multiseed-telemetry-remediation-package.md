@@ -229,7 +229,7 @@ Scale:
   - **Normalizer invariant:** `RunningMeanStd` updates exactly once per rollout batch (not per PPO update step).
 - **Verification:** Logs show multiple policy updates per batch; normalizer update invariant holds.
 
-### [ ] Step 10: Telemetry Escalation (Simic PR2)
+### [X] Step 10: Telemetry Escalation (Simic PR2)
 
 - **Pre-flight checklist:**
   - [ ] Confirm Step 9 is merged.

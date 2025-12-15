@@ -2,12 +2,15 @@
 
 import pytest
 import torch
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from esper.leyline import SeedStage, TelemetryEventType
+from esper.simic.anomaly_detector import AnomalyReport
 from esper.simic.vectorized import (
     _advance_active_seed,
     _calculate_entropy_anneal_steps,
+    _emit_anomaly_diagnostics,
+    _handle_telemetry_escalation,
     _run_ppo_updates,
 )
 
@@ -406,3 +409,123 @@ def test_run_ppo_updates_honors_target_kl_early_stop_and_clears_buffer():
     # Normalizer still updated once because at least one update succeeded
     assert len(normalizer.calls) == 1
     assert metrics["approx_kl"] == pytest.approx((0.005 + 0.02) / 2.0)
+
+
+def test_handle_telemetry_escalation_escalates_on_anomaly():
+    """An anomaly should trigger escalation and always tick once per batch."""
+
+    class _StubTelemetryConfig:
+        def __init__(self):
+            self.escalations = 0
+            self.ticks = 0
+            self.auto_escalate_on_anomaly = True
+
+        def escalate_temporarily(self) -> None:
+            self.escalations += 1
+
+        def tick_escalation(self) -> None:
+            self.ticks += 1
+
+    config = _StubTelemetryConfig()
+    report = AnomalyReport(has_anomaly=True)
+
+    _handle_telemetry_escalation(report, config)
+
+    assert config.escalations == 1
+    assert config.ticks == 1
+
+
+def test_handle_telemetry_escalation_ticks_without_anomaly():
+    """Escalation should still tick down even when there is no anomaly."""
+
+    class _StubTelemetryConfig:
+        def __init__(self):
+            self.escalations = 0
+            self.ticks = 0
+            self.auto_escalate_on_anomaly = True
+
+        def escalate_temporarily(self) -> None:
+            self.escalations += 1
+
+        def tick_escalation(self) -> None:
+            self.ticks += 1
+
+    config = _StubTelemetryConfig()
+    report = AnomalyReport(has_anomaly=False)
+
+    _handle_telemetry_escalation(report, config)
+    _handle_telemetry_escalation(None, config)
+
+    assert config.escalations == 0
+    assert config.ticks == 2
+
+
+def test_handle_telemetry_escalation_respects_opt_out_flag():
+    """Auto-escalation should not trigger when config disables it."""
+
+    class _StubTelemetryConfig:
+        def __init__(self):
+            self.escalations = 0
+            self.ticks = 0
+            self.auto_escalate_on_anomaly = False
+
+        def escalate_temporarily(self) -> None:
+            self.escalations += 1
+
+        def tick_escalation(self) -> None:
+            self.ticks += 1
+
+    config = _StubTelemetryConfig()
+    report = AnomalyReport(has_anomaly=True)
+
+    _handle_telemetry_escalation(report, config)
+
+    assert config.escalations == 0
+    assert config.ticks == 1
+
+
+def test_emit_anomaly_diagnostics_skips_debug_when_disabled(monkeypatch):
+    """Expensive anomaly diagnostics should be skipped when debug telemetry is disabled."""
+
+    class _StubHub:
+        def __init__(self):
+            self.events = []
+
+        def emit(self, event):
+            self.events.append(event)
+
+    class _StubAgent:
+        class _Net:
+            pass
+        def __init__(self):
+            self.network = self._Net()
+
+    # Make gradient/stability collection fail if called
+    def _fail_gradients(_):
+        raise AssertionError("collect_per_layer_gradients should not be called")
+
+    def _fail_stability(_):
+        raise AssertionError("check_numerical_stability should not be called")
+
+    monkeypatch.setattr("esper.simic.vectorized.collect_per_layer_gradients", _fail_gradients)
+    monkeypatch.setattr("esper.simic.vectorized.check_numerical_stability", _fail_stability)
+
+    hub = _StubHub()
+    anomaly_report = AnomalyReport(has_anomaly=True, anomaly_types=["ratio_explosion"])
+
+    _emit_anomaly_diagnostics(
+        hub=hub,
+        anomaly_report=anomaly_report,
+        agent=_StubAgent(),
+        batch_epoch_id=5,
+        batch_idx=0,
+        max_epochs=10,
+        total_episodes=20,
+        collect_debug=False,
+    )
+
+    # Event emitted with minimal payload, and expensive collectors not invoked
+    assert len(hub.events) == 1
+    data = hub.events[0].data
+    assert "gradient_stats" not in data
+    assert "stability" not in data
