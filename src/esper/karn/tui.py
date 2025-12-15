@@ -100,6 +100,7 @@ class SeedState:
     blueprint_id: str | None = None
     alpha: float = 0.0
     accuracy_delta: float = 0.0
+    seed_params: int = 0
 
 
 def _make_sparkline_static(values: list[float], width: int = 8) -> str:
@@ -130,6 +131,7 @@ class EnvState:
     current_epoch: int = 0
     host_accuracy: float = 0.0
     host_loss: float = 0.0
+    host_params: int = 0
     seeds: dict[str, SeedState] = field(default_factory=dict)
     active_seed_count: int = 0
     fossilized_count: int = 0
@@ -159,6 +161,7 @@ class EnvState:
     status: str = "initializing"
     last_update: datetime | None = None
     epochs_since_improvement: int = 0
+    fossilized_params: int = 0
 
     @property
     def current_reward(self) -> float:
@@ -233,6 +236,15 @@ class EnvState:
             self.status = "excellent"
         elif self.current_epoch > 0:
             self.status = "healthy"
+
+    @property
+    def total_seed_params(self) -> int:
+        """Approximate total seed params (active + fossilized)."""
+        total = self.fossilized_params
+        for seed in self.seeds.values():
+            if seed.stage not in ("CULLED", "DORMANT"):
+                total += seed.seed_params
+        return total
 
 
 @dataclass
@@ -819,16 +831,20 @@ class TUIOutput:
         if event_type == "SEED_GERMINATED":
             seed.stage = "GERMINATED"
             seed.blueprint_id = data.get("blueprint_id")
+            seed.seed_params = data.get("params", seed.seed_params)
             env_state.active_seed_count += 1
         elif event_type == "SEED_STAGE_CHANGED":
             seed.stage = data.get("to", seed.stage)
             seed.alpha = data.get("alpha", seed.alpha)
         elif event_type == "SEED_FOSSILIZED":
             seed.stage = "FOSSILIZED"
+            # params_added moves into host; keep count for total params estimate
+            env_state.fossilized_params += int(data.get("params_added", 0) or 0)
             env_state.fossilized_count += 1
             env_state.active_seed_count = max(0, env_state.active_seed_count - 1)
         elif event_type == "SEED_CULLED":
             seed.stage = "CULLED"
+            seed.seed_params = 0
             env_state.culled_count += 1
             env_state.active_seed_count = max(0, env_state.active_seed_count - 1)
 
@@ -889,7 +905,7 @@ class TUIOutput:
         layout.split_column(
             Layout(name="header", size=3),
             Layout(name="env_cards", ratio=2),
-            Layout(name="main", ratio=1),
+            Layout(name="main", size=4),
             Layout(name="bottom", ratio=2),
             Layout(name="footer", size=2),
         )
@@ -1076,16 +1092,16 @@ class TUIOutput:
 
             # Compact table: summary row with slots rendered horizontally
             table = Table(show_header=True, box=None, padding=(0, 0), expand=True)
-            table.add_column("Row", style="dim", width=6)
-            table.add_column("Reward", justify="right", width=12)
-            table.add_column("Acc", justify="right", width=10)
-            table.add_column("Params/Seeds", justify="right", width=14)
-            table.add_column("Rent", justify="right", width=7)
+            table.add_column("Row", style="dim", width=5)
+            table.add_column("Reward", justify="right", width=9)
+            table.add_column("Acc", justify="right", width=8)
+            table.add_column("Seeds/Params", justify="right", width=14)
+            table.add_column("Rent", justify="right", width=6)
             table.add_column("", width=1)
-            table.add_column("Early", justify="left", width=14)
-            table.add_column("Mid", justify="left", width=14)
-            table.add_column("Late", justify="left", width=14)
-            table.add_column("Last Action / Status", justify="left", width=18)
+            table.add_column("Early", justify="left", width=12)
+            table.add_column("Mid", justify="left", width=12)
+            table.add_column("Late", justify="left", width=12)
+            table.add_column("Last / Status", justify="left", width=16)
 
             reward = env.current_reward
             base = env.reward_components.get("base_acc_delta")
@@ -1094,6 +1110,16 @@ class TUIOutput:
             params = getattr(env, "host_params", None)
             last_action = env.action_history[-1] if env.action_history else "—"
             seeds_summary = f"A:{env.active_seed_count} F:{env.fossilized_count} C:{env.culled_count}"
+            growth_ratio = env.reward_components.get("growth_ratio")
+
+            # Estimate total params if host_params absent using growth_ratio + seed params
+            total_params_display = None
+            if isinstance(params, int) and params > 0:
+                total_params_display = params + env.total_seed_params
+            elif isinstance(growth_ratio, (int, float)) and growth_ratio > 1.0 and env.total_seed_params > 0:
+                host_est = int(env.total_seed_params / (growth_ratio - 1))
+                env.host_params = host_est
+                total_params_display = host_est + env.total_seed_params
 
             def _slot_summary(slot_name: str) -> str:
                 seed = env.seeds.get(slot_name)
@@ -1110,7 +1136,7 @@ class TUIOutput:
                 "Env",
                 f"{reward:+.2f}",
                 f"{env.host_accuracy:.1f}%",
-                f"{params:,}" if isinstance(params, int) else seeds_summary,
+                seeds_summary,
                 f"{float(rent):+.2f}" if isinstance(rent, (int, float)) else "─",
                 "",
                 _slot_summary("early"),
@@ -1138,7 +1164,7 @@ class TUIOutput:
                 "Stats",
                 f"{mean_reward:+.2f}/{best_reward:+.2f}",
                 f"best {env.best_accuracy:.1f}%",
-                seeds_summary,
+                f"{total_params_display:,}" if isinstance(total_params_display, (int, float)) else seeds_summary,
                 penalty_str,
                 "",
                 f"Rwd {reward_spark}",
@@ -1240,7 +1266,7 @@ class TUIOutput:
         return table
 
     def _render_policy_stats(self) -> Panel:
-        """Render a compact policy stats strip to save vertical space."""
+        """Render a compact policy stats strip with minimal height."""
         table = Table(show_header=False, box=None, padding=(0, 0), expand=True)
         table.add_column("Actions", ratio=2)
         table.add_column("Health", ratio=2)
@@ -1310,8 +1336,14 @@ class TUIOutput:
 
         table.add_row(actions_line, health_line, losses_line, rewards_line)
 
-        # Return bare table (no panel) to minimize vertical footprint
-        return table
+        # Wrap in a tight panel to keep a small footprint
+        return Panel(
+            table,
+            title="[bold]POLICY STATS[/bold]",
+            border_style="cyan",
+            padding=(0, 0),
+            expand=True,
+        )
 
     def _render_reward_components(self) -> Panel:
         """Render the reward components breakdown for the focused environment."""
