@@ -226,6 +226,8 @@ def _aggregate_ppo_metrics(update_metrics: list[dict]) -> dict:
             aggregated[key] = min(values)
         elif key == "early_stop_epoch":
             aggregated[key] = min(values)
+        elif isinstance(values[0], dict):
+            aggregated[key] = values[0]
         else:
             aggregated[key] = sum(values) / len(values)
     return aggregated
@@ -292,6 +294,7 @@ def _emit_anomaly_diagnostics(
     max_epochs: int,
     total_episodes: int,
     collect_debug: bool,
+    ratio_diagnostic: dict | None = None,
 ) -> None:
     """Emit anomaly telemetry, optionally with expensive diagnostics when debug is enabled."""
     if hub is None or anomaly_report is None or not anomaly_report.has_anomaly:
@@ -328,6 +331,8 @@ def _emit_anomaly_diagnostics(
         if collect_debug:
             data["gradient_stats"] = [gs.to_dict() for gs in gradient_stats[:5]]
             data["stability"] = stability_report.to_dict()
+        if ratio_diagnostic is not None:
+            data["ratio_diagnostic"] = ratio_diagnostic
 
         hub.emit(TelemetryEvent(
             event_type=event_type,
@@ -1834,6 +1839,7 @@ def train_ppo_vectorized(
                 max_epochs=max_epochs,
                 total_episodes=total_episodes,
                 collect_debug=collect_debug_anomaly,
+                ratio_diagnostic=metrics.get("ratio_diagnostic"),
             )
 
         # Telemetry escalation countdown happens once per batch

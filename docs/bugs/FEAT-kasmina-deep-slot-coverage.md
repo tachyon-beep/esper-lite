@@ -1,0 +1,24 @@
+# FEAT Template
+
+- **Title:** Enable Kasmina to target all deep CNN injection points (beyond early/mid/late)
+- **Problem Statement:** Deep CNN hosts (e.g., `cifar10_deep` with `n_blocks=5`) expose four injection points, but the action space and MorphogeneticModel only honor the first three canonical slots (`early`, `mid`, `late`). The extra `block4_post`/`block5_post` injection sites are unreachable, leaving compute on the table and preventing Tamiyo/Simic from experimenting with late-stage grafts.
+- **Goal:** Allow Kasmina/Tamiyo/Simic to germinate, blend, and fossilize seeds at every injection point exposed by the host, not just the first three segments.
+- **Scope:** Kasmina slot discovery/ordering, leyline slot contracts, Simic slot ordering/action masks, task presets that ship deep CNNs (`cifar10_deep`).
+- **Non-Goals:** Redesigning PPO network architecture or changing transformer slot counts (keep transformer early/mid/late semantics unless extended deliberately).
+- **Requirements:**
+  - Derive slot ordering from `host.segment_channels`/`host.injection_points` instead of a hardcoded three-slot tuple.
+  - Allow `--slots`/TaskSpec to include late CNN injection ids (e.g., `block4_post`, `block5_post`) with validation against the host.
+  - Expand Simic slot ordering/action masks and telemetry vectors to handle >3 slots without reshaping errors; preserve backward compatibility when only three slots are enabled.
+  - Counterfactual/telemetry paths must include any additional slots.
+- **Stakeholders/Owners:** Kasmina + Simic maintainers (RL infra), Tolaria training owners.
+- **Design Sketch:** Build a host-driven slot registry (order derived from injection indices), update `CANONICAL_SLOTS`/`ordered_slots` to be topology-aware or dynamically generated, and update action enums/masks to match the discovered slots. Keep legacy `early/mid/late` ordering when the host only exposes those three.
+- **Dependencies/Risks:** Tamiyo/PPO heads and buffers assume three slots; expanding slot count requires reshaping masks/features and may require checkpoint migration or a feature flag for staged rollout.
+- **Telemetry Needs:** Per-slot metrics/telemetry arrays must resize to match the discovered slot count; PPO feature extractor needs to zero-pad or dynamically size to avoid misalignment.
+- **Acceptance Criteria:** 
+  - `cifar10_deep` can be launched with `slots` including late injection points, and seeds in those slots execute and report telemetry.
+  - Action masks/enums align with the expanded slot list (no IndexError/shape drift).
+  - Regression tests cover a deep CNN host with a fourth slot enabled and verify forward paths invoke the seed.
+- **Rollout/Backout:** Introduce behind a config flag or automatic host-driven discovery while keeping `early/mid/late` default; back out by restricting slot discovery to three canonical segments.
+- **Validation Plan:** Add integration test for `CNNHost(n_blocks=5, pool_layers=5)` with four enabled slots; update Simic mask/feature tests to exercise >3 slots; run PPO smoke test to confirm shapes stay consistent.
+- **Status:** Draft
+- **Links:** `src/esper/kasmina/host.py` (segment/injection points), `src/esper/simic/slots.py`, `src/esper/runtime/tasks.py` (`cifar10_deep` preset)

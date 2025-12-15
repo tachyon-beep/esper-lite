@@ -1,0 +1,26 @@
+# FEAT Template
+
+- **Title:** Add AMP path to vectorized PPO training for 30–50% throughput gain
+- **Problem Statement:** Simic vectorized PPO (`src/esper/simic/vectorized.py`) runs entirely in FP32; no `torch.amp.autocast` or GradScaler integration. Training is compute-bound and leaves easy perf on the table.
+- **Goal:** Provide an opt-in AMP execution path for the PPO hot loop (forward, loss, backward) that preserves correctness while reducing wall-clock per episode.
+- **Scope:** Simic (vectorized PPO path only); covers `train_ppo_vectorized` training loop and policy/value eval; excludes heuristic path and non-PPO scripts.
+- **Non-Goals:** No FSDP/DDP changes; no alteration to reward logic; no mixed-precision dataset caching.
+- **Requirements:** 
+  - Flag in `train_ppo_vectorized` (e.g., `use_amp` defaulting to False to preserve baseline).
+  - Wrap forward/loss/backward in `torch.autocast(device_type="cuda")` when enabled; safe CPU fallback.
+  - Ensure gradient norm clipping and optimizer stepping remain stable; disable GradScaler unless tested.
+  - Telemetry note when AMP is active (for Karn/Nissa runs).
+- **Stakeholders/Owners:** Simic maintainers; PyTorch perf owners.
+- **Design Sketch:** Thread `use_amp` through to the batch loop; use a context manager around model forward + loss + backward for host/seed params; guard CUDA-only paths; add config emit in telemetry snapshot.
+- **Dependencies/Risks:** Potential numerical drift; interaction with `torch.compile` graphs; need to confirm mask ops stay deterministic in FP16; mixed precision may reduce counterfactual accuracy if not scaled correctly.
+- **Telemetry Needs:** Emit `amp_enabled` in `ANALYTICS_SNAPSHOT` and include in debug traces for anomalous runs.
+- **Acceptance Criteria:** 
+  - AMP flag present and defaults off.
+  - PPO run completes with AMP on A100 and achieves ≥0.9× accuracy of FP32 baseline while delivering measurable speedup (document benchmark).
+  - No regressions in existing smoke tests.
+- **Rollout/Backout:** Keep flag gated; safe fallback to FP32 on failures/unsupported devices; consider environment variable override for quick disable.
+- **Validation Plan:** 
+  - Fast smoke: `PYTHONPATH=src uv run python -m esper.scripts.train ppo --episodes 1 --n-envs 2 --max-epochs 2 --max-batches 2 --slots mid --device cuda:0 --use-amp` (new flag).
+  - Compare step time vs. baseline on same hardware; verify telemetry includes AMP flag.
+- **Status:** Draft
+- **Links:** PyTorch specialist review (AMP missing), `src/esper/simic/vectorized.py` training loop

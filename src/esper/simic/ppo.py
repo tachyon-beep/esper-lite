@@ -19,6 +19,7 @@ import torch.nn.functional as F
 from esper.simic.tamiyo_buffer import TamiyoRolloutBuffer
 from esper.simic.tamiyo_network import FactoredRecurrentActorCritic
 from esper.simic.advantages import compute_per_head_advantages
+from esper.simic.debug_telemetry import RatioExplosionDiagnostic
 from esper.leyline import (
     DEFAULT_GAMMA,
     DEFAULT_EPISODE_LENGTH,
@@ -242,6 +243,9 @@ class PPOAgent:
             lstm_hidden_dim=lstm_hidden_dim,
             device=torch.device(device),
         )
+        # Ratio explosion thresholds (aligned with anomaly detector defaults)
+        self.ratio_explosion_threshold = 5.0
+        self.ratio_collapse_threshold = 0.1
 
         # [PyTorch 2.9] Compile network for 10-30% speedup on forward/backward
         # mode="default" is safest for networks with MaskedCategorical
@@ -502,6 +506,19 @@ class PPOAgent:
             metrics["ratio_mean"].append(joint_ratio.mean().item())
             metrics["ratio_max"].append(joint_ratio.max().item())
             metrics["ratio_min"].append(joint_ratio.min().item())
+            if (
+                joint_ratio.max() > self.ratio_explosion_threshold
+                or joint_ratio.min() < self.ratio_collapse_threshold
+            ):
+                diag = RatioExplosionDiagnostic.from_batch(
+                    ratio=joint_ratio.flatten(),
+                    old_log_probs=old_log_probs["op"].flatten(),
+                    new_log_probs=log_probs["op"].flatten(),
+                    actions=valid_op_actions.flatten(),
+                    max_threshold=self.ratio_explosion_threshold,
+                    min_threshold=self.ratio_collapse_threshold,
+                )
+                metrics.setdefault("ratio_diagnostic", []).append(diag.to_dict())
 
             # Compute approximate KL divergence using the log-ratio trick:
             # KL(old||new) ≈ E[(ratio - 1) - log(ratio)]
@@ -534,7 +551,16 @@ class PPOAgent:
         # Aggregate
         result = {}
         for k, v in metrics.items():
-            result[k] = sum(v) / len(v) if v else 0.0
+            if not v:
+                result[k] = 0.0
+                continue
+
+            first = v[0]
+            if isinstance(first, dict):
+                # Diagnostic payloads (ratio_diagnostic) are not aggregated
+                result[k] = first
+            else:
+                result[k] = sum(v) / len(v)
 
         return result
 

@@ -355,6 +355,19 @@ def test_run_ppo_updates_runs_multiple_updates_and_updates_normalizer_once():
     assert metrics["approx_kl"] == pytest.approx((0.01 + 0.02 + 0.03) / 3.0)
 
 
+def test_aggregate_ppo_metrics_handles_dict():
+    """Dict metrics (e.g., ratio diagnostics) should pass through aggregation."""
+    from esper.simic.vectorized import _aggregate_ppo_metrics
+
+    metrics = _aggregate_ppo_metrics([
+        {"ratio_max": 2.0, "ratio_diagnostic": {"worst": [1, 2]}},
+        {"ratio_max": 3.0, "ratio_diagnostic": {"worst": [3]}},
+    ])
+
+    assert metrics["ratio_max"] == 3.0
+    assert metrics["ratio_diagnostic"] == {"worst": [1, 2]}
+
+
 def test_run_ppo_updates_honors_target_kl_early_stop_and_clears_buffer():
     """Updates should stop when KL exceeds threshold and still clear the buffer."""
 
@@ -579,6 +592,7 @@ def test_emit_anomaly_diagnostics_collects_when_debug_enabled(monkeypatch):
         max_epochs=5,
         total_episodes=10,
         collect_debug=True,
+        ratio_diagnostic={"foo": "bar"},
     )
 
     assert grad_called["count"] == 1
@@ -586,3 +600,4 @@ def test_emit_anomaly_diagnostics_collects_when_debug_enabled(monkeypatch):
     data = hub.events[0].data
     assert "gradient_stats" in data
     assert "stability" in data
+    assert data["ratio_diagnostic"] == {"foo": "bar"}

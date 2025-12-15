@@ -889,6 +889,15 @@ class TUIOutput:
         # Update GPU stats if available
         self._update_system_stats()
 
+        # Reset per-env seed state for the next batch/episode
+        for env_state in self.state.env_states.values():
+            env_state.seeds.clear()
+            env_state.active_seed_count = 0
+            env_state.fossilized_count = 0
+            env_state.culled_count = 0
+            env_state.fossilized_params = 0
+        self.state.update_aggregate_seed_counts()
+
     # =========================================================================
     # Rendering
     # =========================================================================
