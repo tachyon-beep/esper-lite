@@ -267,30 +267,40 @@ def train_ppo_vectorized(
     from esper.tolaria import create_model
     from esper.tamiyo import SignalTracker
 
-    def _validate_devices(devices_to_check: list[str]) -> None:
-        """Fail fast on invalid CUDA device requests."""
-        if not devices_to_check:
-            return
+    def _parse_device(device_str: str) -> torch.device:
+        """Parse a device string with an actionable error on failure."""
+        try:
+            return torch.device(device_str)
+        except Exception as exc:  # pragma: no cover - torch raises varied exceptions
+            raise ValueError(f"Invalid device '{device_str}': {exc}") from exc
 
-        cuda_requested = [dev for dev in devices_to_check if dev.startswith("cuda")]
-        if not cuda_requested:
+    def _validate_cuda_device(
+        device_str: str, *, require_explicit_index: bool
+    ) -> None:
+        """Fail fast on invalid CUDA device requests."""
+        dev = _parse_device(device_str)
+        if dev.type != "cuda":
             return
 
         if not torch.cuda.is_available():
             raise RuntimeError(
-                f"CUDA device(s) {cuda_requested} requested but CUDA is not available. "
+                f"CUDA device '{device_str}' requested but CUDA is not available. "
                 "Use CPU devices or install CUDA drivers."
             )
 
+        if require_explicit_index and dev.index is None:
+            raise ValueError(
+                f"CUDA device '{device_str}' must include an explicit index like 'cuda:0'."
+            )
+
+        if dev.index is None:
+            return
+
         available = torch.cuda.device_count()
-        for dev in cuda_requested:
-            index = torch.device(dev).index
-            if index is None:
-                continue
-            if index >= available:
-                raise RuntimeError(
-                    f"CUDA device '{dev}' requested but only {available} device(s) are available."
-                )
+        if dev.index >= available:
+            raise RuntimeError(
+                f"CUDA device '{device_str}' requested but only {available} device(s) are available."
+            )
 
     if not slots:
         raise ValueError("slots parameter is required and cannot be empty")
@@ -302,31 +312,22 @@ def train_ppo_vectorized(
     if devices is None:
         devices = [device]
 
-    _validate_devices([device, *devices])
+    if not devices:
+        raise ValueError("devices must be a non-empty list")
+
+    # Policy device may be specified as "cuda" without an index, but env devices must be explicit.
+    _validate_cuda_device(device, require_explicit_index=False)
+    for env_device in devices:
+        _validate_cuda_device(env_device, require_explicit_index=True)
+
+    if len(devices) > n_envs:
+        raise ValueError(
+            f"n_envs={n_envs} must be >= len(devices)={len(devices)} so every requested device "
+            "runs at least one environment."
+        )
 
     task_spec = get_task_spec(task)
     ActionEnum = task_spec.action_enum
-
-    print("=" * 60)
-    print("PPO Vectorized Training (INVERTED CONTROL FLOW + CUDA STREAMS)")
-    print("=" * 60)
-    print(f"Task: {task_spec.name} (topology={task_spec.topology}, type={task_spec.task_type})")
-    print(f"Episodes: {n_episodes} (across {n_envs} parallel envs)")
-    print(f"Max epochs per episode: {max_epochs}")
-    print(f"Policy device: {device}")
-    print(f"Env devices: {devices} ({n_envs // len(devices)} envs per device)")
-    print(f"Random seed: {seed}")
-    if resume_path:
-        print(f"Resuming from: {resume_path}")
-    if entropy_anneal_episodes > 0:
-        print(f"Entropy annealing: {entropy_coef_start or entropy_coef} -> {entropy_coef_end or entropy_coef} over {entropy_anneal_episodes} episodes")
-    else:
-        print(f"Entropy coef: {entropy_coef} (fixed)")
-    print(f"Learning rate: {lr}")
-    print(f"Telemetry features: {'ENABLED' if use_telemetry else 'DISABLED'}")
-    if gpu_preload:
-        print(f"GPU preload: ENABLED (8x faster data loading)")
-    print()
 
     # Create reward config based on mode
     reward_mode_enum = RewardMode(reward_mode)
@@ -336,10 +337,94 @@ def train_ppo_vectorized(
         param_penalty_weight=param_penalty_weight,
         sparse_reward_scale=sparse_reward_scale,
     )
-    print(f"Reward mode: {reward_mode} (param_budget={param_budget}, penalty_weight={param_penalty_weight}, scale={sparse_reward_scale})")
 
     # Map environments to devices in round-robin (needed for SharedBatchIterator)
     env_device_map = [devices[i % len(devices)] for i in range(n_envs)]
+
+    # DataLoader settings (used for SharedBatchIterator + diagnostics).
+    batch_size_per_env = task_spec.dataloader_defaults.get("batch_size", 128)
+    if task_spec.name == "cifar10":
+        batch_size_per_env = 512  # High-throughput setting for CIFAR
+    effective_workers = num_workers if num_workers is not None else 4
+
+    # State dimension: 50 base features + (3 * 10) telemetry features when enabled
+    state_dim = MULTISLOT_FEATURE_SIZE + (SeedTelemetry.feature_dim() * 3 if use_telemetry else 0)
+
+    # Use EMA momentum for stable normalization during long training runs
+    # (prevents distribution shift that can break PPO ratio calculations)
+    obs_normalizer = RunningMeanStd((state_dim,), device=device, momentum=0.99)
+
+    # Reward normalizer for critic stability (prevents value loss explosion)
+    # Essential after ransomware fix where reward magnitudes changed significantly
+    reward_normalizer = RewardNormalizer(clip=10.0)
+
+    # Convert episode-based annealing to step-based
+    # Each batch of n_envs episodes = 1 PPO update step
+    entropy_anneal_steps = entropy_anneal_episodes // n_envs if entropy_anneal_episodes > 0 else 0
+
+    # ==========================================================================
+    # Blueprint Analytics + Nissa Hub Wiring
+    # ==========================================================================
+    hub = get_hub()
+    analytics = BlueprintAnalytics(quiet=quiet_analytics)
+    hub.add_backend(analytics)
+
+    # Mapping diagnostics: required for multi-GPU sign-off.
+    unique_env_devices = list(dict.fromkeys(devices))
+    env_device_counts = {dev: 0 for dev in unique_env_devices}
+    for mapped_device in env_device_map:
+        env_device_counts[mapped_device] += 1
+
+    entropy_anneal_summary = None
+    if entropy_anneal_episodes > 0:
+        entropy_anneal_summary = {
+            "start": entropy_coef_start or entropy_coef,
+            "end": entropy_coef_end or entropy_coef,
+            "episodes": entropy_anneal_episodes,
+            "steps": entropy_anneal_steps,
+        }
+
+    dataloader_summary = {
+        "mode": "gpu_preload" if gpu_preload else "shared_batch_iterator",
+        "batch_size_per_env": batch_size_per_env,
+        "num_workers": None if gpu_preload else effective_workers,
+        "pin_memory": not gpu_preload,
+    }
+
+    hub.emit(TelemetryEvent(
+        event_type=TelemetryEventType.TRAINING_STARTED,
+        message=(
+            f"PPO vectorized training initialized: policy_device={device}, "
+            f"env_device_counts={env_device_counts}"
+        ),
+        data={
+            "episode_id": f"ppo_{seed}_{n_episodes}ep",
+            "seed": seed,
+            "task": task,
+            "topology": task_spec.topology,
+            "task_type": task_spec.task_type,
+            "reward_mode": reward_mode,
+            "max_epochs": max_epochs,
+            "n_envs": n_envs,
+            "n_episodes": n_episodes,
+            "use_telemetry": use_telemetry,
+            "state_dim": state_dim,
+            "policy_device": device,
+            "env_devices": list(devices),
+            "env_device_counts": env_device_counts,
+            "env_device_map_strategy": "round_robin",
+            "resume_path": str(resume_path) if resume_path else None,
+            "lr": lr,
+            "clip_ratio": clip_ratio,
+            "entropy_coef": entropy_coef,
+            "entropy_anneal": entropy_anneal_summary,
+            "gpu_preload": gpu_preload,
+            "dataloader": dataloader_summary,
+            "param_budget": param_budget,
+            "param_penalty_weight": param_penalty_weight,
+            "sparse_reward_scale": sparse_reward_scale,
+        },
+    ))
 
     # Create SharedBatchIterator - single DataLoader serving all environments
     # This eliminates the N×M worker overhead from N independent DataLoaders
@@ -348,7 +433,6 @@ def train_ppo_vectorized(
         # Data is loaded once to GPU and reused across all environments
         # NOTE: GPU preload doesn't use SharedBatchIterator (data already on GPU)
         from esper.utils.data import load_cifar10_gpu
-        print(f"Preloading {task_spec.name} to GPU (one-time cost)...")
 
         def create_env_dataloaders(env_idx: int, base_seed: int):
             """Create GPU-resident DataLoaders."""
@@ -370,16 +454,8 @@ def train_ppo_vectorized(
     else:
         # SharedBatchIterator: Single DataLoader with combined batch size
         # Splits batches across environments and moves to correct devices
-        print(f"Loading {task_spec.name} (SharedBatchIterator, 1 DataLoader for {n_envs} envs)...")
-
         # Get raw datasets from task spec
         train_dataset, test_dataset = task_spec.get_datasets()
-
-        # Determine batch size and workers
-        batch_size_per_env = task_spec.dataloader_defaults.get("batch_size", 128)
-        if task_spec.name == "cifar10":
-            batch_size_per_env = 512  # High-throughput setting for CIFAR
-        effective_workers = num_workers if num_workers is not None else 4
 
         # Create generator for reproducible shuffling
         gen = torch.Generator()
@@ -430,20 +506,6 @@ def train_ppo_vectorized(
             total = targets.size(0)
         return loss, correct, total
 
-    # State dimension: 50 base features + (3 * 10) telemetry features when enabled
-    state_dim = MULTISLOT_FEATURE_SIZE + (SeedTelemetry.feature_dim() * 3 if use_telemetry else 0)
-    # Use EMA momentum for stable normalization during long training runs
-    # (prevents distribution shift that can break PPO ratio calculations)
-    obs_normalizer = RunningMeanStd((state_dim,), device=device, momentum=0.99)
-
-    # Reward normalizer for critic stability (prevents value loss explosion)
-    # Essential after ransomware fix where reward magnitudes changed significantly
-    reward_normalizer = RewardNormalizer(clip=10.0)
-
-    # Convert episode-based annealing to step-based
-    # Each batch of n_envs episodes = 1 PPO update step
-    entropy_anneal_steps = entropy_anneal_episodes // n_envs if entropy_anneal_episodes > 0 else 0
-
     # Create or resume PPO agent
     start_episode = 0
     if resume_path:
@@ -469,16 +531,15 @@ def train_ppo_vectorized(
             start_episode = metadata['n_episodes']
 
         # Emit telemetry for checkpoint resume
-        if hub:
-            hub.emit(TelemetryEvent(
-                event_type=TelemetryEventType.CHECKPOINT_LOADED,
-                message=f"Resumed from checkpoint: {resume_path}",
-                data={
-                    "path": str(resume_path),
-                    "start_episode": start_episode,
-                    "obs_normalizer_momentum": obs_normalizer.momentum if 'obs_normalizer_mean' in metadata else None,
-                },
-            ))
+        hub.emit(TelemetryEvent(
+            event_type=TelemetryEventType.CHECKPOINT_LOADED,
+            message=f"Resumed from checkpoint: {resume_path}",
+            data={
+                "path": str(resume_path),
+                "start_episode": start_episode,
+                "obs_normalizer_momentum": obs_normalizer.momentum if 'obs_normalizer_mean' in metadata else None,
+            },
+        ))
     else:
         agent = PPOAgent(
             state_dim=state_dim,
@@ -499,27 +560,6 @@ def train_ppo_vectorized(
             num_envs=n_envs,
             max_steps_per_env=max_epochs,
         )
-
-    # ==========================================================================
-    # Blueprint Analytics + Nissa Hub Wiring
-    # ==========================================================================
-    hub = get_hub()
-    analytics = BlueprintAnalytics(quiet=quiet_analytics)
-    hub.add_backend(analytics)
-
-    # Emit TRAINING_STARTED so Karn collector activates episode tracking
-    hub.emit(TelemetryEvent(
-        event_type=TelemetryEventType.TRAINING_STARTED,
-        data={
-            "episode_id": f"ppo_{seed}_{n_episodes}ep",
-            "seed": seed,
-            "task": task,
-            "reward_mode": reward_mode,
-            "max_epochs": max_epochs,
-            "n_envs": n_envs,
-            "n_episodes": n_episodes,
-        }
-    ))
 
     # Initialize anomaly detector for automatic diagnostics
     anomaly_detector = AnomalyDetector()
@@ -632,6 +672,11 @@ def train_ppo_vectorized(
             # Move data asynchronously
             inputs = inputs.to(env_dev, non_blocking=True)
             targets = targets.to(env_dev, non_blocking=True)
+            # SharedBatchIterator may have created these tensors on the device's default stream.
+            # record_stream prevents reuse/free while this env stream still consumes them.
+            if env_state.stream and inputs.is_cuda:
+                inputs.record_stream(env_state.stream)
+                targets.record_stream(env_state.stream)
 
             model.train()
 
@@ -753,6 +798,9 @@ def train_ppo_vectorized(
         with stream_ctx:
             inputs = inputs.to(env_dev, non_blocking=True)
             targets = targets.to(env_dev, non_blocking=True)
+            if env_state.stream and inputs.is_cuda:
+                inputs.record_stream(env_state.stream)
+                targets.record_stream(env_state.stream)
 
             model.eval()
             with torch.no_grad():
@@ -1804,14 +1852,29 @@ def train_ppo_vectorized(
 
             prev_rolling_avg_acc = rolling_avg_acc
 
-        # Print analytics summary every 5 episodes
-        if episodes_completed % 5 == 0 and len(analytics.stats) > 0:
-            print()
-            print(analytics.summary_table())
-            for env_idx in range(n_envs):
-                if env_idx in analytics.scoreboards:
-                    print(analytics.scoreboard_table(env_idx))
-            print()
+        # Emit periodic analytics table snapshots via telemetry (no print).
+        if not quiet_analytics and episodes_completed % 5 == 0 and len(analytics.stats) > 0:
+            summary_table = analytics.summary_table()
+            scoreboard_tables = {
+                env_idx: analytics.scoreboard_table(env_idx)
+                for env_idx in range(n_envs)
+                if env_idx in analytics.scoreboards
+            }
+            message = summary_table
+            if scoreboard_tables:
+                message = f"{summary_table}\n" + "\n".join(scoreboard_tables.values())
+
+            hub.emit(TelemetryEvent(
+                event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+                severity="info",
+                message=message,
+                data={
+                    "batch": batch_idx + 1,
+                    "episodes_completed": episodes_completed,
+                    "summary_table": summary_table,
+                    "scoreboard_tables": scoreboard_tables,
+                },
+            ))
 
         history.append({
             'batch': batch_idx + 1,

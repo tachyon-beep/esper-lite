@@ -100,6 +100,7 @@ class SeedState:
     blueprint_id: str | None = None
     alpha: float = 0.0
     accuracy_delta: float = 0.0
+    seed_params: int = 0
 
 
 def _make_sparkline_static(values: list[float], width: int = 8) -> str:
@@ -130,6 +131,7 @@ class EnvState:
     current_epoch: int = 0
     host_accuracy: float = 0.0
     host_loss: float = 0.0
+    host_params: int = 0
     seeds: dict[str, SeedState] = field(default_factory=dict)
     active_seed_count: int = 0
     fossilized_count: int = 0
@@ -159,6 +161,7 @@ class EnvState:
     status: str = "initializing"
     last_update: datetime | None = None
     epochs_since_improvement: int = 0
+    fossilized_params: int = 0
 
     @property
     def current_reward(self) -> float:
@@ -233,6 +236,15 @@ class EnvState:
             self.status = "excellent"
         elif self.current_epoch > 0:
             self.status = "healthy"
+
+    @property
+    def total_seed_params(self) -> int:
+        """Approximate total seed params (active + fossilized)."""
+        total = self.fossilized_params
+        for seed in self.seeds.values():
+            if seed.stage not in ("CULLED", "DORMANT"):
+                total += seed.seed_params
+        return total
 
 
 @dataclass
@@ -819,16 +831,20 @@ class TUIOutput:
         if event_type == "SEED_GERMINATED":
             seed.stage = "GERMINATED"
             seed.blueprint_id = data.get("blueprint_id")
+            seed.seed_params = data.get("params", seed.seed_params)
             env_state.active_seed_count += 1
         elif event_type == "SEED_STAGE_CHANGED":
             seed.stage = data.get("to", seed.stage)
             seed.alpha = data.get("alpha", seed.alpha)
         elif event_type == "SEED_FOSSILIZED":
             seed.stage = "FOSSILIZED"
+            # params_added moves into host; keep count for total params estimate
+            env_state.fossilized_params += int(data.get("params_added", 0) or 0)
             env_state.fossilized_count += 1
             env_state.active_seed_count = max(0, env_state.active_seed_count - 1)
         elif event_type == "SEED_CULLED":
             seed.stage = "CULLED"
+            seed.seed_params = 0
             env_state.culled_count += 1
             env_state.active_seed_count = max(0, env_state.active_seed_count - 1)
 
@@ -885,27 +901,15 @@ class TUIOutput:
         """
         layout = Layout()
 
-        # Determine if we need env overview panel (multi-env mode)
-        show_env_overview = self.state.n_envs > 1
-
-        if show_env_overview:
-            # Multi-env layout with env overview
-            layout.split_column(
-                Layout(name="header", size=3),
-                Layout(name="env_overview", size=8),  # NEW: Env overview table
-                Layout(name="main", ratio=1),
-                Layout(name="bottom", size=12),
-                Layout(name="footer", size=3),
-            )
-            layout["env_overview"].update(self._render_env_overview())
-        else:
-            # Single-env layout (original)
-            layout.split_column(
-                Layout(name="header", size=3),
-                Layout(name="main", ratio=1),
-                Layout(name="bottom", size=12),
-                Layout(name="footer", size=3),
-            )
+        # Unified layout with env cards always visible
+        layout.split_column(
+            Layout(name="header", size=3),
+            Layout(name="env_cards", ratio=2),
+            Layout(name="main", size=4),
+            Layout(name="bottom", ratio=2),
+            Layout(name="footer", size=2),
+        )
+        layout["env_cards"].update(self._render_env_cards())
 
         # Split bottom into event log (left) and performance stats (right)
         layout["bottom"].split_row(
@@ -913,27 +917,11 @@ class TUIOutput:
             Layout(name="perf_stats", ratio=1),
         )
 
-        # Split main into two columns
-        layout["main"].split_row(
-            Layout(name="left", ratio=1),
-            Layout(name="right", ratio=1),
-        )
-
-        # Left column: per-env rewards, seeds, reward components
-        layout["left"].split_column(
-            Layout(name="env_rewards", ratio=1),
-            Layout(name="seeds", ratio=1),
-            Layout(name="reward_components", ratio=1),
-        )
-
-        # Right column: combined policy stats panel (actions + health + losses + rewards)
-        layout["right"].update(self._render_policy_stats())
+        # Main: combined policy stats panel (actions + health + losses + rewards)
+        layout["main"].update(self._render_policy_stats())
 
         # Render each section
         layout["header"].update(self._render_header())
-        layout["env_rewards"].update(self._render_env_rewards())
-        layout["seeds"].update(self._render_seeds())
-        layout["reward_components"].update(self._render_reward_components())
         layout["event_log"].update(self._render_event_log(max_lines=8))
         layout["perf_stats"].update(self._render_performance())
         layout["footer"].update(self._render_footer())
@@ -942,14 +930,11 @@ class TUIOutput:
 
     def _render_header(self) -> Panel:
         """Render the header with episode info and multi-env summary."""
-        step = max((e.current_epoch for e in self.state.env_states.values()), default=0)
         text = Text()
         text.append(f"Episode: ", style="dim")
         text.append(f"{self.state.current_episode}", style="bold cyan")
         text.append(f"  |  Batches: ", style="dim")
         text.append(f"{self.state.batches_completed}", style="bold cyan")
-        text.append(f"  |  Step: ", style="dim")
-        text.append(f"{step}/{self.state.max_epochs}", style="bold cyan")
         text.append(f"  |  Best Acc: ", style="dim")
         text.append(f"{self.state.best_accuracy:.1f}%", style="bold green")
         text.append(f" (ep {self.state.best_accuracy_episode})", style="dim")
@@ -1096,93 +1081,116 @@ class TUIOutput:
                 _fmt_warning(warn_total if warn_any else None),
             )
 
-        return Panel(table, title="[bold]ENV REWARDS[/bold]", border_style="cyan")
+    def _render_env_cards(self) -> Panel:
+        """Render compact cards for all environments with per-slot telemetry."""
+        if not self.state.env_states:
+            return Panel(Text("Waiting for telemetry…", style="dim"), title="[bold]ENV CARDS[/bold]", border_style="cyan")
 
-    # Stage name abbreviations for compact multi-env display
-    _STAGE_ABBREV: dict[str, str] = {
-        "GERMINATED": "Germ",
-        "TRAINING": "Train",
-        "BLENDING": "Blend",
-        "PROBATIONARY": "Prob",
-        "FOSSILIZED": "Fossil",
-        "RESETTING": "Reset",
-        "EMBARGOED": "Embg",
-    }
+        cards = []
+        for env_id in sorted(self.state.env_states.keys()):
+            env = self.state.env_states[env_id]
 
-    def _render_single_env_seeds(self, env_state: EnvState) -> Table:
-        """Render seed state table for a single environment."""
-        table = Table(show_header=False, box=None, padding=(0, 0), expand=True)
-        table.add_column("Info", style="dim", ratio=1)
-        table.add_column("Value", justify="right", ratio=1)
+            # Compact table: summary row with slots rendered horizontally
+            table = Table(show_header=True, box=None, padding=(0, 0), expand=True)
+            table.add_column("Row", style="dim", width=5)
+            table.add_column("Reward", justify="right", width=9)
+            table.add_column("Acc", justify="right", width=8)
+            table.add_column("Seeds/Params", justify="right", width=14)
+            table.add_column("Rent", justify="right", width=6)
+            table.add_column("", width=1)
+            table.add_column("Early", justify="left", width=12)
+            table.add_column("Mid", justify="left", width=12)
+            table.add_column("Late", justify="left", width=12)
+            table.add_column("Last / Status", justify="left", width=16)
 
-        # Count stages
-        stage_counts: dict[str, int] = {}
-        for seed in env_state.seeds.values():
-            stage_counts[seed.stage] = stage_counts.get(seed.stage, 0) + 1
+            reward = env.current_reward
+            base = env.reward_components.get("base_acc_delta")
+            rent = env.reward_components.get("compute_rent")
+            penalty = env.reward_components.get("ratio_penalty")
+            params = getattr(env, "host_params", None)
+            last_action = env.action_history[-1] if env.action_history else "—"
+            seeds_summary = f"A:{env.active_seed_count} F:{env.fossilized_count} C:{env.culled_count}"
+            growth_ratio = env.reward_components.get("growth_ratio")
 
-        # Compact stage display with readable abbreviations
-        for stage, count in sorted(stage_counts.items()):
-            if stage not in ("DORMANT", "CULLED"):
-                marker = self._get_stage_marker(stage)
-                abbrev = self._STAGE_ABBREV.get(stage, stage[:5])
-                table.add_row(f"{marker}{abbrev}", f"{count}")
+            # Estimate total params if host_params absent using growth_ratio + seed params
+            total_params_display = None
+            if isinstance(params, int) and params > 0:
+                total_params_display = params + env.total_seed_params
+            elif isinstance(growth_ratio, (int, float)) and growth_ratio > 1.0 and env.total_seed_params > 0:
+                host_est = int(env.total_seed_params / (growth_ratio - 1))
+                env.host_params = host_est
+                total_params_display = host_est + env.total_seed_params
 
-        table.add_row("Fossil", f"{env_state.fossilized_count}")
-        table.add_row("Culled", f"{env_state.culled_count}")
+            def _slot_summary(slot_name: str) -> str:
+                seed = env.seeds.get(slot_name)
+                if seed:
+                    stage_cell = self._format_slot_cell(env, slot_name)
+                    alpha = f"{seed.alpha:.2f}"
+                    contrib = f"{seed.accuracy_delta:+.2f}"
+                    grad_ratio = getattr(seed, "grad_ratio", None)
+                    grad = f"{grad_ratio:+.2f}" if isinstance(grad_ratio, (int, float)) else "─"
+                    return f"{stage_cell} α={alpha} Δ={contrib} g={grad}"
+                return "[dim]─[/dim]"
 
-        return table
+            table.add_row(
+                "Env",
+                f"{reward:+.2f}",
+                f"{env.host_accuracy:.1f}%",
+                seeds_summary,
+                f"{float(rent):+.2f}" if isinstance(rent, (int, float)) else "─",
+                "",
+                _slot_summary("early"),
+                _slot_summary("mid"),
+                _slot_summary("late"),
+                last_action,
+            )
 
-    def _render_seeds(self) -> Panel:
-        """Render the seed state panel with per-env breakdown."""
-        n_envs = max(1, self.state.n_envs)
+            # Secondary stats row within the same card to avoid extra tables
+            best_reward = env.best_reward if env.reward_history else 0.0
+            mean_reward = env.mean_reward
+            reward_spark = env.reward_sparkline
+            acc_spark = env.accuracy_sparkline
+            status_style = {
+                "excellent": "bold green",
+                "healthy": "green",
+                "stalled": "yellow",
+                "degraded": "red",
+                "initializing": "dim",
+            }.get(env.status, "white")
 
-        if n_envs == 1:
-            # Single env: simple layout
-            env_state = self.state.get_or_create_env(0)
-            table = Table(show_header=False, box=None, padding=(0, 1))
-            table.add_column("Info", style="dim")
-            table.add_column("Value", justify="right")
+            penalty_str = f"{float(penalty):+.2f}" if isinstance(penalty, (int, float)) else "─"
 
-            table.add_row("Active:", f"{self.state.active_seed_count} seeds")
+            table.add_row(
+                "Stats",
+                f"{mean_reward:+.2f}/{best_reward:+.2f}",
+                f"best {env.best_accuracy:.1f}%",
+                f"{total_params_display:,}" if isinstance(total_params_display, (int, float)) else seeds_summary,
+                penalty_str,
+                "",
+                f"Rwd {reward_spark}",
+                f"Acc {acc_spark}",
+                f"[{status_style}]{env.status.upper()}[/{status_style}]",
+                Text(last_action, style="dim"),
+            )
 
-            stage_counts: dict[str, int] = {}
-            for seed in env_state.seeds.values():
-                stage_counts[seed.stage] = stage_counts.get(seed.stage, 0) + 1
+            header = Text()
+            header.append(f"Env {env_id}  ", style="bold cyan")
+            header.append(f"Acc {env.host_accuracy:.1f}%", style="green" if env.host_accuracy >= env.best_accuracy else "yellow")
 
-            for stage, count in sorted(stage_counts.items()):
-                if stage not in ("DORMANT", "CULLED"):
-                    marker = self._get_stage_marker(stage)
-                    table.add_row(f"  {marker} {stage}", f"({count})")
+            cards.append(Panel(table, title=header, border_style="cyan"))
 
-            table.add_row("Fossilized:", f"{self.state.fossilized_count}")
-            table.add_row("Culled:", f"{self.state.culled_count}")
+        return Panel(Group(*cards), title="[bold]ENV CARDS[/bold]", border_style="cyan")
 
-            return Panel(table, title="[bold]SEED STATE[/bold]", border_style="cyan")
-
-        # Multi-env: per-env columns
-        main_table = Table(show_header=True, box=None, padding=(0, 1), expand=True)
-
-        # Add header columns for each env
-        for i in range(n_envs):
-            main_table.add_column(f"Env{i}", justify="center", style="cyan")
-
-        # Build rows by collecting data from each env
-        env_tables = [
-            self._render_single_env_seeds(self.state.get_or_create_env(i))
-            for i in range(n_envs)
-        ]
-
-        main_table.add_row(*env_tables)
-
-        # Add aggregate totals
-        agg_text = Text()
-        agg_text.append(f"Total: ", style="dim")
-        agg_text.append(f"{self.state.active_seed_count}A ", style="green")
-        agg_text.append(f"{self.state.fossilized_count}F ", style="blue")
-        agg_text.append(f"{self.state.culled_count}C", style="red")
-
-        content = Group(main_table, agg_text)
-        return Panel(content, title="[bold]SEED STATE[/bold]", border_style="cyan")
+        # Stage name abbreviations for compact multi-env display
+        _STAGE_ABBREV: dict[str, str] = {
+            "GERMINATED": "Germ",
+            "TRAINING": "Train",
+            "BLENDING": "Blend",
+            "PROBATIONARY": "Prob",
+            "FOSSILIZED": "Fossil",
+            "RESETTING": "Reset",
+            "EMBARGOED": "Embg",
+        }
 
     def _render_actions_table(self) -> Table:
         """Render action distribution as a table (for combined panel)."""
@@ -1258,22 +1266,84 @@ class TUIOutput:
         return table
 
     def _render_policy_stats(self) -> Panel:
-        """Render combined policy stats panel with rewards summary."""
-        # Create outer table with sub-columns
-        outer = Table(show_header=True, box=None, padding=(0, 1), expand=True)
-        outer.add_column("[bold]Actions[/bold]", justify="center", ratio=1)
-        outer.add_column("[bold]Policy Health[/bold]", justify="center", ratio=1)
-        outer.add_column("[bold]Losses[/bold]", justify="center", ratio=1)
-        outer.add_column("[bold]Rewards[/bold]", justify="center", ratio=1)
+        """Render a compact policy stats strip with minimal height."""
+        table = Table(show_header=False, box=None, padding=(0, 0), expand=True)
+        table.add_column("Actions", ratio=2)
+        table.add_column("Health", ratio=2)
+        table.add_column("Losses", ratio=2)
+        table.add_column("Rewards", ratio=2)
 
-        outer.add_row(
-            self._render_actions_table(),
-            self._render_policy_health_table(),
-            self._render_losses_table(),
-            self._render_rewards_table(),
+        # Actions mix as a single line
+        percentages = self.state.get_action_percentages()
+        action_parts = []
+        for action, pct in sorted(percentages.items(), key=lambda x: -x[1]):
+            action_short = {
+                "WAIT": "W",
+                "GERMINATE": "G",
+                "CULL": "C",
+                "FOSSILIZE": "F",
+            }.get(action, action[:1])
+            style = {
+                "WAIT": "dim",
+                "GERMINATE": "green",
+                "CULL": "red",
+                "FOSSILIZE": "blue",
+            }.get(action, "white")
+            action_parts.append(f"[{style}]{action_short}{pct:.0f}%[/{style}]")
+        actions_line = " ".join(action_parts) if action_parts else "─"
+
+        # Health metrics inline
+        entropy_status = self._get_entropy_status(self.state.entropy)
+        clip_status = self._get_clip_status(self.state.clip_fraction)
+        kl_status = self._get_kl_status(self.state.kl_divergence)
+        ev_status = self._get_explained_var_status(self.state.explained_variance)
+        health_line = " ".join(
+            [
+                f"H {self.state.entropy:.2f}{self._status_text(entropy_status)}",
+                f"Clip {self.state.clip_fraction:.2f}{self._status_text(clip_status)}",
+                f"KL {self.state.kl_divergence:.3f}{self._status_text(kl_status)}",
+                f"EV {self.state.explained_variance:.2f}{self._status_text(ev_status)}",
+            ]
         )
 
-        return Panel(outer, title="[bold]POLICY STATS[/bold]", border_style="cyan")
+        # Losses inline
+        grad_status = self._get_grad_norm_status(self.state.grad_norm)
+        grad_style = {
+            HealthStatus.OK: "green",
+            HealthStatus.WARNING: "yellow",
+            HealthStatus.CRITICAL: "red bold",
+        }[grad_status]
+        losses_line = " ".join(
+            [
+                f"P{self.state.policy_loss:.3f}",
+                f"V{self.state.value_loss:.3f}",
+                f"E{self.state.entropy_loss:.3f}",
+                f"G[{grad_style}]{self.state.grad_norm:.2f}[/]",
+            ]
+        )
+
+        # Rewards inline
+        mean = self.state.mean_reward_100
+        std = self.state.std_reward_100
+        rewards_line = " ".join(
+            [
+                f"Cur {self.state.current_reward:+.2f}",
+                f"Mean100 {mean:+.2f}",
+                f"Std {std:.2f}",
+                f"Best {self.state.best_reward:+.2f} (ep {self.state.best_episode})",
+            ]
+        )
+
+        table.add_row(actions_line, health_line, losses_line, rewards_line)
+
+        # Wrap in a tight panel to keep a small footprint
+        return Panel(
+            table,
+            title="[bold]POLICY STATS[/bold]",
+            border_style="cyan",
+            padding=(0, 0),
+            expand=True,
+        )
 
     def _render_reward_components(self) -> Panel:
         """Render the reward components breakdown for the focused environment."""
@@ -1415,12 +1485,12 @@ class TUIOutput:
     # Stage color mapping for slot display
     _STAGE_STYLES: dict[str, str] = {
         "DORMANT": "dim",
-        "GERMINATED": "cyan",
+        "GERMINATED": "bright_cyan",
         "TRAINING": "yellow",
         "BLENDING": "magenta",
-        "PROBATIONARY": "blue",
-        "FOSSILIZED": "green",
-        "CULLED": "red dim",
+        "PROBATIONARY": "bright_blue",
+        "FOSSILIZED": "bright_green",
+        "CULLED": "red",
         "RESETTING": "dim",
         "EMBARGOED": "red",
     }
