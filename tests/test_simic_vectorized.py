@@ -529,3 +529,60 @@ def test_emit_anomaly_diagnostics_skips_debug_when_disabled(monkeypatch):
     data = hub.events[0].data
     assert "gradient_stats" not in data
     assert "stability" not in data
+
+
+def test_emit_anomaly_diagnostics_collects_when_debug_enabled(monkeypatch):
+    """Expensive diagnostics are emitted only when debug collection is enabled."""
+
+    class _StubHub:
+        def __init__(self):
+            self.events = []
+
+        def emit(self, event):
+            self.events.append(event)
+
+    class _StubAgent:
+        class _Net:
+            pass
+        def __init__(self):
+            self.network = self._Net()
+
+    grad_called = {"count": 0}
+    stability_called = {"count": 0}
+
+    def _gradients(_):
+        grad_called["count"] += 1
+        class _GS:
+            def to_dict(self):
+                return {"g": 1}
+        return [_GS()]
+
+    def _stability(_):
+        stability_called["count"] += 1
+        class _S:
+            def to_dict(self):
+                return {"stable": True}
+        return _S()
+
+    monkeypatch.setattr("esper.simic.vectorized.collect_per_layer_gradients", _gradients)
+    monkeypatch.setattr("esper.simic.vectorized.check_numerical_stability", _stability)
+
+    hub = _StubHub()
+    anomaly_report = AnomalyReport(has_anomaly=True, anomaly_types=["ratio_explosion"])
+
+    _emit_anomaly_diagnostics(
+        hub=hub,
+        anomaly_report=anomaly_report,
+        agent=_StubAgent(),
+        batch_epoch_id=2,
+        batch_idx=0,
+        max_epochs=5,
+        total_episodes=10,
+        collect_debug=True,
+    )
+
+    assert grad_called["count"] == 1
+    assert stability_called["count"] == 1
+    data = hub.events[0].data
+    assert "gradient_stats" in data
+    assert "stability" in data

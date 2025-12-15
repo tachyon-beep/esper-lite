@@ -735,7 +735,9 @@ def train_ppo_vectorized(
 
         model = create_model(task=task_spec, device=env_device, slots=slots)
 
-        telemetry_enabled = use_telemetry and telemetry_config is not None and telemetry_config.should_collect("ops_normal")
+        telemetry_enabled = use_telemetry and (
+            telemetry_config is None or telemetry_config.should_collect("ops_normal")
+        )
         telemetry_cb = make_telemetry_callback(env_idx) if telemetry_enabled else None
         for slot in model.seed_slots.values():
             slot.on_telemetry = telemetry_cb
@@ -1795,7 +1797,7 @@ def train_ppo_vectorized(
             # === Anomaly Detection ===
             # Use check_all() for comprehensive anomaly detection
             metric_values = [v for v in metrics.values() if isinstance(v, (int, float))]
-            has_nan = any(not math.isfinite(v) for v in metric_values)
+            has_nan = any(math.isnan(v) for v in metric_values)
             has_inf = any(math.isinf(v) for v in metric_values)
 
             anomaly_report = anomaly_detector.check_all(
@@ -1809,7 +1811,9 @@ def train_ppo_vectorized(
             )
 
             collect_debug_anomaly = (
-                telemetry_config is None or telemetry_config.should_collect("debug")
+                telemetry_config is not None
+                and telemetry_config.should_collect("debug")
+                and telemetry_config.per_layer_gradients
             )
             _emit_anomaly_diagnostics(
                 hub=hub,

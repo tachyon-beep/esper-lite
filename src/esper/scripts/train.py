@@ -301,7 +301,7 @@ def main():
             )
 
         elif args.algorithm == "ppo":
-            use_telemetry = not args.no_telemetry
+            use_telemetry = (not args.no_telemetry) and telemetry_config.level != TelemetryLevel.OFF
             from esper.simic.vectorized import train_ppo_vectorized
             train_ppo_vectorized(
                 n_episodes=args.episodes,
