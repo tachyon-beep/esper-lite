@@ -628,10 +628,10 @@ class TUIOutput:
             max_epochs = data.get("max_epochs", "?")
             msg = f"task={task} epochs={max_epochs}"
         elif event_type == "BATCH_COMPLETED":
-            batch_idx = data.get("batch_idx", data.get("batch", "?"))
+            batch_idx = data.get("batch_idx", "?")
             episodes = data.get("episodes_completed", "?")
             total = data.get("total_episodes", "?")
-            rolling_acc = data.get("rolling_accuracy", data.get("rolling_avg_accuracy", data.get("avg_accuracy")))
+            rolling_acc = data.get("rolling_accuracy")
             avg_reward = data.get("avg_reward")
 
             parts = [f"batch={batch_idx}", f"ep={episodes}/{total}"]
@@ -859,7 +859,7 @@ class TUIOutput:
         self.state.batches_completed += 1
 
         # Track best accuracy across all envs
-        current_acc = data.get("rolling_accuracy", data.get("rolling_avg_accuracy", data.get("avg_accuracy", 0.0)))
+        current_acc = data.get("rolling_accuracy", 0.0)
         self.state.host_accuracy = current_acc
         if current_acc > self.state.best_accuracy:
             self.state.best_accuracy = current_acc
