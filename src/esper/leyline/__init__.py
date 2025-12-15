@@ -292,11 +292,8 @@ from esper.leyline.stages import (
     is_failure_stage,
 )
 
-# Signals (hot path)
+# Signals
 from esper.leyline.signals import (
-    TensorSchema,
-    TENSOR_SCHEMA_SIZE,
-    FastTrainingSignals,
     TrainingMetrics,
     TrainingSignals,
 )
@@ -425,9 +422,6 @@ __all__ = [
     "is_failure_stage",
 
     # Signals
-    "TensorSchema",
-    "TENSOR_SCHEMA_SIZE",
-    "FastTrainingSignals",
     "TrainingMetrics",
     "TrainingSignals",
 
