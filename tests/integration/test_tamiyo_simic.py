@@ -18,12 +18,9 @@ from torch.utils.data import TensorDataset, DataLoader
 from esper.tamiyo.tracker import SignalTracker
 from esper.tamiyo.heuristic import HeuristicTamiyo, HeuristicPolicyConfig
 from esper.kasmina import MorphogeneticModel
-from esper.kasmina.slot import SeedSlot, SeedState
-from esper.kasmina.protocol import HostProtocol
 from esper.leyline import (
     SeedStage,
     TrainingSignals,
-    build_action_enum,
 )
 from esper.tolaria.trainer import train_epoch_normal, validate_and_get_metrics
 
@@ -383,12 +380,7 @@ class TestSeedMetricsTrackedDuringTraining:
         seed_state = model.seed_slots["mid"].state
         seed_state.transition(SeedStage.TRAINING)
 
-        # Create seed optimizer
-        seed_params = [p for p in model.seed_slots["mid"].seed.parameters() if p.requires_grad]
-        seed_optimizer = torch.optim.Adam(seed_params, lr=0.01) if seed_params else None
-
         # Capture initial metrics
-        initial_improvement = seed_state.metrics.improvement_since_stage_start
         initial_epochs_in_stage = seed_state.epochs_in_stage
 
         # Run training epoch
@@ -519,7 +511,6 @@ class TestEndToEndGerminateToFossilize:
             topology="cnn",
         )
 
-        seed_optimizer = None
         seed_created = False
         seed_fossilized = False
 
@@ -570,8 +561,6 @@ class TestEndToEndGerminateToFossilize:
                     blueprint_id=decision.blueprint_id,
                     seed_id=f"seed_{epoch}",
                 )
-                seed_params = [p for p in model.seed_slots["mid"].seed.parameters() if p.requires_grad]
-                seed_optimizer = torch.optim.Adam(seed_params, lr=0.01) if seed_params else None
                 seed_created = True
 
             elif decision.action.name == "FOSSILIZE":  # FOSSILIZE

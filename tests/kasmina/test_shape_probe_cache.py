@@ -4,7 +4,6 @@ The SeedSlot uses a simple dict cache for shape probes, keyed by topology
 ("cnn" or "transformer"). Each entry stores (device, tensor) to detect
 when the slot moves to a different device and needs to regenerate probes.
 """
-import pytest
 import torch
 
 from esper.kasmina.slot import SeedSlot, CNN_SHAPE_PROBE_SPATIAL, TRANSFORMER_SHAPE_PROBE_SEQ_LEN

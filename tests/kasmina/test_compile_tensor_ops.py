@@ -1,5 +1,4 @@
 """Test that tensor operations are torch.compile compatible."""
-import pytest
 import torch
 
 from esper.kasmina.isolation import blend_with_isolation, ste_forward

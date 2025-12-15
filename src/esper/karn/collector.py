@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import uuid4
 
@@ -26,12 +25,9 @@ from esper.karn.store import (
     EpisodeContext,
     EpochSnapshot,
     SlotSnapshot,
-    HostSnapshot,
     PolicySnapshot,
-    DenseTrace,
     DenseTraceTrigger,
     SeedStage,
-    BatchMetrics,
 )
 from esper.karn.triggers import AnomalyDetector, PolicyAnomalyDetector
 
@@ -237,7 +233,7 @@ class KarnCollector:
 
         # Start new trace if anomaly detected and not already capturing
         if trigger_reason and not self._anomaly_detector.is_capturing:
-            trace = self._anomaly_detector.start_trace(snapshot.epoch, trigger_reason)
+            self._anomaly_detector.start_trace(snapshot.epoch, trigger_reason)
             _logger.info(f"Dense trace triggered at epoch {snapshot.epoch}: {trigger_reason}")
 
         # Finalize trace if window ended
@@ -356,7 +352,7 @@ class KarnCollector:
 
         # Trigger dense trace if not already capturing
         if not self._anomaly_detector.is_capturing:
-            trace = self._anomaly_detector.start_trace(epoch, event_type)
+            self._anomaly_detector.start_trace(epoch, event_type)
             _logger.info(f"Dense trace triggered by {event_type} at epoch {epoch}")
 
     def _handle_backend_error(self, backend: OutputBackend, error: Exception) -> None:

@@ -230,7 +230,6 @@ class TestMultipleActiveSeedsHandling:
         self, mock_signals_factory, mock_seed_factory
     ):
         """Policy should only consider first seed in list."""
-        from esper.leyline import SeedStage
 
         policy = HeuristicTamiyo(topology="cnn")
 
@@ -258,7 +257,6 @@ class TestMultipleActiveSeedsHandling:
 
     def test_tracker_summary_seed_selection_is_deterministic(self, signal_tracker, mock_seed_factory):
         """Tracker should select a deterministic summary seed from multiple slots."""
-        from esper.leyline import SeedStage
 
         seed1 = mock_seed_factory(
             seed_id="first",
@@ -291,7 +289,6 @@ class TestMultipleActiveSeedsHandling:
 
     def test_tracker_summary_seed_tiebreaks_on_alpha(self, signal_tracker, mock_seed_factory) -> None:
         """When stages tie, higher alpha wins for summary seed selection."""
-        from esper.leyline import SeedStage
 
         seed_low_alpha = mock_seed_factory(
             seed_id="low_alpha",
@@ -325,7 +322,6 @@ class TestMultipleActiveSeedsHandling:
 
     def test_tracker_summary_seed_tiebreaks_on_counterfactual(self, signal_tracker, mock_seed_factory) -> None:
         """When stage+alpha tie, most negative counterfactual wins (safety)."""
-        from esper.leyline import SeedStage
 
         seed_hurting_more = mock_seed_factory(
             seed_id="hurt_more",
@@ -366,7 +362,6 @@ class TestTerminalStageFiltering:
 
     def test_fossilized_seeds_filtered(self, mock_signals_factory, mock_seed_factory):
         """FOSSILIZED seeds should be filtered out as terminal."""
-        from esper.leyline import SeedStage
 
         policy = HeuristicTamiyo(topology="cnn")
 
@@ -388,7 +383,6 @@ class TestTerminalStageFiltering:
 
     def test_culled_seeds_filtered(self, mock_signals_factory, mock_seed_factory):
         """CULLED seeds should be filtered out as failure stage."""
-        from esper.leyline import SeedStage
 
         policy = HeuristicTamiyo(topology="cnn")
 
@@ -412,7 +406,6 @@ class TestTerminalStageFiltering:
         self, mock_signals_factory, mock_seed_factory
     ):
         """Should filter out terminal but consider active seeds."""
-        from esper.leyline import SeedStage
 
         policy = HeuristicTamiyo(topology="cnn")
 
@@ -496,7 +489,6 @@ class TestConfigEdgeValues:
 
     def test_embargo_zero_no_blocking(self, mock_signals_factory, mock_seed_factory):
         """embargo=0 should not block germination."""
-        from esper.leyline import SeedStage
 
         config = HeuristicPolicyConfig(
             embargo_epochs_after_cull=0,  # No embargo
@@ -568,7 +560,6 @@ class TestConfigEdgeValues:
         self, mock_signals_factory, mock_seed_factory
     ):
         """cull_if_accuracy_drops_by=0 should cull on any negative improvement."""
-        from esper.leyline import SeedStage
 
         config = HeuristicPolicyConfig(
             cull_if_accuracy_drops_by=0.0,  # Cull on any drop

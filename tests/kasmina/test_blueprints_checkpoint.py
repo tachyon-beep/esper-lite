@@ -1,5 +1,4 @@
 """Test activation checkpointing for large seeds."""
-import pytest
 import torch
 
 from esper.kasmina.blueprints.registry import BlueprintRegistry

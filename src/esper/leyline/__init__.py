@@ -8,6 +8,8 @@ Example:
     from esper.leyline.factored_actions import FactoredAction, LifecycleOp
 """
 
+# ruff: noqa: E402  # Imports intentionally follow constant definitions for clarity
+
 # Version
 LEYLINE_VERSION = "0.2.0"
 

@@ -22,7 +22,6 @@ from abc import ABC, abstractmethod
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 from esper.leyline import TelemetryEvent
 

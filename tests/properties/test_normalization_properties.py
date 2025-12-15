@@ -9,7 +9,6 @@ The actual RunningMeanStd API:
 """
 
 import math
-import pytest
 import torch
 from hypothesis import given, assume, settings
 from hypothesis import strategies as st

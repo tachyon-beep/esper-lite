@@ -4,11 +4,13 @@ This file is automatically loaded by pytest and provides fixtures
 accessible to all tests.
 """
 
-import pytest
+import os
 import json
-import torch
 from pathlib import Path
-from hypothesis import settings, HealthCheck
+
+import pytest
+import torch
+from hypothesis import HealthCheck, settings
 
 # =============================================================================
 # Hypothesis Configuration
@@ -69,7 +71,6 @@ settings.register_profile(
 )
 
 # Load profile based on environment variable
-import os
 settings.load_profile(os.getenv("HYPOTHESIS_PROFILE", "dev"))
 
 # =============================================================================

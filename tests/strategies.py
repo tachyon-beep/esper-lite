@@ -321,7 +321,6 @@ __all__ = [
     "seed_telemetries",
     "training_metrics",
     "training_signals",
-    "training_snapshots",
     # Simic
     "action_members",
     "seed_infos",

@@ -1,8 +1,6 @@
 """Test G2 gate gradient-based seed readiness."""
-import pytest
-import torch
 
-from esper.kasmina.slot import SeedSlot, SeedState, SeedMetrics, QualityGates
+from esper.kasmina.slot import SeedState, SeedMetrics, QualityGates
 from esper.leyline import SeedStage
 
 

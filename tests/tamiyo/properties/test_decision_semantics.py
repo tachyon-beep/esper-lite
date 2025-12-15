@@ -14,7 +14,7 @@ These properties ensure the decision logic is semantically sound and complete.
 from __future__ import annotations
 
 import pytest
-from hypothesis import given, settings, HealthCheck, assume
+from hypothesis import given, settings, HealthCheck
 from hypothesis import strategies as st
 
 from esper.leyline import SeedStage
@@ -27,15 +27,11 @@ from tests.tamiyo.strategies import (
     mock_seed_states,
     mock_seed_states_at_stage,
     mock_training_signals,
-    germination_contexts,
-    fossilization_contexts,
-    cull_contexts,
 )
 from tests.tamiyo.strategies.decision_strategies import (
     failing_seed_states,
     succeeding_seed_states,
     probationary_seed_states,
-    stabilized_signals,
     unstabilized_signals,
     plateau_signals,
     early_training_signals,

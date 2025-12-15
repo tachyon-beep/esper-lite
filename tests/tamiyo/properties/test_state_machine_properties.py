@@ -13,25 +13,20 @@ hold at every step, catching edge cases that single-input tests miss.
 from __future__ import annotations
 
 import pytest
-from hypothesis import settings, HealthCheck
 from hypothesis import strategies as st
 from hypothesis.stateful import (
     RuleBasedStateMachine,
-    Bundle,
     rule,
     invariant,
     initialize,
-    precondition,
-    consumes,
 )
 
 from esper.leyline import SeedStage
-from esper.tamiyo.heuristic import HeuristicTamiyo, HeuristicPolicyConfig
+from esper.tamiyo.heuristic import HeuristicTamiyo
 from esper.tamiyo.tracker import SignalTracker
 from esper.tamiyo.decisions import TamiyoDecision
 
 # Import strategies
-from tests.strategies import bounded_floats
 
 
 # =============================================================================
@@ -247,7 +242,7 @@ class SignalTrackerStateMachine(RuleBasedStateMachine):
     )
     def update_tracker(self, loss, accuracy):
         """Update tracker with new values."""
-        signals = self.tracker.update(
+        self.tracker.update(
             epoch=self.epoch,
             global_step=self.epoch * 100,
             train_loss=loss,

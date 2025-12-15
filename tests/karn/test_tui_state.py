@@ -3,7 +3,6 @@
 from collections import deque
 from datetime import datetime, timedelta
 
-import pytest
 
 from esper.karn.tui import EnvState, TUIState
 from esper.leyline import TelemetryEvent, TelemetryEventType

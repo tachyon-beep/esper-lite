@@ -1,7 +1,6 @@
 """Tests for CNNHost segment boundaries for multi-slot support."""
 
 import torch
-import pytest
 
 
 def test_host_segment_channels():

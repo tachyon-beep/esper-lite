@@ -1,9 +1,7 @@
 """Tests for enriched Kasmina telemetry events."""
 
-import pytest
-import torch
 
-from esper.leyline import TelemetryEvent, TelemetryEventType
+from esper.leyline import SeedStage, TelemetryEvent, TelemetryEventType
 from esper.kasmina.slot import SeedSlot
 
 
@@ -82,6 +80,3 @@ class TestEnrichedTelemetry:
         assert event.data["improvement"] == -0.5
         assert event.data["reason"] == "no_improvement"
 
-
-# Need this import for the test
-from esper.leyline import SeedStage

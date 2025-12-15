@@ -15,9 +15,7 @@ Coverage:
 - slot.py: SeedSlot.forward uses @torch.compiler.disable (REQUIRED for CUDA graphs)
 - networks.py: MaskedCategorical validation uses @torch.compiler.disable (intentional)
 """
-import pytest
 import torch
-import torch.nn as nn
 
 from esper.kasmina.isolation import blend_with_isolation, ste_forward
 from esper.kasmina.host import CNNHost, TransformerHost

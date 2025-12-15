@@ -1,9 +1,7 @@
 """Tests for Karn collector multi-env support."""
 
-import pytest
 
 from esper.leyline import TelemetryEvent, TelemetryEventType
-from esper.karn.store import TelemetryStore
 
 
 class TestMultiEnvSlotTracking:

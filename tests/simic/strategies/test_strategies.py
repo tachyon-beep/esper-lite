@@ -4,7 +4,6 @@ If SeedInfo or ContributionRewardConfig fields change, these tests
 will fail immediately rather than causing silent strategy breakage.
 """
 
-import pytest
 from hypothesis import given, settings
 
 from esper.simic.rewards import compute_contribution_reward

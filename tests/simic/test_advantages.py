@@ -1,6 +1,5 @@
 """Tests for per-head advantage computation with causal masking."""
 
-import pytest
 import torch
 
 from esper.simic.advantages import compute_per_head_advantages

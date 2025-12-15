@@ -5,7 +5,6 @@ the explosive growth phase ends. The tracker monitors relative loss improvement
 and flips a latch once improvement drops below 5% for 3 consecutive epochs.
 """
 
-import pytest
 
 from esper.tamiyo.tracker import SignalTracker
 from esper.leyline import DEFAULT_STABILIZATION_THRESHOLD, DEFAULT_STABILIZATION_EPOCHS

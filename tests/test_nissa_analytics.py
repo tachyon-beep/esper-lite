@@ -1,6 +1,5 @@
 """Tests for Nissa Blueprint Analytics."""
 
-import pytest
 from esper.nissa.analytics import BlueprintStats, SeedScoreboard
 from esper.leyline import TelemetryEvent, TelemetryEventType
 from esper.nissa.analytics import BlueprintAnalytics

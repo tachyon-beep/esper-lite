@@ -17,9 +17,8 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from enum import Enum, auto
 from itertools import permutations
-from typing import Any, Callable, Literal
+from typing import Callable, Literal
 import random
 
 

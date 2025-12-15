@@ -1,10 +1,8 @@
 """Integration test for blueprint analytics in training loop."""
 
-import pytest
-import torch
 
-from esper.leyline import TelemetryEvent, TelemetryEventType
-from esper.nissa import NissaHub, BlueprintAnalytics
+from esper.leyline import TelemetryEvent
+from esper.nissa import BlueprintAnalytics, NissaHub, SeedScoreboard
 from esper.tolaria import create_model
 
 
@@ -88,6 +86,3 @@ class TestBlueprintAnalyticsIntegration:
         assert "13" in scoreboard  # total fossilized
         assert "150.0K" in scoreboard  # params
         assert "15.0%" in scoreboard  # of host
-
-
-from esper.nissa.analytics import SeedScoreboard

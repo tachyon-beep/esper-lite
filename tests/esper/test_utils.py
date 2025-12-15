@@ -1,6 +1,5 @@
 """Tests for esper.utils package."""
 
-import pytest
 from esper.utils import load_cifar10
 
 

@@ -1,6 +1,5 @@
 """Tests for telemetry configuration."""
 
-import pytest
 
 from esper.simic.telemetry_config import TelemetryLevel, TelemetryConfig
 

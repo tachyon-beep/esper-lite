@@ -1,12 +1,10 @@
 """Tests for reward component telemetry."""
 
-import pytest
 
 from esper.simic.reward_telemetry import RewardComponentsTelemetry
 from esper.simic.rewards import (
     compute_contribution_reward,
     SeedInfo,
-    ContributionRewardConfig,
 )
 
 

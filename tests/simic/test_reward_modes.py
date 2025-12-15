@@ -1,6 +1,5 @@
 """Tests for reward mode enum and sparse reward functions."""
 
-import pytest
 from esper.leyline.factored_actions import LifecycleOp
 from esper.simic.rewards import RewardMode, RewardFamily, ContributionRewardConfig, compute_reward_for_family, LossRewardConfig
 
@@ -207,7 +206,7 @@ def test_compute_reward_for_family_dispatches_loss():
 
 def test_compute_reward_shaped_mode():
     """compute_reward dispatches to shaped reward by default."""
-    from esper.simic.rewards import compute_reward, SeedInfo
+    from esper.simic.rewards import compute_reward
     config = ContributionRewardConfig(reward_mode=RewardMode.SHAPED)
 
     reward = compute_reward(

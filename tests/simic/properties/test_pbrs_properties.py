@@ -8,15 +8,12 @@ sum(F(s,s')) over trajectory = gamma^T * phi(final) - phi(initial)
 Broken telescoping = reward hacking opportunities.
 """
 
-import math
 import pytest
-from hypothesis import given, settings, assume
-from hypothesis import strategies as st
+from hypothesis import given, settings
 
 from esper.leyline import SeedStage
 from esper.simic.rewards import (
     STAGE_POTENTIALS,
-    DEFAULT_GAMMA,
     ContributionRewardConfig,
     SeedInfo,
     _contribution_pbrs_bonus,

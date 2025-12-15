@@ -7,7 +7,7 @@ from esper.kasmina.blueprints.registry import BlueprintRegistry
 
 # Check FlexAttention availability
 try:
-    from torch.nn.attention.flex_attention import flex_attention
+    from torch.nn.attention.flex_attention import flex_attention  # noqa: F401
     HAS_FLEX_ATTENTION = True
 except ImportError:
     HAS_FLEX_ATTENTION = False

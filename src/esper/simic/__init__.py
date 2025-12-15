@@ -39,7 +39,6 @@ from esper.simic.rewards import (
 from esper.simic.features import (
     safe,
     TaskConfig,
-    normalize_observation,
 )
 
 # Action Masks
@@ -98,7 +97,6 @@ __all__ = [
     # Features
     "safe",
     "TaskConfig",
-    "normalize_observation",
 
     # Action Masks
     "MaskedCategorical",

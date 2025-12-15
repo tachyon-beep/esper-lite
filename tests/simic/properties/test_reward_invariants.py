@@ -10,9 +10,9 @@ Tier 1: Mathematical Invariants
 
 import math
 import pytest
-from hypothesis import given, settings, assume
+from hypothesis import given, settings
 
-from esper.simic.rewards import compute_contribution_reward, ContributionRewardConfig
+from esper.simic.rewards import compute_contribution_reward
 
 # Import strategies
 from tests.simic.strategies import reward_inputs, reward_inputs_with_seed

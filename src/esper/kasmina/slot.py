@@ -28,22 +28,6 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Callable, TYPE_CHECKING
 
-# Debug flag for STE gradient assertions (set ESPER_DEBUG_STE=1 to enable)
-_DEBUG_STE = os.environ.get("ESPER_DEBUG_STE", "").lower() in ("1", "true", "yes")
-
-# Gradient telemetry constants (hyperparameters imported from leyline, internals stay local)
-# Epsilon for numerical stability in gradient ratio computation
-GRADIENT_EPSILON: float = 1e-8
-# Maximum gradient ratio to prevent outliers from skewing G2 gate decisions.
-# Value of 10.0 corresponds to "seed has 100x higher per-parameter gradient intensity
-# than host" after sqrt normalization - an extreme value indicating either a very
-# small seed or numerical anomaly.
-MAX_GRADIENT_RATIO: float = 10.0
-
-# Probation stage constants (internal implementation details)
-PROBATION_HISTORY_MAXLEN: int = 100  # Rolling window for stage history
-# MAX_PROBATION_EPOCHS now imported from leyline as DEFAULT_MAX_PROBATION_EPOCHS
-
 import torch
 import torch.nn as nn
 
@@ -83,6 +67,22 @@ from esper.leyline import (
 
 if TYPE_CHECKING:
     from esper.simic.features import TaskConfig
+
+# Debug flag for STE gradient assertions (set ESPER_DEBUG_STE=1 to enable)
+_DEBUG_STE = os.environ.get("ESPER_DEBUG_STE", "").lower() in ("1", "true", "yes")
+
+# Gradient telemetry constants (hyperparameters imported from leyline, internals stay local)
+# Epsilon for numerical stability in gradient ratio computation
+GRADIENT_EPSILON: float = 1e-8
+# Maximum gradient ratio to prevent outliers from skewing G2 gate decisions.
+# Value of 10.0 corresponds to "seed has 100x higher per-parameter gradient intensity
+# than host" after sqrt normalization - an extreme value indicating either a very
+# small seed or numerical anomaly.
+MAX_GRADIENT_RATIO: float = 10.0
+
+# Probation stage constants (internal implementation details)
+PROBATION_HISTORY_MAXLEN: int = 100  # Rolling window for stage history
+# MAX_PROBATION_EPOCHS now imported from leyline as DEFAULT_MAX_PROBATION_EPOCHS
 
 # Canonical feature-shape probes for seed shape validation.
 # These are smoke tests: seeds must be shape-preserving for arbitrary H/W or seq_len.

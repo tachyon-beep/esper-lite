@@ -4,7 +4,6 @@ When host training stabilizes (germination becomes allowed), the tracker should
 emit a TAMIYO_INITIATED event with relevant context about the stabilization.
 """
 
-import pytest
 
 from esper.leyline import TelemetryEvent, TelemetryEventType
 from esper.tamiyo.tracker import SignalTracker
