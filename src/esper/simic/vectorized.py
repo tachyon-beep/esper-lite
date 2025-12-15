@@ -84,6 +84,52 @@ from esper.tolaria import TolariaGovernor
 
 
 # =============================================================================
+# Telemetry Helpers
+# =============================================================================
+
+
+def _emit_with_env_id(hub, env_idx: int, event: TelemetryEvent) -> None:
+    """Safely emit telemetry with env_id injected and no shared mutation."""
+    data = dict(event.data) if event.data else {}
+    data["env_id"] = env_idx
+    event.data = data
+    hub.emit(event)
+
+
+def _emit_batch_completed(
+    hub,
+    *,
+    batch_idx: int,
+    episodes_completed: int,
+    total_episodes: int,
+    env_final_accs: list[float],
+    avg_acc: float,
+    rolling_avg_acc: float,
+    avg_reward: float,
+    start_episode: int,
+    requested_episodes: int,
+) -> None:
+    """Emit batch completion telemetry with resume-aware totals."""
+    clamped_completed = min(episodes_completed, total_episodes)
+    hub.emit(
+        TelemetryEvent(
+            event_type=TelemetryEventType.BATCH_COMPLETED,
+            data={
+                "batch_idx": batch_idx,
+                "episodes_completed": clamped_completed,
+                "total_episodes": total_episodes,
+                "start_episode": start_episode,
+                "requested_episodes": requested_episodes,
+                "env_accuracies": env_final_accs,
+                "avg_accuracy": avg_acc,
+                "rolling_accuracy": rolling_avg_acc,
+                "avg_reward": avg_reward,
+            },
+        )
+    )
+
+
+# =============================================================================
 # Parallel Environment State
 # =============================================================================
 
@@ -747,8 +793,7 @@ def train_ppo_vectorized(
         """Create callback that injects env_id before emitting to hub."""
 
         def callback(event: TelemetryEvent):
-            event.data["env_id"] = env_idx
-            hub.emit(event)
+            _emit_with_env_id(hub, env_idx, event)
 
         return callback
 
@@ -1919,18 +1964,18 @@ def train_ppo_vectorized(
 
         episodes_completed += envs_this_batch
         if hub:
-            hub.emit(TelemetryEvent(
-                event_type=TelemetryEventType.BATCH_COMPLETED,
-                data={
-                    "batch_idx": batch_idx + 1,
-                    "episodes_completed": episodes_completed,
-                    "total_episodes": n_episodes,
-                    "env_accuracies": env_final_accs,
-                    "avg_accuracy": avg_acc,
-                    "rolling_accuracy": rolling_avg_acc,
-                    "avg_reward": avg_reward,
-                },
-            ))
+            _emit_batch_completed(
+                hub,
+                batch_idx=batch_idx + 1,
+                episodes_completed=episodes_completed,
+                total_episodes=total_episodes,
+                env_final_accs=env_final_accs,
+                avg_acc=avg_acc,
+                rolling_avg_acc=rolling_avg_acc,
+                avg_reward=avg_reward,
+                start_episode=start_episode,
+                requested_episodes=n_episodes,
+            )
 
         total_actions = {op.name: 0 for op in LifecycleOp}
         successful_actions = {op.name: 0 for op in LifecycleOp}
