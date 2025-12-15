@@ -1,0 +1,21 @@
+# FEAT Template
+
+- **Title:** Add offline/mock flag for TinyStories tasks in CLI/runtime
+- **Problem Statement:** TinyStories support requires `datasets`/`transformers` and a network download. There is no CLI/runtime switch to run TinyStories in offline/mock mode, so smoke tests and constrained environments fail. The mock path exists in `TinyStoriesDataset` but is unused by `TaskSpec`/CLI.
+- **Goal:** Allow users and CI to run TinyStories tasks without external downloads by exposing a `--mock-data` (or similar) flag that threads through `TaskSpec` into `TinyStoriesDataset(mock=True)`.
+- **Scope:** Runtime task wiring (`runtime/tasks.py`), CLI options (`scripts/train.py`, maybe `scripts/evaluate.py`), optional Simic/Tolaria defaults.
+- **Non-Goals:** Changing default dataset behavior for production runs; no new datasets.
+- **Requirements:**
+  - CLI flag to enable mock TinyStories data; defaults to real dataset.
+  - `TaskSpec` carries a `mock` bit to `TinyStoriesDataset`.
+  - Ensure no network/download when mock is enabled; skip tokenizer/datasets imports.
+  - Document the flag in README/CLI help.
+- **Stakeholders/Owners:** Runtime owners; CI/smoke-test maintainers.
+- **Design Sketch:** Add `mock` to task config for LM tasks; gate dataset construction in `tasks.py` and `utils.data.load_tinystories`; add CLI flag under both heuristic/PPO paths.
+- **Dependencies/Risks:** Must avoid silently mocking real runs; ensure telemetry/observation shapes remain identical.
+- **Telemetry Needs:** Optional: emit a snapshot noting mock data enabled.
+- **Acceptance Criteria:** TinyStories training/eval commands succeed offline with `--mock-data`; no downloads attempted; shapes/metrics valid for smoke.
+- **Rollout/Backout:** Flag-gated; production default unchanged.
+- **Validation Plan:** Run `python -m esper.scripts.train ppo --task tinystories --episodes 1 --mock-data` in an offline env; add a small unit test asserting `TinyStoriesDataset(mock=True)` path is selected.
+- **Status:** Draft
+- **Links:** `src/esper/runtime/tasks.py`, `src/esper/utils/data.py::TinyStoriesDataset`, `src/esper/scripts/train.py`
