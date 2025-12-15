@@ -1,6 +1,8 @@
 """Tests for anomaly detection in PPO training."""
 
 
+import pytest
+
 from esper.simic.anomaly_detector import AnomalyDetector
 
 
@@ -88,12 +90,11 @@ class TestAnomalyDetector:
         # Both should be in warmup phase with same result
         assert small_run_warmup.has_anomaly == large_run_warmup.has_anomaly
 
-    def test_backwards_compatible_without_episode_info(self):
-        """Without episode info, uses strictest (late) threshold."""
+    def test_requires_episode_info_for_value_collapse_thresholds(self):
+        """Value collapse thresholds require explicit episode context (no shims)."""
         detector = AnomalyDetector()
-        # No episode info = late threshold (0.1)
-        report = detector.check_value_function(explained_variance=0.05)
-        assert report.has_anomaly is True  # 0.05 < 0.1
+        with pytest.raises(ValueError):
+            detector.check_value_function(explained_variance=0.05)
 
     def test_detect_numerical_instability(self):
         """Detects NaN/Inf in metrics."""
@@ -114,17 +115,18 @@ class TestAnomalyDetector:
             explained_variance=0.5,
             has_nan=False,
             has_inf=False,
+            current_episode=1,
+            total_episodes=100,
         )
         assert report.has_anomaly is True
         assert "ratio_explosion" in report.anomaly_types
 
-    def test_value_collapse_detail_shows_unknown_when_no_total(self):
-        """Should show 'unknown' progress when total_episodes is 0."""
+    def test_requires_total_episodes_for_value_collapse_thresholds(self):
+        """Value collapse thresholds require total_episodes (no shims)."""
         detector = AnomalyDetector()
-        report = detector.check_value_function(
-            explained_variance=0.05,  # Below threshold
-            current_episode=10,
-            total_episodes=0,  # Unknown total
-        )
-        assert report.has_anomaly is True
-        assert "unknown" in report.details["value_collapse"].lower()
+        with pytest.raises(ValueError):
+            detector.check_value_function(
+                explained_variance=0.05,
+                current_episode=10,
+                total_episodes=0,
+            )
