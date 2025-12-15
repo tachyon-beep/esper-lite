@@ -2,7 +2,7 @@
 
 import pytest
 from esper.leyline.factored_actions import LifecycleOp
-from esper.simic.rewards import RewardMode, ContributionRewardConfig
+from esper.simic.rewards import RewardMode, RewardFamily, ContributionRewardConfig, compute_reward_for_family, LossRewardConfig
 
 
 def test_reward_mode_enum_exists():
@@ -10,6 +10,12 @@ def test_reward_mode_enum_exists():
     assert RewardMode.SHAPED.value == "shaped"
     assert RewardMode.SPARSE.value == "sparse"
     assert RewardMode.MINIMAL.value == "minimal"
+
+
+def test_reward_family_enum_exists():
+    """RewardFamily enum has two families."""
+    assert RewardFamily.CONTRIBUTION.value == "contribution"
+    assert RewardFamily.LOSS.value == "loss"
 
 
 def test_config_has_sparse_fields():
@@ -145,6 +151,58 @@ def test_minimal_reward_penalty_for_young_cull():
 
     # Non-terminal but penalty applies -> -0.1
     assert reward == config.early_cull_penalty
+
+
+def test_compute_reward_for_family_dispatches_contribution():
+    """Reward family selects contribution reward path."""
+    contrib_cfg = ContributionRewardConfig(reward_mode=RewardMode.SHAPED)
+    loss_cfg = LossRewardConfig.default()
+    reward = compute_reward_for_family(
+        RewardFamily.CONTRIBUTION,
+        action=LifecycleOp.WAIT,
+        seed_contribution=None,
+        val_acc=70.0,
+        host_max_acc=70.0,
+        seed_info=None,
+        epoch=1,
+        max_epochs=10,
+        total_params=100_000,
+        host_params=100_000,
+        acc_at_germination=None,
+        acc_delta=0.0,
+        contribution_config=contrib_cfg,
+        loss_config=loss_cfg,
+        loss_delta=0.1,
+        val_loss=1.0,
+    )
+    assert isinstance(reward, float)
+
+
+def test_compute_reward_for_family_dispatches_loss():
+    """Reward family selects loss reward path."""
+    contrib_cfg = ContributionRewardConfig(reward_mode=RewardMode.SHAPED)
+    loss_cfg = LossRewardConfig.default()
+
+    reward = compute_reward_for_family(
+        RewardFamily.LOSS,
+        action=LifecycleOp.WAIT,
+        seed_contribution=None,
+        val_acc=70.0,
+        host_max_acc=70.0,
+        seed_info=None,
+        epoch=1,
+        max_epochs=10,
+        total_params=100_000,
+        host_params=100_000,
+        acc_at_germination=None,
+        acc_delta=0.0,
+        contribution_config=contrib_cfg,
+        loss_config=loss_cfg,
+        loss_delta=-0.5,
+        val_loss=1.0,
+    )
+    # Loss reward should reward improvement (negative delta -> positive reward)
+    assert reward > 0
 
 
 def test_compute_reward_shaped_mode():

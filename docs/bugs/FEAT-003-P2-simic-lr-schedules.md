@@ -1,0 +1,26 @@
+# FEAT Template
+
+- **Title:** Add learning-rate warmup/decay schedules for PPO stability
+- **Problem Statement:** PPO training in Simic (`src/esper/simic/vectorized.py` + `ppo.py`) uses constant LR; expert review suggested warmup/decay to stabilize value loss and reduce clip/ratio oscillations. LRs are currently static CLI flags.
+- **Goal:** Provide configurable LR schedules (e.g., linear warmup + cosine/step decay) for both policy and value components to improve convergence stability without manual retuning.
+- **Scope:** Simic PPO path only; cover optimizer creation in `train_ppo_vectorized`/`PPOAgent`; CLI plumbing in `scripts/train.py`.
+- **Non-Goals:** No changes to heuristic training; no auto-tuning; no DDP/FSDP work.
+- **Requirements:**
+  - Add schedule configs (warmup_steps or warmup_frac; decay type/steps).
+  - Implement scheduler hook tied to PPO update steps (not epochs) and ensure torch.compile friendliness.
+  - Emit scheduler state in telemetry snapshots/checkpoints for reproducibility.
+  - Defaults must preserve current constant-LR behavior.
+- **Stakeholders/Owners:** Simic maintainers; RL stabilization owners.
+- **Design Sketch:** Add optional scheduler factory in `PPOAgent` that wraps the optimizer with `LambdaLR`/`CosineAnnealingLR`; drive step counts from `train_steps`; expose CLI flags (`--lr-warmup-frac`, `--lr-decay`).
+- **Dependencies/Risks:** Interaction with torch.compile graphs; need to ensure schedulers don’t introduce host-sync every step; checkpointing must persist scheduler state to avoid jumps on resume.
+- **Telemetry Needs:** Log current LR per update in debug/analytics snapshots to compare runs.
+- **Acceptance Criteria:** 
+  - Flags and config present, default off.
+  - PPO run with warmup+decay completes without perf regressions; value loss/ratio variance improves in smoke tests.
+  - Scheduler state saved/restored correctly.
+- **Rollout/Backout:** Feature-flagged; fallback to constant LR if disabled; can gate behind env var for rapid disable.
+- **Validation Plan:** 
+  - Unit-ish: run a short PPO with warmup (e.g., `--lr-warmup-frac 0.1 --lr-decay cosine`) and verify LR traces.
+  - Resume test: run 2 updates, save, resume, and confirm LR continuity.
+- **Status:** Draft
+- **Links:** RL specialist recommendation, `src/esper/simic/vectorized.py`, `src/esper/simic/ppo.py` optimizer setup

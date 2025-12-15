@@ -52,6 +52,13 @@ class RewardMode(Enum):
     MINIMAL = "minimal"
 
 
+class RewardFamily(Enum):
+    """Top-level reward family selection."""
+
+    CONTRIBUTION = "contribution"
+    LOSS = "loss"
+
+
 # =============================================================================
 # POTENTIAL-BASED REWARD SHAPING (PBRS) - DESIGN RATIONALE
 # =============================================================================
@@ -840,6 +847,66 @@ def compute_reward(
     return reward
 
 
+def compute_reward_for_family(
+    reward_family: RewardFamily,
+    *,
+    action: LifecycleOp,
+    seed_contribution: float | None,
+    val_acc: float,
+    host_max_acc: float,
+    seed_info: SeedInfo | None,
+    epoch: int,
+    max_epochs: int,
+    total_params: int,
+    host_params: int,
+    acc_at_germination: float | None,
+    acc_delta: float,
+    num_fossilized_seeds: int = 0,
+    num_contributing_fossilized: int = 0,
+    contribution_config: ContributionRewardConfig | None = None,
+    loss_config: LossRewardConfig | None = None,
+    loss_delta: float = 0.0,
+    val_loss: float = 0.0,
+) -> float:
+    """Dispatch reward based on family (contribution vs loss-primary)."""
+    if contribution_config is None:
+        contribution_config = ContributionRewardConfig()
+    if loss_config is None:
+        loss_config = LossRewardConfig.default()
+
+    if reward_family == RewardFamily.CONTRIBUTION:
+        return compute_reward(
+            action=action,
+            seed_contribution=seed_contribution,
+            val_acc=val_acc,
+            host_max_acc=host_max_acc,
+            seed_info=seed_info,
+            epoch=epoch,
+            max_epochs=max_epochs,
+            total_params=total_params,
+            host_params=host_params,
+            acc_at_germination=acc_at_germination,
+            acc_delta=acc_delta,
+            num_fossilized_seeds=num_fossilized_seeds,
+            num_contributing_fossilized=num_contributing_fossilized,
+            config=contribution_config,
+            return_components=False,
+        )
+    if reward_family == RewardFamily.LOSS:
+        return compute_loss_reward(
+            action=action,
+            loss_delta=loss_delta,
+            val_loss=val_loss,
+            seed_info=seed_info,
+            epoch=epoch,
+            max_epochs=max_epochs,
+            total_params=total_params,
+            host_params=host_params,
+            config=loss_config,
+        )
+    raise ValueError(f"Unknown reward family: {reward_family}")
+
+
 def _contribution_pbrs_bonus(
     seed_info: SeedInfo,
     config: ContributionRewardConfig,
@@ -1162,6 +1229,7 @@ __all__ = [
     "LossRewardConfig",
     "ContributionRewardConfig",
     "RewardMode",
+    "RewardFamily",
     # Seed info
     "SeedInfo",
     # Reward functions
