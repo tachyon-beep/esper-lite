@@ -144,50 +144,22 @@ Train a PPO agent to learn optimal seed lifecycle management.
 PYTHONPATH=src python -m esper.scripts.train ppo [OPTIONS]
 ```
 
-#### Core Training Options
+#### Config-first workflow
+
+All PPO hyperparameters live in `TrainingConfig` (JSON-loadable). CLI flags are
+limited to picking a preset and runtime wiring:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--episodes` | 100 | Number of training episodes |
-| `--max-epochs` | 75 | Maximum epochs per episode |
-| `--n-envs` | 4 | Number of parallel environments |
-| `--update-every` | 5 | PPO update frequency (episodes) |
-| `--seed` | 42 | Random seed for reproducibility |
-
-#### PPO Hyperparameters
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--lr` | 3e-4 | Learning rate |
-| `--clip-ratio` | 0.2 | PPO clipping parameter |
-| `--gamma` | 0.99 | Discount factor |
-| `--entropy-coef` | 0.05 | Entropy bonus coefficient |
-| `--entropy-coef-start` | (uses `--entropy-coef`) | Initial entropy coefficient for annealing |
-| `--entropy-coef-end` | (uses `--entropy-coef`) | Final entropy coefficient for annealing |
-| `--entropy-coef-min` | 0.1 | Minimum entropy floor (prevents collapse) |
-| `--entropy-anneal-episodes` | 0 | Episodes to anneal entropy (0=fixed) |
-
-#### Reward Shaping (Sparse Reward Experiment)
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--reward-mode` | `shaped` | Reward mode: `shaped` (dense), `sparse` (terminal-only), `minimal` (sparse + early-cull penalty) |
-| `--param-budget` | 500000 | Parameter budget for efficiency calculation |
-| `--param-penalty` | 0.1 | Parameter overage penalty weight |
-| `--sparse-scale` | 1.0 | Reward scaling for sparse modes (try 2.0-3.0 if learning is slow) |
-
-**Reward Modes Explained:**
-- **`shaped`** (default): Dense rewards with counterfactual contribution signals at every timestep. Best for initial training.
-- **`sparse`**: Terminal-only rewards based on final accuracy. Tests credit assignment over long horizons.
-- **`minimal`**: Sparse rewards plus penalty for early culling. Discourages wasteful seed germination.
-
-#### Task Configuration
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--task` | `cifar10` | Task preset: `cifar10`, `cifar10_deep`, `tinystories` |
-| `--slots` | `mid` | Seed slots to enable: `early`, `mid`, `late` (space-separated) |
-| `--max-seeds` | unlimited | Maximum total seeds across all slots |
+| `--preset` | `cifar10` | Hyperparameter preset: `cifar10`, `cifar10_deep`, `tinystories` |
+| `--config-json` | (none) | Path to JSON config (strict: unknown keys fail) |
+| `--task` | `cifar10` | Task preset for dataloaders/topology |
+| `--device` | `cuda:0` | Primary compute device |
+| `--devices` | (none) | Multi-GPU devices (e.g., `cuda:0 cuda:1`) |
+| `--amp` | off | Enable AMP (CUDA only) |
+| `--num-workers` | (task default) | DataLoader workers per environment |
+| `--gpu-preload` | off | Preload dataset to GPU (CIFAR-10 only) |
+| `--seed` | (config default) | Override run seed |
 
 #### Hardware & Performance
 
@@ -245,47 +217,29 @@ Telemetry flags (`--telemetry-file`, `--telemetry-dir`, `--telemetry-level`) are
 ### Example Commands
 
 ```bash
-# Basic PPO training
-PYTHONPATH=src python -m esper.scripts.train ppo --episodes 100 --n-envs 4
+# CIFAR-10 preset (default hyperparameters)
+PYTHONPATH=src python -m esper.scripts.train ppo --preset cifar10 --task cifar10
 
-# Multi-GPU training with telemetry
+# Tinystories preset with AMP
 PYTHONPATH=src python -m esper.scripts.train ppo \
-    --episodes 200 \
-    --devices cuda:0 cuda:1 \
-    --telemetry-dir ./runs
+    --preset tinystories \
+    --task tinystories \
+    --amp
 
-# Sparse reward experiment (test credit assignment)
+# Multi-GPU training (deep CIFAR)
 PYTHONPATH=src python -m esper.scripts.train ppo \
-    --reward-mode sparse \
-    --sparse-scale 2.0 \
-    --episodes 100
+    --preset cifar10_deep \
+    --task cifar10_deep \
+    --devices cuda:0 cuda:1
 
-# Multi-slot training with seed limits
+# Load a strict JSON config
 PYTHONPATH=src python -m esper.scripts.train ppo \
-    --slots early mid late \
-    --max-seeds 5
-
-# Fast iteration with GPU preload
-PYTHONPATH=src python -m esper.scripts.train ppo \
-    --gpu-preload \
-    --n-envs 8 \
-    --episodes 50
-
-# Training with terminal UI (live dashboard in terminal)
-PYTHONPATH=src python -m esper.scripts.train ppo \
-    --tui \
-    --episodes 100 \
-    --n-envs 4
+    --config-json configs/ppo_config.json \
+    --task cifar10
 
 # Training with web dashboard (accessible from browser/remote)
 PYTHONPATH=src python -m esper.scripts.train ppo \
+    --preset cifar10 \
     --dashboard \
-    --dashboard-port 8080 \
-    --episodes 100
-
-# TUI with telemetry file logging
-PYTHONPATH=src python -m esper.scripts.train ppo \
-    --tui \
-    --telemetry-file training.jsonl \
-    --episodes 100
+    --dashboard-port 8080
 ```

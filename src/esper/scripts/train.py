@@ -1,28 +1,10 @@
 #!/usr/bin/env python3
-"""Training CLI for Simic RL algorithms.
-
-Usage:
-    # Train PPO (vectorized by default)
-    PYTHONPATH=src python -m esper.scripts.train ppo --episodes 100 --n-envs 4
-
-    # Multi-GPU PPO
-    PYTHONPATH=src python -m esper.scripts.train ppo --n-envs 4 --devices cuda:0 cuda:1
-
-    # Heuristic (h-esper)
-    PYTHONPATH=src python -m esper.scripts.train heuristic --max-epochs 75 --max-batches 50
-"""
+"""Training CLI for Simic RL algorithms."""
 
 import argparse
 
-from esper.leyline import (
-    DEFAULT_GAMMA,
-    DEFAULT_N_ENVS,
-    DEFAULT_LEARNING_RATE,
-    DEFAULT_CLIP_RATIO,
-    DEFAULT_ENTROPY_COEF,
-    DEFAULT_ENTROPY_COEF_MIN,
-)
 from esper.nissa import get_hub, ConsoleOutput, FileOutput, DirectoryOutput
+from esper.simic.config import TrainingConfig
 
 
 def main():
@@ -93,29 +75,27 @@ def main():
     # PPO subcommand
     ppo_parser = subparsers.add_parser("ppo", help="Train PPO agent",
                                        parents=[telemetry_parent])
-    ppo_parser.add_argument("--episodes", type=int, default=100)
-    ppo_parser.add_argument("--max-epochs", type=int, default=75)  # Increased from 25 to allow seed fossilization
-    ppo_parser.add_argument("--update-every", type=int, default=5)
-    ppo_parser.add_argument("--lr", type=float, default=DEFAULT_LEARNING_RATE)
-    ppo_parser.add_argument("--clip-ratio", type=float, default=DEFAULT_CLIP_RATIO)
-    ppo_parser.add_argument("--entropy-coef", type=float, default=DEFAULT_ENTROPY_COEF)
-    ppo_parser.add_argument("--entropy-coef-start", type=float, default=None,
-        help="Initial entropy coefficient (default: use --entropy-coef)")
-    ppo_parser.add_argument("--entropy-coef-end", type=float, default=None,
-        help="Final entropy coefficient (default: use --entropy-coef)")
-    ppo_parser.add_argument("--entropy-coef-min", type=float, default=DEFAULT_ENTROPY_COEF_MIN,
-        help="Minimum entropy coefficient floor to prevent exploration collapse")
-    ppo_parser.add_argument("--entropy-anneal-episodes", type=int, default=0,
-        help="Episodes over which to anneal entropy (0=fixed, no annealing)")
-    ppo_parser.add_argument("--gamma", type=float, default=DEFAULT_GAMMA)
-    ppo_parser.add_argument("--task", default="cifar10",
-                             choices=["cifar10", "cifar10_deep", "tinystories"],
-                             help="Task preset")
+    ppo_parser.add_argument(
+        "--preset",
+        choices=["cifar10", "cifar10_deep", "tinystories"],
+        default="cifar10",
+        help="TrainingConfig preset to use (hyperparameters + slots)",
+    )
+    ppo_parser.add_argument(
+        "--config-json",
+        type=str,
+        default=None,
+        help="Path to JSON config (overrides preset; fails on unknown keys)",
+    )
+    ppo_parser.add_argument(
+        "--task",
+        default="cifar10",
+        choices=["cifar10", "cifar10_deep", "tinystories"],
+        help="Task preset",
+    )
     ppo_parser.add_argument("--save", help="Path to save model")
     ppo_parser.add_argument("--resume", help="Path to checkpoint to resume from")
-    ppo_parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     ppo_parser.add_argument("--device", default="cuda:0")
-    ppo_parser.add_argument("--n-envs", type=int, default=DEFAULT_N_ENVS)
     ppo_parser.add_argument("--devices", nargs="+")
     ppo_parser.add_argument(
         "--num-workers",
@@ -124,48 +104,20 @@ def main():
         help="DataLoader workers per environment (overrides task default)",
     )
     ppo_parser.add_argument(
-        "--no-telemetry",
+        "--gpu-preload",
         action="store_true",
-        help="Disable telemetry features (50-dim instead of 80-dim)",
-    )
-    ppo_parser.add_argument("--gpu-preload", action="store_true",
-        help="Preload dataset to GPU for 8x faster data loading (CIFAR-10 only, uses ~0.75GB VRAM)")
-    ppo_parser.add_argument("--slots", nargs="+", default=["mid"],
-        choices=["early", "mid", "late"],
-        help="Seed slots to enable (default: mid)")
-    ppo_parser.add_argument("--max-seeds", type=int, default=None,
-        help="Maximum total seeds across all slots (default: unlimited)")
-    ppo_parser.add_argument(
-        "--reward-mode",
-        type=str,
-        choices=["shaped", "sparse", "minimal"],
-        default="shaped",
-        help="Reward mode: shaped (dense, default), sparse (terminal-only), minimal (sparse + early-cull)"
+        help="Preload dataset to GPU for 8x faster data loading (CIFAR-10 only, uses ~0.75GB VRAM)",
     )
     ppo_parser.add_argument(
-        "--param-budget",
+        "--amp",
+        action="store_true",
+        help="Enable automatic mixed precision (CUDA only)",
+    )
+    ppo_parser.add_argument(
+        "--seed",
         type=int,
-        default=500_000,
-        help="Parameter budget for sparse reward efficiency calculation (default: 500000)"
-    )
-    ppo_parser.add_argument(
-        "--param-penalty",
-        type=float,
-        default=0.1,
-        help="Parameter penalty weight in sparse reward (default: 0.1)"
-    )
-    ppo_parser.add_argument(
-        "--sparse-scale",
-        type=float,
-        default=1.0,
-        help="Reward scale for sparse mode (DRL Expert: try 2.0-3.0 if learning fails)"
-    )
-    ppo_parser.add_argument(
-        "--reward-family",
-        type=str,
-        choices=["contribution", "loss"],
-        default="contribution",
-        help="Reward family: contribution (default) or loss-primary",
+        default=None,
+        help="Override seed (otherwise use config value)",
     )
 
     args = parser.parse_args()
@@ -308,38 +260,37 @@ def main():
             )
 
         elif args.algorithm == "ppo":
-            use_telemetry = (not args.no_telemetry) and telemetry_config.level != TelemetryLevel.OFF
+            if args.config_json:
+                config = TrainingConfig.from_json_path(args.config_json)
+            else:
+                if args.preset == "cifar10":
+                    config = TrainingConfig.for_cifar10()
+                elif args.preset == "cifar10_deep":
+                    config = TrainingConfig.for_cifar10_deep()
+                else:
+                    config = TrainingConfig.for_tinystories()
+
+            if args.seed is not None:
+                config.seed = args.seed
+            if args.amp:
+                config.amp = True
+            if telemetry_config.level.name == "OFF":
+                config.use_telemetry = False
+
+            print(config.summary())
+
             from esper.simic.vectorized import train_ppo_vectorized
             train_ppo_vectorized(
-                n_episodes=args.episodes,
-                n_envs=args.n_envs,
-                max_epochs=args.max_epochs,
                 device=args.device,
                 devices=args.devices,
                 task=args.task,
-                use_telemetry=use_telemetry,
-                lr=args.lr,
-                clip_ratio=args.clip_ratio,
-                entropy_coef=args.entropy_coef,
-                entropy_coef_start=args.entropy_coef_start,
-                entropy_coef_end=args.entropy_coef_end,
-                entropy_coef_min=args.entropy_coef_min,
-                entropy_anneal_episodes=args.entropy_anneal_episodes,
-                gamma=args.gamma,
                 save_path=args.save,
                 resume_path=args.resume,
-                seed=args.seed,
                 num_workers=args.num_workers,
                 gpu_preload=args.gpu_preload,
                 telemetry_config=telemetry_config,
-                slots=args.slots,
-                max_seeds=args.max_seeds,
-                reward_mode=args.reward_mode,
-                reward_family=args.reward_family,
-                param_budget=args.param_budget,
-                param_penalty_weight=args.param_penalty,
-                sparse_reward_scale=args.sparse_scale,
                 quiet_analytics=use_tui,
+                **config.to_train_kwargs(),
             )
     finally:
         # Export Karn telemetry if requested (P1-04)

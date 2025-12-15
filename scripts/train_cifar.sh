@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-uv run python -m esper.scripts.train ppo --task cifar10 "$@"
+uv run python -m esper.scripts.train ppo --preset cifar10 --task cifar10 "$@"

@@ -1,8 +1,9 @@
-"""Unified Hyperparameter Configuration for Simic Training.
+"""Strict, JSON-loadable hyperparameter configuration for Simic training.
 
-Consolidates all training hyperparameters into a single configuration object
-for easier tuning and experiment management. Supports task-specific presets
-and YAML serialization.
+`TrainingConfig` is the single source of truth for PPO hyperparameters.
+Every field maps directly to `train_ppo_vectorized` so the surface cannot
+silently drift. Configs can be built from presets or loaded from JSON, with
+unknown keys rejected to avoid “paper surfaces.”
 
 Usage:
     from esper.simic.config import TrainingConfig
@@ -12,14 +13,11 @@ Usage:
 
     # Task-specific presets
     config = TrainingConfig.for_cifar10()
+    config = TrainingConfig.for_cifar10_deep()
     config = TrainingConfig.for_tinystories()
 
-    # Custom config
-    config = TrainingConfig(
-        lr=1e-4,
-        target_kl=0.02,
-        ppo_updates_per_batch=2,
-    )
+    # Load from JSON (fails on unknown keys)
+    config = TrainingConfig.from_json_path("config.json")
 
     # Use with train_ppo_vectorized
     agent, history = train_ppo_vectorized(**config.to_train_kwargs())
@@ -27,8 +25,8 @@ Usage:
 
 from __future__ import annotations
 
-import math
-from dataclasses import dataclass, field, asdict
+import json
+from dataclasses import asdict, dataclass, field, fields
 from typing import Any
 
 from esper.leyline import (
@@ -38,97 +36,63 @@ from esper.leyline import (
     DEFAULT_N_ENVS,
     DEFAULT_LEARNING_RATE,
     DEFAULT_CLIP_RATIO,
-    DEFAULT_GAE_LAMBDA,
-    DEFAULT_VALUE_COEF,
-    DEFAULT_MAX_GRAD_NORM,
-    DEFAULT_N_PPO_EPOCHS,
-    DEFAULT_BATCH_SIZE,
     DEFAULT_ENTROPY_COEF,
     DEFAULT_ENTROPY_COEF_MIN,
-    DEFAULT_STABILIZATION_THRESHOLD,
-    DEFAULT_STABILIZATION_EPOCHS,
-    DEFAULT_GOVERNOR_SENSITIVITY,
-    DEFAULT_GOVERNOR_ABSOLUTE_THRESHOLD,
-    DEFAULT_GOVERNOR_DEATH_PENALTY,
 )
+from esper.simic.rewards import RewardFamily, RewardMode
 
 
 @dataclass
 class TrainingConfig:
-    """Unified training configuration for PPO-based seed lifecycle control.
+    """Strict training configuration for vectorized PPO.
 
-    Groups hyperparameters by category:
-    - PPO core: Learning rate, clip ratio, discount, etc.
-    - Entropy: Exploration via entropy bonus and annealing
-    - KL stopping: Early stopping based on policy divergence
-    - Sample efficiency: Multiple updates per batch
-    - Normalization: Observation/reward normalization
-    - Task-specific: Governor, stabilization thresholds
-
-    All parameters have sensible defaults optimized for CIFAR-10.
-    Use class methods for task-specific presets.
+    All fields map directly to `train_ppo_vectorized` arguments. Unknown
+    fields are rejected on load to prevent silent drift between the config
+    surface and the runtime.
     """
 
-    # === PPO Core (defaults from leyline) ===
-    lr: float = DEFAULT_LEARNING_RATE
-    gamma: float = DEFAULT_GAMMA  # From leyline - MUST match PBRS gamma
-    gae_lambda: float = DEFAULT_GAE_LAMBDA  # Less bias for long delays
-    clip_ratio: float = DEFAULT_CLIP_RATIO
-    value_coef: float = DEFAULT_VALUE_COEF
-    max_grad_norm: float = DEFAULT_MAX_GRAD_NORM
-    n_epochs: int = DEFAULT_N_PPO_EPOCHS
-    batch_size: int = DEFAULT_BATCH_SIZE
-    clip_value: bool = True
-    # Weight decay (L2 regularization) - applied to critic only
-    # Actor weight decay is disabled to preserve exploration (RL best practice)
-    weight_decay: float = 0.0
-
-    # === Entropy (Exploration, defaults from leyline) ===
-    entropy_coef: float = DEFAULT_ENTROPY_COEF  # Unified default
-    entropy_coef_start: float | None = None
-    entropy_coef_end: float | None = None
-    entropy_coef_min: float = DEFAULT_ENTROPY_COEF_MIN
-    # Scale entropy floor with valid action count (information-theoretic)
-    adaptive_entropy_floor: bool = False
-    entropy_anneal_episodes: int = 0
-
-    # === KL Early Stopping ===
-    # Stop PPO epoch iteration when approx_kl > 1.5 * target_kl
-    # None disables early stopping (not recommended)
-    target_kl: float | None = 0.015
-
-    # === Sample Efficiency ===
-    # Multiple PPO updates per batch of episodes
-    # Higher values improve sample efficiency but risk policy divergence
-    # With KL early stopping, values of 2-4 are often safe
-    ppo_updates_per_batch: int = 1
-
-    # === Training Scale ===
+    # === Training scale ===
     n_episodes: int = 100
     n_envs: int = DEFAULT_N_ENVS
     max_epochs: int = DEFAULT_EPISODE_LENGTH
 
-    # === Task-Specific: Governor (defaults from leyline) ===
-    # Random guess loss for lobotomy detection
-    # CIFAR-10: ln(10) ≈ 2.3, TinyStories: ln(50257) ≈ 10.8
-    random_guess_loss: float = field(default_factory=lambda: math.log(10))
-    governor_sensitivity: float = DEFAULT_GOVERNOR_SENSITIVITY
-    governor_absolute_threshold: float = DEFAULT_GOVERNOR_ABSOLUTE_THRESHOLD
-    governor_death_penalty: float = DEFAULT_GOVERNOR_DEATH_PENALTY
+    # === PPO core (from leyline defaults) ===
+    lr: float = DEFAULT_LEARNING_RATE
+    clip_ratio: float = DEFAULT_CLIP_RATIO
+    gamma: float = DEFAULT_GAMMA
+    ppo_updates_per_batch: int = 1
 
-    # === Task-Specific: Stabilization (defaults from leyline) ===
-    # Block germination until host training stabilizes
-    # Lower threshold = stricter = stabilizes later
-    stabilization_threshold: float = DEFAULT_STABILIZATION_THRESHOLD
-    stabilization_epochs: int = DEFAULT_STABILIZATION_EPOCHS
+    # === Entropy (exploration) ===
+    entropy_coef: float = DEFAULT_ENTROPY_COEF
+    entropy_coef_start: float | None = None
+    entropy_coef_end: float | None = None
+    entropy_coef_min: float = DEFAULT_ENTROPY_COEF_MIN
+    adaptive_entropy_floor: bool = False
+    entropy_anneal_episodes: int = 0
 
-    # === Telemetry ===
+    # === Telemetry and runtime flags ===
     use_telemetry: bool = True
+    amp: bool = False
 
-    # === LSTM Configuration ===
-    # The unified architecture always uses LSTM (FactoredRecurrentActorCritic)
+    # === LSTM configuration ===
     lstm_hidden_dim: int = DEFAULT_LSTM_HIDDEN_DIM
     chunk_length: int | None = None  # None = auto-match max_epochs; set explicitly if different
+
+    # === Slot/reward selection ===
+    slots: list[str] = field(default_factory=lambda: ["mid"])
+    max_seeds: int | None = None
+    reward_mode: RewardMode = RewardMode.SHAPED
+    reward_family: RewardFamily = RewardFamily.CONTRIBUTION
+    param_budget: int = 500_000
+    param_penalty_weight: float = 0.1
+    sparse_reward_scale: float = 1.0
+
+    # === Diagnostics thresholds ===
+    plateau_threshold: float = 0.5
+    improvement_threshold: float = 2.0
+
+    # === Reproducibility ===
+    seed: int = 42
 
     def __post_init__(self):
         """Validate and set defaults."""
@@ -136,58 +100,94 @@ class TrainingConfig:
         if self.chunk_length is None:
             self.chunk_length = self.max_epochs
 
+        if isinstance(self.reward_family, str):
+            self.reward_family = RewardFamily(self.reward_family)
+        if isinstance(self.reward_mode, str):
+            self.reward_mode = RewardMode(self.reward_mode)
+
+        if not isinstance(self.slots, list):
+            self.slots = list(self.slots)
+
+        self._validate()
+
+    # ------------------------------------------------------------------
+    # Presets
+    # ------------------------------------------------------------------
     @staticmethod
     def for_cifar10() -> "TrainingConfig":
-        """Optimized configuration for CIFAR-10 image classification."""
-        return TrainingConfig(
-            random_guess_loss=math.log(10),  # ln(10) ≈ 2.3
-            stabilization_threshold=0.03,
-            stabilization_epochs=3,
-            entropy_coef=0.1,
-            target_kl=0.015,
-        )
+        """Optimized configuration for CIFAR-10 classification."""
+        return TrainingConfig(entropy_coef=0.1, plateau_threshold=0.4)
+
+    @staticmethod
+    def for_cifar10_deep() -> "TrainingConfig":
+        """Preset tuned for the deeper CIFAR-10 host."""
+        return TrainingConfig(entropy_coef=0.08, plateau_threshold=0.35)
 
     @staticmethod
     def for_tinystories() -> "TrainingConfig":
-        """Optimized configuration for TinyStories language modeling."""
+        """Preset tuned for TinyStories language modeling."""
         return TrainingConfig(
-            random_guess_loss=math.log(50257),  # ln(50257) ≈ 10.8
-            stabilization_threshold=0.01,  # LLMs have smaller relative improvements
-            stabilization_epochs=5,  # More patience for LM stabilization
-            governor_absolute_threshold=15.0,  # Higher threshold for LM loss scale
-            entropy_coef=0.05,  # Lower entropy for more deterministic LM control
-            target_kl=0.02,  # Slightly higher KL tolerance
+            entropy_coef=0.05,
+            entropy_anneal_episodes=10,
+            plateau_threshold=0.3,
+            improvement_threshold=1.5,
+            sparse_reward_scale=0.5,
         )
 
-    @staticmethod
-    def for_imagenet() -> "TrainingConfig":
-        """Configuration for ImageNet (1000 classes)."""
-        return TrainingConfig(
-            random_guess_loss=math.log(1000),  # ln(1000) ≈ 6.9
-            stabilization_threshold=0.02,
-            stabilization_epochs=4,
-            max_epochs=50,  # More epochs for larger dataset
-        )
+    # ------------------------------------------------------------------
+    # Serialization
+    # ------------------------------------------------------------------
+    @classmethod
+    def _validate_known_keys(cls, data: dict[str, Any]) -> None:
+        known_fields = {f.name for f in fields(cls)}
+        unknown = set(data) - known_fields
+        if unknown:
+            raise ValueError(f"Unknown config keys: {sorted(unknown)}")
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "TrainingConfig":
+        """Create from dictionary, rejecting unknown keys."""
+        cls._validate_known_keys(data)
+        parsed = dict(data)
+        if "reward_family" in parsed:
+            parsed["reward_family"] = RewardFamily(parsed["reward_family"])
+        if "reward_mode" in parsed:
+            parsed["reward_mode"] = RewardMode(parsed["reward_mode"])
+        if "slots" in parsed and parsed["slots"] is not None:
+            parsed["slots"] = list(parsed["slots"])
+        return cls(**parsed)
+
+    @classmethod
+    def from_json_path(cls, path: str) -> "TrainingConfig":
+        """Load config from JSON file, failing on unknown keys."""
+        with open(path, "r", encoding="utf-8") as fp:
+            data = json.load(fp)
+        if not isinstance(data, dict):
+            raise ValueError("Config JSON must contain an object at the top level")
+        return cls.from_dict(data)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-serializable dictionary."""
+        raw = asdict(self)
+        raw["reward_family"] = self.reward_family.value
+        raw["reward_mode"] = self.reward_mode.value
+        return raw
+
+    # ------------------------------------------------------------------
+    # Runtime mappings
+    # ------------------------------------------------------------------
     def to_ppo_kwargs(self) -> dict[str, Any]:
-        """Extract PPOAgent constructor kwargs."""
+        """Extract PPOAgent constructor kwargs aligned with runtime usage."""
         return {
             "lr": self.lr,
             "gamma": self.gamma,
-            "gae_lambda": self.gae_lambda,
             "clip_ratio": self.clip_ratio,
             "entropy_coef": self.entropy_coef,
             "entropy_coef_start": self.entropy_coef_start,
             "entropy_coef_end": self.entropy_coef_end,
             "entropy_coef_min": self.entropy_coef_min,
             "adaptive_entropy_floor": self.adaptive_entropy_floor,
-            "value_coef": self.value_coef,
-            "clip_value": self.clip_value,
-            "max_grad_norm": self.max_grad_norm,
-            "weight_decay": self.weight_decay,
-            "n_epochs": self.n_epochs,
-            "batch_size": self.batch_size,
-            "target_kl": self.target_kl,
+            "entropy_anneal_steps": self.entropy_anneal_episodes * self.max_epochs,
             "lstm_hidden_dim": self.lstm_hidden_dim,
             "chunk_length": self.chunk_length,
             "num_envs": self.n_envs,
@@ -211,47 +211,79 @@ class TrainingConfig:
             "entropy_anneal_episodes": self.entropy_anneal_episodes,
             "gamma": self.gamma,
             "ppo_updates_per_batch": self.ppo_updates_per_batch,
+            "amp": self.amp,
             "lstm_hidden_dim": self.lstm_hidden_dim,
             "chunk_length": self.chunk_length,
+            "slots": list(self.slots),
+            "max_seeds": self.max_seeds,
+            "reward_mode": self.reward_mode.value,
+            "reward_family": self.reward_family.value,
+            "param_budget": self.param_budget,
+            "param_penalty_weight": self.param_penalty_weight,
+            "sparse_reward_scale": self.sparse_reward_scale,
+            "plateau_threshold": self.plateau_threshold,
+            "improvement_threshold": self.improvement_threshold,
+            "seed": self.seed,
         }
 
-    def to_governor_kwargs(self) -> dict[str, Any]:
-        """Extract TolariaGovernor constructor kwargs."""
-        return {
-            "sensitivity": self.governor_sensitivity,
-            "absolute_threshold": self.governor_absolute_threshold,
-            "death_penalty": self.governor_death_penalty,
-            "random_guess_loss": self.random_guess_loss,
-        }
+    # ------------------------------------------------------------------
+    # Validation helpers
+    # ------------------------------------------------------------------
+    def _validate_positive(self, value: int, name: str) -> None:
+        if value < 1:
+            raise ValueError(f"{name} must be >= 1 (got {value})")
 
-    def to_tracker_kwargs(self) -> dict[str, Any]:
-        """Extract SignalTracker constructor kwargs."""
-        return {
-            "stabilization_threshold": self.stabilization_threshold,
-            "stabilization_epochs": self.stabilization_epochs,
-        }
+    def _validate(self) -> None:
+        self._validate_positive(self.n_episodes, "n_episodes")
+        self._validate_positive(self.n_envs, "n_envs")
+        self._validate_positive(self.max_epochs, "max_epochs")
+        self._validate_positive(self.ppo_updates_per_batch, "ppo_updates_per_batch")
 
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for serialization."""
-        return asdict(self)
+        if self.chunk_length != self.max_epochs:
+            raise ValueError(
+                "chunk_length must match max_epochs for the current training loop"
+            )
 
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "TrainingConfig":
-        """Create from dictionary."""
-        return cls(**data)
+        if self.entropy_anneal_episodes < 0:
+            raise ValueError("entropy_anneal_episodes cannot be negative")
 
+        if self.max_seeds is not None and self.max_seeds < 1:
+            raise ValueError("max_seeds must be >= 1 when provided")
+
+        allowed_slots = {"early", "mid", "late"}
+        if not self.slots:
+            raise ValueError("slots cannot be empty")
+        unknown_slots = set(self.slots) - allowed_slots
+        if unknown_slots:
+            raise ValueError(f"Unknown slots: {sorted(unknown_slots)}")
+
+        if self.param_budget <= 0:
+            raise ValueError("param_budget must be positive")
+        if self.param_penalty_weight < 0:
+            raise ValueError("param_penalty_weight must be non-negative")
+        if self.sparse_reward_scale <= 0:
+            raise ValueError("sparse_reward_scale must be positive")
+
+        if (
+            self.reward_family == RewardFamily.LOSS
+            and self.reward_mode != RewardMode.SHAPED
+        ):
+            raise ValueError("reward_mode applies only to contribution rewards")
+
+    # ------------------------------------------------------------------
+    # Presentation
+    # ------------------------------------------------------------------
     def summary(self) -> str:
         """Human-readable summary of configuration."""
         lines = [
             "TrainingConfig:",
             f"  PPO: lr={self.lr}, gamma={self.gamma}, clip={self.clip_ratio}",
-            f"  Epochs: {self.n_epochs} PPO epochs, {self.n_episodes} episodes, {self.max_epochs} env epochs",
+            f"  Episodes: {self.n_episodes}, envs={self.n_envs}, max_epochs={self.max_epochs}",
             f"  Entropy: {self.entropy_coef}" + (f" -> {self.entropy_coef_end}" if self.entropy_coef_end else ""),
-            f"  KL stopping: {'enabled' if self.target_kl else 'disabled'}" + (f" (target={self.target_kl})" if self.target_kl else ""),
-            f"  Updates/batch: {self.ppo_updates_per_batch}",
+            f"  Updates/batch: {self.ppo_updates_per_batch}, amp={'on' if self.amp else 'off'}",
             f"  LSTM: hidden={self.lstm_hidden_dim}, chunk={self.chunk_length}",
-            f"  Governor: random_guess_loss={self.random_guess_loss:.2f}",
-            f"  Stabilization: threshold={self.stabilization_threshold}, epochs={self.stabilization_epochs}",
+            f"  Slots: {','.join(self.slots)} | reward_family={self.reward_family.value} mode={self.reward_mode.value}",
+            f"  Telemetry: {'enabled' if self.use_telemetry else 'disabled'}",
         ]
         return "\n".join(lines)
 
