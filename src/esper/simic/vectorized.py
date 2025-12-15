@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 
 import torch
 import torch.nn as nn
+import torch.cuda.amp as torch_amp
 
 from esper.runtime import get_task_spec
 from esper.utils.data import SharedBatchIterator
@@ -246,6 +247,7 @@ def _run_ppo_updates(
     ppo_updates_per_batch: int,
     raw_states_for_normalizer_update: list[torch.Tensor],
     obs_normalizer: RunningMeanStd,
+    use_amp: bool,
 ) -> dict:
     """Run one or more PPO updates on the current buffer and aggregate metrics."""
     update_metrics: list[dict] = []
@@ -254,7 +256,11 @@ def _run_ppo_updates(
 
     for update_idx in range(updates_to_run):
         clear_buffer = update_idx == updates_to_run - 1
-        metrics = agent.update(clear_buffer=clear_buffer)
+        if use_amp and torch.cuda.is_available():
+            with torch_amp.autocast(device_type="cuda", dtype=torch.float16):
+                metrics = agent.update(clear_buffer=clear_buffer)
+        else:
+            metrics = agent.update(clear_buffer=clear_buffer)
         if metrics:
             update_metrics.append(metrics)
         buffer_cleared = buffer_cleared or clear_buffer
@@ -377,6 +383,7 @@ def train_ppo_vectorized(
     seed: int = 42,
     num_workers: int | None = None,
     gpu_preload: bool = False,
+    amp: bool = False,
     lstm_hidden_dim: int = DEFAULT_LSTM_HIDDEN_DIM,
     chunk_length: int = DEFAULT_EPISODE_LENGTH,  # Must match max_epochs (from leyline)
     telemetry_config: "TelemetryConfig | None" = None,
@@ -675,6 +682,10 @@ def train_ppo_vectorized(
             total = targets.size(0)
         return loss, correct, total
 
+    # Create AMP scaler (CUDA only) - enabled gate avoids CPU overhead
+    amp_enabled = amp and torch.cuda.is_available()
+    scaler = torch_amp.GradScaler(enabled=amp_enabled)
+
     # Create or resume PPO agent
     start_episode = 0
     if resume_path:
@@ -816,9 +827,16 @@ def train_ppo_vectorized(
         env_state.init_accumulators(slots)
         return env_state
 
-    def process_train_batch(env_state: ParallelEnvState, inputs: torch.Tensor,
-                            targets: torch.Tensor, criterion: nn.Module,
-                            use_telemetry: bool = False, slots: list[str] | None = None) -> tuple[torch.Tensor, torch.Tensor, int, dict[str, dict] | None]:
+    def process_train_batch(
+        env_state: ParallelEnvState,
+        inputs: torch.Tensor,
+        targets: torch.Tensor,
+        criterion: nn.Module,
+        use_telemetry: bool = False,
+        slots: list[str] | None = None,
+        use_amp: bool = False,
+        scaler: torch.cuda.amp.GradScaler | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, int, dict[str, dict] | None]:
         """Process a single training batch for one environment (runs in CUDA stream).
 
         Returns TENSORS (not floats) to avoid blocking .item() calls inside stream context.
@@ -901,11 +919,20 @@ def train_ppo_vectorized(
             for slot_id in slots_to_step:
                 env_state.seed_optimizers[slot_id].zero_grad()
 
-            outputs = model(inputs)
-            loss, correct_tensor, total = loss_and_correct(outputs, targets, criterion)
-            loss.backward()
+            autocast_ctx = (
+                torch_amp.autocast(device_type="cuda", dtype=torch.float16)
+                if use_amp and env_dev.startswith("cuda")
+                else nullcontext()
+            )
+            with autocast_ctx:
+                outputs = model(inputs)
+                loss, correct_tensor, total = loss_and_correct(outputs, targets, criterion)
 
-            # Collect gradient stats for telemetry (after backward, before step)
+            if use_amp and scaler is not None and env_dev.startswith("cuda"):
+                scaler.scale(loss).backward()
+            else:
+                loss.backward()
+            # Collect gradient stats for telemetry (after backward, before step if scaler used)
             # Use async version to avoid .item() sync inside stream context
             # Collect DUAL gradients (host + seed) to compute gradient ratio for G2 gate
             if use_telemetry:
@@ -948,9 +975,15 @@ def train_ppo_vectorized(
                             "_seed_param_count": seed_param_count,
                         }
 
-            env_state.host_optimizer.step()
-            for slot_id in slots_to_step:
-                env_state.seed_optimizers[slot_id].step()
+            if use_amp and scaler is not None and env_dev.startswith("cuda"):
+                scaler.step(env_state.host_optimizer)
+                for slot_id in slots_to_step:
+                    scaler.step(env_state.seed_optimizers[slot_id])
+                scaler.update()
+            else:
+                env_state.host_optimizer.step()
+                for slot_id in slots_to_step:
+                    env_state.seed_optimizers[slot_id].step()
 
             # Return tensors - .item() called after stream sync
             return loss.detach(), correct_tensor, total, grad_stats_by_slot
@@ -1085,7 +1118,8 @@ def train_ppo_vectorized(
                             env_state.stream.wait_stream(torch.cuda.default_stream(torch.device(env_state.env_device)))
                         inputs, targets = env_batches[i]
                         loss_tensor, correct_tensor, total, grad_stats = process_train_batch(
-                            env_state, inputs, targets, criterion, use_telemetry=use_telemetry, slots=slots
+                            env_state, inputs, targets, criterion, use_telemetry=use_telemetry, slots=slots,
+                            use_amp=amp_enabled, scaler=scaler
                         )
                         if grad_stats is not None:
                             env_grad_stats[i] = grad_stats  # Keep last batch's grad stats
@@ -1112,7 +1146,8 @@ def train_ppo_vectorized(
                             continue
                         inputs, targets = env_batches[i]
                         loss_tensor, correct_tensor, total, grad_stats = process_train_batch(
-                            env_state, inputs, targets, criterion, use_telemetry=use_telemetry, slots=slots
+                            env_state, inputs, targets, criterion, use_telemetry=use_telemetry, slots=slots,
+                            use_amp=amp_enabled, scaler=scaler
                         )
                         if grad_stats is not None:
                             env_grad_stats[i] = grad_stats  # Keep last batch's grad stats
@@ -1834,6 +1869,7 @@ def train_ppo_vectorized(
                 ppo_updates_per_batch=ppo_updates_per_batch,
                 raw_states_for_normalizer_update=raw_states_for_normalizer_update,
                 obs_normalizer=obs_normalizer,
+                use_amp=amp,
             )
 
             # === Anomaly Detection ===
