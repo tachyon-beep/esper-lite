@@ -160,6 +160,13 @@ def main():
         default=1.0,
         help="Reward scale for sparse mode (DRL Expert: try 2.0-3.0 if learning fails)"
     )
+    ppo_parser.add_argument(
+        "--reward-family",
+        type=str,
+        choices=["contribution", "loss"],
+        default="contribution",
+        help="Reward family: contribution (default) or loss-primary",
+    )
 
     args = parser.parse_args()
 
@@ -328,6 +335,7 @@ def main():
                 slots=args.slots,
                 max_seeds=args.max_seeds,
                 reward_mode=args.reward_mode,
+                reward_family=args.reward_family,
                 param_budget=args.param_budget,
                 param_penalty_weight=args.param_penalty,
                 sparse_reward_scale=args.sparse_scale,

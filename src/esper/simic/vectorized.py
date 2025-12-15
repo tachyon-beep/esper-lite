@@ -68,7 +68,15 @@ from esper.simic.gradient_collector import materialize_dual_grad_stats
 from esper.simic.normalization import RunningMeanStd, RewardNormalizer
 from esper.simic.features import MULTISLOT_FEATURE_SIZE
 from esper.simic.ppo import PPOAgent, signals_to_features
-from esper.simic.rewards import compute_reward, RewardMode, ContributionRewardConfig, SeedInfo
+from esper.simic.rewards import (
+    compute_reward,
+    compute_loss_reward,
+    RewardMode,
+    RewardFamily,
+    ContributionRewardConfig,
+    LossRewardConfig,
+    SeedInfo,
+)
 from esper.simic.telemetry_config import TelemetryConfig
 from esper.leyline import DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
 from esper.nissa import get_hub, BlueprintAnalytics
@@ -380,6 +388,7 @@ def train_ppo_vectorized(
     param_budget: int = 500_000,
     param_penalty_weight: float = 0.1,
     sparse_reward_scale: float = 1.0,
+    reward_family: str = "contribution",
     quiet_analytics: bool = False,
 ) -> tuple[PPOAgent, list[dict]]:
     """Train PPO with vectorized environments using INVERTED CONTROL FLOW.
@@ -482,13 +491,18 @@ def train_ppo_vectorized(
     ActionEnum = task_spec.action_enum
 
     # Create reward config based on mode
+    reward_family_enum = RewardFamily(reward_family)
     reward_mode_enum = RewardMode(reward_mode)
+    if reward_family_enum == RewardFamily.LOSS and reward_mode_enum != RewardMode.SHAPED:
+        raise ValueError("reward_mode applies only to contribution rewards. Use default when reward_family=loss.")
+
     reward_config = ContributionRewardConfig(
         reward_mode=reward_mode_enum,
         param_budget=param_budget,
         param_penalty_weight=param_penalty_weight,
         sparse_reward_scale=sparse_reward_scale,
     )
+    loss_reward_config = task_spec.loss_reward_config
 
     # Map environments to devices in round-robin (needed for SharedBatchIterator)
     env_device_map = [devices[i % len(devices)] for i in range(n_envs)]
@@ -1578,45 +1592,58 @@ def train_ppo_vectorized(
                     else 0
                 )
 
-                # Unified reward computation - always use compute_reward dispatcher
-                # For pre-blending stages, seed_contribution is None and acc_delta is used as proxy
+                # Unified reward computation - family selector: contribution vs loss-primary
                 reward_components = None
-                if collect_reward_telemetry:
-                    reward, reward_components = compute_reward(
-                        action=action_for_reward,
-                        seed_contribution=seed_contribution,
-                        val_acc=env_state.val_acc,
-                        host_max_acc=env_state.host_max_acc,
-                        seed_info=SeedInfo.from_seed_state(seed_state, seed_params_for_slot),
-                        epoch=epoch,
-                        max_epochs=max_epochs,
-                        total_params=total_params,
-                        host_params=host_params,
-                        acc_at_germination=env_state.acc_at_germination.get(target_slot),
-                        acc_delta=signals.metrics.accuracy_delta,
-                        return_components=True,
-                        num_fossilized_seeds=env_state.seeds_fossilized,
-                        num_contributing_fossilized=env_state.contributing_fossilized,
-                        config=reward_config,
-                    )
-                    if target_slot in baseline_accs[env_idx]:
-                        reward_components.host_baseline_acc = baseline_accs[env_idx][target_slot]
+                seed_info = SeedInfo.from_seed_state(seed_state, seed_params_for_slot)
+                if reward_family_enum == RewardFamily.CONTRIBUTION:
+                    if collect_reward_telemetry:
+                        reward, reward_components = compute_reward(
+                            action=action_for_reward,
+                            seed_contribution=seed_contribution,
+                            val_acc=env_state.val_acc,
+                            host_max_acc=env_state.host_max_acc,
+                            seed_info=seed_info,
+                            epoch=epoch,
+                            max_epochs=max_epochs,
+                            total_params=total_params,
+                            host_params=host_params,
+                            acc_at_germination=env_state.acc_at_germination.get(target_slot),
+                            acc_delta=signals.metrics.accuracy_delta,
+                            return_components=True,
+                            num_fossilized_seeds=env_state.seeds_fossilized,
+                            num_contributing_fossilized=env_state.contributing_fossilized,
+                            config=reward_config,
+                        )
+                        if target_slot in baseline_accs[env_idx]:
+                            reward_components.host_baseline_acc = baseline_accs[env_idx][target_slot]
+                    else:
+                        reward = compute_reward(
+                            action=action_for_reward,
+                            seed_contribution=seed_contribution,
+                            val_acc=env_state.val_acc,
+                            host_max_acc=env_state.host_max_acc,
+                            seed_info=seed_info,
+                            epoch=epoch,
+                            max_epochs=max_epochs,
+                            total_params=total_params,
+                            host_params=host_params,
+                            acc_at_germination=env_state.acc_at_germination.get(target_slot),
+                            acc_delta=signals.metrics.accuracy_delta,
+                            num_fossilized_seeds=env_state.seeds_fossilized,
+                            num_contributing_fossilized=env_state.contributing_fossilized,
+                            config=reward_config,
+                        )
                 else:
-                    reward = compute_reward(
+                    reward = compute_loss_reward(
                         action=action_for_reward,
-                        seed_contribution=seed_contribution,
-                        val_acc=env_state.val_acc,
-                        host_max_acc=env_state.host_max_acc,
-                        seed_info=SeedInfo.from_seed_state(seed_state, seed_params_for_slot),
+                        loss_delta=signals.metrics.loss_delta,
+                        val_loss=env_state.val_loss,
+                        seed_info=seed_info,
                         epoch=epoch,
                         max_epochs=max_epochs,
                         total_params=total_params,
                         host_params=host_params,
-                        acc_at_germination=env_state.acc_at_germination.get(target_slot),
-                        acc_delta=signals.metrics.accuracy_delta,
-                        num_fossilized_seeds=env_state.seeds_fossilized,
-                        num_contributing_fossilized=env_state.contributing_fossilized,
-                        config=reward_config,
+                        config=loss_reward_config,
                     )
 
                 # Governor punishment: inject negative reward if rollback occurred
