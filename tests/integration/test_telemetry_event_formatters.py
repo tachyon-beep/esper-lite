@@ -73,6 +73,15 @@ class TestCounterfactualEventType:
         assert event_type.name == "COUNTERFACTUAL_COMPUTED"
 
 
+class TestSeedGateEventType:
+    """Verify seed gate event types are defined."""
+
+    def test_seed_gate_evaluated_exists(self) -> None:
+        """SEED_GATE_EVALUATED should be a valid event type."""
+        event_type = TelemetryEventType.SEED_GATE_EVALUATED
+        assert event_type.name == "SEED_GATE_EVALUATED"
+
+
 class TestConsoleOutputFormatters:
     """Test ConsoleOutput formats new event types correctly."""
 

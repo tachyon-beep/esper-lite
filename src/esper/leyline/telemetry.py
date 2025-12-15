@@ -37,6 +37,7 @@ class TelemetryEventType(Enum):
     # Lifecycle events
     SEED_GERMINATED = auto()
     SEED_STAGE_CHANGED = auto()
+    SEED_GATE_EVALUATED = auto()
     SEED_FOSSILIZED = auto()
     SEED_CULLED = auto()
 
