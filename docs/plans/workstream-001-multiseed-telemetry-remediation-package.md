@@ -254,7 +254,7 @@ Scale:
   - Specify entropy semantics explicitly: entropy computed over valid actions only, and (if normalized) normalized by `log(n_valid)` to land in `[0, 1]`.
 - **Verification:** Unit test with all-false mask triggers error.
 
-### [ ] Step 12: Ratio Diagnostics (Simic PR5)
+### [X] Step 12: Ratio Diagnostics (Simic PR5)
 
 - **Pre-flight checklist:**
   - [ ] Confirm Step 11 is merged.
@@ -265,7 +265,7 @@ Scale:
 - **Action:** Return `RatioExplosionDiagnostic` metrics when ratio > threshold.
 - **Verification:** Force a ratio explosion (mock) and see diagnostic in logs.
 
-### [ ] Step 13: Reward Families (Simic PR6)
+### [X] Step 13: Reward Families (Simic PR6)
 
 - **Pre-flight checklist:**
   - [ ] Confirm Step 12 is merged.
