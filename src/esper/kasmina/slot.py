@@ -1417,6 +1417,16 @@ class SeedSlot(nn.Module):
             payload.setdefault("inner_epoch", self.telemetry_inner_epoch)
         if self.telemetry_global_epoch is not None:
             payload.setdefault("global_epoch", self.telemetry_global_epoch)
+        if (
+            self.state is not None
+            and self.state.telemetry is not None
+            and self.state.telemetry.epoch > 0
+        ):
+            payload.setdefault("seed_gradient_norm_ratio", self.state.metrics.seed_gradient_norm_ratio)
+            payload.setdefault("isolation_violations", self.state.metrics.isolation_violations)
+            payload.setdefault("gradient_health", self.state.telemetry.gradient_health)
+            payload.setdefault("has_vanishing", self.state.telemetry.has_vanishing)
+            payload.setdefault("has_exploding", self.state.telemetry.has_exploding)
 
         event = TelemetryEvent(
             event_type=event_type,
