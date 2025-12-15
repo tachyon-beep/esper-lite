@@ -1,10 +1,15 @@
 """Unit tests for vectorized PPO helpers."""
 
 import pytest
+import torch
 from unittest.mock import MagicMock, patch
 
 from esper.leyline import SeedStage, TelemetryEventType
-from esper.simic.vectorized import _advance_active_seed
+from esper.simic.vectorized import (
+    _advance_active_seed,
+    _calculate_entropy_anneal_steps,
+    _run_ppo_updates,
+)
 
 
 class _StubGateResult:
@@ -256,3 +261,148 @@ def test_plateau_detection_logic():
             assert mock_hub.emit.call_count == 1, f"Failed: {description}"
             emitted_event = mock_hub.emit.call_args[0][0]
             assert emitted_event.event_type == expected_event, f"Failed: {description}"
+
+
+def test_calculate_entropy_anneal_steps_respects_updates_per_batch():
+    """Entropy annealing should scale with number of PPO updates per batch."""
+    # 8 episodes, 3 envs -> ceil(8/3) = 3 batches. With 2 updates per batch => 6 steps.
+    assert _calculate_entropy_anneal_steps(
+        entropy_anneal_episodes=8,
+        n_envs=3,
+        ppo_updates_per_batch=2,
+    ) == 6
+
+    # Single update per batch keeps the batch count only
+    assert _calculate_entropy_anneal_steps(
+        entropy_anneal_episodes=8,
+        n_envs=3,
+        ppo_updates_per_batch=1,
+    ) == 3
+
+    # Zero episodes means no annealing regardless of update count
+    assert _calculate_entropy_anneal_steps(
+        entropy_anneal_episodes=0,
+        n_envs=3,
+        ppo_updates_per_batch=4,
+    ) == 0
+
+
+def test_run_ppo_updates_runs_multiple_updates_and_updates_normalizer_once():
+    """Multiple PPO updates should aggregate metrics and update the normalizer once."""
+
+    class _StubBuffer:
+        def __init__(self):
+            self.reset_calls = 0
+
+        def reset(self):
+            self.reset_calls += 1
+
+    class _StubAgent:
+        def __init__(self):
+            self.buffer = _StubBuffer()
+            self.update_calls: list[bool] = []
+            self.target_kl = None
+
+        def update(self, clear_buffer: bool = True) -> dict:
+            """Return deterministic metrics for aggregation checks."""
+            self.update_calls.append(clear_buffer)
+            call_idx = len(self.update_calls)
+            approx = 0.01 * call_idx
+            return {
+                "policy_loss": float(call_idx),
+                "value_loss": float(call_idx + 1),
+                "entropy": float(call_idx + 2),
+                "approx_kl": approx,
+                "ratio_max": 1.0 + approx,
+                "ratio_min": 1.0 - approx,
+                "clip_fraction": 0.1 * call_idx,
+                "explained_variance": 0.05 * call_idx,
+            }
+
+    class _StubNormalizer:
+        def __init__(self):
+            self.calls: list[torch.Tensor] = []
+
+        def update(self, tensor: torch.Tensor) -> None:
+            self.calls.append(tensor)
+
+    agent = _StubAgent()
+    normalizer = _StubNormalizer()
+    raw_states = [torch.ones(2, 3), torch.zeros(1, 3)]
+
+    metrics = _run_ppo_updates(
+        agent=agent,
+        ppo_updates_per_batch=3,
+        raw_states_for_normalizer_update=raw_states,
+        obs_normalizer=normalizer,
+    )
+
+    # Expect three updates, buffer cleared only on final update
+    assert agent.update_calls == [False, False, True]
+    assert agent.buffer.reset_calls == 0
+
+    # Normalizer updated once with concatenated states
+    assert len(normalizer.calls) == 1
+    assert normalizer.calls[0].shape[0] == sum(state.shape[0] for state in raw_states)
+
+    # Metrics aggregated correctly (means except ratio_max/min)
+    assert metrics["ratio_max"] == pytest.approx(1.0 + 0.03)
+    assert metrics["ratio_min"] == pytest.approx(1.0 - 0.03)
+    assert metrics["policy_loss"] == pytest.approx((1.0 + 2.0 + 3.0) / 3.0)
+    assert metrics["approx_kl"] == pytest.approx((0.01 + 0.02 + 0.03) / 3.0)
+
+
+def test_run_ppo_updates_honors_target_kl_early_stop_and_clears_buffer():
+    """Updates should stop when KL exceeds threshold and still clear the buffer."""
+
+    class _StubBuffer:
+        def __init__(self):
+            self.reset_calls = 0
+
+        def reset(self):
+            self.reset_calls += 1
+
+    class _StubAgent:
+        def __init__(self):
+            self.buffer = _StubBuffer()
+            self.update_calls: list[bool] = []
+            self.target_kl = 0.01
+
+        def update(self, clear_buffer: bool = True) -> dict:
+            self.update_calls.append(clear_buffer)
+            call_idx = len(self.update_calls)
+            approx = 0.005 if call_idx == 1 else 0.02
+            return {
+                "policy_loss": float(call_idx),
+                "value_loss": float(call_idx + 1),
+                "entropy": float(call_idx + 2),
+                "approx_kl": approx,
+                "ratio_max": 1.0 + approx,
+                "ratio_min": 1.0 - approx,
+            }
+
+    class _StubNormalizer:
+        def __init__(self):
+            self.calls: list[torch.Tensor] = []
+
+        def update(self, tensor: torch.Tensor) -> None:
+            self.calls.append(tensor)
+
+    agent = _StubAgent()
+    normalizer = _StubNormalizer()
+    raw_states = [torch.ones(1, 3)]
+
+    metrics = _run_ppo_updates(
+        agent=agent,
+        ppo_updates_per_batch=3,
+        raw_states_for_normalizer_update=raw_states,
+        obs_normalizer=normalizer,
+    )
+
+    # Should stop after second update due to KL threshold (1.5 * 0.01 = 0.015)
+    assert agent.update_calls == [False, False]
+    assert agent.buffer.reset_calls == 1  # Cleared because last call didn't clear the buffer
+
+    # Normalizer still updated once because at least one update succeeded
+    assert len(normalizer.calls) == 1
+    assert metrics["approx_kl"] == pytest.approx((0.005 + 0.02) / 2.0)
