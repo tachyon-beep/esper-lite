@@ -43,6 +43,10 @@ data/*
 *.db
 var/
 
+# Git worktrees (local)
+.worktrees/
+worktrees/
+
 telemetry/*
 !telemetry/.gitkeep
 # Mutation testing output
