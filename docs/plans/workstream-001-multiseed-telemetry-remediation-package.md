@@ -240,7 +240,7 @@ Scale:
 - **Action:** Wire `telemetry_config.escalate_temporarily()` to `AnomalyDetector`.
 - **Verification:** Anomaly triggers DEBUG logs.
 
-### [ ] Step 11: Masked Categorical Safety (Simic PR4)
+### [X] Step 11: Masked Categorical Safety (Simic PR4)
 
 - **Pre-flight checklist:**
   - [ ] Confirm Step 10 is merged.

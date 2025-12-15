@@ -122,6 +122,7 @@ class ParallelEnvState:
     # (Batched to [num_layers, num_envs, hidden_dim] during forward pass)
     # None = fresh episode (initialized on first action selection)
     lstm_hidden: tuple[torch.Tensor, torch.Tensor] | None = None
+    telemetry_cb: any = None  # Callback wired when telemetry is enabled
     # Per-slot EMA tracking for seed gradient ratio (for G2 gate)
     # Smooths per-step ratio noise with momentum=0.9
     gradient_ratio_ema: dict[str, float] = field(default_factory=dict)
@@ -270,7 +271,7 @@ def _handle_telemetry_escalation(
     anomaly_report: AnomalyReport | None,
     telemetry_config: TelemetryConfig | None,
 ) -> None:
-    """Escalate telemetry on anomaly and tick down escalation each batch."""
+    """Escalate telemetry on anomaly."""
     if telemetry_config is None:
         return
 
@@ -280,8 +281,6 @@ def _handle_telemetry_escalation(
         and anomaly_report.has_anomaly
     ):
         telemetry_config.escalate_temporarily()
-
-    telemetry_config.tick_escalation()
 
 
 def _emit_anomaly_diagnostics(
@@ -724,6 +723,15 @@ def train_ppo_vectorized(
 
         return callback
 
+    def apply_slot_telemetry(env_state: ParallelEnvState) -> None:
+        """Configure slot telemetry/fast_mode based on current telemetry level."""
+        telemetry_enabled = use_telemetry and (
+            telemetry_config is None or telemetry_config.should_collect("ops_normal")
+        )
+        for slot in env_state.model.seed_slots.values():
+            slot.on_telemetry = env_state.telemetry_cb if telemetry_enabled else None
+            slot.fast_mode = not telemetry_enabled
+
     def create_env_state(env_idx: int, base_seed: int) -> ParallelEnvState:
         """Create environment state with CUDA stream.
 
@@ -735,14 +743,11 @@ def train_ppo_vectorized(
 
         model = create_model(task=task_spec, device=env_device, slots=slots)
 
-        telemetry_enabled = use_telemetry and (
-            telemetry_config is None or telemetry_config.should_collect("ops_normal")
-        )
-        telemetry_cb = make_telemetry_callback(env_idx) if telemetry_enabled else None
+        telemetry_cb = make_telemetry_callback(env_idx)
         for slot in model.seed_slots.values():
             slot.on_telemetry = telemetry_cb
-            # fast_mode disables telemetry/monitoring inside the slot for PPO rollouts
-            slot.fast_mode = not telemetry_enabled
+            # fast_mode toggled per epoch via apply_slot_telemetry (telemetry-enabled by default)
+            slot.fast_mode = False
             # Incubator mode gradient isolation: detach host input into the seed path so
             # host gradients remain identical to the host-only model while the seed
             # trickle-learns via STE in TRAINING. The host optimizer still steps
@@ -786,6 +791,7 @@ def train_ppo_vectorized(
             seeds_created=0,
             episode_rewards=[],
             action_enum=ActionEnum,
+            telemetry_cb=telemetry_cb,
         )
         # Pre-allocate accumulators to avoid per-epoch allocation churn
         env_state.init_accumulators(slots)
@@ -1013,6 +1019,10 @@ def train_ppo_vectorized(
 
         # Run epochs with INVERTED CONTROL FLOW
         for epoch in range(1, max_epochs + 1):
+            if telemetry_config is not None:
+                telemetry_config.tick_escalation()
+            for env_state in env_states:
+                apply_slot_telemetry(env_state)
             # Track gradient stats per env for telemetry sync
             env_grad_stats = [None] * envs_this_batch
 
