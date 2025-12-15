@@ -13,7 +13,7 @@ These properties ensure TamiyoDecision.to_command() is a reliable transformation
 from __future__ import annotations
 
 import pytest
-from hypothesis import given, settings, HealthCheck, assume
+from hypothesis import given, settings, HealthCheck
 from hypothesis import strategies as st
 
 from esper.leyline import CommandType, RiskLevel, SeedStage

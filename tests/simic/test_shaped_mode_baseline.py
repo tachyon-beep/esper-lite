@@ -7,12 +7,10 @@ to ensure the existing SHAPED mode behavior is preserved.
 Created as risk reduction before sparse-reward-experiment implementation.
 """
 
-import pytest
 from esper.leyline import SeedStage
 from esper.leyline.factored_actions import LifecycleOp
 from esper.simic.rewards import (
     compute_contribution_reward,
-    ContributionRewardConfig,
     SeedInfo,
 )
 
@@ -25,8 +23,6 @@ class TestShapedModeBaseline:
 
         This captures the baseline compute_rent behavior.
         """
-        config = ContributionRewardConfig()
-
         reward = compute_contribution_reward(
             action=LifecycleOp.WAIT,
             seed_contribution=None,
@@ -47,8 +43,6 @@ class TestShapedModeBaseline:
 
     def test_blending_seed_with_positive_contribution(self):
         """Reward for BLENDING stage seed with positive counterfactual contribution."""
-        config = ContributionRewardConfig()
-
         seed_info = SeedInfo(
             stage=SeedStage.BLENDING.value,
             improvement_since_stage_start=1.5,
@@ -78,8 +72,6 @@ class TestShapedModeBaseline:
 
     def test_terminal_epoch_includes_bonus(self):
         """Terminal epoch should include accuracy bonus."""
-        config = ContributionRewardConfig()
-
         seed_info = SeedInfo(
             stage=SeedStage.FOSSILIZED.value,
             improvement_since_stage_start=0.0,

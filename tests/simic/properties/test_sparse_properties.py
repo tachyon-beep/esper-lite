@@ -5,7 +5,6 @@ DRL Expert Review: These tests verify critical invariants for sparse rewards.
 """
 
 import math
-import pytest
 from hypothesis import given, strategies as st, settings
 
 from esper.simic.rewards import (

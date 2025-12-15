@@ -4,7 +4,6 @@ Learning rates were previously hardcoded throughout the training code.
 This parameterization allows task-specific tuning without code changes.
 """
 
-import pytest
 
 
 class TestTaskSpecLearningRates:

@@ -10,7 +10,7 @@ Tier 2: Semantic Invariants
 """
 
 import pytest
-from hypothesis import given, settings, assume
+from hypothesis import given, settings
 
 from esper.leyline import SeedStage
 from esper.leyline.factored_actions import LifecycleOp
@@ -18,13 +18,11 @@ from esper.simic.rewards import (
     compute_contribution_reward,
     ContributionRewardConfig,
     STAGE_FOSSILIZED,
-    STAGE_PROBATIONARY,
 )
 
 from tests.simic.strategies import (
     reward_inputs,
     reward_inputs_with_seed,
-    seed_infos_at_stage,
     fossilize_inputs,
     cull_inputs,
 )

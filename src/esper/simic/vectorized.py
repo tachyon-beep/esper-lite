@@ -75,7 +75,6 @@ from esper.simic.rewards import (
     RewardMode,
     RewardFamily,
     ContributionRewardConfig,
-    LossRewardConfig,
     SeedInfo,
 )
 from esper.simic.telemetry_config import TelemetryConfig
@@ -1317,8 +1316,6 @@ def train_ppo_vectorized(
             governor_panic_envs = []  # Track which envs need rollback
 
             # Number of germinate actions = total actions - 3 (WAIT, FOSSILIZE, CULL)
-            num_germinate_actions = len(ActionEnum) - 3
-
             for env_idx, env_state in enumerate(env_states):
                 model = env_state.model
 

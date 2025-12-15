@@ -1,7 +1,6 @@
 """Tests for ratio explosion diagnostics."""
 
 import torch
-import pytest
 
 from esper.simic.debug_telemetry import RatioExplosionDiagnostic
 

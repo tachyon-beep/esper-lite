@@ -188,7 +188,7 @@ class TestG5RequiresCounterfactual:
 
     def test_g5_fails_without_counterfactual(self):
         """G5 should fail if counterfactual_contribution is None."""
-        from esper.kasmina.slot import SeedState, SeedMetrics, QualityGates
+        from esper.kasmina.slot import SeedState, QualityGates
         from esper.leyline import SeedStage
 
         gates = QualityGates()
@@ -209,7 +209,7 @@ class TestG5RequiresCounterfactual:
 
     def test_g5_passes_with_positive_counterfactual(self):
         """G5 should pass with positive counterfactual contribution."""
-        from esper.kasmina.slot import SeedState, SeedMetrics, QualityGates
+        from esper.kasmina.slot import SeedState, QualityGates
         from esper.leyline import SeedStage
 
         gates = QualityGates()
@@ -297,7 +297,6 @@ class TestShapeProbeCacheDeviceTransfer:
 
     def test_cache_only_cleared_on_device_change(self):
         """Cache should only be cleared when device actually changes."""
-        import torch
         from esper.kasmina.slot import SeedSlot
 
         slot = SeedSlot(slot_id="test", channels=64, device="cpu")
@@ -317,7 +316,6 @@ class TestShapeProbeCacheDeviceTransfer:
 
     def test_to_returns_self(self):
         """The .to() method should return self for chaining."""
-        import torch
         from esper.kasmina.slot import SeedSlot
 
         slot = SeedSlot(slot_id="test", channels=64, device="cpu")

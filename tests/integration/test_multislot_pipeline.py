@@ -8,7 +8,6 @@ Focus: Integration - verifying components work together, not re-testing individu
 """
 
 import torch
-import pytest
 
 
 def test_multislot_model_creation_and_forward():

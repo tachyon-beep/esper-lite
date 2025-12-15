@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING
 from esper.karn.store import SeedStage
 
 if TYPE_CHECKING:
-    from esper.karn.store import TelemetryStore, EpochSnapshot
+    from esper.karn.store import TelemetryStore
 
 
 @dataclass

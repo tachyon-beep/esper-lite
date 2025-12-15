@@ -23,11 +23,10 @@ from esper.karn.counterfactual import (
     CounterfactualEngine,
     CounterfactualConfig,
     CounterfactualMatrix,
-    ShapleyEstimate,
 )
 
 if TYPE_CHECKING:
-    from esper.leyline.telemetry import TelemetryEvent
+    pass
 
 _logger = logging.getLogger(__name__)
 

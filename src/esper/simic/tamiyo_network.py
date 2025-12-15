@@ -22,7 +22,7 @@ import math
 import torch
 import torch.nn as nn
 
-from esper.simic.action_masks import MaskedCategorical, InvalidStateMachineError
+from esper.simic.action_masks import MaskedCategorical
 
 from esper.leyline import DEFAULT_LSTM_HIDDEN_DIM, DEFAULT_FEATURE_DIM
 from esper.leyline.factored_actions import (

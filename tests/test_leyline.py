@@ -12,7 +12,6 @@ from esper.leyline import (
     RiskLevel,
     AdaptationCommand,
     TrainingMetrics,
-    TrainingSignals,
     SeedMetrics,
     SeedStateReport,
     GateLevel,

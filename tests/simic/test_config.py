@@ -15,13 +15,13 @@ def test_default_gamma_gae_lambda():
 
 def test_to_ppo_kwargs():
     """to_ppo_kwargs should include vectorized training parameters."""
-    config = TrainingConfig(entropy_anneal_episodes=2, max_epochs=25)
+    config = TrainingConfig(entropy_anneal_episodes=8, n_envs=4, ppo_updates_per_batch=2)
     ppo_kwargs = config.to_ppo_kwargs()
 
     assert ppo_kwargs.get("num_envs") == config.n_envs
     assert ppo_kwargs.get("max_steps_per_env") == config.max_epochs
     assert ppo_kwargs.get("gamma") == 0.995
-    assert ppo_kwargs.get("entropy_anneal_steps") == 50
+    assert ppo_kwargs.get("entropy_anneal_steps") == 4
 
 
 def test_to_train_kwargs_is_subset_of_vectorized_signature():

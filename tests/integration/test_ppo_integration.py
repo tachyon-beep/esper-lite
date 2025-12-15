@@ -6,7 +6,6 @@ Tests that PPO components work together correctly:
 - Action sampling produces valid factored actions
 """
 
-import pytest
 import torch
 
 from esper.simic.ppo import PPOAgent, signals_to_features
@@ -311,10 +310,10 @@ class TestPPOEndToEnd:
         )
 
         # All outputs should be valid
-        assert 0 <= actions["op"].item() < 4, f"Invalid op action"
+        assert 0 <= actions["op"].item() < 4, "Invalid op action"
         for key in log_probs:
             assert log_probs[key].item() <= 0, f"Invalid {key} log prob"
-        assert values.shape == (1,), f"Invalid value shape"
+        assert values.shape == (1,), "Invalid value shape"
 
     def test_telemetry_pipeline(self):
         """Pipeline with telemetry features."""

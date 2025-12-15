@@ -11,15 +11,13 @@ this critical property, ensuring:
 3. Correct telescoping - intermediate terms cancel exactly
 """
 
-import pytest
-from hypothesis import given, strategies as st, settings, assume
+from hypothesis import given, strategies as st, settings
 
 from esper.simic.rewards import (
     compute_seed_potential,
     compute_pbrs_bonus,
     STAGE_POTENTIALS,
 )
-from esper.leyline import SeedStage
 
 
 class TestPBRSTelescopingProperty:
@@ -323,7 +321,6 @@ class TestPBRSPolicyInvariance:
 
         # For gamma < 1, the sum is not exactly zero but bounded
         total = bonus_ab + bonus_ba
-        expected = (gamma - 1) * (phi_b - phi_a) + (gamma - 1) * (phi_a - phi_b)
         # Simplifies to: (gamma - 1) * (phi_b - phi_a + phi_a - phi_b) = 0... wait
         # Actually: F(A,B) = gamma*phi_B - phi_A
         #           F(B,A) = gamma*phi_A - phi_B

@@ -32,7 +32,6 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
-from rich.progress import BarColumn, Progress, TextColumn
 
 if TYPE_CHECKING:
     from esper.leyline.telemetry import TelemetryEvent
@@ -940,14 +939,14 @@ class TUIOutput:
     def _render_header(self) -> Panel:
         """Render the header with episode info and multi-env summary."""
         text = Text()
-        text.append(f"Episode: ", style="dim")
+        text.append("Episode: ", style="dim")
         text.append(f"{self.state.current_episode}", style="bold cyan")
-        text.append(f"  |  Batches: ", style="dim")
+        text.append("  |  Batches: ", style="dim")
         text.append(f"{self.state.batches_completed}", style="bold cyan")
-        text.append(f"  |  Best Acc: ", style="dim")
+        text.append("  |  Best Acc: ", style="dim")
         text.append(f"{self.state.best_accuracy:.1f}%", style="bold green")
         text.append(f" (ep {self.state.best_accuracy_episode})", style="dim")
-        text.append(f"  |  Current: ", style="dim")
+        text.append("  |  Current: ", style="dim")
         text.append(f"{self.state.host_accuracy:.1f}%", style="cyan")
 
         # Add reward hacking warning
@@ -1113,7 +1112,6 @@ class TUIOutput:
             table.add_column("Last / Status", justify="left", width=16)
 
             reward = env.current_reward
-            base = env.reward_components.get("base_acc_delta")
             rent = env.reward_components.get("compute_rent")
             penalty = env.reward_components.get("ratio_penalty")
             params = getattr(env, "host_params", None)

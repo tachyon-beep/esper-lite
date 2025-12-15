@@ -6,20 +6,18 @@ fire correctly and provide proper credit assignment.
 """
 
 import pytest
-from hypothesis import given, settings, assume
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from esper.leyline import SeedStage
 from esper.leyline.factored_actions import LifecycleOp
 from esper.simic.rewards import (
     compute_contribution_reward,
-    ContributionRewardConfig,
     SeedInfo,
     STAGE_BLENDING,
     STAGE_PROBATIONARY,
 )
 
-from tests.simic.strategies import seed_infos_at_stage, reward_inputs_with_seed
 
 
 @pytest.mark.property

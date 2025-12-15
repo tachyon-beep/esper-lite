@@ -18,27 +18,17 @@ from hypothesis import strategies as st
 
 from esper.leyline import SeedStage
 from esper.tamiyo.heuristic import HeuristicTamiyo, HeuristicPolicyConfig
-from esper.tamiyo.decisions import TamiyoDecision
 from esper.tamiyo.tracker import SignalTracker
 
 # Import shared strategies
 from tests.strategies import bounded_floats
 
 # Import Tamiyo-specific strategies
-from tests.tamiyo.strategies import (
-    tamiyo_configs,
-    mock_seed_states,
-    mock_training_signals,
-    embargo_contexts,
-)
 from tests.tamiyo.strategies.decision_strategies import (
     probationary_seed_states,
-    stabilized_signals,
     unstabilized_signals,
-    plateau_signals,
 )
 from tests.tamiyo.strategies.tracker_strategies import (
-    loss_sequences,
     stable_loss_sequences,
     explosive_loss_sequences,
 )
@@ -399,7 +389,7 @@ class TestCounterfactualGuard:
 
         # With positive total_improvement, should fossilize
         assert decision.action.name == "FOSSILIZE", \
-            f"Should fossilize with positive total_improvement when no counterfactual"
+            "Should fossilize with positive total_improvement when no counterfactual"
 
 
 # =============================================================================

@@ -8,8 +8,7 @@ Tests mathematical invariants that must hold for ALL inputs:
 """
 
 import math
-import pytest
-from hypothesis import given, assume, settings, example
+from hypothesis import given, assume, settings
 from hypothesis import strategies as st
 from tests.strategies import (
     bounded_floats,

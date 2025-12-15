@@ -4,7 +4,6 @@ These utilities replace the duplicate _loss_and_correct and _compute_loss
 functions scattered across simic/training.py and tolaria/trainer.py.
 """
 
-import pytest
 import torch
 import torch.nn as nn
 

@@ -96,8 +96,6 @@ class HeuristicTamiyo:
 
     def decide(self, signals: TrainingSignals, active_seeds: list["SeedState"]) -> TamiyoDecision:
         """Make a decision based on training signals."""
-        Action = self._action_enum
-
         # Decay blueprint penalties once per epoch (not per decision)
         # With decay=0.5, penalties now persist ~10 epochs instead of ~4 decisions
         current_epoch = signals.metrics.epoch

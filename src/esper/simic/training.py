@@ -18,7 +18,6 @@ from esper.simic.gradient_collector import (
     collect_seed_gradients_async,
     materialize_grad_stats,
 )
-from esper.simic.action_masks import build_slot_states, compute_action_masks
 from esper.simic.slots import ordered_slots
 from esper.nissa import get_hub
 from esper.utils.loss import compute_task_loss_with_metrics

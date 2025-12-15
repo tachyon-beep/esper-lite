@@ -158,7 +158,6 @@ class WebSocketOutput:
     async def _serve(self) -> None:
         """Main async server loop."""
         try:
-            import websockets
             from websockets.server import serve
         except ImportError:
             _logger.error(

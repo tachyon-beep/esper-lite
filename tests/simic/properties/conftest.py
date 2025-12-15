@@ -2,7 +2,6 @@
 
 import os
 
-import pytest
 from hypothesis import settings, Verbosity
 
 # Register profile for CI (more examples, deterministic)

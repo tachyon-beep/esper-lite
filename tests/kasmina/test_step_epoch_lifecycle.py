@@ -8,8 +8,6 @@ Covers all stage transitions in the seed lifecycle state machine:
 - PROBATIONARY → CULLED (negative counterfactual or timeout)
 """
 
-import pytest
-import torch
 import torch.nn as nn
 
 from esper.kasmina.slot import SeedSlot, SeedState, SeedMetrics, QualityGates, GateResult, GateLevel

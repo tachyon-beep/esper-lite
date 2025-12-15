@@ -5,11 +5,9 @@ verifying the command execution pipeline across the strategic-to-tactical bounda
 """
 
 import pytest
-import torch
-import torch.nn as nn
 
 from esper.tamiyo.decisions import TamiyoDecision
-from esper.kasmina.slot import SeedSlot, SeedState
+from esper.kasmina.slot import SeedSlot
 from esper.leyline import (
     SeedStage,
     CommandType,
@@ -106,13 +104,6 @@ class TestTamiyoKasminaIntegration:
 
         # Set counterfactual contribution (required for G5 gate)
         state.metrics.counterfactual_contribution = 2.5
-
-        # Create FOSSILIZE decision
-        decision = TamiyoDecision(
-            action=action_enum.FOSSILIZE,
-            target_seed_id="test_seed",
-            reason="Seed proven valuable",
-        )
 
         # Execute fossilization
         gate_result = slot.advance_stage(SeedStage.FOSSILIZED)

@@ -14,17 +14,12 @@ from dataclasses import dataclass
 import math
 from typing import TYPE_CHECKING
 
-import torch
 
 # HOT PATH: ONLY leyline imports allowed!
-from esper.leyline import (
-    TensorSchema,
-    TENSOR_SCHEMA_SIZE,
-)
 
 if TYPE_CHECKING:
     # Type hints only - not imported at runtime
-    from typing import Any
+    pass
 
 
 __all__ = [
@@ -32,7 +27,6 @@ __all__ = [
     "obs_to_multislot_features",
     "MULTISLOT_FEATURE_SIZE",
     "TaskConfig",
-    "normalize_observation",
 ]
 
 
@@ -213,19 +207,3 @@ class TaskConfig:
             max_epochs=50,
             max_steps=50000,
         )
-
-
-def normalize_observation(obs: dict, config: TaskConfig) -> dict:
-    """Normalize observations for stable PPO training."""
-    achievable_range = config.achievable_range or 1.0
-    return {
-        "epoch": obs["epoch"] / config.max_epochs,
-        "global_step": obs["global_step"] / config.max_steps,
-        "train_loss": (obs["train_loss"] - config.target_loss) / achievable_range,
-        "val_loss": (obs["val_loss"] - config.target_loss) / achievable_range,
-        "loss_delta": obs["loss_delta"] / config.typical_loss_delta_std,
-        "plateau_epochs": min(obs["plateau_epochs"] / 10.0, 1.0),
-        "seed_alpha": obs["seed_alpha"],
-        "has_active_seed": obs["has_active_seed"],
-        "seed_stage": obs["seed_stage"] / 7.0,
-    }

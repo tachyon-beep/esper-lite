@@ -4,7 +4,6 @@ Tests Action enum, blueprint mappings, and action space completeness.
 These tests cover the flat action enum used by HeuristicTamiyo for baseline comparisons.
 """
 
-import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 

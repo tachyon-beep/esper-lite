@@ -1,6 +1,5 @@
 """Tests for HeuristicTamiyo decision logic."""
 
-import pytest
 
 from esper.leyline import SeedStage, DEFAULT_BLUEPRINT_PENALTY_THRESHOLD
 from esper.tamiyo.heuristic import HeuristicTamiyo, HeuristicPolicyConfig

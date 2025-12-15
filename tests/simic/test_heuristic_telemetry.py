@@ -1,6 +1,5 @@
 """Tests for heuristic training telemetry emission."""
 
-import pytest
 
 from esper.leyline import TelemetryEvent, TelemetryEventType
 

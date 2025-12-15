@@ -3,7 +3,7 @@
 import pytest
 
 from esper.tamiyo.tracker import SignalTracker
-from esper.leyline import TrainingSignals, DEFAULT_STABILIZATION_THRESHOLD, DEFAULT_STABILIZATION_EPOCHS
+from esper.leyline import TrainingSignals
 
 
 @pytest.mark.tamiyo

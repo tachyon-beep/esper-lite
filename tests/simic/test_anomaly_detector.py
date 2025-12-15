@@ -1,8 +1,7 @@
 """Tests for anomaly detection in PPO training."""
 
-import pytest
 
-from esper.simic.anomaly_detector import AnomalyDetector, AnomalyReport
+from esper.simic.anomaly_detector import AnomalyDetector
 
 
 class TestAnomalyDetector:

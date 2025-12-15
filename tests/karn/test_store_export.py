@@ -4,7 +4,6 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-import pytest
 
 from esper.karn.store import TelemetryStore, EpisodeContext
 
@@ -76,7 +75,7 @@ class TestExportJsonl:
         store.commit_epoch()
 
         output_file = tmp_path / "test_enum.jsonl"
-        count = store.export_jsonl(output_file)
+        store.export_jsonl(output_file)
 
         # Should serialize enum as name string
         with open(output_file) as f:

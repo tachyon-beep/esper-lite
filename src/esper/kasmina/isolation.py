@@ -5,7 +5,6 @@ Ensures seed modules don't destabilize the host network during training.
 
 from __future__ import annotations
 
-import math
 
 import torch
 import torch.nn as nn

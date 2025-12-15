@@ -1,6 +1,5 @@
 """Tests for epoch telemetry emission and ordering."""
 
-import pytest
 
 from esper.leyline import TelemetryEvent, TelemetryEventType
 

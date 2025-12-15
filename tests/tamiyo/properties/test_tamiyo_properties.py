@@ -19,12 +19,11 @@ Usage:
 
 from __future__ import annotations
 
-import pytest
-from hypothesis import given, assume, settings, HealthCheck
+from hypothesis import given, settings, HealthCheck
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, rule, invariant, initialize
 
-from esper.leyline import SeedStage, CommandType, DEFAULT_STABILIZATION_THRESHOLD, DEFAULT_STABILIZATION_EPOCHS
+from esper.leyline import CommandType
 from esper.tamiyo.tracker import SignalTracker
 from esper.tamiyo.heuristic import HeuristicTamiyo, HeuristicPolicyConfig
 from esper.tamiyo.decisions import TamiyoDecision
@@ -34,7 +33,6 @@ from tests.strategies import bounded_floats
 
 # Import Tamiyo-specific strategies from the new strategies module
 from tests.tamiyo.strategies import (
-    tamiyo_configs,
     mock_seed_states,
     mock_training_signals,
     loss_sequences,

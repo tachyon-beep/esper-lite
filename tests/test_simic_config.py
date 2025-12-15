@@ -28,11 +28,18 @@ class TestTrainingConfig:
 
     def test_lstm_config_to_ppo_kwargs(self):
         """LSTM params should flow to PPOAgent kwargs."""
-        config = TrainingConfig(lstm_hidden_dim=256, chunk_length=25, entropy_anneal_episodes=2)
+        config = TrainingConfig(
+            lstm_hidden_dim=256,
+            chunk_length=25,
+            entropy_anneal_episodes=8,
+            n_envs=4,
+            ppo_updates_per_batch=2,
+        )
         kwargs = config.to_ppo_kwargs()
         assert kwargs["lstm_hidden_dim"] == 256
         assert kwargs["chunk_length"] == 25
-        assert kwargs["entropy_anneal_steps"] == 2 * config.max_epochs
+        # ceil(episodes / n_envs) * updates_per_batch
+        assert kwargs["entropy_anneal_steps"] == 4
 
     def test_lstm_config_to_train_kwargs(self):
         """LSTM params should flow to train_ppo_vectorized kwargs."""

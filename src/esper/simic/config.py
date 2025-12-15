@@ -26,6 +26,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any
 
@@ -178,6 +179,10 @@ class TrainingConfig:
     # ------------------------------------------------------------------
     def to_ppo_kwargs(self) -> dict[str, Any]:
         """Extract PPOAgent constructor kwargs aligned with runtime usage."""
+        entropy_steps = 0
+        if self.entropy_anneal_episodes > 0:
+            entropy_steps = math.ceil(self.entropy_anneal_episodes / self.n_envs) * self.ppo_updates_per_batch
+
         return {
             "lr": self.lr,
             "gamma": self.gamma,
@@ -187,7 +192,7 @@ class TrainingConfig:
             "entropy_coef_end": self.entropy_coef_end,
             "entropy_coef_min": self.entropy_coef_min,
             "adaptive_entropy_floor": self.adaptive_entropy_floor,
-            "entropy_anneal_steps": self.entropy_anneal_episodes * self.max_epochs,
+            "entropy_anneal_steps": entropy_steps,
             "lstm_hidden_dim": self.lstm_hidden_dim,
             "chunk_length": self.chunk_length,
             "num_envs": self.n_envs,

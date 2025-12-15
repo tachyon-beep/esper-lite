@@ -19,13 +19,12 @@ Usage:
 from __future__ import annotations
 
 import logging
-import os
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from esper.karn.store import TelemetryStore, EpochSnapshot
+    from esper.karn.store import TelemetryStore
 
 _logger = logging.getLogger(__name__)
 
@@ -366,7 +365,7 @@ class VitalSignsMonitor:
         if len(self._loss_history) >= 2:
             recent_losses = self._loss_history[-10:]
             avg_loss = sum(recent_losses) / len(recent_losses)
-            spikes = sum(1 for l in recent_losses if l > avg_loss * self.loss_spike_threshold)
+            spikes = sum(1 for loss_value in recent_losses if loss_value > avg_loss * self.loss_spike_threshold)
             vitals.loss_spike_count = spikes
 
         # Check seed health

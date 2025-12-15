@@ -1,6 +1,5 @@
 """Tests for multi-slot observation feature extraction."""
 
-import pytest
 
 
 def test_multislot_features():

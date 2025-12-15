@@ -1,6 +1,5 @@
 """Tests for G5 fossilization gate minimum contribution threshold."""
 
-import pytest
 from esper.kasmina.slot import (
     QualityGates,
     SeedState,

@@ -72,7 +72,7 @@ class TestValidateWithAttribution:
         assert model.training is True
 
         # Run attribution validation
-        result = validate_with_attribution(model, testloader, criterion, "cpu", slot="mid")
+        validate_with_attribution(model, testloader, criterion, "cpu", slot="mid")
 
         # Model should be back in training mode
         assert model.training is True, (
@@ -95,7 +95,7 @@ class TestValidateWithAttribution:
         model.eval()
         assert model.training is False
 
-        result = validate_with_attribution(model, testloader, criterion, "cpu", slot="mid")
+        validate_with_attribution(model, testloader, criterion, "cpu", slot="mid")
 
         # Model should still be in eval mode
         assert model.training is False, (
@@ -104,16 +104,6 @@ class TestValidateWithAttribution:
 
     def test_restores_mode_even_on_exception(self):
         """Test that training mode is restored even if validation raises."""
-        from esper.tolaria.trainer import validate_with_attribution
-
-        model = DummyModelWithSlot()
-
-        # Empty dataloader will cause division by zero in accuracy calc
-        # Actually, current implementation handles empty gracefully, so we need
-        # a different approach - use a mock that raises
-
-        # For now, just verify the happy path works
-        # A more robust test would mock the inner function to raise
         pass  # Placeholder - implementation handles this via try/finally
 
 
@@ -220,7 +210,7 @@ class TestValidateWithAttributionIntegration:
 
         original_alpha = model_with_seed.seed_slots["mid"].alpha
 
-        result = validate_with_attribution(
+        validate_with_attribution(
             model_with_seed, test_data, criterion, "cpu", slot="mid"
         )
 

@@ -732,7 +732,6 @@ class TestRansomwareSeedDetection:
 
     def test_attribution_discount_sigmoid_values(self):
         """Verify sigmoid discount values at specific total_improvement levels."""
-        import math
         from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0

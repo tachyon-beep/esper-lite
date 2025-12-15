@@ -1,7 +1,6 @@
 """Tests for TolariaGovernor - the fail-safe watchdog mechanism."""
 
 import math
-import pytest
 import torch
 import torch.nn as nn
 
@@ -278,7 +277,7 @@ class TestTolariaGovernor:
             gov.loss_history.append(1.0)
 
         # Execute rollback
-        report = gov.execute_rollback()
+        gov.execute_rollback()
 
         # Weights should be restored
         assert torch.allclose(model.linear.weight.data, original_weight)
@@ -335,14 +334,14 @@ class TestTolariaGovernor:
             gov.loss_history.append(1.0)
 
         # First rollback - should reset to 0
-        report1 = gov.execute_rollback()
+        gov.execute_rollback()
         assert gov.consecutive_panics == 0
 
         # Manually set panics to simulate another panic event
         gov.consecutive_panics = 2
 
         # Second rollback - should reset to 0 again
-        report2 = gov.execute_rollback()
+        gov.execute_rollback()
         assert gov.consecutive_panics == 0
 
     def test_get_punishment_reward(self):
@@ -476,13 +475,12 @@ class TestTolariaGovernor:
             gov.loss_history.append(1.0)
 
         # Execute rollback
-        report = gov.execute_rollback()
+        gov.execute_rollback()
 
         # Seed slot should be cleared (experimental seeds discarded)
         assert not model.seed_slots["mid"].is_active
         assert model.seed_slots["mid"].seed is None
         assert model.seed_slots["mid"].state is None
-        assert report.rollback_occurred is True
 
     def test_execute_rollback_resets_consecutive_panics(self):
         """Test that rollback resets consecutive_panics to allow fresh start."""

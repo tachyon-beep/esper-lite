@@ -4,12 +4,11 @@ The unified architecture always uses factored actions with per-head masks.
 These tests verify the action mask computation and batched action selection.
 """
 
-import pytest
 import torch
 from esper.simic.features import MULTISLOT_FEATURE_SIZE
 
 from esper.simic.ppo import PPOAgent
-from esper.simic.action_masks import compute_action_masks, MaskSeedInfo
+from esper.simic.action_masks import compute_action_masks
 from esper.leyline.factored_actions import NUM_SLOTS, NUM_BLUEPRINTS, NUM_BLENDS, NUM_OPS
 
 

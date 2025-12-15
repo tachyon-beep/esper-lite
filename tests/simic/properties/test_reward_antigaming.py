@@ -12,15 +12,11 @@ Tier 3: Anti-Gaming Properties
 """
 
 import pytest
-from hypothesis import given, settings, assume
+from hypothesis import given, settings
 
-from esper.leyline import SeedStage
-from esper.leyline.factored_actions import LifecycleOp
 from esper.simic.rewards import (
     compute_contribution_reward,
     ContributionRewardConfig,
-    STAGE_BLENDING,
-    STAGE_PROBATIONARY,
 )
 
 from tests.simic.strategies import (

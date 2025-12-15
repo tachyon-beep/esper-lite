@@ -1,7 +1,7 @@
 """Tests for recurrent policy integration with vectorized training."""
 
 import torch
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from esper.simic.vectorized import ParallelEnvState
 

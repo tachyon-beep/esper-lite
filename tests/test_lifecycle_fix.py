@@ -1,6 +1,5 @@
 """Tests for lifecycle state machine fix."""
 
-import pytest
 from esper.kasmina.slot import SeedState, SeedSlot
 from esper.leyline import SeedStage
 
