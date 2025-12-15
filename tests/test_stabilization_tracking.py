@@ -9,10 +9,6 @@ and flips a latch once improvement drops below 5% for 3 consecutive epochs.
 from esper.tamiyo.tracker import SignalTracker
 from esper.leyline import DEFAULT_STABILIZATION_THRESHOLD, DEFAULT_STABILIZATION_EPOCHS
 
-# Backwards compatibility aliases
-STABILIZATION_THRESHOLD = DEFAULT_STABILIZATION_THRESHOLD
-STABILIZATION_EPOCHS = DEFAULT_STABILIZATION_EPOCHS
-
 
 class TestStabilizationTracking:
     """Tests for SignalTracker stabilization detection."""
@@ -82,7 +78,7 @@ class TestStabilizationTracking:
 
         # Fast path to stabilization
         tracker._prev_loss = 1.0
-        tracker._stable_count = STABILIZATION_EPOCHS - 1
+        tracker._stable_count = DEFAULT_STABILIZATION_EPOCHS - 1
         tracker._is_stabilized = False
 
         # One more stable epoch triggers stabilization
@@ -145,7 +141,7 @@ class TestStabilizationTracking:
                 active_seeds=[],
             )
 
-        assert tracker._stable_count >= STABILIZATION_EPOCHS
+        assert tracker._stable_count >= DEFAULT_STABILIZATION_EPOCHS
         assert tracker.is_stabilized  # Latch triggered after 3 stable epochs
 
     def test_diverging_loss_not_counted_as_stable(self):
@@ -216,7 +212,7 @@ class TestStabilizationConstants:
 
     def test_threshold_is_three_percent(self):
         """Stabilization threshold should be 3% relative improvement."""
-        assert STABILIZATION_THRESHOLD == 0.03
+        assert DEFAULT_STABILIZATION_THRESHOLD == 0.03
 
     def test_epochs_is_three(self):
         """Stabilization requires 3 consecutive stable epochs.
@@ -225,4 +221,4 @@ class TestStabilizationConstants:
         could get credit for natural training improvements. Re-enabled per
         DRL expert review recommendation.
         """
-        assert STABILIZATION_EPOCHS == 3
+        assert DEFAULT_STABILIZATION_EPOCHS == 3
