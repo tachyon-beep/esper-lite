@@ -27,6 +27,7 @@ Usage:
 
 from __future__ import annotations
 
+import math
 import random
 from contextlib import nullcontext
 from dataclasses import dataclass, field
@@ -188,6 +189,80 @@ def _advance_active_seed(model, slot_id: str) -> bool:
         # Gate check failure is normal; reward shaping will penalize
         return False
     return False
+
+
+def _calculate_entropy_anneal_steps(
+    entropy_anneal_episodes: int,
+    n_envs: int,
+    ppo_updates_per_batch: int,
+) -> int:
+    """Convert episode-based entropy annealing to step-based with multi-update batches."""
+    if entropy_anneal_episodes <= 0:
+        return 0
+    if n_envs <= 0:
+        raise ValueError("n_envs must be positive when computing entropy anneal steps")
+
+    updates_per_batch = max(1, ppo_updates_per_batch)
+    batches_for_anneal = math.ceil(entropy_anneal_episodes / n_envs)
+    return batches_for_anneal * updates_per_batch
+
+
+def _aggregate_ppo_metrics(update_metrics: list[dict]) -> dict:
+    """Aggregate metrics across multiple PPO updates for a single batch."""
+    if not update_metrics:
+        return {}
+
+    aggregated: dict = {}
+    keys = {k for metrics in update_metrics for k in metrics.keys()}
+    for key in keys:
+        values = [metrics[key] for metrics in update_metrics if key in metrics and metrics[key] is not None]
+        if not values:
+            continue
+        if key == "ratio_max":
+            aggregated[key] = max(values)
+        elif key == "ratio_min":
+            aggregated[key] = min(values)
+        elif key == "early_stop_epoch":
+            aggregated[key] = min(values)
+        else:
+            aggregated[key] = sum(values) / len(values)
+    return aggregated
+
+
+def _run_ppo_updates(
+    agent: PPOAgent,
+    ppo_updates_per_batch: int,
+    raw_states_for_normalizer_update: list[torch.Tensor],
+    obs_normalizer: RunningMeanStd,
+) -> dict:
+    """Run one or more PPO updates on the current buffer and aggregate metrics."""
+    update_metrics: list[dict] = []
+    buffer_cleared = False
+    updates_to_run = max(1, ppo_updates_per_batch)
+
+    for update_idx in range(updates_to_run):
+        clear_buffer = update_idx == updates_to_run - 1
+        metrics = agent.update(clear_buffer=clear_buffer)
+        if metrics:
+            update_metrics.append(metrics)
+        buffer_cleared = buffer_cleared or clear_buffer
+
+        approx_kl = metrics.get("approx_kl") if metrics else None
+        if agent.target_kl is not None and approx_kl is not None:
+            if approx_kl > 1.5 * agent.target_kl:
+                break
+
+    if not buffer_cleared:
+        agent.buffer.reset()
+
+    aggregated_metrics = _aggregate_ppo_metrics(update_metrics)
+
+    # Update observation normalizer exactly once per batch (after successful updates)
+    if raw_states_for_normalizer_update and update_metrics:
+        all_raw_states = torch.cat(raw_states_for_normalizer_update, dim=0)
+        obs_normalizer.update(all_raw_states)
+
+    return aggregated_metrics
 
 
 # =============================================================================
@@ -358,9 +433,12 @@ def train_ppo_vectorized(
     # Essential after ransomware fix where reward magnitudes changed significantly
     reward_normalizer = RewardNormalizer(clip=10.0)
 
-    # Convert episode-based annealing to step-based
-    # Each batch of n_envs episodes = 1 PPO update step
-    entropy_anneal_steps = entropy_anneal_episodes // n_envs if entropy_anneal_episodes > 0 else 0
+    # Convert episode-based annealing to step-based (respecting multi-update batches)
+    entropy_anneal_steps = _calculate_entropy_anneal_steps(
+        entropy_anneal_episodes=entropy_anneal_episodes,
+        n_envs=n_envs,
+        ppo_updates_per_batch=ppo_updates_per_batch,
+    )
 
     # ==========================================================================
     # Blueprint Analytics + Nissa Hub Wiring
@@ -1631,19 +1709,12 @@ def train_ppo_vectorized(
                     },
                 ))
         else:
-            update_metrics = agent.update(clear_buffer=True)
-            metrics = update_metrics
-
-            # NOW update the observation normalizer with all raw states from this batch.
-            # This ensures the next batch will use updated statistics, but all states
-            # within the same batch used identical normalization parameters.
-            #
-            # [Code Review Fix] Only update normalizer when PPO update succeeds.
-            # If Governor rolled back, normalizer stats would be contaminated with
-            # observations from a bad model state, causing distribution shift.
-            if raw_states_for_normalizer_update:
-                all_raw_states = torch.cat(raw_states_for_normalizer_update, dim=0)
-                obs_normalizer.update(all_raw_states)
+            metrics = _run_ppo_updates(
+                agent=agent,
+                ppo_updates_per_batch=ppo_updates_per_batch,
+                raw_states_for_normalizer_update=raw_states_for_normalizer_update,
+                obs_normalizer=obs_normalizer,
+            )
 
             # === Anomaly Detection ===
             # Use check_all() for comprehensive anomaly detection

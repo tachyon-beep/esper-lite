@@ -193,7 +193,7 @@ Scale:
 - **Action:** Update `SignalTracker` and `run_heuristic_episode` to manage *all* enabled slots, not just the first one.
 - **Verification:** Heuristic baseline runs with `--slots early mid late`.
 
-### [ ] Step 8: Multi-GPU Parallelism (Multi‑GPU PR3)
+### [X] Step 8: Multi-GPU Parallelism (Multi‑GPU PR3)
 
 - **Pre-flight checklist:**
   - [ ] Confirm Steps 5–7 are merged.
@@ -216,7 +216,7 @@ Scale:
 
 **Goal:** Upgrade PPO logic *within* the new Phase 2 training loop.
 
-### [ ] Step 9: Multiple PPO Updates per Batch (Simic PR1)
+### [X] Step 9: Multiple PPO Updates per Batch (Simic PR1)
 
 - **Pre-flight checklist:**
   - [ ] Confirm Step 8 is merged (this change depends on the canonical engine loop).
