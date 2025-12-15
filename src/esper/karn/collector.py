@@ -285,6 +285,14 @@ class KarnCollector:
             except KeyError:
                 pass
             slot.epochs_in_stage = 0
+        elif event_type == "SEED_GATE_EVALUATED":
+            slot.last_gate_attempted = data.get("gate")
+            slot.last_gate_passed = data.get("passed")
+            slot.last_gate_reason = data.get("message")
+            if not slot.last_gate_reason:
+                checks_failed = data.get("checks_failed")
+                if isinstance(checks_failed, list) and checks_failed:
+                    slot.last_gate_reason = ",".join(str(c) for c in checks_failed)
         elif event_type == "SEED_FOSSILIZED":
             slot.stage = SeedStage.FOSSILIZED
         elif event_type == "SEED_CULLED":

@@ -102,3 +102,36 @@ class TestMultiEnvSlotTracking:
         slots = store.current_epoch.slots
         assert slots["env0:mid"].counterfactual_contribution == 0.1
         assert slots["env1:mid"].counterfactual_contribution == 0.9
+
+    def test_gate_event_updates_slot_gate_fields(self):
+        """Gate evaluation events populate per-slot gate fields."""
+        from esper.karn.collector import KarnCollector
+
+        collector = KarnCollector()
+        store = collector.store
+
+        collector.emit(
+            TelemetryEvent(
+                event_type=TelemetryEventType.TRAINING_STARTED,
+                data={"episode_id": "test_gate_event", "max_epochs": 5, "n_envs": 2},
+            )
+        )
+
+        collector.emit(
+            TelemetryEvent(
+                event_type=TelemetryEventType.SEED_GATE_EVALUATED,
+                slot_id="mid",
+                data={
+                    "env_id": 1,
+                    "gate": "G2",
+                    "passed": False,
+                    "target_stage": "BLENDING",
+                    "checks_failed": ["seed_not_ready"],
+                },
+            )
+        )
+
+        slot = store.current_epoch.slots["env1:mid"]
+        assert slot.last_gate_attempted == "G2"
+        assert slot.last_gate_passed is False
+        assert "seed_not_ready" in (slot.last_gate_reason or "")

@@ -831,6 +831,17 @@ class SeedSlot(nn.Module):
 
         # Check G0 gate and transition to GERMINATED
         gate_result = self.gates.check_gate(self.state, SeedStage.GERMINATED)
+        self._emit_telemetry(
+            TelemetryEventType.SEED_GATE_EVALUATED,
+            data={
+                "gate": gate_result.gate.name,
+                "passed": gate_result.passed,
+                "target_stage": SeedStage.GERMINATED.name,
+                "checks_passed": list(gate_result.checks_passed),
+                "checks_failed": list(gate_result.checks_failed),
+                "message": gate_result.message,
+            },
+        )
         if gate_result.passed:
             self.state.transition(SeedStage.GERMINATED)
         else:
@@ -882,6 +893,17 @@ class SeedSlot(nn.Module):
 
         # Check gate
         gate_result = self.gates.check_gate(self.state, target_stage)
+        self._emit_telemetry(
+            TelemetryEventType.SEED_GATE_EVALUATED,
+            data={
+                "gate": gate_result.gate.name,
+                "passed": gate_result.passed,
+                "target_stage": target_stage.name,
+                "checks_passed": list(gate_result.checks_passed),
+                "checks_failed": list(gate_result.checks_failed),
+                "message": gate_result.message,
+            },
+        )
 
         if gate_result.passed:
             old_stage = self.state.stage
