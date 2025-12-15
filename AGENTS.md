@@ -2,6 +2,7 @@
 
 ## Start Here
 
+- YOU MUST NOT JUST REVERT CHANGES YOU DID NOT MAKE YOURSELF. IF YOU SPOT A NEW OR CHANGED FILE, THE USER CHANGED THAT FILE FOR A REASON. ASK FIRST. ALL DESTRUCTIVE GIT OPERATIONS REQUIRE APPROVAL.
 - Read `CLAUDE.md` first: it contains the project intro, required reading (e.g., `README.md`, `ROADMAP.md`), and the mandatory coding standards/policies for this repo.
 
 ## Project Structure & Module Organization
