@@ -287,6 +287,7 @@ def _emit_throughput(
     dataloader_wait_ms: float,
 ) -> None:
     """Emit per-env throughput metrics for this batch."""
+    fps = 1000.0 / step_time_ms if step_time_ms > 0 else None
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
         epoch=episodes_completed,
@@ -295,6 +296,7 @@ def _emit_throughput(
             "env_id": env_id,
             "batch": batch_idx,
             "episodes_completed": episodes_completed,
+            "fps": fps,
             "step_time_ms": step_time_ms,
             "dataloader_wait_ms": dataloader_wait_ms,
         },

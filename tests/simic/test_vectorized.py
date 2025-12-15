@@ -132,6 +132,22 @@ def test_throughput_metrics_emitted():
     assert data["dataloader_wait_ms"] == 2.0
 
 
+def test_throughput_metrics_include_fps():
+    from esper.simic import vectorized
+
+    hub = Mock()
+    vectorized._emit_throughput(
+        hub=hub,
+        env_id=0,
+        batch_idx=1,
+        episodes_completed=4,
+        step_time_ms=20.0,
+        dataloader_wait_ms=2.0,
+    )
+    data = hub.emit.call_args[0][0].data
+    assert data["fps"] == 50.0
+
+
 def test_reward_summary_emitted():
     from esper.simic import vectorized
 
