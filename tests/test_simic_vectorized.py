@@ -4,11 +4,13 @@ import pytest
 import torch
 from unittest.mock import MagicMock
 
-from esper.leyline import SeedStage, TelemetryEventType
+from esper.leyline import SeedStage, TelemetryEvent, TelemetryEventType
 from esper.simic.anomaly_detector import AnomalyReport
 from esper.simic.vectorized import (
     _advance_active_seed,
     _calculate_entropy_anneal_steps,
+    _emit_batch_completed,
+    _emit_with_env_id,
     _emit_anomaly_diagnostics,
     _handle_telemetry_escalation,
     _run_ppo_updates,
@@ -603,3 +605,53 @@ def test_emit_anomaly_diagnostics_collects_when_debug_enabled(monkeypatch):
     assert "gradient_stats" in data
     assert "stability" in data
     assert data["ratio_diagnostic"] == {"foo": "bar"}
+
+
+class _StubHub:
+    def __init__(self):
+        self.events: list[TelemetryEvent] = []
+
+    def emit(self, event: TelemetryEvent) -> None:
+        self.events.append(event)
+
+
+def test_emit_with_env_id_handles_none_and_copies():
+    """Callback should handle missing data and avoid mutating shared dicts."""
+    hub = _StubHub()
+
+    event_none = TelemetryEvent(event_type=TelemetryEventType.SEED_GERMINATED, data=None)
+    _emit_with_env_id(hub, 1, event_none)
+    assert hub.events[0].data["env_id"] == 1
+
+    shared = {"foo": "bar"}
+    event_shared = TelemetryEvent(event_type=TelemetryEventType.SEED_GERMINATED, data=shared)
+    _emit_with_env_id(hub, 2, event_shared)
+    # Original dict is untouched
+    assert "env_id" not in shared
+    assert hub.events[1].data["env_id"] == 2
+    assert hub.events[1].data["foo"] == "bar"
+
+
+def test_emit_batch_completed_is_resume_aware_and_clamped():
+    """BATCH_COMPLETED telemetry should include resume offsets and clamp totals."""
+    hub = _StubHub()
+    _emit_batch_completed(
+        hub,
+        batch_idx=5,
+        episodes_completed=22,  # exceeds total_episodes to test clamp
+        total_episodes=20,
+        env_final_accs=[0.8, 0.9],
+        avg_acc=0.85,
+        rolling_avg_acc=0.82,
+        avg_reward=1.0,
+        start_episode=10,
+        requested_episodes=10,
+    )
+
+    assert len(hub.events) == 1
+    data = hub.events[0].data
+    assert data["episodes_completed"] == 20  # clamped
+    assert data["total_episodes"] == 20
+    assert data["start_episode"] == 10
+    assert data["requested_episodes"] == 10
+    assert data["batch_idx"] == 5
