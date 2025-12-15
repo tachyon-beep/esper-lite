@@ -249,8 +249,9 @@ class KarnCollector:
 
         data = event.data or {}
 
-        # Extract env_id (standardize on env_id, but accept env_idx for backwards compat)
-        env_id = data.get("env_id", data.get("env_idx", 0))
+        env_id = data.get("env_id")
+        if env_id is None:
+            return
 
         # Get raw slot_id
         raw_slot_id = event.slot_id or data.get("slot_id", "unknown")
@@ -334,7 +335,9 @@ class KarnCollector:
             return
 
         data = event.data or {}
-        env_id = data.get("env_id", data.get("env_idx", 0))
+        env_id = data.get("env_id")
+        if env_id is None:
+            return
         raw_slot_id = event.slot_id or data.get("slot_id")
         if not raw_slot_id:
             return
