@@ -171,7 +171,7 @@ class TolariaGovernor:
             self._pending_panic = False
             return False
 
-    def execute_rollback(self) -> GovernorReport:
+    def execute_rollback(self, *, env_id: int = 0) -> GovernorReport:
         """Emergency stop: restore LKG state and return punishment info.
 
         Rollback semantics (Option B):
@@ -183,6 +183,19 @@ class TolariaGovernor:
         experimental hypotheses - a catastrophic event means they failed
         the safety test and should be discarded.
         """
+        # Get device from parameters, falling back to CPU if no parameters
+        try:
+            raw_device = next(self.model.parameters()).device
+            device = raw_device if isinstance(raw_device, torch.device) else torch.device(raw_device)
+        except StopIteration:
+            device = torch.device("cpu")
+
+        history = list(self.loss_history)
+        avg = sum(history) / len(history) if history else 0.0
+        variance = sum((x - avg) ** 2 for x in history) / len(history) if history else 0.0
+        std = math.sqrt(variance) if variance > 0 else 0.0
+        threshold = avg + (self.sensitivity * std)
+
         # Emit telemetry event (replaces print)
         hub = get_hub()
         hub.emit(TelemetryEvent(
@@ -190,8 +203,11 @@ class TolariaGovernor:
             severity="critical",
             message="Critical instability detected - initiating rollback",
             data={
+                "env_id": env_id,
+                "device": str(device),
                 "reason": "Structural Collapse",
                 "loss_at_panic": self._panic_loss,
+                "loss_threshold": threshold,
                 "consecutive_panics": self.consecutive_panics,
             },
         ))
@@ -211,12 +227,6 @@ class TolariaGovernor:
         # Restore host + fossilized seeds (strict=True ensures complete restoration)
         # Move all tensors to model device in one batch before loading, avoiding
         # individual CPU->GPU transfers for each parameter.
-        # Get device from parameters, falling back to CPU if no parameters
-        try:
-            device = next(self.model.parameters()).device
-        except StopIteration:
-            device = torch.device('cpu')
-
         # Use non_blocking=True for async CPU->GPU transfer
         state_on_device = {
             k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v
@@ -225,20 +235,13 @@ class TolariaGovernor:
 
         # CRITICAL: Synchronize CUDA stream before load_state_dict
         # load_state_dict() does NOT synchronize - without this, we load garbage
-        if device.type == 'cuda':
+        if device.type == "cuda":
             torch.cuda.synchronize(device)
 
         self.model.load_state_dict(state_on_device, strict=True)
 
         # Reset panic counter after successful rollback to allow fresh recovery
         self.consecutive_panics = 0
-
-        # Calculate what the threshold was
-        history = list(self.loss_history)
-        avg = sum(history) / len(history) if history else 0.0
-        variance = sum((x - avg) ** 2 for x in history) / len(history) if history else 0.0
-        std = math.sqrt(variance) if variance > 0 else 0.0
-        threshold = avg + (self.sensitivity * std)
 
         return GovernorReport(
             reason="Structural Collapse",

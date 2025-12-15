@@ -3,25 +3,37 @@
 
 import argparse
 
-from esper.nissa import get_hub, ConsoleOutput, FileOutput, DirectoryOutput
+from esper.nissa import ConsoleOutput, DirectoryOutput, FileOutput, get_hub
 from esper.simic.config import TrainingConfig
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train Simic RL agents")
 
-    # Parent parser for shared telemetry options
     telemetry_parent = argparse.ArgumentParser(add_help=False)
-    telemetry_parent.add_argument("--telemetry-file", type=str, default=None,
-                                  help="Save Nissa telemetry to JSONL file")
-    telemetry_parent.add_argument("--telemetry-dir", type=str, default=None,
-                                  help="Save Nissa telemetry to timestamped folder in this directory")
+    telemetry_parent.add_argument(
+        "--telemetry-file",
+        type=str,
+        default=None,
+        help="Save Nissa telemetry to JSONL file",
+    )
+    telemetry_parent.add_argument(
+        "--telemetry-dir",
+        type=str,
+        default=None,
+        help="Save Nissa telemetry to timestamped folder in this directory",
+    )
     telemetry_parent.add_argument(
         "--telemetry-level",
         type=str,
         choices=["off", "minimal", "normal", "debug"],
         default="normal",
         help="Telemetry verbosity level (default: normal)",
+    )
+    telemetry_parent.add_argument(
+        "--telemetry-lifecycle-only",
+        action="store_true",
+        help="Keep lightweight seed lifecycle telemetry even when ops telemetry is disabled",
     )
     telemetry_parent.add_argument(
         "--dashboard",
@@ -56,9 +68,11 @@ def main():
 
     subparsers = parser.add_subparsers(dest="algorithm", required=True)
 
-    # Heuristic subcommand
-    heur_parser = subparsers.add_parser("heuristic", help="Train with heuristic policy (h-esper)",
-                                        parents=[telemetry_parent])
+    heur_parser = subparsers.add_parser(
+        "heuristic",
+        help="Train with heuristic policy (h-esper)",
+        parents=[telemetry_parent],
+    )
     heur_parser.add_argument("--episodes", type=int, default=1)
     heur_parser.add_argument("--max-epochs", type=int, default=75)
     heur_parser.add_argument("--max-batches", type=int, default=50, help="Batches per epoch (None=all)")
@@ -72,9 +86,11 @@ def main():
     heur_parser.add_argument("--max-seeds", type=int, default=None,
         help="Maximum total seeds across all slots (default: unlimited)")
 
-    # PPO subcommand
-    ppo_parser = subparsers.add_parser("ppo", help="Train PPO agent",
-                                       parents=[telemetry_parent])
+    ppo_parser = subparsers.add_parser(
+        "ppo",
+        help="Train PPO agent",
+        parents=[telemetry_parent],
+    )
     ppo_parser.add_argument(
         "--preset",
         choices=["cifar10", "cifar10_deep", "tinystories"],
@@ -120,6 +136,11 @@ def main():
         help="Override seed (otherwise use config value)",
     )
 
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
 
     # Create TelemetryConfig from CLI argument
@@ -257,6 +278,8 @@ def main():
                 task=args.task,
                 seed=args.seed,
                 slots=args.slots,
+                telemetry_config=telemetry_config,
+                telemetry_lifecycle_only=args.telemetry_lifecycle_only,
             )
 
         elif args.algorithm == "ppo":
@@ -289,6 +312,7 @@ def main():
                 num_workers=args.num_workers,
                 gpu_preload=args.gpu_preload,
                 telemetry_config=telemetry_config,
+                telemetry_lifecycle_only=args.telemetry_lifecycle_only,
                 quiet_analytics=use_tui,
                 **config.to_train_kwargs(),
             )

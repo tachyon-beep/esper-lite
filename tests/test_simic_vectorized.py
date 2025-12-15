@@ -10,7 +10,7 @@ from esper.simic.vectorized import (
     _advance_active_seed,
     _calculate_entropy_anneal_steps,
     _emit_batch_completed,
-    _emit_with_env_id,
+    _emit_with_env_context,
     _emit_anomaly_diagnostics,
     _handle_telemetry_escalation,
     _run_ppo_updates,
@@ -615,20 +615,23 @@ class _StubHub:
         self.events.append(event)
 
 
-def test_emit_with_env_id_handles_none_and_copies():
+def test_emit_with_env_context_handles_none_and_copies():
     """Callback should handle missing data and avoid mutating shared dicts."""
     hub = _StubHub()
 
     event_none = TelemetryEvent(event_type=TelemetryEventType.SEED_GERMINATED, data=None)
-    _emit_with_env_id(hub, 1, event_none)
+    _emit_with_env_context(hub, 1, "cpu", event_none)
     assert hub.events[0].data["env_id"] == 1
+    assert hub.events[0].data["device"] == "cpu"
 
     shared = {"foo": "bar"}
     event_shared = TelemetryEvent(event_type=TelemetryEventType.SEED_GERMINATED, data=shared)
-    _emit_with_env_id(hub, 2, event_shared)
+    _emit_with_env_context(hub, 2, "cpu", event_shared)
     # Original dict is untouched
     assert "env_id" not in shared
+    assert "device" not in shared
     assert hub.events[1].data["env_id"] == 2
+    assert hub.events[1].data["device"] == "cpu"
     assert hub.events[1].data["foo"] == "bar"
 
 

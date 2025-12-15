@@ -320,6 +320,27 @@ class TestTolariaGovernor:
         assert report.loss_threshold > 0.0
         assert math.isnan(report.loss_at_panic)
 
+    def test_execute_rollback_emits_env_id_and_device(self):
+        """Rollback event should include env_id and device for multi-env telemetry."""
+        from unittest.mock import Mock, patch
+
+        from esper.leyline import TelemetryEventType
+        from esper.tolaria import TolariaGovernor
+
+        model = DummyModel()
+        gov = TolariaGovernor(model)
+
+        with patch("esper.tolaria.governor.get_hub") as get_hub:
+            hub = Mock()
+            get_hub.return_value = hub
+
+            gov.execute_rollback(env_id=7)
+
+            event = hub.emit.call_args[0][0]
+            assert event.event_type == TelemetryEventType.GOVERNOR_ROLLBACK
+            assert event.data["env_id"] == 7
+            assert event.data["device"] == "cpu"
+
     def test_execute_rollback_resets_consecutive_panics_each_time(self):
         """Test that each rollback resets panic counter (not increments)."""
         from esper.tolaria import TolariaGovernor

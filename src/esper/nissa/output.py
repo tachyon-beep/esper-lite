@@ -193,12 +193,17 @@ class ConsoleOutput(OutputBackend):
             print(f"[{timestamp}]   Avg: {avg_acc:.1f}% (rolling: {rolling_acc:.1f}%), reward: {avg_reward:.1f}")
         elif event_type == "COUNTERFACTUAL_COMPUTED":
             data = event.data or {}
-            env_idx = data.get("env_idx", "?")
+            env_id = data.get("env_id", "?")
             slot_id = data.get("slot_id", "?")
-            real_acc = data.get("real_accuracy", 0.0)
-            baseline_acc = data.get("baseline_accuracy", 0.0)
-            contribution = data.get("contribution", 0.0)
-            print(f"[{timestamp}] env{env_idx} | Counterfactual {slot_id}: {real_acc:.1f}% real, {baseline_acc:.1f}% baseline, Δ={contribution:+.1f}%")
+            available = data.get("available", True)
+            if available is False:
+                reason = data.get("reason", "unknown")
+                print(f"[{timestamp}] env{env_id} | Counterfactual {slot_id}: unavailable ({reason})")
+            else:
+                real_acc = data.get("real_accuracy", 0.0)
+                baseline_acc = data.get("baseline_accuracy", 0.0)
+                contribution = data.get("contribution", 0.0)
+                print(f"[{timestamp}] env{env_id} | Counterfactual {slot_id}: {real_acc:.1f}% real, {baseline_acc:.1f}% baseline, Δ={contribution:+.1f}%")
         elif event_type == "CHECKPOINT_SAVED":
             data = event.data or {}
             path = data.get("path", "?")

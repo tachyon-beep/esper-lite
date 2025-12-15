@@ -69,3 +69,36 @@ class TestMultiEnvSlotTracking:
         # Should namespace by env_id
         slots = store.current_epoch.slots
         assert "env3:early" in slots or "early" in slots
+
+    def test_counterfactual_env_idx_fallback_namespaces_by_env(self):
+        """Counterfactual events accept legacy env_idx for namespacing."""
+        from esper.karn.collector import KarnCollector
+
+        collector = KarnCollector()
+        store = collector.store
+
+        collector.emit(
+            TelemetryEvent(
+                event_type=TelemetryEventType.TRAINING_STARTED,
+                data={"episode_id": "test_cf_env_idx", "max_epochs": 5, "n_envs": 2},
+            )
+        )
+
+        collector.emit(
+            TelemetryEvent(
+                event_type=TelemetryEventType.COUNTERFACTUAL_COMPUTED,
+                slot_id="mid",
+                data={"env_idx": 0, "contribution": 0.1},
+            )
+        )
+        collector.emit(
+            TelemetryEvent(
+                event_type=TelemetryEventType.COUNTERFACTUAL_COMPUTED,
+                slot_id="mid",
+                data={"env_idx": 1, "contribution": 0.9},
+            )
+        )
+
+        slots = store.current_epoch.slots
+        assert slots["env0:mid"].counterfactual_contribution == 0.1
+        assert slots["env1:mid"].counterfactual_contribution == 0.9

@@ -612,6 +612,9 @@ class SeedSlot(nn.Module):
         self.gates = gates or QualityGates()
         self.on_telemetry = on_telemetry
         self.fast_mode = fast_mode  # Disable telemetry/isolation for PPO
+        self.telemetry_lifecycle_only: bool = False
+        self.telemetry_inner_epoch: int | None = None
+        self.telemetry_global_epoch: int | None = None
         self.task_config = task_config
 
         self.seed: nn.Module | None = None
@@ -1380,14 +1383,24 @@ class SeedSlot(nn.Module):
 
         Skipped entirely in fast_mode for zero overhead in PPO rollouts.
         """
-        if self.fast_mode or self.on_telemetry is None:
+        if self.on_telemetry is None:
             return
+        if self.fast_mode and not self.telemetry_lifecycle_only:
+            return
+
+        payload = dict(data) if data else {}
+        if self.state is not None:
+            payload.setdefault("alpha", self.state.alpha)
+        if self.telemetry_inner_epoch is not None:
+            payload.setdefault("inner_epoch", self.telemetry_inner_epoch)
+        if self.telemetry_global_epoch is not None:
+            payload.setdefault("global_epoch", self.telemetry_global_epoch)
 
         event = TelemetryEvent(
             event_type=event_type,
             seed_id=self.state.seed_id if self.state else None,
             slot_id=self.slot_id,
-            data=data or {},
+            data=payload,
         )
         self.on_telemetry(event)
 

@@ -326,13 +326,23 @@ class KarnCollector:
             return
 
         data = event.data or {}
-        slot_id = event.slot_id or data.get("slot_id")
+        env_id = data.get("env_id", data.get("env_idx", 0))
+        raw_slot_id = event.slot_id or data.get("slot_id")
+        if not raw_slot_id:
+            return
 
-        if slot_id and slot_id in self.store.current_epoch.slots:
-            slot = self.store.current_epoch.slots[slot_id]
-            slot.counterfactual_contribution = data.get("contribution", 0.0)
-            slot.total_improvement = data.get("total_improvement")
-            slot.improvement_this_epoch = data.get("improvement_this_epoch", 0.0)
+        slot_key = f"env{env_id}:{raw_slot_id}"
+        if slot_key not in self.store.current_epoch.slots:
+            self.store.current_epoch.slots[slot_key] = SlotSnapshot(slot_id=slot_key)
+        slot = self.store.current_epoch.slots[slot_key]
+
+        if data.get("available", True) is False:
+            slot.counterfactual_contribution = None
+            return
+
+        slot.counterfactual_contribution = data.get("contribution")
+        slot.total_improvement = data.get("total_improvement")
+        slot.improvement_this_epoch = data.get("improvement_this_epoch", 0.0)
 
     def _handle_anomaly_event(self, event: "TelemetryEvent", event_type: str) -> None:
         """Handle Simic anomaly events for dense trace capture.

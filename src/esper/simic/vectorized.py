@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import math
 import random
+import time
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 
@@ -88,10 +89,11 @@ from esper.tolaria import TolariaGovernor
 # =============================================================================
 
 
-def _emit_with_env_id(hub, env_idx: int, event: TelemetryEvent) -> None:
-    """Safely emit telemetry with env_id injected and no shared mutation."""
+def _emit_with_env_context(hub, env_idx: int, device: str, event: TelemetryEvent) -> None:
+    """Safely emit telemetry with env_id/device injected and no shared mutation."""
     data = dict(event.data) if event.data else {}
     data["env_id"] = env_idx
+    data["device"] = device
     event.data = data
     hub.emit(event)
 
@@ -127,6 +129,246 @@ def _emit_batch_completed(
             },
         )
     )
+
+
+def _emit_last_action(
+    *,
+    env_id: int,
+    epoch: int,
+    factored_action: FactoredAction,
+    masked: dict[str, bool],
+    success: bool,
+) -> dict:
+    """Emit per-step last-action detail for debugging and UIs."""
+    hub = get_hub()
+    data = {
+        "kind": "last_action",
+        "env_id": env_id,
+        "inner_epoch": epoch,
+        "op": factored_action.op.name,
+        "slot_id": factored_action.slot_id,
+        "blueprint_id": factored_action.blueprint_id,
+        "blend_id": factored_action.blend_algorithm_id,
+        "op_masked": bool(masked.get("op", False)),
+        "slot_masked": bool(masked.get("slot", False)),
+        "blueprint_masked": bool(masked.get("blueprint", False)),
+        "blend_masked": bool(masked.get("blend", False)),
+        "action_success": success,
+    }
+    hub.emit(TelemetryEvent(
+        event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+        epoch=epoch,
+        severity="debug",
+        message="Last action",
+        data=data,
+    ))
+    return data
+
+
+def _compute_grad_norm_surrogate(module: nn.Module) -> float | None:
+    """Compute a cheap grad-norm surrogate (single device sync)."""
+    grad_norm_sq = None
+    for param in module.parameters():
+        if param.grad is None:
+            continue
+        g = param.grad.detach()
+        g_sq = (g.float() * g.float()).sum()
+        grad_norm_sq = g_sq if grad_norm_sq is None else grad_norm_sq + g_sq
+    if grad_norm_sq is None:
+        return None
+    return float(torch.sqrt(grad_norm_sq).item())
+
+
+def _emit_ppo_update_event(
+    *,
+    hub,
+    metrics: dict,
+    episodes_completed: int,
+    batch_idx: int,
+    epoch: int,
+    optimizer,
+    grad_norm: float | None,
+    update_time_ms: float | None,
+) -> None:
+    """Emit PPO update completion telemetry with optional vitals."""
+    lr = None
+    if optimizer is not None:
+        try:
+            lr = optimizer.param_groups[0].get("lr")
+        except (AttributeError, IndexError, KeyError, TypeError):
+            lr = None
+
+    hub.emit(TelemetryEvent(
+        event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+        epoch=episodes_completed,  # Monotonic per-batch epoch id (NOT inner epoch!)
+        data={
+            "inner_epoch": epoch,  # Final inner epoch (typically max_epochs)
+            "batch": batch_idx + 1,
+            "episodes_completed": episodes_completed,
+            "train_steps": metrics.get("train_steps", 0),
+            # Core losses
+            "policy_loss": metrics.get("policy_loss", 0.0),
+            "value_loss": metrics.get("value_loss", 0.0),
+            "entropy": metrics.get("entropy", 0.0),
+            "entropy_coef": metrics.get("entropy_coef", 0.0),
+            # PPO health (KL, clipping) - normalized to kl_divergence for Karn
+            "kl_divergence": metrics.get("approx_kl", 0.0),
+            "clip_fraction": metrics.get("clip_fraction", 0.0),
+            # Ratio statistics (early warning for policy collapse)
+            "ratio_max": metrics.get("ratio_max", 1.0),
+            "ratio_min": metrics.get("ratio_min", 1.0),
+            "ratio_std": metrics.get("ratio_std", 0.0),
+            # Value function health (negative = critic broken)
+            "explained_variance": metrics.get("explained_variance", 0.0),
+            # Early stopping info
+            "early_stop_epoch": metrics.get("early_stop_epoch"),
+            # Episode-level metrics
+            "avg_accuracy": metrics.get("avg_accuracy", 0.0),
+            "avg_reward": metrics.get("avg_reward", 0.0),
+            "rolling_avg_accuracy": metrics.get("rolling_avg_accuracy", 0.0),
+            # Vitals
+            "lr": lr,
+            "grad_norm": grad_norm,
+            "update_time_ms": update_time_ms,
+        },
+    ))
+
+
+def _emit_action_distribution(
+    *,
+    hub,
+    batch_idx: int,
+    episodes_completed: int,
+    action_counts: dict[str, int],
+    success_counts: dict[str, int],
+) -> None:
+    """Emit per-batch action distribution summary."""
+    hub.emit(TelemetryEvent(
+        event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+        epoch=episodes_completed,
+        data={
+            "kind": "action_distribution",
+            "batch": batch_idx,
+            "episodes_completed": episodes_completed,
+            "action_counts": dict(action_counts),
+            "success_counts": dict(success_counts),
+        },
+    ))
+
+
+def _emit_cf_unavailable(
+    hub,
+    *,
+    env_id: int,
+    slot_id: str,
+    reason: str,
+) -> None:
+    """Emit marker event when counterfactual baseline is unavailable."""
+    hub.emit(TelemetryEvent(
+        event_type=TelemetryEventType.COUNTERFACTUAL_COMPUTED,
+        slot_id=slot_id,
+        severity="warning",
+        data={
+            "env_id": env_id,
+            "slot_id": slot_id,
+            "available": False,
+            "reason": reason,
+        },
+    ))
+
+
+def _emit_throughput(
+    *,
+    hub,
+    env_id: int,
+    batch_idx: int,
+    episodes_completed: int,
+    step_time_ms: float,
+    dataloader_wait_ms: float,
+) -> None:
+    """Emit per-env throughput metrics for this batch."""
+    hub.emit(TelemetryEvent(
+        event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+        epoch=episodes_completed,
+        data={
+            "kind": "throughput",
+            "env_id": env_id,
+            "batch": batch_idx,
+            "episodes_completed": episodes_completed,
+            "step_time_ms": step_time_ms,
+            "dataloader_wait_ms": dataloader_wait_ms,
+        },
+    ))
+
+
+def _emit_reward_summary(
+    *,
+    hub,
+    env_id: int,
+    batch_idx: int,
+    summary: dict[str, float],
+    episodes_completed: int = 0,
+) -> None:
+    """Emit compact reward summary for this batch."""
+    hub.emit(TelemetryEvent(
+        event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+        epoch=episodes_completed,
+        data={
+            "kind": "reward_summary",
+            "env_id": env_id,
+            "batch": batch_idx,
+            "episodes_completed": episodes_completed,
+            "summary": dict(summary),
+        },
+    ))
+
+
+def _emit_mask_hit_rates(
+    *,
+    hub,
+    batch_idx: int,
+    episodes_completed: int,
+    mask_hits: dict[str, int],
+    mask_total: dict[str, int],
+) -> None:
+    """Emit per-head mask hit rates for this batch."""
+    hub.emit(TelemetryEvent(
+        event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+        epoch=episodes_completed,
+        data={
+            "kind": "mask_hit_rates",
+            "batch": batch_idx,
+            "episodes_completed": episodes_completed,
+            "mask_hits": dict(mask_hits),
+            "mask_total": dict(mask_total),
+        },
+    ))
+
+
+def _apply_slot_telemetry(
+    env_state,
+    *,
+    ops_telemetry_enabled: bool,
+    lifecycle_only: bool,
+    inner_epoch: int | None = None,
+    global_epoch: int | None = None,
+) -> None:
+    """Configure slot telemetry and fast_mode based on current telemetry settings.
+
+    Lifecycle-only mode keeps lightweight lifecycle events enabled even when
+    ops telemetry is disabled and slots are running in fast_mode.
+    """
+    for slot in env_state.model.seed_slots.values():
+        slot.telemetry_inner_epoch = inner_epoch
+        slot.telemetry_global_epoch = global_epoch
+        slot.fast_mode = not ops_telemetry_enabled
+        if ops_telemetry_enabled:
+            slot.on_telemetry = env_state.telemetry_cb
+            slot.telemetry_lifecycle_only = False
+            continue
+
+        slot.telemetry_lifecycle_only = lifecycle_only
+        slot.on_telemetry = env_state.telemetry_cb if lifecycle_only else None
 
 
 # =============================================================================
@@ -432,6 +674,7 @@ def train_ppo_vectorized(
     lstm_hidden_dim: int = DEFAULT_LSTM_HIDDEN_DIM,
     chunk_length: int = DEFAULT_EPISODE_LENGTH,  # Must match max_epochs (from leyline)
     telemetry_config: "TelemetryConfig | None" = None,
+    telemetry_lifecycle_only: bool = False,
     plateau_threshold: float = 0.5,
     improvement_threshold: float = 2.0,
     slots: list[str] | None = None,
@@ -647,6 +890,21 @@ def train_ppo_vectorized(
         },
     ))
 
+    ops_telemetry_enabled = use_telemetry and (
+        telemetry_config is None or telemetry_config.should_collect("ops_normal")
+    )
+    if telemetry_lifecycle_only and not ops_telemetry_enabled:
+        hub.emit(TelemetryEvent(
+            event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+            severity="warning",
+            message="Ops telemetry disabled; emitting lifecycle-only seed telemetry",
+            data={
+                "telemetry_lifecycle_only": True,
+                "use_telemetry": use_telemetry,
+                "telemetry_level": telemetry_config.level.name if telemetry_config is not None else None,
+            },
+        ))
+
     # Create SharedBatchIterator - single DataLoader serving all environments
     # This eliminates the N×M worker overhead from N independent DataLoaders
     if gpu_preload:
@@ -789,22 +1047,31 @@ def train_ppo_vectorized(
     # Initialize anomaly detector for automatic diagnostics
     anomaly_detector = AnomalyDetector()
 
-    def make_telemetry_callback(env_idx: int):
+    def make_telemetry_callback(env_idx: int, env_device: str):
         """Create callback that injects env_id before emitting to hub."""
 
         def callback(event: TelemetryEvent):
-            _emit_with_env_id(hub, env_idx, event)
+            _emit_with_env_context(hub, env_idx, env_device, event)
 
         return callback
 
-    def apply_slot_telemetry(env_state: ParallelEnvState) -> None:
+    def apply_slot_telemetry(
+        env_state: ParallelEnvState,
+        *,
+        inner_epoch: int | None = None,
+        global_epoch: int | None = None,
+    ) -> None:
         """Configure slot telemetry/fast_mode based on current telemetry level."""
-        telemetry_enabled = use_telemetry and (
+        ops_telemetry_enabled = use_telemetry and (
             telemetry_config is None or telemetry_config.should_collect("ops_normal")
         )
-        for slot in env_state.model.seed_slots.values():
-            slot.on_telemetry = env_state.telemetry_cb if telemetry_enabled else None
-            slot.fast_mode = not telemetry_enabled
+        _apply_slot_telemetry(
+            env_state,
+            ops_telemetry_enabled=ops_telemetry_enabled,
+            lifecycle_only=telemetry_lifecycle_only,
+            inner_epoch=inner_epoch,
+            global_epoch=global_epoch,
+        )
 
     def create_env_state(env_idx: int, base_seed: int) -> ParallelEnvState:
         """Create environment state with CUDA stream.
@@ -817,7 +1084,7 @@ def train_ppo_vectorized(
 
         model = create_model(task=task_spec, device=env_device, slots=slots)
 
-        telemetry_cb = make_telemetry_callback(env_idx)
+        telemetry_cb = make_telemetry_callback(env_idx, env_device)
         for slot in model.seed_slots.values():
             slot.on_telemetry = telemetry_cb
             # fast_mode toggled per epoch via apply_slot_telemetry (telemetry-enabled by default)
@@ -869,6 +1136,7 @@ def train_ppo_vectorized(
         )
         # Pre-allocate accumulators to avoid per-epoch allocation churn
         env_state.init_accumulators(slots)
+        apply_slot_telemetry(env_state)
         return env_state
 
     def process_train_batch(
@@ -1103,6 +1371,15 @@ def train_ppo_vectorized(
         env_final_accs = [0.0] * envs_this_batch
         env_total_rewards = [0.0] * envs_this_batch
 
+        throughput_step_time_ms_sum = 0.0
+        throughput_dataloader_wait_ms_sum = 0.0
+        reward_summary_accum = [
+            {"bounded_attribution": 0.0, "compute_rent": 0.0, "total_reward": 0.0, "count": 0}
+            for _ in range(envs_this_batch)
+        ]
+        mask_hits = {"slot": 0, "blueprint": 0, "blend": 0, "op": 0}
+        mask_total = {"slot": 0, "blueprint": 0, "blend": 0, "op": 0}
+
         # Accumulate raw (unnormalized) states for deferred normalizer update.
         # We freeze normalizer stats during rollout to ensure consistent normalization
         # across all states in a batch, then update stats after PPO update.
@@ -1115,10 +1392,12 @@ def train_ppo_vectorized(
 
         # Run epochs with INVERTED CONTROL FLOW
         for epoch in range(1, max_epochs + 1):
+            step_start = time.perf_counter()
+            dataloader_wait_ms_epoch = 0.0
             if telemetry_config is not None:
                 telemetry_config.tick_escalation()
             for env_state in env_states:
-                apply_slot_telemetry(env_state)
+                apply_slot_telemetry(env_state, inner_epoch=epoch, global_epoch=batch_epoch_id)
             # Track gradient stats per env for telemetry sync
             env_grad_stats = [None] * envs_this_batch
 
@@ -1146,7 +1425,9 @@ def train_ppo_vectorized(
                 train_iter = iter(shared_train_iter)
                 for batch_step in range(num_train_batches):
                     try:
+                        fetch_start = time.perf_counter()
                         env_batches = next(train_iter)  # List of (inputs, targets), already on devices
+                        dataloader_wait_ms_epoch += (time.perf_counter() - fetch_start) * 1000.0
                     except StopIteration:
                         break
 
@@ -1179,7 +1460,9 @@ def train_ppo_vectorized(
                     env_batches = []
                     for i, train_iter_i in enumerate(train_iters):
                         try:
+                            fetch_start = time.perf_counter()
                             inputs, targets = next(train_iter_i)
+                            dataloader_wait_ms_epoch += (time.perf_counter() - fetch_start) * 1000.0
                             env_batches.append((inputs, targets))
                         except StopIteration:
                             env_batches.append(None)
@@ -1256,7 +1539,9 @@ def train_ppo_vectorized(
                 test_iter = iter(shared_test_iter)
                 for batch_step in range(num_test_batches):
                     try:
+                        fetch_start = time.perf_counter()
                         env_batches = next(test_iter)  # List of (inputs, targets), already on devices
+                        dataloader_wait_ms_epoch += (time.perf_counter() - fetch_start) * 1000.0
                     except StopIteration:
                         break
 
@@ -1299,7 +1584,9 @@ def train_ppo_vectorized(
                     env_batches = []
                     for i, test_iter_i in enumerate(test_iters):
                         try:
+                            fetch_start = time.perf_counter()
                             inputs, targets = next(test_iter_i)
+                            dataloader_wait_ms_epoch += (time.perf_counter() - fetch_start) * 1000.0
                             env_batches.append((inputs, targets))
                         except StopIteration:
                             env_batches.append(None)
@@ -1409,13 +1696,24 @@ def train_ppo_vectorized(
                                 seed_state.metrics.counterfactual_contribution = val_acc - baseline_acc
 
                 # Log counterfactual contribution at terminal epoch (for all active slots)
-                if baseline_accs[env_idx] and epoch == max_epochs and hub:
-                    for slot_id, baseline_acc in baseline_accs[env_idx].items():
+                if epoch == max_epochs and hub and env_idx in slots_needing_counterfactual:
+                    for slot_id in slots_needing_counterfactual[env_idx]:
+                        baseline_acc = baseline_accs[env_idx].get(slot_id)
+                        if baseline_acc is None:
+                            _emit_cf_unavailable(
+                                hub,
+                                env_id=env_idx,
+                                slot_id=slot_id,
+                                reason="missing_baseline",
+                            )
+                            continue
                         hub.emit(TelemetryEvent(
                             event_type=TelemetryEventType.COUNTERFACTUAL_COMPUTED,
                             slot_id=slot_id,
                             data={
-                                "env_idx": env_idx,
+                                "env_id": env_idx,
+                                "device": env_state.env_device,
+                                "available": True,
                                 "slot_id": slot_id,
                                 "real_accuracy": val_acc,
                                 "baseline_accuracy": baseline_acc,
@@ -1627,20 +1925,8 @@ def train_ppo_vectorized(
 
                 # Governor rollback: execute if this env panicked
                 if env_idx in governor_panic_envs:
-                    report = env_state.governor.execute_rollback()
+                    env_state.governor.execute_rollback(env_id=env_idx)
                     batch_rollback_occurred = True  # Mark batch as having stale transitions
-                    if hub:
-                        hub.emit(TelemetryEvent(
-                            event_type=TelemetryEventType.GOVERNOR_ROLLBACK,
-                            severity="warning",
-                            data={
-                                "env_idx": env_idx,
-                                "reason": report.reason,
-                                "loss_at_panic": report.loss_at_panic,
-                                "loss_threshold": report.loss_threshold,
-                                "consecutive_panics": report.consecutive_panics,
-                            },
-                        ))
 
                 # Compute reward with cost params
                 # Derive cost from CURRENT architecture, not cumulative scoreboard
@@ -1658,9 +1944,11 @@ def train_ppo_vectorized(
                     if seed_state and seed_state.metrics:
                         seed_state.metrics.counterfactual_contribution = seed_contribution
 
-                # Determine if we need reward components (only at debug level)
-                collect_reward_telemetry = (
+                emit_reward_components_event = (
                     telemetry_config is not None and telemetry_config.should_collect("debug")
+                )
+                collect_reward_summary = (
+                    telemetry_config is not None and telemetry_config.should_collect("ops_normal")
                 )
 
                 seed_params_for_slot = (
@@ -1673,7 +1961,8 @@ def train_ppo_vectorized(
                 reward_components = None
                 seed_info = SeedInfo.from_seed_state(seed_state, seed_params_for_slot)
                 if reward_family_enum == RewardFamily.CONTRIBUTION:
-                    if collect_reward_telemetry:
+                    need_reward_components = emit_reward_components_event or collect_reward_summary
+                    if need_reward_components:
                         reward, reward_components = compute_reward(
                             action=action_for_reward,
                             seed_contribution=seed_contribution,
@@ -1740,6 +2029,14 @@ def train_ppo_vectorized(
                             },
                         ))
 
+                if collect_reward_summary and reward_components is not None:
+                    summary = reward_summary_accum[env_idx]
+                    summary["total_reward"] += reward
+                    if reward_components.bounded_attribution is not None:
+                        summary["bounded_attribution"] += reward_components.bounded_attribution
+                    summary["compute_rent"] += reward_components.compute_rent
+                    summary["count"] += 1
+
                 # Execute action using FactoredAction properties
                 # Validate sampled slot is in enabled slots (masking should prevent this, but safety check)
                 if not slot_is_enabled:
@@ -1793,8 +2090,29 @@ def train_ppo_vectorized(
                 if action_success:
                     env_state.successful_action_counts[factored_action.op.name] = env_state.successful_action_counts.get(factored_action.op.name, 0) + 1
 
+                if hub and use_telemetry and (
+                    telemetry_config is None or telemetry_config.should_collect("ops_normal")
+                ):
+                    masked_flags = {
+                        "slot": not bool(masks_batch["slot"][env_idx].all().item()),
+                        "blueprint": not bool(masks_batch["blueprint"][env_idx].all().item()),
+                        "blend": not bool(masks_batch["blend"][env_idx].all().item()),
+                        "op": not bool(masks_batch["op"][env_idx].all().item()),
+                    }
+                    for head, masked in masked_flags.items():
+                        mask_total[head] += 1
+                        if masked:
+                            mask_hits[head] += 1
+                    _emit_last_action(
+                        env_id=env_idx,
+                        epoch=epoch,
+                        factored_action=factored_action,
+                        masked=masked_flags,
+                        success=action_success,
+                    )
+
                 # Emit reward telemetry if collecting (after action execution so we have action_success)
-                if reward_components is not None:
+                if emit_reward_components_event and reward_components is not None:
                     reward_components.action_success = action_success
                     hub.emit(TelemetryEvent(
                         event_type=TelemetryEventType.REWARD_COMPUTED,
@@ -1873,6 +2191,9 @@ def train_ppo_vectorized(
                     env_final_accs[env_idx] = env_state.val_acc
                     env_total_rewards[env_idx] = sum(env_state.episode_rewards)
 
+            throughput_step_time_ms_sum += (time.perf_counter() - step_start) * 1000.0
+            throughput_dataloader_wait_ms_sum += dataloader_wait_ms_epoch
+
         # PPO Update after all episodes in batch complete
         # Truncation bootstrapping: Episodes end at max_epochs (time limit), not natural
         # termination. Each transition stores its bootstrap_value (V(s_final)) which GAE
@@ -1883,6 +2204,8 @@ def train_ppo_vectorized(
         # With KL early stopping, the policy won't diverge too far from the
         # data collection distribution even with multiple updates.
         metrics = {}
+        ppo_grad_norm: float | None = None
+        ppo_update_time_ms: float | None = None
 
         # If a Governor rollback occurred, the buffer contains transitions from
         # a different model state - training on them would cause distribution shift.
@@ -1906,6 +2229,7 @@ def train_ppo_vectorized(
                     },
                 ))
         else:
+            update_start = time.perf_counter()
             metrics = _run_ppo_updates(
                 agent=agent,
                 ppo_updates_per_batch=ppo_updates_per_batch,
@@ -1913,6 +2237,8 @@ def train_ppo_vectorized(
                 obs_normalizer=obs_normalizer,
                 use_amp=amp,
             )
+            ppo_update_time_ms = (time.perf_counter() - update_start) * 1000.0
+            ppo_grad_norm = _compute_grad_norm_surrogate(agent.network)
 
             # === Anomaly Detection ===
             # Use check_all() for comprehensive anomaly detection
@@ -1976,6 +2302,35 @@ def train_ppo_vectorized(
                 start_episode=start_episode,
                 requested_episodes=n_episodes,
             )
+            avg_step_time_ms = throughput_step_time_ms_sum / max(max_epochs, 1)
+            avg_dataloader_wait_ms = throughput_dataloader_wait_ms_sum / max(max_epochs, 1)
+            for env_id in range(envs_this_batch):
+                _emit_throughput(
+                    hub=hub,
+                    env_id=env_id,
+                    batch_idx=batch_idx + 1,
+                    episodes_completed=episodes_completed,
+                    step_time_ms=avg_step_time_ms,
+                    dataloader_wait_ms=avg_dataloader_wait_ms,
+                )
+            if telemetry_config is None or telemetry_config.should_collect("ops_normal"):
+                for env_id in range(envs_this_batch):
+                    summary = reward_summary_accum[env_id]
+                    count = summary["count"]
+                    if count < 1:
+                        continue
+                    payload = {
+                        "bounded_attribution": summary["bounded_attribution"] / count,
+                        "compute_rent": summary["compute_rent"] / count,
+                        "total_reward": summary["total_reward"] / count,
+                    }
+                    _emit_reward_summary(
+                        hub=hub,
+                        env_id=env_id,
+                        batch_idx=batch_idx + 1,
+                        episodes_completed=episodes_completed,
+                        summary=payload,
+                    )
 
         total_actions = {op.name: 0 for op in LifecycleOp}
         successful_actions = {op.name: 0 for op in LifecycleOp}
@@ -1984,45 +2339,42 @@ def train_ppo_vectorized(
                 total_actions[a] += c
             for a, c in env_state.successful_action_counts.items():
                 successful_actions[a] += c
-        # Action distribution removed - already visible in analytics.summary_table()
 
         if hub:
             # Emit PPO telemetry (only for non-skipped updates).
             # Note: clip_fraction, ratio_*, explained_variance not available in recurrent path.
             if metrics:
-                current_entropy_coef = agent.get_entropy_coef()
-                # PPO loss metrics removed - already in PPO_UPDATE_COMPLETED telemetry
-                ppo_event = TelemetryEvent(
-                    event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
-                    epoch=episodes_completed,  # Monotonic per-batch epoch id (NOT inner epoch!)
-                    data={
-                        "inner_epoch": epoch,  # Final inner epoch (typically max_epochs)
-                        "batch": batch_idx + 1,
-                        "episodes_completed": episodes_completed,
-                        "train_steps": agent.train_steps,
-                        # Core losses
-                        "policy_loss": metrics.get("policy_loss", 0.0),
-                        "value_loss": metrics.get("value_loss", 0.0),
-                        "entropy": metrics.get("entropy", 0.0),
-                        "entropy_coef": current_entropy_coef,
-                        # PPO health (KL, clipping) - normalized to kl_divergence for Karn
-                        "kl_divergence": metrics.get("approx_kl", 0.0),
-                        "clip_fraction": metrics.get("clip_fraction", 0.0),
-                        # Ratio statistics (early warning for policy collapse)
-                        "ratio_max": metrics.get("ratio_max", 1.0),
-                        "ratio_min": metrics.get("ratio_min", 1.0),
-                        "ratio_std": metrics.get("ratio_std", 0.0),
-                        # Value function health (negative = critic broken)
-                        "explained_variance": metrics.get("explained_variance", 0.0),
-                        # Early stopping info
-                        "early_stop_epoch": metrics.get("early_stop_epoch"),
-                        # Episode-level metrics
-                        "avg_accuracy": avg_acc,
-                        "avg_reward": avg_reward,
-                        "rolling_avg_accuracy": rolling_avg_acc,
-                    },
+                payload = dict(metrics)
+                payload["train_steps"] = agent.train_steps
+                payload["entropy_coef"] = agent.get_entropy_coef()
+                payload["avg_accuracy"] = avg_acc
+                payload["avg_reward"] = avg_reward
+                payload["rolling_avg_accuracy"] = rolling_avg_acc
+                _emit_ppo_update_event(
+                    hub=hub,
+                    metrics=payload,
+                    episodes_completed=episodes_completed,
+                    batch_idx=batch_idx,
+                    epoch=epoch,
+                    optimizer=agent.optimizer,
+                    grad_norm=ppo_grad_norm,
+                    update_time_ms=ppo_update_time_ms,
                 )
-                hub.emit(ppo_event)
+            _emit_action_distribution(
+                hub=hub,
+                batch_idx=batch_idx + 1,
+                episodes_completed=episodes_completed,
+                action_counts=total_actions,
+                success_counts=successful_actions,
+            )
+            if sum(mask_total.values()) > 0:
+                _emit_mask_hit_rates(
+                    hub=hub,
+                    batch_idx=batch_idx + 1,
+                    episodes_completed=episodes_completed,
+                    mask_hits=mask_hits,
+                    mask_total=mask_total,
+                )
 
             # Emit ANALYTICS_SNAPSHOT for dashboard full-state sync (P1-07).
             # Always emitted so dashboards stay in sync even when PPO update is skipped.

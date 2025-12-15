@@ -19,6 +19,7 @@ from esper.simic.gradient_collector import (
     materialize_grad_stats,
 )
 from esper.simic.slots import ordered_slots
+from esper.simic.telemetry_config import TelemetryConfig
 from esper.nissa import get_hub
 from esper.utils.loss import compute_task_loss_with_metrics
 
@@ -242,6 +243,8 @@ def run_heuristic_episode(
     device: str = "cuda:0",
     task_spec=None,
     slots: list[str] | None = None,
+    telemetry_config: TelemetryConfig | None = None,
+    telemetry_lifecycle_only: bool = False,
 ) -> tuple[float, dict[str, int], list[float]]:
     """Run a single training episode with heuristic policy.
 
@@ -281,14 +284,22 @@ def run_heuristic_episode(
     # Wire telemetry
     hub = get_hub()
 
+    ops_telemetry_enabled = telemetry_config is None or telemetry_config.should_collect("ops_normal")
+
     def telemetry_callback(event):
         event.data.setdefault("env_id", 0)
+        event.data.setdefault("device", device)
         hub.emit(event)
 
     for slot_id in enabled_slots:
         slot = model.seed_slots[slot_id]
-        slot.on_telemetry = telemetry_callback
-        slot.fast_mode = False
+        slot.fast_mode = not ops_telemetry_enabled
+        slot.telemetry_lifecycle_only = telemetry_lifecycle_only and not ops_telemetry_enabled
+        slot.on_telemetry = (
+            telemetry_callback
+            if ops_telemetry_enabled or telemetry_lifecycle_only
+            else None
+        )
         slot.isolate_gradients = True
 
     # Emit TRAINING_STARTED to activate Karn (P1 fix)
@@ -318,6 +329,10 @@ def run_heuristic_episode(
     host_params = sum(p.numel() for p in model.get_host_parameters() if p.requires_grad)
 
     for epoch in range(1, max_epochs + 1):
+        for slot_id in enabled_slots:
+            slot = model.seed_slots[slot_id]
+            slot.telemetry_inner_epoch = epoch
+            slot.telemetry_global_epoch = epoch
         # Training phase - use tensor accumulation for deferred sync
         model.train()
         running_loss = torch.zeros(1, device=device)
@@ -534,6 +549,8 @@ def train_heuristic(
     task: str = "cifar10",
     seed: int = 42,
     slots: list[str] | None = None,
+    telemetry_config: TelemetryConfig | None = None,
+    telemetry_lifecycle_only: bool = False,
 ):
     """Train with heuristic policy.
 
@@ -550,6 +567,21 @@ def train_heuristic(
     task_spec = get_task_spec(task)
 
     hub = get_hub()
+    ops_telemetry_enabled = telemetry_config is None or telemetry_config.should_collect("ops_normal")
+    if telemetry_lifecycle_only and not ops_telemetry_enabled:
+        hub.emit(TelemetryEvent(
+            event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+            severity="warning",
+            message="Ops telemetry disabled; emitting lifecycle-only seed telemetry",
+            data={
+                "env_id": 0,
+                "mode": "heuristic",
+                "task": task_spec.name,
+                "device": device,
+                "telemetry_lifecycle_only": True,
+                "telemetry_level": telemetry_config.level.name if telemetry_config is not None else None,
+            },
+        ))
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
         data={
@@ -586,6 +618,8 @@ def train_heuristic(
             device=device,
             task_spec=task_spec,
             slots=slots,
+            telemetry_config=telemetry_config,
+            telemetry_lifecycle_only=telemetry_lifecycle_only,
         )
 
         total_reward = sum(rewards)
