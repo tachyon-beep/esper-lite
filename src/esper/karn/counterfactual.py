@@ -21,6 +21,9 @@ from itertools import permutations
 from typing import Callable, Literal
 import random
 
+from esper.nissa import get_hub
+from esper.leyline import TelemetryEvent, TelemetryEventType
+
 
 @dataclass(frozen=True)
 class CounterfactualConfig:
@@ -177,8 +180,9 @@ class CounterfactualEngine:
     that's the collector's job.
     """
 
-    def __init__(self, config: CounterfactualConfig | None = None):
+    def __init__(self, config: CounterfactualConfig | None = None, emit_telemetry: bool = False):
         self.config = config or CounterfactualConfig()
+        self.emit_telemetry = emit_telemetry
 
     def compute_matrix(
         self,
@@ -371,6 +375,28 @@ class CounterfactualEngine:
                 )
             else:
                 result[slot_id] = ShapleyEstimate()
+
+        # Emit telemetry if enabled
+        if self.emit_telemetry:
+            hub = get_hub()
+            if hub is not None:
+                # Convert ShapleyEstimate objects to serializable dict
+                shapley_dict = {
+                    slot_id: {
+                        "mean": estimate.mean,
+                        "std": estimate.std,
+                        "n_samples": estimate.n_samples,
+                    }
+                    for slot_id, estimate in result.items()
+                }
+                hub.emit(TelemetryEvent(
+                    event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+                    data={
+                        "kind": "shapley_computed",
+                        "shapley_values": shapley_dict,
+                        "num_slots": len(result),
+                    },
+                ))
 
         return result
 

@@ -66,7 +66,7 @@ class CounterfactualHelper:
             strategy=strategy,
             shapley_samples=shapley_samples,
         )
-        self.engine = CounterfactualEngine(config)
+        self.engine = CounterfactualEngine(config, emit_telemetry=emit_events)
         self.emit_events = emit_events
         self._last_matrix: CounterfactualMatrix | None = None
 
