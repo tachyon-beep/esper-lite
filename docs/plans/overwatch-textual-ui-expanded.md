@@ -10,6 +10,189 @@
 
 ---
 
+## Telemetry Implementation Status (Master Record)
+
+> **Last audited:** 2025-12-16
+> **Audit source:** Codebase exploration of `src/esper/{nissa,simic,karn,leyline}/`
+
+### Summary
+
+| Status | Count | Percentage |
+|--------|-------|------------|
+| ✅ Implemented | 12 | 18% |
+| ⚠️ Partial (code exists, not wired) | 7 | 10% |
+| ❌ Not Implemented | 48 | 72% |
+| **Total Fields** | **67** | |
+
+---
+
+### PyTorchDiagnostics Fields (26 total)
+
+#### Memory (5 fields)
+| Field | Status | Location | Notes |
+|-------|--------|----------|-------|
+| `cuda_allocated_mb` | ✅ | `karn/health.py` | MemoryStats.gpu_allocated (bytes) |
+| `cuda_reserved_mb` | ✅ | `karn/health.py` | MemoryStats.gpu_reserved (bytes) |
+| `cuda_fragmentation_pct` | ❌ | — | Fragmentation ratio not computed |
+| `alloc_retries` | ❌ | — | CUDA allocator retry tracking missing |
+| `oom_events` | ❌ | — | OOM event counter missing |
+
+#### Gradients (6 fields)
+| Field | Status | Location | Notes |
+|-------|--------|----------|-------|
+| `dead_layers` | ⚠️ | `simic/debug_telemetry.py` | Detection exists, not emitted as event |
+| `exploding_layers` | ⚠️ | `simic/debug_telemetry.py` | `LayerGradientStats.large_fraction` passive |
+| `dead_neuron_pct` | ❌ | — | Per-neuron activation tracking missing |
+| `nan_grad_count` | ⚠️ | `simic/debug_telemetry.py` | `LayerGradientStats.nan_count` exists |
+| `layer_gradient_health` | ⚠️ | `nissa/tracker.py` | `DiagnosticTracker.health_score` limited |
+
+#### torch.compile (3 fields)
+| Field | Status | Location | Notes |
+|-------|--------|----------|-------|
+| `compile_enabled` | ❌ | — | torch.compile status not tracked |
+| `compile_graph_breaks` | ❌ | — | Graph break counting missing |
+| `compile_cache_hit_pct` | ❌ | — | Cache metrics missing |
+
+#### AMP (2 fields)
+| Field | Status | Location | Notes |
+|-------|--------|----------|-------|
+| `amp_loss_scale` | ❌ | — | AMP not used in current training |
+| `amp_skipped_steps` | ❌ | — | AMP skip tracking missing |
+
+#### Tensor Operations (2 fields)
+| Field | Status | Location | Notes |
+|-------|--------|----------|-------|
+| `cpu_gpu_transfers` | ❌ | — | Transfer counting missing |
+| `sync_events` | ❌ | — | Sync event tracking missing |
+
+#### CUDA Kernels (1 field)
+| Field | Status | Location | Notes |
+|-------|--------|----------|-------|
+| `kernel_launch_overhead_pct` | ❌ | — | Kernel profiling missing |
+
+#### DataLoader (2 fields)
+| Field | Status | Location | Notes |
+|-------|--------|----------|-------|
+| `dataloader_bottleneck` | ❌ | — | Throughput monitoring missing |
+| `dataloader_queue_depth` | ❌ | — | Queue depth tracking missing |
+
+#### Distributed (3 fields)
+| Field | Status | Location | Notes |
+|-------|--------|----------|-------|
+| `distributed_enabled` | ❌ | — | Multi-GPU tracking missing |
+| `straggler_rank` | ❌ | — | Straggler detection missing |
+| `comm_overhead_pct` | ❌ | — | Communication overhead missing |
+
+---
+
+### RLDiagnostics Fields (25 total)
+
+#### Value Function (3 fields)
+| Field | Status | Location | Notes |
+|-------|--------|----------|-------|
+| `explained_variance` | ✅ | `simic/ppo.py:419-425` | Computed pre-update |
+| `ev_trend` | ❌ | — | History list not maintained |
+| `ev_direction` | ❌ | — | Slope calculation missing |
+
+#### Advantages (4 fields)
+| Field | Status | Location | Notes |
+|-------|--------|----------|-------|
+| `advantage_mean` | ❌ | — | Not collected |
+| `advantage_std` | ❌ | — | Not tracked |
+| `advantage_range` | ❌ | — | Min/max not computed |
+| `advantage_biased` | ❌ | — | Bias detection missing |
+
+#### Clipping (4 fields)
+| Field | Status | Location | Notes |
+|-------|--------|----------|-------|
+| `policy_ratio_clipped_pct` | ✅ | `simic/ppo.py:583` | clip_fraction collected |
+| `clip_fraction_positive` | ❌ | — | Positive direction missing |
+| `clip_fraction_negative` | ❌ | — | Negative direction missing |
+| `value_clip_fraction` | ❌ | — | Value clipping missing |
+
+#### Reward Hacking (3 fields)
+| Field | Status | Location | Notes |
+|-------|--------|----------|-------|
+| `reward_task_correlation` | ❌ | — | Correlation not computed |
+| `shaped_reward_ratio` | ⚠️ | `simic/reward_telemetry.py` | Components exist, ratio missing |
+| `reward_hacking_detected` | ❌ | — | TODO in telemetry.py:64 |
+
+#### Entropy (4 fields)
+| Field | Status | Location | Notes |
+|-------|--------|----------|-------|
+| `entropy` | ✅ | `simic/ppo.py:545` | Per-head entropy tracked |
+| `entropy_trend` | ❌ | — | History not maintained |
+| `entropy_schedule_pct` | ❌ | — | Schedule progress missing |
+| `entropy_collapsed` | ⚠️ | `simic/ppo.py:181-186` | Floor exists, not flagged |
+
+#### Bootstrap (1 field)
+| Field | Status | Location | Notes |
+|-------|--------|----------|-------|
+| `bootstrap_ratio` | ❌ | — | Bootstrap term ratio missing |
+
+#### Sample Efficiency (3 fields)
+| Field | Status | Location | Notes |
+|-------|--------|----------|-------|
+| `importance_weight_mean` | ❌ | — | IS weights not aggregated |
+| `importance_weight_max` | ❌ | — | Max IS weight missing |
+| `sample_reuse_epochs` | ❌ | — | Reuse count missing |
+
+#### Training Progress (2 fields)
+| Field | Status | Location | Notes |
+|-------|--------|----------|-------|
+| `updates_since_improvement` | ❌ | — | Update counter missing |
+| `plateau_detected` | ⚠️ | `nissa/tracker.py:411-456` | `_plateau_length()` not wired |
+
+#### PBRS (1 field)
+| Field | Status | Location | Notes |
+|-------|--------|----------|-------|
+| `pbrs_potential_drift` | ❌ | — | Potential tracking missing |
+
+---
+
+### Core PPO Metrics (Already Implemented)
+
+These fields are already collected in `simic/ppo.py` and available for Overwatch:
+
+| Field | Location | Notes |
+|-------|----------|-------|
+| `kl_divergence` | `ppo.py:563-580` | approx_kl via log-ratio |
+| `ratio_mean` | `ppo.py:546` | Policy ratio mean |
+| `ratio_max` | `ppo.py:547` | Anomaly if > 5.0 |
+| `ratio_min` | `ppo.py:548` | Anomaly if < 0.1 |
+| `policy_loss` | `ppo.py:543` | Per-epoch policy loss |
+| `value_loss` | `ppo.py:544` | Per-epoch value loss |
+
+---
+
+### Implementation Priority
+
+**Phase 0: Wire Existing Code (7 fields, ~2 hours)**
+- Wire `dead_layers`, `exploding_layers`, `nan_grad_count` from debug_telemetry
+- Wire `layer_gradient_health` from DiagnosticTracker
+- Wire `plateau_detected` from `_plateau_length()`
+- Compute `shaped_reward_ratio` from existing components
+- Flag `entropy_collapsed` when entropy < 0.1
+
+**Phase 1: P1 Critical RL Fields (~1 day)**
+- Advantage statistics (mean, std, range, biased)
+- EV trending (ev_trend list, ev_direction)
+- Reward hacking detection (correlation, detection flag)
+- Bootstrap ratio
+
+**Phase 2: P1 Critical PyTorch Fields (~1 day)**
+- Memory fragmentation computation
+- torch.compile graph break counting
+- AMP metrics (if AMP enabled)
+
+**Phase 3: P2 Fields (defer until TUI working)**
+- Clipping direction breakdown
+- Sample efficiency metrics
+- DataLoader profiling
+- Distributed training metrics
+
+---
+
 ## UX Design Principles
 
 ### Mental Model: Air Traffic Control
