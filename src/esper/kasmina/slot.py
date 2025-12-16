@@ -364,7 +364,7 @@ class SeedState:
             "blueprint_id": self.blueprint_id,
             "slot_id": self.slot_id,
             "stage": self.stage.value,  # Enum -> int
-            "previous_stage": self.previous_stage.value if self.previous_stage else None,
+            "previous_stage": self.previous_stage.value if self.previous_stage is not None else None,
             "stage_entered_at": self.stage_entered_at.isoformat(),  # datetime -> str
             "alpha": self.alpha,
             "stage_history": [
@@ -390,7 +390,7 @@ class SeedState:
             blueprint_id=data["blueprint_id"],
             slot_id=data["slot_id"],
             stage=SeedStage(data["stage"]),
-            previous_stage=SeedStage(data["previous_stage"]) if data.get("previous_stage") else None,
+            previous_stage=SeedStage(data["previous_stage"]) if data.get("previous_stage") is not None else None,
         )
         state.stage_entered_at = datetime.fromisoformat(data["stage_entered_at"])
         state.alpha = data.get("alpha", 0.0)

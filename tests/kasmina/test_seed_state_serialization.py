@@ -92,3 +92,21 @@ class TestSeedStateToDict:
         for stage_val, ts_str in data["stage_history"]:
             assert isinstance(stage_val, int)
             assert isinstance(ts_str, str)
+
+    def test_to_dict_handles_unknown_stage(self):
+        """to_dict() correctly serializes SeedStage.UNKNOWN (value 0)."""
+        state = SeedState(
+            seed_id="test-seed",
+            blueprint_id="norm",
+            slot_id="r0c0",
+            stage=SeedStage.DORMANT,
+            previous_stage=SeedStage.UNKNOWN,  # Value 0, falsy but not None
+        )
+
+        data = state.to_dict()
+        restored = SeedState.from_dict(data)
+
+        # previous_stage=UNKNOWN should be preserved, not treated as None
+        assert data["previous_stage"] == 0
+        assert restored.previous_stage == SeedStage.UNKNOWN
+        assert restored.previous_stage is not None
