@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import math
+import threading
 
 import torch
 import torch.nn as nn
@@ -21,6 +22,11 @@ class BlendAlgorithm(ABC, nn.Module):
 
     Inherits from nn.Module so all blend algorithms can be registered as
     submodules of SeedSlot (required for consistent PyTorch module handling).
+
+    Note:
+        The internal alpha tensor cache is not serialized. After loading
+        a checkpoint, the cache will be repopulated on the first forward pass.
+        This has no correctness impact, only a single-allocation performance cost.
     """
 
     algorithm_id: str = "base"
@@ -28,6 +34,31 @@ class BlendAlgorithm(ABC, nn.Module):
 
     def __init__(self):
         super().__init__()
+        # Thread-local cache for alpha tensor to avoid per-forward allocation
+        # Uses thread-local storage for multi-GPU DataParallel safety
+        self._alpha_cache_local = threading.local()
+
+    def _get_cached_alpha_tensor(self, value: float, x: torch.Tensor) -> torch.Tensor:
+        """Get alpha tensor, using cache if possible.
+
+        Cache is invalidated when device, dtype, or alpha value changes.
+        This eliminates thousands of tensor allocations per episode.
+
+        All three checks (device, dtype, value) are necessary because:
+        - Device: DataParallel may use different GPUs across threads
+        - Dtype: Mixed precision training may change dtypes dynamically
+        - Value: Schedule-based blends change alpha each step
+        """
+        cache = getattr(self._alpha_cache_local, 'cache', None)
+        if cache is not None:
+            cached_device, cached_dtype, cached_value, cached_tensor = cache
+            if cached_device == x.device and cached_dtype == x.dtype and cached_value == value:
+                return cached_tensor
+
+        # Create new tensor and cache it
+        tensor = torch.tensor(value, device=x.device, dtype=x.dtype)
+        self._alpha_cache_local.cache = (x.device, x.dtype, value, tensor)
+        return tensor
 
     def step(self, step: int) -> None:
         """Update the current step for schedule-based algorithms."""
@@ -76,7 +107,7 @@ class LinearBlend(BlendAlgorithm):
     def get_alpha_for_blend(self, x: torch.Tensor) -> torch.Tensor:
         """Return scalar alpha as 0-dim tensor (broadcasts to any shape)."""
         alpha = min(1.0, max(0.0, self._current_step / self.total_steps))
-        return torch.tensor(alpha, device=x.device, dtype=x.dtype)
+        return self._get_cached_alpha_tensor(alpha, x)
 
 
 class SigmoidBlend(BlendAlgorithm):
@@ -101,7 +132,7 @@ class SigmoidBlend(BlendAlgorithm):
     def get_alpha_for_blend(self, x: torch.Tensor) -> torch.Tensor:
         """Return scalar alpha as 0-dim tensor (broadcasts to any shape)."""
         alpha = self._compute_alpha(self._current_step)
-        return torch.tensor(alpha, device=x.device, dtype=x.dtype)
+        return self._get_cached_alpha_tensor(alpha, x)
 
 
 class GatedBlend(BlendAlgorithm):
