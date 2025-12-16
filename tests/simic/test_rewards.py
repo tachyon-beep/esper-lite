@@ -1418,21 +1418,27 @@ class TestPenaltyAntiStacking:
 
 
 class TestRewardHackingDetection:
-    """Test reward hacking detection telemetry."""
+    """Test reward hacking detection telemetry.
+
+    DRL Expert review 2025-12-16: Threshold raised to 5x to align with penalty
+    threshold in compute_contribution_reward(). Ransomware detection added for
+    the dangerous pattern of high contribution + negative total improvement.
+    """
 
     def test_reward_hacking_suspected_emitted_on_anomalous_ratio(self):
+        """Test that 6x ratio triggers with default 5x threshold."""
         from esper.simic.rewards import _check_reward_hacking
         from esper.leyline import TelemetryEventType
         from unittest.mock import Mock
 
         hub = Mock()
 
-        # Seed claims 500% of total improvement (impossible without hacking)
+        # Seed claims 600% of total improvement (above 5x threshold)
         emitted = _check_reward_hacking(
             hub=hub,
-            seed_contribution=5.0,
+            seed_contribution=6.0,
             total_improvement=1.0,
-            hacking_ratio_threshold=3.0,  # 300% is suspicious
+            # Using default threshold of 5.0
             slot_id="r0c0",
             seed_id="seed_001",
         )
@@ -1440,20 +1446,86 @@ class TestRewardHackingDetection:
         assert emitted is True
         event = hub.emit.call_args[0][0]
         assert event.event_type == TelemetryEventType.REWARD_HACKING_SUSPECTED
-        assert event.data["ratio"] == 5.0
+        assert event.data["ratio"] == 6.0
         assert event.data["slot_id"] == "r0c0"
+        assert event.data["threshold"] == 5.0
 
     def test_no_hacking_event_for_normal_ratios(self):
+        """Test that 4x ratio doesn't trigger with default 5x threshold."""
         from esper.simic.rewards import _check_reward_hacking
         from unittest.mock import Mock
 
         hub = Mock()
 
+        # 4x ratio is below 5x threshold
         emitted = _check_reward_hacking(
             hub=hub,
-            seed_contribution=0.8,
+            seed_contribution=4.0,
             total_improvement=1.0,
-            hacking_ratio_threshold=3.0,
+            # Using default threshold of 5.0
+            slot_id="r0c0",
+            seed_id="seed_001",
+        )
+
+        assert emitted is False
+        assert not hub.emit.called
+
+    def test_ransomware_signature_emitted(self):
+        """Test ransomware detection: high contribution + negative total."""
+        from esper.simic.rewards import _check_ransomware_signature
+        from esper.leyline import TelemetryEventType
+        from unittest.mock import Mock
+
+        hub = Mock()
+
+        # Seed claims high contribution while system degrades (ransomware pattern)
+        emitted = _check_ransomware_signature(
+            hub=hub,
+            seed_contribution=2.0,  # High contribution
+            total_improvement=-0.5,  # System getting worse
+            slot_id="r0c0",
+            seed_id="seed_001",
+        )
+
+        assert emitted is True
+        event = hub.emit.call_args[0][0]
+        assert event.event_type == TelemetryEventType.REWARD_HACKING_SUSPECTED
+        assert event.severity == "critical"
+        assert event.data["pattern"] == "ransomware_signature"
+        assert event.data["seed_contribution"] == 2.0
+        assert event.data["total_improvement"] == -0.5
+
+    def test_no_ransomware_when_system_improving(self):
+        """Test no ransomware alert when total improvement is positive."""
+        from esper.simic.rewards import _check_ransomware_signature
+        from unittest.mock import Mock
+
+        hub = Mock()
+
+        # High contribution but system is improving - not ransomware
+        emitted = _check_ransomware_signature(
+            hub=hub,
+            seed_contribution=2.0,
+            total_improvement=0.5,  # System improving
+            slot_id="r0c0",
+            seed_id="seed_001",
+        )
+
+        assert emitted is False
+        assert not hub.emit.called
+
+    def test_no_ransomware_when_contribution_low(self):
+        """Test no ransomware alert when seed contribution is low."""
+        from esper.simic.rewards import _check_ransomware_signature
+        from unittest.mock import Mock
+
+        hub = Mock()
+
+        # Low contribution even though system degrading - not ransomware
+        emitted = _check_ransomware_signature(
+            hub=hub,
+            seed_contribution=0.5,  # Low contribution
+            total_improvement=-0.5,  # System getting worse
             slot_id="r0c0",
             seed_id="seed_001",
         )

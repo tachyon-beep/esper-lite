@@ -362,11 +362,30 @@ def _check_performance_degradation(
     rolling_avg_acc: float,
     degradation_threshold: float = 0.1,
     env_id: int = 0,
+    training_progress: float = 1.0,
+    warmup_threshold: float = 0.1,
 ) -> bool:
     """Emit PERFORMANCE_DEGRADATION if accuracy dropped significantly.
 
+    PPO has natural 15-20% accuracy variance during early training, so we
+    skip emissions during warmup (first 10% of training by default) to
+    avoid false positives from normal policy exploration.
+
+    Args:
+        hub: Telemetry hub for event emission
+        current_acc: Current accuracy value
+        rolling_avg_acc: Rolling average accuracy for comparison
+        degradation_threshold: Minimum relative drop to trigger (default 10%)
+        env_id: Environment ID for attribution
+        training_progress: Progress through training (0.0 to 1.0)
+        warmup_threshold: Skip emissions below this progress (default 0.1 = 10%)
+
     Returns True if event was emitted.
     """
+    # Skip during warmup - PPO has high variance early in training
+    if training_progress < warmup_threshold:
+        return False
+
     if rolling_avg_acc <= 0:
         return False
 
@@ -384,6 +403,7 @@ def _check_performance_degradation(
             "drop_percent": drop * 100,
             "threshold_percent": degradation_threshold * 100,
             "env_id": env_id,
+            "training_progress": training_progress,
         },
     ))
     return True

@@ -207,19 +207,25 @@ def test_mask_hit_rates_emitted():
 
 
 def test_performance_degradation_emitted_on_accuracy_drop():
+    """Test degradation event emitted when accuracy drops significantly.
+
+    DRL Expert review 2025-12-16: Added warmup guard to avoid false positives
+    during early training when PPO has natural 15-20% variance.
+    """
     from esper.simic.vectorized import _check_performance_degradation
     from esper.leyline import TelemetryEventType
     from unittest.mock import Mock
 
     hub = Mock()
 
-    # Accuracy dropped from 0.8 to 0.6 (25% drop)
+    # Accuracy dropped from 0.8 to 0.6 (25% drop), past warmup
     emitted = _check_performance_degradation(
         hub=hub,
         current_acc=0.6,
         rolling_avg_acc=0.8,
         degradation_threshold=0.1,  # 10% drop triggers
         env_id=0,
+        training_progress=0.5,  # Past warmup (50% through training)
     )
 
     assert emitted is True
@@ -228,6 +234,7 @@ def test_performance_degradation_emitted_on_accuracy_drop():
     assert event.event_type == TelemetryEventType.PERFORMANCE_DEGRADATION
     assert event.data["current_acc"] == 0.6
     assert event.data["rolling_avg_acc"] == 0.8
+    assert event.data["training_progress"] == 0.5
 
 
 def test_no_degradation_event_when_stable():
@@ -242,10 +249,59 @@ def test_no_degradation_event_when_stable():
         rolling_avg_acc=0.8,
         degradation_threshold=0.1,
         env_id=0,
+        training_progress=0.5,
     )
 
     assert emitted is False
     assert not hub.emit.called
+
+
+def test_no_degradation_event_during_warmup():
+    """Test that degradation events are skipped during warmup phase.
+
+    DRL Expert review 2025-12-16: PPO has natural 15-20% variance during
+    early training, so we skip emissions in first 10% to avoid false positives.
+    """
+    from esper.simic.vectorized import _check_performance_degradation
+    from unittest.mock import Mock
+
+    hub = Mock()
+
+    # Same degradation that would normally trigger, but during warmup
+    emitted = _check_performance_degradation(
+        hub=hub,
+        current_acc=0.6,
+        rolling_avg_acc=0.8,
+        degradation_threshold=0.1,  # Would normally trigger
+        env_id=0,
+        training_progress=0.05,  # Only 5% through training (warmup)
+    )
+
+    assert emitted is False
+    assert not hub.emit.called
+
+
+def test_degradation_event_emitted_after_warmup():
+    """Test that degradation events resume after warmup threshold."""
+    from esper.simic.vectorized import _check_performance_degradation
+    from esper.leyline import TelemetryEventType
+    from unittest.mock import Mock
+
+    hub = Mock()
+
+    # Just past warmup threshold (11% > 10%)
+    emitted = _check_performance_degradation(
+        hub=hub,
+        current_acc=0.6,
+        rolling_avg_acc=0.8,
+        degradation_threshold=0.1,
+        env_id=0,
+        training_progress=0.11,  # Just past warmup
+    )
+
+    assert emitted is True
+    event = hub.emit.call_args[0][0]
+    assert event.event_type == TelemetryEventType.PERFORMANCE_DEGRADATION
 
 
 def test_resolve_target_slot_uses_canonical_order():

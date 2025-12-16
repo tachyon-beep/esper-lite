@@ -1044,21 +1044,25 @@ def _contribution_cull_shaping(
     return 0.0
 
 
-# TODO: [UNWIRED TELEMETRY] - Call _check_reward_hacking() from compute_contribution_reward()
-# when seed_contribution/total_improvement ratio is computed. See telemetry-phase3.md Task 5.
+# TODO: [UNWIRED TELEMETRY] - Call _check_reward_hacking() and _check_ransomware_signature()
+# from compute_contribution_reward() when attribution is computed. See telemetry-phase3.md Task 5.
 def _check_reward_hacking(
     hub,
     *,
     seed_contribution: float,
     total_improvement: float,
-    hacking_ratio_threshold: float = 3.0,
+    hacking_ratio_threshold: float = 5.0,
     slot_id: str,
     seed_id: str,
 ) -> bool:
     """Emit REWARD_HACKING_SUSPECTED if attribution ratio is anomalous.
 
-    A seed claiming more than 300% of total improvement is suspicious
-    and may indicate reward hacking or measurement error.
+    A seed claiming more than 500% of total improvement is suspicious
+    and may indicate reward hacking or measurement error. The 5x threshold
+    aligns with the penalty threshold in compute_contribution_reward().
+
+    Note: For ransomware detection (high contribution + negative total),
+    use _check_ransomware_signature() instead.
 
     Returns True if event was emitted.
     """
@@ -1080,6 +1084,51 @@ def _check_reward_hacking(
             "seed_contribution": seed_contribution,
             "total_improvement": total_improvement,
             "threshold": hacking_ratio_threshold,
+            "slot_id": slot_id,
+            "seed_id": seed_id,
+        },
+    ))
+    return True
+
+
+def _check_ransomware_signature(
+    hub,
+    *,
+    seed_contribution: float,
+    total_improvement: float,
+    contribution_threshold: float = 1.0,
+    degradation_threshold: float = -0.2,
+    slot_id: str,
+    seed_id: str,
+) -> bool:
+    """Emit REWARD_HACKING_SUSPECTED if seed shows ransomware signature.
+
+    A "ransomware seed" is one that claims high contribution while the
+    system is actually getting worse. This is the most dangerous Goodhart
+    pattern: the seed has learned to maximize its counterfactual signal
+    at the expense of actual performance.
+
+    Signature: seed_contribution > 1.0 AND total_improvement < -0.2
+
+    Returns True if event was emitted.
+    """
+    from esper.leyline import TelemetryEvent, TelemetryEventType
+
+    if seed_contribution <= contribution_threshold:
+        return False
+
+    if total_improvement >= degradation_threshold:
+        return False
+
+    hub.emit(TelemetryEvent(
+        event_type=TelemetryEventType.REWARD_HACKING_SUSPECTED,
+        severity="critical",
+        data={
+            "pattern": "ransomware_signature",
+            "seed_contribution": seed_contribution,
+            "total_improvement": total_improvement,
+            "contribution_threshold": contribution_threshold,
+            "degradation_threshold": degradation_threshold,
             "slot_id": slot_id,
             "seed_id": seed_id,
         },
