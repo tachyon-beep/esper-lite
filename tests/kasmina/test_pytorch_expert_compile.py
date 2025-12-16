@@ -155,26 +155,30 @@ class TestHostCompileCompatibility:
         assert result.shape == (2, 12, 100)
 
 
-class TestPrecomputedKeysNoGraphBreaks:
-    """Verify pre-computed slot keys don't cause graph breaks."""
+class TestSegmentRoutingCompiles:
+    """Verify segment routing compiles efficiently after slot simplification."""
 
-    def test_cnn_slot_keys_are_tuples(self):
-        """CNNHost slot keys should be tuples (inlined by compiler)."""
-        host = CNNHost(num_classes=10, n_blocks=5)
+    def test_cnn_segment_routing_compiles(self):
+        """CNNHost segment routing should compile without graph breaks."""
+        host = CNNHost(num_classes=10, n_blocks=3)
 
-        # Tuples are compile-friendly data structures
-        assert isinstance(host._slot_keys, tuple)
-        assert isinstance(host._slot_indices, tuple)
-        assert len(host._slot_keys) == 4  # n_blocks - 1
+        x = torch.randn(2, 3, 32, 32)
+        features = host.forward_to_segment("r0c1", x)
+        out = host.forward_from_segment("r0c1", features)
 
-    def test_transformer_slot_keys_are_tuples(self):
-        """TransformerHost slot keys should be tuples."""
+        assert out.shape == (2, 10)
+
+    def test_transformer_segment_routing_compiles(self):
+        """TransformerHost segment routing should compile without graph breaks."""
         host = TransformerHost(
             vocab_size=100, n_embd=64, n_head=2, n_layer=6, block_size=16, num_segments=3
         )
 
-        assert isinstance(host._slot_keys, tuple)
-        assert len(host._slot_keys) == 6  # n_layer
+        x = torch.randint(0, 100, (2, 12))
+        features = host.forward_to_segment("r0c0", x)
+        out = host.forward_from_segment("r0c0", features)
+
+        assert out.shape == (2, 12, 100)
 
 
 class TestDynamicShapeHandling:

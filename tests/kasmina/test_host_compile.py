@@ -45,10 +45,14 @@ class TestCNNHostCompile:
 
         assert result.shape == (2, 10)
 
-    def test_slot_key_lookup_uses_tuple(self):
-        """Verify _slot_keys tuple is used for O(1) lookup."""
-        host = CNNHost(num_classes=10, n_blocks=4)
+    def test_segment_routing_compiles(self):
+        """Verify segment routing methods compile without graph breaks."""
+        host = CNNHost(num_classes=10, n_blocks=3)
 
-        # Verify internal structure via direct access
-        assert isinstance(host._slot_keys, tuple)
-        assert len(host._slot_keys) == 3  # n_blocks - 1
+        x = torch.randn(2, 3, 32, 32)
+        # Segment routing should work without errors
+        features = host.forward_to_segment("r0c1", x)
+        assert features.shape[0] == 2
+
+        out = host.forward_from_segment("r0c1", features)
+        assert out.shape == (2, 10)

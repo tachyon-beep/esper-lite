@@ -60,14 +60,17 @@ class DummyHost(nn.Module):
         """Provide single injection point for testing."""
         return {"r0c1": 32}
 
-    def register_slot(self, slot_id: str, slot_module: nn.Module) -> None:
-        """Register seed slot."""
-        self._slots[slot_id] = slot_module
-
-    def unregister_slot(self, slot_id: str) -> None:
-        """Unregister seed slot."""
-        if slot_id in self._slots:
-            del self._slots[slot_id]
+    def injection_specs(self):
+        """Return injection specs for MorphogeneticModel compatibility."""
+        from esper.leyline import InjectionSpec
+        return [
+            InjectionSpec(
+                slot_id="r0c1",
+                channels=32,
+                position=0.5,
+                layer_range=(0, 1),
+            )
+        ]
 
     def forward_to_segment(self, segment: str, x: torch.Tensor, from_segment: str | None = None) -> torch.Tensor:
         """Forward from input or segment to target segment."""

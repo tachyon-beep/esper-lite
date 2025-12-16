@@ -109,11 +109,11 @@ class TestBlendActionIntegration:
     def test_transformer_blend_algorithms(self, algorithm: str):
         """Each blend algorithm works for transformer topology."""
         config = TaskConfig.for_tinystories()
-        host = TransformerHost(vocab_size=1000, n_layer=2, n_embd=64, n_head=4)
+        host = TransformerHost(vocab_size=1000, n_layer=3, n_embd=64, n_head=4, num_segments=3)
         model = MorphogeneticModel(host, device="cpu", slots=["r0c1"], task_config=config)
 
         model.germinate_seed(
-            "norm", f"test_seed_{algorithm}", slot="r0c1",
+            "lora", f"test_seed_{algorithm}", slot="r0c1",
             blend_algorithm_id=algorithm,
         )
 
@@ -145,11 +145,11 @@ class TestBlendActionIntegration:
     def test_gated_blend_transformer_integration(self):
         """GatedBlend creates learnable gate network for transformer."""
         config = TaskConfig.for_tinystories()
-        host = TransformerHost(vocab_size=1000, n_layer=2, n_embd=64, n_head=4)
+        host = TransformerHost(vocab_size=1000, n_layer=3, n_embd=64, n_head=4, num_segments=3)
         model = MorphogeneticModel(host, device="cpu", slots=["r0c1"], task_config=config)
 
         model.germinate_seed(
-            "norm", "test_gated", slot="r0c1",
+            "lora", "test_gated", slot="r0c1",
             blend_algorithm_id="gated",
         )
 
