@@ -330,11 +330,13 @@ class TransformerHost(nn.Module):
         n_layer: int = 6,
         block_size: int = 256,
         dropout: float = 0.1,
+        num_segments: int = 3,
     ):
         super().__init__()
         self.n_layer = n_layer
         self.n_embd = n_embd
         self.block_size = block_size
+        self.num_segments = num_segments
 
         self.tok_emb = nn.Embedding(vocab_size, n_embd)
         self.pos_emb = nn.Embedding(block_size, n_embd)
@@ -354,23 +356,42 @@ class TransformerHost(nn.Module):
         self._slot_keys = tuple(f"layer_{i}_post_block" for i in range(n_layer))
         self.slots = nn.ModuleDict({k: nn.Identity() for k in self._slot_keys})
 
-        # Segment channel counts for multi-slot support
-        # For transformers, all segments have the same embedding dimension
-        # Segments map to layer ranges: r0c0 (0-1), r0c1 (2-3), r0c2 (4-5)
-        self.segment_channels = {
-            "r0c0": n_embd,
-            "r0c1": n_embd,
-            "r0c2": n_embd,
-        }
+        # Compute layer range boundaries for segments
+        layers_per_segment = n_layer // num_segments
+        self._segment_boundaries = {}
+        for i in range(num_segments):
+            from esper.leyline.slot_id import format_slot_id
+            slot_id = format_slot_id(0, i)
+            self._segment_boundaries[slot_id] = (i + 1) * layers_per_segment
 
-        # Layer range boundaries for segments (layer index where segment ENDS)
-        # For n_layer=6: r0c0=0-1, r0c1=2-3, r0c2=4-5
-        third = n_layer // 3
-        self._segment_boundaries = {
-            "r0c0": third,           # Layers 0 to third-1
-            "r0c1": 2 * third,       # Layers third to 2*third-1
-            "r0c2": n_layer,         # Layers 2*third to n_layer-1
-        }
+    def injection_specs(self) -> list["InjectionSpec"]:
+        """Return available injection points as InjectionSpec objects.
+
+        Returns:
+            List of InjectionSpec, one per segment, sorted by network position.
+        """
+        from esper.leyline import InjectionSpec
+        from esper.leyline.slot_id import format_slot_id
+
+        specs = []
+        layers_per_segment = self.n_layer // self.num_segments
+        for i in range(self.num_segments):
+            start_layer = i * layers_per_segment
+            end_layer = (i + 1) * layers_per_segment
+            specs.append(
+                InjectionSpec(
+                    slot_id=format_slot_id(0, i),
+                    channels=self.n_embd,
+                    position=(i + 1) / self.num_segments,
+                    layer_range=(start_layer, end_layer),
+                )
+            )
+        return specs
+
+    @property
+    def segment_channels(self) -> dict[str, int]:
+        """Map of slot_id -> channel dimension (derived from injection_specs)."""
+        return {spec.slot_id: spec.channels for spec in self.injection_specs()}
 
     @property
     @override

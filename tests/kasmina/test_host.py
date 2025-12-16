@@ -328,3 +328,78 @@ class TestCNNHostInjectionSpecs:
         assert positions[0] == 1/3
         assert positions[1] == 2/3
         assert positions[2] == 1.0
+
+
+# =============================================================================
+# TransformerHost Dynamic Injection Specs Tests
+# =============================================================================
+
+
+class TestTransformerHostInjectionSpecs:
+    """Test TransformerHost.injection_specs() method for dynamic slot discovery."""
+
+    def test_default_3_segments_has_3_specs(self):
+        """Default TransformerHost should return 3 injection specs."""
+        host = TransformerHost(vocab_size=100, n_embd=64, n_head=2, n_layer=6, block_size=32)
+        specs = host.injection_specs()
+        assert len(specs) == 3
+        assert all(isinstance(s, InjectionSpec) for s in specs)
+
+    def test_specs_have_correct_slot_ids(self):
+        """Specs should have canonical slot IDs in order."""
+        host = TransformerHost(vocab_size=100, n_embd=64, n_head=2, n_layer=6, block_size=32)
+        specs = host.injection_specs()
+        slot_ids = [s.slot_id for s in specs]
+        assert slot_ids == ["r0c0", "r0c1", "r0c2"]
+
+    def test_specs_have_increasing_positions(self):
+        """Specs should have increasing positions from 0 to 1."""
+        host = TransformerHost(vocab_size=100, n_embd=64, n_head=2, n_layer=6, block_size=32)
+        specs = host.injection_specs()
+        positions = [s.position for s in specs]
+        assert positions == sorted(positions)
+        assert all(0 < p <= 1.0 for p in positions)
+
+    def test_specs_have_uniform_channels(self):
+        """All specs should reflect uniform n_embd dimension."""
+        n_embd = 128
+        host = TransformerHost(vocab_size=100, n_embd=n_embd, n_head=4, n_layer=6, block_size=32)
+        specs = host.injection_specs()
+        channels = [s.channels for s in specs]
+        assert all(c == n_embd for c in channels)
+
+    def test_specs_layer_ranges_cover_all_layers(self):
+        """Specs should partition all layers into segments."""
+        host = TransformerHost(vocab_size=100, n_embd=64, n_head=2, n_layer=6, block_size=32)
+        specs = host.injection_specs()
+        # For 6 layers divided into 3 segments: [0-2), [2-4), [4-6)
+        assert specs[0].layer_range == (0, 2)
+        assert specs[1].layer_range == (2, 4)
+        assert specs[2].layer_range == (4, 6)
+
+    def test_specs_positions_match_network_depth(self):
+        """Positions should be evenly distributed across network depth."""
+        host = TransformerHost(vocab_size=100, n_embd=64, n_head=2, n_layer=6, block_size=32)
+        specs = host.injection_specs()
+        # For 3 segments: positions should be 1/3, 2/3, 3/3
+        positions = [s.position for s in specs]
+        assert positions[0] == 1/3
+        assert positions[1] == 2/3
+        assert positions[2] == 1.0
+
+    def test_segment_channels_derived_from_injection_specs(self):
+        """segment_channels property should derive from injection_specs()."""
+        host = TransformerHost(vocab_size=100, n_embd=64, n_head=2, n_layer=6, block_size=32)
+        # segment_channels should match injection_specs mapping
+        specs_dict = {spec.slot_id: spec.channels for spec in host.injection_specs()}
+        assert host.segment_channels == specs_dict
+
+    def test_different_layer_counts(self):
+        """Should work with different layer counts."""
+        # 9 layers -> 3 segments of 3 layers each
+        host = TransformerHost(vocab_size=100, n_embd=64, n_head=2, n_layer=9, block_size=32)
+        specs = host.injection_specs()
+        assert len(specs) == 3
+        assert specs[0].layer_range == (0, 3)
+        assert specs[1].layer_range == (3, 6)
+        assert specs[2].layer_range == (6, 9)
