@@ -90,13 +90,12 @@ from esper.simic.telemetry import (
     aggregate_layer_gradient_health,
 )
 
-# Parallel environment state
-from esper.simic.parallel_env_state import ParallelEnvState
+# Training (parallel environment state - light import)
+from esper.simic.training import ParallelEnvState
 
 # NOTE: Heavy modules imported on demand:
 #   from esper.simic.agent import PPOAgent
-#   from esper.simic.vectorized import train_ppo_vectorized
-#   from esper.simic.training import train_heuristic
+#   from esper.simic.training import train_ppo_vectorized, train_heuristic
 
 __all__ = [
     # Normalization

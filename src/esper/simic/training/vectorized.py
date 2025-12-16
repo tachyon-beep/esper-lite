@@ -106,7 +106,7 @@ from esper.simic.telemetry.emitters import (
     check_performance_degradation,
     apply_slot_telemetry,
 )
-from esper.simic.parallel_env_state import ParallelEnvState
+from .parallel_env_state import ParallelEnvState
 
 
 # =============================================================================

@@ -3,7 +3,7 @@
 import torch
 from unittest.mock import MagicMock
 
-from esper.simic.vectorized import ParallelEnvState
+from esper.simic.training.vectorized import ParallelEnvState
 
 
 class TestParallelEnvStateRecurrence:

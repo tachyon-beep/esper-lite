@@ -14,7 +14,7 @@ import pytest
 import torch
 from torch.utils.data import TensorDataset
 
-from esper.simic.vectorized import train_ppo_vectorized
+from esper.simic.training.vectorized import train_ppo_vectorized
 
 
 def _has_two_gpus() -> bool:

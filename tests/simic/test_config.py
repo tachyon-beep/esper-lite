@@ -4,8 +4,8 @@ import inspect
 
 import pytest
 
-from esper.simic.config import TrainingConfig
-from esper.simic.vectorized import train_ppo_vectorized
+from esper.simic.training import TrainingConfig
+from esper.simic.training.vectorized import train_ppo_vectorized
 
 
 class TestTrainingConfigDefaults:

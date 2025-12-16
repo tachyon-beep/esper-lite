@@ -14,7 +14,7 @@ from unittest.mock import Mock, MagicMock, patch
 from esper.leyline import SeedStage, TelemetryEvent, TelemetryEventType
 from esper.leyline.slot_config import SlotConfig
 from esper.simic.telemetry import AnomalyReport
-from esper.simic.vectorized import (
+from esper.simic.training.vectorized import (
     _advance_active_seed,
     _calculate_entropy_anneal_steps,
     _emit_anomaly_diagnostics,
@@ -43,8 +43,6 @@ from esper.simic.telemetry.emitters import (
 
 
 def test_lifecycle_only_keeps_slot_telemetry():
-    from esper.simic import vectorized
-
     slot = Mock()
     slot.fast_mode = False
     slot.on_telemetry = None
@@ -674,7 +672,7 @@ def test_run_ppo_updates_runs_multiple_updates_and_updates_normalizer_once():
 
 def test_aggregate_ppo_metrics_handles_dict():
     """Dict metrics (e.g., ratio diagnostics) should pass through aggregation."""
-    from esper.simic.vectorized import _aggregate_ppo_metrics
+    from esper.simic.training.vectorized import _aggregate_ppo_metrics
 
     metrics = _aggregate_ppo_metrics([
         {"ratio_max": 2.0, "ratio_diagnostic": {"worst": [1, 2]}},
@@ -848,8 +846,8 @@ def test_emit_anomaly_diagnostics_skips_debug_when_disabled(monkeypatch):
     def _fail_stability(_):
         raise AssertionError("check_numerical_stability should not be called")
 
-    monkeypatch.setattr("esper.simic.vectorized.collect_per_layer_gradients", _fail_gradients)
-    monkeypatch.setattr("esper.simic.vectorized.check_numerical_stability", _fail_stability)
+    monkeypatch.setattr("esper.simic.training.vectorized.collect_per_layer_gradients", _fail_gradients)
+    monkeypatch.setattr("esper.simic.training.vectorized.check_numerical_stability", _fail_stability)
 
     hub = _StubHub()
     anomaly_report = AnomalyReport(has_anomaly=True, anomaly_types=["ratio_explosion"])
@@ -905,8 +903,8 @@ def test_emit_anomaly_diagnostics_collects_when_debug_enabled(monkeypatch):
                 return {"stable": True}
         return _S()
 
-    monkeypatch.setattr("esper.simic.vectorized.collect_per_layer_gradients", _gradients)
-    monkeypatch.setattr("esper.simic.vectorized.check_numerical_stability", _stability)
+    monkeypatch.setattr("esper.simic.training.vectorized.collect_per_layer_gradients", _gradients)
+    monkeypatch.setattr("esper.simic.training.vectorized.check_numerical_stability", _stability)
 
     hub = _StubHub()
     anomaly_report = AnomalyReport(has_anomaly=True, anomaly_types=["ratio_explosion"])

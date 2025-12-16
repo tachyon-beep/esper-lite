@@ -49,7 +49,7 @@ class TestSparseTrainingSmoke:
         """Sparse mode completes training loop without exceptions."""
         pytest.importorskip("torch")
 
-        from esper.simic.vectorized import train_ppo_vectorized
+        from esper.simic.training.vectorized import train_ppo_vectorized
 
         # Minimal smoke test - just verify it runs
         try:
@@ -73,7 +73,7 @@ class TestSparseTrainingSmoke:
         """Minimal mode completes training loop without exceptions."""
         pytest.importorskip("torch")
 
-        from esper.simic.vectorized import train_ppo_vectorized
+        from esper.simic.training.vectorized import train_ppo_vectorized
 
         try:
             agent, history = train_ppo_vectorized(

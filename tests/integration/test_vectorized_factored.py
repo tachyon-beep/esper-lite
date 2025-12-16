@@ -173,7 +173,7 @@ class TestVectorizedFactoredDefault:
 
     def test_train_ppo_vectorized_signature(self):
         """train_ppo_vectorized should have the expected parameters."""
-        from esper.simic.vectorized import train_ppo_vectorized
+        from esper.simic.training.vectorized import train_ppo_vectorized
         import inspect
 
         sig = inspect.signature(train_ppo_vectorized)

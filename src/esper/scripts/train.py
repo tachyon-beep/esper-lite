@@ -4,7 +4,7 @@
 import argparse
 
 from esper.nissa import ConsoleOutput, DirectoryOutput, FileOutput, get_hub
-from esper.simic.config import TrainingConfig
+from esper.simic.training import TrainingConfig
 
 
 def build_parser() -> argparse.ArgumentParser:
