@@ -20,7 +20,7 @@ from esper.simic.gradient_collector import (
     collect_seed_gradients_async,
     materialize_grad_stats,
 )
-from esper.simic.slots import ordered_slots
+from esper.leyline.slot_id import validate_slot_ids
 from esper.simic.telemetry_config import TelemetryConfig
 from esper.nissa import get_hub
 from esper.utils.loss import compute_task_loss_with_metrics
@@ -306,7 +306,7 @@ def run_heuristic_episode(
         raise ValueError("slots parameter is required and cannot be empty")
     if len(slots) != len(set(slots)):
         raise ValueError(f"slots contains duplicates: {slots}")
-    enabled_slots = list(ordered_slots(slots))
+    enabled_slots = validate_slot_ids(list(slots))
 
     # Wire telemetry
     hub = get_hub()

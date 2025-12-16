@@ -61,7 +61,7 @@ from esper.leyline import (
 )
 from esper.leyline.factored_actions import FactoredAction, LifecycleOp
 from esper.simic.action_masks import build_slot_states, compute_action_masks
-from esper.simic.slots import ordered_slots
+from esper.leyline.slot_id import validate_slot_ids
 from esper.simic.anomaly_detector import AnomalyDetector, AnomalyReport
 from esper.simic.debug_telemetry import (
     collect_per_layer_gradients,
@@ -1887,11 +1887,11 @@ def train_ppo_vectorized(
 
                 # Compute action mask based on current state (physical constraints only)
                 # Build slot states for ALL enabled slots (multi-slot masking)
-                ordered = ordered_slots(slots)
-                slot_states = build_slot_states(slot_reports, list(ordered))
+                ordered = validate_slot_ids(list(slots))
+                slot_states = build_slot_states(slot_reports, ordered)
                 mask = compute_action_masks(
                     slot_states=slot_states,
-                    enabled_slots=list(ordered),
+                    enabled_slots=ordered,
                     total_seeds=model.total_seeds() if model else 0,
                     max_seeds=effective_max_seeds,
                     slot_config=slot_config,

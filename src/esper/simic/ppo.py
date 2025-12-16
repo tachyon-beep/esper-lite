@@ -84,7 +84,7 @@ def signals_to_features(
         are missing.
     """
     from esper.simic.features import obs_to_multislot_features
-    from esper.simic.slots import ordered_slots
+    from esper.leyline.slot_id import validate_slot_ids
     from esper.leyline.slot_config import SlotConfig
 
     if slot_config is None:
@@ -93,7 +93,7 @@ def signals_to_features(
     if not slots:
         raise ValueError("signals_to_features: slots parameter is required and cannot be empty")
 
-    enabled_slots = ordered_slots(slots)
+    enabled_slots = validate_slot_ids(list(slots))
     enabled_set = set(enabled_slots)
 
     # Build observation dict

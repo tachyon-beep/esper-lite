@@ -27,7 +27,6 @@ from torch.distributions import Categorical
 from esper.leyline import SeedStage, MIN_CULL_AGE
 from esper.leyline.stages import VALID_TRANSITIONS
 from esper.leyline.slot_config import SlotConfig
-from esper.simic.slots import ordered_slots
 from esper.leyline.factored_actions import (
     BlueprintAction,
     LifecycleOp,

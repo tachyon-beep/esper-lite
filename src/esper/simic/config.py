@@ -257,15 +257,12 @@ class TrainingConfig:
 
         if not self.slots:
             raise ValueError("slots cannot be empty")
-        # Validate slot IDs against the supported set (not just format)
-        from esper.simic.slots import CANONICAL_SLOTS
-        for slot in self.slots:
-            if slot not in CANONICAL_SLOTS:
-                raise ValueError(
-                    f"Unsupported slot ID: '{slot}'. "
-                    f"Supported slots: {', '.join(CANONICAL_SLOTS)}. "
-                    f"Legacy names (early, mid, late) are no longer supported."
-                )
+        # Validate slot IDs using canonical format validation
+        from esper.leyline.slot_id import validate_slot_ids, SlotIdError
+        try:
+            validate_slot_ids(list(self.slots))
+        except SlotIdError as e:
+            raise ValueError(f"Invalid slot configuration: {e}") from e
 
         if self.param_budget <= 0:
             raise ValueError("param_budget must be positive")
