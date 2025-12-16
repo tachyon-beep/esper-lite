@@ -259,3 +259,123 @@ def test_blueprint_one_hot_encoding():
 
     mid_blueprint = features[36:41]
     assert mid_blueprint == [0.0, 0.0, 0.0, 0.0, 0.0], f"No blueprint should be all zeros, got {mid_blueprint}"
+
+
+def test_dynamic_feature_size_3_slots():
+    """Feature extraction with 3 slots should return 50 features."""
+    from esper.simic.features import obs_to_multislot_features, get_feature_size
+    from esper.leyline.slot_config import SlotConfig
+
+    slot_config = SlotConfig.default()  # 3 slots: r0c0, r0c1, r0c2
+
+    obs = {
+        'epoch': 10,
+        'global_step': 100,
+        'train_loss': 0.5,
+        'val_loss': 0.6,
+        'loss_delta': -0.1,
+        'train_accuracy': 70.0,
+        'val_accuracy': 68.0,
+        'accuracy_delta': 0.5,
+        'plateau_epochs': 2,
+        'best_val_accuracy': 70.0,
+        'best_val_loss': 0.5,
+        'loss_history_5': [0.6, 0.55, 0.5, 0.52, 0.5],
+        'accuracy_history_5': [65.0, 66.0, 67.0, 68.0, 68.0],
+        'slots': {
+            'r0c0': {'is_active': 1.0, 'stage': 2, 'alpha': 0.3, 'improvement': 1.5, 'blueprint_id': 'conv_light'},
+            'r0c1': {'is_active': 0.0, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0, 'blueprint_id': None},
+            'r0c2': {'is_active': 0.0, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0, 'blueprint_id': None},
+        },
+    }
+
+    features = obs_to_multislot_features(obs, slot_config=slot_config)
+
+    # 23 base + 3 slots * 9 features = 50
+    expected_size = get_feature_size(slot_config)
+    assert expected_size == 50, f"Expected feature size 50 for 3 slots, got {expected_size}"
+    assert len(features) == expected_size, f"Expected {expected_size} features, got {len(features)}"
+
+
+def test_dynamic_feature_size_5_slots():
+    """Feature extraction with 5 slots should return 68 features."""
+    from esper.simic.features import obs_to_multislot_features, get_feature_size
+    from esper.leyline.slot_config import SlotConfig
+
+    slot_config = SlotConfig(slot_ids=("r0c0", "r0c1", "r0c2", "r1c0", "r1c1"))  # 5 slots
+
+    obs = {
+        'epoch': 10,
+        'global_step': 100,
+        'train_loss': 0.5,
+        'val_loss': 0.6,
+        'loss_delta': -0.1,
+        'train_accuracy': 70.0,
+        'val_accuracy': 68.0,
+        'accuracy_delta': 0.5,
+        'plateau_epochs': 2,
+        'best_val_accuracy': 70.0,
+        'best_val_loss': 0.5,
+        'loss_history_5': [0.6, 0.55, 0.5, 0.52, 0.5],
+        'accuracy_history_5': [65.0, 66.0, 67.0, 68.0, 68.0],
+        'slots': {
+            'r0c0': {'is_active': 1.0, 'stage': 2, 'alpha': 0.3, 'improvement': 1.5, 'blueprint_id': 'conv_light'},
+            'r0c1': {'is_active': 0.0, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0, 'blueprint_id': None},
+            'r0c2': {'is_active': 1.0, 'stage': 1, 'alpha': 0.1, 'improvement': 0.5, 'blueprint_id': 'attention'},
+            'r1c0': {'is_active': 0.0, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0, 'blueprint_id': None},
+            'r1c1': {'is_active': 1.0, 'stage': 3, 'alpha': 0.7, 'improvement': 2.0, 'blueprint_id': 'norm'},
+        },
+    }
+
+    features = obs_to_multislot_features(obs, slot_config=slot_config)
+
+    # 23 base + 5 slots * 9 features = 68
+    expected_size = get_feature_size(slot_config)
+    assert expected_size == 68, f"Expected feature size 68 for 5 slots, got {expected_size}"
+    assert len(features) == expected_size, f"Expected {expected_size} features, got {len(features)}"
+
+
+def test_dynamic_slot_iteration():
+    """Feature extraction should iterate over slot_config.slot_ids, not hardcoded list."""
+    from esper.simic.features import obs_to_multislot_features
+    from esper.leyline.slot_config import SlotConfig
+
+    slot_config = SlotConfig(slot_ids=("r0c0", "r0c2"))  # Only 2 slots, skipping r0c1
+
+    obs = {
+        'epoch': 10,
+        'global_step': 100,
+        'train_loss': 0.5,
+        'val_loss': 0.6,
+        'loss_delta': -0.1,
+        'train_accuracy': 70.0,
+        'val_accuracy': 68.0,
+        'accuracy_delta': 0.5,
+        'plateau_epochs': 2,
+        'best_val_accuracy': 70.0,
+        'best_val_loss': 0.5,
+        'loss_history_5': [0.6, 0.55, 0.5, 0.52, 0.5],
+        'accuracy_history_5': [65.0, 66.0, 67.0, 68.0, 68.0],
+        'slots': {
+            'r0c0': {'is_active': 1.0, 'stage': 2, 'alpha': 0.3, 'improvement': 1.5, 'blueprint_id': 'conv_light'},
+            'r0c2': {'is_active': 1.0, 'stage': 3, 'alpha': 0.7, 'improvement': 2.0, 'blueprint_id': 'attention'},
+        },
+    }
+
+    features = obs_to_multislot_features(obs, slot_config=slot_config)
+
+    # 23 base + 2 slots * 9 features = 41
+    assert len(features) == 41, f"Expected 41 features for 2 slots, got {len(features)}"
+
+    # Verify slot features are present
+    # r0c0 slot at index 23-31: is_active=1, stage=2, alpha=0.3, improvement=1.5
+    assert features[23] == 1.0, "r0c0 should be active"
+    assert features[24] == 2.0, "r0c0 stage should be 2"
+    assert features[25] == 0.3, "r0c0 alpha should be 0.3"
+    assert features[26] == 1.5, "r0c0 improvement should be 1.5"
+
+    # r0c2 slot at index 32-40: is_active=1, stage=3, alpha=0.7, improvement=2.0
+    assert features[32] == 1.0, "r0c2 should be active"
+    assert features[33] == 3.0, "r0c2 stage should be 3"
+    assert features[34] == 0.7, "r0c2 alpha should be 0.7"
+    assert features[35] == 2.0, "r0c2 improvement should be 2.0"

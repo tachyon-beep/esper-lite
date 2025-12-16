@@ -59,6 +59,7 @@ def signals_to_features(
     total_params: int = 0,
     total_seeds: int = 0,
     max_seeds: int = 0,
+    slot_config: "SlotConfig | None" = None,
 ) -> list[float]:
     """Convert training signals to feature vector.
 
@@ -71,20 +72,25 @@ def signals_to_features(
         total_params: Total model params (host + active seeds)
         total_seeds: Current total seeds across all slots (for utilization calc)
         max_seeds: Maximum allowed seeds (for utilization calc)
+        slot_config: Slot configuration (default: 3-slot config)
 
     Returns:
-        Feature vector: base (50) + telemetry per slot (3 * 10) = 80 when telemetry enabled.
+        Feature vector: base (23 + num_slots*9) + telemetry per slot (num_slots * 10) when telemetry enabled.
 
     Note:
         TrainingSignals.active_seeds contains seed IDs (strings), not SeedState
         objects, so seed-specific features are zero-padded when slot reports
         are missing.
     """
+    from esper.simic.features import obs_to_multislot_features
+    from esper.simic.slots import ordered_slots
+    from esper.leyline.slot_config import SlotConfig
+
+    if slot_config is None:
+        slot_config = SlotConfig.default()
+
     if not slots:
         raise ValueError("signals_to_features: slots parameter is required and cannot be empty")
-
-    from esper.simic.features import obs_to_multislot_features
-    from esper.simic.slots import CANONICAL_SLOTS, ordered_slots
 
     enabled_slots = ordered_slots(slots)
     enabled_set = set(enabled_slots)
@@ -117,7 +123,7 @@ def signals_to_features(
 
     # Build per-slot state dict from reports
     slot_states = {}
-    for slot_id in ['r0c0', 'r0c1', 'r0c2']:
+    for slot_id in slot_config.slot_ids:
         report = slot_reports.get(slot_id)
         if report:
             contribution = report.metrics.counterfactual_contribution
@@ -135,14 +141,14 @@ def signals_to_features(
 
     obs['slots'] = slot_states
 
-    features = obs_to_multislot_features(obs, total_seeds=total_seeds, max_seeds=max_seeds)
+    features = obs_to_multislot_features(obs, total_seeds=total_seeds, max_seeds=max_seeds, slot_config=slot_config)
 
     if use_telemetry:
-        # Deterministic `[early][mid][late]` ordering; zero-pad empty/disabled slots.
+        # Deterministic ordering from slot_config; zero-pad empty/disabled slots.
         from esper.leyline import SeedTelemetry
 
         telemetry_features: list[float] = []
-        for slot_id in CANONICAL_SLOTS:
+        for slot_id in slot_config.slot_ids:
             if slot_id not in enabled_set:
                 telemetry_features.extend([0.0] * SeedTelemetry.feature_dim())
                 continue

@@ -73,7 +73,7 @@ from esper.simic.gradient_collector import (
     materialize_dual_grad_stats,
 )
 from esper.simic.normalization import RunningMeanStd, RewardNormalizer
-from esper.simic.features import MULTISLOT_FEATURE_SIZE
+from esper.simic.features import MULTISLOT_FEATURE_SIZE, get_feature_size
 from esper.simic.ppo import PPOAgent, signals_to_features
 from esper.simic.rewards import (
     compute_reward,
@@ -894,8 +894,11 @@ def train_ppo_vectorized(
         batch_size_per_env = 512  # High-throughput setting for CIFAR
     effective_workers = num_workers if num_workers is not None else 4
 
-    # State dimension: 50 base features + (3 * 10) telemetry features when enabled
-    state_dim = MULTISLOT_FEATURE_SIZE + (SeedTelemetry.feature_dim() * 3 if use_telemetry else 0)
+    # State dimension: base features (dynamic based on slot count) + telemetry features when enabled
+    # For 3 slots: 23 base + 3*9 slot features = 50, plus 3*10 telemetry if enabled
+    base_feature_size = get_feature_size(slot_config)
+    telemetry_size = slot_config.num_slots * SeedTelemetry.feature_dim() if use_telemetry else 0
+    state_dim = base_feature_size + telemetry_size
 
     # Use EMA momentum for stable normalization during long training runs
     # (prevents distribution shift that can break PPO ratio calculations)
@@ -1871,6 +1874,7 @@ def train_ppo_vectorized(
                     total_params=model.total_params if model else 0,
                     total_seeds=model.total_seeds() if model else 0,
                     max_seeds=effective_max_seeds,
+                    slot_config=slot_config,
                 )
                 all_features.append(features)
 

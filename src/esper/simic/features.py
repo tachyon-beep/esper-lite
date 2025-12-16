@@ -14,6 +14,7 @@ from dataclasses import dataclass
 import math
 from typing import TYPE_CHECKING
 
+from esper.leyline.slot_config import SlotConfig
 
 # HOT PATH: ONLY leyline imports allowed!
 
@@ -26,6 +27,9 @@ __all__ = [
     "safe",
     "obs_to_multislot_features",
     "MULTISLOT_FEATURE_SIZE",
+    "get_feature_size",
+    "BASE_FEATURE_SIZE",
+    "SLOT_FEATURE_SIZE",
     "TaskConfig",
 ]
 
@@ -53,13 +57,32 @@ def safe(v, default: float = 0.0, max_val: float = 100.0) -> float:
 
 
 # =============================================================================
-# Multi-Slot Features (V4 - 50 dimensions)
+# Multi-Slot Features (V4 - dynamic dimensions)
 # =============================================================================
+
+# Base features (training state without per-slot features)
+BASE_FEATURE_SIZE = 23
+
+# Per-slot features: 4 state (is_active, stage, alpha, improvement) + 5 blueprint one-hot
+SLOT_FEATURE_SIZE = 9
 
 # Feature size (with telemetry off): 23 base + 3 slots * 9 features per slot = 50
 # Per-slot: 4 state (is_active, stage, alpha, improvement) + 5 blueprint one-hot
 # With telemetry on: + 3 slots * SeedTelemetry.feature_dim() (10) = 80 total
+# NOTE: This constant is kept for backwards compatibility but get_feature_size() should be used
 MULTISLOT_FEATURE_SIZE = 50
+
+
+def get_feature_size(slot_config: SlotConfig) -> int:
+    """Get feature size for given slot configuration.
+
+    Args:
+        slot_config: Slot configuration defining number of slots.
+
+    Returns:
+        Total feature size: BASE_FEATURE_SIZE + num_slots * SLOT_FEATURE_SIZE
+    """
+    return BASE_FEATURE_SIZE + slot_config.num_slots * SLOT_FEATURE_SIZE
 
 
 # Blueprint string ID to index mapping (matches BlueprintAction enum)
@@ -73,8 +96,13 @@ _BLUEPRINT_TO_INDEX = {
 _NUM_BLUEPRINT_TYPES = 5
 
 
-def obs_to_multislot_features(obs: dict, total_seeds: int = 0, max_seeds: int = 1) -> list[float]:
-    """Extract features including per-slot state (50 dims).
+def obs_to_multislot_features(
+    obs: dict,
+    total_seeds: int = 0,
+    max_seeds: int = 1,
+    slot_config: SlotConfig | None = None,
+) -> list[float]:
+    """Extract features including per-slot state (dynamic dims based on slot count).
 
     Base features (23 dims) - training state without seed telemetry:
     - Timing: epoch, global_step (2)
@@ -85,17 +113,18 @@ def obs_to_multislot_features(obs: dict, total_seeds: int = 0, max_seeds: int = 
     - Total params: total_params (1)
     - Resource management: seed_utilization (1) [new - for resource awareness]
 
-    Per-slot features (4 dims each, 3 slots = 12 dims):
+    Per-slot features (9 dims each):
     - is_active: 1.0 if seed active, 0.0 otherwise
     - stage: seed lifecycle stage (0-7)
     - alpha: blending alpha (0.0-1.0)
     - improvement: counterfactual contribution delta
+    - blueprint_id: one-hot encoding of blueprint type (5 dims)
 
     This keeps each slot's local state visible, while still giving Tamiyo
     a single flat observation vector that standard PPO implementations
     can consume without custom architecture changes.
 
-    Feature Layout:
+    Feature Layout (for default 3-slot config):
     [0-1]   Timing (epoch, global_step)
     [2-4]   Losses (train, val, delta)
     [5-7]   Accuracies (train, val, delta)
@@ -104,18 +133,21 @@ def obs_to_multislot_features(obs: dict, total_seeds: int = 0, max_seeds: int = 
     [16-20] Accuracy history (5 values)
     [21]    Total params
     [22]    Seed utilization
-    [23-26] Early slot (is_active, stage, alpha, improvement)
-    [27-30] Mid slot (is_active, stage, alpha, improvement)
-    [31-34] Late slot (is_active, stage, alpha, improvement)
+    [23-31] Slot 0 (is_active, stage, alpha, improvement, blueprint[5])
+    [32-40] Slot 1 (is_active, stage, alpha, improvement, blueprint[5])
+    [41-49] Slot 2 (is_active, stage, alpha, improvement, blueprint[5])
 
     Args:
         obs: Observation dictionary with optional 'slots' key
         total_seeds: Current total seeds across all slots (default 0)
         max_seeds: Maximum allowed seeds (default 1)
+        slot_config: Slot configuration (default: 3-slot config)
 
     Returns:
-        List of 35 floats
+        List of floats: 23 base + num_slots * 9 slot features
     """
+    if slot_config is None:
+        slot_config = SlotConfig.default()
     # Compute seed utilization
     seed_utilization = total_seeds / max_seeds if max_seeds > 0 else 0.0
 
@@ -138,10 +170,10 @@ def obs_to_multislot_features(obs: dict, total_seeds: int = 0, max_seeds: int = 
         float(seed_utilization),  # New: resource management
     ]
 
-    # Per-slot features (9 dims per slot, 3 slots = 27 dims)
+    # Per-slot features (9 dims per slot, num_slots determined by slot_config)
     # 4 state features + 5 blueprint one-hot
     slot_features = []
-    for slot_id in ['r0c0', 'r0c1', 'r0c2']:
+    for slot_id in slot_config.slot_ids:
         slot = obs.get('slots', {}).get(slot_id, {})
         # State features (4 dims)
         slot_features.extend([
