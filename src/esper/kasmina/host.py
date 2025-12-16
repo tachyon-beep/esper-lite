@@ -25,10 +25,11 @@ if TYPE_CHECKING:
 
 
 class CNNHost(nn.Module):
-    """CNN host with dynamic blocks and injection points after each block (except the first).
+    """CNN backbone with segment routing for external slot attachment.
 
-    Mirrors TransformerHost's pattern: a ModuleList of blocks, a ModuleDict of slots keyed
-    by block index, and a simple looped forward that applies slots as identities when unused.
+    Provides segment boundaries for MorphogeneticModel to attach SeedSlots.
+    The host itself performs no slot application - it routes activations
+    between segment boundaries.
 
     Args:
         num_classes: Number of output classes (default 10 for CIFAR-10)
@@ -71,19 +72,6 @@ class CNNHost(nn.Module):
         self.blocks = nn.ModuleList(blocks)
         self.pool = nn.MaxPool2d(2, 2)
 
-        # Slots after each block except the first (aligns with previous block2_post default)
-        self._slot_indices = tuple(range(1, n_blocks))
-        # Keep legacy-friendly naming (block2_post) while allowing multiple slots
-        self._slot_keys = tuple(f"block{idx + 1}_post" for idx in self._slot_indices)
-        self.slots = nn.ModuleDict({k: nn.Identity() for k in self._slot_keys})
-
-        # Build canonical ID -> internal key mapping for register_slot()
-        from esper.leyline.slot_id import format_slot_id
-        self._canonical_to_slot_key = {
-            format_slot_id(0, idx): key
-            for idx, key in zip(self._slot_indices, self._slot_keys)
-        }
-
         # Classifier maps final channels → logits
         self.classifier = nn.Linear(in_c, num_classes)
 
@@ -92,8 +80,6 @@ class CNNHost(nn.Module):
 
         Returns:
             List of InjectionSpec, one per block, sorted by network position.
-            Note: Not all segments have slots - use _canonical_to_slot_key for
-            actual injection points that accept seed registration.
         """
         from esper.leyline import InjectionSpec
         from esper.leyline.slot_id import format_slot_id
@@ -118,41 +104,15 @@ class CNNHost(nn.Module):
         """
         return {spec.slot_id: spec.channels for spec in self.injection_specs()}
 
+    @functools.cached_property
+    def _segment_to_block(self) -> dict[str, int]:
+        """Map segment ID to block index (cached)."""
+        return {spec.slot_id: spec.layer_range[0] for spec in self.injection_specs()}
+
     @property
-    @override
     def injection_points(self) -> dict[str, int]:
-        """Map of slot_id -> channel dimension."""
-        return {k: self.blocks[idx].conv.out_channels for k, idx in zip(self._slot_keys, self._slot_indices)}
-
-    @override
-    def register_slot(self, slot_id: str, slot: nn.Module) -> None:
-        """Attach a seed module at the specified injection point.
-
-        Args:
-            slot_id: Either canonical ID (r0c1, r0c2) or internal key (block2_post).
-            slot: Module to attach at the injection point.
-        """
-        # Map canonical ID to internal key, fall back to slot_id for backwards compat
-        internal_key = self._canonical_to_slot_key.get(slot_id, slot_id)
-        if internal_key not in self.slots:
-            available = list(self._canonical_to_slot_key.keys())
-            raise ValueError(f"Unknown injection point: {slot_id}. Available: {available}")
-        device = next(self.parameters()).device
-        self.slots[internal_key] = slot.to(device)
-
-    @override
-    def unregister_slot(self, slot_id: str) -> None:
-        """Remove a seed module from the specified injection point.
-
-        Args:
-            slot_id: Either canonical ID (r0c1, r0c2) or internal key (block2_post).
-        """
-        # Map canonical ID to internal key, fall back to slot_id for backwards compat
-        internal_key = self._canonical_to_slot_key.get(slot_id, slot_id)
-        if internal_key not in self.slots:
-            available = list(self._canonical_to_slot_key.keys())
-            raise ValueError(f"Unknown injection point: {slot_id}. Available: {available}")
-        self.slots[internal_key] = nn.Identity()
+        """Map of slot_id -> channel dimension. Alias for segment_channels."""
+        return self.segment_channels
 
     # NOTE: forward_to_segment() is intentionally duplicated between CNNHost
     # and TransformerHost. While the structure is similar, the details differ:
@@ -182,27 +142,19 @@ class CNNHost(nn.Module):
         if from_segment is not None and from_segment not in self.segment_channels:
             raise ValueError(f"Unknown from_segment: {from_segment}. Available: {list(self.segment_channels.keys())}")
 
-        # Convert to channels_last ONCE before processing for Tensor Core optimization
-        if self._memory_format == torch.channels_last:
+        # Only convert at entry point (avoid redundant conversion in chained calls)
+        if from_segment is None and self._memory_format == torch.channels_last:
             x = x.to(memory_format=torch.channels_last)
 
-        # Derive segment_to_block from injection_specs (supports variable block counts)
-        segment_to_block = {spec.slot_id: spec.layer_range[0] for spec in self.injection_specs()}
-        target_block = segment_to_block[segment]
-        start_block = 0 if from_segment is None else segment_to_block[from_segment] + 1
-
-        # Map block index to registered slot key for slot application
-        slot_by_idx = dict(zip(self._slot_indices, self._slot_keys))
+        # Use cached mapping (avoid per-call dict rebuilding)
+        target_block = self._segment_to_block[segment]
+        start_block = 0 if from_segment is None else self._segment_to_block[from_segment] + 1
 
         # Forward through blocks in range [start_block, target_block]
         for idx in range(start_block, target_block + 1):
             x = self.blocks[idx](x)
-            # Only pool on first pool_layers blocks
             if idx < self._pool_layers:
                 x = self.pool(x)
-            slot_key = slot_by_idx.get(idx)
-            if slot_key:
-                x = self.slots[slot_key](x)
 
         return x
 
@@ -211,7 +163,7 @@ class CNNHost(nn.Module):
 
         Args:
             segment: Starting segment ID ("r0c0", "r0c1", or "r0c2")
-            x: Feature map at segment boundary (should already be channels_last if from forward_to_segment)
+            x: Feature map at segment boundary (already in correct memory format)
 
         Returns:
             Classification logits
@@ -219,46 +171,31 @@ class CNNHost(nn.Module):
         if segment not in self.segment_channels:
             raise ValueError(f"Unknown segment: {segment}. Available: {list(self.segment_channels.keys())}")
 
-        # Ensure channels_last format for Tensor Core optimization (safe even if already in format)
-        if self._memory_format == torch.channels_last:
-            x = x.to(memory_format=torch.channels_last)
-
-        # Derive segment_to_block from injection_specs (supports variable block counts)
-        segment_to_block = {spec.slot_id: spec.layer_range[0] for spec in self.injection_specs()}
-        start_block = segment_to_block[segment]
-
-        slot_by_idx = dict(zip(self._slot_indices, self._slot_keys))
+        # No memory format conversion needed - tensor already converted by forward_to_segment
+        # Use cached mapping
+        start_block = self._segment_to_block[segment]
 
         # Forward through remaining blocks
         for idx in range(start_block + 1, self.n_blocks):
             x = self.blocks[idx](x)
-            # Only pool on first pool_layers blocks
             if idx < self._pool_layers:
                 x = self.pool(x)
-            slot_key = slot_by_idx.get(idx)
-            if slot_key:
-                x = self.slots[slot_key](x)
 
         # Global average pooling and classification
         x = F.adaptive_avg_pool2d(x, 1).flatten(1)
         return self.classifier(x)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through CNN backbone (no slot application)."""
         # Convert to channels_last ONCE before processing for Tensor Core optimization
-        # Conv2d, BatchNorm2d, MaxPool2d all preserve channels_last format
         if self._memory_format == torch.channels_last:
             x = x.to(memory_format=torch.channels_last)
 
-        slot_idx = 0
         for idx, block in enumerate(self.blocks):
             x = block(x)
             # Only pool on first pool_layers blocks (avoids 0x0 spatial on deep nets)
             if idx < self._pool_layers:
                 x = self.pool(x)
-            # Use pre-computed _slot_indices instead of string formatting
-            if idx in self._slot_indices:
-                x = self.slots[self._slot_keys[slot_idx]](x)
-                slot_idx += 1
 
         # flatten() handles memory format conversion automatically (returns contiguous)
         x = F.adaptive_avg_pool2d(x, 1).flatten(1)
