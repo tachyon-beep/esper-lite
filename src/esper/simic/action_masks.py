@@ -31,8 +31,6 @@ from esper.simic.slots import ordered_slots
 from esper.leyline.factored_actions import (
     BlueprintAction,
     LifecycleOp,
-    SlotAction,
-    NUM_SLOTS,
     NUM_BLUEPRINTS,
     NUM_BLENDS,
     NUM_OPS,

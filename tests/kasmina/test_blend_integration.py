@@ -8,7 +8,7 @@ import torch
 
 from esper.kasmina.blending import BlendCatalog, GatedBlend
 from esper.kasmina.host import CNNHost, TransformerHost, MorphogeneticModel
-from esper.leyline.factored_actions import BlendAction, FactoredAction, LifecycleOp, SlotAction, BlueprintAction
+from esper.leyline.factored_actions import BlendAction, FactoredAction, LifecycleOp, BlueprintAction
 from esper.simic.features import TaskConfig
 
 
@@ -166,7 +166,7 @@ class TestFactoredActionBlendExtraction:
     def test_linear_blend_action(self):
         """BlendAction.LINEAR maps to 'linear'."""
         action = FactoredAction(
-            slot=SlotAction.MID,
+            slot_idx=1,  # Was SlotAction.MID
             blueprint=BlueprintAction.NORM,
             blend=BlendAction.LINEAR,
             op=LifecycleOp.GERMINATE,
@@ -176,7 +176,7 @@ class TestFactoredActionBlendExtraction:
     def test_sigmoid_blend_action(self):
         """BlendAction.SIGMOID maps to 'sigmoid'."""
         action = FactoredAction(
-            slot=SlotAction.MID,
+            slot_idx=1,  # Was SlotAction.MID
             blueprint=BlueprintAction.NORM,
             blend=BlendAction.SIGMOID,
             op=LifecycleOp.GERMINATE,
@@ -186,7 +186,7 @@ class TestFactoredActionBlendExtraction:
     def test_gated_blend_action(self):
         """BlendAction.GATED maps to 'gated'."""
         action = FactoredAction(
-            slot=SlotAction.MID,
+            slot_idx=1,  # Was SlotAction.MID
             blueprint=BlueprintAction.NORM,
             blend=BlendAction.GATED,
             op=LifecycleOp.GERMINATE,

@@ -1,7 +1,7 @@
 """Factored Action Space for Multi-Slot Control.
 
 The action space is factored into:
-- SlotAction: which slot to target
+- slot_idx: which slot to target (integer index)
 - BlueprintAction: what blueprint to germinate
 - BlendAction: which blending algorithm to use
 - LifecycleOp: what operation to perform
@@ -11,16 +11,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import IntEnum
-
-
-class SlotAction(IntEnum):
-    """Target slot selection."""
-    EARLY = 0
-    MID = 1
-    LATE = 2
-
-    def to_slot_id(self) -> str:
-        return ["early", "mid", "late"][self.value]
 
 
 class BlueprintAction(IntEnum):
@@ -64,7 +54,7 @@ class LifecycleOp(IntEnum):
 @dataclass(frozen=True, slots=True)
 class FactoredAction:
     """Composed action from factored components."""
-    slot: SlotAction
+    slot_idx: int
     blueprint: BlueprintAction
     blend: BlendAction
     op: LifecycleOp
@@ -86,10 +76,6 @@ class FactoredAction:
         return self.op == LifecycleOp.WAIT
 
     @property
-    def slot_id(self) -> str:
-        return self.slot.to_slot_id()
-
-    @property
     def blueprint_id(self) -> str | None:
         return self.blueprint.to_blueprint_id()
 
@@ -106,7 +92,7 @@ class FactoredAction:
         op_idx: int,
     ) -> "FactoredAction":
         return cls(
-            slot=SlotAction(slot_idx),
+            slot_idx=slot_idx,
             blueprint=BlueprintAction(blueprint_idx),
             blend=BlendAction(blend_idx),
             op=LifecycleOp(op_idx),
@@ -114,19 +100,16 @@ class FactoredAction:
 
 
 # Dimension sizes for policy network
-NUM_SLOTS = len(SlotAction)
 NUM_BLUEPRINTS = len(BlueprintAction)
 NUM_BLENDS = len(BlendAction)
 NUM_OPS = len(LifecycleOp)
 
 
 __all__ = [
-    "SlotAction",
     "BlueprintAction",
     "BlendAction",
     "LifecycleOp",
     "FactoredAction",
-    "NUM_SLOTS",
     "NUM_BLUEPRINTS",
     "NUM_BLENDS",
     "NUM_OPS",

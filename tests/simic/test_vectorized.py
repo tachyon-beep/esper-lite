@@ -55,12 +55,13 @@ def test_last_action_event_emitted():
             env_id=0,
             epoch=3,
             factored_action=factored_action,
+            slot_id="r0c1",  # Canonical slot ID (was "mid")
             masked={"op": False, "slot": False, "blueprint": False, "blend": True},
             success=True,
         )
 
         emitted = hub.emit.call_args[0][0]
-        assert emitted.data["slot_id"] == "mid"
+        assert emitted.data["slot_id"] == "r0c1"  # Canonical ID
         assert emitted.data["blend_masked"] is True
 
 

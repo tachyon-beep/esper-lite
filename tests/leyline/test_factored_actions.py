@@ -1,12 +1,5 @@
 # tests/leyline/test_factored_actions.py
-def test_slot_action_enum():
-    """SlotAction should enumerate slot choices."""
-    from esper.leyline.factored_actions import SlotAction
-
-    assert SlotAction.EARLY.value == 0
-    assert SlotAction.MID.value == 1
-    assert SlotAction.LATE.value == 2
-    assert len(SlotAction) == 3
+# Removed: test_slot_action_enum - SlotAction enum deleted per No Legacy Code Policy
 
 
 def test_blueprint_action_enum():
@@ -39,19 +32,19 @@ def test_lifecycle_op_enum():
 
 
 def test_factored_action_composition():
-    """FactoredAction should compose slot, blueprint, blend, op."""
+    """FactoredAction should compose slot_idx, blueprint, blend, op."""
     from esper.leyline.factored_actions import (
-        FactoredAction, SlotAction, BlueprintAction, BlendAction, LifecycleOp
+        FactoredAction, BlueprintAction, BlendAction, LifecycleOp
     )
 
     action = FactoredAction(
-        slot=SlotAction.MID,
+        slot_idx=1,  # Was SlotAction.MID
         blueprint=BlueprintAction.CONV_LIGHT,
         blend=BlendAction.LINEAR,
         op=LifecycleOp.GERMINATE,
     )
 
-    assert action.slot == SlotAction.MID
+    assert action.slot_idx == 1
     assert action.blueprint == BlueprintAction.CONV_LIGHT
     assert action.is_germinate
     # CONV_LIGHT maps to "conv_light" (the registered blueprint name)
@@ -61,26 +54,26 @@ def test_factored_action_composition():
 def test_factored_action_execution_properties():
     """FactoredAction properties should provide everything needed for execution."""
     from esper.leyline.factored_actions import (
-        FactoredAction, SlotAction, BlueprintAction, BlendAction, LifecycleOp,
+        FactoredAction, BlueprintAction, BlendAction, LifecycleOp,
     )
 
     # GERMINATE action has all info for execution
-    germ = FactoredAction(SlotAction.EARLY, BlueprintAction.CONV_LIGHT, BlendAction.SIGMOID, LifecycleOp.GERMINATE)
+    germ = FactoredAction(slot_idx=0, blueprint=BlueprintAction.CONV_LIGHT, blend=BlendAction.SIGMOID, op=LifecycleOp.GERMINATE)
     assert germ.is_germinate
-    assert germ.slot_id == "early"
+    assert germ.slot_idx == 0
     assert germ.blueprint_id == "conv_light"  # CONV_LIGHT maps to registered name
     assert germ.blend_algorithm_id == "sigmoid"
 
     # CULL action
-    cull = FactoredAction(SlotAction.MID, BlueprintAction.NOOP, BlendAction.LINEAR, LifecycleOp.CULL)
+    cull = FactoredAction(slot_idx=1, blueprint=BlueprintAction.NOOP, blend=BlendAction.LINEAR, op=LifecycleOp.CULL)
     assert cull.is_cull
-    assert cull.slot_id == "mid"
+    assert cull.slot_idx == 1
 
     # FOSSILIZE action
-    fossilize = FactoredAction(SlotAction.LATE, BlueprintAction.NOOP, BlendAction.LINEAR, LifecycleOp.FOSSILIZE)
+    fossilize = FactoredAction(slot_idx=2, blueprint=BlueprintAction.NOOP, blend=BlendAction.LINEAR, op=LifecycleOp.FOSSILIZE)
     assert fossilize.is_fossilize
-    assert fossilize.slot_id == "late"
+    assert fossilize.slot_idx == 2
 
     # WAIT action
-    wait = FactoredAction(SlotAction.MID, BlueprintAction.NOOP, BlendAction.LINEAR, LifecycleOp.WAIT)
+    wait = FactoredAction(slot_idx=1, blueprint=BlueprintAction.NOOP, blend=BlendAction.LINEAR, op=LifecycleOp.WAIT)
     assert wait.is_wait

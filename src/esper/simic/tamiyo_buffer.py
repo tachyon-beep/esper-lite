@@ -23,11 +23,11 @@ import torch
 
 from esper.leyline import DEFAULT_GAMMA, DEFAULT_LSTM_HIDDEN_DIM
 from esper.leyline.factored_actions import (
-    NUM_SLOTS,
     NUM_BLUEPRINTS,
     NUM_BLENDS,
     NUM_OPS,
 )
+from esper.leyline.slot_config import SlotConfig
 
 
 class TamiyoRolloutStep(NamedTuple):
@@ -94,7 +94,7 @@ class TamiyoRolloutBuffer:
     state_dim: int
     lstm_hidden_dim: int = DEFAULT_LSTM_HIDDEN_DIM
     lstm_layers: int = 1
-    num_slots: int = NUM_SLOTS
+    num_slots: int = SlotConfig.default().num_slots
     num_blueprints: int = NUM_BLUEPRINTS
     num_blends: int = NUM_BLENDS
     num_ops: int = NUM_OPS

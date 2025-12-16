@@ -140,6 +140,7 @@ def _emit_last_action(
     env_id: int,
     epoch: int,
     factored_action: FactoredAction,
+    slot_id: str,
     masked: dict[str, bool],
     success: bool,
 ) -> dict:
@@ -150,7 +151,7 @@ def _emit_last_action(
         "env_id": env_id,
         "inner_epoch": epoch,
         "op": factored_action.op.name,
-        "slot_id": factored_action.slot_id,
+        "slot_id": slot_id,  # Now passed as parameter
         "blueprint_id": factored_action.blueprint_id,
         "blend_id": factored_action.blend_algorithm_id,
         "op_masked": bool(masked.get("op", False)),
@@ -1902,7 +1903,8 @@ def train_ppo_vectorized(
                 )
 
                 # Use the SAMPLED slot as target (multi-slot support)
-                target_slot = factored_action.slot_id
+                # Convert slot_idx to slot_id using slots list
+                target_slot = slots[factored_action.slot_idx] if factored_action.slot_idx < len(slots) else slots[0]
                 slot_is_enabled = target_slot in slots
                 seed_state = (
                     model.seed_slots[target_slot].state
@@ -2100,6 +2102,7 @@ def train_ppo_vectorized(
                         env_id=env_idx,
                         epoch=epoch,
                         factored_action=factored_action,
+                        slot_id=target_slot,
                         masked=masked_flags,
                         success=action_success,
                     )

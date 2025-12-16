@@ -18,7 +18,7 @@ from esper.simic.action_masks import (
     slot_id_to_index,
 )
 from esper.leyline import SeedStage, MIN_CULL_AGE
-from esper.leyline.factored_actions import LifecycleOp, NUM_OPS, SlotAction
+from esper.leyline.factored_actions import LifecycleOp, NUM_OPS
 
 
 def test_compute_action_masks_empty_slots():

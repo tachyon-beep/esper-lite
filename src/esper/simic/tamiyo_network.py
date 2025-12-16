@@ -26,11 +26,11 @@ from esper.simic.action_masks import MaskedCategorical
 
 from esper.leyline import DEFAULT_LSTM_HIDDEN_DIM, DEFAULT_FEATURE_DIM
 from esper.leyline.factored_actions import (
-    NUM_SLOTS,
     NUM_BLUEPRINTS,
     NUM_BLENDS,
     NUM_OPS,
 )
+from esper.leyline.slot_config import SlotConfig
 
 # Mask value for invalid actions. Use -1e4 (not -inf or dtype.min) because:
 # 1. float("-inf") causes FP16 saturation issues
@@ -50,7 +50,7 @@ class FactoredRecurrentActorCritic(nn.Module):
     def __init__(
         self,
         state_dim: int,
-        num_slots: int = NUM_SLOTS,
+        num_slots: int = SlotConfig.default().num_slots,
         num_blueprints: int = NUM_BLUEPRINTS,
         num_blends: int = NUM_BLENDS,
         num_ops: int = NUM_OPS,
