@@ -284,6 +284,7 @@ from esper.leyline.slot_id import (
 )
 
 # Slot configuration
+from esper.leyline.injection_spec import InjectionSpec
 from esper.leyline.slot_config import SlotConfig
 
 # Actions (build_action_enum used by HeuristicTamiyo for flat action mapping)
@@ -425,6 +426,7 @@ __all__ = [
     "validate_slot_ids",
 
     # Slot configuration
+    "InjectionSpec",
     "SlotConfig",
 
     # Actions (build_action_enum used by HeuristicTamiyo)
