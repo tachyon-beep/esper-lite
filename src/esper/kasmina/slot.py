@@ -1521,20 +1521,48 @@ class SeedSlot(nn.Module):
         )
         self.on_telemetry(event)
 
-    def get_extra_state(self):
-        """Persist SeedState, alpha schedule, and gradient isolation in checkpoints."""
-        return {
-            "seed_state": self.state,
-            "alpha_schedule": self.alpha_schedule,
+    def get_extra_state(self) -> dict:
+        """Persist SeedState for PyTorch 2.9+ weights_only=True compatibility.
+
+        Returns only primitive types (dict, list, str, int, float, bool, None).
+        The alpha_schedule nn.Module weights are saved via state_dict(), not here.
+        """
+        state_dict = {
             "isolate_gradients": self.isolate_gradients,
         }
 
+        if self.state is not None:
+            state_dict["seed_state"] = self.state.to_dict()
+
+        # Alpha schedule: save config only, not the nn.Module
+        # The nn.Module weights are saved in state_dict() automatically
+        if self.alpha_schedule is not None:
+            state_dict["alpha_schedule_config"] = {
+                "algorithm_id": getattr(self.alpha_schedule, "algorithm_id", None),
+                "total_steps": getattr(self.alpha_schedule, "total_steps", None),
+                "current_step": getattr(self.alpha_schedule, "_current_step", 0),
+            }
+        else:
+            state_dict["alpha_schedule_config"] = None
+
+        return state_dict
+
     def set_extra_state(self, state: dict) -> None:
-        """Restore SeedState, alpha schedule, and gradient isolation from checkpoints."""
-        self.state = state.get("seed_state")
-        self.alpha_schedule = state.get("alpha_schedule")
-        # Default to True (safe/isolated) if not present in old checkpoints
-        self.isolate_gradients = state.get("isolate_gradients", True)
+        """Restore SeedState from primitive dict."""
+        self.isolate_gradients = state.get("isolate_gradients", False)
+
+        if state.get("seed_state"):
+            self.state = SeedState.from_dict(state["seed_state"])
+
+        # Alpha schedule reconstruction handled separately if needed
+        # The nn.Module weights are restored via load_state_dict()
+        if state.get("alpha_schedule_config"):
+            config = state["alpha_schedule_config"]
+            if config.get("algorithm_id") and self.state and self.state.stage == SeedStage.BLENDING:
+                self.start_blending(total_steps=config.get("total_steps", 10))
+                # Restore step count
+                if hasattr(self.alpha_schedule, "_current_step"):
+                    self.alpha_schedule._current_step = config.get("current_step", 0)
 
 
 __all__ = [
