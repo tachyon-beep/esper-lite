@@ -1215,7 +1215,8 @@ class SeedSlot(nn.Module):
         if self.alpha_schedule is not None:
             alpha = self.alpha_schedule.get_alpha_for_blend(host_features)
         else:
-            alpha = self.alpha
+            # Convert scalar alpha to tensor matching host_features device/dtype
+            alpha = torch.tensor(self.alpha, device=host_features.device, dtype=host_features.dtype)
 
         return blend_with_isolation(host_features, seed_features, alpha)
 

@@ -22,7 +22,7 @@ GRAD_RATIO_EPSILON: float = 1e-8
 def blend_with_isolation(
     host_features: torch.Tensor,
     seed_features: torch.Tensor,
-    alpha: float,
+    alpha: torch.Tensor,
 ) -> torch.Tensor:
     """Blend host and seed features with proper gradient flow.
 
@@ -50,13 +50,17 @@ def blend_with_isolation(
     To control seed→host gradient flow (the indirect path), use
     isolate_gradients at the SEED INPUT, not here. This function
     should always allow gradients to both direct inputs.
+
+    Args:
+        host_features: Host network features
+        seed_features: Seed module features
+        alpha: Blending weight as tensor (must match device/dtype of features).
+            MUST be a tensor (not scalar) for torch.compile compatibility.
     """
     # torch.lerp is a fused operation: lerp(a, b, w) = a + w * (b - a)
-    # Clamp alpha to [0, 1] for safety - works for both scalar and tensor alpha
-    if isinstance(alpha, torch.Tensor):
-        alpha = torch.clamp(alpha, 0.0, 1.0)
-    else:
-        alpha = max(0.0, min(1.0, alpha))
+    # Clamp alpha to [0, 1] for safety
+    # Use Tensor.clamp() method for torch.compile compatibility with 0-dim tensors
+    alpha = alpha.clamp(0.0, 1.0)
     return torch.lerp(host_features, seed_features, alpha)
 
 

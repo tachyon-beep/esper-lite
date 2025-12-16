@@ -57,19 +57,23 @@ class TestIsolationCompileCompatibility:
         assert torch.allclose(seed.grad, torch.ones_like(seed))
 
     def test_blend_compiles_with_different_alpha_values(self):
-        """Blend should compile and handle various alpha values."""
+        """Blend should compile and handle various alpha values.
+
+        Task 5: blend_with_isolation now requires tensor alpha.
+        """
         compiled_blend = torch.compile(blend_with_isolation, fullgraph=True)
 
         host = torch.randn(4, 64)
         seed = torch.randn(4, 64)
 
-        # Test boundary and mid values
-        for alpha in [0.0, 0.5, 1.0]:
+        # Test boundary and mid values (as tensors)
+        for alpha_val in [0.0, 0.5, 1.0]:
+            alpha = torch.tensor(alpha_val)
             result = compiled_blend(host, seed, alpha)
             assert result.shape == host.shape
 
             # Verify blend formula: host + alpha * (seed - host)
-            expected = torch.lerp(host, seed, alpha)
+            expected = torch.lerp(host, seed, alpha_val)
             assert torch.allclose(result, expected, atol=1e-6)
 
     def test_blend_gradient_flow_to_both_inputs(self):
@@ -79,13 +83,16 @@ class TestIsolationCompileCompatibility:
         previously zeroed ALL host gradients. Now blend_with_isolation always
         allows gradients proportional to contribution: host gets (1-alpha),
         seed gets alpha.
+
+        Task 5: blend_with_isolation now requires tensor alpha.
         """
         compiled_blend = torch.compile(blend_with_isolation, fullgraph=True)
 
         host = torch.randn(2, 32, requires_grad=True)
         seed = torch.randn(2, 32, requires_grad=True)
 
-        result = compiled_blend(host, seed, 0.5)
+        alpha = torch.tensor(0.5)
+        result = compiled_blend(host, seed, alpha)
         loss = result.sum()
         loss.backward()
 

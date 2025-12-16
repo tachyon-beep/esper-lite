@@ -35,12 +35,16 @@ class TestCompilableTensorOps:
         assert seed.grad is not None
 
     def test_blend_with_isolation_compiles_fullgraph(self):
-        """Blend should compile with fullgraph=True."""
+        """Blend should compile with fullgraph=True.
+
+        Task 5: blend_with_isolation now requires tensor alpha.
+        """
         compiled_blend = torch.compile(blend_with_isolation, fullgraph=True)
 
         host = torch.randn(2, 32, 8, 8)
         seed = torch.randn(2, 32, 8, 8)
+        alpha = torch.tensor(0.5)
 
-        result = compiled_blend(host, seed, 0.5)
+        result = compiled_blend(host, seed, alpha)
 
         assert result.shape == host.shape
