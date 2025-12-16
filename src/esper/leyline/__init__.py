@@ -257,10 +257,6 @@ DEFAULT_MIN_TRAINING_IMPROVEMENT = 0.5
 # Ensures seed has time to demonstrate stable blending.
 DEFAULT_MIN_BLENDING_EPOCHS = 3
 
-# Maximum gradient isolation violations before gate failure.
-# Prevents seeds that destabilize host gradients from advancing.
-DEFAULT_MAX_ISOLATION_VIOLATIONS = 10
-
 # Alpha threshold for considering blending "complete" (G3 gate).
 # Seeds must reach this alpha level to be considered fully blended.
 DEFAULT_ALPHA_COMPLETE_THRESHOLD = 0.95
@@ -414,7 +410,6 @@ __all__ = [
     # Lifecycle Gate Thresholds (QualityGates)
     "DEFAULT_MIN_TRAINING_IMPROVEMENT",
     "DEFAULT_MIN_BLENDING_EPOCHS",
-    "DEFAULT_MAX_ISOLATION_VIOLATIONS",
     "DEFAULT_ALPHA_COMPLETE_THRESHOLD",
     "DEFAULT_MAX_PROBATION_EPOCHS",
 

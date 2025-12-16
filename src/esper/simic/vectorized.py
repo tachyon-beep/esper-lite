@@ -44,6 +44,7 @@ from esper.leyline import (
     SeedTelemetry,
     TelemetryEvent,
     TelemetryEventType,
+    SlotConfig,
     DEFAULT_GAMMA,
     DEFAULT_EPISODE_LENGTH,
     DEFAULT_LSTM_HIDDEN_DIM,
@@ -496,6 +497,26 @@ def _advance_active_seed(model, slot_id: str) -> bool:
     return False
 
 
+def _resolve_target_slot(
+    slot_idx: int,
+    *,
+    enabled_slots: list[str],
+    slot_config: SlotConfig,
+) -> tuple[str, bool]:
+    """Map a slot head action index to a canonical slot ID.
+
+    slot_idx is defined in SlotConfig.slot_ids order (canonical), independent of
+    the caller-provided enabled slot list order.
+    """
+    try:
+        slot_id = slot_config.slot_id_for_index(slot_idx)
+    except IndexError:
+        # Out-of-range should be impossible (network head size == slot_config.num_slots),
+        # but return a deterministic slot for logging and mark it invalid.
+        return enabled_slots[0], False
+    return slot_id, slot_id in enabled_slots
+
+
 def _calculate_entropy_anneal_steps(
     entropy_anneal_episodes: int,
     n_envs: int,
@@ -767,6 +788,8 @@ def train_ppo_vectorized(
 
     if not slots:
         raise ValueError("slots parameter is required and cannot be empty")
+
+    slot_config = SlotConfig.default()
 
     # Compute effective seed limit
     # max_seeds=None means unlimited (use 0 to indicate no limit)
@@ -1804,6 +1827,7 @@ def train_ppo_vectorized(
                     enabled_slots=list(ordered),
                     total_seeds=model.total_seeds() if model else 0,
                     max_seeds=effective_max_seeds,
+                    slot_config=slot_config,
                     device=torch.device(device),
                 )
                 all_masks.append(mask)
@@ -1903,9 +1927,12 @@ def train_ppo_vectorized(
                 )
 
                 # Use the SAMPLED slot as target (multi-slot support)
-                # Convert slot_idx to slot_id using slots list
-                target_slot = slots[factored_action.slot_idx] if factored_action.slot_idx < len(slots) else slots[0]
-                slot_is_enabled = target_slot in slots
+                # slot_idx is in canonical SlotConfig order, not caller slot list order.
+                target_slot, slot_is_enabled = _resolve_target_slot(
+                    factored_action.slot_idx,
+                    enabled_slots=slots,
+                    slot_config=slot_config,
+                )
                 seed_state = (
                     model.seed_slots[target_slot].state
                     if slot_is_enabled and model.has_active_seed_in_slot(target_slot)

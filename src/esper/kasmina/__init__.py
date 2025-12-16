@@ -29,7 +29,7 @@ from esper.kasmina.slot import SeedMetrics, SeedState, QualityGates, SeedSlot
 from esper.kasmina.blueprints import BlueprintRegistry, BlueprintSpec, ConvBlock
 
 # Isolation
-from esper.kasmina.isolation import blend_with_isolation, GradientIsolationMonitor
+from esper.kasmina.isolation import blend_with_isolation, GradientHealthMonitor
 
 # Host
 from esper.kasmina.protocol import HostProtocol
@@ -56,7 +56,7 @@ __all__ = [
     "ConvBlock",
     # Isolation
     "blend_with_isolation",
-    "GradientIsolationMonitor",
+    "GradientHealthMonitor",
     # Host
     "HostProtocol",
     "CNNHost",

@@ -31,7 +31,7 @@ from typing import Callable, TYPE_CHECKING
 import torch
 import torch.nn as nn
 
-from esper.kasmina.isolation import GradientIsolationMonitor, blend_with_isolation, ste_forward
+from esper.kasmina.isolation import GradientHealthMonitor, blend_with_isolation, ste_forward
 
 from esper.leyline import (
     # Lifecycle
@@ -60,7 +60,6 @@ from esper.leyline import (
     # QualityGates thresholds
     DEFAULT_MIN_TRAINING_IMPROVEMENT,
     DEFAULT_MIN_BLENDING_EPOCHS,
-    DEFAULT_MAX_ISOLATION_VIOLATIONS,
     DEFAULT_ALPHA_COMPLETE_THRESHOLD,
     DEFAULT_MAX_PROBATION_EPOCHS,
 )
@@ -113,7 +112,6 @@ class SeedMetrics:
     accuracy_at_stage_start: float = 0.0
     accuracy_at_blending_start: float = 0.0  # Snapshot at TRAINING→BLENDING
 
-    isolation_violations: int = 0
     gradient_norm_avg: float = 0.0
 
     current_alpha: float = 0.0
@@ -195,7 +193,6 @@ class SeedMetrics:
             seed_gradient_norm_ratio=self.seed_gradient_norm_ratio,
             seed_param_count=self.seed_param_count,
             host_param_count=self.host_param_count,
-            isolation_violations=self.isolation_violations,
             gradient_norm_avg=self.gradient_norm_avg,
             current_alpha=self.current_alpha,
             alpha_ramp_step=self.alpha_ramp_step,
@@ -211,7 +208,6 @@ class SeedMetrics:
             "best_val_accuracy": self.best_val_accuracy,
             "accuracy_at_stage_start": self.accuracy_at_stage_start,
             "accuracy_at_blending_start": self.accuracy_at_blending_start,
-            "isolation_violations": self.isolation_violations,
             "gradient_norm_avg": self.gradient_norm_avg,
             "current_alpha": self.current_alpha,
             "alpha_ramp_step": self.alpha_ramp_step,
@@ -233,7 +229,6 @@ class SeedMetrics:
         metrics.best_val_accuracy = data.get("best_val_accuracy", 0.0)
         metrics.accuracy_at_stage_start = data.get("accuracy_at_stage_start", 0.0)
         metrics.accuracy_at_blending_start = data.get("accuracy_at_blending_start", 0.0)
-        metrics.isolation_violations = data.get("isolation_violations", 0)
         metrics.gradient_norm_avg = data.get("gradient_norm_avg", 0.0)
         metrics.current_alpha = data.get("current_alpha", 0.0)
         metrics.alpha_ramp_step = data.get("alpha_ramp_step", 0)
@@ -354,7 +349,7 @@ class SeedState:
             telemetry=replace(self.telemetry) if self.telemetry is not None else None,
             is_healthy=self.is_healthy,
             is_improving=self.metrics.improvement_since_stage_start > 0,
-            needs_attention=not self.is_healthy or self.metrics.isolation_violations > 0,
+            needs_attention=not self.is_healthy,
         )
 
     def to_dict(self) -> dict:
@@ -431,13 +426,11 @@ class QualityGates:
         self,
         min_training_improvement: float = DEFAULT_MIN_TRAINING_IMPROVEMENT,
         min_blending_epochs: int = DEFAULT_MIN_BLENDING_EPOCHS,
-        max_isolation_violations: int = DEFAULT_MAX_ISOLATION_VIOLATIONS,
         min_probation_stability: float = DEFAULT_MIN_PROBATION_STABILITY,
         min_seed_gradient_ratio: float = DEFAULT_GRADIENT_RATIO_THRESHOLD,
     ):
         self.min_training_improvement = min_training_improvement
         self.min_blending_epochs = min_blending_epochs
-        self.max_isolation_violations = max_isolation_violations
         self.min_probation_stability = min_probation_stability
         self.min_seed_gradient_ratio = min_seed_gradient_ratio
 
@@ -523,7 +516,13 @@ class QualityGates:
         )
 
     def _check_g2(self, state: SeedState) -> GateResult:
-        """G2: Blending readiness – global improvement + seed readiness + gradient activity."""
+        """G2: Blending readiness – global improvement + seed readiness + gradient activity.
+
+        NOTE: Gradient isolation is enforced structurally via detach() at the seed
+        input boundary. There is no numeric "violation" detection - the structural
+        guarantee is absolute. Host gradients from the direct loss path are EXPECTED
+        and do NOT indicate isolation failures.
+        """
         checks_passed = []
         checks_failed = []
 
@@ -536,14 +535,6 @@ class QualityGates:
         else:
             checks_failed.append(f"global_improvement_insufficient_{improvement:.2f}%")
             perf_ok = False
-
-        # Global isolation guard
-        if state.metrics.isolation_violations <= self.max_isolation_violations:
-            checks_passed.append("isolation_ok")
-            isolation_ok = True
-        else:
-            checks_failed.append(f"isolation_violations_{state.metrics.isolation_violations}")
-            isolation_ok = False
 
         # Seed-specific readiness: enough TRAINING epochs to be worth blending
         if self._seed_ready_for_blending(state):
@@ -562,7 +553,7 @@ class QualityGates:
             checks_failed.append(f"seed_gradient_low_{state.metrics.seed_gradient_norm_ratio:.2f}")
             gradient_ok = False
 
-        passed = perf_ok and isolation_ok and seed_ok and gradient_ok
+        passed = perf_ok and seed_ok and gradient_ok
         score = min(1.0, improvement / 5.0) if improvement > 0 else 0.0
 
         return GateResult(
@@ -938,7 +929,7 @@ class SeedSlot(nn.Module):
         # Register for isolation monitoring (skipped in fast_mode)
         if host_module is not None and not self.fast_mode:
             if self.isolation_monitor is None:
-                self.isolation_monitor = GradientIsolationMonitor()
+                self.isolation_monitor = GradientHealthMonitor()
             self.isolation_monitor.register(host_module, self.seed)
 
         self._emit_telemetry(
@@ -1099,15 +1090,15 @@ class SeedSlot(nn.Module):
         return True
 
     def capture_gradient_telemetry(self) -> None:
-        """Calculate gradient norms via the isolation monitor and update internal metrics.
+        """Calculate gradient norms via the health monitor and update internal metrics.
 
         CRITICAL: Call this from Tolaria after loss.backward() to enable the G2 gate.
         Without this, seed_gradient_norm_ratio remains 0.0 and G2 always fails.
 
-        Performance note: Calls check_isolation() which internally performs .item() sync.
-        The actual CUDA→CPU transfer happens in materialize_isolation_stats() within
-        check_isolation(), not directly in this method. For fully async capture, use
-        check_isolation_async() and defer materialization.
+        Performance note: Calls compute_gradient_health() which internally performs
+        .item() sync. The actual CUDA→CPU transfer happens in materialize_gradient_stats()
+        within compute_gradient_health(). For fully async capture, use
+        compute_gradient_health_async() and defer materialization.
 
         Use a stride in the training loop (e.g., every 10 steps) to minimize overhead.
         The EMA smoothing makes sparse sampling acceptable for gate decisions.
@@ -1119,15 +1110,11 @@ class SeedSlot(nn.Module):
         if not self.state:
             return
 
-        # Ask monitor to calculate gradient norms
-        _, stats = self.isolation_monitor.check_isolation()
+        # Ask monitor to calculate gradient norms for G2 gate health assessment
+        stats = self.isolation_monitor.compute_gradient_health()
 
         host_norm = stats.get("host_grad_norm", 0.0)
         seed_norm = stats.get("seed_grad_norm", 0.0)
-
-        # Update isolation violation count if host received unexpected gradients
-        if self.isolate_gradients and host_norm > 1e-6:
-            self.state.metrics.isolation_violations += 1
 
         # Compute parameter-normalized seed gradient ratio
         # Formula: (seed_norm / host_norm) * sqrt(host_params / seed_params)
@@ -1524,7 +1511,6 @@ class SeedSlot(nn.Module):
             and self.state.telemetry.epoch > 0
         ):
             payload.setdefault("seed_gradient_norm_ratio", self.state.metrics.seed_gradient_norm_ratio)
-            payload.setdefault("isolation_violations", self.state.metrics.isolation_violations)
             payload.setdefault("gradient_health", self.state.telemetry.gradient_health)
             payload.setdefault("has_vanishing", self.state.telemetry.has_vanishing)
             payload.setdefault("has_exploding", self.state.telemetry.has_exploding)
