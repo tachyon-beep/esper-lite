@@ -80,7 +80,7 @@ class TrainingConfig:
     chunk_length: int | None = None  # None = auto-match max_epochs; set explicitly if different
 
     # === Slot/reward selection ===
-    slots: list[str] = field(default_factory=lambda: ["mid"])
+    slots: list[str] = field(default_factory=lambda: ["r0c1"])  # canonical ID (formerly "mid")
     max_seeds: int | None = None
     reward_mode: RewardMode = RewardMode.SHAPED
     reward_family: RewardFamily = RewardFamily.CONTRIBUTION
@@ -255,12 +255,16 @@ class TrainingConfig:
         if self.max_seeds is not None and self.max_seeds < 1:
             raise ValueError("max_seeds must be >= 1 when provided")
 
-        allowed_slots = {"early", "mid", "late"}
         if not self.slots:
             raise ValueError("slots cannot be empty")
-        unknown_slots = set(self.slots) - allowed_slots
-        if unknown_slots:
-            raise ValueError(f"Unknown slots: {sorted(unknown_slots)}")
+        # Validate slot IDs use canonical format (r0c0, r0c1, etc.)
+        from esper.leyline.slot_id import validate_slot_id, SlotIdError
+        for slot in self.slots:
+            if not validate_slot_id(slot):
+                raise ValueError(
+                    f"Invalid slot ID: '{slot}'. Use canonical format: 'r0c0', 'r0c1', 'r0c2'. "
+                    f"Legacy names (early, mid, late) are no longer supported."
+                )
 
         if self.param_budget <= 0:
             raise ValueError("param_budget must be positive")

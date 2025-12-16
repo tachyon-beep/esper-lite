@@ -59,7 +59,7 @@ class _StubModel:
         self.has_active_seed = True
         seed_state = _StubSeedState(seed_stage)
         seed_slot = _StubSeedSlot(seed_state, gate_result=gate_result)
-        self.seed_slots = {"mid": seed_slot}
+        self.seed_slots = {"r0c1": seed_slot}
 
     def has_active_seed_in_slot(self, slot: str) -> bool:
         """Check if specific slot has an active seed."""
@@ -69,42 +69,42 @@ class _StubModel:
 def test_advance_active_seed_fossilizes_via_seed_slot():
     """PROBATIONARY seeds should fossilize through SeedSlot.advance_stage (emits telemetry)."""
     model = _StubModel(SeedStage.PROBATIONARY)
-    slot_id = "mid"
+    slot_id = "r0c1"
 
     _advance_active_seed(model, slot_id)
 
-    assert model.seed_slots["mid"].advance_calls == [SeedStage.FOSSILIZED]
-    assert model.seed_slots["mid"].set_alpha_calls == [1.0]
-    assert model.seed_slots["mid"].state.stage == SeedStage.FOSSILIZED
+    assert model.seed_slots["r0c1"].advance_calls == [SeedStage.FOSSILIZED]
+    assert model.seed_slots["r0c1"].set_alpha_calls == [1.0]
+    assert model.seed_slots["r0c1"].state.stage == SeedStage.FOSSILIZED
     # Transition should happen inside advance_stage, not direct transition
-    assert model.seed_slots["mid"].state.transition_calls == []
+    assert model.seed_slots["r0c1"].state.transition_calls == []
 
 
 def test_advance_active_seed_noop_on_failed_fossilization_gate():
     """Failed fossilization gate should be a no-op (Tamiyo learns from failed attempts)."""
     gate_result = _StubGateResult(passed=False, checks_failed=["no_improvement"])
     model = _StubModel(SeedStage.PROBATIONARY, gate_result=gate_result)
-    slot_id = "mid"
+    slot_id = "r0c1"
 
     # Should not raise - failed gate is normal RL outcome
     _advance_active_seed(model, slot_id)
 
     # Gate was checked but transition didn't happen
-    assert model.seed_slots["mid"].advance_calls == [SeedStage.FOSSILIZED]
-    assert model.seed_slots["mid"].set_alpha_calls == []  # No alpha change on failed gate
+    assert model.seed_slots["r0c1"].advance_calls == [SeedStage.FOSSILIZED]
+    assert model.seed_slots["r0c1"].set_alpha_calls == []  # No alpha change on failed gate
     # Stage should NOT change (stub's advance_stage still sets it, but in real code it wouldn't)
 
 
 def test_advance_active_seed_noop_from_training_stage():
     """TRAINING seeds are handled mechanically; fossilize action should do nothing."""
     model = _StubModel(SeedStage.TRAINING)
-    slot_id = "mid"
+    slot_id = "r0c1"
 
     _advance_active_seed(model, slot_id)
 
-    assert model.seed_slots["mid"].state.transition_calls == []
-    assert model.seed_slots["mid"].start_blending_calls == []
-    assert model.seed_slots["mid"].state.stage == SeedStage.TRAINING
+    assert model.seed_slots["r0c1"].state.transition_calls == []
+    assert model.seed_slots["r0c1"].start_blending_calls == []
+    assert model.seed_slots["r0c1"].state.stage == SeedStage.TRAINING
 
 
 def test_custom_thresholds_respected():

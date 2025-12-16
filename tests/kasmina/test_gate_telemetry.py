@@ -7,9 +7,9 @@ from esper.leyline import SeedStage, TelemetryEventType
 def test_gate_event_emitted_on_pass():
     events: list = []
 
-    slot = SeedSlot(slot_id="mid", channels=8, device="cpu", on_telemetry=events.append)
+    slot = SeedSlot(slot_id="r0c1", channels=8, device="cpu", on_telemetry=events.append)
     slot.seed = torch.nn.Identity()
-    slot.state = SeedState(seed_id="s1", blueprint_id="conv", slot_id="mid")
+    slot.state = SeedState(seed_id="s1", blueprint_id="conv", slot_id="r0c1")
     slot.state.stage = SeedStage.GERMINATED  # G1 pass condition for TRAINING
 
     slot.advance_stage(target_stage=SeedStage.TRAINING)
@@ -20,9 +20,9 @@ def test_gate_event_emitted_on_pass():
 def test_gate_event_emitted_on_fail():
     events: list = []
 
-    slot = SeedSlot(slot_id="mid", channels=8, device="cpu", on_telemetry=events.append)
+    slot = SeedSlot(slot_id="r0c1", channels=8, device="cpu", on_telemetry=events.append)
     slot.seed = torch.nn.Identity()
-    slot.state = SeedState(seed_id="s1", blueprint_id="conv", slot_id="mid")
+    slot.state = SeedState(seed_id="s1", blueprint_id="conv", slot_id="r0c1")
     slot.state.stage = SeedStage.TRAINING  # Attempt BLENDING (G2), default metrics should fail
 
     result = slot.advance_stage(target_stage=SeedStage.BLENDING)

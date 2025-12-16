@@ -102,7 +102,7 @@ def test_vectorized_multi_gpu_smoke(monkeypatch):
         use_telemetry=False,
         num_workers=0,
         gpu_preload=False,
-        slots=["mid"],
+        slots=["r0c1"],  # canonical ID (formerly "mid")
         max_seeds=1,
         reward_mode="shaped",
         quiet_analytics=True,

@@ -472,7 +472,7 @@ def _advance_active_seed(model, slot_id: str) -> bool:
 
     Args:
         model: MorphogeneticModel instance
-        slot_id: Target slot ID (e.g., "early", "mid", "late")
+        slot_id: Target slot ID (e.g., "r0c0", "r0c1", "r0c2")
 
     Returns:
         True if the seed successfully fossilized, False otherwise.

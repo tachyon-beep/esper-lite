@@ -8,7 +8,7 @@ Usage:
 
     helper = CounterfactualHelper()
     contributions = helper.compute_contributions(
-        slot_ids=["early", "mid"],
+        slot_ids=["r0c0", "r0c1"],
         evaluate_fn=my_evaluate_fn,
     )
 """

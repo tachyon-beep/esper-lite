@@ -129,7 +129,7 @@ class TestGerminationDecisions:
         decision = policy.decide(signals, active_seeds=[])
 
         assert decision.action.name == "WAIT"
-        assert "early" in decision.reason.lower()
+        assert "too early" in decision.reason.lower()
 
 
 class TestCullDecisions:

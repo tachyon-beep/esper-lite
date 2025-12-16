@@ -14,7 +14,7 @@ class TestTransformerHostSegments:
         host = TransformerHost(vocab_size=100, n_embd=64, n_head=2, n_layer=6, block_size=32)
         assert hasattr(host, "segment_channels")
         assert isinstance(host.segment_channels, dict)
-        assert set(host.segment_channels.keys()) == {"early", "mid", "late"}
+        assert set(host.segment_channels.keys()) == {"r0c0", "r0c1", "r0c2"}
 
     def test_segment_channels_values(self):
         """All segments should map to n_embd dimension."""
@@ -28,7 +28,7 @@ class TestTransformerHostSegments:
         host = TransformerHost(vocab_size=100, n_embd=64, n_head=2, n_layer=6, block_size=32)
         x = torch.randint(0, 100, (2, 16))  # batch=2, seq=16
 
-        h = host.forward_to_segment("mid", x)
+        h = host.forward_to_segment("r0c1", x)
         assert h.shape == (2, 16, 64)  # (batch, seq, n_embd)
 
     def test_forward_from_segment_returns_logits(self):
@@ -36,7 +36,7 @@ class TestTransformerHostSegments:
         host = TransformerHost(vocab_size=100, n_embd=64, n_head=2, n_layer=6, block_size=32)
         h = torch.randn(2, 16, 64)  # (batch, seq, n_embd)
 
-        logits = host.forward_from_segment("mid", h)
+        logits = host.forward_from_segment("r0c1", h)
         assert logits.shape == (2, 16, 100)  # (batch, seq, vocab_size)
 
     def test_segment_round_trip_matches_forward(self):
@@ -49,10 +49,10 @@ class TestTransformerHostSegments:
         with torch.no_grad():
             full_out = host(x)
 
-        # Segment round-trip through "mid"
+        # Segment round-trip through "r0c1"
         with torch.no_grad():
-            h = host.forward_to_segment("mid", x)
-            segment_out = host.forward_from_segment("mid", h)
+            h = host.forward_to_segment("r0c1", x)
+            segment_out = host.forward_from_segment("r0c1", h)
 
         # Should be identical (deterministic with eval mode)
         torch.testing.assert_close(full_out, segment_out, rtol=1e-5, atol=1e-5)
@@ -79,13 +79,13 @@ class TestCNNHostSegments:
 
         with torch.no_grad():
             full_out = host(x)
-            mid_h = host.forward_to_segment("mid", x)
-            segment_out = host.forward_from_segment("mid", mid_h)
+            mid_h = host.forward_to_segment("r0c1", x)
+            segment_out = host.forward_from_segment("r0c1", mid_h)
 
-            early_h = host.forward_to_segment("early", x)
-            late_h_direct = host.forward_to_segment("late", x)
-            late_h_from_early = host.forward_to_segment("late", early_h, from_segment="early")
-            late_out_from_early = host.forward_from_segment("late", late_h_from_early)
+            early_h = host.forward_to_segment("r0c0", x)
+            late_h_direct = host.forward_to_segment("r0c2", x)
+            late_h_from_early = host.forward_to_segment("r0c2", early_h, from_segment="r0c0")
+            late_out_from_early = host.forward_from_segment("r0c2", late_h_from_early)
 
         torch.testing.assert_close(segment_out, full_out, rtol=1e-5, atol=1e-5)
         torch.testing.assert_close(late_h_from_early, late_h_direct, rtol=1e-5, atol=1e-5)

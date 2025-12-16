@@ -58,8 +58,8 @@ class CounterfactualConfig:
 class CounterfactualResult:
     """Result of evaluating a single seed configuration."""
 
-    config: tuple[bool, ...]  # (True, False, True) = early on, mid off, late on
-    slot_ids: tuple[str, ...]  # ("early", "mid", "late")
+    config: tuple[bool, ...]  # (True, False, True) = r0c0 on, r0c1 off, r0c2 on
+    slot_ids: tuple[str, ...]  # ("r0c0", "r0c1", "r0c2")
     alpha_settings: dict[str, float] = field(default_factory=dict)  # {slot: alpha}
     val_loss: float = 0.0
     val_accuracy: float = 0.0
@@ -188,9 +188,9 @@ class CounterfactualEngine:
         """Compute counterfactual matrix for given slots.
 
         Args:
-            slot_ids: List of slot identifiers (e.g., ["early", "mid", "late"])
+            slot_ids: List of slot identifiers (e.g., ["r0c0", "r0c1", "r0c2"])
             evaluate_fn: Function that takes alpha settings and returns (val_loss, val_accuracy)
-                        e.g., evaluate_fn({"early": 0.0, "mid": 1.0}) -> (loss, acc)
+                        e.g., evaluate_fn({"r0c0": 0.0, "r0c1": 1.0}) -> (loss, acc)
 
         Returns:
             CounterfactualMatrix with all evaluated configurations.

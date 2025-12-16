@@ -50,7 +50,7 @@ class EpisodeContext:
     # Architecture
     host_architecture: str = ""  # "cnn_3block" / "gpt_6layer"
     host_params: int = 0  # Param count before any seeds
-    slot_config: tuple[tuple[str, int], ...] = ()  # (("early", 64), ("mid", 128), ...)
+    slot_config: tuple[tuple[str, int], ...] = ()  # (("r0c0", 64), ("r0c1", 128), ...)
 
     # Training config
     max_epochs: int = 75
@@ -88,7 +88,7 @@ class HostBaseline:
 class SlotSnapshot:
     """Per-slot state at a single epoch."""
 
-    slot_id: str  # "early", "mid", "late"
+    slot_id: str  # "r0c0", "r0c1", "r0c2"
 
     # Lifecycle state
     stage: SeedStage = SeedStage.DORMANT

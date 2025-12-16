@@ -83,15 +83,15 @@ class TestEnvOverviewTable:
         # Set up env 0 with seeds in different stages
         env0 = tui.state.get_or_create_env(0)
         env0.status = "healthy"
-        env0.seeds["early"] = SeedState(slot_id="early", stage="TRAINING", blueprint_id="conv3x3")
-        env0.seeds["mid"] = SeedState(slot_id="mid", stage="FOSSILIZED", blueprint_id="norm")
-        env0.seeds["late"] = SeedState(slot_id="late", stage="DORMANT")
+        env0.seeds["r0c0"] = SeedState(slot_id="r0c0", stage="TRAINING", blueprint_id="conv3x3")
+        env0.seeds["r0c1"] = SeedState(slot_id="r0c1", stage="FOSSILIZED", blueprint_id="norm")
+        env0.seeds["r0c2"] = SeedState(slot_id="r0c2", stage="DORMANT")
 
         # Set up env 1 with different configuration
         env1 = tui.state.get_or_create_env(1)
         env1.status = "healthy"
-        env1.seeds["early"] = SeedState(slot_id="early", stage="GERMINATED", blueprint_id="skip")
-        env1.seeds["mid"] = SeedState(slot_id="mid", stage="BLENDING", blueprint_id="attention")
+        env1.seeds["r0c0"] = SeedState(slot_id="r0c0", stage="GERMINATED", blueprint_id="skip")
+        env1.seeds["r0c1"] = SeedState(slot_id="r0c1", stage="BLENDING", blueprint_id="attention")
 
         # Render to string
         console = Console(force_terminal=True, width=140)

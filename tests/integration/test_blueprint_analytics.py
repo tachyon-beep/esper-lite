@@ -16,14 +16,14 @@ class TestBlueprintAnalyticsIntegration:
         hub.add_backend(analytics)
 
         # Create model with telemetry callback
-        model = create_model(device="cpu", slots=["mid"])
+        model = create_model(device="cpu", slots=["r0c1"])
 
         def callback(event: TelemetryEvent):
             event.data["env_id"] = 0
             hub.emit(event)
 
-        model.seed_slots["mid"].on_telemetry = callback
-        model.seed_slots["mid"].fast_mode = False
+        model.seed_slots["r0c1"].on_telemetry = callback
+        model.seed_slots["r0c1"].fast_mode = False
 
         # Set host params baseline
         analytics._get_scoreboard(0).host_params = sum(
@@ -31,21 +31,21 @@ class TestBlueprintAnalyticsIntegration:
         )
 
         # Germinate
-        model.germinate_seed("depthwise", "test_seed", slot="mid")
+        model.germinate_seed("depthwise", "test_seed", slot="r0c1")
 
         assert analytics.stats["depthwise"].germinated == 1
         assert analytics.scoreboards[0].live_blueprint == "depthwise"
 
         # Simulate improvement and fossilize
-        model.seed_slots["mid"].state.metrics.initial_val_accuracy = 70.0
-        model.seed_slots["mid"].state.metrics.current_val_accuracy = 75.0
-        model.seed_slots["mid"].state.metrics.counterfactual_contribution = 5.0  # Required for G5
+        model.seed_slots["r0c1"].state.metrics.initial_val_accuracy = 70.0
+        model.seed_slots["r0c1"].state.metrics.current_val_accuracy = 75.0
+        model.seed_slots["r0c1"].state.metrics.counterfactual_contribution = 5.0  # Required for G5
 
         # Force to PROBATIONARY stage for fossilization (per instructions)
         from esper.leyline import SeedStage
-        model.seed_slots["mid"].state.stage = SeedStage.PROBATIONARY
-        model.seed_slots["mid"].state.is_healthy = True  # G5 also requires health
-        model.seed_slots["mid"].advance_stage(SeedStage.FOSSILIZED)
+        model.seed_slots["r0c1"].state.stage = SeedStage.PROBATIONARY
+        model.seed_slots["r0c1"].state.is_healthy = True  # G5 also requires health
+        model.seed_slots["r0c1"].advance_stage(SeedStage.FOSSILIZED)
 
         assert analytics.stats["depthwise"].fossilized == 1
         assert analytics.stats["depthwise"].acc_deltas == [5.0]

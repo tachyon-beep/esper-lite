@@ -117,7 +117,7 @@ def signals_to_features(
 
     # Build per-slot state dict from reports
     slot_states = {}
-    for slot_id in ['early', 'mid', 'late']:
+    for slot_id in ['r0c0', 'r0c1', 'r0c2']:
         report = slot_reports.get(slot_id)
         if report:
             contribution = report.metrics.counterfactual_contribution

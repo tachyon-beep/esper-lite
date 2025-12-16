@@ -10,7 +10,7 @@ class TestSeedStageContract:
         from esper.karn.store import SlotSnapshot
 
         # SlotSnapshot.stage should use the leyline enum
-        slot = SlotSnapshot(slot_id="mid")
+        slot = SlotSnapshot(slot_id="r0c1")
         assert type(slot.stage).__module__ == "esper.leyline.stages"
         assert isinstance(slot.stage.value, int)  # IntEnum, not Enum
 

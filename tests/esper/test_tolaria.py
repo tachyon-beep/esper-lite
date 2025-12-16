@@ -20,13 +20,13 @@ class TestEnvironment:
 
     def test_create_model_cpu(self):
         """Test model creation on CPU."""
-        model = create_model(device="cpu", slots=["mid"])
+        model = create_model(device="cpu", slots=["r0c1"])
         assert not next(model.parameters()).is_cuda
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
     def test_create_model_cuda(self):
         """Test model creation on CUDA."""
-        model = create_model(device="cuda", slots=["mid"])
+        model = create_model(device="cuda", slots=["r0c1"])
         assert next(model.parameters()).is_cuda
 
     def test_create_model_invalid_cuda_raises(self):
@@ -35,7 +35,7 @@ class TestEnvironment:
             pytest.skip("CUDA is available, cannot test error case")
 
         with pytest.raises(RuntimeError, match="CUDA.*not available"):
-            create_model(device="cuda", slots=["mid"])
+            create_model(device="cuda", slots=["r0c1"])
 
 
 class TestTrainer:
@@ -44,7 +44,7 @@ class TestTrainer:
     @pytest.fixture
     def model_and_loader(self):
         """Create model and minimal data loader for testing."""
-        model = create_model(device="cpu", slots=["mid"])
+        model = create_model(device="cpu", slots=["r0c1"])
         x = torch.randn(64, 3, 32, 32)
         y = torch.randint(0, 10, (64,))
         dataset = TensorDataset(x, y)
@@ -72,7 +72,7 @@ class TestTrainer:
         seed_optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
 
         # Should not raise
-        train_epoch_incubator_mode(model, mini_train, criterion, host_optimizer, seed_optimizer, "cpu", slot="mid")
+        train_epoch_incubator_mode(model, mini_train, criterion, host_optimizer, seed_optimizer, "cpu", slot="r0c1")
 
     def test_train_epoch_blended_runs(self, model_and_loader):
         """Smoke test for train_epoch_blended."""

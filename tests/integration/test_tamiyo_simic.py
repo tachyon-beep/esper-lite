@@ -43,14 +43,14 @@ class DummyHost(nn.Module):
         self.fc = nn.Linear(32, num_classes)
         self._slots: dict[str, nn.Module] = {}
         # MorphogeneticModel requires segment_channels
-        self.segment_channels = {"mid": 32}
+        self.segment_channels = {"r0c1": 32}
 
     def forward(self, x):
         """Standard forward pass producing 4D intermediate tensors."""
         x = torch.relu(self.conv1(x))  # (batch, 32, H, W)
         # Apply slot if registered (expects 4D input)
-        if "mid" in self._slots and self._slots["mid"] is not None:
-            x = self._slots["mid"](x)  # SeedSlot handles blending
+        if "r0c1" in self._slots and self._slots["r0c1"] is not None:
+            x = self._slots["r0c1"](x)  # SeedSlot handles blending
         x = self.pool(x)  # (batch, 32, 1, 1)
         x = x.view(x.size(0), -1)  # (batch, 32)
         return self.fc(x)
@@ -58,7 +58,7 @@ class DummyHost(nn.Module):
     @property
     def injection_points(self) -> dict[str, int]:
         """Provide single injection point for testing."""
-        return {"mid": 32}
+        return {"r0c1": 32}
 
     def register_slot(self, slot_id: str, slot_module: nn.Module) -> None:
         """Register seed slot."""
@@ -71,17 +71,17 @@ class DummyHost(nn.Module):
 
     def forward_to_segment(self, segment: str, x: torch.Tensor, from_segment: str | None = None) -> torch.Tensor:
         """Forward from input or segment to target segment."""
-        if segment == "mid":
+        if segment == "r0c1":
             # Forward to mid point (after conv1) - returns 4D tensor
             return torch.relu(self.conv1(x))
         raise ValueError(f"Unknown segment: {segment}")
 
     def forward_from_segment(self, segment: str, x: torch.Tensor) -> torch.Tensor:
         """Forward from segment to output."""
-        if segment == "mid":
+        if segment == "r0c1":
             # Apply slot if registered
-            if "mid" in self._slots and self._slots["mid"] is not None:
-                x = self._slots["mid"](x)
+            if "r0c1" in self._slots and self._slots["r0c1"] is not None:
+                x = self._slots["r0c1"](x)
             x = self.pool(x)
             x = x.view(x.size(0), -1)
             return self.fc(x)
@@ -111,7 +111,7 @@ def simple_dataloader():
 def morphogenetic_model():
     """Create a MorphogeneticModel with DummyHost for testing."""
     host = DummyHost()
-    model = MorphogeneticModel(host=host, slots=["mid"], device="cpu")
+    model = MorphogeneticModel(host=host, slots=["r0c1"], device="cpu")
     return model
 
 
@@ -310,7 +310,7 @@ class TestPolicyDecisionsAffectSimicTraining:
         for epoch in range(4):
             active_seeds = []
             if model.has_active_seed:
-                active_seeds = [model.seed_slots["mid"].state]
+                active_seeds = [model.seed_slots["r0c1"].state]
 
             # Use constant loss to trigger plateau detection
             signals = tracker.update(
@@ -329,21 +329,21 @@ class TestPolicyDecisionsAffectSimicTraining:
 
             # If GERMINATE, create seed
             if decision.blueprint_id is not None:
-                model.seed_slots["mid"].germinate(
+                model.seed_slots["r0c1"].germinate(
                     blueprint_id=decision.blueprint_id,
                     seed_id=f"seed_{epoch}",
                 )
 
                 # Verify seed was created
                 assert model.has_active_seed
-                assert model.seed_slots["mid"].state.stage == SeedStage.GERMINATED
+                assert model.seed_slots["r0c1"].state.stage == SeedStage.GERMINATED
                 break
 
         # Verify that germination happened
         assert model.has_active_seed, "Policy should have germinated a seed after plateau"
 
         # Verify seed state reflects Simic integration
-        seed_state = model.seed_slots["mid"].state
+        seed_state = model.seed_slots["r0c1"].state
         assert seed_state.seed_id is not None
         assert seed_state.blueprint_id is not None
         assert seed_state.alpha >= 0.0
@@ -376,8 +376,8 @@ class TestSeedMetricsTrackedDuringTraining:
         host_optimizer = torch.optim.Adam(model.host.parameters(), lr=0.01)
 
         # Manually germinate a seed for testing
-        model.seed_slots["mid"].germinate(blueprint_id="norm", seed_id="test_seed")
-        seed_state = model.seed_slots["mid"].state
+        model.seed_slots["r0c1"].germinate(blueprint_id="norm", seed_id="test_seed")
+        seed_state = model.seed_slots["r0c1"].state
         seed_state.transition(SeedStage.TRAINING)
 
         # Capture initial metrics
@@ -408,7 +408,7 @@ class TestSeedMetricsTrackedDuringTraining:
         seed_state.metrics.record_accuracy(val_accuracy)
 
         # Step epoch for lifecycle advancement
-        model.seed_slots["mid"].step_epoch()
+        model.seed_slots["r0c1"].step_epoch()
 
         # Verify metrics were updated
         assert seed_state.epochs_in_stage > initial_epochs_in_stage, \
@@ -439,8 +439,8 @@ class TestTrainingSignalsIncludeActiveSeeds:
         tracker = SignalTracker()
 
         # Create active seeds
-        model.seed_slots["mid"].germinate(blueprint_id="norm", seed_id="seed_1")
-        seed_state = model.seed_slots["mid"].state
+        model.seed_slots["r0c1"].germinate(blueprint_id="norm", seed_id="seed_1")
+        seed_state = model.seed_slots["r0c1"].state
         seed_state.transition(SeedStage.TRAINING)
         seed_state.alpha = 0.3
         # Note: improvement_since_stage_start is a computed property
@@ -494,7 +494,7 @@ class TestEndToEndGerminateToFossilize:
 
         # Create model with host
         host = DummyHost()
-        model = MorphogeneticModel(host=host, slots=["mid"], device="cpu")
+        model = MorphogeneticModel(host=host, slots=["r0c1"], device="cpu")
         criterion = nn.CrossEntropyLoss()
         host_optimizer = torch.optim.Adam(model.host.parameters(), lr=0.01)
 
@@ -539,7 +539,7 @@ class TestEndToEndGerminateToFossilize:
             # Update tracker
             active_seeds = []
             if model.has_active_seed:
-                active_seeds = [model.seed_slots["mid"].state]
+                active_seeds = [model.seed_slots["r0c1"].state]
 
             signals = tracker.update(
                 epoch=epoch,
@@ -557,25 +557,25 @@ class TestEndToEndGerminateToFossilize:
 
             # Execute decision
             if decision.blueprint_id is not None:  # GERMINATE
-                model.seed_slots["mid"].germinate(
+                model.seed_slots["r0c1"].germinate(
                     blueprint_id=decision.blueprint_id,
                     seed_id=f"seed_{epoch}",
                 )
                 seed_created = True
 
             elif decision.action.name == "FOSSILIZE":  # FOSSILIZE
-                seed_state = model.seed_slots["mid"].state
+                seed_state = model.seed_slots["r0c1"].state
                 # Set positive counterfactual for G5 gate
                 seed_state.metrics.counterfactual_contribution = 1.5
-                gate_result = model.seed_slots["mid"].advance_stage(SeedStage.FOSSILIZED)
+                gate_result = model.seed_slots["r0c1"].advance_stage(SeedStage.FOSSILIZED)
                 if gate_result.passed:
-                    model.seed_slots["mid"].set_alpha(1.0)
+                    model.seed_slots["r0c1"].set_alpha(1.0)
                     seed_fossilized = True
                     break
 
             # Step epoch to advance seed lifecycle
             if model.has_active_seed:
-                model.seed_slots["mid"].step_epoch()
+                model.seed_slots["r0c1"].step_epoch()
 
         # Verify full lifecycle completed
         assert seed_created, "Seed should have been germinated"
@@ -583,6 +583,6 @@ class TestEndToEndGerminateToFossilize:
 
         # If fossilized, verify final state
         if seed_fossilized:
-            seed_state = model.seed_slots["mid"].state
+            seed_state = model.seed_slots["r0c1"].state
             assert seed_state.stage == SeedStage.FOSSILIZED
             assert seed_state.alpha == 1.0

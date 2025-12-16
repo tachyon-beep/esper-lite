@@ -65,7 +65,7 @@ class TestTrainingConfig:
 
     def test_to_dict_roundtrip_preserves_enums(self):
         """Enum fields should serialize to values and back."""
-        original = TrainingConfig(reward_family="loss", reward_mode="shaped", slots=["early", "late"])
+        original = TrainingConfig(reward_family="loss", reward_mode="shaped", slots=["r0c0", "r0c2"])
         loaded = TrainingConfig.from_dict(original.to_dict())
         assert loaded.reward_family.value == "loss"
-        assert loaded.slots == ["early", "late"]
+        assert loaded.slots == ["r0c0", "r0c2"]

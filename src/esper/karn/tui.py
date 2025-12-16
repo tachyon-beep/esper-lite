@@ -1146,9 +1146,9 @@ class TUIOutput:
                 seeds_summary,
                 f"{float(rent):+.2f}" if isinstance(rent, (int, float)) else "─",
                 "",
-                _slot_summary("early"),
-                _slot_summary("mid"),
-                _slot_summary("late"),
+                _slot_summary("r0c0"),
+                _slot_summary("r0c1"),
+                _slot_summary("r0c2"),
                 last_action,
             )
 
@@ -1601,9 +1601,9 @@ class TUIOutput:
                 rent_str = "─"
 
             # Format each slot
-            early_str = self._format_slot_cell(env, "early")
-            mid_str = self._format_slot_cell(env, "mid")
-            late_str = self._format_slot_cell(env, "late")
+            early_str = self._format_slot_cell(env, "r0c0")
+            mid_str = self._format_slot_cell(env, "r0c1")
+            late_str = self._format_slot_cell(env, "r0c2")
 
             # Status with styling
             status_style = status_styles.get(env.status, "white")

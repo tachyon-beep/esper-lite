@@ -79,18 +79,18 @@ class CNNHost(nn.Module):
         self.classifier = nn.Linear(in_c, num_classes)
 
         # Segment channel counts for multi-slot support
-        # Map named segments to their channel dimensions at injection points
-        # Requires at least 3 blocks for full early/mid/late segment support
+        # Map canonical slot IDs to their channel dimensions at injection points
+        # Requires at least 3 blocks for full r0c0/r0c1/r0c2 segment support
         if n_blocks >= 3:
             self.segment_channels = {
-                "early": self.blocks[0].conv.out_channels,    # After block1 (32 by default)
-                "mid": self.blocks[1].conv.out_channels,      # After block2 (64 by default)
-                "late": self.blocks[2].conv.out_channels,     # After block3 (128 by default)
+                "r0c0": self.blocks[0].conv.out_channels,    # After block1 (32 by default)
+                "r0c1": self.blocks[1].conv.out_channels,    # After block2 (64 by default)
+                "r0c2": self.blocks[2].conv.out_channels,    # After block3 (128 by default)
             }
         else:
             # Fallback for shallow networks - only expose available segments
             self.segment_channels = {
-                f"block{i}": self.blocks[i].conv.out_channels for i in range(n_blocks)
+                f"r0c{i}": self.blocks[i].conv.out_channels for i in range(n_blocks)
             }
 
     @property
@@ -130,7 +130,7 @@ class CNNHost(nn.Module):
         """Forward from one segment boundary to another.
 
         Args:
-            segment: Target segment (e.g., "early", "mid", "late")
+            segment: Target segment (e.g., "r0c0", "r0c1", "r0c2")
             x: Raw input if from_segment is None, else features at from_segment boundary
             from_segment: Starting point (None = network input)
 
@@ -146,11 +146,11 @@ class CNNHost(nn.Module):
         if self._memory_format == torch.channels_last:
             x = x.to(memory_format=torch.channels_last)
 
-        # Map segment names to block indices (0-indexed)
+        # Map canonical slot IDs to block indices (0-indexed)
         segment_to_block = {
-            "early": 0,  # After block 0 (block1)
-            "mid": 1,    # After block 1 (block2)
-            "late": 2,   # After block 2 (block3)
+            "r0c0": 0,  # After block 0 (block1)
+            "r0c1": 1,  # After block 1 (block2)
+            "r0c2": 2,  # After block 2 (block3)
         }
         target_block = segment_to_block[segment]
         start_block = 0 if from_segment is None else segment_to_block[from_segment] + 1
@@ -174,7 +174,7 @@ class CNNHost(nn.Module):
         """Forward from a segment to output.
 
         Args:
-            segment: Starting segment name ("early", "mid", or "late")
+            segment: Starting segment ID ("r0c0", "r0c1", or "r0c2")
             x: Feature map at segment boundary (should already be channels_last if from forward_to_segment)
 
         Returns:
@@ -187,11 +187,11 @@ class CNNHost(nn.Module):
         if self._memory_format == torch.channels_last:
             x = x.to(memory_format=torch.channels_last)
 
-        # Map segment names to block indices
+        # Map canonical slot IDs to block indices
         segment_to_block = {
-            "early": 0,
-            "mid": 1,
-            "late": 2,
+            "r0c0": 0,
+            "r0c1": 1,
+            "r0c2": 2,
         }
         start_block = segment_to_block[segment]
 
@@ -345,20 +345,20 @@ class TransformerHost(nn.Module):
 
         # Segment channel counts for multi-slot support
         # For transformers, all segments have the same embedding dimension
-        # Segments map to layer ranges: early (0-1), mid (2-3), late (4-5)
+        # Segments map to layer ranges: r0c0 (0-1), r0c1 (2-3), r0c2 (4-5)
         self.segment_channels = {
-            "early": n_embd,
-            "mid": n_embd,
-            "late": n_embd,
+            "r0c0": n_embd,
+            "r0c1": n_embd,
+            "r0c2": n_embd,
         }
 
         # Layer range boundaries for segments (layer index where segment ENDS)
-        # For n_layer=6: early=0-1, mid=2-3, late=4-5
+        # For n_layer=6: r0c0=0-1, r0c1=2-3, r0c2=4-5
         third = n_layer // 3
         self._segment_boundaries = {
-            "early": third,           # Layers 0 to third-1
-            "mid": 2 * third,         # Layers third to 2*third-1
-            "late": n_layer,          # Layers 2*third to n_layer-1
+            "r0c0": third,           # Layers 0 to third-1
+            "r0c1": 2 * third,       # Layers third to 2*third-1
+            "r0c2": n_layer,         # Layers 2*third to n_layer-1
         }
 
     @property
@@ -398,7 +398,7 @@ class TransformerHost(nn.Module):
         """Forward from one segment boundary to another.
 
         Args:
-            segment: Target segment (e.g., "early", "mid", "late")
+            segment: Target segment (e.g., "r0c0", "r0c1", "r0c2")
             x: Raw input if from_segment is None (B, T token indices),
                else features at from_segment boundary (B, T, n_embd)
             from_segment: Starting point (None = network input)
@@ -436,7 +436,7 @@ class TransformerHost(nn.Module):
         """Forward from a segment boundary to output logits.
 
         Args:
-            segment: Starting segment name ("early", "mid", or "late")
+            segment: Starting segment ID ("r0c0", "r0c1", or "r0c2")
             h: Hidden states at segment boundary (B, T, n_embd)
 
         Returns:
@@ -483,7 +483,7 @@ class MorphogeneticModel(nn.Module):
     """Model with Kasmina seed slots registered into host injection points.
 
     Multi-slot architecture for managing multiple concurrent seeds at different
-    network segments (early/mid/late).
+    network segments using canonical slot IDs (r0c0, r0c1, r0c2).
     """
 
     def __init__(
@@ -505,14 +505,14 @@ class MorphogeneticModel(nn.Module):
 
         # Create seed slots as ModuleDict for proper submodule registration
         slots_dict = {}
-        for slot_name in slots:
-            if slot_name not in segment_channels:
+        for slot_id in slots:
+            if slot_id not in segment_channels:
                 raise ValueError(
-                    f"Unknown slot: {slot_name}. Available: {list(segment_channels.keys())}"
+                    f"Unknown slot: {slot_id}. Available: {list(segment_channels.keys())}"
                 )
-            slots_dict[slot_name] = SeedSlot(
-                slot_id=slot_name,
-                channels=segment_channels[slot_name],
+            slots_dict[slot_id] = SeedSlot(
+                slot_id=slot_id,
+                channels=segment_channels[slot_id],
                 device=device,
                 task_config=task_config,
                 fast_mode=fast_mode,
@@ -520,7 +520,7 @@ class MorphogeneticModel(nn.Module):
         self.seed_slots = nn.ModuleDict(slots_dict)
 
         # Track slot order for forward pass
-        self._slot_order = ["early", "mid", "late"]
+        self._slot_order = ["r0c0", "r0c1", "r0c2"]
         self._active_slots = [s for s in self._slot_order if s in self.seed_slots]
 
         # Move host to device
@@ -574,7 +574,7 @@ class MorphogeneticModel(nn.Module):
         Args:
             blueprint_id: Blueprint to instantiate (e.g., "norm", "attention")
             seed_id: Unique identifier for the seed
-            slot: Target slot ("early", "mid", "late")
+            slot: Target slot ("r0c0", "r0c1", "r0c2")
             blend_algorithm_id: Blending algorithm ("linear", "sigmoid", "gated")
         """
         if slot not in self.seed_slots:

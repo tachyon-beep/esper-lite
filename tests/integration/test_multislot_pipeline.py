@@ -16,18 +16,18 @@ def test_multislot_model_creation_and_forward():
 
     # Create host and multi-slot model
     host = CNNHost()
-    model = MorphogeneticModel(host, device="cpu", slots=["early", "mid", "late"])
+    model = MorphogeneticModel(host, device="cpu", slots=["r0c0", "r0c1", "r0c2"])
 
     # Verify slots are created
     assert len(model.seed_slots) == 3
-    assert "early" in model.seed_slots
-    assert "mid" in model.seed_slots
-    assert "late" in model.seed_slots
+    assert "r0c0" in model.seed_slots
+    assert "r0c1" in model.seed_slots
+    assert "r0c2" in model.seed_slots
 
     # Verify correct channel dimensions from host
-    assert model.seed_slots["early"].channels == 32
-    assert model.seed_slots["mid"].channels == 64
-    assert model.seed_slots["late"].channels == 128
+    assert model.seed_slots["r0c0"].channels == 32
+    assert model.seed_slots["r0c1"].channels == 64
+    assert model.seed_slots["r0c2"].channels == 128
 
     # Forward pass through model (no seeds yet)
     x = torch.randn(2, 3, 32, 32)
@@ -43,21 +43,21 @@ def test_end_to_end_multislot_lifecycle():
     from esper.kasmina.host import CNNHost, MorphogeneticModel
 
     host = CNNHost()
-    model = MorphogeneticModel(host, device="cpu", slots=["early", "mid", "late"])
+    model = MorphogeneticModel(host, device="cpu", slots=["r0c0", "r0c1", "r0c2"])
 
     # Initially no active seeds
     assert not model.has_active_seed
 
     # Germinate in different slots (use actual available blueprints)
-    model.germinate_seed("conv_light", "seed_early", slot="early")
-    assert model.has_active_seed_in_slot("early")
-    assert not model.has_active_seed_in_slot("mid")
-    assert not model.has_active_seed_in_slot("late")
+    model.germinate_seed("conv_light", "seed_early", slot="r0c0")
+    assert model.has_active_seed_in_slot("r0c0")
+    assert not model.has_active_seed_in_slot("r0c1")
+    assert not model.has_active_seed_in_slot("r0c2")
 
-    model.germinate_seed("attention", "seed_late", slot="late")
-    assert model.has_active_seed_in_slot("early")
-    assert not model.has_active_seed_in_slot("mid")
-    assert model.has_active_seed_in_slot("late")
+    model.germinate_seed("attention", "seed_late", slot="r0c2")
+    assert model.has_active_seed_in_slot("r0c0")
+    assert not model.has_active_seed_in_slot("r0c1")
+    assert model.has_active_seed_in_slot("r0c2")
 
     # Forward pass with active seeds
     x = torch.randn(2, 3, 32, 32)
@@ -68,15 +68,15 @@ def test_end_to_end_multislot_lifecycle():
     assert model.active_seed_params > 0
 
     # Cull a seed
-    model.cull_seed(slot="early")
-    assert not model.has_active_seed_in_slot("early")
-    assert model.has_active_seed_in_slot("late")
+    model.cull_seed(slot="r0c0")
+    assert not model.has_active_seed_in_slot("r0c0")
+    assert model.has_active_seed_in_slot("r0c2")
 
     # Model still works after culling
     out = model(x)
     assert out.shape == (2, 10)
 
     # Cull remaining seed
-    model.cull_seed(slot="late")
+    model.cull_seed(slot="r0c2")
     assert not model.has_active_seed
     assert model.active_seed_params == 0

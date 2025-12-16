@@ -150,7 +150,7 @@ def test_signals_to_features_with_multislot_params():
         signals=MockSignals(),
         slot_reports={},
         use_telemetry=False,
-        slots=["mid"],
+        slots=["r0c1"],
         total_seeds=1,  # NEW param
         max_seeds=3,    # NEW param
     )

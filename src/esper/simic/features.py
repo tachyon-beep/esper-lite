@@ -141,7 +141,7 @@ def obs_to_multislot_features(obs: dict, total_seeds: int = 0, max_seeds: int = 
     # Per-slot features (9 dims per slot, 3 slots = 27 dims)
     # 4 state features + 5 blueprint one-hot
     slot_features = []
-    for slot_id in ['early', 'mid', 'late']:
+    for slot_id in ['r0c0', 'r0c1', 'r0c2']:
         slot = obs.get('slots', {}).get(slot_id, {})
         # State features (4 dims)
         slot_features.extend([

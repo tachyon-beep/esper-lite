@@ -36,7 +36,7 @@ class TestPPOFeatureCompatibility:
         signals.metrics.val_loss = 1.7
 
         # Extract features
-        features = signals_to_features(signals, slot_reports={}, use_telemetry=False, slots=["mid"])
+        features = signals_to_features(signals, slot_reports={}, use_telemetry=False, slots=["r0c1"])
         assert len(features) == MULTISLOT_FEATURE_SIZE, f"Expected {MULTISLOT_FEATURE_SIZE} features, got {len(features)}"
 
         # Create PPO agent with matching dimensions
@@ -69,7 +69,7 @@ class TestPPOFeatureCompatibility:
         signals.metrics.val_accuracy = 70.0
 
         # Extract features with telemetry
-        features = signals_to_features(signals, slot_reports={}, use_telemetry=True, slots=["mid"])
+        features = signals_to_features(signals, slot_reports={}, use_telemetry=True, slots=["r0c1"])
         expected_dim = MULTISLOT_FEATURE_SIZE + SeedTelemetry.feature_dim() * 3
         assert len(features) == expected_dim, f"Expected {expected_dim} features, got {len(features)}"
 
@@ -101,7 +101,7 @@ class TestPPOFeatureCompatibility:
             signals = TrainingSignals()
             signals.metrics.epoch = i
             signals.metrics.val_accuracy = 50.0 + i
-            features = signals_to_features(signals, slot_reports={}, use_telemetry=False, slots=["mid"])
+            features = signals_to_features(signals, slot_reports={}, use_telemetry=False, slots=["r0c1"])
             all_features.append(features)
 
         # Stack into batch
@@ -292,7 +292,7 @@ class TestPPOEndToEnd:
         signals.metrics.plateau_epochs = 3
 
         # Extract features
-        features = signals_to_features(signals, slot_reports={}, use_telemetry=False, slots=["mid"])
+        features = signals_to_features(signals, slot_reports={}, use_telemetry=False, slots=["r0c1"])
 
         # Create agent
         agent = PPOAgent(state_dim=len(features), device='cpu', compile_network=False)
@@ -322,7 +322,7 @@ class TestPPOEndToEnd:
         signals.metrics.val_accuracy = 75.0
 
         # Extract features with telemetry (will be zero-padded)
-        features = signals_to_features(signals, slot_reports={}, use_telemetry=True, slots=["mid"])
+        features = signals_to_features(signals, slot_reports={}, use_telemetry=True, slots=["r0c1"])
         expected_dim = MULTISLOT_FEATURE_SIZE + SeedTelemetry.feature_dim() * 3
         assert len(features) == expected_dim, f"Should have {expected_dim} features with telemetry"
 

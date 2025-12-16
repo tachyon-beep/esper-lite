@@ -45,7 +45,7 @@ class DummyModelWithSlot(nn.Module):
     def __init__(self):
         super().__init__()
         self.linear = nn.Linear(10, 2)
-        self.seed_slots = {"mid": MockSeedSlot()}
+        self.seed_slots = {"r0c1": MockSeedSlot()}
 
     def forward(self, x):
         return self.linear(x)
@@ -72,7 +72,7 @@ class TestValidateWithAttribution:
         assert model.training is True
 
         # Run attribution validation
-        validate_with_attribution(model, testloader, criterion, "cpu", slot="mid")
+        validate_with_attribution(model, testloader, criterion, "cpu", slot="r0c1")
 
         # Model should be back in training mode
         assert model.training is True, (
@@ -95,7 +95,7 @@ class TestValidateWithAttribution:
         model.eval()
         assert model.training is False
 
-        validate_with_attribution(model, testloader, criterion, "cpu", slot="mid")
+        validate_with_attribution(model, testloader, criterion, "cpu", slot="r0c1")
 
         # Model should still be in eval mode
         assert model.training is False, (
@@ -152,12 +152,12 @@ class TestValidateWithAttributionIntegration:
         from esper.kasmina import MorphogeneticModel, CNNHost
 
         host = CNNHost(num_classes=10)
-        model = MorphogeneticModel(host, device="cpu", slots=["mid"])
-        model.germinate_seed("conv_light", "test_seed", slot="mid")
+        model = MorphogeneticModel(host, device="cpu", slots=["r0c1"])
+        model.germinate_seed("conv_light", "test_seed", slot="r0c1")
 
         # Advance to BLENDING stage so alpha > 0
-        model.seed_slots["mid"].state.stage = 4  # SeedStage.BLENDING
-        model.seed_slots["mid"]._alpha = 0.5
+        model.seed_slots["r0c1"].state.stage = 4  # SeedStage.BLENDING
+        model.seed_slots["r0c1"]._alpha = 0.5
 
         return model
 
@@ -177,7 +177,7 @@ class TestValidateWithAttributionIntegration:
         criterion = nn.CrossEntropyLoss()
 
         result = validate_with_attribution(
-            model_with_seed, test_data, criterion, "cpu", slot="mid"
+            model_with_seed, test_data, criterion, "cpu", slot="r0c1"
         )
 
         # Result should have valid structure
@@ -193,7 +193,7 @@ class TestValidateWithAttributionIntegration:
         criterion = nn.CrossEntropyLoss()
 
         result = validate_with_attribution(
-            model_with_seed, test_data, criterion, "cpu", slot="mid"
+            model_with_seed, test_data, criterion, "cpu", slot="r0c1"
         )
 
         # Contribution can be any value (positive = seed helps, negative = seed hurts)
@@ -208,14 +208,14 @@ class TestValidateWithAttributionIntegration:
 
         criterion = nn.CrossEntropyLoss()
 
-        original_alpha = model_with_seed.seed_slots["mid"].alpha
+        original_alpha = model_with_seed.seed_slots["r0c1"].alpha
 
         validate_with_attribution(
-            model_with_seed, test_data, criterion, "cpu", slot="mid"
+            model_with_seed, test_data, criterion, "cpu", slot="r0c1"
         )
 
         # Alpha should be restored after validation
-        assert model_with_seed.seed_slots["mid"].alpha == original_alpha
+        assert model_with_seed.seed_slots["r0c1"].alpha == original_alpha
 
     def test_attribution_with_empty_loader(self):
         """Test attribution handles empty dataloader gracefully."""
@@ -223,10 +223,10 @@ class TestValidateWithAttributionIntegration:
         from esper.kasmina import MorphogeneticModel, CNNHost
 
         host = CNNHost(num_classes=10)
-        model = MorphogeneticModel(host, device="cpu", slots=["mid"])
-        model.germinate_seed("conv_light", "test_seed", slot="mid")
-        model.seed_slots["mid"].state.stage = 4
-        model.seed_slots["mid"]._alpha = 0.5
+        model = MorphogeneticModel(host, device="cpu", slots=["r0c1"])
+        model.germinate_seed("conv_light", "test_seed", slot="r0c1")
+        model.seed_slots["r0c1"].state.stage = 4
+        model.seed_slots["r0c1"]._alpha = 0.5
 
         # Empty dataset
         empty_dataset = TensorDataset(
@@ -237,7 +237,7 @@ class TestValidateWithAttributionIntegration:
 
         criterion = nn.CrossEntropyLoss()
 
-        result = validate_with_attribution(model, empty_loader, criterion, "cpu", slot="mid")
+        result = validate_with_attribution(model, empty_loader, criterion, "cpu", slot="r0c1")
 
         # Should return 0 accuracy for empty loader
         assert result.real_accuracy == 0.0

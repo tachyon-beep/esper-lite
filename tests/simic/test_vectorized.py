@@ -10,7 +10,7 @@ def test_lifecycle_only_keeps_slot_telemetry():
     slot.telemetry_lifecycle_only = False
 
     env_state = Mock()
-    env_state.model = Mock(seed_slots={"mid": slot})
+    env_state.model = Mock(seed_slots={"r0c1": slot})
     env_state.telemetry_cb = Mock()
 
     vectorized._apply_slot_telemetry(
@@ -55,7 +55,7 @@ def test_last_action_event_emitted():
             env_id=0,
             epoch=3,
             factored_action=factored_action,
-            slot_id="r0c1",  # Canonical slot ID (was "mid")
+            slot_id="r0c1",  # Canonical slot ID (was "r0c1")
             masked={"op": False, "slot": False, "blueprint": False, "blend": True},
             success=True,
         )
@@ -108,7 +108,7 @@ def test_counterfactual_unavailable_event():
     vectorized._emit_cf_unavailable(
         hub,
         env_id=0,
-        slot_id="mid",
+        slot_id="r0c1",
         reason="missing_baseline",
     )
     data = hub.emit.call_args[0][0].data

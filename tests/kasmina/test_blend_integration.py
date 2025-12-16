@@ -87,15 +87,15 @@ class TestBlendActionIntegration:
         """Each blend algorithm produces valid alpha schedules for CNN."""
         config = TaskConfig.for_cifar10()
         host = CNNHost(num_classes=10, n_blocks=3)
-        model = MorphogeneticModel(host, device="cpu", slots=["mid"], task_config=config)
+        model = MorphogeneticModel(host, device="cpu", slots=["r0c1"], task_config=config)
 
         model.germinate_seed(
-            "norm", f"test_seed_{algorithm}", slot="mid",
+            "norm", f"test_seed_{algorithm}", slot="r0c1",
             blend_algorithm_id=algorithm,
         )
 
         # Verify blend algorithm stored
-        slot = model.seed_slots["mid"]
+        slot = model.seed_slots["r0c1"]
         assert slot._blend_algorithm_id == algorithm
 
         # Trigger blending
@@ -110,14 +110,14 @@ class TestBlendActionIntegration:
         """Each blend algorithm works for transformer topology."""
         config = TaskConfig.for_tinystories()
         host = TransformerHost(vocab_size=1000, n_layer=2, n_embd=64, n_head=4)
-        model = MorphogeneticModel(host, device="cpu", slots=["mid"], task_config=config)
+        model = MorphogeneticModel(host, device="cpu", slots=["r0c1"], task_config=config)
 
         model.germinate_seed(
-            "norm", f"test_seed_{algorithm}", slot="mid",
+            "norm", f"test_seed_{algorithm}", slot="r0c1",
             blend_algorithm_id=algorithm,
         )
 
-        slot = model.seed_slots["mid"]
+        slot = model.seed_slots["r0c1"]
         slot.start_blending(total_steps=10)
 
         assert slot.alpha_schedule is not None
@@ -127,14 +127,14 @@ class TestBlendActionIntegration:
         """GatedBlend creates learnable gate network for CNN."""
         config = TaskConfig.for_cifar10()
         host = CNNHost(num_classes=10, n_blocks=3)
-        model = MorphogeneticModel(host, device="cpu", slots=["mid"], task_config=config)
+        model = MorphogeneticModel(host, device="cpu", slots=["r0c1"], task_config=config)
 
         model.germinate_seed(
-            "norm", "test_gated", slot="mid",
+            "norm", "test_gated", slot="r0c1",
             blend_algorithm_id="gated",
         )
 
-        slot = model.seed_slots["mid"]
+        slot = model.seed_slots["r0c1"]
         slot.start_blending(total_steps=10)
 
         assert isinstance(slot.alpha_schedule, GatedBlend)
@@ -146,14 +146,14 @@ class TestBlendActionIntegration:
         """GatedBlend creates learnable gate network for transformer."""
         config = TaskConfig.for_tinystories()
         host = TransformerHost(vocab_size=1000, n_layer=2, n_embd=64, n_head=4)
-        model = MorphogeneticModel(host, device="cpu", slots=["mid"], task_config=config)
+        model = MorphogeneticModel(host, device="cpu", slots=["r0c1"], task_config=config)
 
         model.germinate_seed(
-            "norm", "test_gated", slot="mid",
+            "norm", "test_gated", slot="r0c1",
             blend_algorithm_id="gated",
         )
 
-        slot = model.seed_slots["mid"]
+        slot = model.seed_slots["r0c1"]
         slot.start_blending(total_steps=10)
 
         assert isinstance(slot.alpha_schedule, GatedBlend)

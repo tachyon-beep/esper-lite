@@ -8,7 +8,7 @@ from esper.kasmina.host import CNNHost, TransformerHost
 def test_cifar10_spec_builds_model_and_loaders():
     spec = get_task_spec("cifar10")
 
-    model = spec.create_model(device="cpu", slots=["mid"])
+    model = spec.create_model(device="cpu", slots=["r0c1"])
     assert isinstance(model.host, CNNHost)
     assert len(spec.action_enum) == len(BlueprintRegistry.list_for_topology("cnn")) + 3
 
@@ -22,7 +22,7 @@ def test_cifar10_spec_builds_model_and_loaders():
 def test_tinystories_spec_builds_model_and_loaders():
     spec = get_task_spec("tinystories")
 
-    model = spec.create_model(device="cpu", slots=["mid"])
+    model = spec.create_model(device="cpu", slots=["r0c1"])
     assert isinstance(model.host, TransformerHost)
     assert len(spec.action_enum) == len(BlueprintRegistry.list_for_topology("transformer")) + 3
 

@@ -278,7 +278,7 @@ def test_seed_state_report_includes_telemetry_fields():
     state = SeedState(
         seed_id="seed-1",
         blueprint_id="bp-1",
-        slot_id="mid",
+        slot_id="r0c1",
         stage=SeedStage.TRAINING,
         metrics=metrics,
     )
@@ -339,21 +339,21 @@ def test_morphogenetic_model_to_device_consistency():
     from esper.kasmina.host import CNNHost, MorphogeneticModel
 
     host = CNNHost(num_classes=10)
-    model = MorphogeneticModel(host, device="cpu", slots=["mid"])
+    model = MorphogeneticModel(host, device="cpu", slots=["r0c1"])
 
     # Germinate a seed
-    model.germinate_seed("norm", "test-seed", slot="mid")
-    assert model.seed_slots["mid"].seed is not None
+    model.germinate_seed("norm", "test-seed", slot="r0c1")
+    assert model.seed_slots["r0c1"].seed is not None
 
     # Transfer to CPU (no-op but exercises the code path)
     model = model.to("cpu")
 
     # Verify consistency
     assert str(model._device) == "cpu"
-    assert model.seed_slots["mid"].device == torch.device("cpu")
+    assert model.seed_slots["r0c1"].device == torch.device("cpu")
 
     # Verify seed is on correct device
-    seed_param = next(model.seed_slots["mid"].seed.parameters())
+    seed_param = next(model.seed_slots["r0c1"].seed.parameters())
     assert seed_param.device == torch.device("cpu")
 
 

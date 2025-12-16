@@ -60,7 +60,7 @@ class TestSparseTrainingSmoke:
                 device="cpu",
                 num_workers=0,
                 reward_mode="sparse",
-                slots=["mid"],
+                slots=["r0c1"],
                 use_telemetry=False,
             )
 
@@ -83,7 +83,7 @@ class TestSparseTrainingSmoke:
                 device="cpu",
                 num_workers=0,
                 reward_mode="minimal",
-                slots=["mid"],
+                slots=["r0c1"],
                 use_telemetry=False,
             )
 

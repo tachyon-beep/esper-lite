@@ -11,9 +11,9 @@ def test_host_segment_channels():
 
     # Should expose channels at each injection point (access directly - AttributeError if missing)
     assert host.segment_channels == {
-        "early": 32,   # After block1
-        "mid": 64,     # After block2
-        "late": 128,   # After block3
+        "r0c0": 32,   # After block1
+        "r0c1": 64,     # After block2
+        "r0c2": 128,   # After block3
     }
 
 
@@ -25,17 +25,17 @@ def test_host_forward_segments():
     x = torch.randn(2, 3, 32, 32)
 
     # Forward to each segment
-    x_early = host.forward_to_segment("early", x)
+    x_early = host.forward_to_segment("r0c0", x)
     assert x_early.shape == (2, 32, 16, 16)  # After block1 + pool
 
-    x_mid = host.forward_to_segment("mid", x)
+    x_mid = host.forward_to_segment("r0c1", x)
     assert x_mid.shape == (2, 64, 8, 8)  # After block2 + pool
 
-    x_late = host.forward_to_segment("late", x)
+    x_late = host.forward_to_segment("r0c2", x)
     assert x_late.shape == (2, 128, 4, 4)  # After block3 + pool
 
     # Forward from segment to output
-    out = host.forward_from_segment("late", x_late)
+    out = host.forward_from_segment("r0c2", x_late)
     assert out.shape == (2, 10)
 
 
@@ -47,8 +47,8 @@ def test_forward_from_early_segment():
     x = torch.randn(2, 3, 32, 32)
 
     # Forward to early, then from early to output
-    x_early = host.forward_to_segment("early", x)
-    out = host.forward_from_segment("early", x_early)
+    x_early = host.forward_to_segment("r0c0", x)
+    out = host.forward_from_segment("r0c0", x_early)
     assert out.shape == (2, 10)
 
 
@@ -60,8 +60,8 @@ def test_forward_from_mid_segment():
     x = torch.randn(2, 3, 32, 32)
 
     # Forward to mid, then from mid to output
-    x_mid = host.forward_to_segment("mid", x)
-    out = host.forward_from_segment("mid", x_mid)
+    x_mid = host.forward_to_segment("r0c1", x)
+    out = host.forward_from_segment("r0c1", x_mid)
     assert out.shape == (2, 10)
 
 
@@ -73,7 +73,7 @@ def test_segment_channels_match_injection_points():
 
     # Both should expose the same channel information
     assert "block2_post" in host.injection_points
-    assert host.injection_points["block2_post"] == host.segment_channels["mid"]
+    assert host.injection_points["block2_post"] == host.segment_channels["r0c1"]
 
 
 def test_multislot_model_creation():
@@ -81,17 +81,17 @@ def test_multislot_model_creation():
     from esper.kasmina.host import CNNHost, MorphogeneticModel
 
     host = CNNHost()
-    model = MorphogeneticModel(host, device="cpu", slots=["early", "mid", "late"])
+    model = MorphogeneticModel(host, device="cpu", slots=["r0c0", "r0c1", "r0c2"])
 
     assert len(model.seed_slots) == 3
-    assert "early" in model.seed_slots
-    assert "mid" in model.seed_slots
-    assert "late" in model.seed_slots
+    assert "r0c0" in model.seed_slots
+    assert "r0c1" in model.seed_slots
+    assert "r0c2" in model.seed_slots
 
     # Each slot should have correct channels
-    assert model.seed_slots["early"].channels == 32
-    assert model.seed_slots["mid"].channels == 64
-    assert model.seed_slots["late"].channels == 128
+    assert model.seed_slots["r0c0"].channels == 32
+    assert model.seed_slots["r0c1"].channels == 64
+    assert model.seed_slots["r0c2"].channels == 128
 
 
 def test_multislot_forward_pass():
@@ -100,7 +100,7 @@ def test_multislot_forward_pass():
     import torch
 
     host = CNNHost()
-    model = MorphogeneticModel(host, device="cpu", slots=["early", "mid", "late"])
+    model = MorphogeneticModel(host, device="cpu", slots=["r0c0", "r0c1", "r0c2"])
 
     x = torch.randn(2, 3, 32, 32)
     out = model(x)
@@ -112,14 +112,14 @@ def test_multislot_germinate_specific_slot():
     from esper.kasmina.host import CNNHost, MorphogeneticModel
 
     host = CNNHost()
-    model = MorphogeneticModel(host, device="cpu", slots=["early", "mid", "late"])
+    model = MorphogeneticModel(host, device="cpu", slots=["r0c0", "r0c1", "r0c2"])
 
     # Germinate in mid slot (use actual blueprint name)
-    model.germinate_seed("conv_light", "test_seed", slot="mid")
+    model.germinate_seed("conv_light", "test_seed", slot="r0c1")
 
-    assert model.seed_slots["mid"].is_active
-    assert not model.seed_slots["early"].is_active
-    assert not model.seed_slots["late"].is_active
+    assert model.seed_slots["r0c1"].is_active
+    assert not model.seed_slots["r0c0"].is_active
+    assert not model.seed_slots["r0c2"].is_active
 
 
 def test_transformer_forward_matches_host():
@@ -130,7 +130,7 @@ def test_transformer_forward_matches_host():
     # Create host and model with multiple slots
     host = TransformerHost(vocab_size=1000, n_embd=64, n_head=2, n_layer=6, block_size=32, dropout=0.0)
     host.eval()
-    model = MorphogeneticModel(host, device="cpu", slots=["early", "mid", "late"])
+    model = MorphogeneticModel(host, device="cpu", slots=["r0c0", "r0c1", "r0c2"])
     model.eval()
 
     # Test input
@@ -154,7 +154,7 @@ def test_transformer_single_slot_forward():
     # Create host and model with only mid slot
     host = TransformerHost(vocab_size=1000, n_embd=64, n_head=2, n_layer=6, block_size=32, dropout=0.0)
     host.eval()
-    model = MorphogeneticModel(host, device="cpu", slots=["mid"])
+    model = MorphogeneticModel(host, device="cpu", slots=["r0c1"])
     model.eval()
 
     # Test input

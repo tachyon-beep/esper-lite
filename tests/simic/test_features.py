@@ -24,9 +24,9 @@ def test_multislot_features():
 
         # Per-slot features
         'slots': {
-            'early': {'is_active': False, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0},
-            'mid': {'is_active': True, 'stage': 3, 'alpha': 0.5, 'improvement': 2.5},
-            'late': {'is_active': False, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0},
+            'r0c0': {'is_active': False, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0},
+            'r0c1': {'is_active': True, 'stage': 3, 'alpha': 0.5, 'improvement': 2.5},
+            'r0c2': {'is_active': False, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0},
         },
     }
 
@@ -39,12 +39,12 @@ def test_multislot_features():
     # Check per-slot features are included
     # After base features, we have slot features (9 dims each)
     slot_start = 23
-    # early slot: is_active=0, stage=0, alpha=0, improvement=0, blueprint=[0,0,0,0,0]
+    # r0c0 slot: is_active=0, stage=0, alpha=0, improvement=0, blueprint=[0,0,0,0,0]
     assert features[slot_start:slot_start+4] == [0.0, 0.0, 0.0, 0.0]
     assert features[slot_start+4:slot_start+9] == [0.0, 0.0, 0.0, 0.0, 0.0]  # no blueprint
-    # mid slot: is_active=1, stage=3, alpha=0.5, improvement=2.5, blueprint=[0,0,0,0,0] (none specified)
-    mid_start = slot_start + 9
-    assert features[mid_start:mid_start+4] == [1.0, 3.0, 0.5, 2.5]
+    # r0c1 slot: is_active=1, stage=3, alpha=0.5, improvement=2.5, blueprint=[0,0,0,0,0] (none specified)
+    r0c1_start = slot_start + 9
+    assert features[r0c1_start:r0c1_start+4] == [1.0, 3.0, 0.5, 2.5]
 
 
 def test_multislot_features_normalized_values():
@@ -209,51 +209,51 @@ def test_blueprint_one_hot_encoding():
         'accuracy_history_5': [65.0, 66.0, 67.0, 68.0, 68.0],
     }
 
-    # Test with conv_light in early slot
+    # Test with conv_light in r0c0 slot
     obs = {**base_obs, 'slots': {
-        'early': {'is_active': 1.0, 'stage': 2, 'alpha': 0.3, 'improvement': 1.5, 'blueprint_id': 'conv_light'},
-        'mid': {'is_active': 0.0, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0, 'blueprint_id': None},
-        'late': {'is_active': 0.0, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0, 'blueprint_id': None},
+        'r0c0': {'is_active': 1.0, 'stage': 2, 'alpha': 0.3, 'improvement': 1.5, 'blueprint_id': 'conv_light'},
+        'r0c1': {'is_active': 0.0, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0, 'blueprint_id': None},
+        'r0c2': {'is_active': 0.0, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0, 'blueprint_id': None},
     }}
     features = obs_to_multislot_features(obs)
 
     # Structure: 23 base + 3 slots * 9 features (4 state + 5 blueprint one-hot)
-    # Early slot starts at index 23
+    # r0c0 slot starts at index 23
     # Blueprint one-hot is at indices 27-31 (after 4 state features)
-    early_blueprint = features[27:32]  # conv_light = index 1
-    assert early_blueprint == [0.0, 1.0, 0.0, 0.0, 0.0], f"conv_light should be [0,1,0,0,0], got {early_blueprint}"
+    r0c0_blueprint = features[27:32]  # conv_light = index 1
+    assert r0c0_blueprint == [0.0, 1.0, 0.0, 0.0, 0.0], f"conv_light should be [0,1,0,0,0], got {r0c0_blueprint}"
 
-    # Test with attention in mid slot
+    # Test with attention in r0c1 slot
     obs = {**base_obs, 'slots': {
-        'early': {'is_active': 0.0, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0, 'blueprint_id': None},
-        'mid': {'is_active': 1.0, 'stage': 3, 'alpha': 0.7, 'improvement': 2.0, 'blueprint_id': 'attention'},
-        'late': {'is_active': 0.0, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0, 'blueprint_id': None},
+        'r0c0': {'is_active': 0.0, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0, 'blueprint_id': None},
+        'r0c1': {'is_active': 1.0, 'stage': 3, 'alpha': 0.7, 'improvement': 2.0, 'blueprint_id': 'attention'},
+        'r0c2': {'is_active': 0.0, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0, 'blueprint_id': None},
     }}
     features = obs_to_multislot_features(obs)
 
-    # Mid slot starts at index 23 + 9 = 32
+    # r0c1 slot starts at index 23 + 9 = 32
     # Blueprint one-hot is at indices 36-40
-    mid_blueprint = features[36:41]  # attention = index 2
-    assert mid_blueprint == [0.0, 0.0, 1.0, 0.0, 0.0], f"attention should be [0,0,1,0,0], got {mid_blueprint}"
+    r0c1_blueprint = features[36:41]  # attention = index 2
+    assert r0c1_blueprint == [0.0, 0.0, 1.0, 0.0, 0.0], f"attention should be [0,0,1,0,0], got {r0c1_blueprint}"
 
-    # Test with noop in late slot
+    # Test with noop in r0c2 slot
     obs = {**base_obs, 'slots': {
-        'early': {'is_active': 0.0, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0, 'blueprint_id': None},
-        'mid': {'is_active': 0.0, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0, 'blueprint_id': None},
-        'late': {'is_active': 1.0, 'stage': 1, 'alpha': 0.1, 'improvement': 0.5, 'blueprint_id': 'noop'},
+        'r0c0': {'is_active': 0.0, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0, 'blueprint_id': None},
+        'r0c1': {'is_active': 0.0, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0, 'blueprint_id': None},
+        'r0c2': {'is_active': 1.0, 'stage': 1, 'alpha': 0.1, 'improvement': 0.5, 'blueprint_id': 'noop'},
     }}
     features = obs_to_multislot_features(obs)
 
-    # Late slot starts at index 23 + 18 = 41
+    # r0c2 slot starts at index 23 + 18 = 41
     # Blueprint one-hot is at indices 45-49
-    late_blueprint = features[45:50]  # noop = index 0
-    assert late_blueprint == [1.0, 0.0, 0.0, 0.0, 0.0], f"noop should be [1,0,0,0,0], got {late_blueprint}"
+    r0c2_blueprint = features[45:50]  # noop = index 0
+    assert r0c2_blueprint == [1.0, 0.0, 0.0, 0.0, 0.0], f"noop should be [1,0,0,0,0], got {r0c2_blueprint}"
 
     # Test with no blueprint (inactive slot) - should be all zeros
     obs = {**base_obs, 'slots': {
-        'early': {'is_active': 0.0, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0, 'blueprint_id': None},
-        'mid': {'is_active': 0.0, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0},  # Missing blueprint_id key
-        'late': {'is_active': 0.0, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0, 'blueprint_id': None},
+        'r0c0': {'is_active': 0.0, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0, 'blueprint_id': None},
+        'r0c1': {'is_active': 0.0, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0},  # Missing blueprint_id key
+        'r0c2': {'is_active': 0.0, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0, 'blueprint_id': None},
     }}
     features = obs_to_multislot_features(obs)
 
