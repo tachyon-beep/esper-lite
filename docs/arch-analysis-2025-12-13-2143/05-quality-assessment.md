@@ -100,7 +100,7 @@ The esper-lite codebase demonstrates **high overall quality** with mature engine
 2. **Dataclass Usage**
    - `@dataclass(slots=True)` for memory efficiency
    - Frozen dataclasses for immutability where appropriate
-   - NamedTuples for hot-path data (FastTrainingSignals)
+   - Allocation-aware hot-path feature extraction (`simic.features.obs_to_multislot_features`)
 
 3. **Protocol/ABC Patterns**
    - `HostProtocol` for model abstraction

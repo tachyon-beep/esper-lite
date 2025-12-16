@@ -3,15 +3,15 @@
 - **Title:** Expose `seed_gradient_ratio` in observation space for G2 gate predictability
 - **Problem Statement:** PPO policy cannot directly observe the gradient health signal (`seed_gradient_ratio`) used by G2 quality gate; expert review flagged partial observability—agent can't anticipate G2 outcomes.
 - **Goal:** Add a normalized `seed_gradient_ratio` feature to Leyline signals/features so Tamiyo’s policy can learn when seeds are likely to pass G2, improving decision quality on blending vs. continued training.
-- **Scope:** Leyline signals (`TrainingSignals`/`FastTrainingSignals`), Simic feature extraction; PPO path only. No changes to heuristic policy logic required beyond accepting the new feature dimension.
+- **Scope:** Leyline signals (`TrainingSignals`/`TrainingMetrics`), Simic feature extraction; PPO path only. No changes to heuristic policy logic required beyond accepting the new feature dimension.
 - **Non-Goals:** No change to gate logic or thresholds; no new telemetry outputs; no host model alterations.
 - **Requirements:**
-  - Include `seed_gradient_ratio` in `TrainingSignals` and `FastTrainingSignals`.
+  - Include `seed_gradient_ratio` in the PPO observation (multi-slot features), sourced from the per-slot seed state.
   - Normalize/clamp to a stable range (e.g., [-2, 2] → [-1, 1]) consistent with other features.
   - Update `signals_to_features` and feature size constants; adjust network input dims and buffers accordingly.
-  - Keep backward compatibility for stored telemetry by providing sensible defaults.
+  - No backwards compatibility shims: update all call sites; old checkpoints that assume prior input dims are invalid.
 - **Stakeholders/Owners:** Simic/Leyline maintainers; RL policy owners.
-- **Design Sketch:** Thread an optional float through signals; clamp in `to_features`; bump `MULTISLOT_FEATURE_SIZE` and associated buffer shapes; document in feature map comments.
+- **Design Sketch:** Thread a per-slot float through `signals_to_features`/slot reports; clamp in `obs_to_multislot_features`; bump `MULTISLOT_FEATURE_SIZE` and associated buffer shapes; document in feature map comments.
 - **Dependencies/Risks:** Input-dim change requires regenerating or carefully loading old checkpoints; risk of stale feature indices if masks aren’t updated; need to ensure SharedBatchIterator batching still aligns.
 - **Telemetry Needs:** Optional: emit the normalized value in DEBUG telemetry for validation.
 - **Acceptance Criteria:**
@@ -19,6 +19,7 @@
   - PPO training runs without shape errors; policy sees the new feature.
   - Quick ablation: PPO with new feature matches baseline accuracy in a short run; longer run shows improved G2 pass prediction in telemetry.
 - **Rollout/Backout:** Gate behind minor version flag if needed; can noop by zeroing the feature while keeping shape stable for rollback.
+- **Rollout/Backout:** Breaking change: bump observation dimension and update all call sites in one commit; rollback by reverting the change.
 - **Validation Plan:** Run `PYTHONPATH=src uv run pytest tests/simic -k features` (or add a new targeted test); smoke `python -m esper.scripts.train ppo --episodes 1 --n-envs 2 --max-epochs 1` to confirm training with updated input dim.
 - **Status:** Draft
 - **Links:** Expert review partial observability note (G2 gate), `src/esper/simic/features.py`, `src/esper/leyline/signals.py`

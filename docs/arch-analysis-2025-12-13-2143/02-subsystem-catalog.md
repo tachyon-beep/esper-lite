@@ -34,7 +34,7 @@
 | File | Responsibility | LOC |
 |------|----------------|-----|
 | `stages.py` | SeedStage enum, valid transitions, risk levels | 123 |
-| `signals.py` | FastTrainingSignals (NamedTuple), TrainingSignals (dataclass) | 291 |
+| `signals.py` | TrainingSignals/TrainingMetrics contracts (dataclasses) | 77 |
 | `schemas.py` | AdaptationCommand, GateResult, BlueprintProtocol | 147 |
 | `factored_actions.py` | FactoredAction (4-head action space for PPO) | 137 |
 | `reports.py` | SeedMetrics, SeedStateReport, FieldReport | 127 |
@@ -42,8 +42,8 @@
 
 ### Design Patterns
 - **Zero external dependencies** (stdlib only)
-- **Immutability principle** (frozen dataclasses, NamedTuples)
-- **Two-tier signals** (FastTrainingSignals for hot path, TrainingSignals for context)
+- **Immutability principle** (frozen dataclasses where appropriate)
+- **Structured signal contracts** (`TrainingSignals`; PPO features extracted in `simic/features.py`)
 - **Enum-heavy** for type safety
 
 ### Dependencies
@@ -310,7 +310,7 @@ The dependency graph is strictly acyclic:
 - **Scripts** is the top-level orchestrator
 
 ### Performance Optimizations
-1. **FastTrainingSignals** (NamedTuple for zero GC pressure)
+1. **Hot-path feature extraction** (`simic.features.obs_to_multislot_features` with fixed layout)
 2. **SharedBatchIterator** (eliminates N×M DataLoader worker overhead)
 3. **torch.compile()** on networks and training steps
 4. **CUDA streams** for async environment execution

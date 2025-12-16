@@ -136,10 +136,10 @@ Layer 0: Leyline (Contracts), Utils (Data)
 **Why:** Ensures seeds meet measurable criteria before promotion
 **Trade-off:** May reject viable seeds that don't fit gate criteria
 
-### Decision 5: FastTrainingSignals
-**What:** NamedTuple for hot-path observation data
-**Why:** Zero GC pressure in tight training loops
-**Trade-off:** Less flexibility than dataclass
+### Decision 5: Multi-slot PPO Observation (V4)
+**What:** Fixed-layout multi-slot feature vector (base + per-slot blueprint one-hot; optional per-slot telemetry padding)
+**Why:** Single observation path with explicit indexing documented in `simic/features.py`
+**Trade-off:** Input-dim/layout changes require updating buffers and network shapes
 
 ---
 

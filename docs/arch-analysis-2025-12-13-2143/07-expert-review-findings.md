@@ -120,23 +120,22 @@ The esper-lite codebase demonstrates **mature, production-quality implementation
 
 **Overall Assessment: WELL-DESIGNED FOR RL**
 
-#### Observation Space (35 features)
-- Good coverage: loss trends, accuracy trends, seed state, host dynamics
-- FastTrainingSignals (NamedTuple) for zero GC pressure - excellent
+#### Observation Space (V4 multislot features)
+- Base features (50): training state + per-slot state + per-slot blueprint one-hot
+- With telemetry enabled: + 3 slots × `SeedTelemetry.feature_dim()` (10) = 80 total
+- Hot-path extraction: `simic.features.obs_to_multislot_features` + `simic.ppo.signals_to_features`
 
 #### Issues Found
 
 | Issue | Location | Severity | Description |
 |-------|----------|----------|-------------|
-| Counterfactual lacks clamping | signals.py:152 | HIGH | No symmetrical clamp unlike host_grad_norm |
-| Blueprint one-hot unclear | signals.py:75-80 | MEDIUM | Information leak or dead features? |
-| Infinity initialization | signals.py:164 | MEDIUM | best_val_loss=inf needs better handling |
+| Observation normalization for per-slot improvement | simic/features.py | HIGH | Per-slot improvement/counterfactual is currently unnormalized; scale/clamp for stable PPO learning |
+| Blueprint mapping contract | simic/features.py | MEDIUM | Ensure `blueprint_id` values match the mapping used for one-hot encoding |
 | SHADOWING deprecated | stages.py:48 | LOW | Violates no-legacy policy |
 
 #### Recommendations
-1. Add symmetric clamping: `max(-10.0, min(10.0, seed_counterfactual)) / 10.0`
-2. Document counterfactual baseline definition
-3. Initialize best_val_loss to reasonable max (e.g., 10.0) instead of inf
+1. Normalize/clamp per-slot improvement/counterfactual features to a stable range and document units
+2. Document counterfactual baseline definition and its expected magnitude
 
 ---
 

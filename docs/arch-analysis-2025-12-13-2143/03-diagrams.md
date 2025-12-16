@@ -342,8 +342,8 @@ flowchart LR
     end
 
     subgraph observation["Observation Pipeline"]
-        signals[FastTrainingSignals<br/>from Tolaria]
-        features[features.py<br/>35-dim extraction]
+        signals[TrainingSignals + per-slot reports<br/>from Tamiyo/Tolaria]
+        features[simic/features.py<br/>50-dim base (+ telemetry)]
         obs[Observation Tensor]
     end
 

@@ -107,18 +107,15 @@ Here is my technical review of the invisible substrate.
 **The Hot vs. Cold Path Distinction**
 This is the strongest design choice in the file. You clearly distinguish between:
 
-1. **The Hot Path (`signals.py`):** Used inside the PPO inner loop.
-      * Uses `NamedTuple` (`FastTrainingSignals`) instead of `dataclass`.
-      * **Why this wins:** `NamedTuple`s are treated as simple tuples by the Python interpreter (low memory overhead, faster access). `dataclasses` generate `__dict__` structures which create Garbage Collection (GC) pressure. In an RL loop running millions of steps, avoiding GC pauses is critical.
+1. **The Hot Path (`simic/features.py`):** Used inside the PPO inner loop.
+      * Uses a small, stdlib-only feature extractor (`obs_to_multislot_features`) with a fixed, documented layout.
+      * **Why this wins:** Keeping the inner loop dependency-light and allocation-aware prevents avoidable overhead in vectorized RL runs.
 2. **The Cold Path (`reports.py`):** Used for logging, dashboards, and debugging.
       * Uses `dataclass(slots=True)`.
       * Prioritizes structure, readability, and type safety over raw access speed.
 
-**The Tensor Schema Strategy**
-`TensorSchema` in `signals.py` is a brilliant move for maintainability.
-
-* **The Problem:** In most RL code, the "observation vector" is a mystery bag of floats. Debugging why `obs[14]` is `NaN` usually involves counting indices manually.
-* **Your Solution:** `TRAIN_LOSS = 2`, `LOSS_HIST_0 = 11`. You have semantic aliases for every tensor index. This makes the eventual PPO model code readable: `obs[:, TensorSchema.TRAIN_LOSS]`.
+**The Explicit Feature Layout**
+The PPO observation layout is documented directly in `obs_to_multislot_features`, guarded by `MULTISLOT_FEATURE_SIZE`, and validated by unit tests that assert shape and per-slot telemetry alignment.
 
 ### 2\. The Lifecycle State Machine
 
@@ -133,29 +130,11 @@ In `VALID_TRANSITIONS`, you allow `PROBATIONARY -> CULLED`.
 
 #### A. The "Magic Number" Risk in Signals
 
-In `signals.py`:
+In `simic/features.py`, the base observation dimension is defined by `MULTISLOT_FEATURE_SIZE` and the layout is documented inline.
 
-```python
-TENSOR_SCHEMA_SIZE = 27
-```
+**Risk:** Any drift between (a) the documented layout, (b) the constant(s), and (c) downstream buffer/network shapes can lead to silent misalignment.
 
-And inside `FastTrainingSignals.to_vector()`:
-
-```python
-return [ ... ] # A manually constructed list
-```
-
-**Risk:** There is no compile-time guarantee that the list returned by `to_vector()` has exactly 27 elements. If you add a field to `FastTrainingSignals` and forget to update `TENSOR_SCHEMA_SIZE` or the `TensorSchema` Enum, your neural network input shape will mismatch, causing a crash (best case) or silent tensor misalignment (worst case).
-
-**Recommendation:** Add a runtime safety check or a unit test that enforces this:
-
-```python
-# In a test file
-def test_schema_integrity():
-    dummy = FastTrainingSignals.empty()
-    vec = dummy.to_vector()
-    assert len(vec) == TENSOR_SCHEMA_SIZE, f"Schema mismatch: Expected {TENSOR_SCHEMA_SIZE}, got {len(vec)}"
-```
+**Recommendation:** Keep a small unit test that asserts exact feature length and verifies per-slot telemetry slices align to `[early][mid][late]`.
 
 #### B. Serialization Budgets
 
@@ -181,19 +160,7 @@ def create_module(self, in_channels: int, **kwargs) -> Any: ...
 ### 4\. Refactoring Suggestions
 
 **1. Optimization for the RL Loop**
-In `FastTrainingSignals.to_vector`, you currently allocate a new list `[]` every step.
-
-```python
-# Current
-return [float(self.epoch), ...]
-
-# Faster (Pre-allocation friendly)
-def write_to_buffer(self, buffer: np.ndarray | torch.Tensor, offset: int = 0):
-    buffer[offset + TensorSchema.EPOCH] = self.epoch
-    # ... direct writes
-```
-
-*Why:* For high-frequency PPO, directly writing into the PyTorch tensor memory block avoids the overhead of `List -> Tensor` conversion.
+The current extractor builds Python lists, which is fine for correctness. If PPO throughput becomes a bottleneck, consider writing features directly into the pre-allocated rollout buffer tensor (using the fixed offsets documented in `obs_to_multislot_features`) to avoid Python list allocation and conversion overhead.
 
 **2. Versioning the Schema**
 You have `LEYLINE_VERSION = "0.2.0"`.
@@ -205,7 +172,7 @@ Leyline is a solid foundation. It feels "Corporate Grade" in the best way—safe
 
 **Strengths:**
 
-* **TensorSchema:** Solves the "what is index 5?" problem in RL.
+* **Explicit feature layout:** Solves the "what is index 5?" problem in RL.
 * **Performance Awareness:** Clear separation of logging data vs. training data.
 * **Rich Lifecycle:** The seed stages (Shadowing, Probation) enable complex evolutionary strategies.
 
