@@ -11,6 +11,7 @@ import torch
 import torch.nn as nn
 
 from esper.kasmina.host import CNNHost, TransformerHost, MorphogeneticModel
+from esper.leyline import InjectionSpec
 
 
 # =============================================================================
@@ -261,3 +262,69 @@ def test_transformer_single_slot_forward():
     # Should match exactly - all layers must be processed
     assert torch.allclose(host_out, model_out, atol=1e-6), \
         f"Outputs differ: max diff = {(host_out - model_out).abs().max().item()}"
+
+
+# =============================================================================
+# CNNHost Dynamic Injection Specs Tests
+# =============================================================================
+
+
+class TestCNNHostInjectionSpecs:
+    """Test CNNHost.injection_specs() method for dynamic slot discovery."""
+
+    def test_default_3_block_has_3_specs(self):
+        """Default 3-block CNNHost should return 3 injection specs."""
+        host = CNNHost(n_blocks=3)
+        specs = host.injection_specs()
+        assert len(specs) == 3
+        assert all(isinstance(s, InjectionSpec) for s in specs)
+
+    def test_specs_have_correct_slot_ids(self):
+        """Specs should have canonical slot IDs in order."""
+        host = CNNHost(n_blocks=3)
+        specs = host.injection_specs()
+        slot_ids = [s.slot_id for s in specs]
+        assert slot_ids == ["r0c0", "r0c1", "r0c2"]
+
+    def test_specs_have_increasing_positions(self):
+        """Specs should have increasing positions from 0 to 1."""
+        host = CNNHost(n_blocks=3)
+        specs = host.injection_specs()
+        positions = [s.position for s in specs]
+        assert positions == sorted(positions)
+        assert all(0 < p <= 1.0 for p in positions)
+
+    def test_specs_have_correct_channels(self):
+        """Specs should reflect actual block channel counts."""
+        host = CNNHost(n_blocks=3, base_channels=32)
+        specs = host.injection_specs()
+        # Channels double each block: 32, 64, 128
+        channels = [s.channels for s in specs]
+        assert channels == [32, 64, 128]
+
+    def test_5_block_host_has_5_specs(self):
+        """5-block CNNHost should return 5 injection specs."""
+        host = CNNHost(n_blocks=5, base_channels=16)
+        specs = host.injection_specs()
+        assert len(specs) == 5
+        slot_ids = [s.slot_id for s in specs]
+        assert slot_ids == ["r0c0", "r0c1", "r0c2", "r0c3", "r0c4"]
+
+    def test_specs_layer_ranges(self):
+        """Each spec should have correct layer range."""
+        host = CNNHost(n_blocks=3)
+        specs = host.injection_specs()
+        # Each spec covers one block
+        assert specs[0].layer_range == (0, 1)
+        assert specs[1].layer_range == (1, 2)
+        assert specs[2].layer_range == (2, 3)
+
+    def test_specs_positions_match_network_depth(self):
+        """Positions should be evenly distributed across network depth."""
+        host = CNNHost(n_blocks=3)
+        specs = host.injection_specs()
+        # For 3 blocks: positions should be 1/3, 2/3, 3/3
+        positions = [s.position for s in specs]
+        assert positions[0] == 1/3
+        assert positions[1] == 2/3
+        assert positions[2] == 1.0

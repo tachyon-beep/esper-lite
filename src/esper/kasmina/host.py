@@ -78,20 +78,31 @@ class CNNHost(nn.Module):
         # Classifier maps final channels → logits
         self.classifier = nn.Linear(in_c, num_classes)
 
-        # Segment channel counts for multi-slot support
-        # Map canonical slot IDs to their channel dimensions at injection points
-        # Requires at least 3 blocks for full r0c0/r0c1/r0c2 segment support
-        if n_blocks >= 3:
-            self.segment_channels = {
-                "r0c0": self.blocks[0].conv.out_channels,    # After block1 (32 by default)
-                "r0c1": self.blocks[1].conv.out_channels,    # After block2 (64 by default)
-                "r0c2": self.blocks[2].conv.out_channels,    # After block3 (128 by default)
-            }
-        else:
-            # Fallback for shallow networks - only expose available segments
-            self.segment_channels = {
-                f"r0c{i}": self.blocks[i].conv.out_channels for i in range(n_blocks)
-            }
+    def injection_specs(self) -> list["InjectionSpec"]:
+        """Return available injection points as InjectionSpec objects.
+
+        Returns:
+            List of InjectionSpec, one per block, sorted by network position.
+        """
+        from esper.leyline import InjectionSpec
+        from esper.leyline.slot_id import format_slot_id
+
+        specs = []
+        for i in range(self.n_blocks):
+            specs.append(
+                InjectionSpec(
+                    slot_id=format_slot_id(0, i),
+                    channels=self.blocks[i].conv.out_channels,
+                    position=(i + 1) / self.n_blocks,
+                    layer_range=(i, i + 1),
+                )
+            )
+        return specs
+
+    @property
+    def segment_channels(self) -> dict[str, int]:
+        """Map of slot_id -> channel dimension (derived from injection_specs)."""
+        return {spec.slot_id: spec.channels for spec in self.injection_specs()}
 
     @property
     @override
