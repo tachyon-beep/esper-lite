@@ -178,7 +178,7 @@ class TelemetryConfig(BaseModel):
 
     def feature_count_estimate(self) -> int:
         """Estimate total feature count for this configuration."""
-        count = 5  # Base epoch snapshot scalars (epoch, train_loss, val_loss, val_accuracy, train_val_gap)
+        count = 50  # V4 base observation dims (simic.features.MULTISLOT_FEATURE_SIZE)
 
         if self.gradients.enabled:
             # Assume ~4 tracked layers, 3 stats each

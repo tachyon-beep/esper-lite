@@ -63,7 +63,6 @@ class TrainingSignals:
     seed_epochs_in_stage: int = 0
     seed_alpha: float = 0.0
     seed_improvement: float = 0.0
-    seed_counterfactual: float = 0.0
 
     # Resource state
     gpu_memory_used: float = 0.0  # GB

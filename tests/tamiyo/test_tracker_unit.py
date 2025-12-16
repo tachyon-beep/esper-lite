@@ -30,35 +30,6 @@ class TestSignalTrackerUpdate:
         assert signals.metrics.train_accuracy == 85.0
         assert signals.metrics.val_accuracy == 83.0
 
-    def test_update_populates_seed_counterfactual_when_available(self, signal_tracker, mock_seed_factory):
-        """Should expose counterfactual contribution from the summary seed."""
-        from esper.leyline import SeedStage
-
-        seed_without_counterfactual = mock_seed_factory(
-            seed_id="seed-a",
-            stage=SeedStage.TRAINING,
-            alpha=0.0,
-            counterfactual=None,
-        )
-        seed_with_counterfactual = mock_seed_factory(
-            seed_id="seed-b",
-            stage=SeedStage.TRAINING,
-            alpha=0.0,
-            counterfactual=2.0,
-        )
-
-        signals = signal_tracker.update(
-            epoch=5,
-            global_step=100,
-            train_loss=0.5,
-            train_accuracy=85.0,
-            val_loss=0.6,
-            val_accuracy=83.0,
-            active_seeds=[seed_without_counterfactual, seed_with_counterfactual],
-        )
-
-        assert signals.seed_counterfactual == pytest.approx(2.0)
-
     def test_delta_computation_positive_improvement(self, signal_tracker):
         """Should correctly compute positive deltas on improvement."""
         # First update establishes baseline

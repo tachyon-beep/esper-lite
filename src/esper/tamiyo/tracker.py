@@ -162,7 +162,6 @@ class SignalTracker:
         seed_epochs_in_stage = 0
         seed_alpha = 0.0
         seed_improvement = 0.0
-        seed_counterfactual = 0.0
 
         if active_seeds:
             # Multi-slot summary seed selection rule (deterministic, documented):
@@ -190,8 +189,6 @@ class SignalTracker:
                 summary_seed.metrics.improvement_since_stage_start
                 if summary_seed.metrics else 0.0
             )
-            if summary_seed.metrics and summary_seed.metrics.counterfactual_contribution is not None:
-                seed_counterfactual = float(summary_seed.metrics.counterfactual_contribution)
 
         # Build TrainingSignals (Leyline format with nested metrics)
         signals = TrainingSignals(
@@ -202,7 +199,6 @@ class SignalTracker:
             seed_epochs_in_stage=seed_epochs_in_stage,
             seed_alpha=seed_alpha,
             seed_improvement=seed_improvement,
-            seed_counterfactual=seed_counterfactual,
             loss_history=list(self._loss_history)[-5:],  # Last 5 for compat
             accuracy_history=list(self._accuracy_history)[-5:],
         )
