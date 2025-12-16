@@ -17,12 +17,23 @@ from esper.simic.anomaly_detector import AnomalyReport
 from esper.simic.vectorized import (
     _advance_active_seed,
     _calculate_entropy_anneal_steps,
-    _emit_batch_completed,
-    _emit_with_env_context,
     _emit_anomaly_diagnostics,
     _handle_telemetry_escalation,
     _resolve_target_slot,
     _run_ppo_updates,
+)
+from esper.simic.telemetry.emitters import (
+    apply_slot_telemetry,
+    check_performance_degradation,
+    emit_action_distribution,
+    emit_batch_completed,
+    emit_cf_unavailable,
+    emit_last_action,
+    emit_mask_hit_rates,
+    emit_ppo_update_event,
+    emit_reward_summary,
+    emit_throughput,
+    emit_with_env_context,
 )
 
 
@@ -43,7 +54,7 @@ def test_lifecycle_only_keeps_slot_telemetry():
     env_state.model = Mock(seed_slots={"r0c1": slot})
     env_state.telemetry_cb = Mock()
 
-    vectorized._apply_slot_telemetry(
+    apply_slot_telemetry(
         env_state,
         ops_telemetry_enabled=False,
         lifecycle_only=True,
@@ -57,7 +68,7 @@ def test_lifecycle_only_keeps_slot_telemetry():
 def test_emit_with_env_context_includes_device():
     hub = Mock()
     event = TelemetryEvent(event_type=TelemetryEventType.SEED_GERMINATED, data={})
-    _emit_with_env_context(hub, env_idx=2, device="cpu", event=event)
+    emit_with_env_context(hub, env_idx=2, device="cpu", event=event)
 
     emitted = hub.emit.call_args[0][0]
     assert emitted.data["env_id"] == 2
@@ -66,9 +77,8 @@ def test_emit_with_env_context_includes_device():
 
 def test_last_action_event_emitted():
     from esper.leyline.factored_actions import FactoredAction
-    from esper.simic import vectorized
 
-    with patch("esper.simic.vectorized.get_hub") as get_hub:
+    with patch("esper.simic.telemetry.emitters.get_hub") as get_hub:
         hub = Mock()
         get_hub.return_value = hub
 
@@ -78,7 +88,7 @@ def test_last_action_event_emitted():
             blend_idx=1,
             op_idx=1,
         )
-        vectorized._emit_last_action(
+        emit_last_action(
             env_id=0,
             epoch=3,
             factored_action=factored_action,
@@ -93,11 +103,9 @@ def test_last_action_event_emitted():
 
 
 def test_ppo_update_event_includes_vitals():
-    from esper.simic import vectorized
-
     hub = Mock()
     metrics = {"policy_loss": 0.1}
-    vectorized._emit_ppo_update_event(
+    emit_ppo_update_event(
         hub=hub,
         metrics=metrics,
         episodes_completed=5,
@@ -114,10 +122,8 @@ def test_ppo_update_event_includes_vitals():
 
 
 def test_action_distribution_snapshot():
-    from esper.simic import vectorized
-
     hub = Mock()
-    vectorized._emit_action_distribution(
+    emit_action_distribution(
         hub=hub,
         batch_idx=1,
         episodes_completed=4,
@@ -129,10 +135,8 @@ def test_action_distribution_snapshot():
 
 
 def test_counterfactual_unavailable_event():
-    from esper.simic import vectorized
-
     hub = Mock()
-    vectorized._emit_cf_unavailable(
+    emit_cf_unavailable(
         hub,
         env_id=0,
         slot_id="r0c1",
@@ -144,10 +148,8 @@ def test_counterfactual_unavailable_event():
 
 
 def test_throughput_metrics_emitted():
-    from esper.simic import vectorized
-
     hub = Mock()
-    vectorized._emit_throughput(
+    emit_throughput(
         hub=hub,
         env_id=0,
         batch_idx=1,
@@ -161,10 +163,8 @@ def test_throughput_metrics_emitted():
 
 
 def test_throughput_metrics_include_fps():
-    from esper.simic import vectorized
-
     hub = Mock()
-    vectorized._emit_throughput(
+    emit_throughput(
         hub=hub,
         env_id=0,
         batch_idx=1,
@@ -177,10 +177,8 @@ def test_throughput_metrics_include_fps():
 
 
 def test_reward_summary_emitted():
-    from esper.simic import vectorized
-
     hub = Mock()
-    vectorized._emit_reward_summary(
+    emit_reward_summary(
         hub=hub,
         env_id=0,
         batch_idx=1,
@@ -191,10 +189,8 @@ def test_reward_summary_emitted():
 
 
 def test_mask_hit_rates_emitted():
-    from esper.simic import vectorized
-
     hub = Mock()
-    vectorized._emit_mask_hit_rates(
+    emit_mask_hit_rates(
         hub=hub,
         batch_idx=1,
         episodes_completed=4,
@@ -212,14 +208,10 @@ def test_performance_degradation_emitted_on_accuracy_drop():
     DRL Expert review 2025-12-16: Added warmup guard to avoid false positives
     during early training when PPO has natural 15-20% variance.
     """
-    from esper.simic.vectorized import _check_performance_degradation
-    from esper.leyline import TelemetryEventType
-    from unittest.mock import Mock
-
     hub = Mock()
 
     # Accuracy dropped from 0.8 to 0.6 (25% drop), past warmup
-    emitted = _check_performance_degradation(
+    emitted = check_performance_degradation(
         hub=hub,
         current_acc=0.6,
         rolling_avg_acc=0.8,
@@ -238,12 +230,9 @@ def test_performance_degradation_emitted_on_accuracy_drop():
 
 
 def test_no_degradation_event_when_stable():
-    from esper.simic.vectorized import _check_performance_degradation
-    from unittest.mock import Mock
-
     hub = Mock()
 
-    emitted = _check_performance_degradation(
+    emitted = check_performance_degradation(
         hub=hub,
         current_acc=0.78,
         rolling_avg_acc=0.8,
@@ -262,13 +251,10 @@ def test_no_degradation_event_during_warmup():
     DRL Expert review 2025-12-16: PPO has natural 15-20% variance during
     early training, so we skip emissions in first 10% to avoid false positives.
     """
-    from esper.simic.vectorized import _check_performance_degradation
-    from unittest.mock import Mock
-
     hub = Mock()
 
     # Same degradation that would normally trigger, but during warmup
-    emitted = _check_performance_degradation(
+    emitted = check_performance_degradation(
         hub=hub,
         current_acc=0.6,
         rolling_avg_acc=0.8,
@@ -283,14 +269,10 @@ def test_no_degradation_event_during_warmup():
 
 def test_degradation_event_emitted_after_warmup():
     """Test that degradation events resume after warmup threshold."""
-    from esper.simic.vectorized import _check_performance_degradation
-    from esper.leyline import TelemetryEventType
-    from unittest.mock import Mock
-
     hub = Mock()
 
     # Just past warmup threshold (11% > 10%)
-    emitted = _check_performance_degradation(
+    emitted = check_performance_degradation(
         hub=hub,
         current_acc=0.6,
         rolling_avg_acc=0.8,
@@ -967,13 +949,13 @@ def test_emit_with_env_context_handles_none_and_copies():
     hub = _StubHub()
 
     event_none = TelemetryEvent(event_type=TelemetryEventType.SEED_GERMINATED, data=None)
-    _emit_with_env_context(hub, 1, "cpu", event_none)
+    emit_with_env_context(hub, 1, "cpu", event_none)
     assert hub.events[0].data["env_id"] == 1
     assert hub.events[0].data["device"] == "cpu"
 
     shared = {"foo": "bar"}
     event_shared = TelemetryEvent(event_type=TelemetryEventType.SEED_GERMINATED, data=shared)
-    _emit_with_env_context(hub, 2, "cpu", event_shared)
+    emit_with_env_context(hub, 2, "cpu", event_shared)
     # Original dict is untouched
     assert "env_id" not in shared
     assert "device" not in shared
@@ -985,7 +967,7 @@ def test_emit_with_env_context_handles_none_and_copies():
 def test_emit_batch_completed_is_resume_aware_and_clamped():
     """BATCH_COMPLETED telemetry should include resume offsets and clamp totals."""
     hub = _StubHub()
-    _emit_batch_completed(
+    emit_batch_completed(
         hub,
         batch_idx=5,
         episodes_completed=22,  # exceeds total_episodes to test clamp

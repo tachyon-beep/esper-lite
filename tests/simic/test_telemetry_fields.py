@@ -7,7 +7,7 @@ import pytest
 
 from esper.simic.debug_telemetry import LayerGradientStats
 from esper.simic.reward_telemetry import RewardComponentsTelemetry
-from esper.simic.vectorized import _aggregate_layer_gradient_health
+from esper.simic.telemetry.emitters import aggregate_layer_gradient_health
 
 
 class TestLayerGradientAggregation:
@@ -15,7 +15,7 @@ class TestLayerGradientAggregation:
 
     def test_empty_list_returns_defaults(self):
         """Empty input returns safe defaults."""
-        result = _aggregate_layer_gradient_health([])
+        result = aggregate_layer_gradient_health([])
         assert result["dead_layers"] == 0
         assert result["exploding_layers"] == 0
         assert result["nan_grad_count"] == 0
@@ -54,7 +54,7 @@ class TestLayerGradientAggregation:
             ),
         ]
 
-        result = _aggregate_layer_gradient_health(stats)
+        result = aggregate_layer_gradient_health(stats)
         assert result["dead_layers"] == 1
         assert result["exploding_layers"] == 0
         assert result["nan_grad_count"] == 0
@@ -80,7 +80,7 @@ class TestLayerGradientAggregation:
             ),
         ]
 
-        result = _aggregate_layer_gradient_health(stats)
+        result = aggregate_layer_gradient_health(stats)
         assert result["dead_layers"] == 0
         assert result["exploding_layers"] == 1
         assert result["nan_grad_count"] == 0
@@ -120,7 +120,7 @@ class TestLayerGradientAggregation:
             ),
         ]
 
-        result = _aggregate_layer_gradient_health(stats)
+        result = aggregate_layer_gradient_health(stats)
         assert result["nan_grad_count"] == 15
 
     def test_healthy_layers_perfect_score(self):
@@ -143,7 +143,7 @@ class TestLayerGradientAggregation:
             for i in range(5)
         ]
 
-        result = _aggregate_layer_gradient_health(stats)
+        result = aggregate_layer_gradient_health(stats)
         assert result["dead_layers"] == 0
         assert result["exploding_layers"] == 0
         assert result["nan_grad_count"] == 0

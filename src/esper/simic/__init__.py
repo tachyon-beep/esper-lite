@@ -11,6 +11,8 @@ the Tamiyo seed lifecycle controller:
 - ppo: PPO agent
 - training: Training loops
 - vectorized: Multi-GPU training
+- parallel_env_state: Per-environment state container
+- telemetry/: Telemetry emission helpers
 - debug_telemetry: Per-layer gradient debugging
 - anomaly_detector: Phase-dependent anomaly detection
 """
@@ -80,6 +82,18 @@ from esper.simic.anomaly_detector import (
     AnomalyReport,
 )
 
+# Parallel environment state
+from esper.simic.parallel_env_state import ParallelEnvState
+
+# Telemetry emitters (pure functions extracted from vectorized.py)
+from esper.simic.telemetry import (
+    emit_with_env_context,
+    emit_batch_completed,
+    emit_ppo_update_event,
+    check_performance_degradation,
+    aggregate_layer_gradient_health,
+)
+
 # NOTE: Heavy modules imported on demand:
 #   from esper.simic.ppo import PPOAgent
 #   from esper.simic.vectorized import train_ppo_vectorized
@@ -134,4 +148,14 @@ __all__ = [
     "RatioExplosionDiagnostic",
     "AnomalyDetector",
     "AnomalyReport",
+
+    # Parallel environment state
+    "ParallelEnvState",
+
+    # Telemetry emitters
+    "emit_with_env_context",
+    "emit_batch_completed",
+    "emit_ppo_update_event",
+    "check_performance_degradation",
+    "aggregate_layer_gradient_health",
 ]
