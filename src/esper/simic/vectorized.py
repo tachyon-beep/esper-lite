@@ -1106,7 +1106,7 @@ def train_ppo_vectorized(
             num_workers=0,  # Validation is fast enough without workers
             shuffle=False,
             pin_memory=True,
-            drop_last=True,
+            drop_last=False,  # BUG-009 fix: include all validation samples
         )
 
         num_train_batches = len(shared_train_iter)
