@@ -467,7 +467,7 @@ def generate_blending_checkpoint() -> Path:
     )
 
     # Transition to TRAINING then BLENDING
-    slot = model.slots["mid"]
+    slot = model.seed_slots["mid"]
     slot.state.transition(SeedStage.TRAINING)
     slot.state.transition(SeedStage.BLENDING)
     slot.start_blending(total_steps=10)
@@ -538,7 +538,7 @@ def generate_probationary_checkpoint() -> Path:
     )
 
     # Full lifecycle to PROBATIONARY
-    slot = model.slots["mid"]
+    slot = model.seed_slots["mid"]
     slot.state.transition(SeedStage.TRAINING)
     slot.state.transition(SeedStage.BLENDING)
     slot.start_blending(total_steps=3)
