@@ -66,7 +66,11 @@ from esper.simic.debug_telemetry import (
     collect_per_layer_gradients,
     check_numerical_stability,
 )
-from esper.simic.gradient_collector import materialize_dual_grad_stats
+from esper.simic.gradient_collector import (
+    collect_host_gradients_async,
+    collect_seed_gradients_only_async,
+    materialize_dual_grad_stats,
+)
 from esper.simic.normalization import RunningMeanStd, RewardNormalizer
 from esper.simic.features import MULTISLOT_FEATURE_SIZE
 from esper.simic.ppo import PPOAgent, signals_to_features
@@ -1259,34 +1263,22 @@ def train_ppo_vectorized(
                         slots_needing_grad_telemetry.append(slot_id)
 
                 if slots_needing_grad_telemetry:
-                    # Compute host gradient norm ONCE, then per-slot seed gradient norms.
-                    host_grads = [p.grad for p in model.get_host_parameters() if p.grad is not None]
-                    if host_grads:
-                        host_norms = torch._foreach_norm(host_grads, ord=2)
-                        host_squared_sum = torch.stack(host_norms).pow(2).sum()
-                        host_param_count = sum(g.numel() for g in host_grads)
-                    else:
-                        host_squared_sum = 0.0
-                        host_param_count = 0
+                    # Compute host gradient stats ONCE (expensive), then reuse for each seed
+                    host_stats = collect_host_gradients_async(
+                        model.get_host_parameters(),
+                        device=env_dev,
+                    )
 
                     grad_stats_by_slot = {}
                     for slot_id in slots_needing_grad_telemetry:
-                        seed_grads = [
-                            p.grad for p in model.get_seed_parameters(slot_id) if p.grad is not None
-                        ]
-                        if seed_grads:
-                            seed_norms = torch._foreach_norm(seed_grads, ord=2)
-                            seed_squared_sum = torch.stack(seed_norms).pow(2).sum()
-                            seed_param_count = sum(g.numel() for g in seed_grads)
-                        else:
-                            seed_squared_sum = 0.0
-                            seed_param_count = 0
-
+                        # Only compute seed stats per slot (cheap)
+                        seed_stats = collect_seed_gradients_only_async(
+                            model.get_seed_parameters(slot_id),
+                            device=env_dev,
+                        )
                         grad_stats_by_slot[slot_id] = {
-                            "_host_squared_sum": host_squared_sum,
-                            "_host_param_count": host_param_count,
-                            "_seed_squared_sum": seed_squared_sum,
-                            "_seed_param_count": seed_param_count,
+                            **host_stats,
+                            **seed_stats,
                         }
 
             if use_amp and scaler is not None and env_dev.startswith("cuda"):
@@ -1387,10 +1379,9 @@ def train_ppo_vectorized(
         # across all states in a batch, then update stats after PPO update.
         raw_states_for_normalizer_update = []
 
-        # Track if any Governor rollback occurred during this batch.
-        # If so, the buffer contains stale transitions from a different model state
-        # and must be cleared before PPO update.
-        batch_rollback_occurred = False
+        # Track per-environment rollback (more sample-efficient than batch-level).
+        # Only envs that experienced rollback have stale transitions.
+        env_rollback_occurred = [False] * envs_this_batch
 
         # Run epochs with INVERTED CONTROL FLOW
         for epoch in range(1, max_epochs + 1):
@@ -1928,7 +1919,7 @@ def train_ppo_vectorized(
                 # Governor rollback: execute if this env panicked
                 if env_idx in governor_panic_envs:
                     env_state.governor.execute_rollback(env_id=env_idx)
-                    batch_rollback_occurred = True  # Mark batch as having stale transitions
+                    env_rollback_occurred[env_idx] = True  # Mark only this env as stale
 
                 # Compute reward with cost params
                 # Derive cost from CURRENT architecture, not cumulative scoreboard
@@ -2209,25 +2200,63 @@ def train_ppo_vectorized(
         ppo_grad_norm: float | None = None
         ppo_update_time_ms: float | None = None
 
-        # If a Governor rollback occurred, the buffer contains transitions from
-        # a different model state - training on them would cause distribution shift.
-        # Clear the buffer and skip this PPO update.
+        # If any Governor rollback occurred, clear only the affected env transitions.
+        # This is more sample-efficient than discarding the entire batch.
         anomaly_report: AnomalyReport | None = None
+        rollback_env_indices = [i for i, occurred in enumerate(env_rollback_occurred) if occurred]
 
-        if batch_rollback_occurred:
-            agent.buffer.reset()
+        if rollback_env_indices:
+            # Clear only the affected envs (preserves valid transitions from other envs).
+            # Note: This must happen BEFORE _run_ppo_updates(), which calls
+            # buffer.normalize_advantages(). Clearing sets step_counts[env_id]=0,
+            # so normalize_advantages() will exclude cleared envs from the
+            # normalization statistics (mean/std computed only on remaining data).
+
+            # Track sample efficiency metrics BEFORE clearing
+            transitions_before = len(agent.buffer)
+            transitions_in_cleared_envs = sum(
+                agent.buffer.step_counts[i] for i in rollback_env_indices
+            )
+
+            for env_idx in rollback_env_indices:
+                agent.buffer.clear_env(env_idx)
+
+            transitions_after = len(agent.buffer)
+            preservation_ratio = transitions_after / max(transitions_before, 1)
+
             if hub:
                 hub.emit(TelemetryEvent(
                     event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
                     epoch=batch_epoch_id,  # Monotonic batch epoch id (post-batch)
                     severity="warning",
-                    message="Buffer cleared due to Governor rollback - skipping update",
+                    message=f"Cleared {len(rollback_env_indices)} env(s) due to Governor rollback",
                     data={
-                        "reason": "governor_rollback",
-                        "skipped": True,
+                        "reason": "governor_rollback_partial",
+                        "cleared_envs": rollback_env_indices,
                         "batch": batch_idx + 1,
                         "episodes_completed": batch_epoch_id,
                         "inner_epoch": epoch,
+                        # Sample efficiency telemetry
+                        "transitions_before": transitions_before,
+                        "transitions_discarded": transitions_in_cleared_envs,
+                        "transitions_preserved": transitions_after,
+                        "preservation_ratio": preservation_ratio,
+                    },
+                ))
+
+        # Only skip PPO update if ALL envs were cleared (no valid data left)
+        update_skipped = len(agent.buffer) == 0
+        if update_skipped:
+            if hub:
+                hub.emit(TelemetryEvent(
+                    event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+                    epoch=batch_epoch_id,
+                    severity="warning",
+                    message="Buffer empty after rollback clearing - skipping update",
+                    data={
+                        "reason": "buffer_empty",
+                        "skipped": True,
+                        "batch": batch_idx + 1,
                     },
                 ))
         else:
@@ -2398,7 +2427,7 @@ def train_ppo_vectorized(
                         "total_fossilized": total_seeds_fossilized,
                     },
                     "episodes_completed": episodes_completed,
-                    "skipped_update": batch_rollback_occurred,
+                    "skipped_update": update_skipped,
                 },
             ))
 
@@ -2459,7 +2488,7 @@ def train_ppo_vectorized(
                     "val_loss": sum(val_losses) / max(len(env_states) * num_test_batches, 1),
                     "val_accuracy": 100.0 * total_val_correct / max(total_val_samples, 1),
                     "n_envs": len(env_states),
-                    "skipped_update": batch_rollback_occurred,
+                    "skipped_update": update_skipped,
                 },
             ))
 

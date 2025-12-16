@@ -243,9 +243,16 @@ class FactoredRecurrentActorCritic(nn.Module):
     ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor], torch.Tensor, tuple]:
         """Sample actions from all heads (inference mode).
 
+        WARNING: This method runs under torch.inference_mode(). The returned
+        log_probs are NOT differentiable and cannot be used for backpropagation.
+        Use evaluate_actions() for training - it recomputes differentiable log_probs.
+
+        The log_probs returned here are stored as old_log_probs for PPO ratio
+        computation, but the actual gradient flows through evaluate_actions().
+
         Returns:
             actions: Dict of action indices per head [batch]
-            log_probs: Dict of log probs per head [batch]
+            log_probs: Dict of log probs per head [batch] (NON-DIFFERENTIABLE)
             values: Value estimates [batch]
             hidden: Updated hidden state
         """

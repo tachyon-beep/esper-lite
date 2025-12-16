@@ -6,7 +6,10 @@ import pytest
 
 from esper.simic.gradient_collector import (
     collect_seed_gradients,
+    collect_dual_gradients_async,
+    materialize_dual_grad_stats,
     GradientHealthMetrics,
+    DualGradientStats,
 )
 
 
@@ -90,3 +93,118 @@ class TestEnhancedCollector:
         assert result.gradient_norm > 0
         assert result.min_layer_norm > 0
         assert result.max_layer_norm >= result.min_layer_norm
+
+
+class TestDualGradientCollection:
+    """Tests for dual gradient collection (host + seed)."""
+
+    @pytest.fixture
+    def host_model(self):
+        """Create host model for testing."""
+        return nn.Sequential(
+            nn.Linear(10, 20),
+            nn.ReLU(),
+            nn.Linear(20, 5),
+        )
+
+    @pytest.fixture
+    def seed_model(self):
+        """Create seed model for testing."""
+        return nn.Sequential(
+            nn.Linear(5, 10),
+            nn.ReLU(),
+            nn.Linear(10, 5),
+        )
+
+    def test_collect_returns_correct_keys(self, host_model, seed_model):
+        """collect_dual_gradients_async returns dict with expected keys."""
+        # Generate gradients
+        x = torch.randn(4, 10)
+        loss = host_model(x).sum()
+        loss.backward()
+
+        y = torch.randn(4, 5)
+        seed_loss = seed_model(y).sum()
+        seed_loss.backward()
+
+        result = collect_dual_gradients_async(
+            host_model.parameters(),
+            seed_model.parameters(),
+        )
+
+        assert "_host_squared_sum" in result
+        assert "_host_param_count" in result
+        assert "_seed_squared_sum" in result
+        assert "_seed_param_count" in result
+
+    def test_returns_tensors_for_squared_sums(self, host_model, seed_model):
+        """Squared sums are tensors (for async safety)."""
+        x = torch.randn(4, 10)
+        loss = host_model(x).sum()
+        loss.backward()
+
+        y = torch.randn(4, 5)
+        seed_loss = seed_model(y).sum()
+        seed_loss.backward()
+
+        result = collect_dual_gradients_async(
+            host_model.parameters(),
+            seed_model.parameters(),
+        )
+
+        # Squared sums should be tensors (not floats) when grads exist
+        assert isinstance(result["_host_squared_sum"], torch.Tensor)
+        assert isinstance(result["_seed_squared_sum"], torch.Tensor)
+        # Param counts are always ints
+        assert isinstance(result["_host_param_count"], int)
+        assert isinstance(result["_seed_param_count"], int)
+
+    def test_handles_empty_parameters(self):
+        """Handles empty parameter lists gracefully."""
+        result = collect_dual_gradients_async(iter([]), iter([]))
+
+        assert result["_host_squared_sum"] == 0.0
+        assert result["_host_param_count"] == 0
+        assert result["_seed_squared_sum"] == 0.0
+        assert result["_seed_param_count"] == 0
+
+    def test_materialize_produces_dual_stats(self, host_model, seed_model):
+        """materialize_dual_grad_stats returns DualGradientStats."""
+        x = torch.randn(4, 10)
+        loss = host_model(x).sum()
+        loss.backward()
+
+        y = torch.randn(4, 5)
+        seed_loss = seed_model(y).sum()
+        seed_loss.backward()
+
+        async_stats = collect_dual_gradients_async(
+            host_model.parameters(),
+            seed_model.parameters(),
+        )
+        dual_stats = materialize_dual_grad_stats(async_stats)
+
+        assert isinstance(dual_stats, DualGradientStats)
+        assert dual_stats.host_grad_norm > 0
+        assert dual_stats.seed_grad_norm > 0
+        assert dual_stats.host_param_count > 0
+        assert dual_stats.seed_param_count > 0
+
+    def test_normalized_ratio_computation(self, host_model, seed_model):
+        """normalized_ratio computes parameter-normalized ratio."""
+        x = torch.randn(4, 10)
+        loss = host_model(x).sum()
+        loss.backward()
+
+        y = torch.randn(4, 5)
+        seed_loss = seed_model(y).sum()
+        seed_loss.backward()
+
+        async_stats = collect_dual_gradients_async(
+            host_model.parameters(),
+            seed_model.parameters(),
+        )
+        dual_stats = materialize_dual_grad_stats(async_stats)
+
+        # Ratio should be non-negative
+        assert dual_stats.normalized_ratio >= 0.0

@@ -388,6 +388,31 @@ class TamiyoRolloutBuffer:
         self.episode_boundaries = {}
         # Tensors don't need zeroing - step_counts controls valid range
 
+    def clear_env(self, env_id: int) -> None:
+        """Clear transitions for a single environment.
+
+        Used for per-environment rollback when only one env panics.
+        More sample-efficient than clearing the entire buffer.
+
+        Args:
+            env_id: Index of the environment to clear
+
+        Raises:
+            ValueError: If env_id is out of range [0, num_envs)
+        """
+        if env_id < 0 or env_id >= self.num_envs:
+            raise ValueError(f"env_id {env_id} out of range [0, {self.num_envs})")
+        self.step_counts[env_id] = 0
+        # Clear episode tracking for this env
+        if env_id in self._current_episode_start:
+            del self._current_episode_start[env_id]
+        if env_id in self.episode_boundaries:
+            del self.episode_boundaries[env_id]
+        # Zero LSTM hidden states for this env to prevent stale state leakage.
+        # When new transitions are added, they'll start with fresh hidden states.
+        self.hidden_h[env_id].zero_()
+        self.hidden_c[env_id].zero_()
+
     def __len__(self) -> int:
         """Total transitions across all environments."""
         return sum(self.step_counts)

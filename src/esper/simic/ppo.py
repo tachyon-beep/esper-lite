@@ -36,6 +36,7 @@ from esper.leyline import (
     DEFAULT_ENTROPY_COEF_MIN,
     DEFAULT_VALUE_CLIP,
 )
+from esper.leyline.factored_actions import LifecycleOp
 import logging
 
 if TYPE_CHECKING:
@@ -183,6 +184,10 @@ class PPOAgent:
         entropy_coef_min: float = DEFAULT_ENTROPY_COEF_MIN,  # Exploration floor (from leyline)
         adaptive_entropy_floor: bool = False,  # Scale floor with valid action count
         entropy_anneal_steps: int = 0,
+        # Per-head entropy coefficients for relative weighting.
+        # Blueprint/blend heads may warrant different entropy weighting since they
+        # are only active during GERMINATE actions (less frequent than slot/op).
+        entropy_coef_per_head: dict[str, float] | None = None,
         value_coef: float = DEFAULT_VALUE_COEF,
         clip_value: bool = True,
         # Separate clip range for value function (larger than policy clip_ratio)
@@ -219,6 +224,13 @@ class PPOAgent:
         self.entropy_coef_min = entropy_coef_min
         self.adaptive_entropy_floor = adaptive_entropy_floor
         self.entropy_anneal_steps = entropy_anneal_steps
+        # Per-head entropy multipliers (default to uniform)
+        self.entropy_coef_per_head = entropy_coef_per_head or {
+            "slot": 1.0,
+            "blueprint": 1.0,
+            "blend": 1.0,
+            "op": 1.0,
+        }
         self.value_coef = value_coef
         self.clip_value = clip_value
         self.value_clip = value_clip
@@ -241,6 +253,11 @@ class PPOAgent:
             state_dim=state_dim,
             lstm_hidden_dim=lstm_hidden_dim,
             device=torch.device(device),
+        )
+        # Validate buffer and network use same hidden dim
+        assert self.buffer.lstm_hidden_dim == self.network.lstm_hidden_dim, (
+            f"Buffer lstm_hidden_dim ({self.buffer.lstm_hidden_dim}) != "
+            f"network lstm_hidden_dim ({self.network.lstm_hidden_dim})"
         )
         # Ratio explosion thresholds (aligned with anomaly detector defaults)
         self.ratio_explosion_threshold = 5.0
@@ -446,6 +463,17 @@ class PPOAgent:
                 valid_advantages, valid_op_actions
             )
 
+            # Compute causal masks for masked mean computation
+            # (avoid bias from averaging zeros with real values)
+            is_wait = valid_op_actions == LifecycleOp.WAIT
+            is_germinate = valid_op_actions == LifecycleOp.GERMINATE
+            head_masks = {
+                "op": torch.ones_like(is_wait),  # op always relevant
+                "slot": ~is_wait,  # slot relevant except WAIT
+                "blueprint": is_germinate,  # only for GERMINATE
+                "blend": is_germinate,  # only for GERMINATE
+            }
+
             # Compute per-head ratios
             old_log_probs = {
                 "slot": data["slot_log_probs"][valid_mask],
@@ -459,14 +487,21 @@ class PPOAgent:
                 per_head_ratios[key] = torch.exp(log_probs[key] - old_log_probs[key])
 
             # Compute policy loss per head and sum
+            # Use masked mean to avoid bias from averaging zeros with real values
             policy_loss = 0.0
             for key in ["slot", "blueprint", "blend", "op"]:
                 ratio = per_head_ratios[key]
                 adv = per_head_advantages[key]
+                mask = head_masks[key]
 
                 surr1 = ratio * adv
                 surr2 = torch.clamp(ratio, 1 - self.clip_ratio, 1 + self.clip_ratio) * adv
-                head_loss = -torch.min(surr1, surr2).mean()
+                clipped_surr = torch.min(surr1, surr2)
+
+                # Masked mean: only average over causally-relevant positions
+                # This prevents zeros from masked positions from biasing the loss
+                n_valid = mask.sum().clamp(min=1)  # Avoid div-by-zero
+                head_loss = -(clipped_surr * mask.float()).sum() / n_valid
                 policy_loss = policy_loss + head_loss
 
             # Value loss
@@ -483,10 +518,16 @@ class PPOAgent:
             else:
                 value_loss = F.mse_loss(values, valid_returns)
 
-            # Entropy loss (sum across heads, each normalized)
+            # Entropy loss with per-head weighting.
+            # NOTE: Entropy floors were removed because torch.clamp to a constant
+            # provides zero gradient (d(constant)/d(params) = 0). When a head has
+            # only one valid action, entropy is correctly 0 with no gradient signal -
+            # there's nothing to explore. Gradient starvation is addressed by the
+            # masked mean in policy_loss, not by entropy floors.
             entropy_loss = 0.0
             for key, ent in entropy.items():
-                entropy_loss = entropy_loss - ent.mean()
+                head_coef = self.entropy_coef_per_head.get(key, 1.0)
+                entropy_loss = entropy_loss - head_coef * ent.mean()
 
             entropy_coef = self.get_entropy_coef()
 
@@ -521,15 +562,21 @@ class PPOAgent:
 
             # Compute approximate KL divergence using the log-ratio trick:
             # KL(old||new) ≈ E[(ratio - 1) - log(ratio)]
-            # This is the "KL3" estimator from Schulman's TRPO/PPO papers
-            # Average across all heads for factored policy (PyTorch expert review)
+            # This is the "KL3" estimator from Schulman's TRPO/PPO papers.
+            # For factored action space, joint KL = SUM of per-head KLs (not mean).
+            # Apply same causal masks as policy loss for consistency.
             with torch.no_grad():
                 head_kls = []
                 for key in ["slot", "blueprint", "blend", "op"]:
+                    mask = head_masks[key]
                     log_ratio = log_probs[key] - old_log_probs[key]
-                    head_kl = ((torch.exp(log_ratio) - 1) - log_ratio).mean()
+                    kl_per_step = (torch.exp(log_ratio) - 1) - log_ratio
+                    # Masked mean: only count KL for causally-relevant timesteps
+                    n_valid = mask.sum().clamp(min=1)
+                    head_kl = (kl_per_step * mask.float()).sum() / n_valid
                     head_kls.append(head_kl)
-                approx_kl = torch.stack(head_kls).mean().item()
+                # Sum per-head KLs for correct joint KL (DRL expert review)
+                approx_kl = torch.stack(head_kls).sum().item()
                 metrics["approx_kl"].append(approx_kl)
 
                 # Clip fraction: how often clipping was active
@@ -584,6 +631,7 @@ class PPOAgent:
                 'entropy_coef_min': self.entropy_coef_min,
                 'adaptive_entropy_floor': self.adaptive_entropy_floor,
                 'entropy_anneal_steps': self.entropy_anneal_steps,
+                'entropy_coef_per_head': self.entropy_coef_per_head,
                 'value_coef': self.value_coef,
                 'clip_value': self.clip_value,
                 'value_clip': self.value_clip,

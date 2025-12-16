@@ -402,6 +402,12 @@ def slot_sort_key(slot_id: str) -> tuple[int, int]:
 
     Ordering: r0c0 < r0c1 < r0c2 < r1c0 < r1c1 < ...
 
+    STABILITY NOTE (from DRL Specialist):
+    This ordering determines action indices in the RL policy network.
+    Once a model is trained, changing this function would invalidate
+    the policy (action indices would map to different slots).
+    This function must remain stable across versions.
+
     Args:
         slot_id: Canonical slot ID string
 

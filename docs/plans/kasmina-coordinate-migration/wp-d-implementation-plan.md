@@ -10,6 +10,41 @@
 
 ---
 
+## SPECIALIST REVIEW FINDINGS
+
+The following issues were identified by DRL and PyTorch specialists and MUST be
+characterized by these tests:
+
+### DRL Specialist Findings
+
+1. **G3 Gate Never Passes Naturally**: Since `get_alpha()` always returns 0.5,
+   and G3 checks `state.alpha >= threshold` (typically 1.0), gated blending
+   CANNOT transition out of BLENDING stage via normal lifecycle gates.
+   This is a critical bug that prevents seed graduation.
+
+2. **state.alpha vs forward() Mismatch**: The lifecycle tracks `state.alpha`
+   (always 0.5 from `get_alpha()`), but `forward()` uses `get_alpha_for_blend(x)`
+   (dynamic). These are completely disconnected.
+
+### PyTorch Specialist Findings
+
+1. **GatedBlend Parameters Never Trained**: When `alpha_schedule` is assigned
+   to `SeedSlot`, it's stored as a plain Python attribute, NOT registered as
+   a submodule via `self.add_module()`. This means:
+   - `GatedBlend.parameters()` are NOT included in `SeedSlot.parameters()`
+   - The optimizer never sees the gate parameters
+   - The "learned" gate is actually frozen at random initialization
+
+2. **Serialization Issues**: `SeedSlot.get_extra_state()` returns a dict
+   containing `alpha_schedule` (an nn.Module). This breaks `weights_only=True`
+   unless `torch.serialization.add_safe_globals()` includes the GatedBlend class.
+
+3. **Gate Module Persistence**: After BLENDING completes, the `alpha_schedule`
+   is still set and the gate module persists. It's unclear if it continues
+   to be called in `forward()` after transition to PROBATIONARY.
+
+---
+
 ## Task 1: Create characterization test file with GatedBlend tests
 
 **Files:**
@@ -193,7 +228,13 @@ class TestGatedBlendLifecycleIntegration:
     """Characterize gated blend behavior through lifecycle gates."""
 
     def test_g3_gate_uses_state_alpha_not_gate_output(self):
-        """CURRENT BEHAVIOR: G3 gate checks state.alpha, not actual gate output."""
+        """CRITICAL BUG: G3 gate checks state.alpha, which is ALWAYS 0.5 for gated blend.
+
+        DRL SPECIALIST FINDING:
+        Since get_alpha() always returns 0.5, and G3 checks state.alpha >= threshold
+        (typically 1.0), gated blending CANNOT transition out of BLENDING stage via
+        normal lifecycle gates. Seeds using gated blending are permanently stuck.
+        """
         gates = QualityGates()
 
         state = SeedState(
@@ -213,11 +254,13 @@ class TestGatedBlendLifecycleIntegration:
 
         # CURRENT_BEHAVIOR: G3 uses state.alpha, not the dynamic gate output
         # With gated blending, state.alpha=0.5 (constant from get_alpha)
-        # So G3 may never pass naturally unless state.alpha is manually set
+        # G3 NEVER passes naturally - this is a critical design bug
 
         # Document actual gate behavior
-        assert result_low.passed is False or result_low.passed is True  # Just document
-        assert result_high.passed is True  # alpha=1.0 should pass G3
+        assert result_low.passed is False, "G3 should FAIL with alpha=0.5 (gated blend default)"
+        assert result_high.passed is True, "G3 should PASS with alpha=1.0"
+
+        # CRITICAL: This test documents that gated blending is broken for lifecycle
 
 
 class TestBlendCatalogGated:
@@ -240,13 +283,153 @@ class TestBlendCatalogGated:
         assert len(params) > 0, "GatedBlend should have parameters"
         assert total_params > 0, "GatedBlend should have non-zero parameters"
 
-        # Question for M2: Are these trained? Do they persist after BLENDING?
+        # PYTORCH SPECIALIST FINDING: These parameters are NEVER trained!
+        # See TestGatedBlendParameterRegistration for details.
+
+
+class TestGatedBlendParameterRegistration:
+    """PYTORCH SPECIALIST FINDING: GatedBlend parameters are never trained.
+
+    When alpha_schedule is assigned to SeedSlot, it's stored as a plain Python
+    attribute, NOT registered as a submodule. This means the optimizer never
+    sees the gate parameters - the "learned" gate is frozen at random init.
+    """
+
+    @pytest.fixture
+    def slot_with_gated_blend(self):
+        """Create a SeedSlot with gated blending in BLENDING stage."""
+        slot = SeedSlot(
+            slot_id="r0c0",
+            channels=64,
+            device="cpu",
+            task_config=TaskConfig(topology="cnn", blending_steps=10),
+        )
+        slot.germinate(
+            blueprint_id="norm",
+            seed_id="test-seed",
+            blend_algorithm_id="gated",
+        )
+        slot.state.transition(SeedStage.TRAINING)
+        slot.state.transition(SeedStage.BLENDING)
+        slot.start_blending(total_steps=10)
+        return slot
+
+    def test_gated_blend_has_parameters(self):
+        """GatedBlend itself has learnable parameters."""
+        gate = GatedBlend(channels=64, topology="cnn")
+        gate_params = list(gate.parameters())
+
+        assert len(gate_params) > 0, "GatedBlend should have parameters"
+
+        # CURRENT_BEHAVIOR: Gate has parameters, but see next test...
+
+    def test_gated_blend_params_not_in_slot_params(self, slot_with_gated_blend):
+        """CRITICAL BUG: GatedBlend parameters NOT included in SeedSlot.parameters().
+
+        PYTORCH SPECIALIST FINDING:
+        alpha_schedule is stored as plain attribute, not registered submodule.
+        Optimizer iterates SeedSlot.parameters() but gate params are excluded.
+        """
+        slot = slot_with_gated_blend
+
+        # Get slot's visible parameters (what optimizer sees)
+        slot_params = list(slot.parameters())
+        slot_param_ids = {id(p) for p in slot_params}
+
+        # Get gate's parameters
+        gate_params = list(slot.alpha_schedule.parameters())
+
+        # CURRENT_BEHAVIOR: Gate params are NOT in slot params
+        gate_param_ids = {id(p) for p in gate_params}
+        overlap = slot_param_ids & gate_param_ids
+
+        # This documents the bug: gate params are invisible to optimizer
+        assert len(overlap) == 0, (
+            "CURRENT BEHAVIOR: GatedBlend params should NOT be in slot.parameters() "
+            "(this is a bug - they're never trained)"
+        )
+
+    def test_alpha_schedule_is_not_registered_submodule(self, slot_with_gated_blend):
+        """alpha_schedule is a plain attribute, not registered submodule."""
+        slot = slot_with_gated_blend
+
+        # Get named submodules
+        submodule_names = [name for name, _ in slot.named_modules() if name]
+
+        # CURRENT_BEHAVIOR: alpha_schedule is NOT in named_modules
+        assert "alpha_schedule" not in submodule_names, (
+            "CURRENT BEHAVIOR: alpha_schedule should NOT be a registered submodule "
+            "(this causes the training bug)"
+        )
+
+
+class TestGatedBlendPersistence:
+    """Characterize what happens to alpha_schedule after BLENDING completes.
+
+    PYTORCH SPECIALIST FINDING: It's unclear if the gate module persists
+    and continues to be called after transition to PROBATIONARY.
+    """
+
+    @pytest.fixture
+    def slot_completing_blending(self):
+        """Create a slot that's about to complete blending."""
+        slot = SeedSlot(
+            slot_id="r0c0",
+            channels=64,
+            device="cpu",
+            task_config=TaskConfig(topology="cnn", blending_steps=3),
+        )
+        slot.germinate(
+            blueprint_id="norm",
+            seed_id="test-seed",
+            blend_algorithm_id="gated",
+        )
+        slot.state.transition(SeedStage.TRAINING)
+        slot.state.transition(SeedStage.BLENDING)
+        slot.start_blending(total_steps=3)
+        return slot
+
+    def test_alpha_schedule_persists_during_blending(self, slot_completing_blending):
+        """alpha_schedule exists during BLENDING."""
+        slot = slot_completing_blending
+
+        assert slot.alpha_schedule is not None
+        assert isinstance(slot.alpha_schedule, GatedBlend)
+        assert slot.state.stage == SeedStage.BLENDING
+
+        # CURRENT_BEHAVIOR: alpha_schedule is set during BLENDING
+
+    def test_alpha_schedule_after_manual_transition(self, slot_completing_blending):
+        """Document alpha_schedule state after manual transition to PROBATIONARY.
+
+        QUESTION FOR M2: Should alpha_schedule be cleared on BLENDING completion?
+        """
+        slot = slot_completing_blending
+
+        # Capture state before transition
+        alpha_schedule_before = slot.alpha_schedule
+
+        # Manually transition (bypassing gate check)
+        slot.state.alpha = 1.0  # Force alpha to pass G3
+        slot.state.transition(SeedStage.PROBATIONARY)
+
+        # CURRENT_BEHAVIOR: Document what happens to alpha_schedule
+        # This is critical for understanding cleanup requirements
+        alpha_schedule_after = slot.alpha_schedule
+
+        # Document actual behavior (we expect it persists, which may be wrong)
+        print(f"alpha_schedule before: {type(alpha_schedule_before)}")
+        print(f"alpha_schedule after: {type(alpha_schedule_after)}")
+        print(f"Stage after: {slot.state.stage}")
+
+        # CURRENT_BEHAVIOR: alpha_schedule is likely still set (not cleared)
+        # M2 should decide: clear it on PROBATIONARY transition?
 ```
 
-**Step 2: Run lifecycle tests**
+**Step 2: Run lifecycle and parameter registration tests**
 
-Run: `PYTHONPATH=src uv run pytest tests/kasmina/test_gated_blending_characterization.py::TestGatedBlendLifecycleIntegration tests/kasmina/test_gated_blending_characterization.py::TestBlendCatalogGated -v`
-Expected: All tests pass
+Run: `PYTHONPATH=src uv run pytest tests/kasmina/test_gated_blending_characterization.py::TestGatedBlendLifecycleIntegration tests/kasmina/test_gated_blending_characterization.py::TestBlendCatalogGated tests/kasmina/test_gated_blending_characterization.py::TestGatedBlendParameterRegistration tests/kasmina/test_gated_blending_characterization.py::TestGatedBlendPersistence -v`
+Expected: All tests pass (documenting bugs, not fixing them)
 
 ---
 
@@ -345,16 +528,27 @@ Add to end of test file:
 #
 # 4. G3 gate checks state.alpha >= threshold
 #    - With gated blending, state.alpha = 0.5 (never reaches 1.0 naturally)
-#    - G3 may never pass unless state.alpha is manually forced
+#    - G3 NEVER passes - seeds are permanently stuck in BLENDING (DRL SPECIALIST)
 #
 # 5. Gate module persistence after BLENDING is unclear
 #    - alpha_schedule may still be set
 #    - Gate module may still be called in forward()
 #
+# 6. GatedBlend parameters are NEVER TRAINED (PYTORCH SPECIALIST)
+#    - alpha_schedule is plain Python attribute, not registered submodule
+#    - SeedSlot.parameters() does NOT include gate parameters
+#    - Optimizer never sees gate weights - "learned" gate is random init
+#
+# 7. Serialization issues with alpha_schedule
+#    - get_extra_state() returns dict with nn.Module
+#    - Breaks weights_only=True unless GatedBlend in safe_globals
+#
 # RECOMMENDATION FOR M2:
 # - On BLENDING completion: set alpha_schedule = None, state.alpha = 1.0
 # - Discard gate module (don't serialize it)
 # - GatedBlend.get_alpha() should raise NotImplementedError or track state
+# - If gate should be trained: register as submodule via add_module()
+# - Consider: Is gated blending even viable with these bugs?
 #
 # =============================================================================
 ```
@@ -420,6 +614,11 @@ Expected: Clean working tree
 - [ ] All characterization tests pass
 - [ ] Current behavior documented in test comments
 - [ ] CURRENT_BEHAVIOR_SUMMARY reflects actual findings
+- [ ] Specialist findings documented:
+  - [ ] G3 gate never passes with gated blending (DRL finding)
+  - [ ] GatedBlend parameters not in SeedSlot.parameters() (PyTorch finding)
+  - [ ] alpha_schedule not registered as submodule (PyTorch finding)
+  - [ ] Gate persistence after BLENDING characterized
 - [ ] Tests committed as baseline for M2
 - [ ] No regressions in existing kasmina tests
 

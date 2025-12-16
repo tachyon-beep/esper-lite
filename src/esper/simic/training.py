@@ -5,7 +5,9 @@ This module contains the main training functions extracted from ppo.py.
 
 from __future__ import annotations
 
+import functools
 import random
+from typing import Callable
 
 import torch
 import torch.nn as nn
@@ -27,9 +29,6 @@ from esper.utils.loss import compute_task_loss_with_metrics
 # =============================================================================
 # Compiled Training Step
 # =============================================================================
-
-# Flag to enable/disable torch.compile (set to False if compilation causes issues)
-USE_COMPILED_TRAIN_STEP = True
 
 
 def _train_step_impl(
@@ -62,14 +61,32 @@ def _train_step_impl(
     return loss, outputs
 
 
-# Compile the training step for reduced overhead with CUDA graphs
-# mode="reduce-overhead" uses CUDA graphs for repeated calls with same shapes
-try:
-    _compiled_train_step = torch.compile(_train_step_impl, mode="reduce-overhead")
-except Exception:
-    # Fallback if compilation fails (e.g., older PyTorch version)
-    _compiled_train_step = _train_step_impl
-    USE_COMPILED_TRAIN_STEP = False
+@functools.cache
+def _get_compiled_train_step(use_compile: bool = True) -> Callable:
+    """Get train step function, optionally compiled (thread-safe via functools.cache).
+
+    Uses functools.cache for thread-safe lazy initialization. The cache
+    is immutable once populated, avoiding TOCTOU races.
+
+    Note: Uses mode="default" instead of "reduce-overhead" because the model
+    parameter varies across calls. CUDA graphs (reduce-overhead) capture memory
+    addresses, so different model instances would cause repeated graph recapture.
+
+    Args:
+        use_compile: If True, attempt to compile; if False, use uncompiled version
+
+    Returns:
+        The train step function (compiled or uncompiled)
+    """
+    if use_compile:
+        try:
+            # mode="default" works with varying model instances
+            # (reduce-overhead uses CUDA graphs which capture memory addresses)
+            return torch.compile(_train_step_impl, mode="default")
+        except Exception:
+            # Fallback if compilation fails (e.g., older PyTorch version)
+            return _train_step_impl
+    return _train_step_impl
 
 
 def compiled_train_step(
@@ -77,15 +94,25 @@ def compiled_train_step(
     inputs: torch.Tensor,
     targets: torch.Tensor,
     criterion: nn.Module,
+    use_compile: bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Training step with optional torch.compile optimization.
 
-    Uses compiled version if available and enabled, otherwise falls back
-    to regular implementation.
+    Uses lazy-initialized compiled version if use_compile=True and compilation
+    succeeds, otherwise falls back to uncompiled implementation.
+
+    Args:
+        model: The model to train
+        inputs: Input batch tensor
+        targets: Target batch tensor
+        criterion: Loss function (CrossEntropyLoss)
+        use_compile: Whether to attempt compilation (default True)
+
+    Returns:
+        Tuple of (loss tensor, output logits)
     """
-    if USE_COMPILED_TRAIN_STEP:
-        return _compiled_train_step(model, inputs, targets, criterion)
-    return _train_step_impl(model, inputs, targets, criterion)
+    fn = _get_compiled_train_step(use_compile)
+    return fn(model, inputs, targets, criterion)
 
 
 # =============================================================================

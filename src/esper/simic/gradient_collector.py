@@ -125,9 +125,10 @@ class SeedGradientCollector:
                 'has_exploding': False,
             }
 
-        # [PyTorch 2.9] Use _foreach_norm for efficient multi-tensor norm computation
+        # [PyTorch 2.0+] _foreach_norm is a stable internal API used by clip_grad_norm_.
         # This is a fused CUDA kernel that computes all norms in a single kernel launch,
-        # avoiding Python iteration overhead. Used internally by clip_grad_norm_.
+        # avoiding Python iteration overhead. If this breaks in future versions, fall back
+        # to: [g.norm(2) for g in grads] (slower, O(n) kernels).
         per_param_norms = torch._foreach_norm(grads, ord=2)
 
         # Stack for vectorized comparisons
@@ -199,7 +200,10 @@ def collect_seed_gradients(
     exploding_threshold: float = 100.0,
     return_enhanced: bool = False,
 ) -> dict | GradientHealthMetrics:
-    """Convenience function to collect gradient stats.
+    """Convenience function to collect gradient stats (vectorized).
+
+    Uses torch._foreach_norm for efficient batch norm computation,
+    minimizing GPU-CPU synchronization points.
 
     Args:
         seed_parameters: Iterator of seed parameters
@@ -235,27 +239,60 @@ def collect_seed_gradients(
             'has_exploding': False,
         }
 
-    # Compute per-layer norms
-    per_layer_norms = [g.norm(2).item() for g in grads]
     n_grads = len(grads)
 
-    # Aggregate stats
-    total_norm = sum(n**2 for n in per_layer_norms) ** 0.5
+    # [PyTorch 2.0+] _foreach_norm is a stable internal API used by clip_grad_norm_.
+    # This avoids O(n) .item() calls that cause GPU-CPU sync per gradient.
+    # If this breaks in future versions, fall back to: [g.norm(2) for g in grads]
+    per_param_norms = torch._foreach_norm(grads, ord=2)
+    all_norms = torch.stack(per_param_norms)
+
+    # Compute all stats on GPU before any .item() calls
+    total_squared = (all_norms ** 2).sum()
+    min_norm_t = all_norms.min()
+    max_norm_t = all_norms.max()
+    n_vanishing_t = (all_norms < vanishing_threshold).sum()
+    n_exploding_t = (all_norms > exploding_threshold).sum()
+
+    # Quality checks: accumulate per-tensor to avoid huge concatenated tensor.
+    # Instead of torch.cat([g.view(-1) for g in grads]) which allocates O(total_params),
+    # we sum per-tensor counts which is O(n_grads) intermediate scalars.
+    # NOTE: Use explicit loop instead of sum(generator, start=tensor) because
+    # Python's sum() with generators can cause graph breaks under torch.compile.
+    total_elements = sum(g.numel() for g in grads)
+    device = grads[0].device
+    zero_count_t = torch.zeros((), device=device, dtype=torch.long)
+    nan_count_t = torch.zeros((), device=device, dtype=torch.long)
+    inf_count_t = torch.zeros((), device=device, dtype=torch.long)
+    for g in grads:
+        zero_count_t = zero_count_t + (g == 0).sum()
+        nan_count_t = nan_count_t + torch.isnan(g).sum()
+        inf_count_t = inf_count_t + torch.isinf(g).sum()
+
+    # SINGLE sync point: stack all scalar tensors and materialize with one .tolist()
+    stats_tensor = torch.stack([
+        total_squared,
+        min_norm_t,
+        max_norm_t,
+        n_vanishing_t.float(),
+        n_exploding_t.float(),
+        zero_count_t.float(),
+        nan_count_t.float(),
+        inf_count_t.float(),
+    ])
+    stats = stats_tensor.tolist()
+
+    total_squared_val, min_norm, max_norm, n_vanishing, n_exploding, zero_count, nan_count, inf_count = stats
+    total_norm = total_squared_val ** 0.5
     avg_norm = total_norm / n_grads
+    n_vanishing = int(n_vanishing)
+    n_exploding = int(n_exploding)
+    zero_fraction = zero_count / max(total_elements, 1)
+    nan_count = int(nan_count)
+    inf_count = int(inf_count)
 
-    min_norm = min(per_layer_norms)
-    max_norm = max(per_layer_norms)
+    # Compute derived stats
     norm_ratio = max_norm / max(min_norm, 1e-10)
-
-    # Count vanishing/exploding
-    n_vanishing = sum(1 for n in per_layer_norms if n < vanishing_threshold)
-    n_exploding = sum(1 for n in per_layer_norms if n > exploding_threshold)
-
-    # Quality checks
-    all_grads = torch.cat([g.view(-1) for g in grads])
-    zero_fraction = (all_grads == 0).float().mean().item()
-    nan_count = torch.isnan(all_grads).sum().item()
-    inf_count = torch.isinf(all_grads).sum().item()
 
     # Health score
     vanishing_ratio = n_vanishing / n_grads
@@ -275,8 +312,8 @@ def collect_seed_gradients(
             max_layer_norm=max_norm,
             norm_ratio=norm_ratio,
             zero_grad_fraction=zero_fraction,
-            nan_count=int(nan_count),
-            inf_count=int(inf_count),
+            nan_count=nan_count,
+            inf_count=inf_count,
         )
 
     return {
@@ -381,3 +418,121 @@ def materialize_dual_grad_stats(async_stats: dict) -> DualGradientStats:
         seed_grad_norm=seed_squared ** 0.5,
         seed_param_count=async_stats['_seed_param_count'],
     )
+
+
+def collect_host_gradients_async(
+    host_parameters: Iterator[nn.Parameter],
+    device: torch.device | str = "cpu",
+) -> dict:
+    """Collect gradient stats for host network only (async-safe).
+
+    Use this when computing host gradients once and reusing across multiple seeds.
+
+    IMPORTANT: Returned tensors are on GPU and require synchronization before
+    calling .item(). Use torch.cuda.synchronize() or stream.synchronize()
+    before materialize_dual_grad_stats().
+
+    Args:
+        host_parameters: Iterator over host network parameters
+        device: Device for zero tensors when no gradients exist
+
+    Returns:
+        Dict with _host_squared_sum (Tensor), _host_param_count (int)
+    """
+    host_grads = [p.grad for p in host_parameters if p.grad is not None]
+    if host_grads:
+        # [PyTorch 2.0+] _foreach_norm is stable internal API (used by clip_grad_norm_)
+        host_norms = torch._foreach_norm(host_grads, ord=2)
+        host_squared_sum = torch.stack(host_norms).pow(2).sum()
+        host_param_count = sum(g.numel() for g in host_grads)
+    else:
+        # Return zero scalar tensor (not float) to maintain type consistency for async pattern
+        host_squared_sum = torch.zeros((), device=device)
+        host_param_count = 0
+
+    return {
+        "_host_squared_sum": host_squared_sum,
+        "_host_param_count": host_param_count,
+    }
+
+
+def collect_seed_gradients_only_async(
+    seed_parameters: Iterator[nn.Parameter],
+    device: torch.device | str = "cpu",
+) -> dict:
+    """Collect gradient stats for seed network only (async-safe).
+
+    Use with collect_host_gradients_async when host stats are precomputed.
+
+    IMPORTANT: Returned tensors are on GPU and require synchronization before
+    calling .item(). Use torch.cuda.synchronize() or stream.synchronize()
+    before materialize_dual_grad_stats().
+
+    Args:
+        seed_parameters: Iterator over seed network parameters
+        device: Device for zero tensors when no gradients exist
+
+    Returns:
+        Dict with _seed_squared_sum (Tensor), _seed_param_count (int)
+    """
+    seed_grads = [p.grad for p in seed_parameters if p.grad is not None]
+    if seed_grads:
+        # [PyTorch 2.0+] _foreach_norm is stable internal API (used by clip_grad_norm_)
+        seed_norms = torch._foreach_norm(seed_grads, ord=2)
+        seed_squared_sum = torch.stack(seed_norms).pow(2).sum()
+        seed_param_count = sum(g.numel() for g in seed_grads)
+    else:
+        # Return zero scalar tensor (not float) to maintain type consistency for async pattern
+        seed_squared_sum = torch.zeros((), device=device)
+        seed_param_count = 0
+
+    return {
+        "_seed_squared_sum": seed_squared_sum,
+        "_seed_param_count": seed_param_count,
+    }
+
+
+def collect_dual_gradients_async(
+    host_parameters: Iterator[nn.Parameter],
+    seed_parameters: Iterator[nn.Parameter],
+    device: torch.device | str = "cpu",
+) -> dict:
+    """Collect gradient stats for both host and seed networks (async-safe).
+
+    Returns tensors instead of floats to avoid .item() sync inside CUDA streams.
+    Call materialize_dual_grad_stats() AFTER stream.synchronize() to get final values.
+
+    Note: If collecting for multiple seeds, use collect_host_gradients_async() once
+    and collect_seed_gradients_only_async() per seed to avoid recomputing host norms.
+
+    Args:
+        host_parameters: Iterator over host network parameters
+        seed_parameters: Iterator over seed network parameters
+        device: Device for zero tensors when no gradients exist
+
+    Returns:
+        Dict with _host_squared_sum, _host_param_count, _seed_squared_sum, _seed_param_count
+    """
+    host_stats = collect_host_gradients_async(host_parameters, device)
+    seed_stats = collect_seed_gradients_only_async(seed_parameters, device)
+
+    return {
+        "_host_squared_sum": host_stats["_host_squared_sum"],
+        "_host_param_count": host_stats["_host_param_count"],
+        "_seed_squared_sum": seed_stats["_seed_squared_sum"],
+        "_seed_param_count": seed_stats["_seed_param_count"],
+    }
+
+
+__all__ = [
+    "GradientHealthMetrics",
+    "SeedGradientCollector",
+    "materialize_grad_stats",
+    "collect_seed_gradients",
+    "collect_seed_gradients_async",
+    "DualGradientStats",
+    "materialize_dual_grad_stats",
+    "collect_host_gradients_async",
+    "collect_seed_gradients_only_async",
+    "collect_dual_gradients_async",
+]

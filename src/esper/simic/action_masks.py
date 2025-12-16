@@ -25,6 +25,7 @@ import torch
 from torch.distributions import Categorical
 
 from esper.leyline import SeedStage, MIN_CULL_AGE
+from esper.leyline.stages import VALID_TRANSITIONS
 from esper.simic.slots import ordered_slots
 from esper.leyline.factored_actions import (
     BlueprintAction,
@@ -46,21 +47,17 @@ _SLOT_ID_TO_INDEX: dict[str, int] = {
     "late": SlotAction.LATE.value,
 }
 
-# Stage sets for validation
+# Stage sets for validation - derived from VALID_TRANSITIONS (single source of truth)
+# Stages from which FOSSILIZED is a valid transition
 _FOSSILIZABLE_STAGES = frozenset({
-    SeedStage.PROBATIONARY.value,
+    stage.value for stage, transitions in VALID_TRANSITIONS.items()
+    if SeedStage.FOSSILIZED in transitions
 })
 
-# Stages from which a seed can be culled
-# Derived as: active stages that have CULLED in VALID_TRANSITIONS
-# Equivalently: set(active_stages) - {FOSSILIZED} (terminal success)
-# See stages.py VALID_TRANSITIONS for authoritative source
+# Stages from which CULLED is a valid transition
 _CULLABLE_STAGES = frozenset({
-    SeedStage.GERMINATED.value,
-    SeedStage.TRAINING.value,
-    SeedStage.BLENDING.value,
-    SeedStage.PROBATIONARY.value,
-    # NOT FOSSILIZED - terminal success, no outgoing transitions
+    stage.value for stage, transitions in VALID_TRANSITIONS.items()
+    if SeedStage.CULLED in transitions
 })
 
 

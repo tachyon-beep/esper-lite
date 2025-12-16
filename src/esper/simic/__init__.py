@@ -45,6 +45,9 @@ from esper.simic.features import (
 from esper.simic.action_masks import (
     MaskedCategorical,
     InvalidStateMachineError,
+    build_slot_states,
+    compute_action_masks,
+    compute_batch_masks,
 )
 
 # Telemetry
@@ -57,6 +60,13 @@ from esper.simic.reward_telemetry import (
 )
 from esper.simic.gradient_collector import (
     GradientHealthMetrics,
+    DualGradientStats,
+    SeedGradientCollector,
+    collect_dual_gradients_async,
+    materialize_dual_grad_stats,
+    materialize_grad_stats,
+    collect_seed_gradients,
+    collect_seed_gradients_async,
 )
 from esper.simic.debug_telemetry import (
     LayerGradientStats,
@@ -101,12 +111,22 @@ __all__ = [
     # Action Masks
     "MaskedCategorical",
     "InvalidStateMachineError",
+    "build_slot_states",
+    "compute_action_masks",
+    "compute_batch_masks",
 
     # Telemetry
     "TelemetryLevel",
     "TelemetryConfig",
     "RewardComponentsTelemetry",
     "GradientHealthMetrics",
+    "DualGradientStats",
+    "SeedGradientCollector",
+    "collect_dual_gradients_async",
+    "materialize_dual_grad_stats",
+    "materialize_grad_stats",
+    "collect_seed_gradients",
+    "collect_seed_gradients_async",
     "LayerGradientStats",
     "collect_per_layer_gradients",
     "NumericalStabilityReport",
