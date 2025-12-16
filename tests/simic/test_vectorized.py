@@ -206,6 +206,48 @@ def test_mask_hit_rates_emitted():
     assert data["mask_total"]["op"] == 12
 
 
+def test_performance_degradation_emitted_on_accuracy_drop():
+    from esper.simic.vectorized import _check_performance_degradation
+    from esper.leyline import TelemetryEventType
+    from unittest.mock import Mock
+
+    hub = Mock()
+
+    # Accuracy dropped from 0.8 to 0.6 (25% drop)
+    emitted = _check_performance_degradation(
+        hub=hub,
+        current_acc=0.6,
+        rolling_avg_acc=0.8,
+        degradation_threshold=0.1,  # 10% drop triggers
+        env_id=0,
+    )
+
+    assert emitted is True
+    assert hub.emit.called
+    event = hub.emit.call_args[0][0]
+    assert event.event_type == TelemetryEventType.PERFORMANCE_DEGRADATION
+    assert event.data["current_acc"] == 0.6
+    assert event.data["rolling_avg_acc"] == 0.8
+
+
+def test_no_degradation_event_when_stable():
+    from esper.simic.vectorized import _check_performance_degradation
+    from unittest.mock import Mock
+
+    hub = Mock()
+
+    emitted = _check_performance_degradation(
+        hub=hub,
+        current_acc=0.78,
+        rolling_avg_acc=0.8,
+        degradation_threshold=0.1,
+        env_id=0,
+    )
+
+    assert emitted is False
+    assert not hub.emit.called
+
+
 def test_resolve_target_slot_uses_canonical_order():
     slot_config = SlotConfig.default()
 

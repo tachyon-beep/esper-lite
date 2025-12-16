@@ -353,6 +353,40 @@ def _emit_mask_hit_rates(
     ))
 
 
+def _check_performance_degradation(
+    hub,
+    *,
+    current_acc: float,
+    rolling_avg_acc: float,
+    degradation_threshold: float = 0.1,
+    env_id: int = 0,
+) -> bool:
+    """Emit PERFORMANCE_DEGRADATION if accuracy dropped significantly.
+
+    Returns True if event was emitted.
+    """
+    if rolling_avg_acc <= 0:
+        return False
+
+    drop = (rolling_avg_acc - current_acc) / rolling_avg_acc
+
+    if drop < degradation_threshold:
+        return False
+
+    hub.emit(TelemetryEvent(
+        event_type=TelemetryEventType.PERFORMANCE_DEGRADATION,
+        severity="warning",
+        data={
+            "current_acc": current_acc,
+            "rolling_avg_acc": rolling_avg_acc,
+            "drop_percent": drop * 100,
+            "threshold_percent": degradation_threshold * 100,
+            "env_id": env_id,
+        },
+    ))
+    return True
+
+
 def _apply_slot_telemetry(
     env_state,
     *,
