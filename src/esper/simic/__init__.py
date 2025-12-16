@@ -25,8 +25,17 @@ Training:
 - config: Hyperparameter configuration
 """
 
-# Normalization
-from esper.simic.normalization import RunningMeanStd
+# Control (observation/action preprocessing)
+from esper.simic.control import (
+    RunningMeanStd,
+    safe,
+    TaskConfig,
+    MaskedCategorical,
+    InvalidStateMachineError,
+    build_slot_states,
+    compute_action_masks,
+    compute_batch_masks,
+)
 
 # Rewards
 from esper.simic.rewards import (
@@ -43,21 +52,6 @@ from esper.simic.rewards import (
     STAGE_TRAINING,
     STAGE_BLENDING,
     STAGE_FOSSILIZED,
-)
-
-# Features (hot path)
-from esper.simic.features import (
-    safe,
-    TaskConfig,
-)
-
-# Action Masks
-from esper.simic.action_masks import (
-    MaskedCategorical,
-    InvalidStateMachineError,
-    build_slot_states,
-    compute_action_masks,
-    compute_batch_masks,
 )
 
 # Reward telemetry (from rewards subpackage)

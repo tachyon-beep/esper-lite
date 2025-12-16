@@ -14,7 +14,7 @@ from hypothesis import strategies as st
 from esper.leyline import SeedStage, MIN_CULL_AGE
 from esper.leyline.slot_config import SlotConfig
 from esper.leyline.factored_actions import LifecycleOp, NUM_OPS, NUM_BLUEPRINTS, NUM_BLENDS
-from esper.simic.action_masks import (
+from esper.simic.control import (
     compute_action_masks,
     compute_batch_masks,
     MaskSeedInfo,

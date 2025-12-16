@@ -60,7 +60,7 @@ from esper.leyline import (
     DEFAULT_MIN_PANICS_BEFORE_ROLLBACK,
 )
 from esper.leyline.factored_actions import FactoredAction, LifecycleOp
-from esper.simic.action_masks import build_slot_states, compute_action_masks
+from esper.simic.control import build_slot_states, compute_action_masks
 from esper.leyline.slot_id import validate_slot_ids
 from esper.simic.telemetry import (
     AnomalyDetector,
@@ -73,8 +73,12 @@ from esper.simic.telemetry import (
     materialize_dual_grad_stats,
     TelemetryConfig,
 )
-from esper.simic.normalization import RunningMeanStd, RewardNormalizer
-from esper.simic.features import MULTISLOT_FEATURE_SIZE, get_feature_size
+from esper.simic.control import (
+    RunningMeanStd,
+    RewardNormalizer,
+    MULTISLOT_FEATURE_SIZE,
+    get_feature_size,
+)
 from esper.simic.ppo import PPOAgent, signals_to_features
 from esper.simic.rewards import (
     compute_reward,

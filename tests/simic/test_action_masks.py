@@ -11,7 +11,7 @@ The mask system only blocks PHYSICALLY IMPOSSIBLE actions:
 """
 import pytest
 
-from esper.simic.action_masks import (
+from esper.simic.control import (
     MaskSeedInfo,
     compute_action_masks,
     compute_batch_masks,
@@ -619,7 +619,7 @@ class TestBuildSlotStates:
 
     def test_empty_model_returns_none_states(self):
         """Empty slots return None for each slot."""
-        from esper.simic.action_masks import build_slot_states
+        from esper.simic.control import build_slot_states
         from esper.leyline import SeedMetrics, SeedStage, SeedStateReport
 
         slot_reports = {
@@ -631,7 +631,7 @@ class TestBuildSlotStates:
 
     def test_active_seed_returns_mask_seed_info(self):
         """Active seed returns MaskSeedInfo with correct stage and age."""
-        from esper.simic.action_masks import build_slot_states, MaskSeedInfo
+        from esper.simic.control import build_slot_states, MaskSeedInfo
         from esper.leyline import SeedMetrics, SeedStage, SeedStateReport
 
         slot_reports = {
@@ -647,7 +647,7 @@ class TestBuildSlotStates:
 
     def test_multiple_slots(self):
         """Multiple slots are all processed."""
-        from esper.simic.action_masks import build_slot_states, MaskSeedInfo
+        from esper.simic.control import build_slot_states, MaskSeedInfo
         from esper.leyline import SeedMetrics, SeedStage, SeedStateReport
 
         slot_reports = {

@@ -4,7 +4,7 @@
 
 def test_multislot_features():
     """obs_to_multislot_features should include per-slot state."""
-    from esper.simic.features import obs_to_multislot_features
+    from esper.simic.control import obs_to_multislot_features
 
     obs = {
         # Base features
@@ -49,7 +49,7 @@ def test_multislot_features():
 
 def test_multislot_features_normalized_values():
     """Feature values should be normalized to reasonable ranges."""
-    from esper.simic.features import obs_to_multislot_features
+    from esper.simic.control import obs_to_multislot_features
 
     obs = {
         'epoch': 50,
@@ -84,7 +84,7 @@ def test_multislot_features_normalized_values():
 
 def test_multislot_features_missing_slots():
     """Should handle missing slot data gracefully."""
-    from esper.simic.features import obs_to_multislot_features
+    from esper.simic.control import obs_to_multislot_features
 
     obs = {
         'epoch': 10,
@@ -113,7 +113,7 @@ def test_multislot_features_missing_slots():
 
 def test_multislot_feature_size_constant():
     """MULTISLOT_FEATURE_SIZE constant should match actual size."""
-    from esper.simic.features import MULTISLOT_FEATURE_SIZE, obs_to_multislot_features
+    from esper.simic.control import MULTISLOT_FEATURE_SIZE, obs_to_multislot_features
 
     obs = {
         'epoch': 10,
@@ -144,7 +144,7 @@ def test_multislot_feature_size_constant():
 
 def test_seed_utilization_feature():
     """seed_utilization should track resource usage correctly."""
-    from esper.simic.features import obs_to_multislot_features
+    from esper.simic.control import obs_to_multislot_features
 
     obs = {
         'epoch': 10,
@@ -191,7 +191,7 @@ def test_seed_utilization_feature():
 
 def test_blueprint_one_hot_encoding():
     """Blueprint one-hot encoding should correctly represent blueprint type per slot."""
-    from esper.simic.features import obs_to_multislot_features
+    from esper.simic.control import obs_to_multislot_features
 
     base_obs = {
         'epoch': 10,
@@ -263,7 +263,7 @@ def test_blueprint_one_hot_encoding():
 
 def test_dynamic_feature_size_3_slots():
     """Feature extraction with 3 slots should return 50 features."""
-    from esper.simic.features import obs_to_multislot_features, get_feature_size
+    from esper.simic.control import obs_to_multislot_features, get_feature_size
     from esper.leyline.slot_config import SlotConfig
 
     slot_config = SlotConfig.default()  # 3 slots: r0c0, r0c1, r0c2
@@ -299,7 +299,7 @@ def test_dynamic_feature_size_3_slots():
 
 def test_dynamic_feature_size_5_slots():
     """Feature extraction with 5 slots should return 68 features."""
-    from esper.simic.features import obs_to_multislot_features, get_feature_size
+    from esper.simic.control import obs_to_multislot_features, get_feature_size
     from esper.leyline.slot_config import SlotConfig
 
     slot_config = SlotConfig(slot_ids=("r0c0", "r0c1", "r0c2", "r1c0", "r1c1"))  # 5 slots
@@ -337,7 +337,7 @@ def test_dynamic_feature_size_5_slots():
 
 def test_dynamic_slot_iteration():
     """Feature extraction should iterate over slot_config.slot_ids, not hardcoded list."""
-    from esper.simic.features import obs_to_multislot_features
+    from esper.simic.control import obs_to_multislot_features
     from esper.leyline.slot_config import SlotConfig
 
     slot_config = SlotConfig(slot_ids=("r0c0", "r0c2"))  # Only 2 slots, skipping r0c1

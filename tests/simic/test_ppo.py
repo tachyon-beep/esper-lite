@@ -4,7 +4,7 @@ import torch
 
 from esper.leyline import DEFAULT_EPISODE_LENGTH, DEFAULT_VALUE_CLIP
 from esper.simic.ppo import signals_to_features, PPOAgent
-from esper.simic.features import MULTISLOT_FEATURE_SIZE
+from esper.simic.control import MULTISLOT_FEATURE_SIZE
 
 
 def test_ppo_agent_architecture():
@@ -295,7 +295,7 @@ def test_signals_to_features_telemetry_slot_alignment() -> None:
 def test_ppo_agent_accepts_slot_config():
     """PPOAgent should accept slot_config and derive state_dim from it."""
     from esper.leyline.slot_config import SlotConfig
-    from esper.simic.features import get_feature_size
+    from esper.simic.control import get_feature_size
 
     slot_config = SlotConfig.default()  # 3 slots
     agent = PPOAgent(
@@ -314,7 +314,7 @@ def test_ppo_agent_accepts_slot_config():
 def test_ppo_agent_with_3_slot_config():
     """PPOAgent with 3-slot config should have state_dim=50."""
     from esper.leyline.slot_config import SlotConfig
-    from esper.simic.features import get_feature_size
+    from esper.simic.control import get_feature_size
 
     slot_config = SlotConfig.default()  # 3 slots (r0c0, r0c1, r0c2)
     agent = PPOAgent(
@@ -333,7 +333,7 @@ def test_ppo_agent_with_3_slot_config():
 def test_ppo_agent_with_5_slot_config():
     """PPOAgent with 5-slot config should have state_dim=68."""
     from esper.leyline.slot_config import SlotConfig
-    from esper.simic.features import get_feature_size
+    from esper.simic.control import get_feature_size
 
     # Create a 5-slot config
     slot_config = SlotConfig(slot_ids=("r0c0", "r0c1", "r0c2", "r1c0", "r1c1"))

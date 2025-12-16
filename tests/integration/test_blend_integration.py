@@ -9,7 +9,7 @@ import torch
 from esper.kasmina.blending import BlendCatalog, GatedBlend
 from esper.kasmina.host import CNNHost, TransformerHost, MorphogeneticModel
 from esper.leyline.factored_actions import BlendAction, FactoredAction, LifecycleOp, BlueprintAction
-from esper.simic.features import TaskConfig
+from esper.simic.control import TaskConfig
 
 
 class TestBlendAlgorithmCreation:

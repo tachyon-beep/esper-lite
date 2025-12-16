@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from esper.simic.normalization import RunningMeanStd
+from esper.simic.control import RunningMeanStd
 
 
 class TestRunningMeanStd:
@@ -108,7 +108,7 @@ class TestRewardNormalizer:
 
     def test_first_sample_returns_clipped_raw(self):
         """First sample should return clipped raw reward (can't compute std from 1 sample)."""
-        from esper.simic.normalization import RewardNormalizer
+        from esper.simic.control import RewardNormalizer
 
         normalizer = RewardNormalizer(clip=10.0)
 
@@ -123,7 +123,7 @@ class TestRewardNormalizer:
 
     def test_second_sample_uses_variance(self):
         """Second sample should normalize using computed std."""
-        from esper.simic.normalization import RewardNormalizer
+        from esper.simic.control import RewardNormalizer
 
         normalizer = RewardNormalizer(clip=10.0)
 
@@ -139,7 +139,7 @@ class TestRewardNormalizer:
 
     def test_normalization_with_variance(self):
         """After enough samples, normalization should scale by std."""
-        from esper.simic.normalization import RewardNormalizer
+        from esper.simic.control import RewardNormalizer
 
         normalizer = RewardNormalizer(clip=10.0)
 
@@ -158,7 +158,7 @@ class TestRewardNormalizer:
 
     def test_count_starts_at_zero(self):
         """Count should start at 0, not epsilon."""
-        from esper.simic.normalization import RewardNormalizer
+        from esper.simic.control import RewardNormalizer
 
         normalizer = RewardNormalizer()
         assert normalizer.count == 0
@@ -171,7 +171,7 @@ class TestRewardNormalizer:
 
     def test_normalize_only_before_enough_samples(self):
         """normalize_only should return clipped raw if < 2 samples."""
-        from esper.simic.normalization import RewardNormalizer
+        from esper.simic.control import RewardNormalizer
 
         normalizer = RewardNormalizer(clip=5.0)
 

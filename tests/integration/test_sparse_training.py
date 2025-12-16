@@ -8,7 +8,7 @@ with all reward modes without requiring full training runs.
 import pytest
 import math
 
-from esper.simic.normalization import RewardNormalizer
+from esper.simic.control import RewardNormalizer
 
 
 class TestRewardNormalizerWithSparse:

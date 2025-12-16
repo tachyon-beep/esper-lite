@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 
 from esper.kasmina.slot import SeedSlot
-from esper.simic.features import TaskConfig
+from esper.simic.control import TaskConfig
 from esper.leyline.stages import SeedStage
 
 

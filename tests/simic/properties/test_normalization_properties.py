@@ -14,7 +14,7 @@ from hypothesis import given, assume, settings
 from hypothesis import strategies as st
 from tests.strategies import bounded_floats
 
-from esper.simic.normalization import RunningMeanStd
+from esper.simic.control import RunningMeanStd
 
 
 class TestNormalizationConvergence:

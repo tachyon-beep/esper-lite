@@ -5,7 +5,7 @@ import torch
 
 from esper.kasmina.slot import SeedSlot
 from esper.leyline.stages import SeedStage
-from esper.simic.features import TaskConfig
+from esper.simic.control import TaskConfig
 
 
 def create_slot_in_training() -> SeedSlot:
