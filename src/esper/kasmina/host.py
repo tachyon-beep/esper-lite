@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING
 
 from typing_extensions import override
 
+import functools
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -99,9 +101,12 @@ class CNNHost(nn.Module):
             )
         return specs
 
-    @property
+    @functools.cached_property
     def segment_channels(self) -> dict[str, int]:
-        """Map of slot_id -> channel dimension (derived from injection_specs)."""
+        """Map of slot_id -> channel dimension (derived from injection_specs).
+
+        Cached to avoid repeated object creation on each access.
+        """
         return {spec.slot_id: spec.channels for spec in self.injection_specs()}
 
     @property
@@ -157,12 +162,8 @@ class CNNHost(nn.Module):
         if self._memory_format == torch.channels_last:
             x = x.to(memory_format=torch.channels_last)
 
-        # Map canonical slot IDs to block indices (0-indexed)
-        segment_to_block = {
-            "r0c0": 0,  # After block 0 (block1)
-            "r0c1": 1,  # After block 1 (block2)
-            "r0c2": 2,  # After block 2 (block3)
-        }
+        # Derive segment_to_block from injection_specs (supports variable block counts)
+        segment_to_block = {spec.slot_id: spec.layer_range[0] for spec in self.injection_specs()}
         target_block = segment_to_block[segment]
         start_block = 0 if from_segment is None else segment_to_block[from_segment] + 1
 
@@ -198,12 +199,8 @@ class CNNHost(nn.Module):
         if self._memory_format == torch.channels_last:
             x = x.to(memory_format=torch.channels_last)
 
-        # Map canonical slot IDs to block indices
-        segment_to_block = {
-            "r0c0": 0,
-            "r0c1": 1,
-            "r0c2": 2,
-        }
+        # Derive segment_to_block from injection_specs (supports variable block counts)
+        segment_to_block = {spec.slot_id: spec.layer_range[0] for spec in self.injection_specs()}
         start_block = segment_to_block[segment]
 
         slot_by_idx = dict(zip(self._slot_indices, self._slot_keys))
@@ -333,6 +330,10 @@ class TransformerHost(nn.Module):
         num_segments: int = 3,
     ):
         super().__init__()
+        if n_layer % num_segments != 0:
+            raise ValueError(
+                f"n_layer ({n_layer}) must be divisible by num_segments ({num_segments})"
+            )
         self.n_layer = n_layer
         self.n_embd = n_embd
         self.block_size = block_size
@@ -388,9 +389,12 @@ class TransformerHost(nn.Module):
             )
         return specs
 
-    @property
+    @functools.cached_property
     def segment_channels(self) -> dict[str, int]:
-        """Map of slot_id -> channel dimension (derived from injection_specs)."""
+        """Map of slot_id -> channel dimension (derived from injection_specs).
+
+        Cached to avoid repeated object creation on each access.
+        """
         return {spec.slot_id: spec.channels for spec in self.injection_specs()}
 
     @property
@@ -551,8 +555,8 @@ class MorphogeneticModel(nn.Module):
             )
         self.seed_slots = nn.ModuleDict(slots_dict)
 
-        # Track slot order for forward pass
-        self._slot_order = ["r0c0", "r0c1", "r0c2"]
+        # Track slot order for forward pass (derived from host's injection_specs)
+        self._slot_order = [spec.slot_id for spec in host.injection_specs()]
         self._active_slots = [s for s in self._slot_order if s in self.seed_slots]
 
         # Move host to device
