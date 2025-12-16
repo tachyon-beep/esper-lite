@@ -845,7 +845,16 @@ def train_ppo_vectorized(
     if not slots:
         raise ValueError("slots parameter is required and cannot be empty")
 
-    slot_config = SlotConfig.default()
+    # Get task spec early (needed for model creation to derive slot_config)
+    task_spec = get_task_spec(task)
+    ActionEnum = task_spec.action_enum
+
+    # Derive slot_config from host's injection specs
+    # Create a temporary model to query the host's injection topology
+    temp_device = "cpu"  # Use CPU for temp model to avoid GPU allocation
+    temp_model = create_model(task=task_spec, device=temp_device, slots=slots)
+    slot_config = SlotConfig.from_specs(temp_model.host.injection_specs())
+    del temp_model  # Free memory immediately
 
     # Compute effective seed limit
     # max_seeds=None means unlimited (use 0 to indicate no limit)
@@ -867,9 +876,6 @@ def train_ppo_vectorized(
             f"n_envs={n_envs} must be >= len(devices)={len(devices)} so every requested device "
             "runs at least one environment."
         )
-
-    task_spec = get_task_spec(task)
-    ActionEnum = task_spec.action_enum
 
     # Create reward config based on mode
     reward_family_enum = RewardFamily(reward_family)
@@ -1131,6 +1137,7 @@ def train_ppo_vectorized(
             # Buffer dimensions must match training loop parameters
             num_envs=n_envs,
             max_steps_per_env=max_epochs,
+            slot_config=slot_config,
         )
 
     # Initialize anomaly detector for automatic diagnostics
