@@ -99,3 +99,44 @@ class TestSeedSlotCheckpoint:
             assert new_slot.state is not None
             assert new_slot.state.seed_id == slot.state.seed_id
             assert new_slot.state.stage == slot.state.stage
+
+
+class TestAlphaScheduleCleanup:
+    """Test alpha_schedule is discarded after BLENDING."""
+
+    def test_alpha_schedule_cleared_on_probationary_transition(self):
+        """alpha_schedule should be None after BLENDING -> PROBATIONARY."""
+        slot = SeedSlot(
+            slot_id="r0c0",
+            channels=64,
+            device="cpu",
+            task_config=TaskConfig(
+                task_type="classification",
+                topology="cnn",
+                baseline_loss=2.3,
+                target_loss=0.5,
+                typical_loss_delta_std=0.1,
+                max_epochs=25,
+                blending_steps=3,
+            ),
+        )
+        slot.germinate(
+            blueprint_id="norm",
+            seed_id="test-seed",
+            blend_algorithm_id="linear",
+        )
+        slot.state.transition(SeedStage.TRAINING)
+        slot.state.transition(SeedStage.BLENDING)
+        slot.start_blending(total_steps=3)
+
+        # Verify schedule exists during BLENDING
+        assert slot.alpha_schedule is not None
+
+        # Force transition to PROBATIONARY
+        slot.state.alpha = 1.0
+        slot.state.transition(SeedStage.PROBATIONARY)
+        slot._on_blending_complete()  # Cleanup hook
+
+        # Schedule should be cleared
+        assert slot.alpha_schedule is None
+        assert slot.state.alpha == 1.0

@@ -1294,6 +1294,16 @@ class SeedSlot(nn.Module):
                 f"Valid options: linear, sigmoid, gated"
             )
 
+    def _on_blending_complete(self) -> None:
+        """Clean up after BLENDING stage completes.
+
+        Discards alpha_schedule (no longer needed after full integration).
+        Sets state.alpha = 1.0 (permanently fully blended).
+        """
+        self.alpha_schedule = None
+        if self.state:
+            self.state.alpha = 1.0
+
     def update_alpha_for_step(self, step: int) -> float:
         """Update alpha based on schedule."""
         if self.alpha_schedule is not None:
@@ -1442,6 +1452,8 @@ class SeedSlot(nn.Module):
                     raise RuntimeError(
                         f"Illegal lifecycle transition {self.state.stage} → PROBATIONARY"
                     )
+                # Clean up alpha_schedule after successful transition
+                self._on_blending_complete()
                 self._emit_telemetry(
                     TelemetryEventType.SEED_STAGE_CHANGED,
                     data={"from": old_stage.name, "to": self.state.stage.name},
