@@ -201,6 +201,49 @@ class SeedMetrics:
             alpha_ramp_step=self.alpha_ramp_step,
         )
 
+    def to_dict(self) -> dict:
+        """Convert to primitive dict for serialization."""
+        return {
+            "epochs_total": self.epochs_total,
+            "epochs_in_current_stage": self.epochs_in_current_stage,
+            "initial_val_accuracy": self.initial_val_accuracy,
+            "current_val_accuracy": self.current_val_accuracy,
+            "best_val_accuracy": self.best_val_accuracy,
+            "accuracy_at_stage_start": self.accuracy_at_stage_start,
+            "accuracy_at_blending_start": self.accuracy_at_blending_start,
+            "isolation_violations": self.isolation_violations,
+            "gradient_norm_avg": self.gradient_norm_avg,
+            "current_alpha": self.current_alpha,
+            "alpha_ramp_step": self.alpha_ramp_step,
+            "counterfactual_contribution": self.counterfactual_contribution,
+            "_blending_started": self._blending_started,
+            "seed_gradient_norm_ratio": self.seed_gradient_norm_ratio,
+            "host_param_count": self.host_param_count,
+            "seed_param_count": self.seed_param_count,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "SeedMetrics":
+        """Reconstruct from primitive dict."""
+        metrics = cls()
+        metrics.epochs_total = data.get("epochs_total", 0)
+        metrics.epochs_in_current_stage = data.get("epochs_in_current_stage", 0)
+        metrics.initial_val_accuracy = data.get("initial_val_accuracy", 0.0)
+        metrics.current_val_accuracy = data.get("current_val_accuracy", 0.0)
+        metrics.best_val_accuracy = data.get("best_val_accuracy", 0.0)
+        metrics.accuracy_at_stage_start = data.get("accuracy_at_stage_start", 0.0)
+        metrics.accuracy_at_blending_start = data.get("accuracy_at_blending_start", 0.0)
+        metrics.isolation_violations = data.get("isolation_violations", 0)
+        metrics.gradient_norm_avg = data.get("gradient_norm_avg", 0.0)
+        metrics.current_alpha = data.get("current_alpha", 0.0)
+        metrics.alpha_ramp_step = data.get("alpha_ramp_step", 0)
+        metrics.counterfactual_contribution = data.get("counterfactual_contribution")
+        metrics._blending_started = data.get("_blending_started", False)
+        metrics.seed_gradient_norm_ratio = data.get("seed_gradient_norm_ratio", 0.0)
+        metrics.host_param_count = data.get("host_param_count", 0)
+        metrics.seed_param_count = data.get("seed_param_count", 0)
+        return metrics
+
 
 # =============================================================================
 # Seed State
@@ -313,6 +356,59 @@ class SeedState:
             is_improving=self.metrics.improvement_since_stage_start > 0,
             needs_attention=not self.is_healthy or self.metrics.isolation_violations > 0,
         )
+
+    def to_dict(self) -> dict:
+        """Convert to primitive dict for PyTorch 2.9 weights_only=True serialization."""
+        return {
+            "seed_id": self.seed_id,
+            "blueprint_id": self.blueprint_id,
+            "slot_id": self.slot_id,
+            "stage": self.stage.value,  # Enum -> int
+            "previous_stage": self.previous_stage.value if self.previous_stage else None,
+            "stage_entered_at": self.stage_entered_at.isoformat(),  # datetime -> str
+            "alpha": self.alpha,
+            "stage_history": [
+                (stage.value, ts.isoformat()) for stage, ts in self.stage_history
+            ],  # deque of (Enum, datetime) -> list of (int, str)
+            "metrics": self.metrics.to_dict() if self.metrics else None,
+            "telemetry": self.telemetry.to_dict() if self.telemetry else None,
+            "blending_steps_done": self.blending_steps_done,
+            "blending_steps_total": self.blending_steps_total,
+            "is_healthy": self.is_healthy,
+            "is_paused": self.is_paused,
+            "previous_epochs_in_stage": self.previous_epochs_in_stage,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "SeedState":
+        """Reconstruct from primitive dict."""
+        from datetime import datetime
+        from collections import deque
+
+        state = cls(
+            seed_id=data["seed_id"],
+            blueprint_id=data["blueprint_id"],
+            slot_id=data["slot_id"],
+            stage=SeedStage(data["stage"]),
+            previous_stage=SeedStage(data["previous_stage"]) if data.get("previous_stage") else None,
+        )
+        state.stage_entered_at = datetime.fromisoformat(data["stage_entered_at"])
+        state.alpha = data.get("alpha", 0.0)
+        state.stage_history = deque(
+            (SeedStage(stage), datetime.fromisoformat(ts))
+            for stage, ts in data.get("stage_history", [])
+        )
+        if data.get("metrics"):
+            state.metrics = SeedMetrics.from_dict(data["metrics"])
+        if data.get("telemetry"):
+            from esper.leyline.telemetry import SeedTelemetry
+            state.telemetry = SeedTelemetry.from_dict(data["telemetry"])
+        state.blending_steps_done = data.get("blending_steps_done", 0)
+        state.blending_steps_total = data.get("blending_steps_total", 0)
+        state.is_healthy = data.get("is_healthy", True)
+        state.is_paused = data.get("is_paused", False)
+        state.previous_epochs_in_stage = data.get("previous_epochs_in_stage", 0)
+        return state
 
 
 # =============================================================================
