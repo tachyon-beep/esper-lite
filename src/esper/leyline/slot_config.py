@@ -3,9 +3,15 @@
 Replaces the fixed SlotAction enum with dynamic slot configuration.
 """
 
-from dataclasses import dataclass
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from esper.leyline.slot_id import format_slot_id
+
+if TYPE_CHECKING:
+    from esper.leyline.injection_spec import InjectionSpec
 
 
 @dataclass(frozen=True)
@@ -16,9 +22,11 @@ class SlotConfig:
 
     Attributes:
         slot_ids: Tuple of slot IDs in action space order.
+        _channel_map: Internal mapping of slot_id -> channels (frozen dict workaround).
     """
 
     slot_ids: tuple[str, ...]
+    _channel_map: tuple[tuple[str, int], ...] = field(default=())
 
     @property
     def num_slots(self) -> int:
@@ -53,6 +61,20 @@ class SlotConfig:
         """
         return self.slot_ids.index(slot_id)
 
+    def channels_for_slot(self, slot_id: str) -> int:
+        """Get channel dimension for a slot.
+
+        Args:
+            slot_id: Slot ID to look up.
+
+        Returns:
+            Channel count, or 0 if not available.
+        """
+        for sid, channels in self._channel_map:
+            if sid == slot_id:
+                return channels
+        return 0
+
     @classmethod
     def default(cls) -> "SlotConfig":
         """Default 3-slot configuration (legacy compatible).
@@ -61,6 +83,30 @@ class SlotConfig:
             SlotConfig with 3 slots in a single row (r0c0, r0c1, r0c2).
         """
         return cls(slot_ids=("r0c0", "r0c1", "r0c2"))
+
+    @classmethod
+    def from_specs(cls, specs: list[InjectionSpec]) -> "SlotConfig":
+        """Create config from host injection specs.
+
+        Args:
+            specs: List of InjectionSpec from host.
+
+        Returns:
+            SlotConfig with slots sorted by position.
+
+        Raises:
+            ValueError: If specs is empty.
+        """
+        if not specs:
+            raise ValueError("SlotConfig.from_specs requires at least one InjectionSpec")
+
+        # Sort by position (early -> late in network)
+        sorted_specs = sorted(specs, key=lambda s: s.position)
+
+        slot_ids = tuple(s.slot_id for s in sorted_specs)
+        channel_map = tuple((s.slot_id, s.channels) for s in sorted_specs)
+
+        return cls(slot_ids=slot_ids, _channel_map=channel_map)
 
     @classmethod
     def for_grid(cls, rows: int, cols: int) -> "SlotConfig":

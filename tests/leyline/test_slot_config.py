@@ -86,3 +86,60 @@ def test_slot_config_tuple_enforced():
     # Even if we pass a list, it should be stored as tuple
     config2 = SlotConfig(slot_ids=tuple(["r0c0", "r0c1"]))
     assert isinstance(config2.slot_ids, tuple)
+
+
+class TestSlotConfigFromSpecs:
+    """Tests for SlotConfig.from_specs() factory method."""
+
+    def test_from_specs_extracts_slot_ids(self):
+        """from_specs should extract slot IDs from specs."""
+        from esper.leyline import InjectionSpec
+
+        specs = [
+            InjectionSpec(slot_id="r0c0", channels=64, position=0.33, layer_range=(0, 2)),
+            InjectionSpec(slot_id="r0c1", channels=128, position=0.66, layer_range=(2, 4)),
+        ]
+        config = SlotConfig.from_specs(specs)
+        assert config.slot_ids == ("r0c0", "r0c1")
+        assert config.num_slots == 2
+
+    def test_from_specs_sorts_by_position(self):
+        """from_specs should sort specs by position."""
+        from esper.leyline import InjectionSpec
+
+        # Out of order input
+        specs = [
+            InjectionSpec(slot_id="r0c1", channels=128, position=0.66, layer_range=(2, 4)),
+            InjectionSpec(slot_id="r0c0", channels=64, position=0.33, layer_range=(0, 2)),
+        ]
+        config = SlotConfig.from_specs(specs)
+        # Should be sorted by position
+        assert config.slot_ids == ("r0c0", "r0c1")
+
+    def test_from_specs_preserves_channel_info(self):
+        """from_specs should preserve channel information."""
+        from esper.leyline import InjectionSpec
+
+        specs = [
+            InjectionSpec(slot_id="r0c0", channels=64, position=0.33, layer_range=(0, 2)),
+            InjectionSpec(slot_id="r0c1", channels=128, position=0.66, layer_range=(2, 4)),
+        ]
+        config = SlotConfig.from_specs(specs)
+        assert config.channels_for_slot("r0c0") == 64
+        assert config.channels_for_slot("r0c1") == 128
+
+    def test_from_specs_empty_raises(self):
+        """from_specs should raise ValueError on empty list."""
+        with pytest.raises(ValueError, match="at least one"):
+            SlotConfig.from_specs([])
+
+    def test_channels_for_slot_unknown_slot(self):
+        """channels_for_slot should return 0 for unknown slots."""
+        from esper.leyline import InjectionSpec
+
+        specs = [
+            InjectionSpec(slot_id="r0c0", channels=64, position=0.33, layer_range=(0, 2)),
+        ]
+        config = SlotConfig.from_specs(specs)
+        assert config.channels_for_slot("r0c0") == 64
+        assert config.channels_for_slot("r9c9") == 0
