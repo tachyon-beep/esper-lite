@@ -23,6 +23,9 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from esper.nissa import get_hub
+from esper.leyline import TelemetryEvent, TelemetryEventType
+
 if TYPE_CHECKING:
     from esper.karn.store import TelemetryStore
 
@@ -134,15 +137,58 @@ class HealthMonitor:
         gpu_warning_threshold: float = 0.9,
         grad_norm_warning: float = 50.0,
         grad_norm_error: float = 100.0,
+        memory_warning_threshold: float = 0.85,
+        memory_warning_cooldown: float = 60.0,
     ):
         self.store = store
         self.gpu_warning_threshold = gpu_warning_threshold
         self.grad_norm_warning = grad_norm_warning
         self.grad_norm_error = grad_norm_error
+        self.memory_warning_threshold = memory_warning_threshold
+        self.memory_warning_cooldown = memory_warning_cooldown
 
         # Timing tracking
         self._last_check_time = time.monotonic()
         self._epoch_times: list[float] = []
+        self._last_memory_warning: float = 0.0
+
+    def _check_memory_and_warn(
+        self,
+        gpu_utilization: float,
+        gpu_allocated_gb: float,
+        gpu_total_gb: float,
+    ) -> bool:
+        """Check memory and emit MEMORY_WARNING if threshold exceeded.
+
+        Args:
+            gpu_utilization: GPU memory utilization as a fraction (0-1)
+            gpu_allocated_gb: GPU allocated memory in GB
+            gpu_total_gb: GPU total memory in GB
+
+        Returns:
+            True if warning was emitted, False otherwise
+        """
+        if gpu_utilization < self.memory_warning_threshold:
+            return False
+
+        now = time.time()
+        if now - self._last_memory_warning < self.memory_warning_cooldown:
+            return False  # Cooldown active
+
+        self._last_memory_warning = now
+        hub = get_hub()
+        if hub is not None:
+            hub.emit(TelemetryEvent(
+                event_type=TelemetryEventType.MEMORY_WARNING,
+                severity="warning",
+                data={
+                    "gpu_utilization": gpu_utilization,
+                    "gpu_allocated_gb": gpu_allocated_gb,
+                    "gpu_total_gb": gpu_total_gb,
+                    "threshold": self.memory_warning_threshold,
+                },
+            ))
+        return True
 
     def check_health(self) -> SystemHealth:
         """Perform comprehensive health check.
