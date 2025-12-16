@@ -1044,6 +1044,8 @@ def _contribution_cull_shaping(
     return 0.0
 
 
+# TODO: [UNWIRED TELEMETRY] - Call _check_reward_hacking() from compute_contribution_reward()
+# when seed_contribution/total_improvement ratio is computed. See telemetry-phase3.md Task 5.
 def _check_reward_hacking(
     hub,
     *,
