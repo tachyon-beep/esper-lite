@@ -458,25 +458,19 @@ class TestActionMasksIntegration:
         # The function signature needs to change for M1.5
         raise AssertionError("Function doesn't accept num_slots parameter")
 
-    @pytest.mark.xfail(
-        reason="BLOCKER: _SLOT_ID_TO_INDEX only has early/mid/late",
-        strict=True,
-    )
     def test_slot_id_to_index_dynamic(self):
-        """slot_id_to_index should accept canonical slot IDs.
+        """slot_id_to_index now accepts canonical slot IDs.
 
-        BLOCKER: src/esper/simic/action_masks.py:43-47
-        - _SLOT_ID_TO_INDEX = {"early": 0, "mid": 1, "late": 2}
-        - Only handles legacy names
-
-        REQUIRED FOR M1.5:
-        - Accept r0c0, r0c1, r0c2 etc.
-        - Map to indices dynamically based on slot_config
+        RESOLVED: WP-C migrated _SLOT_ID_TO_INDEX to canonical IDs.
+        - _SLOT_ID_TO_INDEX = {"r0c0": 0, "r0c1": 1, "r0c2": 2}
+        - Now uses coordinate-based names instead of legacy early/mid/late
         """
         from esper.simic.action_masks import _SLOT_ID_TO_INDEX
 
-        # This will fail because only legacy names are supported
+        # WP-C resolved this - canonical IDs are now supported
         assert "r0c0" in _SLOT_ID_TO_INDEX
+        assert "r0c1" in _SLOT_ID_TO_INDEX
+        assert "r0c2" in _SLOT_ID_TO_INDEX
 
 
 class TestPPOAgentIntegration:

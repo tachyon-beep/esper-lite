@@ -395,8 +395,11 @@ class SeedState:
         state.stage_entered_at = datetime.fromisoformat(data["stage_entered_at"])
         state.alpha = data.get("alpha", 0.0)
         state.stage_history = deque(
-            (SeedStage(stage), datetime.fromisoformat(ts))
-            for stage, ts in data.get("stage_history", [])
+            (
+                (SeedStage(stage), datetime.fromisoformat(ts))
+                for stage, ts in data.get("stage_history", [])
+            ),
+            maxlen=PROBATION_HISTORY_MAXLEN,
         )
         if data.get("metrics"):
             state.metrics = SeedMetrics.from_dict(data["metrics"])
@@ -1259,9 +1262,9 @@ class SeedSlot(nn.Module):
 
         # Create blend algorithm with appropriate kwargs
         if algorithm_id == "gated":
-            # GatedBlend needs channels and topology
+            # GatedBlend needs channels, topology, and total_steps
             self.alpha_schedule = BlendCatalog.create(
-                algorithm_id, channels=self.channels, topology=topology
+                algorithm_id, channels=self.channels, topology=topology, total_steps=total_steps
             )
             # Move gated blend to same device as seed
             if isinstance(self.alpha_schedule, nn.Module):
@@ -1575,6 +1578,8 @@ class SeedSlot(nn.Module):
                 self.start_blending(total_steps=config.get("total_steps", 10))
                 # Restore step count (_current_step guaranteed to exist on all BlendAlgorithm instances)
                 self.alpha_schedule._current_step = config.get("current_step", 0)
+                # Re-restore blending_steps_done (start_blending resets it to 0)
+                self.state.blending_steps_done = state["seed_state"].get("blending_steps_done", 0)
 
 
 __all__ = [
