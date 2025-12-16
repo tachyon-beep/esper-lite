@@ -364,16 +364,26 @@ class TinyStoriesDataset(Dataset):
 
         self.tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
         self.tokenizer.pad_token = self.tokenizer.eos_token
+        eos_id = self.tokenizer.eos_token_id
 
         dataset = load_dataset("roneneldan/TinyStories", split=split)
         if max_samples:
             dataset = dataset.select(range(min(max_samples, len(dataset))))
 
         self.examples: list[list[int]] = []
+        target_len = self.block_size + 1
         for example in dataset:
             tokens = self.tokenizer.encode(example["text"])
-            for i in range(0, len(tokens) - self.block_size, self.block_size):
-                self.examples.append(tokens[i : i + self.block_size + 1])
+            # Stride by block_size, capturing all tokens including trailing chunks
+            for i in range(0, len(tokens), self.block_size):
+                chunk = tokens[i : i + target_len]
+                if len(chunk) < 2:
+                    # Skip 1-token chunks (already in previous chunk's y, no new signal)
+                    continue
+                if len(chunk) < target_len:
+                    # Pad short chunks (short stories or trailing tokens) with EOS
+                    chunk = chunk + [eos_id] * (target_len - len(chunk))
+                self.examples.append(chunk)
 
     def __len__(self) -> int:
         return len(self.examples)
