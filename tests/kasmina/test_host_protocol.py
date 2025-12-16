@@ -112,7 +112,7 @@ def test_transformer_host_implements_protocol():
     from esper.kasmina.protocol import HostProtocol
     from esper.kasmina.host import TransformerHost
 
-    host = TransformerHost(vocab_size=1000, n_embd=64, n_head=2, n_layer=2)
+    host = TransformerHost(vocab_size=1000, n_embd=64, n_head=2, n_layer=3, num_segments=3)
     assert isinstance(host, HostProtocol)
 
 
@@ -120,12 +120,12 @@ def test_transformer_host_injection_points():
     """TransformerHost declares injection points per layer."""
     from esper.kasmina.host import TransformerHost
 
-    host = TransformerHost(vocab_size=1000, n_embd=64, n_head=2, n_layer=4)
+    host = TransformerHost(vocab_size=1000, n_embd=64, n_head=2, n_layer=6, num_segments=3)
     points = host.injection_points
 
-    assert len(points) == 4
+    assert len(points) == 6
     assert "layer_0_post_block" in points
-    assert "layer_3_post_block" in points
+    assert "layer_5_post_block" in points
     assert all(dim == 64 for dim in points.values())
 
 
@@ -133,7 +133,7 @@ def test_transformer_host_weight_tying():
     """TransformerHost has weight tying between embedding and output."""
     from esper.kasmina.host import TransformerHost
 
-    host = TransformerHost(vocab_size=1000, n_embd=64, n_head=2, n_layer=2)
+    host = TransformerHost(vocab_size=1000, n_embd=64, n_head=2, n_layer=3, num_segments=3)
 
     assert host.head.weight.data_ptr() == host.tok_emb.weight.data_ptr()
 
@@ -142,7 +142,7 @@ def test_transformer_host_forward():
     """TransformerHost forward produces logits."""
     from esper.kasmina.host import TransformerHost
 
-    host = TransformerHost(vocab_size=1000, n_embd=64, n_head=2, n_layer=2, block_size=32)
+    host = TransformerHost(vocab_size=1000, n_embd=64, n_head=2, n_layer=3, block_size=32, num_segments=3)
 
     x = torch.randint(0, 1000, (2, 16))
     out = host(x)
@@ -154,7 +154,7 @@ def test_transformer_host_register_unregister():
     """TransformerHost can register and unregister slots."""
     from esper.kasmina.host import TransformerHost
 
-    host = TransformerHost(vocab_size=1000, n_embd=64, n_head=2, n_layer=2)
+    host = TransformerHost(vocab_size=1000, n_embd=64, n_head=2, n_layer=3, num_segments=3)
     slot = torch.nn.Linear(64, 64)
 
     host.register_slot("layer_0_post_block", slot)

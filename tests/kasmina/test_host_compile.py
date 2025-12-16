@@ -10,7 +10,7 @@ class TestTransformerHostCompile:
 
     def test_forward_no_graph_break_from_assert(self):
         """TransformerHost.forward should not have assertion graph breaks."""
-        host = TransformerHost(vocab_size=100, n_embd=64, n_head=2, n_layer=2, block_size=32)
+        host = TransformerHost(vocab_size=100, n_embd=64, n_head=2, n_layer=3, block_size=32, num_segments=3)
 
         # This would cause graph break if assert is present
         compiled_host = torch.compile(host, fullgraph=True)
@@ -22,7 +22,7 @@ class TestTransformerHostCompile:
 
     def test_sequence_length_validation_still_works(self):
         """Sequence length > block_size should still raise error."""
-        host = TransformerHost(vocab_size=100, n_embd=64, n_head=2, n_layer=2, block_size=32)
+        host = TransformerHost(vocab_size=100, n_embd=64, n_head=2, n_layer=3, block_size=32, num_segments=3)
 
         x = torch.randint(0, 100, (2, 64))  # 64 > 32 block_size
 

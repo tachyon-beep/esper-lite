@@ -114,7 +114,7 @@ class TestHostCompileCompatibility:
     def test_transformer_host_compiles_with_dynamic_sequence_length(self):
         """TransformerHost should compile and handle various sequence lengths."""
         host = TransformerHost(
-            vocab_size=100, n_embd=64, n_head=2, n_layer=2, block_size=32
+            vocab_size=100, n_embd=64, n_head=2, n_layer=3, block_size=32, num_segments=3
         )
         compiled_host = torch.compile(host, fullgraph=True)
 
@@ -163,11 +163,11 @@ class TestPrecomputedKeysNoGraphBreaks:
     def test_transformer_slot_keys_are_tuples(self):
         """TransformerHost slot keys should be tuples."""
         host = TransformerHost(
-            vocab_size=100, n_embd=64, n_head=2, n_layer=4, block_size=16
+            vocab_size=100, n_embd=64, n_head=2, n_layer=6, block_size=16, num_segments=3
         )
 
         assert isinstance(host._slot_keys, tuple)
-        assert len(host._slot_keys) == 4  # n_layer
+        assert len(host._slot_keys) == 6  # n_layer
 
 
 class TestDynamicShapeHandling:
