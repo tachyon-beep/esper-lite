@@ -510,6 +510,41 @@ class PPOAgent:
             for key in ["slot", "blueprint", "blend", "op"]:
                 per_head_ratios[key] = torch.exp(log_probs[key] - old_log_probs[key])
 
+            # Compute KL divergence EARLY (before optimizer step) for effective early stopping
+            # BUG-003 FIX: With recurrent_n_epochs=1, the old check at loop end was useless
+            # because there's no "next epoch" to skip. By checking here, we can skip the
+            # optimizer.step() entirely if KL is already too high.
+            #
+            # KL(old||new) ≈ E[(ratio - 1) - log(ratio)] (KL3 estimator from Schulman)
+            # For factored action space, joint KL = SUM of per-head KLs (not mean).
+            with torch.no_grad():
+                head_kls = []
+                for key in ["slot", "blueprint", "blend", "op"]:
+                    mask = head_masks[key]
+                    log_ratio = log_probs[key] - old_log_probs[key]
+                    kl_per_step = (torch.exp(log_ratio) - 1) - log_ratio
+                    n_valid = mask.sum().clamp(min=1)
+                    head_kl = (kl_per_step * mask.float()).sum() / n_valid
+                    head_kls.append(head_kl)
+                approx_kl = torch.stack(head_kls).sum().item()
+                metrics["approx_kl"].append(approx_kl)
+
+                # Clip fraction: how often clipping was active
+                joint_ratio = per_head_ratios["op"]
+                clip_fraction = ((joint_ratio - 1.0).abs() > self.clip_ratio).float().mean().item()
+                metrics["clip_fraction"].append(clip_fraction)
+
+                # Early stopping: if KL exceeds threshold, skip this update entirely
+                # 1.5x multiplier is standard (OpenAI baselines, Stable-Baselines3)
+                if self.target_kl is not None and approx_kl > 1.5 * self.target_kl:
+                    early_stopped = True
+                    metrics["early_stop_epoch"] = [epoch_i]
+                    # Record ratio metrics even when early stopping
+                    metrics["ratio_mean"].append(joint_ratio.mean().item())
+                    metrics["ratio_max"].append(joint_ratio.max().item())
+                    metrics["ratio_min"].append(joint_ratio.min().item())
+                    break  # Skip loss computation, backward, and optimizer step
+
             # Compute policy loss per head and sum
             # Use masked mean to avoid bias from averaging zeros with real values
             policy_loss = 0.0
@@ -583,35 +618,6 @@ class PPOAgent:
                     min_threshold=self.ratio_collapse_threshold,
                 )
                 metrics.setdefault("ratio_diagnostic", []).append(diag.to_dict())
-
-            # Compute approximate KL divergence using the log-ratio trick:
-            # KL(old||new) ≈ E[(ratio - 1) - log(ratio)]
-            # This is the "KL3" estimator from Schulman's TRPO/PPO papers.
-            # For factored action space, joint KL = SUM of per-head KLs (not mean).
-            # Apply same causal masks as policy loss for consistency.
-            with torch.no_grad():
-                head_kls = []
-                for key in ["slot", "blueprint", "blend", "op"]:
-                    mask = head_masks[key]
-                    log_ratio = log_probs[key] - old_log_probs[key]
-                    kl_per_step = (torch.exp(log_ratio) - 1) - log_ratio
-                    # Masked mean: only count KL for causally-relevant timesteps
-                    n_valid = mask.sum().clamp(min=1)
-                    head_kl = (kl_per_step * mask.float()).sum() / n_valid
-                    head_kls.append(head_kl)
-                # Sum per-head KLs for correct joint KL (DRL expert review)
-                approx_kl = torch.stack(head_kls).sum().item()
-                metrics["approx_kl"].append(approx_kl)
-
-                # Clip fraction: how often clipping was active
-                clip_fraction = ((joint_ratio - 1.0).abs() > self.clip_ratio).float().mean().item()
-                metrics["clip_fraction"].append(clip_fraction)
-
-                # Early stopping if KL divergence exceeds threshold
-                # 1.5x multiplier is standard (OpenAI baselines, Stable-Baselines3)
-                if self.target_kl is not None and approx_kl > 1.5 * self.target_kl:
-                    early_stopped = True
-                    metrics["early_stop_epoch"] = [epoch_i]
 
         self.train_steps += 1
 

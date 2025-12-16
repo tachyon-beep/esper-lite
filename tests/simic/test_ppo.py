@@ -90,6 +90,71 @@ def test_kl_early_stopping_triggers():
         "Either early stopping triggered or KL was computed"
 
 
+def test_kl_early_stopping_with_single_epoch():
+    """BUG-003 regression: target_kl must work with recurrent_n_epochs=1.
+
+    Previously, KL early stopping only checked at the START of the next epoch.
+    With n_epochs=1, there was no "next epoch" so target_kl was a no-op.
+
+    The fix moves the KL check BEFORE optimizer.step(), so even with n_epochs=1,
+    an update can be skipped if KL is already too high (e.g., from drift since rollout).
+    """
+    agent = PPOAgent(
+        state_dim=35,
+        num_envs=2,
+        max_steps_per_env=5,
+        target_kl=0.0001,  # Extremely low to ensure triggering
+        recurrent_n_epochs=1,  # The critical case from BUG-003
+        compile_network=False,
+        device="cpu",
+    )
+
+    # Fill buffer with FAKE log_probs that differ from network's actual output
+    # This simulates policy drift since rollout collection
+    for env_id in range(2):
+        agent.buffer.start_episode(env_id)
+        for step in range(5):
+            agent.buffer.add(
+                env_id=env_id,
+                state=torch.randn(35),
+                slot_action=0,
+                blueprint_action=0,
+                blend_action=0,
+                op_action=0,
+                # Fake log_probs that are very different from network's actual output
+                slot_log_prob=-10.0,  # Network won't produce this
+                blueprint_log_prob=-10.0,
+                blend_log_prob=-10.0,
+                op_log_prob=-10.0,
+                value=1.0,
+                reward=1.0,
+                done=step == 4,
+                truncated=False,
+                slot_mask=torch.ones(3, dtype=torch.bool),
+                blueprint_mask=torch.ones(5, dtype=torch.bool),
+                blend_mask=torch.ones(3, dtype=torch.bool),
+                op_mask=torch.ones(4, dtype=torch.bool),
+                hidden_h=torch.zeros(1, 1, 128),
+                hidden_c=torch.zeros(1, 1, 128),
+                bootstrap_value=0.0,
+            )
+        agent.buffer.end_episode(env_id)
+
+    metrics = agent.update(clear_buffer=True)
+
+    # With BUG-003 fix: KL check happens BEFORE optimizer.step()
+    # So with n_epochs=1 and extreme policy drift, we should early stop
+    assert "early_stop_epoch" in metrics, \
+        "BUG-003 regression: early stopping should work with n_epochs=1"
+    assert metrics["early_stop_epoch"] == 0, \
+        "Should have early stopped at epoch 0 (the only epoch)"
+
+    # Key assertion: NO update should have happened
+    # (policy_loss won't be in metrics because we broke before computing it)
+    assert "policy_loss" not in metrics, \
+        "No policy_loss should be computed when early stopping at epoch 0"
+
+
 def test_value_clipping_uses_appropriate_range():
     """Verify value clipping doesn't use the policy clip ratio."""
     agent = PPOAgent(
@@ -349,6 +414,7 @@ def test_ppo_agent_full_update_with_5_slots():
         num_envs=1,
         max_steps_per_env=5,
         compile_network=False,
+        target_kl=None,  # Disable KL early stopping - test uses fake log_probs
     )
 
     # Add some transitions to buffer
