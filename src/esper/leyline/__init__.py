@@ -277,6 +277,16 @@ DEFAULT_MAX_PROBATION_EPOCHS = 5
 # Loss must exceed (average * multiplier) to trigger anomaly detection.
 DEFAULT_GOVERNOR_LOSS_MULTIPLIER = 3.0
 
+# Slot ID formatting and parsing
+from esper.leyline.slot_id import (
+    SlotIdError,
+    format_slot_id,
+    parse_slot_id,
+    validate_slot_id,
+    slot_sort_key,
+    validate_slot_ids,
+)
+
 # Actions (build_action_enum used by HeuristicTamiyo for flat action mapping)
 from esper.leyline.actions import build_action_enum
 
@@ -407,6 +417,14 @@ __all__ = [
 
     # Governor Anomaly Detection
     "DEFAULT_GOVERNOR_LOSS_MULTIPLIER",
+
+    # Slot ID
+    "SlotIdError",
+    "format_slot_id",
+    "parse_slot_id",
+    "validate_slot_id",
+    "slot_sort_key",
+    "validate_slot_ids",
 
     # Actions (build_action_enum used by HeuristicTamiyo)
     "build_action_enum",
