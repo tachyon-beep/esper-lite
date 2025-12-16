@@ -202,9 +202,9 @@ def test_signals_to_features_telemetry_slot_alignment() -> None:
     mid_telemetry.max_epochs = 25
 
     slot_reports = {
-        "mid": SeedStateReport(
+        "r0c1": SeedStateReport(
             seed_id="s1",
-            slot_id="mid",
+            slot_id="r0c1",
             blueprint_id="norm",
             stage=SeedStage.TRAINING,
             metrics=SeedMetrics(epochs_total=7),
@@ -216,12 +216,12 @@ def test_signals_to_features_telemetry_slot_alignment() -> None:
         signals=MockSignals(),
         slot_reports=slot_reports,
         use_telemetry=True,
-        slots=["mid"],
+        slots=["r0c1"],
     )
 
     base = MULTISLOT_FEATURE_SIZE
     dim = SeedTelemetry.feature_dim()
 
-    assert features[base:base + dim] == [0.0] * dim  # early (disabled)
-    assert features[base + dim:base + 2 * dim] == pytest.approx(mid_telemetry.to_features())  # mid
-    assert features[base + 2 * dim:base + 3 * dim] == [0.0] * dim  # late (disabled)
+    assert features[base:base + dim] == [0.0] * dim  # r0c0 (disabled)
+    assert features[base + dim:base + 2 * dim] == pytest.approx(mid_telemetry.to_features())  # r0c1
+    assert features[base + 2 * dim:base + 3 * dim] == [0.0] * dim  # r0c2 (disabled)
