@@ -5,16 +5,13 @@ Defines the decisions made by strategic controllers.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from enum import IntEnum
 
 from esper.leyline import CommandType, RiskLevel, AdaptationCommand, SeedStage
 
-
-def _utc_now() -> datetime:
-    """Return current UTC time (timezone-aware)."""
-    return datetime.now(timezone.utc)
+logger = logging.getLogger(__name__)
 
 
 def _is_germinate_action(action: IntEnum) -> bool:
@@ -69,6 +66,11 @@ class TamiyoDecision:
         elif action_name == "CULL":
             command_type, target_stage = CommandType.CULL, SeedStage.CULLED
         else:
+            # Unknown action - log warning but fall back to safe behavior
+            logger.warning(
+                f"Unknown action '{action_name}' in to_command() - "
+                f"falling back to REQUEST_STATE. This may indicate a missing mapping."
+            )
             command_type, target_stage = CommandType.REQUEST_STATE, None
 
         # Determine risk level based on action

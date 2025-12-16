@@ -263,7 +263,7 @@ class HeuristicTamiyo:
         )
 
     def _decay_blueprint_penalties(self) -> None:
-        """Decay blueprint penalties (called once per decision)."""
+        """Decay blueprint penalties (called once per epoch)."""
         for bp in list(self._blueprint_penalties.keys()):
             self._blueprint_penalties[bp] *= self.config.blueprint_penalty_decay
             if self._blueprint_penalties[bp] < 0.1:

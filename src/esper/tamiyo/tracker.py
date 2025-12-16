@@ -155,6 +155,7 @@ class SignalTracker:
             plateau_epochs=self._plateau_count,
             host_stabilized=1 if self._is_stabilized else 0,
             best_val_accuracy=self._best_accuracy,
+            # NOTE: best_val_loss is "best in window" (last N epochs), not global best
             best_val_loss=min(self._loss_history) if self._loss_history else float('inf'),
         )
 
