@@ -1417,6 +1417,51 @@ class TestPenaltyAntiStacking:
         )
 
 
+class TestRewardHackingDetection:
+    """Test reward hacking detection telemetry."""
+
+    def test_reward_hacking_suspected_emitted_on_anomalous_ratio(self):
+        from esper.simic.rewards import _check_reward_hacking
+        from esper.leyline import TelemetryEventType
+        from unittest.mock import Mock
+
+        hub = Mock()
+
+        # Seed claims 500% of total improvement (impossible without hacking)
+        emitted = _check_reward_hacking(
+            hub=hub,
+            seed_contribution=5.0,
+            total_improvement=1.0,
+            hacking_ratio_threshold=3.0,  # 300% is suspicious
+            slot_id="r0c0",
+            seed_id="seed_001",
+        )
+
+        assert emitted is True
+        event = hub.emit.call_args[0][0]
+        assert event.event_type == TelemetryEventType.REWARD_HACKING_SUSPECTED
+        assert event.data["ratio"] == 5.0
+        assert event.data["slot_id"] == "r0c0"
+
+    def test_no_hacking_event_for_normal_ratios(self):
+        from esper.simic.rewards import _check_reward_hacking
+        from unittest.mock import Mock
+
+        hub = Mock()
+
+        emitted = _check_reward_hacking(
+            hub=hub,
+            seed_contribution=0.8,
+            total_improvement=1.0,
+            hacking_ratio_threshold=3.0,
+            slot_id="r0c0",
+            seed_id="seed_001",
+        )
+
+        assert emitted is False
+        assert not hub.emit.called
+
+
 class TestFossilizeTerminalBonus:
     """Test terminal bonus for fossilized seeds.
 

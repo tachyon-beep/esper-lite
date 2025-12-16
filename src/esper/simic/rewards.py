@@ -1044,6 +1044,47 @@ def _contribution_cull_shaping(
     return 0.0
 
 
+def _check_reward_hacking(
+    hub,
+    *,
+    seed_contribution: float,
+    total_improvement: float,
+    hacking_ratio_threshold: float = 3.0,
+    slot_id: str,
+    seed_id: str,
+) -> bool:
+    """Emit REWARD_HACKING_SUSPECTED if attribution ratio is anomalous.
+
+    A seed claiming more than 300% of total improvement is suspicious
+    and may indicate reward hacking or measurement error.
+
+    Returns True if event was emitted.
+    """
+    from esper.leyline import TelemetryEvent, TelemetryEventType
+
+    if total_improvement <= 0 or seed_contribution <= 0:
+        return False
+
+    ratio = seed_contribution / total_improvement
+
+    if ratio < hacking_ratio_threshold:
+        return False
+
+    hub.emit(TelemetryEvent(
+        event_type=TelemetryEventType.REWARD_HACKING_SUSPECTED,
+        severity="warning",
+        data={
+            "ratio": ratio,
+            "seed_contribution": seed_contribution,
+            "total_improvement": total_improvement,
+            "threshold": hacking_ratio_threshold,
+            "slot_id": slot_id,
+            "seed_id": seed_id,
+        },
+    ))
+    return True
+
+
 # =============================================================================
 # Potential-Based Shaping (for offline RL compatibility)
 # =============================================================================
