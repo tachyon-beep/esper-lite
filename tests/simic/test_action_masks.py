@@ -492,6 +492,124 @@ def test_slot_id_to_index_canonical():
 
 
 # =============================================================================
+# Tests for SlotConfig integration
+# =============================================================================
+
+
+def test_compute_action_masks_with_slot_config_default():
+    """SlotConfig.default() should work identically to NUM_SLOTS."""
+    from esper.leyline.slot_config import SlotConfig
+
+    slot_states = {
+        "r0c0": None,
+        "r0c1": None,
+        "r0c2": None,
+    }
+
+    masks = compute_action_masks(
+        slot_states,
+        enabled_slots=["r0c0", "r0c1", "r0c2"],
+        slot_config=SlotConfig.default(),
+    )
+
+    # Should have 3 slots
+    assert masks["slot"].shape[0] == 3
+    assert masks["slot"][0]  # r0c0
+    assert masks["slot"][1]  # r0c1
+    assert masks["slot"][2]  # r0c2
+
+
+def test_compute_action_masks_with_slot_config_two_slots():
+    """SlotConfig with 2 slots should create mask with 2 slots."""
+    from esper.leyline.slot_config import SlotConfig
+
+    slot_states = {
+        "r0c0": None,
+        "r0c1": None,
+    }
+
+    slot_config = SlotConfig(slot_ids=("r0c0", "r0c1"))
+    masks = compute_action_masks(
+        slot_states,
+        enabled_slots=["r0c0", "r0c1"],
+        slot_config=slot_config,
+    )
+
+    # Should have 2 slots
+    assert masks["slot"].shape[0] == 2
+    assert masks["slot"][0]  # r0c0
+    assert masks["slot"][1]  # r0c1
+
+
+def test_compute_action_masks_with_slot_config_five_slots():
+    """SlotConfig with 5 slots should create mask with 5 slots."""
+    from esper.leyline.slot_config import SlotConfig
+
+    slot_states = {
+        "r0c0": None,
+        "r0c1": None,
+        "r0c2": None,
+        "r0c3": None,
+        "r0c4": None,
+    }
+
+    slot_config = SlotConfig(slot_ids=("r0c0", "r0c1", "r0c2", "r0c3", "r0c4"))
+    masks = compute_action_masks(
+        slot_states,
+        enabled_slots=["r0c1", "r0c3"],
+        slot_config=slot_config,
+    )
+
+    # Should have 5 slots
+    assert masks["slot"].shape[0] == 5
+    # Only enabled slots should be masked
+    assert not masks["slot"][0]  # r0c0 not enabled
+    assert masks["slot"][1]  # r0c1 enabled
+    assert not masks["slot"][2]  # r0c2 not enabled
+    assert masks["slot"][3]  # r0c3 enabled
+    assert not masks["slot"][4]  # r0c4 not enabled
+
+
+def test_compute_action_masks_slot_config_none_defaults():
+    """When slot_config is None, should default to SlotConfig.default()."""
+    slot_states = {
+        "r0c0": None,
+        "r0c1": None,
+        "r0c2": None,
+    }
+
+    # Pass None explicitly (or omit parameter)
+    masks = compute_action_masks(
+        slot_states,
+        enabled_slots=["r0c0", "r0c1", "r0c2"],
+        slot_config=None,
+    )
+
+    # Should use default 3 slots
+    assert masks["slot"].shape[0] == 3
+
+
+def test_compute_batch_masks_with_slot_config():
+    """Batch masks should respect slot_config."""
+    from esper.leyline.slot_config import SlotConfig
+
+    batch_slot_states = [
+        {"r0c0": None, "r0c1": None},
+        {"r0c0": None, "r0c1": None},
+    ]
+
+    slot_config = SlotConfig(slot_ids=("r0c0", "r0c1"))
+    masks = compute_batch_masks(
+        batch_slot_states,
+        enabled_slots=["r0c0", "r0c1"],
+        slot_config=slot_config,
+    )
+
+    # Should have 2 slots per batch element
+    assert masks["slot"].shape == (2, 2)
+
+
+# =============================================================================
 # Tests for build_slot_states() helper function
 # =============================================================================
 

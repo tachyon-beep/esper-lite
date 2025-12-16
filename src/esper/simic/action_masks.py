@@ -26,6 +26,7 @@ from torch.distributions import Categorical
 
 from esper.leyline import SeedStage, MIN_CULL_AGE
 from esper.leyline.stages import VALID_TRANSITIONS
+from esper.leyline.slot_config import SlotConfig
 from esper.simic.slots import ordered_slots
 from esper.leyline.factored_actions import (
     BlueprintAction,
@@ -104,6 +105,7 @@ def compute_action_masks(
     enabled_slots: list[str],
     total_seeds: int = 0,
     max_seeds: int = 0,
+    slot_config: SlotConfig | None = None,
     device: torch.device | None = None,
 ) -> dict[str, torch.Tensor]:
     """Compute action masks based on slot states.
@@ -115,24 +117,30 @@ def compute_action_masks(
         enabled_slots: List of slot IDs that are enabled (from --slots arg)
         total_seeds: Total number of active seeds across all slots
         max_seeds: Maximum allowed seeds (0 = unlimited)
+        slot_config: Slot configuration (defaults to SlotConfig.default())
         device: Torch device for tensors
 
     Returns:
         Dict of boolean tensors for each action head:
-        - "slot": [NUM_SLOTS] - which slots can be targeted (only enabled slots)
+        - "slot": [num_slots] - which slots can be targeted (only enabled slots)
         - "blueprint": [NUM_BLUEPRINTS] - which blueprints can be used
         - "blend": [NUM_BLENDS] - which blend methods can be used
         - "op": [NUM_OPS] - which operations are valid (ANY enabled slot)
     """
+    if slot_config is None:
+        slot_config = SlotConfig.default()
+
     device = device or torch.device("cpu")
 
-    ordered = ordered_slots(enabled_slots)
+    # Order enabled slots according to slot_config order
+    enabled_set = set(enabled_slots)
+    ordered = tuple(slot_id for slot_id in slot_config.slot_ids if slot_id in enabled_set)
 
     # Slot mask: only enabled slots are selectable in canonical order
-    slot_mask = torch.zeros(NUM_SLOTS, dtype=torch.bool, device=device)
+    slot_mask = torch.zeros(slot_config.num_slots, dtype=torch.bool, device=device)
     for slot_id in ordered:
-        if slot_id in _SLOT_ID_TO_INDEX:
-            slot_mask[_SLOT_ID_TO_INDEX[slot_id]] = True
+        idx = slot_config.index_for_slot_id(slot_id)
+        slot_mask[idx] = True
 
     # Blueprint mask: disable zero-parameter blueprints (can't train them)
     # NOOP is a placeholder seed with no trainable parameters
@@ -187,6 +195,7 @@ def compute_batch_masks(
     enabled_slots: list[str],
     total_seeds_list: list[int] | None = None,
     max_seeds: int = 0,
+    slot_config: SlotConfig | None = None,
     device: torch.device | None = None,
 ) -> dict[str, torch.Tensor]:
     """Compute action masks for a batch of observations.
@@ -199,6 +208,7 @@ def compute_batch_masks(
         enabled_slots: List of enabled slot IDs (same for all envs, from --slots arg)
         total_seeds_list: List of total seeds per env (None = all 0)
         max_seeds: Maximum allowed seeds (0 = unlimited)
+        slot_config: Slot configuration (defaults to SlotConfig.default())
         device: Torch device for tensors
 
     Returns:
@@ -213,6 +223,7 @@ def compute_batch_masks(
             enabled_slots=enabled_slots,
             total_seeds=total_seeds_list[i] if total_seeds_list else 0,
             max_seeds=max_seeds,
+            slot_config=slot_config,
             device=device,
         )
         for i, slot_states in enumerate(batch_slot_states)
