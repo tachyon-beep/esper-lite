@@ -8,8 +8,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from typing_extensions import override
-
 import functools
 
 import torch
@@ -278,7 +276,12 @@ class TransformerBlock(nn.Module):
 
 
 class TransformerHost(nn.Module):
-    """GPT-style decoder with injection points after each layer."""
+    """Transformer backbone with segment routing for external slot attachment.
+
+    Provides segment boundaries for MorphogeneticModel to attach SeedSlots.
+    The host itself performs no slot application - it routes hidden states
+    between segment boundaries.
+    """
 
     def __init__(
         self,
@@ -314,21 +317,14 @@ class TransformerHost(nn.Module):
         # Weight tying: tok_emb is master
         self.head.weight = self.tok_emb.weight
 
-        # Injection points with compile-friendly ModuleDict
-        self._slot_keys = tuple(f"layer_{i}_post_block" for i in range(n_layer))
-        self.slots = nn.ModuleDict({k: nn.Identity() for k in self._slot_keys})
-
         # Compute layer range boundaries for segments
         layers_per_segment = n_layer // num_segments
         self._segment_boundaries = {}
-        self._canonical_to_slot_key = {}
         for i in range(num_segments):
             from esper.leyline.slot_id import format_slot_id
             slot_id = format_slot_id(0, i)
             end_layer = (i + 1) * layers_per_segment
             self._segment_boundaries[slot_id] = end_layer
-            # Map canonical ID to internal slot key (last layer in segment)
-            self._canonical_to_slot_key[slot_id] = self._slot_keys[end_layer - 1]
 
     def injection_specs(self) -> list["InjectionSpec"]:
         """Return available injection points as InjectionSpec objects.
@@ -363,40 +359,9 @@ class TransformerHost(nn.Module):
         return {spec.slot_id: spec.channels for spec in self.injection_specs()}
 
     @property
-    @override
     def injection_points(self) -> dict[str, int]:
-        """Map of slot_id -> embedding dimension."""
-        return {k: self.n_embd for k in self._slot_keys}
-
-    @override
-    def register_slot(self, slot_id: str, slot: nn.Module) -> None:
-        """Attach a seed module at the specified injection point.
-
-        Args:
-            slot_id: Either canonical ID (r0c0, r0c1, r0c2) or internal key (layer_1_post_block).
-            slot: Module to attach at the injection point.
-        """
-        # Map canonical ID to internal key, fall back to slot_id for backwards compat
-        internal_key = self._canonical_to_slot_key.get(slot_id, slot_id)
-        if internal_key not in self.slots:
-            available = list(self._canonical_to_slot_key.keys())
-            raise ValueError(f"Unknown injection point: {slot_id}. Available: {available}")
-        device = self.tok_emb.weight.device
-        self.slots[internal_key] = slot.to(device)
-
-    @override
-    def unregister_slot(self, slot_id: str) -> None:
-        """Remove a seed module from the specified injection point.
-
-        Args:
-            slot_id: Either canonical ID (r0c0, r0c1, r0c2) or internal key (layer_1_post_block).
-        """
-        # Map canonical ID to internal key, fall back to slot_id for backwards compat
-        internal_key = self._canonical_to_slot_key.get(slot_id, slot_id)
-        if internal_key not in self.slots:
-            available = list(self._canonical_to_slot_key.keys())
-            raise ValueError(f"Unknown injection point: {slot_id}. Available: {available}")
-        self.slots[internal_key] = nn.Identity()
+        """Map of slot_id -> embedding dimension. Alias for segment_channels."""
+        return self.segment_channels
 
     # NOTE: forward_to_segment() is intentionally duplicated between CNNHost
     # and TransformerHost. While the structure is similar, the details differ:
@@ -436,7 +401,6 @@ class TransformerHost(nn.Module):
             h = self.drop(self.tok_emb(x) + self.pos_emb(pos))
             start_layer = 0
         else:
-            # x is already embedded features
             h = x
             start_layer = self._segment_boundaries[from_segment]
 
@@ -444,7 +408,6 @@ class TransformerHost(nn.Module):
         end_layer = self._segment_boundaries[segment]
         for i in range(start_layer, end_layer):
             h = self.layers[i](h)
-            h = self.slots[self._slot_keys[i]](h)
 
         return h
 
@@ -465,13 +428,13 @@ class TransformerHost(nn.Module):
         start_layer = self._segment_boundaries[segment]
         for i in range(start_layer, self.n_layer):
             h = self.layers[i](h)
-            h = self.slots[self._slot_keys[i]](h)
 
         # Output
         h = self.ln_f(h)
         return self.head(h)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through transformer backbone (no slot application)."""
         B, T = x.shape
         if T > self.block_size:
             raise ValueError(f"Sequence length {T} exceeds block_size {self.block_size}")
@@ -480,10 +443,9 @@ class TransformerHost(nn.Module):
         pos = torch.arange(T, device=x.device)
         h = self.drop(self.tok_emb(x) + self.pos_emb(pos))
 
-        # Transformer layers with slot injection
-        for i, layer in enumerate(self.layers):
+        # Transformer layers (no slot application)
+        for layer in self.layers:
             h = layer(h)
-            h = self.slots[self._slot_keys[i]](h)  # Always call, Identity is no-op
 
         # Output
         h = self.ln_f(h)
