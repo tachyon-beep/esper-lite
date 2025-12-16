@@ -113,9 +113,10 @@ class GatedBlend(BlendAlgorithm):
 
     algorithm_id = "gated"
 
-    def __init__(self, channels: int, topology: str = "cnn"):
+    def __init__(self, channels: int, topology: str = "cnn", total_steps: int = 10):
         super().__init__()
         self.topology = topology
+        self.total_steps = max(1, total_steps)
         self.gate = nn.Sequential(
             nn.Linear(channels, channels // 4),
             nn.ReLU(),
@@ -132,9 +133,20 @@ class GatedBlend(BlendAlgorithm):
             # (B, T, C) -> (B, C)
             return x.mean(dim=1)
 
-    def get_alpha(self, step: int) -> float:
-        self._current_step = step
-        return 0.5  # Gated blend computes alpha from features, not step
+    def get_alpha(self, step: int | None = None) -> float:
+        """Return blending progress for lifecycle tracking.
+
+        Unlike schedule-based blends, gated blending uses learned gates
+        during forward(). For lifecycle/G3 gate compatibility, we report
+        step-based progress: step / total_steps.
+
+        This ensures G3 gate can pass naturally when blending completes.
+        """
+        if step is not None:
+            self._current_step = step
+
+        current = step if step is not None else self._current_step
+        return min(1.0, current / self.total_steps)
 
     def get_alpha_for_blend(self, x: torch.Tensor) -> torch.Tensor:
         """Compute per-sample alpha from input features."""
