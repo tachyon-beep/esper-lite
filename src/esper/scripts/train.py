@@ -176,7 +176,7 @@ def main():
     args = parser.parse_args()
 
     # Create TelemetryConfig from CLI argument
-    from esper.simic.telemetry_config import TelemetryConfig, TelemetryLevel
+    from esper.simic.telemetry import TelemetryConfig, TelemetryLevel
 
     level_map = {
         "off": TelemetryLevel.OFF,

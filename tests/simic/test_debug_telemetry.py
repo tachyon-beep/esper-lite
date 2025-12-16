@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import pytest
 
-from esper.simic.debug_telemetry import (
+from esper.simic.telemetry import (
     LayerGradientStats,
     collect_per_layer_gradients,
     NumericalStabilityReport,

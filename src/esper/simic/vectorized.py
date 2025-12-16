@@ -62,16 +62,16 @@ from esper.leyline import (
 from esper.leyline.factored_actions import FactoredAction, LifecycleOp
 from esper.simic.action_masks import build_slot_states, compute_action_masks
 from esper.leyline.slot_id import validate_slot_ids
-from esper.simic.anomaly_detector import AnomalyDetector, AnomalyReport
-from esper.simic.debug_telemetry import (
+from esper.simic.telemetry import (
+    AnomalyDetector,
+    AnomalyReport,
     collect_per_layer_gradients,
     check_numerical_stability,
     LayerGradientStats,
-)
-from esper.simic.gradient_collector import (
     collect_host_gradients_async,
     collect_seed_gradients_only_async,
     materialize_dual_grad_stats,
+    TelemetryConfig,
 )
 from esper.simic.normalization import RunningMeanStd, RewardNormalizer
 from esper.simic.features import MULTISLOT_FEATURE_SIZE, get_feature_size
@@ -84,7 +84,6 @@ from esper.simic.rewards import (
     ContributionRewardConfig,
     SeedInfo,
 )
-from esper.simic.telemetry_config import TelemetryConfig
 from esper.leyline import DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
 from esper.nissa import get_hub, BlueprintAnalytics
 from esper.tolaria import TolariaGovernor

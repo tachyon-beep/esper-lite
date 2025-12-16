@@ -13,7 +13,7 @@ from unittest.mock import Mock, MagicMock, patch
 
 from esper.leyline import SeedStage, TelemetryEvent, TelemetryEventType
 from esper.leyline.slot_config import SlotConfig
-from esper.simic.anomaly_detector import AnomalyReport
+from esper.simic.telemetry import AnomalyReport
 from esper.simic.vectorized import (
     _advance_active_seed,
     _calculate_entropy_anneal_steps,

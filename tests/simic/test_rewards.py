@@ -324,7 +324,7 @@ class TestContributionRewardComponents:
 
     def test_return_components_returns_tuple(self):
         """Test that return_components=True returns (reward, components) tuple."""
-        from esper.simic.reward_telemetry import RewardComponentsTelemetry
+        from esper.simic.rewards import RewardComponentsTelemetry
         from esper.leyline import SeedStage
 
         # Create a mock action enum

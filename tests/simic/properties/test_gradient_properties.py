@@ -13,7 +13,7 @@ import torch
 import torch.nn as nn
 from hypothesis import given, strategies as st
 
-from esper.simic.gradient_collector import SeedGradientCollector
+from esper.simic.telemetry import SeedGradientCollector
 from tests.strategies import bounded_floats
 
 

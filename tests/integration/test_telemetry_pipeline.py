@@ -4,7 +4,7 @@ Tests end-to-end gradient collection, snapshot generation, and feature extractio
 """
 
 import torch
-from esper.simic.gradient_collector import SeedGradientCollector
+from esper.simic.telemetry import SeedGradientCollector
 from esper.leyline import SeedTelemetry
 
 

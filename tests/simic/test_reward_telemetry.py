@@ -1,7 +1,7 @@
 """Tests for reward component telemetry."""
 
 
-from esper.simic.reward_telemetry import RewardComponentsTelemetry
+from esper.simic.rewards import RewardComponentsTelemetry
 from esper.simic.rewards import (
     compute_contribution_reward,
     SeedInfo,

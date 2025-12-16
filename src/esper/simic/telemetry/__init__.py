@@ -1,9 +1,50 @@
 """Telemetry subsystem for simic training.
 
-This package contains telemetry emission helpers and configuration.
+This package contains:
+- emitters.py: Pure telemetry emission functions
+- telemetry_config.py: Configuration for telemetry levels
+- debug_telemetry.py: Per-layer gradient statistics (expensive, debug-only)
+- gradient_collector.py: Async gradient collection for seed telemetry
+- anomaly_detector.py: Phase-dependent training anomaly detection
 """
 
-from esper.simic.telemetry.emitters import (
+# Telemetry configuration
+from .telemetry_config import (
+    TelemetryLevel,
+    TelemetryConfig,
+)
+
+# Debug telemetry (per-layer gradients)
+from .debug_telemetry import (
+    LayerGradientStats,
+    collect_per_layer_gradients,
+    NumericalStabilityReport,
+    check_numerical_stability,
+    RatioExplosionDiagnostic,
+)
+
+# Gradient collection
+from .gradient_collector import (
+    GradientHealthMetrics,
+    DualGradientStats,
+    SeedGradientCollector,
+    collect_dual_gradients_async,
+    collect_host_gradients_async,
+    collect_seed_gradients_only_async,
+    materialize_dual_grad_stats,
+    materialize_grad_stats,
+    collect_seed_gradients,
+    collect_seed_gradients_async,
+)
+
+# Anomaly detection
+from .anomaly_detector import (
+    AnomalyDetector,
+    AnomalyReport,
+)
+
+# Telemetry emitters (pure functions)
+from .emitters import (
     emit_with_env_context,
     emit_batch_completed,
     emit_last_action,
@@ -20,6 +61,30 @@ from esper.simic.telemetry.emitters import (
 )
 
 __all__ = [
+    # Config
+    "TelemetryLevel",
+    "TelemetryConfig",
+    # Debug telemetry
+    "LayerGradientStats",
+    "collect_per_layer_gradients",
+    "NumericalStabilityReport",
+    "check_numerical_stability",
+    "RatioExplosionDiagnostic",
+    # Gradient collection
+    "GradientHealthMetrics",
+    "DualGradientStats",
+    "SeedGradientCollector",
+    "collect_dual_gradients_async",
+    "collect_host_gradients_async",
+    "collect_seed_gradients_only_async",
+    "materialize_dual_grad_stats",
+    "materialize_grad_stats",
+    "collect_seed_gradients",
+    "collect_seed_gradients_async",
+    # Anomaly detection
+    "AnomalyDetector",
+    "AnomalyReport",
+    # Emitters
     "emit_with_env_context",
     "emit_batch_completed",
     "emit_last_action",

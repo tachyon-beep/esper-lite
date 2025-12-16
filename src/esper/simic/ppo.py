@@ -19,7 +19,7 @@ import torch.nn.functional as F
 from esper.simic.tamiyo_buffer import TamiyoRolloutBuffer
 from esper.simic.tamiyo_network import FactoredRecurrentActorCritic
 from esper.simic.advantages import compute_per_head_advantages
-from esper.simic.debug_telemetry import RatioExplosionDiagnostic
+from esper.simic.telemetry import RatioExplosionDiagnostic
 from esper.leyline import (
     DEFAULT_GAMMA,
     DEFAULT_EPISODE_LENGTH,

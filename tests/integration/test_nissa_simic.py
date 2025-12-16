@@ -12,8 +12,8 @@ import torch
 
 from esper.nissa import NissaHub, get_hub
 from esper.leyline import TelemetryEvent, TelemetryEventType
-from esper.simic.anomaly_detector import AnomalyDetector
-from esper.simic.reward_telemetry import RewardComponentsTelemetry
+from esper.simic.telemetry import AnomalyDetector
+from esper.simic.rewards import RewardComponentsTelemetry
 from esper.simic.rewards import (
     compute_contribution_reward,
     SeedInfo,

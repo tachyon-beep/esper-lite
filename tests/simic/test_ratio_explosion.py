@@ -2,7 +2,7 @@
 
 import torch
 
-from esper.simic.debug_telemetry import RatioExplosionDiagnostic
+from esper.simic.telemetry import RatioExplosionDiagnostic
 
 
 class TestRatioExplosionDiagnostic:

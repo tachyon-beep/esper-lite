@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import pytest
 
-from esper.simic.gradient_collector import (
+from esper.simic.telemetry import (
     SeedGradientCollector,
     materialize_grad_stats,
     collect_seed_gradients,

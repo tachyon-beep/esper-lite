@@ -14,11 +14,11 @@ import torch
 from torch import nn
 
 from esper.leyline import TelemetryEvent, TelemetryEventType
-from esper.simic.debug_telemetry import LayerGradientStats
+from .debug_telemetry import LayerGradientStats
 from esper.nissa import get_hub
 
 if TYPE_CHECKING:
-    from esper.simic.telemetry_config import TelemetryConfig
+    from .telemetry_config import TelemetryConfig
 
 
 def emit_with_env_context(hub, env_idx: int, device: str, event: TelemetryEvent) -> None:

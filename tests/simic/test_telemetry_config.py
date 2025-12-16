@@ -1,7 +1,7 @@
 """Tests for telemetry configuration."""
 
 
-from esper.simic.telemetry_config import TelemetryLevel, TelemetryConfig
+from esper.simic.telemetry import TelemetryLevel, TelemetryConfig
 
 
 class TestTelemetryLevel:

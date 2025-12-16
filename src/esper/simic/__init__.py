@@ -3,18 +3,26 @@
 This package contains the reinforcement learning infrastructure for training
 the Tamiyo seed lifecycle controller:
 
-- buffers: Trajectory buffers
-- normalization: Observation normalization
+Core Modules:
+- ppo: PPO agent and policy learning
+- tamiyo_network: Factored recurrent actor-critic network
+- tamiyo_buffer: Trajectory buffer management
+- advantages: Per-head advantage computation
+
+Control:
 - action_masks: Masked action distributions
-- rewards: Reward computation
 - features: Feature extraction (hot path)
-- ppo: PPO agent
+- normalization: Observation/reward preprocessing
+
+Subpackages:
+- rewards/: Reward computation (PBRS, contribution signals, penalties)
+- telemetry/: Diagnostics (config, gradients, anomaly detection, emitters)
+
+Training:
 - training: Training loops
-- vectorized: Multi-GPU training
+- vectorized: Multi-GPU PPO training
 - parallel_env_state: Per-environment state container
-- telemetry/: Telemetry emission helpers
-- debug_telemetry: Per-layer gradient debugging
-- anomaly_detector: Phase-dependent anomaly detection
+- config: Hyperparameter configuration
 """
 
 # Normalization
@@ -52,15 +60,17 @@ from esper.simic.action_masks import (
     compute_batch_masks,
 )
 
-# Telemetry
-from esper.simic.telemetry_config import (
-    TelemetryLevel,
-    TelemetryConfig,
-)
-from esper.simic.reward_telemetry import (
+# Reward telemetry (from rewards subpackage)
+from esper.simic.rewards import (
     RewardComponentsTelemetry,
 )
-from esper.simic.gradient_collector import (
+
+# Telemetry (from telemetry subpackage)
+from esper.simic.telemetry import (
+    # Config
+    TelemetryLevel,
+    TelemetryConfig,
+    # Gradient collection
     GradientHealthMetrics,
     DualGradientStats,
     SeedGradientCollector,
@@ -69,30 +79,25 @@ from esper.simic.gradient_collector import (
     materialize_grad_stats,
     collect_seed_gradients,
     collect_seed_gradients_async,
-)
-from esper.simic.debug_telemetry import (
+    # Debug telemetry
     LayerGradientStats,
     collect_per_layer_gradients,
     NumericalStabilityReport,
     check_numerical_stability,
     RatioExplosionDiagnostic,
-)
-from esper.simic.anomaly_detector import (
+    # Anomaly detection
     AnomalyDetector,
     AnomalyReport,
-)
-
-# Parallel environment state
-from esper.simic.parallel_env_state import ParallelEnvState
-
-# Telemetry emitters (pure functions extracted from vectorized.py)
-from esper.simic.telemetry import (
+    # Emitters
     emit_with_env_context,
     emit_batch_completed,
     emit_ppo_update_event,
     check_performance_degradation,
     aggregate_layer_gradient_health,
 )
+
+# Parallel environment state
+from esper.simic.parallel_env_state import ParallelEnvState
 
 # NOTE: Heavy modules imported on demand:
 #   from esper.simic.ppo import PPOAgent

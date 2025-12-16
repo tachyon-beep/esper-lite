@@ -35,7 +35,7 @@ from typing import NamedTuple
 from esper.leyline import SeedStage, MIN_CULL_AGE, MIN_PROBATION_EPOCHS, DEFAULT_GAMMA
 from esper.leyline import DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
 from esper.leyline.factored_actions import LifecycleOp
-from esper.simic.reward_telemetry import RewardComponentsTelemetry
+from .reward_telemetry import RewardComponentsTelemetry
 
 _logger = logging.getLogger(__name__)
 

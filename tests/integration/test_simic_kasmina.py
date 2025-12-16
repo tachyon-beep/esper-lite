@@ -19,7 +19,7 @@ from esper.simic.rewards import (
     ContributionRewardConfig,
     SeedInfo,
 )
-from esper.simic.gradient_collector import (
+from esper.simic.telemetry import (
     SeedGradientCollector,
     collect_seed_gradients,
     GradientHealthMetrics,

@@ -16,12 +16,12 @@ from esper.leyline.factored_actions import FactoredAction, LifecycleOp
 from esper.leyline import TelemetryEvent, TelemetryEventType
 from esper.runtime import get_task_spec
 from esper.simic.rewards import compute_contribution_reward, SeedInfo
-from esper.simic.gradient_collector import (
+from esper.simic.telemetry import (
     collect_seed_gradients_async,
     materialize_grad_stats,
+    TelemetryConfig,
 )
 from esper.leyline.slot_id import validate_slot_ids
-from esper.simic.telemetry_config import TelemetryConfig
 from esper.nissa import get_hub
 from esper.utils.loss import compute_task_loss_with_metrics
 
