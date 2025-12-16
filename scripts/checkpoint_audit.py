@@ -379,7 +379,15 @@ def generate_morphogenetic_checkpoint() -> Path:
 
     # Create model with seed slots
     host = CNNHost(num_classes=10, n_blocks=3)
-    task_config = TaskConfig(topology="cnn", blending_steps=10)
+    task_config = TaskConfig(
+        task_type="classification",
+        topology="cnn",
+        baseline_loss=2.3,
+        target_loss=0.3,
+        typical_loss_delta_std=0.05,
+        max_epochs=25,
+        blending_steps=10,
+    )
 
     model = MorphogeneticModel(
         host=host,
@@ -433,7 +441,15 @@ def generate_blending_checkpoint() -> Path:
 
     # Create model with seed slots
     host = CNNHost(num_classes=10, n_blocks=3)
-    task_config = TaskConfig(topology="cnn", blending_steps=10)
+    task_config = TaskConfig(
+        task_type="classification",
+        topology="cnn",
+        baseline_loss=2.3,
+        target_loss=0.3,
+        typical_loss_delta_std=0.05,
+        max_epochs=25,
+        blending_steps=10,
+    )
 
     model = MorphogeneticModel(
         host=host,
@@ -496,7 +512,15 @@ def generate_probationary_checkpoint() -> Path:
 
     # Create model with seed slots
     host = CNNHost(num_classes=10, n_blocks=3)
-    task_config = TaskConfig(topology="cnn", blending_steps=3)
+    task_config = TaskConfig(
+        task_type="classification",
+        topology="cnn",
+        baseline_loss=2.3,
+        target_loss=0.3,
+        typical_loss_delta_std=0.05,
+        max_epochs=25,
+        blending_steps=3,
+    )
 
     model = MorphogeneticModel(
         host=host,
