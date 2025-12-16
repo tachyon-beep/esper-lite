@@ -1556,11 +1556,18 @@ class SeedSlot(nn.Module):
         if state.get("seed_state"):
             self.state = SeedState.from_dict(state["seed_state"])
 
-        # Alpha schedule reconstruction handled separately if needed
-        # The nn.Module weights are restored via load_state_dict()
+        # Alpha schedule reconstruction
+        # The nn.Module weights are restored via load_state_dict() automatically
+        # because PyTorch 2.x includes dynamically assigned modules in state_dict.
+        # We only need to restore config and ensure the correct algorithm type.
         if state.get("alpha_schedule_config"):
             config = state["alpha_schedule_config"]
             if config.get("algorithm_id") and self.state and self.state.stage == SeedStage.BLENDING:
+                # CRITICAL: Restore algorithm_id BEFORE start_blending()
+                # Without this, start_blending() defaults to "sigmoid" and
+                # GatedBlend weights become orphaned "unexpected_keys".
+                # See: docs/plans/2025-12-16-tolaria-kasmina-remediation.md
+                self._blend_algorithm_id = config["algorithm_id"]
                 self.start_blending(total_steps=config.get("total_steps", 10))
                 # Restore step count (_current_step guaranteed to exist on all BlendAlgorithm instances)
                 self.alpha_schedule._current_step = config.get("current_step", 0)
