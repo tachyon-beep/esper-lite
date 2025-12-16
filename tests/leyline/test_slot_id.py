@@ -1,6 +1,8 @@
 """Tests for slot ID formatting and parsing."""
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from esper.leyline.slot_id import (
     SlotIdError,
@@ -29,6 +31,17 @@ class TestFormatSlotId:
     def test_negative_col_raises(self):
         with pytest.raises(SlotIdError, match="Column must be non-negative"):
             format_slot_id(0, -1)
+
+    @given(
+        st.integers(min_value=0, max_value=1000),
+        st.integers(min_value=0, max_value=1000),
+    )
+    def test_format_parse_roundtrip(self, row: int, col: int):
+        """Property: format then parse returns original coordinates."""
+        slot_id = format_slot_id(row, col)
+        parsed_row, parsed_col = parse_slot_id(slot_id)
+        assert parsed_row == row
+        assert parsed_col == col
 
 
 class TestParseSlotId:
@@ -111,6 +124,25 @@ class TestSlotSortKey:
         slots = ["r0c2", "r0c0", "r0c1"]
         sorted_slots = sorted(slots, key=slot_sort_key)
         assert sorted_slots == ["r0c0", "r0c1", "r0c2"]
+
+    @given(
+        st.lists(
+            st.tuples(
+                st.integers(min_value=0, max_value=10),
+                st.integers(min_value=0, max_value=10),
+            ),
+            min_size=1,
+            max_size=20,
+        )
+    )
+    def test_sort_key_matches_tuple_sort(self, coords: list[tuple[int, int]]):
+        """Property: sorting by slot_sort_key matches sorting coordinates as tuples."""
+        slot_ids = [format_slot_id(r, c) for r, c in coords]
+
+        sorted_by_key = sorted(slot_ids, key=slot_sort_key)
+        sorted_by_coord = [format_slot_id(r, c) for r, c in sorted(coords)]
+
+        assert sorted_by_key == sorted_by_coord
 
 
 class TestValidateSlotIds:
