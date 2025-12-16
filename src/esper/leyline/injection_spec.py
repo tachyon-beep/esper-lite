@@ -26,6 +26,8 @@ class InjectionSpec:
     layer_range: tuple[int, int]
 
     def __post_init__(self) -> None:
+        if self.channels <= 0:
+            raise ValueError(f"channels must be positive, got {self.channels}")
         if not (0.0 <= self.position <= 1.0):
             raise ValueError(f"position must be between 0 and 1, got {self.position}")
         start, end = self.layer_range

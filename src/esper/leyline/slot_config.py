@@ -28,6 +28,14 @@ class SlotConfig:
     slot_ids: tuple[str, ...]
     _channel_map: tuple[tuple[str, int], ...] = field(default=())
 
+    def __post_init__(self) -> None:
+        """Validate slot configuration invariants."""
+        if not self.slot_ids:
+            raise ValueError("SlotConfig requires at least one slot")
+        if len(self.slot_ids) != len(set(self.slot_ids)):
+            duplicates = [s for s in self.slot_ids if self.slot_ids.count(s) > 1]
+            raise ValueError(f"SlotConfig slot_ids must be unique, found duplicates: {set(duplicates)}")
+
     @property
     def num_slots(self) -> int:
         """Number of slots in this configuration."""

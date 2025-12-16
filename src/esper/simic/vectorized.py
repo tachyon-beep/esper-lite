@@ -66,6 +66,7 @@ from esper.simic.anomaly_detector import AnomalyDetector, AnomalyReport
 from esper.simic.debug_telemetry import (
     collect_per_layer_gradients,
     check_numerical_stability,
+    LayerGradientStats,
 )
 from esper.simic.gradient_collector import (
     collect_host_gradients_async,
@@ -185,6 +186,45 @@ def _compute_grad_norm_surrogate(module: nn.Module) -> float | None:
     return float(torch.sqrt(grad_norm_sq).item())
 
 
+def _aggregate_layer_gradient_health(
+    layer_stats: list[LayerGradientStats],
+) -> dict[str, int | float]:
+    """Aggregate per-layer gradient stats into summary metrics.
+
+    Args:
+        layer_stats: List from collect_per_layer_gradients()
+
+    Returns:
+        Dict with dead_layers, exploding_layers, nan_grad_count, layer_gradient_health
+    """
+    if not layer_stats:
+        return {
+            "dead_layers": 0,
+            "exploding_layers": 0,
+            "nan_grad_count": 0,
+            "layer_gradient_health": 1.0,
+        }
+
+    n_layers = len(layer_stats)
+    dead = sum(1 for s in layer_stats if s.zero_fraction > 0.9)
+    exploding = sum(1 for s in layer_stats if s.large_fraction > 0.1)
+    nan_count = sum(s.nan_count for s in layer_stats)
+
+    # Compute health score: 1.0 = perfect, penalize dead/exploding layers
+    health = 1.0
+    health -= (dead / n_layers) * 0.5  # Dead layers reduce health
+    health -= (exploding / n_layers) * 0.8  # Exploding is worse
+    health -= min(nan_count / 100, 0.5)  # NaNs are bad
+    health = max(0.0, min(1.0, health))
+
+    return {
+        "dead_layers": dead,
+        "exploding_layers": exploding,
+        "nan_grad_count": nan_count,
+        "layer_gradient_health": health,
+    }
+
+
 def _emit_ppo_update_event(
     *,
     hub,
@@ -236,6 +276,14 @@ def _emit_ppo_update_event(
             "lr": lr,
             "grad_norm": grad_norm,
             "update_time_ms": update_time_ms,
+            # Gradient layer health (Task 1)
+            "dead_layers": metrics.get("dead_layers", 0),
+            "exploding_layers": metrics.get("exploding_layers", 0),
+            "nan_grad_count": metrics.get("nan_grad_count", 0),
+            # Gradient health score (Task 2)
+            "layer_gradient_health": metrics.get("layer_gradient_health"),
+            # Entropy collapse flag (Task 3)
+            "entropy_collapsed": metrics.get("entropy", 1.0) < 0.1,
         },
     ))
 
@@ -2478,6 +2526,14 @@ def train_ppo_vectorized(
                 payload["avg_accuracy"] = avg_acc
                 payload["avg_reward"] = avg_reward
                 payload["rolling_avg_accuracy"] = rolling_avg_acc
+                # Collect layer gradient health for telemetry (Task 1)
+                if telemetry_config is None or telemetry_config.should_collect("debug"):
+                    try:
+                        layer_stats = collect_per_layer_gradients(agent.policy)
+                        layer_health = _aggregate_layer_gradient_health(layer_stats)
+                        payload.update(layer_health)
+                    except Exception:
+                        pass  # Graceful degradation if collection fails
                 _emit_ppo_update_event(
                     hub=hub,
                     metrics=payload,
@@ -2574,6 +2630,13 @@ def train_ppo_vectorized(
             total_val_correct = sum(val_corrects)
             total_val_samples = sum(val_totals)
 
+            # Detect plateau: accuracy improvement < 0.5% from previous batch
+            if prev_rolling_avg_acc is not None:
+                accuracy_delta = abs(rolling_avg_acc - prev_rolling_avg_acc)
+                plateau_detected = accuracy_delta < 0.5
+            else:
+                plateau_detected = False  # First batch, no plateau possible
+
             hub.emit(TelemetryEvent(
                 event_type=TelemetryEventType.EPOCH_COMPLETED,
                 epoch=episodes_completed,
@@ -2586,6 +2649,7 @@ def train_ppo_vectorized(
                     "val_accuracy": 100.0 * total_val_correct / max(total_val_samples, 1),
                     "n_envs": len(env_states),
                     "skipped_update": update_skipped,
+                    "plateau_detected": plateau_detected,
                 },
             ))
 

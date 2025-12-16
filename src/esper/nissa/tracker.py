@@ -455,6 +455,11 @@ class DiagnosticTracker:
 
         return count
 
+    @property
+    def plateau_detected(self) -> bool:
+        """Check if training is in a plateau (3+ epochs with no improvement)."""
+        return self._plateau_length() >= 3
+
     def _detect_red_flags(self, snapshot: EpochSnapshot) -> list[str]:
         """Detect issues that might need attention."""
         flags = []

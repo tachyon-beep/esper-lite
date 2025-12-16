@@ -659,3 +659,255 @@ class TestBuildSlotStates:
         assert result["r0c0"] is None
         assert isinstance(result["r0c1"], MaskSeedInfo)
         assert result["r0c2"] is None
+
+
+# =============================================================================
+# Edge Case Tests for Action Masking (Phase 2.2)
+# =============================================================================
+
+
+class TestActionMaskEdgeCases:
+    """Edge case tests for action masking boundary conditions."""
+
+    def test_all_slots_disabled_only_wait_valid(self):
+        """When no slots are enabled, only WAIT should be valid."""
+        from esper.leyline.slot_config import SlotConfig
+
+        slot_states = {
+            "r0c0": None,
+            "r0c1": MaskSeedInfo(stage=SeedStage.TRAINING.value, seed_age_epochs=5),
+            "r0c2": None,
+        }
+
+        masks = compute_action_masks(
+            slot_states,
+            enabled_slots=[],  # No slots enabled
+            slot_config=SlotConfig.default(),
+        )
+
+        # No slots selectable
+        assert not masks["slot"].any(), "No slots should be selectable when none enabled"
+
+        # Only WAIT should be valid
+        assert masks["op"][LifecycleOp.WAIT], "WAIT must always be valid"
+        assert not masks["op"][LifecycleOp.GERMINATE], "GERMINATE requires enabled empty slot"
+        assert not masks["op"][LifecycleOp.CULL], "CULL requires enabled slot with seed"
+        assert not masks["op"][LifecycleOp.FOSSILIZE], "FOSSILIZE requires enabled PROBATIONARY"
+
+    def test_large_config_9_slots(self):
+        """9-slot (3x3) grid should mask correctly."""
+        from esper.leyline.slot_config import SlotConfig
+
+        slot_config = SlotConfig.for_grid(rows=3, cols=3)
+
+        # Mix of states
+        slot_states = {
+            "r0c0": None,
+            "r0c1": MaskSeedInfo(stage=SeedStage.TRAINING.value, seed_age_epochs=5),
+            "r0c2": None,
+            "r1c0": MaskSeedInfo(stage=SeedStage.PROBATIONARY.value, seed_age_epochs=10),
+            "r1c1": None,
+            "r1c2": MaskSeedInfo(stage=SeedStage.BLENDING.value, seed_age_epochs=3),
+            "r2c0": None,
+            "r2c1": None,
+            "r2c2": MaskSeedInfo(stage=SeedStage.FOSSILIZED.value, seed_age_epochs=20),
+        }
+
+        # Enable all slots
+        masks = compute_action_masks(
+            slot_states,
+            enabled_slots=list(slot_config.slot_ids),
+            slot_config=slot_config,
+        )
+
+        # Verify dimensions
+        assert masks["slot"].shape[0] == 9
+        assert masks["op"].shape[0] == NUM_OPS
+
+        # All enabled slots should be selectable
+        assert masks["slot"].all(), "All 9 slots should be selectable when all enabled"
+
+        # Ops check
+        assert masks["op"][LifecycleOp.WAIT]  # Always valid
+        assert masks["op"][LifecycleOp.GERMINATE]  # Empty slots exist
+        assert masks["op"][LifecycleOp.CULL]  # Seeds with age >= 1 exist
+        assert masks["op"][LifecycleOp.FOSSILIZE]  # PROBATIONARY seed exists
+
+    def test_large_config_25_slots(self):
+        """25-slot (5x5) grid should mask correctly."""
+        from esper.leyline.slot_config import SlotConfig
+
+        slot_config = SlotConfig.for_grid(rows=5, cols=5)
+
+        # All slots empty
+        slot_states = {slot_id: None for slot_id in slot_config.slot_ids}
+
+        masks = compute_action_masks(
+            slot_states,
+            enabled_slots=list(slot_config.slot_ids),
+            slot_config=slot_config,
+        )
+
+        # Verify dimensions
+        assert masks["slot"].shape[0] == 25
+
+        # GERMINATE should be valid (all empty)
+        assert masks["op"][LifecycleOp.GERMINATE]
+        assert masks["op"][LifecycleOp.WAIT]
+
+        # No seeds means no CULL/FOSSILIZE
+        assert not masks["op"][LifecycleOp.CULL]
+        assert not masks["op"][LifecycleOp.FOSSILIZE]
+
+    def test_seed_age_exactly_min_cull_age(self):
+        """Seed age exactly at MIN_CULL_AGE boundary should allow CULL."""
+        slot_states = {
+            "r0c1": MaskSeedInfo(
+                stage=SeedStage.GERMINATED.value,
+                seed_age_epochs=MIN_CULL_AGE,  # Exactly at boundary
+            ),
+        }
+
+        masks = compute_action_masks(slot_states, enabled_slots=["r0c1"])
+
+        assert masks["op"][LifecycleOp.CULL], f"CULL should be valid at age {MIN_CULL_AGE}"
+
+    def test_seed_age_one_below_min_cull_age(self):
+        """Seed age one below MIN_CULL_AGE should block CULL."""
+        slot_states = {
+            "r0c1": MaskSeedInfo(
+                stage=SeedStage.GERMINATED.value,
+                seed_age_epochs=MIN_CULL_AGE - 1,  # Just below boundary
+            ),
+        }
+
+        masks = compute_action_masks(slot_states, enabled_slots=["r0c1"])
+
+        assert not masks["op"][LifecycleOp.CULL], f"CULL should be blocked at age {MIN_CULL_AGE - 1}"
+
+    def test_single_slot_all_ops_isolated(self):
+        """Single slot should correctly isolate all operations."""
+        from esper.leyline.slot_config import SlotConfig
+
+        slot_config = SlotConfig(slot_ids=("r0c0",))
+
+        # Test with PROBATIONARY seed (allows FOSSILIZE and CULL)
+        slot_states = {
+            "r0c0": MaskSeedInfo(stage=SeedStage.PROBATIONARY.value, seed_age_epochs=5),
+        }
+
+        masks = compute_action_masks(
+            slot_states,
+            enabled_slots=["r0c0"],
+            slot_config=slot_config,
+        )
+
+        # Single slot should be selectable
+        assert masks["slot"].shape[0] == 1
+        assert masks["slot"][0]
+
+        # WAIT always valid
+        assert masks["op"][LifecycleOp.WAIT]
+
+        # GERMINATE blocked (slot occupied)
+        assert not masks["op"][LifecycleOp.GERMINATE]
+
+        # FOSSILIZE valid (PROBATIONARY)
+        assert masks["op"][LifecycleOp.FOSSILIZE]
+
+        # CULL valid (age >= MIN_CULL_AGE)
+        assert masks["op"][LifecycleOp.CULL]
+
+    def test_seed_limit_exactly_zero_unlimited(self):
+        """max_seeds=0 should mean unlimited (no blocking)."""
+        slot_states = {
+            "r0c0": None,
+            "r0c1": None,
+            "r0c2": None,
+        }
+
+        # total_seeds=1000, max_seeds=0 (unlimited)
+        masks = compute_action_masks(
+            slot_states,
+            enabled_slots=["r0c1"],
+            total_seeds=1000,
+            max_seeds=0,
+        )
+
+        # GERMINATE should still be valid (0 = unlimited)
+        assert masks["op"][LifecycleOp.GERMINATE]
+
+    def test_partial_enabled_slots_mask_correctly(self):
+        """When only some slots enabled, mask should only enable those."""
+        from esper.leyline.slot_config import SlotConfig
+
+        slot_config = SlotConfig.for_grid(rows=2, cols=3)  # 6 slots
+
+        slot_states = {slot_id: None for slot_id in slot_config.slot_ids}
+
+        # Enable only r0c0 and r1c2 (first and last)
+        masks = compute_action_masks(
+            slot_states,
+            enabled_slots=["r0c0", "r1c2"],
+            slot_config=slot_config,
+        )
+
+        # Check individual slot masks
+        expected = [True, False, False, False, False, True]  # r0c0 and r1c2
+        for i, exp in enumerate(expected):
+            assert masks["slot"][i].item() == exp, f"Slot {i} ({slot_config.slot_ids[i]}) mask mismatch"
+
+    def test_all_stages_fossilize_conditions(self):
+        """Test FOSSILIZE masking for all seed stages."""
+        # Only PROBATIONARY should allow FOSSILIZE
+        fossilizable_stages = {SeedStage.PROBATIONARY}
+        all_stages = [
+            SeedStage.GERMINATED,
+            SeedStage.TRAINING,
+            SeedStage.BLENDING,
+            SeedStage.PROBATIONARY,
+            SeedStage.FOSSILIZED,
+        ]
+
+        for stage in all_stages:
+            slot_states = {
+                "r0c1": MaskSeedInfo(stage=stage.value, seed_age_epochs=10),
+            }
+
+            masks = compute_action_masks(slot_states, enabled_slots=["r0c1"])
+
+            expected = stage in fossilizable_stages
+            actual = masks["op"][LifecycleOp.FOSSILIZE].item()
+            assert actual == expected, (
+                f"FOSSILIZE mask for {stage.name}: expected {expected}, got {actual}"
+            )
+
+    def test_all_stages_cull_conditions(self):
+        """Test CULL masking for all seed stages (with sufficient age)."""
+        # Stages that can transition to CULLED
+        cullable_stages = {
+            SeedStage.GERMINATED,
+            SeedStage.TRAINING,
+            SeedStage.BLENDING,
+            SeedStage.PROBATIONARY,
+        }
+        all_stages = [
+            SeedStage.GERMINATED,
+            SeedStage.TRAINING,
+            SeedStage.BLENDING,
+            SeedStage.PROBATIONARY,
+            SeedStage.FOSSILIZED,
+        ]
+
+        for stage in all_stages:
+            slot_states = {
+                "r0c1": MaskSeedInfo(stage=stage.value, seed_age_epochs=10),  # Age sufficient
+            }
+
+            masks = compute_action_masks(slot_states, enabled_slots=["r0c1"])
+
+            expected = stage in cullable_stages
+            actual = masks["op"][LifecycleOp.CULL].item()
+            assert actual == expected, (
+                f"CULL mask for {stage.name}: expected {expected}, got {actual}"
+            )

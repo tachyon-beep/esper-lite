@@ -54,6 +54,17 @@ class RewardComponentsTelemetry:
     # Total
     total_reward: float = 0.0
 
+    @property
+    def shaped_reward_ratio(self) -> float:
+        """Fraction of total reward from shaping terms.
+
+        High values (> 0.5) suggest potential reward hacking.
+        """
+        if abs(self.total_reward) < 1e-8:
+            return 0.0
+        shaped = self.stage_bonus + self.pbrs_bonus + self.action_shaping
+        return abs(shaped) / abs(self.total_reward)
+
     def to_dict(self) -> dict:
         """Convert to dict for TelemetryEvent data field.
 
@@ -86,6 +97,7 @@ class RewardComponentsTelemetry:
             "host_baseline_acc": self.host_baseline_acc,
             "growth_ratio": self.growth_ratio,
             "total_reward": self.total_reward,
+            "shaped_reward_ratio": self.shaped_reward_ratio,
         }
 
 

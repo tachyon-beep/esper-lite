@@ -287,6 +287,132 @@ def seed_infos(draw):
 
 
 # =============================================================================
+# Slot Configuration Types
+# =============================================================================
+
+@st.composite
+def slot_configs(draw, min_slots: int = 1, max_slots: int = 10):
+    """Generate valid SlotConfig instances.
+
+    Args:
+        draw: Hypothesis draw function
+        min_slots: Minimum number of slots
+        max_slots: Maximum number of slots
+
+    Returns:
+        SlotConfig with valid slot IDs in row-major order
+
+    Example:
+        @given(slot_configs())
+        def test_slot_config_property(config):
+            assert config.num_slots >= 1
+    """
+    from esper.leyline.slot_config import SlotConfig
+
+    n_slots = draw(st.integers(min_value=min_slots, max_value=max_slots))
+    # Calculate grid dimensions that produce at least n_slots
+    # Use a simple heuristic: prefer wider grids
+    rows = draw(st.integers(min_value=1, max_value=max(1, n_slots)))
+    cols = (n_slots + rows - 1) // rows  # Ceiling division
+
+    return SlotConfig.for_grid(rows, cols)
+
+
+@st.composite
+def injection_specs(draw, slot_id: str | None = None):
+    """Generate valid InjectionSpec instances.
+
+    Args:
+        draw: Hypothesis draw function
+        slot_id: Optional specific slot ID (generates valid one if None)
+
+    Returns:
+        InjectionSpec with valid invariants
+
+    Example:
+        @given(injection_specs())
+        def test_injection_spec_property(spec):
+            assert spec.channels > 0
+    """
+    from esper.leyline.injection_spec import InjectionSpec
+
+    if slot_id is None:
+        row = draw(st.integers(min_value=0, max_value=9))
+        col = draw(st.integers(min_value=0, max_value=9))
+        slot_id = f"r{row}c{col}"
+
+    channels = draw(st.integers(min_value=1, max_value=1024))
+    position = draw(bounded_floats(0.0, 1.0))
+    start_layer = draw(st.integers(min_value=0, max_value=99))
+    end_layer = draw(st.integers(min_value=start_layer, max_value=100))
+
+    return InjectionSpec(
+        slot_id=slot_id,
+        channels=channels,
+        position=position,
+        layer_range=(start_layer, end_layer),
+    )
+
+
+@st.composite
+def slot_states_for_config(draw, slot_config):
+    """Generate slot states dict matching a SlotConfig.
+
+    Args:
+        draw: Hypothesis draw function
+        slot_config: SlotConfig defining available slots
+
+    Returns:
+        Dict mapping slot_id to MaskSeedInfo or None (empty slot)
+
+    Example:
+        @given(slot_configs())
+        def test_with_states(config):
+            states = slot_states_for_config(config).example()
+    """
+    from esper.simic.action_masks import MaskSeedInfo
+    from esper.leyline import SeedStage
+
+    states: dict[str, MaskSeedInfo | None] = {}
+
+    for slot_id in slot_config.slot_ids:
+        # Randomly decide if slot is occupied
+        if draw(st.booleans()):
+            # Generate a seed in this slot
+            stage = draw(st.sampled_from([s.value for s in SeedStage if s != SeedStage.DORMANT]))
+            age = draw(st.integers(min_value=0, max_value=100))
+            states[slot_id] = MaskSeedInfo(stage=stage, seed_age_epochs=age)
+        else:
+            states[slot_id] = None
+
+    return states
+
+
+@st.composite
+def enabled_slots_for_config(draw, slot_config):
+    """Generate a subset of enabled slots from a SlotConfig.
+
+    Args:
+        draw: Hypothesis draw function
+        slot_config: SlotConfig defining available slots
+
+    Returns:
+        List of enabled slot IDs (non-empty subset)
+
+    Example:
+        @given(slot_configs())
+        def test_with_enabled(config):
+            enabled = enabled_slots_for_config(config).example()
+            assert len(enabled) >= 1
+    """
+    # Must enable at least one slot
+    all_slots = list(slot_config.slot_ids)
+    # Sample 1 to all slots
+    n_enabled = draw(st.integers(min_value=1, max_value=len(all_slots)))
+    return draw(st.lists(st.sampled_from(all_slots), min_size=n_enabled, max_size=n_enabled, unique=True))
+
+
+# =============================================================================
 # Neural Network Types
 # =============================================================================
 

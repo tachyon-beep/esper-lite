@@ -2,7 +2,7 @@
 
 **Goal:** Wire 7 telemetry fields that have code but aren't connected to telemetry events.
 
-**Status:** PLAN - awaiting implementation
+**Status:** IMPLEMENTED - all tasks complete, tests passing
 
 **Estimated Effort:** 2-3 hours
 

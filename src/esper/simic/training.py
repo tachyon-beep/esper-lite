@@ -562,6 +562,7 @@ def run_heuristic_episode(
                 "action": decision.action.name,
                 "op": factored_action.op.name,
                 "reward": reward,
+                "plateau_detected": signals.metrics.plateau_epochs >= 3,
             },
         ))
 
