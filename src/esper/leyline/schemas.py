@@ -1,7 +1,6 @@
-"""Leyline Schemas - Command and blueprint specifications.
+"""Leyline Schemas - Blueprint and gate specifications.
 
-Defines the structure of commands issued by controllers
-and specifications for seed blueprints.
+Defines specifications for seed blueprints and quality gates.
 """
 
 from __future__ import annotations
@@ -10,9 +9,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, IntEnum, auto
 from typing import Any, Protocol, runtime_checkable
-from uuid import uuid4
 
-from esper.leyline.stages import CommandType, RiskLevel, SeedStage
+from esper.leyline.stages import SeedStage
 
 
 def _utc_now() -> datetime:
@@ -43,38 +41,6 @@ OPERATION_TARGET_STAGE: dict[SeedOperation, SeedStage] = {
     SeedOperation.EMBARGO: SeedStage.EMBARGOED,
     SeedOperation.RESET: SeedStage.RESETTING,
 }
-
-
-@dataclass(frozen=True)
-class AdaptationCommand:
-    """Command from Tamiyo to Kasmina.
-
-    This is the primary contract for Tamiyo → Kasmina communication.
-    Commands are immutable once created.
-    """
-
-    # Identity
-    command_id: str = field(default_factory=lambda: str(uuid4()))
-    timestamp: datetime = field(default_factory=_utc_now)
-
-    # Command specification
-    command_type: CommandType = CommandType.GERMINATE
-    target_seed_id: str | None = None
-    target_slot_id: str | None = None
-
-    # Parameters (command-specific)
-    blueprint_id: str | None = None
-    target_stage: SeedStage | None = None
-    alpha_value: float | None = None
-    learning_rate: float | None = None
-
-    # Metadata
-    reason: str = ""
-    confidence: float = 1.0
-    risk_level: RiskLevel = RiskLevel.GREEN
-
-    # Annotations (extensible key-value pairs)
-    annotations: dict[str, str] = field(default_factory=dict)
 
 
 class GateLevel(IntEnum):

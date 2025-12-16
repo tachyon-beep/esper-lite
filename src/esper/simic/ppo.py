@@ -45,6 +45,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Checkpoint format version for forward compatibility
+# Increment when checkpoint structure changes in backwards-incompatible ways
+CHECKPOINT_VERSION = 1
+
 
 # =============================================================================
 # Feature Extraction (PPO-specific wrapper)
@@ -648,6 +652,8 @@ class PPOAgent:
         # Use _base_network to get uncompiled module for consistent state dict keys
         base_net = self._base_network
         save_dict = {
+            # Version for forward compatibility
+            'checkpoint_version': CHECKPOINT_VERSION,
             'network_state_dict': base_net.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'train_steps': self.train_steps,
@@ -672,10 +678,18 @@ class PPOAgent:
                 # Buffer dimensions (must match training loop)
                 'num_envs': self.num_envs,
                 'max_steps_per_env': self.max_steps_per_env,
+                # Training hyperparameters
+                'n_epochs': self.n_epochs,
+                'batch_size': self.batch_size,
+                'max_grad_norm': self.max_grad_norm,
+                'weight_decay': self.weight_decay,
             },
             # Architecture info for load-time reconstruction
             'architecture': {
                 'state_dim': base_net.state_dim,
+                # Slot configuration (critical for network shape)
+                'slot_ids': self.slot_config.slot_ids,
+                'num_slots': self.slot_config.num_slots,
             }
         }
         if metadata:
@@ -685,22 +699,66 @@ class PPOAgent:
 
     @classmethod
     def load(cls, path: str | Path, device: str = "cuda:0") -> "PPOAgent":
-        """Load agent from file."""
+        """Load agent from checkpoint file.
+
+        Args:
+            path: Path to checkpoint file
+            device: Device to load model onto
+
+        Returns:
+            PPOAgent with restored weights and configuration
+
+        Raises:
+            RuntimeError: If checkpoint architecture is incompatible
+        """
+        import warnings
+
         checkpoint = torch.load(path, map_location=device, weights_only=False)
-
         state_dict = checkpoint['network_state_dict']
+        architecture = checkpoint.get('architecture', {})
+        config = checkpoint.get('config', {})
+        version = checkpoint.get('checkpoint_version', 0)
 
-        # Infer state_dim from FactoredRecurrentActorCritic state dict
+        # === Legacy checkpoint warning ===
+        if version == 0:
+            warnings.warn(
+                f"Loading legacy checkpoint (version 0) from {path}. "
+                "Slot configuration will default to 3 slots. "
+                "Re-save checkpoint to upgrade format.",
+                DeprecationWarning,
+                stacklevel=2
+            )
+
+        # === Reconstruct SlotConfig ===
+        if 'slot_ids' in architecture:
+            slot_config = SlotConfig(slot_ids=tuple(architecture['slot_ids']))
+        else:
+            slot_config = SlotConfig.default()
+
+        # === Pre-load validation ===
+        expected_num_slots = slot_config.num_slots
+        actual_num_slots = state_dict['slot_head.2.weight'].shape[0]
+        if expected_num_slots != actual_num_slots:
+            raise RuntimeError(
+                f"Checkpoint slot count mismatch: "
+                f"slot_config has {expected_num_slots} slots, "
+                f"but checkpoint weights have {actual_num_slots} slots. "
+                f"Saved slot_ids: {architecture.get('slot_ids', 'not saved (legacy)')}"
+            )
+
+        # === Infer state_dim ===
         # feature_net.0.weight has shape [hidden_dim, state_dim]
         state_dim = state_dict['feature_net.0.weight'].shape[1]
 
+        # === Create agent with restored config ===
         agent = cls(
             state_dim=state_dim,
+            slot_config=slot_config,
             device=device,
-            **checkpoint.get('config', {})
+            **config
         )
 
-        # Load into base network (handles compiled modules)
+        # === Load weights ===
         agent._base_network.load_state_dict(state_dict)
         agent.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         agent.train_steps = checkpoint.get('train_steps', 0)

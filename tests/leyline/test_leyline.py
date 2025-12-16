@@ -8,9 +8,6 @@ from esper.leyline import (
     is_terminal_stage,
     is_active_stage,
     is_failure_stage,
-    CommandType,
-    RiskLevel,
-    AdaptationCommand,
     TrainingMetrics,
     SeedMetrics,
     SeedStateReport,
@@ -89,30 +86,6 @@ class TestSeedStage:
         assert is_valid_transition(SeedStage.CULLED, SeedStage.EMBARGOED)
         assert is_valid_transition(SeedStage.EMBARGOED, SeedStage.RESETTING)
         assert is_valid_transition(SeedStage.RESETTING, SeedStage.DORMANT)
-
-
-class TestAdaptationCommand:
-    """Tests for AdaptationCommand dataclass."""
-
-    def test_default_values(self):
-        """Test default values are sensible."""
-        cmd = AdaptationCommand()
-        assert cmd.command_type == CommandType.GERMINATE
-        assert cmd.confidence == 1.0
-        assert cmd.risk_level == RiskLevel.GREEN
-        assert cmd.command_id  # Should have auto-generated ID
-
-    def test_command_is_frozen(self):
-        """AdaptationCommand should be immutable (frozen)."""
-        cmd = AdaptationCommand()
-        with pytest.raises(Exception):  # FrozenInstanceError
-            cmd.confidence = 0.5
-
-    def test_unique_command_ids(self):
-        """Each command should have a unique ID."""
-        cmd1 = AdaptationCommand()
-        cmd2 = AdaptationCommand()
-        assert cmd1.command_id != cmd2.command_id
 
 
 class TestTrainingMetrics:

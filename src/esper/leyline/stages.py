@@ -91,32 +91,3 @@ def is_active_stage(stage: SeedStage) -> bool:
 def is_failure_stage(stage: SeedStage) -> bool:
     """Check if a stage represents a failed seed."""
     return stage in (SeedStage.CULLED, SeedStage.EMBARGOED, SeedStage.RESETTING)
-
-
-class CommandType(Enum):
-    """Types of commands Tamiyo can issue to Kasmina."""
-
-    # Lifecycle commands
-    GERMINATE = auto()          # Create a new seed
-    ADVANCE_STAGE = auto()      # Move seed to next stage
-    CULL = auto()               # Kill a seed
-
-    # Parameter commands
-    SET_ALPHA = auto()          # Set blending alpha directly
-    SET_LEARNING_RATE = auto()  # Adjust seed learning rate
-
-    # Control commands
-    PAUSE_SEED = auto()         # Temporarily pause seed training
-    RESUME_SEED = auto()        # Resume paused seed
-
-    # Query commands
-    REQUEST_STATE = auto()      # Request current seed state
-
-
-class RiskLevel(IntEnum):
-    """Risk assessment levels for commands."""
-    GREEN = 1       # Safe, routine operation
-    YELLOW = 2      # Caution, monitor closely
-    ORANGE = 3      # Elevated risk, may need rollback
-    RED = 4         # High risk, prepare for intervention
-    CRITICAL = 5    # Emergency, immediate attention required

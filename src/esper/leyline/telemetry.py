@@ -53,11 +53,6 @@ class TelemetryEventType(Enum):
     GRADIENT_ANOMALY = auto()
     PERFORMANCE_DEGRADATION = auto()
 
-    # Command events
-    COMMAND_ISSUED = auto()  # TODO: Implement when command system built
-    COMMAND_EXECUTED = auto()  # TODO: Implement when command system built
-    COMMAND_FAILED = auto()  # TODO: Implement when command system built
-
     # === NEW: PPO Training Events (Ops Normal) ===
     PPO_UPDATE_COMPLETED = auto()
     MEMORY_WARNING = auto()
