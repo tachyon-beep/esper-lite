@@ -155,6 +155,42 @@ Whenever we make an active design decision to defer functionality due to complex
 
 ## Development Conventions
 
+### Specialist Subagents and Skill Packs
+
+**Use specialist subagents and skill packs liberally and at your own discretion.**
+
+This project is a deep reinforcement learning system built on PyTorch. Given the domain complexity, Claude Code should proactively leverage specialists when working on relevant areas.
+
+#### Subagents (spawn for complex tasks)
+
+| Agent | Use For |
+|-------|---------|
+| **pytorch-expert** | torch.compile optimization, FSDP/distributed training, TorchInductor, custom kernels, performance profiling, memory analysis, tensor operations, GPU debugging |
+| **drl-expert** | PPO/SAC/TD3 implementation, reward engineering, training stability, policy/value network architecture, exploration strategies, hyperparameter tuning, RL debugging |
+
+#### Skill Packs (invoke via Skill tool for guidance)
+
+| Skill Pack | Use For |
+|------------|---------|
+| **yzmir-training-optimization** | NaN losses, gradient explosion, learning rate scheduling, optimizer selection, overfitting prevention, experiment tracking, convergence issues |
+| **yzmir-neural-architectures** | Policy/value network design, CNN vs Transformer decisions, attention mechanisms, normalization techniques, architecture stability |
+| **yzmir-pytorch-engineering** | PyTorch implementation patterns, memory profiling, distributed training, tensor operations, CUDA debugging |
+| **yzmir-deep-rl** | Algorithm selection (PPO/SAC/TD3), reward shaping, exploration-exploitation, on-policy vs off-policy, sample efficiency |
+| **ordis-quality-engineering** | E2E testing, flaky test remediation, test automation, property-based testing, chaos engineering |
+| **axiom-python-engineering** | Python patterns, type systems, async code, package structure, code review |
+| **elspeth-ux-specialist** | TUI design for Karn/Overwatch, dashboard layouts, keyboard navigation, status indicators |
+
+**Default stance:** When in doubt, spawn the specialist or invoke the skill. The overhead is trivial compared to the cost of subtle bugs in tensor operations, RL training loops, or test flakiness.
+
+**Examples of when to use:**
+- Implementing or modifying anything in `simic/` (RL training) → `drl-expert` agent + `yzmir-deep-rl` skills
+- Debugging NaN losses, exploding gradients, or training instability → `yzmir-training-optimization` skills
+- Optimizing tensor operations or memory usage → `pytorch-expert` agent
+- Writing custom loss functions or network architectures → `drl-expert` + `yzmir-neural-architectures`
+- Reviewing RL or PyTorch code → spawn the relevant expert as a reviewer + `axiom-python-engineering`
+- Working on Karn TUI or Overwatch dashboards → `elspeth-ux-specialist`
+- Fixing flaky tests or improving test coverage → `ordis-quality-engineering`
+
 ### Package Manager: UV
 
 This project uses **UV** as the preferred package manager and Python executor.
