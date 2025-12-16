@@ -313,3 +313,74 @@ def test_ppo_agent_backwards_compatible_with_state_dim():
     )
 
     assert agent._base_network.state_dim == 50
+
+
+def test_ppo_agent_buffer_matches_slot_config():
+    """PPOAgent buffer should match slot_config passed during initialization."""
+    from esper.leyline.slot_config import SlotConfig
+
+    slot_config = SlotConfig.for_grid(rows=1, cols=5)  # 5 slots
+
+    agent = PPOAgent(
+        slot_config=slot_config,
+        device="cpu",
+        num_envs=2,
+        max_steps_per_env=10,
+        compile_network=False,
+    )
+
+    # Buffer should have matching slot_config
+    assert agent.buffer.num_slots == 5
+    assert agent.buffer.slot_config == slot_config
+    # slot_masks should have correct shape
+    assert agent.buffer.slot_masks.shape == (2, 10, 5)
+
+
+def test_ppo_agent_full_update_with_5_slots():
+    """Full PPO update cycle with 5-slot config should work correctly."""
+    from esper.leyline.slot_config import SlotConfig
+    import torch
+
+    slot_config = SlotConfig.for_grid(rows=1, cols=5)  # 5 slots
+
+    agent = PPOAgent(
+        slot_config=slot_config,
+        device="cpu",
+        num_envs=1,
+        max_steps_per_env=5,
+        compile_network=False,
+    )
+
+    # Add some transitions to buffer
+    agent.buffer.start_episode(env_id=0)
+    for i in range(5):
+        agent.buffer.add(
+            env_id=0,
+            state=torch.randn(agent._base_network.state_dim),
+            slot_action=i % 5,  # Use all 5 slots
+            blueprint_action=0,
+            blend_action=0,
+            op_action=0,
+            slot_log_prob=-1.0,
+            blueprint_log_prob=-1.0,
+            blend_log_prob=-1.0,
+            op_log_prob=-1.0,
+            value=1.0,
+            reward=1.0,
+            done=(i == 4),
+            slot_mask=torch.ones(5, dtype=torch.bool),  # 5 slots
+            blueprint_mask=torch.ones(5, dtype=torch.bool),
+            blend_mask=torch.ones(3, dtype=torch.bool),
+            op_mask=torch.ones(4, dtype=torch.bool),
+            hidden_h=torch.zeros(1, 1, 128),
+            hidden_c=torch.zeros(1, 1, 128),
+        )
+    agent.buffer.end_episode(env_id=0)
+
+    # Run PPO update - should not crash
+    metrics = agent.update()
+
+    # Should have produced metrics
+    assert "policy_loss" in metrics
+    assert "value_loss" in metrics
+    assert "entropy" in metrics

@@ -94,7 +94,7 @@ class TamiyoRolloutBuffer:
     state_dim: int
     lstm_hidden_dim: int = DEFAULT_LSTM_HIDDEN_DIM
     lstm_layers: int = 1
-    num_slots: int = SlotConfig.default().num_slots
+    slot_config: SlotConfig = field(default_factory=SlotConfig.default)
     num_blueprints: int = NUM_BLUEPRINTS
     num_blends: int = NUM_BLENDS
     num_ops: int = NUM_OPS
@@ -132,6 +132,11 @@ class TamiyoRolloutBuffer:
     episode_boundaries: dict[int, list[tuple[int, int]]] = field(
         default_factory=dict, init=False
     )
+
+    @property
+    def num_slots(self) -> int:
+        """Number of slots from slot_config."""
+        return self.slot_config.num_slots
 
     def __post_init__(self):
         """Allocate all tensors upfront."""

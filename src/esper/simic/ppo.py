@@ -271,12 +271,17 @@ class PPOAgent:
             max_steps_per_env=max_steps_per_env,
             state_dim=state_dim,
             lstm_hidden_dim=lstm_hidden_dim,
+            slot_config=self.slot_config,
             device=torch.device(device),
         )
-        # Validate buffer and network use same hidden dim
+        # Validate buffer and network use same hidden dim and slot config
         assert self.buffer.lstm_hidden_dim == self.network.lstm_hidden_dim, (
             f"Buffer lstm_hidden_dim ({self.buffer.lstm_hidden_dim}) != "
             f"network lstm_hidden_dim ({self.network.lstm_hidden_dim})"
+        )
+        assert self.buffer.num_slots == self.network.num_slots, (
+            f"Buffer num_slots ({self.buffer.num_slots}) != "
+            f"network num_slots ({self.network.num_slots})"
         )
         # Ratio explosion thresholds (aligned with anomaly detector defaults)
         self.ratio_explosion_threshold = 5.0

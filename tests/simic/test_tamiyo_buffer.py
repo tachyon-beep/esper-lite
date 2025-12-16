@@ -226,3 +226,87 @@ class TestTamiyoRolloutBuffer:
                 hidden_h=torch.zeros(1, 1, 128),
                 hidden_c=torch.zeros(1, 1, 128),
             )
+
+    def test_dynamic_slot_config_3_slots(self):
+        """Buffer with 3-slot config should allocate [n, max_steps, 3] slot_masks."""
+        from esper.leyline.slot_config import SlotConfig
+
+        slot_config = SlotConfig.default()  # 3 slots (r0c0, r0c1, r0c2)
+
+        buffer = TamiyoRolloutBuffer(
+            num_envs=2,
+            max_steps_per_env=5,
+            state_dim=50,
+            lstm_hidden_dim=DEFAULT_LSTM_HIDDEN_DIM,
+            slot_config=slot_config,
+        )
+
+        # slot_masks should have shape [num_envs, max_steps, 3]
+        assert buffer.slot_masks.shape == (2, 5, 3)
+        assert buffer.num_slots == 3
+
+    def test_dynamic_slot_config_5_slots(self):
+        """Buffer with 5-slot config should allocate [n, max_steps, 5] slot_masks."""
+        from esper.leyline.slot_config import SlotConfig
+
+        slot_config = SlotConfig.for_grid(rows=1, cols=5)  # 5 slots
+
+        buffer = TamiyoRolloutBuffer(
+            num_envs=2,
+            max_steps_per_env=5,
+            state_dim=50,
+            lstm_hidden_dim=DEFAULT_LSTM_HIDDEN_DIM,
+            slot_config=slot_config,
+        )
+
+        # slot_masks should have shape [num_envs, max_steps, 5]
+        assert buffer.slot_masks.shape == (2, 5, 5)
+        assert buffer.num_slots == 5
+
+    def test_dynamic_slot_config_full_cycle(self):
+        """Full PPO cycle with non-default slot_config should work end-to-end."""
+        from esper.leyline.slot_config import SlotConfig
+
+        slot_config = SlotConfig.for_grid(rows=1, cols=5)  # 5 slots
+
+        buffer = TamiyoRolloutBuffer(
+            num_envs=1,
+            max_steps_per_env=3,
+            state_dim=50,
+            lstm_hidden_dim=DEFAULT_LSTM_HIDDEN_DIM,
+            slot_config=slot_config,
+        )
+
+        # Add transitions with 5-slot masks
+        buffer.start_episode(env_id=0)
+        for i in range(3):
+            buffer.add(
+                env_id=0,
+                state=torch.randn(50),
+                slot_action=i % 5,  # Use slots 0-4
+                blueprint_action=0,
+                blend_action=0,
+                op_action=0,
+                slot_log_prob=-1.0,
+                blueprint_log_prob=-1.0,
+                blend_log_prob=-1.0,
+                op_log_prob=-1.0,
+                value=1.0,
+                reward=1.0,
+                done=(i == 2),
+                slot_mask=torch.ones(5, dtype=torch.bool),  # 5 slots
+                blueprint_mask=torch.ones(5, dtype=torch.bool),
+                blend_mask=torch.ones(3, dtype=torch.bool),
+                op_mask=torch.ones(4, dtype=torch.bool),
+                hidden_h=torch.zeros(1, 1, 128),
+                hidden_c=torch.zeros(1, 1, 128),
+            )
+        buffer.end_episode(env_id=0)
+
+        # Compute advantages and returns
+        buffer.compute_advantages_and_returns(gamma=0.99, gae_lambda=0.95)
+
+        # Get batched data - slot_masks should have correct shape
+        data = buffer.get_batched_sequences()
+        assert data["slot_masks"].shape == (1, 3, 5)
+        assert data["slot_actions"].shape == (1, 3)
