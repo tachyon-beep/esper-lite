@@ -92,6 +92,7 @@ def train_epoch_normal(
     optimizer: torch.optim.Optimizer,
     device: str,
     task_type: str = "classification",
+    max_grad_norm: float | None = None,
 ) -> None:
     """Train one epoch without seed.
 
@@ -103,14 +104,24 @@ def train_epoch_normal(
         criterion: Loss function.
         optimizer: Optimizer for model parameters.
         device: Device to train on.
+        task_type: Task type ("classification" or "lm").
+        max_grad_norm: Maximum gradient norm for clipping. If None, no clipping is applied.
     """
     model.train()
+
+    # Validate max_grad_norm parameter
+    if max_grad_norm is not None:
+        if max_grad_norm <= 0:
+            raise ValueError(f"max_grad_norm must be positive, got {max_grad_norm}")
+
     for inputs, labels in trainloader:
         inputs, labels = inputs.to(device, non_blocking=True), labels.to(device, non_blocking=True)
         optimizer.zero_grad(set_to_none=True)
         outputs = model(inputs)
         loss = compute_task_loss(outputs, labels, criterion, task_type)
         loss.backward()
+        if max_grad_norm is not None:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
         optimizer.step()
 
 
@@ -124,6 +135,7 @@ def train_epoch_incubator_mode(
     slot: str,
     task_type: str = "classification",
     gradient_telemetry_stride: int = 10,
+    max_grad_norm: float | None = None,
 ) -> None:
     """Train one epoch with seed in isolation (seed output doesn't affect forward pass).
 
@@ -148,9 +160,16 @@ def train_epoch_incubator_mode(
         gradient_telemetry_stride: Capture gradient telemetry every N steps.
             Set to 0 to disable. Default 10 balances accuracy with GPU pipeline
             efficiency (each capture triggers a device-to-host sync).
+        max_grad_norm: Maximum gradient norm for clipping. If None, no clipping is applied.
+            Clips both host and seed parameters when set.
     """
     model.train()
     seed_slot = model.seed_slots[slot]
+
+    # Validate max_grad_norm parameter
+    if max_grad_norm is not None:
+        if max_grad_norm <= 0:
+            raise ValueError(f"max_grad_norm must be positive, got {max_grad_norm}")
 
     for step, (inputs, labels) in enumerate(trainloader):
         inputs, labels = inputs.to(device, non_blocking=True), labels.to(device, non_blocking=True)
@@ -164,6 +183,10 @@ def train_epoch_incubator_mode(
         if gradient_telemetry_stride > 0 and step % gradient_telemetry_stride == 0:
             seed_slot.capture_gradient_telemetry()
 
+        # Clip gradients for both host and seed parameters
+        if max_grad_norm is not None:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+
         host_optimizer.step()
         seed_optimizer.step()
 
@@ -176,6 +199,7 @@ def train_epoch_blended(
     seed_optimizer: torch.optim.Optimizer | None,
     device: str,
     task_type: str = "classification",
+    max_grad_norm: float | None = None,
 ) -> None:
     """Train one epoch with blended host+seed.
 
@@ -189,8 +213,16 @@ def train_epoch_blended(
         host_optimizer: Optimizer for host parameters.
         seed_optimizer: Optimizer for seed parameters (optional).
         device: Device to train on.
+        task_type: Task type ("classification" or "lm").
+        max_grad_norm: Maximum gradient norm for clipping. If None, no clipping is applied.
     """
     model.train()
+
+    # Validate max_grad_norm parameter
+    if max_grad_norm is not None:
+        if max_grad_norm <= 0:
+            raise ValueError(f"max_grad_norm must be positive, got {max_grad_norm}")
+
     for inputs, labels in trainloader:
         inputs, labels = inputs.to(device, non_blocking=True), labels.to(device, non_blocking=True)
         host_optimizer.zero_grad(set_to_none=True)
@@ -199,6 +231,8 @@ def train_epoch_blended(
         outputs = model(inputs)
         loss = compute_task_loss(outputs, labels, criterion, task_type)
         loss.backward()
+        if max_grad_norm is not None:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
         host_optimizer.step()
         if seed_optimizer:
             seed_optimizer.step()
