@@ -77,6 +77,13 @@ class CNNHost(nn.Module):
         self._slot_keys = tuple(f"block{idx + 1}_post" for idx in self._slot_indices)
         self.slots = nn.ModuleDict({k: nn.Identity() for k in self._slot_keys})
 
+        # Build canonical ID -> internal key mapping for register_slot()
+        from esper.leyline.slot_id import format_slot_id
+        self._canonical_to_slot_key = {
+            format_slot_id(0, idx): key
+            for idx, key in zip(self._slot_indices, self._slot_keys)
+        }
+
         # Classifier maps final channels → logits
         self.classifier = nn.Linear(in_c, num_classes)
 
@@ -117,18 +124,33 @@ class CNNHost(nn.Module):
 
     @override
     def register_slot(self, slot_id: str, slot: nn.Module) -> None:
-        """Attach a seed module at the specified injection point."""
-        if slot_id not in self.slots:
-            raise ValueError(f"Unknown injection point: {slot_id}")
+        """Attach a seed module at the specified injection point.
+
+        Args:
+            slot_id: Either canonical ID (r0c1, r0c2) or internal key (block2_post).
+            slot: Module to attach at the injection point.
+        """
+        # Map canonical ID to internal key, fall back to slot_id for backwards compat
+        internal_key = self._canonical_to_slot_key.get(slot_id, slot_id)
+        if internal_key not in self.slots:
+            available = list(self._canonical_to_slot_key.keys())
+            raise ValueError(f"Unknown injection point: {slot_id}. Available: {available}")
         device = next(self.parameters()).device
-        self.slots[slot_id] = slot.to(device)
+        self.slots[internal_key] = slot.to(device)
 
     @override
     def unregister_slot(self, slot_id: str) -> None:
-        """Remove a seed module from the specified injection point."""
-        if slot_id not in self.slots:
-            raise ValueError(f"Unknown injection point: {slot_id}")
-        self.slots[slot_id] = nn.Identity()
+        """Remove a seed module from the specified injection point.
+
+        Args:
+            slot_id: Either canonical ID (r0c1, r0c2) or internal key (block2_post).
+        """
+        # Map canonical ID to internal key, fall back to slot_id for backwards compat
+        internal_key = self._canonical_to_slot_key.get(slot_id, slot_id)
+        if internal_key not in self.slots:
+            available = list(self._canonical_to_slot_key.keys())
+            raise ValueError(f"Unknown injection point: {slot_id}. Available: {available}")
+        self.slots[internal_key] = nn.Identity()
 
     # NOTE: forward_to_segment() is intentionally duplicated between CNNHost
     # and TransformerHost. While the structure is similar, the details differ:
@@ -360,10 +382,14 @@ class TransformerHost(nn.Module):
         # Compute layer range boundaries for segments
         layers_per_segment = n_layer // num_segments
         self._segment_boundaries = {}
+        self._canonical_to_slot_key = {}
         for i in range(num_segments):
             from esper.leyline.slot_id import format_slot_id
             slot_id = format_slot_id(0, i)
-            self._segment_boundaries[slot_id] = (i + 1) * layers_per_segment
+            end_layer = (i + 1) * layers_per_segment
+            self._segment_boundaries[slot_id] = end_layer
+            # Map canonical ID to internal slot key (last layer in segment)
+            self._canonical_to_slot_key[slot_id] = self._slot_keys[end_layer - 1]
 
     def injection_specs(self) -> list["InjectionSpec"]:
         """Return available injection points as InjectionSpec objects.
@@ -405,18 +431,33 @@ class TransformerHost(nn.Module):
 
     @override
     def register_slot(self, slot_id: str, slot: nn.Module) -> None:
-        """Attach a seed module at the specified injection point."""
-        if slot_id not in self.slots:
-            raise ValueError(f"Unknown injection point: {slot_id}")
+        """Attach a seed module at the specified injection point.
+
+        Args:
+            slot_id: Either canonical ID (r0c0, r0c1, r0c2) or internal key (layer_1_post_block).
+            slot: Module to attach at the injection point.
+        """
+        # Map canonical ID to internal key, fall back to slot_id for backwards compat
+        internal_key = self._canonical_to_slot_key.get(slot_id, slot_id)
+        if internal_key not in self.slots:
+            available = list(self._canonical_to_slot_key.keys())
+            raise ValueError(f"Unknown injection point: {slot_id}. Available: {available}")
         device = self.tok_emb.weight.device
-        self.slots[slot_id] = slot.to(device)
+        self.slots[internal_key] = slot.to(device)
 
     @override
     def unregister_slot(self, slot_id: str) -> None:
-        """Remove a seed module from the specified injection point."""
-        if slot_id not in self.slots:
-            raise ValueError(f"Unknown injection point: {slot_id}")
-        self.slots[slot_id] = nn.Identity()
+        """Remove a seed module from the specified injection point.
+
+        Args:
+            slot_id: Either canonical ID (r0c0, r0c1, r0c2) or internal key (layer_1_post_block).
+        """
+        # Map canonical ID to internal key, fall back to slot_id for backwards compat
+        internal_key = self._canonical_to_slot_key.get(slot_id, slot_id)
+        if internal_key not in self.slots:
+            available = list(self._canonical_to_slot_key.keys())
+            raise ValueError(f"Unknown injection point: {slot_id}. Available: {available}")
+        self.slots[internal_key] = nn.Identity()
 
     # NOTE: forward_to_segment() is intentionally duplicated between CNNHost
     # and TransformerHost. While the structure is similar, the details differ:
