@@ -296,36 +296,7 @@ class TestHostUnknownSegment:
             host.forward_from_segment("invalid_segment", features)
 
 
-class TestHostRegistrationErrors:
-    """Tests for slot registration error handling."""
-
-    def test_cnn_register_unknown_slot_raises(self):
-        """CNNHost.register_slot should raise ValueError for unknown slot_id."""
-        host = CNNHost(n_blocks=3, memory_format=torch.contiguous_format)
-
-        with pytest.raises(ValueError, match="Unknown injection point"):
-            host.register_slot("invalid_slot", torch.nn.Identity())
-
-    def test_cnn_unregister_unknown_slot_raises(self):
-        """CNNHost.unregister_slot should raise ValueError for unknown slot_id."""
-        host = CNNHost(n_blocks=3, memory_format=torch.contiguous_format)
-
-        with pytest.raises(ValueError, match="Unknown injection point"):
-            host.unregister_slot("invalid_slot")
-
-    def test_transformer_register_unknown_slot_raises(self):
-        """TransformerHost.register_slot should raise ValueError for unknown slot_id."""
-        host = TransformerHost(n_layer=6, num_segments=3, n_embd=64, n_head=2)
-
-        with pytest.raises(ValueError, match="Unknown injection point"):
-            host.register_slot("invalid_slot", torch.nn.Identity())
-
-    def test_transformer_unregister_unknown_slot_raises(self):
-        """TransformerHost.unregister_slot should raise ValueError for unknown slot_id."""
-        host = TransformerHost(n_layer=6, num_segments=3, n_embd=64, n_head=2)
-
-        with pytest.raises(ValueError, match="Unknown injection point"):
-            host.unregister_slot("invalid_slot")
+# TestHostRegistrationErrors removed - hosts no longer have register_slot/unregister_slot
 
 
 class TestHostOutputConsistency:
