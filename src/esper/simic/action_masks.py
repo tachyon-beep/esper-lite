@@ -40,11 +40,12 @@ from esper.leyline.factored_actions import (
 if TYPE_CHECKING:
     from esper.leyline import SeedStateReport
 
-# Mapping from slot ID string to SlotAction index
+# Mapping from canonical slot ID to index
+# Uses canonical 2D coordinate format: r0c0, r0c1, r0c2
 _SLOT_ID_TO_INDEX: dict[str, int] = {
-    "early": SlotAction.EARLY.value,
-    "mid": SlotAction.MID.value,
-    "late": SlotAction.LATE.value,
+    "r0c0": 0,  # formerly "early"
+    "r0c1": 1,  # formerly "mid"
+    "r0c2": 2,  # formerly "late"
 }
 
 # Stage sets for validation - derived from VALID_TRANSITIONS (single source of truth)
@@ -224,19 +225,38 @@ def compute_batch_masks(
     }
 
 
-def slot_id_to_index(slot_id: str) -> int:
-    """Convert slot ID string to SlotAction index.
+def slot_id_to_index(slot_id: str, slot_ids: tuple[str, ...] = ("r0c0", "r0c1", "r0c2")) -> int:
+    """Convert canonical slot ID to action index.
 
     Args:
-        slot_id: Slot name ("early", "mid", "late")
+        slot_id: Canonical slot ID (e.g., "r0c0")
+        slot_ids: Ordered tuple of valid slot IDs (defaults to standard 3-slot config)
 
     Returns:
-        Corresponding SlotAction index (0, 1, 2)
+        Index in slot_ids tuple
 
     Raises:
-        KeyError: If slot_id is not a valid slot name
+        ValueError: If slot_id not in slot_ids or uses legacy format
+
+    Examples:
+        >>> slot_id_to_index("r0c0")
+        0
+        >>> slot_id_to_index("r0c1")
+        1
     """
-    return _SLOT_ID_TO_INDEX[slot_id]
+    from esper.leyline.slot_id import parse_slot_id, SlotIdError
+
+    # Validate format (will raise SlotIdError for legacy names like "early")
+    try:
+        parse_slot_id(slot_id)
+    except SlotIdError as e:
+        raise ValueError(str(e)) from e
+
+    # Look up index in the ordered tuple
+    try:
+        return slot_ids.index(slot_id)
+    except ValueError:
+        raise ValueError(f"Unknown slot_id: {slot_id}. Valid: {slot_ids}")
 
 
 __all__ = [
