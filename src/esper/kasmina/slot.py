@@ -1004,26 +1004,8 @@ class SeedSlot(nn.Module):
             seed_id = self.state.seed_id
 
             if self.state.transition(target_stage):
-                # Stage-specific gradient isolation hooks:
-                # - GERMINATED → TRAINING: enable Incubator isolation so the seed
-                #   sees detached host features during its training phase.
-                # - TRAINING → BLENDING: topology-aware isolation decision
-                #   (CNNs keep isolation, Transformers allow co-adaptation)
-                if old_stage == SeedStage.GERMINATED and target_stage == SeedStage.TRAINING:
-                    self.isolate_gradients = True
-                elif old_stage == SeedStage.TRAINING and target_stage == SeedStage.BLENDING:
-                    # Topology-aware gradient isolation:
-                    # - CNNs: keep isolation (host learns from loss, not seed feedback)
-                    #   Rationale: CNNs have rigid spatial hierarchies where co-adaptation
-                    #   risks destabilizing learned features.
-                    # - Transformers: allow co-adaptation (host receives seed gradients)
-                    #   Rationale: Transformers benefit from host adjusting to seed
-                    #   representations during blending.
-                    topology = self.task_config.topology if self.task_config else "cnn"
-                    self.isolate_gradients = (topology == "cnn")
-                    # Snapshot accuracy at blending start for true causal attribution
-                    # This is when the seed starts actually affecting network output
-                    self.state.metrics.accuracy_at_blending_start = self.state.metrics.current_val_accuracy
+                # Call unified stage entry hook
+                self._on_enter_stage(target_stage, old_stage)
 
                 self._emit_telemetry(
                     TelemetryEventType.SEED_STAGE_CHANGED,
@@ -1294,6 +1276,39 @@ class SeedSlot(nn.Module):
                 f"Valid options: linear, sigmoid, gated"
             )
 
+    def _on_enter_stage(self, new_stage: SeedStage, old_stage: SeedStage) -> None:
+        """Handle stage entry logic uniformly for both advance_stage() and step_epoch().
+
+        This ensures consistent behavior regardless of which method triggers the transition.
+        """
+        if new_stage == SeedStage.TRAINING and old_stage == SeedStage.GERMINATED:
+            # Enable Incubator isolation so seed sees detached host features
+            self.isolate_gradients = True
+
+        elif new_stage == SeedStage.BLENDING and old_stage == SeedStage.TRAINING:
+            # Topology-aware gradient isolation:
+            # - CNNs: keep isolation (host learns from loss, not seed feedback)
+            # - Transformers: allow co-adaptation (host receives seed gradients)
+            topology = self.task_config.topology if self.task_config else "cnn"
+            self.isolate_gradients = (topology == "cnn")
+
+            # Snapshot accuracy at blending start for true causal attribution
+            if self.state:
+                self.state.metrics.accuracy_at_blending_start = self.state.metrics.current_val_accuracy
+                self.state.metrics._blending_started = True
+
+            # Initialize blending schedule
+            total_steps = DEFAULT_BLENDING_TOTAL_STEPS
+            if self.task_config is not None:
+                configured_steps = self.task_config.blending_steps
+                if isinstance(configured_steps, int) and configured_steps > 0:
+                    total_steps = configured_steps
+            self.start_blending(total_steps=total_steps)
+
+        elif new_stage == SeedStage.PROBATIONARY and old_stage == SeedStage.BLENDING:
+            # Clean up blending resources
+            self._on_blending_complete()
+
     def _on_blending_complete(self) -> None:
         """Clean up after BLENDING stage completes.
 
@@ -1382,8 +1397,8 @@ class SeedSlot(nn.Module):
                 raise RuntimeError(
                     f"Illegal lifecycle transition {self.state.stage} → TRAINING"
                 )
-            # Enable Incubator isolation so seed sees detached host features
-            self.isolate_gradients = True
+            # Call unified stage entry hook
+            self._on_enter_stage(SeedStage.TRAINING, old_stage)
             self._emit_telemetry(
                 TelemetryEventType.SEED_STAGE_CHANGED,
                 data={"from": old_stage.name, "to": self.state.stage.name},
@@ -1411,26 +1426,12 @@ class SeedSlot(nn.Module):
                 raise RuntimeError(
                     f"Illegal lifecycle transition {self.state.stage} → BLENDING"
                 )
-            # Topology-aware gradient isolation at TRAINING → BLENDING:
-            # - CNNs: keep isolation (host learns from loss, not seed feedback)
-            # - Transformers: allow co-adaptation (host receives seed gradients)
-            topology = self.task_config.topology if self.task_config else "cnn"
-            self.isolate_gradients = (topology == "cnn")
-            # Snapshot accuracy at blending start for true causal attribution
-            # This is when the seed starts actually affecting network output
-            self.state.metrics.accuracy_at_blending_start = self.state.metrics.current_val_accuracy
-            self.state.metrics._blending_started = True
+            # Call unified stage entry hook
+            self._on_enter_stage(SeedStage.BLENDING, old_stage)
             self._emit_telemetry(
                 TelemetryEventType.SEED_STAGE_CHANGED,
                 data={"from": old_stage.name, "to": self.state.stage.name},
             )
-            # Use explicit task_config.blending_steps if provided, otherwise use leyline default.
-            total_steps = DEFAULT_BLENDING_TOTAL_STEPS
-            if self.task_config is not None:
-                configured_steps = self.task_config.blending_steps
-                if isinstance(configured_steps, int) and configured_steps > 0:
-                    total_steps = configured_steps
-            self.start_blending(total_steps=total_steps)
             return
 
         # BLENDING → PROBATIONARY when alpha ramp completes and gate passes
@@ -1452,8 +1453,8 @@ class SeedSlot(nn.Module):
                     raise RuntimeError(
                         f"Illegal lifecycle transition {self.state.stage} → PROBATIONARY"
                     )
-                # Clean up alpha_schedule after successful transition
-                self._on_blending_complete()
+                # Call unified stage entry hook
+                self._on_enter_stage(SeedStage.PROBATIONARY, old_stage)
                 self._emit_telemetry(
                     TelemetryEventType.SEED_STAGE_CHANGED,
                     data={"from": old_stage.name, "to": self.state.stage.name},
