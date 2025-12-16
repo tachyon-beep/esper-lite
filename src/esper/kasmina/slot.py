@@ -1560,9 +1560,8 @@ class SeedSlot(nn.Module):
             config = state["alpha_schedule_config"]
             if config.get("algorithm_id") and self.state and self.state.stage == SeedStage.BLENDING:
                 self.start_blending(total_steps=config.get("total_steps", 10))
-                # Restore step count
-                if hasattr(self.alpha_schedule, "_current_step"):
-                    self.alpha_schedule._current_step = config.get("current_step", 0)
+                # Restore step count (_current_step guaranteed to exist on all BlendAlgorithm instances)
+                self.alpha_schedule._current_step = config.get("current_step", 0)
 
 
 __all__ = [

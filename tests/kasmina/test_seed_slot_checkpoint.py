@@ -74,3 +74,28 @@ class TestSeedSlotCheckpoint:
 
             # Should not raise
             assert "seed_slots.r0c0._extra_state" in str(loaded) or loaded is not None
+
+            # After loading, verify we can actually restore state
+            new_slot = SeedSlot(
+                slot_id="r0c0",
+                channels=64,
+                device="cpu",
+                task_config=slot.task_config,
+            )
+            # Need to germinate and transition to BLENDING so slot has same structure
+            new_slot.germinate(
+                blueprint_id="norm",
+                seed_id="test-seed",
+                blend_algorithm_id="linear",
+            )
+            new_slot.state.transition(SeedStage.TRAINING)
+            new_slot.state.transition(SeedStage.BLENDING)
+            new_slot.start_blending(total_steps=10)
+
+            # Now load the state
+            new_slot.load_state_dict(loaded)
+
+            # Verify state was restored
+            assert new_slot.state is not None
+            assert new_slot.state.seed_id == slot.state.seed_id
+            assert new_slot.state.stage == slot.state.stage
