@@ -1177,6 +1177,19 @@ class SeedSlot(nn.Module):
 
         # 2. Compute seed features. For Incubator/Training we must detach the
         #    host input so seed gradients do not flow back into the host.
+        #
+        #    CHANNELS_LAST WORKAROUND (BUG-005): When using channels_last memory
+        #    format with isolate_gradients=True, PyTorch segfaults during backward.
+        #    The bug affects BOTH the STE path (TRAINING) and the blend path
+        #    (BLENDING+). The root cause is the combination of non-contiguous
+        #    tensors (channels_last) with detach() in the autograd graph.
+        #
+        #    The fix is to make host_features contiguous BEFORE detach, so that
+        #    the entire computation and its autograd graph use contiguous tensors.
+        if self.isolate_gradients and not host_features.is_contiguous():
+            # Make contiguous to avoid channels_last + detach segfault (BUG-005)
+            host_features = host_features.contiguous()
+
         seed_input = host_features.detach() if self.isolate_gradients else host_features
         seed_features = self.seed(seed_input)
 

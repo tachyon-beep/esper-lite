@@ -71,6 +71,12 @@ def ste_forward(host_features: torch.Tensor, seed_features: torch.Tensor) -> tor
     Backward: gradients flow to both host and seed parameters
 
     This is torch.compile friendly - pure tensor operations, no control flow.
+
+    Note:
+        When using channels_last memory format, callers must ensure host_features
+        is contiguous BEFORE calling this function. See BUG-005 and the workaround
+        in SeedSlot.forward(). The issue is a PyTorch segfault when backward()
+        encounters channels_last tensors with the STE + detach combination.
     """
     return host_features + (seed_features - seed_features.detach())
 
