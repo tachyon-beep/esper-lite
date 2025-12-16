@@ -617,3 +617,167 @@ class TestTolariaGovernor:
         # Should not raise StopIteration
         report = gov.execute_rollback()
         assert report.rollback_occurred is True
+
+    def test_rollback_succeeds_after_seed_culled(self):
+        """Governor rollback should succeed even if seeds were culled after snapshot.
+
+        This tests the fix for the state_dict key mismatch issue:
+        - Snapshot is taken while experimental seed is active (has seed params)
+        - Seed is culled (seed params removed from model)
+        - Rollback is triggered (snapshot has keys that model doesn't)
+        - Should succeed with strict=False, not fail with orphan key error
+
+        The real bug scenario: snapshot() should filter out experimental seeds
+        so the snapshot only contains fossilized seeds + host. That way if
+        experimental seeds are culled between snapshot and rollback, there's
+        no key mismatch.
+        """
+        from esper.tolaria import TolariaGovernor
+        from esper.kasmina import MorphogeneticModel, CNNHost
+        from esper.leyline import SeedStage
+
+        # Create model with a seed slot
+        host = CNNHost()
+        model = MorphogeneticModel(host, device="cpu", slots=["r0c0"])
+
+        # Germinate a seed (experimental seed - not fossilized)
+        model.seed_slots["r0c0"].germinate("conv_heavy", "test_seed")
+        assert model.seed_slots["r0c0"].is_active
+        assert model.seed_slots["r0c0"].state.stage != SeedStage.FOSSILIZED
+
+        # Take snapshot - with the fix, this should exclude experimental seed params
+        gov = TolariaGovernor(model)
+
+        # Check that snapshot doesn't contain experimental seed keys
+        # (this is the core fix being tested)
+        snapshot_keys = set(gov.last_good_state.keys())
+        seed_param_keys = {k for k in snapshot_keys if "seed_slots.r0c0.seed." in k}
+
+        # With the fix, experimental seed params should be filtered out
+        assert len(seed_param_keys) == 0, (
+            f"Snapshot should not include experimental seed parameters, "
+            f"but found: {seed_param_keys}"
+        )
+
+        # Cull the seed - removes seed parameters from model
+        model.seed_slots["r0c0"].cull("test_cull")
+        assert not model.seed_slots["r0c0"].is_active
+
+        # Build minimal history for rollback
+        for i in range(5):
+            gov.loss_history.append(1.0)
+
+        # Rollback should succeed without key mismatch errors
+        report = gov.execute_rollback()
+        assert report.rollback_occurred
+
+    def test_snapshot_includes_fossilized_seeds(self):
+        """Test that fossilized seeds ARE included in snapshots.
+
+        Fossilized seeds are stable, committed memory and should be part of
+        the Last Known Good state. Only experimental (non-fossilized) seeds
+        should be excluded.
+        """
+        from esper.tolaria import TolariaGovernor
+        from esper.kasmina import MorphogeneticModel, CNNHost
+        from esper.leyline import SeedStage
+
+        # Create model with a seed slot
+        host = CNNHost()
+        model = MorphogeneticModel(host, device="cpu", slots=["r0c0"])
+
+        # Germinate a seed and mark it as fossilized
+        model.seed_slots["r0c0"].germinate("conv_heavy", "fossilized_seed")
+        model.seed_slots["r0c0"].state.stage = SeedStage.FOSSILIZED
+
+        # Take snapshot
+        gov = TolariaGovernor(model)
+
+        # Check that snapshot DOES contain fossilized seed keys
+        snapshot_keys = set(gov.last_good_state.keys())
+        fossilized_seed_keys = {k for k in snapshot_keys if "seed_slots.r0c0.seed." in k}
+
+        # Fossilized seeds should be included
+        assert len(fossilized_seed_keys) > 0, (
+            "Snapshot should include fossilized seed parameters"
+        )
+
+    def test_snapshot_filters_alpha_schedule_for_experimental_seeds(self):
+        """Test that alpha_schedule.* parameters are filtered for experimental seeds.
+
+        Both seed.* and alpha_schedule.* parameters should be filtered out for
+        non-fossilized seeds, since alpha_schedule is seed-specific state.
+        """
+        from esper.tolaria import TolariaGovernor
+        from esper.kasmina import MorphogeneticModel, CNNHost
+        from esper.leyline import SeedStage
+
+        # Create model with a seed slot
+        host = CNNHost()
+        model = MorphogeneticModel(host, device="cpu", slots=["r0c1"])
+
+        # Germinate a seed (experimental - not fossilized)
+        model.seed_slots["r0c1"].germinate("conv_heavy", "experimental_seed")
+        assert model.seed_slots["r0c1"].state.stage != SeedStage.FOSSILIZED
+
+        # Take snapshot
+        gov = TolariaGovernor(model)
+
+        # Check that snapshot doesn't contain experimental seed OR alpha_schedule keys
+        snapshot_keys = set(gov.last_good_state.keys())
+        seed_param_keys = {k for k in snapshot_keys if "seed_slots.r0c1.seed." in k}
+        alpha_schedule_keys = {k for k in snapshot_keys if "seed_slots.r0c1.alpha_schedule." in k}
+
+        # Both should be filtered out
+        assert len(seed_param_keys) == 0, (
+            f"Snapshot should not include experimental seed.* parameters, "
+            f"but found: {seed_param_keys}"
+        )
+        assert len(alpha_schedule_keys) == 0, (
+            f"Snapshot should not include experimental alpha_schedule.* parameters, "
+            f"but found: {alpha_schedule_keys}"
+        )
+
+    def test_snapshot_handles_mixed_seed_stages(self):
+        """Test snapshot with multiple slots in different stages.
+
+        Scenario: One fossilized, one training, one dormant.
+        Expected: Only fossilized seed parameters are in snapshot.
+        """
+        from esper.tolaria import TolariaGovernor
+        from esper.kasmina import MorphogeneticModel, CNNHost
+        from esper.leyline import SeedStage
+
+        # Create model with three seed slots
+        host = CNNHost()
+        model = MorphogeneticModel(host, device="cpu", slots=["r0c0", "r0c1", "r0c2"])
+
+        # r0c0: Fossilized seed (should be included)
+        model.seed_slots["r0c0"].germinate("conv_heavy", "fossilized_seed")
+        model.seed_slots["r0c0"].state.stage = SeedStage.FOSSILIZED
+
+        # r0c1: Training seed (should be excluded)
+        model.seed_slots["r0c1"].germinate("conv_heavy", "training_seed")
+        model.seed_slots["r0c1"].state.stage = SeedStage.TRAINING
+
+        # r0c2: Dormant (no seed at all)
+        # Leave as-is
+
+        # Take snapshot
+        gov = TolariaGovernor(model)
+
+        snapshot_keys = set(gov.last_good_state.keys())
+
+        # Check r0c0 (fossilized) - should be included
+        r0c0_keys = {k for k in snapshot_keys if "seed_slots.r0c0.seed." in k}
+        assert len(r0c0_keys) > 0, "Fossilized seed (r0c0) should be in snapshot"
+
+        # Check r0c1 (training) - should be excluded
+        r0c1_keys = {k for k in snapshot_keys if "seed_slots.r0c1.seed." in k}
+        assert len(r0c1_keys) == 0, (
+            f"Training seed (r0c1) should not be in snapshot, but found: {r0c1_keys}"
+        )
+
+        # Check r0c2 (dormant) - no seed parameters to check
+        r0c2_keys = {k for k in snapshot_keys if "seed_slots.r0c2.seed." in k}
+        assert len(r0c2_keys) == 0, "Dormant slot (r0c2) should have no seed parameters"
