@@ -36,6 +36,7 @@ from esper.leyline import (
     DEFAULT_ENTROPY_COEF_MIN,
     DEFAULT_VALUE_CLIP,
 )
+from esper.leyline.slot_config import SlotConfig
 from esper.leyline.factored_actions import LifecycleOp
 import logging
 
@@ -174,7 +175,7 @@ class PPOAgent:
 
     def __init__(
         self,
-        state_dim: int,
+        state_dim: int | None = None,
         action_dim: int = 7,
         hidden_dim: int = 256,
         lr: float = DEFAULT_LEARNING_RATE,
@@ -214,7 +215,18 @@ class PPOAgent:
         max_steps_per_env: int = DEFAULT_EPISODE_LENGTH,  # For TamiyoRolloutBuffer (from leyline)
         # Compilation
         compile_network: bool = True,  # Use torch.compile() for 10-30% speedup
+        # Slot configuration (preferred over explicit state_dim)
+        slot_config: "SlotConfig | None" = None,
     ):
+        # Store slot_config and compute state_dim if needed
+        if slot_config is None:
+            slot_config = SlotConfig.default()
+        self.slot_config = slot_config
+
+        if state_dim is None:
+            from esper.simic.features import get_feature_size
+            state_dim = get_feature_size(slot_config)
+
         self.num_envs = num_envs
         self.max_steps_per_env = max_steps_per_env
         self.chunk_length = chunk_length
@@ -251,6 +263,7 @@ class PPOAgent:
         # Unified factored + recurrent mode
         self.network = FactoredRecurrentActorCritic(
             state_dim=state_dim,
+            num_slots=self.slot_config.num_slots,
             lstm_hidden_dim=lstm_hidden_dim,
         ).to(device)
         self.buffer = TamiyoRolloutBuffer(

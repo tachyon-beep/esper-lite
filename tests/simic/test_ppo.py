@@ -225,3 +225,91 @@ def test_signals_to_features_telemetry_slot_alignment() -> None:
     assert features[base:base + dim] == [0.0] * dim  # r0c0 (disabled)
     assert features[base + dim:base + 2 * dim] == pytest.approx(mid_telemetry.to_features())  # r0c1
     assert features[base + 2 * dim:base + 3 * dim] == [0.0] * dim  # r0c2 (disabled)
+
+
+def test_ppo_agent_accepts_slot_config():
+    """PPOAgent should accept slot_config and derive state_dim from it."""
+    from esper.leyline.slot_config import SlotConfig
+    from esper.simic.features import get_feature_size
+
+    slot_config = SlotConfig.default()  # 3 slots
+    agent = PPOAgent(
+        slot_config=slot_config,
+        num_envs=2,
+        max_steps_per_env=DEFAULT_EPISODE_LENGTH,
+        device="cpu",
+        compile_network=False,
+    )
+
+    expected_state_dim = get_feature_size(slot_config)  # 23 + 3*9 = 50
+    assert agent.slot_config == slot_config
+    assert agent._base_network.state_dim == expected_state_dim
+
+
+def test_ppo_agent_with_3_slot_config():
+    """PPOAgent with 3-slot config should have state_dim=50."""
+    from esper.leyline.slot_config import SlotConfig
+    from esper.simic.features import get_feature_size
+
+    slot_config = SlotConfig.default()  # 3 slots (r0c0, r0c1, r0c2)
+    agent = PPOAgent(
+        slot_config=slot_config,
+        num_envs=2,
+        max_steps_per_env=DEFAULT_EPISODE_LENGTH,
+        device="cpu",
+        compile_network=False,
+    )
+
+    expected_state_dim = get_feature_size(slot_config)  # 23 + 3*9 = 50
+    assert agent._base_network.state_dim == expected_state_dim
+    assert agent._base_network.num_slots == 3
+
+
+def test_ppo_agent_with_5_slot_config():
+    """PPOAgent with 5-slot config should have state_dim=68."""
+    from esper.leyline.slot_config import SlotConfig
+    from esper.simic.features import get_feature_size
+
+    # Create a 5-slot config
+    slot_config = SlotConfig(slot_ids=("r0c0", "r0c1", "r0c2", "r1c0", "r1c1"))
+    agent = PPOAgent(
+        slot_config=slot_config,
+        num_envs=2,
+        max_steps_per_env=DEFAULT_EPISODE_LENGTH,
+        device="cpu",
+        compile_network=False,
+    )
+
+    expected_state_dim = get_feature_size(slot_config)  # 23 + 5*9 = 68
+    assert agent._base_network.state_dim == expected_state_dim
+    assert agent._base_network.num_slots == 5
+
+
+def test_ppo_agent_network_slot_head_matches_config():
+    """Network's slot head size should match slot_config.num_slots."""
+    from esper.leyline.slot_config import SlotConfig
+
+    slot_config = SlotConfig(slot_ids=("r0c0", "r0c1", "r0c2", "r1c0"))  # 4 slots
+    agent = PPOAgent(
+        slot_config=slot_config,
+        num_envs=2,
+        max_steps_per_env=DEFAULT_EPISODE_LENGTH,
+        device="cpu",
+        compile_network=False,
+    )
+
+    # Verify network was initialized with correct num_slots
+    assert agent._base_network.num_slots == 4
+
+
+def test_ppo_agent_backwards_compatible_with_state_dim():
+    """PPOAgent should still accept explicit state_dim for backwards compatibility."""
+    agent = PPOAgent(
+        state_dim=50,
+        num_envs=2,
+        max_steps_per_env=DEFAULT_EPISODE_LENGTH,
+        device="cpu",
+        compile_network=False,
+    )
+
+    assert agent._base_network.state_dim == 50
