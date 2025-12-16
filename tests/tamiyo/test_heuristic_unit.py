@@ -38,7 +38,13 @@ class TestConfiguration:
     def test_topology_affects_actions(self):
         """Different topologies should have different action enums."""
         cnn_policy = HeuristicTamiyo(topology="cnn")
-        transformer_policy = HeuristicTamiyo(topology="transformer")
+        # P1-B: Transformer needs transformer-compatible blueprints in config
+        transformer_config = HeuristicPolicyConfig(
+            blueprint_rotation=["attention", "mlp", "norm"]  # Transformer-compatible
+        )
+        transformer_policy = HeuristicTamiyo(
+            topology="transformer", config=transformer_config
+        )
 
         # Both should have action enums but they're different
         assert cnn_policy._action_enum is not None

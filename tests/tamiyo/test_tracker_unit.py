@@ -496,7 +496,7 @@ class TestTrackerReset:
 
     def test_reset_preserves_configuration(self, signal_tracker):
         """Should preserve configuration parameters after reset."""
-        original_threshold = signal_tracker.plateau_threshold
+        original_threshold = signal_tracker.plateau_threshold_pct  # P2-A: renamed
         original_window = signal_tracker.history_window
 
         # Modify state
@@ -513,7 +513,7 @@ class TestTrackerReset:
         signal_tracker.reset()
 
         # Configuration should remain
-        assert signal_tracker.plateau_threshold == original_threshold
+        assert signal_tracker.plateau_threshold_pct == original_threshold  # P2-A: renamed
         assert signal_tracker.history_window == original_window
 
 
