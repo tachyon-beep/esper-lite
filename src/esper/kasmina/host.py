@@ -88,10 +88,12 @@ class CNNHost(nn.Module):
         self.classifier = nn.Linear(in_c, num_classes)
 
     def injection_specs(self) -> list["InjectionSpec"]:
-        """Return available injection points as InjectionSpec objects.
+        """Return segment boundaries as InjectionSpec objects.
 
         Returns:
             List of InjectionSpec, one per block, sorted by network position.
+            Note: Not all segments have slots - use _canonical_to_slot_key for
+            actual injection points that accept seed registration.
         """
         from esper.leyline import InjectionSpec
         from esper.leyline.slot_id import format_slot_id
