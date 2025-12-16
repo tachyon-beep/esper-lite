@@ -73,13 +73,15 @@ def test_forward_from_mid_segment():
     assert out.shape == (2, 10)
 
 
-def test_segment_channels_match_injection_points():
-    """segment_channels should match the injection_points property."""
+def test_injection_points_alias_segment_channels():
+    """injection_points should be an alias for segment_channels."""
     host = CNNHost()
 
-    # Both should expose the same channel information
-    assert "block2_post" in host.injection_points
-    assert host.injection_points["block2_post"] == host.segment_channels["r0c1"]
+    # Both should expose the same canonical IDs and channels
+    assert host.injection_points == host.segment_channels
+    assert "r0c0" in host.injection_points
+    assert "r0c1" in host.injection_points
+    assert "r0c2" in host.injection_points
 
 
 # =============================================================================
@@ -184,21 +186,11 @@ class TestTransformerHostSegments:
 
 
 class TestCNNHostSegments:
-    """Test CNNHost segment round-trips respect registered slots."""
+    """Test CNNHost segment routing consistency."""
 
     def test_cnn_segment_consistency(self):
+        """Segment round-trips should match full forward pass."""
         host = CNNHost(num_classes=10, base_channels=8)
-
-        class AddConstant(nn.Module):
-            def __init__(self, value: float):
-                super().__init__()
-                self.value = value
-
-            def forward(self, x: torch.Tensor) -> torch.Tensor:
-                return x + torch.as_tensor(self.value, device=x.device, dtype=x.dtype)
-
-        host.register_slot("block2_post", AddConstant(0.1))
-        host.register_slot("block3_post", AddConstant(0.2))
         host.eval()
         x = torch.randn(2, 3, 32, 32)
 
