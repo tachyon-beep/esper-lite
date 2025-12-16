@@ -108,7 +108,11 @@ def test_vectorized_multi_gpu_smoke(monkeypatch):
         quiet_analytics=True,
     )
 
-    assert set(created_on_devices) == set(devices), (
-        f"Expected models created on {devices}, got {created_on_devices}"
+    # Filter out CPU device - a temporary CPU model is created to derive slot_config
+    # from the host's injection_specs before creating the actual env models on CUDA
+    cuda_devices_created = [d for d in created_on_devices if d != "cpu"]
+    assert set(cuda_devices_created) == set(devices), (
+        f"Expected CUDA models created on {devices}, got {cuda_devices_created} "
+        f"(all devices: {created_on_devices})"
     )
     assert history, "Training history should not be empty"

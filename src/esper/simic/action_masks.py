@@ -38,14 +38,6 @@ from esper.leyline.factored_actions import (
 if TYPE_CHECKING:
     from esper.leyline import SeedStateReport
 
-# Mapping from canonical slot ID to index
-# Uses canonical 2D coordinate format: r0c0, r0c1, r0c2
-_SLOT_ID_TO_INDEX: dict[str, int] = {
-    "r0c0": 0,  # formerly "early"
-    "r0c1": 1,  # formerly "mid"
-    "r0c2": 2,  # formerly "late"
-}
-
 # Stage sets for validation - derived from VALID_TRANSITIONS (single source of truth)
 # Stages from which FOSSILIZED is a valid transition
 _FOSSILIZABLE_STAGES = frozenset({
@@ -233,18 +225,18 @@ def compute_batch_masks(
     }
 
 
-def slot_id_to_index(slot_id: str, slot_ids: tuple[str, ...] = ("r0c0", "r0c1", "r0c2")) -> int:
+def slot_id_to_index(slot_id: str, slot_config: SlotConfig | None = None) -> int:
     """Convert canonical slot ID to action index.
 
     Args:
         slot_id: Canonical slot ID (e.g., "r0c0")
-        slot_ids: Ordered tuple of valid slot IDs (defaults to standard 3-slot config)
+        slot_config: Slot configuration (defaults to SlotConfig.default())
 
     Returns:
-        Index in slot_ids tuple
+        Index in slot_config.slot_ids tuple
 
     Raises:
-        ValueError: If slot_id not in slot_ids or uses legacy format
+        ValueError: If slot_id not in slot_config or uses legacy format
 
     Examples:
         >>> slot_id_to_index("r0c0")
@@ -252,6 +244,9 @@ def slot_id_to_index(slot_id: str, slot_ids: tuple[str, ...] = ("r0c0", "r0c1", 
         >>> slot_id_to_index("r0c1")
         1
     """
+    if slot_config is None:
+        slot_config = SlotConfig.default()
+
     from esper.leyline.slot_id import parse_slot_id, SlotIdError
 
     # Validate format (will raise SlotIdError for legacy names like "early")
@@ -260,11 +255,11 @@ def slot_id_to_index(slot_id: str, slot_ids: tuple[str, ...] = ("r0c0", "r0c1", 
     except SlotIdError as e:
         raise ValueError(str(e)) from e
 
-    # Look up index in the ordered tuple
+    # Use slot_config's index method
     try:
-        return slot_ids.index(slot_id)
+        return slot_config.index_for_slot_id(slot_id)
     except ValueError:
-        raise ValueError(f"Unknown slot_id: {slot_id}. Valid: {slot_ids}")
+        raise ValueError(f"Unknown slot_id: {slot_id}. Valid: {slot_config.slot_ids}")
 
 
 __all__ = [

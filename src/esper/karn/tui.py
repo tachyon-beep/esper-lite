@@ -33,6 +33,8 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from esper.leyline.slot_config import SlotConfig
+
 if TYPE_CHECKING:
     from esper.leyline.telemetry import TelemetryEvent
 
@@ -250,6 +252,9 @@ class EnvState:
 class TUIState:
     """Thread-safe state for the TUI display."""
 
+    # Slot configuration (defaults to 3-slot legacy for backwards compatibility)
+    slot_config: SlotConfig = field(default_factory=SlotConfig.default)
+
     # Episode tracking
     current_episode: int = 0
     current_epoch: int = 0
@@ -447,6 +452,7 @@ class TUIOutput:
 
     Args:
         thresholds: Health status thresholds for color coding.
+        slot_config: Slot configuration for dynamic action spaces. Defaults to 3-slot legacy.
         force_layout: Force a specific layout mode ('compact', 'standard', 'wide')
                      instead of auto-detecting from terminal width. Currently unused
                      but reserved for future multi-layout support.
@@ -455,10 +461,11 @@ class TUIOutput:
     def __init__(
         self,
         thresholds: ThresholdConfig | None = None,
+        slot_config: SlotConfig | None = None,
         force_layout: str | None = None,
     ):
         self.thresholds = thresholds or ThresholdConfig()
-        self.state = TUIState()
+        self.state = TUIState(slot_config=slot_config or SlotConfig.default())
         self.console = Console()
         self._live: Live | None = None
         self._started = False
@@ -1106,9 +1113,9 @@ class TUIOutput:
             table.add_column("Seeds/Params", justify="right", width=14)
             table.add_column("Rent", justify="right", width=6)
             table.add_column("", width=1)
-            table.add_column("Early", justify="left", width=12)
-            table.add_column("Mid", justify="left", width=12)
-            table.add_column("Late", justify="left", width=12)
+            # Dynamic slot columns based on slot_config
+            for slot_id in self.state.slot_config.slot_ids:
+                table.add_column(slot_id, justify="left", width=12)
             table.add_column("Last / Status", justify="left", width=16)
 
             reward = env.current_reward
@@ -1139,18 +1146,22 @@ class TUIOutput:
                     return f"{stage_cell} α={alpha} Δ={contrib} g={grad}"
                 return "[dim]─[/dim]"
 
-            table.add_row(
+            # Build the first row dynamically with all slot summaries
+            row_values = [
                 "Env",
                 f"{reward:+.2f}",
                 f"{env.host_accuracy:.1f}%",
                 seeds_summary,
                 f"{float(rent):+.2f}" if isinstance(rent, (int, float)) else "─",
                 "",
-                _slot_summary("r0c0"),
-                _slot_summary("r0c1"),
-                _slot_summary("r0c2"),
-                last_action,
-            )
+            ]
+            # Add dynamic slot summaries
+            for slot_id in self.state.slot_config.slot_ids:
+                row_values.append(_slot_summary(slot_id))
+            # Add last action
+            row_values.append(last_action)
+
+            table.add_row(*row_values)
 
             # Secondary stats row within the same card to avoid extra tables
             best_reward = env.best_reward if env.reward_history else 0.0
@@ -1167,18 +1178,32 @@ class TUIOutput:
 
             penalty_str = f"{float(penalty):+.2f}" if isinstance(penalty, (int, float)) else "─"
 
-            table.add_row(
+            # Build the second row dynamically
+            stats_row_values = [
                 "Stats",
                 f"{mean_reward:+.2f}/{best_reward:+.2f}",
                 f"best {env.best_accuracy:.1f}%",
                 f"{total_params_display:,}" if isinstance(total_params_display, (int, float)) else seeds_summary,
                 penalty_str,
                 "",
-                f"Rwd {reward_spark}",
-                f"Acc {acc_spark}",
-                f"[{status_style}]{env.status.upper()}[/{status_style}]",
-                Text(last_action, style="dim"),
-            )
+            ]
+            # Fill slot columns with sparklines/status
+            # First slot gets reward sparkline, second gets accuracy sparkline, third gets status
+            # If more slots exist, fill with empty strings
+            num_slots = self.state.slot_config.num_slots
+            for i in range(num_slots):
+                if i == 0:
+                    stats_row_values.append(f"Rwd {reward_spark}")
+                elif i == 1:
+                    stats_row_values.append(f"Acc {acc_spark}")
+                elif i == 2:
+                    stats_row_values.append(f"[{status_style}]{env.status.upper()}[/{status_style}]")
+                else:
+                    stats_row_values.append("")
+            # Add last action
+            stats_row_values.append(Text(last_action, style="dim"))
+
+            table.add_row(*stats_row_values)
 
             header = Text()
             header.append(f"Env {env_id}  ", style="bold cyan")
@@ -1551,9 +1576,9 @@ class TUIOutput:
         table.add_column("▁▃▅", justify="left", width=8)  # Sparkline
         table.add_column("ΔAcc", justify="right", width=6)
         table.add_column("Rent", justify="right", width=6)
-        table.add_column("Early", justify="center", width=10)
-        table.add_column("Mid", justify="center", width=10)
-        table.add_column("Late", justify="center", width=10)
+        # Dynamic slot columns based on slot_config
+        for slot_id in self.state.slot_config.slot_ids:
+            table.add_column(slot_id, justify="center", width=10)
         table.add_column("Status", justify="center", width=9)
 
         # Status color mapping
@@ -1600,16 +1625,12 @@ class TUIOutput:
             else:
                 rent_str = "─"
 
-            # Format each slot
-            early_str = self._format_slot_cell(env, "r0c0")
-            mid_str = self._format_slot_cell(env, "r0c1")
-            late_str = self._format_slot_cell(env, "r0c2")
-
             # Status with styling
             status_style = status_styles.get(env.status, "white")
             status_str = f"[{status_style}]{env.status.upper()}[/{status_style}]"
 
-            table.add_row(
+            # Build row dynamically with all slots
+            row_values = [
                 str(env_id),
                 step_str,
                 acc_str,
@@ -1618,11 +1639,14 @@ class TUIOutput:
                 env.reward_sparkline,
                 delta_str,
                 rent_str,
-                early_str,
-                mid_str,
-                late_str,
-                status_str,
-            )
+            ]
+            # Add dynamic slot cells
+            for slot_id in self.state.slot_config.slot_ids:
+                row_values.append(self._format_slot_cell(env, slot_id))
+            # Add status
+            row_values.append(status_str)
+
+            table.add_row(*row_values)
 
         # Add aggregate row if multiple envs
         if len(self.state.env_states) > 1:
@@ -1641,7 +1665,8 @@ class TUIOutput:
             mean_delta = sum(deltas) / len(deltas) if deltas else 0.0
             mean_rent = sum(rents) / len(rents) if rents else 0.0
 
-            table.add_row(
+            # Build separator row dynamically
+            separator_row = [
                 "─" * 2,
                 "─" * 5,
                 "─" * 5,
@@ -1650,11 +1675,14 @@ class TUIOutput:
                 "─" * 6,
                 "─" * 5,
                 "─" * 5,
-                "─" * 8,
-                "─" * 8,
-                "─" * 8,
-                "─" * 7,
-            )
+            ]
+            # Add separator for each slot
+            for _ in self.state.slot_config.slot_ids:
+                separator_row.append("─" * 8)
+            # Add separator for status column
+            separator_row.append("─" * 7)
+            table.add_row(*separator_row)
+
             # Count slots by stage across all envs
             stage_counts: dict[str, int] = {}
             for env in self.state.env_states.values():
@@ -1665,7 +1693,9 @@ class TUIOutput:
                 f"{self._STAGE_SHORT.get(s, s[:3])}:{c}"
                 for s, c in sorted(stage_counts.items())
             ) or "─"
-            table.add_row(
+
+            # Build aggregate row dynamically
+            agg_row = [
                 "[bold]Σ[/bold]",
                 f"[dim]{step}/{self.state.max_epochs}[/dim]",
                 f"[bold]{self.state.aggregate_mean_accuracy:.1f}%[/bold]",
@@ -1674,11 +1704,18 @@ class TUIOutput:
                 "",
                 f"[dim]{mean_delta:+.2f}[/dim]" if deltas else "─",
                 f"[dim]{mean_rent:+.2f}[/dim]" if rents else "─",
-                f"[dim]{stage_summary}[/dim]",
-                "",
-                "",
-                f"[dim]{best_acc:.1f}%[/dim]",
-            )
+            ]
+            # Fill slot columns with stage summary in first slot, empty in others
+            num_slots = self.state.slot_config.num_slots
+            for i in range(num_slots):
+                if i == 0:
+                    agg_row.append(f"[dim]{stage_summary}[/dim]")
+                else:
+                    agg_row.append("")
+            # Add best accuracy in status column
+            agg_row.append(f"[dim]{best_acc:.1f}%[/dim]")
+
+            table.add_row(*agg_row)
 
         return Panel(
             table,

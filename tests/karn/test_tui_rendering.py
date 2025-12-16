@@ -100,11 +100,11 @@ class TestEnvOverviewTable:
             console.print(panel)
         output = capture.get()
 
-        # Verify slot columns exist in header
+        # Verify slot columns exist in header (using dynamic slot IDs)
         assert "Step" in output
-        assert "Early" in output
-        assert "Mid" in output
-        assert "Late" in output
+        assert "r0c0" in output
+        assert "r0c1" in output
+        assert "r0c2" in output
 
         # Verify stage:blueprint patterns appear (checking abbreviated forms)
         assert "Train" in output  # TRAINING stage
