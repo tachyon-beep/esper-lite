@@ -432,6 +432,227 @@ def simple_network_configs(draw, state_dim: int = 28, action_dim: int = 7):
 
 
 # =============================================================================
+# Kasmina Types
+# =============================================================================
+
+@st.composite
+def seed_stages_enum(draw, exclude_terminal: bool = False, exclude_failure: bool = False):
+    """Generate valid SeedStage enum values.
+
+    Args:
+        draw: Hypothesis draw function
+        exclude_terminal: If True, exclude FOSSILIZED (terminal success state)
+        exclude_failure: If True, exclude CULLED, EMBARGOED, RESETTING (failure states)
+
+    Returns:
+        SeedStage enum value
+
+    Example:
+        @given(seed_stages_enum())
+        def test_stage_property(stage):
+            assert isinstance(stage, SeedStage)
+    """
+    from esper.leyline import SeedStage
+    from esper.leyline.stages import is_terminal_stage, is_failure_stage
+
+    stages = list(SeedStage)
+    # Remove UNKNOWN which is not a valid lifecycle stage
+    stages = [s for s in stages if s != SeedStage.UNKNOWN]
+
+    if exclude_terminal:
+        stages = [s for s in stages if not is_terminal_stage(s)]
+    if exclude_failure:
+        stages = [s for s in stages if not is_failure_stage(s)]
+
+    return draw(st.sampled_from(stages))
+
+
+@st.composite
+def alpha_values(draw, include_boundaries: bool = True):
+    """Generate valid alpha values in [0, 1].
+
+    Alpha values control the blending between host and seed outputs.
+    0.0 = pure host, 1.0 = pure seed.
+
+    Args:
+        draw: Hypothesis draw function
+        include_boundaries: If True, occasionally generate exactly 0.0 and 1.0
+
+    Returns:
+        float in [0, 1]
+
+    Example:
+        @given(alpha_values())
+        def test_alpha_property(alpha):
+            assert 0.0 <= alpha <= 1.0
+    """
+    if include_boundaries:
+        # Occasionally generate exact boundary values for edge case testing
+        boundary_choice = draw(st.integers(min_value=0, max_value=99))
+        if boundary_choice < 5:  # 5% chance of 0.0
+            return 0.0
+        elif boundary_choice < 10:  # 5% chance of 1.0
+            return 1.0
+
+    return draw(
+        st.floats(
+            min_value=0.0,
+            max_value=1.0,
+            allow_nan=False,
+            allow_infinity=False,
+        )
+    )
+
+
+@st.composite
+def channel_dimensions(draw, min_channels: int = 1, max_channels: int = 512):
+    """Generate valid channel counts for neural network layers.
+
+    Args:
+        draw: Hypothesis draw function
+        min_channels: Minimum channel count (default 1)
+        max_channels: Maximum channel count (default 512)
+
+    Returns:
+        int representing channel count
+
+    Example:
+        @given(channel_dimensions())
+        def test_channel_property(channels):
+            assert 1 <= channels <= 512
+    """
+    return draw(st.integers(min_value=min_channels, max_value=max_channels))
+
+
+@st.composite
+def seed_metrics_kasmina(draw):
+    """Generate valid SeedMetrics instances for Kasmina.
+
+    Ensures consistency: best_val_accuracy >= current_val_accuracy, etc.
+
+    Returns:
+        SeedMetrics instance with valid invariants
+
+    Example:
+        @given(seed_metrics_kasmina())
+        def test_metrics_property(metrics):
+            assert metrics.best_val_accuracy >= metrics.current_val_accuracy
+    """
+    from esper.kasmina.slot import SeedMetrics
+
+    epochs_total = draw(st.integers(min_value=0, max_value=100))
+    epochs_in_stage = draw(st.integers(min_value=0, max_value=max(1, epochs_total)))
+
+    initial_acc = draw(bounded_floats(0.0, 100.0))
+    current_acc = draw(bounded_floats(0.0, 100.0))
+    best_acc = draw(bounded_floats(max(initial_acc, current_acc), 100.0))
+
+    metrics = SeedMetrics()
+    metrics.epochs_total = epochs_total
+    metrics.epochs_in_current_stage = epochs_in_stage
+    metrics.initial_val_accuracy = initial_acc
+    metrics.current_val_accuracy = current_acc
+    metrics.best_val_accuracy = best_acc
+    metrics.accuracy_at_stage_start = draw(bounded_floats(0.0, current_acc))
+    metrics.gradient_norm_avg = draw(bounded_floats(0.0, 100.0))
+    metrics.current_alpha = draw(alpha_values())
+    metrics.alpha_ramp_step = draw(st.integers(min_value=0, max_value=1000))
+    metrics.seed_gradient_norm_ratio = draw(bounded_floats(0.0, 10.0))
+
+    return metrics
+
+
+@st.composite
+def seed_states_kasmina(draw, stage: "SeedStage | None" = None):
+    """Generate valid SeedState instances for Kasmina.
+
+    Args:
+        draw: Hypothesis draw function
+        stage: Optional specific stage (generates random if None)
+
+    Returns:
+        SeedState instance with valid invariants
+
+    Example:
+        @given(seed_states_kasmina())
+        def test_state_property(state):
+            assert state.alpha >= 0.0
+    """
+    from esper.kasmina.slot import SeedState, SeedMetrics
+    from esper.leyline import SeedStage
+
+    if stage is None:
+        stage = draw(seed_stages_enum())
+
+    seed_id = draw(st.text(alphabet="abcdefghijklmnop", min_size=4, max_size=8))
+    blueprint_id = draw(st.sampled_from(["conv_heavy", "attention", "norm", "depthwise", "noop"]))
+    slot_id = f"r{draw(st.integers(0, 4))}c{draw(st.integers(0, 4))}"
+
+    # Alpha should be 0 for early stages, ramping up for BLENDING
+    if stage in (SeedStage.DORMANT, SeedStage.GERMINATED, SeedStage.TRAINING):
+        alpha = 0.0
+    elif stage == SeedStage.BLENDING:
+        alpha = draw(alpha_values())
+    else:  # PROBATIONARY, FOSSILIZED
+        alpha = 1.0
+
+    state = SeedState(
+        seed_id=seed_id,
+        blueprint_id=blueprint_id,
+        slot_id=slot_id,
+        stage=stage,
+        alpha=alpha,
+    )
+    state.metrics = draw(seed_metrics_kasmina())
+
+    return state
+
+
+@st.composite
+def blending_schedules(draw, algorithm: str | None = None):
+    """Generate valid blending schedule parameters.
+
+    Args:
+        draw: Hypothesis draw function
+        algorithm: Optional specific algorithm ("linear", "sigmoid", "gated")
+
+    Returns:
+        Dict with algorithm name and parameters
+
+    Example:
+        @given(blending_schedules())
+        def test_schedule_property(schedule):
+            assert schedule["algorithm"] in ["linear", "sigmoid", "gated"]
+    """
+    if algorithm is None:
+        algorithm = draw(st.sampled_from(["linear", "sigmoid", "gated"]))
+
+    total_steps = draw(st.integers(min_value=10, max_value=1000))
+
+    if algorithm == "linear":
+        return {
+            "algorithm": "linear",
+            "total_steps": total_steps,
+        }
+    elif algorithm == "sigmoid":
+        steepness = draw(bounded_floats(0.1, 10.0))
+        midpoint = draw(bounded_floats(0.2, 0.8))
+        return {
+            "algorithm": "sigmoid",
+            "total_steps": total_steps,
+            "steepness": steepness,
+            "midpoint": midpoint,
+        }
+    else:  # gated
+        hidden_dim = draw(st.sampled_from([16, 32, 64]))
+        return {
+            "algorithm": "gated",
+            "total_steps": total_steps,
+            "hidden_dim": hidden_dim,
+        }
+
+
+# =============================================================================
 # Exports
 # =============================================================================
 
@@ -450,6 +671,18 @@ __all__ = [
     # Simic
     "action_members",
     "seed_infos",
+    # Slot Configuration
+    "slot_configs",
+    "injection_specs",
+    "slot_states_for_config",
+    "enabled_slots_for_config",
+    # Kasmina
+    "seed_stages_enum",
+    "alpha_values",
+    "channel_dimensions",
+    "seed_metrics_kasmina",
+    "seed_states_kasmina",
+    "blending_schedules",
     # Networks
     "simple_network_configs",
 ]
