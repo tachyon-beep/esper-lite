@@ -604,18 +604,50 @@ def injection_points(self) -> dict[str, int]:
     return self.segment_channels
 ```
 
-**Step 3: Run all kasmina tests**
+**Step 3: Update class docstrings** *(LOW priority specialist feedback)*
+
+Update CNNHost class docstring to reflect pure backbone role:
+
+```python
+class CNNHost(nn.Module):
+    """CNN backbone with segment routing for external slot attachment.
+
+    Provides segment boundaries for MorphogeneticModel to attach SeedSlots.
+    The host itself performs no slot application - it routes activations
+    between segment boundaries.
+
+    ...existing args docstring...
+    """
+```
+
+Similarly update TransformerHost:
+
+```python
+class TransformerHost(nn.Module):
+    """Transformer backbone with segment routing for external slot attachment.
+
+    Provides segment boundaries for MorphogeneticModel to attach SeedSlots.
+    The host itself performs no slot application - it routes hidden states
+    between segment boundaries.
+
+    ...existing args docstring...
+    """
+```
+
+**Step 4: Run all kasmina tests**
 
 Run: `PYTHONPATH=src uv run pytest tests/kasmina/ -v`
 Expected: All tests pass
 
-**Step 4: Commit**
+**Step 5: Commit**
 
 ```bash
 git add src/esper/kasmina/host.py
 git commit -m "refactor(kasmina): make injection_points alias segment_channels
 
-Both properties now return canonical IDs, eliminating internal key exposure."
+- Both properties now return canonical IDs
+- Updated class docstrings to reflect pure backbone role
+- Eliminated internal key exposure"
 ```
 
 ---
