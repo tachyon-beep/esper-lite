@@ -3,14 +3,14 @@ import pytest
 import torch
 
 from esper.leyline import DEFAULT_EPISODE_LENGTH, DEFAULT_VALUE_CLIP
-from esper.simic.ppo import signals_to_features, PPOAgent
+from esper.simic.agent import signals_to_features, PPOAgent
 from esper.simic.control import MULTISLOT_FEATURE_SIZE
 
 
 def test_ppo_agent_architecture():
     """PPOAgent should use FactoredRecurrentActorCritic and TamiyoRolloutBuffer."""
-    from esper.simic.tamiyo_buffer import TamiyoRolloutBuffer
-    from esper.simic.tamiyo_network import FactoredRecurrentActorCritic
+    from esper.simic.agent import TamiyoRolloutBuffer
+    from esper.simic.agent import FactoredRecurrentActorCritic
 
     agent = PPOAgent(
         state_dim=50,

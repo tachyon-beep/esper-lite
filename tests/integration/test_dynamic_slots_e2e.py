@@ -12,7 +12,7 @@ import torch
 from esper.leyline.slot_config import SlotConfig
 from esper.leyline.stages import SeedStage
 from esper.leyline.factored_actions import NUM_BLUEPRINTS, NUM_BLENDS, NUM_OPS, LifecycleOp
-from esper.simic.ppo import PPOAgent
+from esper.simic.agent import PPOAgent
 from esper.simic.control import get_feature_size
 from esper.simic.control import compute_action_masks, MaskSeedInfo
 

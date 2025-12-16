@@ -4,7 +4,7 @@ import pytest
 import torch
 
 from esper.leyline import DEFAULT_LSTM_HIDDEN_DIM
-from esper.simic.tamiyo_buffer import TamiyoRolloutBuffer
+from esper.simic.agent import TamiyoRolloutBuffer
 
 
 class TestTamiyoRolloutBuffer:

@@ -8,7 +8,7 @@ Tests that PPO components work together correctly:
 
 import torch
 
-from esper.simic.ppo import PPOAgent, signals_to_features
+from esper.simic.agent import PPOAgent, signals_to_features
 from esper.simic.control import MULTISLOT_FEATURE_SIZE
 from esper.leyline import TrainingSignals, SeedTelemetry
 

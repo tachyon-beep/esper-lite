@@ -94,7 +94,7 @@ from esper.simic.telemetry import (
 from esper.simic.parallel_env_state import ParallelEnvState
 
 # NOTE: Heavy modules imported on demand:
-#   from esper.simic.ppo import PPOAgent
+#   from esper.simic.agent import PPOAgent
 #   from esper.simic.vectorized import train_ppo_vectorized
 #   from esper.simic.training import train_heuristic
 

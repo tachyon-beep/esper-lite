@@ -79,7 +79,7 @@ from esper.simic.control import (
     MULTISLOT_FEATURE_SIZE,
     get_feature_size,
 )
-from esper.simic.ppo import PPOAgent, signals_to_features
+from esper.simic.agent import PPOAgent, signals_to_features
 from esper.simic.rewards import (
     compute_reward,
     compute_loss_reward,

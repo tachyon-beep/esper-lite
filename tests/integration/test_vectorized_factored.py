@@ -7,7 +7,7 @@ These tests verify the action mask computation and batched action selection.
 import torch
 from esper.simic.control import MULTISLOT_FEATURE_SIZE
 
-from esper.simic.ppo import PPOAgent
+from esper.simic.agent import PPOAgent
 from esper.simic.control import compute_action_masks
 from esper.leyline.factored_actions import NUM_BLUEPRINTS, NUM_BLENDS, NUM_OPS
 from esper.leyline.slot_config import SlotConfig

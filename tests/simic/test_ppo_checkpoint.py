@@ -14,7 +14,7 @@ import pytest
 import torch
 
 from esper.leyline.slot_config import SlotConfig
-from esper.simic.ppo import PPOAgent, CHECKPOINT_VERSION
+from esper.simic.agent import PPOAgent, CHECKPOINT_VERSION
 
 
 class TestPPOCheckpointRoundTrip:
