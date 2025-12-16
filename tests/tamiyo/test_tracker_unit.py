@@ -264,7 +264,7 @@ class TestPlateauCounter:
 
     def test_plateau_counter_custom_threshold(self):
         """Should respect custom plateau threshold."""
-        tracker = SignalTracker(plateau_threshold=1.0)  # Stricter threshold
+        tracker = SignalTracker(plateau_threshold_pct=1.0)  # Stricter threshold
 
         tracker.update(
             epoch=1,

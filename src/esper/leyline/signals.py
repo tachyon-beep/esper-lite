@@ -20,6 +20,13 @@ class TrainingMetrics:
     """Metrics from the training loop.
 
     Uses __slots__ for reduced memory footprint and faster attribute access.
+
+    Scale Conventions (P2-A):
+        - train_accuracy, val_accuracy: 0-100 (percentage points)
+        - train_loss, val_loss: raw loss values (typically 0-10 range)
+        - accuracy_delta: percentage points improvement (e.g., 0.5 = half a percent)
+
+    These conventions are enforced by validation in SignalTracker.update().
     """
 
     epoch: int = 0
@@ -30,10 +37,10 @@ class TrainingMetrics:
     val_loss: float = 0.0
     loss_delta: float = 0.0  # Change from previous epoch (positive = improvement)
 
-    # Accuracy metrics
-    train_accuracy: float = 0.0
-    val_accuracy: float = 0.0
-    accuracy_delta: float = 0.0
+    # Accuracy metrics (0-100 percentage scale)
+    train_accuracy: float = 0.0  # 0-100 scale
+    val_accuracy: float = 0.0    # 0-100 scale
+    accuracy_delta: float = 0.0  # Percentage points
 
     # Trend indicators
     plateau_epochs: int = 0  # Epochs without improvement

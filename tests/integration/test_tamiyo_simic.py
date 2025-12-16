@@ -285,7 +285,7 @@ class TestPolicyDecisionsAffectSimicTraining:
         # Configure tracker with quick stabilization for reliable plateau detection
         tracker = SignalTracker(
             stabilization_epochs=1,
-            plateau_threshold=0.5,  # Sensitive plateau detection
+            plateau_threshold_pct=0.5,  # Sensitive plateau detection
         )
         policy = HeuristicTamiyo(
             config=HeuristicPolicyConfig(

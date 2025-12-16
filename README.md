@@ -209,7 +209,7 @@ PYTHONPATH=src python -m esper.scripts.train heuristic [OPTIONS]
 | `--task` | `cifar10` | Task preset |
 | `--device` | `cuda:0` | Compute device |
 | `--seed` | 42 | Random seed |
-| `--slots` | `mid` | Seed slots to enable |
+| `--slots` | `r0c1` | Seed slots to enable (canonical IDs: r0c0, r0c1, r0c2) |
 | `--max-seeds` | unlimited | Maximum total seeds |
 
 Telemetry flags (`--telemetry-file`, `--telemetry-dir`, `--telemetry-level`) are also available.

@@ -5,6 +5,7 @@ SignalTracker maintains running statistics for decision-making.
 
 from __future__ import annotations
 
+import logging
 from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -21,6 +22,8 @@ from esper.nissa import get_hub
 
 if TYPE_CHECKING:
     from esper.kasmina import SeedState
+
+logger = logging.getLogger(__name__)
 
 
 # Stabilization detection: block germination until explosive growth phase ends
@@ -48,7 +51,8 @@ class SignalTracker:
     """
 
     # Configuration
-    plateau_threshold: float = 0.5  # Min improvement to not count as plateau
+    # P2-A: Renamed for clarity - this is percentage points on 0-100 scale
+    plateau_threshold_pct: float = 0.5  # Min accuracy improvement (pct points) to not count as plateau
     history_window: int = 10
     env_id: int | None = None  # Optional environment identifier for telemetry
 
@@ -96,8 +100,22 @@ class SignalTracker:
         loss_delta = self._prev_loss - val_loss  # Positive = improvement
         accuracy_delta = val_accuracy - self._prev_accuracy
 
+        # P2-A: Validate accuracy scale (warn on 0-1 scale, expected 0-100)
+        if val_accuracy > 1.0 and val_accuracy <= 100.0:
+            pass  # Expected range
+        elif val_accuracy > 100.0:
+            logger.warning(
+                f"val_accuracy {val_accuracy} exceeds 100 - expected 0-100 scale"
+            )
+        elif 0.0 < val_accuracy <= 1.0 and epoch > 0:
+            # Only warn after epoch 0 (initial accuracy can legitimately be low)
+            logger.warning(
+                f"val_accuracy {val_accuracy} appears to be on 0-1 scale - "
+                f"expected 0-100 scale (percentage points)"
+            )
+
         # Update plateau counter
-        if accuracy_delta < self.plateau_threshold:
+        if accuracy_delta < self.plateau_threshold_pct:
             self._plateau_count += 1
         else:
             self._plateau_count = 0
@@ -109,7 +127,10 @@ class SignalTracker:
             if self._prev_loss > EPS:
                 relative_improvement = loss_delta / self._prev_loss
                 # Check: improvement is small AND loss didn't spike (not diverging)
+                # P1-A fix: loss_delta >= 0 ensures regression epochs don't count as stable
+                # (negative delta means loss got worse, which shouldn't trigger stabilization)
                 is_stable_epoch = (
+                    loss_delta >= 0 and  # Must not be regressing
                     relative_improvement < self.stabilization_threshold and
                     val_loss < self._prev_loss * 1.5  # Sanity: not diverging
                 )

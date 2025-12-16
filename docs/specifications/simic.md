@@ -60,7 +60,7 @@ history = train_ppo_vectorized(
     n_envs=4,
     max_epochs=25,
     device="cuda:0",
-    slots=["early", "mid", "late"],
+    slots=["r0c0", "r0c1", "r0c2"],
 )
 
 # PPO Agent (for custom training loops)
