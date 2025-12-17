@@ -28,7 +28,7 @@ def create_transformer_norm_seed(dim: int) -> nn.Module:
         def __init__(self, dim: int):
             super().__init__()
             self.norm = nn.LayerNorm(dim)
-            self.scale = nn.Parameter(torch.ones(1))
+            self.scale = nn.Parameter(torch.zeros(1))
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             # Bound scale to [-1, 1] via tanh to prevent gradient explosion

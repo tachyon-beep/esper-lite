@@ -99,7 +99,7 @@ def create_norm_seed(channels: int) -> nn.Module:
             super().__init__()
             # Use get_num_groups() to guarantee divisibility (fixes channels like 48, 80, 112)
             self.norm = nn.GroupNorm(num_groups=get_num_groups(channels), num_channels=channels)
-            self.scale = nn.Parameter(torch.ones(1))
+            self.scale = nn.Parameter(torch.zeros(1))
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             # Bound scale to [-1, 1] via tanh to prevent gradient explosion
