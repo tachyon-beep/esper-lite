@@ -58,3 +58,49 @@ class SnapshotWriter:
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         """Context manager exit."""
         self.close()
+
+
+class SnapshotReader:
+    """Reads TuiSnapshot objects from JSONL file.
+
+    Supports filtering for selective replay and is re-iterable.
+
+    Usage:
+        reader = SnapshotReader(path, filter_fn=lambda s: s.episode > 10)
+        for snapshot in reader:
+            process(snapshot)
+    """
+
+    def __init__(
+        self,
+        path: Path | str,
+        filter_fn: Callable[[TuiSnapshot], bool] | None = None,
+    ) -> None:
+        """Initialize reader.
+
+        Args:
+            path: Path to JSONL file
+            filter_fn: Optional predicate to filter snapshots
+        """
+        self._path = Path(path)
+        self._filter_fn = filter_fn
+
+    def __iter__(self) -> Iterator[TuiSnapshot]:
+        """Iterate over snapshots in file."""
+        from esper.karn.overwatch.schema import TuiSnapshot
+
+        with open(self._path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+
+                data = json.loads(line)
+                snapshot = TuiSnapshot.from_dict(data)
+
+                if self._filter_fn is None or self._filter_fn(snapshot):
+                    yield snapshot
+
+    def __len__(self) -> int:
+        """Count snapshots (may be slow for large files)."""
+        return sum(1 for _ in self)
