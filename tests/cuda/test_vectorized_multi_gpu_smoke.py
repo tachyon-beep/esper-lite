@@ -63,7 +63,9 @@ def test_vectorized_multi_gpu_smoke(monkeypatch):
     )
 
     # Force vectorized training to request mock datasets and small batch sizes.
-    from esper.runtime import get_task_spec as real_get_task_spec
+    # NOTE: We patch esper.runtime.get_task_spec (not vectorized.get_task_spec)
+    # because vectorized.py uses a lazy import to avoid circular dependencies.
+    from esper.runtime.tasks import get_task_spec as real_get_task_spec
 
     def get_task_spec_mock(name: str):
         task_spec = real_get_task_spec(name)
@@ -74,7 +76,7 @@ def test_vectorized_multi_gpu_smoke(monkeypatch):
         return task_spec
 
     monkeypatch.setattr(
-        "esper.simic.training.vectorized.get_task_spec",
+        "esper.runtime.get_task_spec",
         get_task_spec_mock,
         raising=True,
     )
