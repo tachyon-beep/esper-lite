@@ -13,8 +13,8 @@ from textual.app import ComposeResult
 from textual.containers import Container
 from textual.widgets import Static
 
-from esper.karn.overwatch.schema import EnvSummary, SlotChipState
-from esper.karn.overwatch.widgets.slot_chip import SlotChip, STAGE_SHORT
+from esper.karn.overwatch.schema import EnvSummary
+from esper.karn.overwatch.widgets.slot_chip import SlotChip
 
 
 # Status styling
@@ -118,8 +118,6 @@ class EnvRow(Container):
             indicator = STATUS_ICONS.get(e.status, "[ ]")
 
         # Format: [▶] Env 0  gpu:0  OK     98 fps
-        status_styled = f"[{STATUS_COLORS.get(e.status, 'white')}]{e.status}[/]"
-
         throughput = f"{e.throughput_fps:.0f} fps" if e.throughput_fps > 0 else ""
 
         header = f"{indicator} Env {e.env_id}  gpu:{e.device_id}  {e.status:<4}  {throughput}"
