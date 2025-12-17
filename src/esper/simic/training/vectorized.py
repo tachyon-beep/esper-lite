@@ -111,6 +111,49 @@ from .parallel_env_state import ParallelEnvState
 
 
 # =============================================================================
+# GPU-Accurate Timing (P4-1)
+# =============================================================================
+
+
+class CUDATimer:
+    """GPU-accurate timing using CUDA events.
+
+    CUDA events measure actual GPU kernel execution time, not CPU-side overhead.
+    This is critical for async CUDA operations where time.perf_counter() would
+    only measure the time to enqueue operations, not their actual execution.
+
+    Falls back to CPU timing when CUDA unavailable.
+    """
+
+    def __init__(self, device: str = "cuda"):
+        self.use_cuda = device.startswith("cuda") and torch.cuda.is_available()
+        if self.use_cuda:
+            self.start_event = torch.cuda.Event(enable_timing=True)
+            self.end_event = torch.cuda.Event(enable_timing=True)
+        else:
+            self.start_time = 0.0
+
+    def start(self) -> None:
+        """Record start time."""
+        if self.use_cuda:
+            self.start_event.record()
+        else:
+            self.start_time = time.perf_counter()
+
+    def stop(self) -> float:
+        """Record end time and return elapsed milliseconds.
+
+        For CUDA: synchronizes to ensure GPU work is complete before measuring.
+        """
+        if self.use_cuda:
+            self.end_event.record()
+            self.end_event.synchronize()
+            return self.start_event.elapsed_time(self.end_event)
+        else:
+            return (time.perf_counter() - self.start_time) * 1000.0
+
+
+# =============================================================================
 # Seed Management Helpers
 # =============================================================================
 
@@ -1060,6 +1103,8 @@ def train_ppo_vectorized(
 
         throughput_step_time_ms_sum = 0.0
         throughput_dataloader_wait_ms_sum = 0.0
+        # GPU-accurate timing (P4-1) - uses CUDA events instead of perf_counter
+        step_timer = CUDATimer(env_states[0].env_device)
         reward_summary_accum = [
             {"bounded_attribution": 0.0, "compute_rent": 0.0, "total_reward": 0.0, "count": 0}
             for _ in range(envs_this_batch)
@@ -1078,7 +1123,7 @@ def train_ppo_vectorized(
 
         # Run epochs with INVERTED CONTROL FLOW
         for epoch in range(1, max_epochs + 1):
-            step_start = time.perf_counter()
+            step_timer.start()  # GPU-accurate timing (P4-1)
             dataloader_wait_ms_epoch = 0.0
             if telemetry_config is not None:
                 telemetry_config.tick_escalation()
@@ -1949,7 +1994,7 @@ def train_ppo_vectorized(
                     env_final_accs[env_idx] = env_state.val_acc
                     env_total_rewards[env_idx] = sum(env_state.episode_rewards)
 
-            throughput_step_time_ms_sum += (time.perf_counter() - step_start) * 1000.0
+            throughput_step_time_ms_sum += step_timer.stop()  # GPU-accurate timing (P4-1)
             throughput_dataloader_wait_ms_sum += dataloader_wait_ms_epoch
 
         # PPO Update after all episodes in batch complete
