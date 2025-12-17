@@ -1,0 +1,18 @@
+"""Tests for leyline constants."""
+
+import torch
+from esper.leyline import MASKED_LOGIT_VALUE
+
+
+def test_masked_logit_value_exists():
+    """MASKED_LOGIT_VALUE should be exported from leyline."""
+    assert MASKED_LOGIT_VALUE == -1e4
+
+
+def test_masked_logit_value_safe_for_fp16():
+    """MASKED_LOGIT_VALUE should not overflow in FP16 softmax."""
+    logits = torch.tensor([0.0, MASKED_LOGIT_VALUE], dtype=torch.float16)
+    probs = torch.softmax(logits, dim=0)
+    assert probs[0].item() > 0.99  # Masked action should have ~0 probability
+    assert not torch.isnan(probs).any()
+    assert not torch.isinf(probs).any()

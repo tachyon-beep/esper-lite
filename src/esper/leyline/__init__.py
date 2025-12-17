@@ -108,6 +108,10 @@ DEFAULT_ENTROPY_COEF_MIN = 0.01
 # Order matters: slot → blueprint → blend → op is the causal chain.
 HEAD_NAMES: tuple[str, ...] = ("slot", "blueprint", "blend", "op")
 
+# Action masking constant - safe for FP16/BF16, avoids softmax overflow
+# Used by MaskedCategorical to zero out invalid action probabilities
+MASKED_LOGIT_VALUE: float = -1e4
+
 # =============================================================================
 # Reward Shaping Constants (tunable reward function weights)
 # =============================================================================
@@ -369,6 +373,7 @@ __all__ = [
 
     # Factored Action Space
     "HEAD_NAMES",
+    "MASKED_LOGIT_VALUE",
 
     # Reward Shaping Constants
     "DEFAULT_CONTRIBUTION_WEIGHT",
