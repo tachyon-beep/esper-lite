@@ -49,6 +49,9 @@ from .lstm_health import (
     compute_lstm_health,
 )
 
+# Gradient EMA drift detection (P4-9)
+from .gradient_ema import GradientEMATracker
+
 # Telemetry emitters (pure functions)
 from .emitters import (
     emit_with_env_context,
@@ -93,6 +96,8 @@ __all__ = [
     # LSTM health monitoring (P4-8)
     "LSTMHealthMetrics",
     "compute_lstm_health",
+    # Gradient EMA drift detection (P4-9)
+    "GradientEMATracker",
     # Emitters
     "emit_with_env_context",
     "emit_batch_completed",

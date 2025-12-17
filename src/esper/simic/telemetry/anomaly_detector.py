@@ -179,6 +179,41 @@ class AnomalyDetector:
 
         return report
 
+    def check_gradient_drift(
+        self,
+        norm_drift: float,
+        health_drift: float,
+        drift_threshold: float = 0.5,
+    ) -> AnomalyReport:
+        """Check for gradient drift anomaly (P4-9).
+
+        Gradient drift indicates training is slowly diverging from stable behavior.
+        Single-step checks miss this; EMA tracking catches gradual degradation.
+
+        Args:
+            norm_drift: Gradient norm drift indicator (|current - ema| / ema)
+            health_drift: Gradient health drift indicator
+            drift_threshold: Threshold for drift warning (0.5 = 50% deviation from EMA)
+
+        Returns:
+            AnomalyReport with any detected drift
+        """
+        report = AnomalyReport()
+
+        if norm_drift > drift_threshold:
+            report.add_anomaly(
+                "gradient_norm_drift",
+                f"norm_drift={norm_drift:.3f} > {drift_threshold}",
+            )
+
+        if health_drift > drift_threshold:
+            report.add_anomaly(
+                "gradient_health_drift",
+                f"health_drift={health_drift:.3f} > {drift_threshold}",
+            )
+
+        return report
+
     def check_all(
         self,
         ratio_max: float,

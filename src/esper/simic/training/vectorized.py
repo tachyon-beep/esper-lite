@@ -75,6 +75,7 @@ from esper.simic.telemetry import (
     materialize_dual_grad_stats,
     TelemetryConfig,
     compute_lstm_health,  # P4-8
+    GradientEMATracker,  # P4-9
 )
 from esper.simic.control import (
     RunningMeanStd,
@@ -1085,6 +1086,10 @@ def train_ppo_vectorized(
     total_episodes = n_episodes + start_episode  # Total target including resumed episodes
 
     batch_idx = 0
+    # Gradient EMA tracker for drift detection (P4-9)
+    # Persists across batches to track slow degradation
+    grad_ema_tracker = GradientEMATracker() if use_telemetry else None
+
     while episodes_completed < total_episodes:
         # Determine how many envs to run this batch (may be fewer than n_envs for last batch)
         remaining = total_episodes - episodes_completed
@@ -1684,7 +1689,10 @@ def train_ppo_vectorized(
 
                 # Governor rollback: execute if this env panicked
                 if env_idx in governor_panic_envs:
-                    env_state.governor.execute_rollback(env_id=env_idx)
+                    env_state.governor.execute_rollback(
+                        env_id=env_idx,
+                        optimizer=env_state.host_optimizer
+                    )
                     env_rollback_occurred[env_idx] = True  # Mark only this env as stale
 
                 # Compute reward with cost params
@@ -2118,6 +2126,21 @@ def train_ppo_vectorized(
                 current_episode=batch_epoch_id,
                 total_episodes=total_episodes,
             )
+
+            # Gradient drift detection (P4-9) - catches slow degradation
+            if grad_ema_tracker is not None and ppo_grad_norm is not None:
+                # Simple gradient health: 1.0 if norm in [0.01, 100], scales down outside
+                grad_health = 1.0 if 0.01 <= ppo_grad_norm <= 100.0 else max(0.0, 1.0 - abs(ppo_grad_norm - 50) / 100)
+                has_drift, drift_metrics = grad_ema_tracker.check_drift(ppo_grad_norm, grad_health)
+                if has_drift:
+                    drift_report = anomaly_detector.check_gradient_drift(
+                        norm_drift=drift_metrics["norm_drift"],
+                        health_drift=drift_metrics["health_drift"],
+                    )
+                    if drift_report.has_anomaly:
+                        anomaly_report.has_anomaly = True
+                        anomaly_report.anomaly_types.extend(drift_report.anomaly_types)
+                        anomaly_report.details.update(drift_report.details)
 
             collect_debug_anomaly = (
                 telemetry_config is not None
