@@ -234,7 +234,7 @@ class RewardNormalizer:
         """Load state from dictionary."""
         self.mean = state["mean"]
         self.m2 = state["m2"]
-        self.count = state["count"]
+        self.count = int(state["count"])
 
 
 __all__ = ["RunningMeanStd", "RewardNormalizer"]

@@ -8,12 +8,20 @@ from __future__ import annotations
 import functools
 import logging
 import random
-from typing import Callable
+from typing import Callable, Iterator, Protocol, TYPE_CHECKING, cast
 
 import torch
 import torch.nn as nn
 
 logger = logging.getLogger(__name__)
+
+
+class _HasSeedParameters(Protocol):
+    """Protocol for models that have seed parameters (e.g., HostModel)."""
+
+    def get_seed_parameters(self, slot: str | None = None) -> Iterator[torch.nn.Parameter]:
+        """Yield seed parameters for gradient collection."""
+        ...
 
 from esper.leyline.factored_actions import FactoredAction, LifecycleOp
 from esper.leyline import TelemetryEvent, TelemetryEventType
@@ -196,7 +204,9 @@ def _train_one_epoch(
         # Collect gradient stats as tensors (async-safe, no .item() sync)
         # Overwrites each batch; final value materialized after loop
         if collect_gradients:
-            grad_stats = collect_seed_gradients_async(model.get_seed_parameters())
+            # cast() needed because nn.Module doesn't expose get_seed_parameters in stubs
+            host_model = cast(_HasSeedParameters, model)
+            grad_stats = collect_seed_gradients_async(host_model.get_seed_parameters())
 
         host_optimizer.step()
         if seed_optimizer:

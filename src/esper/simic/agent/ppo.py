@@ -333,6 +333,7 @@ class PPOAgent:
         # MaskedCategorical._validate_action_mask has @torch.compiler.disable
         # M22: dynamic=True handles varying sequence lengths without recompilation
         if compile_network:
+            # torch.compile returns OptimizedModule which wraps the network
             self.network = torch.compile(self.network, mode="default", dynamic=True)  # type: ignore[assignment]
 
         # [PyTorch 2.9] Use fused=True for CUDA, foreach=True for CPU

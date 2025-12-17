@@ -33,7 +33,7 @@ import time
 import warnings
 from contextlib import nullcontext
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Any, Callable
 
 import torch
 import torch.nn as nn
@@ -283,7 +283,8 @@ def _run_ppo_updates(
     for update_idx in range(updates_to_run):
         clear_buffer = update_idx == updates_to_run - 1
         if use_amp and torch.cuda.is_available():
-            with torch_amp.autocast(device_type="cuda", dtype=torch.float16):
+            # torch stubs lag behind actual API - device_type is valid
+            with torch_amp.autocast(device_type="cuda", dtype=torch.float16):  # type: ignore[call-arg]
                 metrics = agent.update(clear_buffer=clear_buffer)
         else:
             metrics = agent.update(clear_buffer=clear_buffer)
@@ -321,7 +322,7 @@ def _handle_telemetry_escalation(
 
 
 def _emit_anomaly_diagnostics(
-    hub: any,
+    hub: Any,
     anomaly_report: AnomalyReport | None,
     agent: PPOAgent,
     batch_epoch_id: int,
@@ -364,6 +365,9 @@ def _emit_anomaly_diagnostics(
         }
 
         if collect_debug:
+            # gradient_stats and stability_report guaranteed non-None when collect_debug=True
+            assert gradient_stats is not None
+            assert stability_report is not None
             data["gradient_stats"] = [gs.to_dict() for gs in gradient_stats[:5]]
             data["stability"] = stability_report.to_dict()
         if ratio_diagnostic is not None:
@@ -399,8 +403,8 @@ def train_ppo_vectorized(
     entropy_anneal_episodes: int = 0,
     gamma: float = DEFAULT_GAMMA,
     ppo_updates_per_batch: int = 1,
-    save_path: str = None,
-    resume_path: str = None,
+    save_path: str | None = None,
+    resume_path: str | None = None,
     seed: int = 42,
     num_workers: int | None = None,
     gpu_preload: bool = False,
@@ -1018,8 +1022,9 @@ def train_ppo_vectorized(
             for slot_id in slots_to_step:
                 env_state.seed_optimizers[slot_id].zero_grad(set_to_none=True)
 
+            # torch stubs lag behind actual API - device_type is valid
             autocast_ctx = (
-                torch_amp.autocast(device_type="cuda", dtype=torch.float16)
+                torch_amp.autocast(device_type="cuda", dtype=torch.float16)  # type: ignore[call-arg]
                 if use_amp and env_dev.startswith("cuda")
                 else nullcontext()
             )
@@ -1193,12 +1198,17 @@ def train_ppo_vectorized(
             for env_state in env_states:
                 configure_slot_telemetry(env_state, inner_epoch=epoch, global_epoch=batch_epoch_id)
             # Track gradient stats per env for telemetry sync
-            env_grad_stats = [None] * envs_this_batch
+            env_grad_stats: list[dict[str, dict[Any, Any]] | None] = [None] * envs_this_batch
 
             # Reset per-epoch metrics by zeroing pre-allocated accumulators (faster than reallocating)
-            train_totals = [0] * envs_this_batch
+            train_totals: list[int] = [0] * envs_this_batch
             for env_state in env_states:
                 env_state.zero_accumulators()
+                # Assert accumulators initialized (for mypy - init_accumulators called before training)
+                assert env_state.train_loss_accum is not None
+                assert env_state.train_correct_accum is not None
+                assert env_state.val_loss_accum is not None
+                assert env_state.val_correct_accum is not None
 
             # ===== TRAINING: Iterate batches first, launch all envs via CUDA streams =====
             # SharedBatchIterator: single DataLoader, batches pre-split and moved to devices
@@ -1209,6 +1219,9 @@ def train_ppo_vectorized(
             # record_stream marks tensors as used by this stream, preventing deallocation.
             for i, env_state in enumerate(env_states):
                 if env_state.stream:
+                    # Accumulators guaranteed initialized by init_accumulators() called earlier
+                    assert env_state.train_loss_accum is not None
+                    assert env_state.train_correct_accum is not None
                     env_state.train_loss_accum.record_stream(env_state.stream)
                     env_state.train_correct_accum.record_stream(env_state.stream)
                     env_state.stream.wait_stream(torch.cuda.default_stream(torch.device(env_state.env_device)))
@@ -1244,12 +1257,14 @@ def train_ppo_vectorized(
                             env_grad_stats[i] = grad_stats  # Keep last batch's grad stats
                         stream_ctx = torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
                         with stream_ctx:
-                            env_state.train_loss_accum.add_(loss_tensor)
-                            env_state.train_correct_accum.add_(correct_tensor)
+                            # Accumulators guaranteed initialized by init_accumulators() called before training
+                            env_state.train_loss_accum.add_(loss_tensor)  # type: ignore[union-attr]
+                            env_state.train_correct_accum.add_(correct_tensor)  # type: ignore[union-attr]
                         train_totals[i] += total
             else:
                 # GPU preload fallback: per-env DataLoaders (data already on GPU)
-                train_iters = [iter(env_dataloaders[i][0]) for i in range(envs_this_batch)]
+                assert env_dataloaders is not None  # Guaranteed when shared_train_iter is None
+                train_iters: list[Any] = [iter(env_dataloaders[i][0]) for i in range(envs_this_batch)]
                 for batch_step in range(num_train_batches):
                     env_batches = []
                     for i, train_iter_i in enumerate(train_iters):
@@ -1274,8 +1289,9 @@ def train_ppo_vectorized(
                             env_grad_stats[i] = grad_stats  # Keep last batch's grad stats
                         stream_ctx = torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
                         with stream_ctx:
-                            env_state.train_loss_accum.add_(loss_tensor)
-                            env_state.train_correct_accum.add_(correct_tensor)
+                            # Accumulators guaranteed initialized by init_accumulators() called before training
+                            env_state.train_loss_accum.add_(loss_tensor)  # type: ignore[union-attr]
+                            env_state.train_correct_accum.add_(correct_tensor)  # type: ignore[union-attr]
                         train_totals[i] += total
 
             # Sync all streams ONCE at epoch end
@@ -1284,8 +1300,9 @@ def train_ppo_vectorized(
                     env_state.stream.synchronize()
 
             # NOW safe to call .item() - all GPU work done
-            train_losses = [env_state.train_loss_accum.item() for env_state in env_states]
-            train_corrects = [env_state.train_correct_accum.item() for env_state in env_states]
+            # Accumulators guaranteed initialized by init_accumulators() called before training
+            train_losses = [env_state.train_loss_accum.item() for env_state in env_states]  # type: ignore[union-attr]
+            train_corrects = [env_state.train_correct_accum.item() for env_state in env_states]  # type: ignore[union-attr]
 
             # ===== VALIDATION + COUNTERFACTUAL (FUSED): Single pass over test data =====
             # Instead of iterating test data twice (once for main validation, once for
@@ -1319,6 +1336,9 @@ def train_ppo_vectorized(
             # This syncs the accumulator zeroing on default stream before we write.
             for i, env_state in enumerate(env_states):
                 if env_state.stream:
+                    # Accumulators guaranteed initialized by init_accumulators() called before training
+                    assert env_state.val_loss_accum is not None
+                    assert env_state.val_correct_accum is not None
                     env_state.val_loss_accum.record_stream(env_state.stream)
                     env_state.val_correct_accum.record_stream(env_state.stream)
                     env_state.stream.wait_stream(torch.cuda.default_stream(torch.device(env_state.env_device)))
@@ -1354,8 +1374,9 @@ def train_ppo_vectorized(
                         loss_tensor, correct_tensor, total = process_val_batch(env_state, inputs, targets, criterion, slots=slots)
                         stream_ctx = torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
                         with stream_ctx:
-                            env_state.val_loss_accum.add_(loss_tensor)
-                            env_state.val_correct_accum.add_(correct_tensor)
+                            # Accumulators guaranteed initialized by init_accumulators() called before training
+                            env_state.val_loss_accum.add_(loss_tensor)  # type: ignore[union-attr]
+                            env_state.val_correct_accum.add_(correct_tensor)  # type: ignore[union-attr]
                         val_totals[i] += total
 
                         # COUNTERFACTUAL (alpha=0) - SAME BATCH, no DataLoader reload!
@@ -1373,7 +1394,8 @@ def train_ppo_vectorized(
                                 env_state.cf_totals[slot_id] += cf_total
             else:
                 # GPU preload fallback: per-env DataLoaders (data already on GPU)
-                test_iters = [iter(env_dataloaders[i][1]) for i in range(envs_this_batch)]
+                assert env_dataloaders is not None  # Guaranteed when shared_test_iter is None
+                test_iters: list[Any] = [iter(env_dataloaders[i][1]) for i in range(envs_this_batch)]
                 for batch_step in range(num_test_batches):
                     env_batches = []
                     for i, test_iter_i in enumerate(test_iters):
@@ -1395,8 +1417,9 @@ def train_ppo_vectorized(
                         loss_tensor, correct_tensor, total = process_val_batch(env_state, inputs, targets, criterion, slots=slots)
                         stream_ctx = torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
                         with stream_ctx:
-                            env_state.val_loss_accum.add_(loss_tensor)
-                            env_state.val_correct_accum.add_(correct_tensor)
+                            # Accumulators guaranteed initialized by init_accumulators() called before training
+                            env_state.val_loss_accum.add_(loss_tensor)  # type: ignore[union-attr]
+                            env_state.val_correct_accum.add_(correct_tensor)  # type: ignore[union-attr]
                         val_totals[i] += total
 
                         # COUNTERFACTUAL (alpha=0) - SAME BATCH, no DataLoader reload!
@@ -1419,8 +1442,9 @@ def train_ppo_vectorized(
                     env_state.stream.synchronize()
 
             # NOW safe to call .item()
-            val_losses = [env_state.val_loss_accum.item() for env_state in env_states]
-            val_corrects = [env_state.val_correct_accum.item() for env_state in env_states]
+            # Accumulators guaranteed initialized by init_accumulators() called before training
+            val_losses = [env_state.val_loss_accum.item() for env_state in env_states]  # type: ignore[union-attr]
+            val_corrects = [env_state.val_correct_accum.item() for env_state in env_states]  # type: ignore[union-attr]
 
             # Compute per-slot baseline accuracies from counterfactual accumulators
             for i in slots_needing_counterfactual:
@@ -1509,8 +1533,8 @@ def train_ppo_vectorized(
                 # Log counterfactual contribution at terminal epoch (for all active slots)
                 if epoch == max_epochs and hub and env_idx in slots_needing_counterfactual:
                     for slot_id in slots_needing_counterfactual[env_idx]:
-                        baseline_acc = baseline_accs[env_idx].get(slot_id)
-                        if baseline_acc is None:
+                        baseline_for_slot = baseline_accs[env_idx].get(slot_id)
+                        if baseline_for_slot is None:
                             emit_cf_unavailable(
                                 hub,
                                 env_id=env_idx,
@@ -1527,14 +1551,15 @@ def train_ppo_vectorized(
                                 "available": True,
                                 "slot_id": slot_id,
                                 "real_accuracy": val_acc,
-                                "baseline_accuracy": baseline_acc,
-                                "contribution": val_acc - baseline_acc,
+                                "baseline_accuracy": baseline_for_slot,
+                                "contribution": val_acc - baseline_for_slot,
                             },
                         ))
 
                 # Sync gradient telemetry after record_accuracy so telemetry reflects this epoch's metrics.
-                if use_telemetry and env_grad_stats[env_idx]:
-                    for slot_id, async_stats in env_grad_stats[env_idx].items():
+                grad_stats_for_env = env_grad_stats[env_idx]
+                if use_telemetry and grad_stats_for_env:
+                    for slot_id, async_stats in grad_stats_for_env.items():
                         if not model.has_active_seed_in_slot(slot_id):
                             continue
                         seed_state = model.seed_slots[slot_id].state
@@ -1659,8 +1684,9 @@ def train_ppo_vectorized(
             batched_hidden = None
             if env_states[0].lstm_hidden is not None:
                 # Concatenate per-env hidden states along batch dimension
-                h_list = [env_state.lstm_hidden[0] for env_state in env_states]
-                c_list = [env_state.lstm_hidden[1] for env_state in env_states]
+                # All envs have lstm_hidden if first one does (consistent initialization)
+                h_list = [env_state.lstm_hidden[0] for env_state in env_states if env_state.lstm_hidden is not None]
+                c_list = [env_state.lstm_hidden[1] for env_state in env_states if env_state.lstm_hidden is not None]
                 # Clone pre-step hidden states for buffer storage
                 pre_step_hiddens = [(h.clone(), c.clone()) for h, c in zip(h_list, c_list)]
                 batched_h = torch.cat(h_list, dim=1)  # [layers, batch, hidden]

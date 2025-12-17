@@ -12,12 +12,12 @@ class ActionResult:
     """Result from policy action selection.
 
     Attributes:
-        action: Dict mapping head names to selected action indices
+        action: Dict mapping head names to selected action tensors [batch] or [batch, seq]
         log_prob: Dict mapping head names to log probabilities
         value: State value estimate
         hidden: New hidden state tuple (h, c) or None for stateless policies
     """
-    action: dict[str, int]
+    action: dict[str, torch.Tensor]
     log_prob: dict[str, torch.Tensor]
     value: torch.Tensor
     hidden: tuple[torch.Tensor, torch.Tensor] | None

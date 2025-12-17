@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional, Protocol, Union
+from typing import Any, Protocol
 
 
 class TelemetryEventLike(Protocol):
@@ -33,7 +33,7 @@ class TelemetryEventLike(Protocol):
     """
 
     @property
-    def event_type(self) -> Union[str, Enum]:
+    def event_type(self) -> str | Enum:
         """Event type identifier. Enum with .name or string."""
         ...
 
@@ -43,32 +43,32 @@ class TelemetryEventLike(Protocol):
         ...
 
     @property
-    def data(self) -> Optional[dict[str, Any]]:
+    def data(self) -> dict[str, Any] | None:
         """Event payload (varies by event_type)."""
         ...
 
     @property
-    def epoch(self) -> Optional[int]:
+    def epoch(self) -> int | None:
         """Training epoch when event occurred."""
         ...
 
     @property
-    def seed_id(self) -> Optional[str]:
+    def seed_id(self) -> str | None:
         """Seed identifier (for seed-related events)."""
         ...
 
     @property
-    def slot_id(self) -> Optional[str]:
+    def slot_id(self) -> str | None:
         """Slot identifier (for slot-related events)."""
         ...
 
     @property
-    def severity(self) -> Optional[str]:
+    def severity(self) -> str | None:
         """Log severity: debug, info, warning, error, critical."""
         ...
 
     @property
-    def message(self) -> Optional[str]:
+    def message(self) -> str | None:
         """Human-readable event description."""
         ...
 

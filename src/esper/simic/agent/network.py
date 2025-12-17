@@ -18,11 +18,23 @@ Design rationale (DRL expert):
 from __future__ import annotations
 
 import math
+from typing import TypedDict
 
 import torch
 import torch.nn as nn
 
 from esper.simic.control import MaskedCategorical
+
+
+class _ForwardOutput(TypedDict):
+    """Typed dict for forward() return value - enables mypy to track per-key types."""
+
+    slot_logits: torch.Tensor
+    blueprint_logits: torch.Tensor
+    blend_logits: torch.Tensor
+    op_logits: torch.Tensor
+    value: torch.Tensor
+    hidden: tuple[torch.Tensor, torch.Tensor]
 
 from esper.leyline import (
     DEFAULT_LSTM_HIDDEN_DIM,
@@ -179,7 +191,7 @@ class FactoredRecurrentActorCritic(nn.Module):
         blueprint_mask: torch.Tensor | None = None,
         blend_mask: torch.Tensor | None = None,
         op_mask: torch.Tensor | None = None,
-    ) -> dict[str, torch.Tensor | tuple[torch.Tensor, torch.Tensor]]:
+    ) -> _ForwardOutput:
         """Forward pass returning logits, value, and new hidden state.
 
         Args:
@@ -188,7 +200,7 @@ class FactoredRecurrentActorCritic(nn.Module):
             *_mask: Boolean masks [batch, seq_len, action_dim], True = valid
 
         Returns:
-            Dict with slot_logits, blueprint_logits, blend_logits,
+            _ForwardOutput with slot_logits, blueprint_logits, blend_logits,
             op_logits, value, and hidden tuple
         """
         batch_size = state.size(0)
@@ -291,8 +303,16 @@ class FactoredRecurrentActorCritic(nn.Module):
                 "op": op_mask[:, 0, :] if op_mask is not None else None,
             }
 
+            # Map head names to logits (TypedDict keys must be literals)
+            head_logits: dict[str, torch.Tensor] = {
+                "slot": output["slot_logits"][:, 0, :],
+                "blueprint": output["blueprint_logits"][:, 0, :],
+                "blend": output["blend_logits"][:, 0, :],
+                "op": output["op_logits"][:, 0, :],
+            }
+
             for key in HEAD_NAMES:
-                logits = output[f"{key}_logits"][:, 0, :]  # [batch, action_dim]
+                logits = head_logits[key]  # [batch, action_dim]
                 mask = masks[key]
                 if mask is None:
                     mask = torch.ones_like(logits, dtype=torch.bool)
@@ -343,8 +363,16 @@ class FactoredRecurrentActorCritic(nn.Module):
             "op": op_mask,
         }
 
+        # Map head names to logits (TypedDict keys must be literals)
+        head_logits: dict[str, torch.Tensor] = {
+            "slot": output["slot_logits"],
+            "blueprint": output["blueprint_logits"],
+            "blend": output["blend_logits"],
+            "op": output["op_logits"],
+        }
+
         for key in HEAD_NAMES:
-            logits = output[f"{key}_logits"]  # [batch, seq_len, action_dim]
+            logits = head_logits[key]  # [batch, seq_len, action_dim]
             action = actions[key]  # [batch, seq_len]
 
             # Reshape for distribution

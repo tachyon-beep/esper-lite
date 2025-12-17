@@ -8,8 +8,21 @@ from esper.tamiyo.policy.types import ActionResult, EvalResult, ForwardResult
 
 
 def test_policy_bundle_is_runtime_checkable():
-    """PolicyBundle should be runtime_checkable for registration validation."""
-    assert hasattr(PolicyBundle, '__protocol_attrs__')
+    """PolicyBundle should be runtime_checkable for registration validation.
+
+    We test the semantic behavior (isinstance works) rather than implementation
+    details like __protocol_attrs__ which may vary across Python versions.
+    """
+    # Check the protocol flag (stable API)
+    assert getattr(PolicyBundle, '_is_runtime_protocol', False), (
+        "PolicyBundle must be decorated with @runtime_checkable"
+    )
+
+    # Verify isinstance actually works on a non-implementing class
+    class NotAPolicy:
+        pass
+
+    assert not isinstance(NotAPolicy(), PolicyBundle)
 
 
 def test_policy_bundle_protocol_methods():
@@ -50,13 +63,14 @@ def test_policy_bundle_protocol_properties():
 def test_action_result_dataclass():
     """ActionResult should hold action selection results."""
     result = ActionResult(
-        action={'slot': 0, 'blueprint': 1, 'blend': 0, 'op': 2},
+        action={'slot': torch.tensor(0), 'blueprint': torch.tensor(1),
+                'blend': torch.tensor(0), 'op': torch.tensor(2)},
         log_prob={'slot': torch.tensor(-0.5), 'blueprint': torch.tensor(-1.0),
                   'blend': torch.tensor(-0.3), 'op': torch.tensor(-0.8)},
         value=torch.tensor(0.5),
         hidden=(torch.zeros(1, 1, 256), torch.zeros(1, 1, 256)),
     )
-    assert result.action['slot'] == 0
+    assert result.action['slot'].item() == 0
     assert result.value.item() == pytest.approx(0.5)
 
 

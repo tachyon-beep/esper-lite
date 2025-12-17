@@ -282,7 +282,7 @@ class TamiyoRolloutBuffer:
             bootstrap_values = self.bootstrap_values[env_id, :num_steps]
 
             advantages = torch.zeros(num_steps, device=self.device)
-            last_gae = 0.0
+            last_gae: torch.Tensor = torch.tensor(0.0, device=self.device)
 
             for t in reversed(range(num_steps)):
                 if t == num_steps - 1:
@@ -294,7 +294,7 @@ class TamiyoRolloutBuffer:
                         # bootstrap value contributes to delta and GAE propagates.
                         next_non_terminal = 1.0
                     else:
-                        next_value = 0.0
+                        next_value = torch.tensor(0.0, device=self.device)
                         next_non_terminal = 1.0 - float(dones[t])
                 else:
                     next_value = values[t + 1]
@@ -303,7 +303,7 @@ class TamiyoRolloutBuffer:
 
                 # Reset GAE at true terminal (not truncation)
                 if dones[t] and not truncated[t]:
-                    last_gae = 0.0
+                    last_gae = torch.tensor(0.0, device=self.device)
 
                 delta = rewards[t] + gamma * next_value * next_non_terminal - values[t]
                 last_gae = delta + gamma * gae_lambda * next_non_terminal * last_gae

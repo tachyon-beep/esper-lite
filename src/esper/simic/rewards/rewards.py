@@ -30,7 +30,7 @@ import logging
 import math
 from dataclasses import dataclass
 from enum import Enum
-from typing import NamedTuple
+from typing import NamedTuple, cast
 
 from esper.leyline import SeedStage, MIN_CULL_AGE, MIN_PROBATION_EPOCHS, DEFAULT_GAMMA
 from esper.leyline import DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
@@ -963,7 +963,9 @@ def compute_reward_for_family(
         loss_config = LossRewardConfig.default()
 
     if reward_family == RewardFamily.CONTRIBUTION:
-        return compute_reward(
+        # cast() needed because compute_reward's return type depends on return_components
+        # When return_components=False, it returns float (not tuple)
+        return cast(float, compute_reward(
             action=action,
             seed_contribution=seed_contribution,
             val_acc=val_acc,
@@ -979,7 +981,7 @@ def compute_reward_for_family(
             num_contributing_fossilized=num_contributing_fossilized,
             config=contribution_config,
             return_components=False,
-        )
+        ))
     if reward_family == RewardFamily.LOSS:
         return compute_loss_reward(
             action=action,

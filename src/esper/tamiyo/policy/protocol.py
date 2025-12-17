@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 import torch
 
 if TYPE_CHECKING:
-    from esper.leyline.factored_actions import FactoredAction
     from esper.tamiyo.policy.types import ActionResult, EvalResult, ForwardResult
 
 
@@ -97,11 +96,17 @@ class PolicyBundle(Protocol):
     def evaluate_actions(
         self,
         features: torch.Tensor,
-        actions: "FactoredAction",
+        actions: dict[str, torch.Tensor],
         masks: dict[str, torch.Tensor],
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> "EvalResult":
         """Evaluate actions for PPO update.
+
+        Args:
+            features: State features [batch, seq_len, feature_dim]
+            actions: Dict mapping head names to action tensors [batch, seq_len]
+            masks: Dict mapping head names to boolean masks
+            hidden: Optional recurrent hidden state
 
         Must be called with gradient tracking enabled (not in inference_mode).
         """
