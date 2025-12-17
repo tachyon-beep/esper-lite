@@ -1956,6 +1956,9 @@ def train_ppo_vectorized(
                     )
                     post_action_normalized = obs_normalizer.normalize(post_action_state)
 
+                    # Extract env-specific masks for bootstrap value computation
+                    env_masks = {key: masks_batch[key][env_idx] for key in masks_batch}
+
                     # Get V(s_{t+1}) - use updated LSTM hidden state from this step
                     with torch.inference_mode():
                         _, _, bootstrap_tensor, _ = agent.network.get_action(
@@ -1970,9 +1973,10 @@ def train_ppo_vectorized(
                         bootstrap_value = bootstrap_tensor[0].item()
                 else:
                     bootstrap_value = 0.0
+                    # Also extract env masks for the else branch (needed for buffer.add below)
+                    env_masks = {key: masks_batch[key][env_idx] for key in masks_batch}
 
                 # Store transition with per-head masks and LSTM states
-                env_masks = {key: masks_batch[key][env_idx] for key in masks_batch}
 
                 # Use PRE-STEP hidden states (captured before get_action)
                 # This is the hidden state that was INPUT to the network when selecting

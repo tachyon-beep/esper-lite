@@ -112,9 +112,9 @@ class CounterfactualHelper:
                     results[slot_id].shapley_std = estimate.std
                     results[slot_id].is_significant = estimate.is_significant()
 
-        # Emit telemetry events
-        if self.emit_events and epoch is not None:
-            self._emit_events(results, epoch)
+        # Emit telemetry events (JANK-007: Karn is a consumer, not a producer)
+        # The calling training loop (e.g., Simic) should emit COUNTERFACTUAL_COMPUTED
+        # events using Leyline contracts, if desired.
 
         _logger.debug(
             f"Counterfactual computed: {len(matrix.configs)} configs, "
@@ -122,36 +122,6 @@ class CounterfactualHelper:
         )
 
         return results
-
-    def _emit_events(
-        self,
-        results: dict[str, ContributionResult],
-        epoch: int,
-    ) -> None:
-        """Emit COUNTERFACTUAL_COMPUTED events to Nissa hub."""
-        try:
-            from esper.nissa import get_hub
-            from esper.leyline import TelemetryEvent, TelemetryEventType
-
-            hub = get_hub()
-
-            for slot_id, result in results.items():
-                event = TelemetryEvent(
-                    event_type=TelemetryEventType.COUNTERFACTUAL_COMPUTED,
-                    epoch=epoch,
-                    slot_id=slot_id,
-                    message=f"Counterfactual contribution computed for {slot_id}",
-                    data={
-                        "contribution": result.contribution,
-                        "shapley_mean": result.shapley_mean,
-                        "shapley_std": result.shapley_std,
-                        "is_significant": result.is_significant,
-                    },
-                )
-                hub.emit(event)
-
-        except Exception as e:
-            _logger.debug(f"Could not emit counterfactual events: {e}")
 
     def get_interaction_terms(self) -> dict[tuple[str, str], float]:
         """Get interaction terms from last computation.

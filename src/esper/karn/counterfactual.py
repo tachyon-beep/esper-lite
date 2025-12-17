@@ -395,7 +395,8 @@ class CounterfactualEngine:
                         "kind": "shapley_computed",
                         "shapley_values": shapley_dict,
                         "num_slots": len(result),
-                    },
+                        "epoch": matrix.epoch,
+                    }
                 ))
 
         return result

@@ -11,5 +11,6 @@
   - B) Add a `reset_hub()` that clears backends and calls close where present (ties to JANK-006 singleton leak).
   - C) Ensure Karn backends expose close/cleanup methods for files/threads.
 - **Validation Plan:** Add a test that registers a mock backend with a `closed` flag, resets the hub, and asserts cleanup occurred; run two training invocations in one process and check no duplicate emissions/FD leaks.
-- **Status:** Open
+- **Status:** Closed (Fixed)
+- **Resolution:** Fixed by adding `OutputBackend.start()` to the backend contract and implementing `NissaHub.reset()` (and global `reset_hub()`) to properly manage backend lifecycles. Backends are now started on addition and closed on reset/shutdown.
 - **Links:** `src/esper/nissa/output.py` (backend API), `src/esper/nissa/__init__.py` (singleton), `src/esper/karn` backends (store/TUI)

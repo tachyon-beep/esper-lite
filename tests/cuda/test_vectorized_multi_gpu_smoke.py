@@ -74,7 +74,7 @@ def test_vectorized_multi_gpu_smoke(monkeypatch):
         return task_spec
 
     monkeypatch.setattr(
-        "esper.simic.vectorized.get_task_spec",
+        "esper.simic.training.vectorized.get_task_spec",
         get_task_spec_mock,
         raising=True,
     )

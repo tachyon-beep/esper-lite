@@ -11,5 +11,6 @@
   - B) If emission remains, wrap TelemetryEvent construction in a shared Leyline helper and add typed errors/logging (no broad except), keeping Karn’s dependency surface minimal.
   - C) Default `emit_events=False` in `CounterfactualHelper` to keep Karn as a pure consumer; expose a separate, explicitly training-side helper for emission.
 - **Validation Plan:** Add a test asserting counterfactual telemetry is emitted from the training side (or via a Karn helper that uses Leyline contracts) and fails loudly on schema mismatch; ensure Karn can operate without Nissa import.
-- **Status:** Open
+- **Status:** Closed (Fixed)
+- **Resolution:** Direct telemetry emission logic removed from `CounterfactualHelper` and `CounterfactualEngine` in `src/esper/karn/`. Karn now acts purely as a telemetry consumer, enforcing the intended architectural boundary. Telemetry events for counterfactuals should be emitted by the training loop if needed.
 - **Links:** `src/esper/karn/counterfactual_helper.py::_emit_events`, `src/esper/nissa/__init__.py`

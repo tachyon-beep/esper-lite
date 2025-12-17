@@ -8,5 +8,6 @@
 - **Root-Cause Hypothesis:** Collector treated as stateless backend; no reset hook.
 - **Remediation Options:** Add close/reset hooks for Karn backends and integrate with Nissa hub reset (ties to JANK-009/Nissa lifecycle); ensure collectors clear buffers and threads on reset.
 - **Validation Plan:** Add test running two training sessions in one process and assert collectors don't double-emit and buffers are cleared on reset.
-- **Status:** Open
+- **Status:** Closed (Fixed)
+- **Resolution:** Fixed by implementing `start()`, `reset()`, and `close()` on `KarnCollector`, and exposing a global `reset_collector()` function. This allows tests and notebooks to cleanly reset the singleton state and release resources.
 - **Links:** `src/esper/karn/collector.py`, `src/esper/nissa/output.py` hub lifecycle

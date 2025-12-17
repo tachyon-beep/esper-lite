@@ -53,6 +53,10 @@ _ANOMALY_EVENT_TYPES = frozenset({
 class OutputBackend(Protocol):
     """Protocol for Karn output backends."""
 
+    def start(self) -> None:
+        """Start backend (optional)."""
+        ...
+
     def emit(self, event: "TelemetryEvent") -> None:
         """Emit event to this backend."""
         ...
@@ -103,11 +107,31 @@ class KarnCollector:
     def add_backend(self, backend: OutputBackend) -> None:
         """Add an output backend."""
         self._backends.append(backend)
+        # Auto-start backend if we are already running?
+        # KarnCollector doesn't have a "running" state per se, but backends might need start.
+        if hasattr(backend, "start"):
+            try:
+                backend.start()
+            except Exception as e:
+                _logger.error(f"Error starting backend {backend}: {e}")
 
     def remove_backend(self, backend: OutputBackend) -> None:
         """Remove an output backend."""
         if backend in self._backends:
             self._backends.remove(backend)
+            try:
+                backend.close()
+            except Exception as e:
+                _logger.error(f"Error closing backend {backend}: {e}")
+
+    def start(self) -> None:
+        """Start all backends (OutputBackend protocol)."""
+        for backend in self._backends:
+            if hasattr(backend, "start"):
+                try:
+                    backend.start()
+                except Exception as e:
+                    _logger.error(f"Error starting backend {backend}: {e}")
 
     def close(self) -> None:
         """Close all backends."""
@@ -116,6 +140,15 @@ class KarnCollector:
                 backend.close()
             except Exception as e:
                 _logger.error(f"Error closing backend {backend}: {e}")
+
+    def reset(self) -> None:
+        """Reset collector state (clear store and backends)."""
+        self.close()
+        self.store = TelemetryStore()
+        self._backends.clear()
+        self._episode_active = False
+        self._anomaly_detector.reset()
+        self._policy_detector.reset()
 
     # =========================================================================
     # Event Emission (primary interface)
@@ -492,6 +525,16 @@ def configure(config: KarnConfig) -> KarnCollector:
     global _global_collector
     _global_collector = KarnCollector(config)
     return _global_collector
+
+
+def reset_collector() -> None:
+    """Reset the global KarnCollector instance.
+
+    Resets state and closes backends. Useful for test cleanup.
+    """
+    global _global_collector
+    if _global_collector is not None:
+        _global_collector.reset()
 
 
 def emit(event: "TelemetryEvent") -> None:

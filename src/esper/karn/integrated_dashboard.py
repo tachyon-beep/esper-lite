@@ -31,7 +31,7 @@ from queue import Queue, Empty
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from esper.leyline.telemetry import TelemetryEvent
+    from esper.karn.contracts import TelemetryEventLike
 
 _logger = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ _logger = logging.getLogger(__name__)
 _DASHBOARD_PATH = Path(__file__).parent / "dashboard.html"
 
 
-def _serialize_event(event: "TelemetryEvent") -> str:
+def _serialize_event(event: "TelemetryEventLike") -> str:
     """Serialize TelemetryEvent to JSON string."""
     data = asdict(event)
 
@@ -87,7 +87,7 @@ class DashboardServer:
         self._running = False
         self._ready = threading.Event()
 
-    def emit(self, event: "TelemetryEvent") -> None:
+    def emit(self, event: "TelemetryEventLike") -> None:
         """Queue event for WebSocket broadcast (OutputBackend interface)."""
         try:
             message = _serialize_event(event)
@@ -126,7 +126,7 @@ class DashboardServer:
         """Run the FastAPI server."""
         try:
             import uvicorn
-            from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+            from fastapi import FastAPI, Response, WebSocket, WebSocketDisconnect
             from fastapi.responses import HTMLResponse
         except ImportError:
             _logger.error(
@@ -140,10 +140,18 @@ class DashboardServer:
         clients: set[WebSocket] = set()
 
         @app.get("/", response_class=HTMLResponse)
-        async def get_dashboard() -> str:
+        async def get_dashboard() -> Response:
             if _DASHBOARD_PATH.exists():
-                return _DASHBOARD_PATH.read_text()
-            return "<html><body><h1>Dashboard not found</h1></body></html>"
+                content = _DASHBOARD_PATH.read_text()
+            else:
+                _logger.warning(f"Dashboard HTML not found at {_DASHBOARD_PATH}, serving fallback.")
+                content = "<html><body><h1>Dashboard not found</h1><p>Please ensure 'dashboard.html' is present in the karn package directory.</p></body></html>"
+            
+            return Response(
+                content=content, 
+                media_type="text/html", 
+                headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
+            )
 
         @app.websocket("/ws")
         async def websocket_endpoint(websocket: WebSocket) -> None:

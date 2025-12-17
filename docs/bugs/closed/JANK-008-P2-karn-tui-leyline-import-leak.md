@@ -11,5 +11,6 @@
   - B) Route all event typing through a stable Leyline consumer-facing contract module to decouple from producer internals.
   - C) Keep TYPE_CHECKING but add clear boundary docs; ensure no runtime imports of Leyline from Karn.
 - **Validation Plan:** Add a mypy/pyright check ensuring Karn builds without importing Leyline; run TUI as a backend in a minimal stub hub with dummy events implementing the Protocol.
-- **Status:** Open
+- **Status:** Closed (Fixed)
+- **Resolution:** Fixed by introducing local Protocol `TelemetryEventLike` and dataclass `KarnSlotConfig` in `src/esper/karn/tui.py`, replacing direct imports from `esper.leyline`. This decouples Karn TUI from Leyline's internal contracts.
 - **Links:** `src/esper/karn/tui.py` (TYPE_CHECKING TelemetryEvent), `src/esper/nissa/output.py` (backend contract)

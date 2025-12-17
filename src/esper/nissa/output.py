@@ -29,6 +29,10 @@ from esper.leyline import TelemetryEvent
 class OutputBackend(ABC):
     """Base class for telemetry output backends."""
 
+    def start(self) -> None:
+        """Start the backend (e.g., open files, start threads)."""
+        pass
+
     @abstractmethod
     def emit(self, event: TelemetryEvent) -> None:
         """Emit a telemetry event to this backend.
@@ -419,6 +423,10 @@ class NissaHub:
             backend: The output backend to add.
         """
         self._backends.append(backend)
+        try:
+            backend.start()
+        except Exception as e:
+            print(f"Error starting backend {backend.__class__.__name__}: {e}", file=sys.stderr)
 
     def remove_backend(self, backend: OutputBackend) -> None:
         """Remove an output backend from the hub.
@@ -427,6 +435,10 @@ class NissaHub:
             backend: The output backend to remove.
         """
         if backend in self._backends:
+            try:
+                backend.close()
+            except Exception as e:
+                print(f"Error closing backend {backend.__class__.__name__}: {e}", file=sys.stderr)
             self._backends.remove(backend)
 
     def emit(self, event: TelemetryEvent) -> None:
@@ -441,6 +453,14 @@ class NissaHub:
             except Exception as e:
                 # Log error but don't let one backend failure break others
                 print(f"Error in backend {backend.__class__.__name__}: {e}", file=sys.stderr)
+
+    def reset(self) -> None:
+        """Reset the hub: close all backends and clear the list.
+
+        Use this to ensure clean state between test runs or episodes.
+        """
+        self.close()
+        self._backends.clear()
 
     def close(self) -> None:
         """Close all backends."""
@@ -471,6 +491,19 @@ def get_hub() -> NissaHub:
     return _global_hub
 
 
+def reset_hub() -> None:
+    """Reset the global NissaHub instance.
+
+    Closes all existing backends and clears the singleton.
+    Useful for test cleanup.
+    """
+    global _global_hub
+    if _global_hub is not None:
+        _global_hub.reset()
+        # Don't set to None, just reset state, to keep singleton alive but empty
+        # Or better: keep instance, clear backends. reset() does this.
+
+
 def emit(event: TelemetryEvent) -> None:
     """Emit a telemetry event to the global hub.
 
@@ -489,5 +522,6 @@ __all__ = [
     "DirectoryOutput",
     "NissaHub",
     "get_hub",
+    "reset_hub",
     "emit",
 ]

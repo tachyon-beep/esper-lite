@@ -11,5 +11,6 @@
   - B) Add ETag or cache-busting query to WebSocket/HTML load.
   - C) Log when fallback HTML is served to catch missing file issues.
 - **Validation Plan:** Package install test; ensure dashboard loads with correct content and updates after changes.
-- **Status:** Open
+- **Status:** Closed (Fixed)
+- **Resolution:** Fixed by adding warning logs when the dashboard HTML is missing and serving the response with `Cache-Control: no-cache` headers to prevent stale UI issues.
 - **Links:** `src/esper/karn/dashboard_server.py::_load_dashboard_html`

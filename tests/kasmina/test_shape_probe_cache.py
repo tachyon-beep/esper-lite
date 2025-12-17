@@ -75,9 +75,9 @@ class TestShapeProbeCache:
         probe_cpu = slot._get_shape_probe("cnn")
         assert probe_cpu.device == torch.device("cpu")
 
-        # Cache should have one entry
+        # Cache should have one entry with key (topology, channels)
         assert len(slot._shape_probe_cache) == 1
-        assert "cnn" in slot._shape_probe_cache
+        assert ("cnn", 32) in slot._shape_probe_cache
 
         # Move to CPU again (no actual change)
         slot.to("cpu")
@@ -135,9 +135,9 @@ class TestShapeProbeCache:
 
         probe = slot._get_shape_probe("cnn")
 
-        # Check cache structure
-        assert "cnn" in slot._shape_probe_cache
-        cached_device, cached_tensor = slot._shape_probe_cache["cnn"]
+        # Check cache structure - key is (topology, channels)
+        assert ("cnn", 32) in slot._shape_probe_cache
+        cached_device, cached_tensor = slot._shape_probe_cache[("cnn", 32)]
 
         assert cached_device == torch.device("cpu")
         assert cached_tensor is probe
@@ -167,10 +167,10 @@ class TestShapeProbeCache:
         # First call should create probe
         probe = slot._get_shape_probe("cnn")
 
-        # Cache should now have entry
+        # Cache should now have entry with key (topology, channels)
         assert len(slot._shape_probe_cache) == 1
-        assert "cnn" in slot._shape_probe_cache
+        assert ("cnn", 32) in slot._shape_probe_cache
 
         # Cached probe should be the same object
-        cached_device, cached_tensor = slot._shape_probe_cache["cnn"]
+        cached_device, cached_tensor = slot._shape_probe_cache[("cnn", 32)]
         assert cached_tensor is probe
