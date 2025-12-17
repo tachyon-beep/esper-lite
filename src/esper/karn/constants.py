@@ -1,10 +1,18 @@
-"""Karn Constants - Centralized thresholds for telemetry subsystem.
+"""Karn Constants - TUI display and presentation thresholds.
 
-All magic numbers for anomaly detection, health monitoring, and TUI
-display are defined here. This enables:
-- Global tuning without hunting through multiple files
-- Clear documentation of threshold rationale
-- Type-safe access via class attributes
+OWNERSHIP BOUNDARY:
+    This module owns PRESENTATION/DISPLAY thresholds - anything that affects:
+    - TUI color coding (green/yellow/red status indicators)
+    - Dense trace trigger sensitivity (when to capture diagnostics)
+    - Health monitoring display alerts (GPU, memory warnings)
+    - Visual anomaly indicators (not training behavior)
+
+    DO NOT add training behavior constants here. Those belong in leyline/__init__.py.
+    When in doubt: if it affects what the USER SEES, it belongs here.
+    If it affects TRAINING OUTCOMES, it belongs in leyline.
+
+    Some thresholds are imported from leyline to ensure consistency between
+    training detection and display. These are clearly marked.
 
 Usage:
     from esper.karn.constants import AnomalyThresholds, HealthThresholds
@@ -15,6 +23,13 @@ Usage:
 
 from __future__ import annotations
 
+# Import shared thresholds from leyline (single source of truth for training behavior)
+from esper.leyline import (
+    DEFAULT_ENTROPY_COLLAPSE_THRESHOLD,
+    DEFAULT_ENTROPY_WARNING_THRESHOLD,
+    DEFAULT_GOVERNOR_LOSS_MULTIPLIER,
+)
+
 
 class AnomalyThresholds:
     """Thresholds for dense trace triggering (Tier 3 capture).
@@ -22,7 +37,10 @@ class AnomalyThresholds:
     These control when the system captures detailed diagnostics.
     """
 
-    # Loss spike: trigger if loss > N× rolling EMA
+    # Loss spike: trigger dense trace if loss > N× rolling EMA.
+    # INTENTIONALLY LOWER than leyline's DEFAULT_GOVERNOR_LOSS_MULTIPLIER (3.0).
+    # TUI should warn users BEFORE governor panics, giving time to investigate.
+    # Governor: 3.0× = panic/rollback. TUI: 2.0× = "hey, something's off".
     LOSS_SPIKE_MULTIPLIER: float = 2.0
 
     # Accuracy drop: trigger if accuracy drops by N percentage points
@@ -39,13 +57,15 @@ class PolicyThresholds:
     """Thresholds for PPO policy anomaly detection.
 
     These detect pathological policy behavior during RL training.
+    Entropy threshold is imported from leyline for consistency with training detection.
     """
 
     # Value collapse: critic outputs have std below this → collapse
     VALUE_STD_COLLAPSE: float = 0.01
 
     # Entropy collapse: policy entropy below this → deterministic
-    ENTROPY_COLLAPSE: float = 0.1
+    # (from leyline - single source of truth for training behavior)
+    ENTROPY_COLLAPSE: float = DEFAULT_ENTROPY_COLLAPSE_THRESHOLD
 
     # KL spike: policy change above this → large update
     KL_SPIKE: float = 0.1
@@ -77,12 +97,15 @@ class TUIThresholds:
     """Thresholds for TUI color-coded health display.
 
     These control green/yellow/red status indicators.
+    Entropy thresholds align with leyline for consistency.
     """
 
     # Entropy (healthy starts near ln(4) ≈ 1.39 for 4 actions)
     ENTROPY_MAX: float = 1.39  # ln(4) for 4 actions
-    ENTROPY_WARNING: float = 0.5
-    ENTROPY_CRITICAL: float = 0.3
+    # Warning threshold from leyline (single source of truth)
+    ENTROPY_WARNING: float = DEFAULT_ENTROPY_WARNING_THRESHOLD
+    # Critical threshold from leyline (single source of truth)
+    ENTROPY_CRITICAL: float = DEFAULT_ENTROPY_COLLAPSE_THRESHOLD
 
     # Clip fraction (target 0.1-0.2)
     CLIP_WARNING: float = 0.25
@@ -106,10 +129,12 @@ class TUIThresholds:
 class VitalSignsThresholds:
     """Thresholds for vital signs monitoring.
 
-    These detect training failure patterns.
+    These detect training failure patterns for display purposes.
     """
 
-    # Loss spike relative to recent average
+    # Loss spike relative to recent average.
+    # INTENTIONALLY LOWER than leyline's DEFAULT_GOVERNOR_LOSS_MULTIPLIER (3.0).
+    # Same rationale as AnomalyThresholds: warn before governor panics.
     LOSS_SPIKE_MULTIPLIER: float = 2.0
 
     # Epochs without improvement before stagnation warning

@@ -3,6 +3,17 @@
 Leyline defines the data contracts that flow between all Esper components.
 Import from here for the public API.
 
+OWNERSHIP BOUNDARY:
+    This module owns all TRAINING BEHAVIOR constants - anything that affects:
+    - Model updates (PPO hyperparameters, learning rates, clipping)
+    - Reward calculation (PBRS weights, terminal bonuses)
+    - Lifecycle gates (fossilization thresholds, cull criteria)
+    - Anomaly detection thresholds for training (entropy collapse, ratio explosion)
+    - Architecture constants (LSTM dim, episode length, batch sizes)
+
+    TUI/display thresholds belong in karn/constants.py instead.
+    When in doubt: if it affects training outcomes, it belongs here.
+
 Example:
     from esper.leyline import SeedStage, TrainingSignals
     from esper.leyline.factored_actions import FactoredAction, LifecycleOp

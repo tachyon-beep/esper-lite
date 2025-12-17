@@ -55,7 +55,7 @@ def test_seed_slot_forward_with_seed():
 def test_germinate_cnn_shape_validation_host_agnostic():
     """CNN seeds validate shape without touching host BatchNorm."""
     from esper.kasmina.slot import SeedSlot
-    from esper.simic.control import TaskConfig
+    from esper.tamiyo.policy.features import TaskConfig
 
     config = TaskConfig.for_cifar10()
 
@@ -80,7 +80,7 @@ def test_germinate_cnn_shape_validation_host_agnostic():
 def test_germinate_transformer_shape_validation_host_agnostic():
     """Transformer seeds validate shape without host-specific helpers."""
     from esper.kasmina.slot import SeedSlot
-    from esper.simic.control import TaskConfig
+    from esper.tamiyo.policy.features import TaskConfig
 
     config = TaskConfig.for_tinystories()
     dim = 64
@@ -108,7 +108,7 @@ def test_germinate_cnn_shape_mismatch_raises_assertion():
     """CNN blueprints that change feature shape must fail germinate."""
     from esper.kasmina.slot import SeedSlot
     from esper.kasmina.blueprints import BlueprintRegistry
-    from esper.simic.control import TaskConfig
+    from esper.tamiyo.policy.features import TaskConfig
 
     @BlueprintRegistry.register(
         name="__test_bad_cnn_shape__",
@@ -146,7 +146,7 @@ def test_germinate_transformer_shape_mismatch_raises_assertion():
     """Transformer blueprints that change embedding dim must fail germinate."""
     from esper.kasmina.slot import SeedSlot
     from esper.kasmina.blueprints import BlueprintRegistry
-    from esper.simic.control import TaskConfig
+    from esper.tamiyo.policy.features import TaskConfig
 
     @BlueprintRegistry.register(
         name="__test_bad_transformer_shape__",

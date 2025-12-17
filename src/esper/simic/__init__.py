@@ -26,10 +26,9 @@ Training:
 """
 
 # Control (observation/action preprocessing)
-from esper.simic.control import (
-    RunningMeanStd,
-    safe,
-    TaskConfig,
+from esper.simic.control import RunningMeanStd
+from esper.tamiyo.policy.features import safe, TaskConfig
+from esper.tamiyo.policy.action_masks import (
     MaskedCategorical,
     InvalidStateMachineError,
     build_slot_states,

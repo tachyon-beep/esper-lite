@@ -6,7 +6,7 @@ import pytest
 def test_germinate_wrong_topology_raises():
     """Germinating transformer blueprint on CNN slot raises."""
     from esper.kasmina.slot import SeedSlot
-    from esper.simic.control import TaskConfig
+    from esper.tamiyo.policy.features import TaskConfig
 
     config = TaskConfig.for_cifar10()
 
@@ -23,7 +23,7 @@ def test_germinate_wrong_topology_raises():
 def test_germinate_correct_topology_succeeds():
     """Germinating matching topology blueprint succeeds."""
     from esper.kasmina.slot import SeedSlot
-    from esper.simic.control import TaskConfig
+    from esper.tamiyo.policy.features import TaskConfig
 
     config = TaskConfig.for_cifar10()
 
@@ -40,7 +40,7 @@ def test_germinate_correct_topology_succeeds():
 def test_germinate_unknown_topology_fails_loudly():
     """Unknown topology should raise before blueprint lookup."""
     from esper.kasmina.slot import SeedSlot
-    from esper.simic.control import TaskConfig
+    from esper.tamiyo.policy.features import TaskConfig
 
     config = TaskConfig(
         task_type="classification",

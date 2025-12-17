@@ -23,7 +23,7 @@ from typing import TypedDict
 import torch
 import torch.nn as nn
 
-from esper.simic.control import MaskedCategorical
+from esper.tamiyo.policy.action_masks import MaskedCategorical
 
 
 class _ForwardOutput(TypedDict):

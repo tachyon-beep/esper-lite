@@ -7,8 +7,13 @@ Dataset loading is handled separately by esper.utils.data.
 from __future__ import annotations
 
 import torch
+from typing import TYPE_CHECKING
 
-from esper.runtime import TaskSpec, get_task_spec
+# NOTE: TaskSpec imported under TYPE_CHECKING to avoid circular import:
+#   runtime -> simic -> simic.training -> vectorized -> tolaria -> environment -> runtime
+# get_task_spec imported lazily inside create_model at runtime.
+if TYPE_CHECKING:
+    from esper.runtime import TaskSpec
 
 
 def _validate_device(device: str) -> None:
@@ -47,6 +52,7 @@ def create_model(task: TaskSpec | str = "cifar10", device: str = "cuda", slots: 
         slots: Seed slots to enable. Required and cannot be empty.
     """
     if isinstance(task, str):
+        from esper.runtime import get_task_spec  # Lazy import to avoid circular dependency
         task_spec = get_task_spec(task)
     else:
         task_spec = task

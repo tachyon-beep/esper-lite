@@ -91,7 +91,7 @@ def signals_to_features(
         objects, so seed-specific features are zero-padded when slot reports
         are missing.
     """
-    from esper.simic.control import obs_to_multislot_features
+    from esper.tamiyo.policy.features import obs_to_multislot_features
     from esper.leyline.slot_id import validate_slot_ids
     from esper.leyline.slot_config import SlotConfig
 
@@ -232,7 +232,7 @@ class PPOAgent:
         self.slot_config = slot_config
 
         if state_dim is None:
-            from esper.simic.control import get_feature_size
+            from esper.tamiyo.policy.features import get_feature_size
             state_dim = get_feature_size(slot_config)
 
         self.num_envs = num_envs

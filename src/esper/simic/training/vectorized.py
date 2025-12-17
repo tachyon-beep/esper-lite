@@ -42,7 +42,8 @@ import torch
 import torch.nn as nn
 import torch.cuda.amp as torch_amp
 
-from esper.runtime import get_task_spec
+# NOTE: get_task_spec imported lazily inside train_ppo_vectorized to avoid circular import:
+#   runtime -> simic.rewards -> simic -> simic.training -> vectorized -> runtime
 from esper.utils.data import SharedBatchIterator
 from esper.leyline import (
     SeedStage,
@@ -66,7 +67,7 @@ from esper.leyline import (
     HEAD_NAMES,
 )
 from esper.leyline.factored_actions import FactoredAction, LifecycleOp
-from esper.simic.control import build_slot_states, compute_action_masks
+from esper.tamiyo.policy.action_masks import build_slot_states, compute_action_masks
 from esper.leyline.slot_id import validate_slot_ids
 from esper.simic.telemetry import (
     AnomalyDetector,
@@ -81,12 +82,8 @@ from esper.simic.telemetry import (
     compute_lstm_health,  # P4-8
     GradientEMATracker,  # P4-9
 )
-from esper.simic.control import (
-    RunningMeanStd,
-    RewardNormalizer,
-    MULTISLOT_FEATURE_SIZE,
-    get_feature_size,
-)
+from esper.simic.control import RunningMeanStd, RewardNormalizer
+from esper.tamiyo.policy.features import MULTISLOT_FEATURE_SIZE, get_feature_size
 from esper.simic.agent import PPOAgent, signals_to_features
 from esper.simic.rewards import (
     compute_reward,
@@ -501,6 +498,8 @@ def train_ppo_vectorized(
         raise ValueError("slots parameter is required and cannot be empty")
 
     # Get task spec early (needed for model creation to derive slot_config)
+    # Lazy import to avoid circular dependency
+    from esper.runtime import get_task_spec
     task_spec = get_task_spec(task)
     ActionEnum = task_spec.action_enum
 
@@ -2148,6 +2147,7 @@ def train_ppo_vectorized(
                         active_slot_ids = [
                             slot_id for slot_id in slots
                             if model.has_active_seed_in_slot(slot_id)
+                            and model.seed_slots[slot_id].alpha > 0
                         ]
 
                         if active_slot_ids and baseline_accs[env_idx]:

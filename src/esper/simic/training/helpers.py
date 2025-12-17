@@ -25,7 +25,8 @@ class _HasSeedParameters(Protocol):
 
 from esper.leyline.factored_actions import FactoredAction, LifecycleOp
 from esper.leyline import TelemetryEvent, TelemetryEventType
-from esper.runtime import get_task_spec
+# NOTE: get_task_spec imported lazily inside functions to avoid circular import:
+#   runtime -> simic.rewards -> simic -> simic.training -> helpers -> runtime
 from esper.simic.rewards import compute_contribution_reward, SeedInfo
 from esper.simic.telemetry import (
     collect_seed_gradients_async,
@@ -311,6 +312,7 @@ def run_heuristic_episode(
     from esper.tamiyo import SignalTracker
 
     if task_spec is None:
+        from esper.runtime import get_task_spec
         task_spec = get_task_spec("cifar10")
     task_type = task_spec.task_type
 
@@ -597,6 +599,7 @@ def train_heuristic(
     slots: list[str] | None = None,
     telemetry_config: TelemetryConfig | None = None,
     telemetry_lifecycle_only: bool = False,
+    min_fossilize_improvement: float | None = None,
 ):
     """Train with heuristic policy.
 
@@ -607,8 +610,15 @@ def train_heuristic(
         device: Device to use
         task: Task preset (cifar10 or tinystories)
         seed: Random seed
+        slots: List of slot IDs to use
+        telemetry_config: Telemetry configuration
+        telemetry_lifecycle_only: If True, only emit lifecycle events
+        min_fossilize_improvement: Minimum improvement (%) required to fossilize a seed.
+            If None, uses leyline default (0.5%). Lower values risk reward hacking.
     """
     from esper.tamiyo import HeuristicTamiyo
+    from esper.tamiyo.heuristic import HeuristicPolicyConfig
+    from esper.runtime import get_task_spec  # Lazy import to avoid circular dependency
 
     task_spec = get_task_spec(task)
 
@@ -640,13 +650,21 @@ def train_heuristic(
             "max_batches": max_batches,
             "device": device,
             "slots": slots,
+            "min_fossilize_improvement": min_fossilize_improvement,
         },
         message="Heuristic training run configuration",
     ))
 
     trainloader, testloader = task_spec.create_dataloaders()
 
-    policy = HeuristicTamiyo(topology=task_spec.topology)
+    # Create policy config if custom parameters are specified
+    policy_config = None
+    if min_fossilize_improvement is not None:
+        policy_config = HeuristicPolicyConfig(
+            min_improvement_to_fossilize=min_fossilize_improvement,
+        )
+
+    policy = HeuristicTamiyo(topology=task_spec.topology, config=policy_config)
     history = []
 
     for ep in range(1, n_episodes + 1):
