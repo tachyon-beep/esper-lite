@@ -383,6 +383,19 @@ class MaskedCategorical:
         comparable across states with different action restrictions.
 
         When only one action is valid, entropy is exactly 0 (no choice = no uncertainty).
+
+        Entropy Coefficient Guidance:
+            Since this returns NORMALIZED entropy [0, 1], the entropy coefficient
+            in PPO should be higher than typical values for unnormalized entropy.
+
+            - Unnormalized entropy: typical coef ~0.01 (entropy ranges 0 to ~3)
+            - Normalized entropy: typical coef ~0.05-0.1 (entropy ranges 0 to 1)
+
+            Example: If you want exploration equivalent to coef=0.01 with unnormalized
+            entropy for a 10-action space (max_entropy = ln(10) ≈ 2.3), use:
+            normalized_coef = unnormalized_coef * max_entropy ≈ 0.023
+
+            The Esper default of entropy_coef=0.05 is appropriate for normalized entropy.
         """
         probs = self._dist.probs
         log_probs = self._dist.logits - self._dist.logits.logsumexp(dim=-1, keepdim=True)
