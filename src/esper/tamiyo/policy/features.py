@@ -1,4 +1,4 @@
-"""Simic Features - HOT PATH Feature Extraction
+"""Tamiyo Policy Features - HOT PATH Feature Extraction
 
 CRITICAL: This module is on the HOT PATH for vectorized training.
 ONLY import from leyline. NO imports from kasmina, tamiyo, or nissa!
@@ -6,6 +6,9 @@ ONLY import from leyline. NO imports from kasmina, tamiyo, or nissa!
 This module extracts features from observations for RL training.
 It must be FAST and have minimal dependencies to avoid bottlenecks
 in the vectorized PPO training loop.
+
+Note: Moved from simic.control to tamiyo.policy as part of the
+Policy Migration (PR #31). Re-exported from simic.control for compatibility.
 """
 
 from __future__ import annotations

@@ -119,8 +119,8 @@ class HeuristicPolicyBundle:
 
     # === Recurrent State ===
 
-    def initial_hidden(self, batch_size: int) -> None:
-        """Heuristic is stateless."""
+    def initial_hidden(self, batch_size: int) -> tuple[torch.Tensor, torch.Tensor] | None:
+        """Heuristic is stateless - returns None (no hidden state)."""
         return None
 
     # === Serialization ===

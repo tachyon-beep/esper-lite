@@ -8,6 +8,13 @@ This subpackage contains the PolicyBundle protocol and implementations:
 - action_masks.py: Action masking for valid actions
 - lstm_bundle.py: LSTM-based recurrent policy (Phase 3)
 - heuristic_bundle.py: Rule-based heuristic (Phase 4)
+
+Note on imports:
+    Importing this package triggers registration of lstm and heuristic policies.
+    This imports torch at module level (standard for a DRL package), but does
+    NOT construct any models - construction is deferred to get_policy() calls.
+    If import cost is a concern for non-training code paths, import specific
+    submodules directly (e.g., `from esper.tamiyo.policy.protocol import PolicyBundle`).
 """
 
 from esper.tamiyo.policy.protocol import PolicyBundle

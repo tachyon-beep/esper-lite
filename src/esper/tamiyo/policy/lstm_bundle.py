@@ -74,11 +74,22 @@ class LSTMPolicyBundle:
     def process_signals(self, signals: "TrainingSignals") -> torch.Tensor:
         """Convert TrainingSignals to feature tensor.
 
-        Delegates to the signals_to_features helper which uses
-        obs_to_multislot_features internally.
+        NOTE: This method is a stub - the current training loop calls
+        signals_to_features() directly with additional context (slot_reports,
+        telemetry settings, etc.). This method exists for protocol compliance
+        and future refactoring where PolicyBundle owns feature extraction.
+
+        TODO: [FUTURE FUNCTIONALITY] - When PolicyBundle owns observation
+        processing, this method should receive additional context via:
+        - Additional method parameters (requires protocol update)
+        - Storing context on the bundle at episode start
+        - A separate context object passed to get_action() instead
         """
-        from esper.simic.agent.ppo import signals_to_features
-        return signals_to_features(signals, self.slot_config)
+        # For now, raise to make it clear this path isn't ready
+        raise NotImplementedError(
+            "LSTMPolicyBundle.process_signals() is not yet fully implemented. "
+            "Use simic.agent.ppo.signals_to_features() directly in the training loop."
+        )
 
     # === Action Selection ===
 
@@ -180,14 +191,14 @@ class LSTMPolicyBundle:
         """Not supported for LSTM policy."""
         raise NotImplementedError(
             "LSTMPolicyBundle does not support off-policy algorithms. "
-            "Use MLPPolicyBundle with SAC/TD3 instead."
+            "Off-policy support requires a future MLP-based PolicyBundle."
         )
 
     def sync_from(self, source: "PolicyBundle", tau: float = 0.005) -> None:
         """Not supported for LSTM policy."""
         raise NotImplementedError(
             "LSTMPolicyBundle does not support target network updates. "
-            "Use MLPPolicyBundle with SAC/TD3 instead."
+            "Off-policy support requires a future MLP-based PolicyBundle."
         )
 
     # === Value Estimation ===

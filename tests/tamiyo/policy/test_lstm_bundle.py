@@ -129,3 +129,38 @@ def test_get_policy_lstm(slot_config):
         "slot_config": slot_config,
     })
     assert isinstance(policy, LSTMPolicyBundle)
+
+
+def test_lstm_bundle_forward(lstm_bundle, slot_config):
+    """forward() should return ForwardResult with logits."""
+    features = torch.randn(1, 1, 50)  # (batch, seq_len, features)
+    masks = {
+        "slot": torch.ones(1, slot_config.num_slots, dtype=torch.bool),
+        "blueprint": torch.ones(1, 5, dtype=torch.bool),
+        "blend": torch.ones(1, 3, dtype=torch.bool),
+        "op": torch.ones(1, 4, dtype=torch.bool),
+    }
+    # Pass None for hidden - network creates its own initial state
+    # (initial_hidden() creates inference-mode tensors that can't be used with autograd)
+    hidden = None
+
+    result = lstm_bundle.forward(features, masks, hidden)
+
+    assert isinstance(result, ForwardResult)
+    assert "op" in result.logits
+    assert "slot" in result.logits
+    assert result.value is not None
+    assert result.hidden is not None
+
+
+def test_lstm_bundle_get_value(lstm_bundle):
+    """get_value() should return state value estimate."""
+    features = torch.randn(1, 50)
+    # Pass None for hidden - network creates its own initial state
+    hidden = None
+
+    value = lstm_bundle.get_value(features, hidden)
+
+    assert isinstance(value, torch.Tensor)
+    # Value should be scalar or batch dimension
+    assert value.numel() == 1 or (value.dim() == 1 and value.shape[0] == 1)

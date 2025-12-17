@@ -42,3 +42,24 @@ def test_get_policy_heuristic():
     """get_policy('heuristic', ...) should return HeuristicPolicyBundle."""
     policy = get_policy("heuristic", {})
     assert isinstance(policy, HeuristicPolicyBundle)
+
+
+def test_heuristic_bundle_device():
+    """device should return CPU (heuristic runs on CPU)."""
+    bundle = HeuristicPolicyBundle()
+    assert bundle.device == torch.device("cpu")
+
+
+def test_heuristic_bundle_dtype():
+    """dtype should return float32 for compatibility."""
+    bundle = HeuristicPolicyBundle()
+    assert bundle.dtype == torch.float32
+
+
+def test_heuristic_bundle_to():
+    """to() should be no-op but return self for chaining."""
+    bundle = HeuristicPolicyBundle()
+    result = bundle.to("cpu")
+    assert result is bundle
+    # Device stays CPU regardless
+    assert bundle.device == torch.device("cpu")
