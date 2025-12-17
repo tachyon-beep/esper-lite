@@ -7,7 +7,6 @@ such as sort order stability (hysteresis) and selection state.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 
 
 @dataclass
@@ -78,18 +77,11 @@ class HysteresisSorter:
             insert_pos = min(natural_positions[new_env], len(current_order))
             current_order.insert(insert_pos, new_env)
 
-        # Current positions
-        current_positions = {env_id: idx for idx, env_id in enumerate(current_order)}
-
-        # Check each env for movement
-        result = current_order.copy()
-        moved = set()
+        # Collect all envs that need to move
+        moves: list[tuple[int, int]] = []  # (env_id, natural_pos)
 
         for env_id in env_ids:
-            if env_id in moved:
-                continue
-
-            current_pos = current_positions[env_id]
+            current_pos = next(i for i, e in enumerate(current_order) if e == env_id)
             natural_pos = natural_positions[env_id]
             delta = current_pos - natural_pos  # Positive = should move up
 
@@ -103,12 +95,14 @@ class HysteresisSorter:
                 should_move = True
 
             if should_move:
-                # Remove from current position
-                result.remove(env_id)
-                # Insert at natural position
-                insert_pos = min(natural_pos, len(result))
-                result.insert(insert_pos, env_id)
-                moved.add(env_id)
+                moves.append((env_id, natural_pos))
+
+        # Apply all moves at once (sort by natural position to ensure correct ordering)
+        result = current_order.copy()
+        for env_id, natural_pos in sorted(moves, key=lambda x: x[1]):
+            result.remove(env_id)
+            insert_pos = min(natural_pos, len(result))
+            result.insert(insert_pos, env_id)
 
         self._previous_order = result.copy()
         return result

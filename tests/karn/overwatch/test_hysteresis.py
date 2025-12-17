@@ -144,3 +144,24 @@ class TestHysteresisSorter:
         scores2 = {0: 0.3, 1: 0.9}
         result2 = sorter.sort(scores2)
         assert result2 == [1, 0]  # Pure score order
+
+    def test_simultaneous_movements(self) -> None:
+        """Multiple envs moving at once should be handled correctly."""
+        from esper.karn.overwatch.display_state import HysteresisSorter, HysteresisConfig
+
+        config = HysteresisConfig(threshold_up=2, threshold_down=2)
+        sorter = HysteresisSorter(config)
+
+        # Initial: [0, 1, 2, 3] with scores [0.9, 0.7, 0.5, 0.3]
+        scores1 = {0: 0.9, 1: 0.7, 2: 0.5, 3: 0.3}
+        result1 = sorter.sort(scores1)
+        assert result1 == [0, 1, 2, 3]
+
+        # Flip scores: multiple envs should move
+        scores2 = {0: 0.3, 1: 0.5, 2: 0.7, 3: 0.9}
+        result2 = sorter.sort(scores2)
+        # Natural order would be [3, 2, 1, 0]
+        # With threshold=2: env 3 moves up (delta=3), env 0 moves down (delta=3)
+        # env 1 and env 2 stay put (delta=1 each, below threshold)
+        # Result: env 3 to front, env 0 to back, env 1 and 2 stay in middle
+        assert result2 == [3, 1, 2, 0]
