@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections import defaultdict
 from pathlib import Path
 import math
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import torch
 import torch.nn as nn
@@ -328,16 +328,16 @@ class PPOAgent:
         self.ratio_explosion_threshold = DEFAULT_RATIO_EXPLOSION_THRESHOLD
         self.ratio_collapse_threshold = DEFAULT_RATIO_COLLAPSE_THRESHOLD
 
-        # [PyTorch 2.9] Compile network for 10-30% speedup on forward/backward
+        # [PyTorch 2.0+] Compile network for 10-30% speedup on forward/backward
         # mode="default" is safest for networks with MaskedCategorical
         # MaskedCategorical._validate_action_mask has @torch.compiler.disable
         # M22: dynamic=True handles varying sequence lengths without recompilation
         if compile_network:
-            self.network = torch.compile(self.network, mode="default", dynamic=True)
+            self.network = torch.compile(self.network, mode="default", dynamic=True)  # type: ignore[assignment]
 
         # [PyTorch 2.9] Use fused=True for CUDA, foreach=True for CPU
         use_cuda = device.startswith("cuda")
-        optimizer_kwargs = {'lr': lr, 'eps': 1e-5}
+        optimizer_kwargs: dict[str, float | bool] = {'lr': lr, 'eps': 1e-5}
         if use_cuda:
             optimizer_kwargs['fused'] = True
         else:
@@ -363,14 +363,14 @@ class PPOAgent:
                 list(self._base_network.lstm_ln.parameters())
             )
 
-            self.optimizer = torch.optim.AdamW([
+            self.optimizer: torch.optim.Optimizer = torch.optim.AdamW([
                 {'params': actor_params, 'weight_decay': 0.0, 'name': 'actor'},
                 {'params': shared_params, 'weight_decay': 0.0, 'name': 'shared'},  # Must be 0!
                 {'params': critic_params, 'weight_decay': weight_decay, 'name': 'critic'},
-            ], **optimizer_kwargs)
+            ], **optimizer_kwargs)  # type: ignore[arg-type]
         else:
             self.optimizer = torch.optim.Adam(
-                self.network.parameters(), **optimizer_kwargs
+                self.network.parameters(), **optimizer_kwargs  # type: ignore[arg-type]
             )
         self.train_steps = 0
 
@@ -496,9 +496,10 @@ class PPOAgent:
         valid_values = data["values"][valid_mask]
         valid_returns = data["returns"][valid_mask]
         var_returns = valid_returns.var()
+        explained_variance: float
         if var_returns > 1e-8:
-            explained_variance = 1.0 - (valid_returns - valid_values).var() / var_returns
-            explained_variance = explained_variance.item()
+            ev_tensor = 1.0 - (valid_returns - valid_values).var() / var_returns
+            explained_variance = ev_tensor.item()
         else:
             explained_variance = 0.0
 
@@ -622,7 +623,7 @@ class PPOAgent:
 
             # Compute policy loss per head and sum
             # Use masked mean to avoid bias from averaging zeros with real values
-            policy_loss = 0.0
+            policy_loss: torch.Tensor = torch.tensor(0.0, device=self.device)
             for key in HEAD_NAMES:
                 ratio = per_head_ratios[key]
                 adv = per_head_advantages[key]
@@ -661,7 +662,7 @@ class PPOAgent:
             # NOTE: Entropy floors were removed because torch.clamp to a constant
             # provides zero gradient (d(constant)/d(params) = 0). When a head has
             # only one valid action, entropy is correctly 0 with no gradient signal.
-            entropy_loss = 0.0
+            entropy_loss: torch.Tensor = torch.tensor(0.0, device=self.device)
             for key, ent in entropy.items():
                 head_coef = self.entropy_coef_per_head.get(key, 1.0)
                 mask = head_masks[key]
@@ -725,19 +726,19 @@ class PPOAgent:
         if clear_buffer:
             self.buffer.reset()
 
-        # Aggregate
-        result = {}
+        # Aggregate into typed result dict
+        result: PPOUpdateMetrics = {}
         for k, v in metrics.items():
             if not v:
-                result[k] = 0.0
+                result[k] = 0.0  # type: ignore[literal-required]
                 continue
 
             first = v[0]
             if isinstance(first, dict):
                 # Diagnostic payloads (ratio_diagnostic) are not aggregated
-                result[k] = first
+                result[k] = first  # type: ignore[literal-required]
             else:
-                result[k] = sum(v) / len(v)
+                result[k] = sum(v) / len(v)  # type: ignore[literal-required]
 
         # Add per-head entropy tracking (P3-1)
         result["head_entropies"] = head_entropy_history
@@ -746,7 +747,7 @@ class PPOAgent:
 
         return result
 
-    def save(self, path: str | Path, metadata: dict = None) -> None:
+    def save(self, path: str | Path, metadata: dict[str, Any] | None = None) -> None:
         """Save agent to file."""
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)

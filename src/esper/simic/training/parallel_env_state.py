@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from esper.tolaria import TolariaGovernor
     from esper.karn.health import HealthMonitor
     from esper.simic.attribution import CounterfactualHelper
+    from esper.simic.contracts import SlottedHostProtocol
 
 
 @dataclass(slots=True)
@@ -31,7 +32,7 @@ class ParallelEnvState:
     DataLoaders are now SHARED via SharedBatchIterator - batches are pre-split
     and data is pre-moved to each env's device with non_blocking=True.
     """
-    model: nn.Module
+    model: "SlottedHostProtocol"
     host_optimizer: torch.optim.Optimizer
     signal_tracker: Any  # SignalTracker from tamiyo
     governor: "TolariaGovernor"  # Fail-safe watchdog for catastrophic failure detection
@@ -104,11 +105,18 @@ class ParallelEnvState:
         self.cf_totals: dict[str, int] = {slot_id: 0 for slot_id in slots}
 
     def zero_accumulators(self) -> None:
-        """Zero accumulators at the start of each epoch (faster than reallocating)."""
-        self.train_loss_accum.zero_()
-        self.train_correct_accum.zero_()
-        self.val_loss_accum.zero_()
-        self.val_correct_accum.zero_()
+        """Zero accumulators at the start of each epoch (faster than reallocating).
+
+        Note: Assumes init_accumulators() was called. Guards added for mypy.
+        """
+        if self.train_loss_accum is not None:
+            self.train_loss_accum.zero_()
+        if self.train_correct_accum is not None:
+            self.train_correct_accum.zero_()
+        if self.val_loss_accum is not None:
+            self.val_loss_accum.zero_()
+        if self.val_correct_accum is not None:
+            self.val_correct_accum.zero_()
         # Zero per-slot counterfactual accumulators
         for slot_id in self.cf_correct_accums:
             self.cf_correct_accums[slot_id].zero_()
