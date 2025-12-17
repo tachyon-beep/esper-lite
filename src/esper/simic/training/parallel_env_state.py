@@ -11,7 +11,7 @@ for a single parallel training environment, including:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import torch
 import torch.nn as nn
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from esper.tolaria import TolariaGovernor
 
 
-@dataclass
+@dataclass(slots=True)
 class ParallelEnvState:
     """State for a single parallel environment with CUDA stream for async execution.
 
@@ -31,11 +31,12 @@ class ParallelEnvState:
     """
     model: nn.Module
     host_optimizer: torch.optim.Optimizer
-    signal_tracker: any  # SignalTracker from tamiyo
+    signal_tracker: Any  # SignalTracker from tamiyo
     governor: "TolariaGovernor"  # Fail-safe watchdog for catastrophic failure detection
     seed_optimizers: dict[str, torch.optim.Optimizer] = field(default_factory=dict)
     env_device: str = "cuda:0"  # Device this env runs on
     stream: torch.cuda.Stream | None = None  # CUDA stream for async execution
+    scaler: torch.amp.GradScaler | None = None  # Per-env AMP scaler (avoids stream race)
     seeds_created: int = 0
     seeds_fossilized: int = 0  # Total seeds fossilized this episode
     contributing_fossilized: int = 0  # Seeds with total_improvement >= DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
@@ -65,7 +66,7 @@ class ParallelEnvState:
     # (Batched to [num_layers, num_envs, hidden_dim] during forward pass)
     # None = fresh episode (initialized on first action selection)
     lstm_hidden: tuple[torch.Tensor, torch.Tensor] | None = None
-    telemetry_cb: any = None  # Callback wired when telemetry is enabled
+    telemetry_cb: Any = None  # Callback wired when telemetry is enabled
     # Per-slot EMA tracking for seed gradient ratio (for G2 gate)
     # Smooths per-step ratio noise with momentum=0.9
     gradient_ratio_ema: dict[str, float] = field(default_factory=dict)

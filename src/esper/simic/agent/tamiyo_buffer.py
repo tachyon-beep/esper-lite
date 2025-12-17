@@ -72,7 +72,7 @@ class TamiyoRolloutStep(NamedTuple):
     hidden_c: torch.Tensor  # [num_layers, hidden_dim]
 
 
-@dataclass
+@dataclass(slots=True)
 class TamiyoRolloutBuffer:
     """Per-environment rollout buffer with pre-allocated tensors.
 

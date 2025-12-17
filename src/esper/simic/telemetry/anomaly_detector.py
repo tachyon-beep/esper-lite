@@ -24,7 +24,7 @@ class AnomalyReport:
             self.details[anomaly_type] = detail
 
 
-@dataclass
+@dataclass(slots=True)
 class AnomalyDetector:
     """Detects training anomalies for telemetry escalation.
 

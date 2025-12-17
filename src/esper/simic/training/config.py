@@ -43,7 +43,7 @@ from esper.leyline import (
 from esper.simic.rewards import RewardFamily, RewardMode
 
 
-@dataclass
+@dataclass(slots=True)
 class TrainingConfig:
     """Strict training configuration for vectorized PPO.
 
