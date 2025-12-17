@@ -17,13 +17,15 @@ Usage:
 from __future__ import annotations
 
 import json
-import sys
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from pathlib import Path
 
 from esper.leyline import TelemetryEvent
+
+_logger = logging.getLogger(__name__)
 
 
 class OutputBackend(ABC):
@@ -416,20 +418,28 @@ class NissaHub:
     def __init__(self):
         self._backends: list[OutputBackend] = []
         self._closed = False  # Idempotency flag for close()
+        self._emit_after_close_warned = False
 
     def add_backend(self, backend: OutputBackend) -> None:
         """Add an output backend to the hub.
 
-        The backend is started immediately on add.
+        The backend is started immediately on add. If start() fails,
+        the backend is NOT added and the exception is re-raised
+        (fail-fast to prevent half-initialized state and silent misconfiguration).
 
         Args:
             backend: The output backend to add.
+
+        Raises:
+            Exception: If backend.start() fails, the original exception is
+                logged and re-raised so callers can detect misconfiguration.
         """
-        self._backends.append(backend)
         try:
             backend.start()
+            self._backends.append(backend)
         except Exception as e:
-            print(f"Error starting backend {backend.__class__.__name__}: {e}", file=sys.stderr)
+            _logger.error(f"Failed to start backend {backend.__class__.__name__}, not adding: {e}")
+            raise
 
     def remove_backend(self, backend: OutputBackend) -> None:
         """Remove an output backend from the hub.
@@ -441,7 +451,7 @@ class NissaHub:
             try:
                 backend.close()
             except Exception as e:
-                print(f"Error closing backend {backend.__class__.__name__}: {e}", file=sys.stderr)
+                _logger.error(f"Error closing backend {backend.__class__.__name__}: {e}")
             self._backends.remove(backend)
 
     def emit(self, event: TelemetryEvent) -> None:
@@ -449,13 +459,22 @@ class NissaHub:
 
         Args:
             event: The telemetry event to emit.
+
+        Note:
+            Does nothing if the hub has been closed. This prevents sending
+            events to backends that have already been shut down.
         """
+        if self._closed:
+            if not self._emit_after_close_warned:
+                _logger.warning("emit() called on closed NissaHub (event dropped)")
+                self._emit_after_close_warned = True
+            return
         for backend in self._backends:
             try:
                 backend.emit(event)
             except Exception as e:
                 # Log error but don't let one backend failure break others
-                print(f"Error in backend {backend.__class__.__name__}: {e}", file=sys.stderr)
+                _logger.error(f"Error in backend {backend.__class__.__name__}: {e}")
 
     def reset(self) -> None:
         """Reset the hub: close all backends and clear the list.
@@ -465,6 +484,7 @@ class NissaHub:
         self.close()
         self._backends.clear()
         self._closed = False  # Allow hub to be reused after reset
+        self._emit_after_close_warned = False
 
     def close(self) -> None:
         """Close all backends (idempotent).
@@ -478,7 +498,7 @@ class NissaHub:
             try:
                 backend.close()
             except Exception as e:
-                print(f"Error closing backend {backend.__class__.__name__}: {e}", file=sys.stderr)
+                _logger.error(f"Error closing backend {backend.__class__.__name__}: {e}")
 
     def __del__(self):
         """Ensure all backends are closed on deletion."""

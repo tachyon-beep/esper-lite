@@ -13,9 +13,12 @@ def test_policy_bundle_is_runtime_checkable():
 
 
 def test_policy_bundle_protocol_methods():
-    """PolicyBundle should define all required methods."""
+    """PolicyBundle should define all required methods.
+
+    Note: process_signals is NOT in this list - feature extraction is
+    handled by Simic's signals_to_features() which requires training context.
+    """
     required_methods = [
-        'process_signals',
         'get_action',
         'forward',
         'evaluate_actions',

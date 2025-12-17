@@ -444,10 +444,26 @@ class TUIOutput:
 
     Args:
         thresholds: Health status thresholds for color coding.
-        slot_config: Slot configuration for dynamic action spaces. Defaults to 3-slot legacy.
+        slot_config: Slot configuration for dynamic action spaces. Any object
+            implementing the SlotConfigProtocol is accepted. Defaults to
+            KarnSlotConfig.default() (3-slot configuration).
         force_layout: Force a specific layout mode ('compact', 'standard', 'wide')
                      instead of auto-detecting from terminal width. Currently unused
                      but reserved for future multi-layout support.
+
+    Note:
+        The ``slot_config`` parameter accepts any "slot-config-like" object that
+        provides the following interface:
+
+        - ``slot_ids: tuple[str, ...]``: Ordered tuple of canonical slot IDs
+          (e.g., ("r0c0", "r0c1", "r0c2"))
+        - ``num_slots: int``: Number of slots (must equal ``len(slot_ids)``)
+        - ``index_for_slot_id(slot_id: str) -> int``: Returns the index of the
+          given slot ID within ``slot_ids``, raising ValueError if not found.
+
+        Both ``esper.leyline.slot_config.SlotConfig`` and
+        ``esper.karn.contracts.KarnSlotConfig`` implement this interface. The
+        TUI is decoupled from Leyline to enable standalone use or testing.
     """
 
     def __init__(

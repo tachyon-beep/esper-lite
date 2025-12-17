@@ -1,14 +1,19 @@
 """Control interface between RL agent and environment.
 
-This subpackage contains stateless utilities for:
-- action_masks.py: Masked action distributions, slot state building
-- features.py: Observation feature extraction (hot path)
+This subpackage contains:
 - normalization.py: Running statistics for observations/rewards
+
+Re-exports from esper.tamiyo.policy:
+- action_masks: compute_action_masks, MaskedCategorical, etc.
+- features: obs_to_multislot_features, get_feature_size, etc.
+
+The canonical location for these is esper.tamiyo.policy.
 """
 
 from .normalization import RunningMeanStd, RewardNormalizer
 
-from .features import (
+# Re-export from tamiyo.policy (canonical location)
+from esper.tamiyo.policy.features import (
     safe,
     TaskConfig,
     BASE_FEATURE_SIZE,
@@ -18,7 +23,7 @@ from .features import (
     obs_to_multislot_features,
 )
 
-from .action_masks import (
+from esper.tamiyo.policy.action_masks import (
     MaskSeedInfo,
     MaskedCategorical,
     InvalidStateMachineError,
@@ -26,7 +31,6 @@ from .action_masks import (
     compute_action_masks,
     compute_batch_masks,
     slot_id_to_index,
-    _validate_action_mask,
 )
 
 __all__ = [
@@ -49,5 +53,4 @@ __all__ = [
     "compute_action_masks",
     "compute_batch_masks",
     "slot_id_to_index",
-    "_validate_action_mask",
 ]

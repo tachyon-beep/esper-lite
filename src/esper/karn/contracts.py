@@ -6,8 +6,9 @@ subsystems like Leyline/Nissa where appropriate (dependency inversion).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 from typing import Any, Optional, Protocol, Union
 
 
@@ -32,7 +33,7 @@ class TelemetryEventLike(Protocol):
     """
 
     @property
-    def event_type(self) -> Union[str, Any]:
+    def event_type(self) -> Union[str, Enum]:
         """Event type identifier. Enum with .name or string."""
         ...
 
@@ -75,12 +76,41 @@ class TelemetryEventLike(Protocol):
 @dataclass(frozen=True)
 class KarnSlotConfig:
     """Minimal SlotConfig-like structure for Karn internal use.
-    
+
     Decouples Karn from esper.leyline.slot_config.SlotConfig.
+
+    Note:
+        Uses tuple (immutable) for slot_ids to maintain frozen semantics.
+        Validates that num_slots matches len(slot_ids) on construction.
     """
-    slot_ids: list[str] = field(default_factory=lambda: ["r0c0", "r0c1", "r0c2"])
+    slot_ids: tuple[str, ...] = ("r0c0", "r0c1", "r0c2")
     num_slots: int = 3
+
+    def __post_init__(self) -> None:
+        """Validate that num_slots matches slot_ids length."""
+        if len(self.slot_ids) != self.num_slots:
+            raise ValueError(
+                f"num_slots ({self.num_slots}) must equal len(slot_ids) ({len(self.slot_ids)})"
+            )
 
     @classmethod
     def default(cls) -> "KarnSlotConfig":
+        """Create default 3-slot configuration."""
         return cls()
+
+    def index_for_slot_id(self, slot_id: str) -> int:
+        """Get the index for a slot ID.
+
+        Args:
+            slot_id: The slot ID to look up.
+
+        Returns:
+            The index of the slot in slot_ids.
+
+        Raises:
+            ValueError: If slot_id is not in slot_ids.
+        """
+        try:
+            return self.slot_ids.index(slot_id)
+        except ValueError:
+            raise ValueError(f"Unknown slot_id: {slot_id}. Valid: {self.slot_ids}")

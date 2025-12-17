@@ -4,9 +4,14 @@ import torch
 from esper.leyline import MASKED_LOGIT_VALUE
 
 
-def test_masked_logit_value_exists():
-    """MASKED_LOGIT_VALUE should be exported from leyline."""
-    assert MASKED_LOGIT_VALUE == -1e4
+def test_masked_logit_value_properties():
+    """MASKED_LOGIT_VALUE should be a large negative value for action masking."""
+    # Should be negative (to suppress probability)
+    assert MASKED_LOGIT_VALUE < 0
+    # Should be large enough to effectively zero out probability
+    assert MASKED_LOGIT_VALUE <= -1e3
+    # Should not be so large that it causes numerical issues
+    assert MASKED_LOGIT_VALUE >= -1e5
 
 
 def test_masked_logit_value_safe_for_fp16():

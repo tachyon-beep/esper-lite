@@ -297,6 +297,22 @@ def _validate_action_mask(mask: torch.Tensor) -> None:
         )
 
 
+@torch.compiler.disable
+def _validate_logits(logits: torch.Tensor) -> None:
+    """Validate that logits don't contain inf/nan (indicates network instability).
+
+    Isolated from torch.compile to prevent graph breaks in the main forward path.
+    If logits contain inf/nan, training has already gone wrong upstream.
+    """
+    if torch.isnan(logits).any() or torch.isinf(logits).any():
+        raise ValueError(
+            f"MaskedCategorical received logits with inf/nan values. "
+            f"This indicates network instability (gradient explosion, numerical overflow). "
+            f"Logits stats: min={logits.min().item():.4g}, max={logits.max().item():.4g}, "
+            f"nan_count={torch.isnan(logits).sum().item()}, inf_count={torch.isinf(logits).sum().item()}"
+        )
+
+
 class MaskedCategorical:
     """Categorical distribution with action masking and correct entropy calculation.
 
@@ -318,12 +334,14 @@ class MaskedCategorical:
 
         Raises:
             InvalidStateMachineError: If any batch element has no valid actions
+            ValueError: If logits contain inf or nan (indicates network instability)
 
         Note:
             The validation check is isolated via @torch.compiler.disable to prevent
             graph breaks in the main forward path while preserving safety checks.
         """
         _validate_action_mask(mask)
+        _validate_logits(logits)
 
         self.mask = mask
         mask_value = torch.tensor(

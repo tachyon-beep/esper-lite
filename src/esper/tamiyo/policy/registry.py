@@ -36,9 +36,16 @@ def register_policy(name: str):
         - Does NOT validate call signatures or return types
         - Does NOT verify that "properties" are actually @property decorated
 
-        For full Protocol compliance validation, use static type checking
-        (mypy/pyright) with the PolicyBundle Protocol definition.
-        Runtime errors may still occur if method signatures don't match.
+        **Signature validation is delegated to static type checking:**
+
+        For full Protocol compliance validation including method signatures,
+        use mypy or pyright with the PolicyBundle Protocol definition.
+        CI pipelines should run `mypy --strict` or `pyright` to catch
+        signature drift before runtime errors occur. Runtime registration
+        only checks structural presence, not correctness.
+
+        The most failure-prone methods (get_action, evaluate_actions, forward)
+        have complex signatures that hasattr cannot validate.
     """
     def decorator(cls: Type[T]) -> Type[T]:
         # Validate protocol compliance
@@ -46,17 +53,20 @@ def register_policy(name: str):
             raise TypeError(f"{cls} is not a class")
 
         # Check for required methods
+        # Note: process_signals is NOT in this list - feature extraction is
+        # handled by Simic's signals_to_features() which requires training context.
         required_methods = [
-            'process_signals', 'get_action', 'forward', 'evaluate_actions',
+            'get_action', 'forward', 'evaluate_actions',
             'get_q_values', 'sync_from', 'get_value', 'initial_hidden',
             'state_dict', 'load_state_dict', 'to', 'enable_gradient_checkpointing',
         ]
         required_properties = ['is_recurrent', 'supports_off_policy', 'device', 'dtype']
 
-        # hasattr AUTHORIZED by John on 2025-12-17 06:30:00 UTC
-        # Justification: Feature Detection - checking if class implements required
-        # PolicyBundle protocol methods at registration time. Cannot instantiate
-        # to use isinstance() since policies require constructor args.
+        # Structural check via hasattr: We verify that the class has required
+        # method/property names defined. This is necessary because we can't
+        # instantiate the class here (policies require constructor arguments)
+        # and Protocol conformance can't be checked at runtime without an instance.
+        # Static type checkers (mypy/pyright) provide full signature validation.
         missing_methods = [m for m in required_methods if not hasattr(cls, m)]
         missing_props = [p for p in required_properties if not hasattr(cls, p)]
 

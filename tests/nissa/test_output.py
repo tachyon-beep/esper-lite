@@ -1,12 +1,14 @@
 """Tests for Nissa output backends."""
 
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 
+import pytest
 
 from esper.leyline import TelemetryEvent, TelemetryEventType
-from esper.nissa.output import DirectoryOutput
+from esper.nissa.output import DirectoryOutput, NissaHub, OutputBackend
 
 
 class TestDirectoryOutput:
@@ -106,3 +108,130 @@ class TestNissaHubWithDirectoryOutput:
             data = json.loads(f.readline())
             assert data["event_type"] == "SEED_GERMINATED"
             assert data["data"]["blueprint_id"] == "test_bp"
+
+
+class TestNissaHubEmitAfterClose:
+    """Tests for emit() after close() behavior."""
+
+    def test_emit_after_close_drops_events(self, tmp_path: Path):
+        """emit() after close() should silently drop events."""
+        hub = NissaHub()
+        dir_backend = DirectoryOutput(tmp_path)
+        hub.add_backend(dir_backend)
+
+        event1 = TelemetryEvent(
+            event_type=TelemetryEventType.EPOCH_COMPLETED,
+            epoch=1,
+            data={"val_accuracy": 80.0},
+        )
+        hub.emit(event1)
+        hub.close()
+
+        # Emit after close should be dropped
+        event2 = TelemetryEvent(
+            event_type=TelemetryEventType.EPOCH_COMPLETED,
+            epoch=2,
+            data={"val_accuracy": 90.0},
+        )
+        hub.emit(event2)
+
+        # Only the first event should be in the file
+        events_file = dir_backend.output_dir / "events.jsonl"
+        with open(events_file) as f:
+            lines = f.readlines()
+            assert len(lines) == 1
+            data = json.loads(lines[0])
+            assert data["epoch"] == 1
+
+    def test_emit_after_close_logs_warning_once(self, caplog: pytest.LogCaptureFixture):
+        """emit() after close() should log warning only once."""
+        hub = NissaHub()
+        hub.close()
+
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.EPOCH_COMPLETED,
+            epoch=1,
+        )
+
+        with caplog.at_level(logging.WARNING, logger="esper.nissa.output"):
+            hub.emit(event)
+            hub.emit(event)
+            hub.emit(event)
+
+        # Should only log warning once
+        warning_count = sum(
+            1 for record in caplog.records
+            if "emit() called on closed NissaHub" in record.message
+        )
+        assert warning_count == 1
+
+    def test_reset_clears_emit_after_close_warning_flag(self, caplog: pytest.LogCaptureFixture):
+        """reset() should allow warning to be logged again."""
+        hub = NissaHub()
+        hub.close()
+
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.EPOCH_COMPLETED,
+            epoch=1,
+        )
+
+        with caplog.at_level(logging.WARNING, logger="esper.nissa.output"):
+            hub.emit(event)  # First warning
+            hub.reset()  # Reset clears the flag
+            hub.close()
+            hub.emit(event)  # Second warning after reset
+
+        warning_count = sum(
+            1 for record in caplog.records
+            if "emit() called on closed NissaHub" in record.message
+        )
+        assert warning_count == 2
+
+
+class TestNissaHubAddBackendFailure:
+    """Tests for add_backend() failure handling."""
+
+    def test_add_backend_raises_on_start_failure(self):
+        """add_backend() should re-raise exception if backend.start() fails."""
+
+        class FailingBackend(OutputBackend):
+            def start(self) -> None:
+                raise RuntimeError("Backend initialization failed")
+
+            def emit(self, event: TelemetryEvent) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        hub = NissaHub()
+
+        with pytest.raises(RuntimeError, match="Backend initialization failed"):
+            hub.add_backend(FailingBackend())
+
+        # Backend should not have been added
+        assert len(hub._backends) == 0
+
+    def test_add_backend_logs_error_on_failure(self, caplog: pytest.LogCaptureFixture):
+        """add_backend() should log error before re-raising."""
+
+        class FailingBackend(OutputBackend):
+            def start(self) -> None:
+                raise RuntimeError("Backend initialization failed")
+
+            def emit(self, event: TelemetryEvent) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        hub = NissaHub()
+
+        with caplog.at_level(logging.ERROR, logger="esper.nissa.output"):
+            with pytest.raises(RuntimeError):
+                hub.add_backend(FailingBackend())
+
+        assert any(
+            "Failed to start backend" in record.message
+            for record in caplog.records
+        )

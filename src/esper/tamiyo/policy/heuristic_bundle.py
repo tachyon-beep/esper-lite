@@ -5,7 +5,7 @@ Wraps HeuristicTamiyo as a PolicyBundle for the registry.
 
 from __future__ import annotations
 
-from typing import Any, TYPE_CHECKING
+from typing import Any
 
 import torch
 
@@ -13,9 +13,6 @@ from esper.tamiyo.policy.protocol import PolicyBundle
 from esper.tamiyo.policy.registry import register_policy
 from esper.tamiyo.policy.types import ActionResult, EvalResult, ForwardResult
 from esper.tamiyo.heuristic import HeuristicTamiyo, HeuristicPolicyConfig
-
-if TYPE_CHECKING:
-    from esper.leyline import TrainingSignals
 
 
 @register_policy("heuristic")
@@ -42,17 +39,6 @@ class HeuristicPolicyBundle:
         """
         self._heuristic = HeuristicTamiyo(config, topology)
         self._topology = topology
-
-    # === Observation Processing ===
-
-    def process_signals(self, signals: "TrainingSignals") -> torch.Tensor:
-        """Convert TrainingSignals to feature tensor.
-
-        For heuristic, we just return a dummy tensor since the
-        heuristic uses the signals directly.
-        """
-        # Return dummy features - heuristic uses signals directly
-        return torch.zeros(1, 1)
 
     # === Action Selection ===
 

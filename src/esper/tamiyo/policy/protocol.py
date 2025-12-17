@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 import torch
 
 if TYPE_CHECKING:
-    from esper.leyline import TrainingSignals
     from esper.leyline.factored_actions import FactoredAction
     from esper.tamiyo.policy.types import ActionResult, EvalResult, ForwardResult
 
@@ -56,12 +55,12 @@ class PolicyBundle(Protocol):
     Keep torch.compile() calls in Simic (training infrastructure).
     """
 
-    # === Observation Processing ===
-    def process_signals(self, signals: "TrainingSignals") -> torch.Tensor:
-        """Convert TrainingSignals to policy-specific features."""
-        ...
-
     # === Action Selection (both paradigms) ===
+    #
+    # Note: Feature extraction (signals → features) is handled by Simic's
+    # signals_to_features() which requires training context (slot_reports,
+    # telemetry settings, max_epochs, etc.) that the PolicyBundle doesn't have.
+    # PolicyBundle receives pre-computed features, not raw TrainingSignals.
     def get_action(
         self,
         features: torch.Tensor,

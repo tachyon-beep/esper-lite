@@ -1,4 +1,4 @@
-# tests/simic/test_action_masks.py
+# tests/tamiyo/policy/test_action_masks.py
 """Tests for action masking with multi-slot support.
 
 The mask system only blocks PHYSICALLY IMPOSSIBLE actions:
@@ -11,11 +11,16 @@ The mask system only blocks PHYSICALLY IMPOSSIBLE actions:
 """
 import pytest
 
-from esper.simic.control import (
+import torch
+
+from esper.tamiyo.policy.action_masks import (
     MaskSeedInfo,
     compute_action_masks,
     compute_batch_masks,
     slot_id_to_index,
+    build_slot_states,
+    MaskedCategorical,
+    InvalidStateMachineError,
 )
 from esper.leyline import SeedStage, MIN_CULL_AGE
 from esper.leyline.factored_actions import LifecycleOp, NUM_OPS
@@ -619,7 +624,7 @@ class TestBuildSlotStates:
 
     def test_empty_model_returns_none_states(self):
         """Empty slots return None for each slot."""
-        from esper.simic.control import build_slot_states
+        # build_slot_states imported at module level
         from esper.leyline import SeedMetrics, SeedStage, SeedStateReport
 
         slot_reports = {
@@ -631,7 +636,7 @@ class TestBuildSlotStates:
 
     def test_active_seed_returns_mask_seed_info(self):
         """Active seed returns MaskSeedInfo with correct stage and age."""
-        from esper.simic.control import build_slot_states, MaskSeedInfo
+        # build_slot_states imported at module level, MaskSeedInfo
         from esper.leyline import SeedMetrics, SeedStage, SeedStateReport
 
         slot_reports = {
@@ -647,7 +652,7 @@ class TestBuildSlotStates:
 
     def test_multiple_slots(self):
         """Multiple slots are all processed."""
-        from esper.simic.control import build_slot_states, MaskSeedInfo
+        # build_slot_states imported at module level, MaskSeedInfo
         from esper.leyline import SeedMetrics, SeedStage, SeedStateReport
 
         slot_reports = {
@@ -911,3 +916,154 @@ class TestActionMaskEdgeCases:
             assert actual == expected, (
                 f"CULL mask for {stage.name}: expected {expected}, got {actual}"
             )
+
+
+# =============================================================================
+# MaskedCategorical Tests
+# =============================================================================
+
+
+class TestMaskedCategorical:
+    """Tests for MaskedCategorical distribution with action masking."""
+
+    def test_basic_sampling_with_valid_logits(self):
+        """MaskedCategorical should sample correctly with valid logits."""
+        logits = torch.tensor([[0.0, 1.0, 2.0]])
+        mask = torch.tensor([[True, True, True]])
+
+        dist = MaskedCategorical(logits, mask)
+        sample = dist.sample()
+
+        assert sample.shape == (1,)
+        assert 0 <= sample.item() < 3
+
+    def test_masked_actions_have_zero_probability(self):
+        """Masked actions should have ~0 probability."""
+        logits = torch.tensor([[0.0, 0.0, 0.0]])
+        mask = torch.tensor([[True, False, True]])
+
+        dist = MaskedCategorical(logits, mask)
+        probs = dist.probs
+
+        # Masked action should have near-zero probability
+        assert probs[0, 1].item() < 1e-4
+
+    def test_raises_on_nan_logits(self):
+        """MaskedCategorical should raise ValueError on NaN logits."""
+        logits = torch.tensor([[0.0, float('nan'), 1.0]])
+        mask = torch.tensor([[True, True, True]])
+
+        with pytest.raises(ValueError, match="inf/nan"):
+            MaskedCategorical(logits, mask)
+
+    def test_raises_on_inf_logits(self):
+        """MaskedCategorical should raise ValueError on inf logits."""
+        logits = torch.tensor([[0.0, float('inf'), 1.0]])
+        mask = torch.tensor([[True, True, True]])
+
+        with pytest.raises(ValueError, match="inf/nan"):
+            MaskedCategorical(logits, mask)
+
+    def test_raises_on_neg_inf_logits(self):
+        """MaskedCategorical should raise ValueError on -inf logits."""
+        logits = torch.tensor([[float('-inf'), 0.0, 1.0]])
+        mask = torch.tensor([[True, True, True]])
+
+        with pytest.raises(ValueError, match="inf/nan"):
+            MaskedCategorical(logits, mask)
+
+    def test_error_message_includes_stats(self):
+        """Error message should include helpful logit statistics."""
+        logits = torch.tensor([[0.0, float('nan'), float('inf')]])
+        mask = torch.tensor([[True, True, True]])
+
+        with pytest.raises(ValueError) as exc_info:
+            MaskedCategorical(logits, mask)
+
+        error_msg = str(exc_info.value)
+        assert "network instability" in error_msg
+        assert "nan_count=" in error_msg
+        assert "inf_count=" in error_msg
+
+    def test_raises_on_all_false_mask(self):
+        """MaskedCategorical should raise InvalidStateMachineError on all-false mask."""
+        logits = torch.tensor([[0.0, 1.0, 2.0]])
+        mask = torch.tensor([[False, False, False]])
+
+        with pytest.raises(InvalidStateMachineError):
+            MaskedCategorical(logits, mask)
+
+    def test_entropy_normalized_to_zero_one(self):
+        """Entropy should be normalized to [0, 1] range."""
+        logits = torch.tensor([[0.0, 0.0, 0.0]])  # Uniform distribution
+        mask = torch.tensor([[True, True, True]])
+
+        dist = MaskedCategorical(logits, mask)
+        entropy = dist.entropy()
+
+        # Uniform over 3 actions = max entropy
+        assert 0.99 <= entropy.item() <= 1.01
+
+    def test_entropy_zero_for_single_valid_action(self):
+        """Entropy should be 0 when only one action is valid."""
+        logits = torch.tensor([[0.0, 0.0, 0.0]])
+        mask = torch.tensor([[True, False, False]])
+
+        dist = MaskedCategorical(logits, mask)
+        entropy = dist.entropy()
+
+        # Single valid action = no uncertainty = zero entropy
+        assert entropy.item() == 0.0
+
+    def test_log_prob_correct(self):
+        """Log probability should be computed correctly."""
+        logits = torch.tensor([[0.0, 1.0, 2.0]])
+        mask = torch.tensor([[True, True, True]])
+
+        dist = MaskedCategorical(logits, mask)
+        log_prob = dist.log_prob(torch.tensor([2]))
+
+        # Action 2 has highest logit, should have highest log_prob
+        assert log_prob.item() > -1.0
+
+    def test_fp16_numerical_stability(self):
+        """MaskedCategorical should be numerically stable in FP16."""
+        logits = torch.tensor([[0.0, 1.0, 2.0]], dtype=torch.float16)
+        mask = torch.tensor([[True, True, True]])
+
+        dist = MaskedCategorical(logits, mask)
+
+        # Should not produce NaN/inf
+        assert not torch.isnan(dist.probs).any()
+        assert not torch.isinf(dist.probs).any()
+        assert not torch.isnan(dist.entropy()).any()
+
+    def test_bf16_numerical_stability(self):
+        """MaskedCategorical should be numerically stable in BF16."""
+        logits = torch.tensor([[0.0, 1.0, 2.0]], dtype=torch.bfloat16)
+        mask = torch.tensor([[True, True, True]])
+
+        dist = MaskedCategorical(logits, mask)
+
+        # Should not produce NaN/inf
+        assert not torch.isnan(dist.probs).any()
+        assert not torch.isinf(dist.probs).any()
+
+    def test_batch_processing(self):
+        """MaskedCategorical should handle batch inputs correctly."""
+        logits = torch.tensor([
+            [0.0, 1.0, 2.0],
+            [2.0, 1.0, 0.0],
+        ])
+        mask = torch.tensor([
+            [True, True, True],
+            [True, True, True],
+        ])
+
+        dist = MaskedCategorical(logits, mask)
+
+        assert dist.probs.shape == (2, 3)
+        assert dist.entropy().shape == (2,)
+
+        samples = dist.sample()
+        assert samples.shape == (2,)

@@ -108,13 +108,20 @@ class KarnCollector:
     def add_backend(self, backend: OutputBackend) -> None:
         """Add an output backend.
 
-        The backend is started immediately on add.
+        The backend is started immediately on add. If start() fails,
+        the backend is NOT added and the exception is re-raised
+        (fail-fast to prevent half-initialized state and silent misconfiguration).
+
+        Raises:
+            Exception: If backend.start() fails, the original exception is
+                logged and re-raised so callers can detect misconfiguration.
         """
-        self._backends.append(backend)
         try:
             backend.start()
+            self._backends.append(backend)
         except Exception as e:
-            _logger.error(f"Error starting backend {backend}: {e}")
+            _logger.error(f"Failed to start backend {backend}, not adding: {e}")
+            raise
 
     def remove_backend(self, backend: OutputBackend) -> None:
         """Remove an output backend."""
@@ -158,12 +165,15 @@ class KarnCollector:
         self._backends.clear()
         self._episode_active = False
         self._closed = False  # Allow collector to be reused after reset
+        self._emit_after_close_warned = False
         self._anomaly_detector.reset()
         self._policy_detector.reset()
 
     # =========================================================================
     # Event Emission (primary interface)
     # =========================================================================
+
+    _emit_after_close_warned = False
 
     def emit(self, event: "TelemetryEvent") -> None:
         """Emit a telemetry event.
@@ -172,7 +182,17 @@ class KarnCollector:
         1. Validated
         2. Stored in TelemetryStore (if episode active)
         3. Routed to all output backends
+
+        Note:
+            Does nothing if the collector has been closed. This prevents
+            sending events to backends that have already been shut down.
         """
+        if self._closed:
+            if not self._emit_after_close_warned:
+                _logger.warning("emit() called on closed KarnCollector (event dropped)")
+                self._emit_after_close_warned = True
+            return
+
         try:
             # Update store based on event type
             self._update_store(event)

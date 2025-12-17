@@ -17,7 +17,6 @@ from esper.leyline.slot_config import SlotConfig
 from esper.leyline import HEAD_NAMES
 
 if TYPE_CHECKING:
-    from esper.leyline import TrainingSignals
     from esper.simic.agent.network import FactoredRecurrentActorCritic
 
 
@@ -67,28 +66,6 @@ class LSTMPolicyBundle:
             num_slots=self.slot_config.num_slots,
             lstm_hidden_dim=hidden_dim,
             lstm_layers=num_lstm_layers,
-        )
-
-    # === Observation Processing ===
-
-    def process_signals(self, signals: "TrainingSignals") -> torch.Tensor:
-        """Convert TrainingSignals to feature tensor.
-
-        NOTE: This method is a stub - the current training loop calls
-        signals_to_features() directly with additional context (slot_reports,
-        telemetry settings, etc.). This method exists for protocol compliance
-        and future refactoring where PolicyBundle owns feature extraction.
-
-        TODO: [FUTURE FUNCTIONALITY] - When PolicyBundle owns observation
-        processing, this method should receive additional context via:
-        - Additional method parameters (requires protocol update)
-        - Storing context on the bundle at episode start
-        - A separate context object passed to get_action() instead
-        """
-        # For now, raise to make it clear this path isn't ready
-        raise NotImplementedError(
-            "LSTMPolicyBundle.process_signals() is not yet fully implemented. "
-            "Use simic.agent.ppo.signals_to_features() directly in the training loop."
         )
 
     # === Action Selection ===

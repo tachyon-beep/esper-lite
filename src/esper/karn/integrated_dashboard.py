@@ -140,7 +140,7 @@ class DashboardServer:
         """Run the FastAPI server."""
         try:
             import uvicorn
-            from fastapi import FastAPI, Response, WebSocket, WebSocketDisconnect
+            from fastapi import FastAPI, WebSocket, WebSocketDisconnect
             from fastapi.responses import HTMLResponse
         except ImportError:
             _logger.error(
@@ -154,17 +154,16 @@ class DashboardServer:
         clients: set[WebSocket] = set()
 
         @app.get("/", response_class=HTMLResponse)
-        async def get_dashboard() -> Response:
+        async def get_dashboard() -> HTMLResponse:
             if _DASHBOARD_PATH.exists():
                 content = _DASHBOARD_PATH.read_text()
             else:
                 _logger.warning(f"Dashboard HTML not found at {_DASHBOARD_PATH}, serving fallback.")
                 content = "<html><body><h1>Dashboard not found</h1><p>Please ensure 'dashboard.html' is present in the karn package directory.</p></body></html>"
-            
-            return Response(
-                content=content, 
-                media_type="text/html", 
-                headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
+
+            return HTMLResponse(
+                content=content,
+                headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
             )
 
         @app.websocket("/ws")
