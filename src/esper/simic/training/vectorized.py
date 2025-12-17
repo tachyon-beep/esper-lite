@@ -261,6 +261,18 @@ def _run_ppo_updates(
     use_amp: bool,
 ) -> dict:
     """Run one or more PPO updates on the current buffer and aggregate metrics."""
+    # C5 FIX: Update observation normalizer BEFORE PPO update.
+    # This ensures batch N's observations are normalized with stats that include batch N,
+    # preventing the one-batch lag that compounds distribution shift over training.
+    #
+    # DESIGN NOTE: Normalizer updates even if PPO update subsequently fails. This is
+    # intentional - the collected observations are valid environment data regardless
+    # of training outcome. Reverting stats on failure would reintroduce one-batch lag
+    # and the observations were already used during rollout collection anyway.
+    if raw_states_for_normalizer_update:
+        all_raw_states = torch.cat(raw_states_for_normalizer_update, dim=0)
+        obs_normalizer.update(all_raw_states)
+
     update_metrics: list[dict] = []
     buffer_cleared = False
     updates_to_run = max(1, ppo_updates_per_batch)
@@ -285,11 +297,6 @@ def _run_ppo_updates(
         agent.buffer.reset()
 
     aggregated_metrics = _aggregate_ppo_metrics(update_metrics)
-
-    # Update observation normalizer exactly once per batch (after successful updates)
-    if raw_states_for_normalizer_update and update_metrics:
-        all_raw_states = torch.cat(raw_states_for_normalizer_update, dim=0)
-        obs_normalizer.update(all_raw_states)
 
     return aggregated_metrics
 
@@ -1029,6 +1036,20 @@ def train_ppo_vectorized(
                         }
 
             if use_amp and env_state.scaler is not None and env_dev.startswith("cuda"):
+                # H12: AMP GradScaler stream safety documentation
+                # Each env has its own GradScaler (created at line 855) to avoid race conditions.
+                # GradScaler's internal state (_scale, _growth_tracker) is NOT stream-safe:
+                # - scale() reads _scale without sync
+                # - step() may write _found_inf_per_device
+                # - update() modifies _scale and _growth_tracker
+                #
+                # This is safe because:
+                # 1. Per-env scaler: No cross-env state sharing
+                # 2. Sequential within stream: scale() → step() → update() ordered by stream
+                # 3. No cross-batch state: Each env_state.scaler is isolated
+                #
+                # Note: scale factor update (update()) changes _scale for the NEXT batch,
+                # which is fine since each batch fully completes before the next starts.
                 env_state.scaler.step(env_state.host_optimizer)
                 for slot_id in slots_to_step:
                     env_state.scaler.step(env_state.seed_optimizers[slot_id])
@@ -1575,10 +1596,11 @@ def train_ppo_vectorized(
 
             # Normalize using FROZEN statistics during rollout collection.
             # IMPORTANT: We do NOT update obs_normalizer here - statistics are updated
-            # AFTER the PPO update to ensure all states in a rollout batch use identical
-            # normalization parameters. This prevents the "normalizer drift" bug where
-            # states from different epochs within the same batch would be normalized
-            # with different mean/var, causing PPO ratio calculation errors.
+            # in _run_ppo_updates() BEFORE the PPO update (C5 FIX). This ensures all
+            # states in a rollout batch use identical normalization parameters during
+            # collection, preventing the "normalizer drift" bug where states from
+            # different steps within the same batch would be normalized with different
+            # mean/var, causing PPO ratio calculation errors.
             states_batch_normalized = obs_normalizer.normalize(states_batch)
 
             # Get BATCHED actions from policy network with action masking (single forward pass!)
@@ -1796,6 +1818,24 @@ def train_ppo_vectorized(
                             },
                         ))
 
+                # Apply pending auto-cull penalty from previous step_epoch()
+                # (DRL Expert review 2025-12-17: prevents degenerate WAIT-spam policies)
+                if env_state.pending_auto_cull_penalty != 0.0:
+                    reward += env_state.pending_auto_cull_penalty
+                    if hub:
+                        hub.emit(TelemetryEvent(
+                            event_type=TelemetryEventType.REWARD_COMPUTED,
+                            severity="info",
+                            data={
+                                "env_id": env_idx,
+                                "action_name": "AUTO_CULL_PENALTY",
+                                "total_reward": reward,
+                                "penalty": env_state.pending_auto_cull_penalty,
+                                "reason": "auto_cull_from_prev_step",
+                            },
+                        ))
+                    env_state.pending_auto_cull_penalty = 0.0  # Clear after application
+
                 if collect_reward_summary and reward_components is not None:
                     summary = reward_summary_accum[env_idx]
                     summary["total_reward"] += reward
@@ -1956,25 +1996,39 @@ def train_ppo_vectorized(
                     )
                     post_action_normalized = obs_normalizer.normalize(post_action_state)
 
-                    # Extract env-specific masks for bootstrap value computation
-                    env_masks = {key: masks_batch[key][env_idx] for key in masks_batch}
+                    # H4 FIX: Compute POST-action masks for bootstrap value computation.
+                    # After GERMINATE, slot occupancy changes - using pre-action masks causes
+                    # incorrect action masking for V(s_{t+1}). The critic needs masks that
+                    # reflect the post-action state to correctly estimate continuation value.
+                    # NOTE: These are separate from env_masks (pre-action) which go into buffer.
+                    ordered = validate_slot_ids(list(slots))
+                    post_action_slot_states = build_slot_states(post_action_slot_reports, ordered)
+                    bootstrap_masks = compute_action_masks(
+                        slot_states=post_action_slot_states,
+                        enabled_slots=ordered,
+                        total_seeds=model.total_seeds() if model else 0,
+                        max_seeds=effective_max_seeds,
+                        slot_config=slot_config,
+                        device=torch.device(device),
+                    )
 
                     # Get V(s_{t+1}) - use updated LSTM hidden state from this step
                     with torch.inference_mode():
                         _, _, bootstrap_tensor, _ = agent.network.get_action(
                             post_action_normalized,
                             hidden=env_state.lstm_hidden,
-                            slot_mask=env_masks["slot"].unsqueeze(0),
-                            blueprint_mask=env_masks["blueprint"].unsqueeze(0),
-                            blend_mask=env_masks["blend"].unsqueeze(0),
-                            op_mask=env_masks["op"].unsqueeze(0),
+                            slot_mask=bootstrap_masks["slot"].unsqueeze(0),
+                            blueprint_mask=bootstrap_masks["blueprint"].unsqueeze(0),
+                            blend_mask=bootstrap_masks["blend"].unsqueeze(0),
+                            op_mask=bootstrap_masks["op"].unsqueeze(0),
                             deterministic=True,
                         )
                         bootstrap_value = bootstrap_tensor[0].item()
                 else:
                     bootstrap_value = 0.0
-                    # Also extract env masks for the else branch (needed for buffer.add below)
-                    env_masks = {key: masks_batch[key][env_idx] for key in masks_batch}
+
+                # Extract pre-action masks for buffer storage (needed for policy evaluation)
+                env_masks = {key: masks_batch[key][env_idx] for key in masks_batch}
 
                 # Store transition with per-head masks and LSTM states
 
@@ -2017,8 +2071,13 @@ def train_ppo_vectorized(
                 # This ensures state/action/reward alignment - advance happens after the step is recorded
                 # Advance ALL enabled slots so non-targeted seeds still progress mechanically.
                 # Cleanup per-slot bookkeeping if a seed is auto-culled during step_epoch().
+                # Track auto-culls and accumulate penalty for next reward computation.
                 for slot_id in slots:
-                    model.seed_slots[slot_id].step_epoch()
+                    was_auto_culled = model.seed_slots[slot_id].step_epoch()
+                    if was_auto_culled:
+                        # Accumulate auto-cull penalty for next step's reward
+                        # (prevents WAIT-spam policies relying on env cleanup)
+                        env_state.pending_auto_cull_penalty += reward_config.auto_cull_penalty
                     if not model.has_active_seed_in_slot(slot_id):
                         env_state.seed_optimizers.pop(slot_id, None)
                         env_state.acc_at_germination.pop(slot_id, None)

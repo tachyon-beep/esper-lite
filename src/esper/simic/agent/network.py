@@ -67,9 +67,10 @@ class FactoredRecurrentActorCritic(nn.Module):
         self.lstm_layers = lstm_layers
 
         # Feature extraction before LSTM (reduces dimensionality)
+        # M7: Pre-LSTM LayerNorm stabilizes input distribution to LSTM
         self.feature_net = nn.Sequential(
             nn.Linear(state_dim, feature_dim),
-            nn.LayerNorm(feature_dim),
+            nn.LayerNorm(feature_dim),  # Normalize BEFORE LSTM
             nn.ReLU(),
         )
 
@@ -81,21 +82,19 @@ class FactoredRecurrentActorCritic(nn.Module):
             batch_first=True,
         )
 
-        # LayerNorm on LSTM output (CRITICAL for training stability)
-        # Prevents hidden state magnitude drift over long 25-epoch sequences
+        # M7: Post-LSTM LayerNorm (CRITICAL for training stability)
+        # Why TWO LayerNorms (pre + post LSTM)?
+        # 1. Pre-LSTM LN: Stabilizes input distribution, helps LSTM gates
+        # 2. Post-LSTM LN: Prevents hidden state magnitude drift over 25-epoch sequences
+        #
+        # This is intentional and follows the "LN everywhere" pattern from transformer
+        # literature (Ba et al., 2016). LSTMs particularly benefit from post-output LN
+        # because hidden state magnitude can drift in long sequences without it.
         self.lstm_ln = nn.LayerNorm(lstm_hidden_dim)
 
-        # Max entropy for per-head normalization (different cardinalities)
-        # Use max(log(n), 1.0) to prevent division-by-near-zero when n=1
-        # When n=1, there's no uncertainty, so we set max_entropy=1.0 (entropy will be 0)
-        # For n>=3: max_entropy=log(n), normalized entropy in [0, 1]
-        # For n=2: max_entropy clamped to 1.0, normalized entropy in [0, 0.693]
-        self.max_entropies = {
-            "slot": max(math.log(num_slots), 1.0),
-            "blueprint": max(math.log(num_blueprints), 1.0),
-            "blend": max(math.log(num_blends), 1.0),
-            "op": max(math.log(num_ops), 1.0),
-        }
+        # H7: Removed unused max_entropies dict.
+        # MaskedCategorical.entropy() already returns normalized entropy internally,
+        # so per-head max entropy tracking is unnecessary.
 
         # Factored action heads (feedforward on LSTM output)
         head_hidden = lstm_hidden_dim // 2
@@ -149,7 +148,16 @@ class FactoredRecurrentActorCritic(nn.Module):
                 nn.init.orthogonal_(param)
             elif "bias" in name:
                 nn.init.zeros_(param)
-                # Set forget gate bias to 1 (helps with long-term memory)
+                # M9: Set forget gate bias to 1 (helps with long-term memory)
+                #
+                # PyTorch LSTM packs 4 gate biases concatenated: [input, forget, cell, output]
+                # Each gate gets n/4 elements, so the forget gate is at indices n//4 : n//2.
+                #
+                # Why bias=1 for forget gate? (Gers et al., 2000 "Learning to Forget")
+                # - Forget gate controls how much of the previous cell state to retain
+                # - Sigmoid(1) ≈ 0.73, so default behavior is "mostly remember"
+                # - Without this, LSTM initially forgets too aggressively, hurting long sequences
+                # - Critical for our 25-epoch seed learning trajectories
                 n = param.size(0)
                 param.data[n // 4 : n // 2].fill_(1.0)
 

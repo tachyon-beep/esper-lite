@@ -6,11 +6,14 @@ This module contains the main training functions extracted from ppo.py.
 from __future__ import annotations
 
 import functools
+import logging
 import random
 from typing import Callable
 
 import torch
 import torch.nn as nn
+
+logger = logging.getLogger(__name__)
 
 from esper.leyline.factored_actions import FactoredAction, LifecycleOp
 from esper.leyline import TelemetryEvent, TelemetryEventType
@@ -80,11 +83,16 @@ def _get_compiled_train_step(use_compile: bool = True) -> Callable:
     """
     if use_compile:
         try:
-            # mode="default" works with varying model instances
-            # (reduce-overhead uses CUDA graphs which capture memory addresses)
-            return torch.compile(_train_step_impl, mode="default")
-        except Exception:
-            # Fallback if compilation fails (e.g., older PyTorch version)
+            # M22: dynamic=True handles varying batch sizes without recompilation.
+            # mode="default" is safest (reduce-overhead uses CUDA graphs which
+            # capture memory addresses and break with varying model instances).
+            return torch.compile(_train_step_impl, mode="default", dynamic=True)
+        except Exception as e:
+            # M22: Log compilation failures so they aren't silent
+            logger.warning(
+                "torch.compile failed, falling back to uncompiled train_step: %s",
+                e,
+            )
             return _train_step_impl
     return _train_step_impl
 

@@ -235,3 +235,43 @@ class TestNissaHubAddBackendFailure:
             "Failed to start backend" in record.message
             for record in caplog.records
         )
+
+    def test_add_backend_raises_on_closed_hub(self):
+        """add_backend() should raise if hub is closed."""
+
+        class MockBackend(OutputBackend):
+            def start(self) -> None:
+                pass
+
+            def emit(self, event: TelemetryEvent) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        hub = NissaHub()
+        hub.close()
+
+        with pytest.raises(RuntimeError, match="Cannot add backend to closed NissaHub"):
+            hub.add_backend(MockBackend())
+
+    def test_add_backend_works_after_reset(self):
+        """add_backend() should work after reset() reopens the hub."""
+
+        class MockBackend(OutputBackend):
+            def start(self) -> None:
+                pass
+
+            def emit(self, event: TelemetryEvent) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        hub = NissaHub()
+        hub.close()
+        hub.reset()  # Reopen the hub
+
+        # Should work now
+        hub.add_backend(MockBackend())
+        assert len(hub._backends) == 1

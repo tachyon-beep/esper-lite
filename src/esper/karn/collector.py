@@ -51,10 +51,21 @@ _ANOMALY_EVENT_TYPES = frozenset({
 
 
 class OutputBackend(Protocol):
-    """Protocol for Karn output backends."""
+    """Protocol for Karn output backends.
+
+    Note:
+        All methods are called by KarnCollector:
+        - start() is called by add_backend() before the backend is registered
+        - emit() is called for each telemetry event
+        - close() is called during collector shutdown
+
+        Backends can implement start() as a no-op if no initialization is needed.
+        For convenience, subclass esper.nissa.output.OutputBackend which provides
+        default no-op implementations for start() and close().
+    """
 
     def start(self) -> None:
-        """Start backend (optional)."""
+        """Start backend (called by add_backend(), can be no-op)."""
         ...
 
     def emit(self, event: "TelemetryEvent") -> None:
@@ -88,6 +99,15 @@ class KarnCollector:
     - Stateful storage (TelemetryStore)
     - Typed event handling
     - Research-focused analytics integration
+
+    Lifecycle Contract:
+        - add_backend(): Starts backend immediately; raises RuntimeError if collector is closed
+        - emit(): Routes to backends and updates store; silently drops (with warning) if closed
+        - close(): Idempotent; closes all backends and marks collector as closed
+        - reset(): Closes backends, clears store/detectors, and reopens collector for reuse
+        - start(): No-op (backends are auto-started by add_backend())
+
+        This contract is shared with NissaHub for consistency across telemetry systems.
     """
 
     def __init__(self, config: KarnConfig | None = None):
@@ -113,14 +133,20 @@ class KarnCollector:
         (fail-fast to prevent half-initialized state and silent misconfiguration).
 
         Raises:
+            RuntimeError: If the collector has been closed. Use reset() to reopen.
             Exception: If backend.start() fails, the original exception is
                 logged and re-raised so callers can detect misconfiguration.
         """
+        if self._closed:
+            raise RuntimeError(
+                "Cannot add backend to closed KarnCollector. "
+                "Call reset() to reopen the collector before adding backends."
+            )
         try:
             backend.start()
             self._backends.append(backend)
-        except Exception as e:
-            _logger.error(f"Failed to start backend {backend}, not adding: {e}")
+        except Exception:
+            _logger.exception(f"Failed to start backend {backend}, not adding")
             raise
 
     def remove_backend(self, backend: OutputBackend) -> None:
@@ -133,16 +159,18 @@ class KarnCollector:
                 _logger.error(f"Error closing backend {backend}: {e}")
 
     def start(self) -> None:
-        """Start all backends.
+        """No-op: backends are auto-started by add_backend().
 
-        Note: Backends are automatically started when added via add_backend().
-        This method exists for API consistency but backends should be idempotent.
+        This method exists for API consistency with OutputBackend protocol
+        but does nothing since add_backend() already starts each backend.
+        Calling this method is harmless but unnecessary.
+
+        Warning:
+            Do NOT rely on this to start backends. Always use add_backend().
         """
-        for backend in self._backends:
-            try:
-                backend.start()
-            except Exception as e:
-                _logger.error(f"Error starting backend {backend}: {e}")
+        # No-op: backends are started in add_backend() to ensure fail-fast
+        # behavior. Double-starting could cause issues with non-idempotent backends.
+        pass
 
     def close(self) -> None:
         """Close all backends (idempotent).
@@ -159,7 +187,14 @@ class KarnCollector:
                 _logger.error(f"Error closing backend {backend}: {e}")
 
     def reset(self) -> None:
-        """Reset collector state (clear store and backends)."""
+        """Reset collector state (clear store and backends).
+
+        Warning:
+            NOT THREAD-SAFE. Must be called when no other threads are emitting
+            events. Intended for test cleanup or between training runs, not
+            during active training. Calling reset() while emit() is running
+            concurrently may cause dropped events or backend errors.
+        """
         self.close()
         self.store = TelemetryStore()
         self._backends.clear()

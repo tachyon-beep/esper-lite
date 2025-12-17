@@ -406,6 +406,14 @@ class NissaHub:
     The hub receives carbon copies of events from all domains and
     distributes them to all registered output backends.
 
+    Lifecycle Contract:
+        - add_backend(): Starts backend immediately; raises RuntimeError if hub is closed
+        - emit(): Delivers to all backends; silently drops (with warning) if hub is closed
+        - close(): Idempotent; closes all backends and marks hub as closed
+        - reset(): Closes all backends, clears list, and reopens hub for reuse
+
+        This contract is shared with KarnCollector for consistency across telemetry systems.
+
     Usage:
         hub = NissaHub()
         hub.add_backend(ConsoleOutput())
@@ -431,14 +439,20 @@ class NissaHub:
             backend: The output backend to add.
 
         Raises:
+            RuntimeError: If the hub has been closed. Use reset() to reopen.
             Exception: If backend.start() fails, the original exception is
                 logged and re-raised so callers can detect misconfiguration.
         """
+        if self._closed:
+            raise RuntimeError(
+                "Cannot add backend to closed NissaHub. "
+                "Call reset() to reopen the hub before adding backends."
+            )
         try:
             backend.start()
             self._backends.append(backend)
-        except Exception as e:
-            _logger.error(f"Failed to start backend {backend.__class__.__name__}, not adding: {e}")
+        except Exception:
+            _logger.exception(f"Failed to start backend {backend.__class__.__name__}, not adding")
             raise
 
     def remove_backend(self, backend: OutputBackend) -> None:
@@ -480,6 +494,12 @@ class NissaHub:
         """Reset the hub: close all backends and clear the list.
 
         Use this to ensure clean state between test runs or episodes.
+
+        Warning:
+            NOT THREAD-SAFE. Must be called when no other threads are emitting
+            events. Intended for test cleanup or between training runs, not
+            during active training. Calling reset() while emit() is running
+            concurrently may cause dropped events or backend errors.
         """
         self.close()
         self._backends.clear()

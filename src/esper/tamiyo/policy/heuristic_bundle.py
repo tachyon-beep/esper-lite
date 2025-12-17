@@ -19,11 +19,22 @@ from esper.tamiyo.heuristic import HeuristicTamiyo, HeuristicPolicyConfig
 class HeuristicPolicyBundle:
     """Rule-based heuristic policy for ablations and debugging.
 
-    This PolicyBundle wraps HeuristicTamiyo, providing the standard
-    PolicyBundle interface for a non-learning baseline.
+    This PolicyBundle wraps HeuristicTamiyo for registry discoverability.
+    However, it is NOT usable through the uniform PolicyBundle API.
 
-    Note: This policy does not have learnable parameters. Methods like
-    evaluate_actions() and get_value() return dummy values.
+    Warning:
+        The heuristic policy requires TrainingSignals (semantic observations)
+        rather than tensor features. The following methods raise NotImplementedError:
+
+        - get_action() - use training loop's heuristic path instead
+        - forward() - heuristic has no forward pass
+        - evaluate_actions() - heuristic has no learnable parameters
+        - get_value() - heuristic has no value function
+        - get_q_values() - heuristic has no Q-values
+        - sync_from() - heuristic has no target network
+
+        To use the heuristic, access the underlying HeuristicTamiyo via
+        the `.heuristic` property and call `decide_from_signals()` directly.
     """
 
     def __init__(

@@ -100,6 +100,20 @@ DEFAULT_ENTROPY_COEF = 0.05
 # Minimum entropy coefficient floor (prevents exploration collapse).
 DEFAULT_ENTROPY_COEF_MIN = 0.01
 
+# M11: Entropy collapse detection thresholds.
+# These are normalized entropy values from MaskedCategorical.entropy().
+# - Collapse: Policy is nearly deterministic (<10% of max entropy)
+# - Warning: Policy is converging, may need entropy boost (<30% of max)
+DEFAULT_ENTROPY_COLLAPSE_THRESHOLD = 0.1
+DEFAULT_ENTROPY_WARNING_THRESHOLD = 0.3
+
+# M21: PPO ratio anomaly detection thresholds.
+# ratio = exp(new_log_prob - old_log_prob). Healthy ratio is close to 1.0.
+# - Explosion (>5.0): Policy changed too much, trust region violated
+# - Collapse (<0.1): Policy severely underweights old actions (potential bug)
+DEFAULT_RATIO_EXPLOSION_THRESHOLD = 5.0
+DEFAULT_RATIO_COLLAPSE_THRESHOLD = 0.1
+
 # =============================================================================
 # Factored Action Space Constants
 # =============================================================================
@@ -142,7 +156,10 @@ DEFAULT_MIN_FOSSILIZE_CONTRIBUTION = 1.0
 
 # G2 Gate: Seed gradient ratio threshold for activity detection.
 # Seeds with ratio below threshold may be considered inactive.
-DEFAULT_GRADIENT_RATIO_THRESHOLD = 0.05
+# (DRL Expert review 2025-12-17: increased from 0.05 to 0.10 to prevent
+# seeds with transient gradient activity from passing G2 prematurely.
+# Combined with EMA smoothing, this ensures meaningful sustained learning.)
+DEFAULT_GRADIENT_RATIO_THRESHOLD = 0.10
 
 # G3 Gate: Minimum stability required for fossilization.
 # Higher = stricter stability requirements before fossilization allowed.
@@ -370,6 +387,10 @@ __all__ = [
     "DEFAULT_BATCH_SIZE",
     "DEFAULT_ENTROPY_COEF",
     "DEFAULT_ENTROPY_COEF_MIN",
+    "DEFAULT_ENTROPY_COLLAPSE_THRESHOLD",
+    "DEFAULT_ENTROPY_WARNING_THRESHOLD",
+    "DEFAULT_RATIO_EXPLOSION_THRESHOLD",
+    "DEFAULT_RATIO_COLLAPSE_THRESHOLD",
 
     # Factored Action Space
     "HEAD_NAMES",

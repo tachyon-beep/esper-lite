@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 import torch
 from torch import nn
 
-from esper.leyline import TelemetryEvent, TelemetryEventType
+from esper.leyline import TelemetryEvent, TelemetryEventType, DEFAULT_ENTROPY_COLLAPSE_THRESHOLD
 from .debug_telemetry import LayerGradientStats
 from esper.nissa import get_hub
 
@@ -223,8 +223,8 @@ def emit_ppo_update_event(
         "nan_grad_count": metrics.get("nan_grad_count", 0),
         # Gradient health score (Task 2)
         "layer_gradient_health": metrics.get("layer_gradient_health"),
-        # Entropy collapse flag (Task 3)
-        "entropy_collapsed": metrics.get("entropy", 1.0) < 0.1,
+        # Entropy collapse flag (Task 3) - M11: use leyline constant
+        "entropy_collapsed": metrics.get("entropy", 1.0) < DEFAULT_ENTROPY_COLLAPSE_THRESHOLD,
     }
     # Add per-head entropy (P3-1)
     data.update(head_entropies_avg)

@@ -15,6 +15,8 @@ class TestEpochCompletedEmission:
         captured = []
 
         class CaptureBackend:
+            def start(self):
+                pass
             def emit(self, event):
                 if event.event_type == TelemetryEventType.EPOCH_COMPLETED:
                     captured.append(event)

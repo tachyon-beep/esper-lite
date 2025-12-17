@@ -33,7 +33,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from esper.karn.contracts import KarnSlotConfig, TelemetryEventLike
+from esper.karn.contracts import KarnSlotConfig, SlotConfigProtocol, TelemetryEventLike
 
 _logger = logging.getLogger(__name__)
 
@@ -244,8 +244,8 @@ class EnvState:
 class TUIState:
     """Thread-safe state for the TUI display."""
 
-    # Slot configuration (defaults to 3-slot legacy for backwards compatibility)
-    slot_config: KarnSlotConfig = field(default_factory=KarnSlotConfig.default)
+    # Slot configuration (accepts any SlotConfigProtocol-compatible object)
+    slot_config: SlotConfigProtocol = field(default_factory=KarnSlotConfig.default)
 
     # Episode tracking
     current_episode: int = 0
@@ -444,32 +444,25 @@ class TUIOutput:
 
     Args:
         thresholds: Health status thresholds for color coding.
-        slot_config: Slot configuration for dynamic action spaces. Any object
-            implementing the SlotConfigProtocol is accepted. Defaults to
+        slot_config: Slot configuration for dynamic action spaces. Accepts any
+            object implementing SlotConfigProtocol. Defaults to
             KarnSlotConfig.default() (3-slot configuration).
         force_layout: Force a specific layout mode ('compact', 'standard', 'wide')
                      instead of auto-detecting from terminal width. Currently unused
                      but reserved for future multi-layout support.
 
     Note:
-        The ``slot_config`` parameter accepts any "slot-config-like" object that
-        provides the following interface:
-
-        - ``slot_ids: tuple[str, ...]``: Ordered tuple of canonical slot IDs
-          (e.g., ("r0c0", "r0c1", "r0c2"))
-        - ``num_slots: int``: Number of slots (must equal ``len(slot_ids)``)
-        - ``index_for_slot_id(slot_id: str) -> int``: Returns the index of the
-          given slot ID within ``slot_ids``, raising ValueError if not found.
-
-        Both ``esper.leyline.slot_config.SlotConfig`` and
-        ``esper.karn.contracts.KarnSlotConfig`` implement this interface. The
+        The ``slot_config`` parameter accepts any object implementing
+        ``esper.karn.contracts.SlotConfigProtocol``. Both
+        ``esper.leyline.slot_config.SlotConfig`` and
+        ``esper.karn.contracts.KarnSlotConfig`` implement this protocol. The
         TUI is decoupled from Leyline to enable standalone use or testing.
     """
 
     def __init__(
         self,
         thresholds: ThresholdConfig | None = None,
-        slot_config: KarnSlotConfig | None = None,
+        slot_config: SlotConfigProtocol | None = None,
         force_layout: str | None = None,
     ):
         self.thresholds = thresholds or ThresholdConfig()

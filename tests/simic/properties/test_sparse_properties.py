@@ -187,8 +187,10 @@ class TestSparseRewardEdgeCases:
             epoch=25, max_epochs=25, config=config,
         )
 
-        # Raw: 3.0 * (1.0 - 0) = 3.0, should clamp to 1.0
-        assert reward == 1.0, f"Should clamp to 1.0, got {reward}"
+        # H10 FIX: Base reward clamped to [-1, 1] BEFORE scaling
+        # base = 1.0 (already in [-1, 1]), scaled = 3.0 * 1.0 = 3.0
+        # Final reward in [-scale, scale] = [-3.0, 3.0]
+        assert reward == 3.0, f"Scale should be effective, got {reward}"
 
 
 class TestMinimalRewardProperties:

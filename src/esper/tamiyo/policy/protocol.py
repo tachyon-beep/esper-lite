@@ -142,7 +142,16 @@ class PolicyBundle(Protocol):
     def initial_hidden(self, batch_size: int) -> tuple[torch.Tensor, torch.Tensor] | None:
         """Initial hidden state for recurrent policies (None if stateless).
 
-        Should be called with inference_mode for efficiency.
+        Note:
+            This method returns **inference-mode tensors** that are NOT suitable
+            for gradient computation. For training:
+
+            - Rollout collection: Use initial_hidden() - no gradients needed
+            - PPO update: Pass hidden=None to evaluate_actions() - the network
+              creates gradient-compatible hidden states internally
+
+            This design prevents accidental gradient tracking during rollout
+            while ensuring correct autograd behavior during training.
         """
         ...
 

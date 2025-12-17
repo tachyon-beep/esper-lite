@@ -73,6 +73,42 @@ class TelemetryEventLike(Protocol):
         ...
 
 
+class SlotConfigProtocol(Protocol):
+    """Protocol for slot configuration objects.
+
+    Any object implementing this protocol can be used where slot configuration
+    is needed. Both esper.leyline.slot_config.SlotConfig and KarnSlotConfig
+    implement this interface.
+
+    This enables dependency inversion: consumers can accept any slot-config-like
+    object without depending on a specific implementation.
+    """
+
+    @property
+    def slot_ids(self) -> tuple[str, ...]:
+        """Ordered tuple of canonical slot IDs (e.g., ("r0c0", "r0c1", "r0c2"))."""
+        ...
+
+    @property
+    def num_slots(self) -> int:
+        """Number of slots (must equal len(slot_ids))."""
+        ...
+
+    def index_for_slot_id(self, slot_id: str) -> int:
+        """Get index of slot_id within slot_ids.
+
+        Args:
+            slot_id: The slot ID to look up.
+
+        Returns:
+            The index of the slot in slot_ids.
+
+        Raises:
+            ValueError: If slot_id is not in slot_ids.
+        """
+        ...
+
+
 @dataclass(frozen=True)
 class KarnSlotConfig:
     """Minimal SlotConfig-like structure for Karn internal use.

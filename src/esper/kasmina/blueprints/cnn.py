@@ -97,7 +97,8 @@ def create_norm_seed(channels: int) -> nn.Module:
     class NormSeed(nn.Module):
         def __init__(self, channels: int):
             super().__init__()
-            self.norm = nn.GroupNorm(num_groups=min(32, channels), num_channels=channels)
+            # Use get_num_groups() to guarantee divisibility (fixes channels like 48, 80, 112)
+            self.norm = nn.GroupNorm(num_groups=get_num_groups(channels), num_channels=channels)
             self.scale = nn.Parameter(torch.ones(1))
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -175,6 +176,79 @@ def create_depthwise_seed(channels: int) -> nn.Module:
             return residual + F.relu(x)
 
     return DepthwiseSeed(channels)
+
+
+@BlueprintRegistry.register(
+    "bottleneck", "cnn", param_estimate=12000,
+    description="Bottleneck conv (1x1→3x3→1x1) - fills gap between depthwise and conv_light"
+)
+def create_bottleneck_seed(channels: int, reduction: int = 4) -> nn.Module:
+    """Bottleneck convolution seed using 1x1 → 3x3 → 1x1 structure.
+
+    This fills the parameter gap between depthwise (~4.8k) and conv_light (~37k).
+    The bottleneck structure reduces dimensionality before the expensive 3x3 conv,
+    making it more parameter-efficient than a direct 3x3 conv.
+
+    For 64 channels with reduction=4:
+    - Down 1x1: 64 * 16 = 1,024 params
+    - 3x3 conv: 16 * 16 * 9 = 2,304 params
+    - Up 1x1: 16 * 64 = 1,024 params
+    - GroupNorm: ~128 params
+    - Total: ~4,480 params (scales with channels²/reduction)
+    """
+
+    class BottleneckSeed(nn.Module):
+        def __init__(self, channels: int, reduction: int):
+            super().__init__()
+            bottleneck_dim = max(8, channels // reduction)  # Ensure at least 8 channels
+            self.down = nn.Conv2d(channels, bottleneck_dim, kernel_size=1, bias=False)
+            self.conv = nn.Conv2d(
+                bottleneck_dim, bottleneck_dim, kernel_size=3, padding=1, bias=False
+            )
+            self.up = nn.Conv2d(bottleneck_dim, channels, kernel_size=1, bias=False)
+            self.gn = nn.GroupNorm(get_num_groups(channels), channels)
+            # Zero-init output for identity start
+            nn.init.zeros_(self.up.weight)
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            residual = x
+            x = F.relu(self.down(x))
+            x = F.relu(self.conv(x))
+            x = self.gn(self.up(x))
+            return residual + x
+
+    return BottleneckSeed(channels, reduction)
+
+
+@BlueprintRegistry.register(
+    "conv_small", "cnn", param_estimate=18000,
+    description="Small 1x1 conv - lighter than conv_light"
+)
+def create_conv_small_seed(channels: int) -> nn.Module:
+    """Small 1x1 convolution seed - lightweight channel mixing.
+
+    This provides an option between bottleneck (~12k) and conv_light (~37k).
+    Uses 1x1 convolution for channel mixing without spatial convolution,
+    making it faster but less expressive than 3x3 convolutions.
+
+    For 64 channels:
+    - 1x1 conv: 64 * 64 = 4,096 params
+    - GroupNorm: ~128 params
+    - Total: ~4,224 params (scales with channels²)
+    """
+
+    class ConvSmallSeed(nn.Module):
+        def __init__(self, channels: int):
+            super().__init__()
+            self.conv = nn.Conv2d(channels, channels, kernel_size=1, bias=False)
+            self.gn = nn.GroupNorm(get_num_groups(channels), channels)
+            # Zero-init for identity start
+            nn.init.zeros_(self.conv.weight)
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            return x + F.relu(self.gn(self.conv(x)))
+
+    return ConvSmallSeed(channels)
 
 
 @BlueprintRegistry.register("conv_light", "cnn", param_estimate=37000, description="Light conv block")

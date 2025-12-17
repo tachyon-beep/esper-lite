@@ -265,3 +265,45 @@ class TestKarnCollectorAddBackendFailure:
             "Failed to start backend" in record.message
             for record in caplog.records
         )
+
+    def test_add_backend_raises_on_closed_collector(self):
+        """add_backend() should raise if collector is closed."""
+        from esper.karn.collector import KarnCollector
+
+        class MockBackend:
+            def start(self) -> None:
+                pass
+
+            def emit(self, event: TelemetryEvent) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        collector = KarnCollector()
+        collector.close()
+
+        with pytest.raises(RuntimeError, match="Cannot add backend to closed KarnCollector"):
+            collector.add_backend(MockBackend())  # type: ignore[arg-type]
+
+    def test_add_backend_works_after_reset(self):
+        """add_backend() should work after reset() reopens the collector."""
+        from esper.karn.collector import KarnCollector
+
+        class MockBackend:
+            def start(self) -> None:
+                pass
+
+            def emit(self, event: TelemetryEvent) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        collector = KarnCollector()
+        collector.close()
+        collector.reset()  # Reopen the collector
+
+        # Should work now
+        collector.add_backend(MockBackend())  # type: ignore[arg-type]
+        assert len(collector._backends) == 1

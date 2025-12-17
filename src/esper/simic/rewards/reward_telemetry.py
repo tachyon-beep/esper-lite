@@ -58,8 +58,20 @@ class RewardComponentsTelemetry:
     def shaped_reward_ratio(self) -> float:
         """Fraction of total reward from shaping terms.
 
-        High values (> 0.5) suggest potential reward hacking.
+        High values (> 0.5) suggest potential reward hacking - the agent may
+        be optimizing for shaping bonuses rather than actual value creation.
+
+        Returns:
+            Ratio of |shaped terms| / |total reward|, or 0.0 if total is negligible.
+
+        Note:
+            M1: Uses 1e-8 threshold for zero-guard because reward magnitudes
+            in this system are typically O(0.1) to O(10). Rewards below 1e-8
+            indicate either (a) true zero or (b) near-perfect cancellation of
+            positive/negative terms - in either case, the ratio is meaningless.
         """
+        # M1: Guard against division by zero/near-zero
+        # 1e-8 is well below minimum meaningful reward magnitude (~0.01)
         if abs(self.total_reward) < 1e-8:
             return 0.0
         shaped = self.stage_bonus + self.pbrs_bonus + self.action_shaping

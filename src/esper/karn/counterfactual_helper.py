@@ -46,7 +46,12 @@ class CounterfactualHelper:
     """Helper for computing counterfactual contributions during training.
 
     Wraps CounterfactualEngine with training-loop-friendly interface.
-    Handles emit of COUNTERFACTUAL_COMPUTED events.
+
+    Telemetry:
+        When emit_events=True (default), the underlying CounterfactualEngine
+        emits ANALYTICS_SNAPSHOT events with kind="shapley_computed" containing
+        Shapley values for each slot. This happens during compute_contributions()
+        when Shapley values are calculated.
     """
 
     def __init__(
@@ -67,7 +72,6 @@ class CounterfactualHelper:
             shapley_samples=shapley_samples,
         )
         self.engine = CounterfactualEngine(config, emit_telemetry=emit_events)
-        self.emit_events = emit_events
         self._last_matrix: CounterfactualMatrix | None = None
 
     def compute_contributions(
@@ -112,9 +116,8 @@ class CounterfactualHelper:
                     results[slot_id].shapley_std = estimate.std
                     results[slot_id].is_significant = estimate.is_significant()
 
-        # Emit telemetry events (JANK-007: Karn is a consumer, not a producer)
-        # The calling training loop (e.g., Simic) should emit COUNTERFACTUAL_COMPUTED
-        # events using Leyline contracts, if desired.
+        # Note: Telemetry is emitted by CounterfactualEngine.compute_shapley_values()
+        # when emit_events=True (default). See ANALYTICS_SNAPSHOT events.
 
         _logger.debug(
             f"Counterfactual computed: {len(matrix.configs)} configs, "

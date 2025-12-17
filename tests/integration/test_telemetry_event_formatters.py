@@ -14,6 +14,10 @@ class MockBackend:
     def __init__(self) -> None:
         self.events: list[TelemetryEvent] = []
 
+    def start(self) -> None:
+        """Start the backend (no-op for mock)."""
+        pass
+
     def emit(self, event: TelemetryEvent) -> None:
         self.events.append(event)
 

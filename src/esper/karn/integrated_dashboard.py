@@ -106,8 +106,12 @@ class DashboardServer:
         try:
             message = _serialize_event(event)
             self._queue.put_nowait(message)
-        except Exception:
-            pass  # Don't let telemetry errors break training
+        except Exception as e:
+            # Log at debug level to help diagnose nonconforming events
+            # without spamming logs during normal operation
+            _logger.debug(
+                f"Failed to serialize event {type(event).__name__}: {e}"
+            )
 
     def close(self) -> None:
         """Stop the dashboard server (OutputBackend interface)."""

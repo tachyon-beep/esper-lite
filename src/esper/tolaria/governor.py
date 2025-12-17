@@ -91,10 +91,15 @@ class TolariaGovernor:
         This trades slightly slower rollback for significant GPU memory savings,
         especially for large models where snapshots could double GPU memory usage.
         """
-        # Explicitly free old snapshot to prevent memory fragmentation
+        # C7 FIX: Explicitly free old snapshot and release GPU memory
+        # PyTorch's caching allocator holds freed memory until empty_cache() is called.
+        # In long training runs, this fragmentation can accumulate and cause OOM.
         if self.last_good_state is not None:
             del self.last_good_state
             self.last_good_state = None
+            # Release any GPU memory that was referenced by old state dict tensors
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         # Get model state, filtering out experimental seed keys
         full_state = self.model.state_dict()

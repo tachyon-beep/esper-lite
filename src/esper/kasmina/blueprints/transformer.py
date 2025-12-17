@@ -55,6 +55,36 @@ def create_lora_seed(dim: int, rank: int = 8) -> nn.Module:
 
 
 @BlueprintRegistry.register(
+    "lora_large", "transformer", param_estimate=25000,
+    description="Large low-rank adapter (rank=32) - fills gap between lora and attention"
+)
+def create_lora_large_seed(dim: int, rank: int = 32) -> nn.Module:
+    """Large low-rank adapter seed - more expressive than standard LoRA.
+
+    This fills the parameter gap between lora (~6k) and attention (~50k).
+    Uses rank=32 instead of rank=8, providing 4× more capacity for
+    adaptation while still being parameter-efficient.
+
+    For dim=384 with rank=32:
+    - Down: 384 * 32 = 12,288 params
+    - Up: 32 * 384 = 12,288 params
+    - Total: 24,576 params
+    """
+
+    class LoRALargeSeed(nn.Module):
+        def __init__(self, dim: int, rank: int):
+            super().__init__()
+            self.down = nn.Linear(dim, rank, bias=False)
+            self.up = nn.Linear(rank, dim, bias=False)
+            nn.init.zeros_(self.up.weight)
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            return x + self.up(self.down(x))
+
+    return LoRALargeSeed(dim, rank)
+
+
+@BlueprintRegistry.register(
     "attention", "transformer", param_estimate=50000, description="Additional self-attention head"
 )
 def create_transformer_attention_seed(dim: int, n_head: int = 4) -> nn.Module:
@@ -91,6 +121,43 @@ def create_transformer_attention_seed(dim: int, n_head: int = 4) -> nn.Module:
 
 
 @BlueprintRegistry.register(
+    "mlp_small", "transformer", param_estimate=300000,
+    description="Small MLP (2x expansion) - fills gap between attention and mlp"
+)
+def create_transformer_mlp_small_seed(dim: int, expansion: int = 2, checkpoint: bool = False) -> nn.Module:
+    """Small MLP seed with 2× expansion - more accessible than full 4× MLP.
+
+    This fills the massive parameter gap between attention (~50k) and mlp (~1.2M).
+    Uses 2× expansion instead of 4×, reducing parameters by 4× while still
+    providing meaningful non-linear transformation capacity.
+
+    For dim=384 with expansion=2:
+    - fc1: 384 * 768 = 294,912 params
+    - fc2: 768 * 384 = 294,912 params
+    - Total: ~590k params (vs 1.2M for 4× expansion)
+    """
+
+    class TransformerMLPSmallSeed(nn.Module):
+        def __init__(self, dim: int, expansion: int, use_checkpoint: bool):
+            super().__init__()
+            self.fc1 = nn.Linear(dim, dim * expansion)
+            self.fc2 = nn.Linear(dim * expansion, dim)
+            self.use_checkpoint = use_checkpoint
+            nn.init.zeros_(self.fc2.weight)
+            nn.init.zeros_(self.fc2.bias)
+
+        def _mlp_forward(self, x: torch.Tensor) -> torch.Tensor:
+            return self.fc2(F.gelu(self.fc1(x)))
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            if self.use_checkpoint and self.training and x.requires_grad:
+                return x + torch_checkpoint(self._mlp_forward, x, use_reentrant=False)
+            return x + self._mlp_forward(x)
+
+    return TransformerMLPSmallSeed(dim, expansion, checkpoint)
+
+
+@BlueprintRegistry.register(
     "mlp", "transformer", param_estimate=1200000, description="Additional MLP (4x expansion)"
 )
 def create_transformer_mlp_seed(dim: int, expansion: int = 4, checkpoint: bool = False) -> nn.Module:
@@ -116,18 +183,25 @@ def create_transformer_mlp_seed(dim: int, expansion: int = 4, checkpoint: bool =
     return TransformerMLPSeed(dim, expansion, checkpoint)
 
 
-# FlexAttention blueprint - conditionally registered
-if _HAS_FLEX_ATTENTION:
-    @BlueprintRegistry.register(
-        "flex_attention", "transformer", param_estimate=55000,
-        description="FlexAttention with causal mask (PyTorch 2.5+)"
-    )
-    def create_flex_attention_seed(dim: int, n_head: int = 4) -> nn.Module:
-        """FlexAttention seed with customizable attention patterns."""
-        if dim % n_head != 0:
-            raise ValueError(
-                f"FlexAttention seed requires dim % n_head == 0, got dim={dim}, n_head={n_head}"
-            )
+# FlexAttention blueprint - always registered for consistent action space
+# Falls back to standard SDPA when FlexAttention is unavailable (PyTorch < 2.5)
+@BlueprintRegistry.register(
+    "flex_attention", "transformer", param_estimate=55000,
+    description="FlexAttention with causal mask (falls back to SDPA on PyTorch < 2.5)"
+)
+def create_flex_attention_seed(dim: int, n_head: int = 4) -> nn.Module:
+    """FlexAttention seed with customizable attention patterns.
+
+    Always registered to maintain consistent action space across PyTorch versions.
+    Falls back to standard scaled_dot_product_attention on PyTorch < 2.5 where
+    FlexAttention is not available.
+    """
+    if dim % n_head != 0:
+        raise ValueError(
+            f"FlexAttention seed requires dim % n_head == 0, got dim={dim}, n_head={n_head}"
+        )
+
+    if _HAS_FLEX_ATTENTION:
 
         class FlexAttentionSeed(nn.Module):
             """Flexible attention with block-sparse patterns.
@@ -158,10 +232,16 @@ if _HAS_FLEX_ATTENTION:
                 self._block_mask_cache.clear()
                 return super()._apply(fn)
 
+            @torch.compiler.disable
             def _get_causal_block_mask(
                 self, seq_len: int, device: torch.device, dtype: torch.dtype
             ):
-                """Get or create cached causal block mask with LRU eviction."""
+                """Get or create cached causal block mask with LRU eviction.
+
+                Note: @torch.compiler.disable isolates OrderedDict cache operations
+                that cause graph breaks (move_to_end, popitem, dict mutations).
+                The forward() method remains compilable since mask lookup is excluded.
+                """
                 # Use str(device) and str(dtype) for reliable dict equality
                 key = (seq_len, str(device), str(dtype))
                 if key in self._block_mask_cache:
@@ -201,6 +281,42 @@ if _HAS_FLEX_ATTENTION:
                 return x + self.proj(out)
 
         return FlexAttentionSeed(dim, n_head)
+
+    else:
+        # Fallback: Use standard SDPA when FlexAttention isn't available
+        # This maintains consistent action space across PyTorch versions
+
+        class FlexAttentionFallback(nn.Module):
+            """Fallback attention using SDPA when FlexAttention is unavailable.
+
+            Provides identical interface and parameter count to FlexAttentionSeed,
+            ensuring policy checkpoints are compatible across PyTorch versions.
+            """
+
+            def __init__(self, dim: int, n_head: int):
+                super().__init__()
+                self.n_head = n_head
+                self.head_dim = dim // n_head
+
+                self.qkv = nn.Linear(dim, 3 * dim)
+                self.proj = nn.Linear(dim, dim)
+                nn.init.zeros_(self.proj.weight)
+                nn.init.zeros_(self.proj.bias)
+
+            def forward(self, x: torch.Tensor) -> torch.Tensor:
+                b, t, c = x.shape
+
+                qkv = self.qkv(x).reshape(b, t, 3, self.n_head, self.head_dim)
+                qkv = qkv.permute(2, 0, 3, 1, 4)
+                q, k, v = qkv[0], qkv[1], qkv[2]
+
+                # Use SDPA with causal mask (same as standard attention seed)
+                out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+
+                out = out.transpose(1, 2).reshape(b, t, c)
+                return x + self.proj(out)
+
+        return FlexAttentionFallback(dim, n_head)
 
 
 @BlueprintRegistry.register("noop", "transformer", param_estimate=0, description="Identity seed")

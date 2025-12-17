@@ -112,14 +112,39 @@ class LSTMPolicyBundle:
         """Forward pass returning distribution parameters.
 
         For off-policy algorithms that need to compute log_prob separately.
+
+        Args:
+            features: Input features [batch, seq_len, feature_dim] or [batch, feature_dim].
+                2D inputs are automatically expanded to 3D with seq_len=1.
+            masks: Dict of boolean masks for each action head. Masks should be
+                [batch, action_dim] or [batch, seq_len, action_dim]. 2D masks are
+                automatically expanded to match features.
+            hidden: Optional LSTM hidden state.
+
+        Returns:
+            ForwardResult with logits, value, and new hidden state.
         """
+        # Normalize 2D inputs to 3D (add seq_len=1 dimension)
+        # Network expects [batch, seq_len, state_dim]
+        need_expand = features.dim() == 2
+        if need_expand:
+            features = features.unsqueeze(1)
+
+        # Normalize masks to match feature shape (network expects 3D masks)
+        def expand_mask(mask: torch.Tensor | None) -> torch.Tensor | None:
+            if mask is None:
+                return None
+            if need_expand and mask.dim() == 2:
+                return mask.unsqueeze(1)  # [batch, action_dim] -> [batch, 1, action_dim]
+            return mask
+
         output = self._network.forward(
             features,
             hidden,
-            slot_mask=masks.get("slot"),
-            blueprint_mask=masks.get("blueprint"),
-            blend_mask=masks.get("blend"),
-            op_mask=masks.get("op"),
+            slot_mask=expand_mask(masks.get("slot")),
+            blueprint_mask=expand_mask(masks.get("blueprint")),
+            blend_mask=expand_mask(masks.get("blend")),
+            op_mask=expand_mask(masks.get("op")),
         )
 
         return ForwardResult(
@@ -202,7 +227,12 @@ class LSTMPolicyBundle:
 
     @torch.inference_mode()
     def initial_hidden(self, batch_size: int) -> tuple[torch.Tensor, torch.Tensor]:
-        """Get initial LSTM hidden state."""
+        """Get initial LSTM hidden state.
+
+        Returns non-differentiable tensors suitable for rollout collection.
+        For PPO training, pass hidden=None to evaluate_actions() instead -
+        the network creates gradient-compatible hidden states internally.
+        """
         return self._network.get_initial_hidden(batch_size, self.device)
 
     # === Serialization ===

@@ -35,6 +35,7 @@ from typing import NamedTuple
 from esper.leyline import SeedStage, MIN_CULL_AGE, MIN_PROBATION_EPOCHS, DEFAULT_GAMMA
 from esper.leyline import DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
 from esper.leyline.factored_actions import LifecycleOp
+from esper.nissa import get_hub
 from .reward_telemetry import RewardComponentsTelemetry
 
 _logger = logging.getLogger(__name__)
@@ -136,7 +137,7 @@ STAGE_POTENTIALS = {
 # =============================================================================
 
 
-@dataclass(slots=True)
+@dataclass
 class ContributionRewardConfig:
     """Configuration for contribution-primary reward computation.
 
@@ -145,15 +146,25 @@ class ContributionRewardConfig:
 
     This is the recommended reward function when counterfactual validation
     is enabled in vectorized training.
+
+    Note:
+        `proxy_contribution_weight` is derived from `contribution_weight * proxy_confidence_factor`.
+        This ensures the proxy signal automatically scales with contribution_weight changes.
     """
 
     # Primary signal: seed contribution weight
     # Reduced from 3.0 to 1.0 for stable PPO (per-step rewards should be in [-10, +10])
     contribution_weight: float = 1.0
 
-    # Proxy signal for pre-blending stages (when counterfactual unavailable)
-    # Proportionally reduced from 1.0 to 0.3 (maintains 3:1 ratio with contribution_weight)
-    proxy_contribution_weight: float = 0.3
+    # M2: Proxy confidence factor - how trustworthy is proxy vs counterfactual signal?
+    # 0.3 means "proxy is 30% as reliable as true counterfactual"
+    # proxy_contribution_weight is derived as: contribution_weight * proxy_confidence_factor
+    proxy_confidence_factor: float = 0.3
+
+    @property
+    def proxy_contribution_weight(self) -> float:
+        """Derived proxy weight: contribution_weight * proxy_confidence_factor."""
+        return self.contribution_weight * self.proxy_confidence_factor
 
     # PBRS stage progression
     pbrs_weight: float = 0.3
@@ -220,6 +231,13 @@ class ContributionRewardConfig:
     early_cull_threshold: int = 5
     # Penalty for culling young seeds
     early_cull_penalty: float = -0.1
+
+    # === Auto-cull Penalty (degenerate policy prevention) ===
+    # Penalty applied when environment auto-culls a seed (safety or timeout)
+    # instead of the policy explicitly choosing to cull.
+    # (DRL Expert review 2025-12-17: prevents WAIT-spam policies that rely on
+    # environment cleanup rather than learning proactive lifecycle management)
+    auto_cull_penalty: float = -0.2
 
     @staticmethod
     def default() -> "ContributionRewardConfig":
@@ -389,6 +407,8 @@ def compute_contribution_reward(
     return_components: bool = False,
     num_fossilized_seeds: int = 0,
     num_contributing_fossilized: int = 0,
+    slot_id: str | None = None,
+    seed_id: str | None = None,
 ) -> float | tuple[float, RewardComponentsTelemetry]:
     """Compute reward using bounded attribution (ransomware-resistant).
 
@@ -425,12 +445,21 @@ def compute_contribution_reward(
         num_fossilized_seeds: Count of all fossilized seeds (for telemetry)
         num_contributing_fossilized: Count of fossilized seeds with total_improvement >= DEFAULT_MIN_FOSSILIZE_CONTRIBUTION.
             Only these seeds receive terminal bonus. This prevents bad fossilizations from being NPV-positive.
+        slot_id: Optional slot identifier for telemetry events (enables reward hacking detection)
+        seed_id: Optional seed identifier for telemetry events (enables reward hacking detection)
 
     Returns:
         Shaped reward value, or (reward, components) if return_components=True
     """
     if config is None:
         config = _DEFAULT_CONTRIBUTION_CONFIG
+
+    # PBRS requires gamma_pbrs == gamma_ppo for policy invariance (Ng et al., 1999)
+    # Runtime validation catches misconfiguration that would invalidate shaping guarantees
+    assert config.gamma == DEFAULT_GAMMA, (
+        f"PBRS gamma mismatch: config.gamma={config.gamma} != DEFAULT_GAMMA={DEFAULT_GAMMA}. "
+        "This breaks policy invariance guarantees. Use DEFAULT_GAMMA from leyline."
+    )
 
     # Track components if requested (no import needed - already at module level)
     components = RewardComponentsTelemetry() if return_components else None
@@ -468,7 +497,9 @@ def compute_contribution_reward(
         # Ratio penalty only for high contribution (> 1.0) to avoid noise
         # Only calculate when attribution_discount >= 0.5 (avoid penalty stacking)
         if seed_contribution > 1.0 and attribution_discount >= 0.5:
-            if total_imp > config.improvement_safe_threshold:
+            # Guard against division by very small values even if threshold is misconfigured
+            safe_threshold = max(config.improvement_safe_threshold, 1e-8)
+            if total_imp > safe_threshold:
                 # Safe zone: actual improvement exists
                 # Check if contribution vastly exceeds improvement (suspicious)
                 ratio = seed_contribution / total_imp
@@ -483,6 +514,29 @@ def compute_contribution_reward(
                 # Dangerous: high contribution but no real improvement
                 # Scale penalty by contribution magnitude (cap at cull_good_seed_penalty)
                 ratio_penalty = config.cull_good_seed_penalty * min(1.0, seed_contribution / 10.0)
+
+        # === H9: Wire telemetry for reward hacking detection ===
+        # Emit telemetry events when attribution anomalies are detected
+        if slot_id is not None and seed_id is not None:
+            hub = get_hub()
+            # Check for reward hacking (contribution >> improvement)
+            if total_imp > 0 and ratio_penalty != 0:
+                _check_reward_hacking(
+                    hub,
+                    seed_contribution=seed_contribution,
+                    total_improvement=total_imp,
+                    hacking_ratio_threshold=config.hacking_ratio_threshold,
+                    slot_id=slot_id,
+                    seed_id=seed_id,
+                )
+            # Check for ransomware signature (high contribution + negative total)
+            _check_ransomware_signature(
+                hub,
+                seed_contribution=seed_contribution,
+                total_improvement=total_imp,
+                slot_id=slot_id,
+                seed_id=seed_id,
+            )
 
     if seed_contribution is not None and not seed_is_fossilized:
         # Counterfactual available (BLENDING+ stages)
@@ -707,7 +761,7 @@ def compute_sparse_reward(
         config: Reward configuration with param_budget, param_penalty_weight, sparse_reward_scale
 
     Returns:
-        0.0 for non-terminal epochs, scaled reward at terminal (clamped to [-1, 1])
+        0.0 for non-terminal epochs, scaled reward at terminal in [-scale, scale]
     """
     # Non-terminal: return 0.0 (the defining property of sparse rewards)
     if epoch != max_epochs:
@@ -717,11 +771,16 @@ def compute_sparse_reward(
     accuracy_reward = host_max_acc / 100.0
     param_cost = config.param_penalty_weight * (total_params / config.param_budget)
 
-    # Apply scale for better gradient signal (DRL Expert recommendation)
-    reward = config.sparse_reward_scale * (accuracy_reward - param_cost)
+    # H10 FIX: Clamp base reward to [-1, 1] BEFORE scaling, not after.
+    # This ensures sparse_reward_scale actually affects magnitude.
+    # Without this fix, scale=2.5 with base=0.78 → scaled=1.95 → clamped to 1.0 (scale is defeated).
+    # With fix: base=0.78 → clamped to 0.78 → scaled to 1.95 (scale is effective).
+    base_reward = accuracy_reward - param_cost
+    clamped_base = max(-1.0, min(1.0, base_reward))
 
-    # Clamp to [-1.0, 1.0] for stable learning
-    return max(-1.0, min(1.0, reward))
+    # Apply scale for better gradient signal (DRL Expert recommendation)
+    # Final reward is in [-scale, scale] range
+    return config.sparse_reward_scale * clamped_base
 
 
 def compute_minimal_reward(
@@ -1065,16 +1124,20 @@ def _contribution_cull_shaping(
         elif seed_contribution < 0:
             return config.cull_acceptable_bonus  # Acceptable: marginal harm
         else:
-            # Penalize culling good seeds, scaled by how good
-            return config.cull_good_seed_penalty - 0.05 * seed_contribution
+            # M3 FIX: Penalize culling good seeds, scaled by how good, but BOUNDED.
+            # Without cap: contribution=20 → penalty=-1.3, breaking reward scale.
+            # Cap at 3x base penalty to keep in reasonable [-1, 0] range.
+            base_penalty = config.cull_good_seed_penalty  # -0.3 default
+            scaled_penalty = base_penalty - 0.05 * seed_contribution
+            # Cap at 3x base penalty magnitude (e.g., -0.9 with default -0.3)
+            max_penalty = 3.0 * base_penalty  # More negative than base
+            return max(scaled_penalty, max_penalty)
 
     # No counterfactual (TRAINING stage) - neutral
     # We don't have information yet, so CULL is neither good nor bad
     return 0.0
 
 
-# TODO: [UNWIRED TELEMETRY] - Call _check_reward_hacking() and _check_ransomware_signature()
-# from compute_contribution_reward() when attribution is computed. See telemetry-phase3.md Task 5.
 def _check_reward_hacking(
     hub,
     *,
@@ -1324,19 +1387,25 @@ def compute_loss_reward(
 # Intervention Costs
 # =============================================================================
 
+# M5: Derive from ContributionRewardConfig defaults to avoid value duplication.
+# This ensures INTERVENTION_COSTS stays in sync with config defaults.
+_default_config = ContributionRewardConfig()
 INTERVENTION_COSTS: dict[LifecycleOp, float] = {
     LifecycleOp.WAIT: 0.0,
-    LifecycleOp.GERMINATE: -0.02,
-    LifecycleOp.FOSSILIZE: -0.01,
-    LifecycleOp.CULL: -0.005,
+    LifecycleOp.GERMINATE: _default_config.germinate_cost,
+    LifecycleOp.FOSSILIZE: _default_config.fossilize_cost,
+    LifecycleOp.CULL: _default_config.cull_cost,
 }
+del _default_config  # Don't pollute module namespace
 
 
 def get_intervention_cost(action: LifecycleOp) -> float:
-    """Get intervention cost for an action.
+    """Get intervention cost for an action using default config values.
 
     Small negative costs discourage unnecessary interventions,
     encouraging the agent to only act when beneficial.
+
+    Note: For custom costs, use ContributionRewardConfig fields directly.
     """
     return INTERVENTION_COSTS.get(action, 0.0)
 

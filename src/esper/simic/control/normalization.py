@@ -21,6 +21,19 @@ class RunningMeanStd:
 
     GPU-native: automatically moves stats to match input device.
 
+    Thread Safety (H13):
+        This class is NOT thread-safe. The update() and normalize() methods
+        modify internal state (mean, var, count) without locks. Concurrent
+        calls from multiple threads will cause data races.
+
+        In vectorized training (simic/training/vectorized.py), this is safe
+        because each ParallelEnvState has its own RunningMeanStd instance.
+        Per-env normalizers avoid cross-env state sharing.
+
+        If you need to share a normalizer across threads:
+        - Use external locking (threading.Lock) around update() calls
+        - Or use torch.nn.SyncBatchNorm for distributed training
+
     Args:
         shape: Shape of observations to normalize
         epsilon: Small constant for numerical stability

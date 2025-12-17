@@ -70,6 +70,10 @@ class ParallelEnvState:
     # Per-slot EMA tracking for seed gradient ratio (for G2 gate)
     # Smooths per-step ratio noise with momentum=0.9
     gradient_ratio_ema: dict[str, float] = field(default_factory=dict)
+    # Pending auto-cull penalty to be applied on next reward computation
+    # (DRL Expert review 2025-12-17: prevents degenerate WAIT-spam policies
+    # that rely on environment cleanup rather than proactive lifecycle management)
+    pending_auto_cull_penalty: float = 0.0
 
     def __post_init__(self) -> None:
         # Initialize counters with LifecycleOp names (WAIT, GERMINATE, FOSSILIZE, CULL)
