@@ -402,7 +402,7 @@ def run_heuristic_episode(
         total = 0
         batch_count = 0
 
-        with torch.no_grad():
+        with torch.inference_mode():
             for inputs, targets in testloader:
                 if max_batches and batch_count >= max_batches:
                     break

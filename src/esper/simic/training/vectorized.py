@@ -1011,7 +1011,7 @@ def train_ppo_vectorized(
                 targets.record_stream(env_state.stream)
 
             model.eval()
-            with torch.no_grad():
+            with torch.inference_mode():
                 outputs = model(inputs)
                 loss, correct_tensor, total = loss_and_correct(outputs, targets, criterion)
 
@@ -1879,7 +1879,7 @@ def train_ppo_vectorized(
                     post_action_normalized = obs_normalizer.normalize(post_action_state)
 
                     # Get V(s_{t+1}) - use updated LSTM hidden state from this step
-                    with torch.no_grad():
+                    with torch.inference_mode():
                         _, _, bootstrap_tensor, _ = agent.network.get_action(
                             post_action_normalized,
                             hidden=env_state.lstm_hidden,

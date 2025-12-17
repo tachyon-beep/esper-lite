@@ -522,7 +522,7 @@ class PPOAgent:
             #
             # KL(old||new) ≈ E[(ratio - 1) - log(ratio)] (KL3 estimator from Schulman)
             # For factored action space, joint KL = SUM of per-head KLs (not mean).
-            with torch.no_grad():
+            with torch.inference_mode():
                 head_kls = []
                 for key in HEAD_NAMES:
                     mask = head_masks[key]

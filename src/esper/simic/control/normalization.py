@@ -45,7 +45,7 @@ class RunningMeanStd:
         self._device = device
         self.momentum = momentum
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def update(self, x: torch.Tensor) -> None:
         """Update running stats with new batch of observations.
 
@@ -71,9 +71,23 @@ class RunningMeanStd:
         """
         if self.momentum is not None:
             # EMA update: slower adaptation to prevent distribution shift
-            # during long training runs
+            # during long training runs.
+            #
+            # Law of total variance: when combining distributions with different means,
+            # the combined variance includes a cross-term for between-group variance:
+            #   Var_combined = w1*Var1 + w2*Var2 + w1*w2*(Mean1 - Mean2)^2
+            #
+            # For EMA with weights (momentum, 1-momentum):
+            #   new_var = m*old_var + (1-m)*batch_var + m*(1-m)*(old_mean - batch_mean)^2
+            #
+            # The cross-term must be computed BEFORE updating the mean.
+            delta = batch_mean - self.mean
             self.mean = self.momentum * self.mean + (1 - self.momentum) * batch_mean
-            self.var = self.momentum * self.var + (1 - self.momentum) * batch_var
+            self.var = (
+                self.momentum * self.var
+                + (1 - self.momentum) * batch_var
+                + self.momentum * (1 - self.momentum) * delta ** 2
+            )
             # Count still tracked for diagnostics but not used in EMA
             self.count = self.count + batch_count
         else:
