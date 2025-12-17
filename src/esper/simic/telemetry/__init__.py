@@ -52,6 +52,9 @@ from .lstm_health import (
 # Gradient EMA drift detection (P4-9)
 from .gradient_ema import GradientEMATracker
 
+# torch.profiler integration (P4-5)
+from .profiler import training_profiler
+
 # Telemetry emitters (pure functions)
 from .emitters import (
     emit_with_env_context,
@@ -98,6 +101,8 @@ __all__ = [
     "compute_lstm_health",
     # Gradient EMA drift detection (P4-9)
     "GradientEMATracker",
+    # torch.profiler integration (P4-5)
+    "training_profiler",
     # Emitters
     "emit_with_env_context",
     "emit_batch_completed",
