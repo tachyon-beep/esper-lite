@@ -298,3 +298,119 @@ class DeviceVitals:
             memory_total_gb=data["memory_total_gb"],
             temperature_c=data.get("temperature_c", 0),
         )
+
+
+@dataclass
+class FeedEvent:
+    """Single event for the Event Feed panel."""
+
+    timestamp: str  # ISO format or display format like "12:00:03"
+    event_type: str  # GATE, STAGE, PPO, GERM, CULL, etc.
+    env_id: int | None  # None for global events like PPO updates
+    message: str
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to JSON-serializable dict."""
+        return {
+            "timestamp": self.timestamp,
+            "event_type": self.event_type,
+            "env_id": self.env_id,
+            "message": self.message,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> FeedEvent:
+        """Reconstruct from dict."""
+        return cls(
+            timestamp=data["timestamp"],
+            event_type=data["event_type"],
+            env_id=data.get("env_id"),
+            message=data["message"],
+        )
+
+
+@dataclass
+class TuiSnapshot:
+    """Complete snapshot for Overwatch TUI rendering.
+
+    This is the root schema that contains all data needed to render
+    the entire TUI at a point in time. Designed for JSON serialization
+    to support replay functionality.
+    """
+
+    # Schema version for future migrations
+    schema_version: int
+
+    # Timing
+    captured_at: str  # ISO format timestamp
+
+    # Connection status
+    connection: ConnectionStatus
+
+    # Tamiyo agent state
+    tamiyo: TamiyoState
+
+    # Run identity
+    run_id: str = ""
+    task_name: str = ""
+    episode: int = 0
+    batch: int = 0
+    best_metric: float = 0.0
+    runtime_s: float = 0.0
+
+    # Device vitals
+    devices: list[DeviceVitals] = field(default_factory=list)
+
+    # Flight board (list of envs, UI will sort by anomaly)
+    flight_board: list[EnvSummary] = field(default_factory=list)
+
+    # Event feed
+    event_feed: list[FeedEvent] = field(default_factory=list)
+
+    # Aggregate health counts
+    envs_ok: int = 0
+    envs_warn: int = 0
+    envs_crit: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to JSON-serializable dict."""
+        return {
+            "schema_version": self.schema_version,
+            "captured_at": self.captured_at,
+            "connection": self.connection.to_dict(),
+            "tamiyo": self.tamiyo.to_dict(),
+            "run_id": self.run_id,
+            "task_name": self.task_name,
+            "episode": self.episode,
+            "batch": self.batch,
+            "best_metric": self.best_metric,
+            "runtime_s": self.runtime_s,
+            "devices": [d.to_dict() for d in self.devices],
+            "flight_board": [e.to_dict() for e in self.flight_board],
+            "event_feed": [e.to_dict() for e in self.event_feed],
+            "envs_ok": self.envs_ok,
+            "envs_warn": self.envs_warn,
+            "envs_crit": self.envs_crit,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> TuiSnapshot:
+        """Reconstruct from dict."""
+        return cls(
+            schema_version=data["schema_version"],
+            captured_at=data["captured_at"],
+            connection=ConnectionStatus.from_dict(data["connection"]),
+            tamiyo=TamiyoState.from_dict(data.get("tamiyo", {})),
+            run_id=data.get("run_id", ""),
+            task_name=data.get("task_name", ""),
+            episode=data.get("episode", 0),
+            batch=data.get("batch", 0),
+            best_metric=data.get("best_metric", 0.0),
+            runtime_s=data.get("runtime_s", 0.0),
+            devices=[DeviceVitals.from_dict(d) for d in data.get("devices", [])],
+            flight_board=[EnvSummary.from_dict(e) for e in data.get("flight_board", [])],
+            event_feed=[FeedEvent.from_dict(e) for e in data.get("event_feed", [])],
+            envs_ok=data.get("envs_ok", 0),
+            envs_warn=data.get("envs_warn", 0),
+            envs_crit=data.get("envs_crit", 0),
+        )

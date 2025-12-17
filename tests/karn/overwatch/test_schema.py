@@ -389,3 +389,170 @@ class TestDeviceVitals:
 
         assert restored.device_id == vitals.device_id
         assert restored.memory_used_gb == vitals.memory_used_gb
+
+
+class TestTuiSnapshot:
+    """Tests for TuiSnapshot dataclass (root schema)."""
+
+    def test_tui_snapshot_creation(self) -> None:
+        """TuiSnapshot can be created with minimal fields."""
+        from esper.karn.overwatch.schema import (
+            TuiSnapshot,
+            ConnectionStatus,
+            TamiyoState,
+        )
+
+        snap = TuiSnapshot(
+            schema_version=1,
+            captured_at="2025-12-18T12:00:00Z",
+            connection=ConnectionStatus(True, 1000.0, 0.5),
+            tamiyo=TamiyoState(),
+        )
+
+        assert snap.schema_version == 1
+        assert snap.connection.connected is True
+        assert snap.flight_board == []
+
+    def test_tui_snapshot_with_envs(self) -> None:
+        """TuiSnapshot contains flight board envs."""
+        from esper.karn.overwatch.schema import (
+            TuiSnapshot,
+            ConnectionStatus,
+            TamiyoState,
+            EnvSummary,
+            SlotChipState,
+        )
+
+        envs = [
+            EnvSummary(
+                env_id=0,
+                device_id=0,
+                status="OK",
+                slots={"r0c1": SlotChipState("r0c1", "TRAINING", "conv", 0.5)},
+            ),
+            EnvSummary(
+                env_id=1,
+                device_id=1,
+                status="WARN",
+                anomaly_score=0.6,
+            ),
+        ]
+
+        snap = TuiSnapshot(
+            schema_version=1,
+            captured_at="2025-12-18T12:00:00Z",
+            connection=ConnectionStatus(True, 1000.0, 0.5),
+            tamiyo=TamiyoState(),
+            flight_board=envs,
+        )
+
+        assert len(snap.flight_board) == 2
+        assert snap.flight_board[0].slots["r0c1"].stage == "TRAINING"
+
+    def test_tui_snapshot_to_dict(self) -> None:
+        """TuiSnapshot serializes completely."""
+        from esper.karn.overwatch.schema import (
+            TuiSnapshot,
+            ConnectionStatus,
+            TamiyoState,
+            EnvSummary,
+            DeviceVitals,
+        )
+
+        snap = TuiSnapshot(
+            schema_version=1,
+            captured_at="2025-12-18T12:00:00Z",
+            connection=ConnectionStatus(True, 1000.0, 0.5),
+            tamiyo=TamiyoState(kl_divergence=0.02),
+            run_id="run-123",
+            task_name="cifar10",
+            episode=47,
+            batch=1203,
+            best_metric=82.1,
+            runtime_s=8040.0,
+            devices=[DeviceVitals(0, "GPU 0", 94.0, 11.2, 12.0, 72)],
+            flight_board=[EnvSummary(0, 0, "OK")],
+            envs_ok=4,
+            envs_warn=0,
+            envs_crit=0,
+        )
+
+        d = snap.to_dict()
+
+        assert d["schema_version"] == 1
+        assert d["tamiyo"]["kl_divergence"] == 0.02
+        assert len(d["devices"]) == 1
+        assert d["devices"][0]["utilization_pct"] == 94.0
+
+    def test_tui_snapshot_from_dict(self) -> None:
+        """TuiSnapshot deserializes completely."""
+        from esper.karn.overwatch.schema import TuiSnapshot
+
+        d = {
+            "schema_version": 1,
+            "captured_at": "2025-12-18T12:00:00Z",
+            "connection": {"connected": True, "last_event_ts": 1000.0, "staleness_s": 1.0},
+            "tamiyo": {"kl_divergence": 0.015, "action_counts": {"BLEND": 5}},
+            "run_id": "test-run",
+            "task_name": "mnist",
+            "episode": 10,
+            "batch": 500,
+            "best_metric": 95.0,
+            "runtime_s": 600.0,
+            "devices": [
+                {"device_id": 0, "name": "GPU 0", "utilization_pct": 80.0,
+                 "memory_used_gb": 8.0, "memory_total_gb": 12.0}
+            ],
+            "flight_board": [
+                {"env_id": 0, "device_id": 0, "status": "OK", "slots": {}}
+            ],
+            "event_feed": [],
+            "envs_ok": 1,
+            "envs_warn": 0,
+            "envs_crit": 0,
+        }
+
+        snap = TuiSnapshot.from_dict(d)
+
+        assert snap.schema_version == 1
+        assert snap.tamiyo.kl_divergence == 0.015
+        assert snap.tamiyo.action_counts["BLEND"] == 5
+        assert len(snap.devices) == 1
+        assert snap.devices[0].name == "GPU 0"
+
+    def test_tui_snapshot_json_roundtrip(self) -> None:
+        """TuiSnapshot survives full JSON serialization cycle."""
+        from esper.karn.overwatch.schema import (
+            TuiSnapshot,
+            ConnectionStatus,
+            TamiyoState,
+            EnvSummary,
+            SlotChipState,
+            DeviceVitals,
+        )
+
+        original = TuiSnapshot(
+            schema_version=1,
+            captured_at="2025-12-18T12:00:00Z",
+            connection=ConnectionStatus(True, 1000.0, 0.5),
+            tamiyo=TamiyoState(
+                action_counts={"GERMINATE": 10, "BLEND": 20},
+                kl_divergence=0.019,
+            ),
+            devices=[DeviceVitals(0, "GPU 0", 90.0, 10.0, 12.0, 68)],
+            flight_board=[
+                EnvSummary(
+                    env_id=0,
+                    device_id=0,
+                    status="OK",
+                    slots={"r0c1": SlotChipState("r0c1", "BLENDING", "conv", 0.7)},
+                )
+            ],
+        )
+
+        json_str = json.dumps(original.to_dict())
+        restored = TuiSnapshot.from_dict(json.loads(json_str))
+
+        assert restored.schema_version == original.schema_version
+        assert restored.tamiyo.kl_divergence == original.tamiyo.kl_divergence
+        assert restored.flight_board[0].slots["r0c1"].alpha == 0.7
