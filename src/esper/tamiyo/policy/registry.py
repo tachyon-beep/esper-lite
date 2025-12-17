@@ -28,6 +28,17 @@ def register_policy(name: str):
     Raises:
         TypeError: If the class doesn't implement PolicyBundle protocol
         ValueError: If name is already registered
+
+    Note:
+        This performs a **best-effort structural check** only:
+
+        - Verifies required method/property names exist via hasattr
+        - Does NOT validate call signatures or return types
+        - Does NOT verify that "properties" are actually @property decorated
+
+        For full Protocol compliance validation, use static type checking
+        (mypy/pyright) with the PolicyBundle Protocol definition.
+        Runtime errors may still occur if method signatures don't match.
     """
     def decorator(cls: Type[T]) -> Type[T]:
         # Validate protocol compliance

@@ -1,7 +1,7 @@
 """Tests for PolicyBundle protocol."""
 
+import pytest
 import torch
-from typing import runtime_checkable
 
 from esper.tamiyo.policy.protocol import PolicyBundle
 from esper.tamiyo.policy.types import ActionResult, EvalResult, ForwardResult
@@ -54,7 +54,7 @@ def test_action_result_dataclass():
         hidden=(torch.zeros(1, 1, 256), torch.zeros(1, 1, 256)),
     )
     assert result.action['slot'] == 0
-    assert result.value.item() == 0.5
+    assert result.value.item() == pytest.approx(0.5)
 
 
 def test_eval_result_dataclass():

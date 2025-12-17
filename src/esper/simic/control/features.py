@@ -4,6 +4,15 @@ DEPRECATED: Import from esper.tamiyo.policy.features instead.
 This module exists for backwards compatibility during migration.
 """
 
+import warnings
+
+warnings.warn(
+    "esper.simic.control.features is deprecated. "
+    "Import from esper.tamiyo.policy.features instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 # Re-export everything from tamiyo
 from esper.tamiyo.policy.features import (
     safe,

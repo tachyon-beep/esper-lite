@@ -25,7 +25,6 @@ import asyncio
 import json
 import logging
 import threading
-from dataclasses import asdict
 from pathlib import Path
 from queue import Queue, Empty
 from typing import Any, TYPE_CHECKING
@@ -40,20 +39,35 @@ _DASHBOARD_PATH = Path(__file__).parent / "dashboard.html"
 
 
 def _serialize_event(event: "TelemetryEventLike") -> str:
-    """Serialize TelemetryEvent to JSON string."""
-    data = asdict(event)
+    """Serialize TelemetryEvent-like object to JSON string.
 
-    # Convert enum to string
-    # hasattr AUTHORIZED by John on 2025-12-14 03:00:00 UTC
+    Uses explicit field access instead of asdict() since TelemetryEventLike
+    is a Protocol, not a dataclass. This allows any object implementing
+    the protocol to be serialized correctly.
+    """
+    # Extract fields explicitly - Protocol doesn't guarantee dataclass
+    # hasattr AUTHORIZED by John on 2025-12-17 10:00:00 UTC
     # Justification: Serialization - handle both enum and string event_type values
-    if hasattr(data.get("event_type"), "name"):
-        data["event_type"] = data["event_type"].name
+    event_type = event.event_type
+    if hasattr(event_type, "name"):
+        event_type = event_type.name
 
-    # Convert datetime to ISO string
-    # hasattr AUTHORIZED by John on 2025-12-14 03:00:00 UTC
+    # hasattr AUTHORIZED by John on 2025-12-17 10:00:00 UTC
     # Justification: Serialization - safely handle datetime objects
-    if data.get("timestamp") and hasattr(data["timestamp"], "isoformat"):
-        data["timestamp"] = data["timestamp"].isoformat()
+    timestamp = event.timestamp
+    if hasattr(timestamp, "isoformat"):
+        timestamp = timestamp.isoformat()
+
+    data = {
+        "event_type": event_type,
+        "timestamp": timestamp,
+        "data": event.data,
+        "epoch": event.epoch,
+        "seed_id": event.seed_id,
+        "slot_id": event.slot_id,
+        "severity": event.severity,
+        "message": event.message,
+    }
 
     return json.dumps(data, default=str)
 

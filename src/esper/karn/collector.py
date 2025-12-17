@@ -95,6 +95,7 @@ class KarnCollector:
         self.store = TelemetryStore()
         self._backends: list[OutputBackend] = []
         self._episode_active = False
+        self._closed = False  # Idempotency flag for close()
 
         # Tier 3: Anomaly detection and dense trace capture
         self._anomaly_detector = AnomalyDetector(config=self.config.dense_trigger)
@@ -105,15 +106,15 @@ class KarnCollector:
     # =========================================================================
 
     def add_backend(self, backend: OutputBackend) -> None:
-        """Add an output backend."""
+        """Add an output backend.
+
+        The backend is started immediately on add.
+        """
         self._backends.append(backend)
-        # Auto-start backend if we are already running?
-        # KarnCollector doesn't have a "running" state per se, but backends might need start.
-        if hasattr(backend, "start"):
-            try:
-                backend.start()
-            except Exception as e:
-                _logger.error(f"Error starting backend {backend}: {e}")
+        try:
+            backend.start()
+        except Exception as e:
+            _logger.error(f"Error starting backend {backend}: {e}")
 
     def remove_backend(self, backend: OutputBackend) -> None:
         """Remove an output backend."""
@@ -125,16 +126,25 @@ class KarnCollector:
                 _logger.error(f"Error closing backend {backend}: {e}")
 
     def start(self) -> None:
-        """Start all backends (OutputBackend protocol)."""
+        """Start all backends.
+
+        Note: Backends are automatically started when added via add_backend().
+        This method exists for API consistency but backends should be idempotent.
+        """
         for backend in self._backends:
-            if hasattr(backend, "start"):
-                try:
-                    backend.start()
-                except Exception as e:
-                    _logger.error(f"Error starting backend {backend}: {e}")
+            try:
+                backend.start()
+            except Exception as e:
+                _logger.error(f"Error starting backend {backend}: {e}")
 
     def close(self) -> None:
-        """Close all backends."""
+        """Close all backends (idempotent).
+
+        Safe to call multiple times - only closes backends once.
+        """
+        if self._closed:
+            return
+        self._closed = True
         for backend in self._backends:
             try:
                 backend.close()
@@ -147,6 +157,7 @@ class KarnCollector:
         self.store = TelemetryStore()
         self._backends.clear()
         self._episode_active = False
+        self._closed = False  # Allow collector to be reused after reset
         self._anomaly_detector.reset()
         self._policy_detector.reset()
 

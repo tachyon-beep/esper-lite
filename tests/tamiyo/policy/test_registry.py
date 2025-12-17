@@ -155,3 +155,15 @@ def test_register_policy_validates_protocol():
 
     with pytest.raises(TypeError, match="does not implement PolicyBundle"):
         register_policy("invalid")(InvalidPolicy)
+
+
+def test_register_policy_duplicate_raises():
+    """@register_policy should raise ValueError for duplicate names."""
+    @register_policy("duplicate_test")
+    class FirstPolicy(MockPolicyBundle):
+        pass
+
+    with pytest.raises(ValueError, match="already registered"):
+        @register_policy("duplicate_test")
+        class SecondPolicy(MockPolicyBundle):
+            pass

@@ -118,7 +118,7 @@ class TestPPOAgentFactoredInVectorized:
         assert isinstance(log_probs, dict)
         assert values.shape == (n_envs,)
 
-    def test_tamiyo_buffer_stores_factored_transitions(self):
+    def test_rollout_buffer_stores_factored_transitions(self):
         """TamiyoRolloutBuffer should store factored transitions from multiple envs."""
         n_envs = 4
         state_dim = MULTISLOT_FEATURE_SIZE

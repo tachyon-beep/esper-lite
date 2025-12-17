@@ -300,8 +300,12 @@ def _validate_action_mask(mask: torch.Tensor) -> None:
 class MaskedCategorical:
     """Categorical distribution with action masking and correct entropy calculation.
 
-    Masks invalid actions by setting their logits to dtype minimum before softmax.
-    Uses torch.finfo().min for float16/bfloat16 compatibility.
+    Masks invalid actions by setting their logits to MASKED_LOGIT_VALUE (-1e4)
+    before softmax. This value is chosen to be:
+    - Large enough to effectively zero the probability after softmax
+    - Small enough to avoid numerical overflow in FP16/BF16 (finfo.min can cause issues)
+    - Consistent across all dtypes for deterministic behavior
+
     Computes entropy only over valid actions to avoid penalizing restricted states.
     """
 

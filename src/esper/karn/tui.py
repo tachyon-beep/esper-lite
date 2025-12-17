@@ -239,7 +239,6 @@ class EnvState:
 # TUI State
 # =============================================================================
 
-# ... (rest of the file content) ...
 
 @dataclass
 class TUIState:

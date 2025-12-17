@@ -415,9 +415,12 @@ class NissaHub:
 
     def __init__(self):
         self._backends: list[OutputBackend] = []
+        self._closed = False  # Idempotency flag for close()
 
     def add_backend(self, backend: OutputBackend) -> None:
         """Add an output backend to the hub.
+
+        The backend is started immediately on add.
 
         Args:
             backend: The output backend to add.
@@ -461,9 +464,16 @@ class NissaHub:
         """
         self.close()
         self._backends.clear()
+        self._closed = False  # Allow hub to be reused after reset
 
     def close(self) -> None:
-        """Close all backends."""
+        """Close all backends (idempotent).
+
+        Safe to call multiple times - only closes backends once.
+        """
+        if self._closed:
+            return
+        self._closed = True
         for backend in self._backends:
             try:
                 backend.close()
@@ -494,14 +504,13 @@ def get_hub() -> NissaHub:
 def reset_hub() -> None:
     """Reset the global NissaHub instance.
 
-    Closes all existing backends and clears the singleton.
+    Closes all existing backends and clears the backend list, but keeps the
+    singleton instance alive (allows reuse without creating a new hub).
     Useful for test cleanup.
     """
     global _global_hub
     if _global_hub is not None:
         _global_hub.reset()
-        # Don't set to None, just reset state, to keep singleton alive but empty
-        # Or better: keep instance, clear backends. reset() does this.
 
 
 def emit(event: TelemetryEvent) -> None:
