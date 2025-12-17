@@ -164,3 +164,16 @@ def test_lstm_bundle_get_value(lstm_bundle):
     assert isinstance(value, torch.Tensor)
     # Value should be scalar or batch dimension
     assert value.numel() == 1 or (value.dim() == 1 and value.shape[0] == 1)
+
+
+def test_get_value_does_not_create_grad_graph(lstm_bundle):
+    """get_value() should not create gradient computation graph."""
+    # Ensure we're in a context where gradients would normally be tracked
+    features = torch.randn(1, 50).requires_grad_(True)
+
+    value = lstm_bundle.get_value(features)
+
+    # Value should not require grad (computed in inference_mode)
+    assert not value.requires_grad, (
+        "get_value() created gradient graph. Add @torch.inference_mode() decorator."
+    )

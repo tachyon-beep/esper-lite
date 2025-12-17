@@ -205,6 +205,7 @@ class LSTMPolicyBundle:
 
     # === Value Estimation ===
 
+    @torch.inference_mode()
     def get_value(
         self,
         features: torch.Tensor,
@@ -212,8 +213,9 @@ class LSTMPolicyBundle:
     ) -> torch.Tensor:
         """Get state value estimate.
 
-        Note: The network doesn't have a standalone get_value method,
-        so we'll do a forward pass and extract the value.
+        Note: Uses inference_mode() since this is only called for bootstrap
+        value computation during rollout collection, not during PPO training.
+        The network's forward pass for training uses evaluate_actions() instead.
         """
         # Need to add seq_len dimension if not present
         if features.dim() == 2:
