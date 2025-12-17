@@ -18,7 +18,7 @@ from esper.leyline import HEAD_NAMES
 
 if TYPE_CHECKING:
     from esper.leyline import TrainingSignals
-    from esper.simic.agent.tamiyo_network import FactoredRecurrentActorCritic
+    from esper.simic.agent.network import FactoredRecurrentActorCritic
 
 
 @register_policy("lstm")
@@ -58,7 +58,7 @@ class LSTMPolicyBundle:
         self.slot_config = slot_config or SlotConfig.default()
 
         # Lazy import to avoid circular dependency
-        from esper.simic.agent.tamiyo_network import FactoredRecurrentActorCritic
+        from esper.simic.agent.network import FactoredRecurrentActorCritic
 
         # Create the network
         # Note: The network's first parameter is "state_dim" which is our feature_dim

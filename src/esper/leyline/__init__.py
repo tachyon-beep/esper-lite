@@ -52,7 +52,7 @@ DEFAULT_EPISODE_LENGTH = 25
 
 # LSTM hidden dimension - architecture constant for temporal memory.
 # Must match across network construction and buffer state tracking.
-# Used by: config.py, vectorized.py, ppo.py, rollout_buffer.py, tamiyo_network.py
+# Used by: config.py, vectorized.py, ppo.py, rollout_buffer.py, network.py
 DEFAULT_LSTM_HIDDEN_DIM = 128
 
 # Parallel environments for vectorized training.
