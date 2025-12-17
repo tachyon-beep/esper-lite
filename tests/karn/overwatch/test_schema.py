@@ -556,3 +556,24 @@ class TestTuiSnapshot:
         assert restored.schema_version == original.schema_version
         assert restored.tamiyo.kl_divergence == original.tamiyo.kl_divergence
         assert restored.flight_board[0].slots["r0c1"].alpha == 0.7
+
+
+class TestPackageExports:
+    """Tests that public API is exported correctly."""
+
+    def test_all_schemas_importable_from_package(self) -> None:
+        """All schema classes are importable from overwatch package."""
+        from esper.karn.overwatch import (
+            TuiSnapshot,
+            EnvSummary,
+            SlotChipState,
+            TamiyoState,
+            ConnectionStatus,
+            DeviceVitals,
+            FeedEvent,
+        )
+
+        # Just verify imports work
+        assert TuiSnapshot is not None
+        assert EnvSummary is not None
+        assert SlotChipState is not None
