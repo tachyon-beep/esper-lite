@@ -19,6 +19,7 @@ import torch.nn.functional as F
 from .tamiyo_buffer import TamiyoRolloutBuffer
 from .tamiyo_network import FactoredRecurrentActorCritic
 from .advantages import compute_per_head_advantages
+from .types import PPOUpdateMetrics
 from esper.simic.telemetry import RatioExplosionDiagnostic
 from esper.leyline import (
     DEFAULT_GAMMA,
@@ -416,7 +417,7 @@ class PPOAgent:
     def update(
         self,
         clear_buffer: bool = True,
-    ) -> dict:
+    ) -> PPOUpdateMetrics:
         """PPO update (factored + recurrent).
 
         Uses per-head advantages with causal masking and LSTM hidden states.

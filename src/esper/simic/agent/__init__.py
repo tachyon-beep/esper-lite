@@ -22,6 +22,14 @@ from .ppo import (
     PPOAgent,
 )
 
+from .types import (
+    GradientStats,
+    PPOUpdateMetrics,
+    HeadLogProbs,
+    HeadEntropies,
+    ActionDict,
+)
+
 __all__ = [
     # Advantages
     "compute_per_head_advantages",
@@ -34,4 +42,10 @@ __all__ = [
     "CHECKPOINT_VERSION",
     "signals_to_features",
     "PPOAgent",
+    # Types
+    "GradientStats",
+    "PPOUpdateMetrics",
+    "HeadLogProbs",
+    "HeadEntropies",
+    "ActionDict",
 ]
