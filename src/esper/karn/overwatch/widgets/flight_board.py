@@ -14,7 +14,7 @@ from textual.containers import VerticalScroll
 from textual.message import Message
 from textual.widgets import Static
 
-from esper.karn.overwatch.display_state import DisplayState, HysteresisSorter
+from esper.karn.overwatch.display_state import DisplayState
 from esper.karn.overwatch.widgets.env_row import EnvRow
 
 if TYPE_CHECKING:
@@ -27,7 +27,7 @@ class FlightBoard(VerticalScroll):
     Features:
     - Sorts envs by anomaly score with hysteresis
     - j/k or arrow navigation between envs
-    - Enter to expand env details, Esc to collapse
+    - Enter to toggle env expansion
     - Visual focus indicator on selected row
 
     Messages:
