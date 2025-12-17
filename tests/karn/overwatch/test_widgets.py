@@ -120,3 +120,138 @@ class TestSlotChip:
         rendered = chip.render_chip()
         assert "G1" in rendered
         assert "✗" in rendered or "✘" in rendered or "×" in rendered
+
+
+class TestEnvRow:
+    """Tests for EnvRow widget."""
+
+    def test_env_row_imports(self) -> None:
+        """EnvRow can be imported."""
+        from esper.karn.overwatch.widgets.env_row import EnvRow
+
+        assert EnvRow is not None
+
+    def test_env_row_renders_env_id(self) -> None:
+        """EnvRow displays environment ID."""
+        from esper.karn.overwatch.widgets.env_row import EnvRow
+        from esper.karn.overwatch.schema import EnvSummary
+
+        env = EnvSummary(
+            env_id=3,
+            device_id=1,
+            status="OK",
+        )
+        row = EnvRow(env)
+
+        rendered = row.render_header()
+        assert "Env 3" in rendered or "env:3" in rendered.lower()
+
+    def test_env_row_renders_device_id(self) -> None:
+        """EnvRow displays device/GPU ID."""
+        from esper.karn.overwatch.widgets.env_row import EnvRow
+        from esper.karn.overwatch.schema import EnvSummary
+
+        env = EnvSummary(
+            env_id=0,
+            device_id=2,
+            status="OK",
+        )
+        row = EnvRow(env)
+
+        rendered = row.render_header()
+        assert "gpu:2" in rendered.lower() or "GPU 2" in rendered
+
+    def test_env_row_renders_status_ok(self) -> None:
+        """EnvRow displays OK status with appropriate styling."""
+        from esper.karn.overwatch.widgets.env_row import EnvRow
+        from esper.karn.overwatch.schema import EnvSummary
+
+        env = EnvSummary(
+            env_id=0,
+            device_id=0,
+            status="OK",
+        )
+        row = EnvRow(env)
+
+        rendered = row.render_header()
+        assert "OK" in rendered
+
+    def test_env_row_renders_status_warn(self) -> None:
+        """EnvRow displays WARN status."""
+        from esper.karn.overwatch.widgets.env_row import EnvRow
+        from esper.karn.overwatch.schema import EnvSummary
+
+        env = EnvSummary(
+            env_id=1,
+            device_id=0,
+            status="WARN",
+            anomaly_score=0.65,
+        )
+        row = EnvRow(env)
+
+        rendered = row.render_header()
+        assert "WARN" in rendered
+
+    def test_env_row_renders_status_crit(self) -> None:
+        """EnvRow displays CRIT status."""
+        from esper.karn.overwatch.widgets.env_row import EnvRow
+        from esper.karn.overwatch.schema import EnvSummary
+
+        env = EnvSummary(
+            env_id=2,
+            device_id=1,
+            status="CRIT",
+            anomaly_score=0.85,
+        )
+        row = EnvRow(env)
+
+        rendered = row.render_header()
+        assert "CRIT" in rendered
+
+    def test_env_row_renders_throughput(self) -> None:
+        """EnvRow displays throughput."""
+        from esper.karn.overwatch.widgets.env_row import EnvRow
+        from esper.karn.overwatch.schema import EnvSummary
+
+        env = EnvSummary(
+            env_id=0,
+            device_id=0,
+            status="OK",
+            throughput_fps=98.5,
+        )
+        row = EnvRow(env)
+
+        rendered = row.render_header()
+        assert "98" in rendered or "fps" in rendered.lower()
+
+    def test_env_row_renders_slots_inline(self) -> None:
+        """EnvRow renders slot chips inline."""
+        from esper.karn.overwatch.widgets.env_row import EnvRow
+        from esper.karn.overwatch.schema import EnvSummary, SlotChipState
+
+        env = EnvSummary(
+            env_id=0,
+            device_id=0,
+            status="OK",
+            slots={
+                "r0c1": SlotChipState("r0c1", "TRAINING", "conv", 0.5),
+            },
+        )
+        row = EnvRow(env)
+
+        content = row.render_slots_inline()
+        assert "[r0c1]" in content
+        assert "TRAIN" in content
+
+    def test_env_row_focus_indicator(self) -> None:
+        """EnvRow shows focus indicator when selected."""
+        from esper.karn.overwatch.widgets.env_row import EnvRow
+        from esper.karn.overwatch.schema import EnvSummary
+
+        env = EnvSummary(env_id=0, device_id=0, status="OK")
+        row = EnvRow(env, selected=True)
+
+        # Should have some visual indicator
+        header = row.render_header()
+        # Either [!] prefix or special character
+        assert "[" in header or "▶" in header or "●" in header
