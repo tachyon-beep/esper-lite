@@ -893,6 +893,9 @@ class SeedSlot(nn.Module):
         prev_alpha = self.state.alpha
         prev_schedule = self.alpha_schedule
 
+        # Invalidate cache ensures forward() picks up the forced value
+        self._cached_alpha_tensor = None
+
         # Override alpha AND disable schedule to force forward() to use state.alpha
         self.state.alpha = value
         self.alpha_schedule = None
@@ -902,6 +905,8 @@ class SeedSlot(nn.Module):
         finally:
             self.state.alpha = prev_alpha
             self.alpha_schedule = prev_schedule
+            # Invalidate cache again to restore original behavior
+            self._cached_alpha_tensor = None
 
     # TODO: [FUTURE ENHANCEMENT] - DDP support for force_alpha
     # Current implementation mutates instance state which is incompatible with
