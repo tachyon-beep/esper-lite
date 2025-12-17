@@ -10,17 +10,18 @@ from typing import Any
 import torch
 
 from esper.tamiyo.policy.protocol import PolicyBundle
-from esper.tamiyo.policy.registry import register_policy
 from esper.tamiyo.policy.types import ActionResult, EvalResult, ForwardResult
 from esper.tamiyo.heuristic import HeuristicTamiyo, HeuristicPolicyConfig
 
 
-@register_policy("heuristic")
 class HeuristicPolicyBundle:
     """Rule-based heuristic policy for ablations and debugging.
 
-    This PolicyBundle wraps HeuristicTamiyo for registry discoverability.
-    However, it is NOT usable through the uniform PolicyBundle API.
+    IMPORTANT: This is NOT a neural PolicyBundle implementation.
+    It wraps HeuristicTamiyo but is NOT registered in the policy registry
+    because it raises NotImplementedError for most PolicyBundle methods.
+
+    Use create_heuristic_policy() factory function to create instances.
 
     Warning:
         The heuristic policy requires TrainingSignals (semantic observations)

@@ -88,15 +88,19 @@ class MockPolicyBundle:
         pass
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture()
 def clean_registry():
-    """Clear registry before and after each test."""
+    """Clear registry before and after each test.
+
+    Note: Changed from autouse=True to allow test_heuristic_not_in_neural_policy_registry
+    to check the actual state after module imports.
+    """
     clear_registry()
     yield
     clear_registry()
 
 
-def test_register_policy_decorator():
+def test_register_policy_decorator(clean_registry):
     """@register_policy should add class to registry."""
     @register_policy("mock")
     class TestPolicy(MockPolicyBundle):
@@ -105,7 +109,7 @@ def test_register_policy_decorator():
     assert "mock" in list_policies()
 
 
-def test_get_policy_returns_instance():
+def test_get_policy_returns_instance(clean_registry):
     """get_policy should instantiate registered policy."""
     @register_policy("mock")
     class TestPolicy(MockPolicyBundle):
@@ -115,7 +119,7 @@ def test_get_policy_returns_instance():
     assert isinstance(policy, TestPolicy)
 
 
-def test_get_policy_passes_config():
+def test_get_policy_passes_config(clean_registry):
     """get_policy should pass config to constructor."""
     @register_policy("configurable")
     class ConfigurablePolicy(MockPolicyBundle):
@@ -126,13 +130,13 @@ def test_get_policy_passes_config():
     assert policy.hidden_dim == 128
 
 
-def test_get_policy_unknown_raises():
+def test_get_policy_unknown_raises(clean_registry):
     """get_policy should raise for unknown policy names."""
     with pytest.raises(ValueError, match="Unknown policy"):
         get_policy("nonexistent", {})
 
 
-def test_list_policies():
+def test_list_policies(clean_registry):
     """list_policies should return all registered policy names."""
     @register_policy("policy_a")
     class PolicyA(MockPolicyBundle):
@@ -147,7 +151,7 @@ def test_list_policies():
     assert "policy_b" in policies
 
 
-def test_register_policy_validates_protocol():
+def test_register_policy_validates_protocol(clean_registry):
     """@register_policy should validate PolicyBundle protocol compliance."""
     # This class is missing required methods
     class InvalidPolicy:
@@ -157,7 +161,7 @@ def test_register_policy_validates_protocol():
         register_policy("invalid")(InvalidPolicy)
 
 
-def test_register_policy_duplicate_raises():
+def test_register_policy_duplicate_raises(clean_registry):
     """@register_policy should raise ValueError for duplicate names."""
     @register_policy("duplicate_test")
     class FirstPolicy(MockPolicyBundle):
@@ -167,3 +171,19 @@ def test_register_policy_duplicate_raises():
         @register_policy("duplicate_test")
         class SecondPolicy(MockPolicyBundle):
             pass
+
+
+def test_heuristic_not_in_neural_policy_registry():
+    """Heuristic should not be registered as a neural PolicyBundle.
+
+    Note: This test does NOT use clean_registry fixture, so it checks the
+    actual state after the tamiyo.policy module imports have triggered
+    the @register_policy decorators.
+    """
+    from esper.tamiyo.policy import list_policies
+
+    policies = list_policies()
+    assert "heuristic" not in policies, (
+        "HeuristicPolicyBundle should not be in the neural policy registry. "
+        "It raises NotImplementedError for most PolicyBundle methods."
+    )

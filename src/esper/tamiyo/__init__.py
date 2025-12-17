@@ -31,6 +31,7 @@ from esper.tamiyo.policy import (
     register_policy,
     get_policy,
     list_policies,
+    create_heuristic_policy,
 )
 
 __all__ = [
@@ -49,4 +50,5 @@ __all__ = [
     "register_policy",
     "get_policy",
     "list_policies",
+    "create_heuristic_policy",
 ]

@@ -10,20 +10,20 @@ import pytest
 
 @pytest.mark.integration
 def test_policy_bundle_from_registry():
-    """Simic should be able to get policy from Tamiyo registry.
+    """Simic should be able to get neural policy from Tamiyo registry.
 
     Integration flow:
-    1. Verify both 'lstm' and 'heuristic' policies are registered
+    1. Verify 'lstm' policy is registered (heuristic is NOT in registry - it's a factory)
     2. Verify LSTM policy can be instantiated with correct config
     3. Assert is_recurrent and supports_off_policy properties
     """
     from esper.tamiyo import get_policy, list_policies
     from esper.leyline.slot_config import SlotConfig
 
-    # Verify both policies are registered
+    # Verify neural policy is registered, heuristic is not (it's a factory)
     policies = list_policies()
     assert "lstm" in policies
-    assert "heuristic" in policies
+    assert "heuristic" not in policies
 
     # Verify LSTM policy can be instantiated
     slot_config = SlotConfig.default()
@@ -38,11 +38,11 @@ def test_policy_bundle_from_registry():
 
 
 @pytest.mark.integration
-def test_heuristic_policy_from_registry():
-    """Verify heuristic policy can be retrieved from registry."""
-    from esper.tamiyo import get_policy
+def test_heuristic_policy_factory():
+    """Verify heuristic policy can be created via factory function."""
+    from esper.tamiyo import create_heuristic_policy
 
-    policy = get_policy("heuristic", {})
+    policy = create_heuristic_policy()
 
     assert policy.is_recurrent is False
     assert policy.supports_off_policy is False

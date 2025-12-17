@@ -39,7 +39,29 @@ from esper.tamiyo.policy.action_masks import (
 
 # Import to trigger registration (must be after registry is defined)
 from esper.tamiyo.policy import lstm_bundle as _lstm_bundle  # noqa: F401
-from esper.tamiyo.policy import heuristic_bundle as _heuristic_bundle  # noqa: F401
+# Note: heuristic_bundle is imported but NOT registered
+from esper.tamiyo.policy.heuristic_bundle import HeuristicPolicyBundle
+
+
+def create_heuristic_policy(
+    config: "HeuristicPolicyConfig | None" = None,
+    topology: str = "cnn",
+) -> HeuristicPolicyBundle:
+    """Create a heuristic policy adapter.
+
+    This is the recommended way to create heuristic policies. Unlike neural
+    policies, the heuristic is not registered in the policy registry because
+    it doesn't implement the full PolicyBundle interface.
+
+    Args:
+        config: Heuristic policy configuration
+        topology: Model topology ("cnn" or "transformer")
+
+    Returns:
+        HeuristicPolicyBundle instance.
+    """
+    return HeuristicPolicyBundle(config=config, topology=topology)
+
 
 __all__ = [
     # Protocol
@@ -52,6 +74,11 @@ __all__ = [
     "register_policy",
     "get_policy",
     "list_policies",
+    # Neural policy bundles (via registry)
+    # Note: LSTMPolicyBundle available via get_policy("lstm")
+    # Heuristic adapter (NOT registered - use create_heuristic_policy())
+    "HeuristicPolicyBundle",
+    "create_heuristic_policy",
     # Features
     "obs_to_multislot_features",
     "get_feature_size",

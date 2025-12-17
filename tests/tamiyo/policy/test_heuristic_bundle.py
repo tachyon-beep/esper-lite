@@ -3,14 +3,14 @@
 import pytest
 import torch
 
-from esper.tamiyo.policy import get_policy, list_policies
+from esper.tamiyo.policy import list_policies, create_heuristic_policy
 from esper.tamiyo.policy.heuristic_bundle import HeuristicPolicyBundle
 from esper.tamiyo.policy.types import ActionResult
 
 
-def test_heuristic_bundle_registered():
-    """HeuristicPolicyBundle should be registered as 'heuristic'."""
-    assert "heuristic" in list_policies()
+def test_heuristic_bundle_not_registered():
+    """HeuristicPolicyBundle should NOT be registered (doesn't implement full interface)."""
+    assert "heuristic" not in list_policies()
 
 
 def test_heuristic_bundle_is_not_recurrent():
@@ -38,9 +38,9 @@ def test_heuristic_bundle_state_dict():
     assert state == {}
 
 
-def test_get_policy_heuristic():
-    """get_policy('heuristic', ...) should return HeuristicPolicyBundle."""
-    policy = get_policy("heuristic", {})
+def test_create_heuristic_policy_factory():
+    """create_heuristic_policy() should return HeuristicPolicyBundle."""
+    policy = create_heuristic_policy()
     assert isinstance(policy, HeuristicPolicyBundle)
 
 
