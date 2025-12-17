@@ -457,6 +457,8 @@ class PPOAgent:
 
         # Initialize per-head entropy tracking (P3-1)
         head_entropy_history: dict[str, list[float]] = {head: [] for head in HEAD_NAMES}
+        # Initialize per-head gradient norm tracking (P4-6)
+        head_grad_norm_history: dict[str, list[float]] = {head: [] for head in HEAD_NAMES + ("value",)}
 
         for epoch_i in range(self.recurrent_n_epochs):
             if early_stopped:
@@ -607,6 +609,26 @@ class PPOAgent:
 
             self.optimizer.zero_grad(set_to_none=True)
             loss.backward()
+
+            # Collect per-head gradient norms BEFORE clipping (P4-6)
+            # Measures raw gradients to diagnose head dominance
+            with torch.inference_mode():
+                for head_name, head_module in [
+                    ("slot", self.network.slot_head),
+                    ("blueprint", self.network.blueprint_head),
+                    ("blend", self.network.blend_head),
+                    ("op", self.network.op_head),
+                    ("value", self.network.value_head),
+                ]:
+                    params_with_grad = [p for p in head_module.parameters() if p.grad is not None]
+                    if params_with_grad:
+                        grad_norm = torch.linalg.vector_norm(
+                            torch.stack([torch.linalg.vector_norm(p.grad) for p in params_with_grad])
+                        ).item()
+                    else:
+                        grad_norm = 0.0
+                    head_grad_norm_history[head_name].append(grad_norm)
+
             nn.utils.clip_grad_norm_(self.network.parameters(), self.max_grad_norm)
             self.optimizer.step()
 
@@ -653,6 +675,8 @@ class PPOAgent:
 
         # Add per-head entropy tracking (P3-1)
         result["head_entropies"] = head_entropy_history
+        # Add per-head gradient norm tracking (P4-6)
+        result["head_grad_norms"] = head_grad_norm_history
 
         return result
 

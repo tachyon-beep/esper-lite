@@ -181,6 +181,13 @@ def emit_ppo_update_event(
             avg_entropy = sum(values) / len(values) if values else 0.0
             head_entropies_avg[f"{head}_entropy"] = avg_entropy
 
+    # Compute per-head gradient norm averages for logging (P4-6)
+    head_grad_norms_avg = {}
+    if "head_grad_norms" in metrics:
+        for head, values in metrics["head_grad_norms"].items():
+            avg_grad_norm = sum(values) / len(values) if values else 0.0
+            head_grad_norms_avg[f"head_{head}_grad_norm"] = avg_grad_norm
+
     data = {
         "inner_epoch": epoch,  # Final inner epoch (typically max_epochs)
         "batch": batch_idx + 1,
@@ -221,6 +228,8 @@ def emit_ppo_update_event(
     }
     # Add per-head entropy (P3-1)
     data.update(head_entropies_avg)
+    # Add per-head gradient norms (P4-6)
+    data.update(head_grad_norms_avg)
 
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
