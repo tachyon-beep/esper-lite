@@ -95,6 +95,7 @@ from esper.simic.rewards import (
 from esper.leyline import DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
 from esper.nissa import get_hub, BlueprintAnalytics
 from esper.tolaria import TolariaGovernor
+from esper.karn.health import HealthMonitor
 from esper.simic.telemetry.emitters import (
     emit_with_env_context,
     emit_batch_completed,
@@ -882,11 +883,19 @@ def train_ppo_vectorized(
         )
         governor.snapshot()  # Ensure rollback is always possible before first panic
 
+        # Create HealthMonitor for system health tracking
+        # Uses existing telemetry_cb from create_env_state scope
+        health_monitor = HealthMonitor(
+            store=None,  # TelemetryStore integration deferred
+            emit_callback=telemetry_cb,  # Same callback as slots
+        ) if use_telemetry else None
+
         env_state = ParallelEnvState(
             model=model,
             host_optimizer=host_optimizer,
             signal_tracker=SignalTracker(env_id=env_idx),
             governor=governor,
+            health_monitor=health_monitor,
             env_device=env_device,
             stream=stream,
             scaler=env_scaler,
@@ -1439,6 +1448,23 @@ def train_ppo_vectorized(
                 is_panic = env_state.governor.check_vital_signs(val_loss)
                 if is_panic:
                     governor_panic_envs.append(env_idx)
+
+                # Health monitor - check GPU memory warnings
+                if env_state.health_monitor is not None:
+                    try:
+                        if torch.cuda.is_available():
+                            gpu_allocated = torch.cuda.memory_allocated(env_state.env_device)
+                            gpu_total = torch.cuda.get_device_properties(
+                                torch.device(env_state.env_device).index
+                            ).total_memory
+                            if gpu_total > 0:
+                                env_state.health_monitor._check_memory_and_warn(
+                                    gpu_utilization=gpu_allocated / gpu_total,
+                                    gpu_allocated_gb=gpu_allocated / (1024**3),
+                                    gpu_total_gb=gpu_total / (1024**3),
+                                )
+                    except Exception:
+                        pass  # Non-critical monitoring - don't crash training
 
                 # Gather active seeds across ALL enabled slots (multi-seed support)
                 active_seeds = []
