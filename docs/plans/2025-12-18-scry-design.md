@@ -2,9 +2,10 @@
 
 > **WebSocket-based browser dashboard for remote Esper training monitoring.**
 >
-> **Status:** Design Complete
+> **Status:** Design Complete (UX Reviewed)
 > **Branch:** `feat/overwatch-textual-ui` (shared foundation with Overwatch)
 > **Supersedes:** Existing `--dashboard` feature
+> **UX Review:** 2025-12-18 by elspeth-ux-specialist
 
 ---
 
@@ -135,11 +136,13 @@ src/esper/karn/scry/frontend/
 │   ├── widgets/
 │   │   ├── EnvCard.vue        # Single environment row
 │   │   ├── SlotChip.vue       # Seed stage indicator
-│   │   ├── HealthBadge.vue    # OK/WARN/CRIT status
-│   │   ├── TrendArrow.vue     # ↑↑ ↑ → ↓ ↓↓ indicator
-│   │   ├── Sparkline.vue      # SVG mini chart
+│   │   ├── HealthBadge.vue    # OK/WARN/CRIT status (shape + color + text)
+│   │   ├── TrendArrow.vue     # ↑↑ ↑ → ↓ ↓↓ with text alternatives
+│   │   ├── Sparkline.vue      # SVG mini chart with ARIA labels
 │   │   ├── ProgressBar.vue    # Alpha / utilization bars
-│   │   └── BestRunsPanel.vue  # Leaderboard with dismiss
+│   │   ├── BestRunsPanel.vue  # Collapsible leaderboard with dismiss
+│   │   ├── KeyHintsBar.vue    # Persistent keyboard shortcuts bar
+│   │   └── EmptyState.vue     # Warmup, no selection, etc.
 │   └── replay/
 │       └── ReplayBar.vue      # Play/pause, scrubber, speed
 ├── types/
@@ -172,47 +175,59 @@ No aggregation in the client — server sends complete snapshots, Vue just rende
 
 ## UI Layout
 
-Same mental model as Overwatch (5 logical regions), but browser-native layout:
+Same mental model as Overwatch (5 logical regions), but browser-native layout.
+
+### Revised Layout (Post-UX Review)
+
+Key changes from initial design:
+- **Tamiyo Strip compacted** to 1-2 lines with expand toggle `[T]`
+- **Best Runs moved** to collapsible section in Flight Board column (not left column)
+- **Anomaly scores visible** inline as `[A: 0.72]`
+- **Key hints bar added** at bottom for discoverability
+- **Timestamps shown** for connection staleness and data freshness
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ ESPER SCRY                                          GPU0 94% ▓▓▓▓▓▓▓░░ 11/12G│
-│ cifar10 · Episode 47 · 2h 14m           ● Connected  GPU1 91% ▓▓▓▓▓▓░░░ 10/12G│
+│ ESPER SCRY                                         GPU0 94%  GPU1 91%       │
+│ cifar10 · Episode 47 · 2h 14m · Best: 82.1%           ● Connected (0.3s)   │
 ├────────────────────────────────────────────┬────────────────────────────────┤
-│ TAMIYO                                     │ FLIGHT BOARD                   │
-│ ┌─────────────────────────────────────┐    │                                │
-│ │ KL 0.019 ✓   Entropy 1.24 ↓         │    │ ┌─ Pinned ───────────────────┐ │
-│ │ Clip 4.8% ✓  Expl.Var 0.42 ↓↓       │    │ │ 📌 Env 2  gpu:1  OK        │ │
-│ │ Grad 0.8     LR 3e-4                │    │ │    [r0c1] TRAINING ▓▓▓░ .45│ │
-│ └─────────────────────────────────────┘    │ └────────────────────────────┘ │
-│ Actions: G 34% B 28% C 12% W 26%           │ ┌────────────────────────────┐ │
-│ Recent: [G][B][B][W][G][G][B]              │ │ ⚠ Env 3  gpu:1  WARN   [📌]│ │
-│ Confidence: 73% ▓▓▓▓▓▓▓░░░                 │ │   [r0c1] BLENDING ▓▓▓▓░ .78│ │
-│                                            │ │   102 fps · grad 3.2x      │ │
-│ ┌─ Entropy Trend ────────────────────┐     │ └────────────────────────────┘ │
-│ │    ╭──╮    ╭─                      │     │ ┌────────────────────────────┐ │
-│ │ ──╯  ╰────╯                        │     │ │ ✓ Env 0  gpu:0  OK     [📌]│ │
-│ └────────────────────────────────────┘     │ │   [r0c1] FOSSILIZED ▓▓▓▓▓▓ │ │
-│                                            │ │   98 fps                   │ │
-│ ┌─ BEST RUNS ─────────────────────────┐    │ └────────────────────────────┘ │
-│ │      Env   Acc     Reward   Params  │    │ ┌────────────────────────────┐ │
-│ │ 🥇   0    82.1%    +47.2   +1.2M [×]│    │ │ ✓ Env 1  gpu:0  OK     [📌]│ │
-│ │ 🥈   2    81.3%    +52.1   +0.8M [×]│    │ │   [r0c0] TRAINING ▓▓░░░ .32│ │
-│ │ 🥉   1    79.8%    +38.9   +1.1M [×]│    │ └────────────────────────────┘ │
-│ └─────────────────────────────────────┘    │                                │
+│ TAMIYO [OK]  Ent 1.24↓  Conf 73%  [T]     │ FLIGHT BOARD          [12:04:23]│
+│ Recent: [G][B][B][W][G][G][B]              │                                │
+├────────────────────────────────────────────┤ ┌─ Pinned ──────────────────┐  │
+│ (Tamiyo expanded on [T] toggle)            │ │ 📌 Env 2  OK  [A: 0.18]   │  │
+│ ┌─────────────────────────────────────┐    │ │    [r0c1] TRAINING .45α   │  │
+│ │ KL 0.019 ✓   Entropy 1.24 ↓         │    │ └───────────────────────────┘  │
+│ │ Clip 4.8% ✓  Expl.Var 0.42 ↓↓       │    │ ┌───────────────────────────┐  │
+│ │ Grad 0.8     LR 3e-4                │    │ │ ⚠ Env 3  WARN  [A: 0.72] │  │
+│ └─────────────────────────────────────┘    │ │    [r0c1] BLENDING .78α   │  │
+│ Actions: G 34% B 28% C 12% W 26%           │ │    102 fps · grad 3.2×    │  │
+│ Confidence: 73% ▓▓▓▓▓▓▓░░░  Explore: 42%   │ └───────────────────────────┘  │
+│ ┌─ Entropy Trend ────────────────────┐     │ ┌───────────────────────────┐  │
+│ │    ╭──╮    ╭─                      │     │ │ ✓ Env 0  OK  [A: 0.12]   │  │
+│ └────────────────────────────────────┘     │ │    [r0c1] FOSSILIZED 1.0α │  │
+│                                            │ └───────────────────────────┘  │
+│                                            │ ┌───────────────────────────┐  │
+│                                            │ │ ✓ Env 1  OK  [A: 0.08]   │  │
+│                                            │ │    [r0c0] TRAINING .32α   │  │
+│                                            │ └───────────────────────────┘  │
+│                                            │ ▼ Best Runs ─────────────────  │
+│                                            │   🥇 Env 0  82.1%  +47.2r [×] │
+│                                            │   🥈 Env 2  81.3%  +52.1r [×] │
+│                                            │   🥉 Env 1  79.8%  +38.9r [×] │
 ├────────────────────────────────────────────┴────────────────────────────────┤
-│ DETAIL                                                                       │
-│ ┌─ Why Flagged: Env 3 ─────────────────────────────────────────────────────┐ │
-│ │ • High gradient ratio (3.2× mean)                                        │ │
-│ │ • Memory pressure (94% utilized)                                         │ │
-│ │ • Slot r0c1 alpha plateau (5 epochs)                                     │ │
-│ └──────────────────────────────────────────────────────────────────────────┘ │
+│ DETAIL  [Context] [Tamiyo] [Best Runs]                                      │
+│ ┌─ Why Flagged: Env 3 ─────────────────────────────────────────────────────┐│
+│ │ • High gradient ratio (3.2× mean) — indicates learning instability       ││
+│ │ • Memory pressure (94% utilized) — may cause OOM                         ││
+│ │ • Slot r0c1 alpha plateau (5 epochs) — blending may be stuck             ││
+│ └──────────────────────────────────────────────────────────────────────────┘│
 ├──────────────────────────────────────────────────────────────────────────────┤
-│ EVENT FEED                                                          [Filter] │
-│ 12:04:23  [GATE]  Env 3 r0c1 gate opened (grad health 0.82)                  │
-│ 12:04:18  [PPO]   Policy update: KL=0.019, clip=4.8%                         │
-│ 12:03:55  [STAGE] Env 0 r0c1 BLENDING → FOSSILIZED                           │
-│ 12:03:41  [WARN]  Env 3 anomaly score exceeded threshold (0.72)              │
+│ EVENT FEED                                                          [Filter]│
+│ 12:04:23  [GATE]  Env 3 r0c1 gate opened (grad health 0.82)                 │
+│ 12:04:18  [PPO]   Policy update: KL=0.019, clip=4.8%                        │
+│ 12:03:55  [STAGE] Env 0 r0c1 BLENDING → FOSSILIZED                          │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ [j/k] Navigate  [Enter] Expand  [p] Pin  [t/c] Detail  [T] Tamiyo  [?] Help │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -220,10 +235,11 @@ Same mental model as Overwatch (5 logical regions), but browser-native layout:
 
 | Aspect | Overwatch (TUI) | Scry (Web) |
 |--------|-----------------|------------|
-| **Tamiyo + Detail** | Horizontal strip + side panel | Left column (stacked) |
-| **Flight Board** | Center with side detail | Right column (scrollable) |
+| **Tamiyo Strip** | Always expanded | Compact by default, `[T]` expands |
+| **Best Runs** | N/A | Collapsible section in Flight Board column |
+| **Anomaly scores** | Hidden | Visible inline `[A: 0.72]` |
 | **Sparklines** | ASCII approximation | SVG charts |
-| **Env cards** | Compact rows | Cards with more whitespace |
+| **Key hints** | N/A | Persistent bar at bottom |
 | **Responsiveness** | Fixed terminal size | Adapts to viewport |
 
 ### Unique Features
@@ -234,7 +250,176 @@ Same mental model as Overwatch (5 logical regions), but browser-native layout:
 | **Best Runs leaderboard** | Top 3 by accuracy, shows reward for Goodhart detection |
 | **Dismissable entries** | `×` removes investigated items from leaderboard |
 | **SVG sparklines** | Real charts for trends |
-| **Sortable leaderboard** | Click headers to sort by Accuracy/Reward/Efficiency |
+| **Anomaly scores visible** | Inline `[A: 0.72]` shows anomaly severity |
+| **Tamiyo compact mode** | Reduces cognitive load; expand on demand |
+| **Key hints bar** | Improves discoverability for keyboard shortcuts |
+
+---
+
+## Keyboard Navigation
+
+| Key | Action |
+|-----|--------|
+| `j` / `k` | Move selection down/up in Flight Board |
+| `Tab` | Cycle focus: Flight Board → Detail → Event Feed |
+| `Enter` | Expand selected environment |
+| `Esc` | Collapse / clear filter / dismiss overlay |
+| `p` | Pin/unpin selected environment |
+| `t` | Show Tamiyo Detail Panel |
+| `c` | Show Context Panel |
+| `T` | Toggle Tamiyo Strip expanded/compact |
+| `f` | Toggle Event Feed expanded/compact |
+| `/` | Focus filter input |
+| `g` + N | Jump to Env N (e.g., `g3` jumps to Env 3) |
+| `?` | Show help overlay |
+| `h` | Hide/show key hints bar |
+| `q` | Quit (with confirmation if unsaved state) |
+
+**Replay mode:**
+
+| Key | Action |
+|-----|--------|
+| `Space` | Play/Pause |
+| `.` | Step forward |
+| `,` | Step backward |
+| `<` / `>` | Speed down/up (0.5x, 1x, 2x, 4x) |
+| `Home` | Jump to start |
+| `End` | Jump to end |
+
+---
+
+## Empty & Error States
+
+### 1. Warmup Period (No Data Yet)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ ESPER SCRY                                                                  │
+│ Waiting for training data...                            ○ Connecting        │
+├────────────────────────────────────────────┬────────────────────────────────┤
+│ TAMIYO                                     │ FLIGHT BOARD                   │
+│ ┌─────────────────────────────────────┐    │                                │
+│ │        Warmup in Progress            │    │     No environments yet       │
+│ │                                      │    │                                │
+│ │   PPO policy initializing.           │    │  Training will begin shortly. │
+│ │   Metrics will appear after          │    │  Environments will appear     │
+│ │   first batch completes.             │    │  as they start training.      │
+│ │                                      │    │                                │
+│ │      ░░░░░░░░░░ 0/100 warmup         │    │                                │
+│ └─────────────────────────────────────┘    │                                │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 2. Connection Lost
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ ESPER SCRY                                              ✕ Disconnected      │
+│ cifar10 · Episode 47 · 2h 14m                   Last data: 12:04:23 (45s)  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │                    Connection Lost                                  │   │
+│   │                                                                     │   │
+│   │   WebSocket connection to ws://192.168.1.50:8765 failed.           │   │
+│   │                                                                     │   │
+│   │   Retrying in 5s... [████░░░░░░]                                   │   │
+│   │                                                                     │   │
+│   │   [r] Retry now    [q] Quit                                        │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│   Previous data still visible below (stale)                                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 3. No Anomalies (Healthy State)
+
+```
+│ FLIGHT BOARD                                                                │
+│                                                                             │
+│ ┌────────────────────────────────────────────────────────────────────────┐  │
+│ │  ✓ All 4 environments healthy                                          │  │
+│ │                                                                        │  │
+│ │  No anomalies detected. Training proceeding normally.                  │  │
+│ │                                                                        │  │
+│ │  [Show all environments anyway]                                        │  │
+│ └────────────────────────────────────────────────────────────────────────┘  │
+│                                                                             │
+│ ┌─ Pinned ───────────────────────────────────────────────────────────────┐  │
+│ │ 📌 Env 2  OK  [A: 0.12]                                                │  │
+│ │    [r0c1] TRAINING ▓▓▓░ .45α                                           │  │
+│ └────────────────────────────────────────────────────────────────────────┘  │
+```
+
+### 4. No Selection (Detail Panel)
+
+```
+│ DETAIL                                                                      │
+│ ┌─────────────────────────────────────────────────────────────────────────┐ │
+│ │                     No Environment Selected                             │ │
+│ │                                                                         │ │
+│ │   Select an environment from the Flight Board to see details.          │ │
+│ │                                                                         │ │
+│ │   Press [j/k] to navigate, [Enter] to select.                          │ │
+│ └─────────────────────────────────────────────────────────────────────────┘ │
+```
+
+### 5. Replay Complete
+
+```
+│ [■ REPLAY COMPLETE] 12:15:47 / 12:15:47 [██████████████████████] 100%       │
+│                                                                             │
+│   Replay finished. [Space] to restart, [q] to quit, [</>] to step back     │
+```
+
+---
+
+## Connection States
+
+| State | Indicator | Description |
+|-------|-----------|-------------|
+| **Connected** | `● Connected (0.3s)` | Live, <2s latency |
+| **Stale** | `◐ Stale (8s)` | Connected but no recent events |
+| **Reconnecting** | `○ Reconnecting...` | Backoff in progress |
+| **Degraded** | `◐ Degraded` | Connected but missing expected events |
+| **Disconnected** | `✕ Disconnected` | Connection lost, not retrying |
+
+---
+
+## Accessibility
+
+### Triple Redundancy for Status
+
+All status indicators use **shape + color + text**:
+
+| Status | Shape | Color | Text |
+|--------|-------|-------|------|
+| Good | ✓ | Green | `OK` |
+| Warning | ⚠ | Yellow | `WARN` |
+| Critical | ✕ | Red | `CRIT` |
+
+This ensures colorblind users (8% of males) can distinguish states.
+
+### Focus States
+
+- **Focused row:** bright border + background highlight
+- **Focused button:** bright outline (not just color change)
+- **Region focus:** bright title when selected, dim when not
+
+### Screen Reader Support
+
+- Trend arrows have text alternatives: `Entropy: 1.24 (declining rapidly)`
+- Sparklines have ARIA labels: `aria-label="Entropy trending downward over last 5 minutes"`
+
+### Slot Stage Visual Weight
+
+| Stage | Visual Treatment |
+|-------|------------------|
+| TRAINING | Bright text, filled progress bar |
+| BLENDING | Bright text with accent border (critical transition) |
+| FOSSILIZED | Dim text (completed, safe to ignore) |
+| DORMANT | Very dim, condensed display |
+| CULLED | Strikethrough or dim red |
 
 ---
 
@@ -468,6 +653,34 @@ scry = [
 | Vue render time | <50ms for 16 envs |
 | Bundle size | <200KB gzipped |
 | Test coverage | >80% for new code |
+
+---
+
+## UX Review Summary
+
+**Reviewed by:** elspeth-ux-specialist on 2025-12-18
+
+### Key Changes Incorporated
+
+| Area | Original | Revised |
+|------|----------|---------|
+| **Best Runs placement** | Left column below Tamiyo | Collapsible section in Flight Board column |
+| **Tamiyo Strip** | Always expanded, information-dense | Compact by default, `[T]` to expand |
+| **Anomaly scores** | Hidden | Visible inline `[A: 0.72]` |
+| **Discoverability** | No hints | Key hints bar at bottom |
+| **Status indicators** | Color-coded | Triple redundancy: shape + color + text |
+| **Empty states** | Undefined | Five states defined with mockups |
+| **Connection states** | 3 states | 5 states (added Reconnecting, Degraded) |
+
+### Rationale
+
+1. **Best Runs moved** — Placing outcomes (accuracy) with brain state (Tamiyo) created cognitive collision. Outcomes belong with the data they describe (environments).
+
+2. **Tamiyo compacted** — 6 metrics + action distribution + sparkline was too dense for a "glanceable" strip. Compact mode shows the essential health signal; expand for details.
+
+3. **Anomaly scores visible** — Operators need to see *how* anomalous something is, not just that it's flagged. `[A: 0.72]` enables quick triage.
+
+4. **Triple redundancy** — 8% of male users are colorblind. Shape + color + text ensures all users can distinguish OK/WARN/CRIT.
 
 ---
 
