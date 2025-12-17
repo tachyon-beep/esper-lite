@@ -323,7 +323,14 @@ class MaskedCategorical:
     - Consistent across all dtypes for deterministic behavior
 
     Computes entropy only over valid actions to avoid penalizing restricted states.
+
+    Attributes:
+        validate: Class-level toggle for validation. Set to False for production
+            performance (disables CUDA sync from .any()/.sum() calls).
+            Default: True (validation enabled for safety during development).
     """
+
+    validate: bool = True  # Class-level validation toggle
 
     def __init__(self, logits: torch.Tensor, mask: torch.Tensor):
         """Initialize masked categorical distribution.
@@ -334,14 +341,17 @@ class MaskedCategorical:
 
         Raises:
             InvalidStateMachineError: If any batch element has no valid actions
-            ValueError: If logits contain inf or nan (indicates network instability)
+                (only when validate=True)
+            ValueError: If logits contain inf or nan (only when validate=True)
 
         Note:
             The validation check is isolated via @torch.compiler.disable to prevent
             graph breaks in the main forward path while preserving safety checks.
+            Disable with MaskedCategorical.validate = False for production.
         """
-        _validate_action_mask(mask)
-        _validate_logits(logits)
+        if MaskedCategorical.validate:
+            _validate_action_mask(mask)
+            _validate_logits(logits)
 
         self.mask = mask
         mask_value = torch.tensor(

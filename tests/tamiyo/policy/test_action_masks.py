@@ -1067,3 +1067,39 @@ class TestMaskedCategorical:
 
         samples = dist.sample()
         assert samples.shape == (2,)
+
+
+class TestMaskedCategoricalValidation:
+    """Tests for validation toggle behavior."""
+
+    def test_validation_enabled_by_default(self):
+        """Validation should be enabled by default for safety."""
+        from esper.tamiyo.policy.action_masks import MaskedCategorical
+        assert MaskedCategorical.validate is True
+
+    def test_validation_can_be_disabled(self):
+        """Validation can be disabled for production performance."""
+        from esper.tamiyo.policy.action_masks import MaskedCategorical
+        original = MaskedCategorical.validate
+        try:
+            MaskedCategorical.validate = False
+            # This would raise InvalidStateMachineError with validation enabled
+            logits = torch.zeros(1, 5)
+            mask = torch.zeros(1, 5, dtype=torch.bool)  # All invalid!
+            # Should NOT raise when validation is disabled
+            dist = MaskedCategorical(logits, mask)
+            assert dist is not None
+        finally:
+            MaskedCategorical.validate = original
+
+    def test_validation_catches_invalid_mask_when_enabled(self):
+        """Validation raises error for invalid masks when enabled."""
+        from esper.tamiyo.policy.action_masks import (
+            MaskedCategorical,
+            InvalidStateMachineError,
+        )
+        MaskedCategorical.validate = True
+        logits = torch.zeros(1, 5)
+        mask = torch.zeros(1, 5, dtype=torch.bool)  # All invalid!
+        with pytest.raises(InvalidStateMachineError):
+            MaskedCategorical(logits, mask)
