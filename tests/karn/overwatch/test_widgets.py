@@ -255,3 +255,21 @@ class TestEnvRow:
         header = row.render_header()
         # Either [!] prefix or special character
         assert "[" in header or "▶" in header or "●" in header
+
+
+class TestWidgetExports:
+    """Tests for widget package exports."""
+
+    def test_all_widgets_importable(self) -> None:
+        """All widgets are importable from package."""
+        from esper.karn.overwatch.widgets import (
+            HelpOverlay,
+            SlotChip,
+            EnvRow,
+            FlightBoard,
+        )
+
+        assert HelpOverlay is not None
+        assert SlotChip is not None
+        assert EnvRow is not None
+        assert FlightBoard is not None
