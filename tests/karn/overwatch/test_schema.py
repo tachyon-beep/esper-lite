@@ -302,3 +302,90 @@ class TestTamiyoState:
         restored = TamiyoState.from_dict(json.loads(json_str))
 
         assert restored.action_counts == state.action_counts
+
+
+class TestConnectionStatus:
+    """Tests for ConnectionStatus dataclass."""
+
+    def test_connection_status_live(self) -> None:
+        """ConnectionStatus reports Live when fresh."""
+        from esper.karn.overwatch.schema import ConnectionStatus
+
+        status = ConnectionStatus(
+            connected=True,
+            last_event_ts=1000.0,
+            staleness_s=0.5,
+        )
+
+        assert status.connected is True
+        assert "Live" in status.display_text
+
+    def test_connection_status_stale(self) -> None:
+        """ConnectionStatus reports Stale when old."""
+        from esper.karn.overwatch.schema import ConnectionStatus
+
+        status = ConnectionStatus(
+            connected=True,
+            last_event_ts=1000.0,
+            staleness_s=8.0,
+        )
+
+        assert "Stale" in status.display_text
+        assert "8" in status.display_text
+
+    def test_connection_status_disconnected(self) -> None:
+        """ConnectionStatus reports Disconnected when not connected."""
+        from esper.karn.overwatch.schema import ConnectionStatus
+
+        status = ConnectionStatus(
+            connected=False,
+            last_event_ts=0.0,
+            staleness_s=30.0,
+        )
+
+        assert "Disconnected" in status.display_text
+
+    def test_connection_status_json_roundtrip(self) -> None:
+        """ConnectionStatus survives JSON serialization."""
+        from esper.karn.overwatch.schema import ConnectionStatus
+
+        status = ConnectionStatus(True, 1234.5, 2.0)
+
+        json_str = json.dumps(status.to_dict())
+        restored = ConnectionStatus.from_dict(json.loads(json_str))
+
+        assert restored.connected == status.connected
+        assert restored.staleness_s == status.staleness_s
+
+
+class TestDeviceVitals:
+    """Tests for DeviceVitals dataclass."""
+
+    def test_device_vitals_creation(self) -> None:
+        """DeviceVitals stores GPU metrics."""
+        from esper.karn.overwatch.schema import DeviceVitals
+
+        vitals = DeviceVitals(
+            device_id=0,
+            name="GPU 0",
+            utilization_pct=94.0,
+            memory_used_gb=11.2,
+            memory_total_gb=12.0,
+            temperature_c=72,
+        )
+
+        assert vitals.device_id == 0
+        assert vitals.utilization_pct == 94.0
+        assert vitals.memory_pct == pytest.approx(93.33, rel=0.01)
+
+    def test_device_vitals_json_roundtrip(self) -> None:
+        """DeviceVitals survives JSON serialization."""
+        from esper.karn.overwatch.schema import DeviceVitals
+
+        vitals = DeviceVitals(0, "GPU 0", 90.0, 10.0, 12.0, 70)
+
+        json_str = json.dumps(vitals.to_dict())
+        restored = DeviceVitals.from_dict(json.loads(json_str))
+
+        assert restored.device_id == vitals.device_id
+        assert restored.memory_used_gb == vitals.memory_used_gb

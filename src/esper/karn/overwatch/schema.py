@@ -216,3 +216,85 @@ class TamiyoState:
             entropy_collapsed=data.get("entropy_collapsed", False),
             ev_warning=data.get("ev_warning", False),
         )
+
+
+@dataclass
+class ConnectionStatus:
+    """Connection status for header display.
+
+    Tracks whether telemetry is flowing and how stale it is.
+    """
+
+    connected: bool
+    last_event_ts: float  # Unix timestamp
+    staleness_s: float  # Seconds since last event
+
+    @property
+    def display_text(self) -> str:
+        """Human-readable status text."""
+        if not self.connected:
+            return "Disconnected"
+        if self.staleness_s < 2.0:
+            return "Live"
+        if self.staleness_s < 5.0:
+            return f"Live ({self.staleness_s:.0f}s)"
+        return f"Stale ({self.staleness_s:.0f}s)"
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to JSON-serializable dict."""
+        return {
+            "connected": self.connected,
+            "last_event_ts": self.last_event_ts,
+            "staleness_s": self.staleness_s,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ConnectionStatus:
+        """Reconstruct from dict."""
+        return cls(
+            connected=data["connected"],
+            last_event_ts=data["last_event_ts"],
+            staleness_s=data["staleness_s"],
+        )
+
+
+@dataclass
+class DeviceVitals:
+    """GPU device vitals for header resource display."""
+
+    device_id: int
+    name: str
+    utilization_pct: float
+    memory_used_gb: float
+    memory_total_gb: float
+    temperature_c: int = 0
+
+    @property
+    def memory_pct(self) -> float:
+        """Memory usage as percentage."""
+        if self.memory_total_gb == 0:
+            return 0.0
+        return (self.memory_used_gb / self.memory_total_gb) * 100
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to JSON-serializable dict."""
+        return {
+            "device_id": self.device_id,
+            "name": self.name,
+            "utilization_pct": self.utilization_pct,
+            "memory_used_gb": self.memory_used_gb,
+            "memory_total_gb": self.memory_total_gb,
+            "temperature_c": self.temperature_c,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> DeviceVitals:
+        """Reconstruct from dict."""
+        return cls(
+            device_id=data["device_id"],
+            name=data["name"],
+            utilization_pct=data["utilization_pct"],
+            memory_used_gb=data["memory_used_gb"],
+            memory_total_gb=data["memory_total_gb"],
+            temperature_c=data.get("temperature_c", 0),
+        )
