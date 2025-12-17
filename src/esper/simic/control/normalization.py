@@ -132,6 +132,20 @@ class RunningMeanStd:
         """Current device of the stats."""
         return self.mean.device
 
+    def state_dict(self) -> dict[str, torch.Tensor]:
+        """Return state dictionary for checkpointing."""
+        return {
+            "mean": self.mean.clone(),
+            "var": self.var.clone(),
+            "count": self.count.clone(),
+        }
+
+    def load_state_dict(self, state: dict[str, torch.Tensor]) -> None:
+        """Load state from dictionary."""
+        self.mean = state["mean"].to(self._device)
+        self.var = state["var"].to(self._device)
+        self.count = state["count"].to(self._device)
+
 
 class RewardNormalizer:
     """Running reward normalization for critic stability.
@@ -194,6 +208,20 @@ class RewardNormalizer:
         std = max(self.epsilon, (self.m2 / (self.count - 1)) ** 0.5)
         normalized = reward / std
         return max(-self.clip, min(self.clip, normalized))
+
+    def state_dict(self) -> dict[str, float | int]:
+        """Return state dictionary for checkpointing."""
+        return {
+            "mean": self.mean,
+            "m2": self.m2,
+            "count": self.count,
+        }
+
+    def load_state_dict(self, state: dict[str, float | int]) -> None:
+        """Load state from dictionary."""
+        self.mean = state["mean"]
+        self.m2 = state["m2"]
+        self.count = state["count"]
 
 
 __all__ = ["RunningMeanStd", "RewardNormalizer"]
