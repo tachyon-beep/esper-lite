@@ -26,6 +26,7 @@ from .action_masks import (
     compute_action_masks,
     compute_batch_masks,
     slot_id_to_index,
+    _validate_action_mask,
 )
 
 __all__ = [
@@ -48,4 +49,5 @@ __all__ = [
     "compute_action_masks",
     "compute_batch_masks",
     "slot_id_to_index",
+    "_validate_action_mask",
 ]

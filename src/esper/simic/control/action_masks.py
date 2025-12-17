@@ -13,6 +13,7 @@ from esper.tamiyo.policy.action_masks import (
     slot_id_to_index,
     MaskedCategorical,
     InvalidStateMachineError,
+    _validate_action_mask,
 )
 
 __all__ = [
@@ -23,4 +24,5 @@ __all__ = [
     "slot_id_to_index",
     "MaskedCategorical",
     "InvalidStateMachineError",
+    "_validate_action_mask",
 ]
