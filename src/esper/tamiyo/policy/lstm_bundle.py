@@ -242,11 +242,15 @@ class LSTMPolicyBundle:
     def state_dict(self) -> dict[str, Any]:
         """Return network state dict."""
         # Handle torch.compile wrapper
+        # getattr AUTHORIZED by Code Review 2025-12-17
+        # Justification: torch.compile wraps modules - must unwrap to access actual state_dict
         base = getattr(self._network, '_orig_mod', self._network)
         return base.state_dict()
 
     def load_state_dict(self, state_dict: dict[str, Any], strict: bool = True) -> None:
         """Load network state dict."""
+        # getattr AUTHORIZED by Code Review 2025-12-17
+        # Justification: torch.compile wraps modules - must unwrap to access actual load_state_dict
         base = getattr(self._network, '_orig_mod', self._network)
         base.load_state_dict(state_dict, strict=strict)
 

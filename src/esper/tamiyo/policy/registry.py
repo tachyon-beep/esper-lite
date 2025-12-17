@@ -67,6 +67,8 @@ def register_policy(name: str):
         # instantiate the class here (policies require constructor arguments)
         # and Protocol conformance can't be checked at runtime without an instance.
         # Static type checkers (mypy/pyright) provide full signature validation.
+        # hasattr AUTHORIZED by Code Review 2025-12-17
+        # Justification: Protocol structural verification - checking class attributes without instantiation
         missing_methods = [m for m in required_methods if not hasattr(cls, m)]
         missing_props = [p for p in required_properties if not hasattr(cls, p)]
 
