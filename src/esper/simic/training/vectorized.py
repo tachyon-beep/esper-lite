@@ -670,14 +670,14 @@ def train_ppo_vectorized(
             total = targets.size(0)
         return loss, correct, total
 
-    # Create AMP scaler (CUDA only) - enabled gate avoids CPU overhead
+    # AMP enabled gate - actual GradScaler created per-env in ParallelEnvState
+    # to avoid stream race conditions (GradScaler internal state is not stream-safe)
     amp_enabled = amp and torch.cuda.is_available()
-    scaler = torch_amp.GradScaler(enabled=amp_enabled)
 
     # Create or resume PPO agent
     start_episode = 0
     if resume_path:
-        checkpoint = torch.load(resume_path, map_location=device, weights_only=False)
+        checkpoint = torch.load(resume_path, map_location=device, weights_only=True)
         agent = PPOAgent.load(resume_path, device=device)
 
         # Restore observation normalizer state
@@ -693,6 +693,12 @@ def train_ppo_vectorized(
             # Restore momentum (critical for EMA mode - affects normalization dynamics)
             if 'obs_normalizer_momentum' in metadata:
                 obs_normalizer.momentum = metadata['obs_normalizer_momentum']
+
+        # Restore reward normalizer state (P1-6 fix: prevents value function instability on resume)
+        if 'reward_normalizer_mean' in metadata:
+            reward_normalizer.mean = metadata['reward_normalizer_mean']
+            reward_normalizer.m2 = metadata['reward_normalizer_m2']
+            reward_normalizer.count = metadata['reward_normalizer_count']
 
         # Calculate starting episode from checkpoint
         if 'n_episodes' in metadata:
@@ -793,6 +799,9 @@ def train_ppo_vectorized(
         env_device_obj = torch.device(env_device)
         stream = torch.cuda.Stream(device=env_device_obj) if env_device_obj.type == "cuda" else None
 
+        # Per-env AMP scaler to avoid stream race conditions (GradScaler state is not stream-safe)
+        env_scaler = torch_amp.GradScaler(enabled=amp_enabled) if env_device_obj.type == "cuda" else None
+
         # Create Governor for fail-safe watchdog
         # Conservative settings to avoid false positives during seed blending:
         # - sensitivity=6.0: 6-sigma is very rare for Gaussian
@@ -815,6 +824,7 @@ def train_ppo_vectorized(
             governor=governor,
             env_device=env_device,
             stream=stream,
+            scaler=env_scaler,
             seeds_created=0,
             episode_rewards=[],
             action_enum=ActionEnum,
@@ -833,7 +843,6 @@ def train_ppo_vectorized(
         use_telemetry: bool = False,
         slots: list[str] | None = None,
         use_amp: bool = False,
-        scaler: torch.cuda.amp.GradScaler | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, int, dict[str, dict] | None]:
         """Process a single training batch for one environment (runs in CUDA stream).
 
@@ -841,7 +850,7 @@ def train_ppo_vectorized(
         Call .item() only AFTER synchronizing all streams.
 
         Args:
-            env_state: Parallel environment state
+            env_state: Parallel environment state (includes per-env scaler)
             inputs: Input tensor
             targets: Target tensor
             criterion: Loss criterion
@@ -913,9 +922,9 @@ def train_ppo_vectorized(
                         seed_params, lr=task_spec.seed_lr, momentum=0.9
                     )
 
-            env_state.host_optimizer.zero_grad()
+            env_state.host_optimizer.zero_grad(set_to_none=True)
             for slot_id in slots_to_step:
-                env_state.seed_optimizers[slot_id].zero_grad()
+                env_state.seed_optimizers[slot_id].zero_grad(set_to_none=True)
 
             autocast_ctx = (
                 torch_amp.autocast(device_type="cuda", dtype=torch.float16)
@@ -926,8 +935,8 @@ def train_ppo_vectorized(
                 outputs = model(inputs)
                 loss, correct_tensor, total = loss_and_correct(outputs, targets, criterion)
 
-            if use_amp and scaler is not None and env_dev.startswith("cuda"):
-                scaler.scale(loss).backward()
+            if use_amp and env_state.scaler is not None and env_dev.startswith("cuda"):
+                env_state.scaler.scale(loss).backward()
             else:
                 loss.backward()
             # Collect gradient stats for telemetry (after backward, before step if scaler used)
@@ -961,11 +970,11 @@ def train_ppo_vectorized(
                             **seed_stats,
                         }
 
-            if use_amp and scaler is not None and env_dev.startswith("cuda"):
-                scaler.step(env_state.host_optimizer)
+            if use_amp and env_state.scaler is not None and env_dev.startswith("cuda"):
+                env_state.scaler.step(env_state.host_optimizer)
                 for slot_id in slots_to_step:
-                    scaler.step(env_state.seed_optimizers[slot_id])
-                scaler.update()
+                    env_state.scaler.step(env_state.seed_optimizers[slot_id])
+                env_state.scaler.update()
             else:
                 env_state.host_optimizer.step()
                 for slot_id in slots_to_step:
@@ -1117,7 +1126,7 @@ def train_ppo_vectorized(
                         inputs, targets = env_batches[i]
                         loss_tensor, correct_tensor, total, grad_stats = process_train_batch(
                             env_state, inputs, targets, criterion, use_telemetry=use_telemetry, slots=slots,
-                            use_amp=amp_enabled, scaler=scaler
+                            use_amp=amp_enabled,
                         )
                         if grad_stats is not None:
                             env_grad_stats[i] = grad_stats  # Keep last batch's grad stats
@@ -1147,7 +1156,7 @@ def train_ppo_vectorized(
                         inputs, targets = env_batches[i]
                         loss_tensor, correct_tensor, total, grad_stats = process_train_batch(
                             env_state, inputs, targets, criterion, use_telemetry=use_telemetry, slots=slots,
-                            use_amp=amp_enabled, scaler=scaler
+                            use_amp=amp_enabled,
                         )
                         if grad_stats is not None:
                             env_grad_stats[i] = grad_stats  # Keep last batch's grad stats
@@ -1816,7 +1825,72 @@ def train_ppo_vectorized(
                 # is consistent across all envs, keeping on GPU is more efficient.
                 done = (epoch == max_epochs)
                 truncated = done  # All episodes end at max_epochs (time limit truncation)
-                bootstrap_value = value if truncated else 0.0  # Bootstrap from V(s_final) for truncation
+
+                # Bootstrap value for truncation: use V(s_{t+1}), not V(s_t)
+                # For truncated episodes (time limit), we need the value of the POST-action
+                # state to correctly estimate returns. Using V(s_t) causes biased advantages.
+                # This requires an extra critic forward pass at the final step.
+                if truncated:
+                    # Get post-action slot reports (seed states changed by action)
+                    post_action_slot_reports = model.get_slot_reports()
+
+                    # Gather post-action active seeds
+                    post_action_seeds = []
+                    for slot_id in slots:
+                        if model.has_active_seed_in_slot(slot_id):
+                            seed_state = model.seed_slots[slot_id].state
+                            if seed_state is not None:
+                                post_action_seeds.append(seed_state)
+
+                    # Compute post-action available slots
+                    post_action_available = sum(
+                        1 for slot_id in slots if not model.has_active_seed_in_slot(slot_id)
+                    )
+
+                    # Build post-action signals (epoch/accuracy same, seed states changed)
+                    post_action_signals = env_state.signal_tracker.peek(
+                        epoch=epoch,
+                        global_step=epoch * num_train_batches,
+                        train_loss=env_state.train_loss,
+                        train_accuracy=env_state.train_acc,
+                        val_loss=env_state.val_loss,
+                        val_accuracy=env_state.val_acc,
+                        active_seeds=post_action_seeds,
+                        available_slots=post_action_available,
+                    )
+
+                    # Convert to features
+                    post_action_features = signals_to_features(
+                        post_action_signals,
+                        slot_reports=post_action_slot_reports,
+                        use_telemetry=use_telemetry,
+                        slots=slots,
+                        total_params=model.total_params if model else 0,
+                        total_seeds=model.total_seeds() if model else 0,
+                        max_seeds=effective_max_seeds,
+                        slot_config=slot_config,
+                    )
+
+                    # Normalize and get value from critic
+                    post_action_state = torch.tensor(
+                        [post_action_features], dtype=torch.float32, device=device
+                    )
+                    post_action_normalized = obs_normalizer.normalize(post_action_state)
+
+                    # Get V(s_{t+1}) - use updated LSTM hidden state from this step
+                    with torch.no_grad():
+                        _, _, bootstrap_tensor, _ = agent.network.get_action(
+                            post_action_normalized,
+                            hidden=env_state.lstm_hidden,
+                            slot_mask=env_masks["slot"].unsqueeze(0),
+                            blueprint_mask=env_masks["blueprint"].unsqueeze(0),
+                            blend_mask=env_masks["blend"].unsqueeze(0),
+                            op_mask=env_masks["op"].unsqueeze(0),
+                            deterministic=True,
+                        )
+                        bootstrap_value = bootstrap_tensor[0].item()
+                else:
+                    bootstrap_value = 0.0
 
                 # Store transition with per-head masks and LSTM states
                 env_masks = {key: masks_batch[key][env_idx] for key in masks_batch}
@@ -2261,6 +2335,10 @@ def train_ppo_vectorized(
             'obs_normalizer_var': obs_normalizer.var.tolist(),
             'obs_normalizer_count': obs_normalizer.count.item(),
             'obs_normalizer_momentum': obs_normalizer.momentum,
+            # Reward normalizer state (P1-6 fix: prevents value function instability on resume)
+            'reward_normalizer_mean': reward_normalizer.mean,
+            'reward_normalizer_m2': reward_normalizer.m2,
+            'reward_normalizer_count': reward_normalizer.count,
         })
         if hub:
             hub.emit(TelemetryEvent(
