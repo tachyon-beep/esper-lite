@@ -14,6 +14,7 @@ from textual.containers import Container
 from textual.widgets import Footer, Header, Static
 
 from esper.karn.overwatch.widgets.help import HelpOverlay
+from esper.karn.overwatch.widgets.flight_board import FlightBoard
 
 if TYPE_CHECKING:
     from esper.karn.overwatch.schema import TuiSnapshot
@@ -82,10 +83,9 @@ class OverwatchApp(App):
 
         # Main area with flight board and detail panel
         with Container(id="main-area"):
-            yield Static(
-                self._render_flight_board_content(),
-                id="flight-board",
-            )
+            # Real FlightBoard widget
+            yield FlightBoard(id="flight-board")
+
             yield Static(
                 self._render_detail_panel_content(),
                 id="detail-panel",
@@ -119,13 +119,6 @@ class OverwatchApp(App):
             return f"[TAMIYO] KL: {kl:.3f} | Entropy: {ent:.2f}"
         return "[TAMIYO STRIP] Waiting for policy data..."
 
-    def _render_flight_board_content(self) -> str:
-        """Render Flight Board placeholder content."""
-        if self._snapshot and self._snapshot.flight_board:
-            n = len(self._snapshot.flight_board)
-            return f"[FLIGHT BOARD] {n} environments loaded"
-        return "[FLIGHT BOARD] No environments"
-
     def _render_detail_panel_content(self) -> str:
         """Render Detail Panel placeholder content."""
         return "[DETAIL PANEL] Select an environment"
@@ -143,6 +136,9 @@ class OverwatchApp(App):
         if self._replay_path:
             self._load_first_snapshot()
 
+        # Set focus to flight board for navigation
+        self.query_one(FlightBoard).focus()
+
     def _load_first_snapshot(self) -> None:
         """Load the first snapshot from replay file."""
         from esper.karn.overwatch.replay import SnapshotReader
@@ -158,16 +154,23 @@ class OverwatchApp(App):
 
         if self._snapshot:
             self.notify(f"Loaded snapshot from {self._snapshot.captured_at}")
-            # Refresh all placeholders
+            # Update flight board with snapshot
+            self._update_flight_board()
+            # Refresh placeholders
             self._refresh_placeholders()
         else:
             self.notify("No snapshots found in replay file", severity="warning")
 
+    def _update_flight_board(self) -> None:
+        """Update the flight board with current snapshot."""
+        if self._snapshot:
+            flight_board = self.query_one(FlightBoard)
+            flight_board.update_snapshot(self._snapshot)
+
     def _refresh_placeholders(self) -> None:
-        """Refresh all placeholder widgets with current snapshot."""
+        """Refresh placeholder widgets with current snapshot."""
         self.query_one("#header", Static).update(self._render_header_content())
         self.query_one("#tamiyo-strip", Static).update(self._render_tamiyo_content())
-        self.query_one("#flight-board", Static).update(self._render_flight_board_content())
         self.query_one("#detail-panel", Static).update(self._render_detail_panel_content())
         self.query_one("#event-feed", Static).update(self._render_event_feed_content())
 
@@ -181,3 +184,41 @@ class OverwatchApp(App):
         """Dismiss overlays or collapse expanded elements."""
         if self._help_visible:
             self.action_toggle_help()
+
+    def on_flight_board_env_selected(self, message: FlightBoard.EnvSelected) -> None:
+        """Handle env selection in flight board."""
+        self._update_detail_panel(message.env_id)
+
+    def on_flight_board_env_expanded(self, message: FlightBoard.EnvExpanded) -> None:
+        """Handle env expansion in flight board."""
+        pass  # Could update detail panel
+
+    def _update_detail_panel(self, env_id: int | None) -> None:
+        """Update detail panel with selected env info."""
+        if env_id is None or self._snapshot is None:
+            self.query_one("#detail-panel", Static).update(
+                "[DETAIL PANEL] Select an environment"
+            )
+            return
+
+        # Find the env
+        env = None
+        for e in self._snapshot.flight_board:
+            if e.env_id == env_id:
+                env = e
+                break
+
+        if env is None:
+            return
+
+        # Build detail content
+        lines = [f"[DETAIL] Env {env.env_id}"]
+        lines.append(f"Status: {env.status}")
+        lines.append(f"Anomaly: {env.anomaly_score:.2f}")
+
+        if env.anomaly_reasons:
+            lines.append("Reasons:")
+            for reason in env.anomaly_reasons:
+                lines.append(f"  • {reason}")
+
+        self.query_one("#detail-panel", Static).update("\n".join(lines))
