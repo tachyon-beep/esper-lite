@@ -222,6 +222,11 @@ DEFAULT_CULL_IF_ACCURACY_DROPS_BY = 2.0
 # Cooldown epochs after a cull before next germination allowed (anti-thrashing).
 DEFAULT_EMBARGO_EPOCHS_AFTER_CULL = 5
 
+# Fossilization threshold: minimum improvement required to fossilize a seed.
+# Set to 0.5% to prevent reward hacking via marginal fossilization.
+# A seed must demonstrate meaningful contribution before permanent integration.
+DEFAULT_MIN_IMPROVEMENT_TO_FOSSILIZE = 0.5
+
 # Default number of steps for alpha ramp during BLENDING stage.
 # Controls how gradually seed influence is increased.
 DEFAULT_BLENDING_TOTAL_STEPS = 5
@@ -425,6 +430,7 @@ __all__ = [
     "DEFAULT_CULL_AFTER_EPOCHS_WITHOUT_IMPROVEMENT",
     "DEFAULT_CULL_IF_ACCURACY_DROPS_BY",
     "DEFAULT_EMBARGO_EPOCHS_AFTER_CULL",
+    "DEFAULT_MIN_IMPROVEMENT_TO_FOSSILIZE",
     "DEFAULT_BLENDING_TOTAL_STEPS",
 
     # Task Training Defaults

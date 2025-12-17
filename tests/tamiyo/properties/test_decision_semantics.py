@@ -481,3 +481,19 @@ class TestDecisionHistory:
         # Modifying returned list shouldn't affect internal state
         history1.clear()
         assert len(policy.decisions) == 1, "Internal history should be unchanged"
+
+
+def test_fossilize_requires_meaningful_improvement():
+    """Fossilization should require meaningful improvement, not just any positive value."""
+    from esper.tamiyo.heuristic import HeuristicPolicyConfig
+    from esper.leyline import DEFAULT_MIN_IMPROVEMENT_TO_FOSSILIZE
+
+    # Default threshold should be meaningful (at least 0.5%)
+    assert DEFAULT_MIN_IMPROVEMENT_TO_FOSSILIZE >= 0.5, (
+        f"Default fossilize threshold {DEFAULT_MIN_IMPROVEMENT_TO_FOSSILIZE} is too low. "
+        "Seeds with negligible improvement can be fossilized, enabling reward hacking."
+    )
+
+    # HeuristicPolicyConfig should use the default
+    config = HeuristicPolicyConfig()
+    assert config.min_improvement_to_fossilize >= 0.5

@@ -26,6 +26,7 @@ from esper.leyline import (
     DEFAULT_BLUEPRINT_PENALTY_ON_CULL,
     DEFAULT_BLUEPRINT_PENALTY_DECAY,
     DEFAULT_BLUEPRINT_PENALTY_THRESHOLD,
+    DEFAULT_MIN_IMPROVEMENT_TO_FOSSILIZE,
 )
 from esper.leyline.actions import build_action_enum
 from esper.tamiyo.decisions import TamiyoDecision
@@ -58,8 +59,8 @@ class HeuristicPolicyConfig:
     cull_after_epochs_without_improvement: int = DEFAULT_CULL_AFTER_EPOCHS_WITHOUT_IMPROVEMENT
     cull_if_accuracy_drops_by: float = DEFAULT_CULL_IF_ACCURACY_DROPS_BY  # % drop triggers cull
 
-    # Fossilization threshold
-    min_improvement_to_fossilize: float = 0.0  # Any positive improvement
+    # Fossilization threshold (from leyline)
+    min_improvement_to_fossilize: float = DEFAULT_MIN_IMPROVEMENT_TO_FOSSILIZE
 
     # Anti-thrashing: cooldown after cull (from leyline)
     embargo_epochs_after_cull: int = DEFAULT_EMBARGO_EPOCHS_AFTER_CULL
