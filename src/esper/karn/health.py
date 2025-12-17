@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING
 
 from esper.nissa import get_hub
 from esper.karn.constants import HealthThresholds, VitalSignsThresholds
-from esper.leyline import TelemetryEvent, TelemetryEventType
+from esper.leyline import TelemetryEvent, TelemetryEventType, SeedStage, is_active_stage
 
 if TYPE_CHECKING:
     from esper.karn.store import TelemetryStore
@@ -420,11 +420,14 @@ class VitalSignsMonitor:
         culled_seeds = 0
         active = 0
         for slot in latest.slots.values():
-            if slot.stage.value >= 2:  # GERMINATED or beyond
+            # Count seeds that have been germinated (past DORMANT)
+            if slot.stage != SeedStage.DORMANT and slot.stage != SeedStage.UNKNOWN:
                 total_seeds += 1
-            if slot.stage.value == 7:  # CULLED
+            # Count culled seeds for failure rate
+            if slot.stage == SeedStage.CULLED:
                 culled_seeds += 1
-            if slot.stage.value in (2, 3, 4, 5):  # Active states
+            # Count active seeds (contributing to forward pass)
+            if is_active_stage(slot.stage):
                 active += 1
 
         vitals.active_seeds = active
