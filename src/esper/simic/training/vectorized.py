@@ -1634,6 +1634,7 @@ def train_ppo_vectorized(
                     max_seeds=effective_max_seeds,
                     slot_config=slot_config,
                     device=torch.device(device),
+                    topology=task_spec.topology,
                 )
                 all_masks.append(mask)
 
