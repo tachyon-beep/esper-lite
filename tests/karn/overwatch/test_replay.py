@@ -272,3 +272,14 @@ class TestSnapshotReader:
         # Second iteration
         second = list(reader)
         assert len(second) == 3
+
+
+class TestReplayExports:
+    """Tests that replay classes are exported correctly."""
+
+    def test_replay_classes_importable_from_package(self) -> None:
+        """Replay classes are importable from overwatch package."""
+        from esper.karn.overwatch import SnapshotWriter, SnapshotReader
+
+        assert SnapshotWriter is not None
+        assert SnapshotReader is not None
