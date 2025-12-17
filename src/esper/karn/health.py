@@ -21,10 +21,10 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
-from esper.nissa import get_hub
-from esper.leyline import TelemetryEvent, TelemetryEventType
+from esper.karn.constants import HealthThresholds, VitalSignsThresholds
+from esper.leyline import TelemetryEvent, TelemetryEventType, SeedStage, is_active_stage
 
 if TYPE_CHECKING:
     from esper.karn.store import TelemetryStore
@@ -92,7 +92,7 @@ class GradientHealth:
     @property
     def is_healthy(self) -> bool:
         """True if gradients are healthy."""
-        return not self.has_nan and not self.has_inf and self.mean_norm < 100.0
+        return not self.has_nan and not self.has_inf and self.mean_norm < HealthThresholds.GRAD_NORM_ERROR
 
 
 @dataclass
@@ -134,13 +134,15 @@ class HealthMonitor:
     def __init__(
         self,
         store: "TelemetryStore | None" = None,
-        gpu_warning_threshold: float = 0.9,
-        grad_norm_warning: float = 50.0,
-        grad_norm_error: float = 100.0,
-        memory_warning_threshold: float = 0.85,
-        memory_warning_cooldown: float = 60.0,
+        emit_callback: Callable[[TelemetryEvent], None] | None = None,
+        gpu_warning_threshold: float = HealthThresholds.GPU_UTILIZATION_WARNING,
+        grad_norm_warning: float = HealthThresholds.GRAD_NORM_WARNING,
+        grad_norm_error: float = HealthThresholds.GRAD_NORM_ERROR,
+        memory_warning_threshold: float = HealthThresholds.MEMORY_WARNING_THRESHOLD,
+        memory_warning_cooldown: float = HealthThresholds.MEMORY_WARNING_COOLDOWN_SECONDS,
     ):
         self.store = store
+        self._emit_callback = emit_callback
         self.gpu_warning_threshold = gpu_warning_threshold
         self.grad_norm_warning = grad_norm_warning
         self.grad_norm_error = grad_norm_error
@@ -176,9 +178,8 @@ class HealthMonitor:
             return False  # Cooldown active
 
         self._last_memory_warning = now
-        hub = get_hub()
-        if hub is not None:
-            hub.emit(TelemetryEvent(
+        if self._emit_callback is not None:
+            self._emit_callback(TelemetryEvent(
                 event_type=TelemetryEventType.MEMORY_WARNING,
                 severity="warning",
                 data={
@@ -268,7 +269,7 @@ class HealthMonitor:
         grad_health.max_norm = max(norms)
 
         # Check for NaN/Inf (indicated by very large norms)
-        if grad_health.max_norm > 1e10:
+        if grad_health.max_norm > HealthThresholds.GRAD_NORM_EXPLOSION:
             grad_health.has_inf = True
             health.add_error("Gradient explosion detected (possible Inf)")
 
@@ -362,8 +363,8 @@ class VitalSignsMonitor:
     def __init__(
         self,
         store: "TelemetryStore | None" = None,
-        loss_spike_threshold: float = 2.0,
-        stagnation_epochs: int = 20,
+        loss_spike_threshold: float = VitalSignsThresholds.LOSS_SPIKE_MULTIPLIER,
+        stagnation_epochs: int = VitalSignsThresholds.STAGNATION_EPOCHS,
     ):
         self.store = store
         self.loss_spike_threshold = loss_spike_threshold
@@ -419,11 +420,14 @@ class VitalSignsMonitor:
         culled_seeds = 0
         active = 0
         for slot in latest.slots.values():
-            if slot.stage.value >= 2:  # GERMINATED or beyond
+            # Count seeds that have been germinated (past DORMANT)
+            if slot.stage != SeedStage.DORMANT and slot.stage != SeedStage.UNKNOWN:
                 total_seeds += 1
-            if slot.stage.value == 7:  # CULLED
+            # Count culled seeds for failure rate
+            if slot.stage == SeedStage.CULLED:
                 culled_seeds += 1
-            if slot.stage.value in (2, 3, 4, 5):  # Active states
+            # Count active seeds (contributing to forward pass)
+            if is_active_stage(slot.stage):
                 active += 1
 
         vitals.active_seeds = active

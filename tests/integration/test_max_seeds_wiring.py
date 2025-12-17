@@ -1,8 +1,8 @@
 """Integration tests for max_seeds wiring through training pipeline."""
 
 from esper.simic.agent import signals_to_features
-from esper.simic.control import compute_action_masks
-from esper.simic.control import MULTISLOT_FEATURE_SIZE
+from esper.tamiyo.policy.action_masks import compute_action_masks
+from esper.tamiyo.policy.features import MULTISLOT_FEATURE_SIZE
 from esper.leyline.factored_actions import LifecycleOp
 
 

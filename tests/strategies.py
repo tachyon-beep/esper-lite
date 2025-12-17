@@ -370,7 +370,7 @@ def slot_states_for_config(draw, slot_config):
         def test_with_states(config):
             states = slot_states_for_config(config).example()
     """
-    from esper.simic.control import MaskSeedInfo
+    from esper.tamiyo.policy.action_masks import MaskSeedInfo
     from esper.leyline import SeedStage
 
     states: dict[str, MaskSeedInfo | None] = {}

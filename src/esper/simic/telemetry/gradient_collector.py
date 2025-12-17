@@ -13,6 +13,21 @@ from typing import Iterator
 import torch
 import torch.nn as nn
 
+from esper.leyline import DEFAULT_MAX_GRAD_NORM
+
+# H14: PPO-tuned gradient thresholds
+# These defaults are calibrated for PPO with gradient clipping at DEFAULT_MAX_GRAD_NORM (0.5).
+# Collection happens BEFORE clipping, so we detect:
+# - Vanishing: gradients too small to provide learning signal
+# - Exploding: gradients that will be heavily clipped (10x clip norm)
+#
+# Why 10x clip norm for "exploding"?
+# - At 10x clip, gradient direction is preserved but magnitude scaled down 10x
+# - This is informative (heavy clipping) but not catastrophic
+# - True explosions (100x+) indicate numerical instability
+DEFAULT_VANISHING_THRESHOLD = 1e-7  # Very small but non-zero
+DEFAULT_EXPLODING_THRESHOLD = 10.0 * DEFAULT_MAX_GRAD_NORM  # = 5.0 with default clip
+
 
 @dataclass(slots=True)
 class GradientHealthMetrics:
@@ -69,18 +84,25 @@ class SeedGradientCollector:
     - Computes only essential stats (norm, health, vanishing, exploding)
     - Is stateless (no history)
     - Uses vectorized operations for performance
+
+    H14: Thresholds are PPO-tuned by default (see module-level constants).
+    Collection happens BEFORE gradient clipping, so "exploding" means
+    "will be heavily clipped" rather than "catastrophic".
     """
 
     def __init__(
         self,
-        vanishing_threshold: float = 1e-7,
-        exploding_threshold: float = 100.0,
+        vanishing_threshold: float = DEFAULT_VANISHING_THRESHOLD,
+        exploding_threshold: float = DEFAULT_EXPLODING_THRESHOLD,
     ):
         """Initialize collector with detection thresholds.
 
         Args:
-            vanishing_threshold: Gradient norm below this is considered vanishing
-            exploding_threshold: Gradient norm above this is considered exploding
+            vanishing_threshold: Gradient norm below this is considered vanishing.
+                Default: 1e-7 (very small but non-zero).
+            exploding_threshold: Gradient norm above this is considered exploding.
+                Default: 10x clip norm (5.0 with DEFAULT_MAX_GRAD_NORM=0.5).
+                At this level, gradients will be scaled down 10x by clipping.
         """
         self.vanishing_threshold = vanishing_threshold
         self.exploding_threshold = exploding_threshold
@@ -196,8 +218,8 @@ def materialize_grad_stats(async_stats: dict) -> dict:
 
 def collect_seed_gradients(
     seed_parameters: Iterator[nn.Parameter],
-    vanishing_threshold: float = 1e-7,
-    exploding_threshold: float = 100.0,
+    vanishing_threshold: float = DEFAULT_VANISHING_THRESHOLD,
+    exploding_threshold: float = DEFAULT_EXPLODING_THRESHOLD,
     return_enhanced: bool = False,
 ) -> dict | GradientHealthMetrics:
     """Convenience function to collect gradient stats (vectorized).
@@ -254,20 +276,16 @@ def collect_seed_gradients(
     n_vanishing_t = (all_norms < vanishing_threshold).sum()
     n_exploding_t = (all_norms > exploding_threshold).sum()
 
-    # Quality checks: accumulate per-tensor to avoid huge concatenated tensor.
-    # Instead of torch.cat([g.view(-1) for g in grads]) which allocates O(total_params),
-    # we sum per-tensor counts which is O(n_grads) intermediate scalars.
-    # NOTE: Use explicit loop instead of sum(generator, start=tensor) because
-    # Python's sum() with generators can cause graph breaks under torch.compile.
-    total_elements = sum(g.numel() for g in grads)
+    # C6 FIX: Vectorized quality checks to avoid torch.compile graph breaks.
+    # Trade-off: allocates O(total_params) temporary tensor, but eliminates
+    # data-dependent loop that caused TorchDynamo to insert graph breaks.
+    # Since this is telemetry (not hot path), memory overhead is acceptable.
     device = grads[0].device
-    zero_count_t = torch.zeros((), device=device, dtype=torch.long)
-    nan_count_t = torch.zeros((), device=device, dtype=torch.long)
-    inf_count_t = torch.zeros((), device=device, dtype=torch.long)
-    for g in grads:
-        zero_count_t = zero_count_t + (g == 0).sum()
-        nan_count_t = nan_count_t + torch.isnan(g).sum()
-        inf_count_t = inf_count_t + torch.isinf(g).sum()
+    all_grads_flat = torch.cat([g.view(-1) for g in grads])
+    total_elements = all_grads_flat.numel()
+    zero_count_t = (all_grads_flat == 0).sum()
+    nan_count_t = torch.isnan(all_grads_flat).sum()
+    inf_count_t = torch.isinf(all_grads_flat).sum()
 
     # SINGLE sync point: stack all scalar tensors and materialize with one .tolist()
     stats_tensor = torch.stack([
@@ -326,8 +344,8 @@ def collect_seed_gradients(
 
 def collect_seed_gradients_async(
     seed_parameters: Iterator[nn.Parameter],
-    vanishing_threshold: float = 1e-7,
-    exploding_threshold: float = 100.0,
+    vanishing_threshold: float = DEFAULT_VANISHING_THRESHOLD,
+    exploding_threshold: float = DEFAULT_EXPLODING_THRESHOLD,
 ) -> dict:
     """Collect gradient stats as tensors (async-safe version).
 
@@ -525,6 +543,10 @@ def collect_dual_gradients_async(
 
 
 __all__ = [
+    # H14: PPO-tuned threshold constants
+    "DEFAULT_VANISHING_THRESHOLD",
+    "DEFAULT_EXPLODING_THRESHOLD",
+    # Classes and functions
     "GradientHealthMetrics",
     "SeedGradientCollector",
     "materialize_grad_stats",

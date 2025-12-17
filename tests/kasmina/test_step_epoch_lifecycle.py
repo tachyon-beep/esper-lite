@@ -130,7 +130,7 @@ class TestStepEpochTrainingToBlending:
 
     def test_training_advances_to_blending_transformer_disables_isolation(self):
         """Transformer topology should disable isolation at BLENDING for co-adaptation."""
-        from esper.simic.control import TaskConfig
+        from esper.tamiyo.policy.features import TaskConfig
 
         gates = MockGates()
         gates.set_gate_result(SeedStage.BLENDING, True)

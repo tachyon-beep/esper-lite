@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from esper.simic.control import InvalidStateMachineError
+from esper.tamiyo.policy.action_masks import InvalidStateMachineError
 from esper.simic.agent import FactoredRecurrentActorCritic
 
 

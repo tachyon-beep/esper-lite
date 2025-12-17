@@ -7,6 +7,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from esper.leyline import (
+    DEFAULT_ENTROPY_COLLAPSE_THRESHOLD,
+    DEFAULT_ENTROPY_WARNING_THRESHOLD,
+    DEFAULT_RATIO_EXPLOSION_THRESHOLD,
+    DEFAULT_RATIO_COLLAPSE_THRESHOLD,
+)
+
 
 @dataclass(slots=True)
 class AnomalyReport:
@@ -42,9 +49,9 @@ class AnomalyDetector:
     - Late (75%+): Expect useful predictions (EV < 0.1)
     """
 
-    # Ratio thresholds
-    max_ratio_threshold: float = 5.0
-    min_ratio_threshold: float = 0.1
+    # M21: Ratio thresholds from leyline (single source of truth)
+    max_ratio_threshold: float = DEFAULT_RATIO_EXPLOSION_THRESHOLD
+    min_ratio_threshold: float = DEFAULT_RATIO_COLLAPSE_THRESHOLD
 
     # Value function thresholds by training phase (proportions of total_episodes)
     # Phase boundaries as fractions of total training
@@ -179,6 +186,79 @@ class AnomalyDetector:
 
         return report
 
+    # M11: Entropy collapse thresholds from leyline (single source of truth)
+    entropy_collapse_threshold: float = DEFAULT_ENTROPY_COLLAPSE_THRESHOLD
+    entropy_warning_threshold: float = DEFAULT_ENTROPY_WARNING_THRESHOLD
+
+    # KL divergence thresholds
+    kl_spike_threshold: float = 0.1  # KL above this indicates large policy update
+    kl_extreme_threshold: float = 0.5  # KL above this indicates instability
+
+    def check_entropy_collapse(
+        self,
+        entropy: float,
+        head_name: str = "policy",
+    ) -> AnomalyReport:
+        """Check for entropy collapse (policy becoming deterministic).
+
+        Entropy collapse is one of the most common PPO failure modes:
+        - Policy converges to deterministic action selection
+        - Exploration stops, learning stalls
+        - Often caused by insufficient entropy coefficient or reward hacking
+
+        Args:
+            entropy: Current policy entropy (normalized, 0-1 range)
+            head_name: Name of the action head (for multi-head policies)
+
+        Returns:
+            AnomalyReport with any detected issues
+        """
+        report = AnomalyReport()
+
+        if entropy < self.entropy_collapse_threshold:
+            report.add_anomaly(
+                "entropy_collapse",
+                f"{head_name} entropy={entropy:.4f} < {self.entropy_collapse_threshold} (collapsed)",
+            )
+        elif entropy < self.entropy_warning_threshold:
+            report.add_anomaly(
+                "entropy_low",
+                f"{head_name} entropy={entropy:.4f} < {self.entropy_warning_threshold} (warning)",
+            )
+
+        return report
+
+    def check_kl_divergence(
+        self,
+        kl: float,
+    ) -> AnomalyReport:
+        """Check for KL divergence anomalies.
+
+        KL spikes are leading indicators of training instability that often
+        precede ratio explosion. High KL means the policy is changing too
+        quickly, violating PPO's trust region.
+
+        Args:
+            kl: KL divergence between old and new policy
+
+        Returns:
+            AnomalyReport with any detected issues
+        """
+        report = AnomalyReport()
+
+        if kl > self.kl_extreme_threshold:
+            report.add_anomaly(
+                "kl_extreme",
+                f"kl={kl:.4f} > {self.kl_extreme_threshold} (trust region violated)",
+            )
+        elif kl > self.kl_spike_threshold:
+            report.add_anomaly(
+                "kl_spike",
+                f"kl={kl:.4f} > {self.kl_spike_threshold} (large policy update)",
+            )
+
+        return report
+
     def check_gradient_drift(
         self,
         norm_drift: float,
@@ -223,6 +303,8 @@ class AnomalyDetector:
         has_inf: bool = False,
         current_episode: int = 0,
         total_episodes: int = 0,
+        entropy: float | None = None,
+        kl: float | None = None,
     ) -> AnomalyReport:
         """Run all anomaly checks and combine results.
 
@@ -234,17 +316,29 @@ class AnomalyDetector:
             has_inf: Whether Inf values were detected
             current_episode: Current episode for phase-dependent value collapse threshold
             total_episodes: Total configured episodes for phase detection
+            entropy: Policy entropy (0-1 normalized). If provided, checks for entropy collapse.
+            kl: KL divergence between old and new policy. If provided, checks for KL spikes.
 
         Returns:
             Combined AnomalyReport
         """
         combined = AnomalyReport()
 
-        for check_report in [
+        checks = [
             self.check_ratios(ratio_max, ratio_min),
             self.check_value_function(explained_variance, current_episode, total_episodes),
             self.check_numerical_stability(has_nan, has_inf),
-        ]:
+        ]
+
+        # Add entropy check if provided (H1: entropy collapse detection)
+        if entropy is not None:
+            checks.append(self.check_entropy_collapse(entropy))
+
+        # Add KL check if provided (H2: KL divergence detection)
+        if kl is not None:
+            checks.append(self.check_kl_divergence(kl))
+
+        for check_report in checks:
             if check_report.has_anomaly:
                 combined.has_anomaly = True
                 combined.anomaly_types.extend(check_report.anomaly_types)

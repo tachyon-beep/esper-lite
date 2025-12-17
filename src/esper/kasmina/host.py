@@ -307,6 +307,10 @@ class TransformerHost(nn.Module):
         self.pos_emb = nn.Embedding(block_size, n_embd)
         self.drop = nn.Dropout(dropout)
 
+        # Pre-allocate position indices buffer to avoid per-forward allocation
+        # persistent=False excludes from state_dict (reconstructed from block_size)
+        self.register_buffer('pos_indices', torch.arange(block_size), persistent=False)
+
         self.layers = nn.ModuleList(
             [TransformerBlock(n_embd, n_head, block_size, dropout) for _ in range(n_layer)]
         )
@@ -397,8 +401,8 @@ class TransformerHost(nn.Module):
             B, T = x.shape
             if T > self.block_size:
                 raise ValueError(f"Sequence length {T} exceeds block_size {self.block_size}")
-            pos = torch.arange(T, device=x.device)
-            h = self.drop(self.tok_emb(x) + self.pos_emb(pos))
+            # Use pre-allocated buffer to avoid per-forward allocation
+            h = self.drop(self.tok_emb(x) + self.pos_emb(self.pos_indices[:T]))
             start_layer = 0
         else:
             h = x
@@ -439,9 +443,8 @@ class TransformerHost(nn.Module):
         if T > self.block_size:
             raise ValueError(f"Sequence length {T} exceeds block_size {self.block_size}")
 
-        # Embeddings
-        pos = torch.arange(T, device=x.device)
-        h = self.drop(self.tok_emb(x) + self.pos_emb(pos))
+        # Embeddings - use pre-allocated buffer to avoid per-forward allocation
+        h = self.drop(self.tok_emb(x) + self.pos_emb(self.pos_indices[:T]))
 
         # Transformer layers (no slot application)
         for layer in self.layers:
@@ -517,7 +520,8 @@ class MorphogeneticModel(nn.Module):
         # Update tracking for all slots
         for slot in self.seed_slots.values():
             slot.device = actual_device
-        self._device = str(actual_device)
+        # Store as torch.device for type consistency with slot.device
+        self._device = actual_device
 
         return result
 
@@ -616,8 +620,14 @@ class MorphogeneticModel(nn.Module):
 
     @property
     def total_params(self) -> int:
-        """Total trainable params (host + active seeds)."""
-        host_params = sum(p.numel() for p in self.host.parameters() if p.requires_grad)
+        """Total trainable params (host + active seeds).
+
+        Uses set() to deduplicate parameters, which is necessary for
+        TransformerHost with weight tying (tok_emb shares weights with head).
+        Without deduplication, tied weights would be counted twice.
+        """
+        # Deduplicate to handle weight tying in TransformerHost
+        host_params = sum(p.numel() for p in set(self.host.parameters()) if p.requires_grad)
         return host_params + self.active_seed_params
 
     def count_active_seeds(self) -> int:

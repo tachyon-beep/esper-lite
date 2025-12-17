@@ -19,7 +19,7 @@ class TestConfiguration:
         assert policy.config.min_epochs_before_germinate == 5
         assert policy.config.cull_after_epochs_without_improvement == 5
         assert policy.config.cull_if_accuracy_drops_by == 2.0
-        assert policy.config.min_improvement_to_fossilize == 0.0
+        assert policy.config.min_improvement_to_fossilize == 0.5
         assert policy.config.embargo_epochs_after_cull == 5
 
     def test_custom_config_respected(self):

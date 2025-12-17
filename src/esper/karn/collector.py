@@ -51,7 +51,22 @@ _ANOMALY_EVENT_TYPES = frozenset({
 
 
 class OutputBackend(Protocol):
-    """Protocol for Karn output backends."""
+    """Protocol for Karn output backends.
+
+    Note:
+        All methods are called by KarnCollector:
+        - start() is called by add_backend() before the backend is registered
+        - emit() is called for each telemetry event
+        - close() is called during collector shutdown
+
+        Backends can implement start() as a no-op if no initialization is needed.
+        For convenience, subclass esper.nissa.output.OutputBackend which provides
+        default no-op implementations for start() and close().
+    """
+
+    def start(self) -> None:
+        """Start backend (called by add_backend(), can be no-op)."""
+        ...
 
     def emit(self, event: "TelemetryEvent") -> None:
         """Emit event to this backend."""
@@ -84,6 +99,15 @@ class KarnCollector:
     - Stateful storage (TelemetryStore)
     - Typed event handling
     - Research-focused analytics integration
+
+    Lifecycle Contract:
+        - add_backend(): Starts backend immediately; raises RuntimeError if collector is closed
+        - emit(): Routes to backends and updates store; silently drops (with warning) if closed
+        - close(): Idempotent; closes all backends and marks collector as closed
+        - reset(): Closes backends, clears store/detectors, and reopens collector for reuse
+        - start(): No-op (backends are auto-started by add_backend())
+
+        This contract is shared with NissaHub for consistency across telemetry systems.
     """
 
     def __init__(self, config: KarnConfig | None = None):
@@ -91,6 +115,7 @@ class KarnCollector:
         self.store = TelemetryStore()
         self._backends: list[OutputBackend] = []
         self._episode_active = False
+        self._closed = False  # Idempotency flag for close()
 
         # Tier 3: Anomaly detection and dense trace capture
         self._anomaly_detector = AnomalyDetector(config=self.config.dense_trigger)
@@ -101,25 +126,89 @@ class KarnCollector:
     # =========================================================================
 
     def add_backend(self, backend: OutputBackend) -> None:
-        """Add an output backend."""
-        self._backends.append(backend)
+        """Add an output backend.
+
+        The backend is started immediately on add. If start() fails,
+        the backend is NOT added and the exception is re-raised
+        (fail-fast to prevent half-initialized state and silent misconfiguration).
+
+        Raises:
+            RuntimeError: If the collector has been closed. Use reset() to reopen.
+            Exception: If backend.start() fails, the original exception is
+                logged and re-raised so callers can detect misconfiguration.
+        """
+        if self._closed:
+            raise RuntimeError(
+                "Cannot add backend to closed KarnCollector. "
+                "Call reset() to reopen the collector before adding backends."
+            )
+        try:
+            backend.start()
+            self._backends.append(backend)
+        except Exception:
+            _logger.exception(f"Failed to start backend {backend}, not adding")
+            raise
 
     def remove_backend(self, backend: OutputBackend) -> None:
         """Remove an output backend."""
         if backend in self._backends:
             self._backends.remove(backend)
+            try:
+                backend.close()
+            except Exception as e:
+                _logger.error(f"Error closing backend {backend}: {e}")
+
+    def start(self) -> None:
+        """No-op: backends are auto-started by add_backend().
+
+        This method exists for API consistency with OutputBackend protocol
+        but does nothing since add_backend() already starts each backend.
+        Calling this method is harmless but unnecessary.
+
+        Warning:
+            Do NOT rely on this to start backends. Always use add_backend().
+        """
+        # No-op: backends are started in add_backend() to ensure fail-fast
+        # behavior. Double-starting could cause issues with non-idempotent backends.
+        pass
 
     def close(self) -> None:
-        """Close all backends."""
+        """Close all backends (idempotent).
+
+        Safe to call multiple times - only closes backends once.
+        """
+        if self._closed:
+            return
+        self._closed = True
         for backend in self._backends:
             try:
                 backend.close()
             except Exception as e:
                 _logger.error(f"Error closing backend {backend}: {e}")
 
+    def reset(self) -> None:
+        """Reset collector state (clear store and backends).
+
+        Warning:
+            NOT THREAD-SAFE. Must be called when no other threads are emitting
+            events. Intended for test cleanup or between training runs, not
+            during active training. Calling reset() while emit() is running
+            concurrently may cause dropped events or backend errors.
+        """
+        self.close()
+        self.store = TelemetryStore()
+        self._backends.clear()
+        self._episode_active = False
+        self._closed = False  # Allow collector to be reused after reset
+        self._emit_after_close_warned = False
+        self._anomaly_detector.reset()
+        self._policy_detector.reset()
+
     # =========================================================================
     # Event Emission (primary interface)
     # =========================================================================
+
+    _emit_after_close_warned = False
 
     def emit(self, event: "TelemetryEvent") -> None:
         """Emit a telemetry event.
@@ -128,7 +217,17 @@ class KarnCollector:
         1. Validated
         2. Stored in TelemetryStore (if episode active)
         3. Routed to all output backends
+
+        Note:
+            Does nothing if the collector has been closed. This prevents
+            sending events to backends that have already been shut down.
         """
+        if self._closed:
+            if not self._emit_after_close_warned:
+                _logger.warning("emit() called on closed KarnCollector (event dropped)")
+                self._emit_after_close_warned = True
+            return
+
         try:
             # Update store based on event type
             self._update_store(event)
@@ -492,6 +591,16 @@ def configure(config: KarnConfig) -> KarnCollector:
     global _global_collector
     _global_collector = KarnCollector(config)
     return _global_collector
+
+
+def reset_collector() -> None:
+    """Reset the global KarnCollector instance.
+
+    Resets state and closes backends. Useful for test cleanup.
+    """
+    global _global_collector
+    if _global_collector is not None:
+        _global_collector.reset()
 
 
 def emit(event: "TelemetryEvent") -> None:

@@ -24,36 +24,15 @@ import asyncio
 import json
 import logging
 import threading
-from dataclasses import asdict
 from queue import Queue, Empty
 from typing import Any, TYPE_CHECKING
+
+from esper.karn.serialization import serialize_event as _serialize_event
 
 if TYPE_CHECKING:
     from esper.leyline.telemetry import TelemetryEvent
 
 _logger = logging.getLogger(__name__)
-
-
-def _serialize_event(event: "TelemetryEvent") -> str:
-    """Serialize TelemetryEvent to JSON string.
-
-    Handles enum conversion and datetime serialization.
-    """
-    data = asdict(event)
-
-    # Convert enum to string
-    # hasattr AUTHORIZED by John on 2025-12-14 02:45:00 UTC
-    # Justification: Serialization - handle both enum and string event_type values
-    if hasattr(data.get("event_type"), "name"):
-        data["event_type"] = data["event_type"].name
-
-    # Convert datetime to ISO string
-    # hasattr AUTHORIZED by John on 2025-12-14 02:45:00 UTC
-    # Justification: Serialization - safely handle datetime objects
-    if data.get("timestamp") and hasattr(data["timestamp"], "isoformat"):
-        data["timestamp"] = data["timestamp"].isoformat()
-
-    return json.dumps(data, default=str)
 
 
 class WebSocketOutput:

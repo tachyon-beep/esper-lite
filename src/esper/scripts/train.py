@@ -88,6 +88,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     heur_parser.add_argument("--max-seeds", type=int, default=None,
         help="Maximum total seeds across all slots (default: unlimited)")
+    heur_parser.add_argument(
+        "--min-fossilize-improvement",
+        type=float,
+        default=None,
+        metavar="PCT",
+        help="Min improvement (%%) required to fossilize a seed (default: 0.5%%). "
+             "Lower values risk reward hacking; higher values require stronger contribution.",
+    )
 
     ppo_parser = subparsers.add_parser(
         "ppo",
@@ -315,6 +323,7 @@ def main():
                 slots=validated_slots,
                 telemetry_config=telemetry_config,
                 telemetry_lifecycle_only=args.telemetry_lifecycle_only,
+                min_fossilize_improvement=args.min_fossilize_improvement,
             )
 
         elif args.algorithm == "ppo":

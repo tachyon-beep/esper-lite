@@ -48,7 +48,9 @@ def compute_per_head_advantages(
     is_germinate = op_actions == LifecycleOp.GERMINATE
 
     # op head: always gets advantage (always causally relevant)
-    op_advantages = base_advantages.clone()
+    # M8: No clone needed - we're not modifying the tensor, just returning it.
+    # Other heads use multiplication which creates new tensors anyway.
+    op_advantages = base_advantages
 
     # slot head: relevant for GERMINATE, FOSSILIZE, CULL (not WAIT)
     slot_mask = ~is_wait

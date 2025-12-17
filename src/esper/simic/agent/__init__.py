@@ -2,19 +2,19 @@
 
 This subpackage contains the learnable agent components:
 - ppo.py: PPOAgent class and signals_to_features helper
-- tamiyo_network.py: FactoredRecurrentActorCritic neural architecture
-- tamiyo_buffer.py: TamiyoRolloutBuffer for trajectory storage
+- network.py: FactoredRecurrentActorCritic neural architecture
+- rollout_buffer.py: TamiyoRolloutBuffer for trajectory storage
 - advantages.py: GAE advantage computation
 """
 
 from .advantages import compute_per_head_advantages
 
-from .tamiyo_buffer import (
+from .rollout_buffer import (
     TamiyoRolloutStep,
     TamiyoRolloutBuffer,
 )
 
-from .tamiyo_network import FactoredRecurrentActorCritic
+from .network import FactoredRecurrentActorCritic
 
 from .ppo import (
     CHECKPOINT_VERSION,

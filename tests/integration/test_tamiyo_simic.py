@@ -589,3 +589,6 @@ class TestEndToEndGerminateToFossilize:
             seed_state = model.seed_slots["r0c1"].state
             assert seed_state.stage == SeedStage.FOSSILIZED
             assert seed_state.alpha == 1.0
+
+
+# NOTE: PolicyBundle integration tests are in test_policy_bundle_integration.py

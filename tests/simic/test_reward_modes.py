@@ -97,11 +97,10 @@ def test_sparse_reward_with_scale():
         config=config,
     )
 
-    # Expected: 2.5 * (0.8 - 0.02) = 2.5 * 0.78 = 1.95, clamped to 1.0
-    # Actually: scale applied before clamp, so raw = 1.95, clamped = 1.0
-    # But if we want scale to help, clamp should be [-scale, +scale]
-    # Let's verify behavior matches implementation
-    assert reward == 1.0  # Clamped at upper bound
+    # H10 FIX: base reward clamped to [-1, 1] BEFORE scaling
+    # base = 0.78 (already in [-1, 1]), scaled = 2.5 * 0.78 = 1.95
+    # Final reward in [-scale, scale] = [-2.5, 2.5]
+    assert abs(reward - 1.95) < 1e-6, f"Scale should be effective, got {reward}"
 
 
 def test_minimal_reward_no_penalty_for_old_cull():

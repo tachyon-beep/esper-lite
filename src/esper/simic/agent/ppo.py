@@ -10,14 +10,14 @@ from __future__ import annotations
 from collections import defaultdict
 from pathlib import Path
 import math
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .tamiyo_buffer import TamiyoRolloutBuffer
-from .tamiyo_network import FactoredRecurrentActorCritic
+from .rollout_buffer import TamiyoRolloutBuffer
+from .network import FactoredRecurrentActorCritic
 from .advantages import compute_per_head_advantages
 from .types import PPOUpdateMetrics
 from esper.simic.telemetry import RatioExplosionDiagnostic
@@ -36,6 +36,8 @@ from esper.leyline import (
     DEFAULT_ENTROPY_COEF,
     DEFAULT_ENTROPY_COEF_MIN,
     DEFAULT_VALUE_CLIP,
+    DEFAULT_RATIO_EXPLOSION_THRESHOLD,
+    DEFAULT_RATIO_COLLAPSE_THRESHOLD,
     HEAD_NAMES,
 )
 from esper.leyline.slot_config import SlotConfig
@@ -89,7 +91,7 @@ def signals_to_features(
         objects, so seed-specific features are zero-padded when slot reports
         are missing.
     """
-    from esper.simic.control import obs_to_multislot_features
+    from esper.tamiyo.policy.features import obs_to_multislot_features
     from esper.leyline.slot_id import validate_slot_ids
     from esper.leyline.slot_config import SlotConfig
 
@@ -230,15 +232,25 @@ class PPOAgent:
         self.slot_config = slot_config
 
         if state_dim is None:
-            from esper.simic.control import get_feature_size
+            from esper.tamiyo.policy.features import get_feature_size
             state_dim = get_feature_size(slot_config)
 
         self.num_envs = num_envs
         self.max_steps_per_env = max_steps_per_env
         self.chunk_length = chunk_length
         self.gamma = gamma
-        # Recurrent PPO with multiple epochs can cause hidden state staleness (policy drift)
-        # Default to 1 epoch for LSTM safety; increase with caution
+        # C4: RECURRENT POLICY VALUE STALENESS WARNING
+        # Recurrent PPO with multiple epochs can cause hidden state staleness (policy drift).
+        # Default to 1 epoch for LSTM safety; increase with caution.
+        #
+        # With recurrent_n_epochs > 1 AND clip_value=True:
+        # - Rollout values are computed with specific LSTM hidden state trajectories
+        # - After epoch 0 update, network weights change
+        # - Epoch 1+ forward passes produce different hidden state trajectories
+        # - Value clipping compares new values against stale rollout values
+        # - This creates incorrect gradient signals, slowing value learning
+        #
+        # Recommended: Keep recurrent_n_epochs=1 for recurrent policies.
         self.recurrent_n_epochs = recurrent_n_epochs if recurrent_n_epochs is not None else 1
         self.gae_lambda = gae_lambda
         self.clip_ratio = clip_ratio
@@ -266,6 +278,29 @@ class PPOAgent:
         self.weight_decay = weight_decay
         self.device = device
 
+        # C4/H5: Runtime warning for risky recurrent configuration
+        if self.recurrent_n_epochs > 1:
+            import warnings
+            if self.clip_value:
+                warnings.warn(
+                    f"recurrent_n_epochs={self.recurrent_n_epochs} with clip_value=True: "
+                    "Value clipping uses rollout values which have different LSTM hidden state "
+                    "trajectories than training forward passes after epoch 0. This causes stale "
+                    "value comparisons that may slow learning. Consider recurrent_n_epochs=1 or "
+                    "clip_value=False.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            else:
+                warnings.warn(
+                    f"recurrent_n_epochs={self.recurrent_n_epochs} > 1: Hidden states stored from "
+                    "rollout collection may diverge from current policy's hidden state evolution "
+                    "after epoch 0 weight updates. This can cause gradient estimation errors. "
+                    "Consider recurrent_n_epochs=1 for recurrent policies.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+
         # Unified factored + recurrent mode
         self.network = FactoredRecurrentActorCritic(
             state_dim=state_dim,
@@ -289,19 +324,21 @@ class PPOAgent:
             f"Buffer num_slots ({self.buffer.num_slots}) != "
             f"network num_slots ({self.network.num_slots})"
         )
-        # Ratio explosion thresholds (aligned with anomaly detector defaults)
-        self.ratio_explosion_threshold = 5.0
-        self.ratio_collapse_threshold = 0.1
+        # M21: Ratio anomaly thresholds from leyline (single source of truth)
+        self.ratio_explosion_threshold = DEFAULT_RATIO_EXPLOSION_THRESHOLD
+        self.ratio_collapse_threshold = DEFAULT_RATIO_COLLAPSE_THRESHOLD
 
-        # [PyTorch 2.9] Compile network for 10-30% speedup on forward/backward
+        # [PyTorch 2.0+] Compile network for 10-30% speedup on forward/backward
         # mode="default" is safest for networks with MaskedCategorical
         # MaskedCategorical._validate_action_mask has @torch.compiler.disable
+        # M22: dynamic=True handles varying sequence lengths without recompilation
         if compile_network:
-            self.network = torch.compile(self.network, mode="default")
+            # torch.compile returns OptimizedModule which wraps the network
+            self.network = torch.compile(self.network, mode="default", dynamic=True)  # type: ignore[assignment]
 
         # [PyTorch 2.9] Use fused=True for CUDA, foreach=True for CPU
         use_cuda = device.startswith("cuda")
-        optimizer_kwargs = {'lr': lr, 'eps': 1e-5}
+        optimizer_kwargs: dict[str, float | bool] = {'lr': lr, 'eps': 1e-5}
         if use_cuda:
             optimizer_kwargs['fused'] = True
         else:
@@ -327,14 +364,14 @@ class PPOAgent:
                 list(self._base_network.lstm_ln.parameters())
             )
 
-            self.optimizer = torch.optim.AdamW([
+            self.optimizer: torch.optim.Optimizer = torch.optim.AdamW([
                 {'params': actor_params, 'weight_decay': 0.0, 'name': 'actor'},
                 {'params': shared_params, 'weight_decay': 0.0, 'name': 'shared'},  # Must be 0!
                 {'params': critic_params, 'weight_decay': weight_decay, 'name': 'critic'},
-            ], **optimizer_kwargs)
+            ], **optimizer_kwargs)  # type: ignore[arg-type]
         else:
             self.optimizer = torch.optim.Adam(
-                self.network.parameters(), **optimizer_kwargs
+                self.network.parameters(), **optimizer_kwargs  # type: ignore[arg-type]
             )
         self.train_steps = 0
 
@@ -437,7 +474,22 @@ class PPOAgent:
         )
         self.buffer.normalize_advantages()
 
-        # Get batched data
+        # C3: INTENTIONAL SINGLE-BATCH PROCESSING FOR RECURRENT POLICIES
+        # We process the entire rollout as a single batch WITHOUT minibatch shuffling.
+        # This is intentional for LSTM state coherence:
+        #
+        # 1. Temporal Dependency: LSTM hidden states encode sequential context.
+        #    Shuffling would break temporal dependencies that the LSTM learned during rollout.
+        #
+        # 2. Hidden State Alignment: We store initial hidden states per sequence and
+        #    reconstruct LSTM state during training. Shuffling would misalign hidden
+        #    states with their corresponding observations.
+        #
+        # 3. BPTT Coherence: Backpropagation through time requires contiguous sequences.
+        #    Random minibatches would create discontinuous gradients.
+        #
+        # Trade-off: Higher gradient variance vs correct recurrent credit assignment.
+        # For non-recurrent policies, minibatch shuffling would be preferred.
         data = self.buffer.get_batched_sequences(device=self.device)
         valid_mask = data["valid_mask"]
 
@@ -445,9 +497,10 @@ class PPOAgent:
         valid_values = data["values"][valid_mask]
         valid_returns = data["returns"][valid_mask]
         var_returns = valid_returns.var()
+        explained_variance: float
         if var_returns > 1e-8:
-            explained_variance = 1.0 - (valid_returns - valid_values).var() / var_returns
-            explained_variance = explained_variance.item()
+            ev_tensor = 1.0 - (valid_returns - valid_values).var() / var_returns
+            explained_variance = ev_tensor.item()
         else:
             explained_variance = 0.0
 
@@ -531,17 +584,26 @@ class PPOAgent:
             # optimizer.step() entirely if KL is already too high.
             #
             # KL(old||new) ≈ E[(ratio - 1) - log(ratio)] (KL3 estimator from Schulman)
-            # For factored action space, joint KL = SUM of per-head KLs (not mean).
+            #
+            # H6 FIX: Weight per-head KL by causal relevance.
+            # Sparse heads (blueprint, blend) are only active during GERMINATE (~5-15%).
+            # Without weighting, they contribute full KL to the sum despite being rarely
+            # causally relevant, inflating joint KL and triggering premature early stopping.
+            # Weight = (n_valid for head) / (total timesteps) to scale by relevance.
             with torch.inference_mode():
-                head_kls = []
+                total_timesteps = valid_mask.sum().float().clamp(min=1)
+                weighted_kl_sum = torch.tensor(0.0, device=self.device)
                 for key in HEAD_NAMES:
                     mask = head_masks[key]
                     log_ratio = log_probs[key] - old_log_probs[key]
                     kl_per_step = (torch.exp(log_ratio) - 1) - log_ratio
-                    n_valid = mask.sum().clamp(min=1)
+                    n_valid = mask.sum().float().clamp(min=1)
+                    # Masked mean KL for this head
                     head_kl = (kl_per_step * mask.float()).sum() / n_valid
-                    head_kls.append(head_kl)
-                approx_kl = torch.stack(head_kls).sum().item()
+                    # Weight by fraction of timesteps where head is causally relevant
+                    causal_weight = n_valid / total_timesteps
+                    weighted_kl_sum = weighted_kl_sum + causal_weight * head_kl
+                approx_kl = weighted_kl_sum.item()
                 metrics["approx_kl"].append(approx_kl)
 
                 # Clip fraction: how often clipping was active
@@ -562,7 +624,7 @@ class PPOAgent:
 
             # Compute policy loss per head and sum
             # Use masked mean to avoid bias from averaging zeros with real values
-            policy_loss = 0.0
+            policy_loss: torch.Tensor = torch.tensor(0.0, device=self.device)
             for key in HEAD_NAMES:
                 ratio = per_head_ratios[key]
                 adv = per_head_advantages[key]
@@ -592,16 +654,22 @@ class PPOAgent:
             else:
                 value_loss = F.mse_loss(values, valid_returns)
 
-            # Entropy loss with per-head weighting.
+            # Entropy loss with per-head weighting and causal masking.
+            # H3 FIX: Use masked mean for sparse heads (blueprint, blend).
+            # These heads are only active during GERMINATE (~5-15% of timesteps).
+            # Without masking, entropy gradient is diluted by averaging over zeros,
+            # starving exploration signal for rare-but-important action heads.
+            #
             # NOTE: Entropy floors were removed because torch.clamp to a constant
             # provides zero gradient (d(constant)/d(params) = 0). When a head has
-            # only one valid action, entropy is correctly 0 with no gradient signal -
-            # there's nothing to explore. Gradient starvation is addressed by the
-            # masked mean in policy_loss, not by entropy floors.
-            entropy_loss = 0.0
+            # only one valid action, entropy is correctly 0 with no gradient signal.
+            entropy_loss: torch.Tensor = torch.tensor(0.0, device=self.device)
             for key, ent in entropy.items():
                 head_coef = self.entropy_coef_per_head.get(key, 1.0)
-                entropy_loss = entropy_loss - head_coef * ent.mean()
+                mask = head_masks[key]
+                n_valid = mask.sum().clamp(min=1)
+                masked_ent = (ent * mask.float()).sum() / n_valid
+                entropy_loss = entropy_loss - head_coef * masked_ent
 
             entropy_coef = self.get_entropy_coef()
 
@@ -659,19 +727,19 @@ class PPOAgent:
         if clear_buffer:
             self.buffer.reset()
 
-        # Aggregate
-        result = {}
+        # Aggregate into typed result dict
+        result: PPOUpdateMetrics = {}
         for k, v in metrics.items():
             if not v:
-                result[k] = 0.0
+                result[k] = 0.0  # type: ignore[literal-required]
                 continue
 
             first = v[0]
             if isinstance(first, dict):
                 # Diagnostic payloads (ratio_diagnostic) are not aggregated
-                result[k] = first
+                result[k] = first  # type: ignore[literal-required]
             else:
-                result[k] = sum(v) / len(v)
+                result[k] = sum(v) / len(v)  # type: ignore[literal-required]
 
         # Add per-head entropy tracking (P3-1)
         result["head_entropies"] = head_entropy_history
@@ -680,7 +748,7 @@ class PPOAgent:
 
         return result
 
-    def save(self, path: str | Path, metadata: dict = None) -> None:
+    def save(self, path: str | Path, metadata: dict[str, Any] | None = None) -> None:
         """Save agent to file."""
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -751,9 +819,16 @@ class PPOAgent:
 
         checkpoint = torch.load(path, map_location=device, weights_only=True)
         state_dict = checkpoint['network_state_dict']
+        optimizer_state_dict = checkpoint['optimizer_state_dict']
         architecture = checkpoint.get('architecture', {})
         config = checkpoint.get('config', {})
         version = checkpoint.get('checkpoint_version', 0)
+        train_steps = checkpoint.get('train_steps', 0)
+
+        # M6: Free checkpoint memory immediately after extracting needed data.
+        # Checkpoint holds a full copy of all model weights; waiting for GC to
+        # free this can cause OOM when loading large models on GPU.
+        del checkpoint
 
         # === Legacy checkpoint warning ===
         if version == 0:
@@ -796,8 +871,8 @@ class PPOAgent:
 
         # === Load weights ===
         agent._base_network.load_state_dict(state_dict)
-        agent.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        agent.train_steps = checkpoint.get('train_steps', 0)
+        agent.optimizer.load_state_dict(optimizer_state_dict)
+        agent.train_steps = train_steps
 
         return agent
 

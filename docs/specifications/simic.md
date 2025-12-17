@@ -290,7 +290,7 @@ The reward system implements multi-layer defenses against seeds that create stru
 | Hidden state staleness | Erratic policy after epoch 1 | `recurrent_n_epochs > 1` with LSTM | Keep `recurrent_n_epochs=1` (default) |
 | Value explosion | `value_loss > 1000` | Value clip too tight (0.2) | Use `value_clip=10.0` (different from `clip_ratio`) |
 | Entropy collapse | Policy becomes deterministic | `entropy_coef_min` too low | Set `entropy_coef_min=0.01`, enable `adaptive_entropy_floor` |
-| GAE interleaving | Incorrect advantages | Cross-environment GAE contamination | P0 fix: GAE computed per-environment (`tamiyo_buffer.py:266`) |
+| GAE interleaving | Incorrect advantages | Cross-environment GAE contamination | P0 fix: GAE computed per-environment (`rollout_buffer.py:266`) |
 
 ---
 
@@ -331,8 +331,8 @@ numpy                    # Limited use (prefer torch)
 ```
 train_ppo_vectorized
 ├── PPOAgent (ppo.py)
-│   ├── FactoredRecurrentActorCritic (tamiyo_network.py)
-│   └── TamiyoRolloutBuffer (tamiyo_buffer.py)
+│   ├── FactoredRecurrentActorCritic (network.py)
+│   └── TamiyoRolloutBuffer (rollout_buffer.py)
 ├── compute_contribution_reward (rewards.py)
 │   └── SeedInfo, STAGE_POTENTIALS, DEFAULT_GAMMA
 ├── compute_action_masks (action_masks.py)
@@ -432,8 +432,8 @@ agent = PPOAgent.load("checkpoint.pt", device="cuda:0")
 | `ppo.py` | 578 | PPO agent with factored recurrent architecture |
 | `training.py` | 518 | Heuristic training, compiled train step |
 | `gradient_collector.py` | 429 | Async gradient statistics collection |
-| `tamiyo_buffer.py` | 395 | Pre-allocated rollout buffer |
-| `tamiyo_network.py` | 334 | LSTM policy/value network |
+| `rollout_buffer.py` | 395 | Pre-allocated rollout buffer |
+| `network.py` | 334 | LSTM policy/value network |
 | `action_masks.py` | 332 | MaskedCategorical distribution |
 | `config.py` | 238 | TrainingConfig dataclass |
 | `features.py` | 230 | Feature extraction |
@@ -498,7 +498,7 @@ if components.ratio_penalty != 0:
 | Pre-step hidden state capture | Buffer must store INPUT hidden state, not OUTPUT. Many LSTM-PPO implementations get this wrong | `vectorized.py:1117-1139` |
 | Frozen normalizer during rollout | All states in a batch must use identical normalization. Updating mid-rollout causes inconsistency | `vectorized.py:1100-1110` |
 | EMA momentum=0.99 for normalizer | Prevents distribution shift during long training. Welford's algorithm adapts too fast | `vectorized.py:395-396` |
-| @torch.compiler.disable on GAE | Python loops in GAE cause graph breaks. Acceptable since GAE runs once per rollout, not per batch | `tamiyo_buffer.py:255` |
+| @torch.compiler.disable on GAE | Python loops in GAE cause graph breaks. Acceptable since GAE runs once per rollout, not per batch | `rollout_buffer.py:255` |
 | Action mask validation compiler-disabled | `.any()` check forces CPU sync. Safety check worth the cost but shouldn't block compilation | `action_masks.py:263-275` |
 | Tensor accumulation in train loop | Single `.item()` sync at epoch end instead of per-batch. 10x faster | `training.py:134-138` |
 
@@ -506,7 +506,7 @@ if components.ratio_penalty != 0:
 
 | Insight | Why It Matters | Location |
 |---------|----------------|----------|
-| Truncation bootstrapping is NOT terminal | Time-limit truncation (25 epochs) is artificial. Without bootstrap, value function underestimates returns near episode end | `tamiyo_buffer.py:283-289` |
+| Truncation bootstrapping is NOT terminal | Time-limit truncation (25 epochs) is artificial. Without bootstrap, value function underestimates returns near episode end | `rollout_buffer.py:283-289` |
 | Counterfactual fused with validation | Eliminates second DataLoader pass. Sets alpha=0 temporarily during validation batch | `vectorized.py:893-903` |
 | Causal advantage masking | Blueprint/blend choices only matter for GERMINATE. Zero advantages for causally-irrelevant heads reduces gradient noise | `advantages.py:33-70` |
 | Ransomware = high removal cost, negative improvement | Counterfactual measures "removal cost" not "value added". Seed can create dependencies without improving accuracy | `rewards.py:426-451` |
@@ -529,7 +529,7 @@ if components.ratio_penalty != 0:
 ### 2025-12-14 (This Document)
 - Created comprehensive Module Bible with specialist reviews
 - **FIXED gamma mismatch**: Moved `DEFAULT_GAMMA=0.995` to leyline as single source of truth
-  - Updated: `ppo.py`, `tamiyo_buffer.py`, `vectorized.py`, `config.py`, `train.py`
+  - Updated: `ppo.py`, `rollout_buffer.py`, `vectorized.py`, `config.py`, `train.py`
   - `rewards.py` now imports from leyline instead of defining its own
 - Added anti-ransomware defense documentation
 - Captured PyTorch expert CUDA stream patterns
@@ -558,7 +558,7 @@ if components.ratio_penalty != 0:
 - [x] Specialists ACTUALLY DISPATCHED via Task tool (drl-expert, pytorch-expert)
 - [x] Specialist insights cited in Tribal Knowledge with attribution
 - [x] All files >500 lines had dedicated deep-dives
-- [x] Tensor shapes verified against code (checked tamiyo_network.py, tamiyo_buffer.py)
+- [x] Tensor shapes verified against code (checked network.py, rollout_buffer.py)
 - [x] State machines cover episode lifecycle and reward attribution
 - [x] Tribal Knowledge has ≥5 entries with file:line references
 - [x] Performance Cliffs explain WHY, not just WHAT

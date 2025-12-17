@@ -10,7 +10,7 @@ import torch
 from esper.kasmina.blending import GatedBlend, LinearBlend, SigmoidBlend, BlendCatalog
 from esper.kasmina.slot import SeedSlot, SeedState, QualityGates
 from esper.leyline.stages import SeedStage
-from esper.simic.control import TaskConfig
+from esper.tamiyo.policy.features import TaskConfig
 
 
 class TestGatedBlendGetAlpha:

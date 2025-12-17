@@ -20,6 +20,9 @@ from esper.leyline.factored_actions import LifecycleOp
 
 if TYPE_CHECKING:
     from esper.tolaria import TolariaGovernor
+    from esper.karn.health import HealthMonitor
+    from esper.simic.attribution import CounterfactualHelper
+    from esper.simic.contracts import SlottedHostProtocol
 
 
 @dataclass(slots=True)
@@ -29,10 +32,12 @@ class ParallelEnvState:
     DataLoaders are now SHARED via SharedBatchIterator - batches are pre-split
     and data is pre-moved to each env's device with non_blocking=True.
     """
-    model: nn.Module
+    model: "SlottedHostProtocol"
     host_optimizer: torch.optim.Optimizer
     signal_tracker: Any  # SignalTracker from tamiyo
     governor: "TolariaGovernor"  # Fail-safe watchdog for catastrophic failure detection
+    health_monitor: "HealthMonitor | None" = None  # System health monitoring (GPU memory warnings)
+    counterfactual_helper: "CounterfactualHelper | None" = None  # Shapley value analysis at episode end
     seed_optimizers: dict[str, torch.optim.Optimizer] = field(default_factory=dict)
     env_device: str = "cuda:0"  # Device this env runs on
     stream: torch.cuda.Stream | None = None  # CUDA stream for async execution
@@ -70,6 +75,10 @@ class ParallelEnvState:
     # Per-slot EMA tracking for seed gradient ratio (for G2 gate)
     # Smooths per-step ratio noise with momentum=0.9
     gradient_ratio_ema: dict[str, float] = field(default_factory=dict)
+    # Pending auto-cull penalty to be applied on next reward computation
+    # (DRL Expert review 2025-12-17: prevents degenerate WAIT-spam policies
+    # that rely on environment cleanup rather than proactive lifecycle management)
+    pending_auto_cull_penalty: float = 0.0
 
     def __post_init__(self) -> None:
         # Initialize counters with LifecycleOp names (WAIT, GERMINATE, FOSSILIZE, CULL)
@@ -96,11 +105,18 @@ class ParallelEnvState:
         self.cf_totals: dict[str, int] = {slot_id: 0 for slot_id in slots}
 
     def zero_accumulators(self) -> None:
-        """Zero accumulators at the start of each epoch (faster than reallocating)."""
-        self.train_loss_accum.zero_()
-        self.train_correct_accum.zero_()
-        self.val_loss_accum.zero_()
-        self.val_correct_accum.zero_()
+        """Zero accumulators at the start of each epoch (faster than reallocating).
+
+        Note: Assumes init_accumulators() was called. Guards added for mypy.
+        """
+        if self.train_loss_accum is not None:
+            self.train_loss_accum.zero_()
+        if self.train_correct_accum is not None:
+            self.train_correct_accum.zero_()
+        if self.val_loss_accum is not None:
+            self.val_loss_accum.zero_()
+        if self.val_correct_accum is not None:
+            self.val_correct_accum.zero_()
         # Zero per-slot counterfactual accumulators
         for slot_id in self.cf_correct_accums:
             self.cf_correct_accums[slot_id].zero_()

@@ -87,12 +87,32 @@ def compute_lstm_health(
     h, c = hidden
 
     with torch.inference_mode():
-        h_norm = torch.linalg.vector_norm(h).item()
-        c_norm = torch.linalg.vector_norm(c).item()
-        h_max = h.abs().max().item()
-        c_max = c.abs().max().item()
-        has_nan = bool(torch.isnan(h).any().item() or torch.isnan(c).any().item())
-        has_inf = bool(torch.isinf(h).any().item() or torch.isinf(c).any().item())
+        # M14 FIX: Batch all GPU computations before CPU transfer.
+        # Original had 8 .item() calls = 8 GPU-CPU syncs.
+        # Now we compute all values on GPU and transfer in a single sync.
+
+        # Compute scalar metrics on GPU
+        h_norm_t = torch.linalg.vector_norm(h)
+        c_norm_t = torch.linalg.vector_norm(c)
+        h_max_t = h.abs().max()
+        c_max_t = c.abs().max()
+
+        # Compute boolean flags on GPU (as float for stacking)
+        h_nan_t = torch.isnan(h).any().float()
+        c_nan_t = torch.isnan(c).any().float()
+        h_inf_t = torch.isinf(h).any().float()
+        c_inf_t = torch.isinf(c).any().float()
+
+        # Single GPU-CPU sync: stack all values and transfer together
+        all_values = torch.stack([
+            h_norm_t, c_norm_t, h_max_t, c_max_t,
+            h_nan_t, c_nan_t, h_inf_t, c_inf_t,
+        ])
+        result = all_values.tolist()  # Single sync!
+
+    h_norm, c_norm, h_max, c_max, h_nan, c_nan, h_inf, c_inf = result
+    has_nan = bool(h_nan or c_nan)
+    has_inf = bool(h_inf or c_inf)
 
     return LSTMHealthMetrics(
         h_norm=h_norm,

@@ -7,7 +7,7 @@ def test_transformer_with_seed_lifecycle():
     """Full seed lifecycle on TransformerHost through MorphogeneticModel."""
     from esper.kasmina.host import TransformerHost, MorphogeneticModel
     from esper.leyline import SeedStage
-    from esper.simic.control import TaskConfig
+    from esper.tamiyo.policy.features import TaskConfig
 
     host = TransformerHost(
         vocab_size=1000, n_embd=64, n_head=2, n_layer=6,
@@ -45,7 +45,7 @@ def test_transformer_gradient_flow():
     """Gradients flow through TransformerHost with seed via MorphogeneticModel."""
     from esper.kasmina.host import TransformerHost, MorphogeneticModel
     from esper.leyline import SeedStage
-    from esper.simic.control import TaskConfig
+    from esper.tamiyo.policy.features import TaskConfig
 
     host = TransformerHost(
         vocab_size=1000, n_embd=64, n_head=2, n_layer=6,
@@ -74,7 +74,7 @@ def test_cnn_with_seed_lifecycle():
     """CNNHost seed lifecycle through MorphogeneticModel."""
     from esper.kasmina.host import CNNHost, MorphogeneticModel
     from esper.leyline import SeedStage
-    from esper.simic.control import TaskConfig
+    from esper.tamiyo.policy.features import TaskConfig
 
     host = CNNHost()
     config = TaskConfig.for_cifar10()

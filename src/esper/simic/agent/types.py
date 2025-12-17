@@ -32,8 +32,12 @@ class HeadGradientNorms(TypedDict):
     value: float
 
 
-class PPOUpdateMetrics(TypedDict):
-    """Metrics from a single PPO update step."""
+class PPOUpdateMetrics(TypedDict, total=False):
+    """Metrics from a single PPO update step.
+
+    Note: total=False makes all keys optional since update() may return
+    empty dict when buffer is empty, or subset of keys in some cases.
+    """
 
     policy_loss: list[float]
     value_loss: list[float]
@@ -47,6 +51,12 @@ class PPOUpdateMetrics(TypedDict):
     head_entropies: dict[str, list[float]]
     # Per-head gradient norms (P4-6) - for diagnosing head dominance
     head_grad_norms: dict[str, list[float]]
+    # Additional metrics that may be present
+    entropy: list[float]
+    ratio_mean: list[float]
+    ratio_max: list[float]
+    ratio_min: list[float]
+    ratio_diagnostic: dict
 
 
 class HeadLogProbs(TypedDict):

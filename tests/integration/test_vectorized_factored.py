@@ -5,10 +5,10 @@ These tests verify the action mask computation and batched action selection.
 """
 
 import torch
-from esper.simic.control import MULTISLOT_FEATURE_SIZE
+from esper.tamiyo.policy.features import MULTISLOT_FEATURE_SIZE
 
 from esper.simic.agent import PPOAgent
-from esper.simic.control import compute_action_masks
+from esper.tamiyo.policy.action_masks import compute_action_masks
 from esper.leyline.factored_actions import NUM_BLUEPRINTS, NUM_BLENDS, NUM_OPS
 from esper.leyline.slot_config import SlotConfig
 
@@ -118,7 +118,7 @@ class TestPPOAgentFactoredInVectorized:
         assert isinstance(log_probs, dict)
         assert values.shape == (n_envs,)
 
-    def test_tamiyo_buffer_stores_factored_transitions(self):
+    def test_rollout_buffer_stores_factored_transitions(self):
         """TamiyoRolloutBuffer should store factored transitions from multiple envs."""
         n_envs = 4
         state_dim = MULTISLOT_FEATURE_SIZE

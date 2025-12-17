@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol
 
 from rich.console import Console, Group
 from rich.layout import Layout
@@ -33,17 +33,44 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from esper.leyline.slot_config import SlotConfig
-
-if TYPE_CHECKING:
-    from esper.leyline.telemetry import TelemetryEvent
+from esper.karn.contracts import KarnSlotConfig, SlotConfigProtocol, TelemetryEventLike
 
 _logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# Health Status Thresholds (from DRL Expert requirements)
+# Configuration and Enums
 # =============================================================================
+
+class ThresholdConfig:
+    """Thresholds for red flag detection (delegates to constants)."""
+
+    # Import at module level
+    from esper.karn.constants import TUIThresholds
+
+    # Entropy thresholds
+    entropy_critical: float = TUIThresholds.ENTROPY_CRITICAL
+    entropy_warning: float = TUIThresholds.ENTROPY_WARNING
+    entropy_max: float = TUIThresholds.ENTROPY_MAX
+
+    # Clip fraction thresholds
+    clip_critical: float = TUIThresholds.CLIP_CRITICAL
+    clip_warning: float = TUIThresholds.CLIP_WARNING
+
+    # Explained variance
+    explained_var_critical: float = TUIThresholds.EXPLAINED_VAR_CRITICAL
+    explained_var_warning: float = TUIThresholds.EXPLAINED_VAR_WARNING
+
+    # Gradient norm
+    grad_norm_critical: float = TUIThresholds.GRAD_NORM_CRITICAL
+    grad_norm_warning: float = TUIThresholds.GRAD_NORM_WARNING
+
+    # KL divergence
+    kl_warning: float = TUIThresholds.KL_WARNING
+
+    # Action distribution
+    wait_warning: float = TUIThresholds.WAIT_DOMINANCE_WARNING
+
 
 class HealthStatus(Enum):
     """Health status for color coding."""
@@ -52,46 +79,9 @@ class HealthStatus(Enum):
     CRITICAL = "red"
 
 
-@dataclass
-class ThresholdConfig:
-    """Thresholds for red flag detection."""
-
-    # Entropy thresholds (healthy starts near ln(4) ≈ 1.39)
-    entropy_critical: float = 0.3
-    entropy_warning: float = 0.5
-    entropy_max: float = 1.39  # ln(4) for 4 actions
-
-    # Clip fraction thresholds (target 0.1-0.2)
-    clip_critical: float = 0.3
-    clip_warning: float = 0.25
-
-    # Explained variance (value learning quality)
-    explained_var_critical: float = 0.5
-    explained_var_warning: float = 0.7
-
-    # Gradient norm
-    grad_norm_critical: float = 10.0
-    grad_norm_warning: float = 5.0
-
-    # KL divergence (policy change magnitude)
-    kl_warning: float = 0.05
-
-    # Action distribution (WAIT dominance)
-    wait_warning: float = 0.7  # > 70% WAIT is suspicious
-
-
 # =============================================================================
-# Metric Tracking State
+# Per-Environment State Classes
 # =============================================================================
-
-@dataclass
-class EpisodeStats:
-    """Statistics for a single episode."""
-    episode: int = 0
-    reward: float = 0.0
-    final_accuracy: float = 0.0
-    episode_length: int = 0
-
 
 @dataclass
 class SeedState:
@@ -248,12 +238,17 @@ class EnvState:
         return total
 
 
+# =============================================================================
+# TUI State
+# =============================================================================
+
+
 @dataclass
 class TUIState:
     """Thread-safe state for the TUI display."""
 
-    # Slot configuration (defaults to 3-slot legacy for backwards compatibility)
-    slot_config: SlotConfig = field(default_factory=SlotConfig.default)
+    # Slot configuration (accepts any SlotConfigProtocol-compatible object)
+    slot_config: SlotConfigProtocol = field(default_factory=KarnSlotConfig.default)
 
     # Episode tracking
     current_episode: int = 0
@@ -452,20 +447,29 @@ class TUIOutput:
 
     Args:
         thresholds: Health status thresholds for color coding.
-        slot_config: Slot configuration for dynamic action spaces. Defaults to 3-slot legacy.
+        slot_config: Slot configuration for dynamic action spaces. Accepts any
+            object implementing SlotConfigProtocol. Defaults to
+            KarnSlotConfig.default() (3-slot configuration).
         force_layout: Force a specific layout mode ('compact', 'standard', 'wide')
                      instead of auto-detecting from terminal width. Currently unused
                      but reserved for future multi-layout support.
+
+    Note:
+        The ``slot_config`` parameter accepts any object implementing
+        ``esper.karn.contracts.SlotConfigProtocol``. Both
+        ``esper.leyline.slot_config.SlotConfig`` and
+        ``esper.karn.contracts.KarnSlotConfig`` implement this protocol. The
+        TUI is decoupled from Leyline to enable standalone use or testing.
     """
 
     def __init__(
         self,
         thresholds: ThresholdConfig | None = None,
-        slot_config: SlotConfig | None = None,
+        slot_config: SlotConfigProtocol | None = None,
         force_layout: str | None = None,
     ):
         self.thresholds = thresholds or ThresholdConfig()
-        self.state = TUIState(slot_config=slot_config or SlotConfig.default())
+        self.state = TUIState(slot_config=slot_config or KarnSlotConfig.default())
         self.console = Console()
         self._live: Live | None = None
         self._started = False
@@ -493,7 +497,7 @@ class TUIOutput:
             self._live = None
         self._started = False
 
-    def emit(self, event: "TelemetryEvent") -> None:
+    def emit(self, event: TelemetryEventLike) -> None:
         """Emit a telemetry event to update the TUI.
 
         Thread-safe - can be called from training loop.
@@ -546,7 +550,7 @@ class TUIOutput:
 
     _SEVERITY_ORDER = {"debug": 0, "info": 1, "warning": 2, "error": 3, "critical": 4}
 
-    def _format_event_for_log(self, event: "TelemetryEvent") -> tuple[str, str, str] | None:
+    def _format_event_for_log(self, event: TelemetryEventLike) -> tuple[str, str, str] | None:
         """Format event for log display, returns (timestamp, event_type, message) or None if filtered."""
 
         # Filter by severity
@@ -701,7 +705,7 @@ class TUIOutput:
     # Event Handlers
     # =========================================================================
 
-    def _handle_training_started(self, event: "TelemetryEvent") -> None:
+    def _handle_training_started(self, event: TelemetryEventLike) -> None:
         """Handle TRAINING_STARTED event."""
         data = event.data or {}
         self.state.current_episode = data.get("episode", 0)
@@ -732,7 +736,7 @@ class TUIOutput:
         # Initial system stats
         self._update_system_stats()
 
-    def _handle_epoch_completed(self, event: "TelemetryEvent") -> None:
+    def _handle_epoch_completed(self, event: TelemetryEventLike) -> None:
         """Handle EPOCH_COMPLETED event."""
         data = event.data or {}
         self.state.current_epoch = event.epoch or data.get("epoch", 0)
@@ -743,7 +747,7 @@ class TUIOutput:
         train_acc = data.get("train_accuracy", 0.0)
         self.state.host_accuracy_delta = self.state.host_accuracy - train_acc
 
-    def _handle_ppo_update(self, event: "TelemetryEvent") -> None:
+    def _handle_ppo_update(self, event: TelemetryEventLike) -> None:
         """Handle PPO_UPDATE_COMPLETED event."""
         data = event.data or {}
 
@@ -768,7 +772,7 @@ class TUIOutput:
         self.state.advantage_min = data.get("advantage_min", 0.0)
         self.state.advantage_max = data.get("advantage_max", 0.0)
 
-    def _handle_reward_computed(self, event: "TelemetryEvent") -> None:
+    def _handle_reward_computed(self, event: TelemetryEventLike) -> None:
         """Handle REWARD_COMPUTED event with per-env routing."""
         data = event.data or {}
         env_id = data.get("env_id", 0)
@@ -819,7 +823,7 @@ class TUIOutput:
         if acc_delta < 0 and total_reward > 0:
             self.state.reward_hacking_detected = True
 
-    def _handle_seed_event(self, event: "TelemetryEvent", event_type: str) -> None:
+    def _handle_seed_event(self, event: TelemetryEventLike, event_type: str) -> None:
         """Handle seed lifecycle events with per-env tracking."""
         data = event.data or {}
         slot_id = event.slot_id or data.get("slot_id", "unknown")
@@ -857,7 +861,7 @@ class TUIOutput:
         # Update aggregate counts
         self.state.update_aggregate_seed_counts()
 
-    def _handle_batch_completed(self, event: "TelemetryEvent") -> None:
+    def _handle_batch_completed(self, event: TelemetryEventLike) -> None:
         """Handle BATCH_COMPLETED event (episode completion)."""
         data = event.data or {}
         episodes_completed = data.get("episodes_completed")

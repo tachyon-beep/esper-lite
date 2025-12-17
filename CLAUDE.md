@@ -183,6 +183,7 @@ This project is a deep reinforcement learning system built on PyTorch. Given the
 **Default stance:** When in doubt, spawn the specialist or invoke the skill. The overhead is trivial compared to the cost of subtle bugs in tensor operations, RL training loops, or test flakiness.
 
 **Examples of when to use:**
+
 - Implementing or modifying anything in `simic/` (RL training) → `drl-expert` agent + `yzmir-deep-rl` skills
 - Debugging NaN losses, exploding gradients, or training instability → `yzmir-training-optimization` skills
 - Optimizing tensor operations or memory usage → `pytorch-expert` agent
@@ -262,3 +263,4 @@ Think of it as: **"The organism's stem cells undergo a botanical development pro
 - Claude Code MUST NOT use body terms for seed states (no "seed is metabolizing")
 - Claude Code MUST NOT use plant terms for system architecture (no "Tamiyo is the gardener")
 - When in doubt, refer to the tables above
+- If you are being asked to deliver a telemetry component, do not defer or put it off; if you are working on a half finished telemetry component, do not remove it as 'incomplete' or 'deferred functionality'. This pattern of behaviour is why we are several months in and have no telemetry.

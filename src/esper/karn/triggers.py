@@ -17,6 +17,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from esper.karn.constants import AnomalyThresholds, PolicyThresholds
 from esper.karn.store import (
     DenseTrace,
     DenseTraceTrigger,
@@ -100,7 +101,7 @@ class AnomalyDetector:
 
     # Active trace being captured
     _active_trace: DenseTrace | None = field(default=None, repr=False)
-    _trace_window_epochs: int = 3  # Capture N epochs after trigger
+    _trace_window_epochs: int = AnomalyThresholds.TRACE_WINDOW_EPOCHS
 
     def check_epoch(self, snapshot: "EpochSnapshot") -> str | None:
         """Check epoch for anomalies and return trigger reason if detected.
@@ -230,14 +231,14 @@ class PolicyAnomalyDetector:
     """
 
     # Thresholds
-    value_std_threshold: float = 0.01  # Values more similar than this = collapse
-    entropy_threshold: float = 0.1  # Entropy below this = collapse
-    kl_threshold: float = 0.1  # KL above this = large policy change
+    value_std_threshold: float = PolicyThresholds.VALUE_STD_COLLAPSE
+    entropy_threshold: float = PolicyThresholds.ENTROPY_COLLAPSE
+    kl_threshold: float = PolicyThresholds.KL_SPIKE
 
     # Rolling stats
     value_stds: list[float] = field(default_factory=list)
     entropies: list[float] = field(default_factory=list)
-    window_size: int = 10
+    window_size: int = PolicyThresholds.WINDOW_SIZE
 
     def check_value_collapse(self, value_std: float) -> bool:
         """Check if critic is collapsing to constant output."""

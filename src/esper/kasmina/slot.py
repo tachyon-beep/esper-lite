@@ -26,7 +26,7 @@ from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from typing import Callable, TYPE_CHECKING
+from typing import Callable, ClassVar, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
@@ -114,6 +114,12 @@ class SeedMetrics:
 
     gradient_norm_avg: float = 0.0
 
+    # Note on alpha semantics (DRL Expert review 2025-12-17):
+    # current_alpha represents "blending progress" (step/total_steps), not actual
+    # blend values. For GatedBlend, actual per-sample alpha is learned and input-
+    # dependent. The agent controls blending TIMELINE, not per-sample gates.
+    # This is intentional for credit assignment - observations should reflect
+    # controllable state, not emergent gate behavior.
     current_alpha: float = 0.0
     alpha_ramp_step: int = 0
 
@@ -132,6 +138,18 @@ class SeedMetrics:
     # Parameter counts for normalization (set once at germination)
     host_param_count: int = 0
     seed_param_count: int = 0
+
+    # Auto-cull tracking for degenerate policy detection
+    # (DRL Expert review 2025-12-17: policies could learn to rely on environment
+    # cleanup rather than proactive culling, creating reward hacking via WAIT spam)
+    auto_culled: bool = False
+    auto_cull_reason: str = ""
+
+    # Known auto-cull reasons (for distinguishing explicit vs auto culls)
+    AUTO_CULL_REASONS: ClassVar[frozenset[str]] = frozenset({
+        "negative_counterfactual",  # Safety auto-cull: seed hurts performance
+        "probation_timeout",        # Timeout auto-cull: no decision made in time
+    })
 
     def record_accuracy(self, accuracy: float | torch.Tensor) -> None:
         """Record a new accuracy measurement.
@@ -159,13 +177,43 @@ class SeedMetrics:
         return self.current_val_accuracy - self.accuracy_at_stage_start
 
     @property
+    def total_improvement_normalized(self) -> float:
+        """Normalized total improvement in [-1, 1] range.
+
+        Raw improvement is in percentage points (0-100 scale), which creates
+        scale mismatch with other observation features like alpha (0-1).
+        This normalization clamps to ±10 percentage points and scales to [-1, 1]
+        for stable PPO value function learning.
+        """
+        raw = self.total_improvement
+        clamped = max(-10.0, min(10.0, raw))
+        return clamped / 10.0
+
+    @property
+    def improvement_since_stage_start_normalized(self) -> float:
+        """Normalized stage improvement in [-1, 1] range.
+
+        See total_improvement_normalized for rationale.
+        """
+        raw = self.improvement_since_stage_start
+        clamped = max(-10.0, min(10.0, raw))
+        return clamped / 10.0
+
+    @property
     def blending_delta(self) -> float:
         """Accuracy change since blending started (includes host drift).
 
+        WARNING: This metric is for TELEMETRY/LOGGING only, NOT for RL signals.
+
         This is NOT causal attribution - it measures the total accuracy change
         during BLENDING stages, which conflates host training gains with seed
-        impact. For true causal attribution, use counterfactual validation
+        impact. For true causal attribution, use counterfactual_contribution
         (real_acc - baseline_acc with alpha=0).
+
+        DO NOT use this for:
+        - Reward shaping (use counterfactual_contribution instead)
+        - Observation features (use counterfactual_contribution instead)
+        - Gate decisions (G5 uses counterfactual_contribution)
 
         Returns 0 if seed never reached BLENDING.
         """
@@ -719,6 +767,18 @@ class SeedSlot(nn.Module):
         # Keys: (topology, channels), values: (device, tensor)
         self._shape_probe_cache: dict[tuple[str, int], tuple[torch.device, torch.Tensor]] = {}
 
+        # Cached alpha tensor to avoid per-forward allocation when alpha_schedule is None
+        # Invalidated when alpha changes via set_alpha() or device changes via to()
+        self._cached_alpha_tensor: torch.Tensor | None = None
+
+        # Preallocated buffer for DDP gate synchronization to avoid per-call tensor creation
+        # Only used when torch.distributed is available and initialized
+        self._ddp_sync_buffer: torch.Tensor | None = None
+
+        # Pending async gradient stats (tensor-based, no .item() sync yet)
+        # Used by capture_gradient_telemetry_async() / finalize_gradient_telemetry() pair
+        self._pending_gradient_stats: dict | None = None
+
     def _get_shape_probe(self, topology: str) -> torch.Tensor:
         """Get cached shape probe for topology, creating if needed."""
         # Include channels in key to handle slot reuse/reconfiguration (BUG-014)
@@ -762,15 +822,25 @@ class SeedSlot(nn.Module):
             actual_device = next(self.parameters()).device
             self.device = actual_device
         except StopIteration:
-            # Infer from args if no parameters
+            # Infer from args/kwargs if no parameters (DORMANT state with no seed)
+            # Check positional args first
+            device_found = False
             for arg in args:
                 if isinstance(arg, (str, torch.device)):
                     self.device = torch.device(arg) if isinstance(arg, str) else arg
+                    device_found = True
                     break
+            # Also check kwargs['device'] (e.g., .to(device='cuda:0'))
+            if not device_found and 'device' in kwargs:
+                device_arg = kwargs['device']
+                if device_arg is not None:
+                    self.device = torch.device(device_arg) if isinstance(device_arg, str) else device_arg
 
-        # Only clear cache if device actually changed
+        # Only clear caches if device actually changed
         if self.device != old_device:
             self._shape_probe_cache.clear()
+            self._cached_alpha_tensor = None  # Alpha tensor has device affinity
+            self._ddp_sync_buffer = None  # DDP buffer has device affinity
 
         return self
 
@@ -928,8 +998,11 @@ class SeedSlot(nn.Module):
         else:
             raise RuntimeError(f"G0 gate failed: {gate_result.checks_failed}")
 
-        # Register for isolation monitoring (skipped in fast_mode)
-        if host_module is not None and not self.fast_mode:
+        # Register for isolation monitoring
+        # (DRL Expert review 2025-12-17: Always register regardless of fast_mode to keep
+        # gradient stats fresh for observation vectors. fast_mode should only affect
+        # telemetry emission, not core metric computation like seed_gradient_norm_ratio.)
+        if host_module is not None:
             if self.isolation_monitor is None:
                 self.isolation_monitor = GradientHealthMonitor()
             self.isolation_monitor.register(host_module, self.seed)
@@ -1061,6 +1134,12 @@ class SeedSlot(nn.Module):
         blueprint_id = self.state.blueprint_id
         seed_id = self.state.seed_id
 
+        # Track auto-cull status for degenerate policy detection
+        # Auto-culls happen via environment safety mechanisms, not explicit RL actions
+        is_auto_cull = reason in SeedMetrics.AUTO_CULL_REASONS
+        self.state.metrics.auto_culled = is_auto_cull
+        self.state.metrics.auto_cull_reason = reason if is_auto_cull else ""
+
         old_stage = self.state.stage
         if not self.state.transition(SeedStage.CULLED):
             # Transition failed (shouldn't happen for non-FOSSILIZED)
@@ -1074,6 +1153,7 @@ class SeedSlot(nn.Module):
             TelemetryEventType.SEED_CULLED,
             data={
                 "reason": reason,
+                "auto_culled": is_auto_cull,  # Distinguish explicit vs environment culls
                 "blueprint_id": blueprint_id,
                 "seed_id": seed_id,
                 "improvement": improvement,
@@ -1089,6 +1169,15 @@ class SeedSlot(nn.Module):
         self.isolate_gradients = False
         if self.isolation_monitor is not None:
             self.isolation_monitor.reset()
+        # Clear shape probe cache to prevent memory leak
+        # (DRL Expert review 2025-12-17: cache holds intermediate tensors from shape
+        # validation; in PPO rollouts with frequent cull/regerminate cycles, this can
+        # accumulate significant GPU memory)
+        self._shape_probe_cache.clear()
+        # Clear cached alpha tensor (invalidate on cull)
+        self._cached_alpha_tensor = None
+        # Clear pending async gradient stats
+        self._pending_gradient_stats = None
         return True
 
     def capture_gradient_telemetry(self) -> None:
@@ -1148,6 +1237,87 @@ class SeedSlot(nn.Module):
             ratio = raw_ratio
 
         # Clamp to reasonable range to prevent outliers from skewing G2 gate decisions
+        self.state.metrics.seed_gradient_norm_ratio = min(MAX_GRADIENT_RATIO, ratio)
+
+        # Update EMA of gradient norm for monitoring
+        current_avg = self.state.metrics.gradient_norm_avg
+        self.state.metrics.gradient_norm_avg = (
+            DEFAULT_GRADIENT_EMA_DECAY * current_avg + (1 - DEFAULT_GRADIENT_EMA_DECAY) * seed_norm
+        )
+
+    def capture_gradient_telemetry_async(self) -> bool:
+        """Launch async gradient computation without CPU sync.
+
+        Non-blocking version of capture_gradient_telemetry(). Launches GPU kernel
+        to compute gradient norms but does NOT call .item() (no CPU-GPU sync).
+        Stores tensor-based stats in _pending_gradient_stats.
+
+        Usage pattern for PPO hot path:
+            # After backward(), launch async computation
+            for slot in seed_slots.values():
+                slot.capture_gradient_telemetry_async()
+
+            # ... do other work (optimizer step, etc.) ...
+
+            # After stream.synchronize() or CUDA graph boundary
+            for slot in seed_slots.values():
+                slot.finalize_gradient_telemetry()
+
+        Returns:
+            True if async stats were captured, False if skipped (no monitor/no seed).
+        """
+        self._pending_gradient_stats = None
+
+        # Fast exit if no monitor or no active seed
+        if self.isolation_monitor is None or not self.is_active:
+            return False
+
+        if not self.state:
+            return False
+
+        # Launch async computation (no .item() sync)
+        self._pending_gradient_stats = self.isolation_monitor.compute_gradient_health_async()
+        return True
+
+    def finalize_gradient_telemetry(self) -> None:
+        """Materialize pending async gradient stats and update metrics.
+
+        Deferred sync version - call AFTER stream.synchronize() or at CUDA graph
+        boundary. Performs .item() calls to extract final values and updates
+        seed_gradient_norm_ratio and gradient_norm_avg metrics.
+
+        No-op if capture_gradient_telemetry_async() was not called or returned False.
+        """
+        if self._pending_gradient_stats is None:
+            return
+
+        if not self.state:
+            self._pending_gradient_stats = None
+            return
+
+        # Materialize tensor values (this is where .item() sync happens)
+        stats = self.isolation_monitor.materialize_gradient_stats(self._pending_gradient_stats)
+        self._pending_gradient_stats = None
+
+        # Same ratio computation logic as capture_gradient_telemetry()
+        host_norm = stats.get("host_grad_norm", 0.0)
+        seed_norm = stats.get("seed_grad_norm", 0.0)
+
+        if host_norm < GRADIENT_EPSILON:
+            raw_ratio = 0.0
+        else:
+            raw_ratio = seed_norm / host_norm
+
+        # Apply parameter normalization if counts are available
+        host_params = self.state.metrics.host_param_count
+        seed_params = self.state.metrics.seed_param_count
+        if host_params > 0 and seed_params > 0:
+            normalization_factor = (host_params / seed_params) ** 0.5
+            ratio = raw_ratio * normalization_factor
+        else:
+            ratio = raw_ratio
+
+        # Clamp and update metrics
         self.state.metrics.seed_gradient_norm_ratio = min(MAX_GRADIENT_RATIO, ratio)
 
         # Update EMA of gradient norm for monitoring
@@ -1230,8 +1400,15 @@ class SeedSlot(nn.Module):
         if self.alpha_schedule is not None:
             alpha = self.alpha_schedule.get_alpha_for_blend(host_features)
         else:
-            # Convert scalar alpha to tensor matching host_features device/dtype
-            alpha = torch.tensor(self.alpha, device=host_features.device, dtype=host_features.dtype)
+            # Use cached alpha tensor to avoid per-forward allocation overhead
+            # Cache is invalidated in set_alpha() when value changes
+            if (self._cached_alpha_tensor is None or
+                self._cached_alpha_tensor.device != host_features.device or
+                self._cached_alpha_tensor.dtype != host_features.dtype):
+                self._cached_alpha_tensor = torch.tensor(
+                    self.alpha, device=host_features.device, dtype=host_features.dtype
+                )
+            alpha = self._cached_alpha_tensor
 
         return blend_with_isolation(host_features, seed_features, alpha)
 
@@ -1242,9 +1419,16 @@ class SeedSlot(nn.Module):
         return self.seed.parameters()
 
     def set_alpha(self, alpha: float) -> None:
-        """Set the blending alpha."""
+        """Set the blending alpha.
+
+        Invalidates the cached alpha tensor to ensure forward() uses the new value.
+        """
         if self.state:
-            self.state.alpha = max(0.0, min(1.0, alpha))
+            new_alpha = max(0.0, min(1.0, alpha))
+            # Only invalidate cache if alpha actually changed
+            if self.state.alpha != new_alpha:
+                self._cached_alpha_tensor = None
+            self.state.alpha = new_alpha
             self.state.metrics.current_alpha = self.state.alpha
 
     def start_blending(self, total_steps: int) -> None:
@@ -1356,11 +1540,16 @@ class SeedSlot(nn.Module):
         if not (torch.distributed.is_available() and torch.distributed.is_initialized()):
             return gate_result
 
-        # 1 = Passed, 0 = Failed; MIN gives unanimous consensus
-        decision = torch.tensor([int(gate_result.passed)], device=self.device, dtype=torch.int)
-        torch.distributed.all_reduce(decision, op=torch.distributed.ReduceOp.MIN)
+        # Use preallocated buffer to avoid per-call tensor creation overhead
+        # Buffer is lazily created on first DDP sync and invalidated on device change
+        if self._ddp_sync_buffer is None:
+            self._ddp_sync_buffer = torch.zeros(1, device=self.device, dtype=torch.int)
 
-        is_passed = bool(decision.item())
+        # 1 = Passed, 0 = Failed; MIN gives unanimous consensus
+        self._ddp_sync_buffer.fill_(int(gate_result.passed))
+        torch.distributed.all_reduce(self._ddp_sync_buffer, op=torch.distributed.ReduceOp.MIN)
+
+        is_passed = bool(self._ddp_sync_buffer.item())
 
         if gate_result.passed and not is_passed:
             # Vetoed by DDP consensus - create new result with updated status
@@ -1383,10 +1572,16 @@ class SeedSlot(nn.Module):
             message=gate_result.message,
         )
 
-    def step_epoch(self) -> None:
-        """Advance lifecycle mechanically once per epoch (Kasmina timekeeper)."""
+    def step_epoch(self) -> bool:
+        """Advance lifecycle mechanically once per epoch (Kasmina timekeeper).
+
+        Returns:
+            True if an auto-cull occurred (environment safety mechanism),
+            False otherwise. Used by the RL system to apply auto-cull penalties
+            that prevent degenerate WAIT-spam policies.
+        """
         if not self.state:
-            return
+            return False
 
         stage = self.state.stage
 
@@ -1395,7 +1590,7 @@ class SeedSlot(nn.Module):
             gate_result = self.gates.check_gate(self.state, SeedStage.TRAINING)
             gate_result = self._sync_gate_decision(gate_result)
             if not gate_result.passed:
-                return
+                return False
 
             old_stage = self.state.stage
             ok = self.state.transition(SeedStage.TRAINING)
@@ -1409,7 +1604,7 @@ class SeedSlot(nn.Module):
                 TelemetryEventType.SEED_STAGE_CHANGED,
                 data={"from": old_stage.name, "to": self.state.stage.name},
             )
-            return
+            return False
 
         # TRAINING → BLENDING when dwell satisfied and gate passes
         if stage == SeedStage.TRAINING:
@@ -1419,12 +1614,12 @@ class SeedSlot(nn.Module):
                     1, int(self.task_config.max_epochs * self.task_config.train_to_blend_fraction)
                 )
             if self.state.metrics.epochs_in_current_stage < dwell_epochs:
-                return
+                return False
 
             gate_result = self.gates.check_gate(self.state, SeedStage.BLENDING)
             gate_result = self._sync_gate_decision(gate_result)
             if not gate_result.passed:
-                return
+                return False
 
             old_stage = self.state.stage
             ok = self.state.transition(SeedStage.BLENDING)
@@ -1438,7 +1633,7 @@ class SeedSlot(nn.Module):
                 TelemetryEventType.SEED_STAGE_CHANGED,
                 data={"from": old_stage.name, "to": self.state.stage.name},
             )
-            return
+            return False
 
         # BLENDING → PROBATIONARY when alpha ramp completes and gate passes
         if stage == SeedStage.BLENDING:
@@ -1452,7 +1647,7 @@ class SeedSlot(nn.Module):
                 gate_result = self.gates.check_gate(self.state, SeedStage.PROBATIONARY)
                 gate_result = self._sync_gate_decision(gate_result)
                 if not gate_result.passed:
-                    return
+                    return False
                 old_stage = self.state.stage
                 ok = self.state.transition(SeedStage.PROBATIONARY)
                 if not ok:
@@ -1465,7 +1660,7 @@ class SeedSlot(nn.Module):
                     TelemetryEventType.SEED_STAGE_CHANGED,
                     data={"from": old_stage.name, "to": self.state.stage.name},
                 )
-            return
+            return False
 
         # PROBATIONARY: Decision point for Tamiyo
         # Fossilization requires explicit FOSSILIZE action - NO auto-advance
@@ -1486,13 +1681,15 @@ class SeedSlot(nn.Module):
             if self.state.metrics.counterfactual_contribution is not None:
                 if self.state.metrics.counterfactual_contribution <= 0:
                     self.cull(reason="negative_counterfactual")
-                    return
+                    return True  # Auto-cull occurred
 
             # Timeout: Tamiyo failed to decide in time
             # The escalating WAIT penalty in rewards.py creates pressure to decide sooner
             if self.state.metrics.epochs_in_current_stage >= max_probation_epochs:
                 self.cull(reason="probation_timeout")
-                return
+                return True  # Auto-cull occurred
+
+        return False  # No auto-cull
 
     def get_state_report(self) -> SeedStateReport | None:
         """Get current state as Leyline report."""

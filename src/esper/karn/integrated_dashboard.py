@@ -25,37 +25,19 @@ import asyncio
 import json
 import logging
 import threading
-from dataclasses import asdict
 from pathlib import Path
 from queue import Queue, Empty
 from typing import Any, TYPE_CHECKING
 
+from esper.karn.serialization import serialize_event as _serialize_event
+
 if TYPE_CHECKING:
-    from esper.leyline.telemetry import TelemetryEvent
+    from esper.karn.contracts import TelemetryEventLike
 
 _logger = logging.getLogger(__name__)
 
 # Dashboard HTML file path
 _DASHBOARD_PATH = Path(__file__).parent / "dashboard.html"
-
-
-def _serialize_event(event: "TelemetryEvent") -> str:
-    """Serialize TelemetryEvent to JSON string."""
-    data = asdict(event)
-
-    # Convert enum to string
-    # hasattr AUTHORIZED by John on 2025-12-14 03:00:00 UTC
-    # Justification: Serialization - handle both enum and string event_type values
-    if hasattr(data.get("event_type"), "name"):
-        data["event_type"] = data["event_type"].name
-
-    # Convert datetime to ISO string
-    # hasattr AUTHORIZED by John on 2025-12-14 03:00:00 UTC
-    # Justification: Serialization - safely handle datetime objects
-    if data.get("timestamp") and hasattr(data["timestamp"], "isoformat"):
-        data["timestamp"] = data["timestamp"].isoformat()
-
-    return json.dumps(data, default=str)
 
 
 class DashboardServer:
@@ -87,13 +69,17 @@ class DashboardServer:
         self._running = False
         self._ready = threading.Event()
 
-    def emit(self, event: "TelemetryEvent") -> None:
+    def emit(self, event: "TelemetryEventLike") -> None:
         """Queue event for WebSocket broadcast (OutputBackend interface)."""
         try:
             message = _serialize_event(event)
             self._queue.put_nowait(message)
-        except Exception:
-            pass  # Don't let telemetry errors break training
+        except Exception as e:
+            # Log at debug level to help diagnose nonconforming events
+            # without spamming logs during normal operation
+            _logger.debug(
+                f"Failed to serialize event {type(event).__name__}: {e}"
+            )
 
     def close(self) -> None:
         """Stop the dashboard server (OutputBackend interface)."""
@@ -140,10 +126,17 @@ class DashboardServer:
         clients: set[WebSocket] = set()
 
         @app.get("/", response_class=HTMLResponse)
-        async def get_dashboard() -> str:
+        async def get_dashboard() -> HTMLResponse:
             if _DASHBOARD_PATH.exists():
-                return _DASHBOARD_PATH.read_text()
-            return "<html><body><h1>Dashboard not found</h1></body></html>"
+                content = _DASHBOARD_PATH.read_text()
+            else:
+                _logger.warning(f"Dashboard HTML not found at {_DASHBOARD_PATH}, serving fallback.")
+                content = "<html><body><h1>Dashboard not found</h1><p>Please ensure 'dashboard.html' is present in the karn package directory.</p></body></html>"
+
+            return HTMLResponse(
+                content=content,
+                headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+            )
 
         @app.websocket("/ws")
         async def websocket_endpoint(websocket: WebSocket) -> None:

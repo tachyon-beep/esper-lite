@@ -6,15 +6,27 @@ This module contains the main training functions extracted from ppo.py.
 from __future__ import annotations
 
 import functools
+import logging
 import random
-from typing import Callable
+from typing import Callable, Iterator, Protocol, TYPE_CHECKING, cast
 
 import torch
 import torch.nn as nn
 
+logger = logging.getLogger(__name__)
+
+
+class _HasSeedParameters(Protocol):
+    """Protocol for models that have seed parameters (e.g., HostModel)."""
+
+    def get_seed_parameters(self, slot: str | None = None) -> Iterator[torch.nn.Parameter]:
+        """Yield seed parameters for gradient collection."""
+        ...
+
 from esper.leyline.factored_actions import FactoredAction, LifecycleOp
 from esper.leyline import TelemetryEvent, TelemetryEventType
-from esper.runtime import get_task_spec
+# NOTE: get_task_spec imported lazily inside functions to avoid circular import:
+#   runtime -> simic.rewards -> simic -> simic.training -> helpers -> runtime
 from esper.simic.rewards import compute_contribution_reward, SeedInfo
 from esper.simic.telemetry import (
     collect_seed_gradients_async,
@@ -80,11 +92,16 @@ def _get_compiled_train_step(use_compile: bool = True) -> Callable:
     """
     if use_compile:
         try:
-            # mode="default" works with varying model instances
-            # (reduce-overhead uses CUDA graphs which capture memory addresses)
-            return torch.compile(_train_step_impl, mode="default")
-        except Exception:
-            # Fallback if compilation fails (e.g., older PyTorch version)
+            # M22: dynamic=True handles varying batch sizes without recompilation.
+            # mode="default" is safest (reduce-overhead uses CUDA graphs which
+            # capture memory addresses and break with varying model instances).
+            return torch.compile(_train_step_impl, mode="default", dynamic=True)
+        except Exception as e:
+            # M22: Log compilation failures so they aren't silent
+            logger.warning(
+                "torch.compile failed, falling back to uncompiled train_step: %s",
+                e,
+            )
             return _train_step_impl
     return _train_step_impl
 
@@ -188,7 +205,9 @@ def _train_one_epoch(
         # Collect gradient stats as tensors (async-safe, no .item() sync)
         # Overwrites each batch; final value materialized after loop
         if collect_gradients:
-            grad_stats = collect_seed_gradients_async(model.get_seed_parameters())
+            # cast() needed because nn.Module doesn't expose get_seed_parameters in stubs
+            host_model = cast(_HasSeedParameters, model)
+            grad_stats = collect_seed_gradients_async(host_model.get_seed_parameters())
 
         host_optimizer.step()
         if seed_optimizer:
@@ -293,6 +312,7 @@ def run_heuristic_episode(
     from esper.tamiyo import SignalTracker
 
     if task_spec is None:
+        from esper.runtime import get_task_spec
         task_spec = get_task_spec("cifar10")
     task_type = task_spec.task_type
 
@@ -579,6 +599,7 @@ def train_heuristic(
     slots: list[str] | None = None,
     telemetry_config: TelemetryConfig | None = None,
     telemetry_lifecycle_only: bool = False,
+    min_fossilize_improvement: float | None = None,
 ):
     """Train with heuristic policy.
 
@@ -589,8 +610,15 @@ def train_heuristic(
         device: Device to use
         task: Task preset (cifar10 or tinystories)
         seed: Random seed
+        slots: List of slot IDs to use
+        telemetry_config: Telemetry configuration
+        telemetry_lifecycle_only: If True, only emit lifecycle events
+        min_fossilize_improvement: Minimum improvement (%) required to fossilize a seed.
+            If None, uses leyline default (0.5%). Lower values risk reward hacking.
     """
     from esper.tamiyo import HeuristicTamiyo
+    from esper.tamiyo.heuristic import HeuristicPolicyConfig
+    from esper.runtime import get_task_spec  # Lazy import to avoid circular dependency
 
     task_spec = get_task_spec(task)
 
@@ -622,13 +650,21 @@ def train_heuristic(
             "max_batches": max_batches,
             "device": device,
             "slots": slots,
+            "min_fossilize_improvement": min_fossilize_improvement,
         },
         message="Heuristic training run configuration",
     ))
 
     trainloader, testloader = task_spec.create_dataloaders()
 
-    policy = HeuristicTamiyo(topology=task_spec.topology)
+    # Create policy config if custom parameters are specified
+    policy_config = None
+    if min_fossilize_improvement is not None:
+        policy_config = HeuristicPolicyConfig(
+            min_improvement_to_fossilize=min_fossilize_improvement,
+        )
+
+    policy = HeuristicTamiyo(topology=task_spec.topology, config=policy_config)
     history = []
 
     for ep in range(1, n_episodes + 1):

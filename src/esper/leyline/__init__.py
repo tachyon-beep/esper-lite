@@ -3,6 +3,17 @@
 Leyline defines the data contracts that flow between all Esper components.
 Import from here for the public API.
 
+OWNERSHIP BOUNDARY:
+    This module owns all TRAINING BEHAVIOR constants - anything that affects:
+    - Model updates (PPO hyperparameters, learning rates, clipping)
+    - Reward calculation (PBRS weights, terminal bonuses)
+    - Lifecycle gates (fossilization thresholds, cull criteria)
+    - Anomaly detection thresholds for training (entropy collapse, ratio explosion)
+    - Architecture constants (LSTM dim, episode length, batch sizes)
+
+    TUI/display thresholds belong in karn/constants.py instead.
+    When in doubt: if it affects training outcomes, it belongs here.
+
 Example:
     from esper.leyline import SeedStage, TrainingSignals
     from esper.leyline.factored_actions import FactoredAction, LifecycleOp
@@ -52,7 +63,7 @@ DEFAULT_EPISODE_LENGTH = 25
 
 # LSTM hidden dimension - architecture constant for temporal memory.
 # Must match across network construction and buffer state tracking.
-# Used by: config.py, vectorized.py, ppo.py, tamiyo_buffer.py, tamiyo_network.py
+# Used by: config.py, vectorized.py, ppo.py, rollout_buffer.py, network.py
 DEFAULT_LSTM_HIDDEN_DIM = 128
 
 # Parallel environments for vectorized training.
@@ -100,6 +111,20 @@ DEFAULT_ENTROPY_COEF = 0.05
 # Minimum entropy coefficient floor (prevents exploration collapse).
 DEFAULT_ENTROPY_COEF_MIN = 0.01
 
+# M11: Entropy collapse detection thresholds.
+# These are normalized entropy values from MaskedCategorical.entropy().
+# - Collapse: Policy is nearly deterministic (<10% of max entropy)
+# - Warning: Policy is converging, may need entropy boost (<30% of max)
+DEFAULT_ENTROPY_COLLAPSE_THRESHOLD = 0.1
+DEFAULT_ENTROPY_WARNING_THRESHOLD = 0.3
+
+# M21: PPO ratio anomaly detection thresholds.
+# ratio = exp(new_log_prob - old_log_prob). Healthy ratio is close to 1.0.
+# - Explosion (>5.0): Policy changed too much, trust region violated
+# - Collapse (<0.1): Policy severely underweights old actions (potential bug)
+DEFAULT_RATIO_EXPLOSION_THRESHOLD = 5.0
+DEFAULT_RATIO_COLLAPSE_THRESHOLD = 0.1
+
 # =============================================================================
 # Factored Action Space Constants
 # =============================================================================
@@ -107,6 +132,10 @@ DEFAULT_ENTROPY_COEF_MIN = 0.01
 # Head names for factored action space (slot selection, blueprint, blend algorithm, lifecycle op).
 # Order matters: slot → blueprint → blend → op is the causal chain.
 HEAD_NAMES: tuple[str, ...] = ("slot", "blueprint", "blend", "op")
+
+# Action masking constant - safe for FP16/BF16, avoids softmax overflow
+# Used by MaskedCategorical to zero out invalid action probabilities
+MASKED_LOGIT_VALUE: float = -1e4
 
 # =============================================================================
 # Reward Shaping Constants (tunable reward function weights)
@@ -138,7 +167,10 @@ DEFAULT_MIN_FOSSILIZE_CONTRIBUTION = 1.0
 
 # G2 Gate: Seed gradient ratio threshold for activity detection.
 # Seeds with ratio below threshold may be considered inactive.
-DEFAULT_GRADIENT_RATIO_THRESHOLD = 0.05
+# (DRL Expert review 2025-12-17: increased from 0.05 to 0.10 to prevent
+# seeds with transient gradient activity from passing G2 prematurely.
+# Combined with EMA smoothing, this ensures meaningful sustained learning.)
+DEFAULT_GRADIENT_RATIO_THRESHOLD = 0.10
 
 # G3 Gate: Minimum stability required for fossilization.
 # Higher = stricter stability requirements before fossilization allowed.
@@ -200,6 +232,11 @@ DEFAULT_CULL_IF_ACCURACY_DROPS_BY = 2.0
 
 # Cooldown epochs after a cull before next germination allowed (anti-thrashing).
 DEFAULT_EMBARGO_EPOCHS_AFTER_CULL = 5
+
+# Fossilization threshold: minimum improvement required to fossilize a seed.
+# Set to 0.5% to prevent reward hacking via marginal fossilization.
+# A seed must demonstrate meaningful contribution before permanent integration.
+DEFAULT_MIN_IMPROVEMENT_TO_FOSSILIZE = 0.5
 
 # Default number of steps for alpha ramp during BLENDING stage.
 # Controls how gradually seed influence is increased.
@@ -366,9 +403,14 @@ __all__ = [
     "DEFAULT_BATCH_SIZE",
     "DEFAULT_ENTROPY_COEF",
     "DEFAULT_ENTROPY_COEF_MIN",
+    "DEFAULT_ENTROPY_COLLAPSE_THRESHOLD",
+    "DEFAULT_ENTROPY_WARNING_THRESHOLD",
+    "DEFAULT_RATIO_EXPLOSION_THRESHOLD",
+    "DEFAULT_RATIO_COLLAPSE_THRESHOLD",
 
     # Factored Action Space
     "HEAD_NAMES",
+    "MASKED_LOGIT_VALUE",
 
     # Reward Shaping Constants
     "DEFAULT_CONTRIBUTION_WEIGHT",
@@ -399,6 +441,7 @@ __all__ = [
     "DEFAULT_CULL_AFTER_EPOCHS_WITHOUT_IMPROVEMENT",
     "DEFAULT_CULL_IF_ACCURACY_DROPS_BY",
     "DEFAULT_EMBARGO_EPOCHS_AFTER_CULL",
+    "DEFAULT_MIN_IMPROVEMENT_TO_FOSSILIZE",
     "DEFAULT_BLENDING_TOTAL_STEPS",
 
     # Task Training Defaults
