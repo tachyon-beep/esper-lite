@@ -139,9 +139,15 @@ def create_attention_seed(channels: int, reduction: int = 4) -> nn.Module:
             self.fc = nn.Sequential(
                 nn.Linear(channels, reduced, bias=False),
                 nn.ReLU(inplace=True),
-                nn.Linear(reduced, channels, bias=False),
+                # Use bias=True to enable identity initialization
+                nn.Linear(reduced, channels, bias=True),
                 nn.Sigmoid(),
             )
+            # Initialize for identity-like behavior (output ≈ 1.0)
+            # Weight 0 ensures input independence at start
+            # Bias 3.0 gives sigmoid(3.0) ≈ 0.95 (near-identity scaling)
+            nn.init.zeros_(self.fc[2].weight)
+            nn.init.constant_(self.fc[2].bias, 3.0)
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             # Squeeze: global average pooling to channel descriptor
