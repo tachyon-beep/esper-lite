@@ -20,10 +20,16 @@ Usage:
     hub.add_backend(DashboardServer(port=8000))
 """
 
-# Dashboard components
-from esper.karn.websocket_output import WebSocketOutput
-from esper.karn.dashboard_server import create_app, run_dashboard_server
-from esper.karn.integrated_dashboard import DashboardServer
+# Dashboard components (lazy import - fastapi may not be installed)
+try:
+    from esper.karn.websocket_output import WebSocketOutput
+    from esper.karn.dashboard_server import create_app, run_dashboard_server
+    from esper.karn.integrated_dashboard import DashboardServer
+except ImportError:
+    WebSocketOutput = None  # type: ignore[misc, assignment]
+    create_app = None  # type: ignore[misc, assignment]
+    run_dashboard_server = None  # type: ignore[misc, assignment]
+    DashboardServer = None  # type: ignore[misc, assignment]
 
 # Store (data models)
 from esper.karn.store import (
