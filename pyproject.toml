@@ -25,6 +25,9 @@ dashboard = [
     "uvicorn[standard]>=0.32.0",
     "websockets>=14.0",
 ]
+overwatch = [
+    "textual>=0.47.0",
+]
 
 [build-system]
 requires = ["setuptools>=61.0"]
