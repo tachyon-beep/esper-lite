@@ -58,3 +58,75 @@ class SlotChipState:
             gate_last=data.get("gate_last"),
             gate_passed=data.get("gate_passed"),
         )
+
+
+@dataclass
+class EnvSummary:
+    """Summary of a single training environment for Flight Board.
+
+    Contains all information needed to render one row in the Flight Board:
+    environment identity, status, throughput, slots, and anomaly info.
+    """
+
+    # Identity
+    env_id: int
+    device_id: int  # GPU device index
+    status: str  # OK, INFO, WARN, CRIT
+
+    # Throughput
+    throughput_fps: float = 0.0
+    step_time_ms: float = 0.0
+
+    # Metrics
+    reward_last: float = 0.0
+    task_metric: float = 0.0  # Task-specific metric (e.g., accuracy)
+    task_metric_delta: float = 0.0
+
+    # Slots (keyed by slot_id like "r0c1")
+    slots: dict[str, SlotChipState] = field(default_factory=dict)
+
+    # Anomaly detection
+    anomaly_score: float = 0.0  # 0.0-1.0, higher = more anomalous
+    anomaly_reasons: list[str] = field(default_factory=list)
+
+    # Staleness
+    last_update_ts: float = 0.0  # Unix timestamp of last telemetry
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to JSON-serializable dict."""
+        return {
+            "env_id": self.env_id,
+            "device_id": self.device_id,
+            "status": self.status,
+            "throughput_fps": self.throughput_fps,
+            "step_time_ms": self.step_time_ms,
+            "reward_last": self.reward_last,
+            "task_metric": self.task_metric,
+            "task_metric_delta": self.task_metric_delta,
+            "slots": {k: v.to_dict() for k, v in self.slots.items()},
+            "anomaly_score": self.anomaly_score,
+            "anomaly_reasons": self.anomaly_reasons,
+            "last_update_ts": self.last_update_ts,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> EnvSummary:
+        """Reconstruct from dict."""
+        slots = {
+            k: SlotChipState.from_dict(v)
+            for k, v in data.get("slots", {}).items()
+        }
+        return cls(
+            env_id=data["env_id"],
+            device_id=data["device_id"],
+            status=data["status"],
+            throughput_fps=data.get("throughput_fps", 0.0),
+            step_time_ms=data.get("step_time_ms", 0.0),
+            reward_last=data.get("reward_last", 0.0),
+            task_metric=data.get("task_metric", 0.0),
+            task_metric_delta=data.get("task_metric_delta", 0.0),
+            slots=slots,
+            anomaly_score=data.get("anomaly_score", 0.0),
+            anomaly_reasons=data.get("anomaly_reasons", []),
+            last_update_ts=data.get("last_update_ts", 0.0),
+        )

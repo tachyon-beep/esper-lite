@@ -91,3 +91,123 @@ class TestSlotChipState:
         assert restored.slot_id == chip.slot_id
         assert restored.stage == chip.stage
         assert restored.alpha == chip.alpha
+
+
+class TestEnvSummary:
+    """Tests for EnvSummary dataclass."""
+
+    def test_env_summary_creation(self) -> None:
+        """EnvSummary can be created with required fields."""
+        from esper.karn.overwatch.schema import EnvSummary, SlotChipState
+
+        env = EnvSummary(
+            env_id=0,
+            device_id=0,
+            status="OK",
+        )
+
+        assert env.env_id == 0
+        assert env.device_id == 0
+        assert env.status == "OK"
+        assert env.slots == {}
+        assert env.anomaly_score == 0.0
+        assert env.anomaly_reasons == []
+
+    def test_env_summary_with_slots(self) -> None:
+        """EnvSummary contains slot states."""
+        from esper.karn.overwatch.schema import EnvSummary, SlotChipState
+
+        chip = SlotChipState(
+            slot_id="r0c1",
+            stage="TRAINING",
+            blueprint_id="conv_light",
+            alpha=0.3,
+        )
+
+        env = EnvSummary(
+            env_id=3,
+            device_id=1,
+            status="WARN",
+            slots={"r0c1": chip},
+            anomaly_score=0.65,
+            anomaly_reasons=["High gradient ratio (3.2x)"],
+        )
+
+        assert "r0c1" in env.slots
+        assert env.slots["r0c1"].stage == "TRAINING"
+        assert env.anomaly_score == 0.65
+
+    def test_env_summary_to_dict(self) -> None:
+        """EnvSummary serializes to dict with nested slots."""
+        from esper.karn.overwatch.schema import EnvSummary, SlotChipState
+
+        chip = SlotChipState(
+            slot_id="r0c1",
+            stage="BLENDING",
+            blueprint_id="mlp",
+            alpha=0.7,
+        )
+
+        env = EnvSummary(
+            env_id=2,
+            device_id=0,
+            status="OK",
+            throughput_fps=98.5,
+            slots={"r0c1": chip},
+        )
+
+        d = env.to_dict()
+
+        assert d["env_id"] == 2
+        assert d["throughput_fps"] == 98.5
+        assert "r0c1" in d["slots"]
+        assert d["slots"]["r0c1"]["stage"] == "BLENDING"
+
+    def test_env_summary_from_dict(self) -> None:
+        """EnvSummary deserializes from dict."""
+        from esper.karn.overwatch.schema import EnvSummary
+
+        d = {
+            "env_id": 1,
+            "device_id": 0,
+            "status": "CRIT",
+            "throughput_fps": 45.0,
+            "reward_last": -0.5,
+            "slots": {
+                "r0c0": {
+                    "slot_id": "r0c0",
+                    "stage": "CULLED",
+                    "blueprint_id": "bad_seed",
+                    "alpha": 0.0,
+                }
+            },
+            "anomaly_score": 0.85,
+            "anomaly_reasons": ["Throughput 55% below baseline", "Negative reward"],
+        }
+
+        env = EnvSummary.from_dict(d)
+
+        assert env.env_id == 1
+        assert env.status == "CRIT"
+        assert env.anomaly_score == 0.85
+        assert len(env.anomaly_reasons) == 2
+        assert env.slots["r0c0"].stage == "CULLED"
+
+    def test_env_summary_json_roundtrip(self) -> None:
+        """EnvSummary survives JSON serialization."""
+        from esper.karn.overwatch.schema import EnvSummary, SlotChipState
+
+        env = EnvSummary(
+            env_id=0,
+            device_id=0,
+            status="OK",
+            slots={
+                "r0c1": SlotChipState("r0c1", "TRAINING", "conv", 0.5)
+            },
+        )
+
+        json_str = json.dumps(env.to_dict())
+        restored = EnvSummary.from_dict(json.loads(json_str))
+
+        assert restored.env_id == env.env_id
+        assert restored.slots["r0c1"].alpha == 0.5
