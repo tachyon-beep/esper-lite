@@ -1,8 +1,9 @@
 # Tamiyo Policy Migration Design
 
-**Status:** Design Complete - Ready for Implementation
+**Status:** Design Complete - Expert Reviewed - Ready for Implementation
 **Date:** 2025-12-17
 **Authors:** John + Claude (Brainstorming Session)
+**Reviewers:** DRL Expert Agent, PyTorch Expert Agent
 
 ---
 
@@ -25,7 +26,8 @@ This document captures the design for migrating the policy network from Simic to
 7. [Policy Registry](#7-policy-registry)
 8. [Checkpointing](#8-checkpointing)
 9. [Migration Plan](#9-migration-plan)
-10. [Appendix: Full Brainstorming Session](#appendix-full-brainstorming-session)
+10. [Expert Review Feedback](#10-expert-review-feedback)
+11. [Appendix: Full Brainstorming Session](#appendix-full-brainstorming-session)
 
 ---
 
@@ -139,9 +141,17 @@ This refactoring concerns **tactical Tamiyo only**. Strategic Tamiyo is a separa
 
 ## 4. PolicyBundle Protocol
 
+> **Note:** This protocol was enhanced based on DRL and PyTorch expert review.
+> See [Section 10](#10-expert-review-feedback) for detailed rationale.
+
 ```python
 # tamiyo/policy/protocol.py
 
+from typing import Protocol, runtime_checkable, Any, Iterator
+import torch
+from torch import nn
+
+@runtime_checkable  # [PyTorch expert] Enables isinstance() checks at registration
 class PolicyBundle(Protocol):
     """Interface for swappable Tamiyo policy implementations.
 
@@ -152,6 +162,13 @@ class PolicyBundle(Protocol):
     - LSTMPolicyBundle: Recurrent neural policy with temporal memory
     - MLPPolicyBundle: Stateless feedforward policy (simpler baseline)
     - HeuristicPolicyBundle: Rule-based expert system (for ablations)
+
+    ## Design Rationale (from expert review)
+
+    - Protocol over ABC: Avoids MRO conflicts with nn.Module inheritance
+    - runtime_checkable: Enables validation at policy registration time
+    - Explicit state_dict: Required for checkpoint compatibility
+    - Device management: Essential for multi-GPU and distributed training
 
     ## Adding a New Policy
 
@@ -164,17 +181,22 @@ class PolicyBundle(Protocol):
 
     Policies declare their capabilities via `supports_off_policy`.
     On-policy algorithms (PPO) use `evaluate_actions()`.
-    Off-policy algorithms (SAC) use `get_q_values()`.
+    Off-policy algorithms (SAC) use `get_q_values()` and `forward()`.
 
     ## Recurrent Policies
 
     Recurrent policies (LSTM) maintain hidden state across steps.
     They must implement `initial_hidden()` and set `is_recurrent = True`.
     Simic handles hidden state threading during rollout collection.
+
+    ## torch.compile Guidance
+
+    Compile the inner nn.Module, NOT the PolicyBundle wrapper.
+    Keep torch.compile() calls in Simic (training infrastructure).
     """
 
     # === Observation Processing ===
-    def process_signals(self, signals: TrainingSignals) -> torch.Tensor:
+    def process_signals(self, signals: "TrainingSignals") -> torch.Tensor:
         """Convert TrainingSignals to policy-specific features."""
         ...
 
@@ -183,21 +205,46 @@ class PolicyBundle(Protocol):
         self,
         features: torch.Tensor,
         masks: dict[str, torch.Tensor],
-        hidden: torch.Tensor | None = None,
+        hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
         deterministic: bool = False,  # For off-policy eval mode
-    ) -> ActionResult:
-        """Select action given observations."""
+    ) -> "ActionResult":
+        """Select action given observations.
+
+        Uses inference_mode internally - returned tensors are non-differentiable.
+        """
+        ...
+
+    # === Forward (for off-policy) === [DRL expert recommendation]
+    def forward(
+        self,
+        features: torch.Tensor,
+        masks: dict[str, torch.Tensor],
+        hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
+    ) -> "ForwardResult":
+        """Compute action distribution parameters without sampling.
+
+        Required for:
+        - SAC: Computing log_prob of sampled actions for entropy bonus
+        - TD3: Getting deterministic action for target policy
+        - Offline RL: Computing action distribution for OOD detection
+
+        Returns:
+            ForwardResult with logits/mean+std per head, value, new_hidden
+        """
         ...
 
     # === On-Policy (PPO/A2C) ===
     def evaluate_actions(
         self,
         features: torch.Tensor,
-        actions: FactoredAction,
+        actions: "FactoredAction",
         masks: dict[str, torch.Tensor],
-        hidden: torch.Tensor | None = None,
-    ) -> EvalResult:  # log_prob, value, entropy
-        """Evaluate actions for PPO update."""
+        hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
+    ) -> "EvalResult":  # log_prob, value, entropy
+        """Evaluate actions for PPO update.
+
+        Must be called with gradient tracking enabled (not in inference_mode).
+        """
         ...
 
     # === Off-Policy (SAC/TD3) ===
@@ -206,29 +253,90 @@ class PolicyBundle(Protocol):
         features: torch.Tensor,
         action: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Twin Q-values for off-policy critic (optional)."""
+        """Twin Q-values for off-policy critic.
+
+        Returns (Q1, Q2) for clipped double-Q learning.
+        Raises NotImplementedError if supports_off_policy is False.
+        """
+        ...
+
+    def sync_from(self, source: "PolicyBundle", tau: float = 0.005) -> None:
+        """Polyak averaging update from source policy (for target networks).
+
+        target = tau * source + (1 - tau) * target
+
+        [DRL expert recommendation] Required for SAC/TD3 target network updates.
+        """
         ...
 
     # === Value Estimation ===
     def get_value(
         self,
         features: torch.Tensor,
-        hidden: torch.Tensor | None = None,
+        hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> torch.Tensor:
         """State value estimate for baseline."""
         ...
 
     # === Recurrent State ===
-    def initial_hidden(self, batch_size: int) -> torch.Tensor | None:
-        """Initial hidden state for recurrent policies (None if stateless)."""
+    def initial_hidden(self, batch_size: int) -> tuple[torch.Tensor, torch.Tensor] | None:
+        """Initial hidden state for recurrent policies (None if stateless).
+
+        Should be called with inference_mode for efficiency.
+        """
+        ...
+
+    # === Serialization === [PyTorch expert recommendation]
+    def state_dict(self) -> dict[str, Any]:
+        """Return policy state for checkpointing."""
+        ...
+
+    def load_state_dict(self, state_dict: dict[str, Any], strict: bool = True) -> None:
+        """Load policy state from checkpoint.
+
+        Args:
+            state_dict: State dictionary from checkpoint
+            strict: If True, keys must match exactly. If False, allows partial loading.
+        """
+        ...
+
+    # === Device Management === [PyTorch expert recommendation]
+    @property
+    def device(self) -> torch.device:
+        """Device where policy parameters reside."""
+        ...
+
+    def to(self, device: torch.device | str) -> "PolicyBundle":
+        """Move policy to specified device. Returns self for chaining."""
         ...
 
     # === Introspection ===
     @property
-    def is_recurrent(self) -> bool: ...
+    def is_recurrent(self) -> bool:
+        """True if policy maintains hidden state across steps."""
+        ...
 
     @property
-    def supports_off_policy(self) -> bool: ...
+    def supports_off_policy(self) -> bool:
+        """True if policy supports off-policy algorithms (SAC/TD3).
+
+        If False, get_q_values() and sync_from() raise NotImplementedError.
+        """
+        ...
+
+    @property
+    def dtype(self) -> torch.dtype:
+        """Data type of policy parameters (for AMP compatibility)."""
+        ...
+
+    # === Optional: Gradient Checkpointing === [PyTorch expert recommendation]
+    def enable_gradient_checkpointing(self, enabled: bool = True) -> None:
+        """Enable/disable gradient checkpointing for memory efficiency.
+
+        Optional - policies that don't support this should no-op.
+        Primarily useful for Transformer-based policies.
+        """
+        ...
 ```
 
 ---
@@ -501,6 +609,123 @@ def load_checkpoint(path: str, config: dict, weights_only: bool = False) -> tupl
 1. Remove dead imports
 2. Update all tests
 3. Delete any remaining legacy code
+
+---
+
+## 10. Expert Review Feedback
+
+The design was reviewed by two specialist agents before implementation approval.
+
+### 10.1 DRL Expert Review
+
+**Overall Assessment:** "Production-quality RL engineering" - design is sound.
+
+#### Key Confirmations
+
+| Aspect | Assessment |
+|--------|------------|
+| Action masking in Tamiyo | ✅ Correct - semantic constraints belong with the brain |
+| LSTM + off-policy = False | ✅ Correct - needs R2D2 machinery, defer to separate bundle |
+| Hidden state handling | ✅ Sequence-based forward is correct |
+| Per-head advantage masking | ✅ "Excellent RL engineering" - causal masking is correct |
+
+#### Recommendations Incorporated
+
+1. **Added `forward()` method** - SAC needs `sample_and_log_prob` functionality. The new method returns distribution parameters without sampling.
+
+2. **Added `sync_from()` method** - Required for Polyak updates in SAC/TD3 target networks.
+
+3. **Per-head entropy weighting** (implementation note) - Blueprint/blend heads fire ~10% of time. Consider upweighting their entropy coefficient (2x) to encourage exploration when germinating.
+
+4. **Per-head ratio monitoring** (implementation note) - Track ratio statistics per-head separately for debugging head-specific issues.
+
+#### Algorithm Recommendation
+
+For seed lifecycle control (semi-sparse rewards, 25-epoch episodes, factored discrete actions, recurrence need):
+
+1. **PPO (current)** - Optimal choice, keep it
+2. **PPO with entropy annealing** - Experiment with aggressive annealing
+3. **SAC-Discrete (stateless MLP)** - As experiment, not replacement
+4. **TD3** - Probably not a good fit (deterministic policy for discrete actions)
+
+### 10.2 PyTorch Expert Review
+
+**Overall Assessment:** "Fundamentally sound" - design is compile-safe with minor enhancements.
+
+#### Key Confirmations
+
+| Aspect | Assessment |
+|--------|------------|
+| Protocol over ABC | ✅ Correct - avoids MRO conflicts with nn.Module |
+| Import structure | ✅ No concerns - lazy imports already in place |
+| Checkpoint structure | ✅ Correct for single-node; use DCP for future distributed |
+
+#### Recommendations Incorporated
+
+1. **Added `@runtime_checkable`** - Enables `isinstance()` checks at policy registration time.
+
+2. **Added explicit `state_dict()` / `load_state_dict()`** - Duck typing insufficient for checkpointing; compile-time guarantees needed.
+
+3. **Added `device` property and `to()` method** - Essential for multi-GPU and future FSDP/tensor parallelism.
+
+4. **Added `dtype` property** - Helps callers know whether to use `torch.float16` for inference.
+
+5. **Added `enable_gradient_checkpointing()`** - Optional no-op for LSTM, useful for future Transformer bundles.
+
+#### torch.compile Guidance
+
+```python
+# CORRECT: Compile inner nn.Module in Simic
+class PPOAgent:
+    def __init__(self, policy_bundle: PolicyBundle, compile_network: bool = True):
+        if compile_network and hasattr(policy_bundle, '_network'):
+            policy_bundle._network = torch.compile(
+                policy_bundle._network,
+                mode="default"
+            )
+
+# WRONG: Don't compile the PolicyBundle wrapper
+# policy_bundle = torch.compile(policy_bundle)  # NO!
+```
+
+#### Code Cleanup Items (for migration)
+
+1. **Unify mask values** - `_MASK_VALUE = -1e4` defined in two places. Define once in Leyline:
+   ```python
+   # leyline/constants.py
+   MASKED_LOGIT_VALUE = -1e4  # Safe for FP16/BF16
+   ```
+
+2. **Fix `hasattr` pattern** - Replace:
+   ```python
+   # Before
+   if hasattr(self.network, '_orig_mod'):
+       return self.network._orig_mod
+
+   # After
+   return getattr(self.network, '_orig_mod', self.network)
+   ```
+
+3. **Add `@torch.inference_mode()`** to `get_initial_hidden()` - Prevents accidental gradient tracking.
+
+### 10.3 Summary of Changes from Expert Review
+
+| Category | Original | After Review |
+|----------|----------|--------------|
+| Protocol methods | 8 methods | 13 methods (+forward, +sync_from, +state_dict, +load_state_dict, +to) |
+| Properties | 2 properties | 4 properties (+device, +dtype) |
+| Decorators | None | @runtime_checkable |
+| Optional methods | None | enable_gradient_checkpointing() |
+
+The enhanced protocol supports:
+- On-policy (PPO, A2C) ✅
+- Off-policy (SAC, TD3) ✅
+- Recurrent policies (LSTM) ✅
+- Stateless policies (MLP) ✅
+- Heuristic policies ✅
+- Mixed precision training ✅
+- Multi-GPU deployment ✅
+- Gradient checkpointing ✅
 
 ---
 
