@@ -7,7 +7,7 @@ import numpy as np
 
 def test_shapley_computed_event_emitted():
     """Test that Shapley telemetry is emitted when enabled (legacy test with get_hub mock)."""
-    from esper.karn.counterfactual import CounterfactualEngine, CounterfactualMatrix, CounterfactualResult
+    from esper.simic.attribution.counterfactual import CounterfactualEngine, CounterfactualMatrix, CounterfactualResult
     from esper.leyline import TelemetryEventType
 
     events = []
@@ -15,7 +15,7 @@ def test_shapley_computed_event_emitted():
     def capture_emit(e):
         events.append(e)
 
-    with patch("esper.karn.counterfactual_helper.get_hub") as mock_hub:
+    with patch("esper.simic.attribution.counterfactual_helper.get_hub") as mock_hub:
         mock_hub.return_value.emit = capture_emit
 
         engine = CounterfactualEngine(emit_callback=capture_emit)
@@ -63,7 +63,7 @@ def test_shapley_computed_event_emitted():
 
 def test_no_shapley_event_when_telemetry_disabled():
     """Test that Shapley telemetry is NOT emitted when disabled."""
-    from esper.karn.counterfactual import CounterfactualEngine, CounterfactualMatrix, CounterfactualResult
+    from esper.simic.attribution.counterfactual import CounterfactualEngine, CounterfactualMatrix, CounterfactualResult
 
     events = []
 
@@ -96,7 +96,7 @@ def test_no_shapley_event_when_telemetry_disabled():
 
 def test_shapley_event_includes_all_slots():
     """Test that Shapley event includes values for all slots."""
-    from esper.karn.counterfactual import CounterfactualEngine, CounterfactualMatrix, CounterfactualResult
+    from esper.simic.attribution.counterfactual import CounterfactualEngine, CounterfactualMatrix, CounterfactualResult
     from esper.leyline import TelemetryEventType
 
     events = []
@@ -137,13 +137,13 @@ def test_shapley_event_includes_all_slots():
 
 def test_counterfactual_helper_emits_shapley_telemetry():
     """Test that CounterfactualHelper emits Shapley telemetry when emit_events=True."""
-    from esper.karn.counterfactual_helper import CounterfactualHelper
+    from esper.simic.attribution import CounterfactualHelper
     from esper.leyline import TelemetryEventType
 
     events = []
 
     # Mock the hub to capture events
-    with patch("esper.karn.counterfactual_helper.get_hub") as mock_hub:
+    with patch("esper.simic.attribution.counterfactual_helper.get_hub") as mock_hub:
         mock_hub.return_value.emit = lambda e: events.append(e)
 
         # Create helper with telemetry enabled
@@ -181,13 +181,13 @@ def test_counterfactual_helper_emits_shapley_telemetry():
 
 def test_counterfactual_helper_no_telemetry_when_disabled():
     """Test that CounterfactualHelper does NOT emit Shapley telemetry when emit_events=False."""
-    from esper.karn.counterfactual_helper import CounterfactualHelper
+    from esper.simic.attribution import CounterfactualHelper
     from esper.leyline import TelemetryEventType
 
     events = []
 
     # Mock the hub to capture events
-    with patch("esper.karn.counterfactual_helper.get_hub") as mock_hub:
+    with patch("esper.simic.attribution.counterfactual_helper.get_hub") as mock_hub:
         mock_hub.return_value.emit = lambda e: events.append(e)
 
         # Create helper with telemetry disabled
@@ -226,7 +226,7 @@ class TestCounterfactualEngineCallback:
 
     def test_emits_shapley_via_callback(self) -> None:
         """Shapley computation should emit via injected callback."""
-        from esper.karn.counterfactual import CounterfactualEngine, CounterfactualMatrix, CounterfactualResult
+        from esper.simic.attribution.counterfactual import CounterfactualEngine, CounterfactualMatrix, CounterfactualResult
 
         emitted_events: list = []
 
@@ -274,7 +274,7 @@ class TestCounterfactualEngineCallback:
 
     def test_no_emit_without_callback(self) -> None:
         """Without callback, Shapley still works but no emission."""
-        from esper.karn.counterfactual import CounterfactualEngine, CounterfactualMatrix, CounterfactualResult
+        from esper.simic.attribution.counterfactual import CounterfactualEngine, CounterfactualMatrix, CounterfactualResult
 
         engine = CounterfactualEngine(
             emit_callback=None,

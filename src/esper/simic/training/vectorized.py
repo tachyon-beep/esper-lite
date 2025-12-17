@@ -33,6 +33,7 @@ import time
 import warnings
 from contextlib import nullcontext
 from dataclasses import dataclass, field
+from typing import Callable
 
 import torch
 import torch.nn as nn
@@ -93,9 +94,10 @@ from esper.simic.rewards import (
     SeedInfo,
 )
 from esper.leyline import DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
-from esper.nissa import get_hub, BlueprintAnalytics
+from esper.nissa import get_hub, BlueprintAnalytics, DirectoryOutput
 from esper.tolaria import TolariaGovernor
 from esper.karn.health import HealthMonitor
+from esper.simic.attribution import CounterfactualHelper
 from esper.simic.telemetry.emitters import (
     emit_with_env_context,
     emit_batch_completed,
@@ -417,6 +419,7 @@ def train_ppo_vectorized(
     sparse_reward_scale: float = 1.0,
     reward_family: str = "contribution",
     quiet_analytics: bool = False,
+    telemetry_dir: str | None = None,
 ) -> tuple[PPOAgent, list[dict]]:
     """Train PPO with vectorized environments using INVERTED CONTROL FLOW.
 
@@ -575,6 +578,13 @@ def train_ppo_vectorized(
     hub = get_hub()
     analytics = BlueprintAnalytics(quiet=quiet_analytics)
     hub.add_backend(analytics)
+
+    # Optional file-based telemetry logging
+    dir_output = None
+    if telemetry_dir and use_telemetry:
+        dir_output = DirectoryOutput(telemetry_dir)
+        hub.add_backend(dir_output)
+        _logger.info(f"Telemetry logging to: {telemetry_dir}")
 
     # Mapping diagnostics: required for multi-GPU sign-off.
     unique_env_devices = list(dict.fromkeys(devices))
@@ -890,12 +900,20 @@ def train_ppo_vectorized(
             emit_callback=telemetry_cb,  # Same callback as slots
         ) if use_telemetry else None
 
+        # Create CounterfactualHelper for Shapley value analysis at episode end
+        counterfactual_helper = CounterfactualHelper(
+            strategy="auto",  # Full factorial for <=4 slots, Shapley sampling otherwise
+            shapley_samples=20,
+            emit_events=use_telemetry,
+        ) if use_telemetry else None
+
         env_state = ParallelEnvState(
             model=model,
             host_optimizer=host_optimizer,
             signal_tracker=SignalTracker(env_id=env_idx),
             governor=governor,
             health_monitor=health_monitor,
+            counterfactual_helper=counterfactual_helper,
             env_device=env_device,
             stream=stream,
             scaler=env_scaler,
@@ -2112,6 +2130,56 @@ def train_ppo_vectorized(
                 if epoch == max_epochs:
                     env_final_accs[env_idx] = env_state.val_acc
                     env_total_rewards[env_idx] = sum(env_state.episode_rewards)
+
+                    # Compute Shapley contributions at episode end (emits ANALYTICS_SNAPSHOT)
+                    if env_state.counterfactual_helper is not None:
+                        active_slot_ids = [
+                            slot_id for slot_id in slots
+                            if model.has_active_seed_in_slot(slot_id)
+                        ]
+
+                        if active_slot_ids and baseline_accs[env_idx]:
+                            # Create evaluate_fn using cached baseline_accs
+                            # (avoids expensive re-validation for each counterfactual config)
+                            cached_baselines = baseline_accs[env_idx]
+                            full_acc = env_state.val_acc
+                            full_loss = env_state.val_loss
+
+                            def _make_evaluate_fn() -> Callable[[dict[str, float]], tuple[float, float]]:
+                                def evaluate_fn(alpha_settings: dict[str, float]) -> tuple[float, float]:
+                                    # All enabled: return full accuracy
+                                    if all(a >= 0.99 for a in alpha_settings.values()):
+                                        return full_loss, full_acc
+
+                                    # Single slot disabled: use cached baseline
+                                    disabled = [s for s, a in alpha_settings.items() if a < 0.01]
+                                    if len(disabled) == 1 and disabled[0] in cached_baselines:
+                                        return full_loss * 1.1, cached_baselines[disabled[0]]
+
+                                    # Multi-slot disabled: estimate as average of individual ablations
+                                    # (not perfect but reasonable for Shapley estimation)
+                                    if disabled:
+                                        avg_baseline = sum(
+                                            cached_baselines.get(s, full_acc) for s in disabled
+                                        ) / len(disabled)
+                                        return full_loss * 1.2, avg_baseline
+
+                                    return full_loss, full_acc
+
+                                return evaluate_fn
+
+                            try:
+                                contributions = env_state.counterfactual_helper.compute_contributions(
+                                    slot_ids=active_slot_ids,
+                                    evaluate_fn=_make_evaluate_fn(),
+                                    epoch=epoch,
+                                )
+                                _logger.debug(
+                                    f"Env {env_idx}: Shapley computed for {len(active_slot_ids)} slots: "
+                                    f"{', '.join(f'{s}={c.shapley_mean:.2f}' for s, c in contributions.items())}"
+                                )
+                            except Exception as e:
+                                _logger.warning(f"Shapley computation failed for env {env_idx}: {e}")
 
             throughput_step_time_ms_sum += step_timer.stop()  # GPU-accurate timing (P4-1)
             throughput_dataloader_wait_ms_sum += dataloader_wait_ms_epoch

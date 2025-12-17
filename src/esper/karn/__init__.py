@@ -54,21 +54,6 @@ from esper.karn.collector import (
     emit,
 )
 
-# Counterfactual (causal attribution)
-from esper.karn.counterfactual import (
-    CounterfactualEngine,
-    CounterfactualConfig,
-    CounterfactualResult,
-    CounterfactualMatrix,
-    ShapleyEstimate,
-    InteractionTerm,
-)
-from esper.karn.counterfactual_helper import (
-    CounterfactualHelper,
-    ContributionResult,
-    compute_simple_ablation,
-)
-
 # Triggers (anomaly detection)
 from esper.karn.triggers import (
     AnomalyDetector,
@@ -132,16 +117,6 @@ __all__ = [
     "get_collector",
     "configure",
     "emit",
-    # Counterfactual
-    "CounterfactualEngine",
-    "CounterfactualConfig",
-    "CounterfactualResult",
-    "CounterfactualMatrix",
-    "ShapleyEstimate",
-    "InteractionTerm",
-    "CounterfactualHelper",
-    "ContributionResult",
-    "compute_simple_ablation",
     # Triggers
     "AnomalyDetector",
     "PolicyAnomalyDetector",

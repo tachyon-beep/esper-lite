@@ -20,6 +20,8 @@ from esper.leyline.factored_actions import LifecycleOp
 
 if TYPE_CHECKING:
     from esper.tolaria import TolariaGovernor
+    from esper.karn.health import HealthMonitor
+    from esper.simic.attribution import CounterfactualHelper
 
 
 @dataclass(slots=True)
@@ -33,6 +35,8 @@ class ParallelEnvState:
     host_optimizer: torch.optim.Optimizer
     signal_tracker: Any  # SignalTracker from tamiyo
     governor: "TolariaGovernor"  # Fail-safe watchdog for catastrophic failure detection
+    health_monitor: "HealthMonitor | None" = None  # System health monitoring (GPU memory warnings)
+    counterfactual_helper: "CounterfactualHelper | None" = None  # Shapley value analysis at episode end
     seed_optimizers: dict[str, torch.optim.Optimizer] = field(default_factory=dict)
     env_device: str = "cuda:0"  # Device this env runs on
     stream: torch.cuda.Stream | None = None  # CUDA stream for async execution

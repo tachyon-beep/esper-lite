@@ -1,10 +1,10 @@
-"""Karn Counterfactual Helper - Bridge between CounterfactualEngine and training loop.
+"""Simic Counterfactual Helper - Bridge between CounterfactualEngine and training loop.
 
 Provides a simple interface for computing counterfactual attribution during training.
 This is a thin wrapper that handles the integration concerns.
 
 Usage:
-    from esper.karn.counterfactual_helper import CounterfactualHelper
+    from esper.simic.attribution import CounterfactualHelper
 
     helper = CounterfactualHelper()
     contributions = helper.compute_contributions(
@@ -19,7 +19,7 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
-from esper.karn.counterfactual import (
+from esper.simic.attribution.counterfactual import (
     CounterfactualEngine,
     CounterfactualConfig,
     CounterfactualMatrix,
