@@ -32,6 +32,7 @@ from esper.tamiyo.policy.action_masks import (
 
 # Import to trigger registration (must be after registry is defined)
 from esper.tamiyo.policy import lstm_bundle as _lstm_bundle  # noqa: F401
+from esper.tamiyo.policy import heuristic_bundle as _heuristic_bundle  # noqa: F401
 
 __all__ = [
     # Protocol
