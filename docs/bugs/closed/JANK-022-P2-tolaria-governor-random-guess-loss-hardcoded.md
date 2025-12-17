@@ -11,5 +11,6 @@
   - B) Add a helper to compute from task_type/topology; document defaults.
   - C) Emit telemetry warning when using default and task != cifar10.
 - **Validation Plan:** Test governor init for TinyStories sets random_guess_loss appropriately; ensure lobotomy detection logic uses task-aware values.
-- **Status:** Open
+- **Status:** Closed (Fixed)
+- **Resolution:** Fixed in `src/esper/simic/training/vectorized.py` by calculating `random_guess_loss` from `TaskSpec` (`ln(num_classes)` or `ln(vocab_size)`) and passing it to `TolariaGovernor`.
 - **Links:** `src/esper/tolaria/governor.py` (random_guess_loss default), TaskSpec wiring

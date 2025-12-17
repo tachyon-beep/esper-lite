@@ -231,6 +231,89 @@ class SignalTracker:
 
         return signals
 
+    def peek(
+        self,
+        epoch: int,
+        global_step: int,
+        train_loss: float,
+        train_accuracy: float,
+        val_loss: float,
+        val_accuracy: float,
+        active_seeds: list["SeedState"],
+        available_slots: int = 1,
+    ) -> TrainingSignals:
+        """Build TrainingSignals without modifying tracker state.
+
+        Use this for bootstrap value computation where you need to query
+        the value of a hypothetical state without advancing the tracker.
+        Uses current tracker state (loss/accuracy history, best values)
+        but with caller-provided seed information.
+
+        This is read-only - does NOT update histories, deltas, or stabilization state.
+        """
+        # Compute deltas from current tracker state (same as update())
+        loss_delta = self._prev_loss - val_loss  # Positive = improvement
+        accuracy_delta = val_accuracy - self._prev_accuracy
+
+        # Build TrainingMetrics using current tracker state
+        metrics = TrainingMetrics(
+            epoch=epoch,
+            global_step=global_step,
+            train_loss=train_loss,
+            val_loss=val_loss,
+            loss_delta=loss_delta,
+            train_accuracy=train_accuracy,
+            val_accuracy=val_accuracy,
+            accuracy_delta=accuracy_delta,
+            plateau_epochs=self._plateau_count,
+            host_stabilized=1 if self._is_stabilized else 0,
+            best_val_accuracy=max(self._best_accuracy, val_accuracy),
+            best_val_loss=min(
+                min(self._loss_history) if self._loss_history else float('inf'),
+                val_loss
+            ),
+        )
+
+        # Same seed summary logic as update()
+        seed_stage = 0
+        seed_epochs_in_stage = 0
+        seed_alpha = 0.0
+        seed_improvement = 0.0
+
+        if active_seeds:
+            seed_ids = [s.seed_id for s in active_seeds]
+            if len(seed_ids) != len(set(seed_ids)):
+                raise RuntimeError(f"Duplicate seed_id(s) in active_seeds: {seed_ids}")
+
+            def summary_key(seed: "SeedState") -> tuple[int, float, float, str]:
+                stage = int(seed.stage)
+                alpha = float(seed.alpha)
+                counterfactual = float("inf")
+                if seed.metrics and seed.metrics.counterfactual_contribution is not None:
+                    counterfactual = seed.metrics.counterfactual_contribution
+                return (stage, alpha, -counterfactual, seed.seed_id)
+
+            summary_seed = max(active_seeds, key=summary_key)
+            seed_stage = int(summary_seed.stage)
+            seed_epochs_in_stage = summary_seed.epochs_in_stage
+            seed_alpha = summary_seed.alpha
+            seed_improvement = (
+                summary_seed.metrics.improvement_since_stage_start
+                if summary_seed.metrics else 0.0
+            )
+
+        return TrainingSignals(
+            metrics=metrics,
+            active_seeds=[s.seed_id for s in active_seeds],
+            available_slots=available_slots,
+            seed_stage=seed_stage,
+            seed_epochs_in_stage=seed_epochs_in_stage,
+            seed_alpha=seed_alpha,
+            seed_improvement=seed_improvement,
+            loss_history=list(self._loss_history)[-5:],
+            accuracy_history=list(self._accuracy_history)[-5:],
+        )
+
     def reset(self) -> None:
         """Reset tracker state."""
         # Recreate deques with current history_window (not just clear)

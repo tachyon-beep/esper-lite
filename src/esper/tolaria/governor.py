@@ -198,13 +198,19 @@ class TolariaGovernor:
             self._pending_panic = False
             return False
 
-    def execute_rollback(self, *, env_id: int = 0) -> GovernorReport:
+    def execute_rollback(
+        self,
+        *,
+        env_id: int = 0,
+        optimizer: torch.optim.Optimizer | None = None,
+    ) -> GovernorReport:
         """Emergency stop: restore LKG state and return punishment info.
 
         Rollback semantics (Option B):
         - Restore host + fossilized seeds from snapshot
         - Discard any live/experimental seeds (not fossilized)
         - Reset seed slots to empty/DORMANT state
+        - (Optional) Reset optimizer momentum to prevent immediate re-crash
 
         Philosophy: Fossils are committed stable memory. Live seeds are
         experimental hypotheses - a catastrophic event means they failed
@@ -285,6 +291,18 @@ class TolariaGovernor:
                     "reason": "State Dict Key Mismatch",
                 },
             ))
+
+        # Reset optimizer momentum (BUG-015 fix)
+        # If we don't clear momentum, the optimizer will push the restored weights
+        # in the same direction that caused the crash.
+        if optimizer is not None:
+            for group in optimizer.param_groups:
+                for p in group["params"]:
+                    state = optimizer.state.get(p)
+                    if state:
+                        for value in state.values():
+                            if isinstance(value, torch.Tensor) and value.is_floating_point():
+                                value.zero_()
 
         # Reset panic counter after successful rollback to allow fresh recovery
         self.consecutive_panics = 0

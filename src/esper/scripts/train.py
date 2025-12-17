@@ -337,7 +337,7 @@ def main():
 
             print(config.summary())
 
-            from esper.simic.vectorized import train_ppo_vectorized
+            from esper.simic.training import train_ppo_vectorized
             train_ppo_vectorized(
                 device=args.device,
                 devices=args.devices,

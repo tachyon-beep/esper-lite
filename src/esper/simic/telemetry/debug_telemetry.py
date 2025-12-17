@@ -264,6 +264,17 @@ class RatioExplosionDiagnostic:
         Returns:
             RatioExplosionDiagnostic
         """
+        # Handle empty tensors gracefully (edge case: no valid transitions)
+        # Empty tensors cause mean() to return nan and max() to raise RuntimeError
+        if ratio.numel() == 0:
+            return cls(
+                worst_ratio_indices=[],
+                worst_ratio_values=[],
+                worst_ratio_actions=[],
+                logit_diff_mean=0.0,
+                logit_diff_max=0.0,
+            )
+
         # Find problematic indices
         bad_mask = (ratio > max_threshold) | (ratio < min_threshold)
         bad_indices = bad_mask.nonzero(as_tuple=True)[0].tolist()

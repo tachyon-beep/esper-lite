@@ -43,3 +43,32 @@ class TestRatioExplosionDiagnostic:
         d = diag.to_dict()
         assert "worst_ratio_indices" in d
         assert d["logit_diff_max"] == 2.0
+
+    def test_empty_tensors_handled_gracefully(self):
+        """Empty tensors return valid diagnostic without crashing.
+
+        Edge case: when valid_mask selects zero transitions, all input tensors
+        are empty. PyTorch's max() raises RuntimeError on empty tensors, and
+        mean() returns nan. The fix returns a valid "no problems" diagnostic.
+        """
+        empty_ratio = torch.tensor([])
+        empty_log_probs = torch.tensor([])
+        empty_actions = torch.tensor([], dtype=torch.long)
+
+        diag = RatioExplosionDiagnostic.from_batch(
+            ratio=empty_ratio,
+            old_log_probs=empty_log_probs,
+            new_log_probs=empty_log_probs,
+            actions=empty_actions,
+        )
+
+        # Should return valid diagnostic with empty lists and zero stats
+        assert diag.worst_ratio_indices == []
+        assert diag.worst_ratio_values == []
+        assert diag.worst_ratio_actions == []
+        assert diag.logit_diff_mean == 0.0
+        assert diag.logit_diff_max == 0.0
+
+        # Should be serializable
+        d = diag.to_dict()
+        assert d["logit_diff_mean"] == 0.0

@@ -185,6 +185,15 @@ class ContributionRewardConfig:
     cull_good_seed_penalty: float = -0.3
     cull_hurting_threshold: float = -0.5
 
+    # Anti-gaming: attribution discount and ratio penalty thresholds
+    # Prevents seeds from gaming counterfactual by creating dependencies
+    # - improvement_safe_threshold: below this, high contribution is suspicious
+    # - hacking_ratio_threshold: contribution/improvement ratio triggering penalty
+    # - attribution_sigmoid_steepness: controls discount curve for regressing seeds
+    improvement_safe_threshold: float = 0.1
+    hacking_ratio_threshold: float = 5.0
+    attribution_sigmoid_steepness: float = 10.0
+
     # Terminal bonus
     terminal_acc_weight: float = 0.05
     # Terminal bonus per fossilized seed (incentivizes completion over farming)
@@ -347,6 +356,22 @@ _DEFAULT_CONTRIBUTION_CONFIG = ContributionRewardConfig()
 # =============================================================================
 # Contribution-Primary Reward (uses counterfactual validation)
 # =============================================================================
+#
+# P2-2 Design Decision: This function is intentionally large (~300 lines, 7 components)
+# because it implements sophisticated reward engineering where each component addresses
+# a specific failure mode:
+#   1. Bounded attribution - prevents ransomware signatures (gaming via model corruption)
+#   2. Blending warning - early signal for problematic seeds before they cause damage
+#   3. Probationary indecision - prevents farming WAIT actions for positive rewards
+#   4. PBRS stage progression - potential-based shaping preserves optimal policy
+#   5. Compute rent - logarithmic parameter cost prevents model bloat
+#   6. Action shaping - state machine compliance penalties
+#   7. Terminal bonus - episode completion incentive
+#
+# Splitting into smaller functions would obscure the reward design and make it
+# harder to reason about component interactions. Property tests in
+# tests/simic/properties/test_pbrs_properties.py verify PBRS guarantees hold.
+# =============================================================================
 
 
 def compute_contribution_reward(
@@ -436,24 +461,28 @@ def compute_contribution_reward(
         total_imp = seed_info.total_improvement
 
         # Attribution discount applies to all seeds with negative total_improvement
+        # Sigmoid steepness controls how quickly discount kicks in for regressing seeds
         if total_imp < 0:
-            attribution_discount = 1.0 / (1.0 + math.exp(-10 * total_imp))
+            attribution_discount = 1.0 / (1.0 + math.exp(-config.attribution_sigmoid_steepness * total_imp))
 
         # Ratio penalty only for high contribution (> 1.0) to avoid noise
         # Only calculate when attribution_discount >= 0.5 (avoid penalty stacking)
         if seed_contribution > 1.0 and attribution_discount >= 0.5:
-            if total_imp > 0.1:
+            if total_imp > config.improvement_safe_threshold:
                 # Safe zone: actual improvement exists
                 # Check if contribution vastly exceeds improvement (suspicious)
                 ratio = seed_contribution / total_imp
-                if ratio > 5.0:
-                    # Contribution > 5x improvement - possible dependency gaming
-                    # Escalating penalty: 0 at ratio 5, -0.1 at ratio 10, -0.3 at ratio 20+
-                    ratio_penalty = -min(0.3, 0.1 * (ratio - 5) / 5)
-            elif total_imp <= 0.1:
+                if ratio > config.hacking_ratio_threshold:
+                    # Contribution > threshold × improvement - possible dependency gaming
+                    # Escalating penalty: 0 at threshold, -0.1 at 2x threshold, capped at cull_good_seed_penalty
+                    ratio_penalty = -min(
+                        -config.cull_good_seed_penalty,
+                        0.1 * (ratio - config.hacking_ratio_threshold) / config.hacking_ratio_threshold
+                    )
+            elif total_imp <= config.improvement_safe_threshold:
                 # Dangerous: high contribution but no real improvement
-                # Scale penalty by contribution magnitude (cap at 10%)
-                ratio_penalty = -0.3 * min(1.0, seed_contribution / 10.0)
+                # Scale penalty by contribution magnitude (cap at cull_good_seed_penalty)
+                ratio_penalty = config.cull_good_seed_penalty * min(1.0, seed_contribution / 10.0)
 
     if seed_contribution is not None and not seed_is_fossilized:
         # Counterfactual available (BLENDING+ stages)

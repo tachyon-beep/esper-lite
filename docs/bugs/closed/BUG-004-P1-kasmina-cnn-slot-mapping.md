@@ -38,5 +38,6 @@
 - **Hypotheses:** `segment_to_block` mapping in `CNNHost.forward_to_segment`/`forward_from_segment` is hardcoded to early/mid/late, and `_slot_order` in `MorphogeneticModel` is fixed to canonical slots so any non-canonical id is ignored even if `segment_channels` exposes it.
 - **Fix Plan:** Unassigned — derive segment/block mapping from `host.segment_channels`, fail fast on unsupported slot ids, and build `_active_slots` from the host’s available segments instead of a fixed `["early", "mid", "late"]` list. Add coverage for shallow CNNs.
 - **Validation Plan:** Unit tests for `CNNHost(n_blocks=2)` exercising `forward_to_segment`/`forward_from_segment` with `block*` ids, and a MorphogeneticModel test that asserts a `block0` slot actually runs (output differs from baseline when alpha>0) instead of being filtered out.
-- **Status:** Open
+- **Status:** Closed (Fixed)
+- **Resolution:** Fixed by dynamic slot ID generation in `CNNHost` (`r0c0` format) and removing hardcoded "early/mid/late" mapping. Verified with shallow network test case.
 - **Links:** `src/esper/kasmina/host.py` (segment mapping), `src/esper/kasmina/host.py` MorphogeneticModel `_slot_order`

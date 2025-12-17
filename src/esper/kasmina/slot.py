@@ -716,12 +716,14 @@ class SeedSlot(nn.Module):
         self.isolation_monitor = None
 
         # Cached shape probes to avoid per-germinate allocation
-        # Keys: "cnn" or "transformer", values: (device, tensor)
-        self._shape_probe_cache: dict[str, tuple[torch.device, torch.Tensor]] = {}
+        # Keys: (topology, channels), values: (device, tensor)
+        self._shape_probe_cache: dict[tuple[str, int], tuple[torch.device, torch.Tensor]] = {}
 
     def _get_shape_probe(self, topology: str) -> torch.Tensor:
         """Get cached shape probe for topology, creating if needed."""
-        cached = self._shape_probe_cache.get(topology)
+        # Include channels in key to handle slot reuse/reconfiguration (BUG-014)
+        key = (topology, self.channels)
+        cached = self._shape_probe_cache.get(key)
 
         if cached is not None:
             cached_device, cached_tensor = cached
@@ -747,7 +749,7 @@ class SeedSlot(nn.Module):
             )
 
         # Store device as torch.device, not string
-        self._shape_probe_cache[topology] = (self.device, probe)
+        self._shape_probe_cache[key] = (self.device, probe)
         return probe
 
     def to(self, *args, **kwargs) -> "SeedSlot":

@@ -85,7 +85,10 @@ def get_feature_size(slot_config: SlotConfig) -> int:
     return BASE_FEATURE_SIZE + slot_config.num_slots * SLOT_FEATURE_SIZE
 
 
-# Blueprint string ID to index mapping (matches BlueprintAction enum)
+# Blueprint string ID to index mapping (matches BlueprintAction enum in leyline.factored_actions)
+# WARNING: Must stay synchronized with BlueprintAction enum values.
+# P2-7 Design Decision: Duplicated for performance - pre-computed dict lookup in hot path
+# is faster than enum operations. This module is on the HOT PATH (see module docstring).
 _BLUEPRINT_TO_INDEX = {
     "noop": 0,
     "conv_light": 1,
@@ -145,6 +148,13 @@ def obs_to_multislot_features(
 
     Returns:
         List of floats: 23 base + num_slots * 9 slot features
+
+    Note (P2-9 Design Decision):
+        Returns list[float] instead of torch.Tensor for flexibility during
+        construction. The caller (signals_to_features) may append telemetry
+        features. Batched conversion to tensor happens once at line 1502 in
+        vectorized.py, which is more efficient than converting each env
+        separately. Cost is ~5-10µs per step, negligible vs forward pass.
     """
     if slot_config is None:
         slot_config = SlotConfig.default()

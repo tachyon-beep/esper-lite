@@ -310,7 +310,7 @@ class MaskedCategorical:
 
         Args:
             logits: Raw policy logits [batch, num_actions]
-            mask: Binary mask, 1.0 = valid, 0.0 = invalid [batch, num_actions]
+            mask: Boolean mask, True = valid, False = invalid [batch, num_actions]
 
         Raises:
             InvalidStateMachineError: If any batch element has no valid actions
@@ -328,7 +328,7 @@ class MaskedCategorical:
             device=logits.device,
             dtype=logits.dtype,
         )
-        self.masked_logits = logits.masked_fill(mask < 0.5, mask_value)
+        self.masked_logits = logits.masked_fill(~mask, mask_value)
         self._dist = Categorical(logits=self.masked_logits)
 
     @property
@@ -350,10 +350,14 @@ class MaskedCategorical:
         Returns entropy normalized to [0, 1] by dividing by max entropy
         (log of number of valid actions). This makes exploration incentives
         comparable across states with different action restrictions.
+
+        When only one action is valid, entropy is exactly 0 (no choice = no uncertainty).
         """
         probs = self._dist.probs
         log_probs = self._dist.logits - self._dist.logits.logsumexp(dim=-1, keepdim=True)
         raw_entropy = -(probs * log_probs * self.mask).sum(dim=-1)
         num_valid = self.mask.sum(dim=-1).clamp(min=1)
-        max_entropy = torch.log(num_valid)
-        return raw_entropy / max_entropy.clamp(min=1e-8)
+        max_entropy = torch.log(num_valid.float())
+        normalized = raw_entropy / max_entropy.clamp(min=1e-8)
+        # Single valid action = zero entropy (no choice = no uncertainty)
+        return torch.where(num_valid == 1, torch.zeros_like(normalized), normalized)

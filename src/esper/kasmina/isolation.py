@@ -150,14 +150,26 @@ class GradientHealthMonitor:
             # NOTE: torch._foreach_norm is a private API but stable since PyTorch 1.9.
             # If removed in future PyTorch, fallback: torch.stack([p.norm() for p in grads])
             norms = torch._foreach_norm(host_grads)
+
+            # FIX BUG-013: Handle mixed devices (e.g., host parts on different GPUs)
+            # torch.stack fails if tensors are on different devices.
+            # We move all scalar norms to the device of the first one.
+            target_device = norms[0].device
+            norms_unified = [n.to(target_device) for n in norms]
+
             # Sum of squared norms for total norm via Pythagorean theorem
-            result['_host_norm_sq'] = torch.stack(norms).pow(2).sum()
+            result['_host_norm_sq'] = torch.stack(norms_unified).pow(2).sum()
         else:
             result['_host_norm_sq'] = None  # Distinguishes "no grads" from "zero grads"
 
         if seed_grads:
             norms = torch._foreach_norm(seed_grads)
-            result['_seed_norm_sq'] = torch.stack(norms).pow(2).sum()
+
+            # FIX BUG-013: Handle mixed devices
+            target_device = norms[0].device
+            norms_unified = [n.to(target_device) for n in norms]
+
+            result['_seed_norm_sq'] = torch.stack(norms_unified).pow(2).sum()
         else:
             result['_seed_norm_sq'] = None
 

@@ -10,5 +10,6 @@
 - **Hypotheses:** Cache was added for perf; invalidation not updated for multi-topology/channel reuse.
 - **Fix Plan:** Include channels/topology in cache key; clear cache on germinate/host change; add assertions.
 - **Validation Plan:** Add test reusing a slot across topologies/channels to ensure probes regenerate with correct shape.
-- **Status:** Open
+- **Status:** Closed (Fixed)
+- **Resolution:** Fixed by updating `_shape_probe_cache` key to `(topology, channels)` tuple in `SeedSlot`. This ensures unique probes for different channel configurations even on the same device.
 - **Links:** `src/esper/kasmina/slot.py::_shape_probe_cache`, `_get_shape_probe`, `to()`
