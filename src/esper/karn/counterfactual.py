@@ -18,11 +18,13 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from itertools import permutations
-from typing import Callable, Literal
+from typing import Callable, Literal, TYPE_CHECKING
 import random
 
-from esper.nissa import get_hub
 from esper.leyline import TelemetryEvent, TelemetryEventType
+
+if TYPE_CHECKING:
+    pass
 
 
 @dataclass(frozen=True)
@@ -180,9 +182,13 @@ class CounterfactualEngine:
     that's the collector's job.
     """
 
-    def __init__(self, config: CounterfactualConfig | None = None, emit_telemetry: bool = False):
+    def __init__(
+        self,
+        config: CounterfactualConfig | None = None,
+        emit_callback: Callable[[TelemetryEvent], None] | None = None,
+    ):
         self.config = config or CounterfactualConfig()
-        self.emit_telemetry = emit_telemetry
+        self._emit_callback = emit_callback
 
     def compute_matrix(
         self,
@@ -376,28 +382,26 @@ class CounterfactualEngine:
             else:
                 result[slot_id] = ShapleyEstimate()
 
-        # Emit telemetry if enabled
-        if self.emit_telemetry:
-            hub = get_hub()
-            if hub is not None:
-                # Convert ShapleyEstimate objects to serializable dict
-                shapley_dict = {
-                    slot_id: {
-                        "mean": estimate.mean,
-                        "std": estimate.std,
-                        "n_samples": estimate.n_samples,
-                    }
-                    for slot_id, estimate in result.items()
+        # Emit telemetry via callback if provided
+        if self._emit_callback is not None:
+            # Convert ShapleyEstimate objects to serializable dict
+            shapley_dict = {
+                slot_id: {
+                    "mean": estimate.mean,
+                    "std": estimate.std,
+                    "n_samples": estimate.n_samples,
                 }
-                hub.emit(TelemetryEvent(
-                    event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
-                    data={
-                        "kind": "shapley_computed",
-                        "shapley_values": shapley_dict,
-                        "num_slots": len(result),
-                        "epoch": matrix.epoch,
-                    }
-                ))
+                for slot_id, estimate in result.items()
+            }
+            self._emit_callback(TelemetryEvent(
+                event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+                data={
+                    "kind": "shapley_computed",
+                    "shapley_values": shapley_dict,
+                    "num_slots": len(result),
+                    "epoch": matrix.epoch,
+                }
+            ))
 
         return result
 

@@ -24,6 +24,7 @@ from esper.karn.counterfactual import (
     CounterfactualConfig,
     CounterfactualMatrix,
 )
+from esper.nissa import get_hub
 
 if TYPE_CHECKING:
     pass
@@ -71,7 +72,13 @@ class CounterfactualHelper:
             strategy=strategy,
             shapley_samples=shapley_samples,
         )
-        self.engine = CounterfactualEngine(config, emit_telemetry=emit_events)
+        # Convert emit_events bool to callback
+        emit_callback = None
+        if emit_events:
+            hub = get_hub()
+            if hub is not None:
+                emit_callback = hub.emit
+        self.engine = CounterfactualEngine(config, emit_callback=emit_callback)
         self._last_matrix: CounterfactualMatrix | None = None
 
     def compute_contributions(
