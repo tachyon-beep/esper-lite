@@ -238,6 +238,20 @@ class TrainingConfig:
         if value < 1:
             raise ValueError(f"{name} must be >= 1 (got {value})")
 
+    def _validate_range(
+        self, value: float, name: str, min_val: float, max_val: float,
+        min_inclusive: bool = True, max_inclusive: bool = True
+    ) -> None:
+        """Validate value is within range."""
+        min_ok = value >= min_val if min_inclusive else value > min_val
+        max_ok = value <= max_val if max_inclusive else value < max_val
+        if not (min_ok and max_ok):
+            min_bracket = "[" if min_inclusive else "("
+            max_bracket = "]" if max_inclusive else ")"
+            raise ValueError(
+                f"{name} must be in {min_bracket}{min_val}, {max_val}{max_bracket} (got {value})"
+            )
+
     def _validate(self) -> None:
         self._validate_positive(self.n_episodes, "n_episodes")
         self._validate_positive(self.n_envs, "n_envs")
@@ -276,6 +290,12 @@ class TrainingConfig:
             and self.reward_mode != RewardMode.SHAPED
         ):
             raise ValueError("reward_mode applies only to contribution rewards")
+
+        # PPO hyperparameter ranges
+        self._validate_range(self.gamma, "gamma", 0.0, 1.0, min_inclusive=False, max_inclusive=True)
+        self._validate_range(self.clip_ratio, "clip_ratio", 0.0, 1.0, min_inclusive=False, max_inclusive=True)
+        self._validate_range(self.lr, "lr", 0.0, float("inf"), min_inclusive=False, max_inclusive=False)
+        self._validate_range(self.entropy_coef, "entropy_coef", 0.0, float("inf"), min_inclusive=True, max_inclusive=False)
 
     # ------------------------------------------------------------------
     # Presentation
