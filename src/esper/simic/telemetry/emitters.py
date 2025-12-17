@@ -8,6 +8,7 @@ Extracted from vectorized.py to reduce file size and improve clarity.
 
 from __future__ import annotations
 
+import dataclasses
 from typing import TYPE_CHECKING
 
 import torch
@@ -22,12 +23,15 @@ if TYPE_CHECKING:
 
 
 def emit_with_env_context(hub, env_idx: int, device: str, event: TelemetryEvent) -> None:
-    """Safely emit telemetry with env_id/device injected and no shared mutation."""
+    """Safely emit telemetry with env_id/device injected and no shared mutation.
+
+    Creates a new event with the additional context rather than mutating the input.
+    """
     data = dict(event.data) if event.data else {}
     data["env_id"] = env_idx
     data["device"] = device
-    event.data = data
-    hub.emit(event)
+    new_event = dataclasses.replace(event, data=data)
+    hub.emit(new_event)
 
 
 def emit_batch_completed(
@@ -170,47 +174,58 @@ def emit_ppo_update_event(
         except (AttributeError, IndexError, KeyError, TypeError):
             lr = None
 
+    # Compute per-head entropy averages for logging (P3-1)
+    head_entropies_avg = {}
+    if "head_entropies" in metrics:
+        for head, values in metrics["head_entropies"].items():
+            avg_entropy = sum(values) / len(values) if values else 0.0
+            head_entropies_avg[f"{head}_entropy"] = avg_entropy
+
+    data = {
+        "inner_epoch": epoch,  # Final inner epoch (typically max_epochs)
+        "batch": batch_idx + 1,
+        "episodes_completed": episodes_completed,
+        "train_steps": metrics.get("train_steps", 0),
+        # Core losses
+        "policy_loss": metrics.get("policy_loss", 0.0),
+        "value_loss": metrics.get("value_loss", 0.0),
+        "entropy": metrics.get("entropy", 0.0),
+        "entropy_coef": metrics.get("entropy_coef", 0.0),
+        # PPO health (KL, clipping) - normalized to kl_divergence for Karn
+        "kl_divergence": metrics.get("approx_kl", 0.0),
+        "clip_fraction": metrics.get("clip_fraction", 0.0),
+        # Ratio statistics (early warning for policy collapse)
+        "ratio_max": metrics.get("ratio_max", 1.0),
+        "ratio_min": metrics.get("ratio_min", 1.0),
+        "ratio_std": metrics.get("ratio_std", 0.0),
+        # Value function health (negative = critic broken)
+        "explained_variance": metrics.get("explained_variance", 0.0),
+        # Early stopping info
+        "early_stop_epoch": metrics.get("early_stop_epoch"),
+        # Episode-level metrics
+        "avg_accuracy": metrics.get("avg_accuracy", 0.0),
+        "avg_reward": metrics.get("avg_reward", 0.0),
+        "rolling_avg_accuracy": metrics.get("rolling_avg_accuracy", 0.0),
+        # Vitals
+        "lr": lr,
+        "grad_norm": grad_norm,
+        "update_time_ms": update_time_ms,
+        # Gradient layer health (Task 1)
+        "dead_layers": metrics.get("dead_layers", 0),
+        "exploding_layers": metrics.get("exploding_layers", 0),
+        "nan_grad_count": metrics.get("nan_grad_count", 0),
+        # Gradient health score (Task 2)
+        "layer_gradient_health": metrics.get("layer_gradient_health"),
+        # Entropy collapse flag (Task 3)
+        "entropy_collapsed": metrics.get("entropy", 1.0) < 0.1,
+    }
+    # Add per-head entropy (P3-1)
+    data.update(head_entropies_avg)
+
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
         epoch=episodes_completed,  # Monotonic per-batch epoch id (NOT inner epoch!)
-        data={
-            "inner_epoch": epoch,  # Final inner epoch (typically max_epochs)
-            "batch": batch_idx + 1,
-            "episodes_completed": episodes_completed,
-            "train_steps": metrics.get("train_steps", 0),
-            # Core losses
-            "policy_loss": metrics.get("policy_loss", 0.0),
-            "value_loss": metrics.get("value_loss", 0.0),
-            "entropy": metrics.get("entropy", 0.0),
-            "entropy_coef": metrics.get("entropy_coef", 0.0),
-            # PPO health (KL, clipping) - normalized to kl_divergence for Karn
-            "kl_divergence": metrics.get("approx_kl", 0.0),
-            "clip_fraction": metrics.get("clip_fraction", 0.0),
-            # Ratio statistics (early warning for policy collapse)
-            "ratio_max": metrics.get("ratio_max", 1.0),
-            "ratio_min": metrics.get("ratio_min", 1.0),
-            "ratio_std": metrics.get("ratio_std", 0.0),
-            # Value function health (negative = critic broken)
-            "explained_variance": metrics.get("explained_variance", 0.0),
-            # Early stopping info
-            "early_stop_epoch": metrics.get("early_stop_epoch"),
-            # Episode-level metrics
-            "avg_accuracy": metrics.get("avg_accuracy", 0.0),
-            "avg_reward": metrics.get("avg_reward", 0.0),
-            "rolling_avg_accuracy": metrics.get("rolling_avg_accuracy", 0.0),
-            # Vitals
-            "lr": lr,
-            "grad_norm": grad_norm,
-            "update_time_ms": update_time_ms,
-            # Gradient layer health (Task 1)
-            "dead_layers": metrics.get("dead_layers", 0),
-            "exploding_layers": metrics.get("exploding_layers", 0),
-            "nan_grad_count": metrics.get("nan_grad_count", 0),
-            # Gradient health score (Task 2)
-            "layer_gradient_health": metrics.get("layer_gradient_health"),
-            # Entropy collapse flag (Task 3)
-            "entropy_collapsed": metrics.get("entropy", 1.0) < 0.1,
-        },
+        data=data,
     ))
 
 

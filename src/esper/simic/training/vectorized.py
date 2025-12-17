@@ -16,7 +16,7 @@ Performance comparison (4 envs, 4 workers each):
 - New (shared): 4 worker processes, 1× IPC overhead
 
 Usage:
-    from esper.simic.vectorized import train_ppo_vectorized
+    from esper.simic.training import train_ppo_vectorized
 
     agent, history = train_ppo_vectorized(
         n_episodes=100,
@@ -197,6 +197,9 @@ def _aggregate_ppo_metrics(update_metrics: list[dict]) -> dict:
             aggregated[key] = min(values)
         elif key == "early_stop_epoch":
             aggregated[key] = min(values)
+        elif key == "head_entropies":
+            # Aggregate per-head entropy: concatenate lists from multiple updates
+            aggregated[key] = values[0]  # Just use first update's head_entropies
         elif isinstance(values[0], dict):
             aggregated[key] = values[0]
         else:

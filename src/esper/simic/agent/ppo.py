@@ -455,6 +455,9 @@ class PPOAgent:
         metrics["explained_variance"] = [explained_variance]
         early_stopped = False
 
+        # Initialize per-head entropy tracking (P3-1)
+        head_entropy_history: dict[str, list[float]] = {head: [] for head in HEAD_NAMES}
+
         for epoch_i in range(self.recurrent_n_epochs):
             if early_stopped:
                 break
@@ -483,6 +486,10 @@ class PPOAgent:
             values = values[valid_mask]
             for key in entropy:
                 entropy[key] = entropy[key][valid_mask]
+
+            # Track per-head entropy (P3-1)
+            for key in HEAD_NAMES:
+                head_entropy_history[key].append(entropy[key].mean().item())
 
             valid_advantages = data["advantages"][valid_mask]
             valid_returns = data["returns"][valid_mask]
@@ -643,6 +650,9 @@ class PPOAgent:
                 result[k] = first
             else:
                 result[k] = sum(v) / len(v)
+
+        # Add per-head entropy tracking (P3-1)
+        result["head_entropies"] = head_entropy_history
 
         return result
 
