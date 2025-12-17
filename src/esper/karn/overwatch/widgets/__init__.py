@@ -3,4 +3,12 @@
 Custom Textual widgets for the Overwatch monitoring interface.
 """
 
-__all__: list[str] = []
+# Lazy import - Textual may not be installed
+try:
+    from esper.karn.overwatch.widgets.help import HelpOverlay
+except ImportError:
+    HelpOverlay = None  # type: ignore[misc, assignment]
+
+__all__ = [
+    "HelpOverlay",
+]

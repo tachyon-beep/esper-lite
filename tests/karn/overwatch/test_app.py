@@ -29,3 +29,19 @@ class TestOverwatchApp:
         binding_keys = [b.key for b in app.BINDINGS]
         assert "q" in binding_keys
         assert "question_mark" in binding_keys
+
+
+class TestPackageExports:
+    """Tests for package-level exports."""
+
+    def test_app_importable_from_package(self) -> None:
+        """OverwatchApp importable from overwatch package."""
+        from esper.karn.overwatch import OverwatchApp
+
+        assert OverwatchApp is not None
+
+    def test_help_overlay_importable_from_widgets(self) -> None:
+        """HelpOverlay importable from widgets package."""
+        from esper.karn.overwatch.widgets import HelpOverlay
+
+        assert HelpOverlay is not None
