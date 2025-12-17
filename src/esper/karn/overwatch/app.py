@@ -108,7 +108,8 @@ class OverwatchApp(App):
             ts = self._snapshot.captured_at
             run_id = self._snapshot.run_id or "unknown"
             task = self._snapshot.task_name or "unknown"
-            return f"[HEADER] Run: {run_id} | Task: {task} | Snapshot: {ts}"
+            ep = self._snapshot.episode
+            return f"[HEADER] Run: {run_id} | Task: {task} | Episode: {ep} | Snapshot: {ts}"
         return "[HEADER] Waiting for data..."
 
     def _render_tamiyo_content(self) -> str:
@@ -116,12 +117,13 @@ class OverwatchApp(App):
         if self._snapshot and self._snapshot.tamiyo:
             kl = self._snapshot.tamiyo.kl_divergence
             ent = self._snapshot.tamiyo.entropy
-            return f"[TAMIYO] KL: {kl:.3f} | Entropy: {ent:.2f}"
+            ev = self._snapshot.tamiyo.explained_variance
+            return f"[TAMIYO] KL: {kl:.3f} | Entropy: {ent:.2f} | EV: {ev:.2f}"
         return "[TAMIYO STRIP] Waiting for policy data..."
 
     def _render_detail_panel_content(self) -> str:
         """Render Detail Panel placeholder content."""
-        return "[DETAIL PANEL] Select an environment"
+        return "[DETAIL PANEL] Select an environment (j/k to navigate)"
 
     def _render_event_feed_content(self) -> str:
         """Render Event Feed placeholder content."""
