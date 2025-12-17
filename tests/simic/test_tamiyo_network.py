@@ -3,8 +3,8 @@
 import pytest
 import torch
 
-from esper.simic.action_masks import InvalidStateMachineError
-from esper.simic.tamiyo_network import FactoredRecurrentActorCritic
+from esper.simic.control import InvalidStateMachineError
+from esper.simic.agent import FactoredRecurrentActorCritic
 
 
 class TestFactoredRecurrentActorCritic:

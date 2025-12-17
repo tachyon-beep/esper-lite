@@ -31,7 +31,7 @@ from typing import Callable, TYPE_CHECKING
 import torch
 import torch.nn as nn
 
-from esper.kasmina.isolation import GradientIsolationMonitor, blend_with_isolation, ste_forward
+from esper.kasmina.isolation import GradientHealthMonitor, blend_with_isolation, ste_forward
 
 from esper.leyline import (
     # Lifecycle
@@ -60,7 +60,6 @@ from esper.leyline import (
     # QualityGates thresholds
     DEFAULT_MIN_TRAINING_IMPROVEMENT,
     DEFAULT_MIN_BLENDING_EPOCHS,
-    DEFAULT_MAX_ISOLATION_VIOLATIONS,
     DEFAULT_ALPHA_COMPLETE_THRESHOLD,
     DEFAULT_MAX_PROBATION_EPOCHS,
 )
@@ -113,7 +112,6 @@ class SeedMetrics:
     accuracy_at_stage_start: float = 0.0
     accuracy_at_blending_start: float = 0.0  # Snapshot at TRAINING→BLENDING
 
-    isolation_violations: int = 0
     gradient_norm_avg: float = 0.0
 
     current_alpha: float = 0.0
@@ -195,11 +193,51 @@ class SeedMetrics:
             seed_gradient_norm_ratio=self.seed_gradient_norm_ratio,
             seed_param_count=self.seed_param_count,
             host_param_count=self.host_param_count,
-            isolation_violations=self.isolation_violations,
             gradient_norm_avg=self.gradient_norm_avg,
             current_alpha=self.current_alpha,
             alpha_ramp_step=self.alpha_ramp_step,
         )
+
+    def to_dict(self) -> dict:
+        """Convert to primitive dict for serialization."""
+        return {
+            "epochs_total": self.epochs_total,
+            "epochs_in_current_stage": self.epochs_in_current_stage,
+            "initial_val_accuracy": self.initial_val_accuracy,
+            "current_val_accuracy": self.current_val_accuracy,
+            "best_val_accuracy": self.best_val_accuracy,
+            "accuracy_at_stage_start": self.accuracy_at_stage_start,
+            "accuracy_at_blending_start": self.accuracy_at_blending_start,
+            "gradient_norm_avg": self.gradient_norm_avg,
+            "current_alpha": self.current_alpha,
+            "alpha_ramp_step": self.alpha_ramp_step,
+            "counterfactual_contribution": self.counterfactual_contribution,
+            "_blending_started": self._blending_started,
+            "seed_gradient_norm_ratio": self.seed_gradient_norm_ratio,
+            "host_param_count": self.host_param_count,
+            "seed_param_count": self.seed_param_count,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "SeedMetrics":
+        """Reconstruct from primitive dict."""
+        metrics = cls()
+        metrics.epochs_total = data.get("epochs_total", 0)
+        metrics.epochs_in_current_stage = data.get("epochs_in_current_stage", 0)
+        metrics.initial_val_accuracy = data.get("initial_val_accuracy", 0.0)
+        metrics.current_val_accuracy = data.get("current_val_accuracy", 0.0)
+        metrics.best_val_accuracy = data.get("best_val_accuracy", 0.0)
+        metrics.accuracy_at_stage_start = data.get("accuracy_at_stage_start", 0.0)
+        metrics.accuracy_at_blending_start = data.get("accuracy_at_blending_start", 0.0)
+        metrics.gradient_norm_avg = data.get("gradient_norm_avg", 0.0)
+        metrics.current_alpha = data.get("current_alpha", 0.0)
+        metrics.alpha_ramp_step = data.get("alpha_ramp_step", 0)
+        metrics.counterfactual_contribution = data.get("counterfactual_contribution")
+        metrics._blending_started = data.get("_blending_started", False)
+        metrics.seed_gradient_norm_ratio = data.get("seed_gradient_norm_ratio", 0.0)
+        metrics.host_param_count = data.get("host_param_count", 0)
+        metrics.seed_param_count = data.get("seed_param_count", 0)
+        return metrics
 
 
 # =============================================================================
@@ -311,8 +349,64 @@ class SeedState:
             telemetry=replace(self.telemetry) if self.telemetry is not None else None,
             is_healthy=self.is_healthy,
             is_improving=self.metrics.improvement_since_stage_start > 0,
-            needs_attention=not self.is_healthy or self.metrics.isolation_violations > 0,
+            needs_attention=not self.is_healthy,
         )
+
+    def to_dict(self) -> dict:
+        """Convert to primitive dict for PyTorch 2.9 weights_only=True serialization."""
+        return {
+            "seed_id": self.seed_id,
+            "blueprint_id": self.blueprint_id,
+            "slot_id": self.slot_id,
+            "stage": self.stage.value,  # Enum -> int
+            "previous_stage": self.previous_stage.value if self.previous_stage is not None else None,
+            "stage_entered_at": self.stage_entered_at.isoformat(),  # datetime -> str
+            "alpha": self.alpha,
+            "stage_history": [
+                (stage.value, ts.isoformat()) for stage, ts in self.stage_history
+            ],  # deque of (Enum, datetime) -> list of (int, str)
+            "metrics": self.metrics.to_dict() if self.metrics else None,
+            "telemetry": self.telemetry.to_dict() if self.telemetry else None,
+            "blending_steps_done": self.blending_steps_done,
+            "blending_steps_total": self.blending_steps_total,
+            "is_healthy": self.is_healthy,
+            "is_paused": self.is_paused,
+            "previous_epochs_in_stage": self.previous_epochs_in_stage,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "SeedState":
+        """Reconstruct from primitive dict."""
+        from datetime import datetime
+        from collections import deque
+
+        state = cls(
+            seed_id=data["seed_id"],
+            blueprint_id=data["blueprint_id"],
+            slot_id=data["slot_id"],
+            stage=SeedStage(data["stage"]),
+            previous_stage=SeedStage(data["previous_stage"]) if data.get("previous_stage") is not None else None,
+        )
+        state.stage_entered_at = datetime.fromisoformat(data["stage_entered_at"])
+        state.alpha = data.get("alpha", 0.0)
+        state.stage_history = deque(
+            (
+                (SeedStage(stage), datetime.fromisoformat(ts))
+                for stage, ts in data.get("stage_history", [])
+            ),
+            maxlen=PROBATION_HISTORY_MAXLEN,
+        )
+        if data.get("metrics"):
+            state.metrics = SeedMetrics.from_dict(data["metrics"])
+        if data.get("telemetry"):
+            from esper.leyline.telemetry import SeedTelemetry
+            state.telemetry = SeedTelemetry.from_dict(data["telemetry"])
+        state.blending_steps_done = data.get("blending_steps_done", 0)
+        state.blending_steps_total = data.get("blending_steps_total", 0)
+        state.is_healthy = data.get("is_healthy", True)
+        state.is_paused = data.get("is_paused", False)
+        state.previous_epochs_in_stage = data.get("previous_epochs_in_stage", 0)
+        return state
 
 
 # =============================================================================
@@ -332,13 +426,11 @@ class QualityGates:
         self,
         min_training_improvement: float = DEFAULT_MIN_TRAINING_IMPROVEMENT,
         min_blending_epochs: int = DEFAULT_MIN_BLENDING_EPOCHS,
-        max_isolation_violations: int = DEFAULT_MAX_ISOLATION_VIOLATIONS,
         min_probation_stability: float = DEFAULT_MIN_PROBATION_STABILITY,
         min_seed_gradient_ratio: float = DEFAULT_GRADIENT_RATIO_THRESHOLD,
     ):
         self.min_training_improvement = min_training_improvement
         self.min_blending_epochs = min_blending_epochs
-        self.max_isolation_violations = max_isolation_violations
         self.min_probation_stability = min_probation_stability
         self.min_seed_gradient_ratio = min_seed_gradient_ratio
 
@@ -424,7 +516,13 @@ class QualityGates:
         )
 
     def _check_g2(self, state: SeedState) -> GateResult:
-        """G2: Blending readiness – global improvement + seed readiness + gradient activity."""
+        """G2: Blending readiness – global improvement + seed readiness + gradient activity.
+
+        NOTE: Gradient isolation is enforced structurally via detach() at the seed
+        input boundary. There is no numeric "violation" detection - the structural
+        guarantee is absolute. Host gradients from the direct loss path are EXPECTED
+        and do NOT indicate isolation failures.
+        """
         checks_passed = []
         checks_failed = []
 
@@ -437,14 +535,6 @@ class QualityGates:
         else:
             checks_failed.append(f"global_improvement_insufficient_{improvement:.2f}%")
             perf_ok = False
-
-        # Global isolation guard
-        if state.metrics.isolation_violations <= self.max_isolation_violations:
-            checks_passed.append("isolation_ok")
-            isolation_ok = True
-        else:
-            checks_failed.append(f"isolation_violations_{state.metrics.isolation_violations}")
-            isolation_ok = False
 
         # Seed-specific readiness: enough TRAINING epochs to be worth blending
         if self._seed_ready_for_blending(state):
@@ -463,7 +553,7 @@ class QualityGates:
             checks_failed.append(f"seed_gradient_low_{state.metrics.seed_gradient_norm_ratio:.2f}")
             gradient_ok = False
 
-        passed = perf_ok and isolation_ok and seed_ok and gradient_ok
+        passed = perf_ok and seed_ok and gradient_ok
         score = min(1.0, improvement / 5.0) if improvement > 0 else 0.0
 
         return GateResult(
@@ -626,12 +716,14 @@ class SeedSlot(nn.Module):
         self.isolation_monitor = None
 
         # Cached shape probes to avoid per-germinate allocation
-        # Keys: "cnn" or "transformer", values: (device, tensor)
-        self._shape_probe_cache: dict[str, tuple[torch.device, torch.Tensor]] = {}
+        # Keys: (topology, channels), values: (device, tensor)
+        self._shape_probe_cache: dict[tuple[str, int], tuple[torch.device, torch.Tensor]] = {}
 
     def _get_shape_probe(self, topology: str) -> torch.Tensor:
         """Get cached shape probe for topology, creating if needed."""
-        cached = self._shape_probe_cache.get(topology)
+        # Include channels in key to handle slot reuse/reconfiguration (BUG-014)
+        key = (topology, self.channels)
+        cached = self._shape_probe_cache.get(key)
 
         if cached is not None:
             cached_device, cached_tensor = cached
@@ -657,7 +749,7 @@ class SeedSlot(nn.Module):
             )
 
         # Store device as torch.device, not string
-        self._shape_probe_cache[topology] = (self.device, probe)
+        self._shape_probe_cache[key] = (self.device, probe)
         return probe
 
     def to(self, *args, **kwargs) -> "SeedSlot":
@@ -839,7 +931,7 @@ class SeedSlot(nn.Module):
         # Register for isolation monitoring (skipped in fast_mode)
         if host_module is not None and not self.fast_mode:
             if self.isolation_monitor is None:
-                self.isolation_monitor = GradientIsolationMonitor()
+                self.isolation_monitor = GradientHealthMonitor()
             self.isolation_monitor.register(host_module, self.seed)
 
         self._emit_telemetry(
@@ -908,26 +1000,8 @@ class SeedSlot(nn.Module):
             seed_id = self.state.seed_id
 
             if self.state.transition(target_stage):
-                # Stage-specific gradient isolation hooks:
-                # - GERMINATED → TRAINING: enable Incubator isolation so the seed
-                #   sees detached host features during its training phase.
-                # - TRAINING → BLENDING: topology-aware isolation decision
-                #   (CNNs keep isolation, Transformers allow co-adaptation)
-                if old_stage == SeedStage.GERMINATED and target_stage == SeedStage.TRAINING:
-                    self.isolate_gradients = True
-                elif old_stage == SeedStage.TRAINING and target_stage == SeedStage.BLENDING:
-                    # Topology-aware gradient isolation:
-                    # - CNNs: keep isolation (host learns from loss, not seed feedback)
-                    #   Rationale: CNNs have rigid spatial hierarchies where co-adaptation
-                    #   risks destabilizing learned features.
-                    # - Transformers: allow co-adaptation (host receives seed gradients)
-                    #   Rationale: Transformers benefit from host adjusting to seed
-                    #   representations during blending.
-                    topology = self.task_config.topology if self.task_config else "cnn"
-                    self.isolate_gradients = (topology == "cnn")
-                    # Snapshot accuracy at blending start for true causal attribution
-                    # This is when the seed starts actually affecting network output
-                    self.state.metrics.accuracy_at_blending_start = self.state.metrics.current_val_accuracy
+                # Call unified stage entry hook
+                self._on_enter_stage(target_stage, old_stage)
 
                 self._emit_telemetry(
                     TelemetryEventType.SEED_STAGE_CHANGED,
@@ -1018,15 +1092,15 @@ class SeedSlot(nn.Module):
         return True
 
     def capture_gradient_telemetry(self) -> None:
-        """Calculate gradient norms via the isolation monitor and update internal metrics.
+        """Calculate gradient norms via the health monitor and update internal metrics.
 
         CRITICAL: Call this from Tolaria after loss.backward() to enable the G2 gate.
         Without this, seed_gradient_norm_ratio remains 0.0 and G2 always fails.
 
-        Performance note: Calls check_isolation() which internally performs .item() sync.
-        The actual CUDA→CPU transfer happens in materialize_isolation_stats() within
-        check_isolation(), not directly in this method. For fully async capture, use
-        check_isolation_async() and defer materialization.
+        Performance note: Calls compute_gradient_health() which internally performs
+        .item() sync. The actual CUDA→CPU transfer happens in materialize_gradient_stats()
+        within compute_gradient_health(). For fully async capture, use
+        compute_gradient_health_async() and defer materialization.
 
         Use a stride in the training loop (e.g., every 10 steps) to minimize overhead.
         The EMA smoothing makes sparse sampling acceptable for gate decisions.
@@ -1038,15 +1112,11 @@ class SeedSlot(nn.Module):
         if not self.state:
             return
 
-        # Ask monitor to calculate gradient norms
-        _, stats = self.isolation_monitor.check_isolation()
+        # Ask monitor to calculate gradient norms for G2 gate health assessment
+        stats = self.isolation_monitor.compute_gradient_health()
 
         host_norm = stats.get("host_grad_norm", 0.0)
         seed_norm = stats.get("seed_grad_norm", 0.0)
-
-        # Update isolation violation count if host received unexpected gradients
-        if self.isolate_gradients and host_norm > 1e-6:
-            self.state.metrics.isolation_violations += 1
 
         # Compute parameter-normalized seed gradient ratio
         # Formula: (seed_norm / host_norm) * sqrt(host_params / seed_params)
@@ -1109,6 +1179,19 @@ class SeedSlot(nn.Module):
 
         # 2. Compute seed features. For Incubator/Training we must detach the
         #    host input so seed gradients do not flow back into the host.
+        #
+        #    CHANNELS_LAST WORKAROUND (BUG-005): When using channels_last memory
+        #    format with isolate_gradients=True, PyTorch segfaults during backward.
+        #    The bug affects BOTH the STE path (TRAINING) and the blend path
+        #    (BLENDING+). The root cause is the combination of non-contiguous
+        #    tensors (channels_last) with detach() in the autograd graph.
+        #
+        #    The fix is to make host_features contiguous BEFORE detach, so that
+        #    the entire computation and its autograd graph use contiguous tensors.
+        if self.isolate_gradients and not host_features.is_contiguous():
+            # Make contiguous to avoid channels_last + detach segfault (BUG-005)
+            host_features = host_features.contiguous()
+
         seed_input = host_features.detach() if self.isolate_gradients else host_features
         seed_features = self.seed(seed_input)
 
@@ -1147,7 +1230,8 @@ class SeedSlot(nn.Module):
         if self.alpha_schedule is not None:
             alpha = self.alpha_schedule.get_alpha_for_blend(host_features)
         else:
-            alpha = self.alpha
+            # Convert scalar alpha to tensor matching host_features device/dtype
+            alpha = torch.tensor(self.alpha, device=host_features.device, dtype=host_features.dtype)
 
         return blend_with_isolation(host_features, seed_features, alpha)
 
@@ -1181,9 +1265,9 @@ class SeedSlot(nn.Module):
 
         # Create blend algorithm with appropriate kwargs
         if algorithm_id == "gated":
-            # GatedBlend needs channels and topology
+            # GatedBlend needs channels, topology, and total_steps
             self.alpha_schedule = BlendCatalog.create(
-                algorithm_id, channels=self.channels, topology=topology
+                algorithm_id, channels=self.channels, topology=topology, total_steps=total_steps
             )
             # Move gated blend to same device as seed
             if isinstance(self.alpha_schedule, nn.Module):
@@ -1197,6 +1281,49 @@ class SeedSlot(nn.Module):
                 f"Unknown blend algorithm: {algorithm_id}. "
                 f"Valid options: linear, sigmoid, gated"
             )
+
+    def _on_enter_stage(self, new_stage: SeedStage, old_stage: SeedStage) -> None:
+        """Handle stage entry logic uniformly for both advance_stage() and step_epoch().
+
+        This ensures consistent behavior regardless of which method triggers the transition.
+        """
+        if new_stage == SeedStage.TRAINING and old_stage == SeedStage.GERMINATED:
+            # Enable Incubator isolation so seed sees detached host features
+            self.isolate_gradients = True
+
+        elif new_stage == SeedStage.BLENDING and old_stage == SeedStage.TRAINING:
+            # Topology-aware gradient isolation:
+            # - CNNs: keep isolation (host learns from loss, not seed feedback)
+            # - Transformers: allow co-adaptation (host receives seed gradients)
+            topology = self.task_config.topology if self.task_config else "cnn"
+            self.isolate_gradients = (topology == "cnn")
+
+            # Snapshot accuracy at blending start for true causal attribution
+            if self.state:
+                self.state.metrics.accuracy_at_blending_start = self.state.metrics.current_val_accuracy
+                self.state.metrics._blending_started = True
+
+            # Initialize blending schedule
+            total_steps = DEFAULT_BLENDING_TOTAL_STEPS
+            if self.task_config is not None:
+                configured_steps = self.task_config.blending_steps
+                if isinstance(configured_steps, int) and configured_steps > 0:
+                    total_steps = configured_steps
+            self.start_blending(total_steps=total_steps)
+
+        elif new_stage == SeedStage.PROBATIONARY and old_stage == SeedStage.BLENDING:
+            # Clean up blending resources
+            self._on_blending_complete()
+
+    def _on_blending_complete(self) -> None:
+        """Clean up after BLENDING stage completes.
+
+        Discards alpha_schedule (no longer needed after full integration).
+        Sets state.alpha = 1.0 (permanently fully blended).
+        """
+        self.alpha_schedule = None
+        if self.state:
+            self.state.alpha = 1.0
 
     def update_alpha_for_step(self, step: int) -> float:
         """Update alpha based on schedule."""
@@ -1276,8 +1403,8 @@ class SeedSlot(nn.Module):
                 raise RuntimeError(
                     f"Illegal lifecycle transition {self.state.stage} → TRAINING"
                 )
-            # Enable Incubator isolation so seed sees detached host features
-            self.isolate_gradients = True
+            # Call unified stage entry hook
+            self._on_enter_stage(SeedStage.TRAINING, old_stage)
             self._emit_telemetry(
                 TelemetryEventType.SEED_STAGE_CHANGED,
                 data={"from": old_stage.name, "to": self.state.stage.name},
@@ -1305,26 +1432,12 @@ class SeedSlot(nn.Module):
                 raise RuntimeError(
                     f"Illegal lifecycle transition {self.state.stage} → BLENDING"
                 )
-            # Topology-aware gradient isolation at TRAINING → BLENDING:
-            # - CNNs: keep isolation (host learns from loss, not seed feedback)
-            # - Transformers: allow co-adaptation (host receives seed gradients)
-            topology = self.task_config.topology if self.task_config else "cnn"
-            self.isolate_gradients = (topology == "cnn")
-            # Snapshot accuracy at blending start for true causal attribution
-            # This is when the seed starts actually affecting network output
-            self.state.metrics.accuracy_at_blending_start = self.state.metrics.current_val_accuracy
-            self.state.metrics._blending_started = True
+            # Call unified stage entry hook
+            self._on_enter_stage(SeedStage.BLENDING, old_stage)
             self._emit_telemetry(
                 TelemetryEventType.SEED_STAGE_CHANGED,
                 data={"from": old_stage.name, "to": self.state.stage.name},
             )
-            # Use explicit task_config.blending_steps if provided, otherwise use leyline default.
-            total_steps = DEFAULT_BLENDING_TOTAL_STEPS
-            if self.task_config is not None:
-                configured_steps = self.task_config.blending_steps
-                if isinstance(configured_steps, int) and configured_steps > 0:
-                    total_steps = configured_steps
-            self.start_blending(total_steps=total_steps)
             return
 
         # BLENDING → PROBATIONARY when alpha ramp completes and gate passes
@@ -1346,6 +1459,8 @@ class SeedSlot(nn.Module):
                     raise RuntimeError(
                         f"Illegal lifecycle transition {self.state.stage} → PROBATIONARY"
                     )
+                # Call unified stage entry hook
+                self._on_enter_stage(SeedStage.PROBATIONARY, old_stage)
                 self._emit_telemetry(
                     TelemetryEventType.SEED_STAGE_CHANGED,
                     data={"from": old_stage.name, "to": self.state.stage.name},
@@ -1412,7 +1527,6 @@ class SeedSlot(nn.Module):
             and self.state.telemetry.epoch > 0
         ):
             payload.setdefault("seed_gradient_norm_ratio", self.state.metrics.seed_gradient_norm_ratio)
-            payload.setdefault("isolation_violations", self.state.metrics.isolation_violations)
             payload.setdefault("gradient_health", self.state.telemetry.gradient_health)
             payload.setdefault("has_vanishing", self.state.telemetry.has_vanishing)
             payload.setdefault("has_exploding", self.state.telemetry.has_exploding)
@@ -1425,20 +1539,56 @@ class SeedSlot(nn.Module):
         )
         self.on_telemetry(event)
 
-    def get_extra_state(self):
-        """Persist SeedState, alpha schedule, and gradient isolation in checkpoints."""
-        return {
-            "seed_state": self.state,
-            "alpha_schedule": self.alpha_schedule,
+    def get_extra_state(self) -> dict:
+        """Persist SeedState for PyTorch 2.9+ weights_only=True compatibility.
+
+        Returns only primitive types (dict, list, str, int, float, bool, None).
+        The alpha_schedule nn.Module weights are saved via state_dict(), not here.
+        """
+        state_dict = {
             "isolate_gradients": self.isolate_gradients,
         }
 
+        if self.state is not None:
+            state_dict["seed_state"] = self.state.to_dict()
+
+        # Alpha schedule: save config only, not the nn.Module
+        # The nn.Module weights are saved in state_dict() automatically
+        if self.alpha_schedule is not None:
+            state_dict["alpha_schedule_config"] = {
+                "algorithm_id": getattr(self.alpha_schedule, "algorithm_id", None),
+                "total_steps": getattr(self.alpha_schedule, "total_steps", None),
+                "current_step": getattr(self.alpha_schedule, "_current_step", 0),
+            }
+        else:
+            state_dict["alpha_schedule_config"] = None
+
+        return state_dict
+
     def set_extra_state(self, state: dict) -> None:
-        """Restore SeedState, alpha schedule, and gradient isolation from checkpoints."""
-        self.state = state.get("seed_state")
-        self.alpha_schedule = state.get("alpha_schedule")
-        # Default to True (safe/isolated) if not present in old checkpoints
-        self.isolate_gradients = state.get("isolate_gradients", True)
+        """Restore SeedState from primitive dict."""
+        self.isolate_gradients = state.get("isolate_gradients", False)
+
+        if state.get("seed_state"):
+            self.state = SeedState.from_dict(state["seed_state"])
+
+        # Alpha schedule reconstruction
+        # The nn.Module weights are restored via load_state_dict() automatically
+        # because PyTorch 2.x includes dynamically assigned modules in state_dict.
+        # We only need to restore config and ensure the correct algorithm type.
+        if state.get("alpha_schedule_config"):
+            config = state["alpha_schedule_config"]
+            if config.get("algorithm_id") and self.state and self.state.stage == SeedStage.BLENDING:
+                # CRITICAL: Restore algorithm_id BEFORE start_blending()
+                # Without this, start_blending() defaults to "sigmoid" and
+                # GatedBlend weights become orphaned "unexpected_keys".
+                # See: docs/plans/2025-12-16-tolaria-kasmina-remediation.md
+                self._blend_algorithm_id = config["algorithm_id"]
+                self.start_blending(total_steps=config.get("total_steps", 10))
+                # Restore step count (_current_step guaranteed to exist on all BlendAlgorithm instances)
+                self.alpha_schedule._current_step = config.get("current_step", 0)
+                # Re-restore blending_steps_done (start_blending resets it to 0)
+                self.state.blending_steps_done = state["seed_state"].get("blending_steps_done", 0)
 
 
 __all__ = [

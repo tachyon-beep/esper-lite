@@ -7,10 +7,9 @@ Properties tested:
 1. Stabilization latch monotonicity - once True, stays True
 2. SignalTracker invariants - best_accuracy, history bounds, plateau_count
 3. Decision idempotence - same inputs → same outputs
-4. TamiyoDecision.to_command() preserves information
-5. Blueprint penalty decay monotonicity
-6. Embargo enforcement invariant
-7. Stateful decision sequences
+4. Blueprint penalty decay monotonicity
+5. Embargo enforcement invariant
+6. Stateful decision sequences
 
 Usage:
     pytest tests/tamiyo/properties/ -v --hypothesis-show-statistics
@@ -23,10 +22,8 @@ from hypothesis import given, settings, HealthCheck
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, rule, invariant, initialize
 
-from esper.leyline import CommandType
 from esper.tamiyo.tracker import SignalTracker
 from esper.tamiyo.heuristic import HeuristicTamiyo, HeuristicPolicyConfig
-from esper.tamiyo.decisions import TamiyoDecision
 
 # Import shared strategies from tests.strategies
 from tests.strategies import bounded_floats
@@ -212,64 +209,7 @@ class TestDecisionIdempotence:
 
 
 # =============================================================================
-# Property 4: TamiyoDecision.to_command() Preservation
-# =============================================================================
-
-class TestDecisionToCommandProperties:
-    """Property: to_command() preserves essential information."""
-
-    @given(
-        st.sampled_from(["WAIT", "FOSSILIZE", "CULL"]),
-        st.one_of(st.none(), st.text(min_size=1, max_size=16)),
-        st.text(max_size=100),
-        bounded_floats(0.0, 1.0),
-    )
-    def test_to_command_preserves_target(self, action_name, target_id, reason, confidence):
-        """Property: to_command() preserves target_seed_id."""
-        from esper.leyline.actions import build_action_enum
-
-        ActionEnum = build_action_enum("cnn")
-        action = getattr(ActionEnum, action_name)
-
-        decision = TamiyoDecision(
-            action=action,
-            target_seed_id=target_id,
-            reason=reason,
-            confidence=confidence,
-        )
-
-        command = decision.to_command()
-
-        # Target must be preserved
-        assert command.target_seed_id == target_id, \
-            f"Target lost: {target_id} -> {command.target_seed_id}"
-
-        # Confidence must be preserved
-        assert command.confidence == confidence, \
-            f"Confidence lost: {confidence} -> {command.confidence}"
-
-        # Reason must be preserved
-        assert command.reason == reason, \
-            f"Reason lost: {reason} -> {command.reason}"
-
-    @given(st.sampled_from(["conv_light", "conv_heavy", "attention"]))
-    def test_germinate_preserves_blueprint(self, blueprint_id):
-        """Property: GERMINATE action preserves blueprint_id in command."""
-        from esper.leyline.actions import build_action_enum
-
-        ActionEnum = build_action_enum("cnn")
-        action = getattr(ActionEnum, f"GERMINATE_{blueprint_id.upper()}")
-
-        decision = TamiyoDecision(action=action, reason="test")
-        command = decision.to_command()
-
-        assert command.blueprint_id == blueprint_id, \
-            f"Blueprint lost: {blueprint_id} -> {command.blueprint_id}"
-        assert command.command_type == CommandType.GERMINATE
-
-
-# =============================================================================
-# Property 5: Blueprint Penalty Decay Monotonicity
+# Property 4: Blueprint Penalty Decay Monotonicity
 # =============================================================================
 
 class TestBlueprintPenaltyProperties:

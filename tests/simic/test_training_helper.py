@@ -29,7 +29,7 @@ class TestTrainOneEpoch:
         caller's convenience. The optimization is that .item() is called once
         per epoch, not once per batch.
         """
-        from esper.simic.training import _train_one_epoch
+        from esper.simic.training.helpers import _train_one_epoch
 
         criterion = nn.CrossEntropyLoss()
         optimizer = torch.optim.SGD(simple_model.parameters(), lr=0.01)
@@ -54,7 +54,7 @@ class TestTrainOneEpoch:
 
     def test_accumulates_correctly(self, simple_model, simple_dataloader):
         """Should accumulate loss, correct, and total across batches."""
-        from esper.simic.training import _train_one_epoch
+        from esper.simic.training.helpers import _train_one_epoch
 
         criterion = nn.CrossEntropyLoss()
         optimizer = torch.optim.SGD(simple_model.parameters(), lr=0.01)
@@ -84,7 +84,7 @@ class TestTrainOneEpoch:
         Note: This creates a seed optimizer for a module not in the forward pass,
         testing the code path without verifying actual gradient updates.
         """
-        from esper.simic.training import _train_one_epoch
+        from esper.simic.training.helpers import _train_one_epoch
 
         # Create a second "seed" module (not used in forward pass)
         seed_module = nn.Linear(10, 10)
@@ -109,7 +109,7 @@ class TestTrainOneEpoch:
 
     def test_lm_task_type(self):
         """Should handle language modeling task type."""
-        from esper.simic.training import _train_one_epoch
+        from esper.simic.training.helpers import _train_one_epoch
 
         # Simple LM-like model: input (batch, seq, features) -> output (batch, seq, vocab)
         model = nn.Linear(16, 100)  # 16 features -> 100 vocab
@@ -151,7 +151,7 @@ class TestTrainOneEpoch:
 
     def test_empty_dataloader(self):
         """Should handle empty dataloader without errors."""
-        from esper.simic.training import _train_one_epoch
+        from esper.simic.training.helpers import _train_one_epoch
 
         model = nn.Linear(10, 2)
         # Create empty dataloader

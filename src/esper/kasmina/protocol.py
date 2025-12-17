@@ -1,37 +1,49 @@
 """Kasmina Protocol - Structural typing for pluggable hosts.
 
-Hosts declare where seeds can be planted (injection_points),
-accept seed modules (register_slot), and handle their own
-forward pass including calling any attached slots.
+Hosts are pure backbone networks that provide segment routing.
+Slot management is handled by MorphogeneticModel, not hosts directly.
 """
 
 from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-import torch.nn as nn
 from torch import Tensor
 
 
 @runtime_checkable
 class HostProtocol(Protocol):
-    """Contract for graftable host networks."""
+    """Contract for graftable host networks.
+
+    Hosts are pure backbone networks that provide:
+    - injection_points: Available segment boundaries for seed attachment
+    - segment_channels: Channel dimensions at each boundary
+    - forward_to_segment/forward_from_segment: Segment routing for MorphogeneticModel
+    - forward: Standard backbone forward pass (no slot application)
+
+    Slot management is handled by MorphogeneticModel, not hosts directly.
+    """
 
     @property
     def injection_points(self) -> dict[str, int]:
         """Map of slot_id -> channel/embedding dimension."""
         ...
 
-    def register_slot(self, slot_id: str, slot: nn.Module) -> None:
-        """Attach a seed module at the specified injection point."""
-        ...
-
-    def unregister_slot(self, slot_id: str) -> None:
-        """Remove a seed module from the specified injection point."""
+    @property
+    def segment_channels(self) -> dict[str, int]:
+        """Map of canonical slot_id -> channel dimension."""
         ...
 
     def forward(self, x: Tensor) -> Tensor:
-        """Full forward pass, including any attached slots."""
+        """Forward pass through backbone (no slot application)."""
+        ...
+
+    def forward_to_segment(self, segment: str, x: Tensor, from_segment: str | None = None) -> Tensor:
+        """Forward from input or segment to target segment boundary."""
+        ...
+
+    def forward_from_segment(self, segment: str, x: Tensor) -> Tensor:
+        """Forward from segment boundary to output."""
         ...
 
 

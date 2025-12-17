@@ -129,7 +129,7 @@ class TestGerminationDecisions:
         decision = policy.decide(signals, active_seeds=[])
 
         assert decision.action.name == "WAIT"
-        assert "early" in decision.reason.lower()
+        assert "too early" in decision.reason.lower()
 
 
 class TestCullDecisions:
@@ -232,12 +232,13 @@ class TestFossilizeDecisions:
         """Should prefer counterfactual contribution over total improvement."""
         policy = HeuristicTamiyo(topology="cnn")
 
-        # Total improvement is negative, but counterfactual is positive
+        # Total improvement is zero (neutral), but counterfactual is positive
+        # NOTE: Negative total_improvement + positive counterfactual = ransomware (P2-B)
         seed = MockSeedState(
             stage=SeedStage.PROBATIONARY,
             epochs_in_stage=3,
             improvement=-1.0,
-            total_improvement=-2.0,
+            total_improvement=0.5,  # Slightly positive to avoid ransomware detection
             counterfactual=1.0,  # Counterfactual shows positive contribution
         )
         signals = MockTrainingSignals(MockTrainingMetrics(epoch=30))

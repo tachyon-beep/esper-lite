@@ -144,6 +144,44 @@ class TestStabilizationFirstEpochSkip:
         assert signals.metrics.host_stabilized == 1
         # Accurate: 2 stable epochs required, got 2 (epochs 1-2)
 
+    def test_regression_does_not_increment_stable_count(self):
+        """Loss increases should reset stabilization counting instead of advancing it.
+
+        BUG: The old stabilization check only verified relative_improvement < threshold.
+        When loss increased (regression), loss_delta was negative, making
+        relative_improvement negative, which always passed the < threshold check.
+
+        FIX: Added loss_delta >= 0.0 to require loss actually decreased.
+        """
+        tracker = SignalTracker(
+            stabilization_threshold=0.03,
+            stabilization_epochs=2,
+        )
+
+        # Initialize previous loss
+        tracker.update(
+            epoch=0,
+            global_step=0,
+            train_loss=1.0,
+            train_accuracy=50.0,
+            val_loss=1.0,
+            val_accuracy=50.0,
+            active_seeds=[],
+        )
+
+        # Regression: validation loss increases, should not count toward stability
+        tracker.update(
+            epoch=1,
+            global_step=10,
+            train_loss=1.1,
+            train_accuracy=49.0,
+            val_loss=1.1,
+            val_accuracy=49.0,
+            active_seeds=[],
+        )
+        assert tracker._stable_count == 0
+        assert tracker.is_stabilized is False
+
 
 @pytest.mark.tamiyo
 class TestPenaltyDecayEpochNotDecision:

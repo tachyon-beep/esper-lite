@@ -38,13 +38,82 @@ class TestConfiguration:
     def test_topology_affects_actions(self):
         """Different topologies should have different action enums."""
         cnn_policy = HeuristicTamiyo(topology="cnn")
-        transformer_policy = HeuristicTamiyo(topology="transformer")
+        # P1-B: Transformer needs transformer-compatible blueprints in config
+        transformer_config = HeuristicPolicyConfig(
+            blueprint_rotation=["attention", "mlp", "norm"]  # Transformer-compatible
+        )
+        transformer_policy = HeuristicTamiyo(
+            topology="transformer", config=transformer_config
+        )
 
         # Both should have action enums but they're different
         assert cnn_policy._action_enum is not None
         assert transformer_policy._action_enum is not None
         # CNN has GERMINATE_CONV_LIGHT, transformer might not
         assert hasattr(cnn_policy._action_enum, "GERMINATE_CONV_LIGHT")
+
+
+@pytest.mark.tamiyo
+class TestBlueprintValidation:
+    """Tests for P1-B: Blueprint validation at initialization.
+
+    The heuristic should fail fast if blueprint_rotation contains blueprints
+    not available for the specified topology.
+    """
+
+    def test_default_config_with_transformer_topology_fails(self):
+        """Default config has CNN blueprints which fail for transformer topology.
+
+        Default blueprint_rotation includes conv_light, conv_heavy, depthwise
+        which are CNN-only blueprints. Using default config with transformer
+        should raise ValueError immediately at init, not during training.
+        """
+        with pytest.raises(ValueError, match="blueprint_rotation contains blueprints not available"):
+            HeuristicTamiyo(topology="transformer")
+
+    def test_invalid_blueprints_rejected_with_clear_error(self):
+        """Invalid blueprint names should produce a helpful error message."""
+        config = HeuristicPolicyConfig(
+            blueprint_rotation=["conv_light", "nonexistent_blueprint"]
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            HeuristicTamiyo(config=config, topology="cnn")
+
+        error_msg = str(exc_info.value)
+        assert "nonexistent_blueprint" in error_msg
+        assert "Available:" in error_msg
+
+    def test_valid_cnn_blueprints_accepted(self):
+        """Valid CNN blueprints should be accepted without error."""
+        config = HeuristicPolicyConfig(
+            blueprint_rotation=["conv_light", "conv_heavy", "norm"]
+        )
+        # Should not raise
+        policy = HeuristicTamiyo(config=config, topology="cnn")
+        assert policy.config.blueprint_rotation == ["conv_light", "conv_heavy", "norm"]
+
+    def test_valid_transformer_blueprints_accepted(self):
+        """Valid transformer blueprints should be accepted without error."""
+        config = HeuristicPolicyConfig(
+            blueprint_rotation=["attention", "norm", "lora"]
+        )
+        # Should not raise
+        policy = HeuristicTamiyo(config=config, topology="transformer")
+        assert policy.config.blueprint_rotation == ["attention", "norm", "lora"]
+
+    def test_error_lists_available_blueprints(self):
+        """Error message should list available blueprints for the topology."""
+        config = HeuristicPolicyConfig(
+            blueprint_rotation=["invalid_blueprint"]
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            HeuristicTamiyo(config=config, topology="cnn")
+
+        error_msg = str(exc_info.value)
+        # Should mention what IS available
+        assert "conv_light" in error_msg or "Available:" in error_msg
 
 
 @pytest.mark.tamiyo

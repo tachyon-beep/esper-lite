@@ -2,7 +2,7 @@
 
 import torch
 
-from esper.simic.advantages import compute_per_head_advantages
+from esper.simic.agent import compute_per_head_advantages
 from esper.leyline.factored_actions import LifecycleOp
 
 

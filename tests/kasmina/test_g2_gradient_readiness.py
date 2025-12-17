@@ -22,7 +22,6 @@ class TestG2GradientReadiness:
         # Set base accuracy to create improvement
         state.metrics.accuracy_at_stage_start = 50.0
         state.metrics.current_val_accuracy = 52.0  # 2.0% improvement
-        state.metrics.isolation_violations = 0
         state.metrics.epochs_in_current_stage = 5
         state.metrics.seed_gradient_norm_ratio = 0.01  # Very low seed activity
 
@@ -46,7 +45,6 @@ class TestG2GradientReadiness:
         # Set base accuracy to create improvement
         state.metrics.accuracy_at_stage_start = 50.0
         state.metrics.current_val_accuracy = 52.0  # 2.0% improvement
-        state.metrics.isolation_violations = 0
         state.metrics.epochs_in_current_stage = 5
         state.metrics.seed_gradient_norm_ratio = 0.10  # Good seed activity (10%)
 
@@ -71,7 +69,6 @@ class TestG2GradientReadiness:
         # Set base accuracy to create excellent improvement
         state.metrics.accuracy_at_stage_start = 50.0
         state.metrics.current_val_accuracy = 60.0  # 10.0% improvement
-        state.metrics.isolation_violations = 0
         state.metrics.epochs_in_current_stage = 10
         state.metrics.seed_gradient_norm_ratio = 0.001  # Nearly zero seed activity
 

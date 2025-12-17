@@ -21,6 +21,9 @@ from itertools import permutations
 from typing import Callable, Literal
 import random
 
+from esper.nissa import get_hub
+from esper.leyline import TelemetryEvent, TelemetryEventType
+
 
 @dataclass(frozen=True)
 class CounterfactualConfig:
@@ -58,8 +61,8 @@ class CounterfactualConfig:
 class CounterfactualResult:
     """Result of evaluating a single seed configuration."""
 
-    config: tuple[bool, ...]  # (True, False, True) = early on, mid off, late on
-    slot_ids: tuple[str, ...]  # ("early", "mid", "late")
+    config: tuple[bool, ...]  # (True, False, True) = r0c0 on, r0c1 off, r0c2 on
+    slot_ids: tuple[str, ...]  # ("r0c0", "r0c1", "r0c2")
     alpha_settings: dict[str, float] = field(default_factory=dict)  # {slot: alpha}
     val_loss: float = 0.0
     val_accuracy: float = 0.0
@@ -177,8 +180,9 @@ class CounterfactualEngine:
     that's the collector's job.
     """
 
-    def __init__(self, config: CounterfactualConfig | None = None):
+    def __init__(self, config: CounterfactualConfig | None = None, emit_telemetry: bool = False):
         self.config = config or CounterfactualConfig()
+        self.emit_telemetry = emit_telemetry
 
     def compute_matrix(
         self,
@@ -188,9 +192,9 @@ class CounterfactualEngine:
         """Compute counterfactual matrix for given slots.
 
         Args:
-            slot_ids: List of slot identifiers (e.g., ["early", "mid", "late"])
+            slot_ids: List of slot identifiers (e.g., ["r0c0", "r0c1", "r0c2"])
             evaluate_fn: Function that takes alpha settings and returns (val_loss, val_accuracy)
-                        e.g., evaluate_fn({"early": 0.0, "mid": 1.0}) -> (loss, acc)
+                        e.g., evaluate_fn({"r0c0": 0.0, "r0c1": 1.0}) -> (loss, acc)
 
         Returns:
             CounterfactualMatrix with all evaluated configurations.
@@ -371,6 +375,28 @@ class CounterfactualEngine:
                 )
             else:
                 result[slot_id] = ShapleyEstimate()
+
+        # Emit telemetry if enabled
+        if self.emit_telemetry:
+            hub = get_hub()
+            if hub is not None:
+                # Convert ShapleyEstimate objects to serializable dict
+                shapley_dict = {
+                    slot_id: {
+                        "mean": estimate.mean,
+                        "std": estimate.std,
+                        "n_samples": estimate.n_samples,
+                    }
+                    for slot_id, estimate in result.items()
+                }
+                hub.emit(TelemetryEvent(
+                    event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+                    data={
+                        "kind": "shapley_computed",
+                        "shapley_values": shapley_dict,
+                        "num_slots": len(result),
+                    },
+                ))
 
         return result
 

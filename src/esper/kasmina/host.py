@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from typing_extensions import override
+import functools
 
 import torch
 import torch.nn as nn
@@ -23,10 +23,11 @@ if TYPE_CHECKING:
 
 
 class CNNHost(nn.Module):
-    """CNN host with dynamic blocks and injection points after each block (except the first).
+    """CNN backbone with segment routing for external slot attachment.
 
-    Mirrors TransformerHost's pattern: a ModuleList of blocks, a ModuleDict of slots keyed
-    by block index, and a simple looped forward that applies slots as identities when unused.
+    Provides segment boundaries for MorphogeneticModel to attach SeedSlots.
+    The host itself performs no slot application - it routes activations
+    between segment boundaries.
 
     Args:
         num_classes: Number of output classes (default 10 for CIFAR-10)
@@ -69,50 +70,47 @@ class CNNHost(nn.Module):
         self.blocks = nn.ModuleList(blocks)
         self.pool = nn.MaxPool2d(2, 2)
 
-        # Slots after each block except the first (aligns with previous block2_post default)
-        self._slot_indices = tuple(range(1, n_blocks))
-        # Keep legacy-friendly naming (block2_post) while allowing multiple slots
-        self._slot_keys = tuple(f"block{idx + 1}_post" for idx in self._slot_indices)
-        self.slots = nn.ModuleDict({k: nn.Identity() for k in self._slot_keys})
-
         # Classifier maps final channels → logits
         self.classifier = nn.Linear(in_c, num_classes)
 
-        # Segment channel counts for multi-slot support
-        # Map named segments to their channel dimensions at injection points
-        # Requires at least 3 blocks for full early/mid/late segment support
-        if n_blocks >= 3:
-            self.segment_channels = {
-                "early": self.blocks[0].conv.out_channels,    # After block1 (32 by default)
-                "mid": self.blocks[1].conv.out_channels,      # After block2 (64 by default)
-                "late": self.blocks[2].conv.out_channels,     # After block3 (128 by default)
-            }
-        else:
-            # Fallback for shallow networks - only expose available segments
-            self.segment_channels = {
-                f"block{i}": self.blocks[i].conv.out_channels for i in range(n_blocks)
-            }
+    def injection_specs(self) -> list["InjectionSpec"]:
+        """Return segment boundaries as InjectionSpec objects.
+
+        Returns:
+            List of InjectionSpec, one per block, sorted by network position.
+        """
+        from esper.leyline import InjectionSpec
+        from esper.leyline.slot_id import format_slot_id
+
+        specs = []
+        for i in range(self.n_blocks):
+            specs.append(
+                InjectionSpec(
+                    slot_id=format_slot_id(0, i),
+                    channels=self.blocks[i].conv.out_channels,
+                    position=(i + 1) / self.n_blocks,
+                    layer_range=(i, i + 1),
+                )
+            )
+        return specs
+
+    @functools.cached_property
+    def segment_channels(self) -> dict[str, int]:
+        """Map of slot_id -> channel dimension (derived from injection_specs).
+
+        Cached to avoid repeated object creation on each access.
+        """
+        return {spec.slot_id: spec.channels for spec in self.injection_specs()}
+
+    @functools.cached_property
+    def _segment_to_block(self) -> dict[str, int]:
+        """Map segment ID to block index (cached)."""
+        return {spec.slot_id: spec.layer_range[0] for spec in self.injection_specs()}
 
     @property
-    @override
     def injection_points(self) -> dict[str, int]:
-        """Map of slot_id -> channel dimension."""
-        return {k: self.blocks[idx].conv.out_channels for k, idx in zip(self._slot_keys, self._slot_indices)}
-
-    @override
-    def register_slot(self, slot_id: str, slot: nn.Module) -> None:
-        """Attach a seed module at the specified injection point."""
-        if slot_id not in self.slots:
-            raise ValueError(f"Unknown injection point: {slot_id}")
-        device = next(self.parameters()).device
-        self.slots[slot_id] = slot.to(device)
-
-    @override
-    def unregister_slot(self, slot_id: str) -> None:
-        """Remove a seed module from the specified injection point."""
-        if slot_id not in self.slots:
-            raise ValueError(f"Unknown injection point: {slot_id}")
-        self.slots[slot_id] = nn.Identity()
+        """Map of slot_id -> channel dimension. Alias for segment_channels."""
+        return self.segment_channels
 
     # NOTE: forward_to_segment() is intentionally duplicated between CNNHost
     # and TransformerHost. While the structure is similar, the details differ:
@@ -130,7 +128,7 @@ class CNNHost(nn.Module):
         """Forward from one segment boundary to another.
 
         Args:
-            segment: Target segment (e.g., "early", "mid", "late")
+            segment: Target segment (e.g., "r0c0", "r0c1", "r0c2")
             x: Raw input if from_segment is None, else features at from_segment boundary
             from_segment: Starting point (None = network input)
 
@@ -142,31 +140,19 @@ class CNNHost(nn.Module):
         if from_segment is not None and from_segment not in self.segment_channels:
             raise ValueError(f"Unknown from_segment: {from_segment}. Available: {list(self.segment_channels.keys())}")
 
-        # Convert to channels_last ONCE before processing for Tensor Core optimization
-        if self._memory_format == torch.channels_last:
+        # Only convert at entry point (avoid redundant conversion in chained calls)
+        if from_segment is None and self._memory_format == torch.channels_last:
             x = x.to(memory_format=torch.channels_last)
 
-        # Map segment names to block indices (0-indexed)
-        segment_to_block = {
-            "early": 0,  # After block 0 (block1)
-            "mid": 1,    # After block 1 (block2)
-            "late": 2,   # After block 2 (block3)
-        }
-        target_block = segment_to_block[segment]
-        start_block = 0 if from_segment is None else segment_to_block[from_segment] + 1
-
-        # Map block index to registered slot key for slot application
-        slot_by_idx = dict(zip(self._slot_indices, self._slot_keys))
+        # Use cached mapping (avoid per-call dict rebuilding)
+        target_block = self._segment_to_block[segment]
+        start_block = 0 if from_segment is None else self._segment_to_block[from_segment] + 1
 
         # Forward through blocks in range [start_block, target_block]
         for idx in range(start_block, target_block + 1):
             x = self.blocks[idx](x)
-            # Only pool on first pool_layers blocks
             if idx < self._pool_layers:
                 x = self.pool(x)
-            slot_key = slot_by_idx.get(idx)
-            if slot_key:
-                x = self.slots[slot_key](x)
 
         return x
 
@@ -174,8 +160,8 @@ class CNNHost(nn.Module):
         """Forward from a segment to output.
 
         Args:
-            segment: Starting segment name ("early", "mid", or "late")
-            x: Feature map at segment boundary (should already be channels_last if from forward_to_segment)
+            segment: Starting segment ID ("r0c0", "r0c1", or "r0c2")
+            x: Feature map at segment boundary (already in correct memory format)
 
         Returns:
             Classification logits
@@ -183,50 +169,31 @@ class CNNHost(nn.Module):
         if segment not in self.segment_channels:
             raise ValueError(f"Unknown segment: {segment}. Available: {list(self.segment_channels.keys())}")
 
-        # Ensure channels_last format for Tensor Core optimization (safe even if already in format)
-        if self._memory_format == torch.channels_last:
-            x = x.to(memory_format=torch.channels_last)
-
-        # Map segment names to block indices
-        segment_to_block = {
-            "early": 0,
-            "mid": 1,
-            "late": 2,
-        }
-        start_block = segment_to_block[segment]
-
-        slot_by_idx = dict(zip(self._slot_indices, self._slot_keys))
+        # No memory format conversion needed - tensor already converted by forward_to_segment
+        # Use cached mapping
+        start_block = self._segment_to_block[segment]
 
         # Forward through remaining blocks
         for idx in range(start_block + 1, self.n_blocks):
             x = self.blocks[idx](x)
-            # Only pool on first pool_layers blocks
             if idx < self._pool_layers:
                 x = self.pool(x)
-            slot_key = slot_by_idx.get(idx)
-            if slot_key:
-                x = self.slots[slot_key](x)
 
         # Global average pooling and classification
         x = F.adaptive_avg_pool2d(x, 1).flatten(1)
         return self.classifier(x)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through CNN backbone (no slot application)."""
         # Convert to channels_last ONCE before processing for Tensor Core optimization
-        # Conv2d, BatchNorm2d, MaxPool2d all preserve channels_last format
         if self._memory_format == torch.channels_last:
             x = x.to(memory_format=torch.channels_last)
 
-        slot_idx = 0
         for idx, block in enumerate(self.blocks):
             x = block(x)
             # Only pool on first pool_layers blocks (avoids 0x0 spatial on deep nets)
             if idx < self._pool_layers:
                 x = self.pool(x)
-            # Use pre-computed _slot_indices instead of string formatting
-            if idx in self._slot_indices:
-                x = self.slots[self._slot_keys[slot_idx]](x)
-                slot_idx += 1
 
         # flatten() handles memory format conversion automatically (returns contiguous)
         x = F.adaptive_avg_pool2d(x, 1).flatten(1)
@@ -309,7 +276,12 @@ class TransformerBlock(nn.Module):
 
 
 class TransformerHost(nn.Module):
-    """GPT-style decoder with injection points after each layer."""
+    """Transformer backbone with segment routing for external slot attachment.
+
+    Provides segment boundaries for MorphogeneticModel to attach SeedSlots.
+    The host itself performs no slot application - it routes hidden states
+    between segment boundaries.
+    """
 
     def __init__(
         self,
@@ -319,11 +291,17 @@ class TransformerHost(nn.Module):
         n_layer: int = 6,
         block_size: int = 256,
         dropout: float = 0.1,
+        num_segments: int = 3,
     ):
         super().__init__()
+        if n_layer % num_segments != 0:
+            raise ValueError(
+                f"n_layer ({n_layer}) must be divisible by num_segments ({num_segments})"
+            )
         self.n_layer = n_layer
         self.n_embd = n_embd
         self.block_size = block_size
+        self.num_segments = num_segments
 
         self.tok_emb = nn.Embedding(vocab_size, n_embd)
         self.pos_emb = nn.Embedding(block_size, n_embd)
@@ -339,48 +317,51 @@ class TransformerHost(nn.Module):
         # Weight tying: tok_emb is master
         self.head.weight = self.tok_emb.weight
 
-        # Injection points with compile-friendly ModuleDict
-        self._slot_keys = tuple(f"layer_{i}_post_block" for i in range(n_layer))
-        self.slots = nn.ModuleDict({k: nn.Identity() for k in self._slot_keys})
+        # Compute layer range boundaries for segments
+        layers_per_segment = n_layer // num_segments
+        self._segment_boundaries = {}
+        for i in range(num_segments):
+            from esper.leyline.slot_id import format_slot_id
+            slot_id = format_slot_id(0, i)
+            end_layer = (i + 1) * layers_per_segment
+            self._segment_boundaries[slot_id] = end_layer
 
-        # Segment channel counts for multi-slot support
-        # For transformers, all segments have the same embedding dimension
-        # Segments map to layer ranges: early (0-1), mid (2-3), late (4-5)
-        self.segment_channels = {
-            "early": n_embd,
-            "mid": n_embd,
-            "late": n_embd,
-        }
+    def injection_specs(self) -> list["InjectionSpec"]:
+        """Return available injection points as InjectionSpec objects.
 
-        # Layer range boundaries for segments (layer index where segment ENDS)
-        # For n_layer=6: early=0-1, mid=2-3, late=4-5
-        third = n_layer // 3
-        self._segment_boundaries = {
-            "early": third,           # Layers 0 to third-1
-            "mid": 2 * third,         # Layers third to 2*third-1
-            "late": n_layer,          # Layers 2*third to n_layer-1
-        }
+        Returns:
+            List of InjectionSpec, one per segment, sorted by network position.
+        """
+        from esper.leyline import InjectionSpec
+        from esper.leyline.slot_id import format_slot_id
+
+        specs = []
+        layers_per_segment = self.n_layer // self.num_segments
+        for i in range(self.num_segments):
+            start_layer = i * layers_per_segment
+            end_layer = (i + 1) * layers_per_segment
+            specs.append(
+                InjectionSpec(
+                    slot_id=format_slot_id(0, i),
+                    channels=self.n_embd,
+                    position=(i + 1) / self.num_segments,
+                    layer_range=(start_layer, end_layer),
+                )
+            )
+        return specs
+
+    @functools.cached_property
+    def segment_channels(self) -> dict[str, int]:
+        """Map of slot_id -> channel dimension (derived from injection_specs).
+
+        Cached to avoid repeated object creation on each access.
+        """
+        return {spec.slot_id: spec.channels for spec in self.injection_specs()}
 
     @property
-    @override
     def injection_points(self) -> dict[str, int]:
-        """Map of slot_id -> embedding dimension."""
-        return {k: self.n_embd for k in self._slot_keys}
-
-    @override
-    def register_slot(self, slot_id: str, slot: nn.Module) -> None:
-        """Attach a seed module at the specified injection point."""
-        if slot_id not in self.slots:
-            raise ValueError(f"Unknown injection point: {slot_id}")
-        device = self.tok_emb.weight.device
-        self.slots[slot_id] = slot.to(device)
-
-    @override
-    def unregister_slot(self, slot_id: str) -> None:
-        """Remove a seed module from the specified injection point."""
-        if slot_id not in self.slots:
-            raise ValueError(f"Unknown injection point: {slot_id}")
-        self.slots[slot_id] = nn.Identity()
+        """Map of slot_id -> embedding dimension. Alias for segment_channels."""
+        return self.segment_channels
 
     # NOTE: forward_to_segment() is intentionally duplicated between CNNHost
     # and TransformerHost. While the structure is similar, the details differ:
@@ -398,7 +379,7 @@ class TransformerHost(nn.Module):
         """Forward from one segment boundary to another.
 
         Args:
-            segment: Target segment (e.g., "early", "mid", "late")
+            segment: Target segment (e.g., "r0c0", "r0c1", "r0c2")
             x: Raw input if from_segment is None (B, T token indices),
                else features at from_segment boundary (B, T, n_embd)
             from_segment: Starting point (None = network input)
@@ -420,7 +401,6 @@ class TransformerHost(nn.Module):
             h = self.drop(self.tok_emb(x) + self.pos_emb(pos))
             start_layer = 0
         else:
-            # x is already embedded features
             h = x
             start_layer = self._segment_boundaries[from_segment]
 
@@ -428,7 +408,6 @@ class TransformerHost(nn.Module):
         end_layer = self._segment_boundaries[segment]
         for i in range(start_layer, end_layer):
             h = self.layers[i](h)
-            h = self.slots[self._slot_keys[i]](h)
 
         return h
 
@@ -436,7 +415,7 @@ class TransformerHost(nn.Module):
         """Forward from a segment boundary to output logits.
 
         Args:
-            segment: Starting segment name ("early", "mid", or "late")
+            segment: Starting segment ID ("r0c0", "r0c1", or "r0c2")
             h: Hidden states at segment boundary (B, T, n_embd)
 
         Returns:
@@ -449,13 +428,13 @@ class TransformerHost(nn.Module):
         start_layer = self._segment_boundaries[segment]
         for i in range(start_layer, self.n_layer):
             h = self.layers[i](h)
-            h = self.slots[self._slot_keys[i]](h)
 
         # Output
         h = self.ln_f(h)
         return self.head(h)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through transformer backbone (no slot application)."""
         B, T = x.shape
         if T > self.block_size:
             raise ValueError(f"Sequence length {T} exceeds block_size {self.block_size}")
@@ -464,10 +443,9 @@ class TransformerHost(nn.Module):
         pos = torch.arange(T, device=x.device)
         h = self.drop(self.tok_emb(x) + self.pos_emb(pos))
 
-        # Transformer layers with slot injection
-        for i, layer in enumerate(self.layers):
+        # Transformer layers (no slot application)
+        for layer in self.layers:
             h = layer(h)
-            h = self.slots[self._slot_keys[i]](h)  # Always call, Identity is no-op
 
         # Output
         h = self.ln_f(h)
@@ -483,7 +461,7 @@ class MorphogeneticModel(nn.Module):
     """Model with Kasmina seed slots registered into host injection points.
 
     Multi-slot architecture for managing multiple concurrent seeds at different
-    network segments (early/mid/late).
+    network segments using canonical slot IDs (r0c0, r0c1, r0c2).
     """
 
     def __init__(
@@ -505,22 +483,22 @@ class MorphogeneticModel(nn.Module):
 
         # Create seed slots as ModuleDict for proper submodule registration
         slots_dict = {}
-        for slot_name in slots:
-            if slot_name not in segment_channels:
+        for slot_id in slots:
+            if slot_id not in segment_channels:
                 raise ValueError(
-                    f"Unknown slot: {slot_name}. Available: {list(segment_channels.keys())}"
+                    f"Unknown slot: {slot_id}. Available: {list(segment_channels.keys())}"
                 )
-            slots_dict[slot_name] = SeedSlot(
-                slot_id=slot_name,
-                channels=segment_channels[slot_name],
+            slots_dict[slot_id] = SeedSlot(
+                slot_id=slot_id,
+                channels=segment_channels[slot_id],
                 device=device,
                 task_config=task_config,
                 fast_mode=fast_mode,
             )
         self.seed_slots = nn.ModuleDict(slots_dict)
 
-        # Track slot order for forward pass
-        self._slot_order = ["early", "mid", "late"]
+        # Track slot order for forward pass (derived from host's injection_specs)
+        self._slot_order = [spec.slot_id for spec in host.injection_specs()]
         self._active_slots = [s for s in self._slot_order if s in self.seed_slots]
 
         # Move host to device
@@ -574,7 +552,7 @@ class MorphogeneticModel(nn.Module):
         Args:
             blueprint_id: Blueprint to instantiate (e.g., "norm", "attention")
             seed_id: Unique identifier for the seed
-            slot: Target slot ("early", "mid", "late")
+            slot: Target slot ("r0c0", "r0c1", "r0c2")
             blend_algorithm_id: Blending algorithm ("linear", "sigmoid", "gated")
         """
         if slot not in self.seed_slots:

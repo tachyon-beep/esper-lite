@@ -296,7 +296,7 @@ def test_compute_reward_minimal_mode():
 
 def test_parallel_env_state_has_host_max_acc():
     """ParallelEnvState tracks host_max_acc."""
-    from esper.simic.vectorized import ParallelEnvState
+    from esper.simic.training.vectorized import ParallelEnvState
     import inspect
 
     # Check the dataclass has the field

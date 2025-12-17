@@ -4,7 +4,7 @@
 import argparse
 
 from esper.nissa import ConsoleOutput, DirectoryOutput, FileOutput, get_hub
-from esper.simic.config import TrainingConfig
+from esper.simic.training import TrainingConfig
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -80,9 +80,12 @@ def build_parser() -> argparse.ArgumentParser:
                               choices=["cifar10", "cifar10_deep", "tinystories"])
     heur_parser.add_argument("--device", default="cuda:0")
     heur_parser.add_argument("--seed", type=int, default=42)
-    heur_parser.add_argument("--slots", nargs="+", default=["mid"],
-        choices=["early", "mid", "late"],
-        help="Seed slots to enable (default: mid)")
+    heur_parser.add_argument(
+        "--slots",
+        nargs="+",
+        default=["r0c0", "r0c1", "r0c2"],
+        help="Canonical slot IDs to use (e.g., r0c0 r0c1 r0c2). Default: r0c0 r0c1 r0c2",
+    )
     heur_parser.add_argument("--max-seeds", type=int, default=None,
         help="Maximum total seeds across all slots (default: unlimited)")
 
@@ -139,12 +142,41 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def validate_slots(slot_ids: list[str]) -> list[str]:
+    """Validate CLI slot arguments use canonical format.
+
+    Args:
+        slot_ids: List of slot ID strings from CLI
+
+    Returns:
+        Validated slot IDs (unchanged if valid)
+
+    Raises:
+        ValueError: If any slot ID is invalid or uses legacy format
+    """
+    from esper.leyline.slot_id import validate_slot_id, parse_slot_id, SlotIdError
+
+    for slot_id in slot_ids:
+        if not validate_slot_id(slot_id):
+            # Try to parse to get detailed error message
+            try:
+                parse_slot_id(slot_id)
+            except SlotIdError as e:
+                # Re-raise with CLI-specific guidance
+                raise ValueError(str(e)) from e
+            # If validate returns False but parse doesn't raise, it's an unknown issue
+            raise ValueError(
+                f"Invalid slot ID '{slot_id}'. Use canonical format: r0c0, r0c1, r0c2, etc."
+            )
+    return slot_ids
+
+
 def main():
     parser = build_parser()
     args = parser.parse_args()
 
     # Create TelemetryConfig from CLI argument
-    from esper.simic.telemetry_config import TelemetryConfig, TelemetryLevel
+    from esper.simic.telemetry import TelemetryConfig, TelemetryLevel
 
     level_map = {
         "off": TelemetryLevel.OFF,
@@ -269,6 +301,9 @@ def main():
 
     try:
         if args.algorithm == "heuristic":
+            # Validate slot IDs use canonical format
+            validated_slots = validate_slots(args.slots)
+
             from esper.simic.training import train_heuristic
             train_heuristic(
                 n_episodes=args.episodes,
@@ -277,7 +312,7 @@ def main():
                 device=args.device,
                 task=args.task,
                 seed=args.seed,
-                slots=args.slots,
+                slots=validated_slots,
                 telemetry_config=telemetry_config,
                 telemetry_lifecycle_only=args.telemetry_lifecycle_only,
             )
@@ -302,7 +337,7 @@ def main():
 
             print(config.summary())
 
-            from esper.simic.vectorized import train_ppo_vectorized
+            from esper.simic.training import train_ppo_vectorized
             train_ppo_vectorized(
                 device=args.device,
                 devices=args.devices,

@@ -5,11 +5,12 @@ These tests verify the action mask computation and batched action selection.
 """
 
 import torch
-from esper.simic.features import MULTISLOT_FEATURE_SIZE
+from esper.simic.control import MULTISLOT_FEATURE_SIZE
 
-from esper.simic.ppo import PPOAgent
-from esper.simic.action_masks import compute_action_masks
-from esper.leyline.factored_actions import NUM_SLOTS, NUM_BLUEPRINTS, NUM_BLENDS, NUM_OPS
+from esper.simic.agent import PPOAgent
+from esper.simic.control import compute_action_masks
+from esper.leyline.factored_actions import NUM_BLUEPRINTS, NUM_BLENDS, NUM_OPS
+from esper.leyline.slot_config import SlotConfig
 
 
 class TestFactoredActionMasksInVectorized:
@@ -17,19 +18,21 @@ class TestFactoredActionMasksInVectorized:
 
     def test_compute_action_masks_returns_dict_tensors(self):
         """compute_action_masks should return dict of boolean tensors."""
-        slot_states = {"early": None}  # Empty slot
+        slot_config = SlotConfig.default()
+        slot_states = {"r0c0": None}  # Empty slot (canonical ID)
 
         masks = compute_action_masks(
             slot_states=slot_states,
-            enabled_slots=["early"],
+            enabled_slots=["r0c0"],
             total_seeds=0,
             max_seeds=0,
+            slot_config=slot_config,
             device=torch.device("cpu"),
         )
 
         assert isinstance(masks, dict)
         assert set(masks.keys()) == {"slot", "blueprint", "blend", "op"}
-        assert masks["slot"].shape == (NUM_SLOTS,)
+        assert masks["slot"].shape == (slot_config.num_slots,)
         assert masks["blueprint"].shape == (NUM_BLUEPRINTS,)
         assert masks["blend"].shape == (NUM_BLENDS,)
         assert masks["op"].shape == (NUM_OPS,)
@@ -38,7 +41,8 @@ class TestFactoredActionMasksInVectorized:
     def test_factored_masks_batch_stacking(self):
         """Test that factored masks can be batched correctly for vectorized envs."""
         n_envs = 4
-        slot_ids = ["early", "mid", "late"]
+        slot_config = SlotConfig.default()
+        slot_ids = slot_config.slot_ids  # Canonical IDs: r0c0, r0c1, r0c2
 
         # Simulate masks from multiple environments
         all_masks = []
@@ -47,9 +51,10 @@ class TestFactoredActionMasksInVectorized:
             slot_states = {slot_id: None for slot_id in slot_ids}
             masks = compute_action_masks(
                 slot_states=slot_states,
-                enabled_slots=slot_ids,
+                enabled_slots=list(slot_ids),
                 total_seeds=0,
                 max_seeds=0,
+                slot_config=slot_config,
                 device=torch.device("cpu"),
             )
             all_masks.append(masks)
@@ -60,7 +65,7 @@ class TestFactoredActionMasksInVectorized:
             for key in all_masks[0].keys()
         }
 
-        assert batched_masks["slot"].shape == (n_envs, NUM_SLOTS)
+        assert batched_masks["slot"].shape == (n_envs, slot_config.num_slots)
         assert batched_masks["blueprint"].shape == (n_envs, NUM_BLUEPRINTS)
         assert batched_masks["blend"].shape == (n_envs, NUM_BLENDS)
         assert batched_masks["op"].shape == (n_envs, NUM_OPS)
@@ -84,8 +89,9 @@ class TestPPOAgentFactoredInVectorized:
         states = torch.randn(n_envs, state_dim)
 
         # Batched masks (dict of [n_envs, head_dim] tensors)
+        slot_config = SlotConfig.default()
         masks = {
-            "slot": torch.ones(n_envs, NUM_SLOTS, dtype=torch.bool),
+            "slot": torch.ones(n_envs, slot_config.num_slots, dtype=torch.bool),
             "blueprint": torch.ones(n_envs, NUM_BLUEPRINTS, dtype=torch.bool),
             "blend": torch.ones(n_envs, NUM_BLENDS, dtype=torch.bool),
             "op": torch.ones(n_envs, NUM_OPS, dtype=torch.bool),
@@ -130,6 +136,7 @@ class TestPPOAgentFactoredInVectorized:
             agent.buffer.start_episode(env_id=env_idx)
 
         # Store transitions from each env
+        slot_config = SlotConfig.default()
         for env_idx in range(n_envs):
             state = torch.randn(state_dim)
             # Hidden state: [num_layers, hidden_dim] (batch dim squeezed in add())
@@ -138,7 +145,7 @@ class TestPPOAgentFactoredInVectorized:
             agent.buffer.add(
                 env_id=env_idx,
                 state=state,
-                slot_action=env_idx % NUM_SLOTS,
+                slot_action=env_idx % slot_config.num_slots,
                 blueprint_action=env_idx % NUM_BLUEPRINTS,
                 blend_action=env_idx % NUM_BLENDS,
                 op_action=env_idx % NUM_OPS,
@@ -149,7 +156,7 @@ class TestPPOAgentFactoredInVectorized:
                 value=0.5,
                 reward=1.0,
                 done=False,
-                slot_mask=torch.ones(NUM_SLOTS, dtype=torch.bool),
+                slot_mask=torch.ones(slot_config.num_slots, dtype=torch.bool),
                 blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
                 blend_mask=torch.ones(NUM_BLENDS, dtype=torch.bool),
                 op_mask=torch.ones(NUM_OPS, dtype=torch.bool),
@@ -166,7 +173,7 @@ class TestVectorizedFactoredDefault:
 
     def test_train_ppo_vectorized_signature(self):
         """train_ppo_vectorized should have the expected parameters."""
-        from esper.simic.vectorized import train_ppo_vectorized
+        from esper.simic.training.vectorized import train_ppo_vectorized
         import inspect
 
         sig = inspect.signature(train_ppo_vectorized)

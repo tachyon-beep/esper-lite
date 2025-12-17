@@ -3,14 +3,14 @@ import pytest
 import torch
 
 from esper.leyline import DEFAULT_EPISODE_LENGTH, DEFAULT_VALUE_CLIP
-from esper.simic.ppo import signals_to_features, PPOAgent
-from esper.simic.features import MULTISLOT_FEATURE_SIZE
+from esper.simic.agent import signals_to_features, PPOAgent
+from esper.simic.control import MULTISLOT_FEATURE_SIZE
 
 
 def test_ppo_agent_architecture():
     """PPOAgent should use FactoredRecurrentActorCritic and TamiyoRolloutBuffer."""
-    from esper.simic.tamiyo_buffer import TamiyoRolloutBuffer
-    from esper.simic.tamiyo_network import FactoredRecurrentActorCritic
+    from esper.simic.agent import TamiyoRolloutBuffer
+    from esper.simic.agent import FactoredRecurrentActorCritic
 
     agent = PPOAgent(
         state_dim=50,
@@ -90,6 +90,71 @@ def test_kl_early_stopping_triggers():
         "Either early stopping triggered or KL was computed"
 
 
+def test_kl_early_stopping_with_single_epoch():
+    """BUG-003 regression: target_kl must work with recurrent_n_epochs=1.
+
+    Previously, KL early stopping only checked at the START of the next epoch.
+    With n_epochs=1, there was no "next epoch" so target_kl was a no-op.
+
+    The fix moves the KL check BEFORE optimizer.step(), so even with n_epochs=1,
+    an update can be skipped if KL is already too high (e.g., from drift since rollout).
+    """
+    agent = PPOAgent(
+        state_dim=35,
+        num_envs=2,
+        max_steps_per_env=5,
+        target_kl=0.0001,  # Extremely low to ensure triggering
+        recurrent_n_epochs=1,  # The critical case from BUG-003
+        compile_network=False,
+        device="cpu",
+    )
+
+    # Fill buffer with FAKE log_probs that differ from network's actual output
+    # This simulates policy drift since rollout collection
+    for env_id in range(2):
+        agent.buffer.start_episode(env_id)
+        for step in range(5):
+            agent.buffer.add(
+                env_id=env_id,
+                state=torch.randn(35),
+                slot_action=0,
+                blueprint_action=0,
+                blend_action=0,
+                op_action=0,
+                # Fake log_probs that are very different from network's actual output
+                slot_log_prob=-10.0,  # Network won't produce this
+                blueprint_log_prob=-10.0,
+                blend_log_prob=-10.0,
+                op_log_prob=-10.0,
+                value=1.0,
+                reward=1.0,
+                done=step == 4,
+                truncated=False,
+                slot_mask=torch.ones(3, dtype=torch.bool),
+                blueprint_mask=torch.ones(5, dtype=torch.bool),
+                blend_mask=torch.ones(3, dtype=torch.bool),
+                op_mask=torch.ones(4, dtype=torch.bool),
+                hidden_h=torch.zeros(1, 1, 128),
+                hidden_c=torch.zeros(1, 1, 128),
+                bootstrap_value=0.0,
+            )
+        agent.buffer.end_episode(env_id)
+
+    metrics = agent.update(clear_buffer=True)
+
+    # With BUG-003 fix: KL check happens BEFORE optimizer.step()
+    # So with n_epochs=1 and extreme policy drift, we should early stop
+    assert "early_stop_epoch" in metrics, \
+        "BUG-003 regression: early stopping should work with n_epochs=1"
+    assert metrics["early_stop_epoch"] == 0, \
+        "Should have early stopped at epoch 0 (the only epoch)"
+
+    # Key assertion: NO update should have happened
+    # (policy_loss won't be in metrics because we broke before computing it)
+    assert "policy_loss" not in metrics, \
+        "No policy_loss should be computed when early stopping at epoch 0"
+
+
 def test_value_clipping_uses_appropriate_range():
     """Verify value clipping doesn't use the policy clip ratio."""
     agent = PPOAgent(
@@ -150,7 +215,7 @@ def test_signals_to_features_with_multislot_params():
         signals=MockSignals(),
         slot_reports={},
         use_telemetry=False,
-        slots=["mid"],
+        slots=["r0c1"],
         total_seeds=1,  # NEW param
         max_seeds=3,    # NEW param
     )
@@ -202,9 +267,9 @@ def test_signals_to_features_telemetry_slot_alignment() -> None:
     mid_telemetry.max_epochs = 25
 
     slot_reports = {
-        "mid": SeedStateReport(
+        "r0c1": SeedStateReport(
             seed_id="s1",
-            slot_id="mid",
+            slot_id="r0c1",
             blueprint_id="norm",
             stage=SeedStage.TRAINING,
             metrics=SeedMetrics(epochs_total=7),
@@ -216,12 +281,172 @@ def test_signals_to_features_telemetry_slot_alignment() -> None:
         signals=MockSignals(),
         slot_reports=slot_reports,
         use_telemetry=True,
-        slots=["mid"],
+        slots=["r0c1"],
     )
 
     base = MULTISLOT_FEATURE_SIZE
     dim = SeedTelemetry.feature_dim()
 
-    assert features[base:base + dim] == [0.0] * dim  # early (disabled)
-    assert features[base + dim:base + 2 * dim] == pytest.approx(mid_telemetry.to_features())  # mid
-    assert features[base + 2 * dim:base + 3 * dim] == [0.0] * dim  # late (disabled)
+    assert features[base:base + dim] == [0.0] * dim  # r0c0 (disabled)
+    assert features[base + dim:base + 2 * dim] == pytest.approx(mid_telemetry.to_features())  # r0c1
+    assert features[base + 2 * dim:base + 3 * dim] == [0.0] * dim  # r0c2 (disabled)
+
+
+def test_ppo_agent_accepts_slot_config():
+    """PPOAgent should accept slot_config and derive state_dim from it."""
+    from esper.leyline.slot_config import SlotConfig
+    from esper.simic.control import get_feature_size
+
+    slot_config = SlotConfig.default()  # 3 slots
+    agent = PPOAgent(
+        slot_config=slot_config,
+        num_envs=2,
+        max_steps_per_env=DEFAULT_EPISODE_LENGTH,
+        device="cpu",
+        compile_network=False,
+    )
+
+    expected_state_dim = get_feature_size(slot_config)  # 23 + 3*9 = 50
+    assert agent.slot_config == slot_config
+    assert agent._base_network.state_dim == expected_state_dim
+
+
+def test_ppo_agent_with_3_slot_config():
+    """PPOAgent with 3-slot config should have state_dim=50."""
+    from esper.leyline.slot_config import SlotConfig
+    from esper.simic.control import get_feature_size
+
+    slot_config = SlotConfig.default()  # 3 slots (r0c0, r0c1, r0c2)
+    agent = PPOAgent(
+        slot_config=slot_config,
+        num_envs=2,
+        max_steps_per_env=DEFAULT_EPISODE_LENGTH,
+        device="cpu",
+        compile_network=False,
+    )
+
+    expected_state_dim = get_feature_size(slot_config)  # 23 + 3*9 = 50
+    assert agent._base_network.state_dim == expected_state_dim
+    assert agent._base_network.num_slots == 3
+
+
+def test_ppo_agent_with_5_slot_config():
+    """PPOAgent with 5-slot config should have state_dim=68."""
+    from esper.leyline.slot_config import SlotConfig
+    from esper.simic.control import get_feature_size
+
+    # Create a 5-slot config
+    slot_config = SlotConfig(slot_ids=("r0c0", "r0c1", "r0c2", "r1c0", "r1c1"))
+    agent = PPOAgent(
+        slot_config=slot_config,
+        num_envs=2,
+        max_steps_per_env=DEFAULT_EPISODE_LENGTH,
+        device="cpu",
+        compile_network=False,
+    )
+
+    expected_state_dim = get_feature_size(slot_config)  # 23 + 5*9 = 68
+    assert agent._base_network.state_dim == expected_state_dim
+    assert agent._base_network.num_slots == 5
+
+
+def test_ppo_agent_network_slot_head_matches_config():
+    """Network's slot head size should match slot_config.num_slots."""
+    from esper.leyline.slot_config import SlotConfig
+
+    slot_config = SlotConfig(slot_ids=("r0c0", "r0c1", "r0c2", "r1c0"))  # 4 slots
+    agent = PPOAgent(
+        slot_config=slot_config,
+        num_envs=2,
+        max_steps_per_env=DEFAULT_EPISODE_LENGTH,
+        device="cpu",
+        compile_network=False,
+    )
+
+    # Verify network was initialized with correct num_slots
+    assert agent._base_network.num_slots == 4
+
+
+def test_ppo_agent_backwards_compatible_with_state_dim():
+    """PPOAgent should still accept explicit state_dim for backwards compatibility."""
+    agent = PPOAgent(
+        state_dim=50,
+        num_envs=2,
+        max_steps_per_env=DEFAULT_EPISODE_LENGTH,
+        device="cpu",
+        compile_network=False,
+    )
+
+    assert agent._base_network.state_dim == 50
+
+
+def test_ppo_agent_buffer_matches_slot_config():
+    """PPOAgent buffer should match slot_config passed during initialization."""
+    from esper.leyline.slot_config import SlotConfig
+
+    slot_config = SlotConfig.for_grid(rows=1, cols=5)  # 5 slots
+
+    agent = PPOAgent(
+        slot_config=slot_config,
+        device="cpu",
+        num_envs=2,
+        max_steps_per_env=10,
+        compile_network=False,
+    )
+
+    # Buffer should have matching slot_config
+    assert agent.buffer.num_slots == 5
+    assert agent.buffer.slot_config == slot_config
+    # slot_masks should have correct shape
+    assert agent.buffer.slot_masks.shape == (2, 10, 5)
+
+
+def test_ppo_agent_full_update_with_5_slots():
+    """Full PPO update cycle with 5-slot config should work correctly."""
+    from esper.leyline.slot_config import SlotConfig
+    import torch
+
+    slot_config = SlotConfig.for_grid(rows=1, cols=5)  # 5 slots
+
+    agent = PPOAgent(
+        slot_config=slot_config,
+        device="cpu",
+        num_envs=1,
+        max_steps_per_env=5,
+        compile_network=False,
+        target_kl=None,  # Disable KL early stopping - test uses fake log_probs
+    )
+
+    # Add some transitions to buffer
+    agent.buffer.start_episode(env_id=0)
+    for i in range(5):
+        agent.buffer.add(
+            env_id=0,
+            state=torch.randn(agent._base_network.state_dim),
+            slot_action=i % 5,  # Use all 5 slots
+            blueprint_action=0,
+            blend_action=0,
+            op_action=0,
+            slot_log_prob=-1.0,
+            blueprint_log_prob=-1.0,
+            blend_log_prob=-1.0,
+            op_log_prob=-1.0,
+            value=1.0,
+            reward=1.0,
+            done=(i == 4),
+            slot_mask=torch.ones(5, dtype=torch.bool),  # 5 slots
+            blueprint_mask=torch.ones(5, dtype=torch.bool),
+            blend_mask=torch.ones(3, dtype=torch.bool),
+            op_mask=torch.ones(4, dtype=torch.bool),
+            hidden_h=torch.zeros(1, 1, 128),
+            hidden_c=torch.zeros(1, 1, 128),
+        )
+    agent.buffer.end_episode(env_id=0)
+
+    # Run PPO update - should not crash
+    metrics = agent.update()
+
+    # Should have produced metrics
+    assert "policy_loss" in metrics
+    assert "value_loss" in metrics
+    assert "entropy" in metrics

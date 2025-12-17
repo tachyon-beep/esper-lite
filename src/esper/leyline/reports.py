@@ -58,7 +58,6 @@ class SeedMetrics:
     host_param_count: int = 0
 
     # Health
-    isolation_violations: int = 0
     gradient_norm_avg: float = 0.0
 
     # Blending

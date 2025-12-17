@@ -53,15 +53,10 @@ class TelemetryEventType(Enum):
     GRADIENT_ANOMALY = auto()
     PERFORMANCE_DEGRADATION = auto()
 
-    # Command events
-    COMMAND_ISSUED = auto()  # TODO: Implement when command system built
-    COMMAND_EXECUTED = auto()  # TODO: Implement when command system built
-    COMMAND_FAILED = auto()  # TODO: Implement when command system built
-
     # === NEW: PPO Training Events (Ops Normal) ===
     PPO_UPDATE_COMPLETED = auto()
-    MEMORY_WARNING = auto()  # TODO: Wire up GPU memory monitoring
-    REWARD_HACKING_SUSPECTED = auto()  # TODO: Wire up reward hacking detection
+    MEMORY_WARNING = auto()
+    REWARD_HACKING_SUSPECTED = auto()
     REWARD_COMPUTED = auto()  # Per-step reward breakdown for debugging
 
     # === NEW: Debug Events (triggered by anomalies) ===
@@ -198,3 +193,46 @@ class SeedTelemetry:
     def feature_dim(cls) -> int:
         """Return current feature vector dimension."""
         return 10
+
+    def to_dict(self) -> dict:
+        """Convert to primitive dict for serialization."""
+        return {
+            "seed_id": self.seed_id,
+            "blueprint_id": self.blueprint_id,
+            "layer_id": self.layer_id,
+            "gradient_norm": self.gradient_norm,
+            "gradient_health": self.gradient_health,
+            "has_vanishing": self.has_vanishing,
+            "has_exploding": self.has_exploding,
+            "accuracy": self.accuracy,
+            "accuracy_delta": self.accuracy_delta,
+            "epochs_in_stage": self.epochs_in_stage,
+            "stage": self.stage,
+            "alpha": self.alpha,
+            "epoch": self.epoch,
+            "max_epochs": self.max_epochs,
+            "captured_at": self.captured_at.isoformat() if self.captured_at else None,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "SeedTelemetry":
+        """Reconstruct from primitive dict."""
+        from datetime import datetime
+
+        return cls(
+            seed_id=data["seed_id"],
+            blueprint_id=data.get("blueprint_id", ""),
+            layer_id=data.get("layer_id", ""),
+            gradient_norm=data.get("gradient_norm", 0.0),
+            gradient_health=data.get("gradient_health", 1.0),
+            has_vanishing=data.get("has_vanishing", False),
+            has_exploding=data.get("has_exploding", False),
+            accuracy=data.get("accuracy", 0.0),
+            accuracy_delta=data.get("accuracy_delta", 0.0),
+            epochs_in_stage=data.get("epochs_in_stage", 0),
+            stage=data.get("stage", 1),
+            alpha=data.get("alpha", 0.0),
+            epoch=data.get("epoch", 0),
+            max_epochs=data.get("max_epochs", 25),
+            captured_at=datetime.fromisoformat(data["captured_at"]) if data.get("captured_at") else _utc_now(),
+        )

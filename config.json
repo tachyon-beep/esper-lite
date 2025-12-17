@@ -1,6 +1,6 @@
 {
   "n_episodes": 200,
-  "n_envs": 4,
+  "n_envs": 1,
   "max_epochs": 100,
   "lr": 0.0003,
   "clip_ratio": 0.2,
@@ -15,11 +15,11 @@
   "lstm_hidden_dim": 128,
   "chunk_length": 100,
   "slots": [
-    "early",
-    "mid",
-    "late"
+    "r0c0",
+    "r0c1",
+    "r0c2"
   ],
-  "max_seeds": 2,
+  "max_seeds": 3,
   "reward_mode": "shaped",
   "reward_family": "contribution",
   "param_budget": 500000,

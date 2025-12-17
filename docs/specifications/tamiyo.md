@@ -66,7 +66,7 @@ class TamiyoPolicy(Protocol):
 > Tracks training signals over time and computes derived metrics including stabilization detection.
 
 **Constructor:**
-- `SignalTracker(plateau_threshold: float = 0.5, history_window: int = 10, ...)`
+- `SignalTracker(plateau_threshold_pct: float = 0.5, history_window: int = 10, ...)`
 
 **Key Methods:**
 - `update(epoch, global_step, train_loss, train_accuracy, val_loss, val_accuracy, active_seeds, available_slots) -> TrainingSignals` - Update tracker and return current signals

@@ -14,7 +14,7 @@ import pytest
 import torch
 from torch.utils.data import TensorDataset
 
-from esper.simic.vectorized import train_ppo_vectorized
+from esper.simic.training.vectorized import train_ppo_vectorized
 
 
 def _has_two_gpus() -> bool:
@@ -102,13 +102,17 @@ def test_vectorized_multi_gpu_smoke(monkeypatch):
         use_telemetry=False,
         num_workers=0,
         gpu_preload=False,
-        slots=["mid"],
+        slots=["r0c1"],  # canonical ID (formerly "mid")
         max_seeds=1,
         reward_mode="shaped",
         quiet_analytics=True,
     )
 
-    assert set(created_on_devices) == set(devices), (
-        f"Expected models created on {devices}, got {created_on_devices}"
+    # Filter out CPU device - a temporary CPU model is created to derive slot_config
+    # from the host's injection_specs before creating the actual env models on CUDA
+    cuda_devices_created = [d for d in created_on_devices if d != "cpu"]
+    assert set(cuda_devices_created) == set(devices), (
+        f"Expected CUDA models created on {devices}, got {cuda_devices_created} "
+        f"(all devices: {created_on_devices})"
     )
     assert history, "Training history should not be empty"

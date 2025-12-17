@@ -403,11 +403,9 @@ class TestRansomwareDetection:
     Properties for detecting "ransomware" seeds - high counterfactual but
     negative total improvement (seed created dependencies without net benefit).
 
-    NOTE: HeuristicTamiyo is currently VULNERABLE to this pattern.
-    These tests document the desired behavior for future implementation.
+    P2-B: HeuristicTamiyo now detects and culls ransomware patterns.
     """
 
-    @pytest.mark.skip(reason="HeuristicTamiyo doesn't yet detect ransomware pattern")
     @given(
         counterfactual=bounded_floats(5.0, 15.0),
         total_improvement=bounded_floats(-5.0, -0.5),
@@ -418,8 +416,6 @@ class TestRansomwareDetection:
         Ransomware pattern: Seed creates dependencies (high counterfactual) but
         overall system is worse (negative total_improvement). The seed is holding
         the system "hostage."
-
-        FUTURE: This test will pass once ransomware detection is implemented.
         """
         policy = HeuristicTamiyo(topology="cnn")
 

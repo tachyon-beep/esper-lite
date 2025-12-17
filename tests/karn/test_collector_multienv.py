@@ -21,17 +21,17 @@ class TestMultiEnvSlotTracking:
             data={"episode_id": "test_multi", "max_epochs": 10, "n_envs": 2}
         ))
 
-        # Germinate in slot "mid" for env 0
+        # Germinate in slot "r0c1" for env 0
         collector.emit(TelemetryEvent(
             event_type=TelemetryEventType.SEED_GERMINATED,
-            slot_id="mid",
+            slot_id="r0c1",
             data={"env_id": 0, "seed_id": "env0_seed_0", "blueprint_id": "conv"}
         ))
 
-        # Germinate in slot "mid" for env 1 (same slot_id, different env)
+        # Germinate in slot "r0c1" for env 1 (same slot_id, different env)
         collector.emit(TelemetryEvent(
             event_type=TelemetryEventType.SEED_GERMINATED,
-            slot_id="mid",
+            slot_id="r0c1",
             data={"env_id": 1, "seed_id": "env1_seed_0", "blueprint_id": "norm"}
         ))
 
@@ -39,12 +39,12 @@ class TestMultiEnvSlotTracking:
         slots = store.current_epoch.slots
 
         # Expect namespaced keys
-        assert "env0:mid" in slots or ("mid" in slots and len(slots) == 2)
+        assert "env0:r0c1" in slots or ("r0c1" in slots and len(slots) == 2)
 
         # If namespaced, verify different blueprints
-        if "env0:mid" in slots:
-            assert slots["env0:mid"].blueprint_id == "conv"
-            assert slots["env1:mid"].blueprint_id == "norm"
+        if "env0:r0c1" in slots:
+            assert slots["env0:r0c1"].blueprint_id == "conv"
+            assert slots["env1:r0c1"].blueprint_id == "norm"
 
     def test_env_id_extracted_from_event_data(self):
         """env_id is correctly extracted from event.data."""
@@ -62,13 +62,13 @@ class TestMultiEnvSlotTracking:
         # Event with env_id in data
         collector.emit(TelemetryEvent(
             event_type=TelemetryEventType.SEED_GERMINATED,
-            slot_id="early",
+            slot_id="r0c0",
             data={"env_id": 3, "seed_id": "env3_seed_0", "blueprint_id": "test"}
         ))
 
         # Should namespace by env_id
         slots = store.current_epoch.slots
-        assert "env3:early" in slots or "early" in slots
+        assert "env3:r0c0" in slots or "r0c0" in slots
 
     def test_counterfactual_env_idx_is_ignored_to_avoid_misbucketing(self):
         """env_idx is not a supported telemetry field (no legacy shims)."""
@@ -87,15 +87,15 @@ class TestMultiEnvSlotTracking:
         collector.emit(
             TelemetryEvent(
                 event_type=TelemetryEventType.COUNTERFACTUAL_COMPUTED,
-                slot_id="mid",
+                slot_id="r0c1",
                 data={"env_idx": 1, "contribution": 0.9},
             )
         )
 
         slots = store.current_epoch.slots
-        assert "env0:mid" not in slots
-        assert "env1:mid" not in slots
-        assert "mid" not in slots
+        assert "env0:r0c1" not in slots
+        assert "env1:r0c1" not in slots
+        assert "r0c1" not in slots
 
     def test_gate_event_updates_slot_gate_fields(self):
         """Gate evaluation events populate per-slot gate fields."""
@@ -114,7 +114,7 @@ class TestMultiEnvSlotTracking:
         collector.emit(
             TelemetryEvent(
                 event_type=TelemetryEventType.SEED_GATE_EVALUATED,
-                slot_id="mid",
+                slot_id="r0c1",
                 data={
                     "env_id": 1,
                     "gate": "G2",
@@ -125,7 +125,7 @@ class TestMultiEnvSlotTracking:
             )
         )
 
-        slot = store.current_epoch.slots["env1:mid"]
+        slot = store.current_epoch.slots["env1:r0c1"]
         assert slot.last_gate_attempted == "G2"
         assert slot.last_gate_passed is False
         assert "seed_not_ready" in (slot.last_gate_reason or "")

@@ -101,6 +101,14 @@ DEFAULT_ENTROPY_COEF = 0.05
 DEFAULT_ENTROPY_COEF_MIN = 0.01
 
 # =============================================================================
+# Factored Action Space Constants
+# =============================================================================
+
+# Head names for factored action space (slot selection, blueprint, blend algorithm, lifecycle op).
+# Order matters: slot → blueprint → blend → op is the causal chain.
+HEAD_NAMES: tuple[str, ...] = ("slot", "blueprint", "blend", "op")
+
+# =============================================================================
 # Reward Shaping Constants (tunable reward function weights)
 # =============================================================================
 
@@ -257,10 +265,6 @@ DEFAULT_MIN_TRAINING_IMPROVEMENT = 0.5
 # Ensures seed has time to demonstrate stable blending.
 DEFAULT_MIN_BLENDING_EPOCHS = 3
 
-# Maximum gradient isolation violations before gate failure.
-# Prevents seeds that destabilize host gradients from advancing.
-DEFAULT_MAX_ISOLATION_VIOLATIONS = 10
-
 # Alpha threshold for considering blending "complete" (G3 gate).
 # Seeds must reach this alpha level to be considered fully blended.
 DEFAULT_ALPHA_COMPLETE_THRESHOLD = 0.95
@@ -277,14 +281,26 @@ DEFAULT_MAX_PROBATION_EPOCHS = 5
 # Loss must exceed (average * multiplier) to trigger anomaly detection.
 DEFAULT_GOVERNOR_LOSS_MULTIPLIER = 3.0
 
+# Slot ID formatting and parsing
+from esper.leyline.slot_id import (
+    SlotIdError,
+    format_slot_id,
+    parse_slot_id,
+    validate_slot_id,
+    slot_sort_key,
+    validate_slot_ids,
+)
+
+# Slot configuration
+from esper.leyline.injection_spec import InjectionSpec
+from esper.leyline.slot_config import SlotConfig
+
 # Actions (build_action_enum used by HeuristicTamiyo for flat action mapping)
 from esper.leyline.actions import build_action_enum
 
 # Stages and transitions
 from esper.leyline.stages import (
     SeedStage,
-    CommandType,
-    RiskLevel,
     VALID_TRANSITIONS,
     is_valid_transition,
     is_terminal_stage,
@@ -302,7 +318,6 @@ from esper.leyline.signals import (
 from esper.leyline.schemas import (
     SeedOperation,
     OPERATION_TARGET_STAGE,
-    AdaptationCommand,
     GateLevel,
     GateResult,
     BlueprintProtocol,
@@ -351,6 +366,9 @@ __all__ = [
     "DEFAULT_BATCH_SIZE",
     "DEFAULT_ENTROPY_COEF",
     "DEFAULT_ENTROPY_COEF_MIN",
+
+    # Factored Action Space
+    "HEAD_NAMES",
 
     # Reward Shaping Constants
     "DEFAULT_CONTRIBUTION_WEIGHT",
@@ -401,20 +419,29 @@ __all__ = [
     # Lifecycle Gate Thresholds (QualityGates)
     "DEFAULT_MIN_TRAINING_IMPROVEMENT",
     "DEFAULT_MIN_BLENDING_EPOCHS",
-    "DEFAULT_MAX_ISOLATION_VIOLATIONS",
     "DEFAULT_ALPHA_COMPLETE_THRESHOLD",
     "DEFAULT_MAX_PROBATION_EPOCHS",
 
     # Governor Anomaly Detection
     "DEFAULT_GOVERNOR_LOSS_MULTIPLIER",
 
+    # Slot ID
+    "SlotIdError",
+    "format_slot_id",
+    "parse_slot_id",
+    "validate_slot_id",
+    "slot_sort_key",
+    "validate_slot_ids",
+
+    # Slot configuration
+    "InjectionSpec",
+    "SlotConfig",
+
     # Actions (build_action_enum used by HeuristicTamiyo)
     "build_action_enum",
 
     # Stages
     "SeedStage",
-    "CommandType",
-    "RiskLevel",
     "VALID_TRANSITIONS",
     "is_valid_transition",
     "is_terminal_stage",
@@ -428,7 +455,6 @@ __all__ = [
     # Schemas
     "SeedOperation",
     "OPERATION_TARGET_STAGE",
-    "AdaptationCommand",
     "GateLevel",
     "GateResult",
     "BlueprintProtocol",

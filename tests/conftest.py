@@ -125,7 +125,7 @@ def small_ppo_model_deterministic(tmp_path_factory):
     Use this for testing the "plumbing" (loading, inference, etc.), not
     for testing that the model is "smart."
     """
-    from esper.simic.ppo import PPOAgent
+    from esper.simic.agent import PPOAgent
 
     # Create agent with deterministic weights
     agent = PPOAgent(state_dim=30, action_dim=7)

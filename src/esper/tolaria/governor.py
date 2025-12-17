@@ -23,6 +23,7 @@ from esper.leyline import (
     DEFAULT_GOVERNOR_HISTORY_WINDOW,
     DEFAULT_MIN_PANICS_BEFORE_ROLLBACK,
     DEFAULT_GOVERNOR_LOSS_MULTIPLIER,
+    SeedStage,
 )
 from esper.nissa import get_hub
 
@@ -82,6 +83,10 @@ class TolariaGovernor:
     def snapshot(self) -> None:
         """Save Last Known Good state to CPU memory to reduce GPU memory pressure.
 
+        Only snapshots host parameters and fossilized seeds. Experimental
+        (non-fossilized) seeds are excluded because they may be culled
+        before rollback, causing state_dict key mismatches.
+
         Tensors are moved to CPU; non-tensor values are deep copied.
         This trades slightly slower rollback for significant GPU memory savings,
         especially for large models where snapshots could double GPU memory usage.
@@ -91,12 +96,34 @@ class TolariaGovernor:
             del self.last_good_state
             self.last_good_state = None
 
+        # Get model state, filtering out experimental seed keys
+        full_state = self.model.state_dict()
+
+        # If model has seed_slots, filter out non-fossilized seed parameters
+        # hasattr AUTHORIZED by John on 2025-12-17 00:00:00 UTC
+        # Justification: Feature detection - MorphogeneticModel has seed_slots, base models don't
+        if hasattr(self.model, 'seed_slots'):
+            experimental_prefixes = []
+            for slot_id, slot in self.model.seed_slots.items():
+                if slot.state is not None and slot.state.stage != SeedStage.FOSSILIZED:
+                    # This seed is experimental - exclude its keys from snapshot
+                    experimental_prefixes.append(f"seed_slots.{slot_id}.seed.")
+                    experimental_prefixes.append(f"seed_slots.{slot_id}.alpha_schedule.")
+
+            # Filter state dict
+            filtered_state = {
+                k: v for k, v in full_state.items()
+                if not any(k.startswith(prefix) for prefix in experimental_prefixes)
+            }
+        else:
+            filtered_state = full_state
+
         # Store on CPU to save GPU memory (rollback is rare, memory savings are constant)
         # Use no_grad() to prevent any autograd overhead during state extraction
         with torch.no_grad():
             self.last_good_state = {
                 k: v.detach().cpu().clone() if isinstance(v, torch.Tensor) else copy.deepcopy(v)
-                for k, v in self.model.state_dict().items()
+                for k, v in filtered_state.items()
             }
 
     def check_vital_signs(self, current_loss: float) -> bool:
@@ -171,13 +198,19 @@ class TolariaGovernor:
             self._pending_panic = False
             return False
 
-    def execute_rollback(self, *, env_id: int = 0) -> GovernorReport:
+    def execute_rollback(
+        self,
+        *,
+        env_id: int = 0,
+        optimizer: torch.optim.Optimizer | None = None,
+    ) -> GovernorReport:
         """Emergency stop: restore LKG state and return punishment info.
 
         Rollback semantics (Option B):
         - Restore host + fossilized seeds from snapshot
         - Discard any live/experimental seeds (not fossilized)
         - Reset seed slots to empty/DORMANT state
+        - (Optional) Reset optimizer momentum to prevent immediate re-crash
 
         Philosophy: Fossils are committed stable memory. Live seeds are
         experimental hypotheses - a catastrophic event means they failed
@@ -224,7 +257,11 @@ class TolariaGovernor:
             for slot in self.model.seed_slots.values():
                 slot.cull("governor_rollback")
 
-        # Restore host + fossilized seeds (strict=True ensures complete restoration)
+        # Restore host + fossilized seeds from snapshot
+        # Use strict=False because:
+        # 1. Snapshot excludes experimental seeds (by design)
+        # 2. Current model may have different seed state than snapshot
+        # 3. execute_rollback culls all seeds before restore, so missing keys are expected
         # Move all tensors to model device in one batch before loading, avoiding
         # individual CPU->GPU transfers for each parameter.
         # Use non_blocking=True for async CPU->GPU transfer
@@ -238,7 +275,34 @@ class TolariaGovernor:
         if device.type == "cuda":
             torch.cuda.synchronize(device)
 
-        self.model.load_state_dict(state_on_device, strict=True)
+        missing_keys, unexpected_keys = self.model.load_state_dict(state_on_device, strict=False)
+
+        # Log if there are key mismatches (diagnostic for snapshot filtering issues)
+        if missing_keys or unexpected_keys:
+            hub.emit(TelemetryEvent(
+                event_type=TelemetryEventType.GOVERNOR_ROLLBACK,
+                severity="warning",
+                message="Rollback load_state_dict had key mismatches",
+                data={
+                    "missing_keys": list(missing_keys),
+                    "unexpected_keys": list(unexpected_keys),
+                    "env_id": env_id,
+                    "device": str(device),
+                    "reason": "State Dict Key Mismatch",
+                },
+            ))
+
+        # Reset optimizer momentum (BUG-015 fix)
+        # If we don't clear momentum, the optimizer will push the restored weights
+        # in the same direction that caused the crash.
+        if optimizer is not None:
+            for group in optimizer.param_groups:
+                for p in group["params"]:
+                    state = optimizer.state.get(p)
+                    if state:
+                        for value in state.values():
+                            if isinstance(value, torch.Tensor) and value.is_floating_point():
+                                value.zero_()
 
         # Reset panic counter after successful rollback to allow fresh recovery
         self.consecutive_panics = 0

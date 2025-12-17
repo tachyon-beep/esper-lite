@@ -68,8 +68,8 @@ class TestExportJsonl:
         store.start_epoch(1)
 
         # Add a slot with enum stage
-        store.current_epoch.slots["mid"] = SlotSnapshot(
-            slot_id="mid",
+        store.current_epoch.slots["r0c1"] = SlotSnapshot(
+            slot_id="r0c1",
             stage=SeedStage.TRAINING,
         )
         store.commit_epoch()

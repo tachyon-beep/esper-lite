@@ -72,6 +72,12 @@ class HeuristicPolicyConfig:
     blueprint_penalty_decay: float = DEFAULT_BLUEPRINT_PENALTY_DECAY
     blueprint_penalty_threshold: float = DEFAULT_BLUEPRINT_PENALTY_THRESHOLD
 
+    # P2-B: Ransomware detection thresholds
+    # Seeds with high counterfactual but negative total improvement create dependencies
+    # without adding value - they're "holding the model hostage"
+    ransomware_contribution_threshold: float = 0.1  # Counterfactual must exceed this
+    ransomware_improvement_threshold: float = 0.0   # Total improvement must be below this
+
 
 class HeuristicTamiyo:
     """Heuristic-based Tamiyo policy.
@@ -87,6 +93,22 @@ class HeuristicTamiyo:
         self.config = config or HeuristicPolicyConfig()
         self.topology = topology
         self._action_enum = build_action_enum(topology)
+
+        # P1-B fix: Validate blueprint_rotation against available actions at init
+        # Prevents AttributeError crash during training when getattr fails
+        available_blueprints = {
+            name[len("GERMINATE_"):].lower()
+            for name in dir(self._action_enum)
+            if name.startswith("GERMINATE_")
+        }
+        invalid_blueprints = set(self.config.blueprint_rotation) - available_blueprints
+        if invalid_blueprints:
+            raise ValueError(
+                f"blueprint_rotation contains blueprints not available for "
+                f"topology '{topology}': {sorted(invalid_blueprints)}. "
+                f"Available: {sorted(available_blueprints)}"
+            )
+
         self._blueprint_index = 0
         self._germination_count = 0
         self._decisions_made: list[TamiyoDecision] = []
@@ -208,19 +230,24 @@ class HeuristicTamiyo:
             if stage == SeedStage.PROBATIONARY:
                 # Prefer counterfactual contribution (true causal impact) when available
                 contribution = seed.metrics.counterfactual_contribution
-                if contribution is not None:
-                    improvement = contribution
-                else:
-                    improvement = seed.metrics.total_improvement  # Fallback
+                total_improvement = seed.metrics.total_improvement
 
-                # TODO: [FUTURE FUNCTIONALITY] - Ransomware detection
-                # Currently we only check counterfactual contribution for fossilization.
-                # "Ransomware" seeds have high counterfactual (model needs them) but
-                # negative total_improvement (model is worse overall). These seeds
-                # created dependencies without adding value. The reward system in
-                # simic/rewards.py handles this, but HeuristicTamiyo should also
-                # detect and cull ransomware patterns. See test:
-                # tests/tamiyo/properties/test_decision_antigaming.py::TestRansomwareDetection
+                # P2-B: Ransomware detection - cull seeds that create dependencies
+                # without adding value (high counterfactual but negative total improvement)
+                if contribution is not None and total_improvement is not None:
+                    is_ransomware = (
+                        contribution > self.config.ransomware_contribution_threshold and
+                        total_improvement < self.config.ransomware_improvement_threshold
+                    )
+                    if is_ransomware:
+                        return self._cull_seed(
+                            signals, seed,
+                            f"Ransomware pattern: high counterfactual ({contribution:.3f}) "
+                            f"but negative improvement ({total_improvement:.3f})"
+                        )
+
+                # Use counterfactual if available, else total_improvement
+                improvement = contribution if contribution is not None else total_improvement
 
                 if improvement > self.config.min_improvement_to_fossilize:
                     return TamiyoDecision(
@@ -263,7 +290,7 @@ class HeuristicTamiyo:
         )
 
     def _decay_blueprint_penalties(self) -> None:
-        """Decay blueprint penalties (called once per decision)."""
+        """Decay blueprint penalties (called once per epoch)."""
         for bp in list(self._blueprint_penalties.keys()):
             self._blueprint_penalties[bp] *= self.config.blueprint_penalty_decay
             if self._blueprint_penalties[bp] < 0.1:

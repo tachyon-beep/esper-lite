@@ -1,19 +1,19 @@
-"""Test gradient isolation monitoring performance."""
+"""Test gradient health monitoring performance."""
 import torch
 import torch.nn as nn
 
-from esper.kasmina.isolation import GradientIsolationMonitor
+from esper.kasmina.isolation import GradientHealthMonitor
 
 
-class TestGradientIsolationPerformance:
-    """Verify foreach_norm optimization."""
+class TestGradientHealthMonitor:
+    """Verify foreach_norm optimization for gradient health monitoring."""
 
-    def test_check_isolation_uses_foreach(self):
+    def test_compute_gradient_health_uses_foreach(self):
         """Verify batched norm computation is used."""
         host = nn.Linear(64, 64)
         seed = nn.Linear(64, 64)
 
-        monitor = GradientIsolationMonitor()
+        monitor = GradientHealthMonitor()
         monitor.register(host, seed)
 
         # Create gradients
@@ -21,7 +21,7 @@ class TestGradientIsolationPerformance:
         loss = (host(x) + seed(x)).sum()
         loss.backward()
 
-        is_isolated, stats = monitor.check_isolation()
+        stats = monitor.compute_gradient_health()
 
         # Verify stats are computed
         assert "host_grad_norm" in stats

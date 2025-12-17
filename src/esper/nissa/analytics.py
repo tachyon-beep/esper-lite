@@ -19,10 +19,17 @@ from esper.nissa.output import OutputBackend
 # =============================================================================
 
 BLUEPRINT_COMPUTE_MULTIPLIERS: dict[str, float] = {
+    # CNN blueprints
+    "noop": 1.0,            # Identity seed - no compute impact
+    "norm": 1.02,           # Minimal - normalization only
     "depthwise": 1.08,      # Cheap - depthwise separable
-    "conv_enhance": 1.15,   # Moderate - adds conv layers
-    "norm": 1.02,           # Minimal - just normalization
-    "attention": 1.35,      # Expensive - O(n²) attention
+    "conv_light": 1.15,     # Moderate - single conv block
+    "conv_heavy": 1.25,     # Heavier - double conv block
+    # Transformer blueprints
+    "lora": 1.05,           # Low-rank adapter - lightweight
+    "attention": 1.35,      # Additional self-attention head (O(n²))
+    "flex_attention": 1.35, # FlexAttention variant - similar cost envelope
+    "mlp": 1.20,            # Extra MLP block
 }
 
 

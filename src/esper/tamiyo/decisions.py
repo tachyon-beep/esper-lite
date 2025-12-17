@@ -6,15 +6,7 @@ Defines the decisions made by strategic controllers.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from enum import IntEnum
-
-from esper.leyline import CommandType, RiskLevel, AdaptationCommand, SeedStage
-
-
-def _utc_now() -> datetime:
-    """Return current UTC time (timezone-aware)."""
-    return datetime.now(timezone.utc)
 
 
 def _is_germinate_action(action: IntEnum) -> bool:
@@ -54,44 +46,6 @@ class TamiyoDecision:
     def blueprint_id(self) -> str | None:
         """Get blueprint ID if this is a germinate action."""
         return _get_blueprint_from_action(self.action)
-
-    def to_command(self) -> AdaptationCommand:
-        """Convert to Leyline's canonical AdaptationCommand format."""
-        action_name = self.action.name
-        is_germinate = _is_germinate_action(self.action)
-
-        if action_name == "WAIT":
-            command_type, target_stage = CommandType.REQUEST_STATE, None
-        elif is_germinate:
-            command_type, target_stage = CommandType.GERMINATE, SeedStage.GERMINATED
-        elif action_name == "FOSSILIZE":
-            command_type, target_stage = CommandType.ADVANCE_STAGE, SeedStage.FOSSILIZED
-        elif action_name == "CULL":
-            command_type, target_stage = CommandType.CULL, SeedStage.CULLED
-        else:
-            command_type, target_stage = CommandType.REQUEST_STATE, None
-
-        # Determine risk level based on action
-        if action_name == "WAIT":
-            risk = RiskLevel.GREEN
-        elif is_germinate:
-            risk = RiskLevel.YELLOW
-        elif action_name == "FOSSILIZE":
-            risk = RiskLevel.YELLOW
-        elif action_name == "CULL":
-            risk = RiskLevel.ORANGE
-        else:
-            risk = RiskLevel.GREEN
-
-        return AdaptationCommand(
-            command_type=command_type,
-            target_seed_id=self.target_seed_id,
-            blueprint_id=self.blueprint_id,
-            target_stage=target_stage,
-            reason=self.reason,
-            confidence=self.confidence,
-            risk_level=risk,
-        )
 
 
 __all__ = [

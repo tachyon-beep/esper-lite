@@ -1,8 +1,8 @@
 """Integration tests for max_seeds wiring through training pipeline."""
 
-from esper.simic.ppo import signals_to_features
-from esper.simic.action_masks import compute_action_masks
-from esper.simic.features import MULTISLOT_FEATURE_SIZE
+from esper.simic.agent import signals_to_features
+from esper.simic.control import compute_action_masks
+from esper.simic.control import MULTISLOT_FEATURE_SIZE
 from esper.leyline.factored_actions import LifecycleOp
 
 
@@ -42,7 +42,7 @@ class TestMaxSeedsWiring:
             signals=MockSignals(),
             slot_reports={},
             use_telemetry=False,
-            slots=["mid"],
+            slots=["r0c1"],
             total_seeds=1,
             max_seeds=3,
         )
@@ -54,12 +54,12 @@ class TestMaxSeedsWiring:
     def test_germinate_masked_at_limit(self):
         """Verify GERMINATE is masked when at seed limit."""
         # No active seed (empty slot)
-        slot_states = {"mid": None}
+        slot_states = {"r0c1": None}
 
         # At limit: 3 seeds out of 3 max
         masks = compute_action_masks(
             slot_states=slot_states,
-            enabled_slots=["mid"],
+            enabled_slots=["r0c1"],
             total_seeds=3,
             max_seeds=3,
         )
@@ -70,12 +70,12 @@ class TestMaxSeedsWiring:
     def test_germinate_allowed_under_limit(self):
         """Verify GERMINATE is allowed when under seed limit."""
         # No active seed (empty slot)
-        slot_states = {"mid": None}
+        slot_states = {"r0c1": None}
 
         # Under limit: 2 seeds out of 3 max
         masks = compute_action_masks(
             slot_states=slot_states,
-            enabled_slots=["mid"],
+            enabled_slots=["r0c1"],
             total_seeds=2,
             max_seeds=3,
         )
@@ -86,12 +86,12 @@ class TestMaxSeedsWiring:
     def test_unlimited_seeds_when_max_zero(self):
         """Verify max_seeds=0 means unlimited."""
         # No active seed (empty slot)
-        slot_states = {"mid": None}
+        slot_states = {"r0c1": None}
 
         # max_seeds=0 means unlimited
         masks = compute_action_masks(
             slot_states=slot_states,
-            enabled_slots=["mid"],
+            enabled_slots=["r0c1"],
             total_seeds=100,  # Many seeds
             max_seeds=0,      # Unlimited
         )

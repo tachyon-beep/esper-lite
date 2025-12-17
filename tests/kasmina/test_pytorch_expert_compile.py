@@ -57,19 +57,23 @@ class TestIsolationCompileCompatibility:
         assert torch.allclose(seed.grad, torch.ones_like(seed))
 
     def test_blend_compiles_with_different_alpha_values(self):
-        """Blend should compile and handle various alpha values."""
+        """Blend should compile and handle various alpha values.
+
+        Task 5: blend_with_isolation now requires tensor alpha.
+        """
         compiled_blend = torch.compile(blend_with_isolation, fullgraph=True)
 
         host = torch.randn(4, 64)
         seed = torch.randn(4, 64)
 
-        # Test boundary and mid values
-        for alpha in [0.0, 0.5, 1.0]:
+        # Test boundary and mid values (as tensors)
+        for alpha_val in [0.0, 0.5, 1.0]:
+            alpha = torch.tensor(alpha_val)
             result = compiled_blend(host, seed, alpha)
             assert result.shape == host.shape
 
             # Verify blend formula: host + alpha * (seed - host)
-            expected = torch.lerp(host, seed, alpha)
+            expected = torch.lerp(host, seed, alpha_val)
             assert torch.allclose(result, expected, atol=1e-6)
 
     def test_blend_gradient_flow_to_both_inputs(self):
@@ -79,13 +83,16 @@ class TestIsolationCompileCompatibility:
         previously zeroed ALL host gradients. Now blend_with_isolation always
         allows gradients proportional to contribution: host gets (1-alpha),
         seed gets alpha.
+
+        Task 5: blend_with_isolation now requires tensor alpha.
         """
         compiled_blend = torch.compile(blend_with_isolation, fullgraph=True)
 
         host = torch.randn(2, 32, requires_grad=True)
         seed = torch.randn(2, 32, requires_grad=True)
 
-        result = compiled_blend(host, seed, 0.5)
+        alpha = torch.tensor(0.5)
+        result = compiled_blend(host, seed, alpha)
         loss = result.sum()
         loss.backward()
 
@@ -114,7 +121,7 @@ class TestHostCompileCompatibility:
     def test_transformer_host_compiles_with_dynamic_sequence_length(self):
         """TransformerHost should compile and handle various sequence lengths."""
         host = TransformerHost(
-            vocab_size=100, n_embd=64, n_head=2, n_layer=2, block_size=32
+            vocab_size=100, n_embd=64, n_head=2, n_layer=3, block_size=32, num_segments=3
         )
         compiled_host = torch.compile(host, fullgraph=True)
 
@@ -148,26 +155,30 @@ class TestHostCompileCompatibility:
         assert result.shape == (2, 12, 100)
 
 
-class TestPrecomputedKeysNoGraphBreaks:
-    """Verify pre-computed slot keys don't cause graph breaks."""
+class TestSegmentRoutingCompiles:
+    """Verify segment routing compiles efficiently after slot simplification."""
 
-    def test_cnn_slot_keys_are_tuples(self):
-        """CNNHost slot keys should be tuples (inlined by compiler)."""
-        host = CNNHost(num_classes=10, n_blocks=5)
+    def test_cnn_segment_routing_compiles(self):
+        """CNNHost segment routing should compile without graph breaks."""
+        host = CNNHost(num_classes=10, n_blocks=3)
 
-        # Tuples are compile-friendly data structures
-        assert isinstance(host._slot_keys, tuple)
-        assert isinstance(host._slot_indices, tuple)
-        assert len(host._slot_keys) == 4  # n_blocks - 1
+        x = torch.randn(2, 3, 32, 32)
+        features = host.forward_to_segment("r0c1", x)
+        out = host.forward_from_segment("r0c1", features)
 
-    def test_transformer_slot_keys_are_tuples(self):
-        """TransformerHost slot keys should be tuples."""
+        assert out.shape == (2, 10)
+
+    def test_transformer_segment_routing_compiles(self):
+        """TransformerHost segment routing should compile without graph breaks."""
         host = TransformerHost(
-            vocab_size=100, n_embd=64, n_head=2, n_layer=4, block_size=16
+            vocab_size=100, n_embd=64, n_head=2, n_layer=6, block_size=16, num_segments=3
         )
 
-        assert isinstance(host._slot_keys, tuple)
-        assert len(host._slot_keys) == 4  # n_layer
+        x = torch.randint(0, 100, (2, 12))
+        features = host.forward_to_segment("r0c0", x)
+        out = host.forward_from_segment("r0c0", features)
+
+        assert out.shape == (2, 12, 100)
 
 
 class TestDynamicShapeHandling:
@@ -236,7 +247,7 @@ class TestCompilerDisabledPaths:
 
     def test_validate_action_mask_has_compiler_disable(self):
         """_validate_action_mask should have @torch.compiler.disable decorator."""
-        from esper.simic.action_masks import _validate_action_mask
+        from esper.simic.control import _validate_action_mask
 
         assert getattr(_validate_action_mask, '_torchdynamo_disable', False), \
             "_validate_action_mask should have @torch.compiler.disable"

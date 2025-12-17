@@ -3,7 +3,7 @@
 
 import pytest
 
-from esper.simic.anomaly_detector import AnomalyDetector
+from esper.simic.telemetry import AnomalyDetector
 
 
 class TestAnomalyDetector:

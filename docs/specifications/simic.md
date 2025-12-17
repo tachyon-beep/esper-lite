@@ -52,7 +52,7 @@ Simic is **NOT** responsible for:
 
 ```python
 # Vectorized training (main training API)
-from esper.simic.vectorized import train_ppo_vectorized
+from esper.simic.training import train_ppo_vectorized
 
 history = train_ppo_vectorized(
     task="cifar10",
@@ -60,11 +60,11 @@ history = train_ppo_vectorized(
     n_envs=4,
     max_epochs=25,
     device="cuda:0",
-    slots=["early", "mid", "late"],
+    slots=["r0c0", "r0c1", "r0c2"],
 )
 
 # PPO Agent (for custom training loops)
-from esper.simic.ppo import PPOAgent
+from esper.simic.agent import PPOAgent
 
 agent = PPOAgent(
     state_dim=80,  # 50 base + 30 telemetry (10 per slot × 3)

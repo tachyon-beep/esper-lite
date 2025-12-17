@@ -1,7 +1,7 @@
 """Integration tests for Tamiyo-Kasmina interaction.
 
 Tests that Tamiyo decisions correctly translate to Kasmina slot operations,
-verifying the command execution pipeline across the strategic-to-tactical boundary.
+verifying the strategic-to-tactical boundary for seed lifecycle management.
 """
 
 import pytest
@@ -10,13 +10,12 @@ from esper.tamiyo.decisions import TamiyoDecision
 from esper.kasmina.slot import SeedSlot
 from esper.leyline import (
     SeedStage,
-    CommandType,
     build_action_enum,
 )
 
 
 class TestTamiyoKasminaIntegration:
-    """Integration tests for Tamiyo → Kasmina command execution."""
+    """Integration tests for Tamiyo → Kasmina decision execution."""
 
     @pytest.fixture
     def slot(self):
@@ -31,32 +30,6 @@ class TestTamiyoKasminaIntegration:
     def action_enum(self):
         """Create action enum for CNN topology."""
         return build_action_enum("cnn")
-
-    def test_decision_to_command_executed(self, slot, action_enum):
-        """TamiyoDecision → AdaptationCommand → Kasmina execution pipeline.
-
-        Tests the full integration from strategic decision to tactical execution:
-        1. Tamiyo makes a decision (using action enum)
-        2. Decision converts to AdaptationCommand
-        3. Command properties match expected values
-        """
-        # Create GERMINATE decision
-        decision = TamiyoDecision(
-            action=action_enum.GERMINATE_NORM,
-            target_seed_id=None,
-            reason="Test germination",
-            confidence=0.95,
-        )
-
-        # Convert to command
-        command = decision.to_command()
-
-        # Verify command properties
-        assert command.command_type == CommandType.GERMINATE
-        assert command.blueprint_id == "norm"
-        assert command.target_stage == SeedStage.GERMINATED
-        assert command.reason == "Test germination"
-        assert command.confidence == 0.95
 
     def test_germinate_creates_seed(self, slot, action_enum):
         """GERMINATE command creates seed in GERMINATED stage.
@@ -142,24 +115,12 @@ class TestTamiyoKasminaIntegration:
         assert slot.state is None
 
 
-class TestTamiyoKasminaCommandTranslation:
-    """Test command translation edge cases and error handling."""
+class TestTamiyoKasminaDecisionProperties:
+    """Test decision property extraction and edge cases."""
 
     @pytest.fixture
     def action_enum(self):
         return build_action_enum("cnn")
-
-    def test_wait_action_translation(self, action_enum):
-        """WAIT action translates to REQUEST_STATE command."""
-        decision = TamiyoDecision(
-            action=action_enum.WAIT,
-            reason="Waiting for stability",
-        )
-
-        command = decision.to_command()
-
-        assert command.command_type == CommandType.REQUEST_STATE
-        assert command.target_stage is None
 
     def test_blueprint_extraction_from_action(self, action_enum):
         """Blueprint ID correctly extracted from GERMINATE_* actions."""

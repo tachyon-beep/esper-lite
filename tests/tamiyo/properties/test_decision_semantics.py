@@ -128,8 +128,10 @@ class TestActionReachability:
         """Property: FOSSILIZE is reachable for contributing PROBATIONARY seeds."""
         policy = HeuristicTamiyo(topology="cnn")
 
-        # Ensure positive contribution
+        # Ensure positive contribution AND positive total_improvement
+        # (to avoid triggering ransomware detection - P2-B)
         seed.metrics.counterfactual_contribution = 5.0
+        seed.metrics.total_improvement = 3.0  # Positive to avoid ransomware pattern
 
         class MockSignals:
             class metrics:

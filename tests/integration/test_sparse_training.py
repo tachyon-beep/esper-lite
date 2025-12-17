@@ -8,7 +8,7 @@ with all reward modes without requiring full training runs.
 import pytest
 import math
 
-from esper.simic.normalization import RewardNormalizer
+from esper.simic.control import RewardNormalizer
 
 
 class TestRewardNormalizerWithSparse:
@@ -49,7 +49,7 @@ class TestSparseTrainingSmoke:
         """Sparse mode completes training loop without exceptions."""
         pytest.importorskip("torch")
 
-        from esper.simic.vectorized import train_ppo_vectorized
+        from esper.simic.training.vectorized import train_ppo_vectorized
 
         # Minimal smoke test - just verify it runs
         try:
@@ -60,7 +60,7 @@ class TestSparseTrainingSmoke:
                 device="cpu",
                 num_workers=0,
                 reward_mode="sparse",
-                slots=["mid"],
+                slots=["r0c1"],
                 use_telemetry=False,
             )
 
@@ -73,7 +73,7 @@ class TestSparseTrainingSmoke:
         """Minimal mode completes training loop without exceptions."""
         pytest.importorskip("torch")
 
-        from esper.simic.vectorized import train_ppo_vectorized
+        from esper.simic.training.vectorized import train_ppo_vectorized
 
         try:
             agent, history = train_ppo_vectorized(
@@ -83,7 +83,7 @@ class TestSparseTrainingSmoke:
                 device="cpu",
                 num_workers=0,
                 reward_mode="minimal",
-                slots=["mid"],
+                slots=["r0c1"],
                 use_telemetry=False,
             )
 
