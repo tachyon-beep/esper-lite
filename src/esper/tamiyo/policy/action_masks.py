@@ -33,6 +33,8 @@ from esper.leyline.factored_actions import (
     NUM_BLUEPRINTS,
     NUM_BLENDS,
     NUM_OPS,
+    CNN_BLUEPRINTS,
+    TRANSFORMER_BLUEPRINTS,
 )
 
 if TYPE_CHECKING:
@@ -96,6 +98,7 @@ def compute_action_masks(
     max_seeds: int = 0,
     slot_config: SlotConfig | None = None,
     device: torch.device | None = None,
+    topology: str = "cnn",
 ) -> dict[str, torch.Tensor]:
     """Compute action masks based on slot states.
 
@@ -108,6 +111,7 @@ def compute_action_masks(
         max_seeds: Maximum allowed seeds (0 = unlimited)
         slot_config: Slot configuration (defaults to SlotConfig.default())
         device: Torch device for tensors
+        topology: Task topology ("cnn" or "transformer") for blueprint masking
 
     Returns:
         Dict of boolean tensors for each action head:
@@ -131,9 +135,15 @@ def compute_action_masks(
         idx = slot_config.index_for_slot_id(slot_id)
         slot_mask[idx] = True
 
-    # Blueprint mask: disable zero-parameter blueprints (can't train them)
-    # NOOP is a placeholder seed with no trainable parameters
-    blueprint_mask = torch.ones(NUM_BLUEPRINTS, dtype=torch.bool, device=device)
+    # Blueprint mask: only allow blueprints valid for this topology
+    blueprint_mask = torch.zeros(NUM_BLUEPRINTS, dtype=torch.bool, device=device)
+    
+    valid_blueprints = TRANSFORMER_BLUEPRINTS if topology == "transformer" else CNN_BLUEPRINTS
+    for bp in valid_blueprints:
+        # NOOP is technically in the sets but we force it masked out anyway below
+        blueprint_mask[bp] = True
+
+    # NOOP is a placeholder seed with no trainable parameters - always disable
     blueprint_mask[BlueprintAction.NOOP] = False
 
     # Blend mask: all blend methods valid (network learns preferences)
@@ -186,6 +196,7 @@ def compute_batch_masks(
     max_seeds: int = 0,
     slot_config: SlotConfig | None = None,
     device: torch.device | None = None,
+    topology: str = "cnn",
 ) -> dict[str, torch.Tensor]:
     """Compute action masks for a batch of observations.
 
@@ -199,6 +210,7 @@ def compute_batch_masks(
         max_seeds: Maximum allowed seeds (0 = unlimited)
         slot_config: Slot configuration (defaults to SlotConfig.default())
         device: Torch device for tensors
+        topology: Task topology ("cnn" or "transformer") for blueprint masking
 
     Returns:
         Dict of boolean tensors (batch_size, num_actions) for each head
@@ -214,6 +226,7 @@ def compute_batch_masks(
             max_seeds=max_seeds,
             slot_config=slot_config,
             device=device,
+            topology=topology,
         )
         for i, slot_states in enumerate(batch_slot_states)
     ]

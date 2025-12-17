@@ -98,8 +98,16 @@ _BLUEPRINT_TO_INDEX = {
     "attention": 2,
     "norm": 3,
     "depthwise": 4,
+    "bottleneck": 5,
+    "conv_small": 6,
+    "conv_heavy": 7,
+    "lora": 8,
+    "lora_large": 9,
+    "mlp_small": 10,
+    "mlp": 11,
+    "flex_attention": 12,
 }
-_NUM_BLUEPRINT_TYPES = 5
+_NUM_BLUEPRINT_TYPES = 13
 
 
 def obs_to_multislot_features(

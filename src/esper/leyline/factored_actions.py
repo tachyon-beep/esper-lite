@@ -20,6 +20,14 @@ class BlueprintAction(IntEnum):
     ATTENTION = 2
     NORM = 3
     DEPTHWISE = 4
+    BOTTLENECK = 5
+    CONV_SMALL = 6
+    CONV_HEAVY = 7
+    LORA = 8
+    LORA_LARGE = 9
+    MLP_SMALL = 10
+    MLP = 11
+    FLEX_ATTENTION = 12
 
     def to_blueprint_id(self) -> str | None:
         """Map to registered blueprint name."""
@@ -29,6 +37,14 @@ class BlueprintAction(IntEnum):
             2: "attention",
             3: "norm",
             4: "depthwise",
+            5: "bottleneck",
+            6: "conv_small",
+            7: "conv_heavy",
+            8: "lora",
+            9: "lora_large",
+            10: "mlp_small",
+            11: "mlp",
+            12: "flex_attention",
         }
         return mapping.get(self.value)
 
@@ -105,6 +121,30 @@ NUM_BLENDS = len(BlendAction)
 NUM_OPS = len(LifecycleOp)
 
 
+# Valid blueprints per topology (for action masking)
+CNN_BLUEPRINTS = frozenset({
+    BlueprintAction.NOOP,
+    BlueprintAction.NORM,
+    BlueprintAction.ATTENTION,
+    BlueprintAction.CONV_LIGHT,
+    BlueprintAction.DEPTHWISE,
+    BlueprintAction.BOTTLENECK,
+    BlueprintAction.CONV_SMALL,
+    BlueprintAction.CONV_HEAVY,
+})
+
+TRANSFORMER_BLUEPRINTS = frozenset({
+    BlueprintAction.NOOP,
+    BlueprintAction.NORM,
+    BlueprintAction.ATTENTION,
+    BlueprintAction.LORA,
+    BlueprintAction.LORA_LARGE,
+    BlueprintAction.MLP_SMALL,
+    BlueprintAction.MLP,
+    BlueprintAction.FLEX_ATTENTION,
+})
+
+
 __all__ = [
     "BlueprintAction",
     "BlendAction",
@@ -113,4 +153,6 @@ __all__ = [
     "NUM_BLUEPRINTS",
     "NUM_BLENDS",
     "NUM_OPS",
+    "CNN_BLUEPRINTS",
+    "TRANSFORMER_BLUEPRINTS",
 ]
