@@ -211,3 +211,94 @@ class TestEnvSummary:
 
         assert restored.env_id == env.env_id
         assert restored.slots["r0c1"].alpha == 0.5
+
+
+class TestTamiyoState:
+    """Tests for TamiyoState dataclass."""
+
+    def test_tamiyo_state_creation(self) -> None:
+        """TamiyoState can be created with defaults."""
+        from esper.karn.overwatch.schema import TamiyoState
+
+        state = TamiyoState()
+
+        assert state.action_counts == {}
+        assert state.recent_actions == []
+        assert state.confidence_mean == 0.0
+        assert state.exploration_pct == 0.0
+
+    def test_tamiyo_state_with_data(self) -> None:
+        """TamiyoState stores action distribution and PPO vitals."""
+        from esper.karn.overwatch.schema import TamiyoState
+
+        state = TamiyoState(
+            action_counts={"GERMINATE": 34, "BLEND": 28, "CULL": 12, "WAIT": 26},
+            recent_actions=["G", "B", "B", "W", "G"],
+            confidence_mean=0.73,
+            confidence_min=0.42,
+            confidence_max=0.94,
+            exploration_pct=31.0,
+            kl_divergence=0.019,
+            entropy=1.24,
+            clip_fraction=0.048,
+            explained_variance=0.42,
+            learning_rate=3e-4,
+        )
+
+        assert state.action_counts["GERMINATE"] == 34
+        assert len(state.recent_actions) == 5
+        assert state.kl_divergence == 0.019
+
+    def test_tamiyo_state_to_dict(self) -> None:
+        """TamiyoState serializes to dict."""
+        from esper.karn.overwatch.schema import TamiyoState
+
+        state = TamiyoState(
+            action_counts={"GERMINATE": 10},
+            recent_actions=["G", "G"],
+            confidence_mean=0.8,
+            kl_divergence=0.02,
+        )
+
+        d = state.to_dict()
+
+        assert d["action_counts"] == {"GERMINATE": 10}
+        assert d["recent_actions"] == ["G", "G"]
+        assert d["kl_divergence"] == 0.02
+
+    def test_tamiyo_state_from_dict(self) -> None:
+        """TamiyoState deserializes from dict."""
+        from esper.karn.overwatch.schema import TamiyoState
+
+        d = {
+            "action_counts": {"BLEND": 5, "CULL": 3},
+            "recent_actions": ["B", "C"],
+            "confidence_mean": 0.65,
+            "confidence_min": 0.4,
+            "confidence_max": 0.9,
+            "exploration_pct": 25.0,
+            "kl_divergence": 0.015,
+            "entropy": 1.5,
+            "clip_fraction": 0.03,
+            "explained_variance": 0.5,
+            "learning_rate": 0.0003,
+        }
+
+        state = TamiyoState.from_dict(d)
+
+        assert state.action_counts["BLEND"] == 5
+        assert state.entropy == 1.5
+
+    def test_tamiyo_state_json_roundtrip(self) -> None:
+        """TamiyoState survives JSON serialization."""
+        from esper.karn.overwatch.schema import TamiyoState
+
+        state = TamiyoState(
+            action_counts={"WAIT": 100},
+            kl_divergence=0.01,
+        )
+
+        json_str = json.dumps(state.to_dict())
+        restored = TamiyoState.from_dict(json.loads(json_str))
+
+        assert restored.action_counts == state.action_counts

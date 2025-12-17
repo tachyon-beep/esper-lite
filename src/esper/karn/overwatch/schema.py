@@ -130,3 +130,89 @@ class EnvSummary:
             anomaly_reasons=data.get("anomaly_reasons", []),
             last_update_ts=data.get("last_update_ts", 0.0),
         )
+
+
+@dataclass
+class TamiyoState:
+    """Tamiyo agent state for the Tamiyo Strip and Detail Panel.
+
+    Contains PPO vitals, action distribution, and decision confidence
+    for rendering agent brain telemetry.
+    """
+
+    # Action distribution (counts over recent window)
+    action_counts: dict[str, int] = field(default_factory=dict)
+    recent_actions: list[str] = field(default_factory=list)  # Last N actions as codes
+
+    # Confidence (from policy logprobs)
+    confidence_mean: float = 0.0
+    confidence_min: float = 0.0
+    confidence_max: float = 0.0
+    confidence_history: list[float] = field(default_factory=list)  # For sparkline
+
+    # Exploration
+    exploration_pct: float = 0.0  # Entropy as % of max entropy
+
+    # PPO vitals
+    kl_divergence: float = 0.0
+    entropy: float = 0.0
+    clip_fraction: float = 0.0
+    explained_variance: float = 0.0
+    grad_norm: float = 0.0
+    learning_rate: float = 0.0
+
+    # Trends (for arrows: positive = rising, negative = falling)
+    kl_trend: float = 0.0
+    entropy_trend: float = 0.0
+    ev_trend: float = 0.0
+
+    # Status flags
+    entropy_collapsed: bool = False
+    ev_warning: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to JSON-serializable dict."""
+        return {
+            "action_counts": self.action_counts,
+            "recent_actions": self.recent_actions,
+            "confidence_mean": self.confidence_mean,
+            "confidence_min": self.confidence_min,
+            "confidence_max": self.confidence_max,
+            "confidence_history": self.confidence_history,
+            "exploration_pct": self.exploration_pct,
+            "kl_divergence": self.kl_divergence,
+            "entropy": self.entropy,
+            "clip_fraction": self.clip_fraction,
+            "explained_variance": self.explained_variance,
+            "grad_norm": self.grad_norm,
+            "learning_rate": self.learning_rate,
+            "kl_trend": self.kl_trend,
+            "entropy_trend": self.entropy_trend,
+            "ev_trend": self.ev_trend,
+            "entropy_collapsed": self.entropy_collapsed,
+            "ev_warning": self.ev_warning,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> TamiyoState:
+        """Reconstruct from dict."""
+        return cls(
+            action_counts=data.get("action_counts", {}),
+            recent_actions=data.get("recent_actions", []),
+            confidence_mean=data.get("confidence_mean", 0.0),
+            confidence_min=data.get("confidence_min", 0.0),
+            confidence_max=data.get("confidence_max", 0.0),
+            confidence_history=data.get("confidence_history", []),
+            exploration_pct=data.get("exploration_pct", 0.0),
+            kl_divergence=data.get("kl_divergence", 0.0),
+            entropy=data.get("entropy", 0.0),
+            clip_fraction=data.get("clip_fraction", 0.0),
+            explained_variance=data.get("explained_variance", 0.0),
+            grad_norm=data.get("grad_norm", 0.0),
+            learning_rate=data.get("learning_rate", 0.0),
+            kl_trend=data.get("kl_trend", 0.0),
+            entropy_trend=data.get("entropy_trend", 0.0),
+            ev_trend=data.get("ev_trend", 0.0),
+            entropy_collapsed=data.get("entropy_collapsed", False),
+            ev_warning=data.get("ev_warning", False),
+        )
