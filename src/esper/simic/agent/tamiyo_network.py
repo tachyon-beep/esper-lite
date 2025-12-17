@@ -24,7 +24,7 @@ import torch.nn as nn
 
 from esper.simic.control import MaskedCategorical
 
-from esper.leyline import DEFAULT_LSTM_HIDDEN_DIM, DEFAULT_FEATURE_DIM
+from esper.leyline import DEFAULT_LSTM_HIDDEN_DIM, DEFAULT_FEATURE_DIM, HEAD_NAMES
 from esper.leyline.factored_actions import (
     NUM_BLUEPRINTS,
     NUM_BLENDS,
@@ -286,7 +286,7 @@ class FactoredRecurrentActorCritic(nn.Module):
                 "op": op_mask[:, 0, :] if op_mask is not None else None,
             }
 
-            for key in ["slot", "blueprint", "blend", "op"]:
+            for key in HEAD_NAMES:
                 logits = output[f"{key}_logits"][:, 0, :]  # [batch, action_dim]
                 mask = masks[key]
                 if mask is None:
@@ -338,7 +338,7 @@ class FactoredRecurrentActorCritic(nn.Module):
             "op": op_mask,
         }
 
-        for key in ["slot", "blueprint", "blend", "op"]:
+        for key in HEAD_NAMES:
             logits = output[f"{key}_logits"]  # [batch, seq_len, action_dim]
             action = actions[key]  # [batch, seq_len]
 

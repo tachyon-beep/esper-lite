@@ -101,6 +101,14 @@ DEFAULT_ENTROPY_COEF = 0.05
 DEFAULT_ENTROPY_COEF_MIN = 0.01
 
 # =============================================================================
+# Factored Action Space Constants
+# =============================================================================
+
+# Head names for factored action space (slot selection, blueprint, blend algorithm, lifecycle op).
+# Order matters: slot → blueprint → blend → op is the causal chain.
+HEAD_NAMES: tuple[str, ...] = ("slot", "blueprint", "blend", "op")
+
+# =============================================================================
 # Reward Shaping Constants (tunable reward function weights)
 # =============================================================================
 
@@ -358,6 +366,9 @@ __all__ = [
     "DEFAULT_BATCH_SIZE",
     "DEFAULT_ENTROPY_COEF",
     "DEFAULT_ENTROPY_COEF_MIN",
+
+    # Factored Action Space
+    "HEAD_NAMES",
 
     # Reward Shaping Constants
     "DEFAULT_CONTRIBUTION_WEIGHT",

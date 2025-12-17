@@ -58,6 +58,7 @@ from esper.leyline import (
     DEFAULT_GOVERNOR_DEATH_PENALTY,
     DEFAULT_GOVERNOR_HISTORY_WINDOW,
     DEFAULT_MIN_PANICS_BEFORE_ROLLBACK,
+    HEAD_NAMES,
 )
 from esper.leyline.factored_actions import FactoredAction, LifecycleOp
 from esper.simic.control import build_slot_states, compute_action_masks
@@ -1060,8 +1061,8 @@ def train_ppo_vectorized(
             {"bounded_attribution": 0.0, "compute_rent": 0.0, "total_reward": 0.0, "count": 0}
             for _ in range(envs_this_batch)
         ]
-        mask_hits = {"slot": 0, "blueprint": 0, "blend": 0, "op": 0}
-        mask_total = {"slot": 0, "blueprint": 0, "blend": 0, "op": 0}
+        mask_hits = {head: 0 for head in HEAD_NAMES}
+        mask_total = {head: 0 for head in HEAD_NAMES}
 
         # Accumulate raw (unnormalized) states for deferred normalizer update.
         # We freeze normalizer stats during rollout to ensure consistent normalization

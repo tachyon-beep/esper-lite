@@ -35,6 +35,7 @@ from esper.leyline import (
     DEFAULT_ENTROPY_COEF,
     DEFAULT_ENTROPY_COEF_MIN,
     DEFAULT_VALUE_CLIP,
+    HEAD_NAMES,
 )
 from esper.leyline.slot_config import SlotConfig
 from esper.leyline.factored_actions import LifecycleOp
@@ -511,7 +512,7 @@ class PPOAgent:
             }
 
             per_head_ratios = {}
-            for key in ["slot", "blueprint", "blend", "op"]:
+            for key in HEAD_NAMES:
                 per_head_ratios[key] = torch.exp(log_probs[key] - old_log_probs[key])
 
             # Compute KL divergence EARLY (before optimizer step) for effective early stopping
@@ -523,7 +524,7 @@ class PPOAgent:
             # For factored action space, joint KL = SUM of per-head KLs (not mean).
             with torch.no_grad():
                 head_kls = []
-                for key in ["slot", "blueprint", "blend", "op"]:
+                for key in HEAD_NAMES:
                     mask = head_masks[key]
                     log_ratio = log_probs[key] - old_log_probs[key]
                     kl_per_step = (torch.exp(log_ratio) - 1) - log_ratio
@@ -552,7 +553,7 @@ class PPOAgent:
             # Compute policy loss per head and sum
             # Use masked mean to avoid bias from averaging zeros with real values
             policy_loss = 0.0
-            for key in ["slot", "blueprint", "blend", "op"]:
+            for key in HEAD_NAMES:
                 ratio = per_head_ratios[key]
                 adv = per_head_advantages[key]
                 mask = head_masks[key]
@@ -713,7 +714,7 @@ class PPOAgent:
         """
         import warnings
 
-        checkpoint = torch.load(path, map_location=device, weights_only=False)
+        checkpoint = torch.load(path, map_location=device, weights_only=True)
         state_dict = checkpoint['network_state_dict']
         architecture = checkpoint.get('architecture', {})
         config = checkpoint.get('config', {})
