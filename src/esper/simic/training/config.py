@@ -120,6 +120,11 @@ class TrainingConfig:
         return TrainingConfig(entropy_coef=0.1, plateau_threshold=0.4)
 
     @staticmethod
+    def for_cifar10_blind() -> "TrainingConfig":
+        """Configuration for the 'blind' CIFAR-10 host (1x1 convs)."""
+        return TrainingConfig.for_cifar10()
+
+    @staticmethod
     def for_cifar10_deep() -> "TrainingConfig":
         """Preset tuned for the deeper CIFAR-10 host."""
         return TrainingConfig(entropy_coef=0.08, plateau_threshold=0.35)

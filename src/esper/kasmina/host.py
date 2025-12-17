@@ -48,6 +48,7 @@ class CNNHost(nn.Module):
         base_channels: int = 32,
         pool_layers: int | None = None,
         memory_format: torch.memory_format = torch.channels_last,
+        kernel_size: int = 3,
     ):
         super().__init__()
         if n_blocks < 2:
@@ -65,7 +66,7 @@ class CNNHost(nn.Module):
         in_c = 3
         for i in range(n_blocks):
             out_c = base_channels * (2 ** i)
-            blocks.append(ConvBlock(in_c, out_c))
+            blocks.append(ConvBlock(in_c, out_c, kernel_size=kernel_size))
             in_c = out_c
         self.blocks = nn.ModuleList(blocks)
         self.pool = nn.MaxPool2d(2, 2)

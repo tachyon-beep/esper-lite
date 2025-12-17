@@ -77,7 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
     heur_parser.add_argument("--max-epochs", type=int, default=75)
     heur_parser.add_argument("--max-batches", type=int, default=50, help="Batches per epoch (None=all)")
     heur_parser.add_argument("--task", default="cifar10",
-                              choices=["cifar10", "cifar10_deep", "tinystories"])
+                              choices=["cifar10", "cifar10_deep", "cifar10_blind", "tinystories"])
     heur_parser.add_argument("--device", default="cuda:0")
     heur_parser.add_argument("--seed", type=int, default=42)
     heur_parser.add_argument(
@@ -104,7 +104,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ppo_parser.add_argument(
         "--preset",
-        choices=["cifar10", "cifar10_deep", "tinystories"],
+        choices=["cifar10", "cifar10_deep", "cifar10_blind", "tinystories"],
         default="cifar10",
         help="TrainingConfig preset to use (hyperparameters + slots)",
     )
@@ -117,7 +117,7 @@ def build_parser() -> argparse.ArgumentParser:
     ppo_parser.add_argument(
         "--task",
         default="cifar10",
-        choices=["cifar10", "cifar10_deep", "tinystories"],
+        choices=["cifar10", "cifar10_deep", "cifar10_blind", "tinystories"],
         help="Task preset",
     )
     ppo_parser.add_argument("--save", help="Path to save model")
@@ -334,6 +334,8 @@ def main():
                     config = TrainingConfig.for_cifar10()
                 elif args.preset == "cifar10_deep":
                     config = TrainingConfig.for_cifar10_deep()
+                elif args.preset == "cifar10_blind":
+                    config = TrainingConfig.for_cifar10_blind()
                 else:
                     config = TrainingConfig.for_tinystories()
 
