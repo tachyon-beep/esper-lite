@@ -6,7 +6,7 @@ the Tamiyo seed lifecycle controller:
 Core Modules:
 - ppo: PPO agent and policy learning
 - tamiyo_network: Factored recurrent actor-critic network
-- tamiyo_buffer: Trajectory buffer management
+- rollout_buffer: Trajectory buffer management
 - advantages: Per-head advantage computation
 
 Control:

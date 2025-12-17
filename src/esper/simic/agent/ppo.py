@@ -16,7 +16,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .tamiyo_buffer import TamiyoRolloutBuffer
+from .rollout_buffer import TamiyoRolloutBuffer
 from .tamiyo_network import FactoredRecurrentActorCritic
 from .advantages import compute_per_head_advantages
 from .types import PPOUpdateMetrics
