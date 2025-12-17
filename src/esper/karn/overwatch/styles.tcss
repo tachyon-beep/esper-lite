@@ -61,12 +61,54 @@ Screen {
     color: $success;
 }
 
+.status-info {
+    color: $primary;
+}
+
 .status-warn {
     color: $warning;
 }
 
 .status-crit {
     color: $error;
+}
+
+/* === Stage Colors (Seed Lifecycle) === */
+
+.stage-dormant {
+    color: #666666;
+}
+
+.stage-germinated {
+    color: #98c379;  /* Light green - new growth */
+}
+
+.stage-training {
+    color: #61afef;  /* Blue - active learning */
+}
+
+.stage-blending {
+    color: #c678dd;  /* Purple/magenta - integration */
+}
+
+.stage-probationary {
+    color: #e5c07b;  /* Yellow/amber - under observation */
+}
+
+.stage-fossilized {
+    color: #56b6c2;  /* Cyan - permanent/stable */
+}
+
+.stage-culled {
+    color: #e06c75;  /* Red - removed */
+}
+
+.stage-embargoed {
+    color: #be5046;  /* Dark red - blocked */
+}
+
+.stage-resetting {
+    color: #d19a66;  /* Orange - transitioning */
 }
 
 /* === Tamiyo Theme (Magenta) === */
@@ -85,8 +127,59 @@ Screen {
     background: $primary-darken-1;
 }
 
+.selected {
+    background: $primary-darken-2;
+}
+
 /* === Hidden State === */
 
 .hidden {
     display: none;
+}
+
+/* === FlightBoard Specific === */
+
+FlightBoard {
+    scrollbar-gutter: stable;
+}
+
+FlightBoard:focus-within {
+    border: tall $accent;
+}
+
+EnvRow {
+    height: auto;
+    min-height: 1;
+}
+
+EnvRow.selected {
+    background: $primary-darken-2;
+}
+
+EnvRow:hover {
+    background: $surface-lighten-1;
+}
+
+/* === Progress Bars === */
+
+.alpha-bar-filled {
+    color: $success;
+}
+
+.alpha-bar-empty {
+    color: $surface-lighten-2;
+}
+
+/* === Anomaly Score Indicator === */
+
+.anomaly-low {
+    color: $success;
+}
+
+.anomaly-medium {
+    color: $warning;
+}
+
+.anomaly-high {
+    color: $error;
 }
