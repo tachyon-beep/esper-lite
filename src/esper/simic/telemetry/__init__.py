@@ -43,6 +43,12 @@ from .anomaly_detector import (
     AnomalyReport,
 )
 
+# LSTM health monitoring (P4-8)
+from .lstm_health import (
+    LSTMHealthMetrics,
+    compute_lstm_health,
+)
+
 # Telemetry emitters (pure functions)
 from .emitters import (
     emit_with_env_context,
@@ -84,6 +90,9 @@ __all__ = [
     # Anomaly detection
     "AnomalyDetector",
     "AnomalyReport",
+    # LSTM health monitoring (P4-8)
+    "LSTMHealthMetrics",
+    "compute_lstm_health",
     # Emitters
     "emit_with_env_context",
     "emit_batch_completed",

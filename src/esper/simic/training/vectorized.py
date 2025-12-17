@@ -30,6 +30,7 @@ from __future__ import annotations
 import math
 import random
 import time
+import warnings
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 
@@ -73,6 +74,7 @@ from esper.simic.telemetry import (
     collect_seed_gradients_only_async,
     materialize_dual_grad_stats,
     TelemetryConfig,
+    compute_lstm_health,  # P4-8
 )
 from esper.simic.control import (
     RunningMeanStd,
@@ -849,6 +851,13 @@ def train_ppo_vectorized(
         # Per-env AMP scaler to avoid stream race conditions (GradScaler state is not stream-safe)
         env_scaler = torch_amp.GradScaler(enabled=amp_enabled) if env_device_obj.type == "cuda" else None
 
+        # Determine random guess loss for lobotomy detection
+        random_guess_loss = None
+        if task_spec.task_type == "classification" and task_spec.num_classes:
+            random_guess_loss = math.log(task_spec.num_classes)
+        elif task_spec.task_type == "lm" and task_spec.vocab_size:
+            random_guess_loss = math.log(task_spec.vocab_size)
+
         # Create Governor for fail-safe watchdog
         # Conservative settings to avoid false positives during seed blending:
         # - sensitivity=6.0: 6-sigma is very rare for Gaussian
@@ -861,6 +870,7 @@ def train_ppo_vectorized(
             death_penalty=DEFAULT_GOVERNOR_DEATH_PENALTY,
             history_window=DEFAULT_GOVERNOR_HISTORY_WINDOW,
             min_panics_before_rollback=DEFAULT_MIN_PANICS_BEFORE_ROLLBACK,
+            random_guess_loss=random_guess_loss,
         )
         governor.snapshot()  # Ensure rollback is always possible before first panic
 
@@ -1614,6 +1624,18 @@ def train_ppo_vectorized(
                 env_h = new_h[:, env_idx:env_idx+1, :].contiguous()
                 env_c = new_c[:, env_idx:env_idx+1, :].contiguous()
                 env_state.lstm_hidden = (env_h, env_c)
+
+                # Check LSTM health (P4-8) - detect hidden state drift/explosion
+                if use_telemetry:
+                    lstm_health = compute_lstm_health(env_state.lstm_hidden)
+                    if lstm_health is not None and not lstm_health.is_healthy():
+                        warnings.warn(
+                            f"Env {env_idx}: LSTM unhealthy - h_norm={lstm_health.h_norm:.2f}, "
+                            f"c_norm={lstm_health.c_norm:.2f}, nan={lstm_health.has_nan}, "
+                            f"inf={lstm_health.has_inf}",
+                            RuntimeWarning,
+                            stacklevel=2,
+                        )
 
             # Convert to list of dicts for per-env processing
             actions = [
