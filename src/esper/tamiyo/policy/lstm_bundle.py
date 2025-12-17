@@ -5,7 +5,7 @@ Wraps FactoredRecurrentActorCritic as a PolicyBundle for the registry.
 
 from __future__ import annotations
 
-from typing import Any, TYPE_CHECKING
+from typing import Any
 
 import torch
 from torch import nn
@@ -15,9 +15,6 @@ from esper.tamiyo.policy.registry import register_policy
 from esper.tamiyo.policy.types import ActionResult, EvalResult, ForwardResult
 from esper.leyline.slot_config import SlotConfig
 from esper.leyline import HEAD_NAMES
-
-if TYPE_CHECKING:
-    from esper.simic.agent.network import FactoredRecurrentActorCritic
 
 
 @register_policy("lstm")

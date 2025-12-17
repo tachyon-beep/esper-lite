@@ -41,10 +41,11 @@ from esper.tamiyo.policy.action_masks import (
 from esper.tamiyo.policy import lstm_bundle as _lstm_bundle  # noqa: F401
 # Note: heuristic_bundle is imported but NOT registered
 from esper.tamiyo.policy.heuristic_bundle import HeuristicPolicyBundle
+from esper.tamiyo.heuristic import HeuristicPolicyConfig
 
 
 def create_heuristic_policy(
-    config: "HeuristicPolicyConfig | None" = None,
+    config: HeuristicPolicyConfig | None = None,
     topology: str = "cnn",
 ) -> HeuristicPolicyBundle:
     """Create a heuristic policy adapter.
