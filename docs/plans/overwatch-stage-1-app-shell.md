@@ -1,6 +1,6 @@
 # Overwatch Stage 1: Minimal Textual App Shell
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan (fresh subagent per task, code review after each).
 
 **Goal:** Get a Textual app that launches, shows placeholder layout, loads snapshots from JSONL, and exits cleanly.
 
@@ -124,8 +124,8 @@ class TestHelpOverlay:
         from esper.karn.overwatch.widgets.help import HelpOverlay
 
         widget = HelpOverlay()
-        # Widget should have some renderable content
-        assert hasattr(widget, "compose")
+        # Widget should have compose method for rendering
+        assert callable(getattr(widget, "compose", None))
 ```
 
 **Step 2: Run test to verify it fails**
@@ -374,7 +374,7 @@ class TestOverwatchApp:
         from esper.karn.overwatch.app import OverwatchApp
 
         app = OverwatchApp()
-        assert hasattr(app, "compose")
+        assert callable(getattr(app, "compose", None))
 
     def test_app_has_bindings(self) -> None:
         """OverwatchApp has keyboard bindings."""
@@ -631,6 +631,8 @@ Expected: FAIL with `ImportError`
 
 **Step 3: Update widgets __init__.py**
 
+Note: Lazy import to allow `from esper.karn.overwatch import widgets` even without Textual.
+
 ```python
 # src/esper/karn/overwatch/widgets/__init__.py
 """Overwatch TUI Widgets.
@@ -638,7 +640,11 @@ Expected: FAIL with `ImportError`
 Custom Textual widgets for the Overwatch monitoring interface.
 """
 
-from esper.karn.overwatch.widgets.help import HelpOverlay
+# Lazy import - Textual may not be installed
+try:
+    from esper.karn.overwatch.widgets.help import HelpOverlay
+except ImportError:
+    HelpOverlay = None  # type: ignore[misc, assignment]
 
 __all__ = [
     "HelpOverlay",
@@ -646,6 +652,9 @@ __all__ = [
 ```
 
 **Step 4: Update overwatch __init__.py**
+
+Note: We use lazy import for OverwatchApp to prevent import failures when Textual
+isn't installed. The schema and replay modules (Stage 0) have no Textual dependency.
 
 ```python
 # src/esper/karn/overwatch/__init__.py
@@ -670,7 +679,11 @@ from esper.karn.overwatch.replay import (
     SnapshotReader,
 )
 
-from esper.karn.overwatch.app import OverwatchApp
+# Lazy import for OverwatchApp - Textual may not be installed
+try:
+    from esper.karn.overwatch.app import OverwatchApp
+except ImportError:
+    OverwatchApp = None  # type: ignore[misc, assignment]
 
 __all__ = [
     # Schema
@@ -684,7 +697,7 @@ __all__ = [
     # Replay
     "SnapshotWriter",
     "SnapshotReader",
-    # App
+    # App (may be None if Textual not installed)
     "OverwatchApp",
 ]
 ```
@@ -727,8 +740,8 @@ class TestOverwatchCLI:
         """CLI module can be imported."""
         from esper.scripts import overwatch
 
-        assert hasattr(overwatch, "main")
-        assert hasattr(overwatch, "build_parser")
+        assert callable(getattr(overwatch, "main", None))
+        assert callable(getattr(overwatch, "build_parser", None))
 
     def test_parser_has_replay_arg(self) -> None:
         """Parser accepts --replay argument."""
@@ -1013,20 +1026,31 @@ dev = [
 ]
 ```
 
-**Step 3: Run uv sync to install**
+**Step 3: Configure pytest-asyncio mode**
+
+Add to `pytest.ini` (or create if it doesn't exist):
+
+```ini
+[pytest]
+asyncio_mode = auto
+```
+
+This ensures async tests run without needing `@pytest.mark.asyncio` on every test.
+
+**Step 4: Run uv sync to install**
 
 Run: `uv sync --extra dev --extra overwatch`
 
-**Step 4: Run integration tests**
+**Step 5: Run integration tests**
 
 Run: `PYTHONPATH=src uv run pytest tests/karn/overwatch/test_integration.py -v`
 
 Expected: All 4 tests PASS
 
-**Step 5: Commit**
+**Step 6: Commit**
 
 ```bash
-git add tests/karn/overwatch/test_integration.py pyproject.toml uv.lock
+git add tests/karn/overwatch/test_integration.py pyproject.toml uv.lock pytest.ini
 git commit -m "test(overwatch): add integration tests with Textual pilot"
 ```
 
