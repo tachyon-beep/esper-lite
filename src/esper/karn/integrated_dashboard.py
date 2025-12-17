@@ -29,6 +29,8 @@ from pathlib import Path
 from queue import Queue, Empty
 from typing import Any, TYPE_CHECKING
 
+from esper.karn.serialization import serialize_event as _serialize_event
+
 if TYPE_CHECKING:
     from esper.karn.contracts import TelemetryEventLike
 
@@ -36,40 +38,6 @@ _logger = logging.getLogger(__name__)
 
 # Dashboard HTML file path
 _DASHBOARD_PATH = Path(__file__).parent / "dashboard.html"
-
-
-def _serialize_event(event: "TelemetryEventLike") -> str:
-    """Serialize TelemetryEvent-like object to JSON string.
-
-    Uses explicit field access instead of asdict() since TelemetryEventLike
-    is a Protocol, not a dataclass. This allows any object implementing
-    the protocol to be serialized correctly.
-    """
-    # Extract fields explicitly - Protocol doesn't guarantee dataclass
-    # hasattr AUTHORIZED by John on 2025-12-17 10:00:00 UTC
-    # Justification: Serialization - handle both enum and string event_type values
-    event_type = event.event_type
-    if hasattr(event_type, "name"):
-        event_type = event_type.name
-
-    # hasattr AUTHORIZED by John on 2025-12-17 10:00:00 UTC
-    # Justification: Serialization - safely handle datetime objects
-    timestamp = event.timestamp
-    if hasattr(timestamp, "isoformat"):
-        timestamp = timestamp.isoformat()
-
-    data = {
-        "event_type": event_type,
-        "timestamp": timestamp,
-        "data": event.data,
-        "epoch": event.epoch,
-        "seed_id": event.seed_id,
-        "slot_id": event.slot_id,
-        "severity": event.severity,
-        "message": event.message,
-    }
-
-    return json.dumps(data, default=str)
 
 
 class DashboardServer:
