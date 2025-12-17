@@ -21,9 +21,8 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
-from esper.nissa import get_hub
 from esper.karn.constants import HealthThresholds, VitalSignsThresholds
 from esper.leyline import TelemetryEvent, TelemetryEventType, SeedStage, is_active_stage
 
@@ -135,6 +134,7 @@ class HealthMonitor:
     def __init__(
         self,
         store: "TelemetryStore | None" = None,
+        emit_callback: Callable[[TelemetryEvent], None] | None = None,
         gpu_warning_threshold: float = HealthThresholds.GPU_UTILIZATION_WARNING,
         grad_norm_warning: float = HealthThresholds.GRAD_NORM_WARNING,
         grad_norm_error: float = HealthThresholds.GRAD_NORM_ERROR,
@@ -142,6 +142,7 @@ class HealthMonitor:
         memory_warning_cooldown: float = HealthThresholds.MEMORY_WARNING_COOLDOWN_SECONDS,
     ):
         self.store = store
+        self._emit_callback = emit_callback
         self.gpu_warning_threshold = gpu_warning_threshold
         self.grad_norm_warning = grad_norm_warning
         self.grad_norm_error = grad_norm_error
@@ -177,9 +178,8 @@ class HealthMonitor:
             return False  # Cooldown active
 
         self._last_memory_warning = now
-        hub = get_hub()
-        if hub is not None:
-            hub.emit(TelemetryEvent(
+        if self._emit_callback is not None:
+            self._emit_callback(TelemetryEvent(
                 event_type=TelemetryEventType.MEMORY_WARNING,
                 severity="warning",
                 data={

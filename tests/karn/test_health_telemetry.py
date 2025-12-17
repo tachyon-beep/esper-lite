@@ -1,7 +1,5 @@
 """Tests for health monitoring telemetry emission."""
 
-from unittest.mock import Mock, patch
-
 
 def test_memory_warning_emitted_when_threshold_exceeded():
     """Test that MEMORY_WARNING is emitted when GPU utilization exceeds threshold."""
@@ -13,12 +11,12 @@ def test_memory_warning_emitted_when_threshold_exceeded():
     def capture(event):
         events.append(event)
 
-    with patch("esper.karn.health.get_hub") as mock_hub:
-        mock_hub.return_value.emit = capture
-
-        monitor = HealthMonitor(memory_warning_threshold=0.8)
-        # Simulate 90% GPU utilization
-        monitor._check_memory_and_warn(gpu_utilization=0.9, gpu_allocated_gb=10.0, gpu_total_gb=11.1)
+    monitor = HealthMonitor(
+        emit_callback=capture,
+        memory_warning_threshold=0.8,
+    )
+    # Simulate 90% GPU utilization
+    monitor._check_memory_and_warn(gpu_utilization=0.9, gpu_allocated_gb=10.0, gpu_total_gb=11.1)
 
     assert len(events) == 1
     assert events[0].event_type == TelemetryEventType.MEMORY_WARNING
@@ -30,10 +28,11 @@ def test_no_memory_warning_when_below_threshold():
     from esper.karn.health import HealthMonitor
 
     events = []
-    with patch("esper.karn.health.get_hub") as mock_hub:
-        mock_hub.return_value.emit = lambda e: events.append(e)
 
-        monitor = HealthMonitor(memory_warning_threshold=0.8)
-        monitor._check_memory_and_warn(gpu_utilization=0.7, gpu_allocated_gb=7.0, gpu_total_gb=10.0)
+    monitor = HealthMonitor(
+        emit_callback=lambda e: events.append(e),
+        memory_warning_threshold=0.8,
+    )
+    monitor._check_memory_and_warn(gpu_utilization=0.7, gpu_allocated_gb=7.0, gpu_total_gb=10.0)
 
     assert len(events) == 0

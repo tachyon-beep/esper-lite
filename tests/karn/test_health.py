@@ -153,3 +153,51 @@ class TestVitalSignsEnumComparisons:
 
         vitals = monitor.check_vitals()
         assert vitals.active_seeds == 0, "UNKNOWN should not count as active"
+
+
+class TestHealthMonitorCallback:
+    """Test HealthMonitor with emit callback injection."""
+
+    def test_emits_memory_warning_via_callback(self) -> None:
+        """Memory warning should be emitted via injected callback."""
+        from esper.karn.health import HealthMonitor
+
+        emitted_events: list = []
+
+        def capture_emit(event):
+            emitted_events.append(event)
+
+        monitor = HealthMonitor(
+            emit_callback=capture_emit,
+            memory_warning_threshold=0.5,  # Low threshold to trigger easily
+        )
+
+        # Trigger memory warning check with high utilization
+        warned = monitor._check_memory_and_warn(
+            gpu_utilization=0.95,
+            gpu_allocated_gb=10.0,
+            gpu_total_gb=12.0,
+        )
+
+        assert warned is True
+        assert len(emitted_events) == 1
+        assert emitted_events[0].event_type.name == "MEMORY_WARNING"
+
+    def test_no_emit_without_callback(self) -> None:
+        """Without callback, no emission should occur (no crash)."""
+        from esper.karn.health import HealthMonitor
+
+        monitor = HealthMonitor(
+            emit_callback=None,
+            memory_warning_threshold=0.5,
+        )
+
+        # Should not crash even without callback
+        warned = monitor._check_memory_and_warn(
+            gpu_utilization=0.95,
+            gpu_allocated_gb=10.0,
+            gpu_total_gb=12.0,
+        )
+
+        # Still returns True (warning condition met) but no emission
+        assert warned is True
