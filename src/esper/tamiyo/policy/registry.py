@@ -42,6 +42,10 @@ def register_policy(name: str):
         ]
         required_properties = ['is_recurrent', 'supports_off_policy', 'device', 'dtype']
 
+        # hasattr AUTHORIZED by John on 2025-12-17 06:30:00 UTC
+        # Justification: Feature Detection - checking if class implements required
+        # PolicyBundle protocol methods at registration time. Cannot instantiate
+        # to use isinstance() since policies require constructor args.
         missing_methods = [m for m in required_methods if not hasattr(cls, m)]
         missing_props = [p for p in required_properties if not hasattr(cls, p)]
 
