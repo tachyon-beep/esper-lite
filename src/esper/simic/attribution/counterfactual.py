@@ -114,6 +114,8 @@ class CounterfactualMatrix:
         """
         if self._marginal_contributions is None:
             self._compute_marginal_contributions()
+        # Guaranteed non-None after _compute_marginal_contributions()
+        assert self._marginal_contributions is not None
         return self._marginal_contributions.get(slot_id, 0.0)
 
     def _compute_marginal_contributions(self) -> None:
