@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from esper.nissa import get_hub
+from esper.karn.constants import HealthThresholds, VitalSignsThresholds
 from esper.leyline import TelemetryEvent, TelemetryEventType
 
 if TYPE_CHECKING:
@@ -92,7 +93,7 @@ class GradientHealth:
     @property
     def is_healthy(self) -> bool:
         """True if gradients are healthy."""
-        return not self.has_nan and not self.has_inf and self.mean_norm < 100.0
+        return not self.has_nan and not self.has_inf and self.mean_norm < HealthThresholds.GRAD_NORM_ERROR
 
 
 @dataclass
@@ -134,11 +135,11 @@ class HealthMonitor:
     def __init__(
         self,
         store: "TelemetryStore | None" = None,
-        gpu_warning_threshold: float = 0.9,
-        grad_norm_warning: float = 50.0,
-        grad_norm_error: float = 100.0,
-        memory_warning_threshold: float = 0.85,
-        memory_warning_cooldown: float = 60.0,
+        gpu_warning_threshold: float = HealthThresholds.GPU_UTILIZATION_WARNING,
+        grad_norm_warning: float = HealthThresholds.GRAD_NORM_WARNING,
+        grad_norm_error: float = HealthThresholds.GRAD_NORM_ERROR,
+        memory_warning_threshold: float = HealthThresholds.MEMORY_WARNING_THRESHOLD,
+        memory_warning_cooldown: float = HealthThresholds.MEMORY_WARNING_COOLDOWN_SECONDS,
     ):
         self.store = store
         self.gpu_warning_threshold = gpu_warning_threshold
@@ -268,7 +269,7 @@ class HealthMonitor:
         grad_health.max_norm = max(norms)
 
         # Check for NaN/Inf (indicated by very large norms)
-        if grad_health.max_norm > 1e10:
+        if grad_health.max_norm > HealthThresholds.GRAD_NORM_EXPLOSION:
             grad_health.has_inf = True
             health.add_error("Gradient explosion detected (possible Inf)")
 
@@ -362,8 +363,8 @@ class VitalSignsMonitor:
     def __init__(
         self,
         store: "TelemetryStore | None" = None,
-        loss_spike_threshold: float = 2.0,
-        stagnation_epochs: int = 20,
+        loss_spike_threshold: float = VitalSignsThresholds.LOSS_SPIKE_MULTIPLIER,
+        stagnation_epochs: int = VitalSignsThresholds.STAGNATION_EPOCHS,
     ):
         self.store = store
         self.loss_spike_threshold = loss_spike_threshold

@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 from collections import deque
 
+from esper.karn.constants import AnomalyThresholds
 from esper.leyline import SeedStage
 
 
@@ -246,9 +247,9 @@ class DenseTraceTrigger:
     stage_transition: bool = True
 
     # Anomalies
-    loss_spike_threshold: float = 2.0  # > 2x rolling average
-    accuracy_drop_threshold: float = 5.0  # > 5% drop epoch-over-epoch
-    gradient_explosion: float = 100.0  # grad_norm > 100x typical
+    loss_spike_threshold: float = AnomalyThresholds.LOSS_SPIKE_MULTIPLIER
+    accuracy_drop_threshold: float = AnomalyThresholds.ACCURACY_DROP_POINTS
+    gradient_explosion: float = AnomalyThresholds.GRADIENT_EXPLOSION_MULTIPLIER
 
     # Gate events
     gate_failure: bool = True  # Any G0-G5 gate fails

@@ -43,30 +43,33 @@ _logger = logging.getLogger(__name__)
 # =============================================================================
 
 class ThresholdConfig:
-    """Thresholds for red flag detection."""
+    """Thresholds for red flag detection (delegates to constants)."""
 
-    # Entropy thresholds (healthy starts near ln(4) ≈ 1.39)
-    entropy_critical: float = 0.3
-    entropy_warning: float = 0.5
-    entropy_max: float = 1.39  # ln(4) for 4 actions
+    # Import at module level
+    from esper.karn.constants import TUIThresholds
 
-    # Clip fraction thresholds (target 0.1-0.2)
-    clip_critical: float = 0.3
-    clip_warning: float = 0.25
+    # Entropy thresholds
+    entropy_critical: float = TUIThresholds.ENTROPY_CRITICAL
+    entropy_warning: float = TUIThresholds.ENTROPY_WARNING
+    entropy_max: float = TUIThresholds.ENTROPY_MAX
 
-    # Explained variance (value learning quality)
-    explained_var_critical: float = 0.5
-    explained_var_warning: float = 0.7
+    # Clip fraction thresholds
+    clip_critical: float = TUIThresholds.CLIP_CRITICAL
+    clip_warning: float = TUIThresholds.CLIP_WARNING
+
+    # Explained variance
+    explained_var_critical: float = TUIThresholds.EXPLAINED_VAR_CRITICAL
+    explained_var_warning: float = TUIThresholds.EXPLAINED_VAR_WARNING
 
     # Gradient norm
-    grad_norm_critical: float = 10.0
-    grad_norm_warning: float = 5.0
+    grad_norm_critical: float = TUIThresholds.GRAD_NORM_CRITICAL
+    grad_norm_warning: float = TUIThresholds.GRAD_NORM_WARNING
 
-    # KL divergence (policy change magnitude)
-    kl_warning: float = 0.05
+    # KL divergence
+    kl_warning: float = TUIThresholds.KL_WARNING
 
-    # Action distribution (WAIT dominance)
-    wait_warning: float = 0.7  # > 70% WAIT is suspicious
+    # Action distribution
+    wait_warning: float = TUIThresholds.WAIT_DOMINANCE_WARNING
 
 
 class HealthStatus(Enum):
