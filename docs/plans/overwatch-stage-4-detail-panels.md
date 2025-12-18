@@ -965,6 +965,10 @@ git commit -m "feat(overwatch): add DetailPanel container with mode switching"
 - Modify: `src/esper/karn/overwatch/widgets/__init__.py`
 - Modify: `tests/karn/overwatch/test_widgets.py`
 
+**Step 0: Fix unused import in test_widgets.py**
+
+Remove line 5 (`import pytest`) from `tests/karn/overwatch/test_widgets.py` - it's unused and will fail linting.
+
 **Step 1: Add test for new widget exports**
 
 Append to `tests/karn/overwatch/test_widgets.py`:
@@ -1208,6 +1212,14 @@ class OverwatchApp(App):
         detail_panel = self.query_one(DetailPanel)
         detail_panel.update_tamiyo(self._snapshot.tamiyo)
 
+        # Update context panel with initial env selection
+        board = self.query_one(FlightBoard)
+        if board.selected_env_id is not None:
+            for env in self._snapshot.flight_board:
+                if env.env_id == board.selected_env_id:
+                    detail_panel.update_env(env)
+                    break
+
         # Update event feed placeholder
         self.query_one("#event-feed", Static).update(self._render_event_feed_content())
 
@@ -1273,6 +1285,35 @@ git commit -m "feat(overwatch): wire DetailPanel into app with c/t keybindings"
 
 **Files:**
 - Modify: `tests/karn/overwatch/test_integration.py`
+
+**Step 0: Fix existing test that will break**
+
+The existing `test_detail_panel_updates_on_selection` test queries `#detail-panel` as a `Static`, but we're replacing it with `DetailPanel`. Update this test in `TestFlightBoardNavigation`:
+
+```python
+    @pytest.mark.asyncio
+    async def test_detail_panel_updates_on_selection(self, multi_env_replay: Path) -> None:
+        """Detail panel updates when env is selected via navigation."""
+        from esper.karn.overwatch import OverwatchApp
+        from esper.karn.overwatch.widgets.flight_board import FlightBoard
+        from esper.karn.overwatch.widgets.context_panel import ContextPanel
+
+        app = OverwatchApp(replay_path=multi_env_replay)
+
+        async with app.run_test() as pilot:
+            # Verify flight board has initial selection
+            board = app.query_one(FlightBoard)
+            assert board.selected_env_id == 2
+
+            # Navigate to env 1
+            await pilot.press("j")
+            await pilot.pause()
+
+            # Panel should update after navigation - query ContextPanel instead of Static
+            context = app.query_one(ContextPanel)
+            detail_text = context.render_content()
+            assert "Env 1" in detail_text, f"Expected 'Env 1' in detail panel, got: {detail_text}"
+```
 
 **Step 1: Add integration tests**
 
