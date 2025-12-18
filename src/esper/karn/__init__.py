@@ -94,6 +94,9 @@ from esper.karn.tui import (
     HealthStatus,
 )
 
+# Overwatch (live telemetry backend)
+from esper.karn.overwatch.backend import OverwatchBackend
+
 __all__ = [
     # Dashboard
     "WebSocketOutput",
@@ -145,4 +148,6 @@ __all__ = [
     "TUIState",
     "ThresholdConfig",
     "HealthStatus",
+    # Overwatch
+    "OverwatchBackend",
 ]

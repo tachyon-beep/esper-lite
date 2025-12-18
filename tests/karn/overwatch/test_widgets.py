@@ -325,3 +325,25 @@ class TestStage5WidgetExports:
         from esper.karn.overwatch.widgets import ReplayStatusBar
 
         assert ReplayStatusBar is not None
+
+
+class TestStage6ModuleExports:
+    """Tests for Stage 6 module exports."""
+
+    def test_aggregator_exported(self) -> None:
+        """TelemetryAggregator is exported."""
+        from esper.karn.overwatch import TelemetryAggregator
+
+        assert TelemetryAggregator is not None
+
+    def test_backend_exported(self) -> None:
+        """OverwatchBackend is exported."""
+        from esper.karn.overwatch import OverwatchBackend
+
+        assert OverwatchBackend is not None
+
+    def test_karn_exports_overwatch_backend(self) -> None:
+        """Karn package exports OverwatchBackend."""
+        from esper.karn import OverwatchBackend
+
+        assert OverwatchBackend is not None

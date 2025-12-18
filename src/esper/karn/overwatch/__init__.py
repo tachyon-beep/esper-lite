@@ -19,6 +19,9 @@ from esper.karn.overwatch.replay import (
     SnapshotReader,
 )
 
+from esper.karn.overwatch.aggregator import TelemetryAggregator
+from esper.karn.overwatch.backend import OverwatchBackend
+
 # Lazy import for OverwatchApp - Textual may not be installed
 try:
     from esper.karn.overwatch.app import OverwatchApp
@@ -37,6 +40,9 @@ __all__ = [
     # Replay
     "SnapshotWriter",
     "SnapshotReader",
+    # Aggregator & Backend
+    "TelemetryAggregator",
+    "OverwatchBackend",
     # App (may be None if Textual not installed)
     "OverwatchApp",
 ]
