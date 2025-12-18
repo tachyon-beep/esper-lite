@@ -548,6 +548,29 @@ def train_ppo_vectorized(
     )
     loss_reward_config = task_spec.loss_reward_config
 
+    # Per-environment reward configs for A/B testing
+    if ab_reward_modes is not None:
+        if len(ab_reward_modes) != n_envs:
+            raise ValueError(
+                f"ab_reward_modes length ({len(ab_reward_modes)}) must match n_envs ({n_envs})"
+            )
+        env_reward_configs = []
+        for env_idx, mode_str in enumerate(ab_reward_modes):
+            env_mode = RewardMode(mode_str)
+            env_config = ContributionRewardConfig(
+                reward_mode=env_mode,
+                param_budget=param_budget,
+                param_penalty_weight=param_penalty_weight,
+                sparse_reward_scale=sparse_reward_scale,
+            )
+            env_reward_configs.append(env_config)
+        _logger.info(
+            "A/B testing enabled: %s",
+            {mode: ab_reward_modes.count(mode) for mode in set(ab_reward_modes)}
+        )
+    else:
+        env_reward_configs = [reward_config] * n_envs
+
     # Map environments to devices in round-robin (needed for SharedBatchIterator)
     env_device_map = [devices[i % len(devices)] for i in range(n_envs)]
 
@@ -1870,7 +1893,7 @@ def train_ppo_vectorized(
                             return_components=True,
                             num_fossilized_seeds=env_state.seeds_fossilized,
                             num_contributing_fossilized=env_state.contributing_fossilized,
-                            config=reward_config,
+                            config=env_reward_configs[env_idx],
                         )
                         if target_slot in baseline_accs[env_idx]:
                             reward_components.host_baseline_acc = baseline_accs[env_idx][target_slot]
@@ -1889,7 +1912,7 @@ def train_ppo_vectorized(
                             acc_delta=signals.metrics.accuracy_delta,
                             num_fossilized_seeds=env_state.seeds_fossilized,
                             num_contributing_fossilized=env_state.contributing_fossilized,
-                            config=reward_config,
+                            config=env_reward_configs[env_idx],
                         )
                 else:
                     reward = compute_loss_reward(
@@ -2032,6 +2055,7 @@ def train_ppo_vectorized(
                         data={
                             "env_id": env_idx,
                             "episode": episodes_completed + env_idx,
+                            "ab_group": env_reward_configs[env_idx].reward_mode.value,
                             **reward_components.to_dict(),
                         },
                         severity="debug",
