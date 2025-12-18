@@ -100,6 +100,21 @@ class SeedState:
     epochs_in_stage: int = 0
 
 
+@dataclass
+class BestRunRecord:
+    """Historical record of a best run for the leaderboard.
+
+    Captured at batch end when an env achieves a new personal best.
+    Shows both the peak accuracy and where the run ended up.
+    """
+    env_id: int
+    episode: int
+    peak_accuracy: float  # Best accuracy achieved during this run
+    final_accuracy: float  # Accuracy at the end of the batch
+    seeds: dict[str, SeedState] = field(default_factory=dict)  # Seeds at peak
+    timestamp: datetime = field(default_factory=datetime.now)
+
+
 def _make_sparkline_static(values: list[float], width: int = 8) -> str:
     """Create a sparkline from values (static helper)."""
     if not values:
@@ -354,6 +369,10 @@ class TUIState:
     env_states: dict[int, EnvState] = field(default_factory=dict)
     n_envs: int = 1  # Number of environments (updated from TRAINING_STARTED)
     max_epochs: int = 75  # Inner epochs per batch (from TRAINING_STARTED)
+
+    # Historical best runs leaderboard (updated at batch end only)
+    # Sorted by peak_accuracy descending, capped at 10 entries
+    best_runs: list[BestRunRecord] = field(default_factory=list)
 
     # Aggregate seed stats (summed across all envs)
     active_seed_count: int = 0
@@ -1025,6 +1044,29 @@ class TUIOutput:
         # Update GPU stats if available
         self._update_system_stats()
 
+        # Capture best run records for envs that improved during this batch
+        # Do this BEFORE resetting seed state so we can snapshot the seeds
+        current_ep = self.state.current_episode
+        for env_state in self.state.env_states.values():
+            # Check if this env achieved a new best during this episode
+            if env_state.best_accuracy_episode == current_ep and env_state.best_accuracy > 0:
+                record = BestRunRecord(
+                    env_id=env_state.env_id,
+                    episode=current_ep,
+                    peak_accuracy=env_state.best_accuracy,
+                    final_accuracy=env_state.host_accuracy,
+                    seeds=dict(env_state.best_seeds),  # Copy the snapshot
+                )
+                # Remove any existing record for this env (replace with new best)
+                self.state.best_runs = [
+                    r for r in self.state.best_runs if r.env_id != env_state.env_id
+                ]
+                self.state.best_runs.append(record)
+
+        # Sort by peak accuracy descending, keep top 10
+        self.state.best_runs.sort(key=lambda r: r.peak_accuracy, reverse=True)
+        self.state.best_runs = self.state.best_runs[:10]
+
         # Reset per-env seed state for the next batch/episode
         for env_state in self.state.env_states.values():
             env_state.seeds.clear()
@@ -1070,46 +1112,39 @@ class TUIOutput:
             f"[red]{total_culled}[/]",
         )
 
-        # === LEADERBOARD ===
+        # === LEADERBOARD (historical records, updated at batch end) ===
         lb_table = Table(show_header=True, box=None, padding=(0, 1), expand=True)
         lb_table.add_column("#", style="dim", width=3)
         lb_table.add_column("@Ep", justify="right", width=4)
-        lb_table.add_column("High", justify="right", width=6)
-        lb_table.add_column("Cur", justify="right", width=6)
+        lb_table.add_column("Peak", justify="right", width=6)
+        lb_table.add_column("End", justify="right", width=6)
         lb_table.add_column("Seeds", justify="left", width=20)
-
-        # Sort all envs by best accuracy - show top 10
-        sorted_envs = sorted(
-            all_envs,
-            key=lambda e: e.best_accuracy,
-            reverse=True
-        )[:10]
 
         medals = ["🥇", "🥈", "🥉"]
 
-        if not sorted_envs:
+        if not self.state.best_runs:
             lb_table.add_row("-", "-", "-", "-", "-")
         else:
-            for i, env in enumerate(sorted_envs):
+            for i, record in enumerate(self.state.best_runs):
                 rank = medals[i] if i < 3 else f"{i + 1}"
 
-                # Current vs best styling
-                delta = env.host_accuracy - env.best_accuracy
+                # End vs peak styling (how did the run finish relative to its best?)
+                delta = record.final_accuracy - record.peak_accuracy
                 if delta >= -0.5:
-                    cur_style = "green"
+                    end_style = "green"
                 elif delta >= -2.0:
-                    cur_style = "yellow"
+                    end_style = "yellow"
                 else:
-                    cur_style = "dim"
+                    end_style = "dim"
 
-                # Format seeds at best accuracy (compact) with stage-based colors
+                # Format seeds at peak accuracy (compact) with stage-based colors
                 # Colors: FOSSILIZED=green, PROBATIONARY=yellow, BLENDING=magenta
-                if env.best_seeds:
-                    n_seeds = len(env.best_seeds)
+                if record.seeds:
+                    n_seeds = len(record.seeds)
                     if n_seeds <= 3:
                         # Show individual blueprints with stage-based colors
                         seed_parts = []
-                        for s in env.best_seeds.values():
+                        for s in record.seeds.values():
                             bp = s.blueprint_id[:6] if s.blueprint_id else "?"
                             if s.stage == "FOSSILIZED":
                                 seed_parts.append(f"[green]{bp}[/]")
@@ -1122,8 +1157,8 @@ class TUIOutput:
                         seeds_str = " ".join(seed_parts)
                     else:
                         # Count by stage for many seeds
-                        permanent = sum(1 for s in env.best_seeds.values() if s.stage == "FOSSILIZED")
-                        provisional = len(env.best_seeds) - permanent
+                        permanent = sum(1 for s in record.seeds.values() if s.stage == "FOSSILIZED")
+                        provisional = len(record.seeds) - permanent
                         if permanent and provisional:
                             seeds_str = f"[green]{permanent}[/]+[yellow]{provisional}[/]"
                         elif permanent:
@@ -1135,9 +1170,9 @@ class TUIOutput:
 
                 lb_table.add_row(
                     rank,
-                    str(env.best_accuracy_episode),
-                    f"[bold green]{env.best_accuracy:.1f}[/]",
-                    f"[{cur_style}]{env.host_accuracy:.1f}[/]",
+                    str(record.episode),
+                    f"[bold green]{record.peak_accuracy:.1f}[/]",
+                    f"[{end_style}]{record.final_accuracy:.1f}[/]",
                     seeds_str,
                 )
 
