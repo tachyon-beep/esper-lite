@@ -11,13 +11,15 @@ from typing import TYPE_CHECKING
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container
-from textual.widgets import Footer, Header, Static
+from textual.widgets import Footer, Header
 
 from esper.karn.overwatch.widgets.help import HelpOverlay
 from esper.karn.overwatch.widgets.flight_board import FlightBoard
 from esper.karn.overwatch.widgets.run_header import RunHeader
 from esper.karn.overwatch.widgets.tamiyo_strip import TamiyoStrip
 from esper.karn.overwatch.widgets.detail_panel import DetailPanel
+from esper.karn.overwatch.widgets.event_feed import EventFeed
+from esper.karn.overwatch.widgets.replay_status import ReplayStatusBar
 
 if TYPE_CHECKING:
     from esper.karn.overwatch.schema import TuiSnapshot
@@ -52,6 +54,13 @@ class OverwatchApp(App):
         Binding("escape", "dismiss", "Dismiss", show=False),
         Binding("c", "show_context", "Context", show=True),
         Binding("t", "show_tamiyo", "Tamiyo", show=True),
+        # Replay controls
+        Binding("space", "toggle_play", "Play/Pause", show=True),
+        Binding("period", "step_forward", "Step →", show=False),
+        Binding("comma", "step_backward", "← Step", show=False),
+        Binding("shift+period", "speed_up", "Faster", show=False),
+        Binding("shift+comma", "speed_down", "Slower", show=False),
+        Binding("f", "toggle_feed", "Feed", show=True),
     ]
 
     def __init__(
@@ -69,10 +78,15 @@ class OverwatchApp(App):
         self._replay_path = Path(replay_path) if replay_path else None
         self._snapshot: TuiSnapshot | None = None
         self._help_visible = False
+        self._replay_controller = None
+        self._playback_timer = None
 
     def compose(self) -> ComposeResult:
         """Compose the application layout."""
         yield Header()
+
+        # Replay status bar (hidden in live mode)
+        yield ReplayStatusBar(id="replay-status")
 
         # Run header (run identity, connection status)
         # NOTE: Keep id="header" for backwards compatibility with existing integration tests
@@ -83,56 +97,69 @@ class OverwatchApp(App):
 
         # Main area with flight board and detail panel
         with Container(id="main-area"):
-            # Real FlightBoard widget
             yield FlightBoard(id="flight-board")
-
             yield DetailPanel(id="detail-panel")
 
-        # Event feed
-        yield Static(
-            self._render_event_feed_content(),
-            id="event-feed",
-        )
+        # Event feed (scrollable)
+        yield EventFeed(id="event-feed")
 
         # Help overlay (hidden by default)
         yield HelpOverlay(id="help-overlay", classes="hidden")
 
         yield Footer()
 
-    def _render_event_feed_content(self) -> str:
-        """Render Event Feed placeholder content."""
-        if self._snapshot and self._snapshot.event_feed:
-            n = len(self._snapshot.event_feed)
-            return f"[EVENT FEED] {n} events"
-        return "[EVENT FEED] No events"
-
     def on_mount(self) -> None:
         """Called when app is mounted."""
-        # Load initial snapshot if replay file provided
+        # Initialize replay controller if replay file provided
         if self._replay_path:
-            self._load_first_snapshot()
+            self._init_replay()
+        else:
+            # Hide replay status bar in live mode
+            self.query_one(ReplayStatusBar).set_visible(False)
 
         # Set focus to flight board for navigation
         self.query_one(FlightBoard).focus()
 
-    def _load_first_snapshot(self) -> None:
-        """Load the first snapshot from replay file."""
-        from esper.karn.overwatch.replay import SnapshotReader
+    def _init_replay(self) -> None:
+        """Initialize replay mode."""
+        from esper.karn.overwatch.replay_controller import ReplayController
 
         if not self._replay_path or not self._replay_path.exists():
             self.notify(f"Replay file not found: {self._replay_path}", severity="error")
             return
 
-        reader = SnapshotReader(self._replay_path)
-        for snapshot in reader:
-            self._snapshot = snapshot
-            break  # Take first snapshot only
+        self._replay_controller = ReplayController(self._replay_path)
 
-        if self._snapshot:
-            self.notify(f"Loaded snapshot from {self._snapshot.captured_at}")
-            self._update_all_widgets()
-        else:
+        if self._replay_controller.total_frames == 0:
             self.notify("No snapshots found in replay file", severity="warning")
+            return
+
+        # Load first snapshot
+        self._snapshot = self._replay_controller.current_snapshot
+        self._update_all_widgets()
+        self._update_replay_status()
+
+        self.notify(f"Loaded {self._replay_controller.total_frames} snapshots")
+
+    def _update_replay_status(self) -> None:
+        """Update replay status bar."""
+        if not self._replay_controller:
+            return
+
+        timestamp = ""
+        if self._snapshot:
+            # Extract time from captured_at
+            captured = self._snapshot.captured_at
+            if "T" in captured:
+                timestamp = captured.split("T")[1][:8]  # HH:MM:SS
+
+        self.query_one(ReplayStatusBar).update_status(
+            playing=self._replay_controller.playing,
+            speed=self._replay_controller.speed,
+            current=self._replay_controller.current_index,
+            total=self._replay_controller.total_frames,
+            timestamp=timestamp,
+        )
 
     def _update_all_widgets(self) -> None:
         """Update all widgets with current snapshot."""
@@ -160,8 +187,8 @@ class OverwatchApp(App):
                     detail_panel.update_env(env)
                     break
 
-        # Update event feed placeholder
-        self.query_one("#event-feed", Static).update(self._render_event_feed_content())
+        # Update event feed
+        self.query_one(EventFeed).update_events(self._snapshot.event_feed)
 
     def action_toggle_help(self) -> None:
         """Toggle the help overlay visibility."""
@@ -181,6 +208,109 @@ class OverwatchApp(App):
     def action_show_tamiyo(self) -> None:
         """Toggle tamiyo detail panel view."""
         self.query_one(DetailPanel).toggle_mode("tamiyo")
+
+    def action_toggle_play(self) -> None:
+        """Toggle replay play/pause."""
+        if not self._replay_controller:
+            return
+
+        self._replay_controller.toggle_play()
+
+        if self._replay_controller.playing:
+            self._start_playback()
+        else:
+            self._stop_playback()
+
+        self._update_replay_status()
+
+    def action_step_forward(self) -> None:
+        """Step forward one frame."""
+        if not self._replay_controller:
+            return
+
+        self._replay_controller.pause()
+        self._stop_playback()
+
+        if self._replay_controller.step_forward():
+            self._snapshot = self._replay_controller.current_snapshot
+            self._update_all_widgets()
+
+        self._update_replay_status()
+
+    def action_step_backward(self) -> None:
+        """Step backward one frame."""
+        if not self._replay_controller:
+            return
+
+        self._replay_controller.pause()
+        self._stop_playback()
+
+        if self._replay_controller.step_backward():
+            self._snapshot = self._replay_controller.current_snapshot
+            self._update_all_widgets()
+
+        self._update_replay_status()
+
+    def action_speed_up(self) -> None:
+        """Increase playback speed."""
+        if not self._replay_controller:
+            return
+
+        self._replay_controller.increase_speed()
+        self._update_replay_status()
+
+        # Restart timer with new speed if playing
+        if self._replay_controller.playing:
+            self._stop_playback()
+            self._start_playback()
+
+    def action_speed_down(self) -> None:
+        """Decrease playback speed."""
+        if not self._replay_controller:
+            return
+
+        self._replay_controller.decrease_speed()
+        self._update_replay_status()
+
+        # Restart timer with new speed if playing
+        if self._replay_controller.playing:
+            self._stop_playback()
+            self._start_playback()
+
+    def action_toggle_feed(self) -> None:
+        """Toggle event feed expanded/compact."""
+        self.query_one(EventFeed).toggle_expanded()
+
+    def _start_playback(self) -> None:
+        """Start playback timer."""
+        if self._playback_timer:
+            self._playback_timer.stop()
+
+        interval = self._replay_controller.tick_interval_ms() / 1000.0
+        self._playback_timer = self.set_interval(interval, self._playback_tick)
+
+    def _stop_playback(self) -> None:
+        """Stop playback timer."""
+        if self._playback_timer:
+            self._playback_timer.stop()
+            self._playback_timer = None
+
+    def _playback_tick(self) -> None:
+        """Called on each playback tick."""
+        if not self._replay_controller or not self._replay_controller.playing:
+            self._stop_playback()
+            return
+
+        if self._replay_controller.step_forward():
+            self._snapshot = self._replay_controller.current_snapshot
+            self._update_all_widgets()
+            self._update_replay_status()
+        else:
+            # Reached end
+            self._replay_controller.pause()
+            self._stop_playback()
+            self._update_replay_status()
+            self.notify("Replay complete")
 
     def on_flight_board_env_selected(self, message: FlightBoard.EnvSelected) -> None:
         """Handle env selection in flight board."""
