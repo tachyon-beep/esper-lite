@@ -165,3 +165,33 @@ class TestHysteresisSorter:
         # env 1 and env 2 stay put (delta=1 each, below threshold)
         # Result: env 3 to front, env 0 to back, env 1 and 2 stay in middle
         assert result2 == [3, 1, 2, 0]
+
+    def test_multi_move_positions_are_correct(self) -> None:
+        """Verify multi-move insertion positions are calculated correctly.
+
+        This tests the specific concern that natural_pos insertion after
+        removals might cause incorrect positioning. The algorithm processes
+        moves sorted by natural_pos (ascending), ensuring earlier insertions
+        are not disturbed by later ones.
+        """
+        from esper.karn.overwatch.display_state import HysteresisSorter, HysteresisConfig
+
+        # Use threshold=0 to force ALL items to move to natural positions
+        config = HysteresisConfig(threshold_up=0, threshold_down=0)
+        sorter = HysteresisSorter(config)
+
+        # Initial: [0, 1, 2, 3, 4] with descending scores
+        scores1 = {0: 0.9, 1: 0.7, 2: 0.5, 3: 0.3, 4: 0.1}
+        result1 = sorter.sort(scores1)
+        assert result1 == [0, 1, 2, 3, 4]
+
+        # Reverse all scores - all items must move to opposite positions
+        scores2 = {0: 0.1, 1: 0.3, 2: 0.5, 3: 0.7, 4: 0.9}
+        result2 = sorter.sort(scores2)
+
+        # With threshold=0, all items move to natural positions
+        # Natural order: [4, 3, 2, 1, 0]
+        assert result2 == [4, 3, 2, 1, 0], (
+            f"All items should move to natural positions with threshold=0. "
+            f"Got {result2}, expected [4, 3, 2, 1, 0]"
+        )

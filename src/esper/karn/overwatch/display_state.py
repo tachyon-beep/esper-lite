@@ -98,9 +98,15 @@ class HysteresisSorter:
                 moves.append((env_id, natural_pos))
 
         # Apply all moves at once (sort by natural position to ensure correct ordering)
+        # Algorithm correctness: Remove all moving items first, then insert in natural_pos order.
+        # This ensures that insertion positions are calculated relative to the stable (non-moving) items.
+        # If we removed and inserted one-at-a-time, earlier insertions would shift later insertion positions.
         result = current_order.copy()
-        for env_id, natural_pos in sorted(moves, key=lambda x: x[1]):
+        # First, remove all items that need to move
+        for env_id, _ in moves:
             result.remove(env_id)
+        # Then, insert them in natural_pos order
+        for env_id, natural_pos in sorted(moves, key=lambda x: x[1]):
             insert_pos = min(natural_pos, len(result))
             result.insert(insert_pos, env_id)
 
