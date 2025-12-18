@@ -1300,6 +1300,30 @@ git commit -m "feat(overwatch): export Stage 5 widgets (EventFeed, ReplayStatusB
 **Files:**
 - Modify: `src/esper/karn/overwatch/app.py`
 
+**Step 0: Understand the delta from existing app.py**
+
+The current `app.py` has methods that will be **removed** and **replaced**:
+
+**Removed methods:**
+- `_load_first_snapshot()` - replaced by `_init_replay()`
+- `_render_event_feed_content()` - no longer needed (EventFeed widget handles rendering)
+
+**Modified methods:**
+- `compose()` - Replace `Static` event feed with `EventFeed` widget, add `ReplayStatusBar` after Header
+- `on_mount()` - Replace `_load_first_snapshot()` call with `_init_replay()`, add else branch to hide ReplayStatusBar in live mode
+- `_update_all_widgets()` - Change event feed line from `self.query_one("#event-feed", Static).update(...)` to `self.query_one(EventFeed).update_events(self._snapshot.event_feed)`
+
+**New instance variables in `__init__`:**
+- `self._replay_controller = None`
+- `self._playback_timer = None`
+
+**New methods:**
+- `_init_replay()` - Initialize ReplayController and load first snapshot
+- `_update_replay_status()` - Update ReplayStatusBar with current state
+- `_start_playback()` / `_stop_playback()` - Timer management
+- `_playback_tick()` - Called by timer to advance frames
+- `action_toggle_play()`, `action_step_forward()`, `action_step_backward()`, `action_speed_up()`, `action_speed_down()`, `action_toggle_feed()` - Replay control actions
+
 **Step 1: Update app.py with replay infrastructure**
 
 This is a significant update. The key changes:
@@ -1374,8 +1398,8 @@ class OverwatchApp(App):
         Binding("space", "toggle_play", "Play/Pause", show=True),
         Binding("period", "step_forward", "Step →", show=False),
         Binding("comma", "step_backward", "← Step", show=False),
-        Binding("greater_than_sign", "speed_up", "Faster", show=False),
-        Binding("less_than_sign", "speed_down", "Slower", show=False),
+        Binding("shift+period", "speed_up", "Faster", show=False),
+        Binding("shift+comma", "speed_down", "Slower", show=False),
         Binding("f", "toggle_feed", "Feed", show=True),
     ]
 
@@ -1846,10 +1870,10 @@ class TestReplayControlsIntegration:
         async with app.run_test() as pilot:
             assert app._replay_controller.speed == 1.0
 
-            await pilot.press("greater_than_sign")
+            await pilot.press("shift+period")
             assert app._replay_controller.speed == 2.0
 
-            await pilot.press("less_than_sign")
+            await pilot.press("shift+comma")
             assert app._replay_controller.speed == 1.0
 ```
 
