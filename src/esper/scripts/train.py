@@ -65,6 +65,11 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="Export Karn telemetry store to JSONL file after training",
     )
+    telemetry_parent.add_argument(
+        "--overwatch",
+        action="store_true",
+        help="Launch Overwatch TUI for real-time monitoring (replaces Rich TUI)",
+    )
 
     subparsers = parser.add_subparsers(dest="algorithm", required=True)
 
@@ -203,11 +208,13 @@ def main():
     # alongside training logs.
     hub = get_hub()
 
-    # Use TUI by default, Console if --no-tui or non-TTY
+    # Determine UI mode
     import sys
     tui_backend = None
     is_tty = sys.stdout.isatty()
-    use_tui = not args.no_tui and is_tty
+    use_overwatch = args.overwatch
+    # Overwatch replaces Rich TUI (mutually exclusive)
+    use_tui = not args.no_tui and is_tty and not use_overwatch
 
     if not is_tty and not args.no_tui:
         print("Non-TTY detected, using console output instead of TUI")
@@ -301,13 +308,22 @@ def main():
             print("Warning: Dashboard dependencies not installed.")
             print("  Install with: pip install esper-lite[dashboard]")
 
+    # Setup Overwatch backend if requested
+    overwatch_backend = None
+    if use_overwatch:
+        from esper.karn import OverwatchBackend
+        overwatch_backend = OverwatchBackend()
+        hub.add_backend(overwatch_backend)
+
     # Add Karn research telemetry collector
     # KarnCollector captures events into typed store for research analytics
     from esper.karn import get_collector
     karn_collector = get_collector()
     hub.add_backend(karn_collector)
 
-    try:
+    # Define training function to enable background execution for Overwatch
+    def run_training():
+        """Execute the training algorithm."""
         if args.algorithm == "heuristic":
             # Validate slot IDs use canonical format
             validated_slots = validate_slots(args.slots)
@@ -362,6 +378,22 @@ def main():
                 quiet_analytics=use_tui,
                 **config.to_train_kwargs(),
             )
+
+    try:
+        if use_overwatch:
+            # Overwatch mode: run training in background thread, Overwatch controls terminal
+            import threading
+            from esper.karn.overwatch import OverwatchApp
+
+            training_thread = threading.Thread(target=run_training, daemon=True)
+            training_thread.start()
+
+            # Run Overwatch TUI in main thread (blocks until user quits)
+            app = OverwatchApp(backend=overwatch_backend)
+            app.run()
+        else:
+            # Normal mode: run training directly in main thread
+            run_training()
     finally:
         # Export Karn telemetry if requested (P1-04)
         if karn_collector and args.export_karn:
