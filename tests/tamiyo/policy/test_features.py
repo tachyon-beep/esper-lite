@@ -217,11 +217,12 @@ def test_blueprint_one_hot_encoding():
     }}
     features = obs_to_multislot_features(obs)
 
-    # Structure: 23 base + 3 slots * 9 features (4 state + 5 blueprint one-hot)
+    # Structure: 23 base + 3 slots * 17 features (4 state + 13 blueprint one-hot)
     # r0c0 slot starts at index 23
-    # Blueprint one-hot is at indices 27-31 (after 4 state features)
-    r0c0_blueprint = features[27:32]  # conv_light = index 1
-    assert r0c0_blueprint == [0.0, 1.0, 0.0, 0.0, 0.0], f"conv_light should be [0,1,0,0,0], got {r0c0_blueprint}"
+    # Blueprint one-hot is at indices 27-39 (after 4 state features)
+    r0c0_blueprint = features[27:40]  # conv_light = index 1
+    expected = [0.0, 1.0] + [0.0] * 11  # 13-element one-hot with index 1 set
+    assert r0c0_blueprint == expected, f"conv_light should be {expected}, got {r0c0_blueprint}"
 
     # Test with attention in r0c1 slot
     obs = {**base_obs, 'slots': {
@@ -231,10 +232,11 @@ def test_blueprint_one_hot_encoding():
     }}
     features = obs_to_multislot_features(obs)
 
-    # r0c1 slot starts at index 23 + 9 = 32
-    # Blueprint one-hot is at indices 36-40
-    r0c1_blueprint = features[36:41]  # attention = index 2
-    assert r0c1_blueprint == [0.0, 0.0, 1.0, 0.0, 0.0], f"attention should be [0,0,1,0,0], got {r0c1_blueprint}"
+    # r0c1 slot starts at index 23 + 17 = 40
+    # Blueprint one-hot is at indices 44-56
+    r0c1_blueprint = features[44:57]  # attention = index 2
+    expected = [0.0, 0.0, 1.0] + [0.0] * 10  # 13-element one-hot with index 2 set
+    assert r0c1_blueprint == expected, f"attention should be {expected}, got {r0c1_blueprint}"
 
     # Test with noop in r0c2 slot
     obs = {**base_obs, 'slots': {
@@ -244,10 +246,11 @@ def test_blueprint_one_hot_encoding():
     }}
     features = obs_to_multislot_features(obs)
 
-    # r0c2 slot starts at index 23 + 18 = 41
-    # Blueprint one-hot is at indices 45-49
-    r0c2_blueprint = features[45:50]  # noop = index 0
-    assert r0c2_blueprint == [1.0, 0.0, 0.0, 0.0, 0.0], f"noop should be [1,0,0,0,0], got {r0c2_blueprint}"
+    # r0c2 slot starts at index 23 + 34 = 57
+    # Blueprint one-hot is at indices 61-73
+    r0c2_blueprint = features[61:74]  # noop = index 0
+    expected = [1.0] + [0.0] * 12  # 13-element one-hot with index 0 set
+    assert r0c2_blueprint == expected, f"noop should be {expected}, got {r0c2_blueprint}"
 
     # Test with no blueprint (inactive slot) - should be all zeros
     obs = {**base_obs, 'slots': {
@@ -257,8 +260,8 @@ def test_blueprint_one_hot_encoding():
     }}
     features = obs_to_multislot_features(obs)
 
-    mid_blueprint = features[36:41]
-    assert mid_blueprint == [0.0, 0.0, 0.0, 0.0, 0.0], f"No blueprint should be all zeros, got {mid_blueprint}"
+    mid_blueprint = features[44:57]  # r0c1 blueprint slice
+    assert mid_blueprint == [0.0] * 13, f"No blueprint should be all zeros, got {mid_blueprint}"
 
 
 def test_dynamic_feature_size_3_slots():
