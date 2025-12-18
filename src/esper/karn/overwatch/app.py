@@ -23,6 +23,7 @@ from esper.karn.overwatch.widgets.replay_status import ReplayStatusBar
 
 if TYPE_CHECKING:
     from esper.karn.overwatch.schema import TuiSnapshot
+    from esper.karn.overwatch.backend import OverwatchBackend
 
 
 class OverwatchApp(App):
@@ -66,20 +67,27 @@ class OverwatchApp(App):
     def __init__(
         self,
         replay_path: Path | str | None = None,
+        backend: "OverwatchBackend | None" = None,
+        poll_interval_ms: int = 250,
         **kwargs,
     ) -> None:
         """Initialize the Overwatch app.
 
         Args:
             replay_path: Optional path to JSONL replay file
+            backend: Optional OverwatchBackend for live mode
+            poll_interval_ms: Polling interval for live updates (default: 250ms)
             **kwargs: Additional args passed to App
         """
         super().__init__(**kwargs)
         self._replay_path = Path(replay_path) if replay_path else None
+        self._backend = backend
+        self._poll_interval_ms = poll_interval_ms
         self._snapshot: TuiSnapshot | None = None
         self._help_visible = False
         self._replay_controller = None
         self._playback_timer = None
+        self._live_timer = None
 
     def compose(self) -> ComposeResult:
         """Compose the application layout."""
@@ -113,8 +121,11 @@ class OverwatchApp(App):
         # Initialize replay controller if replay file provided
         if self._replay_path:
             self._init_replay()
+        elif self._backend:
+            # Live mode
+            self._init_live()
         else:
-            # Hide replay status bar in live mode
+            # Demo/standalone mode - hide replay bar
             self.query_one(ReplayStatusBar).set_visible(False)
 
         # Set focus to flight board for navigation
@@ -334,3 +345,27 @@ class OverwatchApp(App):
                 break
 
         self.query_one(DetailPanel).update_env(env)
+
+    def _init_live(self) -> None:
+        """Initialize live telemetry mode."""
+        # Hide replay status bar in live mode
+        self.query_one(ReplayStatusBar).set_visible(False)
+
+        # Start polling timer
+        interval = self._poll_interval_ms / 1000.0
+        self._live_timer = self.set_interval(interval, self._live_poll)
+
+        # Initial poll
+        self._live_poll()
+
+    def _live_poll(self) -> None:
+        """Poll backend for latest snapshot."""
+        if not self._backend:
+            return
+
+        snapshot = self._backend.get_snapshot()
+
+        # Only update if snapshot changed (by captured_at timestamp)
+        if snapshot.captured_at != getattr(self._snapshot, "captured_at", None):
+            self._snapshot = snapshot
+            self._update_all_widgets()
