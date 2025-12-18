@@ -1726,8 +1726,9 @@ def train_ppo_vectorized(
                         )
 
             # Convert to list of dicts for per-env processing
+            # Use static HEAD_NAMES (still has .item() - addressed in Task 5)
             actions = [
-                {key: actions_dict[key][i].item() for key in actions_dict}
+                {key: actions_dict[key][i].item() for key in HEAD_NAMES}
                 for i in range(len(env_states))
             ]
             values = values_tensor.tolist()
