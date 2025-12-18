@@ -151,6 +151,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Override seed (otherwise use config value)",
     )
+    ppo_parser.add_argument(
+        "--ab-test",
+        type=str,
+        choices=["shaped-vs-simplified", "shaped-vs-sparse"],
+        default=None,
+        help="Run A/B test: split envs between two reward modes (requires even n_envs)",
+    )
 
     return parser
 
@@ -388,6 +395,18 @@ def main():
                 if telemetry_config.level.name == "OFF":
                     config.use_telemetry = False
 
+                # Handle A/B testing
+                ab_reward_modes = None
+                if args.ab_test:
+                    if config.n_envs % 2 != 0:
+                        raise ValueError("--ab-test requires even number of envs")
+                    half = config.n_envs // 2
+                    if args.ab_test == "shaped-vs-simplified":
+                        ab_reward_modes = ["shaped"] * half + ["simplified"] * half
+                    elif args.ab_test == "shaped-vs-sparse":
+                        ab_reward_modes = ["shaped"] * half + ["sparse"] * half
+                    print(f"[A/B Test] {half} envs SHAPED vs {half} envs {args.ab_test.split('-vs-')[1].upper()}")
+
                 print(config.summary())
 
                 from esper.simic.training import train_ppo_vectorized
@@ -402,6 +421,7 @@ def main():
                     telemetry_config=telemetry_config,
                     telemetry_lifecycle_only=args.telemetry_lifecycle_only,
                     quiet_analytics=use_tui or use_overwatch,
+                    ab_reward_modes=ab_reward_modes,
                     **config.to_train_kwargs(),
                 )
         except Exception:
