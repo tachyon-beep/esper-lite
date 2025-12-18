@@ -265,7 +265,7 @@ def test_blueprint_one_hot_encoding():
 
 
 def test_dynamic_feature_size_3_slots():
-    """Feature extraction with 3 slots should return 50 features."""
+    """Feature extraction with 3 slots should return 74 features."""
     from esper.tamiyo.policy.features import obs_to_multislot_features, get_feature_size
     from esper.leyline.slot_config import SlotConfig
 
@@ -294,14 +294,14 @@ def test_dynamic_feature_size_3_slots():
 
     features = obs_to_multislot_features(obs, slot_config=slot_config)
 
-    # 23 base + 3 slots * 9 features = 50
+    # 23 base + 3 slots * 17 features = 74
     expected_size = get_feature_size(slot_config)
-    assert expected_size == 50, f"Expected feature size 50 for 3 slots, got {expected_size}"
+    assert expected_size == 74, f"Expected feature size 74 for 3 slots, got {expected_size}"
     assert len(features) == expected_size, f"Expected {expected_size} features, got {len(features)}"
 
 
 def test_dynamic_feature_size_5_slots():
-    """Feature extraction with 5 slots should return 68 features."""
+    """Feature extraction with 5 slots should return 108 features."""
     from esper.tamiyo.policy.features import obs_to_multislot_features, get_feature_size
     from esper.leyline.slot_config import SlotConfig
 
@@ -332,9 +332,9 @@ def test_dynamic_feature_size_5_slots():
 
     features = obs_to_multislot_features(obs, slot_config=slot_config)
 
-    # 23 base + 5 slots * 9 features = 68
+    # 23 base + 5 slots * 17 features = 108
     expected_size = get_feature_size(slot_config)
-    assert expected_size == 68, f"Expected feature size 68 for 5 slots, got {expected_size}"
+    assert expected_size == 108, f"Expected feature size 108 for 5 slots, got {expected_size}"
     assert len(features) == expected_size, f"Expected {expected_size} features, got {len(features)}"
 
 
@@ -367,18 +367,18 @@ def test_dynamic_slot_iteration():
 
     features = obs_to_multislot_features(obs, slot_config=slot_config)
 
-    # 23 base + 2 slots * 9 features = 41
-    assert len(features) == 41, f"Expected 41 features for 2 slots, got {len(features)}"
+    # 23 base + 2 slots * 17 features = 57
+    assert len(features) == 57, f"Expected 57 features for 2 slots, got {len(features)}"
 
     # Verify slot features are present
-    # r0c0 slot at index 23-31: is_active=1, stage=2, alpha=0.3, improvement=1.5
+    # r0c0 slot at index 23-39: is_active=1, stage=2, alpha=0.3, improvement=1.5
     assert features[23] == 1.0, "r0c0 should be active"
     assert features[24] == 2.0, "r0c0 stage should be 2"
     assert features[25] == 0.3, "r0c0 alpha should be 0.3"
     assert features[26] == 1.5, "r0c0 improvement should be 1.5"
 
-    # r0c2 slot at index 32-40: is_active=1, stage=3, alpha=0.7, improvement=2.0
-    assert features[32] == 1.0, "r0c2 should be active"
-    assert features[33] == 3.0, "r0c2 stage should be 3"
-    assert features[34] == 0.7, "r0c2 alpha should be 0.7"
-    assert features[35] == 2.0, "r0c2 improvement should be 2.0"
+    # r0c2 slot at index 40-56: is_active=1, stage=3, alpha=0.7, improvement=2.0
+    assert features[40] == 1.0, "r0c2 should be active"
+    assert features[41] == 3.0, "r0c2 stage should be 3"
+    assert features[42] == 0.7, "r0c2 alpha should be 0.7"
+    assert features[43] == 2.0, "r0c2 improvement should be 2.0"
