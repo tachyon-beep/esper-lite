@@ -232,7 +232,7 @@ class TestFlightBoardNavigation:
         """Detail panel updates when env is selected via navigation."""
         from esper.karn.overwatch import OverwatchApp
         from esper.karn.overwatch.widgets.flight_board import FlightBoard
-        from textual.widgets import Static
+        from esper.karn.overwatch.widgets.context_panel import ContextPanel
 
         app = OverwatchApp(replay_path=multi_env_replay)
 
@@ -245,9 +245,9 @@ class TestFlightBoardNavigation:
             await pilot.press("j")
             await pilot.pause()
 
-            # Panel should update after navigation
-            detail = app.query_one("#detail-panel", Static)
-            detail_text = str(detail.render())
+            # Panel should update after navigation - query ContextPanel instead of Static
+            context = app.query_one(ContextPanel)
+            detail_text = context.render_content()
             assert "Env 1" in detail_text, f"Expected 'Env 1' in detail panel, got: {detail_text}"
 
 
@@ -358,3 +358,135 @@ class TestHeaderAndStripIntegration:
             # envs_ok=2, envs_warn=1
             assert "OK:2" in content or "2" in content
             assert "WARN:1" in content or "1" in content
+
+
+class TestDetailPanelIntegration:
+    """Integration tests for DetailPanel functionality."""
+
+    @pytest.fixture
+    def detail_replay(self, tmp_path: Path) -> Path:
+        """Create replay with detailed env and tamiyo data."""
+        from esper.karn.overwatch import (
+            SnapshotWriter,
+            TuiSnapshot,
+            ConnectionStatus,
+            TamiyoState,
+            EnvSummary,
+            SlotChipState,
+        )
+
+        path = tmp_path / "detail.jsonl"
+        with SnapshotWriter(path) as writer:
+            snap = TuiSnapshot(
+                schema_version=1,
+                captured_at="2025-12-18T14:00:00Z",
+                connection=ConnectionStatus(True, 1000.0, 0.5),
+                tamiyo=TamiyoState(
+                    action_counts={"GERMINATE": 34, "BLEND": 28, "CULL": 12, "WAIT": 26},
+                    recent_actions=["G", "B", "W", "W", "C"],
+                    confidence_mean=0.73,
+                    confidence_min=0.45,
+                    confidence_max=0.92,
+                    confidence_history=[0.5, 0.6, 0.7, 0.65, 0.8],
+                    exploration_pct=0.65,
+                    kl_divergence=0.015,
+                    entropy=1.5,
+                    explained_variance=0.75,
+                ),
+                flight_board=[
+                    EnvSummary(
+                        env_id=3,
+                        device_id=1,
+                        status="WARN",
+                        anomaly_score=0.72,
+                        anomaly_reasons=["High gradient ratio (3.2x)", "Memory pressure (94%)"],
+                        throughput_fps=102.5,
+                        slots={
+                            "r0c1": SlotChipState("r0c1", "BLENDING", "conv_light", 0.78, gate_last="G2", gate_passed=True),
+                        },
+                    ),
+                    EnvSummary(env_id=0, device_id=0, status="OK", anomaly_score=0.1),
+                ],
+            )
+            writer.write(snap)
+        return path
+
+    @pytest.mark.asyncio
+    async def test_detail_panel_shows_context_by_default(self, detail_replay: Path) -> None:
+        """DetailPanel starts in context mode."""
+        from esper.karn.overwatch import OverwatchApp
+        from esper.karn.overwatch.widgets.detail_panel import DetailPanel
+
+        app = OverwatchApp(replay_path=detail_replay)
+
+        async with app.run_test() as pilot:
+            panel = app.query_one(DetailPanel)
+            assert panel.mode == "context"
+
+    @pytest.mark.asyncio
+    async def test_t_key_switches_to_tamiyo_mode(self, detail_replay: Path) -> None:
+        """Pressing 't' switches to tamiyo mode."""
+        from esper.karn.overwatch import OverwatchApp
+        from esper.karn.overwatch.widgets.detail_panel import DetailPanel
+
+        app = OverwatchApp(replay_path=detail_replay)
+
+        async with app.run_test() as pilot:
+            panel = app.query_one(DetailPanel)
+            assert panel.mode == "context"
+
+            await pilot.press("t")
+            assert panel.mode == "tamiyo"
+
+    @pytest.mark.asyncio
+    async def test_c_key_switches_to_context_mode(self, detail_replay: Path) -> None:
+        """Pressing 'c' switches to context mode."""
+        from esper.karn.overwatch import OverwatchApp
+        from esper.karn.overwatch.widgets.detail_panel import DetailPanel
+
+        app = OverwatchApp(replay_path=detail_replay)
+
+        async with app.run_test() as pilot:
+            panel = app.query_one(DetailPanel)
+
+            # Switch to tamiyo first
+            await pilot.press("t")
+            assert panel.mode == "tamiyo"
+
+            # Switch back to context
+            await pilot.press("c")
+            assert panel.mode == "context"
+
+    @pytest.mark.asyncio
+    async def test_context_panel_shows_anomaly_reasons(self, detail_replay: Path) -> None:
+        """Context panel displays anomaly reasons for selected env."""
+        from esper.karn.overwatch import OverwatchApp
+        from esper.karn.overwatch.widgets.context_panel import ContextPanel
+
+        app = OverwatchApp(replay_path=detail_replay)
+
+        async with app.run_test() as pilot:
+            # Initial selection should be highest anomaly (env 3)
+            context = app.query_one(ContextPanel)
+            content = context.render_content()
+
+            assert "High gradient ratio" in content
+            assert "Memory pressure" in content
+
+    @pytest.mark.asyncio
+    async def test_tamiyo_detail_shows_action_distribution(self, detail_replay: Path) -> None:
+        """Tamiyo detail panel shows action distribution."""
+        from esper.karn.overwatch import OverwatchApp
+        from esper.karn.overwatch.widgets.tamiyo_detail import TamiyoDetailPanel
+
+        app = OverwatchApp(replay_path=detail_replay)
+
+        async with app.run_test() as pilot:
+            # Switch to tamiyo mode
+            await pilot.press("t")
+
+            tamiyo = app.query_one(TamiyoDetailPanel)
+            content = tamiyo.render_content()
+
+            assert "GERM" in content or "Germinate" in content
+            assert "34" in content  # 34%
