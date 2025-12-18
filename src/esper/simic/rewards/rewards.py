@@ -47,10 +47,12 @@ class RewardMode(Enum):
     SHAPED: Current dense shaping with PBRS, attribution, warnings (default)
     SPARSE: Terminal-only ground truth (accuracy - param_cost)
     MINIMAL: Sparse + early-cull penalty only
+    SIMPLIFIED: DRL Expert recommended - PBRS + intervention cost + terminal only
     """
     SHAPED = "shaped"
     SPARSE = "sparse"
     MINIMAL = "minimal"
+    SIMPLIFIED = "simplified"
 
 
 class RewardFamily(Enum):
