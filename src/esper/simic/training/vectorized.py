@@ -692,27 +692,37 @@ def train_ppo_vectorized(
     # This eliminates the N×M worker overhead from N independent DataLoaders
     if gpu_preload:
         # GPU-resident data loading: 8x faster than CPU DataLoader workers
-        # Data is loaded once to GPU and reused across all environments
-        # NOTE: GPU preload doesn't use SharedBatchIterator (data already on GPU)
-        from esper.utils.data import load_cifar10_gpu
+        # SharedGPUBatchIterator: ONE DataLoader per device, splits batches across envs
+        # CRITICAL: Multiple DataLoaders sharing cached GPU tensors causes data corruption
+        # (race condition when concurrent iterators access same tensor storage)
+        from esper.utils.data import SharedGPUBatchIterator
 
-        def create_env_dataloaders(env_idx: int, base_seed: int):
-            """Create GPU-resident DataLoaders."""
-            gen = torch.Generator(device='cpu')  # Generator for shuffle
-            gen.manual_seed(base_seed + env_idx * 7919)
-            env_device = devices[env_idx % len(devices)]
-            return load_cifar10_gpu(
-                batch_size=512,
-                generator=gen,
-                device=env_device,
-            )
+        # Create generator for reproducible shuffling
+        gen = torch.Generator()
+        gen.manual_seed(seed)
 
-        # Create DataLoaders once and reuse across all batches
-        env_dataloaders = [create_env_dataloaders(i, seed) for i in range(n_envs)]
-        num_train_batches = len(env_dataloaders[0][0])
-        num_test_batches = len(env_dataloaders[0][1])
-        shared_train_iter = None  # Not using SharedBatchIterator for GPU preload
-        shared_test_iter = None
+        # Create shared GPU iterators for train and test
+        shared_train_iter = SharedGPUBatchIterator(
+            batch_size_per_env=512,
+            n_envs=n_envs,
+            env_devices=env_device_map,
+            shuffle=True,
+            generator=gen,
+            is_train=True,
+        )
+
+        shared_test_iter = SharedGPUBatchIterator(
+            batch_size_per_env=512,
+            n_envs=n_envs,
+            env_devices=env_device_map,
+            shuffle=False,
+            generator=gen,
+            is_train=False,
+        )
+
+        num_train_batches = len(shared_train_iter)
+        num_test_batches = len(shared_test_iter)
+        env_dataloaders = None  # Not using per-env dataloaders (uses shared iterator)
     else:
         # SharedBatchIterator: Single DataLoader with combined batch size
         # Splits batches across environments and moves to correct devices
@@ -1267,7 +1277,7 @@ def train_ppo_vectorized(
 
             # ===== TRAINING: Iterate batches first, launch all envs via CUDA streams =====
             # SharedBatchIterator: single DataLoader, batches pre-split and moved to devices
-            # GPU preload fallback: per-env DataLoaders (data already on GPU)
+            # SharedGPUBatchIterator: GPU-resident data, one DataLoader per device
 
             # Issue one wait_stream per env BEFORE the loop starts (not per-batch).
             # This syncs the accumulator zeroing on default stream before we write.
@@ -1279,73 +1289,41 @@ def train_ppo_vectorized(
                     env_state.train_correct_accum.record_stream(env_state.stream)  # type: ignore[union-attr]
                     env_state.stream.wait_stream(torch.cuda.default_stream(torch.device(env_state.env_device)))
 
-            # Choose iteration strategy based on data loading mode
-            if shared_train_iter is not None:
-                # SharedBatchIterator: single iterator yields list of (inputs, targets) per env
-                train_iter = iter(shared_train_iter)
-                for batch_step in range(num_train_batches):
-                    try:
-                        fetch_start = time.perf_counter()
-                        env_batches = next(train_iter)  # List of (inputs, targets), already on devices
-                        dataloader_wait_ms_epoch += (time.perf_counter() - fetch_start) * 1000.0
-                    except StopIteration:
-                        break
+            # Iterate training batches using shared iterator (SharedBatchIterator or SharedGPUBatchIterator)
+            # Both provide list of (inputs, targets) per environment, already on correct devices
+            train_iter = iter(shared_train_iter)
+            for batch_step in range(num_train_batches):
+                try:
+                    fetch_start = time.perf_counter()
+                    env_batches = next(train_iter)  # List of (inputs, targets), already on devices
+                    dataloader_wait_ms_epoch += (time.perf_counter() - fetch_start) * 1000.0
+                except StopIteration:
+                    break
 
-                    # Launch all environments in their respective CUDA streams (async)
-                    # Data already moved to correct device by SharedBatchIterator
-                    for i, env_state in enumerate(env_states):
-                        if i >= len(env_batches):
-                            continue
-                        # CRITICAL: SharedBatchIterator does non_blocking transfers on the default stream.
-                        # We must sync env_state.stream with default stream before using the data,
-                        # otherwise we may access partially-transferred data (race condition).
-                        # Only sync if SharedBatchIterator did async transfer (not gpu_preload)
-                        # When gpu_preload=True, shared_train_iter is None and data is already on GPU
-                        if env_state.stream and shared_train_iter is not None:
-                            env_state.stream.wait_stream(torch.cuda.default_stream(torch.device(env_state.env_device)))
-                        inputs, targets = env_batches[i]
-                        loss_tensor, correct_tensor, total, grad_stats = process_train_batch(
-                            env_state, inputs, targets, criterion, use_telemetry=use_telemetry, slots=slots,
-                            use_amp=amp_enabled,
-                        )
-                        if grad_stats is not None:
-                            env_grad_stats[i] = grad_stats  # Keep last batch's grad stats
-                        stream_ctx = torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
-                        with stream_ctx:
-                            env_state.train_loss_accum.add_(loss_tensor)  # type: ignore[union-attr]
-                            env_state.train_correct_accum.add_(correct_tensor)  # type: ignore[union-attr]
-                        train_totals[i] += total
-            else:
-                # GPU preload fallback: per-env DataLoaders (data already on GPU)
-                assert env_dataloaders is not None  # Guaranteed when shared_train_iter is None
-                train_iters = [iter(env_dataloaders[i][0]) for i in range(envs_this_batch)]
-                for batch_step in range(num_train_batches):
-                    env_batches = []
-                    for i, train_iter_i in enumerate(train_iters):
-                        try:
-                            fetch_start = time.perf_counter()
-                            inputs, targets = next(train_iter_i)
-                            dataloader_wait_ms_epoch += (time.perf_counter() - fetch_start) * 1000.0
-                            env_batches.append((inputs, targets))
-                        except StopIteration:
-                            env_batches.append(None)
-
-                    # Launch all environments in their respective CUDA streams (async)
-                    for i, env_state in enumerate(env_states):
-                        if env_batches[i] is None:
-                            continue
-                        inputs, targets = env_batches[i]
-                        loss_tensor, correct_tensor, total, grad_stats = process_train_batch(
-                            env_state, inputs, targets, criterion, use_telemetry=use_telemetry, slots=slots,
-                            use_amp=amp_enabled,
-                        )
-                        if grad_stats is not None:
-                            env_grad_stats[i] = grad_stats  # Keep last batch's grad stats
-                        stream_ctx = torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
-                        with stream_ctx:
-                            env_state.train_loss_accum.add_(loss_tensor)  # type: ignore[union-attr]
-                            env_state.train_correct_accum.add_(correct_tensor)  # type: ignore[union-attr]
-                        train_totals[i] += total
+                # Launch all environments in their respective CUDA streams (async)
+                # Data already moved to correct device by the shared iterator
+                for i, env_state in enumerate(env_states):
+                    if i >= len(env_batches):
+                        continue
+                    # CRITICAL: DataLoader collation (torch.stack) runs on the default stream.
+                    # We must sync env_state.stream with default stream before using the data,
+                    # otherwise we may access partially-transferred data (race condition).
+                    # This applies to BOTH SharedBatchIterator (CPU→GPU transfers) and
+                    # SharedGPUBatchIterator (collation still uses default stream for GPU data).
+                    if env_state.stream:
+                        env_state.stream.wait_stream(torch.cuda.default_stream(torch.device(env_state.env_device)))
+                    inputs, targets = env_batches[i]
+                    loss_tensor, correct_tensor, total, grad_stats = process_train_batch(
+                        env_state, inputs, targets, criterion, use_telemetry=use_telemetry, slots=slots,
+                        use_amp=amp_enabled,
+                    )
+                    if grad_stats is not None:
+                        env_grad_stats[i] = grad_stats  # Keep last batch's grad stats
+                    stream_ctx = torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
+                    with stream_ctx:
+                        env_state.train_loss_accum.add_(loss_tensor)  # type: ignore[union-attr]
+                        env_state.train_correct_accum.add_(correct_tensor)  # type: ignore[union-attr]
+                    train_totals[i] += total
 
             # Sync all streams ONCE at epoch end
             for env_state in env_states:
@@ -1398,94 +1376,50 @@ def train_ppo_vectorized(
                         for slot_id in slots_needing_counterfactual[i]:
                             env_state.cf_correct_accums[slot_id].record_stream(env_state.stream)
 
-            # Choose iteration strategy based on data loading mode
-            if shared_test_iter is not None:
-                # SharedBatchIterator: single iterator yields list of (inputs, targets) per env
-                test_iter = iter(shared_test_iter)
-                for batch_step in range(num_test_batches):
-                    try:
-                        fetch_start = time.perf_counter()
-                        env_batches = next(test_iter)  # List of (inputs, targets), already on devices
-                        dataloader_wait_ms_epoch += (time.perf_counter() - fetch_start) * 1000.0
-                    except StopIteration:
-                        break
+            # Iterate validation batches using shared iterator (SharedBatchIterator or SharedGPUBatchIterator)
+            test_iter = iter(shared_test_iter)
+            for batch_step in range(num_test_batches):
+                try:
+                    fetch_start = time.perf_counter()
+                    env_batches = next(test_iter)  # List of (inputs, targets), already on devices
+                    dataloader_wait_ms_epoch += (time.perf_counter() - fetch_start) * 1000.0
+                except StopIteration:
+                    break
 
-                    # Launch all environments: MAIN VALIDATION + COUNTERFACTUAL on same batch
-                    for i, env_state in enumerate(env_states):
-                        if i >= len(env_batches):
-                            continue
-                        # CRITICAL: SharedBatchIterator does non_blocking transfers on the default stream.
-                        # We must sync env_state.stream with default stream before using the data,
-                        # otherwise we may access partially-transferred data (race condition).
-                        # Only sync if SharedBatchIterator did async transfer (not gpu_preload)
-                        # When gpu_preload=True, shared_test_iter is None and data is already on GPU
-                        if env_state.stream and shared_test_iter is not None:
-                            env_state.stream.wait_stream(torch.cuda.default_stream(torch.device(env_state.env_device)))
-                        inputs, targets = env_batches[i]
+                # Launch all environments: MAIN VALIDATION + COUNTERFACTUAL on same batch
+                for i, env_state in enumerate(env_states):
+                    if i >= len(env_batches):
+                        continue
+                    # CRITICAL: DataLoader collation (torch.stack) runs on the default stream.
+                    # We must sync env_state.stream with default stream before using the data,
+                    # otherwise we may access partially-transferred data (race condition).
+                    # This applies to BOTH SharedBatchIterator (CPU→GPU transfers) and
+                    # SharedGPUBatchIterator (collation still uses default stream for GPU data).
+                    if env_state.stream:
+                        env_state.stream.wait_stream(torch.cuda.default_stream(torch.device(env_state.env_device)))
+                    inputs, targets = env_batches[i]
 
-                        # MAIN VALIDATION (real alpha)
-                        loss_tensor, correct_tensor, total = process_val_batch(env_state, inputs, targets, criterion, slots=slots)
-                        stream_ctx = torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
-                        with stream_ctx:
-                            env_state.val_loss_accum.add_(loss_tensor)  # type: ignore[union-attr]
-                            env_state.val_correct_accum.add_(correct_tensor)  # type: ignore[union-attr]
-                        val_totals[i] += total
+                    # MAIN VALIDATION (real alpha)
+                    loss_tensor, correct_tensor, total = process_val_batch(env_state, inputs, targets, criterion, slots=slots)
+                    stream_ctx = torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
+                    with stream_ctx:
+                        env_state.val_loss_accum.add_(loss_tensor)  # type: ignore[union-attr]
+                        env_state.val_correct_accum.add_(correct_tensor)  # type: ignore[union-attr]
+                    val_totals[i] += total
 
-                        # COUNTERFACTUAL (alpha=0) - SAME BATCH, no DataLoader reload!
-                        # Data is already on GPU from the main validation pass.
-                        # Compute per-slot counterfactual for multi-slot reward attribution
-                        if i in slots_needing_counterfactual:
-                            for slot_id in slots_needing_counterfactual[i]:
-                                # Entire counterfactual pass in stream_ctx (PyTorch specialist fix)
-                                with stream_ctx:
-                                    with env_state.model.seed_slots[slot_id].force_alpha(0.0):
-                                        _, cf_correct_tensor, cf_total = process_val_batch(
-                                            env_state, inputs, targets, criterion, slots=slots
-                                        )
-                                    env_state.cf_correct_accums[slot_id].add_(cf_correct_tensor)
-                                env_state.cf_totals[slot_id] += cf_total
-            else:
-                # GPU preload fallback: per-env DataLoaders (data already on GPU)
-                assert env_dataloaders is not None  # Guaranteed when shared_test_iter is None
-                test_iters = [iter(env_dataloaders[i][1]) for i in range(envs_this_batch)]
-                for batch_step in range(num_test_batches):
-                    env_batches = []
-                    for i, test_iter_i in enumerate(test_iters):
-                        try:
-                            fetch_start = time.perf_counter()
-                            inputs, targets = next(test_iter_i)
-                            dataloader_wait_ms_epoch += (time.perf_counter() - fetch_start) * 1000.0
-                            env_batches.append((inputs, targets))
-                        except StopIteration:
-                            env_batches.append(None)
-
-                    # Launch all environments: MAIN VALIDATION + COUNTERFACTUAL on same batch
-                    for i, env_state in enumerate(env_states):
-                        if env_batches[i] is None:
-                            continue
-                        inputs, targets = env_batches[i]
-
-                        # MAIN VALIDATION (real alpha)
-                        loss_tensor, correct_tensor, total = process_val_batch(env_state, inputs, targets, criterion, slots=slots)
-                        stream_ctx = torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
-                        with stream_ctx:
-                            env_state.val_loss_accum.add_(loss_tensor)  # type: ignore[union-attr]
-                            env_state.val_correct_accum.add_(correct_tensor)  # type: ignore[union-attr]
-                        val_totals[i] += total
-
-                        # COUNTERFACTUAL (alpha=0) - SAME BATCH, no DataLoader reload!
-                        # Data is already on GPU from the main validation pass.
-                        # Compute per-slot counterfactual for multi-slot reward attribution
-                        if i in slots_needing_counterfactual:
-                            for slot_id in slots_needing_counterfactual[i]:
-                                # Entire counterfactual pass in stream_ctx (PyTorch specialist fix)
-                                with stream_ctx:
-                                    with env_state.model.seed_slots[slot_id].force_alpha(0.0):
-                                        _, cf_correct_tensor, cf_total = process_val_batch(
-                                            env_state, inputs, targets, criterion, slots=slots
-                                        )
-                                    env_state.cf_correct_accums[slot_id].add_(cf_correct_tensor)
-                                env_state.cf_totals[slot_id] += cf_total
+                    # COUNTERFACTUAL (alpha=0) - SAME BATCH, no DataLoader reload!
+                    # Data is already on GPU from the main validation pass.
+                    # Compute per-slot counterfactual for multi-slot reward attribution
+                    if i in slots_needing_counterfactual:
+                        for slot_id in slots_needing_counterfactual[i]:
+                            # Entire counterfactual pass in stream_ctx (PyTorch specialist fix)
+                            with stream_ctx:
+                                with env_state.model.seed_slots[slot_id].force_alpha(0.0):
+                                    _, cf_correct_tensor, cf_total = process_val_batch(
+                                        env_state, inputs, targets, criterion, slots=slots
+                                    )
+                                env_state.cf_correct_accums[slot_id].add_(cf_correct_tensor)
+                            env_state.cf_totals[slot_id] += cf_total
 
             # Single sync point at end (not once per pass)
             for env_state in env_states:
