@@ -97,7 +97,7 @@ class OverwatchApp(App):
         yield ReplayStatusBar(id="replay-status")
 
         # Run header (run identity, connection status)
-        # NOTE: Keep id="header" for backwards compatibility with existing integration tests
+        # NOTE: id="header" required by integration tests (test_app.py, test_integration.py)
         yield RunHeader(id="header")
 
         # Tamiyo Strip (PPO vitals, action summary)
