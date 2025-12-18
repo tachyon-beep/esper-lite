@@ -17,6 +17,7 @@ from esper.karn.overwatch.widgets.help import HelpOverlay
 from esper.karn.overwatch.widgets.flight_board import FlightBoard
 from esper.karn.overwatch.widgets.run_header import RunHeader
 from esper.karn.overwatch.widgets.tamiyo_strip import TamiyoStrip
+from esper.karn.overwatch.widgets.detail_panel import DetailPanel
 
 if TYPE_CHECKING:
     from esper.karn.overwatch.schema import TuiSnapshot
@@ -49,6 +50,8 @@ class OverwatchApp(App):
         Binding("q", "quit", "Quit", show=True),
         Binding("question_mark", "toggle_help", "Help", show=True),
         Binding("escape", "dismiss", "Dismiss", show=False),
+        Binding("c", "show_context", "Context", show=True),
+        Binding("t", "show_tamiyo", "Tamiyo", show=True),
     ]
 
     def __init__(
@@ -83,10 +86,7 @@ class OverwatchApp(App):
             # Real FlightBoard widget
             yield FlightBoard(id="flight-board")
 
-            yield Static(
-                self._render_detail_panel_content(),
-                id="detail-panel",
-            )
+            yield DetailPanel(id="detail-panel")
 
         # Event feed
         yield Static(
@@ -98,10 +98,6 @@ class OverwatchApp(App):
         yield HelpOverlay(id="help-overlay", classes="hidden")
 
         yield Footer()
-
-    def _render_detail_panel_content(self) -> str:
-        """Render Detail Panel placeholder content."""
-        return "[DETAIL PANEL] Select an environment (j/k to navigate)"
 
     def _render_event_feed_content(self) -> str:
         """Render Event Feed placeholder content."""
@@ -152,8 +148,19 @@ class OverwatchApp(App):
         # Update flight board
         self.query_one(FlightBoard).update_snapshot(self._snapshot)
 
-        # Update placeholders
-        self.query_one("#detail-panel", Static).update(self._render_detail_panel_content())
+        # Update detail panel with tamiyo data
+        detail_panel = self.query_one(DetailPanel)
+        detail_panel.update_tamiyo(self._snapshot.tamiyo)
+
+        # Update context panel with initial env selection
+        board = self.query_one(FlightBoard)
+        if board.selected_env_id is not None:
+            for env in self._snapshot.flight_board:
+                if env.env_id == board.selected_env_id:
+                    detail_panel.update_env(env)
+                    break
+
+        # Update event feed placeholder
         self.query_one("#event-feed", Static).update(self._render_event_feed_content())
 
     def action_toggle_help(self) -> None:
@@ -167,20 +174,26 @@ class OverwatchApp(App):
         if self._help_visible:
             self.action_toggle_help()
 
+    def action_show_context(self) -> None:
+        """Toggle context panel view."""
+        self.query_one(DetailPanel).toggle_mode("context")
+
+    def action_show_tamiyo(self) -> None:
+        """Toggle tamiyo detail panel view."""
+        self.query_one(DetailPanel).toggle_mode("tamiyo")
+
     def on_flight_board_env_selected(self, message: FlightBoard.EnvSelected) -> None:
         """Handle env selection in flight board."""
-        self._update_detail_panel(message.env_id)
+        self._update_detail_panel_env(message.env_id)
 
     def on_flight_board_env_expanded(self, message: FlightBoard.EnvExpanded) -> None:
         """Handle env expansion in flight board."""
         pass  # Could update detail panel
 
-    def _update_detail_panel(self, env_id: int | None) -> None:
+    def _update_detail_panel_env(self, env_id: int | None) -> None:
         """Update detail panel with selected env info."""
         if env_id is None or self._snapshot is None:
-            self.query_one("#detail-panel", Static).update(
-                "[DETAIL PANEL] Select an environment"
-            )
+            self.query_one(DetailPanel).update_env(None)
             return
 
         # Find the env
@@ -190,17 +203,4 @@ class OverwatchApp(App):
                 env = e
                 break
 
-        if env is None:
-            return
-
-        # Build detail content
-        lines = [f"[DETAIL] Env {env.env_id}"]
-        lines.append(f"Status: {env.status}")
-        lines.append(f"Anomaly: {env.anomaly_score:.2f}")
-
-        if env.anomaly_reasons:
-            lines.append("Reasons:")
-            for reason in env.anomaly_reasons:
-                lines.append(f"  • {reason}")
-
-        self.query_one("#detail-panel", Static).update("\n".join(lines))
+        self.query_one(DetailPanel).update_env(env)
