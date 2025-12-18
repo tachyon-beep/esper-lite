@@ -92,6 +92,7 @@ class SeedState:
     alpha: float = 0.0
     accuracy_delta: float = 0.0
     seed_params: int = 0
+    grad_ratio: float = 0.0
 
 
 def _make_sparkline_static(values: list[float], width: int = 8) -> str:
@@ -140,6 +141,7 @@ class EnvState:
     accuracy_history: deque[float] = field(default_factory=lambda: deque(maxlen=50))
     best_accuracy: float = 0.0
     best_accuracy_epoch: int = 0
+    best_accuracy_episode: int = 0
 
     # Per-env action tracking
     action_history: deque[str] = field(default_factory=lambda: deque(maxlen=10))
@@ -183,7 +185,7 @@ class EnvState:
             self.best_reward = reward
             self.best_reward_epoch = epoch
 
-    def add_accuracy(self, accuracy: float, epoch: int) -> None:
+    def add_accuracy(self, accuracy: float, epoch: int, episode: int = 0) -> None:
         """Add accuracy and update best/status tracking."""
         prev_acc = self.accuracy_history[-1] if self.accuracy_history else 0.0
         self.accuracy_history.append(accuracy)
@@ -192,6 +194,7 @@ class EnvState:
         if accuracy > self.best_accuracy:
             self.best_accuracy = accuracy
             self.best_accuracy_epoch = epoch
+            self.best_accuracy_episode = episode
             self.epochs_since_improvement = 0
         else:
             self.epochs_since_improvement += 1
@@ -315,6 +318,9 @@ class TUIState:
 
     # Red flags
     reward_hacking_detected: bool = False
+
+    # Data availability flags (for "waiting" states)
+    ppo_data_received: bool = False  # True after first PPO_UPDATE_COMPLETED
 
     # Performance metrics
     start_time: datetime | None = None
@@ -602,22 +608,23 @@ class TUIOutput:
             total = data.get("total_reward", 0.0)
             msg = f"{env_prefix}{action} r={total:+.3f}"
         elif event_type.startswith("SEED_"):
-            seed_id = event.seed_id or "?"
+            # Use slot_id (e.g., "r0c1") for position context; fall back to seed_id if unavailable
+            slot_id = event.slot_id or data.get("slot_id") or event.seed_id or "?"
             if event_type == "SEED_GERMINATED":
                 blueprint_id = data.get("blueprint_id", "?")
-                msg = f"{env_prefix}{seed_id} germinated ({blueprint_id})"
+                msg = f"{env_prefix}{slot_id} germinated ({blueprint_id})"
             elif event_type == "SEED_STAGE_CHANGED":
                 from_stage = data.get("from", "?")
                 to_stage = data.get("to", "?")
-                msg = f"{env_prefix}{seed_id} {from_stage}->{to_stage}"
+                msg = f"{env_prefix}{slot_id} {from_stage}->{to_stage}"
             elif event_type == "SEED_FOSSILIZED":
                 improvement = data.get("improvement", 0)
-                msg = f"{env_prefix}{seed_id} fossilized (+{improvement:.2f}%)"
+                msg = f"{env_prefix}{slot_id} fossilized (+{improvement:.2f}%)"
             elif event_type == "SEED_CULLED":
                 reason = data.get("reason", "")
-                msg = f"{env_prefix}{seed_id} culled" + (f" ({reason})" if reason else "")
+                msg = f"{env_prefix}{slot_id} culled" + (f" ({reason})" if reason else "")
             else:
-                msg = f"{env_prefix}{seed_id}"
+                msg = f"{env_prefix}{slot_id}"
         elif event_type == "PPO_UPDATE_COMPLETED":
             if data.get("skipped"):
                 msg = "skipped (buffer rollback)"
@@ -713,6 +720,7 @@ class TUIOutput:
         self.state.n_envs = data.get("n_envs", 1)
         self.state.max_epochs = data.get("max_epochs", self.state.max_epochs)
         self.state.reward_hacking_detected = False
+        self.state.ppo_data_received = False  # Reset for new run
         self.state.current_reward = 0.0
         self.state.reward_history.clear()
         self.state.best_reward = float("-inf")
@@ -753,6 +761,9 @@ class TUIOutput:
 
         if data.get("skipped"):
             return
+
+        # Mark that we've received PPO data (for "waiting" state display)
+        self.state.ppo_data_received = True
 
         # P0 Critical metrics
         self.state.entropy = data.get("entropy", 0.0)
@@ -842,10 +853,12 @@ class TUIOutput:
             seed.stage = "GERMINATED"
             seed.blueprint_id = data.get("blueprint_id")
             seed.seed_params = data.get("params", seed.seed_params)
+            seed.grad_ratio = data.get("grad_ratio", seed.grad_ratio)
             env_state.active_seed_count += 1
         elif event_type == "SEED_STAGE_CHANGED":
             seed.stage = data.get("to", seed.stage)
             seed.alpha = data.get("alpha", seed.alpha)
+            seed.grad_ratio = data.get("grad_ratio", seed.grad_ratio)
         elif event_type == "SEED_FOSSILIZED":
             seed.stage = "FOSSILIZED"
             # params_added moves into host; keep count for total params estimate
@@ -912,6 +925,87 @@ class TUIOutput:
     # Rendering
     # =========================================================================
 
+    def _render_scoreboard(self) -> Panel:
+        """Render the 'Best Progress' scoreboard."""
+        table = Table(show_header=True, box=None, padding=(0, 1), expand=True)
+        table.add_column("Rank", style="dim", width=4)
+        table.add_column("Env", style="cyan", width=4)
+        table.add_column("Best Acc", justify="right", width=8)
+        table.add_column("Current", justify="right", width=8)
+        table.add_column("@Step", justify="right", style="dim", width=5)
+
+        # Sort all envs by best accuracy
+        sorted_envs = sorted(
+            self.state.env_states.values(),
+            key=lambda e: e.best_accuracy,
+            reverse=True
+        )[:3]  # Top 3
+
+        medals = ["🥇", "🥈", "🥉"]
+
+        if not sorted_envs:
+            table.add_row("-", "-", "-", "-", "-")
+        else:
+            for i, env in enumerate(sorted_envs):
+                rank = medals[i] if i < 3 else str(i + 1)
+
+                # Highlight if current is close to best
+                current_style = "green" if env.host_accuracy >= env.best_accuracy - 0.5 else "dim"
+
+                table.add_row(
+                    rank,
+                    str(env.env_id),
+                    f"[bold green]{env.best_accuracy:.1f}%[/]",
+                    f"[{current_style}]{env.host_accuracy:.1f}%[/]",
+                    str(env.best_accuracy_epoch),  # Inner step when best was achieved
+                )
+
+        return Panel(
+            table,
+            title="[bold]BEST RUNS[/bold]",
+            border_style="cyan",
+        )
+
+    def _render_tamiyo_brain(self) -> Panel:
+        """Render the comprehensive Tamiyo Brain panel."""
+        # Show waiting state if no PPO data received yet
+        if not self.state.ppo_data_received:
+            waiting_text = Text(justify="center")
+            waiting_text.append("⏳ Waiting for first batch to complete...\n", style="dim italic")
+            waiting_text.append(f"Progress: {self.state.current_epoch}/{self.state.max_epochs} epochs", style="cyan")
+            return Panel(
+                waiting_text,
+                title="[bold magenta]TAMIYO BRAIN (Policy Agent)[/bold magenta]",
+                border_style="magenta dim",
+            )
+
+        # Create a grid layout for the brain panel
+        grid = Table.grid(expand=True)
+        grid.add_column(ratio=1)
+        grid.add_column(ratio=1)
+        grid.add_column(ratio=1)
+
+        # Column 1: Health & Vitals
+        health_table = self._render_policy_health_table()
+
+        # Column 2: Losses & Gradients
+        losses_table = self._render_losses_table()
+
+        # Column 3: Action Distribution
+        actions_table = self._render_actions_table()
+
+        grid.add_row(
+            Panel(health_table, title="Health", border_style="dim"),
+            Panel(losses_table, title="Losses", border_style="dim"),
+            Panel(actions_table, title="Actions", border_style="dim"),
+        )
+
+        return Panel(
+            grid,
+            title="[bold magenta]TAMIYO BRAIN (Policy Agent)[/bold magenta]",
+            border_style="magenta",
+        )
+
     def _render(self) -> Layout:
         """Render the full TUI layout with event log.
 
@@ -920,29 +1014,42 @@ class TUIOutput:
         """
         layout = Layout()
 
-        # Unified layout with env cards always visible
+        # Improved Layout Strategy:
+        # 1. Header (Fixed height)
+        # 2. Top Row: Flight Board + Scoreboard (Flexible ratio)
+        # 3. Middle: Tamiyo Brain (Fixed height for detail)
+        # 4. Bottom: Event Log (Full height remaining) + Perf (Side)
+        # 5. Footer (Fixed height)
+
         layout.split_column(
             Layout(name="header", size=3),
-            Layout(name="env_cards", ratio=2),
-            Layout(name="main", size=4),
+            Layout(name="top", ratio=3),
+            Layout(name="brain", size=10),  # Fixed height for 3-column stats (outer border + inner panel + 5 rows)
             Layout(name="bottom", ratio=2),
             Layout(name="footer", size=2),
         )
-        layout["env_cards"].update(self._render_env_cards())
 
-        # Split bottom into event log (left) and performance stats (right)
+        # Top: Flight Board (Env Overview) vs Scoreboard
+        layout["top"].split_row(
+            Layout(name="env_overview", ratio=3),
+            Layout(name="scoreboard", ratio=1),
+        )
+        layout["env_overview"].update(self._render_env_overview())
+        layout["scoreboard"].update(self._render_scoreboard())
+
+        # Middle: Tamiyo Brain (The Point)
+        layout["brain"].update(self._render_tamiyo_brain())
+
+        # Bottom: Event Log vs Performance
         layout["bottom"].split_row(
-            Layout(name="event_log", ratio=2),
+            Layout(name="event_log", ratio=3),
             Layout(name="perf_stats", ratio=1),
         )
-
-        # Main: combined policy stats panel (actions + health + losses + rewards)
-        layout["main"].update(self._render_policy_stats())
-
-        # Render each section
-        layout["header"].update(self._render_header())
-        layout["event_log"].update(self._render_event_log(max_lines=8))
+        layout["event_log"].update(self._render_event_log(max_lines=20))
         layout["perf_stats"].update(self._render_performance())
+
+        # Header/Footer
+        layout["header"].update(self._render_header())
         layout["footer"].update(self._render_footer())
 
         return layout
@@ -952,6 +1059,8 @@ class TUIOutput:
         text = Text()
         text.append("Episode: ", style="dim")
         text.append(f"{self.state.current_episode}", style="bold cyan")
+        text.append("  |  Step: ", style="dim")
+        text.append(f"{self.state.current_epoch}/{self.state.max_epochs}", style="cyan")
         text.append("  |  Batches: ", style="dim")
         text.append(f"{self.state.batches_completed}", style="bold cyan")
         text.append("  |  Best Acc: ", style="dim")
@@ -1100,122 +1209,7 @@ class TUIOutput:
                 _fmt_warning(warn_total if warn_any else None),
             )
 
-    def _render_env_cards(self) -> Panel:
-        """Render compact cards for all environments with per-slot telemetry."""
-        if not self.state.env_states:
-            return Panel(Text("Waiting for telemetry…", style="dim"), title="[bold]ENV CARDS[/bold]", border_style="cyan")
 
-        cards = []
-        for env_id in sorted(self.state.env_states.keys()):
-            env = self.state.env_states[env_id]
-
-            # Compact table: summary row with slots rendered horizontally
-            table = Table(show_header=True, box=None, padding=(0, 0), expand=True)
-            table.add_column("Row", style="dim", width=5)
-            table.add_column("Reward", justify="right", width=9)
-            table.add_column("Acc", justify="right", width=8)
-            table.add_column("Seeds/Params", justify="right", width=14)
-            table.add_column("Rent", justify="right", width=6)
-            table.add_column("", width=1)
-            # Dynamic slot columns based on slot_config
-            for slot_id in self.state.slot_config.slot_ids:
-                table.add_column(slot_id, justify="left", width=12)
-            table.add_column("Last / Status", justify="left", width=16)
-
-            reward = env.current_reward
-            rent = env.reward_components.get("compute_rent")
-            penalty = env.reward_components.get("ratio_penalty")
-            params = getattr(env, "host_params", None)
-            last_action = env.action_history[-1] if env.action_history else "—"
-            seeds_summary = f"A:{env.active_seed_count} F:{env.fossilized_count} C:{env.culled_count}"
-            growth_ratio = env.reward_components.get("growth_ratio")
-
-            # Estimate total params if host_params absent using growth_ratio + seed params
-            total_params_display = None
-            if isinstance(params, int) and params > 0:
-                total_params_display = params + env.total_seed_params
-            elif isinstance(growth_ratio, (int, float)) and growth_ratio > 1.0 and env.total_seed_params > 0:
-                host_est = int(env.total_seed_params / (growth_ratio - 1))
-                env.host_params = host_est
-                total_params_display = host_est + env.total_seed_params
-
-            def _slot_summary(slot_name: str) -> str:
-                seed = env.seeds.get(slot_name)
-                if seed:
-                    stage_cell = self._format_slot_cell(env, slot_name)
-                    alpha = f"{seed.alpha:.2f}"
-                    contrib = f"{seed.accuracy_delta:+.2f}"
-                    grad_ratio = getattr(seed, "grad_ratio", None)
-                    grad = f"{grad_ratio:+.2f}" if isinstance(grad_ratio, (int, float)) else "─"
-                    return f"{stage_cell} α={alpha} Δ={contrib} g={grad}"
-                return "[dim]─[/dim]"
-
-            # Build the first row dynamically with all slot summaries
-            row_values = [
-                "Env",
-                f"{reward:+.2f}",
-                f"{env.host_accuracy:.1f}%",
-                seeds_summary,
-                f"{float(rent):+.2f}" if isinstance(rent, (int, float)) else "─",
-                "",
-            ]
-            # Add dynamic slot summaries
-            for slot_id in self.state.slot_config.slot_ids:
-                row_values.append(_slot_summary(slot_id))
-            # Add last action
-            row_values.append(last_action)
-
-            table.add_row(*row_values)
-
-            # Secondary stats row within the same card to avoid extra tables
-            best_reward = env.best_reward if env.reward_history else 0.0
-            mean_reward = env.mean_reward
-            reward_spark = env.reward_sparkline
-            acc_spark = env.accuracy_sparkline
-            status_style = {
-                "excellent": "bold green",
-                "healthy": "green",
-                "stalled": "yellow",
-                "degraded": "red",
-                "initializing": "dim",
-            }.get(env.status, "white")
-
-            penalty_str = f"{float(penalty):+.2f}" if isinstance(penalty, (int, float)) else "─"
-
-            # Build the second row dynamically
-            stats_row_values = [
-                "Stats",
-                f"{mean_reward:+.2f}/{best_reward:+.2f}",
-                f"best {env.best_accuracy:.1f}%",
-                f"{total_params_display:,}" if isinstance(total_params_display, (int, float)) else seeds_summary,
-                penalty_str,
-                "",
-            ]
-            # Fill slot columns with sparklines/status
-            # First slot gets reward sparkline, second gets accuracy sparkline, third gets status
-            # If more slots exist, fill with empty strings
-            num_slots = self.state.slot_config.num_slots
-            for i in range(num_slots):
-                if i == 0:
-                    stats_row_values.append(f"Rwd {reward_spark}")
-                elif i == 1:
-                    stats_row_values.append(f"Acc {acc_spark}")
-                elif i == 2:
-                    stats_row_values.append(f"[{status_style}]{env.status.upper()}[/{status_style}]")
-                else:
-                    stats_row_values.append("")
-            # Add last action
-            stats_row_values.append(Text(last_action, style="dim"))
-
-            table.add_row(*stats_row_values)
-
-            header = Text()
-            header.append(f"Env {env_id}  ", style="bold cyan")
-            header.append(f"Acc {env.host_accuracy:.1f}%", style="green" if env.host_accuracy >= env.best_accuracy else "yellow")
-
-            cards.append(Panel(table, title=header, border_style="cyan"))
-
-        return Panel(Group(*cards), title="[bold]ENV CARDS[/bold]", border_style="cyan")
 
         # Stage name abbreviations for compact multi-env display
         _STAGE_ABBREV: dict[str, str] = {
@@ -1576,14 +1570,14 @@ class TUIOutput:
         table.add_column("Step", justify="right", width=7)
         table.add_column("Acc", justify="right", width=6)
         table.add_column("▁▃▅", justify="left", width=8)  # Sparkline
-        table.add_column("Reward", justify="right", width=7)
+        table.add_column("Reward (Avg)", justify="right", width=15)
         table.add_column("▁▃▅", justify="left", width=8)  # Sparkline
         table.add_column("ΔAcc", justify="right", width=6)
-        table.add_column("Rent", justify="right", width=6)
+        table.add_column("Params (H+S)", justify="right", width=12)
         # Dynamic slot columns based on slot_config
         for slot_id in self.state.slot_config.slot_ids:
             table.add_column(slot_id, justify="center", width=10)
-        table.add_column("Status", justify="center", width=9)
+        table.add_column("Last / Status", justify="center", width=9)
 
         # Status color mapping
         status_styles = {
@@ -1594,8 +1588,23 @@ class TUIOutput:
             "degraded": "red",
         }
 
-        for env_id in sorted(self.state.env_states.keys()):
-            env = self.state.env_states[env_id]
+        # Severity map for sorting (lower is more critical)
+        severity_map = {
+            "degraded": 0,
+            "stalled": 1,
+            "initializing": 2,
+            "healthy": 3,
+            "excellent": 4,
+        }
+
+        # Sort envs by severity (ascending score = more critical first) then by ID
+        sorted_envs = sorted(
+            self.state.env_states.values(),
+            key=lambda e: (severity_map.get(e.status, 5), e.env_id)
+        )
+
+        for env in sorted_envs:
+            env_id = env.env_id
 
             step_str = f"{env.current_epoch}/{self.state.max_epochs}"
 
@@ -1607,12 +1616,11 @@ class TUIOutput:
                 elif env.epochs_since_improvement > 5:
                     acc_str = f"[yellow]{acc_str}[/yellow]"
 
-            # Reward
-            reward_str = f"{env.current_reward:+.2f}"
-            if env.current_reward > 0:
-                reward_str = f"[green]{reward_str}[/green]"
-            elif env.current_reward < -0.5:
-                reward_str = f"[red]{reward_str}[/red]"
+            # Reward with rolling average
+            reward_val = env.current_reward
+            mean_val = env.mean_reward
+            r_style = "green" if reward_val > 0 else "red" if reward_val < -0.5 else "white"
+            reward_str = f"[{r_style}]{reward_val:+.2f}[/] [dim]({mean_val:+.2f})[/]"
 
             # Reward components (from last REWARD_COMPUTED)
             base_delta = env.reward_components.get("base_acc_delta")
@@ -1622,16 +1630,29 @@ class TUIOutput:
             else:
                 delta_str = "─"
 
-            rent_val = env.reward_components.get("compute_rent")
-            if isinstance(rent_val, (int, float)):
-                style = "red" if float(rent_val) < 0 else "dim"
-                rent_str = f"[{style}]{float(rent_val):+,.2f}[/{style}]"
+            # Params display (Host + Seed)
+            params = getattr(env, "host_params", 0)
+            growth_ratio = env.reward_components.get("growth_ratio")
+            if isinstance(growth_ratio, (int, float)) and growth_ratio > 1.0 and env.total_seed_params > 0 and params == 0:
+                 # Estimate host if missing
+                 params = int(env.total_seed_params / (growth_ratio - 1))
+            
+            def fmt_p(n: int) -> str:
+                if n == 0: return "0"
+                if n < 1000: return str(n)
+                if n < 10000: return f"{n/1000:.1f}k"
+                return f"{n/1000:.0f}k"
+
+            if params > 0:
+                params_str = f"{fmt_p(params)}+{fmt_p(env.total_seed_params)}"
             else:
-                rent_str = "─"
+                params_str = f"+{fmt_p(env.total_seed_params)}"
 
             # Status with styling
             status_style = status_styles.get(env.status, "white")
             status_str = f"[{status_style}]{env.status.upper()}[/{status_style}]"
+            last_action = env.action_history[-1] if env.action_history else "—"
+            status_cell = f"{last_action}\n{status_str}"
 
             # Build row dynamically with all slots
             row_values = [
@@ -1642,13 +1663,13 @@ class TUIOutput:
                 reward_str,
                 env.reward_sparkline,
                 delta_str,
-                rent_str,
+                params_str,
             ]
             # Add dynamic slot cells
             for slot_id in self.state.slot_config.slot_ids:
                 row_values.append(self._format_slot_cell(env, slot_id))
             # Add status
-            row_values.append(status_str)
+            row_values.append(status_cell)
 
             table.add_row(*row_values)
 
@@ -1804,11 +1825,11 @@ class TUIOutput:
     def _status_text(self, status: HealthStatus) -> Text:
         """Create status text with color."""
         if status == HealthStatus.OK:
-            return Text("OK", style="green")
+            return Text("✓ OK", style="green")
         elif status == HealthStatus.WARNING:
-            return Text("WARN", style="yellow")
+            return Text("⚠ WARN", style="yellow")
         else:
-            return Text("CRIT", style="red bold")
+            return Text("✕ CRIT", style="red bold")
 
     def _get_stage_marker(self, stage: str) -> str:
         """Get a marker for seed stage."""
