@@ -21,6 +21,7 @@ from .rewards import (
     compute_contribution_reward,
     compute_sparse_reward,
     compute_minimal_reward,
+    compute_simplified_reward,
     compute_loss_reward,
     # PBRS utilities
     compute_potential,
@@ -62,6 +63,7 @@ __all__ = [
     "compute_contribution_reward",
     "compute_sparse_reward",
     "compute_minimal_reward",
+    "compute_simplified_reward",
     "compute_loss_reward",
     # PBRS utilities
     "compute_potential",

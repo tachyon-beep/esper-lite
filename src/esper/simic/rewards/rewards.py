@@ -838,6 +838,71 @@ def compute_minimal_reward(
     return reward
 
 
+def compute_simplified_reward(
+    action: LifecycleOp,
+    seed_info: SeedInfo | None,
+    epoch: int,
+    max_epochs: int,
+    val_acc: float,
+    num_contributing_fossilized: int,
+    config: ContributionRewardConfig | None = None,
+) -> float:
+    """Compute simplified 3-component reward (DRL Expert recommended).
+
+    This reward function addresses the "unlearnable landscape" problem by
+    removing conflicting components. Only three signals remain:
+
+    1. PBRS stage progression (preserves optimal policy per Ng et al., 1999)
+    2. Uniform intervention cost (small friction on non-WAIT actions)
+    3. Terminal bonus (accuracy + fossilize count, scaled for 25-step credit)
+
+    Removed vs SHAPED:
+    - bounded_attribution (replace with terminal accuracy)
+    - blending_warning (let terminal handle bad seeds)
+    - probation_warning (let PBRS + terminal handle pacing)
+    - ratio_penalty / attribution_discount (address via environment, not reward)
+    - compute_rent (simplify - not critical for learning)
+
+    Args:
+        action: Action taken (LifecycleOp enum member)
+        seed_info: Seed state info (None if no active seed)
+        epoch: Current epoch
+        max_epochs: Maximum epochs in episode
+        val_acc: Current validation accuracy
+        num_contributing_fossilized: Count of fossilized seeds with meaningful contribution
+        config: Reward configuration (uses default if None)
+
+    Returns:
+        Simplified reward value
+    """
+    if config is None:
+        config = _DEFAULT_CONTRIBUTION_CONFIG
+
+    reward = 0.0
+
+    # === 1. PBRS: Stage Progression ===
+    # This is the ONLY shaping that preserves optimal policy guarantees
+    if seed_info is not None:
+        reward += _contribution_pbrs_bonus(seed_info, config)
+
+    # === 2. Intervention Cost ===
+    # Uniform small negative cost for any non-WAIT action
+    # Prevents "action spam" without creating complex penalty landscape
+    if action != LifecycleOp.WAIT:
+        reward -= 0.01
+
+    # === 3. Terminal Bonus ===
+    # Scaled for 25-step credit assignment (DRL Expert recommendation)
+    if epoch == max_epochs:
+        # Accuracy component: [0, 3] range
+        accuracy_bonus = (val_acc / 100.0) * 3.0
+        # Fossilize component: [0, 6] for 3 slots max
+        fossilize_bonus = num_contributing_fossilized * 2.0
+        reward += accuracy_bonus + fossilize_bonus
+
+    return reward
+
+
 def compute_reward(
     action: LifecycleOp,
     seed_contribution: float | None,
@@ -1436,6 +1501,7 @@ __all__ = [
     "compute_contribution_reward",
     "compute_sparse_reward",
     "compute_minimal_reward",
+    "compute_simplified_reward",
     "compute_loss_reward",
     # PBRS utilities
     "compute_potential",
