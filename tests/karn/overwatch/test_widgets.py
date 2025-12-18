@@ -309,3 +309,19 @@ class TestStage4WidgetExports:
         from esper.karn.overwatch.widgets import DetailPanel
 
         assert DetailPanel is not None
+
+
+class TestStage5WidgetExports:
+    """Tests for Stage 5 widget exports."""
+
+    def test_event_feed_importable(self) -> None:
+        """EventFeed is importable from package."""
+        from esper.karn.overwatch.widgets import EventFeed
+
+        assert EventFeed is not None
+
+    def test_replay_status_bar_importable(self) -> None:
+        """ReplayStatusBar is importable from package."""
+        from esper.karn.overwatch.widgets import ReplayStatusBar
+
+        assert ReplayStatusBar is not None

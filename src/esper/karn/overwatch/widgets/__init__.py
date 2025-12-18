@@ -12,6 +12,8 @@ from esper.karn.overwatch.widgets.tamiyo_strip import TamiyoStrip
 from esper.karn.overwatch.widgets.context_panel import ContextPanel
 from esper.karn.overwatch.widgets.tamiyo_detail import TamiyoDetailPanel
 from esper.karn.overwatch.widgets.detail_panel import DetailPanel
+from esper.karn.overwatch.widgets.event_feed import EventFeed
+from esper.karn.overwatch.widgets.replay_status import ReplayStatusBar
 
 __all__ = [
     "HelpOverlay",
@@ -23,4 +25,6 @@ __all__ = [
     "ContextPanel",
     "TamiyoDetailPanel",
     "DetailPanel",
+    "EventFeed",
+    "ReplayStatusBar",
 ]
