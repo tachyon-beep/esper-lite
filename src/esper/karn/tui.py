@@ -93,6 +93,11 @@ class SeedState:
     accuracy_delta: float = 0.0
     seed_params: int = 0
     grad_ratio: float = 0.0
+    # Gradient health flags
+    has_vanishing: bool = False
+    has_exploding: bool = False
+    # Stage progress
+    epochs_in_stage: int = 0
 
 
 def _make_sparkline_static(values: list[float], width: int = 8) -> str:
@@ -209,6 +214,9 @@ class EnvState:
                     accuracy_delta=seed.accuracy_delta,
                     seed_params=seed.seed_params,
                     grad_ratio=seed.grad_ratio,
+                    has_vanishing=seed.has_vanishing,
+                    has_exploding=seed.has_exploding,
+                    epochs_in_stage=seed.epochs_in_stage,
                 )
                 for slot_id, seed in self.seeds.items()
                 if seed.stage == "FOSSILIZED"
@@ -943,10 +951,16 @@ class TUIOutput:
             seed.blueprint_id = data.get("blueprint_id")
             seed.seed_params = data.get("params", seed.seed_params)
             seed.grad_ratio = data.get("grad_ratio", seed.grad_ratio)
+            seed.has_vanishing = data.get("has_vanishing", False)
+            seed.has_exploding = data.get("has_exploding", False)
+            seed.epochs_in_stage = data.get("epochs_in_stage", 0)
             env_state.active_seed_count += 1
         elif event_type == "SEED_STAGE_CHANGED":
             seed.stage = data.get("to", seed.stage)
             seed.grad_ratio = data.get("grad_ratio", seed.grad_ratio)
+            seed.has_vanishing = data.get("has_vanishing", seed.has_vanishing)
+            seed.has_exploding = data.get("has_exploding", seed.has_exploding)
+            seed.epochs_in_stage = data.get("epochs_in_stage", 0)  # Reset on stage change
         elif event_type == "SEED_FOSSILIZED":
             seed.stage = "FOSSILIZED"
             # params_added moves into host; keep count for total params estimate
@@ -962,6 +976,9 @@ class TUIOutput:
             seed.alpha = 0.0
             seed.accuracy_delta = 0.0
             seed.grad_ratio = 0.0
+            seed.has_vanishing = False
+            seed.has_exploding = False
+            seed.epochs_in_stage = 0
             env_state.culled_count += 1
             env_state.active_seed_count = max(0, env_state.active_seed_count - 1)
 
@@ -1055,7 +1072,7 @@ class TUIOutput:
         lb_table = Table(show_header=True, box=None, padding=(0, 1), expand=True)
         lb_table.add_column("#", style="dim", width=3)
         lb_table.add_column("@Ep", justify="right", width=4)
-        lb_table.add_column("Best", justify="right", width=6)
+        lb_table.add_column("High", justify="right", width=6)
         lb_table.add_column("Cur", justify="right", width=6)
         lb_table.add_column("Seeds", justify="left", width=20)
 
@@ -1087,9 +1104,9 @@ class TUIOutput:
                 if env.best_seeds:
                     n_seeds = len(env.best_seeds)
                     if n_seeds <= 2:
-                        # Show individual blueprints
+                        # Show individual blueprints (6 chars to differentiate conv_light/heavy/small)
                         seed_parts = [
-                            f"[green]{s.blueprint_id[:4] if s.blueprint_id else '?'}[/]"
+                            f"[green]{s.blueprint_id[:6] if s.blueprint_id else '?'}[/]"
                             for s in env.best_seeds.values()
                         ]
                         seeds_str = " ".join(seed_parts)
@@ -1631,27 +1648,42 @@ class TUIOutput:
 
         table.add_row("", "")
 
-        # GPU stats - show all configured GPUs
+        # GPU stats - show all configured GPUs (memory + utilization)
         if self.state.gpu_stats:
             for dev_id, stats in sorted(self.state.gpu_stats.items()):
                 if stats.memory_total_gb > 0:
                     gpu_pct = (stats.memory_used_gb / stats.memory_total_gb) * 100
                     mem_style = "red" if gpu_pct > 90 else "yellow" if gpu_pct > 75 else "green"
-                    label = f"GPU{dev_id}:" if len(self.state.gpu_stats) > 1 else "GPU Mem:"
+                    label = f"GPU{dev_id}:" if len(self.state.gpu_stats) > 1 else "GPU:"
+                    # Show memory usage
                     table.add_row(
                         label,
                         Text(f"{stats.memory_used_gb:.1f}/{stats.memory_total_gb:.1f}GB", style=mem_style)
                     )
+                    # Show utilization if available (from pynvml)
+                    if stats.utilization > 0:
+                        util_style = "red" if stats.utilization > 95 else "yellow" if stats.utilization > 80 else "green"
+                        util_label = f"  util:" if len(self.state.gpu_stats) > 1 else "GPU util:"
+                        table.add_row(
+                            util_label,
+                            Text(f"{stats.utilization:.0f}%", style=util_style)
+                        )
         elif self.state.gpu_memory_total_gb > 0:
             # Fallback to legacy single-GPU fields
             gpu_pct = (self.state.gpu_memory_used_gb / self.state.gpu_memory_total_gb) * 100
             mem_style = "red" if gpu_pct > 90 else "yellow" if gpu_pct > 75 else "green"
             table.add_row(
-                "GPU Mem:",
+                "GPU:",
                 Text(f"{self.state.gpu_memory_used_gb:.1f}/{self.state.gpu_memory_total_gb:.1f}GB", style=mem_style)
             )
+            if self.state.gpu_utilization > 0:
+                util_style = "red" if self.state.gpu_utilization > 95 else "yellow" if self.state.gpu_utilization > 80 else "green"
+                table.add_row(
+                    "GPU util:",
+                    Text(f"{self.state.gpu_utilization:.0f}%", style=util_style)
+                )
         else:
-            table.add_row("GPU Mem:", "-")
+            table.add_row("GPU:", "-")
 
         if self.state.ram_total_gb > 0:
             ram_pct = (self.state.ram_used_gb / self.state.ram_total_gb) * 100
@@ -1690,10 +1722,11 @@ class TUIOutput:
     }
 
     def _format_slot_cell(self, env: EnvState, slot_name: str) -> str:
-        """Format a slot cell showing stage, blueprint, and blend progress.
+        """Format a slot cell showing stage, blueprint, epochs and gradient health.
 
-        Returns styled string like "[cyan]Train:conv[/cyan]" or "[dim]─[/dim]".
+        Returns styled string like "[cyan]Train:conv e5[/cyan]" or "[dim]─[/dim]".
         For BLENDING seeds, shows alpha progress: "[cyan]Blend:conv 0.3[/cyan]"
+        Gradient warnings: ▼ (vanishing, yellow), ▲ (exploding, red)
         """
         seed = env.seeds.get(slot_name)
         if not seed or seed.stage == "DORMANT":
@@ -1702,16 +1735,27 @@ class TUIOutput:
         stage_short = self._STAGE_SHORT.get(seed.stage, seed.stage[:4])
         style = self._STAGE_STYLES.get(seed.stage, "white")
 
-        # Get blueprint abbreviation (first 4 chars)
+        # Get blueprint abbreviation (first 6 chars to differentiate conv_light/heavy/small)
         blueprint = seed.blueprint_id or "?"
-        if len(blueprint) > 4:
-            blueprint = blueprint[:4]
+        if len(blueprint) > 6:
+            blueprint = blueprint[:6]
+
+        # Build gradient health indicator
+        grad_indicator = ""
+        if seed.has_exploding:
+            grad_indicator = "[red]▲[/red]"
+        elif seed.has_vanishing:
+            grad_indicator = "[yellow]▼[/yellow]"
 
         # Show alpha progress for BLENDING seeds
         if seed.stage == "BLENDING" and seed.alpha > 0:
-            return f"[{style}]{stage_short}:{blueprint} {seed.alpha:.1f}[/{style}]"
+            base = f"[{style}]{stage_short}:{blueprint} {seed.alpha:.1f}[/{style}]"
+            return f"{base}{grad_indicator}" if grad_indicator else base
 
-        return f"[{style}]{stage_short}:{blueprint}[/{style}]"
+        # Show epochs in stage for active seeds (compact: e3 = epoch 3)
+        epochs_str = f" e{seed.epochs_in_stage}" if seed.epochs_in_stage > 0 else ""
+        base = f"[{style}]{stage_short}:{blueprint}{epochs_str}[/{style}]"
+        return f"{base}{grad_indicator}" if grad_indicator else base
 
     def _render_env_overview(self) -> Panel:
         """Render per-environment overview table.
@@ -1721,10 +1765,9 @@ class TUIOutput:
         """
         table = Table(show_header=True, box=None, padding=(0, 1), expand=True)
 
-        # Columns: ID, Accuracy, Best, Reward, Sparklines, Components, Slots, Status
+        # Columns: ID, Accuracy, Reward, Sparklines, Components, Slots, Status
         table.add_column("Env", style="cyan", justify="center", width=3)
         table.add_column("Acc", justify="right", width=6)
-        table.add_column("Best", justify="right", width=10)  # Best accuracy with episode
         table.add_column("Reward", justify="right", width=12)  # Current (avg)
         table.add_column("Acc▁▃▅", justify="left", width=8)  # Accuracy sparkline
         table.add_column("Rwd▁▃▅", justify="left", width=8)  # Reward sparkline
@@ -1762,12 +1805,6 @@ class TUIOutput:
                     acc_str = f"[green]{acc_str}[/green]"
                 elif env.epochs_since_improvement > 5:
                     acc_str = f"[yellow]{acc_str}[/yellow]"
-
-            # Best accuracy with episode marker
-            if env.best_accuracy > 0:
-                best_str = f"{env.best_accuracy:.1f}% [dim]@{env.best_accuracy_episode}[/dim]"
-            else:
-                best_str = "─"
 
             # Reward with rolling average
             reward_val = env.current_reward
@@ -1830,7 +1867,6 @@ class TUIOutput:
             row_values = [
                 str(env_id),
                 acc_str,
-                best_str,
                 reward_str,
                 env.accuracy_sparkline,
                 env.reward_sparkline,
@@ -1867,7 +1903,6 @@ class TUIOutput:
             separator_row = [
                 "─" * 2,  # Env
                 "─" * 5,  # Acc
-                "─" * 8,  # Best
                 "─" * 10, # Reward
                 "─" * 6,  # Acc sparkline
                 "─" * 6,  # Rwd sparkline
@@ -1887,7 +1922,6 @@ class TUIOutput:
             agg_row = [
                 "[bold]Σ[/bold]",
                 f"[bold]{self.state.aggregate_mean_accuracy:.1f}%[/bold]",
-                f"[dim]{best_acc:.1f}%@e{best_env}[/dim]" if best_acc > 0 else "─",
                 f"[bold]{self.state.aggregate_mean_reward:+.2f}[/bold]",
                 "",  # Acc sparkline
                 "",  # Rwd sparkline

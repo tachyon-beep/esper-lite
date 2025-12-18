@@ -874,7 +874,8 @@ def train_ppo_vectorized(
         stream = torch.cuda.Stream(device=env_device_obj) if env_device_obj.type == "cuda" else None
 
         # Per-env AMP scaler to avoid stream race conditions (GradScaler state is not stream-safe)
-        env_scaler = torch_amp.GradScaler(enabled=amp_enabled) if env_device_obj.type == "cuda" else None
+        # Use new torch.amp.GradScaler API (torch.cuda.amp.GradScaler deprecated in PyTorch 2.4+)
+        env_scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled) if env_device_obj.type == "cuda" else None
 
         # Determine random guess loss for lobotomy detection
         random_guess_loss = None
