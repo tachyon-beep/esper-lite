@@ -490,3 +490,179 @@ class TestDetailPanelIntegration:
 
             assert "GERM" in content or "Germinate" in content
             assert "34" in content  # 34%
+
+
+class TestEventFeedIntegration:
+    """Integration tests for EventFeed functionality."""
+
+    @pytest.fixture
+    def events_replay(self, tmp_path: Path) -> Path:
+        """Create replay with event feed data."""
+        from esper.karn.overwatch import (
+            SnapshotWriter,
+            TuiSnapshot,
+            ConnectionStatus,
+            TamiyoState,
+            EnvSummary,
+            FeedEvent,
+        )
+
+        path = tmp_path / "events.jsonl"
+        with SnapshotWriter(path) as writer:
+            snap = TuiSnapshot(
+                schema_version=1,
+                captured_at="2025-12-18T14:00:00Z",
+                connection=ConnectionStatus(True, 1000.0, 0.5),
+                tamiyo=TamiyoState(),
+                flight_board=[
+                    EnvSummary(env_id=0, device_id=0, status="OK"),
+                ],
+                event_feed=[
+                    FeedEvent("14:00:01", "GATE", 0, "Gate G1 passed"),
+                    FeedEvent("14:00:02", "PPO", None, "Policy updated: KL=0.015"),
+                    FeedEvent("14:00:03", "GERM", 1, "Seed germinated in r0c1"),
+                ],
+            )
+            writer.write(snap)
+        return path
+
+    @pytest.mark.asyncio
+    async def test_event_feed_displays_events(self, events_replay: Path) -> None:
+        """EventFeed displays events from snapshot."""
+        from esper.karn.overwatch import OverwatchApp
+        from esper.karn.overwatch.widgets.event_feed import EventFeed
+
+        app = OverwatchApp(replay_path=events_replay)
+
+        async with app.run_test() as pilot:
+            feed = app.query_one(EventFeed)
+            content = feed.render_events()
+
+            assert "Gate G1 passed" in content
+            assert "Policy updated" in content
+            assert "Seed germinated" in content
+
+    @pytest.mark.asyncio
+    async def test_f_key_toggles_feed_size(self, events_replay: Path) -> None:
+        """f key toggles event feed between compact and expanded."""
+        from esper.karn.overwatch import OverwatchApp
+        from esper.karn.overwatch.widgets.event_feed import EventFeed
+
+        app = OverwatchApp(replay_path=events_replay)
+
+        async with app.run_test() as pilot:
+            feed = app.query_one(EventFeed)
+            assert feed.expanded is False
+
+            await pilot.press("f")
+            assert feed.expanded is True
+
+            await pilot.press("f")
+            assert feed.expanded is False
+
+
+class TestReplayControlsIntegration:
+    """Integration tests for replay controls."""
+
+    @pytest.fixture
+    def multi_snapshot_replay(self, tmp_path: Path) -> Path:
+        """Create replay with multiple snapshots for navigation testing."""
+        from esper.karn.overwatch import (
+            SnapshotWriter,
+            TuiSnapshot,
+            ConnectionStatus,
+            TamiyoState,
+            EnvSummary,
+        )
+
+        path = tmp_path / "multi.jsonl"
+        with SnapshotWriter(path) as writer:
+            for i in range(5):
+                snap = TuiSnapshot(
+                    schema_version=1,
+                    captured_at=f"2025-12-18T14:00:0{i}Z",
+                    connection=ConnectionStatus(True, 1000.0, 0.5),
+                    tamiyo=TamiyoState(),
+                    episode=i,
+                    flight_board=[
+                        EnvSummary(env_id=0, device_id=0, status="OK"),
+                    ],
+                )
+                writer.write(snap)
+        return path
+
+    @pytest.mark.asyncio
+    async def test_replay_status_bar_visible(self, multi_snapshot_replay: Path) -> None:
+        """Replay status bar is visible in replay mode."""
+        from esper.karn.overwatch import OverwatchApp
+        from esper.karn.overwatch.widgets.replay_status import ReplayStatusBar
+
+        app = OverwatchApp(replay_path=multi_snapshot_replay)
+
+        async with app.run_test() as pilot:
+            bar = app.query_one(ReplayStatusBar)
+            assert bar.is_visible is True
+
+    @pytest.mark.asyncio
+    async def test_step_forward_with_period(self, multi_snapshot_replay: Path) -> None:
+        """Period key steps forward through replay."""
+        from esper.karn.overwatch import OverwatchApp
+
+        app = OverwatchApp(replay_path=multi_snapshot_replay)
+
+        async with app.run_test() as pilot:
+            assert app._snapshot.episode == 0
+
+            await pilot.press("period")
+            assert app._snapshot.episode == 1
+
+            await pilot.press("period")
+            assert app._snapshot.episode == 2
+
+    @pytest.mark.asyncio
+    async def test_step_backward_with_comma(self, multi_snapshot_replay: Path) -> None:
+        """Comma key steps backward through replay."""
+        from esper.karn.overwatch import OverwatchApp
+
+        app = OverwatchApp(replay_path=multi_snapshot_replay)
+
+        async with app.run_test() as pilot:
+            # Step forward first
+            await pilot.press("period")
+            await pilot.press("period")
+            assert app._snapshot.episode == 2
+
+            await pilot.press("comma")
+            assert app._snapshot.episode == 1
+
+    @pytest.mark.asyncio
+    async def test_space_toggles_play(self, multi_snapshot_replay: Path) -> None:
+        """Space key toggles play/pause."""
+        from esper.karn.overwatch import OverwatchApp
+
+        app = OverwatchApp(replay_path=multi_snapshot_replay)
+
+        async with app.run_test() as pilot:
+            assert app._replay_controller.playing is False
+
+            await pilot.press("space")
+            assert app._replay_controller.playing is True
+
+            await pilot.press("space")
+            assert app._replay_controller.playing is False
+
+    @pytest.mark.asyncio
+    async def test_speed_controls(self, multi_snapshot_replay: Path) -> None:
+        """< and > keys adjust playback speed."""
+        from esper.karn.overwatch import OverwatchApp
+
+        app = OverwatchApp(replay_path=multi_snapshot_replay)
+
+        async with app.run_test() as pilot:
+            assert app._replay_controller.speed == 1.0
+
+            await pilot.press("shift+period")
+            assert app._replay_controller.speed == 2.0
+
+            await pilot.press("shift+comma")
+            assert app._replay_controller.speed == 1.0
