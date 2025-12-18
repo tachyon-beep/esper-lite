@@ -666,3 +666,95 @@ class TestReplayControlsIntegration:
 
             await pilot.press("shift+comma")
             assert app._replay_controller.speed == 1.0
+
+
+class TestLiveModeIntegration:
+    """Integration tests for Overwatch live mode."""
+
+    @pytest.mark.asyncio
+    async def test_live_mode_full_workflow(self) -> None:
+        """Test complete live mode workflow."""
+        from esper.leyline import TelemetryEvent, TelemetryEventType
+        from esper.karn.overwatch import OverwatchApp, OverwatchBackend
+
+        backend = OverwatchBackend()
+        backend.start()
+
+        # Simulate training startup
+        backend.emit(TelemetryEvent(
+            event_type=TelemetryEventType.TRAINING_STARTED,
+            data={
+                "run_id": "integration-test",
+                "task": "cifar10",
+                "num_envs": 2,
+                "max_epochs": 75,
+            },
+        ))
+
+        # Simulate seed germination
+        backend.emit(TelemetryEvent(
+            event_type=TelemetryEventType.SEED_GERMINATED,
+            slot_id="r0c0",
+            data={
+                "env_id": 0,
+                "seed_id": "seed-001",
+                "blueprint_id": "conv3x3",
+            },
+        ))
+
+        # Simulate PPO update
+        backend.emit(TelemetryEvent(
+            event_type=TelemetryEventType.PPO_UPDATE_COMPLETED,
+            data={
+                "kl_divergence": 0.012,
+                "entropy": 1.5,
+                "clip_fraction": 0.05,
+                "explained_variance": 0.8,
+            },
+        ))
+
+        app = OverwatchApp(backend=backend)
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            # Verify app state
+            assert app._snapshot is not None
+            assert app._snapshot.run_id == "integration-test"
+            assert app._snapshot.connection.connected is True
+
+            # Verify tamiyo state
+            assert app._snapshot.tamiyo.kl_divergence == pytest.approx(0.012)
+            assert app._snapshot.tamiyo.entropy == pytest.approx(1.5)
+
+            # Verify flight board has env
+            assert len(app._snapshot.flight_board) >= 1
+            env0 = app._snapshot.flight_board[0]
+            assert "r0c0" in env0.slots
+            assert env0.slots["r0c0"].stage == "GERMINATED"
+
+            # Verify event feed has events
+            assert len(app._snapshot.event_feed) >= 2  # GERM + PPO
+
+    @pytest.mark.asyncio
+    async def test_live_mode_staleness_detection(self) -> None:
+        """Test that staleness is tracked correctly."""
+        from esper.leyline import TelemetryEvent, TelemetryEventType
+        from esper.karn.overwatch import OverwatchApp, OverwatchBackend
+
+        backend = OverwatchBackend()
+        backend.start()
+
+        backend.emit(TelemetryEvent(
+            event_type=TelemetryEventType.TRAINING_STARTED,
+            data={"run_id": "stale-test"},
+        ))
+
+        app = OverwatchApp(backend=backend)
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            # Staleness should be low immediately after event
+            assert app._snapshot.connection.staleness_s < 2.0
+            assert app._snapshot.connection.connected is True
