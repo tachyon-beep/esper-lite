@@ -141,10 +141,10 @@ class SanctumApp(App):
 
     def _refresh_all_panels(self) -> None:
         """Refresh all panels with current snapshot."""
-        # Will be implemented when widgets are created
+        # TODO: [Task 7] Implement when widgets are wired up
         pass
 
     def _refresh_focused_panels(self) -> None:
         """Refresh panels that depend on focused env."""
-        # Will be implemented when widgets are created
+        # TODO: [Task 7] Implement when focused-env-aware widgets are added
         pass
