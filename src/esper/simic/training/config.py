@@ -88,6 +88,12 @@ class TrainingConfig:
     param_penalty_weight: float = 0.1
     sparse_reward_scale: float = 1.0
 
+    # === A/B Testing ===
+    # Per-environment reward mode override for A/B testing
+    # If None, all envs use reward_mode. If list, must match n_envs length.
+    # Example: ["shaped"]*4 + ["simplified"]*4 for 8-env A/B test
+    ab_reward_modes: list[str] | None = None
+
     # === Diagnostics thresholds ===
     plateau_threshold: float = 0.5
     improvement_threshold: float = 2.0
@@ -234,6 +240,7 @@ class TrainingConfig:
             "plateau_threshold": self.plateau_threshold,
             "improvement_threshold": self.improvement_threshold,
             "seed": self.seed,
+            "ab_reward_modes": self.ab_reward_modes,
         }
 
     # ------------------------------------------------------------------
@@ -295,6 +302,22 @@ class TrainingConfig:
             and self.reward_mode != RewardMode.SHAPED
         ):
             raise ValueError("reward_mode applies only to contribution rewards")
+
+        # A/B testing validation
+        if self.ab_reward_modes is not None:
+            if len(self.ab_reward_modes) != self.n_envs:
+                raise ValueError(
+                    f"ab_reward_modes length ({len(self.ab_reward_modes)}) "
+                    f"must match n_envs ({self.n_envs})"
+                )
+            # Validate each mode is valid
+            valid_modes = {m.value for m in RewardMode}
+            for i, mode in enumerate(self.ab_reward_modes):
+                if mode not in valid_modes:
+                    raise ValueError(
+                        f"ab_reward_modes[{i}] = '{mode}' is not a valid RewardMode. "
+                        f"Valid modes: {sorted(valid_modes)}"
+                    )
 
         # PPO hyperparameter ranges
         self._validate_range(self.gamma, "gamma", 0.0, 1.0, min_inclusive=False, max_inclusive=True)

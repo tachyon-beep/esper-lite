@@ -188,3 +188,36 @@ class TestComputeRewardDispatcher:
         # Should NOT have probation_warning (-9.0) or attribution (+5.0)
         # Should be small (just PBRS)
         assert -2.0 < reward < 2.0
+
+
+from esper.simic.training.config import TrainingConfig
+
+
+class TestABTestingConfig:
+    """Test A/B testing configuration."""
+
+    def test_ab_reward_modes_field_exists(self):
+        """TrainingConfig should have ab_reward_modes field."""
+        config = TrainingConfig()
+        assert hasattr(config, "ab_reward_modes")
+        # Default should be None (all envs use reward_mode)
+        assert config.ab_reward_modes is None
+
+    def test_ab_reward_modes_splits_envs(self):
+        """ab_reward_modes should specify per-env reward modes."""
+        config = TrainingConfig(
+            n_envs=8,
+            ab_reward_modes=["shaped", "shaped", "shaped", "shaped",
+                            "simplified", "simplified", "simplified", "simplified"],
+        )
+        assert len(config.ab_reward_modes) == 8
+        assert config.ab_reward_modes[0] == "shaped"
+        assert config.ab_reward_modes[4] == "simplified"
+
+    def test_ab_reward_modes_validation(self):
+        """ab_reward_modes length must match n_envs."""
+        with pytest.raises(ValueError, match="ab_reward_modes.*must match.*n_envs"):
+            TrainingConfig(
+                n_envs=8,
+                ab_reward_modes=["shaped", "simplified"],  # Wrong length
+            )
