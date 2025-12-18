@@ -32,18 +32,18 @@ def test_multislot_features():
 
     features = obs_to_multislot_features(obs)
 
-    # Base features (23) + per-slot (3 slots * 9 features) = 50
-    # Per-slot: 4 state + 5 blueprint one-hot
-    assert len(features) == 50
+    # Base features (23) + per-slot (3 slots * 17 features) = 74
+    # Per-slot: 4 state + 13 blueprint one-hot
+    assert len(features) == 74
 
     # Check per-slot features are included
-    # After base features, we have slot features (9 dims each)
+    # After base features, we have slot features (17 dims each)
     slot_start = 23
-    # r0c0 slot: is_active=0, stage=0, alpha=0, improvement=0, blueprint=[0,0,0,0,0]
+    # r0c0 slot: is_active=0, stage=0, alpha=0, improvement=0, blueprint=[0]*13
     assert features[slot_start:slot_start+4] == [0.0, 0.0, 0.0, 0.0]
-    assert features[slot_start+4:slot_start+9] == [0.0, 0.0, 0.0, 0.0, 0.0]  # no blueprint
-    # r0c1 slot: is_active=1, stage=3, alpha=0.5, improvement=2.5, blueprint=[0,0,0,0,0] (none specified)
-    r0c1_start = slot_start + 9
+    assert features[slot_start+4:slot_start+17] == [0.0] * 13  # no blueprint
+    # r0c1 slot: is_active=1, stage=3, alpha=0.5, improvement=2.5
+    r0c1_start = slot_start + 17
     assert features[r0c1_start:r0c1_start+4] == [1.0, 3.0, 0.5, 2.5]
 
 
@@ -105,10 +105,10 @@ def test_multislot_features_missing_slots():
 
     features = obs_to_multislot_features(obs)
 
-    # Should still produce 50 features, with slot features defaulting to 0
-    assert len(features) == 50
-    # Last 27 features should be all zeros (3 slots * 9 features)
-    assert features[23:] == [0.0] * 27
+    # Should still produce 74 features, with slot features defaulting to 0
+    assert len(features) == 74
+    # Last 51 features should be all zeros (3 slots * 17 features)
+    assert features[23:] == [0.0] * 51
 
 
 def test_multislot_feature_size_constant():
@@ -139,7 +139,7 @@ def test_multislot_feature_size_constant():
     features = obs_to_multislot_features(obs)
 
     assert len(features) == MULTISLOT_FEATURE_SIZE
-    assert MULTISLOT_FEATURE_SIZE == 50, "Expected 23 base + 27 slot features (3 slots × 9)"
+    assert MULTISLOT_FEATURE_SIZE == 74, "Expected 23 base + 51 slot features (3 slots × 17)"
 
 
 def test_seed_utilization_feature():
