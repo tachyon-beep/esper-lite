@@ -147,3 +147,101 @@ class DisplayState:
     def is_expanded(self, env_id: int) -> bool:
         """Check if env is expanded."""
         return env_id in self.expanded_env_ids
+
+
+# Health indicator and formatting functions
+
+
+def trend_arrow(value: float, threshold: float = 0.01) -> str:
+    """Convert trend value to arrow character.
+
+    Args:
+        value: Trend value (positive = rising, negative = falling)
+        threshold: Minimum absolute value to show direction
+
+    Returns:
+        Arrow character: ↑ (rising), ↓ (falling), → (stable)
+    """
+    if value > threshold:
+        return "↑"
+    elif value < -threshold:
+        return "↓"
+    return "→"
+
+
+def kl_health(kl: float) -> str:
+    """Classify KL divergence health level.
+
+    PPO target KL is typically 0.01-0.02. Higher values indicate
+    the policy is changing too fast.
+
+    Args:
+        kl: KL divergence value
+
+    Returns:
+        Health level: "ok", "warn", or "crit"
+    """
+    if kl < 0.025:
+        return "ok"
+    elif kl < 0.05:
+        return "warn"
+    return "crit"
+
+
+def entropy_health(entropy: float) -> str:
+    """Classify entropy health level.
+
+    Entropy measures exploration. Very low entropy indicates
+    the policy has collapsed to deterministic actions.
+
+    Args:
+        entropy: Policy entropy value
+
+    Returns:
+        Health level: "ok", "warn", or "crit"
+    """
+    if entropy < 0.2:
+        return "crit"  # Policy collapsed
+    elif entropy < 0.5:
+        return "warn"
+    return "ok"
+
+
+def ev_health(ev: float) -> str:
+    """Classify explained variance health level.
+
+    Explained variance measures how well the value function
+    predicts returns. Values near 1.0 are good.
+
+    Args:
+        ev: Explained variance (-inf to 1.0)
+
+    Returns:
+        Health level: "ok", "warn", or "crit"
+    """
+    if ev < 0.3:
+        return "crit"
+    elif ev < 0.6:
+        return "warn"
+    return "ok"
+
+
+def format_runtime(seconds: float) -> str:
+    """Format runtime as human-readable string.
+
+    Args:
+        seconds: Runtime in seconds
+
+    Returns:
+        Formatted string like "1h 2m", "5m 30s", or "45s"
+    """
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    elif seconds < 3600:
+        mins = int(seconds // 60)
+        secs = int(seconds % 60)
+        return f"{mins}m {secs}s"
+    else:
+        hours = int(seconds // 3600)
+        mins = int((seconds % 3600) // 60)
+        return f"{hours}h {mins}m"
