@@ -156,7 +156,9 @@ class EnvState:
             self.best_accuracy_epoch = epoch
             self.best_accuracy_episode = episode
             self.epochs_since_improvement = 0
-            # Snapshot FOSSILIZED seeds when new best is achieved
+            # Snapshot contributing seeds when new best is achieved
+            # Include permanent (FOSSILIZED) and provisional (PROBATIONARY, BLENDING)
+            _contributing_stages = {"FOSSILIZED", "PROBATIONARY", "BLENDING"}
             self.best_seeds = {
                 slot_id: SeedState(
                     slot_id=seed.slot_id,
@@ -171,7 +173,7 @@ class EnvState:
                     epochs_in_stage=seed.epochs_in_stage,
                 )
                 for slot_id, seed in self.seeds.items()
-                if seed.stage == "FOSSILIZED"
+                if seed.stage in _contributing_stages
             }
         else:
             self.epochs_since_improvement += 1

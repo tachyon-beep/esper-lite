@@ -202,9 +202,11 @@ class EnvState:
             self.best_accuracy_epoch = epoch
             self.best_accuracy_episode = episode
             self.epochs_since_improvement = 0
-            # Snapshot FOSSILIZED seeds when new best is achieved.
-            # Only fossilized seeds are permanently integrated - intermediate
-            # stages (TRAINING, BLENDING) might later be culled.
+            # Snapshot seeds contributing to best accuracy.
+            # Include FOSSILIZED (permanent), PROBATIONARY, and BLENDING stages
+            # as these all contribute to the current accuracy. Exclude TRAINING
+            # (alpha=0, not blended) and CULLED (removed).
+            _contributing_stages = {"FOSSILIZED", "PROBATIONARY", "BLENDING"}
             self.best_seeds = {
                 slot_id: SeedState(
                     slot_id=seed.slot_id,
@@ -219,7 +221,7 @@ class EnvState:
                     epochs_in_stage=seed.epochs_in_stage,
                 )
                 for slot_id, seed in self.seeds.items()
-                if seed.stage == "FOSSILIZED"
+                if seed.stage in _contributing_stages
             }
         else:
             self.epochs_since_improvement += 1
@@ -1100,19 +1102,34 @@ class TUIOutput:
                 else:
                     cur_style = "dim"
 
-                # Format fossilized seeds at best accuracy (compact)
+                # Format seeds at best accuracy (compact) with stage-based colors
+                # Colors: FOSSILIZED=green, PROBATIONARY=yellow, BLENDING=magenta
                 if env.best_seeds:
                     n_seeds = len(env.best_seeds)
-                    if n_seeds <= 2:
-                        # Show individual blueprints (6 chars to differentiate conv_light/heavy/small)
-                        seed_parts = [
-                            f"[green]{s.blueprint_id[:6] if s.blueprint_id else '?'}[/]"
-                            for s in env.best_seeds.values()
-                        ]
+                    if n_seeds <= 3:
+                        # Show individual blueprints with stage-based colors
+                        seed_parts = []
+                        for s in env.best_seeds.values():
+                            bp = s.blueprint_id[:6] if s.blueprint_id else "?"
+                            if s.stage == "FOSSILIZED":
+                                seed_parts.append(f"[green]{bp}[/]")
+                            elif s.stage == "PROBATIONARY":
+                                seed_parts.append(f"[yellow]{bp}[/]")
+                            elif s.stage == "BLENDING":
+                                seed_parts.append(f"[magenta]{bp}[/]")
+                            else:
+                                seed_parts.append(f"[dim]{bp}[/]")
                         seeds_str = " ".join(seed_parts)
                     else:
-                        # Just show count for many seeds
-                        seeds_str = f"[green]{n_seeds} seeds[/]"
+                        # Count by stage for many seeds
+                        permanent = sum(1 for s in env.best_seeds.values() if s.stage == "FOSSILIZED")
+                        provisional = len(env.best_seeds) - permanent
+                        if permanent and provisional:
+                            seeds_str = f"[green]{permanent}[/]+[yellow]{provisional}[/]"
+                        elif permanent:
+                            seeds_str = f"[green]{permanent} seeds[/]"
+                        else:
+                            seeds_str = f"[yellow]{provisional} prov[/]"
                 else:
                     seeds_str = "─"
 
