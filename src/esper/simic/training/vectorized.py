@@ -1645,9 +1645,10 @@ def train_ppo_vectorized(
             # Batch all states and masks into tensors
             states_batch = torch.tensor(all_features, dtype=torch.float32, device=device)
             # Stack dict masks into batched dict: {key: [n_envs, head_dim]}
+            # Use static HEAD_NAMES for torch.compile compatibility
             masks_batch = {
                 key: torch.stack([m[key] for m in all_masks]).to(device)
-                for key in all_masks[0].keys()
+                for key in HEAD_NAMES
             }
 
             # Accumulate raw states for deferred normalizer update
