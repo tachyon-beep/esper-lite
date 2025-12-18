@@ -145,3 +145,46 @@ class TestComputeSimplifiedReward:
 
         # Should NOT have the -9.0 probation_warning
         assert reward > -2.0
+
+
+from esper.simic.rewards import compute_reward
+
+
+class TestComputeRewardDispatcher:
+    """Test that compute_reward dispatches to SIMPLIFIED correctly."""
+
+    def test_simplified_mode_dispatches(self):
+        """compute_reward with SIMPLIFIED mode should use simplified logic."""
+        config = ContributionRewardConfig(reward_mode=RewardMode.SIMPLIFIED)
+        seed_info = SeedInfo(
+            stage=STAGE_PROBATIONARY,
+            improvement_since_stage_start=-5.0,  # Would trigger warnings in SHAPED
+            total_improvement=-3.0,
+            epochs_in_stage=5,
+            seed_params=1000,
+            previous_stage=STAGE_PROBATIONARY,
+            previous_epochs_in_stage=4,
+            seed_age_epochs=20,
+        )
+
+        # Call through dispatcher
+        reward = compute_reward(
+            action=LifecycleOp.WAIT,
+            seed_contribution=5.0,  # Would give attribution in SHAPED
+            val_acc=60.0,
+            host_max_acc=65.0,
+            seed_info=seed_info,
+            epoch=20,
+            max_epochs=25,
+            total_params=100000,
+            host_params=90000,
+            acc_at_germination=55.0,
+            acc_delta=0.5,
+            num_fossilized_seeds=1,
+            num_contributing_fossilized=1,
+            config=config,
+        )
+
+        # Should NOT have probation_warning (-9.0) or attribution (+5.0)
+        # Should be small (just PBRS)
+        assert -2.0 < reward < 2.0

@@ -926,6 +926,7 @@ def compute_reward(
     - SHAPED: Dense shaping with PBRS, attribution, warnings (default)
     - SPARSE: Terminal-only ground truth reward
     - MINIMAL: Sparse + early-cull penalty
+    - SIMPLIFIED: PBRS + intervention cost + terminal (DRL Expert recommended)
 
     Args:
         action: Action taken (LifecycleOp or similar IntEnum)
@@ -990,10 +991,21 @@ def compute_reward(
             config=config,
         )
 
+    elif config.reward_mode == RewardMode.SIMPLIFIED:
+        reward = compute_simplified_reward(
+            action=action,
+            seed_info=seed_info,
+            epoch=epoch,
+            max_epochs=max_epochs,
+            val_acc=val_acc,
+            num_contributing_fossilized=num_contributing_fossilized,
+            config=config,
+        )
+
     else:
         raise ValueError(f"Unknown reward mode: {config.reward_mode}")
 
-    # Handle return_components for sparse/minimal modes
+    # Handle return_components for sparse/minimal/simplified modes
     if return_components:
         components = RewardComponentsTelemetry()
         components.total_reward = reward

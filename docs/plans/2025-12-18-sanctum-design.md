@@ -81,20 +81,33 @@ Phase 1 ports the existing Rich TUI to Textual with the same functionality:
 - GPU utilization, memory
 - Throughput (steps/sec)
 
-## Future Phases
+## Existing Features to Preserve
+
+The current Rich TUI has these features that must be ported 1:1:
+
+### BEST RUNS Scoreboard (Already Exists!)
+- Global best accuracy, Mean best
+- Fossilized/Culled counts
+- Top 10 envs by best accuracy with medals (🥇🥈🥉)
+- Seeds at best accuracy for each env
+- This IS the "Hall of Fame" - no new feature needed
+
+### Flight Board
+- 16 environment cards with per-env metrics
+- Color-coded health status
+
+### Tamiyo Brain
+- Policy health, losses, vitals, action distribution
+
+## Future Phases (Post-Port)
 
 ### Phase 2: Focus Mode
 - Select any env card to expand into detail panel
 - Full reward component breakdown for selected env
 - Detailed seed telemetry for selected env
 
-### Phase 3: Hall of Fame
-- Auto-save snapshot when env finishes in top-10 by accuracy
-- Browse historical top performers
-- 10 "Hall of Fame" cards alongside 16 live cards
-
-### Phase 4: Time Travel
-- Scrub through Hall of Fame entry history
+### Phase 3: Time Travel
+- Scrub through historical decision data
 - "What was Tamiyo thinking 50 steps ago?"
 - Decision replay for debugging
 
@@ -176,6 +189,30 @@ Phase 1 is complete when:
 2. `--sanctum` flag launches the new TUI
 3. `karn/tui.py` is deleted
 4. No regression in diagnostic capability
+
+## Specialist Recommendations (Minor Enhancements for Phase 1)
+
+### UX Specialist Suggestions
+
+| # | Issue | Fix | Effort |
+|---|-------|-----|--------|
+| 1 | CPU indicator broken (collected but never displayed) | Add CPU% to ESPER STATUS panel | Trivial |
+| 2 | No keyboard navigation in Rich | Add Textual focus states (Tab cycles panels) | Low |
+| 3 | No data staleness indicator | Show "(Ns ago)" in panel headers when data >5s old | Low |
+| 4 | Empty state unhelpful | Improve "Waiting for PPO data" message with guidance | Trivial |
+| 5 | Row flicker on updates | Use Textual DataTable with stable row keys | Low |
+
+### DRL Expert Suggestions
+
+| # | Issue | Fix | Effort |
+|---|-------|-----|--------|
+| 1 | Entropy lacks context | Show as "Ent(/1.39)" or percentage of max | Trivial |
+| 2 | ExplVar confusing scale | Add hint: "harm"/"weak"/"ok" based on value | Trivial |
+| 3 | Clip thresholds permissive | Lower WARNING to 0.20, CRITICAL to 0.25 | Trivial |
+| 4 | "GradHP" cryptic | Rename to "Grad Health" or "GradOK%" | Trivial |
+| 5 | "Ratio↑/↓" unclear | Prefix with "π" to clarify policy ratio | Trivial |
+
+All suggestions preserve existing layout. No new panels or major changes.
 
 ## Open Questions
 
