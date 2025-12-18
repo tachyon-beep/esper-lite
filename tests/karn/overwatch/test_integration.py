@@ -249,3 +249,112 @@ class TestFlightBoardNavigation:
             detail = app.query_one("#detail-panel", Static)
             detail_text = str(detail.render())
             assert "Env 1" in detail_text, f"Expected 'Env 1' in detail panel, got: {detail_text}"
+
+
+class TestHeaderAndStripIntegration:
+    """Integration tests for RunHeader and TamiyoStrip."""
+
+    @pytest.fixture
+    def tamiyo_replay(self, tmp_path: Path) -> Path:
+        """Create replay with Tamiyo data."""
+        from esper.karn.overwatch import (
+            SnapshotWriter,
+            TuiSnapshot,
+            ConnectionStatus,
+            TamiyoState,
+            EnvSummary,
+        )
+
+        path = tmp_path / "tamiyo.jsonl"
+        with SnapshotWriter(path) as writer:
+            snap = TuiSnapshot(
+                schema_version=1,
+                captured_at="2025-12-18T14:00:00Z",
+                connection=ConnectionStatus(True, 1000.0, 0.5),
+                tamiyo=TamiyoState(
+                    kl_divergence=0.015,
+                    entropy=1.5,
+                    explained_variance=0.75,
+                    kl_trend=0.002,
+                    entropy_trend=-0.05,
+                    ev_trend=0.01,
+                    action_counts={"GERMINATE": 10, "WAIT": 90},
+                ),
+                run_id="test-001",
+                task_name="cifar10",
+                episode=5,
+                batch=100,
+                runtime_s=600.0,
+                envs_ok=2,
+                envs_warn=1,
+                envs_crit=0,
+                flight_board=[
+                    EnvSummary(env_id=0, device_id=0, status="OK", anomaly_score=0.1),
+                    EnvSummary(env_id=1, device_id=0, status="WARN", anomaly_score=0.6),
+                ],
+            )
+            writer.write(snap)
+        return path
+
+    @pytest.mark.asyncio
+    async def test_run_header_displays_data(self, tamiyo_replay: Path) -> None:
+        """RunHeader shows run identity when loaded."""
+        from esper.karn.overwatch import OverwatchApp
+        from esper.karn.overwatch.widgets.run_header import RunHeader
+
+        app = OverwatchApp(replay_path=tamiyo_replay)
+
+        async with app.run_test() as pilot:
+            header = app.query_one(RunHeader)
+            content = header.render_line1()
+
+            assert "test-001" in content
+            assert "cifar10" in content
+            assert "5" in content  # episode
+
+    @pytest.mark.asyncio
+    async def test_tamiyo_strip_displays_vitals(self, tamiyo_replay: Path) -> None:
+        """TamiyoStrip shows PPO vitals when loaded."""
+        from esper.karn.overwatch import OverwatchApp
+        from esper.karn.overwatch.widgets.tamiyo_strip import TamiyoStrip
+
+        app = OverwatchApp(replay_path=tamiyo_replay)
+
+        async with app.run_test() as pilot:
+            strip = app.query_one(TamiyoStrip)
+            content = strip.render_vitals()
+
+            assert "KL" in content
+            assert "Ent" in content
+            assert "EV" in content
+
+    @pytest.mark.asyncio
+    async def test_tamiyo_strip_shows_trend_arrows(self, tamiyo_replay: Path) -> None:
+        """TamiyoStrip shows trend arrows for metrics."""
+        from esper.karn.overwatch import OverwatchApp
+        from esper.karn.overwatch.widgets.tamiyo_strip import TamiyoStrip
+
+        app = OverwatchApp(replay_path=tamiyo_replay)
+
+        async with app.run_test() as pilot:
+            strip = app.query_one(TamiyoStrip)
+            content = strip.render_vitals()
+
+            # entropy_trend=-0.05 should show ↓
+            assert "↓" in content
+
+    @pytest.mark.asyncio
+    async def test_header_shows_env_counts(self, tamiyo_replay: Path) -> None:
+        """RunHeader shows environment health counts."""
+        from esper.karn.overwatch import OverwatchApp
+        from esper.karn.overwatch.widgets.run_header import RunHeader
+
+        app = OverwatchApp(replay_path=tamiyo_replay)
+
+        async with app.run_test() as pilot:
+            header = app.query_one(RunHeader)
+            content = header.render_line2()
+
+            # envs_ok=2, envs_warn=1
+            assert "OK:2" in content or "2" in content
+            assert "WARN:1" in content or "1" in content
