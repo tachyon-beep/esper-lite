@@ -1246,7 +1246,9 @@ def train_ppo_vectorized(
                         # CRITICAL: SharedBatchIterator does non_blocking transfers on the default stream.
                         # We must sync env_state.stream with default stream before using the data,
                         # otherwise we may access partially-transferred data (race condition).
-                        if env_state.stream:
+                        # Only sync if SharedBatchIterator did async transfer (not gpu_preload)
+                        # When gpu_preload=True, shared_train_iter is None and data is already on GPU
+                        if env_state.stream and shared_train_iter is not None:
                             env_state.stream.wait_stream(torch.cuda.default_stream(torch.device(env_state.env_device)))
                         inputs, targets = env_batches[i]
                         loss_tensor, correct_tensor, total, grad_stats = process_train_batch(
@@ -1362,7 +1364,9 @@ def train_ppo_vectorized(
                         # CRITICAL: SharedBatchIterator does non_blocking transfers on the default stream.
                         # We must sync env_state.stream with default stream before using the data,
                         # otherwise we may access partially-transferred data (race condition).
-                        if env_state.stream:
+                        # Only sync if SharedBatchIterator did async transfer (not gpu_preload)
+                        # When gpu_preload=True, shared_test_iter is None and data is already on GPU
+                        if env_state.stream and shared_test_iter is not None:
                             env_state.stream.wait_stream(torch.cuda.default_stream(torch.device(env_state.env_device)))
                         inputs, targets = env_batches[i]
 
