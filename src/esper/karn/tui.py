@@ -197,7 +197,9 @@ class EnvState:
             self.best_accuracy_epoch = epoch
             self.best_accuracy_episode = episode
             self.epochs_since_improvement = 0
-            # Snapshot current seeds when new best is achieved
+            # Snapshot FOSSILIZED seeds when new best is achieved.
+            # Only fossilized seeds are permanently integrated - intermediate
+            # stages (TRAINING, BLENDING) might later be culled.
             self.best_seeds = {
                 slot_id: SeedState(
                     slot_id=seed.slot_id,
@@ -209,7 +211,7 @@ class EnvState:
                     grad_ratio=seed.grad_ratio,
                 )
                 for slot_id, seed in self.seeds.items()
-                if seed.stage != "DORMANT"
+                if seed.stage == "FOSSILIZED"
             }
         else:
             self.epochs_since_improvement += 1
@@ -857,7 +859,7 @@ class TUIOutput:
         # Update per-env accuracy if provided
         val_acc = data.get("val_acc")
         if val_acc is not None:
-            env_state.add_accuracy(val_acc, epoch)
+            env_state.add_accuracy(val_acc, epoch, episode=self.state.current_episode)
 
         env_state.current_epoch = epoch
         env_state.last_update = datetime.now()
@@ -924,8 +926,14 @@ class TUIOutput:
             env_state.fossilized_count += 1
             env_state.active_seed_count = max(0, env_state.active_seed_count - 1)
         elif event_type == "SEED_CULLED":
-            seed.stage = "CULLED"
+            # After cull, the slot is empty and available for new germination.
+            # Reset to DORMANT so UI accurately reflects slot availability.
+            seed.stage = "DORMANT"
             seed.seed_params = 0
+            seed.blueprint_id = None
+            seed.alpha = 0.0
+            seed.accuracy_delta = 0.0
+            seed.grad_ratio = 0.0
             env_state.culled_count += 1
             env_state.active_seed_count = max(0, env_state.active_seed_count - 1)
 
@@ -984,14 +992,13 @@ class TUIOutput:
     # =========================================================================
 
     def _render_scoreboard(self) -> Panel:
-        """Render the 'Best Progress' scoreboard."""
+        """Render the 'Best Runs' scoreboard showing historical bests per env."""
         table = Table(show_header=True, box=None, padding=(0, 1), expand=True)
         table.add_column("Rank", style="dim", width=4)
         table.add_column("Env", style="cyan", width=4)
         table.add_column("Best Acc", justify="right", width=8)
-        table.add_column("Current", justify="right", width=8)
-        table.add_column("@Ep", justify="right", style="dim", width=4)
-        table.add_column("Seeds@Best", justify="left", width=20)  # Seed snapshot
+        table.add_column("@Ep", justify="right", style="dim", width=5)
+        table.add_column("Fossilized Seeds", justify="left", width=24)
 
         # Sort all envs by best accuracy
         sorted_envs = sorted(
@@ -1003,24 +1010,17 @@ class TUIOutput:
         medals = ["🥇", "🥈", "🥉"]
 
         if not sorted_envs:
-            table.add_row("-", "-", "-", "-", "-", "-")
+            table.add_row("-", "-", "-", "-", "-")
         else:
             for i, env in enumerate(sorted_envs):
                 rank = medals[i] if i < 3 else str(i + 1)
 
-                # Highlight if current is close to best
-                current_style = "green" if env.host_accuracy >= env.best_accuracy - 0.5 else "dim"
-
-                # Format seeds at best accuracy
+                # Format fossilized seeds at best accuracy
                 if env.best_seeds:
                     seed_parts = []
                     for seed in env.best_seeds.values():
                         bp = seed.blueprint_id[:4] if seed.blueprint_id else "?"
-                        stage_short = self._STAGE_SHORT.get(seed.stage, seed.stage[:3])
-                        if seed.stage == "BLENDING" and seed.alpha > 0:
-                            seed_parts.append(f"{bp}:{stage_short}({seed.alpha:.1f})")
-                        else:
-                            seed_parts.append(f"{bp}:{stage_short}")
+                        seed_parts.append(f"[green]{bp}[/]")
                     seeds_str = " ".join(seed_parts) if seed_parts else "─"
                 else:
                     seeds_str = "─"
@@ -1029,7 +1029,6 @@ class TUIOutput:
                     rank,
                     str(env.env_id),
                     f"[bold green]{env.best_accuracy:.1f}%[/]",
-                    f"[{current_style}]{env.host_accuracy:.1f}%[/]",
                     str(env.best_accuracy_episode),
                     seeds_str,
                 )
@@ -1224,7 +1223,7 @@ class TUIOutput:
         table = Table(show_header=False, box=None, padding=(0, 0))
         table.add_column("Metric", style="dim", width=8)
         table.add_column("Val", justify="right", width=5)
-        table.add_column("St", justify="center", width=4)
+        table.add_column("St", justify="center", width=6)  # "✕ CRIT" is 6 chars
 
         # Entropy
         entropy_status = self._get_entropy_status(self.state.entropy)

@@ -112,8 +112,10 @@ class TUIThresholds:
     CLIP_CRITICAL: float = 0.3
 
     # Explained variance (value learning quality)
-    EXPLAINED_VAR_WARNING: float = 0.7
-    EXPLAINED_VAR_CRITICAL: float = 0.5
+    # In PPO, explained variance starts near 0 and improves as value function learns.
+    # Negative values mean value function increases variance (harmful).
+    EXPLAINED_VAR_WARNING: float = 0.0   # Value function not helping
+    EXPLAINED_VAR_CRITICAL: float = -0.5  # Value function actively harmful
 
     # Gradient norm
     GRAD_NORM_WARNING: float = 5.0

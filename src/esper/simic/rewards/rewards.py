@@ -201,9 +201,12 @@ class ContributionRewardConfig:
     # - improvement_safe_threshold: below this, high contribution is suspicious
     # - hacking_ratio_threshold: contribution/improvement ratio triggering penalty
     # - attribution_sigmoid_steepness: controls discount curve for regressing seeds
+    #   Lower values are more forgiving of normal training variance (±0.1-0.3%)
+    #   steepness=10: -0.1% regression → 27% credit (too aggressive)
+    #   steepness=3:  -0.1% regression → 43% credit, -0.5% → 18% (balanced)
     improvement_safe_threshold: float = 0.1
     hacking_ratio_threshold: float = 5.0
-    attribution_sigmoid_steepness: float = 10.0
+    attribution_sigmoid_steepness: float = 3.0
 
     # Terminal bonus
     terminal_acc_weight: float = 0.05
@@ -665,13 +668,14 @@ def compute_contribution_reward(
         components.pbrs_bonus = pbrs_bonus
 
     # === 3. RENT: Compute Cost ===
-    # Logarithmic penalty on parameter bloat
+    # Logarithmic penalty on parameter bloat from seeds
     rent_penalty = 0.0
     growth_ratio = 0.0
-    if host_params > 0 and total_params > 0:
-        growth_ratio = total_params / host_params
-        # Guard against negative ratios (defensive - shouldn't happen in practice)
-        scaled_cost = math.log(1.0 + max(0.0, growth_ratio))
+    if host_params > 0 and total_params > host_params:
+        # Measure EXCESS params from seeds, not total ratio
+        # growth_ratio = 0 when no seeds, so no rent penalty
+        growth_ratio = (total_params - host_params) / host_params
+        scaled_cost = math.log(1.0 + growth_ratio)
         rent_penalty = min(config.rent_weight * scaled_cost, config.max_rent)
         reward -= rent_penalty
     if components:
@@ -1358,15 +1362,16 @@ def compute_loss_reward(
         clipped *= config.regression_penalty_scale
     reward += (-clipped) * config.loss_delta_weight
 
-    # Compute rent with grace period (logarithmic scaling)
-    if host_params > 0 and total_params > 0:
+    # Compute rent with grace period (logarithmic scaling on seed overhead)
+    if host_params > 0 and total_params > host_params:
         in_grace = False
         if seed_info is not None:
             in_grace = seed_info.seed_age_epochs < config.grace_epochs
         if not in_grace:
-            growth_ratio = total_params / host_params
-            # Guard against negative ratios (defensive - shouldn't happen in practice)
-            scaled_cost = math.log(1.0 + max(0.0, growth_ratio))
+            # Measure EXCESS params from seeds, not total ratio
+            # growth_ratio = 0 when no seeds, so no rent penalty
+            growth_ratio = (total_params - host_params) / host_params
+            scaled_cost = math.log(1.0 + growth_ratio)
             rent_penalty = config.compute_rent_weight * scaled_cost
             rent_penalty = min(rent_penalty, config.max_rent_penalty)
             reward -= rent_penalty

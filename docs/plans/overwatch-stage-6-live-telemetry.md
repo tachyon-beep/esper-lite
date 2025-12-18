@@ -2,7 +2,7 @@
 
 **Status:** Ready for Implementation
 **Prerequisites:** Stage 5 Complete (Event Feed + Replay)
-**Estimated Tasks:** 8
+**Estimated Tasks:** 7
 
 ## Overview
 
@@ -55,7 +55,7 @@ This stage connects the Overwatch TUI to live training telemetry, enabling real-
 | `TRAINING_STARTED` | `run_id`, `task_name`, `connection.connected=True` |
 | `BATCH_COMPLETED` | `batch`, `episode`, `best_metric`, `runtime_s` |
 | `PPO_UPDATE_COMPLETED` | `TamiyoState.*` (kl, entropy, clip_fraction, etc.) |
-| `EPOCH_COMPLETED` | Per-env `EnvSummary.task_metric`, `reward_last` |
+| `EPOCH_COMPLETED` | Per-env `EnvSummary.task_metric` |
 | `SEED_GERMINATED` | `SlotChipState` creation, `FeedEvent(GERM)` |
 | `SEED_STAGE_CHANGED` | `SlotChipState.stage`, `FeedEvent(STAGE)` |
 | `SEED_GATE_EVALUATED` | `SlotChipState.gate_*`, `FeedEvent(GATE)` |
@@ -72,6 +72,8 @@ This stage connects the Overwatch TUI to live training telemetry, enabling real-
 **File:** `src/esper/karn/overwatch/aggregator.py`
 
 Creates a stateful aggregator that maintains `TuiSnapshot` from streaming events.
+
+**Thread-safety:** Uses `threading.Lock` to protect state during concurrent access from training thread (emit) and UI thread (get_snapshot).
 
 ### Test File: `tests/karn/overwatch/test_aggregator.py`
 
@@ -160,7 +162,8 @@ class TestBatchAndEpisodeTracking:
         snapshot = agg.get_snapshot()
         assert snapshot.batch == 5
         assert snapshot.episode == 10
-        assert snapshot.best_metric >= 65.5
+        # best_metric stored as 0-1 range (65.5% -> 0.655)
+        assert snapshot.best_metric == pytest.approx(0.655, rel=0.01)
 
 
 class TestPPOVitals:
@@ -193,6 +196,32 @@ class TestPPOVitals:
         assert snapshot.tamiyo.entropy == pytest.approx(1.2)
         assert snapshot.tamiyo.clip_fraction == pytest.approx(0.08)
         assert snapshot.tamiyo.explained_variance == pytest.approx(0.85)
+
+
+class TestEpochCompleted:
+    """Test EPOCH_COMPLETED event handling."""
+
+    def test_epoch_completed_updates_env_metric(self):
+        """EPOCH_COMPLETED updates per-env task_metric."""
+        agg = TelemetryAggregator(num_envs=2)
+        agg.process_event(TelemetryEvent(
+            event_type=TelemetryEventType.TRAINING_STARTED,
+            data={"run_id": "test", "num_envs": 2},
+        ))
+
+        agg.process_event(TelemetryEvent(
+            event_type=TelemetryEventType.EPOCH_COMPLETED,
+            data={
+                "env_id": 0,
+                "val_accuracy": 72.5,
+                "val_loss": 0.8,
+            },
+        ))
+
+        snapshot = agg.get_snapshot()
+        env0 = next((e for e in snapshot.flight_board if e.env_id == 0), None)
+        assert env0 is not None
+        assert env0.task_metric == pytest.approx(72.5)
 
 
 class TestSeedLifecycle:
@@ -330,6 +359,51 @@ class TestEventFeedManagement:
 
         snapshot = agg.get_snapshot()
         assert len(snapshot.event_feed) <= 5
+
+
+class TestThreadSafety:
+    """Test thread-safety of aggregator."""
+
+    def test_concurrent_access_no_crash(self):
+        """Concurrent process_event and get_snapshot don't crash."""
+        import threading
+
+        agg = TelemetryAggregator(num_envs=2)
+        agg.process_event(TelemetryEvent(
+            event_type=TelemetryEventType.TRAINING_STARTED,
+            data={"run_id": "test", "num_envs": 2},
+        ))
+
+        errors = []
+
+        def emit_events():
+            try:
+                for i in range(100):
+                    agg.process_event(TelemetryEvent(
+                        event_type=TelemetryEventType.BATCH_COMPLETED,
+                        data={"batch_idx": i, "avg_accuracy": 50.0 + i * 0.1},
+                    ))
+            except Exception as e:
+                errors.append(e)
+
+        def read_snapshots():
+            try:
+                for _ in range(100):
+                    snapshot = agg.get_snapshot()
+                    _ = snapshot.batch  # Access field
+            except Exception as e:
+                errors.append(e)
+
+        threads = [
+            threading.Thread(target=emit_events),
+            threading.Thread(target=read_snapshots),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(errors) == 0, f"Thread errors: {errors}"
 ```
 
 ### Implementation: `src/esper/karn/overwatch/aggregator.py`
@@ -339,10 +413,14 @@ class TestEventFeedManagement:
 
 Maintains stateful accumulation of telemetry events to build
 real-time TuiSnapshot objects for the Overwatch TUI.
+
+Thread-safe: Uses threading.Lock to protect state during concurrent
+access from training thread (emit) and UI thread (get_snapshot).
 """
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -361,25 +439,12 @@ if TYPE_CHECKING:
     from esper.leyline import TelemetryEvent
 
 
-# Event type name → FeedEvent.event_type mapping
-_EVENT_TYPE_MAP = {
-    "SEED_GERMINATED": "GERM",
-    "SEED_STAGE_CHANGED": "STAGE",
-    "SEED_GATE_EVALUATED": "GATE",
-    "SEED_FOSSILIZED": "STAGE",
-    "SEED_CULLED": "CULL",
-    "PPO_UPDATE_COMPLETED": "PPO",
-    "GOVERNOR_PANIC": "CRIT",
-    "GOVERNOR_ROLLBACK": "CRIT",
-}
-
-
 @dataclass
 class TelemetryAggregator:
     """Aggregates telemetry events into TuiSnapshot state.
 
     Thread-safe: process_event() and get_snapshot() can be called
-    from different threads.
+    from different threads safely due to internal locking.
 
     Usage:
         agg = TelemetryAggregator(num_envs=4)
@@ -394,7 +459,7 @@ class TelemetryAggregator:
     num_envs: int = 4
     max_feed_events: int = 100
 
-    # Internal state
+    # Internal state (protected by _lock)
     _run_id: str = ""
     _task_name: str = ""
     _connected: bool = False
@@ -403,7 +468,7 @@ class TelemetryAggregator:
     # Progress tracking
     _episode: int = 0
     _batch: int = 0
-    _best_metric: float = 0.0
+    _best_metric: float = 0.0  # Stored as 0-1 range
     _runtime_s: float = 0.0
     _start_time: float = field(default_factory=time.time)
 
@@ -416,12 +481,16 @@ class TelemetryAggregator:
     # Event feed (most recent last)
     _feed: list[FeedEvent] = field(default_factory=list)
 
+    # Thread safety
+    _lock: threading.Lock = field(default_factory=threading.Lock)
+
     def __post_init__(self):
         """Initialize per-env state."""
         self._envs = {}
         self._feed = []
         self._tamiyo = TamiyoState()
         self._start_time = time.time()
+        self._lock = threading.Lock()
 
     def process_event(self, event: "TelemetryEvent") -> None:
         """Process a telemetry event and update internal state.
@@ -429,6 +498,11 @@ class TelemetryAggregator:
         Args:
             event: The telemetry event to process.
         """
+        with self._lock:
+            self._process_event_unlocked(event)
+
+    def _process_event_unlocked(self, event: "TelemetryEvent") -> None:
+        """Process event without locking (caller must hold lock)."""
         # Update last event timestamp
         if event.timestamp:
             self._last_event_ts = event.timestamp.timestamp()
@@ -455,6 +529,11 @@ class TelemetryAggregator:
         Returns:
             Complete snapshot of current aggregator state.
         """
+        with self._lock:
+            return self._get_snapshot_unlocked()
+
+    def _get_snapshot_unlocked(self) -> TuiSnapshot:
+        """Get snapshot without locking (caller must hold lock)."""
         now = time.time()
         staleness = now - self._last_event_ts if self._last_event_ts else float("inf")
 
@@ -508,9 +587,11 @@ class TelemetryAggregator:
         self._batch = data.get("batch_idx", self._batch)
         self._episode = data.get("episodes_completed", self._episode)
 
+        # avg_accuracy comes as 0-100, store as 0-1 for consistency with run_header
         avg_acc = data.get("avg_accuracy", 0.0)
-        if avg_acc > self._best_metric:
-            self._best_metric = avg_acc
+        avg_acc_normalized = avg_acc / 100.0 if avg_acc > 1.0 else avg_acc
+        if avg_acc_normalized > self._best_metric:
+            self._best_metric = avg_acc_normalized
 
         # Update per-env accuracies if provided
         env_accs = data.get("env_accuracies", [])
@@ -539,6 +620,17 @@ class TelemetryAggregator:
             message=f"KL={self._tamiyo.kl_divergence:.4f} H={self._tamiyo.entropy:.2f}",
             timestamp=event.timestamp,
         )
+
+    def _handle_epoch_completed(self, event: "TelemetryEvent") -> None:
+        """Handle EPOCH_COMPLETED event."""
+        data = event.data or {}
+        env_id = data.get("env_id")
+
+        if env_id is None:
+            return
+
+        self._ensure_env(env_id)
+        self._envs[env_id].task_metric = data.get("val_accuracy", 0.0)
 
     def _handle_seed_germinated(self, event: "TelemetryEvent") -> None:
         """Handle SEED_GERMINATED event."""
@@ -816,7 +908,7 @@ class OverwatchBackend:
     """OutputBackend that feeds telemetry to Overwatch TUI.
 
     Thread-safe: emit() can be called from training thread while
-    get_snapshot() is called from UI thread.
+    get_snapshot() is called from UI thread (aggregator handles locking).
 
     Usage:
         from esper.nissa import get_hub
@@ -883,13 +975,27 @@ PYTHONPATH=src uv run pytest tests/karn/overwatch/test_backend.py -v
 
 Add live mode support with `set_interval` polling.
 
+### Step 0: Understand the delta from existing app.py
+
+The current `app.py` has:
+- `__init__` with `replay_path` parameter
+- `on_mount` that calls `_init_replay()` or hides replay bar
+- Replay-related methods and timers
+
+We need to add:
+- `backend` parameter for live mode
+- `poll_interval_ms` parameter
+- `_live_timer` attribute
+- `_init_live()` method
+- `_live_poll()` method
+- Update `on_mount` to handle live mode
+
 ### Test File: `tests/karn/overwatch/test_live_mode.py`
 
 ```python
 """Tests for Overwatch live mode."""
 
 import pytest
-from unittest.mock import MagicMock, patch
 
 from esper.karn.overwatch.app import OverwatchApp
 from esper.karn.overwatch.backend import OverwatchBackend
@@ -924,19 +1030,12 @@ class TestLiveModePolling:
         backend = OverwatchBackend()
         backend.start()
 
-        # Mock the backend to return a known snapshot
-        mock_snapshot = TuiSnapshot(
-            schema_version=1,
-            captured_at="2024-01-01T00:00:00Z",
-            connection=ConnectionStatus(
-                connected=True,
-                last_event_ts=0.0,
-                staleness_s=0.0,
-            ),
-            tamiyo=TamiyoState(),
-            run_id="test-run",
-        )
-        backend._aggregator.get_snapshot = MagicMock(return_value=mock_snapshot)
+        # Emit a training started event
+        from esper.leyline import TelemetryEvent, TelemetryEventType
+        backend.emit(TelemetryEvent(
+            event_type=TelemetryEventType.TRAINING_STARTED,
+            data={"run_id": "test-run", "task": "cifar10"},
+        ))
 
         app = OverwatchApp(backend=backend)
 
@@ -971,20 +1070,26 @@ class TestLiveModeUpdates:
             # Wait for poll
             await pilot.pause()
 
-            # Header should show run info
-            header = app.query_one("#header")
-            assert "live-test" in header.render() or app._snapshot.run_id == "live-test"
+            # Verify snapshot was loaded
+            assert app._snapshot is not None
+            assert app._snapshot.run_id == "live-test"
 ```
 
 ### Implementation Changes to `app.py`
 
-Add to `OverwatchApp.__init__`:
+Add to imports at top:
+```python
+if TYPE_CHECKING:
+    from esper.karn.overwatch.backend import OverwatchBackend
+```
+
+Modify `OverwatchApp.__init__`:
 ```python
 def __init__(
     self,
     replay_path: Path | str | None = None,
-    backend: "OverwatchBackend | None" = None,  # NEW
-    poll_interval_ms: int = 250,  # NEW
+    backend: "OverwatchBackend | None" = None,
+    poll_interval_ms: int = 250,
     **kwargs,
 ) -> None:
     """Initialize the Overwatch app.
@@ -997,16 +1102,16 @@ def __init__(
     """
     super().__init__(**kwargs)
     self._replay_path = Path(replay_path) if replay_path else None
-    self._backend = backend  # NEW
-    self._poll_interval_ms = poll_interval_ms  # NEW
+    self._backend = backend
+    self._poll_interval_ms = poll_interval_ms
     self._snapshot: TuiSnapshot | None = None
     self._help_visible = False
     self._replay_controller = None
     self._playback_timer = None
-    self._live_timer = None  # NEW
+    self._live_timer = None
 ```
 
-Add to `on_mount`:
+Modify `on_mount`:
 ```python
 def on_mount(self) -> None:
     """Called when app is mounted."""
@@ -1014,7 +1119,7 @@ def on_mount(self) -> None:
     if self._replay_path:
         self._init_replay()
     elif self._backend:
-        # NEW: Live mode
+        # Live mode
         self._init_live()
     else:
         # Demo/standalone mode - hide replay bar
@@ -1024,7 +1129,7 @@ def on_mount(self) -> None:
     self.query_one(FlightBoard).focus()
 ```
 
-Add new method:
+Add new methods:
 ```python
 def _init_live(self) -> None:
     """Initialize live telemetry mode."""
@@ -1045,7 +1150,7 @@ def _live_poll(self) -> None:
 
     snapshot = self._backend.get_snapshot()
 
-    # Only update if snapshot changed
+    # Only update if snapshot changed (by captured_at timestamp)
     if snapshot.captured_at != getattr(self._snapshot, "captured_at", None):
         self._snapshot = snapshot
         self._update_all_widgets()
@@ -1088,22 +1193,66 @@ def test_karn_exports_overwatch_backend():
 
 Update `src/esper/karn/overwatch/__init__.py`:
 ```python
-from esper.karn.overwatch.app import OverwatchApp
+"""Overwatch - Textual TUI for Esper training monitoring.
+
+Provides real-time visibility into training environments, seed lifecycle,
+and Tamiyo decision-making.
+"""
+
+from esper.karn.overwatch.schema import (
+    TuiSnapshot,
+    EnvSummary,
+    SlotChipState,
+    TamiyoState,
+    ConnectionStatus,
+    DeviceVitals,
+    FeedEvent,
+)
+
+from esper.karn.overwatch.replay import (
+    SnapshotWriter,
+    SnapshotReader,
+)
+
 from esper.karn.overwatch.aggregator import TelemetryAggregator
 from esper.karn.overwatch.backend import OverwatchBackend
-from esper.karn.overwatch.widgets.help import HelpOverlay
+
+# Lazy import for OverwatchApp - Textual may not be installed
+try:
+    from esper.karn.overwatch.app import OverwatchApp
+except ImportError:
+    OverwatchApp = None  # type: ignore[misc, assignment]
 
 __all__ = [
-    "OverwatchApp",
+    # Schema
+    "TuiSnapshot",
+    "EnvSummary",
+    "SlotChipState",
+    "TamiyoState",
+    "ConnectionStatus",
+    "DeviceVitals",
+    "FeedEvent",
+    # Replay
+    "SnapshotWriter",
+    "SnapshotReader",
+    # Aggregator & Backend
     "TelemetryAggregator",
     "OverwatchBackend",
-    "HelpOverlay",
+    # App (may be None if Textual not installed)
+    "OverwatchApp",
 ]
 ```
 
-Update `src/esper/karn/__init__.py` to add:
+Update `src/esper/karn/__init__.py` to add after existing imports:
 ```python
+# Overwatch (live telemetry backend)
 from esper.karn.overwatch.backend import OverwatchBackend
+```
+
+And add to `__all__`:
+```python
+    # Overwatch
+    "OverwatchBackend",
 ```
 
 ### Verification
@@ -1118,7 +1267,9 @@ PYTHONPATH=src uv run pytest tests/karn/overwatch/test_widgets.py::test_aggregat
 
 **File:** `src/esper/scripts/train.py` (modify)
 
-Add `--overwatch` flag that launches Overwatch TUI alongside training.
+Add `--overwatch` flag that launches Overwatch TUI for monitoring.
+
+**IMPORTANT:** This flag is **mutually exclusive** with the existing Rich TUI (`--no-tui` is implied). Overwatch takes control of the terminal while training runs in a background thread.
 
 ### Test: Manual CLI test
 
@@ -1129,38 +1280,150 @@ uv run python -m esper.scripts.train ppo --help | grep overwatch
 
 ### Implementation Changes
 
-Add to `telemetry_parent` ArgumentParser:
+Add to `telemetry_parent` ArgumentParser (around line 48):
 ```python
 telemetry_parent.add_argument(
     "--overwatch",
     action="store_true",
-    help="Launch Overwatch TUI for real-time monitoring",
+    help="Launch Overwatch TUI for real-time monitoring (replaces Rich TUI)",
 )
 ```
 
-Add to main(), after hub setup:
+Modify main() to handle --overwatch. The key insight is that **Overwatch needs terminal control**, so we run training in a background thread instead:
+
+After the telemetry hub setup section (around line 220), add:
 ```python
-# Add Overwatch backend if requested
-overwatch_backend = None
+# Overwatch mode: run training in background, Overwatch controls terminal
 if args.overwatch:
     from esper.karn import OverwatchBackend
+    from esper.karn.overwatch import OverwatchApp
+    import threading
+
+    # Create backend and add to hub
     overwatch_backend = OverwatchBackend()
     hub.add_backend(overwatch_backend)
+
+    # Disable Rich TUI (Overwatch replaces it)
+    use_tui = False
+
+    # Define training function to run in background
+    def run_training():
+        try:
+            if args.algorithm == "heuristic":
+                validated_slots = validate_slots(args.slots)
+                from esper.simic.training import train_heuristic
+                train_heuristic(
+                    n_episodes=args.episodes,
+                    max_epochs=args.max_epochs,
+                    max_batches=args.max_batches if args.max_batches > 0 else None,
+                    device=args.device,
+                    task=args.task,
+                    seed=args.seed,
+                    slots=validated_slots,
+                    telemetry_config=telemetry_config,
+                    telemetry_lifecycle_only=args.telemetry_lifecycle_only,
+                    min_fossilize_improvement=args.min_fossilize_improvement,
+                )
+            elif args.algorithm == "ppo":
+                # ... PPO training code (same as existing)
+                pass
+        finally:
+            # Signal training complete (Overwatch will detect via staleness)
+            pass
+
+    # Start training in background thread
+    training_thread = threading.Thread(target=run_training, daemon=True)
+    training_thread.start()
+
+    # Run Overwatch TUI (blocks until user quits)
+    app = OverwatchApp(backend=overwatch_backend)
+    app.run()
+
+    # Clean up
+    hub.close()
+    return  # Exit after Overwatch closes
 ```
 
-Modify the training execution to run TUI in parallel:
+The full implementation requires restructuring the existing if/else blocks. Here's the cleaner approach - wrap the training execution in a function and call it either directly or in a thread:
+
 ```python
-if args.overwatch and overwatch_backend:
-    # Run Overwatch TUI in separate thread
-    import threading
-    from esper.karn.overwatch import OverwatchApp
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
 
-    def run_overwatch():
-        app = OverwatchApp(backend=overwatch_backend)
-        app.run()
+    # ... existing telemetry config setup ...
 
-    overwatch_thread = threading.Thread(target=run_overwatch, daemon=True)
-    overwatch_thread.start()
+    hub = get_hub()
+
+    # Determine UI mode
+    import sys
+    is_tty = sys.stdout.isatty()
+    use_overwatch = args.overwatch
+    use_tui = not args.no_tui and is_tty and not use_overwatch
+
+    # ... existing TUI/console backend setup (skip if use_overwatch) ...
+
+    if not use_overwatch:
+        if use_tui:
+            from esper.karn import TUIOutput
+            layout = None if args.tui_layout == "auto" else args.tui_layout
+            tui_backend = TUIOutput(force_layout=layout)
+            hub.add_backend(tui_backend)
+        else:
+            hub.add_backend(ConsoleOutput(min_severity=console_min_severity))
+
+    # ... existing file/dir/dashboard backend setup ...
+
+    # Setup Overwatch if requested
+    overwatch_backend = None
+    if use_overwatch:
+        from esper.karn import OverwatchBackend
+        overwatch_backend = OverwatchBackend()
+        hub.add_backend(overwatch_backend)
+
+    # Add Karn collector
+    from esper.karn import get_collector
+    karn_collector = get_collector()
+    hub.add_backend(karn_collector)
+
+    def run_training():
+        """Execute the training algorithm."""
+        if args.algorithm == "heuristic":
+            validated_slots = validate_slots(args.slots)
+            from esper.simic.training import train_heuristic
+            train_heuristic(
+                n_episodes=args.episodes,
+                max_epochs=args.max_epochs,
+                max_batches=args.max_batches if args.max_batches > 0 else None,
+                device=args.device,
+                task=args.task,
+                seed=args.seed,
+                slots=validated_slots,
+                telemetry_config=telemetry_config,
+                telemetry_lifecycle_only=args.telemetry_lifecycle_only,
+                min_fossilize_improvement=args.min_fossilize_improvement,
+            )
+        elif args.algorithm == "ppo":
+            # ... existing PPO setup and call ...
+            pass
+
+    try:
+        if use_overwatch:
+            # Run training in background, Overwatch in foreground
+            import threading
+            from esper.karn.overwatch import OverwatchApp
+
+            training_thread = threading.Thread(target=run_training, daemon=True)
+            training_thread.start()
+
+            app = OverwatchApp(backend=overwatch_backend)
+            app.run()
+        else:
+            # Normal mode: run training directly
+            run_training()
+    finally:
+        # ... existing cleanup ...
+        hub.close()
 ```
 
 ### Verification
@@ -1172,12 +1435,15 @@ uv run python -m esper.scripts.train ppo --help | grep -A2 overwatch
 
 ---
 
-## Task 6: Integration Test - Live Mode End-to-End
+## Task 6: Integration Tests - Live Mode End-to-End
 
-**File:** `tests/karn/overwatch/test_integration.py` (add)
+**File:** `tests/karn/overwatch/test_integration.py` (add to existing file)
 
 ```python
-"""Integration tests for Overwatch live mode."""
+"""Integration tests for Overwatch live mode.
+
+Added to existing test_integration.py from Stage 5.
+"""
 
 import pytest
 from esper.leyline import TelemetryEvent, TelemetryEventType
@@ -1276,98 +1542,7 @@ PYTHONPATH=src uv run pytest tests/karn/overwatch/test_integration.py::test_live
 
 ---
 
-## Task 7: Update RunHeader for Live Status
-
-**File:** `src/esper/karn/overwatch/widgets/run_header.py` (modify)
-
-Add connection status indicator to header.
-
-### Test: `tests/karn/overwatch/test_run_header.py` (add)
-
-```python
-"""Tests for RunHeader connection status."""
-
-import pytest
-from esper.karn.overwatch.widgets.run_header import RunHeader
-from esper.karn.overwatch.schema import (
-    TuiSnapshot,
-    ConnectionStatus,
-    TamiyoState,
-)
-
-
-def test_header_shows_connected_status():
-    """Header shows 'Live' when connected."""
-    header = RunHeader()
-
-    snapshot = TuiSnapshot(
-        schema_version=1,
-        captured_at="2024-01-01T00:00:00Z",
-        connection=ConnectionStatus(
-            connected=True,
-            last_event_ts=0.0,
-            staleness_s=0.5,
-        ),
-        tamiyo=TamiyoState(),
-        run_id="test-run",
-    )
-
-    header.update_snapshot(snapshot)
-    rendered = header.render()
-
-    # Should show connected indicator
-    assert "Live" in str(rendered) or snapshot.connection.connected
-
-
-def test_header_shows_disconnected_status():
-    """Header shows 'Disconnected' when not connected."""
-    header = RunHeader()
-
-    snapshot = TuiSnapshot(
-        schema_version=1,
-        captured_at="2024-01-01T00:00:00Z",
-        connection=ConnectionStatus(
-            connected=False,
-            last_event_ts=0.0,
-            staleness_s=100.0,
-        ),
-        tamiyo=TamiyoState(),
-    )
-
-    header.update_snapshot(snapshot)
-    # Should show disconnected indicator
-    assert snapshot.connection.connected is False
-```
-
-### Implementation
-
-The RunHeader already has `update_snapshot()` - enhance it to show connection status:
-
-```python
-def update_snapshot(self, snapshot: "TuiSnapshot") -> None:
-    """Update header from snapshot."""
-    # ... existing code ...
-
-    # Add connection status
-    status_text = snapshot.connection.display_text
-    if snapshot.connection.connected:
-        status_color = "green" if snapshot.connection.staleness_s < 2.0 else "yellow"
-    else:
-        status_color = "red"
-
-    # Include in render
-    self._status_text = f"[{status_color}]{status_text}[/{status_color}]"
-```
-
-### Verification
-
-```bash
-PYTHONPATH=src uv run pytest tests/karn/overwatch/test_run_header.py -v
-```
-
----
-
-## Task 8: Full Test Suite Verification
+## Task 7: Full Test Suite Verification
 
 Run complete test suite to ensure no regressions.
 
@@ -1388,14 +1563,23 @@ uv run ruff check src/esper/karn/overwatch/
 
 | Task | Description | New Files | Modified Files |
 |------|-------------|-----------|----------------|
-| 1 | TelemetryAggregator | `aggregator.py`, `test_aggregator.py` | - |
+| 1 | TelemetryAggregator (with threading.Lock) | `aggregator.py`, `test_aggregator.py` | - |
 | 2 | OverwatchBackend | `backend.py`, `test_backend.py` | - |
 | 3 | Live Mode Wiring | `test_live_mode.py` | `app.py` |
 | 4 | Module Exports | - | `overwatch/__init__.py`, `karn/__init__.py` |
 | 5 | CLI --overwatch Flag | - | `train.py` |
-| 6 | Integration Tests | - | `test_integration.py` |
-| 7 | RunHeader Status | `test_run_header.py` | `run_header.py` |
-| 8 | Full Verification | - | - |
+| 6 | Integration Tests | - | `test_integration.py` (add to existing) |
+| 7 | Full Verification | - | - |
+
+## Notes on RunHeader
+
+The existing `run_header.py` already implements connection status display with:
+- `● Live` (green, staleness < 2s)
+- `● Live (Xs)` (yellow, staleness 2-5s)
+- `◐ Stale (Xs)` (warning, staleness > 5s)
+- `○ Disconnected` (red)
+
+No changes needed - Stage 6 provides the data, RunHeader already displays it.
 
 ## Next Stage
 

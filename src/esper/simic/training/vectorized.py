@@ -1781,7 +1781,9 @@ def train_ppo_vectorized(
                 # (rent should reflect current extra params, not historical totals)
                 scoreboard = analytics._get_scoreboard(env_idx)
                 host_params = scoreboard.host_params
-                total_params = model.active_seed_params
+                # BUG FIX: Was using active_seed_params (seed only), should be total (host + seed)
+                # Without this fix, total_params < host_params is always true, so rent is never charged
+                total_params = model.total_params
 
                 # Compute seed_contribution from counterfactual for the SAMPLED slot
                 # (multi-slot reward attribution: use the slot the policy chose)

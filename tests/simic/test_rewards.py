@@ -461,7 +461,7 @@ class TestContributionRewardComponents:
             seed_info=seed_info,
             epoch=15,
             max_epochs=25,
-            total_params=5000,
+            total_params=25000,  # total = host + seed params
             host_params=20000,
             acc_at_germination=68.0,
             return_components=True,
@@ -470,7 +470,8 @@ class TestContributionRewardComponents:
         # DRL Expert recommended fields
         assert components.val_acc == 72.0
         assert components.acc_at_germination == 68.0
-        assert components.growth_ratio == 5000 / 20000  # 0.25
+        # growth_ratio = (total - host) / host = excess seed params as fraction
+        assert components.growth_ratio == (25000 - 20000) / 20000  # 0.25
         assert components.progress_since_germination == 72.0 - 68.0  # 4.0
 
 
@@ -756,20 +757,21 @@ class TestRansomwareSeedDetection:
             )
             return components.attribution_discount
 
-        # Test specific values from steepened sigmoid (-10 coefficient)
-        # DRL Expert review 2025-12-10: steepened from -5 to -10 to reduce
-        # reward leakage for ransomware seeds
-        # At -0.5%, expect ~0.007 (was ~0.076 at -5)
+        # Test specific values from sigmoid (steepness=3, more forgiving of variance)
+        # DRL Expert review 2025-12-18: reduced from 10 to 3 to avoid penalizing
+        # normal training variance (±0.1-0.3%), while still catching true regression
+        #
+        # At -0.5%, expect ~0.18 (still penalized but not zeroed)
         discount_05 = get_discount(-0.5)
-        assert discount_05 < 0.02, f"At -0.5%: {discount_05}"
+        assert 0.10 < discount_05 < 0.25, f"At -0.5%: {discount_05}"
 
-        # At -0.2%, expect ~0.12 (was ~0.27 at -5)
+        # At -0.2%, expect ~0.35 (forgiving of noise)
         discount_02 = get_discount(-0.2)
-        assert 0.08 < discount_02 < 0.20, f"At -0.2%: {discount_02}"
+        assert 0.25 < discount_02 < 0.45, f"At -0.2%: {discount_02}"
 
-        # At -1.0%, expect ~0.00005 (essentially zero)
+        # At -1.0%, expect ~0.05 (heavily penalized for clear regression)
         discount_10 = get_discount(-1.0)
-        assert discount_10 < 0.001, f"At -1.0%: {discount_10}"
+        assert discount_10 < 0.10, f"At -1.0%: {discount_10}"
 
     def test_fossilized_seeds_get_no_attribution(self):
         """FOSSILIZED seeds should not receive attribution rewards.
