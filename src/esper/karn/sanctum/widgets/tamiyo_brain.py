@@ -163,25 +163,25 @@ class TamiyoBrain(Static):
         ratio_std = tamiyo.ratio_std
 
         # Color code ratio_max: green if <1.5, yellow if <2.0, red if >=2.0
-        if ratio_max >= 2.0:
+        if ratio_max >= TUIThresholds.RATIO_MAX_CRITICAL:
             max_style = "red bold"
-        elif ratio_max >= 1.5:
+        elif ratio_max >= TUIThresholds.RATIO_MAX_WARNING:
             max_style = "yellow"
         else:
             max_style = "green"
         table.add_row("Ratio↑", Text(f"{ratio_max:.2f}", style=max_style))
 
         # Color code ratio_min: green if >0.5, yellow if >0.3, red if <=0.3
-        if ratio_min <= 0.3:
+        if ratio_min <= TUIThresholds.RATIO_MIN_CRITICAL:
             min_style = "red bold"
-        elif ratio_min <= 0.5:
+        elif ratio_min <= TUIThresholds.RATIO_MIN_WARNING:
             min_style = "yellow"
         else:
             min_style = "green"
         table.add_row("Ratio↓", Text(f"{ratio_min:.2f}", style=min_style))
 
         # Ratio std - higher means more variance in updates
-        if ratio_std >= 0.5:
+        if ratio_std >= TUIThresholds.RATIO_STD_WARNING:
             std_style = "yellow"
         else:
             std_style = ""
@@ -199,9 +199,9 @@ class TamiyoBrain(Static):
             table.add_row("Explode", Text(f"{exploding} layers", style="red bold"))
 
         # Overall gradient health (1.0 = perfect)
-        if health < 0.5:
+        if health < TUIThresholds.GRAD_HEALTH_CRITICAL:
             health_style = "red bold"
-        elif health < 0.8:
+        elif health < TUIThresholds.GRAD_HEALTH_WARNING:
             health_style = "yellow"
         else:
             health_style = "green"

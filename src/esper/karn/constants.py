@@ -127,6 +127,17 @@ class TUIThresholds:
     # Action distribution (WAIT dominance is suspicious)
     WAIT_DOMINANCE_WARNING: float = 0.7  # > 70% WAIT
 
+    # Ratio statistics thresholds (PPO policy ratio should stay near 1.0)
+    RATIO_MAX_CRITICAL: float = 2.0   # Policy changing too fast
+    RATIO_MAX_WARNING: float = 1.5
+    RATIO_MIN_CRITICAL: float = 0.3   # Policy changing too fast in other direction
+    RATIO_MIN_WARNING: float = 0.5
+    RATIO_STD_WARNING: float = 0.5    # High variance in updates
+
+    # Gradient health percentage thresholds
+    GRAD_HEALTH_WARNING: float = 0.8   # >80% healthy layers is OK
+    GRAD_HEALTH_CRITICAL: float = 0.5  # <50% healthy is critical
+
 
 class VitalSignsThresholds:
     """Thresholds for vital signs monitoring.
