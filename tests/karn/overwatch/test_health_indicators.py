@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 
 class TestTrendArrow:
     """Tests for trend arrow rendering."""
