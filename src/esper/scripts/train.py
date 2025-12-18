@@ -226,7 +226,8 @@ def main():
         tui_backend = TUIOutput(force_layout=layout)
         hub.add_backend(tui_backend)
         # TUI auto-starts on first event
-    else:
+    elif not use_overwatch:
+        # Only add console if NOT using either TUI or Overwatch
         hub.add_backend(ConsoleOutput(min_severity=console_min_severity))
 
     # Add file output if requested
@@ -312,7 +313,31 @@ def main():
     overwatch_backend = None
     if use_overwatch:
         from esper.karn import OverwatchBackend
-        overwatch_backend = OverwatchBackend()
+        from esper.leyline import DEFAULT_N_ENVS
+
+        # Determine num_envs for Overwatch display
+        if args.algorithm == "ppo":
+            # For PPO, get from config
+            if args.config_json:
+                temp_config = TrainingConfig.from_json_path(args.config_json)
+            else:
+                if args.preset == "cifar10":
+                    temp_config = TrainingConfig.for_cifar10()
+                elif args.preset == "cifar10_deep":
+                    temp_config = TrainingConfig.for_cifar10_deep()
+                elif args.preset == "cifar10_blind":
+                    temp_config = TrainingConfig.for_cifar10_blind()
+                else:
+                    temp_config = TrainingConfig.for_tinystories()
+            num_envs = temp_config.n_envs
+        elif args.algorithm == "heuristic":
+            # For heuristic, use number of slots
+            num_envs = len(args.slots)
+        else:
+            # Fallback for unknown algorithms
+            num_envs = DEFAULT_N_ENVS
+
+        overwatch_backend = OverwatchBackend(num_envs=num_envs)
         hub.add_backend(overwatch_backend)
 
     # Add Karn research telemetry collector
@@ -324,60 +349,65 @@ def main():
     # Define training function to enable background execution for Overwatch
     def run_training():
         """Execute the training algorithm."""
-        if args.algorithm == "heuristic":
-            # Validate slot IDs use canonical format
-            validated_slots = validate_slots(args.slots)
+        try:
+            if args.algorithm == "heuristic":
+                # Validate slot IDs use canonical format
+                validated_slots = validate_slots(args.slots)
 
-            from esper.simic.training import train_heuristic
-            train_heuristic(
-                n_episodes=args.episodes,
-                max_epochs=args.max_epochs,
-                max_batches=args.max_batches if args.max_batches > 0 else None,
-                device=args.device,
-                task=args.task,
-                seed=args.seed,
-                slots=validated_slots,
-                telemetry_config=telemetry_config,
-                telemetry_lifecycle_only=args.telemetry_lifecycle_only,
-                min_fossilize_improvement=args.min_fossilize_improvement,
-            )
+                from esper.simic.training import train_heuristic
+                train_heuristic(
+                    n_episodes=args.episodes,
+                    max_epochs=args.max_epochs,
+                    max_batches=args.max_batches if args.max_batches > 0 else None,
+                    device=args.device,
+                    task=args.task,
+                    seed=args.seed,
+                    slots=validated_slots,
+                    telemetry_config=telemetry_config,
+                    telemetry_lifecycle_only=args.telemetry_lifecycle_only,
+                    min_fossilize_improvement=args.min_fossilize_improvement,
+                )
 
-        elif args.algorithm == "ppo":
-            if args.config_json:
-                config = TrainingConfig.from_json_path(args.config_json)
-            else:
-                if args.preset == "cifar10":
-                    config = TrainingConfig.for_cifar10()
-                elif args.preset == "cifar10_deep":
-                    config = TrainingConfig.for_cifar10_deep()
-                elif args.preset == "cifar10_blind":
-                    config = TrainingConfig.for_cifar10_blind()
+            elif args.algorithm == "ppo":
+                if args.config_json:
+                    config = TrainingConfig.from_json_path(args.config_json)
                 else:
-                    config = TrainingConfig.for_tinystories()
+                    if args.preset == "cifar10":
+                        config = TrainingConfig.for_cifar10()
+                    elif args.preset == "cifar10_deep":
+                        config = TrainingConfig.for_cifar10_deep()
+                    elif args.preset == "cifar10_blind":
+                        config = TrainingConfig.for_cifar10_blind()
+                    else:
+                        config = TrainingConfig.for_tinystories()
 
-            if args.seed is not None:
-                config.seed = args.seed
-            if args.amp:
-                config.amp = True
-            if telemetry_config.level.name == "OFF":
-                config.use_telemetry = False
+                if args.seed is not None:
+                    config.seed = args.seed
+                if args.amp:
+                    config.amp = True
+                if telemetry_config.level.name == "OFF":
+                    config.use_telemetry = False
 
-            print(config.summary())
+                print(config.summary())
 
-            from esper.simic.training import train_ppo_vectorized
-            train_ppo_vectorized(
-                device=args.device,
-                devices=args.devices,
-                task=args.task,
-                save_path=args.save,
-                resume_path=args.resume,
-                num_workers=args.num_workers,
-                gpu_preload=args.gpu_preload,
-                telemetry_config=telemetry_config,
-                telemetry_lifecycle_only=args.telemetry_lifecycle_only,
-                quiet_analytics=use_tui,
-                **config.to_train_kwargs(),
-            )
+                from esper.simic.training import train_ppo_vectorized
+                train_ppo_vectorized(
+                    device=args.device,
+                    devices=args.devices,
+                    task=args.task,
+                    save_path=args.save,
+                    resume_path=args.resume,
+                    num_workers=args.num_workers,
+                    gpu_preload=args.gpu_preload,
+                    telemetry_config=telemetry_config,
+                    telemetry_lifecycle_only=args.telemetry_lifecycle_only,
+                    quiet_analytics=use_tui or use_overwatch,
+                    **config.to_train_kwargs(),
+                )
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            raise
 
     try:
         if use_overwatch:
