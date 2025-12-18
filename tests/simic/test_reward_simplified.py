@@ -199,7 +199,6 @@ class TestABTestingConfig:
     def test_ab_reward_modes_field_exists(self):
         """TrainingConfig should have ab_reward_modes field."""
         config = TrainingConfig()
-        assert hasattr(config, "ab_reward_modes")
         # Default should be None (all envs use reward_mode)
         assert config.ab_reward_modes is None
 

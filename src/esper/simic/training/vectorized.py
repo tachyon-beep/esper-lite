@@ -419,6 +419,7 @@ def train_ppo_vectorized(
     param_penalty_weight: float = 0.1,
     sparse_reward_scale: float = 1.0,
     reward_family: str = "contribution",
+    ab_reward_modes: list[str] | None = None,
     quiet_analytics: bool = False,
     telemetry_dir: str | None = None,
 ) -> tuple[PPOAgent, list[dict]]:
