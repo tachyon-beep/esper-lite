@@ -380,11 +380,11 @@ class TelemetryAggregator:
         event_type: str,
         env_id: int | None,
         message: str,
-        timestamp: "datetime | None" = None,
+        timestamp: datetime | None = None,
     ) -> None:
         """Add event to feed, maintaining max size."""
-        ts = timestamp or datetime.now(timezone.utc)
-        ts_str = ts.strftime("%H:%M:%S") if hasattr(ts, "strftime") else str(ts)[:8]
+        ts = timestamp if timestamp is not None else datetime.now(timezone.utc)
+        ts_str = ts.strftime("%H:%M:%S")
 
         self._feed.append(FeedEvent(
             timestamp=ts_str,
