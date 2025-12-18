@@ -68,35 +68,38 @@ def test_asymmetric_regression_penalty():
 
 
 def test_compute_rent():
-    """Compute rent penalizes excess parameters."""
+    """Compute rent penalizes excess parameters (seed overhead above host)."""
     from esper.simic.rewards import compute_loss_reward, LossRewardConfig
 
     config = LossRewardConfig.default()
 
-    no_params_reward = compute_loss_reward(
+    # No overhead: total_params = host_params, so no rent
+    no_overhead_reward = compute_loss_reward(
         action=0,
         loss_delta=-0.1,
         val_loss=2.0,
         seed_info=None,
         epoch=10,
         max_epochs=25,
-        total_params=0,
+        total_params=100000,  # Equal to host = no overhead
         host_params=100000,
         config=config,
     )
-    with_params_reward = compute_loss_reward(
+    # With overhead: total_params > host_params, so rent applies
+    with_overhead_reward = compute_loss_reward(
         action=0,
         loss_delta=-0.1,
         val_loss=2.0,
         seed_info=None,
         epoch=10,
         max_epochs=25,
-        total_params=50000,
+        total_params=150000,  # 50K overhead from seeds
         host_params=100000,
         config=config,
     )
 
-    assert with_params_reward < no_params_reward
+    # Overhead should reduce reward (rent penalty)
+    assert with_overhead_reward < no_overhead_reward
 
 
 def test_pbrs_stage_bonus():

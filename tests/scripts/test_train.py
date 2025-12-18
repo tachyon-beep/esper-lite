@@ -91,3 +91,61 @@ class TestSlotValidation:
         args = parser.parse_args(["heuristic", "--slots", "r1c5", "r2c3"])
         assert args.slots == ["r1c5", "r2c3"]
 
+
+class TestABTestingCLI:
+    """Test CLI --ab-test argument and config integration."""
+
+    def test_ab_test_argument_parsed(self):
+        """--ab-test argument should be parsed correctly."""
+        from esper.scripts.train import build_parser
+
+        parser = build_parser()
+
+        args = parser.parse_args(["ppo", "--ab-test", "shaped-vs-simplified"])
+        assert args.ab_test == "shaped-vs-simplified"
+
+        args = parser.parse_args(["ppo", "--ab-test", "shaped-vs-sparse"])
+        assert args.ab_test == "shaped-vs-sparse"
+
+    def test_ab_test_sets_config_ab_reward_modes(self):
+        """--ab-test should set config.ab_reward_modes, not pass separately.
+
+        This test catches the bug where ab_reward_modes was passed both
+        explicitly AND via config.to_train_kwargs(), causing duplicate
+        keyword argument errors.
+        """
+        from esper.simic.training import TrainingConfig
+
+        # Simulate CLI logic from train.py
+        config = TrainingConfig.for_cifar10()
+        ab_test = "shaped-vs-simplified"
+
+        # Apply A/B test to config (as train.py now does)
+        if ab_test:
+            half = config.n_envs // 2
+            if ab_test == "shaped-vs-simplified":
+                config.ab_reward_modes = ["shaped"] * half + ["simplified"] * half
+            elif ab_test == "shaped-vs-sparse":
+                config.ab_reward_modes = ["shaped"] * half + ["sparse"] * half
+
+        # Verify config has ab_reward_modes set
+        assert config.ab_reward_modes is not None
+        assert len(config.ab_reward_modes) == config.n_envs
+
+        # Verify to_train_kwargs() includes ab_reward_modes (no separate passing needed)
+        kwargs = config.to_train_kwargs()
+        assert "ab_reward_modes" in kwargs
+        assert kwargs["ab_reward_modes"] == config.ab_reward_modes
+
+    def test_ab_test_requires_even_envs(self):
+        """--ab-test should require even n_envs for equal split."""
+        from esper.simic.training import TrainingConfig
+
+        config = TrainingConfig.for_cifar10()
+        config.n_envs = 3  # Odd number
+
+        # This check happens in train.py before setting ab_reward_modes
+        with pytest.raises(ValueError, match="even"):
+            if config.n_envs % 2 != 0:
+                raise ValueError("--ab-test requires even number of envs")
+

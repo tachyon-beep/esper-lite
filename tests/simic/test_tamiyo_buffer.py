@@ -4,6 +4,7 @@ import pytest
 import torch
 
 from esper.leyline import DEFAULT_LSTM_HIDDEN_DIM
+from esper.leyline.factored_actions import NUM_BLUEPRINTS
 from esper.simic.agent import TamiyoRolloutBuffer
 
 
@@ -41,7 +42,7 @@ class TestTamiyoRolloutBuffer:
                 reward=1.0,
                 done=(i == 2),
                 slot_mask=torch.ones(3, dtype=torch.bool),
-                blueprint_mask=torch.ones(5, dtype=torch.bool),
+                blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
                 blend_mask=torch.ones(3, dtype=torch.bool),
                 op_mask=torch.ones(4, dtype=torch.bool),
                 hidden_h=torch.zeros(1, 1, 128),
@@ -67,7 +68,7 @@ class TestTamiyoRolloutBuffer:
                 reward=100.0,  # HIGH reward
                 done=(i == 2),
                 slot_mask=torch.ones(3, dtype=torch.bool),
-                blueprint_mask=torch.ones(5, dtype=torch.bool),
+                blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
                 blend_mask=torch.ones(3, dtype=torch.bool),
                 op_mask=torch.ones(4, dtype=torch.bool),
                 hidden_h=torch.zeros(1, 1, 128),
@@ -115,7 +116,7 @@ class TestTamiyoRolloutBuffer:
             reward=1.0,
             done=True,
             slot_mask=torch.ones(3, dtype=torch.bool),
-            blueprint_mask=torch.ones(5, dtype=torch.bool),
+            blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
             blend_mask=torch.ones(3, dtype=torch.bool),
             op_mask=torch.ones(4, dtype=torch.bool),
             hidden_h=torch.zeros(1, 1, 128),
@@ -157,7 +158,7 @@ class TestTamiyoRolloutBuffer:
             reward=1.0,
             done=True,
             slot_mask=torch.ones(3, dtype=torch.bool),
-            blueprint_mask=torch.ones(5, dtype=torch.bool),
+            blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
             blend_mask=torch.ones(3, dtype=torch.bool),
             op_mask=torch.ones(4, dtype=torch.bool),
             hidden_h=hidden_h,
@@ -203,7 +204,7 @@ class TestTamiyoRolloutBuffer:
                 blend_log_prob=-1.0, op_log_prob=-1.0,
                 value=1.0, reward=1.0, done=False,
                 slot_mask=torch.ones(3, dtype=torch.bool),
-                blueprint_mask=torch.ones(5, dtype=torch.bool),
+                blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
                 blend_mask=torch.ones(3, dtype=torch.bool),
                 op_mask=torch.ones(4, dtype=torch.bool),
                 hidden_h=torch.zeros(1, 1, 128),
@@ -220,7 +221,7 @@ class TestTamiyoRolloutBuffer:
                 blend_log_prob=-1.0, op_log_prob=-1.0,
                 value=1.0, reward=1.0, done=False,
                 slot_mask=torch.ones(3, dtype=torch.bool),
-                blueprint_mask=torch.ones(5, dtype=torch.bool),
+                blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
                 blend_mask=torch.ones(3, dtype=torch.bool),
                 op_mask=torch.ones(4, dtype=torch.bool),
                 hidden_h=torch.zeros(1, 1, 128),
@@ -295,7 +296,7 @@ class TestTamiyoRolloutBuffer:
                 reward=1.0,
                 done=(i == 2),
                 slot_mask=torch.ones(5, dtype=torch.bool),  # 5 slots
-                blueprint_mask=torch.ones(5, dtype=torch.bool),
+                blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
                 blend_mask=torch.ones(3, dtype=torch.bool),
                 op_mask=torch.ones(4, dtype=torch.bool),
                 hidden_h=torch.zeros(1, 1, 128),

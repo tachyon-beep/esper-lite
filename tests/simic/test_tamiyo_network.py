@@ -3,6 +3,7 @@
 import pytest
 import torch
 
+from esper.leyline.factored_actions import NUM_BLUEPRINTS
 from esper.tamiyo.policy.action_masks import InvalidStateMachineError
 from esper.simic.agent import FactoredRecurrentActorCritic
 
@@ -26,7 +27,7 @@ class TestFactoredRecurrentActorCritic:
 
         # Check shapes
         assert output["slot_logits"].shape == (2, 1, 3)  # NUM_SLOTS=3
-        assert output["blueprint_logits"].shape == (2, 1, 5)  # NUM_BLUEPRINTS=5
+        assert output["blueprint_logits"].shape == (2, 1, NUM_BLUEPRINTS)
         assert output["blend_logits"].shape == (2, 1, 3)  # NUM_BLENDS=3
         assert output["op_logits"].shape == (2, 1, 4)  # NUM_OPS=4
         assert output["value"].shape == (2, 1)
