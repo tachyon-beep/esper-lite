@@ -264,6 +264,16 @@ class EnvState:
 
 
 @dataclass
+class GPUStats:
+    """Statistics for a single GPU."""
+    device_id: int = 0
+    memory_used_gb: float = 0.0
+    memory_total_gb: float = 0.0
+    utilization: float = 0.0
+    temperature: float = 0.0
+
+
+@dataclass
 class TUIState:
     """Thread-safe state for the TUI display."""
 
@@ -365,6 +375,10 @@ class TUIState:
     epochs_completed: int = 0
     epochs_per_second: float = 0.0
     batches_per_hour: float = 0.0
+    # Multi-GPU support
+    gpu_devices: list[str] = field(default_factory=list)  # e.g., ["cuda:0", "cuda:1"]
+    gpu_stats: dict[int, GPUStats] = field(default_factory=dict)  # device_id -> GPUStats
+    # Legacy single-GPU fields (kept for backward compat)
     gpu_memory_used_gb: float = 0.0
     gpu_memory_total_gb: float = 0.0
     gpu_utilization: float = 0.0
@@ -771,6 +785,18 @@ class TUIOutput:
         self.state.best_accuracy = 0.0
         self.state.best_accuracy_episode = 0
 
+        # Capture GPU devices from training config
+        env_devices = data.get("env_devices", [])
+        policy_device = data.get("policy_device", "")
+        # Combine unique devices (policy + env devices)
+        all_devices = []
+        if policy_device:
+            all_devices.append(policy_device)
+        for dev in env_devices:
+            if dev not in all_devices:
+                all_devices.append(dev)
+        self.state.gpu_devices = all_devices
+
         # Reset multi-env state for a new run
         self.state.env_states.clear()
 
@@ -859,7 +885,9 @@ class TUIOutput:
         # Update per-env accuracy if provided
         val_acc = data.get("val_acc")
         if val_acc is not None:
-            env_state.add_accuracy(val_acc, epoch, episode=self.state.current_episode)
+            # Use episode from event data (preferred) or fall back to global state
+            episode = data.get("episode", self.state.current_episode)
+            env_state.add_accuracy(val_acc, epoch, episode=episode)
 
         env_state.current_epoch = epoch
         env_state.last_update = datetime.now()
@@ -992,49 +1020,102 @@ class TUIOutput:
     # =========================================================================
 
     def _render_scoreboard(self) -> Panel:
-        """Render the 'Best Runs' scoreboard showing historical bests per env."""
-        table = Table(show_header=True, box=None, padding=(0, 1), expand=True)
-        table.add_column("Rank", style="dim", width=4)
-        table.add_column("Env", style="cyan", width=4)
-        table.add_column("Best Acc", justify="right", width=8)
-        table.add_column("@Ep", justify="right", style="dim", width=5)
-        table.add_column("Fossilized Seeds", justify="left", width=24)
+        """Render the 'Best Runs' scoreboard with stats and top performers."""
+        from rich.console import Group
 
-        # Sort all envs by best accuracy
+        # === AGGREGATE STATS ===
+        stats_table = Table(show_header=False, box=None, padding=(0, 1), expand=True)
+        stats_table.add_column("Label", style="dim", width=12)
+        stats_table.add_column("Value", justify="right", width=8)
+        stats_table.add_column("Label2", style="dim", width=12)
+        stats_table.add_column("Value2", justify="right", width=8)
+
+        # Compute aggregates
+        all_envs = list(self.state.env_states.values())
+        total_fossilized = sum(e.fossilized_count for e in all_envs)
+        total_culled = sum(e.culled_count for e in all_envs)
+        best_accs = [e.best_accuracy for e in all_envs if e.best_accuracy > 0]
+        mean_best = sum(best_accs) / len(best_accs) if best_accs else 0.0
+        global_best = max(best_accs) if best_accs else 0.0
+
+        stats_table.add_row(
+            "Global Best:",
+            f"[bold green]{global_best:.1f}%[/]",
+            "Mean Best:",
+            f"{mean_best:.1f}%",
+        )
+        stats_table.add_row(
+            "Fossilized:",
+            f"[green]{total_fossilized}[/]",
+            "Culled:",
+            f"[red]{total_culled}[/]",
+        )
+
+        # === LEADERBOARD ===
+        lb_table = Table(show_header=True, box=None, padding=(0, 1), expand=True)
+        lb_table.add_column("#", style="dim", width=3)
+        lb_table.add_column("@Ep", justify="right", width=4)
+        lb_table.add_column("Best", justify="right", width=6)
+        lb_table.add_column("Cur", justify="right", width=6)
+        lb_table.add_column("Seeds", justify="left", width=20)
+
+        # Sort all envs by best accuracy - show top 10
         sorted_envs = sorted(
-            self.state.env_states.values(),
+            all_envs,
             key=lambda e: e.best_accuracy,
             reverse=True
-        )[:3]  # Top 3
+        )[:10]
 
         medals = ["🥇", "🥈", "🥉"]
 
         if not sorted_envs:
-            table.add_row("-", "-", "-", "-", "-")
+            lb_table.add_row("-", "-", "-", "-", "-")
         else:
             for i, env in enumerate(sorted_envs):
-                rank = medals[i] if i < 3 else str(i + 1)
+                rank = medals[i] if i < 3 else f"{i + 1}"
 
-                # Format fossilized seeds at best accuracy
+                # Current vs best styling
+                delta = env.host_accuracy - env.best_accuracy
+                if delta >= -0.5:
+                    cur_style = "green"
+                elif delta >= -2.0:
+                    cur_style = "yellow"
+                else:
+                    cur_style = "dim"
+
+                # Format fossilized seeds at best accuracy (compact)
                 if env.best_seeds:
-                    seed_parts = []
-                    for seed in env.best_seeds.values():
-                        bp = seed.blueprint_id[:4] if seed.blueprint_id else "?"
-                        seed_parts.append(f"[green]{bp}[/]")
-                    seeds_str = " ".join(seed_parts) if seed_parts else "─"
+                    n_seeds = len(env.best_seeds)
+                    if n_seeds <= 2:
+                        # Show individual blueprints
+                        seed_parts = [
+                            f"[green]{s.blueprint_id[:4] if s.blueprint_id else '?'}[/]"
+                            for s in env.best_seeds.values()
+                        ]
+                        seeds_str = " ".join(seed_parts)
+                    else:
+                        # Just show count for many seeds
+                        seeds_str = f"[green]{n_seeds} seeds[/]"
                 else:
                     seeds_str = "─"
 
-                table.add_row(
+                lb_table.add_row(
                     rank,
-                    str(env.env_id),
-                    f"[bold green]{env.best_accuracy:.1f}%[/]",
                     str(env.best_accuracy_episode),
+                    f"[bold green]{env.best_accuracy:.1f}[/]",
+                    f"[{cur_style}]{env.host_accuracy:.1f}[/]",
                     seeds_str,
                 )
 
+        # Combine stats and leaderboard
+        content = Group(
+            stats_table,
+            Text("─" * 40, style="dim"),
+            lb_table,
+        )
+
         return Panel(
-            table,
+            content,
             title="[bold]BEST RUNS[/bold]",
             border_style="cyan",
         )
@@ -1071,11 +1152,13 @@ class TUIOutput:
         # Column 4: Action Distribution
         actions_table = self._render_actions_table()
 
+        # Use fixed height for uniform sub-panels (7 rows + border)
+        panel_height = 9
         grid.add_row(
-            Panel(health_table, title="Health", border_style="dim"),
-            Panel(losses_table, title="Losses", border_style="dim"),
-            Panel(vitals_table, title="Vitals", border_style="dim"),
-            Panel(actions_table, title="Actions", border_style="dim"),
+            Panel(health_table, title="Health", border_style="dim", height=panel_height),
+            Panel(losses_table, title="Losses", border_style="dim", height=panel_height),
+            Panel(vitals_table, title="Vitals", border_style="dim", height=panel_height),
+            Panel(actions_table, title="Actions", border_style="dim", height=panel_height),
         )
 
         return Panel(
@@ -1102,7 +1185,7 @@ class TUIOutput:
         layout.split_column(
             Layout(name="header", size=3),
             Layout(name="top", ratio=3),
-            Layout(name="brain", size=10),  # Fixed height for 3-column stats (outer border + inner panel + 5 rows)
+            Layout(name="brain", size=11),  # Fixed height: inner panels (9) + outer border (2)
             Layout(name="bottom", ratio=2),
             Layout(name="footer", size=3),  # Panel border (2) + content (1)
         )
@@ -1220,9 +1303,9 @@ class TUIOutput:
 
     def _render_policy_health_table(self) -> Table:
         """Render policy health as a table (for combined panel)."""
-        table = Table(show_header=False, box=None, padding=(0, 0))
-        table.add_column("Metric", style="dim", width=8)
-        table.add_column("Val", justify="right", width=5)
+        table = Table(show_header=False, box=None, padding=(0, 1))
+        table.add_column("Metric", style="dim", justify="left", width=10)
+        table.add_column("Val", justify="right", width=8)
         table.add_column("St", justify="center", width=6)  # "✕ CRIT" is 6 chars
 
         # Entropy
@@ -1245,9 +1328,9 @@ class TUIOutput:
 
     def _render_losses_table(self) -> Table:
         """Render losses as a table (for combined panel)."""
-        table = Table(show_header=False, box=None, padding=(0, 0))
-        table.add_column("Loss", style="dim", width=7)
-        table.add_column("Value", justify="right", width=8)
+        table = Table(show_header=False, box=None, padding=(0, 1))
+        table.add_column("Loss", style="dim", justify="left", width=10)
+        table.add_column("Value", justify="right", width=10)
 
         table.add_row("Policy", f"{self.state.policy_loss:.4f}")
         table.add_row("Value", f"{self.state.value_loss:.4f}")
@@ -1266,9 +1349,9 @@ class TUIOutput:
 
     def _render_vitals_table(self) -> Table:
         """Render training vitals as a table (LR, ratio stats, gradient health)."""
-        table = Table(show_header=False, box=None, padding=(0, 0))
-        table.add_column("Metric", style="dim", width=8)
-        table.add_column("Value", justify="right", width=8)
+        table = Table(show_header=False, box=None, padding=(0, 1))
+        table.add_column("Metric", style="dim", justify="left", width=10)
+        table.add_column("Value", justify="right", width=10)
 
         # Learning rate
         if self.state.learning_rate is not None:
@@ -1548,8 +1631,19 @@ class TUIOutput:
 
         table.add_row("", "")
 
-        # GPU stats
-        if self.state.gpu_memory_total_gb > 0:
+        # GPU stats - show all configured GPUs
+        if self.state.gpu_stats:
+            for dev_id, stats in sorted(self.state.gpu_stats.items()):
+                if stats.memory_total_gb > 0:
+                    gpu_pct = (stats.memory_used_gb / stats.memory_total_gb) * 100
+                    mem_style = "red" if gpu_pct > 90 else "yellow" if gpu_pct > 75 else "green"
+                    label = f"GPU{dev_id}:" if len(self.state.gpu_stats) > 1 else "GPU Mem:"
+                    table.add_row(
+                        label,
+                        Text(f"{stats.memory_used_gb:.1f}/{stats.memory_total_gb:.1f}GB", style=mem_style)
+                    )
+        elif self.state.gpu_memory_total_gb > 0:
+            # Fallback to legacy single-GPU fields
             gpu_pct = (self.state.gpu_memory_used_gb / self.state.gpu_memory_total_gb) * 100
             mem_style = "red" if gpu_pct > 90 else "yellow" if gpu_pct > 75 else "green"
             table.add_row(
@@ -1823,24 +1917,61 @@ class TUIOutput:
 
     def _update_system_stats(self) -> None:
         """Update GPU and CPU statistics."""
-        # GPU stats via PyTorch
+        # GPU stats via PyTorch - collect for all configured devices
         try:
             import torch
             if torch.cuda.is_available():
-                # Memory
-                self.state.gpu_memory_used_gb = torch.cuda.memory_allocated() / (1024**3)
-                self.state.gpu_memory_total_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                # Determine which device IDs to query
+                device_ids: list[int] = []
+                if self.state.gpu_devices:
+                    # Extract device indices from configured devices (e.g., "cuda:0" -> 0)
+                    for dev in self.state.gpu_devices:
+                        if dev.startswith("cuda:"):
+                            try:
+                                device_ids.append(int(dev.split(":")[1]))
+                            except (ValueError, IndexError):
+                                pass
+                        elif dev == "cuda":
+                            device_ids.append(0)
+                if not device_ids:
+                    # Default to device 0 if no devices configured
+                    device_ids = [0]
+                # Remove duplicates while preserving order
+                device_ids = list(dict.fromkeys(device_ids))
+
+                # Collect stats for each GPU
+                self.state.gpu_stats.clear()
+                for dev_id in device_ids:
+                    if dev_id < torch.cuda.device_count():
+                        stats = GPUStats(device_id=dev_id)
+                        stats.memory_used_gb = torch.cuda.memory_allocated(dev_id) / (1024**3)
+                        stats.memory_total_gb = torch.cuda.get_device_properties(dev_id).total_memory / (1024**3)
+                        self.state.gpu_stats[dev_id] = stats
+
+                # Update legacy single-GPU fields (for backward compat, use first GPU)
+                if device_ids:
+                    first_dev = device_ids[0]
+                    if first_dev in self.state.gpu_stats:
+                        first_stats = self.state.gpu_stats[first_dev]
+                        self.state.gpu_memory_used_gb = first_stats.memory_used_gb
+                        self.state.gpu_memory_total_gb = first_stats.memory_total_gb
 
                 # Try to get utilization and temp via pynvml
                 try:
                     import pynvml
                     pynvml.nvmlInit()
-                    handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-                    util = pynvml.nvmlDeviceGetUtilizationRates(handle)
-                    self.state.gpu_utilization = util.gpu
-                    self.state.gpu_temperature = pynvml.nvmlDeviceGetTemperature(
-                        handle, pynvml.NVML_TEMPERATURE_GPU
-                    )
+                    for dev_id in device_ids:
+                        if dev_id in self.state.gpu_stats:
+                            handle = pynvml.nvmlDeviceGetHandleByIndex(dev_id)
+                            util = pynvml.nvmlDeviceGetUtilizationRates(handle)
+                            self.state.gpu_stats[dev_id].utilization = util.gpu
+                            self.state.gpu_stats[dev_id].temperature = pynvml.nvmlDeviceGetTemperature(
+                                handle, pynvml.NVML_TEMPERATURE_GPU
+                            )
+                    # Update legacy fields from first GPU
+                    if device_ids and device_ids[0] in self.state.gpu_stats:
+                        self.state.gpu_utilization = self.state.gpu_stats[device_ids[0]].utilization
+                        self.state.gpu_temperature = self.state.gpu_stats[device_ids[0]].temperature
                 except Exception:
                     pass  # pynvml not available
         except Exception:

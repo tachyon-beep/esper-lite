@@ -1989,6 +1989,7 @@ def train_ppo_vectorized(
                         epoch=epoch,
                         data={
                             "env_id": env_idx,
+                            "episode": episodes_completed + env_idx,
                             **reward_components.to_dict(),
                         },
                         severity="debug",
