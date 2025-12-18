@@ -9,6 +9,9 @@ from esper.karn.overwatch.widgets.env_row import EnvRow
 from esper.karn.overwatch.widgets.flight_board import FlightBoard
 from esper.karn.overwatch.widgets.run_header import RunHeader
 from esper.karn.overwatch.widgets.tamiyo_strip import TamiyoStrip
+from esper.karn.overwatch.widgets.context_panel import ContextPanel
+from esper.karn.overwatch.widgets.tamiyo_detail import TamiyoDetailPanel
+from esper.karn.overwatch.widgets.detail_panel import DetailPanel
 
 __all__ = [
     "HelpOverlay",
@@ -17,4 +20,7 @@ __all__ = [
     "FlightBoard",
     "RunHeader",
     "TamiyoStrip",
+    "ContextPanel",
+    "TamiyoDetailPanel",
+    "DetailPanel",
 ]

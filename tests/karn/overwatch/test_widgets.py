@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 
 class TestHelpOverlay:
     """Tests for HelpOverlay widget."""
@@ -289,3 +287,25 @@ class TestStage3WidgetExports:
         from esper.karn.overwatch.widgets import TamiyoStrip
 
         assert TamiyoStrip is not None
+
+
+class TestStage4WidgetExports:
+    """Tests for Stage 4 widget exports."""
+
+    def test_context_panel_importable(self) -> None:
+        """ContextPanel is importable from package."""
+        from esper.karn.overwatch.widgets import ContextPanel
+
+        assert ContextPanel is not None
+
+    def test_tamiyo_detail_panel_importable(self) -> None:
+        """TamiyoDetailPanel is importable from package."""
+        from esper.karn.overwatch.widgets import TamiyoDetailPanel
+
+        assert TamiyoDetailPanel is not None
+
+    def test_detail_panel_importable(self) -> None:
+        """DetailPanel is importable from package."""
+        from esper.karn.overwatch.widgets import DetailPanel
+
+        assert DetailPanel is not None
