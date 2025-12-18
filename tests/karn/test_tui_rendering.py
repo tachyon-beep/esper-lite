@@ -101,7 +101,8 @@ class TestEnvOverviewTable:
         output = capture.get()
 
         # Verify slot columns exist in header (using dynamic slot IDs)
-        assert "Step" in output
+        assert "Best" in output  # Best accuracy column
+        assert "Rent" in output  # Compute rent column
         assert "r0c0" in output
         assert "r0c1" in output
         assert "r0c2" in output

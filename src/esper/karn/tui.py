@@ -307,6 +307,9 @@ class TUIState:
     fossilized_count: int = 0
     culled_count: int = 0
 
+    # Host network params (from TRAINING_STARTED)
+    host_params: int = 0
+
     # Advantage stats
     advantage_mean: float = 0.0
     advantage_std: float = 0.0
@@ -719,6 +722,7 @@ class TUIOutput:
         self.state.current_epoch = 0
         self.state.n_envs = data.get("n_envs", 1)
         self.state.max_epochs = data.get("max_epochs", self.state.max_epochs)
+        self.state.host_params = data.get("host_params", 0)
         self.state.reward_hacking_detected = False
         self.state.ppo_data_received = False  # Reset for new run
         self.state.current_reward = 0.0
@@ -849,6 +853,11 @@ class TUIOutput:
 
         seed = env_state.seeds[slot_id]
 
+        # Capture alpha from ALL seed events (it's included in every slot telemetry)
+        # Critical for tracking blend progress since alpha ramps within BLENDING stage
+        if "alpha" in data:
+            seed.alpha = data["alpha"]
+
         if event_type == "SEED_GERMINATED":
             seed.stage = "GERMINATED"
             seed.blueprint_id = data.get("blueprint_id")
@@ -857,7 +866,6 @@ class TUIOutput:
             env_state.active_seed_count += 1
         elif event_type == "SEED_STAGE_CHANGED":
             seed.stage = data.get("to", seed.stage)
-            seed.alpha = data.get("alpha", seed.alpha)
             seed.grad_ratio = data.get("grad_ratio", seed.grad_ratio)
         elif event_type == "SEED_FOSSILIZED":
             seed.stage = "FOSSILIZED"
@@ -932,7 +940,7 @@ class TUIOutput:
         table.add_column("Env", style="cyan", width=4)
         table.add_column("Best Acc", justify="right", width=8)
         table.add_column("Current", justify="right", width=8)
-        table.add_column("@Step", justify="right", style="dim", width=5)
+        table.add_column("@Ep", justify="right", style="dim", width=4)  # Episode number
 
         # Sort all envs by best accuracy
         sorted_envs = sorted(
@@ -957,7 +965,7 @@ class TUIOutput:
                     str(env.env_id),
                     f"[bold green]{env.best_accuracy:.1f}%[/]",
                     f"[{current_style}]{env.host_accuracy:.1f}%[/]",
-                    str(env.best_accuracy_epoch),  # Inner step when best was achieved
+                    str(env.best_accuracy_episode),  # Episode when best was achieved
                 )
 
         return Panel(
@@ -1026,7 +1034,7 @@ class TUIOutput:
             Layout(name="top", ratio=3),
             Layout(name="brain", size=10),  # Fixed height for 3-column stats (outer border + inner panel + 5 rows)
             Layout(name="bottom", ratio=2),
-            Layout(name="footer", size=2),
+            Layout(name="footer", size=3),  # Panel border (2) + content (1)
         )
 
         # Top: Flight Board (Env Overview) vs Scoreboard
@@ -1040,13 +1048,13 @@ class TUIOutput:
         # Middle: Tamiyo Brain (The Point)
         layout["brain"].update(self._render_tamiyo_brain())
 
-        # Bottom: Event Log vs Performance
+        # Bottom: Event Log vs Esper Status
         layout["bottom"].split_row(
             Layout(name="event_log", ratio=3),
-            Layout(name="perf_stats", ratio=1),
+            Layout(name="esper_status", ratio=1),
         )
         layout["event_log"].update(self._render_event_log(max_lines=20))
-        layout["perf_stats"].update(self._render_performance())
+        layout["esper_status"].update(self._render_esper_status())
 
         # Header/Footer
         layout["header"].update(self._render_header())
@@ -1458,11 +1466,45 @@ class TUIOutput:
         text.append("Stop Training", style="dim")
         return Panel(text, border_style="dim")
 
-    def _render_performance(self) -> Panel:
-        """Render performance statistics panel."""
+    def _render_esper_status(self) -> Panel:
+        """Render Esper system status panel (seeds + performance)."""
         table = Table(show_header=False, box=None, padding=(0, 1))
         table.add_column("Metric", style="dim")
         table.add_column("Value", justify="right")
+
+        # Seed stage counts (aggregate across all envs)
+        stage_counts: dict[str, int] = {}
+        for env in self.state.env_states.values():
+            for seed in env.seeds.values():
+                if seed.stage != "DORMANT":
+                    stage_counts[seed.stage] = stage_counts.get(seed.stage, 0) + 1
+
+        if stage_counts:
+            # Stage colors matching the env overview
+            stage_styles = {
+                "TRAINING": "yellow",
+                "BLENDING": "cyan",
+                "PROBATIONARY": "blue",
+                "FOSSILIZED": "magenta",
+                "CULLED": "red",
+                "GERMINATED": "green",
+            }
+            for stage, count in sorted(stage_counts.items()):
+                short = self._STAGE_SHORT.get(stage, stage[:4])
+                style = stage_styles.get(stage, "dim")
+                table.add_row(f"{short}:", Text(str(count), style=style))
+            table.add_row("", "")
+
+        # Host network params
+        if self.state.host_params > 0:
+            if self.state.host_params >= 1_000_000:
+                params_str = f"{self.state.host_params / 1_000_000:.1f}M"
+            elif self.state.host_params >= 1_000:
+                params_str = f"{self.state.host_params / 1_000:.0f}K"
+            else:
+                params_str = str(self.state.host_params)
+            table.add_row("Host Params:", params_str)
+            table.add_row("", "")
 
         # Throughput
         table.add_row("Epochs/sec:", f"{self.state.epochs_per_second:.2f}")
@@ -1490,18 +1532,6 @@ class TUIOutput:
         else:
             table.add_row("GPU Mem:", "-")
 
-        if self.state.gpu_utilization > 0:
-            util_style = "green" if self.state.gpu_utilization > 80 else "yellow" if self.state.gpu_utilization > 50 else "dim"
-            table.add_row("GPU Util:", Text(f"{self.state.gpu_utilization:.0f}%", style=util_style))
-
-        if self.state.gpu_temperature > 0:
-            temp_style = "red" if self.state.gpu_temperature > 85 else "yellow" if self.state.gpu_temperature > 75 else "green"
-            table.add_row("GPU Temp:", Text(f"{self.state.gpu_temperature:.0f}°C", style=temp_style))
-
-        # CPU/RAM
-        if self.state.cpu_percent > 0:
-            table.add_row("CPU:", f"{self.state.cpu_percent:.0f}%")
-
         if self.state.ram_total_gb > 0:
             ram_pct = (self.state.ram_used_gb / self.state.ram_total_gb) * 100
             ram_style = "red" if ram_pct > 90 else "yellow" if ram_pct > 75 else "dim"
@@ -1510,7 +1540,7 @@ class TUIOutput:
                 Text(f"{self.state.ram_used_gb:.1f}/{self.state.ram_total_gb:.0f}GB", style=ram_style)
             )
 
-        return Panel(table, title="[bold]PERFORMANCE[/bold]", border_style="cyan")
+        return Panel(table, title="[bold]ESPER STATUS[/bold]", border_style="cyan")
 
     # Stage color mapping for slot display
     _STAGE_STYLES: dict[str, str] = {
@@ -1539,9 +1569,10 @@ class TUIOutput:
     }
 
     def _format_slot_cell(self, env: EnvState, slot_name: str) -> str:
-        """Format a slot cell showing stage and blueprint.
+        """Format a slot cell showing stage, blueprint, and blend progress.
 
         Returns styled string like "[cyan]Train:conv[/cyan]" or "[dim]─[/dim]".
+        For BLENDING seeds, shows alpha progress: "[cyan]Blend:conv 0.3[/cyan]"
         """
         seed = env.seeds.get(slot_name)
         if not seed or seed.stage == "DORMANT":
@@ -1555,6 +1586,10 @@ class TUIOutput:
         if len(blueprint) > 4:
             blueprint = blueprint[:4]
 
+        # Show alpha progress for BLENDING seeds
+        if seed.stage == "BLENDING" and seed.alpha > 0:
+            return f"[{style}]{stage_short}:{blueprint} {seed.alpha:.1f}[/{style}]"
+
         return f"[{style}]{stage_short}:{blueprint}[/{style}]"
 
     def _render_env_overview(self) -> Panel:
@@ -1565,19 +1600,21 @@ class TUIOutput:
         """
         table = Table(show_header=True, box=None, padding=(0, 1), expand=True)
 
-        # Columns: ID, Step, Accuracy, Sparklines, Reward, Components, Slots, Status
+        # Columns: ID, Accuracy, Best, Reward, Sparklines, Components, Slots, Status
         table.add_column("Env", style="cyan", justify="center", width=3)
-        table.add_column("Step", justify="right", width=7)
         table.add_column("Acc", justify="right", width=6)
-        table.add_column("▁▃▅", justify="left", width=8)  # Sparkline
-        table.add_column("Reward (Avg)", justify="right", width=15)
-        table.add_column("▁▃▅", justify="left", width=8)  # Sparkline
+        table.add_column("Best", justify="right", width=10)  # Best accuracy with episode
+        table.add_column("Reward", justify="right", width=12)  # Current (avg)
+        table.add_column("Acc▁▃▅", justify="left", width=8)  # Accuracy sparkline
+        table.add_column("Rwd▁▃▅", justify="left", width=8)  # Reward sparkline
         table.add_column("ΔAcc", justify="right", width=6)
-        table.add_column("Params (H+S)", justify="right", width=12)
+        table.add_column("Seed Δ", justify="right", width=7)
+        table.add_column("Rent", justify="right", width=5)  # Compute rent
         # Dynamic slot columns based on slot_config
         for slot_id in self.state.slot_config.slot_ids:
             table.add_column(slot_id, justify="center", width=10)
-        table.add_column("Last / Status", justify="center", width=9)
+        table.add_column("Last", justify="center", width=6)
+        table.add_column("Status", justify="center", width=8)
 
         # Status color mapping
         status_styles = {
@@ -1606,8 +1643,6 @@ class TUIOutput:
         for env in sorted_envs:
             env_id = env.env_id
 
-            step_str = f"{env.current_epoch}/{self.state.max_epochs}"
-
             # Accuracy with delta indicator
             acc_str = f"{env.host_accuracy:.1f}%"
             if env.best_accuracy > 0:
@@ -1615,6 +1650,12 @@ class TUIOutput:
                     acc_str = f"[green]{acc_str}[/green]"
                 elif env.epochs_since_improvement > 5:
                     acc_str = f"[yellow]{acc_str}[/yellow]"
+
+            # Best accuracy with episode marker
+            if env.best_accuracy > 0:
+                best_str = f"{env.best_accuracy:.1f}% [dim]@{env.best_accuracy_episode}[/dim]"
+            else:
+                best_str = "─"
 
             # Reward with rolling average
             reward_val = env.current_reward
@@ -1630,53 +1671,73 @@ class TUIOutput:
             else:
                 delta_str = "─"
 
-            # Params display (Host + Seed)
-            params = getattr(env, "host_params", 0)
-            growth_ratio = env.reward_components.get("growth_ratio")
-            if isinstance(growth_ratio, (int, float)) and growth_ratio > 1.0 and env.total_seed_params > 0 and params == 0:
-                 # Estimate host if missing
-                 params = int(env.total_seed_params / (growth_ratio - 1))
-            
-            def fmt_p(n: int) -> str:
-                if n == 0: return "0"
-                if n < 1000: return str(n)
-                if n < 10000: return f"{n/1000:.1f}k"
-                return f"{n/1000:.0f}k"
-
-            if params > 0:
-                params_str = f"{fmt_p(params)}+{fmt_p(env.total_seed_params)}"
+            # Seed contribution display (replacing unreliable host+seed params)
+            seed_contrib = env.reward_components.get("seed_contribution")
+            bounded_attr = env.reward_components.get("bounded_attribution")
+            if isinstance(seed_contrib, (int, float)) and seed_contrib != 0:
+                style = "green" if seed_contrib > 0 else "red"
+                contrib_str = f"[{style}]{seed_contrib:+.1f}%[/{style}]"
+            elif isinstance(bounded_attr, (int, float)) and bounded_attr != 0:
+                style = "green" if bounded_attr > 0 else "red"
+                contrib_str = f"[{style}]{bounded_attr:+.2f}[/{style}]"
             else:
-                params_str = f"+{fmt_p(env.total_seed_params)}"
+                contrib_str = "─"
 
-            # Status with styling
+            # Compute rent (cost of active seeds)
+            compute_rent = env.reward_components.get("compute_rent")
+            if isinstance(compute_rent, (int, float)) and compute_rent != 0:
+                rent_str = f"[red]{compute_rent:.2f}[/red]"
+            else:
+                rent_str = "─"
+
+            # Status with styling and epochs since improvement
             status_style = status_styles.get(env.status, "white")
-            status_str = f"[{status_style}]{env.status.upper()}[/{status_style}]"
+            # Short status names for compact display
+            status_short = {
+                "excellent": "EXCL",
+                "healthy": "OK",
+                "initializing": "INIT",
+                "stalled": "STAL",
+                "degraded": "DEGR",
+            }.get(env.status, env.status[:4].upper())
+            status_str = f"[{status_style}]{status_short}[/{status_style}]"
+            # Show epochs since improvement if stagnating (>5 epochs)
+            if env.epochs_since_improvement > 5:
+                stale_style = "red" if env.epochs_since_improvement > 15 else "yellow"
+                status_str += f"[{stale_style}]({env.epochs_since_improvement})[/{stale_style}]"
             last_action = env.action_history[-1] if env.action_history else "—"
-            status_cell = f"{last_action}\n{status_str}"
+            # Shorten action names for compact display
+            action_short = {
+                "WAIT": "WAIT",
+                "GERMINATE": "GERM",
+                "FOSSILIZE": "FOSS",
+                "CULL": "CULL",
+            }.get(last_action, last_action[:4] if last_action else "—")
 
             # Build row dynamically with all slots
             row_values = [
                 str(env_id),
-                step_str,
                 acc_str,
-                env.accuracy_sparkline,
+                best_str,
                 reward_str,
+                env.accuracy_sparkline,
                 env.reward_sparkline,
                 delta_str,
-                params_str,
+                contrib_str,
+                rent_str,
             ]
             # Add dynamic slot cells
             for slot_id in self.state.slot_config.slot_ids:
                 row_values.append(self._format_slot_cell(env, slot_id))
-            # Add status
-            row_values.append(status_cell)
+            # Add last action and status as separate columns
+            row_values.append(action_short)
+            row_values.append(status_str)
 
             table.add_row(*row_values)
 
         # Add aggregate row if multiple envs
         if len(self.state.env_states) > 1:
             best_acc, best_env, best_epoch = self.state.aggregate_best_accuracy
-            step = max((e.current_epoch for e in self.state.env_states.values()), default=0)
             deltas = [
                 float(e.reward_components.get("base_acc_delta"))
                 for e in self.state.env_states.values()
@@ -1690,55 +1751,45 @@ class TUIOutput:
             mean_delta = sum(deltas) / len(deltas) if deltas else 0.0
             mean_rent = sum(rents) / len(rents) if rents else 0.0
 
-            # Build separator row dynamically
+            # Build separator row dynamically (matches new column order)
             separator_row = [
-                "─" * 2,
-                "─" * 5,
-                "─" * 5,
-                "─" * 6,
-                "─" * 6,
-                "─" * 6,
-                "─" * 5,
-                "─" * 5,
+                "─" * 2,  # Env
+                "─" * 5,  # Acc
+                "─" * 8,  # Best
+                "─" * 10, # Reward
+                "─" * 6,  # Acc sparkline
+                "─" * 6,  # Rwd sparkline
+                "─" * 5,  # ΔAcc
+                "─" * 5,  # Seed Δ
+                "─" * 4,  # Rent
             ]
             # Add separator for each slot
             for _ in self.state.slot_config.slot_ids:
                 separator_row.append("─" * 8)
-            # Add separator for status column
-            separator_row.append("─" * 7)
+            # Add separator for Last and Status columns
+            separator_row.append("─" * 4)  # Last
+            separator_row.append("─" * 6)  # Status
             table.add_row(*separator_row)
-
-            # Count slots by stage across all envs
-            stage_counts: dict[str, int] = {}
-            for env in self.state.env_states.values():
-                for seed in env.seeds.values():
-                    if seed.stage != "DORMANT":
-                        stage_counts[seed.stage] = stage_counts.get(seed.stage, 0) + 1
-            stage_summary = " ".join(
-                f"{self._STAGE_SHORT.get(s, s[:3])}:{c}"
-                for s, c in sorted(stage_counts.items())
-            ) or "─"
 
             # Build aggregate row dynamically
             agg_row = [
                 "[bold]Σ[/bold]",
-                f"[dim]{step}/{self.state.max_epochs}[/dim]",
                 f"[bold]{self.state.aggregate_mean_accuracy:.1f}%[/bold]",
-                "",
+                f"[dim]{best_acc:.1f}%@e{best_env}[/dim]" if best_acc > 0 else "─",
                 f"[bold]{self.state.aggregate_mean_reward:+.2f}[/bold]",
-                "",
+                "",  # Acc sparkline
+                "",  # Rwd sparkline
                 f"[dim]{mean_delta:+.2f}[/dim]" if deltas else "─",
-                f"[dim]{mean_rent:+.2f}[/dim]" if rents else "─",
+                "─",  # Seed Δ aggregate not meaningful
+                f"[dim]{mean_rent:.2f}[/dim]" if rents else "─",
             ]
-            # Fill slot columns with stage summary in first slot, empty in others
+            # Fill slot columns with empty (stage counts moved to Tamiyo Brain)
             num_slots = self.state.slot_config.num_slots
-            for i in range(num_slots):
-                if i == 0:
-                    agg_row.append(f"[dim]{stage_summary}[/dim]")
-                else:
-                    agg_row.append("")
-            # Add best accuracy in status column
-            agg_row.append(f"[dim]{best_acc:.1f}%[/dim]")
+            for _ in range(num_slots):
+                agg_row.append("")
+            # Add empty Last and aggregate accuracy in Status column
+            agg_row.append("")  # Last
+            agg_row.append(f"[dim]{best_acc:.1f}%[/dim]")  # Status
 
             table.add_row(*agg_row)
 

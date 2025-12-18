@@ -508,6 +508,8 @@ def train_ppo_vectorized(
     temp_device = "cpu"  # Use CPU for temp model to avoid GPU allocation
     temp_model = create_model(task=task_spec, device=temp_device, slots=slots)
     slot_config = SlotConfig.from_specs(temp_model.host.injection_specs())
+    # Calculate host_params while we have the model (constant across all envs)
+    host_params_baseline = sum(p.numel() for p in temp_model.host.parameters() if p.requires_grad)
     del temp_model  # Free memory immediately
 
     # Compute effective seed limit
@@ -643,6 +645,7 @@ def train_ppo_vectorized(
             "param_budget": param_budget,
             "param_penalty_weight": param_penalty_weight,
             "sparse_reward_scale": sparse_reward_scale,
+            "host_params": host_params_baseline,
         },
     ))
 

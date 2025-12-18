@@ -353,6 +353,9 @@ def run_heuristic_episode(
         )
         slot.isolate_gradients = True
 
+    # Calculate host_params before emitting (needed for Karn TUI)
+    host_params = sum(p.numel() for p in model.get_host_parameters() if p.requires_grad)
+
     # Emit TRAINING_STARTED to activate Karn (P1 fix)
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.TRAINING_STARTED,
@@ -362,6 +365,7 @@ def run_heuristic_episode(
             "max_epochs": max_epochs,
             "task": task_spec.name,
             "mode": "heuristic",
+            "host_params": host_params,
         },
     ))
 
@@ -376,8 +380,6 @@ def run_heuristic_episode(
     # Track ops by LifecycleOp enum value
     action_counts = {op.name: 0 for op in LifecycleOp}
     episode_rewards = []
-
-    host_params = sum(p.numel() for p in model.get_host_parameters() if p.requires_grad)
 
     for epoch in range(1, max_epochs + 1):
         for slot_id in enabled_slots:
