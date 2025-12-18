@@ -2635,6 +2635,7 @@ def train_ppo_vectorized(
             'batch': batch_idx + 1,
             'episodes': episodes_completed,
             'env_accuracies': list(env_final_accs),
+            'env_rewards': list(env_total_rewards),
             'avg_accuracy': avg_acc,
             'rolling_avg_accuracy': rolling_avg_acc,
             'avg_reward': avg_reward,
@@ -2686,6 +2687,40 @@ def train_ppo_vectorized(
     # Add analytics to final history entry
     if history:
         history[-1]["blueprint_analytics"] = analytics.snapshot()
+
+    # A/B Test Summary
+    if ab_reward_modes is not None and not quiet_analytics:
+        print("\n" + "=" * 60)
+        print("A/B TEST RESULTS")
+        print("=" * 60)
+
+        # Group episodes by reward mode
+        from collections import defaultdict
+        ab_groups = defaultdict(list)
+
+        # Iterate through batches and environments to collect per-episode data
+        for batch_data in history:
+            env_accs = batch_data.get("env_accuracies", [])
+            env_rews = batch_data.get("env_rewards", [])
+
+            for env_idx in range(len(env_accs)):
+                # Determine which reward mode this environment used
+                mode = env_reward_configs[env_idx].reward_mode.value
+                ab_groups[mode].append({
+                    "episode_reward": env_rews[env_idx] if env_idx < len(env_rews) else 0,
+                    "final_accuracy": env_accs[env_idx],
+                })
+
+        for mode, episodes in sorted(ab_groups.items()):
+            rewards = [ep["episode_reward"] for ep in episodes]
+            accuracies = [ep["final_accuracy"] for ep in episodes]
+            avg_reward = sum(rewards) / len(rewards) if rewards else 0
+            avg_acc = sum(accuracies) / len(accuracies) if accuracies else 0
+            print(f"\n{mode.upper()} ({len(episodes)} episodes):")
+            print(f"  Avg Episode Reward: {avg_reward:.2f}")
+            print(f"  Avg Final Accuracy: {avg_acc:.2f}%")
+            print(f"  Reward Range: [{min(rewards):.2f}, {max(rewards):.2f}]")
+        print("=" * 60)
 
     return agent, history
 
