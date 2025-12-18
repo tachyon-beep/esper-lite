@@ -210,6 +210,14 @@ class Scoreboard(Static):
 
     MEDALS = ["🥇", "🥈", "🥉"]
 
+    # A/B test cohort styling (matches EnvOverview)
+    # Shows colored pip next to rank to maintain visual continuity
+    _AB_STYLES: dict[str, tuple[str, str]] = {
+        "shaped": ("●", "bright_blue"),      # Blue pip for shaped reward
+        "simplified": ("●", "bright_yellow"), # Yellow pip for simplified reward
+        "sparse": ("●", "bright_cyan"),       # Cyan pip for sparse reward
+    }
+
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._envs: dict[int, EnvState] = {}
@@ -319,9 +327,17 @@ class Scoreboard(Static):
             else:
                 seeds_str = "─"
 
+            # A/B cohort indicator (colored pip before rank)
+            # Maintains visual continuity with EnvOverview color coding
+            if env.reward_mode and env.reward_mode in self._AB_STYLES:
+                pip, color = self._AB_STYLES[env.reward_mode]
+                rank_str = f"[{color}]{pip}[/{color}]{rank}"
+            else:
+                rank_str = rank
+
             # Add row with stable key for updates
             self._table.add_row(
-                rank,
+                rank_str,
                 str(env.best_accuracy_episode),
                 f"[bold green]{env.best_accuracy:.1f}[/]",
                 f"[{cur_style}]{env.host_accuracy:.1f}[/]",

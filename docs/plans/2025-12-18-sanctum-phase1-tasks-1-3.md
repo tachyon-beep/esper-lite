@@ -368,6 +368,11 @@ class EnvState:
     last_update: datetime | None = None
     epochs_since_improvement: int = 0
 
+    # A/B test cohort (for color coding)
+    # Captured from REWARD_COMPUTED event's ab_group field
+    # Values: "shaped", "simplified", "sparse", or None if not A/B testing
+    reward_mode: str | None = None
+
     @property
     def current_reward(self) -> float:
         """Get most recent reward."""
@@ -1348,6 +1353,14 @@ class EnvOverview(Static):
         "EMBARGOED": "Embg",
     }
 
+    # A/B test cohort styling (for --ab-test shaped-vs-simplified)
+    # Shows colored pip next to env ID to distinguish cohorts
+    _AB_STYLES: dict[str, tuple[str, str]] = {
+        "shaped": ("●", "bright_blue"),      # Blue pip for shaped reward
+        "simplified": ("●", "bright_yellow"), # Yellow pip for simplified reward
+        "sparse": ("●", "bright_cyan"),       # Cyan pip for sparse reward
+    }
+
     def __init__(self, slot_ids: list[str] | None = None, **kwargs) -> None:
         super().__init__(**kwargs)
         self.slot_ids = slot_ids or []
@@ -1489,8 +1502,13 @@ class EnvOverview(Static):
         status_short: dict[str, str],
     ) -> list[str]:
         """Build a single env row."""
-        # Env ID
-        env_id_str = str(env.env_id)
+        # Env ID with A/B cohort indicator (colored pip)
+        # Shows: "●0" for shaped, "●8" for simplified, etc.
+        if env.reward_mode and env.reward_mode in self._AB_STYLES:
+            pip, color = self._AB_STYLES[env.reward_mode]
+            env_id_str = f"[{color}]{pip}[/{color}]{env.env_id}"
+        else:
+            env_id_str = str(env.env_id)
 
         # FIX: Accuracy with color (green if at best, yellow if stagnant >5 epochs)
         acc_str = f"{env.host_accuracy:.1f}%"

@@ -322,6 +322,29 @@ class SanctumApp(App):
 .stale-warning {
     color: $warning;
 }
+
+/* A/B test cohort styling (--ab-test shaped-vs-simplified)
+   NOTE: Primary color coding uses inline Rich markup (●) for the pip.
+   These CSS classes are available for future use (e.g., row backgrounds).
+
+   Color scheme:
+   - shaped: blue (default reward function)
+   - simplified: yellow/amber (simplified reward function)
+   - sparse: cyan (sparse reward function)
+*/
+.ab-shaped {
+    /* Default - no special styling needed */
+}
+
+.ab-simplified {
+    /* Yellow tint for simplified reward cohort */
+    background: $warning 10%;
+}
+
+.ab-sparse {
+    /* Cyan tint for sparse reward cohort */
+    background: $accent 10%;
+}
 ```
 
 ### Step 4: Tests
@@ -805,6 +828,12 @@ class SanctumAggregator:
         env.action_history.append(action_name)
         env.action_counts[action_name] = env.action_counts.get(action_name, 0) + 1
         env.total_actions += 1
+
+        # Capture A/B test cohort (for color coding in TUI)
+        # ab_group is emitted by vectorized training when --ab-test is used
+        ab_group = data.get("ab_group")
+        if ab_group:
+            env.reward_mode = ab_group
 
         # Store reward component breakdown
         env.reward_components = RewardComponents(
