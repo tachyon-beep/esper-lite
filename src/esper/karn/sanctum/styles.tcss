@@ -1,0 +1,103 @@
+/* Sanctum Diagnostic TUI Styles
+ * Matches Rich TUI layout with Textual styling.
+ * FIX: TamiyoBrain as full-width row, Event Log added
+ */
+
+#sanctum-main {
+    height: 1fr;
+    padding: 0 1;
+}
+
+/* Top section: Env Overview + Scoreboard */
+#top-section {
+    height: 16;
+}
+
+/* Environment Overview - main table (65% width) */
+#env-overview {
+    width: 65%;
+    border: solid $primary;
+    margin-right: 1;
+}
+
+#env-overview:focus {
+    border: double $accent;
+}
+
+/* Scoreboard - Best Runs (35% width) */
+#scoreboard {
+    width: 35%;
+    border: solid cyan;
+}
+
+#scoreboard:focus {
+    border: double $accent;
+}
+
+/* Tamiyo Brain - Full-width dedicated row (FIX) */
+.brain-panel {
+    height: 11;
+    border: solid magenta;
+    margin-top: 1;
+    margin-bottom: 1;
+}
+
+#tamiyo-brain:focus {
+    border: double $accent;
+}
+
+/* Bottom section: Event Log + (Rewards + Status) */
+#bottom-section {
+    height: 12;
+}
+
+/* Event Log (FIX: Added missing panel) - 65% width */
+#event-log {
+    width: 65%;
+    border: solid yellow;
+    margin-right: 1;
+}
+
+#event-log:focus {
+    border: double $accent;
+}
+
+/* Right bottom container - 35% width */
+#right-bottom {
+    width: 35%;
+}
+
+/* Reward Components */
+#reward-components {
+    height: 1fr;
+    border: solid cyan;
+    margin-bottom: 1;
+}
+
+#reward-components:focus {
+    border: double $accent;
+}
+
+/* Esper Status */
+#esper-status {
+    height: 1fr;
+    border: solid cyan;
+}
+
+#esper-status:focus {
+    border: double $accent;
+}
+
+/* Common panel styling */
+.panel {
+    padding: 1;
+}
+
+.focusable:focus-within {
+    border: double $accent;
+}
+
+/* Staleness indicator (FIX: Data staleness display) */
+.stale {
+    opacity: 0.7;
+}

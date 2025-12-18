@@ -7,6 +7,7 @@ with detailed diagnostic panels.
 Usage:
     python -m esper.scripts.train ppo --sanctum
 """
+from esper.karn.sanctum.app import SanctumApp
 from esper.karn.sanctum.schema import (
     SanctumSnapshot,
     EnvState,
@@ -20,6 +21,7 @@ from esper.karn.sanctum.schema import (
 )
 
 __all__ = [
+    "SanctumApp",
     "SanctumSnapshot",
     "EnvState",
     "SeedState",
