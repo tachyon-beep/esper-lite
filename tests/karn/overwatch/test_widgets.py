@@ -273,3 +273,19 @@ class TestWidgetExports:
         assert SlotChip is not None
         assert EnvRow is not None
         assert FlightBoard is not None
+
+
+class TestStage3WidgetExports:
+    """Tests for Stage 3 widget exports."""
+
+    def test_run_header_importable(self) -> None:
+        """RunHeader is importable from package."""
+        from esper.karn.overwatch.widgets import RunHeader
+
+        assert RunHeader is not None
+
+    def test_tamiyo_strip_importable(self) -> None:
+        """TamiyoStrip is importable from package."""
+        from esper.karn.overwatch.widgets import TamiyoStrip
+
+        assert TamiyoStrip is not None
