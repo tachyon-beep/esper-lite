@@ -941,13 +941,18 @@ def train_ppo_vectorized(
     @torch.compiler.disable
     def _collect_gradient_telemetry_for_batch(
         model: "HostWithSeeds",
-        slots: list[str],
+        slots_with_active_seeds: list[str],
         env_dev: str,
     ) -> dict[str, dict[str, Any]] | None:
         """Collect gradient telemetry for all active slots.
 
         Isolated from torch.compile to prevent graph breaks from
         data-dependent slot iteration and conditional logic.
+
+        Args:
+            model: The HostWithSeeds model
+            slots_with_active_seeds: Pre-filtered list of slots with active seeds
+            env_dev: Device string
         """
         from esper.leyline import SeedStage
         from esper.simic.telemetry.gradient_collector import (
@@ -956,9 +961,8 @@ def train_ppo_vectorized(
         )
 
         slots_needing_grad_telemetry = []
-        for slot_id in slots:
-            if not model.has_active_seed_in_slot(slot_id):
-                continue
+        for slot_id in slots_with_active_seeds:
+            # Already filtered to active slots via cache
             seed_state = model.seed_slots[slot_id].state
             if seed_state and seed_state.stage in (SeedStage.TRAINING, SeedStage.BLENDING):
                 slots_needing_grad_telemetry.append(slot_id)
@@ -1018,6 +1022,13 @@ def train_ppo_vectorized(
         model = env_state.model
         env_dev = env_state.env_device
 
+        # Cache slot activity to avoid repeated dict lookups in hot path
+        active_slots = {
+            slot_id: model.has_active_seed_in_slot(slot_id)
+            for slot_id in slots
+        }
+        slots_with_active_seeds = [slot_id for slot_id, active in active_slots.items() if active]
+
         # Use CUDA stream for async execution
         stream_ctx = torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
 
@@ -1035,9 +1046,8 @@ def train_ppo_vectorized(
 
             # Auto-advance GERMINATED → TRAINING before forward so STE training starts immediately.
             # Do this per-slot (multi-seed support).
-            for slot_id in slots:
-                if not model.has_active_seed_in_slot(slot_id):
-                    continue
+            for slot_id in slots_with_active_seeds:
+                # Already filtered to active slots via cache
                 slot_state = model.seed_slots[slot_id].state
                 if slot_state and slot_state.stage == SeedStage.GERMINATED:
                     gate_result = model.seed_slots[slot_id].advance_stage(SeedStage.TRAINING)
@@ -1049,9 +1059,8 @@ def train_ppo_vectorized(
             # Ensure per-slot seed optimizers exist for any slot with a live seed.
             # We keep optimizers per-slot to avoid dynamic param-group surgery.
             slots_to_step: list[str] = []
-            for slot_id in slots:
-                if not model.has_active_seed_in_slot(slot_id):
-                    continue
+            for slot_id in slots_with_active_seeds:
+                # Already filtered to active slots via cache
                 seed_state = model.seed_slots[slot_id].state
                 if seed_state is None:
                     continue
@@ -1092,7 +1101,7 @@ def train_ppo_vectorized(
             # Collect gradient telemetry (isolated from torch.compile)
             grad_stats_by_slot = None
             if use_telemetry:
-                grad_stats_by_slot = _collect_gradient_telemetry_for_batch(model, slots, env_dev)
+                grad_stats_by_slot = _collect_gradient_telemetry_for_batch(model, slots_with_active_seeds, env_dev)
 
             if use_amp and env_state.scaler is not None and env_dev.startswith("cuda"):
                 # H12: AMP GradScaler stream safety documentation
