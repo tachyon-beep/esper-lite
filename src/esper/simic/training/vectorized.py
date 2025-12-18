@@ -2716,10 +2716,12 @@ def train_ppo_vectorized(
             accuracies = [ep["final_accuracy"] for ep in episodes]
             avg_reward = sum(rewards) / len(rewards) if rewards else 0
             avg_acc = sum(accuracies) / len(accuracies) if accuracies else 0
+            min_rwd = min(rewards) if rewards else 0
+            max_rwd = max(rewards) if rewards else 0
             print(f"\n{mode.upper()} ({len(episodes)} episodes):")
             print(f"  Avg Episode Reward: {avg_reward:.2f}")
             print(f"  Avg Final Accuracy: {avg_acc:.2f}%")
-            print(f"  Reward Range: [{min(rewards):.2f}, {max(rewards):.2f}]")
+            print(f"  Reward Range: [{min_rwd:.2f}, {max_rwd:.2f}]")
         print("=" * 60)
 
     return agent, history
