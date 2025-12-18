@@ -59,6 +59,7 @@ class TestOverwatchIntegration:
     async def test_app_launches_with_replay(self, sample_replay_path: Path) -> None:
         """App launches and loads replay file."""
         from esper.karn.overwatch import OverwatchApp
+        from esper.karn.overwatch.widgets.run_header import RunHeader
 
         app = OverwatchApp(replay_path=sample_replay_path)
 
@@ -68,8 +69,8 @@ class TestOverwatchIntegration:
             assert app._snapshot.run_id == "test-run-001"
 
             # Header should show snapshot info
-            header = app.query_one("#header")
-            assert "test-run-001" in str(header.render())
+            header = app.query_one(RunHeader)
+            assert "test-run-001" in header.render_line1()
 
     async def test_app_help_toggle(self, sample_replay_path: Path) -> None:
         """? key toggles help overlay."""
@@ -108,13 +109,14 @@ class TestAppWithoutReplay:
     async def test_app_launches_without_data(self) -> None:
         """App launches even without replay file."""
         from esper.karn.overwatch import OverwatchApp
+        from esper.karn.overwatch.widgets.run_header import RunHeader
 
         app = OverwatchApp()
 
         async with app.run_test() as pilot:
             # Should show placeholder content
-            header = app.query_one("#header")
-            assert "Waiting" in str(header.render())
+            header = app.query_one(RunHeader)
+            assert "Waiting" in header.render_line1()
 
 
 class TestFlightBoardNavigation:

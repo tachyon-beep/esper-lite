@@ -15,6 +15,8 @@ from textual.widgets import Footer, Header, Static
 
 from esper.karn.overwatch.widgets.help import HelpOverlay
 from esper.karn.overwatch.widgets.flight_board import FlightBoard
+from esper.karn.overwatch.widgets.run_header import RunHeader
+from esper.karn.overwatch.widgets.tamiyo_strip import TamiyoStrip
 
 if TYPE_CHECKING:
     from esper.karn.overwatch.schema import TuiSnapshot
@@ -69,17 +71,12 @@ class OverwatchApp(App):
         """Compose the application layout."""
         yield Header()
 
-        # Header region (run identity, connection status)
-        yield Static(
-            self._render_header_content(),
-            id="header",
-        )
+        # Run header (run identity, connection status)
+        # NOTE: Keep id="header" for backwards compatibility with existing integration tests
+        yield RunHeader(id="header")
 
         # Tamiyo Strip (PPO vitals, action summary)
-        yield Static(
-            self._render_tamiyo_content(),
-            id="tamiyo-strip",
-        )
+        yield TamiyoStrip(id="tamiyo-strip")
 
         # Main area with flight board and detail panel
         with Container(id="main-area"):
@@ -101,25 +98,6 @@ class OverwatchApp(App):
         yield HelpOverlay(id="help-overlay", classes="hidden")
 
         yield Footer()
-
-    def _render_header_content(self) -> str:
-        """Render header placeholder content."""
-        if self._snapshot:
-            ts = self._snapshot.captured_at
-            run_id = self._snapshot.run_id or "unknown"
-            task = self._snapshot.task_name or "unknown"
-            ep = self._snapshot.episode
-            return f"[HEADER] Run: {run_id} | Task: {task} | Episode: {ep} | Snapshot: {ts}"
-        return "[HEADER] Waiting for data..."
-
-    def _render_tamiyo_content(self) -> str:
-        """Render Tamiyo Strip placeholder content."""
-        if self._snapshot and self._snapshot.tamiyo:
-            kl = self._snapshot.tamiyo.kl_divergence
-            ent = self._snapshot.tamiyo.entropy
-            ev = self._snapshot.tamiyo.explained_variance
-            return f"[TAMIYO] KL: {kl:.3f} | Entropy: {ent:.2f} | EV: {ev:.2f}"
-        return "[TAMIYO STRIP] Waiting for policy data..."
 
     def _render_detail_panel_content(self) -> str:
         """Render Detail Panel placeholder content."""
@@ -156,23 +134,25 @@ class OverwatchApp(App):
 
         if self._snapshot:
             self.notify(f"Loaded snapshot from {self._snapshot.captured_at}")
-            # Update flight board with snapshot
-            self._update_flight_board()
-            # Refresh placeholders
-            self._refresh_placeholders()
+            self._update_all_widgets()
         else:
             self.notify("No snapshots found in replay file", severity="warning")
 
-    def _update_flight_board(self) -> None:
-        """Update the flight board with current snapshot."""
-        if self._snapshot:
-            flight_board = self.query_one(FlightBoard)
-            flight_board.update_snapshot(self._snapshot)
+    def _update_all_widgets(self) -> None:
+        """Update all widgets with current snapshot."""
+        if self._snapshot is None:
+            return
 
-    def _refresh_placeholders(self) -> None:
-        """Refresh placeholder widgets with current snapshot."""
-        self.query_one("#header", Static).update(self._render_header_content())
-        self.query_one("#tamiyo-strip", Static).update(self._render_tamiyo_content())
+        # Update run header
+        self.query_one(RunHeader).update_snapshot(self._snapshot)
+
+        # Update tamiyo strip
+        self.query_one(TamiyoStrip).update_snapshot(self._snapshot)
+
+        # Update flight board
+        self.query_one(FlightBoard).update_snapshot(self._snapshot)
+
+        # Update placeholders
         self.query_one("#detail-panel", Static).update(self._render_detail_panel_content())
         self.query_one("#event-feed", Static).update(self._render_event_feed_content())
 
