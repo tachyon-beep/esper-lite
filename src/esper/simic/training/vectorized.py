@@ -877,6 +877,9 @@ def train_ppo_vectorized(
         # Use new torch.amp.GradScaler API (torch.cuda.amp.GradScaler deprecated in PyTorch 2.4+)
         env_scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled) if env_device_obj.type == "cuda" else None
 
+        # Pre-compute autocast decision for hot path (avoids per-batch device type checks)
+        autocast_enabled = amp_enabled and env_device_obj.type == "cuda"
+
         # Determine random guess loss for lobotomy detection
         random_guess_loss = None
         if task_spec.task_type == "classification" and task_spec.num_classes:
@@ -928,6 +931,7 @@ def train_ppo_vectorized(
             episode_rewards=[],
             action_enum=ActionEnum,
             telemetry_cb=telemetry_cb,
+            autocast_enabled=autocast_enabled,
         )
         # Pre-allocate accumulators to avoid per-epoch allocation churn
         env_state.init_accumulators(slots)
@@ -1025,16 +1029,17 @@ def train_ppo_vectorized(
             for slot_id in slots_to_step:
                 env_state.seed_optimizers[slot_id].zero_grad(set_to_none=True)
 
+            # Use pre-computed autocast decision from env_state
             autocast_ctx = (
                 torch_amp.autocast(device_type="cuda", dtype=torch.float16)  # type: ignore[call-arg]
-                if use_amp and env_dev.startswith("cuda")
+                if env_state.autocast_enabled
                 else nullcontext()
             )
             with autocast_ctx:
                 outputs = model(inputs)
                 loss, correct_tensor, total = loss_and_correct(outputs, targets, criterion)
 
-            if use_amp and env_state.scaler is not None and env_dev.startswith("cuda"):
+            if env_state.autocast_enabled:
                 env_state.scaler.scale(loss).backward()
             else:
                 loss.backward()
