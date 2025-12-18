@@ -142,6 +142,7 @@ class EnvState:
     best_accuracy: float = 0.0
     best_accuracy_epoch: int = 0
     best_accuracy_episode: int = 0
+    best_seeds: dict[str, "SeedState"] = field(default_factory=dict)  # Seed snapshot at best
 
     # Per-env action tracking
     action_history: deque[str] = field(default_factory=lambda: deque(maxlen=10))
@@ -196,6 +197,20 @@ class EnvState:
             self.best_accuracy_epoch = epoch
             self.best_accuracy_episode = episode
             self.epochs_since_improvement = 0
+            # Snapshot current seeds when new best is achieved
+            self.best_seeds = {
+                slot_id: SeedState(
+                    slot_id=seed.slot_id,
+                    stage=seed.stage,
+                    blueprint_id=seed.blueprint_id,
+                    alpha=seed.alpha,
+                    accuracy_delta=seed.accuracy_delta,
+                    seed_params=seed.seed_params,
+                    grad_ratio=seed.grad_ratio,
+                )
+                for slot_id, seed in self.seeds.items()
+                if seed.stage != "DORMANT"
+            }
         else:
             self.epochs_since_improvement += 1
 
@@ -281,6 +296,22 @@ class TUIState:
     value_loss: float = 0.0
     entropy_loss: float = 0.0
     grad_norm: float = 0.0
+
+    # Ratio statistics (early warning for policy collapse)
+    ratio_max: float = 1.0
+    ratio_min: float = 1.0
+    ratio_std: float = 0.0
+
+    # Learning rate and entropy coefficient
+    learning_rate: float | None = None
+    entropy_coef: float = 0.0
+
+    # Gradient health
+    dead_layers: int = 0
+    exploding_layers: int = 0
+    nan_grad_count: int = 0
+    layer_gradient_health: float = 1.0
+    entropy_collapsed: bool = False
 
     # Action distribution
     action_counts: dict[str, int] = field(default_factory=lambda: {
@@ -751,7 +782,8 @@ class TUIOutput:
     def _handle_epoch_completed(self, event: TelemetryEventLike) -> None:
         """Handle EPOCH_COMPLETED event."""
         data = event.data or {}
-        self.state.current_epoch = event.epoch or data.get("epoch", 0)
+        # Use inner_epoch from data (the 1-75 step progress), NOT event.epoch (episode number)
+        self.state.current_epoch = data.get("inner_epoch") or data.get("epoch", 0)
         self.state.host_accuracy = data.get("val_accuracy", 0.0)
         self.state.host_loss = data.get("val_loss", 0.0)
 
@@ -786,6 +818,24 @@ class TUIOutput:
         self.state.advantage_std = data.get("advantage_std", 0.0)
         self.state.advantage_min = data.get("advantage_min", 0.0)
         self.state.advantage_max = data.get("advantage_max", 0.0)
+
+        # Ratio statistics (early warning for policy collapse)
+        self.state.ratio_max = data.get("ratio_max", 1.0)
+        self.state.ratio_min = data.get("ratio_min", 1.0)
+        self.state.ratio_std = data.get("ratio_std", 0.0)
+
+        # Learning rate and entropy coefficient
+        self.state.learning_rate = data.get("lr")
+        self.state.entropy_coef = data.get("entropy_coef", 0.0)
+
+        # Gradient health
+        self.state.dead_layers = data.get("dead_layers", 0)
+        self.state.exploding_layers = data.get("exploding_layers", 0)
+        self.state.nan_grad_count = data.get("nan_grad_count", 0)
+        layer_health = data.get("layer_gradient_health")
+        if layer_health is not None:
+            self.state.layer_gradient_health = layer_health
+        self.state.entropy_collapsed = data.get("entropy_collapsed", False)
 
     def _handle_reward_computed(self, event: TelemetryEventLike) -> None:
         """Handle REWARD_COMPUTED event with per-env routing."""
@@ -940,7 +990,8 @@ class TUIOutput:
         table.add_column("Env", style="cyan", width=4)
         table.add_column("Best Acc", justify="right", width=8)
         table.add_column("Current", justify="right", width=8)
-        table.add_column("@Ep", justify="right", style="dim", width=4)  # Episode number
+        table.add_column("@Ep", justify="right", style="dim", width=4)
+        table.add_column("Seeds@Best", justify="left", width=20)  # Seed snapshot
 
         # Sort all envs by best accuracy
         sorted_envs = sorted(
@@ -952,7 +1003,7 @@ class TUIOutput:
         medals = ["🥇", "🥈", "🥉"]
 
         if not sorted_envs:
-            table.add_row("-", "-", "-", "-", "-")
+            table.add_row("-", "-", "-", "-", "-", "-")
         else:
             for i, env in enumerate(sorted_envs):
                 rank = medals[i] if i < 3 else str(i + 1)
@@ -960,12 +1011,27 @@ class TUIOutput:
                 # Highlight if current is close to best
                 current_style = "green" if env.host_accuracy >= env.best_accuracy - 0.5 else "dim"
 
+                # Format seeds at best accuracy
+                if env.best_seeds:
+                    seed_parts = []
+                    for seed in env.best_seeds.values():
+                        bp = seed.blueprint_id[:4] if seed.blueprint_id else "?"
+                        stage_short = self._STAGE_SHORT.get(seed.stage, seed.stage[:3])
+                        if seed.stage == "BLENDING" and seed.alpha > 0:
+                            seed_parts.append(f"{bp}:{stage_short}({seed.alpha:.1f})")
+                        else:
+                            seed_parts.append(f"{bp}:{stage_short}")
+                    seeds_str = " ".join(seed_parts) if seed_parts else "─"
+                else:
+                    seeds_str = "─"
+
                 table.add_row(
                     rank,
                     str(env.env_id),
                     f"[bold green]{env.best_accuracy:.1f}%[/]",
                     f"[{current_style}]{env.host_accuracy:.1f}%[/]",
-                    str(env.best_accuracy_episode),  # Episode when best was achieved
+                    str(env.best_accuracy_episode),
+                    seeds_str,
                 )
 
         return Panel(
@@ -987,8 +1053,9 @@ class TUIOutput:
                 border_style="magenta dim",
             )
 
-        # Create a grid layout for the brain panel
+        # Create a grid layout for the brain panel (4 columns)
         grid = Table.grid(expand=True)
+        grid.add_column(ratio=1)
         grid.add_column(ratio=1)
         grid.add_column(ratio=1)
         grid.add_column(ratio=1)
@@ -999,12 +1066,16 @@ class TUIOutput:
         # Column 2: Losses & Gradients
         losses_table = self._render_losses_table()
 
-        # Column 3: Action Distribution
+        # Column 3: Vitals (LR, Ratio, Gradient Health)
+        vitals_table = self._render_vitals_table()
+
+        # Column 4: Action Distribution
         actions_table = self._render_actions_table()
 
         grid.add_row(
             Panel(health_table, title="Health", border_style="dim"),
             Panel(losses_table, title="Losses", border_style="dim"),
+            Panel(vitals_table, title="Vitals", border_style="dim"),
             Panel(actions_table, title="Actions", border_style="dim"),
         )
 
@@ -1121,115 +1192,6 @@ class TUIOutput:
         """Render the rewards panel."""
         return Panel(self._render_rewards_table(), title="[bold]REWARDS[/bold]", border_style="cyan")
 
-    def _render_env_rewards(self) -> Panel:
-        """Render a per-environment reward components summary (all envs at once)."""
-        if not self.state.env_states:
-            return Panel(
-                Text("Waiting for reward telemetry…", style="dim"),
-                title="[bold]ENV REWARDS[/bold]",
-                border_style="cyan",
-            )
-
-        def _fmt_component(value: float | None) -> Text:
-            if not isinstance(value, (int, float)):
-                return Text("─", style="dim")
-            v = float(value)
-            if v > 0:
-                style = "green"
-            elif v < 0:
-                style = "red"
-            else:
-                style = "dim"
-            return Text(f"{v:+.2f}", style=style)
-
-        def _fmt_total(value: float) -> Text:
-            if value > 0:
-                style = "bold green"
-            elif value < 0:
-                style = "bold red"
-            else:
-                style = "dim"
-            return Text(f"{value:+.2f}", style=style)
-
-        def _fmt_warning(value: float | None) -> Text:
-            if not isinstance(value, (int, float)):
-                return Text("─", style="dim")
-            v = float(value)
-            if v < 0:
-                style = "yellow"
-            elif v > 0:
-                style = "green"
-            else:
-                style = "dim"
-            return Text(f"{v:+.2f}", style=style)
-
-        table = Table(show_header=True, box=None, padding=(0, 0), expand=True)
-        table.add_column("Env", style="cyan", justify="center", width=3)
-        table.add_column("Total", justify="right", width=7)
-        table.add_column("ΔAcc", justify="right", width=6)
-        table.add_column("Attr", justify="right", width=6)
-        table.add_column("Rent", justify="right", width=6)
-        table.add_column("Pen", justify="right", width=6)
-        table.add_column("Other", justify="right", width=6)
-        table.add_column("Warn", justify="right", width=6)
-
-        for env_id in sorted(self.state.env_states.keys()):
-            env = self.state.env_states[env_id]
-            components = env.reward_components
-
-            base = components.get("base_acc_delta")
-            attr = components.get("bounded_attribution")
-            rent = components.get("compute_rent")
-            penalty = components.get("ratio_penalty")
-
-            other_total = 0.0
-            other_any = False
-            other_sources = (
-                "stage_bonus",
-                "pbrs_bonus",
-                "action_shaping",
-                "terminal_bonus",
-                "fossilize_terminal_bonus",
-            )
-            for key in other_sources:
-                v = components.get(key)
-                if isinstance(v, (int, float)):
-                    other_total += float(v)
-                    other_any = True
-
-            warn_total = 0.0
-            warn_any = False
-            warn_sources = ("blending_warning", "probation_warning")
-            for key in warn_sources:
-                v = components.get(key)
-                if isinstance(v, (int, float)):
-                    warn_total += float(v)
-                    warn_any = True
-
-            table.add_row(
-                str(env_id),
-                _fmt_total(env.current_reward),
-                _fmt_component(base),
-                _fmt_component(attr),
-                _fmt_component(rent),
-                _fmt_component(penalty),
-                _fmt_component(other_total if other_any else None),
-                _fmt_warning(warn_total if warn_any else None),
-            )
-
-
-
-        # Stage name abbreviations for compact multi-env display
-        _STAGE_ABBREV: dict[str, str] = {
-            "GERMINATED": "Germ",
-            "TRAINING": "Train",
-            "BLENDING": "Blend",
-            "PROBATIONARY": "Prob",
-            "FOSSILIZED": "Fossil",
-            "RESETTING": "Reset",
-            "EMBARGOED": "Embg",
-        }
-
     def _render_actions_table(self) -> Table:
         """Render action distribution as a table (for combined panel)."""
         table = Table(show_header=False, box=None, padding=(0, 0))
@@ -1300,6 +1262,72 @@ class TUIOutput:
             HealthStatus.CRITICAL: "red bold",
         }[grad_status]
         table.add_row("GradNorm", Text(f"{self.state.grad_norm:.2f}", style=grad_style))
+
+        return table
+
+    def _render_vitals_table(self) -> Table:
+        """Render training vitals as a table (LR, ratio stats, gradient health)."""
+        table = Table(show_header=False, box=None, padding=(0, 0))
+        table.add_column("Metric", style="dim", width=8)
+        table.add_column("Value", justify="right", width=8)
+
+        # Learning rate
+        if self.state.learning_rate is not None:
+            lr_str = f"{self.state.learning_rate:.2e}"
+        else:
+            lr_str = "─"
+        table.add_row("LR", lr_str)
+
+        # Ratio statistics (PPO policy ratio - should stay near 1.0)
+        # Max ratio > 2.0 or min ratio < 0.5 indicates policy instability
+        ratio_max = self.state.ratio_max
+        ratio_min = self.state.ratio_min
+        ratio_std = self.state.ratio_std
+
+        # Color code ratio_max: green if <1.5, yellow if <2.0, red if >=2.0
+        if ratio_max >= 2.0:
+            max_style = "red bold"
+        elif ratio_max >= 1.5:
+            max_style = "yellow"
+        else:
+            max_style = "green"
+        table.add_row("Ratio↑", Text(f"{ratio_max:.2f}", style=max_style))
+
+        # Color code ratio_min: green if >0.5, yellow if >0.3, red if <=0.3
+        if ratio_min <= 0.3:
+            min_style = "red bold"
+        elif ratio_min <= 0.5:
+            min_style = "yellow"
+        else:
+            min_style = "green"
+        table.add_row("Ratio↓", Text(f"{ratio_min:.2f}", style=min_style))
+
+        # Ratio std - higher means more variance in updates
+        if ratio_std >= 0.5:
+            std_style = "yellow"
+        else:
+            std_style = ""
+        table.add_row("Ratio σ", Text(f"{ratio_std:.3f}", style=std_style))
+
+        # Gradient health: dead/exploding layers
+        dead = self.state.dead_layers
+        exploding = self.state.exploding_layers
+        health = self.state.layer_gradient_health
+
+        # Show gradient issues with color
+        if dead > 0:
+            table.add_row("Dead", Text(f"{dead} layers", style="yellow bold"))
+        if exploding > 0:
+            table.add_row("Explode", Text(f"{exploding} layers", style="red bold"))
+
+        # Overall gradient health (1.0 = perfect)
+        if health < 0.5:
+            health_style = "red bold"
+        elif health < 0.8:
+            health_style = "yellow"
+        else:
+            health_style = "green"
+        table.add_row("GradHP", Text(f"{health:.0%}", style=health_style))
 
         return table
 
@@ -1625,19 +1653,10 @@ class TUIOutput:
             "degraded": "red",
         }
 
-        # Severity map for sorting (lower is more critical)
-        severity_map = {
-            "degraded": 0,
-            "stalled": 1,
-            "initializing": 2,
-            "healthy": 3,
-            "excellent": 4,
-        }
-
-        # Sort envs by severity (ascending score = more critical first) then by ID
+        # Sort envs by ordinal env_id (stable order, no jumping)
         sorted_envs = sorted(
             self.state.env_states.values(),
-            key=lambda e: (severity_map.get(e.status, 5), e.env_id)
+            key=lambda e: e.env_id
         )
 
         for env in sorted_envs:
