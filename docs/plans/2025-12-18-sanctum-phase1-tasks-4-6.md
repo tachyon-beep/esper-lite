@@ -55,12 +55,14 @@ def test_scoreboard_creation():
 
 def test_scoreboard_has_stats_header():
     """Should have stats header with global best, mean, counts."""
+    from esper.karn.sanctum.schema import SanctumSnapshot
     board = Scoreboard()
     envs = {
         0: EnvState(env_id=0, best_accuracy=80.0, fossilized_count=2, culled_count=1),
         1: EnvState(env_id=1, best_accuracy=90.0, fossilized_count=1, culled_count=0),
     }
-    board.update_envs(envs)
+    snapshot = SanctumSnapshot(envs=envs)
+    board.update_snapshot(snapshot)
     # Stats should be computed
     assert board._global_best == 90.0
     assert board._mean_best == 85.0
@@ -70,13 +72,15 @@ def test_scoreboard_has_stats_header():
 
 def test_scoreboard_sorts_by_best_accuracy():
     """Scoreboard should sort envs by best accuracy descending."""
+    from esper.karn.sanctum.schema import SanctumSnapshot
     board = Scoreboard()
     envs = {
         0: EnvState(env_id=0, best_accuracy=75.0),
         1: EnvState(env_id=1, best_accuracy=85.0),
         2: EnvState(env_id=2, best_accuracy=80.0),
     }
-    board.update_envs(envs)
+    snapshot = SanctumSnapshot(envs=envs)
+    board.update_snapshot(snapshot)
     assert board._sorted_envs[0].env_id == 1  # Best: 85.0
     assert board._sorted_envs[1].env_id == 2  # Second: 80.0
     assert board._sorted_envs[2].env_id == 0  # Third: 75.0
@@ -84,9 +88,11 @@ def test_scoreboard_sorts_by_best_accuracy():
 
 def test_scoreboard_shows_medals():
     """Top 3 should get medal indicators."""
+    from esper.karn.sanctum.schema import SanctumSnapshot
     board = Scoreboard()
     envs = {i: EnvState(env_id=i, best_accuracy=90 - i) for i in range(5)}
-    board.update_envs(envs)
+    snapshot = SanctumSnapshot(envs=envs)
+    board.update_snapshot(snapshot)
     assert board._get_rank_display(0) == "🥇"
     assert board._get_rank_display(1) == "🥈"
     assert board._get_rank_display(2) == "🥉"
@@ -95,14 +101,17 @@ def test_scoreboard_shows_medals():
 
 def test_scoreboard_limits_to_top_10():
     """Should only show top 10 envs."""
+    from esper.karn.sanctum.schema import SanctumSnapshot
     board = Scoreboard()
     envs = {i: EnvState(env_id=i, best_accuracy=100 - i) for i in range(20)}
-    board.update_envs(envs)
+    snapshot = SanctumSnapshot(envs=envs)
+    board.update_snapshot(snapshot)
     assert len(board._sorted_envs) == 10
 
 
 def test_scoreboard_current_accuracy_styling():
     """Current accuracy should be styled based on delta from best."""
+    from esper.karn.sanctum.schema import SanctumSnapshot
     board = Scoreboard()
     # Delta >= -0.5 → green
     env1 = EnvState(env_id=0, best_accuracy=80.0, host_accuracy=79.6)
@@ -111,23 +120,27 @@ def test_scoreboard_current_accuracy_styling():
     # Delta < -2.0 → dim
     env3 = EnvState(env_id=2, best_accuracy=80.0, host_accuracy=77.0)
 
-    board.update_envs({0: env1, 1: env2, 2: env3})
+    snapshot = SanctumSnapshot(envs={0: env1, 1: env2, 2: env3})
+    board.update_snapshot(snapshot)
     # Styling will be applied in _refresh_display
 
 
 def test_scoreboard_shows_best_seeds():
     """Should show seeds at best accuracy (blueprint names or count)."""
+    from esper.karn.sanctum.schema import SanctumSnapshot
     board = Scoreboard()
     env = EnvState(env_id=0, best_accuracy=85.0)
     env.best_seeds["r0c0"] = SeedState(slot_id="r0c0", blueprint_id="conv_light")
     env.best_seeds["r0c1"] = SeedState(slot_id="r0c1", blueprint_id="mlp_medium")
-    board.update_envs({0: env})
+    snapshot = SanctumSnapshot(envs={0: env})
+    board.update_snapshot(snapshot)
     # With ≤2 seeds, should show blueprint names
     # With >2 seeds, should show count
 
 
 def test_scoreboard_shows_best_seeds_count_when_many():
     """Should show count when >2 seeds at best."""
+    from esper.karn.sanctum.schema import SanctumSnapshot
     board = Scoreboard()
     env = EnvState(env_id=0, best_accuracy=85.0)
     for i in range(5):
@@ -135,7 +148,8 @@ def test_scoreboard_shows_best_seeds_count_when_many():
             slot_id=f"r{i}c0",
             blueprint_id=f"seed{i}"
         )
-    board.update_envs({0: env})
+    snapshot = SanctumSnapshot(envs={0: env})
+    board.update_snapshot(snapshot)
     # Should display "5 seeds" instead of listing all
 ```
 
@@ -223,19 +237,24 @@ class Scoreboard(Static):
         self._table = table
         yield table
 
-    def update_envs(self, envs: dict[int, EnvState]) -> None:
-        """Update with new environment states."""
-        self._envs = envs
+    def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
+        """Update with new snapshot data.
+
+        Args:
+            snapshot: The current telemetry snapshot.
+        """
+        from esper.karn.sanctum.schema import SanctumSnapshot
+        self._envs = snapshot.envs
 
         # Sort by best accuracy descending, take top 10
         self._sorted_envs = sorted(
-            envs.values(),
+            self._envs.values(),
             key=lambda e: e.best_accuracy,
             reverse=True
         )[:10]
 
         # Compute aggregate stats for header
-        all_envs = list(envs.values())
+        all_envs = list(self._envs.values())
         self._total_fossilized = sum(e.fossilized_count for e in all_envs)
         self._total_culled = sum(e.culled_count for e in all_envs)
         best_accs = [e.best_accuracy for e in all_envs if e.best_accuracy > 0]
@@ -392,7 +411,8 @@ def test_tamiyo_brain_creation():
 
 
 def test_tamiyo_brain_update():
-    """TamiyoBrain should accept state updates."""
+    """TamiyoBrain should accept snapshot updates."""
+    from esper.karn.sanctum.schema import SanctumSnapshot
     brain = TamiyoBrain()
     state = TamiyoState(
         entropy=1.2,
@@ -401,7 +421,8 @@ def test_tamiyo_brain_update():
         explained_variance=0.85,
         ppo_data_received=True,
     )
-    brain.update_state(state)
+    snapshot = SanctumSnapshot(tamiyo=state)
+    brain.update_snapshot(snapshot)
     assert brain._state.entropy == 1.2
 
 
@@ -631,9 +652,14 @@ class TamiyoBrain(Static):
                 yield Static("Actions", classes="brain-section-title")
                 yield Static("", id="actions-content")
 
-    def update_state(self, state: TamiyoState) -> None:
-        """Update with new Tamiyo state."""
-        self._state = state
+    def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
+        """Update with new snapshot data.
+
+        Args:
+            snapshot: The current telemetry snapshot.
+        """
+        from esper.karn.sanctum.schema import SanctumSnapshot
+        self._state = snapshot.tamiyo
         self._refresh_display()
 
     # =========================================================================
@@ -1276,9 +1302,21 @@ class RewardComponents(Static):
         self._table = table
         yield table
 
-    def update_rewards(self, rewards: RewardData) -> None:
-        """Update with new reward data."""
-        self._rewards = rewards
+    def update_snapshot(self, snapshot: "SanctumSnapshot", env_id: int | None = None) -> None:
+        """Update with new snapshot data.
+
+        Args:
+            snapshot: The current telemetry snapshot.
+            env_id: Specific env_id to display rewards for (defaults to focused_env_id).
+        """
+        from esper.karn.sanctum.schema import SanctumSnapshot
+
+        target_env_id = env_id if env_id is not None else snapshot.focused_env_id
+        if target_env_id in snapshot.envs:
+            env = snapshot.envs[target_env_id]
+            self._rewards = env.reward_components
+        else:
+            self._rewards = None
         self._refresh_display()
 
     def _refresh_display(self) -> None:
@@ -1441,17 +1479,17 @@ class EsperStatus(Static):
         self._table = table
         yield table
 
-    def update_status(
-        self,
-        envs: dict[int, EnvState],
-        vitals: SystemVitals,
-        start_time: datetime | None = None,
-    ) -> None:
-        """Update with new status data."""
-        self._envs = envs
-        self._vitals = vitals
-        if start_time is not None:
-            self._start_time = start_time
+    def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
+        """Update with new snapshot data.
+
+        Args:
+            snapshot: The current telemetry snapshot.
+        """
+        from esper.karn.sanctum.schema import SanctumSnapshot
+        self._envs = snapshot.envs
+        self._vitals = snapshot.vitals
+        if snapshot.start_time is not None:
+            self._start_time = snapshot.start_time
         self._refresh_display()
 
     def _refresh_display(self) -> None:
@@ -1567,6 +1605,148 @@ class EsperStatus(Static):
             )
 ```
 
+### Part C: EventLog Widget
+
+Create `src/esper/karn/sanctum/widgets/event_log.py`:
+
+```python
+"""Event Log Widget - Real-time telemetry event display.
+
+Shows recent telemetry events with color-coded event types.
+Ported from Rich TUI _render_event_log concepts.
+
+Event Type Colors:
+- REWARD_COMPUTED: dim (most frequent)
+- SEED_*: green/cyan (lifecycle events)
+- PPO_*: magenta (policy updates)
+- BATCH_*: blue (episode boundaries)
+- CRIT/ERROR: red (critical events)
+"""
+from __future__ import annotations
+
+from textual.app import ComposeResult
+from textual.widgets import Static, RichLog
+
+from esper.karn.sanctum.schema import SanctumSnapshot, EventLogEntry
+
+
+class EventLog(Static):
+    """Real-time event log showing recent telemetry events."""
+
+    DEFAULT_CSS = """
+    EventLog {
+        height: 100%;
+        padding: 1;
+    }
+
+    EventLog RichLog {
+        height: 1fr;
+        border: solid $primary-darken-2;
+    }
+    """
+
+    # Event type colors
+    _EVENT_STYLES: dict[str, str] = {
+        "REWARD_COMPUTED": "dim",
+        "SEED_GERMINATED": "green",
+        "SEED_STAGE_CHANGED": "cyan",
+        "SEED_FOSSILIZED": "magenta",
+        "SEED_CULLED": "red",
+        "PPO_UPDATE_COMPLETED": "blue",
+        "BATCH_COMPLETED": "yellow",
+        "TRAINING_STARTED": "bold green",
+        "CRIT": "bold red",
+        "ERROR": "bold red",
+    }
+
+    def __init__(self, max_events: int = 50, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._max_events = max_events
+        self._log: RichLog | None = None
+        self._last_event_count = 0
+
+    def compose(self) -> ComposeResult:
+        """Create the event log."""
+        log = RichLog(id="event-log-content", highlight=True, markup=True)
+        self._log = log
+        yield log
+
+    def update_snapshot(self, snapshot: SanctumSnapshot) -> None:
+        """Update with new snapshot data.
+
+        Only writes NEW events (not already displayed) to avoid duplication.
+
+        Args:
+            snapshot: The current telemetry snapshot.
+        """
+        if self._log is None:
+            return
+
+        events = snapshot.event_log
+        new_event_count = len(events)
+
+        # Only write new events
+        if new_event_count > self._last_event_count:
+            new_events = events[self._last_event_count:]
+            for entry in new_events:
+                self._write_event(entry)
+            self._last_event_count = new_event_count
+
+    def _write_event(self, entry: EventLogEntry) -> None:
+        """Write a single event to the log.
+
+        Args:
+            entry: The event log entry to display.
+        """
+        if self._log is None:
+            return
+
+        style = self._EVENT_STYLES.get(entry.event_type, "white")
+        env_str = f"E{entry.env_id}" if entry.env_id is not None else "──"
+
+        # Format: [HH:MM:SS] [ENV] EVENT_TYPE: message
+        self._log.write(
+            f"[dim]{entry.timestamp}[/] "
+            f"[cyan]{env_str:>3}[/] "
+            f"[{style}]{entry.message}[/]"
+        )
+
+    def clear(self) -> None:
+        """Clear the event log."""
+        if self._log is not None:
+            self._log.clear()
+            self._last_event_count = 0
+```
+
+Add EventLog tests to `tests/karn/sanctum/test_remaining_widgets.py`:
+
+```python
+# ============================================================================
+# EventLog Tests
+# ============================================================================
+
+def test_event_log_creation():
+    """EventLog widget should create without errors."""
+    from esper.karn.sanctum.widgets.event_log import EventLog
+    widget = EventLog()
+    assert widget is not None
+
+
+def test_event_log_update_snapshot():
+    """EventLog should accept snapshot updates."""
+    from esper.karn.sanctum.widgets.event_log import EventLog
+    from esper.karn.sanctum.schema import SanctumSnapshot, EventLogEntry
+
+    widget = EventLog()
+    snapshot = SanctumSnapshot(
+        event_log=[
+            EventLogEntry(timestamp="12:00:00", event_type="SEED_GERMINATED", env_id=0, message="r0c0 germinated"),
+            EventLogEntry(timestamp="12:00:01", event_type="REWARD_COMPUTED", env_id=0, message="WAIT r=0.5"),
+        ]
+    )
+    # Note: Full test requires Textual pilot, this verifies interface
+```
+
 ### Step 5: Update widgets __init__.py
 
 Edit `src/esper/karn/sanctum/widgets/__init__.py`:
@@ -1578,6 +1758,7 @@ from esper.karn.sanctum.widgets.scoreboard import Scoreboard
 from esper.karn.sanctum.widgets.tamiyo_brain import TamiyoBrain
 from esper.karn.sanctum.widgets.reward_components import RewardComponents
 from esper.karn.sanctum.widgets.esper_status import EsperStatus
+from esper.karn.sanctum.widgets.event_log import EventLog
 
 __all__ = [
     "EnvOverview",
@@ -1585,6 +1766,7 @@ __all__ = [
     "TamiyoBrain",
     "RewardComponents",
     "EsperStatus",
+    "EventLog",
 ]
 ```
 

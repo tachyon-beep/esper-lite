@@ -469,6 +469,7 @@ class TamiyoState:
     Reference: tui.py TUIState policy metrics + _render_tamiyo_brain()
 
     FIX: Added total_actions field (required for action percentage calculation)
+    FIX: Added advantage stats, entropy_coef, gradient health fields from aggregator
     """
     # Policy health (Health panel)
     entropy: float = 0.0
@@ -484,15 +485,22 @@ class TamiyoState:
 
     # Vitals (Vitals panel)
     learning_rate: float | None = None
+    entropy_coef: float = 0.0  # Entropy coefficient (adaptive)
     ratio_mean: float = 1.0
     ratio_min: float = 1.0
     ratio_max: float = 1.0
     ratio_std: float = 0.0  # Standard deviation of ratio
 
+    # Advantage statistics (from PPO update)
+    advantage_mean: float = 0.0
+    advantage_std: float = 0.0
+
     # Gradient health (shown in Vitals)
     dead_layers: int = 0
     exploding_layers: int = 0
+    nan_grad_count: int = 0  # NaN gradient count
     layer_gradient_health: float = 1.0  # GradHP percentage (0-1)
+    entropy_collapsed: bool = False  # Entropy collapse detected
 
     # Action distribution (Actions panel)
     action_counts: dict[str, int] = field(default_factory=dict)
@@ -581,6 +589,18 @@ class RewardComponents:
 
 
 @dataclass
+class EventLogEntry:
+    """Single event log entry for display in Event Log panel.
+
+    Reference: Used by aggregator to build event_log list
+    """
+    timestamp: str  # Formatted as HH:MM:SS
+    event_type: str  # REWARD_COMPUTED, SEED_GERMINATED, etc.
+    env_id: int | None  # None for global events (PPO, BATCH)
+    message: str  # Formatted message for display
+
+
+@dataclass
 class SanctumSnapshot:
     """Complete snapshot of Sanctum state for rendering.
 
@@ -610,9 +630,18 @@ class SanctumSnapshot:
     task_name: str = ""
     start_time: datetime | None = None
 
+    # Connection and timing (used by aggregator)
+    connected: bool = False
+    runtime_seconds: float = 0.0
+    staleness_seconds: float = float('inf')
+    captured_at: str = ""  # ISO timestamp
+
     # Aggregates (computed from envs)
     aggregate_mean_accuracy: float = 0.0
     aggregate_mean_reward: float = 0.0
+
+    # Event log (most recent last)
+    event_log: list[EventLogEntry] = field(default_factory=list)
 
     # Timestamps for staleness detection
     last_ppo_update: datetime | None = None
@@ -627,20 +656,7 @@ class SanctumSnapshot:
 
         STALENESS THRESHOLD: 5 seconds (matches Overwatch behavior)
         """
-        if self.last_ppo_update is None:
-            return True
-        age = (datetime.now() - self.last_ppo_update).total_seconds()
-        return age > 5.0
-
-    @property
-    def staleness_seconds(self) -> float:
-        """Get seconds since last update.
-
-        Used for "(Ns ago)" indicator when data is stale.
-        """
-        if self.last_ppo_update is None:
-            return float('inf')
-        return (datetime.now() - self.last_ppo_update).total_seconds()
+        return self.staleness_seconds > 5.0
 
 
 def make_sparkline(values: list[float] | deque[float], width: int = 8) -> str:
@@ -696,6 +712,7 @@ from esper.karn.sanctum.schema import (
     SystemVitals,
     RewardComponents,
     GPUStats,
+    EventLogEntry,
     make_sparkline,
 )
 
@@ -707,6 +724,7 @@ __all__ = [
     "SystemVitals",
     "RewardComponents",
     "GPUStats",
+    "EventLogEntry",
     "make_sparkline",
 ]
 ```
