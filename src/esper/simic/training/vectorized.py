@@ -938,6 +938,53 @@ def train_ppo_vectorized(
         configure_slot_telemetry(env_state)
         return env_state
 
+    @torch.compiler.disable
+    def _collect_gradient_telemetry_for_batch(
+        model: "HostWithSeeds",
+        slots: list[str],
+        env_dev: str,
+    ) -> dict[str, dict[str, Any]] | None:
+        """Collect gradient telemetry for all active slots.
+
+        Isolated from torch.compile to prevent graph breaks from
+        data-dependent slot iteration and conditional logic.
+        """
+        from esper.leyline import SeedStage
+        from esper.simic.telemetry.gradient_collector import (
+            collect_host_gradients_async,
+            collect_seed_gradients_only_async,
+        )
+
+        slots_needing_grad_telemetry = []
+        for slot_id in slots:
+            if not model.has_active_seed_in_slot(slot_id):
+                continue
+            seed_state = model.seed_slots[slot_id].state
+            if seed_state and seed_state.stage in (SeedStage.TRAINING, SeedStage.BLENDING):
+                slots_needing_grad_telemetry.append(slot_id)
+
+        if not slots_needing_grad_telemetry:
+            return None
+
+        # Compute host gradient stats ONCE (expensive), then reuse for each seed
+        host_stats = collect_host_gradients_async(
+            model.get_host_parameters(),
+            device=env_dev,
+        )
+
+        grad_stats_by_slot = {}
+        for slot_id in slots_needing_grad_telemetry:
+            seed_stats = collect_seed_gradients_only_async(
+                model.get_seed_parameters(slot_id),
+                device=env_dev,
+            )
+            grad_stats_by_slot[slot_id] = {
+                **host_stats,
+                **seed_stats,
+            }
+
+        return grad_stats_by_slot
+
     def process_train_batch(
         env_state: ParallelEnvState,
         inputs: torch.Tensor,
@@ -970,7 +1017,6 @@ def train_ppo_vectorized(
 
         model = env_state.model
         env_dev = env_state.env_device
-        grad_stats_by_slot: dict[str, dict] | None = None
 
         # Use CUDA stream for async execution
         stream_ctx = torch.cuda.stream(env_state.stream) if env_state.stream else nullcontext()
@@ -1043,36 +1089,10 @@ def train_ppo_vectorized(
                 env_state.scaler.scale(loss).backward()
             else:
                 loss.backward()
-            # Collect gradient stats for telemetry (after backward, before step if scaler used)
-            # Use async version to avoid .item() sync inside stream context
-            # Collect DUAL gradients (host + seed) to compute gradient ratio for G2 gate
+            # Collect gradient telemetry (isolated from torch.compile)
+            grad_stats_by_slot = None
             if use_telemetry:
-                slots_needing_grad_telemetry = []
-                for slot_id in slots:
-                    if not model.has_active_seed_in_slot(slot_id):
-                        continue
-                    seed_state = model.seed_slots[slot_id].state
-                    if seed_state and seed_state.stage in (SeedStage.TRAINING, SeedStage.BLENDING):
-                        slots_needing_grad_telemetry.append(slot_id)
-
-                if slots_needing_grad_telemetry:
-                    # Compute host gradient stats ONCE (expensive), then reuse for each seed
-                    host_stats = collect_host_gradients_async(
-                        model.get_host_parameters(),
-                        device=env_dev,
-                    )
-
-                    grad_stats_by_slot = {}
-                    for slot_id in slots_needing_grad_telemetry:
-                        # Only compute seed stats per slot (cheap)
-                        seed_stats = collect_seed_gradients_only_async(
-                            model.get_seed_parameters(slot_id),
-                            device=env_dev,
-                        )
-                        grad_stats_by_slot[slot_id] = {
-                            **host_stats,
-                            **seed_stats,
-                        }
+                grad_stats_by_slot = _collect_gradient_telemetry_for_batch(model, slots, env_dev)
 
             if use_amp and env_state.scaler is not None and env_dev.startswith("cuda"):
                 # H12: AMP GradScaler stream safety documentation
