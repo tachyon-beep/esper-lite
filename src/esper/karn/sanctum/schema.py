@@ -351,6 +351,22 @@ class RewardComponents:
 
 
 @dataclass
+class BestRunRecord:
+    """Historical record of a best run for the leaderboard.
+
+    Captured at batch end when an env achieves a new personal best.
+    Shows both the peak accuracy and where the run ended up.
+
+    Reference: tui.py lines 103-114 (BestRunRecord dataclass)
+    """
+    env_id: int
+    episode: int
+    peak_accuracy: float  # Best accuracy achieved during this run
+    final_accuracy: float  # Accuracy at the end of the batch
+    seeds: dict[str, SeedState] = field(default_factory=dict)  # Seeds at peak
+
+
+@dataclass
 class EventLogEntry:
     """Single event log entry for display in Event Log panel.
 
@@ -404,6 +420,9 @@ class SanctumSnapshot:
 
     # Event log (most recent last)
     event_log: list[EventLogEntry] = field(default_factory=list)
+
+    # Best runs leaderboard (top 10 by peak accuracy)
+    best_runs: list[BestRunRecord] = field(default_factory=list)
 
     # Timestamps for staleness detection
     last_ppo_update: datetime | None = None
