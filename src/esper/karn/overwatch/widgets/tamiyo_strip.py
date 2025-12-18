@@ -78,7 +78,7 @@ class TamiyoStrip(Container):
         self._snapshot: TuiSnapshot | None = None
 
     def render_vitals(self) -> str:
-        """Render vitals line with trend arrows."""
+        """Render vitals line with trend arrows and health-based coloring."""
         if self._snapshot is None or self._snapshot.tamiyo is None:
             return "-- | Waiting for policy data..."
 
@@ -89,9 +89,24 @@ class TamiyoStrip(Container):
         ent_arrow = trend_arrow(t.entropy_trend)
         ev_arrow = trend_arrow(t.ev_trend)
 
-        kl_str = f"KL{kl_arrow} {t.kl_divergence:.3f}"
-        ent_str = f"Ent{ent_arrow} {t.entropy:.2f}"
-        ev_str = f"EV{ev_arrow} {t.explained_variance:.2f}"
+        # Get health status for each vital
+        health = self.get_vitals_health()
+
+        # Map health levels to Rich colors
+        color_map = {
+            "ok": "green",
+            "warn": "yellow",
+            "crit": "red",
+        }
+
+        kl_color = color_map[health["kl"]]
+        ent_color = color_map[health["entropy"]]
+        ev_color = color_map[health["ev"]]
+
+        # Apply Rich markup for health coloring
+        kl_str = f"[{kl_color}]KL{kl_arrow} {t.kl_divergence:.3f}[/{kl_color}]"
+        ent_str = f"[{ent_color}]Ent{ent_arrow} {t.entropy:.2f}[/{ent_color}]"
+        ev_str = f"[{ev_color}]EV{ev_arrow} {t.explained_variance:.2f}[/{ev_color}]"
         clip_str = f"Clip {t.clip_fraction*100:.0f}%"
         grad_str = f"∇ {t.grad_norm:.2f}"
 

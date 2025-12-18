@@ -114,7 +114,7 @@ class TestTamiyoStrip:
         assert "W" in content
 
     def test_tamiyo_strip_health_coloring(self, tamiyo_snapshot: TuiSnapshot) -> None:
-        """TamiyoStrip applies health-based CSS classes."""
+        """TamiyoStrip applies health-based Rich markup coloring."""
         from esper.karn.overwatch.widgets.tamiyo_strip import TamiyoStrip
 
         strip = TamiyoStrip()
@@ -125,6 +125,12 @@ class TestTamiyoStrip:
         assert health["kl"] == "ok"
         assert health["entropy"] == "ok"
         assert health["ev"] == "ok"
+
+        # Verify Rich markup is applied to vitals
+        content = strip.render_vitals()
+        assert "[green]KL" in content  # KL is healthy (ok)
+        assert "[green]Ent" in content  # Entropy is healthy (ok)
+        assert "[green]EV" in content  # EV is healthy (ok)
 
     def test_tamiyo_strip_empty_state(self) -> None:
         """TamiyoStrip handles no snapshot gracefully."""
@@ -153,3 +159,65 @@ class TestTamiyoStrip:
 
         health = strip.get_vitals_health()
         assert health["entropy"] == "crit"
+
+        # Verify critical health shows as red
+        content = strip.render_vitals()
+        assert "[red]Ent" in content
+
+    def test_tamiyo_strip_warning_health_coloring(self) -> None:
+        """TamiyoStrip shows yellow for warning health levels."""
+        from esper.karn.overwatch.widgets.tamiyo_strip import TamiyoStrip
+
+        # Create snapshot with warning-level metrics
+        snapshot = TuiSnapshot(
+            schema_version=1,
+            captured_at="2025-12-18T14:00:00Z",
+            connection=ConnectionStatus(True, 1000.0, 0.5),
+            tamiyo=TamiyoState(
+                kl_divergence=0.03,  # warn level (0.025-0.05)
+                entropy=0.4,  # warn level (0.2-0.5)
+                explained_variance=0.5,  # warn level (0.3-0.6)
+            ),
+        )
+        strip = TamiyoStrip()
+        strip.update_snapshot(snapshot)
+
+        health = strip.get_vitals_health()
+        assert health["kl"] == "warn"
+        assert health["entropy"] == "warn"
+        assert health["ev"] == "warn"
+
+        # Verify warning health shows as yellow
+        content = strip.render_vitals()
+        assert "[yellow]KL" in content
+        assert "[yellow]Ent" in content
+        assert "[yellow]EV" in content
+
+    def test_tamiyo_strip_critical_health_coloring(self) -> None:
+        """TamiyoStrip shows red for critical health levels."""
+        from esper.karn.overwatch.widgets.tamiyo_strip import TamiyoStrip
+
+        # Create snapshot with critical-level metrics
+        snapshot = TuiSnapshot(
+            schema_version=1,
+            captured_at="2025-12-18T14:00:00Z",
+            connection=ConnectionStatus(True, 1000.0, 0.5),
+            tamiyo=TamiyoState(
+                kl_divergence=0.08,  # crit level (>0.05)
+                entropy=0.1,  # crit level (<0.2)
+                explained_variance=0.2,  # crit level (<0.3)
+            ),
+        )
+        strip = TamiyoStrip()
+        strip.update_snapshot(snapshot)
+
+        health = strip.get_vitals_health()
+        assert health["kl"] == "crit"
+        assert health["entropy"] == "crit"
+        assert health["ev"] == "crit"
+
+        # Verify critical health shows as red
+        content = strip.render_vitals()
+        assert "[red]KL" in content
+        assert "[red]Ent" in content
+        assert "[red]EV" in content
