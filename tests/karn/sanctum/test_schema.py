@@ -240,3 +240,25 @@ def test_system_vitals_multi_gpu_alarm():
     )
     assert vitals.has_memory_alarm is True
     assert vitals.memory_alarm_devices == ["cuda:1"]
+
+
+def test_decision_snapshot_creation():
+    """Test DecisionSnapshot dataclass creation."""
+    from datetime import datetime, timezone
+    from esper.karn.sanctum.schema import DecisionSnapshot
+
+    decision = DecisionSnapshot(
+        timestamp=datetime.now(timezone.utc),
+        slot_states={"r0c0": "Training 12%", "r0c1": "Empty"},
+        host_accuracy=67.0,
+        chosen_action="GERMINATE",
+        chosen_slot="r0c1",
+        confidence=0.73,
+        expected_value=0.42,
+        actual_reward=0.38,
+        alternatives=[("WAIT", 0.15), ("BLEND r0c0", 0.12)],
+    )
+
+    assert decision.chosen_action == "GERMINATE"
+    assert decision.confidence == 0.73
+    assert len(decision.alternatives) == 2

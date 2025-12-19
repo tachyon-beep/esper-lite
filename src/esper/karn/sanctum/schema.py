@@ -262,6 +262,9 @@ class TamiyoState:
     # PPO data received flag
     ppo_data_received: bool = False
 
+    # Last decision snapshot (captured from REWARD_COMPUTED events)
+    last_decision: "DecisionSnapshot | None" = None
+
 
 @dataclass
 class SystemVitals:
@@ -377,6 +380,24 @@ class RewardComponents:
     env_id: int = 0
     val_acc: float = 0.0
     last_action: str = ""
+
+
+@dataclass
+class DecisionSnapshot:
+    """Snapshot of a single Tamiyo decision for display.
+
+    Captures what Tamiyo saw, what she chose, and the outcome.
+    Used for the "Last Decision" section of TamiyoBrain.
+    """
+    timestamp: datetime
+    slot_states: dict[str, str]  # slot_id -> "Training 12%" or "Empty"
+    host_accuracy: float
+    chosen_action: str  # "GERMINATE", "WAIT", "CULL", "FOSSILIZE"
+    chosen_slot: str | None  # Target slot for action (None for WAIT)
+    confidence: float  # Action probability (0-1)
+    expected_value: float  # Value estimate before action
+    actual_reward: float | None  # Actual reward received (None if pending)
+    alternatives: list[tuple[str, float]]  # [(action_name, probability), ...]
 
 
 @dataclass
