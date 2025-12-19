@@ -24,9 +24,7 @@ from esper.karn.sanctum.widgets import (
     EventLog,
     RunHeader,
     Scoreboard,
-    SystemResources,
     TamiyoBrain,
-    TrainingHealth,
 )
 
 if TYPE_CHECKING:
@@ -80,6 +78,7 @@ class SanctumApp(App):
         backend: "SanctumBackend",
         num_envs: int = 16,
         refresh_rate: float = 4.0,
+        training_thread: threading.Thread | None = None,
     ):
         """Initialize Sanctum app.
 
@@ -87,6 +86,7 @@ class SanctumApp(App):
             backend: SanctumBackend providing snapshot data.
             num_envs: Number of training environments.
             refresh_rate: Snapshot refresh rate in Hz.
+            training_thread: Optional training thread to monitor.
         """
         super().__init__()
         self._backend = backend
@@ -95,6 +95,8 @@ class SanctumApp(App):
         self._focused_env_id: int = 0
         self._snapshot: "SanctumSnapshot" | None = None
         self._lock = threading.Lock()
+        self._poll_count = 0  # Debug: track timer fires
+        self._training_thread = training_thread  # Monitor thread status
 
     def compose(self) -> ComposeResult:
         """Build the Sanctum layout.
@@ -102,8 +104,7 @@ class SanctumApp(App):
         Layout structure:
         - Run Header: Episode, Epoch, Batch, Runtime, Best Accuracy, Connection
         - Top row: EnvOverview (65%) | Scoreboard (35%)
-        - Middle row: TamiyoBrain (full width, fixed height)
-        - Bottom row: EventLog (65%) | SystemResources + TrainingHealth (35%)
+        - Bottom row: EventLog (50%) | TamiyoBrain (50%)
         - Footer: Keybindings
         """
         yield RunHeader(id="run-header")
@@ -114,18 +115,12 @@ class SanctumApp(App):
                 yield EnvOverview(num_envs=self._num_envs, id="env-overview")
                 yield Scoreboard(id="scoreboard")
 
-            # Middle section: Tamiyo Brain (full width, fixed height)
-            yield TamiyoBrain(id="tamiyo-brain")
-
-            # Bottom section: Event Log + (Resources + Health)
+            # Bottom section: Event Log (left) | TamiyoBrain (right)
             with Horizontal(id="bottom-section"):
-                # Left side: Event Log (65%)
+                # Left side: Event Log (50%)
                 yield EventLog(id="event-log")
-
-                # Right side: System Resources and Training Health (35%)
-                with Vertical(id="right-bottom"):
-                    yield SystemResources(id="system-resources")
-                    yield TrainingHealth(id="training-health")
+                # Right side: TamiyoBrain (50%)
+                yield TamiyoBrain(id="tamiyo-brain")
 
         yield Footer()
 
@@ -139,11 +134,30 @@ class SanctumApp(App):
         Called periodically by set_interval timer.
         Thread-safe: backend.get_snapshot() is thread-safe.
         """
+        self._poll_count += 1
+
         if self._backend is None:
+            self.log.warning("Backend is None, skipping refresh")
             return
 
         # Get snapshot from backend (thread-safe)
         snapshot = self._backend.get_snapshot()
+
+        # Debug: Add poll count to snapshot for display
+        snapshot.poll_count = self._poll_count
+
+        # Debug: Check if training thread is still alive
+        thread_alive = self._training_thread.is_alive() if self._training_thread else None
+        snapshot.training_thread_alive = thread_alive
+
+        # Debug: Log snapshot state (visible in Textual console with Ctrl+Shift+D)
+        self.log.info(
+            f"Poll #{self._poll_count}: connected={snapshot.connected}, "
+            f"ep={snapshot.current_episode}, "
+            f"events={len(snapshot.event_log)}, "
+            f"total_events={snapshot.total_events_received}, "
+            f"thread_alive={thread_alive}"
+        )
 
         with self._lock:
             self._snapshot = snapshot
@@ -193,20 +207,6 @@ class SanctumApp(App):
             pass  # Widget hasn't mounted yet
         except Exception as e:
             self.log.warning(f"Failed to update event-log: {e}")
-
-        try:
-            self.query_one("#system-resources", SystemResources).update_snapshot(snapshot)
-        except NoMatches:
-            pass  # Widget hasn't mounted yet
-        except Exception as e:
-            self.log.warning(f"Failed to update system-resources: {e}")
-
-        try:
-            self.query_one("#training-health", TrainingHealth).update_snapshot(snapshot)
-        except NoMatches:
-            pass  # Widget hasn't mounted yet
-        except Exception as e:
-            self.log.warning(f"Failed to update training-health: {e}")
 
         # Update EnvDetailScreen modal if displayed
         # Check if we have a modal screen on the stack

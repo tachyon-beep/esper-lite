@@ -6,6 +6,7 @@ events and update the SanctumAggregator for TUI consumption.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from esper.karn.sanctum.aggregator import SanctumAggregator
@@ -13,6 +14,8 @@ from esper.karn.sanctum.aggregator import SanctumAggregator
 if TYPE_CHECKING:
     from esper.leyline import TelemetryEvent
     from esper.karn.sanctum.schema import SanctumSnapshot
+
+_logger = logging.getLogger(__name__)
 
 
 class SanctumBackend:
@@ -44,10 +47,12 @@ class SanctumBackend:
             max_event_log=max_event_log,
         )
         self._started = False
+        self._event_count = 0
 
     def start(self) -> None:
         """Start the backend (required by OutputBackend protocol)."""
         self._started = True
+        _logger.info("SanctumBackend started")
 
     def emit(self, event: "TelemetryEvent") -> None:
         """Emit telemetry event to aggregator.
@@ -56,7 +61,9 @@ class SanctumBackend:
             event: The telemetry event to process.
         """
         if not self._started:
+            _logger.warning("SanctumBackend.emit() called before start()")
             return
+        self._event_count += 1
         self._aggregator.process_event(event)
 
     def close(self) -> None:
@@ -69,4 +76,7 @@ class SanctumBackend:
         Returns:
             Snapshot of current aggregator state.
         """
-        return self._aggregator.get_snapshot()
+        snapshot = self._aggregator.get_snapshot()
+        # Add event count for debugging
+        snapshot.total_events_received = self._event_count
+        return snapshot

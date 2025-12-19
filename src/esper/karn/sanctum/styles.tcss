@@ -3,6 +3,13 @@
  * FIX: TamiyoBrain as full-width row, Event Log added
  */
 
+/* Run Header - fixed height for 2-row display */
+#run-header {
+    height: 6;
+    min-height: 6;
+    margin-bottom: 1;
+}
+
 #sanctum-main {
     height: 1fr;
     padding: 0 1;

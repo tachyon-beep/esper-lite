@@ -391,6 +391,14 @@ def main():
     karn_collector = get_collector()
     hub.add_backend(karn_collector)
 
+    # Event to signal when DataLoader workers are spawned (for TUI synchronization)
+    # When using TUI backends (Sanctum/Overwatch), main thread waits for this event
+    # before starting Textual, ensuring workers spawn while terminal FDs are valid.
+    import threading
+    dataloader_ready_event: threading.Event | None = None
+    if use_overwatch or use_sanctum:
+        dataloader_ready_event = threading.Event()
+
     # Define training function to enable background execution for Overwatch
     def run_training():
         """Execute the training algorithm."""
@@ -458,6 +466,7 @@ def main():
                     telemetry_config=telemetry_config,
                     telemetry_lifecycle_only=args.telemetry_lifecycle_only,
                     quiet_analytics=use_overwatch or use_sanctum,
+                    ready_event=dataloader_ready_event,
                     **config.to_train_kwargs(),
                 )
         except Exception:
@@ -474,20 +483,61 @@ def main():
             training_thread = threading.Thread(target=run_training, daemon=True)
             training_thread.start()
 
+            # CRITICAL: Wait for DataLoader workers to spawn BEFORE starting Textual.
+            # Textual modifies terminal file descriptors, which breaks multiprocessing spawn.
+            # By waiting here, workers spawn while FDs are still valid.
+            if dataloader_ready_event is not None:
+                print("Waiting for DataLoader workers to initialize...")
+                dataloader_ready_event.wait(timeout=60.0)  # 60s timeout for slow datasets
+                if not dataloader_ready_event.is_set():
+                    print("WARNING: DataLoader initialization timed out, starting TUI anyway")
+
             # Run Overwatch TUI in main thread (blocks until user quits)
             app = OverwatchApp(backend=overwatch_backend)
             app.run()
         elif use_sanctum:
             # Sanctum mode: run training in background thread, Sanctum controls terminal
             import threading
+            import traceback
             from esper.karn.sanctum import SanctumApp
 
-            training_thread = threading.Thread(target=run_training, daemon=True)
+            # Track training errors for debugging
+            training_error = [None]  # Use list to allow mutation from thread
+
+            def training_wrapper():
+                """Wrap training to capture exceptions."""
+                try:
+                    run_training()
+                except Exception as e:
+                    training_error[0] = traceback.format_exc()
+                    # Log to stderr (visible in Textual console)
+                    import sys
+                    print(f"\n[TRAINING ERROR]\n{training_error[0]}", file=sys.stderr)
+
+            training_thread = threading.Thread(target=training_wrapper, daemon=True)
             training_thread.start()
 
+            # CRITICAL: Wait for DataLoader workers to spawn BEFORE starting Textual.
+            # Textual modifies terminal file descriptors, which breaks multiprocessing spawn.
+            # By waiting here, workers spawn while FDs are still valid.
+            if dataloader_ready_event is not None:
+                print("Waiting for DataLoader workers to initialize...")
+                dataloader_ready_event.wait(timeout=60.0)  # 60s timeout for slow datasets
+                if not dataloader_ready_event.is_set():
+                    print("WARNING: DataLoader initialization timed out, starting TUI anyway")
+
             # Run Sanctum TUI in main thread (blocks until user quits)
-            app = SanctumApp(backend=sanctum_backend, num_envs=num_envs)
+            # Pass training_thread so TUI can monitor if it's alive
+            app = SanctumApp(
+                backend=sanctum_backend,
+                num_envs=num_envs,
+                training_thread=training_thread,
+            )
             app.run()
+
+            # After TUI exits, show any training error
+            if training_error[0]:
+                print(f"\n[Training crashed with error:]\n{training_error[0]}")
         else:
             # Normal mode: run training directly in main thread
             run_training()
