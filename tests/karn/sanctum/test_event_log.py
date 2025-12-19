@@ -29,7 +29,7 @@ def test_event_log_creation():
     widget = EventLog()
     assert widget is not None
     assert widget._max_events == 20
-    assert widget.border_title == "EVENT LOG"
+    assert widget.border_title == "EVENTS"
 
 
 def test_event_log_no_events():
@@ -129,3 +129,83 @@ def test_event_log_color_mapping():
     assert "SEED_FOSSILIZED" in _EVENT_COLORS
     assert "SEED_CULLED" in _EVENT_COLORS
     assert "BATCH_COMPLETED" in _EVENT_COLORS
+
+
+def test_event_log_episode_grouping():
+    """EventLog should group events by episode with separators."""
+    from esper.karn.sanctum.widgets.event_log import EventLog
+    from esper.karn.sanctum.schema import EventLogEntry
+    from rich.console import Group
+
+    widget = EventLog()
+    widget._snapshot = SanctumSnapshot(
+        event_log=[
+            EventLogEntry(
+                timestamp="12:33:12",
+                event_type="BATCH_COMPLETED",
+                env_id=None,
+                message="Episode 4 complete",
+                episode=4,
+                relative_time="(1m)",
+            ),
+            EventLogEntry(
+                timestamp="12:34:51",
+                event_type="REWARD_COMPUTED",
+                env_id=0,
+                message="WAIT r=+0.12",
+                episode=5,
+                relative_time="(7s)",
+            ),
+            EventLogEntry(
+                timestamp="12:34:56",
+                event_type="SEED_GERMINATED",
+                env_id=0,
+                message="seed_0a3f germinated",
+                episode=5,
+                relative_time="(2s)",
+            ),
+        ]
+    )
+
+    result = widget.render()
+    assert isinstance(result, Group)
+
+    # Render to text and check for episode separator
+    rendered = render_to_text(result)
+    assert "Episode 5" in rendered
+    assert "seed_0a3f germinated" in rendered
+    assert "WAIT r=+0.12" in rendered
+    assert "Episode 4 complete" in rendered
+    assert "(2s)" in rendered
+    assert "(7s)" in rendered
+    assert "(1m)" in rendered
+
+
+def test_event_log_color_coding():
+    """EventLog should color-code events by type."""
+    from esper.karn.sanctum.widgets.event_log import EventLog
+
+    widget = EventLog()
+
+    # Test color mapping
+    assert widget._get_event_color("SEED_GERMINATED") == "bright_yellow"
+    assert widget._get_event_color("SEED_FOSSILIZED") == "bright_green"
+    assert widget._get_event_color("SEED_CULLED") == "bright_red"
+    assert widget._get_event_color("REWARD_COMPUTED") == "bright_cyan"
+    assert widget._get_event_color("BATCH_COMPLETED") == "bright_blue"
+    assert widget._get_event_color("UNKNOWN_EVENT") == "white"  # Default
+
+
+def test_event_log_emoji_mapping():
+    """EventLog should return correct emoji for event types."""
+    from esper.karn.sanctum.widgets.event_log import EventLog
+
+    widget = EventLog()
+
+    # Test emoji mapping
+    assert widget._get_event_emoji("SEED_GERMINATED") == "🌱"
+    assert widget._get_event_emoji("SEED_FOSSILIZED") == "✅"
+    assert widget._get_event_emoji("SEED_CULLED") == "⚠️"
+    assert widget._get_event_emoji("REWARD_COMPUTED") == "📊"
+    assert widget._get_event_emoji("BATCH_COMPLETED") == "🏆"
+    assert widget._get_event_emoji("UNKNOWN_EVENT") == ""  # No emoji for unknown

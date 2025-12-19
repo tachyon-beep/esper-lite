@@ -438,6 +438,8 @@ class EventLogEntry:
     event_type: str  # REWARD_COMPUTED, SEED_GERMINATED, etc.
     env_id: int | None  # None for global events (PPO, BATCH)
     message: str  # Formatted message for display
+    episode: int = 0  # Episode number for grouping
+    relative_time: str = ""  # "(2s ago)" relative time string
 
 
 @dataclass
