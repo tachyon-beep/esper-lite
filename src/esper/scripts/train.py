@@ -56,7 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         choices=["compact", "standard", "wide", "auto"],
         default="auto",
-        help="TUI layout mode: compact (< 100 cols), standard (100-150), wide (150+), auto (detect)",
+        help="DEPRECATED: Use --sanctum instead. This flag is ignored.",
     )
     telemetry_parent.add_argument(
         "--export-karn",
@@ -64,6 +64,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="PATH",
         help="Export Karn telemetry store to JSONL file after training",
+    )
+    telemetry_parent.add_argument(
+        "--overwatch",
+        action="store_true",
+        help="Launch Overwatch TUI for real-time monitoring (replaces Rich TUI)",
+    )
+    telemetry_parent.add_argument(
+        "--sanctum",
+        action="store_true",
+        help="Launch Sanctum TUI for developer debugging (replaces Rich TUI, mutually exclusive with --overwatch)",
     )
 
     subparsers = parser.add_subparsers(dest="algorithm", required=True)
@@ -77,7 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
     heur_parser.add_argument("--max-epochs", type=int, default=75)
     heur_parser.add_argument("--max-batches", type=int, default=50, help="Batches per epoch (None=all)")
     heur_parser.add_argument("--task", default="cifar10",
-                              choices=["cifar10", "cifar10_deep", "tinystories"])
+                              choices=["cifar10", "cifar10_deep", "cifar10_blind", "tinystories"])
     heur_parser.add_argument("--device", default="cuda:0")
     heur_parser.add_argument("--seed", type=int, default=42)
     heur_parser.add_argument(
@@ -104,7 +114,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ppo_parser.add_argument(
         "--preset",
-        choices=["cifar10", "cifar10_deep", "tinystories"],
+        choices=["cifar10", "cifar10_deep", "cifar10_blind", "tinystories"],
         default="cifar10",
         help="TrainingConfig preset to use (hyperparameters + slots)",
     )
@@ -117,7 +127,7 @@ def build_parser() -> argparse.ArgumentParser:
     ppo_parser.add_argument(
         "--task",
         default="cifar10",
-        choices=["cifar10", "cifar10_deep", "tinystories"],
+        choices=["cifar10", "cifar10_deep", "cifar10_blind", "tinystories"],
         help="Task preset",
     )
     ppo_parser.add_argument("--save", help="Path to save model")
@@ -145,6 +155,13 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Override seed (otherwise use config value)",
+    )
+    ppo_parser.add_argument(
+        "--ab-test",
+        type=str,
+        choices=["shaped-vs-simplified", "shaped-vs-sparse"],
+        default=None,
+        help="Run A/B test: split envs between two reward modes (requires even n_envs)",
     )
 
     return parser
@@ -203,23 +220,28 @@ def main():
     # alongside training logs.
     hub = get_hub()
 
-    # Use TUI by default, Console if --no-tui or non-TTY
+    # Check mutual exclusion
+    if args.overwatch and args.sanctum:
+        parser.error("--overwatch and --sanctum are mutually exclusive. Choose one.")
+
+    # Determine UI mode
     import sys
-    tui_backend = None
     is_tty = sys.stdout.isatty()
-    use_tui = not args.no_tui and is_tty
+    use_overwatch = args.overwatch
+    use_sanctum = args.sanctum
 
     if not is_tty and not args.no_tui:
         print("Non-TTY detected, using console output instead of TUI")
 
-    if use_tui:
-        from esper.karn import TUIOutput
-        # Pass layout mode (None for auto-detect)
-        layout = None if args.tui_layout == "auto" else args.tui_layout
-        tui_backend = TUIOutput(force_layout=layout)
-        hub.add_backend(tui_backend)
-        # TUI auto-starts on first event
-    else:
+    # Warn about deprecated --tui-layout flag
+    if args.tui_layout != "auto":
+        print(
+            f"WARNING: --tui-layout is deprecated and ignored. "
+            f"Use --sanctum for the developer TUI or --overwatch for operator monitoring."
+        )
+
+    # Add console output if not using a TUI backend
+    if not use_overwatch and not use_sanctum:
         hub.add_backend(ConsoleOutput(min_severity=console_min_severity))
 
     # Add file output if requested
@@ -301,65 +323,224 @@ def main():
             print("Warning: Dashboard dependencies not installed.")
             print("  Install with: pip install esper-lite[dashboard]")
 
+    # Setup Overwatch backend if requested
+    overwatch_backend = None
+    if use_overwatch:
+        from esper.karn import OverwatchBackend
+        from esper.leyline import DEFAULT_N_ENVS
+
+        # Determine num_envs for Overwatch display
+        if args.algorithm == "ppo":
+            # For PPO, get from config
+            if args.config_json:
+                temp_config = TrainingConfig.from_json_path(args.config_json)
+            else:
+                if args.preset == "cifar10":
+                    temp_config = TrainingConfig.for_cifar10()
+                elif args.preset == "cifar10_deep":
+                    temp_config = TrainingConfig.for_cifar10_deep()
+                elif args.preset == "cifar10_blind":
+                    temp_config = TrainingConfig.for_cifar10_blind()
+                else:
+                    temp_config = TrainingConfig.for_tinystories()
+            num_envs = temp_config.n_envs
+        elif args.algorithm == "heuristic":
+            # For heuristic, use number of slots
+            num_envs = len(args.slots)
+        else:
+            # Fallback for unknown algorithms
+            num_envs = DEFAULT_N_ENVS
+
+        overwatch_backend = OverwatchBackend(num_envs=num_envs)
+        hub.add_backend(overwatch_backend)
+
+    # Setup Sanctum backend if requested
+    sanctum_backend = None
+    if use_sanctum:
+        from esper.karn.sanctum import SanctumBackend
+        from esper.leyline import DEFAULT_N_ENVS
+
+        # Determine num_envs for Sanctum display (same logic as Overwatch)
+        if args.algorithm == "ppo":
+            # For PPO, get from config
+            if args.config_json:
+                temp_config = TrainingConfig.from_json_path(args.config_json)
+            else:
+                if args.preset == "cifar10":
+                    temp_config = TrainingConfig.for_cifar10()
+                elif args.preset == "cifar10_deep":
+                    temp_config = TrainingConfig.for_cifar10_deep()
+                elif args.preset == "cifar10_blind":
+                    temp_config = TrainingConfig.for_cifar10_blind()
+                else:
+                    temp_config = TrainingConfig.for_tinystories()
+            num_envs = temp_config.n_envs
+        elif args.algorithm == "heuristic":
+            # For heuristic, use number of slots
+            num_envs = len(args.slots)
+        else:
+            # Fallback for unknown algorithms
+            num_envs = DEFAULT_N_ENVS
+
+        sanctum_backend = SanctumBackend(num_envs=num_envs)
+        hub.add_backend(sanctum_backend)
+
     # Add Karn research telemetry collector
     # KarnCollector captures events into typed store for research analytics
     from esper.karn import get_collector
     karn_collector = get_collector()
     hub.add_backend(karn_collector)
 
-    try:
-        if args.algorithm == "heuristic":
-            # Validate slot IDs use canonical format
-            validated_slots = validate_slots(args.slots)
+    # Event to signal when DataLoader workers are spawned (for TUI synchronization)
+    # When using TUI backends (Sanctum/Overwatch), main thread waits for this event
+    # before starting Textual, ensuring workers spawn while terminal FDs are valid.
+    import threading
+    dataloader_ready_event: threading.Event | None = None
+    if use_overwatch or use_sanctum:
+        dataloader_ready_event = threading.Event()
 
-            from esper.simic.training import train_heuristic
-            train_heuristic(
-                n_episodes=args.episodes,
-                max_epochs=args.max_epochs,
-                max_batches=args.max_batches if args.max_batches > 0 else None,
-                device=args.device,
-                task=args.task,
-                seed=args.seed,
-                slots=validated_slots,
-                telemetry_config=telemetry_config,
-                telemetry_lifecycle_only=args.telemetry_lifecycle_only,
-                min_fossilize_improvement=args.min_fossilize_improvement,
-            )
+    # Define training function to enable background execution for Overwatch
+    def run_training():
+        """Execute the training algorithm."""
+        try:
+            if args.algorithm == "heuristic":
+                # Validate slot IDs use canonical format
+                validated_slots = validate_slots(args.slots)
 
-        elif args.algorithm == "ppo":
-            if args.config_json:
-                config = TrainingConfig.from_json_path(args.config_json)
-            else:
-                if args.preset == "cifar10":
-                    config = TrainingConfig.for_cifar10()
-                elif args.preset == "cifar10_deep":
-                    config = TrainingConfig.for_cifar10_deep()
+                from esper.simic.training import train_heuristic
+                train_heuristic(
+                    n_episodes=args.episodes,
+                    max_epochs=args.max_epochs,
+                    max_batches=args.max_batches if args.max_batches > 0 else None,
+                    device=args.device,
+                    task=args.task,
+                    seed=args.seed,
+                    slots=validated_slots,
+                    telemetry_config=telemetry_config,
+                    telemetry_lifecycle_only=args.telemetry_lifecycle_only,
+                    min_fossilize_improvement=args.min_fossilize_improvement,
+                )
+
+            elif args.algorithm == "ppo":
+                if args.config_json:
+                    config = TrainingConfig.from_json_path(args.config_json)
                 else:
-                    config = TrainingConfig.for_tinystories()
+                    if args.preset == "cifar10":
+                        config = TrainingConfig.for_cifar10()
+                    elif args.preset == "cifar10_deep":
+                        config = TrainingConfig.for_cifar10_deep()
+                    elif args.preset == "cifar10_blind":
+                        config = TrainingConfig.for_cifar10_blind()
+                    else:
+                        config = TrainingConfig.for_tinystories()
 
-            if args.seed is not None:
-                config.seed = args.seed
-            if args.amp:
-                config.amp = True
-            if telemetry_config.level.name == "OFF":
-                config.use_telemetry = False
+                if args.seed is not None:
+                    config.seed = args.seed
+                if args.amp:
+                    config.amp = True
+                if telemetry_config.level.name == "OFF":
+                    config.use_telemetry = False
 
-            print(config.summary())
+                # Handle A/B testing - set on config for validation
+                if args.ab_test:
+                    if config.n_envs % 2 != 0:
+                        raise ValueError("--ab-test requires even number of envs")
+                    half = config.n_envs // 2
+                    if args.ab_test == "shaped-vs-simplified":
+                        config.ab_reward_modes = ["shaped"] * half + ["simplified"] * half
+                    elif args.ab_test == "shaped-vs-sparse":
+                        config.ab_reward_modes = ["shaped"] * half + ["sparse"] * half
+                    print(f"[A/B Test] {half} envs SHAPED vs {half} envs {args.ab_test.split('-vs-')[1].upper()}")
 
-            from esper.simic.training import train_ppo_vectorized
-            train_ppo_vectorized(
-                device=args.device,
-                devices=args.devices,
-                task=args.task,
-                save_path=args.save,
-                resume_path=args.resume,
-                num_workers=args.num_workers,
-                gpu_preload=args.gpu_preload,
-                telemetry_config=telemetry_config,
-                telemetry_lifecycle_only=args.telemetry_lifecycle_only,
-                quiet_analytics=use_tui,
-                **config.to_train_kwargs(),
+                print(config.summary())
+
+                from esper.simic.training import train_ppo_vectorized
+                train_ppo_vectorized(
+                    device=args.device,
+                    devices=args.devices,
+                    task=args.task,
+                    save_path=args.save,
+                    resume_path=args.resume,
+                    num_workers=args.num_workers,
+                    gpu_preload=args.gpu_preload,
+                    telemetry_config=telemetry_config,
+                    telemetry_lifecycle_only=args.telemetry_lifecycle_only,
+                    quiet_analytics=use_overwatch or use_sanctum,
+                    ready_event=dataloader_ready_event,
+                    **config.to_train_kwargs(),
+                )
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            raise
+
+    try:
+        if use_overwatch:
+            # Overwatch mode: run training in background thread, Overwatch controls terminal
+            import threading
+            from esper.karn.overwatch import OverwatchApp
+
+            training_thread = threading.Thread(target=run_training, daemon=True)
+            training_thread.start()
+
+            # CRITICAL: Wait for DataLoader workers to spawn BEFORE starting Textual.
+            # Textual modifies terminal file descriptors, which breaks multiprocessing spawn.
+            # By waiting here, workers spawn while FDs are still valid.
+            if dataloader_ready_event is not None:
+                print("Waiting for DataLoader workers to initialize...")
+                dataloader_ready_event.wait(timeout=60.0)  # 60s timeout for slow datasets
+                if not dataloader_ready_event.is_set():
+                    print("WARNING: DataLoader initialization timed out, starting TUI anyway")
+
+            # Run Overwatch TUI in main thread (blocks until user quits)
+            app = OverwatchApp(backend=overwatch_backend)
+            app.run()
+        elif use_sanctum:
+            # Sanctum mode: run training in background thread, Sanctum controls terminal
+            import threading
+            import traceback
+            from esper.karn.sanctum import SanctumApp
+
+            # Track training errors for debugging
+            training_error = [None]  # Use list to allow mutation from thread
+
+            def training_wrapper():
+                """Wrap training to capture exceptions."""
+                try:
+                    run_training()
+                except Exception as e:
+                    training_error[0] = traceback.format_exc()
+                    # Log to stderr (visible in Textual console)
+                    import sys
+                    print(f"\n[TRAINING ERROR]\n{training_error[0]}", file=sys.stderr)
+
+            training_thread = threading.Thread(target=training_wrapper, daemon=True)
+            training_thread.start()
+
+            # CRITICAL: Wait for DataLoader workers to spawn BEFORE starting Textual.
+            # Textual modifies terminal file descriptors, which breaks multiprocessing spawn.
+            # By waiting here, workers spawn while FDs are still valid.
+            if dataloader_ready_event is not None:
+                print("Waiting for DataLoader workers to initialize...")
+                dataloader_ready_event.wait(timeout=60.0)  # 60s timeout for slow datasets
+                if not dataloader_ready_event.is_set():
+                    print("WARNING: DataLoader initialization timed out, starting TUI anyway")
+
+            # Run Sanctum TUI in main thread (blocks until user quits)
+            # Pass training_thread so TUI can monitor if it's alive
+            app = SanctumApp(
+                backend=sanctum_backend,
+                num_envs=num_envs,
+                training_thread=training_thread,
             )
+            app.run()
+
+            # After TUI exits, show any training error
+            if training_error[0]:
+                print(f"\n[Training crashed with error:]\n{training_error[0]}")
+        else:
+            # Normal mode: run training directly in main thread
+            run_training()
     finally:
         # Export Karn telemetry if requested (P1-04)
         if karn_collector and args.export_karn:
@@ -368,11 +549,14 @@ def main():
             count = karn_collector.store.export_jsonl(export_path)
             print(f"Exported {count} Karn records to {export_path}")
 
-        # Clean up TUI backend if used
-        if tui_backend is not None:
-            tui_backend.close()
-        # Close all hub backends
+        # Close all hub backends (includes Overwatch/Sanctum if used)
         hub.close()
 
 if __name__ == "__main__":
+    # CRITICAL: Set spawn method before main() to avoid fork issues with
+    # Textual TUI + PyTorch DataLoader workers. The 'fork' method fails
+    # when the main process runs a TUI (Textual/Overwatch/Sanctum) because
+    # forked workers inherit state that can't be safely duplicated.
+    import multiprocessing
+    multiprocessing.set_start_method("spawn")
     main()

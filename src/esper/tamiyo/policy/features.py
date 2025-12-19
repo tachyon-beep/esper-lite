@@ -66,14 +66,14 @@ def safe(v, default: float = 0.0, max_val: float = 100.0) -> float:
 # Base features (training state without per-slot features)
 BASE_FEATURE_SIZE = 23
 
-# Per-slot features: 4 state (is_active, stage, alpha, improvement) + 5 blueprint one-hot
-SLOT_FEATURE_SIZE = 9
+# Per-slot features: 4 state (is_active, stage, alpha, improvement) + 13 blueprint one-hot
+SLOT_FEATURE_SIZE = 17
 
-# Feature size (with telemetry off): 23 base + 3 slots * 9 features per slot = 50
-# Per-slot: 4 state (is_active, stage, alpha, improvement) + 5 blueprint one-hot
-# With telemetry on: + 3 slots * SeedTelemetry.feature_dim() (10) = 80 total
-# NOTE: This constant is kept for backwards compatibility but get_feature_size() should be used
-MULTISLOT_FEATURE_SIZE = 50
+# Feature size (with telemetry off): 23 base + 3 slots * 17 features per slot = 74
+# Per-slot: 4 state (is_active, stage, alpha, improvement) + 13 blueprint one-hot
+# With telemetry on: + 3 slots * SeedTelemetry.feature_dim() (10) = 104 total
+# NOTE: Default for 3-slot configuration. Use get_feature_size(slot_config) for dynamic slot counts.
+MULTISLOT_FEATURE_SIZE = 74
 
 
 def get_feature_size(slot_config: SlotConfig) -> int:
@@ -98,8 +98,16 @@ _BLUEPRINT_TO_INDEX = {
     "attention": 2,
     "norm": 3,
     "depthwise": 4,
+    "bottleneck": 5,
+    "conv_small": 6,
+    "conv_heavy": 7,
+    "lora": 8,
+    "lora_large": 9,
+    "mlp_small": 10,
+    "mlp": 11,
+    "flex_attention": 12,
 }
-_NUM_BLUEPRINT_TYPES = 5
+_NUM_BLUEPRINT_TYPES = 13
 
 
 def obs_to_multislot_features(

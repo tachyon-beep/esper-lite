@@ -99,7 +99,7 @@ class TestPPOAgentFactoredInVectorized:
 
         # Get batched actions via network.get_action
         with torch.no_grad():
-            actions, log_probs, values, hidden = agent.network.get_action(
+            result = agent.network.get_action(
                 states,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
@@ -109,14 +109,14 @@ class TestPPOAgentFactoredInVectorized:
             )
 
         # Actions should be dict of tensors
-        assert isinstance(actions, dict)
-        assert set(actions.keys()) == {"slot", "blueprint", "blend", "op"}
-        assert actions["slot"].shape == (n_envs,)
-        assert actions["op"].shape == (n_envs,)
+        assert isinstance(result.actions, dict)
+        assert set(result.actions.keys()) == {"slot", "blueprint", "blend", "op"}
+        assert result.actions["slot"].shape == (n_envs,)
+        assert result.actions["op"].shape == (n_envs,)
 
         # Log probs should be dict and values should be [n_envs]
-        assert isinstance(log_probs, dict)
-        assert values.shape == (n_envs,)
+        assert isinstance(result.log_probs, dict)
+        assert result.values.shape == (n_envs,)
 
     def test_rollout_buffer_stores_factored_transitions(self):
         """TamiyoRolloutBuffer should store factored transitions from multiple envs."""

@@ -26,15 +26,22 @@ def test_policy_bundle_from_registry():
     assert "heuristic" not in policies
 
     # Verify LSTM policy can be instantiated
+    # Note: feature_dim omitted to test auto-computation from slot_config
     slot_config = SlotConfig.default()
     policy = get_policy("lstm", {
-        "feature_dim": 50,
         "hidden_dim": 64,
         "slot_config": slot_config,
     })
 
     assert policy.is_recurrent is True
     assert policy.supports_off_policy is False
+
+    # Verify feature_dim was auto-computed correctly (23 base + 3 slots * 17 features = 74)
+    from esper.tamiyo.policy.features import get_feature_size
+    expected_dim = get_feature_size(slot_config)
+    assert policy.feature_dim == expected_dim, (
+        f"feature_dim should be auto-computed to {expected_dim}, got {policy.feature_dim}"
+    )
 
 
 @pytest.mark.integration

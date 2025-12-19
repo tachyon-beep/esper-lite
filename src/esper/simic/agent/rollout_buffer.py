@@ -167,11 +167,18 @@ class TamiyoRolloutBuffer:
         self.truncated = torch.zeros(n, m, dtype=torch.bool, device=device)
         self.bootstrap_values = torch.zeros(n, m, device=device)
 
-        # Action masks
+        # Action masks - initialize with first action valid per row
+        # This prevents InvalidStateMachineError on padded timesteps when
+        # evaluate_actions processes the full buffer before valid_mask filtering.
+        # Padded rows use these default masks; real data overwrites during add().
         self.slot_masks = torch.zeros(n, m, self.num_slots, dtype=torch.bool, device=device)
+        self.slot_masks[:, :, 0] = True  # First slot always valid (padding default)
         self.blueprint_masks = torch.zeros(n, m, self.num_blueprints, dtype=torch.bool, device=device)
+        self.blueprint_masks[:, :, 0] = True  # First blueprint always valid
         self.blend_masks = torch.zeros(n, m, self.num_blends, dtype=torch.bool, device=device)
+        self.blend_masks[:, :, 0] = True  # First blend always valid
         self.op_masks = torch.zeros(n, m, self.num_ops, dtype=torch.bool, device=device)
+        self.op_masks[:, :, 0] = True  # First op always valid
 
         # LSTM hidden states: [num_envs, max_steps, lstm_layers, hidden_dim]
         self.hidden_h = torch.zeros(n, m, self.lstm_layers, self.lstm_hidden_dim, device=device)
@@ -204,11 +211,11 @@ class TamiyoRolloutBuffer:
         blueprint_action: int,
         blend_action: int,
         op_action: int,
-        slot_log_prob: float,
-        blueprint_log_prob: float,
-        blend_log_prob: float,
-        op_log_prob: float,
-        value: float,
+        slot_log_prob: float | torch.Tensor,
+        blueprint_log_prob: float | torch.Tensor,
+        blend_log_prob: float | torch.Tensor,
+        op_log_prob: float | torch.Tensor,
+        value: float | torch.Tensor,
         reward: float,
         done: bool,
         slot_mask: torch.Tensor,
@@ -218,7 +225,7 @@ class TamiyoRolloutBuffer:
         hidden_h: torch.Tensor,
         hidden_c: torch.Tensor,
         truncated: bool = False,
-        bootstrap_value: float = 0.0,
+        bootstrap_value: float | torch.Tensor = 0.0,
     ) -> None:
         """Add a transition for a specific environment.
 

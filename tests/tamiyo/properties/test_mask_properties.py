@@ -501,12 +501,13 @@ class TestBlueprintMask:
 
     @given(config=slot_configs())
     def test_non_noop_blueprints_enabled(self, config: SlotConfig):
-        """Property: Non-NOOP blueprints are enabled."""
-        from esper.leyline.factored_actions import BlueprintAction
+        """Property: Topology-compatible non-NOOP blueprints are enabled."""
+        from esper.leyline.factored_actions import BlueprintAction, CNN_BLUEPRINTS
 
         slot_states = {slot_id: None for slot_id in config.slot_ids}
         enabled = list(config.slot_ids)
 
+        # Default topology is "cnn", so only CNN-compatible blueprints should be enabled
         masks = compute_action_masks(
             slot_states=slot_states,
             enabled_slots=enabled,
@@ -514,7 +515,18 @@ class TestBlueprintMask:
         )
 
         for bp in BlueprintAction:
-            if bp != BlueprintAction.NOOP:
+            if bp == BlueprintAction.NOOP:
+                # NOOP always disabled
+                assert masks["blueprint"][bp].item() is False, (
+                    f"NOOP blueprint should always be disabled"
+                )
+            elif bp in CNN_BLUEPRINTS:
+                # CNN-compatible blueprints should be enabled
                 assert masks["blueprint"][bp].item() is True, (
-                    f"Blueprint {bp.name} should be enabled"
+                    f"CNN blueprint {bp.name} should be enabled for default topology"
+                )
+            else:
+                # Non-CNN blueprints (LORA, MLP, etc.) should be disabled
+                assert masks["blueprint"][bp].item() is False, (
+                    f"Non-CNN blueprint {bp.name} should be disabled for default topology"
                 )

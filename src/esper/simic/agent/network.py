@@ -18,12 +18,34 @@ Design rationale (DRL expert):
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import TypedDict
 
 import torch
 import torch.nn as nn
 
 from esper.tamiyo.policy.action_masks import MaskedCategorical
+
+
+@dataclass(frozen=True, slots=True)
+class GetActionResult:
+    """Result from get_action() method.
+
+    Attributes:
+        actions: Dict of action indices per head [batch]
+        log_probs: Dict of log probs per head [batch] (NON-DIFFERENTIABLE)
+        values: Value estimates [batch]
+        hidden: Updated hidden state (h, c)
+        op_logits: Raw masked logits for op head [batch, num_ops].
+            Only populated if return_op_logits=True, otherwise None.
+            Use F.softmax(op_logits, dim=-1) to get action probabilities.
+    """
+
+    actions: dict[str, torch.Tensor]
+    log_probs: dict[str, torch.Tensor]
+    values: torch.Tensor
+    hidden: tuple[torch.Tensor, torch.Tensor]
+    op_logits: torch.Tensor | None = None
 
 
 class _ForwardOutput(TypedDict):
@@ -257,7 +279,8 @@ class FactoredRecurrentActorCritic(nn.Module):
         blend_mask: torch.Tensor | None = None,
         op_mask: torch.Tensor | None = None,
         deterministic: bool = False,
-    ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor], torch.Tensor, tuple]:
+        return_op_logits: bool = False,
+    ) -> GetActionResult:
         """Sample actions from all heads (inference mode).
 
         WARNING: This method runs under torch.inference_mode(). The returned
@@ -267,11 +290,20 @@ class FactoredRecurrentActorCritic(nn.Module):
         The log_probs returned here are stored as old_log_probs for PPO ratio
         computation, but the actual gradient flows through evaluate_actions().
 
+        Args:
+            state: Input state tensor [batch, state_dim] or [batch, 1, state_dim]
+            hidden: LSTM hidden state (h, c) or None for initial state
+            slot_mask: Boolean mask for slot actions [batch, num_slots]
+            blueprint_mask: Boolean mask for blueprint actions [batch, num_blueprints]
+            blend_mask: Boolean mask for blend actions [batch, num_blends]
+            op_mask: Boolean mask for op actions [batch, num_ops]
+            deterministic: If True, use argmax instead of sampling
+            return_op_logits: If True, include raw masked op logits in result
+                for telemetry/decision snapshot. Default False for performance.
+
         Returns:
-            actions: Dict of action indices per head [batch]
-            log_probs: Dict of log probs per head [batch] (NON-DIFFERENTIABLE)
-            values: Value estimates [batch]
-            hidden: Updated hidden state
+            GetActionResult with actions, log_probs, values, hidden, and
+            optionally op_logits if return_op_logits=True.
         """
         # Ensure 3D input
         if state.dim() == 2:
@@ -329,7 +361,16 @@ class FactoredRecurrentActorCritic(nn.Module):
             value = output["value"][:, 0]  # [batch]
             new_hidden = output["hidden"]
 
-            return actions, log_probs, value, new_hidden
+            # Conditionally capture op_logits for telemetry (Decision Snapshot)
+            op_logits_out = head_logits["op"] if return_op_logits else None
+
+            return GetActionResult(
+                actions=actions,
+                log_probs=log_probs,
+                values=value,
+                hidden=new_hidden,
+                op_logits=op_logits_out,
+            )
 
     def evaluate_actions(
         self,

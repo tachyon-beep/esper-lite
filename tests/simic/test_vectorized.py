@@ -80,16 +80,13 @@ def test_last_action_event_emitted():
         hub = Mock()
         get_hub.return_value = hub
 
-        factored_action = FactoredAction.from_indices(
+        emit_last_action(
+            env_id=0,
+            epoch=3,
             slot_idx=1,
             blueprint_idx=1,
             blend_idx=1,
             op_idx=1,
-        )
-        emit_last_action(
-            env_id=0,
-            epoch=3,
-            factored_action=factored_action,
             slot_id="r0c1",
             masked={"op": False, "slot": False, "blueprint": False, "blend": True},
             success=True,

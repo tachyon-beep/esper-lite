@@ -1,0 +1,185 @@
+/* src/esper/karn/overwatch/styles.tcss */
+
+/* Overwatch TUI Styles
+ *
+ * Layout regions:
+ * - Header (2 rows): Run identity, connection, health indicators
+ * - TamiyoStrip (2 rows): PPO vitals, action summary
+ * - MainArea (flexible): FlightBoard + DetailPanel side-by-side
+ * - EventFeed (4 rows collapsed, 8 expanded)
+ */
+
+/* === Root Layout === */
+
+Screen {
+    layout: grid;
+    grid-size: 1;
+    grid-rows: 2 2 1fr 4;
+}
+
+/* === Region Placeholders === */
+
+#header {
+    background: $surface;
+    border-bottom: solid $primary-darken-2;
+    padding: 0 1;
+}
+
+#tamiyo-strip {
+    background: $surface;
+    color: $text;
+    border-bottom: solid $secondary;
+    padding: 0 1;
+}
+
+#main-area {
+    layout: grid;
+    grid-size: 2 1;
+    grid-columns: 2fr 1fr;
+}
+
+#flight-board {
+    background: $surface;
+    border-right: solid $primary-darken-3;
+    padding: 0 1;
+}
+
+#detail-panel {
+    background: $surface;
+    padding: 0 1;
+}
+
+#event-feed {
+    background: $surface;
+    border-top: solid $primary-darken-2;
+    padding: 0 1;
+}
+
+/* === Status Colors === */
+
+.status-ok {
+    color: $success;
+}
+
+.status-info {
+    color: $primary;
+}
+
+.status-warn {
+    color: $warning;
+}
+
+.status-crit {
+    color: $error;
+}
+
+/* === Stage Colors (Seed Lifecycle) === */
+
+.stage-dormant {
+    color: #666666;
+}
+
+.stage-germinated {
+    color: #98c379;  /* Light green - new growth */
+}
+
+.stage-training {
+    color: #61afef;  /* Blue - active learning */
+}
+
+.stage-blending {
+    color: #c678dd;  /* Purple/magenta - integration */
+}
+
+.stage-probationary {
+    color: #e5c07b;  /* Yellow/amber - under observation */
+}
+
+.stage-fossilized {
+    color: #56b6c2;  /* Cyan - permanent/stable */
+}
+
+.stage-culled {
+    color: #e06c75;  /* Red - removed */
+}
+
+.stage-embargoed {
+    color: #be5046;  /* Dark red - blocked */
+}
+
+.stage-resetting {
+    color: #d19a66;  /* Orange - transitioning */
+}
+
+/* === Tamiyo Theme (Magenta) === */
+
+.tamiyo {
+    color: #c678dd;
+}
+
+.tamiyo-muted {
+    color: #8b5a9e;
+}
+
+/* === Focus Indicators === */
+
+.focused {
+    background: $primary-darken-1;
+}
+
+.selected {
+    background: $primary-darken-2;
+}
+
+/* === Hidden State === */
+
+.hidden {
+    display: none;
+}
+
+/* === FlightBoard Specific === */
+
+FlightBoard {
+    scrollbar-gutter: stable;
+}
+
+FlightBoard:focus-within {
+    border: tall $accent;
+}
+
+EnvRow {
+    height: auto;
+    min-height: 1;
+}
+
+EnvRow.selected {
+    background: $primary-darken-2;
+}
+
+EnvRow:hover {
+    background: $surface-lighten-1;
+}
+
+/* === Progress Bars === */
+
+.alpha-bar-filled {
+    color: $success;
+}
+
+.alpha-bar-empty {
+    color: $surface-lighten-2;
+}
+
+/* === Anomaly Score Indicator === */
+
+.anomaly-low {
+    color: $success;
+}
+
+.anomaly-medium {
+    color: $warning;
+}
+
+.anomaly-high {
+    color: $error;
+}

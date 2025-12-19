@@ -7,6 +7,7 @@ from esper.tamiyo.policy import PolicyBundle, get_policy, list_policies
 from esper.tamiyo.policy.lstm_bundle import LSTMPolicyBundle
 from esper.tamiyo.policy.types import ActionResult, EvalResult, ForwardResult
 from esper.leyline.slot_config import SlotConfig
+from esper.leyline.factored_actions import NUM_BLUEPRINTS, NUM_BLENDS, NUM_OPS
 
 
 @pytest.fixture
@@ -17,7 +18,7 @@ def slot_config():
 @pytest.fixture
 def lstm_bundle(slot_config):
     return LSTMPolicyBundle(
-        feature_dim=50,
+        feature_dim=74,  # Updated: 23 base + 3 slots * 17 features
         hidden_dim=64,
         num_lstm_layers=1,
         slot_config=slot_config,
@@ -50,12 +51,12 @@ def test_lstm_bundle_initial_hidden(lstm_bundle):
 
 def test_lstm_bundle_get_action(lstm_bundle, slot_config):
     """get_action should return ActionResult."""
-    features = torch.randn(1, 50)
+    features = torch.randn(1, 74)  # Updated feature dim
     masks = {
         "slot": torch.ones(1, slot_config.num_slots, dtype=torch.bool),
-        "blueprint": torch.ones(1, 5, dtype=torch.bool),
-        "blend": torch.ones(1, 3, dtype=torch.bool),
-        "op": torch.ones(1, 4, dtype=torch.bool),
+        "blueprint": torch.ones(1, NUM_BLUEPRINTS, dtype=torch.bool),
+        "blend": torch.ones(1, NUM_BLENDS, dtype=torch.bool),
+        "op": torch.ones(1, NUM_OPS, dtype=torch.bool),
     }
     hidden = lstm_bundle.initial_hidden(batch_size=1)
 
@@ -69,12 +70,12 @@ def test_lstm_bundle_get_action(lstm_bundle, slot_config):
 
 def test_lstm_bundle_evaluate_actions(lstm_bundle, slot_config):
     """evaluate_actions should return EvalResult with gradients."""
-    features = torch.randn(1, 10, 50)  # (batch, seq_len, features)
+    features = torch.randn(1, 10, 74)  # Updated feature dim
     masks = {
         "slot": torch.ones(1, 10, slot_config.num_slots, dtype=torch.bool),
-        "blueprint": torch.ones(1, 10, 5, dtype=torch.bool),
-        "blend": torch.ones(1, 10, 3, dtype=torch.bool),
-        "op": torch.ones(1, 10, 4, dtype=torch.bool),
+        "blueprint": torch.ones(1, 10, NUM_BLUEPRINTS, dtype=torch.bool),
+        "blend": torch.ones(1, 10, NUM_BLENDS, dtype=torch.bool),
+        "op": torch.ones(1, 10, NUM_OPS, dtype=torch.bool),
     }
     actions = {
         "slot": torch.zeros(1, 10, dtype=torch.long),
@@ -124,7 +125,7 @@ def test_lstm_bundle_dtype(lstm_bundle):
 def test_get_policy_lstm(slot_config):
     """get_policy('lstm', ...) should return LSTMPolicyBundle."""
     policy = get_policy("lstm", {
-        "feature_dim": 50,
+        "feature_dim": 74,  # Updated feature dim
         "hidden_dim": 64,
         "slot_config": slot_config,
     })
@@ -133,12 +134,12 @@ def test_get_policy_lstm(slot_config):
 
 def test_lstm_bundle_forward(lstm_bundle, slot_config):
     """forward() should return ForwardResult with logits."""
-    features = torch.randn(1, 1, 50)  # (batch, seq_len, features)
+    features = torch.randn(1, 1, 74)  # Updated feature dim
     masks = {
         "slot": torch.ones(1, slot_config.num_slots, dtype=torch.bool),
-        "blueprint": torch.ones(1, 5, dtype=torch.bool),
-        "blend": torch.ones(1, 3, dtype=torch.bool),
-        "op": torch.ones(1, 4, dtype=torch.bool),
+        "blueprint": torch.ones(1, NUM_BLUEPRINTS, dtype=torch.bool),
+        "blend": torch.ones(1, NUM_BLENDS, dtype=torch.bool),
+        "op": torch.ones(1, NUM_OPS, dtype=torch.bool),
     }
     # Pass None for hidden - network creates its own initial state
     # (initial_hidden() creates inference-mode tensors that can't be used with autograd)
@@ -155,7 +156,7 @@ def test_lstm_bundle_forward(lstm_bundle, slot_config):
 
 def test_lstm_bundle_get_value(lstm_bundle):
     """get_value() should return state value estimate."""
-    features = torch.randn(1, 50)
+    features = torch.randn(1, 74)  # Updated feature dim
     # Pass None for hidden - network creates its own initial state
     hidden = None
 
@@ -169,7 +170,7 @@ def test_lstm_bundle_get_value(lstm_bundle):
 def test_get_value_does_not_create_grad_graph(lstm_bundle):
     """get_value() should not create gradient computation graph."""
     # Ensure we're in a context where gradients would normally be tracked
-    features = torch.randn(1, 50).requires_grad_(True)
+    features = torch.randn(1, 74).requires_grad_(True)  # Updated feature dim
 
     value = lstm_bundle.get_value(features)
 

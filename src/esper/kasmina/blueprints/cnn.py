@@ -99,7 +99,7 @@ def create_norm_seed(channels: int) -> nn.Module:
             super().__init__()
             # Use get_num_groups() to guarantee divisibility (fixes channels like 48, 80, 112)
             self.norm = nn.GroupNorm(num_groups=get_num_groups(channels), num_channels=channels)
-            self.scale = nn.Parameter(torch.ones(1))
+            self.scale = nn.Parameter(torch.zeros(1))
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             # Bound scale to [-1, 1] via tanh to prevent gradient explosion
@@ -139,9 +139,15 @@ def create_attention_seed(channels: int, reduction: int = 4) -> nn.Module:
             self.fc = nn.Sequential(
                 nn.Linear(channels, reduced, bias=False),
                 nn.ReLU(inplace=True),
-                nn.Linear(reduced, channels, bias=False),
+                # Use bias=True to enable identity initialization
+                nn.Linear(reduced, channels, bias=True),
                 nn.Sigmoid(),
             )
+            # Initialize for identity-like behavior (output ≈ 1.0)
+            # Weight 0 ensures input independence at start
+            # Bias 3.0 gives sigmoid(3.0) ≈ 0.95 (near-identity scaling)
+            nn.init.zeros_(self.fc[2].weight)
+            nn.init.constant_(self.fc[2].bias, 3.0)
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             # Squeeze: global average pooling to channel descriptor

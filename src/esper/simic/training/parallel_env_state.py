@@ -79,6 +79,9 @@ class ParallelEnvState:
     # (DRL Expert review 2025-12-17: prevents degenerate WAIT-spam policies
     # that rely on environment cleanup rather than proactive lifecycle management)
     pending_auto_cull_penalty: float = 0.0
+    # Pre-computed autocast decision for hot path performance
+    # Avoids repeated device type checks and amp flag evaluation per batch
+    autocast_enabled: bool = False
 
     def __post_init__(self) -> None:
         # Initialize counters with LifecycleOp names (WAIT, GERMINATE, FOSSILIZE, CULL)

@@ -36,7 +36,12 @@ def test_seed_slot_forward_dormant_identity():
 
 
 def test_seed_slot_forward_with_seed():
-    """SeedSlot forward applies seed transformation."""
+    """SeedSlot forward applies seed transformation when scale is non-zero.
+
+    Freshly germinated seeds start as identity (scale=0 → tanh(0)=0).
+    This is intentional design for stable training startup. To verify
+    seed transformation works, we must set scale to non-zero.
+    """
     from esper.kasmina.slot import SeedSlot
     from esper.leyline import SeedStage
 
@@ -45,6 +50,11 @@ def test_seed_slot_forward_with_seed():
 
     slot.state.transition(SeedStage.TRAINING)
     slot.set_alpha(1.0)
+
+    # Seed's scale is initialized to 0, making it identity by design.
+    # Set scale to non-zero to verify blending works.
+    with torch.no_grad():
+        slot.seed.scale.fill_(1.0)
 
     x = torch.randn(2, 64, 8, 8)
     out = slot.forward(x)

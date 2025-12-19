@@ -47,10 +47,12 @@ class RewardMode(Enum):
     SHAPED: Current dense shaping with PBRS, attribution, warnings (default)
     SPARSE: Terminal-only ground truth (accuracy - param_cost)
     MINIMAL: Sparse + early-cull penalty only
+    SIMPLIFIED: DRL Expert recommended - PBRS + intervention cost + terminal only
     """
     SHAPED = "shaped"
     SPARSE = "sparse"
     MINIMAL = "minimal"
+    SIMPLIFIED = "simplified"
 
 
 class RewardFamily(Enum):
@@ -201,9 +203,12 @@ class ContributionRewardConfig:
     # - improvement_safe_threshold: below this, high contribution is suspicious
     # - hacking_ratio_threshold: contribution/improvement ratio triggering penalty
     # - attribution_sigmoid_steepness: controls discount curve for regressing seeds
+    #   Lower values are more forgiving of normal training variance (±0.1-0.3%)
+    #   steepness=10: -0.1% regression → 27% credit (too aggressive)
+    #   steepness=3:  -0.1% regression → 43% credit, -0.5% → 18% (balanced)
     improvement_safe_threshold: float = 0.1
     hacking_ratio_threshold: float = 5.0
-    attribution_sigmoid_steepness: float = 10.0
+    attribution_sigmoid_steepness: float = 3.0
 
     # Terminal bonus
     terminal_acc_weight: float = 0.05
@@ -665,13 +670,14 @@ def compute_contribution_reward(
         components.pbrs_bonus = pbrs_bonus
 
     # === 3. RENT: Compute Cost ===
-    # Logarithmic penalty on parameter bloat
+    # Logarithmic penalty on parameter bloat from seeds
     rent_penalty = 0.0
     growth_ratio = 0.0
-    if host_params > 0 and total_params > 0:
-        growth_ratio = total_params / host_params
-        # Guard against negative ratios (defensive - shouldn't happen in practice)
-        scaled_cost = math.log(1.0 + max(0.0, growth_ratio))
+    if host_params > 0 and total_params > host_params:
+        # Measure EXCESS params from seeds, not total ratio
+        # growth_ratio = 0 when no seeds, so no rent penalty
+        growth_ratio = (total_params - host_params) / host_params
+        scaled_cost = math.log(1.0 + growth_ratio)
         rent_penalty = min(config.rent_weight * scaled_cost, config.max_rent)
         reward -= rent_penalty
     if components:
@@ -832,6 +838,71 @@ def compute_minimal_reward(
     return reward
 
 
+def compute_simplified_reward(
+    action: LifecycleOp,
+    seed_info: SeedInfo | None,
+    epoch: int,
+    max_epochs: int,
+    val_acc: float,
+    num_contributing_fossilized: int,
+    config: ContributionRewardConfig | None = None,
+) -> float:
+    """Compute simplified 3-component reward (DRL Expert recommended).
+
+    This reward function addresses the "unlearnable landscape" problem by
+    removing conflicting components. Only three signals remain:
+
+    1. PBRS stage progression (preserves optimal policy per Ng et al., 1999)
+    2. Uniform intervention cost (small friction on non-WAIT actions)
+    3. Terminal bonus (accuracy + fossilize count, scaled for 25-step credit)
+
+    Removed vs SHAPED:
+    - bounded_attribution (replace with terminal accuracy)
+    - blending_warning (let terminal handle bad seeds)
+    - probation_warning (let PBRS + terminal handle pacing)
+    - ratio_penalty / attribution_discount (address via environment, not reward)
+    - compute_rent (simplify - not critical for learning)
+
+    Args:
+        action: Action taken (LifecycleOp enum member)
+        seed_info: Seed state info (None if no active seed)
+        epoch: Current epoch
+        max_epochs: Maximum epochs in episode
+        val_acc: Current validation accuracy
+        num_contributing_fossilized: Count of fossilized seeds with meaningful contribution
+        config: Reward configuration (uses default if None)
+
+    Returns:
+        Simplified reward value
+    """
+    if config is None:
+        config = _DEFAULT_CONTRIBUTION_CONFIG
+
+    reward = 0.0
+
+    # === 1. PBRS: Stage Progression ===
+    # This is the ONLY shaping that preserves optimal policy guarantees
+    if seed_info is not None:
+        reward += _contribution_pbrs_bonus(seed_info, config)
+
+    # === 2. Intervention Cost ===
+    # Uniform small negative cost for any non-WAIT action
+    # Prevents "action spam" without creating complex penalty landscape
+    if action != LifecycleOp.WAIT:
+        reward -= 0.01
+
+    # === 3. Terminal Bonus ===
+    # Scaled for 25-step credit assignment (DRL Expert recommendation)
+    if epoch == max_epochs:
+        # Accuracy component: [0, 3] range
+        accuracy_bonus = (val_acc / 100.0) * 3.0
+        # Fossilize component: [0, 6] for 3 slots max
+        fossilize_bonus = num_contributing_fossilized * 2.0
+        reward += accuracy_bonus + fossilize_bonus
+
+    return reward
+
+
 def compute_reward(
     action: LifecycleOp,
     seed_contribution: float | None,
@@ -855,6 +926,7 @@ def compute_reward(
     - SHAPED: Dense shaping with PBRS, attribution, warnings (default)
     - SPARSE: Terminal-only ground truth reward
     - MINIMAL: Sparse + early-cull penalty
+    - SIMPLIFIED: PBRS + intervention cost + terminal (DRL Expert recommended)
 
     Args:
         action: Action taken (LifecycleOp or similar IntEnum)
@@ -919,10 +991,21 @@ def compute_reward(
             config=config,
         )
 
+    elif config.reward_mode == RewardMode.SIMPLIFIED:
+        reward = compute_simplified_reward(
+            action=action,
+            seed_info=seed_info,
+            epoch=epoch,
+            max_epochs=max_epochs,
+            val_acc=val_acc,
+            num_contributing_fossilized=num_contributing_fossilized,
+            config=config,
+        )
+
     else:
         raise ValueError(f"Unknown reward mode: {config.reward_mode}")
 
-    # Handle return_components for sparse/minimal modes
+    # Handle return_components for sparse/minimal/simplified modes
     if return_components:
         components = RewardComponentsTelemetry()
         components.total_reward = reward
@@ -1358,15 +1441,16 @@ def compute_loss_reward(
         clipped *= config.regression_penalty_scale
     reward += (-clipped) * config.loss_delta_weight
 
-    # Compute rent with grace period (logarithmic scaling)
-    if host_params > 0 and total_params > 0:
+    # Compute rent with grace period (logarithmic scaling on seed overhead)
+    if host_params > 0 and total_params > host_params:
         in_grace = False
         if seed_info is not None:
             in_grace = seed_info.seed_age_epochs < config.grace_epochs
         if not in_grace:
-            growth_ratio = total_params / host_params
-            # Guard against negative ratios (defensive - shouldn't happen in practice)
-            scaled_cost = math.log(1.0 + max(0.0, growth_ratio))
+            # Measure EXCESS params from seeds, not total ratio
+            # growth_ratio = 0 when no seeds, so no rent penalty
+            growth_ratio = (total_params - host_params) / host_params
+            scaled_cost = math.log(1.0 + growth_ratio)
             rent_penalty = config.compute_rent_weight * scaled_cost
             rent_penalty = min(rent_penalty, config.max_rent_penalty)
             reward -= rent_penalty
@@ -1429,6 +1513,7 @@ __all__ = [
     "compute_contribution_reward",
     "compute_sparse_reward",
     "compute_minimal_reward",
+    "compute_simplified_reward",
     "compute_loss_reward",
     # PBRS utilities
     "compute_potential",

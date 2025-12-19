@@ -276,13 +276,15 @@ class TestEpisodeCycling:
             }
 
             with torch.no_grad():
-                actions, log_probs, values, hidden = agent.network.get_action(
+                result = agent.network.get_action(
                     states,
                     slot_mask=masks["slot"],
                     blueprint_mask=masks["blueprint"],
                     blend_mask=masks["blend"],
                     op_mask=masks["op"],
                 )
+                # Access result attributes to ensure they're computed
+                _ = result.actions, result.log_probs, result.values, result.hidden
 
         gc.collect()
         final_memory = tracemalloc.get_traced_memory()[0]

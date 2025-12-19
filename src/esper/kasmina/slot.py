@@ -343,11 +343,22 @@ class SeedState:
 
         Call this once per epoch after validation to update telemetry.
         SeedMetrics remains the source of truth for accuracy/epoch data.
+
+        IMPORTANT: accuracy_delta is stage-aware:
+        - TRAINING/GERMINATED (alpha=0): Always 0.0 because seed cannot affect output
+        - BLENDING+ (alpha>0): Stage-relative improvement (proxy for causal contribution)
         """
         from datetime import timezone
 
         self.telemetry.accuracy = self.metrics.current_val_accuracy
-        self.telemetry.accuracy_delta = self.metrics.improvement_since_stage_start
+
+        # Stage-aware accuracy_delta: seeds with alpha=0 have zero causal impact
+        # TRAINING and GERMINATED seeds are learning but not contributing to output
+        if self.stage in (SeedStage.TRAINING, SeedStage.GERMINATED, SeedStage.DORMANT):
+            self.telemetry.accuracy_delta = 0.0
+        else:
+            # BLENDING, PROBATIONARY, FOSSILIZED - seed is contributing via alpha
+            self.telemetry.accuracy_delta = self.metrics.improvement_since_stage_start
         self.telemetry.epochs_in_stage = self.metrics.epochs_in_current_stage
         self.telemetry.stage = self.stage.value
         self.telemetry.alpha = self.alpha
@@ -893,6 +904,9 @@ class SeedSlot(nn.Module):
         prev_alpha = self.state.alpha
         prev_schedule = self.alpha_schedule
 
+        # Invalidate cache ensures forward() picks up the forced value
+        self._cached_alpha_tensor = None
+
         # Override alpha AND disable schedule to force forward() to use state.alpha
         self.state.alpha = value
         self.alpha_schedule = None
@@ -902,6 +916,8 @@ class SeedSlot(nn.Module):
         finally:
             self.state.alpha = prev_alpha
             self.alpha_schedule = prev_schedule
+            # Invalidate cache again to restore original behavior
+            self._cached_alpha_tensor = None
 
     # TODO: [FUTURE ENHANCEMENT] - DDP support for force_alpha
     # Current implementation mutates instance state which is incompatible with
@@ -1078,7 +1094,14 @@ class SeedSlot(nn.Module):
 
                 self._emit_telemetry(
                     TelemetryEventType.SEED_STAGE_CHANGED,
-                    data={"from": old_stage.name, "to": target_stage.name}
+                    data={
+                        "from": old_stage.name,
+                        "to": target_stage.name,
+                        "accuracy_delta": improvement,
+                        "epochs_in_stage": epochs_in_stage,
+                        "epochs_total": epochs_total,
+                        "counterfactual": counterfactual,
+                    }
                 )
 
                 # Handle special stage entry logic
@@ -1147,7 +1170,14 @@ class SeedSlot(nn.Module):
 
         self._emit_telemetry(
             TelemetryEventType.SEED_STAGE_CHANGED,
-            data={"from": old_stage.name, "to": SeedStage.CULLED.name},
+            data={
+                "from": old_stage.name,
+                "to": SeedStage.CULLED.name,
+                "accuracy_delta": improvement,
+                "epochs_in_stage": epochs_in_stage,
+                "epochs_total": epochs_total,
+                "counterfactual": counterfactual,
+            },
         )
         self._emit_telemetry(
             TelemetryEventType.SEED_CULLED,
@@ -1593,6 +1623,12 @@ class SeedSlot(nn.Module):
                 return False
 
             old_stage = self.state.stage
+            # Capture metrics before transition
+            metrics = self.state.metrics
+            epochs_in_stage = metrics.epochs_in_current_stage
+            epochs_total = metrics.epochs_total
+            improvement = metrics.total_improvement
+
             ok = self.state.transition(SeedStage.TRAINING)
             if not ok:
                 raise RuntimeError(
@@ -1602,7 +1638,13 @@ class SeedSlot(nn.Module):
             self._on_enter_stage(SeedStage.TRAINING, old_stage)
             self._emit_telemetry(
                 TelemetryEventType.SEED_STAGE_CHANGED,
-                data={"from": old_stage.name, "to": self.state.stage.name},
+                data={
+                    "from": old_stage.name,
+                    "to": self.state.stage.name,
+                    "accuracy_delta": improvement,
+                    "epochs_in_stage": epochs_in_stage,
+                    "epochs_total": epochs_total,
+                },
             )
             return False
 
@@ -1622,6 +1664,12 @@ class SeedSlot(nn.Module):
                 return False
 
             old_stage = self.state.stage
+            # Capture metrics before transition
+            metrics = self.state.metrics
+            epochs_in_stage = metrics.epochs_in_current_stage
+            epochs_total = metrics.epochs_total
+            improvement = metrics.total_improvement
+
             ok = self.state.transition(SeedStage.BLENDING)
             if not ok:
                 raise RuntimeError(
@@ -1631,7 +1679,13 @@ class SeedSlot(nn.Module):
             self._on_enter_stage(SeedStage.BLENDING, old_stage)
             self._emit_telemetry(
                 TelemetryEventType.SEED_STAGE_CHANGED,
-                data={"from": old_stage.name, "to": self.state.stage.name},
+                data={
+                    "from": old_stage.name,
+                    "to": self.state.stage.name,
+                    "accuracy_delta": improvement,
+                    "epochs_in_stage": epochs_in_stage,
+                    "epochs_total": epochs_total,
+                },
             )
             return False
 
@@ -1649,6 +1703,13 @@ class SeedSlot(nn.Module):
                 if not gate_result.passed:
                     return False
                 old_stage = self.state.stage
+                # Capture metrics before transition
+                metrics = self.state.metrics
+                epochs_in_stage = metrics.epochs_in_current_stage
+                epochs_total = metrics.epochs_total
+                improvement = metrics.total_improvement
+                counterfactual = metrics.counterfactual_contribution
+
                 ok = self.state.transition(SeedStage.PROBATIONARY)
                 if not ok:
                     raise RuntimeError(
@@ -1658,7 +1719,14 @@ class SeedSlot(nn.Module):
                 self._on_enter_stage(SeedStage.PROBATIONARY, old_stage)
                 self._emit_telemetry(
                     TelemetryEventType.SEED_STAGE_CHANGED,
-                    data={"from": old_stage.name, "to": self.state.stage.name},
+                    data={
+                        "from": old_stage.name,
+                        "to": self.state.stage.name,
+                        "accuracy_delta": improvement,
+                        "epochs_in_stage": epochs_in_stage,
+                        "epochs_total": epochs_total,
+                        "counterfactual": counterfactual,
+                    },
                 )
             return False
 

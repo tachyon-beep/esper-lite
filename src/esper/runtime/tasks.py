@@ -72,7 +72,7 @@ class TaskSpec:
         Returns:
             Tuple of (trainset, testset) Dataset objects.
         """
-        if self.name in ("cifar10", "cifar10_deep"):
+        if self.name in ("cifar10", "cifar10_deep", "cifar10_blind"):
             data_root = self.dataloader_defaults.get("data_root", "./data")
             mock = self.dataloader_defaults.get("mock", False)
             return get_cifar10_datasets(data_root=data_root, mock=mock)
@@ -210,6 +210,43 @@ def _tinystories_spec() -> TaskSpec:
     )
 
 
+def _cifar10_blind_spec() -> TaskSpec:
+    """CIFAR-10 with 1x1 convolutions only ("Spatial Blindness").
+
+    This host cannot see spatial features (shapes, edges) and relies purely on
+    per-pixel channel statistics. Baseline accuracy caps at ~25-30%.
+    Seeds (which have 3x3 kernels or attention) must be used to restore
+    spatial awareness.
+    """
+    cifar_config = TaskConfig.for_cifar10()
+    loss_cfg = LossRewardConfig.for_cifar10()
+
+    def _make_model(device: str, slots: list[str] | None = None) -> MorphogeneticModel:
+        if not slots:
+            raise ValueError("slots parameter is required and cannot be empty")
+        # kernel_size=1 creates the "blind" host
+        host = CNNHost(num_classes=10, base_channels=32, kernel_size=1)
+        return MorphogeneticModel(host, device=device, slots=slots, task_config=cifar_config)
+
+    return TaskSpec(
+        name="cifar10_blind",
+        topology="cnn",
+        task_type="classification",
+        model_factory=_make_model,
+        dataloader_factory=load_cifar10,
+        dataloader_defaults={
+            "batch_size": DEFAULT_BATCH_SIZE_TRAINING,
+            "data_root": "./data",
+            "num_workers": 4,
+            "mock": False,
+            "generator": None,
+        },
+        task_config=cifar_config,
+        loss_reward_config=loss_cfg,
+        num_classes=10,
+    )
+
+
 def get_task_spec(name: str) -> TaskSpec:
     """Return TaskSpec preset by name."""
     key = name.lower()
@@ -217,9 +254,11 @@ def get_task_spec(name: str) -> TaskSpec:
         return _cifar10_spec()
     if key == "cifar10_deep":
         return _cifar10_deep_spec()
+    if key == "cifar10_blind":
+        return _cifar10_blind_spec()
     if key == "tinystories":
         return _tinystories_spec()
-    raise ValueError(f"Unknown task '{name}'. Available: cifar10, cifar10_deep, tinystories")
+    raise ValueError(f"Unknown task '{name}'. Available: cifar10, cifar10_deep, cifar10_blind, tinystories")
 
 
 __all__ = ["TaskSpec", "get_task_spec"]

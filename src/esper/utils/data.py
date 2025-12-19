@@ -114,6 +114,168 @@ class SharedBatchIterator:
 _GPU_DATASET_CACHE: dict[str, tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]] = {}
 
 
+def _ensure_cifar10_cached(device: str, data_root: str = "./data") -> None:
+    """Ensure CIFAR-10 is cached on the specified device."""
+    global _GPU_DATASET_CACHE
+    cache_key = f"cifar10_{device}"
+
+    if cache_key not in _GPU_DATASET_CACHE:
+        # Load raw data (no augmentation for GPU-resident - applied at batch time)
+        train_transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
+        ])
+        test_transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
+        ])
+
+        trainset = torchvision.datasets.CIFAR10(
+            root=data_root, train=True, download=True, transform=train_transform
+        )
+        testset = torchvision.datasets.CIFAR10(
+            root=data_root, train=False, download=True, transform=test_transform
+        )
+
+        # Preload to GPU (one-time cost ~12s, amortized over training)
+        train_x = torch.stack([trainset[i][0] for i in range(len(trainset))])
+        train_y = torch.tensor([trainset[i][1] for i in range(len(trainset))])
+        test_x = torch.stack([testset[i][0] for i in range(len(testset))])
+        test_y = torch.tensor([testset[i][1] for i in range(len(testset))])
+
+        _GPU_DATASET_CACHE[cache_key] = (
+            train_x.to(device),
+            train_y.to(device),
+            test_x.to(device),
+            test_y.to(device),
+        )
+
+
+class SharedGPUBatchIterator:
+    """Single GPU-resident DataLoader serving multiple parallel environments per device.
+
+    This is the GPU-preload equivalent of SharedBatchIterator. Instead of having N
+    independent DataLoaders sharing cached GPU tensors (which causes race conditions),
+    this uses ONE DataLoader per device and splits batches across environments.
+
+    CRITICAL: Multiple DataLoaders iterating shared GPU tensors concurrently causes
+    data corruption. This class avoids that by using a single DataLoader per device.
+
+    Architecture:
+    - Groups environments by device
+    - Creates one DataLoader per device with combined batch size for that device's envs
+    - Iteration returns per-environment tensors already on the correct device
+
+    Args:
+        batch_size_per_env: Batch size each environment receives
+        n_envs: Total number of parallel environments
+        env_devices: List of device strings for each env (e.g., ["cuda:0", "cuda:0", "cuda:1", "cuda:1"])
+        shuffle: Whether to shuffle data
+        generator: Optional torch.Generator for reproducible shuffling
+        data_root: Root directory for dataset storage
+        is_train: If True, use training set; if False, use test set
+    """
+
+    def __init__(
+        self,
+        batch_size_per_env: int,
+        n_envs: int,
+        env_devices: list[str],
+        shuffle: bool = True,
+        generator: torch.Generator | None = None,
+        data_root: str = "./data",
+        is_train: bool = True,
+    ):
+        self.n_envs = n_envs
+        self.env_devices = env_devices
+        self.batch_size_per_env = batch_size_per_env
+        self.is_train = is_train
+
+        # Group environments by device
+        # e.g., {cuda:0: [0, 1, 2, 3], cuda:1: [4, 5, 6, 7]}
+        self._device_to_env_indices: dict[str, list[int]] = {}
+        for env_idx, device in enumerate(env_devices):
+            if device not in self._device_to_env_indices:
+                self._device_to_env_indices[device] = []
+            self._device_to_env_indices[device].append(env_idx)
+
+        # Ensure data is cached on all devices
+        for device in self._device_to_env_indices.keys():
+            _ensure_cifar10_cached(device, data_root)
+
+        # Create ONE DataLoader per device with combined batch size
+        self._device_loaders: dict[str, DataLoader] = {}
+        self._device_iters: dict[str, object] = {}
+
+        for device, env_indices in self._device_to_env_indices.items():
+            n_envs_on_device = len(env_indices)
+            total_batch = batch_size_per_env * n_envs_on_device
+
+            cache_key = f"cifar10_{device}"
+            train_x, train_y, test_x, test_y = _GPU_DATASET_CACHE[cache_key]
+
+            if is_train:
+                dataset = TensorDataset(train_x, train_y)
+            else:
+                dataset = TensorDataset(test_x, test_y)
+
+            loader_kwargs = {
+                "batch_size": total_batch,
+                "shuffle": shuffle,
+                "num_workers": 0,  # Data already on GPU, no workers needed
+                "drop_last": is_train,  # Drop last for training, keep for validation
+            }
+            if generator is not None:
+                # Each device gets a deterministically offset generator
+                device_gen = torch.Generator(device='cpu')
+                device_gen.manual_seed(generator.initial_seed() + hash(device) % 2**31)
+                loader_kwargs["generator"] = device_gen
+
+            self._device_loaders[device] = DataLoader(dataset, **loader_kwargs)
+
+        # Compute length as minimum across devices (ensures all devices provide data)
+        self._len = min(len(loader) for loader in self._device_loaders.values())
+
+    def __len__(self) -> int:
+        return self._len
+
+    def __iter__(self) -> "SharedGPUBatchIterator":
+        # Reset iterators for all device loaders
+        self._device_iters = {
+            device: iter(loader)
+            for device, loader in self._device_loaders.items()
+        }
+        return self
+
+    def __next__(self) -> list[tuple[torch.Tensor, torch.Tensor]]:
+        """Returns list of (inputs, targets) tuples, one per environment.
+
+        Tensors are already on the correct device for each environment.
+        """
+        # Collect batches from each device and split across its environments
+        result: list[tuple[torch.Tensor, torch.Tensor] | None] = [None] * self.n_envs
+
+        for device, env_indices in self._device_to_env_indices.items():
+            # Get combined batch from this device's DataLoader
+            try:
+                inputs, targets = next(self._device_iters[device])
+            except StopIteration:
+                raise StopIteration
+
+            # Split into per-env chunks for environments on this device
+            n_envs_on_device = len(env_indices)
+            input_chunks = inputs.chunk(n_envs_on_device)
+            target_chunks = targets.chunk(n_envs_on_device)
+
+            # Assign to correct environment indices
+            for local_idx, (inp, tgt) in enumerate(zip(input_chunks, target_chunks)):
+                global_env_idx = env_indices[local_idx]
+                result[global_env_idx] = (inp, tgt)
+
+        # Type narrowing - all slots should be filled
+        return [(inp, tgt) for inp, tgt in result if inp is not None]
+
+
 def load_cifar10_gpu(
     batch_size: int = 512,
     generator: torch.Generator | None = None,

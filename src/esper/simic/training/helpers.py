@@ -33,6 +33,7 @@ from esper.simic.telemetry import (
     materialize_grad_stats,
     TelemetryConfig,
 )
+from esper.leyline.slot_config import SlotConfig
 from esper.leyline.slot_id import validate_slot_ids
 from esper.nissa import get_hub
 from esper.utils.loss import compute_task_loss_with_metrics
@@ -316,14 +317,17 @@ def run_heuristic_episode(
         task_spec = get_task_spec("cifar10")
     task_type = task_spec.task_type
 
+    if slots is None:
+        slots = list(SlotConfig.default().slot_ids)
+    if not slots:
+        raise ValueError("slots parameter is required and cannot be empty")
+
     torch.manual_seed(base_seed)
     random.seed(base_seed)
 
     episode_id = f"heur_{base_seed}"
     model = create_model(task=task_spec, device=device, slots=slots)
 
-    if not slots:
-        raise ValueError("slots parameter is required and cannot be empty")
     if len(slots) != len(set(slots)):
         raise ValueError(f"slots contains duplicates: {slots}")
     enabled_slots = validate_slot_ids(list(slots))
@@ -349,6 +353,9 @@ def run_heuristic_episode(
         )
         slot.isolate_gradients = True
 
+    # Calculate host_params before emitting (needed for Karn TUI)
+    host_params = sum(p.numel() for p in model.get_host_parameters() if p.requires_grad)
+
     # Emit TRAINING_STARTED to activate Karn (P1 fix)
     hub.emit(TelemetryEvent(
         event_type=TelemetryEventType.TRAINING_STARTED,
@@ -358,6 +365,7 @@ def run_heuristic_episode(
             "max_epochs": max_epochs,
             "task": task_spec.name,
             "mode": "heuristic",
+            "host_params": host_params,
         },
     ))
 
@@ -372,8 +380,6 @@ def run_heuristic_episode(
     # Track ops by LifecycleOp enum value
     action_counts = {op.name: 0 for op in LifecycleOp}
     episode_rewards = []
-
-    host_params = sum(p.numel() for p in model.get_host_parameters() if p.requires_grad)
 
     for epoch in range(1, max_epochs + 1):
         for slot_id in enabled_slots:
@@ -619,6 +625,11 @@ def train_heuristic(
     from esper.tamiyo import HeuristicTamiyo
     from esper.tamiyo.heuristic import HeuristicPolicyConfig
     from esper.runtime import get_task_spec  # Lazy import to avoid circular dependency
+
+    if slots is None:
+        slots = list(SlotConfig.default().slot_ids)
+    if not slots:
+        raise ValueError("slots parameter is required and cannot be empty")
 
     task_spec = get_task_spec(task)
 

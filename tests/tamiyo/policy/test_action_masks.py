@@ -23,7 +23,7 @@ from esper.tamiyo.policy.action_masks import (
     InvalidStateMachineError,
 )
 from esper.leyline import SeedStage, MIN_CULL_AGE
-from esper.leyline.factored_actions import LifecycleOp, NUM_OPS
+from esper.leyline.factored_actions import LifecycleOp, NUM_OPS, NUM_BLUEPRINTS
 
 
 def test_compute_action_masks_empty_slots():
@@ -216,7 +216,7 @@ def test_compute_batch_masks():
 
     # Check shapes (NUM_OPS=4 now)
     assert masks["slot"].shape == (2, 3)
-    assert masks["blueprint"].shape == (2, 5)
+    assert masks["blueprint"].shape == (2, NUM_BLUEPRINTS)
     assert masks["blend"].shape == (2, 3)
     assert masks["op"].shape == (2, NUM_OPS)
 
