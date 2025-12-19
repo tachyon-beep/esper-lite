@@ -94,3 +94,29 @@ class TestSanctumAppIntegration:
 
         import asyncio
         asyncio.run(test_quit())
+
+
+@pytest.mark.asyncio
+async def test_new_layout_structure():
+    """Test that new layout has correct panel structure."""
+    from esper.karn.sanctum.app import SanctumApp
+    from esper.karn.sanctum.backend import SanctumBackend
+
+    backend = SanctumBackend()
+    app = SanctumApp(backend=backend, num_envs=4)
+
+    async with app.run_test() as pilot:
+        # Should have EnvOverview and Scoreboard in top section
+        assert app.query_one("#env-overview") is not None
+        assert app.query_one("#scoreboard") is not None
+
+        # Should have EventLog and TamiyoBrain in bottom section
+        assert app.query_one("#event-log") is not None
+        assert app.query_one("#tamiyo-brain") is not None
+
+        # Should NOT have SystemResources or TrainingHealth
+        from textual.css.query import NoMatches
+        with pytest.raises(NoMatches):
+            app.query_one("#system-resources")
+        with pytest.raises(NoMatches):
+            app.query_one("#training-health")
