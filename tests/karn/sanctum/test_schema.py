@@ -189,3 +189,27 @@ class TestSanctumSnapshot:
         """Must track dynamic slot configuration."""
         snapshot = SanctumSnapshot(slot_ids=["r0c0", "r0c1", "r1c0", "r1c1"])
         assert len(snapshot.slot_ids) == 4
+
+
+def test_system_vitals_memory_alarm_threshold():
+    """Memory above 90% should trigger alarm state."""
+    vitals = SystemVitals(
+        gpu_memory_used_gb=9.5,
+        gpu_memory_total_gb=10.0,  # 95% usage
+        ram_used_gb=30.0,
+        ram_total_gb=32.0,  # 93.75% usage
+    )
+    assert vitals.has_memory_alarm is True
+    assert vitals.memory_alarm_devices == ["cuda:0"]
+
+
+def test_system_vitals_no_alarm_below_threshold():
+    """Memory below 90% should not trigger alarm."""
+    vitals = SystemVitals(
+        gpu_memory_used_gb=7.0,
+        gpu_memory_total_gb=10.0,  # 70% usage
+        ram_used_gb=20.0,
+        ram_total_gb=32.0,  # 62.5% usage
+    )
+    assert vitals.has_memory_alarm is False
+    assert vitals.memory_alarm_devices == []

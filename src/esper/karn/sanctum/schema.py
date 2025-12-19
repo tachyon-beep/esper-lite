@@ -293,6 +293,42 @@ class SystemVitals:
     # Host network
     host_params: int = 0
 
+    @property
+    def has_memory_alarm(self) -> bool:
+        """Check if any device exceeds 90% memory usage."""
+        # Check RAM
+        if self.ram_total_gb > 0 and (self.ram_used_gb / self.ram_total_gb) > 0.90:
+            return True
+        # Check GPUs
+        for stats in self.gpu_stats.values():
+            if stats.memory_total_gb > 0:
+                usage = stats.memory_used_gb / stats.memory_total_gb
+                if usage > 0.90:
+                    return True
+        # Fallback single GPU
+        if self.gpu_memory_total_gb > 0:
+            usage = self.gpu_memory_used_gb / self.gpu_memory_total_gb
+            if usage > 0.90:
+                return True
+        return False
+
+    @property
+    def memory_alarm_devices(self) -> list[str]:
+        """Get list of devices exceeding 90% memory usage."""
+        devices = []
+        # Check multi-GPU stats first
+        for device, stats in self.gpu_stats.items():
+            if stats.memory_total_gb > 0:
+                usage = stats.memory_used_gb / stats.memory_total_gb
+                if usage > 0.90:
+                    devices.append(f"cuda:{device}")
+        # Fallback to single GPU if no gpu_stats but fallback fields are populated
+        if not devices and self.gpu_memory_total_gb > 0:
+            usage = self.gpu_memory_used_gb / self.gpu_memory_total_gb
+            if usage > 0.90:
+                devices.append("cuda:0")
+        return devices
+
 
 @dataclass
 class RewardComponents:
@@ -404,6 +440,9 @@ class SanctumSnapshot:
     runtime_seconds: float = 0.0
     staleness_seconds: float = float('inf')
     captured_at: str = ""  # ISO timestamp
+    total_events_received: int = 0  # Debug: total events received by backend
+    poll_count: int = 0  # Debug: number of UI poll cycles
+    training_thread_alive: bool | None = None  # Debug: is training thread running?
 
     # Aggregates (computed from envs)
     aggregate_mean_accuracy: float = 0.0
