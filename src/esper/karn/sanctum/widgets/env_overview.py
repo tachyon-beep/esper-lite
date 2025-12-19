@@ -52,6 +52,7 @@ class EnvOverview(Static):
         self._num_envs = num_envs
         self.table = DataTable(zebra_stripes=True, cursor_type="row")
         self._snapshot: SanctumSnapshot | None = None
+        self._current_slot_ids: list[str] = []  # Track slot_ids to detect column changes
 
     def compose(self):
         """Compose the widget."""
@@ -62,9 +63,17 @@ class EnvOverview(Static):
         self._setup_columns()
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
-        """Update table with new snapshot data."""
+        """Update table with new snapshot data.
+
+        Only rebuilds columns if slot_ids changed. Preserves cursor position.
+        """
         self._snapshot = snapshot
-        self._setup_columns()
+
+        # Only rebuild columns if slot_ids changed
+        if snapshot.slot_ids != self._current_slot_ids:
+            self._setup_columns()
+            self._current_slot_ids = list(snapshot.slot_ids)
+
         self._refresh_table()
 
     def _setup_columns(self) -> None:
@@ -93,9 +102,15 @@ class EnvOverview(Static):
         self.table.add_column("Status", key="status")
 
     def _refresh_table(self) -> None:
-        """Refresh table rows with current snapshot data."""
+        """Refresh table rows with current snapshot data.
+
+        Preserves cursor position across refresh cycles.
+        """
         if self._snapshot is None:
             return
+
+        # Save cursor position before clearing
+        saved_cursor_row = self.table.cursor_row
 
         # Clear existing rows
         self.table.clear()
@@ -114,6 +129,11 @@ class EnvOverview(Static):
         if len(self._snapshot.envs) > 1:
             self._add_separator_row()
             self._add_aggregate_row()
+
+        # Restore cursor position (clamped to valid range)
+        if self.table.row_count > 0 and saved_cursor_row is not None:
+            target_row = min(saved_cursor_row, self.table.row_count - 1)
+            self.table.move_cursor(row=target_row)
 
     def _add_env_row(self, env: "EnvState") -> None:
         """Add a single environment row."""
