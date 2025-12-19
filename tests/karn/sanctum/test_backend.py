@@ -544,6 +544,58 @@ class TestSanctumAggregator:
         # Verify episode counter updated
         assert snapshot.current_episode == 1
 
+    def test_batch_completed_resets_counterfactual_matrix(self):
+        """BATCH_COMPLETED should reset counterfactual matrix to prevent stale data.
+
+        Regression test: Without this reset, old counterfactual data from a previous
+        episode would persist and be displayed for environments that have completely
+        different seeds in the new episode, causing confusion.
+        """
+        from esper.karn.sanctum.schema import CounterfactualConfig, CounterfactualSnapshot
+
+        agg = SanctumAggregator(num_envs=4)
+
+        # Simulate receiving a counterfactual matrix
+        matrix_event = MagicMock()
+        matrix_event.event_type = MagicMock()
+        matrix_event.event_type.name = "COUNTERFACTUAL_MATRIX_COMPUTED"
+        matrix_event.timestamp = datetime.now(timezone.utc)
+        matrix_event.data = {
+            "env_id": 0,
+            "slot_ids": ["r0c0", "r0c1"],
+            "configs": [
+                {"seed_mask": [False, False], "accuracy": 70.0},
+                {"seed_mask": [True, False], "accuracy": 72.0},
+                {"seed_mask": [False, True], "accuracy": 71.0},
+                {"seed_mask": [True, True], "accuracy": 75.0},
+            ],
+            "strategy": "full_factorial",
+            "compute_time_ms": 50.0,
+        }
+        agg.process_event(matrix_event)
+
+        snapshot = agg.get_snapshot()
+        env = snapshot.envs[0]
+
+        # Verify matrix was captured
+        assert env.counterfactual_matrix.strategy == "full_factorial"
+        assert len(env.counterfactual_matrix.configs) == 4
+
+        # Now emit BATCH_COMPLETED
+        batch_event = MagicMock()
+        batch_event.event_type = MagicMock()
+        batch_event.event_type.name = "BATCH_COMPLETED"
+        batch_event.timestamp = datetime.now(timezone.utc)
+        batch_event.data = {"episodes_completed": 1}
+        agg.process_event(batch_event)
+
+        snapshot = agg.get_snapshot()
+        env = snapshot.envs[0]
+
+        # Verify counterfactual matrix was reset
+        assert env.counterfactual_matrix.strategy == "unavailable"
+        assert len(env.counterfactual_matrix.configs) == 0
+
     def test_batch_completed_captures_best_runs(self):
         """BATCH_COMPLETED should capture best_runs for envs that improved."""
         agg = SanctumAggregator(num_envs=4)

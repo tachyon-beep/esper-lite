@@ -673,6 +673,9 @@ class SanctumAggregator:
             env.fossilized_count = 0
             env.culled_count = 0
             env.fossilized_params = 0
+            # Reset counterfactual matrix - stale data from previous episode
+            # would confuse users when current seeds have different composition
+            env.counterfactual_matrix = CounterfactualSnapshot()
 
     def _handle_counterfactual_matrix(self, event: "TelemetryEvent") -> None:
         """Handle COUNTERFACTUAL_MATRIX_COMPUTED event."""
