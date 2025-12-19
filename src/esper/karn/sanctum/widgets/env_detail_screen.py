@@ -198,6 +198,12 @@ class EnvDetailScreen(ModalScreen[None]):
         min-height: 12;
     }
 
+    EnvDetailScreen SeedCard {
+        width: 1fr;
+        height: auto;
+        min-height: 10;
+    }
+
     EnvDetailScreen .metrics-section {
         height: auto;
         margin-top: 1;
