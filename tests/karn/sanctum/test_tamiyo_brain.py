@@ -444,3 +444,52 @@ async def test_zero_actions_display():
 
         widget.update_snapshot(snapshot)
         assert widget._snapshot.tamiyo.total_actions == 0
+
+
+@pytest.mark.asyncio
+async def test_tamiyo_brain_action_distribution_bar():
+    """Action distribution should render as horizontal stacked bar."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            action_counts={"WAIT": 35, "GERMINATE": 25, "CULL": 0, "FOSSILIZE": 40},
+            total_actions=100,
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+
+        # Test the action bar rendering method
+        bar = widget._render_action_distribution_bar()
+        assert bar is not None
+
+
+@pytest.mark.asyncio
+async def test_tamiyo_brain_learning_vitals_gauges():
+    """Learning vitals gauges should render correctly."""
+    app = TamiyoBrainTestApp()
+    async with app.run_test():
+        widget = app.query_one(TamiyoBrain)
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        snapshot.tamiyo = TamiyoState(
+            action_counts={"WAIT": 35, "GERMINATE": 25, "CULL": 0, "FOSSILIZE": 40},
+            total_actions=100,
+            entropy=0.42,
+            value_loss=0.08,
+            advantage_mean=0.31,
+            ppo_data_received=True,
+        )
+
+        widget.update_snapshot(snapshot)
+
+        # Verify gauges render
+        entropy_gauge = widget._render_gauge("Entropy", 0.42, 0, 2.0, "Getting decisive")
+        assert entropy_gauge is not None
+
+        value_gauge = widget._render_gauge("Value Loss", 0.08, 0, 1.0, "Learning well")
+        assert value_gauge is not None
+
+        advantage_gauge = widget._render_gauge("Advantage", 0.31, -1.0, 1.0, "Choices working")
+        assert advantage_gauge is not None

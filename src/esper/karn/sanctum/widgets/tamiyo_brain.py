@@ -1,10 +1,9 @@
-"""TamiyoBrain widget - Policy agent diagnostics.
+"""TamiyoBrain widget - Policy agent diagnostics (Redesigned).
 
-Port of tui.py _render_tamiyo_brain() (lines 1192-1237).
-Shows 4-column layout with policy health, losses, vitals, and actions.
-
-Reference: src/esper/karn/tui.py lines 1192-1237 (_render_tamiyo_brain method)
-          src/esper/karn/tui.py lines 1373-1483 (helper table methods)
+New layout focuses on answering:
+- "What is Tamiyo doing?" (Action distribution bar)
+- "Is she learning?" (Entropy, Value Loss gauges)
+- "What did she just decide?" (Last Decision snapshot)
 """
 from __future__ import annotations
 
@@ -24,31 +23,23 @@ if TYPE_CHECKING:
 class TamiyoBrain(Static):
     """TamiyoBrain widget - Policy agent diagnostics.
 
-    Shows:
-    1. Health: entropy, clip, KL, explained variance with status indicators
-    2. Losses: policy/value/entropy loss, gradient norm
-    3. Vitals: LR, ratio stats (min/max/std), gradient health (dead/exploding, GradHP)
-    4. Actions: WAIT/GERMINATE/CULL/FOSSILIZE distribution with percentages
-
-    Before PPO data arrives, shows waiting state with progress indicator.
+    New two-section layout:
+    1. LEARNING VITALS - Action distribution bar + gauges (entropy, value loss, advantage)
+    2. LAST DECISION - What Tamiyo saw, chose, and got
     """
 
     def __init__(self, **kwargs) -> None:
-        """Initialize TamiyoBrain widget."""
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
-        """Update widget with new snapshot data."""
         self._snapshot = snapshot
         self.refresh()
 
     def render(self) -> Panel:
-        """Render the TamiyoBrain panel."""
         if self._snapshot is None:
-            return Panel("No data", title="TAMIYO BRAIN (Policy Agent)", border_style="magenta")
+            return Panel("No data", title="TAMIYO", border_style="magenta")
 
-        # Show waiting state if no PPO data received yet
         if not self._snapshot.tamiyo.ppo_data_received:
             waiting_text = Text(justify="center")
             waiting_text.append("⏳ Waiting for PPO data...\n", style="dim italic")
@@ -58,202 +49,214 @@ class TamiyoBrain(Static):
             )
             return Panel(
                 waiting_text,
-                title="[bold magenta]TAMIYO BRAIN (Policy Agent)[/bold magenta]",
+                title="[bold magenta]TAMIYO[/bold magenta]",
                 border_style="magenta dim",
             )
 
-        # Create a grid layout for the brain panel (4 columns)
-        grid = Table.grid(expand=True)
-        grid.add_column(ratio=1)
-        grid.add_column(ratio=1)
-        grid.add_column(ratio=1)
-        grid.add_column(ratio=1)
+        # Main layout: two sections stacked
+        main_table = Table.grid(expand=True)
+        main_table.add_column(ratio=1)
 
-        # Column 1: Health
-        health_table = self._render_policy_health_table()
+        # Section 1: Learning Vitals
+        vitals_panel = self._render_learning_vitals()
+        main_table.add_row(vitals_panel)
 
-        # Column 2: Losses
-        losses_table = self._render_losses_table()
-
-        # Column 3: Vitals
-        vitals_table = self._render_vitals_table()
-
-        # Column 4: Actions
-        actions_table = self._render_actions_table()
-
-        # Use fixed height for uniform sub-panels (7 rows + border)
-        panel_height = 9
-        grid.add_row(
-            Panel(health_table, title="Health", border_style="dim", height=panel_height),
-            Panel(losses_table, title="Losses", border_style="dim", height=panel_height),
-            Panel(vitals_table, title="Vitals", border_style="dim", height=panel_height),
-            Panel(actions_table, title="Actions", border_style="dim", height=panel_height),
-        )
+        # Section 2: Last Decision (if available)
+        decision_panel = self._render_last_decision()
+        main_table.add_row(decision_panel)
 
         return Panel(
-            grid,
-            title="[bold magenta]TAMIYO BRAIN (Policy Agent)[/bold magenta]",
+            main_table,
+            title="[bold magenta]TAMIYO[/bold magenta]",
             border_style="magenta",
         )
 
-    def _render_policy_health_table(self) -> Table:
-        """Render policy health as a table (Health column)."""
-        table = Table(show_header=False, box=None, padding=(0, 1))
-        table.add_column("Metric", style="dim", justify="left", width=10)
-        table.add_column("Val", justify="right", width=8)
-        table.add_column("St", justify="center", width=6)  # "✕ CRIT" is 6 chars
-
+    def _render_learning_vitals(self) -> Panel:
+        """Render Learning Vitals section with action bar and gauges."""
         tamiyo = self._snapshot.tamiyo
 
-        # Entropy
-        entropy_status = self._get_entropy_status(tamiyo.entropy)
-        table.add_row("Entropy", f"{tamiyo.entropy:.2f}", self._status_text(entropy_status))
+        content = Table.grid(expand=True)
+        content.add_column(ratio=1)
 
-        # Clip fraction
-        clip_status = self._get_clip_status(tamiyo.clip_fraction)
-        table.add_row("Clip", f"{tamiyo.clip_fraction:.2f}", self._status_text(clip_status))
+        # Row 1: Action distribution bar
+        action_bar = self._render_action_distribution_bar()
+        content.add_row(action_bar)
 
-        # KL divergence
-        kl_status = self._get_kl_status(tamiyo.kl_divergence)
-        table.add_row("KL", f"{tamiyo.kl_divergence:.3f}", self._status_text(kl_status))
+        # Row 2: Gauges (Entropy, Value Loss, Advantage)
+        gauges = Table.grid(expand=True)
+        gauges.add_column(ratio=1)
+        gauges.add_column(ratio=1)
+        gauges.add_column(ratio=1)
 
-        # Explained variance
-        ev_status = self._get_ev_status(tamiyo.explained_variance)
-        table.add_row("ExplVar", f"{tamiyo.explained_variance:.2f}", self._status_text(ev_status))
+        entropy_gauge = self._render_gauge(
+            "Entropy", tamiyo.entropy, 0, 2.0,
+            self._get_entropy_label(tamiyo.entropy)
+        )
+        value_gauge = self._render_gauge(
+            "Value Loss", tamiyo.value_loss, 0, 1.0,
+            self._get_value_loss_label(tamiyo.value_loss)
+        )
+        advantage_gauge = self._render_gauge(
+            "Advantage", tamiyo.advantage_mean, -1.0, 1.0,
+            self._get_advantage_label(tamiyo.advantage_mean)
+        )
 
-        return table
+        gauges.add_row(entropy_gauge, value_gauge, advantage_gauge)
+        content.add_row(gauges)
 
-    def _render_losses_table(self) -> Table:
-        """Render losses as a table (Losses column)."""
-        table = Table(show_header=False, box=None, padding=(0, 1))
-        table.add_column("Loss", style="dim", justify="left", width=10)
-        table.add_column("Value", justify="right", width=10)
+        return Panel(content, title="LEARNING VITALS", border_style="dim")
 
-        tamiyo = self._snapshot.tamiyo
-
-        table.add_row("Policy", f"{tamiyo.policy_loss:.4f}")
-        table.add_row("Value", f"{tamiyo.value_loss:.4f}")
-        table.add_row("Entropy", f"{tamiyo.entropy_loss:.4f}")
-
-        # Gradient norm with status
-        grad_status = self._get_grad_norm_status(tamiyo.grad_norm)
-        grad_style = self._status_style(grad_status)
-        table.add_row("GradNorm", Text(f"{tamiyo.grad_norm:.2f}", style=grad_style))
-
-        return table
-
-    def _render_vitals_table(self) -> Table:
-        """Render training vitals as a table (Vitals column)."""
-        table = Table(show_header=False, box=None, padding=(0, 1))
-        table.add_column("Metric", style="dim", justify="left", width=10)
-        table.add_column("Value", justify="right", width=10)
-
-        tamiyo = self._snapshot.tamiyo
-
-        # Learning rate (scientific notation)
-        if tamiyo.learning_rate is not None:
-            lr_str = f"{tamiyo.learning_rate:.2e}"
-        else:
-            lr_str = "─"
-        table.add_row("LR", lr_str)
-
-        # Ratio statistics (PPO policy ratio - should stay near 1.0)
-        ratio_max = tamiyo.ratio_max
-        ratio_min = tamiyo.ratio_min
-        ratio_std = tamiyo.ratio_std
-
-        # Color code ratio_max: green if <1.5, yellow if <2.0, red if >=2.0
-        if ratio_max >= TUIThresholds.RATIO_MAX_CRITICAL:
-            max_style = "red bold"
-        elif ratio_max >= TUIThresholds.RATIO_MAX_WARNING:
-            max_style = "yellow"
-        else:
-            max_style = "green"
-        table.add_row("Ratio↑", Text(f"{ratio_max:.2f}", style=max_style))
-
-        # Color code ratio_min: green if >0.5, yellow if >0.3, red if <=0.3
-        if ratio_min <= TUIThresholds.RATIO_MIN_CRITICAL:
-            min_style = "red bold"
-        elif ratio_min <= TUIThresholds.RATIO_MIN_WARNING:
-            min_style = "yellow"
-        else:
-            min_style = "green"
-        table.add_row("Ratio↓", Text(f"{ratio_min:.2f}", style=min_style))
-
-        # Ratio std - higher means more variance in updates
-        if ratio_std >= TUIThresholds.RATIO_STD_WARNING:
-            std_style = "yellow"
-        else:
-            std_style = ""
-        table.add_row("Ratio σ", Text(f"{ratio_std:.3f}", style=std_style))
-
-        # Gradient health: dead/exploding layers
-        dead = tamiyo.dead_layers
-        exploding = tamiyo.exploding_layers
-        health = tamiyo.layer_gradient_health
-
-        # Show gradient issues with color
-        if dead > 0:
-            table.add_row("Dead", Text(f"{dead} layers", style="yellow bold"))
-        if exploding > 0:
-            table.add_row("Explode", Text(f"{exploding} layers", style="red bold"))
-
-        # Overall gradient health (1.0 = perfect)
-        if health < TUIThresholds.GRAD_HEALTH_CRITICAL:
-            health_style = "red bold"
-        elif health < TUIThresholds.GRAD_HEALTH_WARNING:
-            health_style = "yellow"
-        else:
-            health_style = "green"
-        table.add_row("GradHP", Text(f"{health:.0%}", style=health_style))
-
-        return table
-
-    def _render_actions_table(self) -> Table:
-        """Render action distribution as a table (Actions column)."""
-        table = Table(show_header=False, box=None, padding=(0, 0))
-        table.add_column("Action", style="dim", width=8)
-        table.add_column("Bar", width=8)
-        table.add_column("%", justify="right", width=4)
-
+    def _render_action_distribution_bar(self) -> Text:
+        """Render horizontal stacked bar for action distribution."""
         tamiyo = self._snapshot.tamiyo
         total = tamiyo.total_actions
 
         if total == 0:
-            table.add_row("─", "─", "─")
-            return table
+            return Text("Actions: [no data]", style="dim")
 
         # Calculate percentages
-        percentages = {}
-        for action, count in tamiyo.action_counts.items():
-            percentages[action] = (count / total) * 100
+        pcts = {a: (c / total) * 100 for a, c in tamiyo.action_counts.items()}
 
-        # Display actions in descending order by percentage
-        for action, pct in sorted(percentages.items(), key=lambda x: -x[1]):
-            action_style = {
-                "WAIT": "dim",
-                "GERMINATE": "green",
-                "CULL": "red",
-                "FOSSILIZE": "blue",
-            }.get(action, "white")
+        # Build stacked bar (width 40 chars)
+        bar_width = 40
+        bar = Text("Actions: [")
 
-            # Warn if WAIT > 70%
-            pct_style = (
-                "yellow bold"
-                if action == "WAIT" and pct > TUIThresholds.WAIT_DOMINANCE_WARNING * 100
-                else ""
+        # Color mapping
+        colors = {
+            "GERMINATE": "green",
+            "WAIT": "dim",
+            "BLEND": "cyan",  # Blending includes FOSSILIZE transitions
+            "FOSSILIZE": "blue",
+            "CULL": "red",
+        }
+
+        for action in ["GERMINATE", "WAIT", "FOSSILIZE", "CULL"]:
+            pct = pcts.get(action, 0)
+            width = int((pct / 100) * bar_width)
+            if width > 0:
+                bar.append("▓" * width, style=colors.get(action, "white"))
+
+        bar.append("]")
+
+        # Add legend
+        bar.append("  ")
+        for action in ["GERMINATE", "WAIT", "FOSSILIZE"]:
+            if pcts.get(action, 0) > 0:
+                bar.append(f"{action[:4]} {pcts[action]:.0f}%  ", style=colors.get(action, "white"))
+
+        return bar
+
+    def _render_gauge(self, label: str, value: float, min_val: float, max_val: float, description: str) -> Text:
+        """Render a single gauge with label and description."""
+        # Normalize to 0-1
+        normalized = (value - min_val) / (max_val - min_val) if max_val != min_val else 0.5
+        normalized = max(0, min(1, normalized))
+
+        # Build gauge bar (width 12)
+        gauge_width = 12
+        filled = int(normalized * gauge_width)
+        empty = gauge_width - filled
+
+        gauge = Text()
+        gauge.append(f"{label}: ", style="dim")
+        gauge.append("[")
+        gauge.append("█" * filled, style="cyan")
+        gauge.append("░" * empty, style="dim")
+        gauge.append("]")
+        gauge.append(f" {value:.2f}  ", style="cyan")
+        gauge.append(f'"{description}"', style="italic dim")
+
+        return gauge
+
+    def _get_entropy_label(self, entropy: float) -> str:
+        if entropy < TUIThresholds.ENTROPY_CRITICAL:
+            return "Collapsed!"
+        elif entropy < TUIThresholds.ENTROPY_WARNING:
+            return "Getting decisive"
+        else:
+            return "Exploring"
+
+    def _get_value_loss_label(self, value_loss: float) -> str:
+        if value_loss < 0.1:
+            return "Learning well"
+        elif value_loss < 0.5:
+            return "Still learning"
+        else:
+            return "Struggling"
+
+    def _get_advantage_label(self, advantage: float) -> str:
+        if advantage > 0.2:
+            return "Choices working"
+        elif advantage > 0:
+            return "Slight edge"
+        else:
+            return "Needs improvement"
+
+    def _render_last_decision(self) -> Panel:
+        """Render Last Decision section."""
+        tamiyo = self._snapshot.tamiyo
+        decision = tamiyo.last_decision
+
+        if decision is None:
+            return Panel(
+                Text("No decisions captured yet", style="dim italic"),
+                title="LAST DECISION",
+                border_style="dim",
             )
 
-            table.add_row(
-                Text(action, style=action_style),
-                self._make_bar(pct, width=8),
-                Text(f"{pct:.0f}%", style=pct_style),
-            )
+        # Build decision display
+        content = Table.grid(expand=True)
+        content.add_column(ratio=1)
 
-        return table
+        # Time since decision
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        age = (now - decision.timestamp).total_seconds()
+        age_str = f"{age:.1f}s ago" if age < 60 else f"{age/60:.0f}m ago"
+
+        # SAW line
+        saw_line = Text()
+        saw_line.append("SAW:  ", style="bold")
+        for slot_id, state in decision.slot_states.items():
+            saw_line.append(f"{slot_id}: {state} │ ", style="dim")
+        saw_line.append(f"Host: {decision.host_accuracy:.0f}%", style="cyan")
+        content.add_row(saw_line)
+
+        # CHOSE line
+        chose_line = Text()
+        chose_line.append("CHOSE: ", style="bold")
+        chose_line.append(f"{decision.chosen_action}", style="green bold")
+        if decision.chosen_slot:
+            chose_line.append(f" {decision.chosen_slot}", style="cyan")
+        chose_line.append(f" ({decision.confidence:.0%})", style="dim")
+        content.add_row(chose_line)
+
+        # EXPECTED vs GOT line
+        result_line = Text()
+        result_line.append("EXPECTED: ", style="dim")
+        result_line.append(f"{decision.expected_value:+.2f}", style="cyan")
+        result_line.append("  →  GOT: ", style="dim")
+        if decision.actual_reward is not None:
+            diff = decision.actual_reward - decision.expected_value
+            style = "green" if abs(diff) < 0.1 else ("yellow" if diff > 0 else "red")
+            result_line.append(f"{decision.actual_reward:+.2f} ", style=style)
+            result_line.append("✓" if abs(diff) < 0.1 else "✗", style=style)
+        else:
+            result_line.append("pending...", style="dim italic")
+        content.add_row(result_line)
+
+        # Alternatives line
+        if decision.alternatives:
+            alt_line = Text()
+            alt_line.append("Also: ", style="dim")
+            for action, prob in decision.alternatives[:2]:
+                alt_line.append(f"{action} ({prob:.0%}), ", style="dim")
+            content.add_row(alt_line)
+
+        return Panel(content, title=f"LAST DECISION ({age_str})", border_style="dim")
 
     # ========================================================================
-    # Status Helpers (using TUIThresholds)
+    # Legacy status helpers (kept for backward compatibility with existing tests)
     # ========================================================================
 
     def _get_entropy_status(self, entropy: float) -> str:
