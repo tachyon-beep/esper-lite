@@ -33,7 +33,7 @@ class LSTMPolicyBundle:
 
     def __init__(
         self,
-        feature_dim: int = 50,
+        feature_dim: int | None = None,
         hidden_dim: int = 256,
         num_lstm_layers: int = 1,
         slot_config: SlotConfig | None = None,
@@ -42,16 +42,25 @@ class LSTMPolicyBundle:
         """Initialize LSTM policy bundle.
 
         Args:
-            feature_dim: Observation feature dimension (state_dim for the network)
+            feature_dim: Observation feature dimension. If None, auto-computed from
+                slot_config using get_feature_size(). This ensures the network input
+                dimension matches the feature extractor output.
             hidden_dim: LSTM hidden dimension
             num_lstm_layers: Number of LSTM layers
             slot_config: Slot configuration (defaults to SlotConfig.default())
             dropout: Dropout rate for LSTM (currently unused by network)
         """
-        self.feature_dim = feature_dim
         self.hidden_dim = hidden_dim
         self.num_lstm_layers = num_lstm_layers
         self.slot_config = slot_config or SlotConfig.default()
+
+        # Auto-compute feature_dim from slot_config if not provided
+        # This prevents drift between feature extraction and network input dimensions
+        if feature_dim is None:
+            from esper.tamiyo.policy.features import get_feature_size
+            feature_dim = get_feature_size(self.slot_config)
+
+        self.feature_dim = feature_dim
 
         # Lazy import to avoid circular dependency
         from esper.simic.agent.network import FactoredRecurrentActorCritic
