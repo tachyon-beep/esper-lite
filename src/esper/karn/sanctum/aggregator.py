@@ -128,6 +128,9 @@ class SanctumAggregator:
     # Slot configuration (dynamic - populated from training config or observed seeds)
     _slot_ids: list[str] = field(default_factory=list)
 
+    # Rolling average history (mean accuracy across all envs, updated per epoch)
+    _mean_accuracy_history: deque[float] = field(default_factory=lambda: deque(maxlen=50))
+
     # Thread safety
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -140,6 +143,7 @@ class SanctumAggregator:
         self._gpu_devices = []
         self._best_runs = []
         self._slot_ids = []
+        self._mean_accuracy_history = deque(maxlen=self.max_history)
         self._start_time = time.time()
         self._lock = threading.Lock()
 
@@ -242,6 +246,8 @@ class SanctumAggregator:
             event_log=list(self._event_log),
             # Historical best runs
             best_runs=list(self._best_runs),
+            # Rolling mean accuracy history
+            mean_accuracy_history=deque(self._mean_accuracy_history, maxlen=50),
         )
 
     # =========================================================================
@@ -357,6 +363,12 @@ class SanctumAggregator:
                 self._slot_ids.sort()
 
         env.last_update = datetime.now(timezone.utc)
+
+        # Update rolling mean accuracy across all envs
+        accuracies = [e.host_accuracy for e in self._envs.values() if e.host_accuracy > 0]
+        if accuracies:
+            mean_acc = sum(accuracies) / len(accuracies)
+            self._mean_accuracy_history.append(mean_acc)
 
     def _handle_ppo_update(self, event: "TelemetryEvent") -> None:
         """Handle PPO_UPDATE_COMPLETED event."""
@@ -538,15 +550,23 @@ class SanctumAggregator:
         for env in self._envs.values():
             # Check if this env achieved a new best during this episode
             if env.best_accuracy_episode == current_ep and env.best_accuracy > 0:
+                # Compute absolute episode for human-readable display
+                # e.g., batch 3 with 8 envs and env_id=0 → absolute episode 25
+                absolute_ep = current_ep * self.num_envs + env.env_id + 1
                 record = BestRunRecord(
                     env_id=env.env_id,
                     episode=current_ep,
                     peak_accuracy=env.best_accuracy,
                     final_accuracy=env.host_accuracy,
+                    absolute_episode=absolute_ep,
                     seeds={k: SeedState(**v.__dict__) for k, v in env.best_seeds.items()},
                 )
-                # Remove any existing record for this env (replace with new best)
-                self._best_runs = [r for r in self._best_runs if r.env_id != env.env_id]
+                # Remove existing record ONLY if same env in same episode (duplicate event)
+                # Different episodes are different training runs, keep both!
+                self._best_runs = [
+                    r for r in self._best_runs
+                    if not (r.env_id == env.env_id and r.episode == current_ep)
+                ]
                 self._best_runs.append(record)
 
         # Sort by peak accuracy descending, keep top 10

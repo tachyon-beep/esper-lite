@@ -511,6 +511,104 @@ class TestSanctumAggregator:
         assert record.env_id == 0
         assert record.peak_accuracy == 85.0
         assert record.episode == 0  # The episode when best was achieved
+        # Absolute episode: batch 0 * 4 envs + env_id 0 + 1 = 1
+        assert record.absolute_episode == 1
+
+    def test_batch_completed_captures_multiple_envs_best_runs(self):
+        """BATCH_COMPLETED should capture best_runs for ALL envs that improved.
+
+        This tests the fix for the bug where only one env per batch was captured
+        due to incorrect deduplication logic.
+        """
+        agg = SanctumAggregator(num_envs=8)
+
+        # Emit EPOCH_COMPLETED for multiple envs with different accuracies
+        for env_id in [0, 3, 7]:
+            epoch_event = MagicMock()
+            epoch_event.event_type = MagicMock()
+            epoch_event.event_type.name = "EPOCH_COMPLETED"
+            epoch_event.timestamp = datetime.now(timezone.utc)
+            epoch_event.data = {
+                "env_id": env_id,
+                "val_accuracy": 80.0 + env_id,  # 80, 83, 87
+                "val_loss": 0.3,
+                "inner_epoch": 10,
+            }
+            agg.process_event(epoch_event)
+
+        # Emit BATCH_COMPLETED
+        batch_event = MagicMock()
+        batch_event.event_type = MagicMock()
+        batch_event.event_type.name = "BATCH_COMPLETED"
+        batch_event.timestamp = datetime.now(timezone.utc)
+        batch_event.data = {"episodes_completed": 1}
+        agg.process_event(batch_event)
+
+        snapshot = agg.get_snapshot()
+
+        # All 3 envs should be captured (sorted by peak accuracy descending)
+        assert len(snapshot.best_runs) == 3
+        assert snapshot.best_runs[0].env_id == 7  # 87% (highest)
+        assert snapshot.best_runs[1].env_id == 3  # 83%
+        assert snapshot.best_runs[2].env_id == 0  # 80%
+
+        # Verify absolute episode calculation
+        # batch 0 * 8 envs + env_id + 1
+        assert snapshot.best_runs[0].absolute_episode == 8  # 0*8 + 7 + 1
+        assert snapshot.best_runs[1].absolute_episode == 4  # 0*8 + 3 + 1
+        assert snapshot.best_runs[2].absolute_episode == 1  # 0*8 + 0 + 1
+
+    def test_best_runs_preserves_across_episodes(self):
+        """Best runs from different episodes should NOT deduplicate each other.
+
+        Each episode represents a different training run, so env_id=0 in episode 1
+        is a completely different run than env_id=0 in episode 2.
+        """
+        agg = SanctumAggregator(num_envs=4)
+
+        # Episode 0: env 0 achieves 80%
+        epoch_event = MagicMock()
+        epoch_event.event_type = MagicMock()
+        epoch_event.event_type.name = "EPOCH_COMPLETED"
+        epoch_event.timestamp = datetime.now(timezone.utc)
+        epoch_event.data = {"env_id": 0, "val_accuracy": 80.0, "val_loss": 0.3}
+        agg.process_event(epoch_event)
+
+        batch_event = MagicMock()
+        batch_event.event_type = MagicMock()
+        batch_event.event_type.name = "BATCH_COMPLETED"
+        batch_event.timestamp = datetime.now(timezone.utc)
+        batch_event.data = {"episodes_completed": 1}
+        agg.process_event(batch_event)
+
+        # Episode 1: env 0 achieves 85%
+        epoch_event2 = MagicMock()
+        epoch_event2.event_type = MagicMock()
+        epoch_event2.event_type.name = "EPOCH_COMPLETED"
+        epoch_event2.timestamp = datetime.now(timezone.utc)
+        epoch_event2.data = {"env_id": 0, "val_accuracy": 85.0, "val_loss": 0.2}
+        agg.process_event(epoch_event2)
+
+        batch_event2 = MagicMock()
+        batch_event2.event_type = MagicMock()
+        batch_event2.event_type.name = "BATCH_COMPLETED"
+        batch_event2.timestamp = datetime.now(timezone.utc)
+        batch_event2.data = {"episodes_completed": 2}
+        agg.process_event(batch_event2)
+
+        snapshot = agg.get_snapshot()
+
+        # BOTH records should be preserved (different training runs!)
+        assert len(snapshot.best_runs) == 2
+
+        # Sorted by peak accuracy descending
+        assert snapshot.best_runs[0].peak_accuracy == 85.0
+        assert snapshot.best_runs[0].episode == 1  # Second batch
+        assert snapshot.best_runs[0].absolute_episode == 5  # 1*4 + 0 + 1
+
+        assert snapshot.best_runs[1].peak_accuracy == 80.0
+        assert snapshot.best_runs[1].episode == 0  # First batch
+        assert snapshot.best_runs[1].absolute_episode == 1  # 0*4 + 0 + 1
 
     def test_ppo_update_skipped_does_not_update_tamiyo(self):
         """PPO_UPDATE_COMPLETED with skipped=True should not update Tamiyo state."""

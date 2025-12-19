@@ -29,8 +29,8 @@ async def test_app_has_main_panels():
         assert app.query_one("#env-overview") is not None
         assert app.query_one("#scoreboard") is not None
         assert app.query_one("#tamiyo-brain") is not None
-        assert app.query_one("#reward-components") is not None
-        assert app.query_one("#esper-status") is not None
+        assert app.query_one("#system-resources") is not None
+        assert app.query_one("#training-health") is not None
         assert app.query_one("#event-log") is not None
 
 

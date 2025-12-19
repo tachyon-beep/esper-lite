@@ -503,4 +503,10 @@ def main():
         hub.close()
 
 if __name__ == "__main__":
+    # CRITICAL: Set spawn method before main() to avoid fork issues with
+    # Textual TUI + PyTorch DataLoader workers. The 'fork' method fails
+    # when the main process runs a TUI (Textual/Overwatch/Sanctum) because
+    # forked workers inherit state that can't be safely duplicated.
+    import multiprocessing
+    multiprocessing.set_start_method("spawn")
     main()

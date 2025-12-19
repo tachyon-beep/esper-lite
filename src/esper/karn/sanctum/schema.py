@@ -350,9 +350,10 @@ class BestRunRecord:
     Reference: tui.py lines 103-114 (BestRunRecord dataclass)
     """
     env_id: int
-    episode: int
+    episode: int  # Batch number (0-indexed)
     peak_accuracy: float  # Best accuracy achieved during this run
     final_accuracy: float  # Accuracy at the end of the batch
+    absolute_episode: int = 0  # Human-readable: episode * num_envs + env_id + 1
     seeds: dict[str, SeedState] = field(default_factory=dict)  # Seeds at peak
 
 
@@ -407,6 +408,9 @@ class SanctumSnapshot:
     # Aggregates (computed from envs)
     aggregate_mean_accuracy: float = 0.0
     aggregate_mean_reward: float = 0.0
+
+    # Rolling average history (mean accuracy across all envs over time)
+    mean_accuracy_history: deque[float] = field(default_factory=lambda: deque(maxlen=50))
 
     # Event log (most recent last)
     event_log: list[EventLogEntry] = field(default_factory=list)

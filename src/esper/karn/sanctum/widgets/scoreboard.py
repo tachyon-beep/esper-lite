@@ -124,7 +124,7 @@ class Scoreboard(Static):
 
                 lb_table.add_row(
                     rank,
-                    str(record.episode),
+                    str(record.absolute_episode),
                     f"[bold green]{record.peak_accuracy:.1f}[/]",
                     f"[{cur_style}]{record.final_accuracy:.1f}[/]",
                     seeds_str,

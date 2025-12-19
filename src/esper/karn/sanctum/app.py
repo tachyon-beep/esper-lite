@@ -21,12 +21,12 @@ from textual.widgets import DataTable, Footer
 from esper.karn.sanctum.widgets import (
     EnvDetailScreen,
     EnvOverview,
-    EsperStatus,
     EventLog,
-    RewardComponents,
     RunHeader,
     Scoreboard,
+    SystemResources,
     TamiyoBrain,
+    TrainingHealth,
 )
 
 if TYPE_CHECKING:
@@ -103,7 +103,7 @@ class SanctumApp(App):
         - Run Header: Episode, Epoch, Batch, Runtime, Best Accuracy, Connection
         - Top row: EnvOverview (65%) | Scoreboard (35%)
         - Middle row: TamiyoBrain (full width, fixed height)
-        - Bottom row: RewardComponents + EventLog (65%) | EsperStatus (35%)
+        - Bottom row: EventLog (65%) | SystemResources + TrainingHealth (35%)
         - Footer: Keybindings
         """
         yield RunHeader(id="run-header")
@@ -117,15 +117,15 @@ class SanctumApp(App):
             # Middle section: Tamiyo Brain (full width, fixed height)
             yield TamiyoBrain(id="tamiyo-brain")
 
-            # Bottom section: Event Log + (Reward + Status)
+            # Bottom section: Event Log + (Resources + Health)
             with Horizontal(id="bottom-section"):
                 # Left side: Event Log (65%)
                 yield EventLog(id="event-log")
 
-                # Right side: Reward Components and Esper Status (35%)
+                # Right side: System Resources and Training Health (35%)
                 with Vertical(id="right-bottom"):
-                    yield RewardComponents(id="reward-components")
-                    yield EsperStatus(id="esper-status")
+                    yield SystemResources(id="system-resources")
+                    yield TrainingHealth(id="training-health")
 
         yield Footer()
 
@@ -188,15 +188,6 @@ class SanctumApp(App):
             self.log.warning(f"Failed to update tamiyo-brain: {e}")
 
         try:
-            # RewardComponents needs focused env
-            reward_widget = self.query_one("#reward-components", RewardComponents)
-            reward_widget.update_snapshot(snapshot, env_id=self._focused_env_id)
-        except NoMatches:
-            pass  # Widget hasn't mounted yet
-        except Exception as e:
-            self.log.warning(f"Failed to update reward-components: {e}")
-
-        try:
             self.query_one("#event-log", EventLog).update_snapshot(snapshot)
         except NoMatches:
             pass  # Widget hasn't mounted yet
@@ -204,11 +195,18 @@ class SanctumApp(App):
             self.log.warning(f"Failed to update event-log: {e}")
 
         try:
-            self.query_one("#esper-status", EsperStatus).update_snapshot(snapshot)
+            self.query_one("#system-resources", SystemResources).update_snapshot(snapshot)
         except NoMatches:
             pass  # Widget hasn't mounted yet
         except Exception as e:
-            self.log.warning(f"Failed to update esper-status: {e}")
+            self.log.warning(f"Failed to update system-resources: {e}")
+
+        try:
+            self.query_one("#training-health", TrainingHealth).update_snapshot(snapshot)
+        except NoMatches:
+            pass  # Widget hasn't mounted yet
+        except Exception as e:
+            self.log.warning(f"Failed to update training-health: {e}")
 
         # Update EnvDetailScreen modal if displayed
         # Check if we have a modal screen on the stack
@@ -231,15 +229,8 @@ class SanctumApp(App):
         """
         if 0 <= env_id < self._num_envs:
             self._focused_env_id = env_id
-            # Immediately refresh reward components with new focus
-            if self._snapshot:
-                try:
-                    reward_widget = self.query_one("#reward-components", RewardComponents)
-                    reward_widget.update_snapshot(self._snapshot, env_id=env_id)
-                except NoMatches:
-                    pass  # Widget hasn't mounted yet
-                except Exception as e:
-                    self.log.warning(f"Failed to update reward-components in focus: {e}")
+            # Focused env is used when opening EnvDetailScreen
+            # No longer need to refresh per-env widgets since TrainingHealth shows aggregates
 
     def action_refresh(self) -> None:
         """Manually trigger refresh."""

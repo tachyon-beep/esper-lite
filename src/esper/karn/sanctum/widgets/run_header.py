@@ -193,6 +193,16 @@ class RunHeader(Static):
             row1.append("Best: ", style="dim")
             row1.append("--", style="dim")
 
+        # Rolling average with sparkline
+        if s.mean_accuracy_history:
+            from esper.karn.sanctum.schema import make_sparkline
+            current_mean = s.mean_accuracy_history[-1] if s.mean_accuracy_history else 0
+            sparkline = make_sparkline(s.mean_accuracy_history, width=10)
+            row1.append("  |  ", style="dim")
+            row1.append("Avg: ", style="dim")
+            row1.append(f"{current_mean:.1f}%", style="cyan")
+            row1.append(f" {sparkline}", style="cyan")
+
         table.add_row(row1)
 
         # === Row 2: Connection + Health ===

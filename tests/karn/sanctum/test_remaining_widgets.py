@@ -1,12 +1,10 @@
-"""Tests for remaining Sanctum widgets - RewardComponents and EsperStatus.
+"""Tests for Sanctum widgets - SystemResources, TrainingHealth, EventLog.
 
 Tests cover:
-- RewardComponents: reward breakdown display with conditional visibility and styling
-- EsperStatus: system vitals with seed counts, throughput, GPU/RAM/CPU, color thresholds
-
-Reference: src/esper/karn/tui.py lines 1565-1748
+- SystemResources: CPU/RAM/GPU monitoring with visual progress bars
+- TrainingHealth: Entropy, gradients, action distribution, seed stage counts
+- EventLog: Event log display with color-coded entries
 """
-from datetime import datetime, timedelta
 from io import StringIO
 
 import pytest
@@ -15,599 +13,554 @@ from rich.console import Console
 from esper.karn.sanctum.schema import (
     EnvState,
     GPUStats,
-    RewardComponents as RewardComponentsSchema,
     SanctumSnapshot,
     SeedState,
     SystemVitals,
+    TamiyoState,
 )
-from esper.karn.sanctum.widgets.esper_status import EsperStatus
-from esper.karn.sanctum.widgets.reward_components import RewardComponents
+from esper.karn.sanctum.widgets.system_resources import SystemResources
+from esper.karn.sanctum.widgets.training_health import TrainingHealth
 
 
-def render_to_text(panel) -> str:
-    """Helper to render a Rich panel to plain text."""
+def render_to_text(renderable) -> str:
+    """Helper to render a Rich renderable to plain text."""
     console = Console(file=StringIO(), width=120, legacy_windows=False)
-    console.print(panel)
+    console.print(renderable)
     return console.file.getvalue()
 
 
 # ============================================================================
-# RewardComponents Tests
+# SystemResources Tests
 # ============================================================================
 
 
-def test_reward_components_creation():
+def test_system_resources_creation():
     """Test widget creation."""
-    widget = RewardComponents()
+    widget = SystemResources()
     assert widget is not None
 
 
-def test_reward_components_no_data():
-    """Test render with no snapshot."""
-    widget = RewardComponents()
-    panel = widget.render()
-    assert "No data" in panel.renderable
+def test_system_resources_no_data():
+    """Test render with no snapshot shows waiting message."""
+    widget = SystemResources()
+    result = widget.render()
+    rendered = render_to_text(result)
+    assert "Waiting for data" in rendered
 
 
-def test_reward_components_no_env():
-    """Test render with no focused env."""
-    snapshot = SanctumSnapshot(focused_env_id=999)  # Non-existent env
-    widget = RewardComponents()
+def test_system_resources_cpu_bar():
+    """Test CPU usage bar is displayed."""
+    vitals = SystemVitals(cpu_percent=65.5)
+    snapshot = SanctumSnapshot(vitals=vitals)
+    widget = SystemResources()
     widget.update_snapshot(snapshot)
-    panel = widget.render()
-    assert "No env selected" in panel.renderable
+    result = widget.render()
+
+    rendered = render_to_text(result)
+    assert "CPU" in rendered
+    assert "66%" in rendered  # Rounded to nearest integer
 
 
-def test_reward_components_header_display():
-    """Test header shows env_id, last_action, val_acc."""
-    env = EnvState(env_id=3)
-    env.action_history.append("GERMINATE_CONV_LIGHT")
-
-    snapshot = SanctumSnapshot(
-        focused_env_id=3,
-        envs={3: env},
-        rewards=RewardComponentsSchema(val_acc=85.5),
-    )
-
-    widget = RewardComponents()
+def test_system_resources_cpu_zero_not_shown():
+    """Test CPU not shown when 0%."""
+    vitals = SystemVitals(cpu_percent=0.0)
+    snapshot = SanctumSnapshot(vitals=vitals)
+    widget = SystemResources()
     widget.update_snapshot(snapshot)
-    panel = widget.render()
+    result = widget.render()
 
-    rendered = render_to_text(panel)
-    assert "GERMINATE_CONV_LIGHT" in rendered
-    assert "85.5%" in rendered
+    rendered = render_to_text(result)
+    # CPU line should not appear when 0
+    assert "CPU" not in rendered
 
 
-def test_reward_components_base_delta_positive():
-    """Test base_acc_delta displays when positive."""
-    env = EnvState(env_id=1)
-    env.reward_history.append(2.5)
-
-    snapshot = SanctumSnapshot(
-        focused_env_id=1,
-        envs={1: env},
-        rewards=RewardComponentsSchema(base_acc_delta=2.5),
-    )
-    widget = RewardComponents()
+def test_system_resources_ram_bar():
+    """Test RAM usage bar with GB values."""
+    vitals = SystemVitals(ram_used_gb=24.5, ram_total_gb=32.0)
+    snapshot = SanctumSnapshot(vitals=vitals)
+    widget = SystemResources()
     widget.update_snapshot(snapshot)
-    panel = widget.render()
+    result = widget.render()
 
-    rendered = render_to_text(panel)
-    assert "+2.50" in rendered
+    rendered = render_to_text(result)
+    assert "RAM" in rendered
+    assert "24/32G" in rendered  # GB values shown
+    assert "77%" in rendered  # ~76.6% rounded
 
 
-def test_reward_components_base_delta_negative():
-    """Test base_acc_delta displays when negative."""
-    env = EnvState(env_id=1)
-    env.reward_history.append(-1.5)
-
-    snapshot = SanctumSnapshot(
-        focused_env_id=1,
-        envs={1: env},
-        rewards=RewardComponentsSchema(base_acc_delta=-1.5),
-    )
-    widget = RewardComponents()
+def test_system_resources_ram_zero_total():
+    """Test RAM not shown when total is 0."""
+    vitals = SystemVitals(ram_used_gb=0.0, ram_total_gb=0.0)
+    snapshot = SanctumSnapshot(vitals=vitals)
+    widget = SystemResources()
     widget.update_snapshot(snapshot)
-    panel = widget.render()
+    result = widget.render()
 
-    rendered = render_to_text(panel)
-    assert "-1.50" in rendered
-
-
-def test_reward_components_attribution_conditional():
-    """Test attribution only shows if non-zero."""
-    # Zero attribution - should NOT show
-    env1 = EnvState(env_id=1)
-    env1.reward_history.append(0.0)
-
-    snapshot1 = SanctumSnapshot(
-        focused_env_id=1,
-        envs={1: env1},
-        rewards=RewardComponentsSchema(bounded_attribution=0.0),
-    )
-    widget = RewardComponents()
-    widget.update_snapshot(snapshot1)
-    panel1 = widget.render()
-    rendered1 = render_to_text(panel1)
-    assert "Attr:" not in rendered1
-
-    # Non-zero attribution - SHOULD show
-    env2 = EnvState(env_id=2)
-    env2.reward_history.append(1.2)
-
-    snapshot2 = SanctumSnapshot(
-        focused_env_id=2,
-        envs={2: env2},
-        rewards=RewardComponentsSchema(bounded_attribution=1.2),
-    )
-    widget.update_snapshot(snapshot2)
-    panel2 = widget.render()
-    rendered2 = render_to_text(panel2)
-    assert "Attr:" in rendered2
-    assert "+1.20" in rendered2
+    rendered = render_to_text(result)
+    # RAM line should not appear
+    assert "RAM" not in rendered
 
 
-def test_reward_components_attribution_negative():
-    """Test attribution displays when negative."""
-    env = EnvState(env_id=1)
-    env.reward_history.append(-0.8)
-
-    snapshot = SanctumSnapshot(
-        focused_env_id=1,
-        envs={1: env},
-        rewards=RewardComponentsSchema(bounded_attribution=-0.8),
-    )
-    widget = RewardComponents()
+def test_system_resources_single_gpu():
+    """Test single GPU display with memory bar."""
+    gpu = GPUStats(device_id=0, memory_used_gb=8.5, memory_total_gb=16.0, utilization=75)
+    vitals = SystemVitals(gpu_stats={"cuda:0": gpu})
+    snapshot = SanctumSnapshot(vitals=vitals)
+    widget = SystemResources()
     widget.update_snapshot(snapshot)
-    panel = widget.render()
+    result = widget.render()
 
-    rendered = render_to_text(panel)
-    assert "Attr:" in rendered
-    assert "-0.80" in rendered
+    rendered = render_to_text(result)
+    assert "GPU" in rendered
+    assert "8.5/16G" in rendered  # Memory GB values
+    assert "53%" in rendered  # ~53.1% memory usage
 
 
-def test_reward_components_compute_rent():
-    """Test compute rent always displays (usually negative, red)."""
-    env = EnvState(env_id=1)
-    env.reward_history.append(-0.5)
-
-    snapshot = SanctumSnapshot(
-        focused_env_id=1,
-        envs={1: env},
-        rewards=RewardComponentsSchema(compute_rent=-0.5),
-    )
-    widget = RewardComponents()
+def test_system_resources_multi_gpu():
+    """Test multi-GPU display with device labels."""
+    gpu0 = GPUStats(device_id=0, memory_used_gb=4.5, memory_total_gb=16.0)
+    gpu1 = GPUStats(device_id=1, memory_used_gb=8.0, memory_total_gb=16.0)
+    vitals = SystemVitals(gpu_stats={"cuda:0": gpu0, "cuda:1": gpu1})
+    snapshot = SanctumSnapshot(vitals=vitals)
+    widget = SystemResources()
     widget.update_snapshot(snapshot)
-    panel = widget.render()
+    result = widget.render()
 
-    rendered = render_to_text(panel)
-    assert "Rent:" in rendered
-    assert "-0.50" in rendered
-
-
-def test_reward_components_ratio_penalty_conditional():
-    """Test ratio penalty only shows if non-zero."""
-    # Zero penalty - should NOT show
-    env1 = EnvState(env_id=1)
-    env1.reward_history.append(0.0)
-
-    snapshot1 = SanctumSnapshot(
-        focused_env_id=1,
-        envs={1: env1},
-        rewards=RewardComponentsSchema(ratio_penalty=0.0),
-    )
-    widget = RewardComponents()
-    widget.update_snapshot(snapshot1)
-    panel1 = widget.render()
-    rendered1 = render_to_text(panel1)
-    assert "Penalty:" not in rendered1
-
-    # Non-zero penalty - SHOULD show (red if negative)
-    env2 = EnvState(env_id=2)
-    env2.reward_history.append(-2.0)
-
-    snapshot2 = SanctumSnapshot(
-        focused_env_id=2,
-        envs={2: env2},
-        rewards=RewardComponentsSchema(ratio_penalty=-2.0),
-    )
-    widget.update_snapshot(snapshot2)
-    panel2 = widget.render()
-    rendered2 = render_to_text(panel2)
-    assert "Penalty:" in rendered2
-    assert "-2.00" in rendered2
+    rendered = render_to_text(result)
+    # Should show GPU0 and GPU1 labels for multi-GPU
+    assert "GPU0" in rendered or "GPU1" in rendered
+    assert "4.5/16G" in rendered  # GPU0 memory
+    assert "8.0/16G" in rendered  # GPU1 memory
 
 
-def test_reward_components_stage_bonus():
-    """Test stage bonus shows if non-zero (blue styling)."""
-    env = EnvState(env_id=1)
-    env.reward_history.append(1.0)
-
-    snapshot = SanctumSnapshot(
-        focused_env_id=1,
-        envs={1: env},
-        rewards=RewardComponentsSchema(stage_bonus=1.0),
-    )
-    widget = RewardComponents()
+def test_system_resources_gpu_utilization():
+    """Test GPU utilization bar displayed when available."""
+    gpu = GPUStats(device_id=0, memory_used_gb=8.0, memory_total_gb=16.0, utilization=88)
+    vitals = SystemVitals(gpu_stats={"cuda:0": gpu})
+    snapshot = SanctumSnapshot(vitals=vitals)
+    widget = SystemResources()
     widget.update_snapshot(snapshot)
-    panel = widget.render()
+    result = widget.render()
 
-    rendered = render_to_text(panel)
-    assert "Stage:" in rendered
-    assert "+1.00" in rendered
+    rendered = render_to_text(result)
+    assert "util" in rendered
+    assert "88%" in rendered
 
 
-def test_reward_components_fossil_bonus():
-    """Test fossilize bonus shows if non-zero (blue styling)."""
-    env = EnvState(env_id=1)
-    env.reward_history.append(10.0)
-
-    snapshot = SanctumSnapshot(
-        focused_env_id=1,
-        envs={1: env},
-        rewards=RewardComponentsSchema(fossilize_terminal_bonus=10.0),
-    )
-    widget = RewardComponents()
+def test_system_resources_gpu_utilization_zero_not_shown():
+    """Test GPU utilization not shown when 0."""
+    gpu = GPUStats(device_id=0, memory_used_gb=8.0, memory_total_gb=16.0, utilization=0)
+    vitals = SystemVitals(gpu_stats={"cuda:0": gpu})
+    snapshot = SanctumSnapshot(vitals=vitals)
+    widget = SystemResources()
     widget.update_snapshot(snapshot)
-    panel = widget.render()
+    result = widget.render()
 
-    rendered = render_to_text(panel)
-    assert "Fossil:" in rendered
-    assert "+10.00" in rendered
+    rendered = render_to_text(result)
+    # Should NOT show utilization line when 0
+    assert "util" not in rendered
 
 
-def test_reward_components_blending_warning():
-    """Test blending warning shows if negative (yellow styling)."""
-    env = EnvState(env_id=1)
-    env.reward_history.append(-0.5)
-
-    snapshot = SanctumSnapshot(
-        focused_env_id=1,
-        envs={1: env},
-        rewards=RewardComponentsSchema(blending_warning=-0.5),
+def test_system_resources_fallback_single_gpu():
+    """Test fallback to legacy single-GPU fields."""
+    vitals = SystemVitals(
+        gpu_memory_used_gb=6.0,
+        gpu_memory_total_gb=16.0,
     )
-    widget = RewardComponents()
+    snapshot = SanctumSnapshot(vitals=vitals)
+    widget = SystemResources()
     widget.update_snapshot(snapshot)
-    panel = widget.render()
+    result = widget.render()
 
-    rendered = render_to_text(panel)
-    assert "Blend Warn:" in rendered
-    assert "-0.50" in rendered
+    rendered = render_to_text(result)
+    assert "GPU" in rendered
+    assert "6.0/16G" in rendered
 
 
-def test_reward_components_probation_warning():
-    """Test probation warning shows if negative (yellow styling)."""
-    env = EnvState(env_id=1)
-    env.reward_history.append(-0.3)
-
-    snapshot = SanctumSnapshot(
-        focused_env_id=1,
-        envs={1: env},
-        rewards=RewardComponentsSchema(probation_warning=-0.3),
-    )
-    widget = RewardComponents()
+def test_system_resources_no_cuda():
+    """Test no CUDA message when no GPU available."""
+    vitals = SystemVitals(gpu_stats={}, gpu_memory_total_gb=0.0)
+    snapshot = SanctumSnapshot(vitals=vitals)
+    widget = SystemResources()
     widget.update_snapshot(snapshot)
-    panel = widget.render()
+    result = widget.render()
 
-    rendered = render_to_text(panel)
-    assert "Prob Warn:" in rendered
-    assert "-0.30" in rendered
+    rendered = render_to_text(result)
+    assert "no CUDA" in rendered
 
 
-def test_reward_components_total_positive():
-    """Test total displays bold green when positive."""
-    env = EnvState(env_id=1)
-    env.reward_history.append(3.5)
-
-    snapshot = SanctumSnapshot(
-        focused_env_id=1,
-        envs={1: env},
-        rewards=RewardComponentsSchema(total=3.5),
-    )
-    widget = RewardComponents()
+def test_system_resources_throughput():
+    """Test throughput display."""
+    vitals = SystemVitals(epochs_per_second=1.5)
+    snapshot = SanctumSnapshot(vitals=vitals)
+    widget = SystemResources()
     widget.update_snapshot(snapshot)
-    panel = widget.render()
+    result = widget.render()
 
-    rendered = render_to_text(panel)
-    assert "Total:" in rendered
-    assert "+3.50" in rendered
-    # Check for bold green styling
+    rendered = render_to_text(result)
+    assert "Throughput" in rendered
+    assert "1.5" in rendered
+    assert "ep/s" in rendered
 
 
-def test_reward_components_total_negative():
-    """Test total displays bold red when negative."""
-    env = EnvState(env_id=1)
-    env.reward_history.append(-2.5)
-
-    snapshot = SanctumSnapshot(
-        focused_env_id=1,
-        envs={1: env},
-        rewards=RewardComponentsSchema(total=-2.5),
-    )
-    widget = RewardComponents()
+def test_system_resources_throughput_zero():
+    """Test throughput shows dash when 0."""
+    vitals = SystemVitals(epochs_per_second=0.0)
+    snapshot = SanctumSnapshot(vitals=vitals)
+    widget = SystemResources()
     widget.update_snapshot(snapshot)
-    panel = widget.render()
+    result = widget.render()
 
-    rendered = render_to_text(panel)
-    assert "Total:" in rendered
-    assert "-2.50" in rendered
-    # Check for bold red styling
+    rendered = render_to_text(result)
+    assert "Throughput" in rendered
+    assert "--" in rendered
 
 
 # ============================================================================
-# EsperStatus Tests
+# TrainingHealth Tests
 # ============================================================================
 
 
-def test_esper_status_creation():
+def test_training_health_creation():
     """Test widget creation."""
-    widget = EsperStatus()
+    widget = TrainingHealth()
     assert widget is not None
 
 
-def test_esper_status_no_data():
-    """Test render with no snapshot."""
-    widget = EsperStatus()
-    panel = widget.render()
-    assert "No data" in panel.renderable
+def test_training_health_no_data():
+    """Test render with no snapshot shows waiting message."""
+    widget = TrainingHealth()
+    result = widget.render()
+    rendered = render_to_text(result)
+    assert "Waiting for data" in rendered
 
 
-def test_esper_status_seed_stage_counts():
-    """Test seed stage counts aggregate across all envs."""
-    # Create 2 envs with various seed stages
+def test_training_health_entropy_ok():
+    """Test entropy shows green when healthy."""
+    tamiyo = TamiyoState(entropy=0.5, entropy_collapsed=False)
+    snapshot = SanctumSnapshot(tamiyo=tamiyo)
+    widget = TrainingHealth()
+    widget.update_snapshot(snapshot)
+    result = widget.render()
+
+    rendered = render_to_text(result)
+    assert "Entropy" in rendered
+    assert "0.500" in rendered
+
+
+def test_training_health_entropy_warning():
+    """Test entropy shows LOW when below warning threshold."""
+    tamiyo = TamiyoState(entropy=0.05, entropy_collapsed=False)
+    snapshot = SanctumSnapshot(tamiyo=tamiyo)
+    widget = TrainingHealth()
+    widget.update_snapshot(snapshot)
+    result = widget.render()
+
+    rendered = render_to_text(result)
+    assert "Entropy" in rendered
+    assert "LOW" in rendered
+
+
+def test_training_health_entropy_collapsed():
+    """Test entropy shows COLLAPSED when flag is true."""
+    tamiyo = TamiyoState(entropy=0.001, entropy_collapsed=True)
+    snapshot = SanctumSnapshot(tamiyo=tamiyo)
+    widget = TrainingHealth()
+    widget.update_snapshot(snapshot)
+    result = widget.render()
+
+    rendered = render_to_text(result)
+    assert "Entropy" in rendered
+    assert "COLLAPSED" in rendered
+
+
+def test_training_health_gradients_ok():
+    """Test gradients shows OK when healthy."""
+    tamiyo = TamiyoState(dead_layers=0, exploding_layers=0, layer_gradient_health=0.8)
+    snapshot = SanctumSnapshot(tamiyo=tamiyo)
+    widget = TrainingHealth()
+    widget.update_snapshot(snapshot)
+    result = widget.render()
+
+    rendered = render_to_text(result)
+    assert "Gradients" in rendered
+    assert "OK" in rendered
+
+
+def test_training_health_gradients_dead():
+    """Test gradients shows dead layer count."""
+    tamiyo = TamiyoState(dead_layers=3, exploding_layers=0, layer_gradient_health=0.7)
+    snapshot = SanctumSnapshot(tamiyo=tamiyo)
+    widget = TrainingHealth()
+    widget.update_snapshot(snapshot)
+    result = widget.render()
+
+    rendered = render_to_text(result)
+    assert "Gradients" in rendered
+    assert "3 dead" in rendered
+
+
+def test_training_health_gradients_exploding():
+    """Test gradients shows exploding layer count (takes priority over dead)."""
+    tamiyo = TamiyoState(dead_layers=2, exploding_layers=1, layer_gradient_health=0.3)
+    snapshot = SanctumSnapshot(tamiyo=tamiyo)
+    widget = TrainingHealth()
+    widget.update_snapshot(snapshot)
+    result = widget.render()
+
+    rendered = render_to_text(result)
+    assert "Gradients" in rendered
+    assert "1 exploding" in rendered
+    assert "dead" not in rendered  # Exploding takes priority
+
+
+def test_training_health_gradients_unhealthy():
+    """Test gradients shows UNHEALTHY when health < 0.5."""
+    tamiyo = TamiyoState(dead_layers=0, exploding_layers=0, layer_gradient_health=0.3)
+    snapshot = SanctumSnapshot(tamiyo=tamiyo)
+    widget = TrainingHealth()
+    widget.update_snapshot(snapshot)
+    result = widget.render()
+
+    rendered = render_to_text(result)
+    assert "Gradients" in rendered
+    assert "UNHEALTHY" in rendered
+
+
+def test_training_health_action_distribution():
+    """Test action distribution shows top actions."""
+    tamiyo = TamiyoState(
+        action_counts={"WAIT": 100, "GERMINATE": 50, "FOSSILIZE": 30, "CULL": 20},
+        total_actions=200,
+    )
+    snapshot = SanctumSnapshot(tamiyo=tamiyo)
+    widget = TrainingHealth()
+    widget.update_snapshot(snapshot)
+    result = widget.render()
+
+    rendered = render_to_text(result)
+    assert "Actions" in rendered
+    assert "WAIT" in rendered
+    assert "50%" in rendered  # WAIT is 50%
+    assert "GERM" in rendered  # GERMINATE abbreviated
+    assert "25%" in rendered  # GERMINATE is 25%
+
+
+def test_training_health_action_distribution_no_actions():
+    """Test action distribution shows dash when no actions."""
+    tamiyo = TamiyoState(action_counts={}, total_actions=0)
+    snapshot = SanctumSnapshot(tamiyo=tamiyo)
+    widget = TrainingHealth()
+    widget.update_snapshot(snapshot)
+    result = widget.render()
+
+    rendered = render_to_text(result)
+    assert "Actions" in rendered
+    assert "--" in rendered
+
+
+def test_training_health_seed_stages():
+    """Test seed stage counts across envs."""
     env1 = EnvState(env_id=1)
     env1.seeds = {
         "R0C0": SeedState(slot_id="R0C0", stage="TRAINING"),
         "R0C1": SeedState(slot_id="R0C1", stage="BLENDING"),
     }
-
     env2 = EnvState(env_id=2)
     env2.seeds = {
         "R0C0": SeedState(slot_id="R0C0", stage="TRAINING"),
         "R0C1": SeedState(slot_id="R0C1", stage="FOSSILIZED"),
-        "R1C0": SeedState(slot_id="R1C0", stage="DORMANT"),  # Should NOT count
     }
 
     snapshot = SanctumSnapshot(envs={1: env1, 2: env2})
-    widget = EsperStatus()
+    widget = TrainingHealth()
     widget.update_snapshot(snapshot)
-    panel = widget.render()
+    result = widget.render()
 
-    rendered = render_to_text(panel)
-    # Should show Train: 2, Blend: 1, Foss: 1
-    assert "Train:" in rendered or "TRAINING" in rendered
-    assert "Blend:" in rendered or "BLENDING" in rendered
-    assert "Foss:" in rendered or "FOSSILIZED" in rendered
+    rendered = render_to_text(result)
+    assert "Seeds" in rendered
+    assert "T:2" in rendered  # 2 TRAINING
+    assert "B:1" in rendered  # 1 BLENDING
+    assert "F:1" in rendered  # 1 FOSSILIZED
 
 
-def test_esper_status_host_params_millions():
-    """Test host params formatting for millions (M)."""
-    vitals = SystemVitals(host_params=2_500_000)
-    snapshot = SanctumSnapshot(vitals=vitals)
-    widget = EsperStatus()
+def test_training_health_seed_stages_empty():
+    """Test seed stages shows dash when no seeds."""
+    snapshot = SanctumSnapshot(envs={})
+    widget = TrainingHealth()
     widget.update_snapshot(snapshot)
-    panel = widget.render()
+    result = widget.render()
 
-    rendered = render_to_text(panel)
-    assert "Host Params:" in rendered
-    assert "2.5M" in rendered
+    rendered = render_to_text(result)
+    assert "Seeds" in rendered
+    assert "--" in rendered
 
 
-def test_esper_status_host_params_thousands():
-    """Test host params formatting for thousands (K)."""
-    vitals = SystemVitals(host_params=50_000)
-    snapshot = SanctumSnapshot(vitals=vitals)
-    widget = EsperStatus()
+def test_training_health_seed_stages_culled():
+    """Test seed stages shows culled count."""
+    env = EnvState(env_id=1)
+    env.seeds = {
+        "R0C0": SeedState(slot_id="R0C0", stage="CULLED"),
+        "R0C1": SeedState(slot_id="R0C1", stage="CULLED"),
+    }
+
+    snapshot = SanctumSnapshot(envs={1: env})
+    widget = TrainingHealth()
     widget.update_snapshot(snapshot)
-    panel = widget.render()
+    result = widget.render()
 
-    rendered = render_to_text(panel)
-    assert "Host Params:" in rendered
-    assert "50K" in rendered
+    rendered = render_to_text(result)
+    assert "Seeds" in rendered
+    assert "X:2" in rendered  # 2 CULLED
 
 
-def test_esper_status_host_params_small():
-    """Test host params formatting for small counts (raw number)."""
-    vitals = SystemVitals(host_params=500)
-    snapshot = SanctumSnapshot(vitals=vitals)
-    widget = EsperStatus()
+def test_training_health_kl_divergence():
+    """Test KL divergence shown when non-zero."""
+    tamiyo = TamiyoState(kl_divergence=0.0123)
+    snapshot = SanctumSnapshot(tamiyo=tamiyo)
+    widget = TrainingHealth()
     widget.update_snapshot(snapshot)
-    panel = widget.render()
+    result = widget.render()
 
-    rendered = render_to_text(panel)
-    assert "Host Params:" in rendered
-    assert "500" in rendered
+    rendered = render_to_text(result)
+    assert "KL" in rendered
+    assert "0.0123" in rendered
 
 
-def test_esper_status_throughput():
-    """Test throughput display (epochs/sec, batches/hr)."""
-    vitals = SystemVitals(epochs_per_second=1.5, batches_per_hour=360)
-    snapshot = SanctumSnapshot(vitals=vitals)
-    widget = EsperStatus()
+def test_training_health_kl_divergence_zero_not_shown():
+    """Test KL divergence not shown when 0."""
+    tamiyo = TamiyoState(kl_divergence=0.0)
+    snapshot = SanctumSnapshot(tamiyo=tamiyo)
+    widget = TrainingHealth()
     widget.update_snapshot(snapshot)
-    panel = widget.render()
+    result = widget.render()
 
-    rendered = render_to_text(panel)
-    assert "Epochs/sec:" in rendered
-    assert "1.50" in rendered
-    assert "Batches/hr:" in rendered
-    assert "360" in rendered
+    rendered = render_to_text(result)
+    assert "KL" not in rendered
 
 
-def test_esper_status_runtime_formatting():
-    """Test runtime formatting (Xh Ym Zs)."""
-    start_time = datetime.now() - timedelta(hours=2, minutes=30, seconds=45)
-    snapshot = SanctumSnapshot(start_time=start_time)
-    widget = EsperStatus()
+def test_training_health_kl_divergence_warning():
+    """Test KL divergence shows warning when high."""
+    tamiyo = TamiyoState(kl_divergence=0.05)  # Above warning threshold
+    snapshot = SanctumSnapshot(tamiyo=tamiyo)
+    widget = TrainingHealth()
     widget.update_snapshot(snapshot)
-    panel = widget.render()
+    result = widget.render()
 
-    rendered = render_to_text(panel)
-    assert "Runtime:" in rendered
-    assert "2h" in rendered
-    assert "30m" in rendered
-    # Seconds may vary slightly due to test execution time
+    rendered = render_to_text(result)
+    assert "KL" in rendered
+    assert "0.0500" in rendered
 
 
-def test_esper_status_runtime_no_start():
-    """Test runtime shows dash when no start_time."""
-    snapshot = SanctumSnapshot(start_time=None)
-    widget = EsperStatus()
-    widget.update_snapshot(snapshot)
-    panel = widget.render()
-
-    rendered = render_to_text(panel)
-    assert "Runtime:" in rendered
-    assert "-" in rendered
+# ============================================================================
+# EventLog Tests
+# ============================================================================
 
 
-def test_esper_status_multi_gpu_display():
-    """Test multi-GPU display with device labels."""
-    gpu0 = GPUStats(device_id=0, memory_used_gb=4.5, memory_total_gb=16.0, utilization=75)
-    gpu1 = GPUStats(device_id=1, memory_used_gb=8.0, memory_total_gb=16.0, utilization=60)
-    vitals = SystemVitals(gpu_stats={0: gpu0, 1: gpu1})
-    snapshot = SanctumSnapshot(vitals=vitals)
-    widget = EsperStatus()
-    widget.update_snapshot(snapshot)
-    panel = widget.render()
+def test_event_log_creation():
+    """Test widget creation."""
+    from esper.karn.sanctum.widgets.event_log import EventLog
 
-    rendered = render_to_text(panel)
-    # Should show GPU0 and GPU1 labels
-    assert "GPU0:" in rendered or "GPU1:" in rendered
-    assert "4.5" in rendered  # GPU0 used
-    assert "8.0" in rendered  # GPU1 used
+    widget = EventLog()
+    assert widget is not None
+    assert widget._max_events == 20
+    assert widget.border_title == "EVENT LOG"
 
 
-def test_esper_status_gpu_memory_green():
-    """Test GPU memory shows green when < 75%."""
-    gpu = GPUStats(device_id=0, memory_used_gb=6.0, memory_total_gb=16.0)  # 37.5%
-    vitals = SystemVitals(gpu_stats={0: gpu})
-    snapshot = SanctumSnapshot(vitals=vitals)
-    widget = EsperStatus()
-    widget.update_snapshot(snapshot)
-    panel = widget.render()
+def test_event_log_no_events():
+    """Test render with no events shows waiting message."""
+    from esper.karn.sanctum.widgets.event_log import EventLog
+    from rich.text import Text
 
-    rendered = render_to_text(panel)
-    assert "6.0/16.0GB" in rendered
+    widget = EventLog()
+    widget._snapshot = SanctumSnapshot(event_log=[])
+    result = widget.render()
 
-
-def test_esper_status_gpu_memory_yellow():
-    """Test GPU memory shows yellow when 75-90%."""
-    gpu = GPUStats(device_id=0, memory_used_gb=13.0, memory_total_gb=16.0)  # 81.25%
-    vitals = SystemVitals(gpu_stats={0: gpu})
-    snapshot = SanctumSnapshot(vitals=vitals)
-    widget = EsperStatus()
-    widget.update_snapshot(snapshot)
-    panel = widget.render()
-
-    rendered = render_to_text(panel)
-    assert "13.0/16.0GB" in rendered
+    # Should return "Waiting for events..." text
+    assert isinstance(result, Text)
+    assert "Waiting for events" in result.plain
 
 
-def test_esper_status_gpu_memory_red():
-    """Test GPU memory shows red when > 90%."""
-    gpu = GPUStats(device_id=0, memory_used_gb=15.0, memory_total_gb=16.0)  # 93.75%
-    vitals = SystemVitals(gpu_stats={0: gpu})
-    snapshot = SanctumSnapshot(vitals=vitals)
-    widget = EsperStatus()
-    widget.update_snapshot(snapshot)
-    panel = widget.render()
+def test_event_log_with_events():
+    """Test render with events shows formatted log."""
+    from esper.karn.sanctum.widgets.event_log import EventLog
+    from esper.karn.sanctum.schema import EventLogEntry
+    from rich.console import Group
 
-    rendered = render_to_text(panel)
-    assert "15.0/16.0GB" in rendered
-
-
-def test_esper_status_gpu_utilization_green():
-    """Test GPU utilization shows green when < 80%."""
-    gpu = GPUStats(device_id=0, memory_used_gb=8.0, memory_total_gb=16.0, utilization=65)
-    vitals = SystemVitals(gpu_stats={0: gpu})
-    snapshot = SanctumSnapshot(vitals=vitals)
-    widget = EsperStatus()
-    widget.update_snapshot(snapshot)
-    panel = widget.render()
-
-    rendered = render_to_text(panel)
-    assert "65%" in rendered
-
-
-def test_esper_status_gpu_utilization_yellow():
-    """Test GPU utilization shows yellow when 80-95%."""
-    gpu = GPUStats(device_id=0, memory_used_gb=8.0, memory_total_gb=16.0, utilization=88)
-    vitals = SystemVitals(gpu_stats={0: gpu})
-    snapshot = SanctumSnapshot(vitals=vitals)
-    widget = EsperStatus()
-    widget.update_snapshot(snapshot)
-    panel = widget.render()
-
-    rendered = render_to_text(panel)
-    assert "88%" in rendered
-
-
-def test_esper_status_gpu_utilization_red():
-    """Test GPU utilization shows red when > 95%."""
-    gpu = GPUStats(device_id=0, memory_used_gb=8.0, memory_total_gb=16.0, utilization=98)
-    vitals = SystemVitals(gpu_stats={0: gpu})
-    snapshot = SanctumSnapshot(vitals=vitals)
-    widget = EsperStatus()
-    widget.update_snapshot(snapshot)
-    panel = widget.render()
-
-    rendered = render_to_text(panel)
-    assert "98%" in rendered
-
-
-def test_esper_status_ram_display():
-    """Test RAM usage display with color thresholds."""
-    vitals = SystemVitals(ram_used_gb=24.5, ram_total_gb=32.0)  # 76.5% - yellow
-    snapshot = SanctumSnapshot(vitals=vitals)
-    widget = EsperStatus()
-    widget.update_snapshot(snapshot)
-    panel = widget.render()
-
-    rendered = render_to_text(panel)
-    assert "RAM:" in rendered
-    assert "24.5/32GB" in rendered
-
-
-def test_esper_status_cpu_display():
-    """Test CPU percentage display (FIX: was never shown in old TUI)."""
-    vitals = SystemVitals(cpu_percent=45.2)
-    snapshot = SanctumSnapshot(vitals=vitals)
-    widget = EsperStatus()
-    widget.update_snapshot(snapshot)
-    panel = widget.render()
-
-    rendered = render_to_text(panel)
-    assert "CPU:" in rendered
-    assert "45.2%" in rendered
-
-
-def test_esper_status_cpu_zero_not_shown():
-    """Test CPU percentage not shown if zero."""
-    vitals = SystemVitals(cpu_percent=0.0)
-    snapshot = SanctumSnapshot(vitals=vitals)
-    widget = EsperStatus()
-    widget.update_snapshot(snapshot)
-    panel = widget.render()
-
-    rendered = render_to_text(panel)
-    # Should not show CPU line when 0
-    assert "CPU:" not in rendered
-
-
-def test_esper_status_fallback_single_gpu():
-    """Test fallback to legacy single-GPU fields when gpu_stats is empty."""
-    vitals = SystemVitals(
-        gpu_memory_used_gb=6.0,
-        gpu_memory_total_gb=16.0,
-        gpu_utilization=70,
+    widget = EventLog(max_events=10)
+    widget._snapshot = SanctumSnapshot(
+        event_log=[
+            EventLogEntry(
+                timestamp="10:15:30",
+                event_type="TRAINING_STARTED",
+                env_id=None,
+                message="Training started"
+            ),
+            EventLogEntry(
+                timestamp="10:15:31",
+                event_type="REWARD_COMPUTED",
+                env_id=0,
+                message="WAIT r=+0.500"
+            ),
+            EventLogEntry(
+                timestamp="10:15:32",
+                event_type="SEED_GERMINATED",
+                env_id=1,
+                message="A1 germinated (dense_m)"
+            ),
+        ]
     )
-    snapshot = SanctumSnapshot(vitals=vitals)
-    widget = EsperStatus()
-    widget.update_snapshot(snapshot)
-    panel = widget.render()
+    result = widget.render()
 
-    rendered = render_to_text(panel)
-    assert "GPU:" in rendered
-    assert "6.0/16.0GB" in rendered
-    assert "70%" in rendered
+    # Should return Group of Text lines
+    assert isinstance(result, Group)
+
+    # Render to text and check content
+    rendered = render_to_text(result)
+    assert "10:15:30" in rendered
+    assert "10:15:31" in rendered
+    assert "10:15:32" in rendered
+    assert "WAIT r=+0.500" in rendered
+    assert "A1 germinated" in rendered
+
+
+def test_event_log_max_events_limit():
+    """Test that only max_events are shown."""
+    from esper.karn.sanctum.widgets.event_log import EventLog
+    from esper.karn.sanctum.schema import EventLogEntry
+
+    events = [
+        EventLogEntry(
+            timestamp=f"10:00:{i:02d}",
+            event_type="EPOCH_COMPLETED",
+            env_id=0,
+            message=f"Event {i}"
+        )
+        for i in range(30)  # 30 events
+    ]
+
+    widget = EventLog(max_events=10)  # Only show 10
+    widget._snapshot = SanctumSnapshot(event_log=events)
+    result = widget.render()
+
+    rendered = render_to_text(result)
+    # Should only have last 10 events (20-29)
+    assert "Event 20" in rendered
+    assert "Event 29" in rendered
+    assert "Event 19" not in rendered  # Should be cut off
+
+
+def test_event_log_color_mapping():
+    """Test event types get correct colors."""
+    from esper.karn.sanctum.widgets.event_log import _EVENT_COLORS
+
+    # Verify color mapping exists for expected event types
+    assert "TRAINING_STARTED" in _EVENT_COLORS
+    assert "EPOCH_COMPLETED" in _EVENT_COLORS
+    assert "PPO_UPDATE_COMPLETED" in _EVENT_COLORS
+    assert "REWARD_COMPUTED" in _EVENT_COLORS
+    assert "SEED_GERMINATED" in _EVENT_COLORS
+    assert "SEED_STAGE_CHANGED" in _EVENT_COLORS
+    assert "SEED_FOSSILIZED" in _EVENT_COLORS
+    assert "SEED_CULLED" in _EVENT_COLORS
+    assert "BATCH_COMPLETED" in _EVENT_COLORS

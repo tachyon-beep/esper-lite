@@ -51,30 +51,18 @@ class EventLog(Static):
         super().__init__(**kwargs)
         self._max_events = max_events
         self._snapshot: SanctumSnapshot | None = None
+        self.border_title = "EVENT LOG"
 
-    def compose(self):
-        """Compose the widget layout."""
-        yield Static("Event Log", classes="panel-title")
+    def render(self):
+        """Render the event log content.
 
-    def on_mount(self) -> None:
-        """Called when widget mounts."""
-        self.update("[dim]Waiting for events...[/dim]")
-
-    def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
-        """Update widget with new snapshot data.
-
-        Args:
-            snapshot: The current telemetry snapshot.
+        Returns a Group of Text lines (no Panel - CSS handles the border).
         """
-        self._snapshot = snapshot
-
-        # Render event log
-        if not snapshot.event_log:
-            self.update("[dim]No events yet[/dim]")
-            return
+        if self._snapshot is None or not self._snapshot.event_log:
+            return Text("Waiting for events...", style="dim")
 
         # Take the last N events
-        events = list(snapshot.event_log)[-self._max_events :]
+        events = list(self._snapshot.event_log)[-self._max_events:]
 
         # Build event lines with color coding
         lines = []
@@ -91,5 +79,14 @@ class EventLog(Static):
             text.append(entry.message, style=color)
             lines.append(text)
 
-        # Render as a group
-        self.update(Group(*lines))
+        # Return Group directly (CSS handles border via #event-log)
+        return Group(*lines)
+
+    def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
+        """Update widget with new snapshot data.
+
+        Args:
+            snapshot: The current telemetry snapshot.
+        """
+        self._snapshot = snapshot
+        self.refresh()  # Trigger re-render

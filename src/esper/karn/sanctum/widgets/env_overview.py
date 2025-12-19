@@ -97,8 +97,9 @@ class EnvOverview(Static):
         for slot_id in self._snapshot.slot_ids:
             self.table.add_column(slot_id, key=f"slot_{slot_id}")
 
-        # Last action and status
+        # Last action, stale epochs, and status
         self.table.add_column("Last", key="last")
+        self.table.add_column("Stale", key="stale")
         self.table.add_column("Status", key="status")
 
     def _refresh_table(self) -> None:
@@ -163,6 +164,9 @@ class EnvOverview(Static):
         # Last action
         last_action = self._format_last_action(env)
 
+        # Stale epochs (time since improvement)
+        stale_cell = self._format_stale_epochs(env)
+
         # Status
         status_cell = self._format_status(env)
 
@@ -178,6 +182,7 @@ class EnvOverview(Static):
             rent_cell,
         ] + slot_cells + [
             last_action,
+            stale_cell,
             status_cell,
         ]
 
@@ -228,6 +233,11 @@ class EnvOverview(Static):
 
         # Last action column (empty)
         agg_row.append("")
+
+        # Stale column - show mean epochs since improvement
+        stales = [e.epochs_since_improvement for e in self._snapshot.envs.values()]
+        mean_stale = sum(stales) / len(stales) if stales else 0
+        agg_row.append(f"[dim]μ{mean_stale:.0f}[/dim]")
 
         # Status column shows best accuracy from any env
         best_acc = max((e.best_accuracy for e in self._snapshot.envs.values()), default=0.0)
@@ -377,6 +387,25 @@ class EnvOverview(Static):
 
         return action_short
 
+    def _format_stale_epochs(self, env: "EnvState") -> str:
+        """Format epochs since improvement with color coding.
+
+        Returns the number of epochs since the last improvement, colored:
+        - Green: 0 (currently improving)
+        - White: 1-5 (normal)
+        - Yellow: 6-15 (stagnating)
+        - Red: >15 (severely stalled)
+        """
+        epochs = env.epochs_since_improvement
+        if epochs == 0:
+            return "[green]✓[/green]"
+        elif epochs <= 5:
+            return f"[white]{epochs}[/white]"
+        elif epochs <= 15:
+            return f"[yellow]{epochs}[/yellow]"
+        else:
+            return f"[red]{epochs}[/red]"
+
     def _format_status(self, env: "EnvState") -> str:
         """Format status with color coding."""
         status_styles = {
@@ -396,14 +425,7 @@ class EnvOverview(Static):
         }.get(env.status, env.status[:4].upper())
 
         status_style = status_styles.get(env.status, "white")
-        status_str = f"[{status_style}]{status_short}[/{status_style}]"
-
-        # Show epochs since improvement if stagnating (>5 epochs)
-        if env.epochs_since_improvement > 5:
-            stale_style = "red" if env.epochs_since_improvement > 15 else "yellow"
-            status_str += f"[{stale_style}]({env.epochs_since_improvement})[/{stale_style}]"
-
-        return status_str
+        return f"[{status_style}]{status_short}[/{status_style}]"
 
     def _make_sparkline(self, values, width: int = 8) -> str:
         """Create sparkline from values using schema module."""
