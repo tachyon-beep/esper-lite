@@ -15,6 +15,7 @@ from rich.console import Console
 from esper.karn.sanctum.schema import (
     EnvState,
     GPUStats,
+    RewardComponents as RewardComponentsSchema,
     SanctumSnapshot,
     SeedState,
     SystemVitals,
@@ -61,11 +62,11 @@ def test_reward_components_header_display():
     """Test header shows env_id, last_action, val_acc."""
     env = EnvState(env_id=3)
     env.action_history.append("GERMINATE_CONV_LIGHT")
-    env.reward_components = {"val_acc": 85.5}
 
     snapshot = SanctumSnapshot(
         focused_env_id=3,
         envs={3: env},
+        rewards=RewardComponentsSchema(val_acc=85.5),
     )
 
     widget = RewardComponents()
@@ -80,10 +81,13 @@ def test_reward_components_header_display():
 def test_reward_components_base_delta_positive():
     """Test base_acc_delta displays when positive."""
     env = EnvState(env_id=1)
-    env.reward_components = {"base_acc_delta": 2.5}
     env.reward_history.append(2.5)
 
-    snapshot = SanctumSnapshot(focused_env_id=1, envs={1: env})
+    snapshot = SanctumSnapshot(
+        focused_env_id=1,
+        envs={1: env},
+        rewards=RewardComponentsSchema(base_acc_delta=2.5),
+    )
     widget = RewardComponents()
     widget.update_snapshot(snapshot)
     panel = widget.render()
@@ -95,10 +99,13 @@ def test_reward_components_base_delta_positive():
 def test_reward_components_base_delta_negative():
     """Test base_acc_delta displays when negative."""
     env = EnvState(env_id=1)
-    env.reward_components = {"base_acc_delta": -1.5}
     env.reward_history.append(-1.5)
 
-    snapshot = SanctumSnapshot(focused_env_id=1, envs={1: env})
+    snapshot = SanctumSnapshot(
+        focused_env_id=1,
+        envs={1: env},
+        rewards=RewardComponentsSchema(base_acc_delta=-1.5),
+    )
     widget = RewardComponents()
     widget.update_snapshot(snapshot)
     panel = widget.render()
@@ -111,10 +118,13 @@ def test_reward_components_attribution_conditional():
     """Test attribution only shows if non-zero."""
     # Zero attribution - should NOT show
     env1 = EnvState(env_id=1)
-    env1.reward_components = {"bounded_attribution": 0.0}
     env1.reward_history.append(0.0)
 
-    snapshot1 = SanctumSnapshot(focused_env_id=1, envs={1: env1})
+    snapshot1 = SanctumSnapshot(
+        focused_env_id=1,
+        envs={1: env1},
+        rewards=RewardComponentsSchema(bounded_attribution=0.0),
+    )
     widget = RewardComponents()
     widget.update_snapshot(snapshot1)
     panel1 = widget.render()
@@ -123,10 +133,13 @@ def test_reward_components_attribution_conditional():
 
     # Non-zero attribution - SHOULD show
     env2 = EnvState(env_id=2)
-    env2.reward_components = {"bounded_attribution": 1.2}
     env2.reward_history.append(1.2)
 
-    snapshot2 = SanctumSnapshot(focused_env_id=2, envs={2: env2})
+    snapshot2 = SanctumSnapshot(
+        focused_env_id=2,
+        envs={2: env2},
+        rewards=RewardComponentsSchema(bounded_attribution=1.2),
+    )
     widget.update_snapshot(snapshot2)
     panel2 = widget.render()
     rendered2 = render_to_text(panel2)
@@ -137,10 +150,13 @@ def test_reward_components_attribution_conditional():
 def test_reward_components_attribution_negative():
     """Test attribution displays when negative."""
     env = EnvState(env_id=1)
-    env.reward_components = {"bounded_attribution": -0.8}
     env.reward_history.append(-0.8)
 
-    snapshot = SanctumSnapshot(focused_env_id=1, envs={1: env})
+    snapshot = SanctumSnapshot(
+        focused_env_id=1,
+        envs={1: env},
+        rewards=RewardComponentsSchema(bounded_attribution=-0.8),
+    )
     widget = RewardComponents()
     widget.update_snapshot(snapshot)
     panel = widget.render()
@@ -153,10 +169,13 @@ def test_reward_components_attribution_negative():
 def test_reward_components_compute_rent():
     """Test compute rent always displays (usually negative, red)."""
     env = EnvState(env_id=1)
-    env.reward_components = {"compute_rent": -0.5}
     env.reward_history.append(-0.5)
 
-    snapshot = SanctumSnapshot(focused_env_id=1, envs={1: env})
+    snapshot = SanctumSnapshot(
+        focused_env_id=1,
+        envs={1: env},
+        rewards=RewardComponentsSchema(compute_rent=-0.5),
+    )
     widget = RewardComponents()
     widget.update_snapshot(snapshot)
     panel = widget.render()
@@ -170,10 +189,13 @@ def test_reward_components_ratio_penalty_conditional():
     """Test ratio penalty only shows if non-zero."""
     # Zero penalty - should NOT show
     env1 = EnvState(env_id=1)
-    env1.reward_components = {"ratio_penalty": 0.0}
     env1.reward_history.append(0.0)
 
-    snapshot1 = SanctumSnapshot(focused_env_id=1, envs={1: env1})
+    snapshot1 = SanctumSnapshot(
+        focused_env_id=1,
+        envs={1: env1},
+        rewards=RewardComponentsSchema(ratio_penalty=0.0),
+    )
     widget = RewardComponents()
     widget.update_snapshot(snapshot1)
     panel1 = widget.render()
@@ -182,10 +204,13 @@ def test_reward_components_ratio_penalty_conditional():
 
     # Non-zero penalty - SHOULD show (red if negative)
     env2 = EnvState(env_id=2)
-    env2.reward_components = {"ratio_penalty": -2.0}
     env2.reward_history.append(-2.0)
 
-    snapshot2 = SanctumSnapshot(focused_env_id=2, envs={2: env2})
+    snapshot2 = SanctumSnapshot(
+        focused_env_id=2,
+        envs={2: env2},
+        rewards=RewardComponentsSchema(ratio_penalty=-2.0),
+    )
     widget.update_snapshot(snapshot2)
     panel2 = widget.render()
     rendered2 = render_to_text(panel2)
@@ -196,10 +221,13 @@ def test_reward_components_ratio_penalty_conditional():
 def test_reward_components_stage_bonus():
     """Test stage bonus shows if non-zero (blue styling)."""
     env = EnvState(env_id=1)
-    env.reward_components = {"stage_bonus": 1.0}
     env.reward_history.append(1.0)
 
-    snapshot = SanctumSnapshot(focused_env_id=1, envs={1: env})
+    snapshot = SanctumSnapshot(
+        focused_env_id=1,
+        envs={1: env},
+        rewards=RewardComponentsSchema(stage_bonus=1.0),
+    )
     widget = RewardComponents()
     widget.update_snapshot(snapshot)
     panel = widget.render()
@@ -212,10 +240,13 @@ def test_reward_components_stage_bonus():
 def test_reward_components_fossil_bonus():
     """Test fossilize bonus shows if non-zero (blue styling)."""
     env = EnvState(env_id=1)
-    env.reward_components = {"fossilize_terminal_bonus": 10.0}
     env.reward_history.append(10.0)
 
-    snapshot = SanctumSnapshot(focused_env_id=1, envs={1: env})
+    snapshot = SanctumSnapshot(
+        focused_env_id=1,
+        envs={1: env},
+        rewards=RewardComponentsSchema(fossilize_terminal_bonus=10.0),
+    )
     widget = RewardComponents()
     widget.update_snapshot(snapshot)
     panel = widget.render()
@@ -228,10 +259,13 @@ def test_reward_components_fossil_bonus():
 def test_reward_components_blending_warning():
     """Test blending warning shows if negative (yellow styling)."""
     env = EnvState(env_id=1)
-    env.reward_components = {"blending_warning": -0.5}
     env.reward_history.append(-0.5)
 
-    snapshot = SanctumSnapshot(focused_env_id=1, envs={1: env})
+    snapshot = SanctumSnapshot(
+        focused_env_id=1,
+        envs={1: env},
+        rewards=RewardComponentsSchema(blending_warning=-0.5),
+    )
     widget = RewardComponents()
     widget.update_snapshot(snapshot)
     panel = widget.render()
@@ -244,10 +278,13 @@ def test_reward_components_blending_warning():
 def test_reward_components_probation_warning():
     """Test probation warning shows if negative (yellow styling)."""
     env = EnvState(env_id=1)
-    env.reward_components = {"probation_warning": -0.3}
     env.reward_history.append(-0.3)
 
-    snapshot = SanctumSnapshot(focused_env_id=1, envs={1: env})
+    snapshot = SanctumSnapshot(
+        focused_env_id=1,
+        envs={1: env},
+        rewards=RewardComponentsSchema(probation_warning=-0.3),
+    )
     widget = RewardComponents()
     widget.update_snapshot(snapshot)
     panel = widget.render()
@@ -260,10 +297,13 @@ def test_reward_components_probation_warning():
 def test_reward_components_total_positive():
     """Test total displays bold green when positive."""
     env = EnvState(env_id=1)
-    env.reward_components = {}
     env.reward_history.append(3.5)
 
-    snapshot = SanctumSnapshot(focused_env_id=1, envs={1: env})
+    snapshot = SanctumSnapshot(
+        focused_env_id=1,
+        envs={1: env},
+        rewards=RewardComponentsSchema(total=3.5),
+    )
     widget = RewardComponents()
     widget.update_snapshot(snapshot)
     panel = widget.render()
@@ -277,10 +317,13 @@ def test_reward_components_total_positive():
 def test_reward_components_total_negative():
     """Test total displays bold red when negative."""
     env = EnvState(env_id=1)
-    env.reward_components = {}
     env.reward_history.append(-2.5)
 
-    snapshot = SanctumSnapshot(focused_env_id=1, envs={1: env})
+    snapshot = SanctumSnapshot(
+        focused_env_id=1,
+        envs={1: env},
+        rewards=RewardComponentsSchema(total=-2.5),
+    )
     widget = RewardComponents()
     widget.update_snapshot(snapshot)
     panel = widget.render()

@@ -79,63 +79,58 @@ class RewardComponents(Static):
                 border_style="cyan",
             )
 
-        components = env_state.reward_components
+        # Use snapshot.rewards (RewardComponents dataclass) instead of
+        # env_state.reward_components (dict). The aggregator populates
+        # snapshot.rewards from the focused env's telemetry.
+        components = self._snapshot.rewards
 
         # Header context
         table.add_row("Env:", Text(str(env_id), style="bold cyan"))
         if env_state.action_history:
             table.add_row("Action:", env_state.action_history[-1])
-        if "val_acc" in components and isinstance(components.get("val_acc"), (int, float)):
-            table.add_row("Val Acc:", f"{float(components['val_acc']):.1f}%")
+        if isinstance(components.val_acc, (int, float)) and components.val_acc > 0:
+            table.add_row("Val Acc:", f"{components.val_acc:.1f}%")
 
         table.add_row("", "")
 
         # Base delta (legacy shaped signal)
-        base = components.get("base_acc_delta")
-        if isinstance(base, (int, float)):
-            style = "green" if float(base) >= 0 else "red"
-            table.add_row("ΔAcc:", Text(f"{float(base):+.2f}", style=style))
+        if isinstance(components.base_acc_delta, (int, float)):
+            style = "green" if components.base_acc_delta >= 0 else "red"
+            table.add_row("ΔAcc:", Text(f"{components.base_acc_delta:+.2f}", style=style))
 
         # Attribution (contribution-primary)
-        bounded = components.get("bounded_attribution")
-        if isinstance(bounded, (int, float)) and float(bounded) != 0.0:
-            style = "green" if float(bounded) >= 0 else "red"
-            table.add_row("Attr:", Text(f"{float(bounded):+.2f}", style=style))
+        if isinstance(components.bounded_attribution, (int, float)) and components.bounded_attribution != 0.0:
+            style = "green" if components.bounded_attribution >= 0 else "red"
+            table.add_row("Attr:", Text(f"{components.bounded_attribution:+.2f}", style=style))
 
         # Compute rent (usually negative)
-        rent = components.get("compute_rent")
-        if isinstance(rent, (int, float)):
-            style = "red" if float(rent) < 0 else "dim"
-            table.add_row("Rent:", Text(f"{float(rent):+.2f}", style=style))
+        if isinstance(components.compute_rent, (int, float)):
+            style = "red" if components.compute_rent < 0 else "dim"
+            table.add_row("Rent:", Text(f"{components.compute_rent:+.2f}", style=style))
 
         # Ratio penalty (ransomware / attribution mismatch)
-        ratio_penalty = components.get("ratio_penalty")
-        if isinstance(ratio_penalty, (int, float)) and float(ratio_penalty) != 0.0:
-            style = "red" if float(ratio_penalty) < 0 else "dim"
-            table.add_row("Penalty:", Text(f"{float(ratio_penalty):+.2f}", style=style))
+        if isinstance(components.ratio_penalty, (int, float)) and components.ratio_penalty != 0.0:
+            style = "red" if components.ratio_penalty < 0 else "dim"
+            table.add_row("Penalty:", Text(f"{components.ratio_penalty:+.2f}", style=style))
 
         # Stage / terminal bonuses
-        stage_bonus = components.get("stage_bonus")
-        if isinstance(stage_bonus, (int, float)) and float(stage_bonus) != 0.0:
-            table.add_row("Stage:", Text(f"{float(stage_bonus):+.2f}", style="blue"))
+        if isinstance(components.stage_bonus, (int, float)) and components.stage_bonus != 0.0:
+            table.add_row("Stage:", Text(f"{components.stage_bonus:+.2f}", style="blue"))
 
-        fossil_bonus = components.get("fossilize_terminal_bonus")
-        if isinstance(fossil_bonus, (int, float)) and float(fossil_bonus) != 0.0:
-            table.add_row("Fossil:", Text(f"{float(fossil_bonus):+.2f}", style="blue"))
+        if isinstance(components.fossilize_terminal_bonus, (int, float)) and components.fossilize_terminal_bonus != 0.0:
+            table.add_row("Fossil:", Text(f"{components.fossilize_terminal_bonus:+.2f}", style="blue"))
 
         # Warnings
-        blending_warn = components.get("blending_warning")
-        if isinstance(blending_warn, (int, float)) and float(blending_warn) < 0:
-            table.add_row("Blend Warn:", Text(f"{float(blending_warn):.2f}", style="yellow"))
+        if isinstance(components.blending_warning, (int, float)) and components.blending_warning < 0:
+            table.add_row("Blend Warn:", Text(f"{components.blending_warning:.2f}", style="yellow"))
 
-        probation_warn = components.get("probation_warning")
-        if isinstance(probation_warn, (int, float)) and float(probation_warn) < 0:
-            table.add_row("Prob Warn:", Text(f"{float(probation_warn):.2f}", style="yellow"))
+        if isinstance(components.probation_warning, (int, float)) and components.probation_warning < 0:
+            table.add_row("Prob Warn:", Text(f"{components.probation_warning:.2f}", style="yellow"))
 
         # Total (last computed reward for this env)
         table.add_row("", "")
         table.add_row("───────────", "───────")
-        total = env_state.current_reward
+        total = components.total
         style = "bold green" if total >= 0 else "bold red"
         table.add_row("Total:", Text(f"{total:+.2f}", style=style))
 
