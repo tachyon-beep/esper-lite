@@ -320,6 +320,81 @@ class TestSanctumAggregator:
         assert snapshot.event_log[0].event_type == "REWARD_COMPUTED"
         assert "WAIT" in snapshot.event_log[0].message
 
+    def test_event_log_populates_episode_and_relative_time(self):
+        """Event log entries should include episode and relative_time fields."""
+        from datetime import timedelta
+
+        agg = SanctumAggregator(num_envs=4, max_event_log=10)
+
+        # Set current episode
+        agg._current_episode = 5
+
+        # Create an event with a timestamp 30 seconds ago
+        now = datetime.now(timezone.utc)
+        past_timestamp = now - timedelta(seconds=30)
+
+        event = MagicMock()
+        event.event_type = MagicMock()
+        event.event_type.name = "REWARD_COMPUTED"
+        event.timestamp = past_timestamp
+        event.message = None
+        event.data = {
+            "env_id": 2,
+            "total_reward": 0.75,
+            "action_name": "GERMINATE",
+        }
+
+        agg.process_event(event)
+        snapshot = agg.get_snapshot()
+
+        assert len(snapshot.event_log) == 1
+        entry = snapshot.event_log[0]
+
+        # Verify episode is populated
+        assert entry.episode == 5
+
+        # Verify relative_time is populated and has correct format
+        assert entry.relative_time != ""
+        assert entry.relative_time.startswith("(")
+        assert entry.relative_time.endswith(")")
+        # Should be in seconds format (less than 60 seconds)
+        assert "s)" in entry.relative_time
+
+        # Test minute format (90 seconds ago)
+        past_timestamp_minutes = now - timedelta(seconds=90)
+        event2 = MagicMock()
+        event2.event_type = MagicMock()
+        event2.event_type.name = "SEED_GERMINATED"
+        event2.timestamp = past_timestamp_minutes
+        event2.slot_id = "r0c0"
+        event2.data = {"env_id": 1, "blueprint_id": "conv_light"}
+
+        agg.process_event(event2)
+        snapshot = agg.get_snapshot()
+
+        assert len(snapshot.event_log) == 2
+        entry2 = snapshot.event_log[1]
+
+        # Should be in minutes format
+        assert "m)" in entry2.relative_time
+
+        # Test hour format (7200 seconds = 2 hours ago)
+        past_timestamp_hours = now - timedelta(seconds=7200)
+        event3 = MagicMock()
+        event3.event_type = MagicMock()
+        event3.event_type.name = "BATCH_COMPLETED"
+        event3.timestamp = past_timestamp_hours
+        event3.data = {"episodes_completed": 3}
+
+        agg.process_event(event3)
+        snapshot = agg.get_snapshot()
+
+        assert len(snapshot.event_log) == 3
+        entry3 = snapshot.event_log[2]
+
+        # Should be in hours format
+        assert "h)" in entry3.relative_time
+
     def test_seed_stage_changed_updates_stage(self):
         """SEED_STAGE_CHANGED should update seed stage and metrics."""
         agg = SanctumAggregator(num_envs=4)

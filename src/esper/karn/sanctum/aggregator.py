@@ -612,10 +612,20 @@ class SanctumAggregator:
             )
 
     def _add_event_log(self, event: "TelemetryEvent", event_type: str) -> None:
-        """Add event to log with formatting."""
+        """Add event to log with formatting, episode, and relative time."""
         data = event.data or {}
         env_id = data.get("env_id")
         timestamp = event.timestamp or datetime.now(timezone.utc)
+
+        # Calculate relative time
+        now = datetime.now(timezone.utc)
+        age_seconds = (now - timestamp).total_seconds()
+        if age_seconds < 60:
+            relative_time = f"({age_seconds:.0f}s)"
+        elif age_seconds < 3600:
+            relative_time = f"({age_seconds/60:.0f}m)"
+        else:
+            relative_time = f"({age_seconds/3600:.0f}h)"
 
         # Format message based on event type
         if event_type == "REWARD_COMPUTED":
@@ -655,6 +665,8 @@ class SanctumAggregator:
             event_type=event_type,
             env_id=env_id,
             message=message,
+            episode=self._current_episode,
+            relative_time=relative_time,
         ))
 
     def _update_system_vitals(self) -> None:
