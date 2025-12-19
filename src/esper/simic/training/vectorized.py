@@ -67,7 +67,17 @@ from esper.leyline import (
     DEFAULT_MIN_PANICS_BEFORE_ROLLBACK,
     HEAD_NAMES,
 )
-from esper.leyline.factored_actions import FactoredAction, LifecycleOp
+from esper.leyline.factored_actions import (
+    FactoredAction,
+    LifecycleOp,
+    OP_NAMES,
+    BLUEPRINT_IDS,
+    BLEND_IDS,
+    OP_WAIT,
+    OP_GERMINATE,
+    OP_CULL,
+    OP_FOSSILIZE,
+)
 from esper.tamiyo.policy.action_masks import build_slot_states, compute_action_masks
 from esper.leyline.slot_id import validate_slot_ids
 from esper.simic.telemetry import (
@@ -1874,19 +1884,17 @@ def train_ppo_vectorized(
                 # Now Python floats/ints - no GPU sync
                 value = values[env_idx]
 
-                # Parse factored action FIRST to determine target slot
+                # Parse factored action using direct indexing (no object creation)
                 action_dict = actions[env_idx]  # {slot: int, blueprint: int, blend: int, op: int}
-                factored_action = FactoredAction.from_indices(
-                    slot_idx=action_dict["slot"],
-                    blueprint_idx=action_dict["blueprint"],
-                    blend_idx=action_dict["blend"],
-                    op_idx=action_dict["op"],
-                )
+                slot_idx = action_dict["slot"]
+                blueprint_idx = action_dict["blueprint"]
+                blend_idx = action_dict["blend"]
+                op_idx = action_dict["op"]
 
                 # Use the SAMPLED slot as target (multi-slot support)
                 # slot_idx is in canonical SlotConfig order, not caller slot list order.
                 target_slot, slot_is_enabled = _resolve_target_slot(
-                    factored_action.slot_idx,
+                    slot_idx,
                     enabled_slots=slots,
                     slot_config=slot_config,
                 )
@@ -1896,9 +1904,9 @@ def train_ppo_vectorized(
                     else None
                 )
                 # Use op name for action counting
-                env_state.action_counts[factored_action.op.name] = env_state.action_counts.get(factored_action.op.name, 0) + 1
+                env_state.action_counts[OP_NAMES[op_idx]] = env_state.action_counts.get(OP_NAMES[op_idx], 0) + 1
                 # For reward computation, use LifecycleOp (IntEnum compatible)
-                action_for_reward = factored_action.op
+                action_for_reward = LifecycleOp(op_idx)
 
                 action_success = False
 
@@ -2046,12 +2054,12 @@ def train_ppo_vectorized(
                     # (should not happen if action masking is working correctly)
                     action_success = False
 
-                elif factored_action.is_germinate:
+                elif op_idx == OP_GERMINATE:
                     # Germinate in the SAMPLED slot (multi-slot support)
                     if not model.has_active_seed_in_slot(target_slot):
                         env_state.acc_at_germination[target_slot] = env_state.val_acc
-                        blueprint_id = factored_action.blueprint_id
-                        blend_algorithm_id = factored_action.blend_algorithm_id
+                        blueprint_id = BLUEPRINT_IDS[blueprint_idx]
+                        blend_algorithm_id = BLEND_IDS[blend_idx]
                         seed_id = f"env{env_idx}_seed_{env_state.seeds_created}"
                         model.germinate_seed(
                             blueprint_id,
@@ -2063,7 +2071,7 @@ def train_ppo_vectorized(
                         env_state.seed_optimizers.pop(target_slot, None)
                         action_success = True
 
-                elif factored_action.is_fossilize:
+                elif op_idx == OP_FOSSILIZE:
                     # Fossilize the seed in the SAMPLED slot
                     seed_total_improvement = (
                         seed_state.metrics.total_improvement
@@ -2077,7 +2085,7 @@ def train_ppo_vectorized(
                             env_state.contributing_fossilized += 1
                         env_state.acc_at_germination.pop(target_slot, None)
 
-                elif factored_action.is_cull:
+                elif op_idx == OP_CULL:
                     # Cull the seed in the SAMPLED slot
                     if model.has_active_seed_in_slot(target_slot):
                         model.cull_seed(slot=target_slot)
@@ -2090,7 +2098,7 @@ def train_ppo_vectorized(
                     action_success = True
 
                 if action_success:
-                    env_state.successful_action_counts[factored_action.op.name] = env_state.successful_action_counts.get(factored_action.op.name, 0) + 1
+                    env_state.successful_action_counts[OP_NAMES[op_idx]] = env_state.successful_action_counts.get(OP_NAMES[op_idx], 0) + 1
 
                 if hub and use_telemetry and (
                     telemetry_config is None or telemetry_config.should_collect("ops_normal")
@@ -2104,10 +2112,10 @@ def train_ppo_vectorized(
                     emit_last_action(
                         env_id=env_idx,
                         epoch=epoch,
-                        slot_idx=factored_action.slot_idx,
-                        blueprint_idx=factored_action.blueprint.value,
-                        blend_idx=factored_action.blend.value,
-                        op_idx=factored_action.op.value,
+                        slot_idx=slot_idx,
+                        blueprint_idx=blueprint_idx,
+                        blend_idx=blend_idx,
+                        op_idx=op_idx,
                         slot_id=target_slot,
                         masked=masked_flags,
                         success=action_success,
