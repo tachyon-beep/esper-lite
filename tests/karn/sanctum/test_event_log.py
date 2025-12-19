@@ -28,7 +28,7 @@ def test_event_log_creation():
 
     widget = EventLog()
     assert widget is not None
-    assert widget._max_events == 20
+    assert widget._max_events == 30  # Increased for more context
     assert widget.border_title == "EVENTS"
 
 

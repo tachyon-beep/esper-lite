@@ -384,9 +384,19 @@ class CounterfactualPanel(Static):
         lines.append(Text(f"Expected (sum of solo): +{expected:.1f}%", style="dim"))
         lines.append(Text(f"Actual improvement:     +{improvement:.1f}%", style="dim"))
 
-        synergy_style = "bold green" if synergy > 0.5 else "bold red" if synergy < -0.5 else "bold"
-        synergy_label = "Synergy" if synergy >= 0 else "Interference"
-        lines.append(Text(f"{synergy_label}:              {synergy:+.1f}%", style=synergy_style))
+        # Interference is MORE critical to surface than synergy - seeds hurting each other
+        # Use loud visual treatment for negative cases
+        if synergy < -0.5:
+            # INTERFERENCE: Seeds are hurting each other - make this LOUD
+            lines.append(Text(""))
+            lines.append(Text("✗ INTERFERENCE DETECTED", style="bold red reverse"))
+            lines.append(Text(f"  Seeds are hurting each other by {synergy:.1f}%", style="red"))
+        elif synergy > 0.5:
+            # Synergy: Seeds working together
+            lines.append(Text(f"✓ Synergy:              +{synergy:.1f}%", style="bold green"))
+        else:
+            # Neutral: Seeds are independent
+            lines.append(Text(f"  Interaction:          {synergy:+.1f}%", style="dim"))
 
         content = Group(*lines)
         return Panel(content, title="Counterfactual Analysis", border_style="cyan")

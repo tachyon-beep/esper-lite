@@ -419,20 +419,22 @@ class EnvOverview(Static):
         """Format epochs since improvement with color coding.
 
         Returns the number of epochs since the last improvement, colored:
-        - Green: 0 (currently improving)
-        - White: 1-5 (normal)
-        - Yellow: 6-15 (stagnating)
-        - Red: >15 (severely stalled)
+        - Green: 0 (currently improving) with checkmark
+        - White: 1-5 (normal) numbers only
+        - Yellow: 6-15 (stagnating) with warning icon
+        - Red: >15 (severely stalled) with X icon
+
+        Icons provide color-independent indication (accessibility).
         """
         epochs = env.epochs_since_improvement
         if epochs == 0:
-            return "[green]✓[/green]"
+            return "[green]✓0[/green]"
         elif epochs <= 5:
             return f"[white]{epochs}[/white]"
         elif epochs <= 15:
-            return f"[yellow]{epochs}[/yellow]"
+            return f"[yellow]⚠{epochs}[/yellow]"
         else:
-            return f"[red]{epochs}[/red]"
+            return f"[red]✗{epochs}[/red]"
 
     def _format_status(self, env: "EnvState") -> str:
         """Format status with color coding."""
@@ -444,12 +446,13 @@ class EnvOverview(Static):
             "degraded": "red",
         }
 
+        # Icons provide color-independent status indication (accessibility)
         status_short = {
-            "excellent": "EXCL",
-            "healthy": "OK",
-            "initializing": "INIT",
-            "stalled": "STAL",
-            "degraded": "DEGR",
+            "excellent": "★EXCL",
+            "healthy": "●OK",
+            "initializing": "○INIT",
+            "stalled": "◐STAL",
+            "degraded": "▼DEGR",
         }.get(env.status, env.status[:4].upper())
 
         status_style = status_styles.get(env.status, "white")

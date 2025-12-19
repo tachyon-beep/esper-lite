@@ -55,11 +55,11 @@ class EventLog(Static):
     - Emoji prefixes for quick scanning
     """
 
-    def __init__(self, max_events: int = 20, **kwargs) -> None:
+    def __init__(self, max_events: int = 30, **kwargs) -> None:
         """Initialize EventLog widget.
 
         Args:
-            max_events: Maximum events to display (default: 20)
+            max_events: Maximum events to display (default: 30)
         """
         super().__init__(**kwargs)
         self._max_events = max_events

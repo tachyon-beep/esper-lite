@@ -119,7 +119,7 @@ def test_run_header_connection_live():
     panel = widget.render()
     rendered = render_to_text(panel)
 
-    assert "Live" in rendered
+    assert "LIVE" in rendered  # Uppercase for accessibility
 
 
 def test_run_header_connection_stale():
@@ -134,7 +134,7 @@ def test_run_header_connection_stale():
     panel = widget.render()
     rendered = render_to_text(panel)
 
-    assert "Stale" in rendered
+    assert "STALE" in rendered  # Uppercase for accessibility
 
 
 def test_run_header_connection_disconnected():
