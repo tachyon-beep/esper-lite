@@ -316,14 +316,17 @@ class SystemVitals:
     def memory_alarm_devices(self) -> list[str]:
         """Get list of devices exceeding 90% memory usage."""
         devices = []
-        # Check multi-GPU stats first
+        # Check RAM
+        if self.ram_total_gb > 0 and (self.ram_used_gb / self.ram_total_gb) > 0.90:
+            devices.append("RAM")
+        # Check multi-GPU stats
         for device, stats in self.gpu_stats.items():
             if stats.memory_total_gb > 0:
                 usage = stats.memory_used_gb / stats.memory_total_gb
                 if usage > 0.90:
                     devices.append(f"cuda:{device}")
         # Fallback to single GPU if no gpu_stats but fallback fields are populated
-        if not devices and self.gpu_memory_total_gb > 0:
+        if not self.gpu_stats and self.gpu_memory_total_gb > 0:
             usage = self.gpu_memory_used_gb / self.gpu_memory_total_gb
             if usage > 0.90:
                 devices.append("cuda:0")

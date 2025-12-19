@@ -200,7 +200,7 @@ def test_system_vitals_memory_alarm_threshold():
         ram_total_gb=32.0,  # 93.75% usage
     )
     assert vitals.has_memory_alarm is True
-    assert vitals.memory_alarm_devices == ["cuda:0"]
+    assert vitals.memory_alarm_devices == ["RAM", "cuda:0"]
 
 
 def test_system_vitals_no_alarm_below_threshold():
@@ -213,3 +213,30 @@ def test_system_vitals_no_alarm_below_threshold():
     )
     assert vitals.has_memory_alarm is False
     assert vitals.memory_alarm_devices == []
+
+
+def test_system_vitals_ram_only_alarm():
+    """RAM alarm should be included in memory_alarm_devices."""
+    vitals = SystemVitals(
+        gpu_memory_used_gb=5.0,
+        gpu_memory_total_gb=10.0,  # 50% - no alarm
+        ram_used_gb=30.0,
+        ram_total_gb=32.0,  # 93.75% - alarm
+    )
+    assert vitals.has_memory_alarm is True
+    assert "RAM" in vitals.memory_alarm_devices
+    assert "cuda:0" not in vitals.memory_alarm_devices
+
+
+def test_system_vitals_multi_gpu_alarm():
+    """Multi-GPU alarm detection via gpu_stats dict."""
+    vitals = SystemVitals(
+        gpu_stats={
+            0: GPUStats(device_id=0, memory_used_gb=5.0, memory_total_gb=10.0),  # 50%
+            1: GPUStats(device_id=1, memory_used_gb=9.5, memory_total_gb=10.0),  # 95%
+        },
+        ram_used_gb=10.0,
+        ram_total_gb=32.0,  # 31% - no alarm
+    )
+    assert vitals.has_memory_alarm is True
+    assert vitals.memory_alarm_devices == ["cuda:1"]
