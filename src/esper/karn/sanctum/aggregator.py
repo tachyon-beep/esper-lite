@@ -331,6 +331,9 @@ class SanctumAggregator:
         # Reset Tamiyo state
         self._tamiyo = TamiyoState()
 
+        # Reset best runs for new training session
+        self._best_runs = []
+
     def _handle_epoch_completed(self, event: "TelemetryEvent") -> None:
         """Handle EPOCH_COMPLETED event."""
         data = event.data or {}
