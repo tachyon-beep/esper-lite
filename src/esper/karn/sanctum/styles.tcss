@@ -1,6 +1,5 @@
 /* Sanctum Diagnostic TUI Styles
- * Matches Rich TUI layout with Textual styling.
- * FIX: TamiyoBrain as full-width row, Event Log added
+ * New layout: Top (EnvOverview + Scoreboard) | Bottom (EventLog + TamiyoBrain)
  */
 
 /* Run Header - fixed height for 2-row display */
@@ -15,10 +14,10 @@
     padding: 0 1;
 }
 
-/* Top section: Env Overview + Scoreboard */
+/* Top section: Env Overview + Scoreboard (~55% of main area) */
 #top-section {
-    min-height: 20;
-    height: auto;
+    height: 55%;
+    min-height: 15;
 }
 
 /* Environment Overview - main table (65% width) */
@@ -42,27 +41,16 @@
     border: double $accent;
 }
 
-/* Tamiyo Brain - Full-width dedicated row (FIX) */
-.brain-panel {
-    height: 11;
-    border: solid magenta;
-    margin-top: 1;
-    margin-bottom: 1;
-}
-
-#tamiyo-brain:focus {
-    border: double $accent;
-}
-
-/* Bottom section: Event Log + (Rewards + Status) */
+/* Bottom section: Event Log + TamiyoBrain (~45% of main area) */
 #bottom-section {
-    height: 15;
+    height: 45%;
+    min-height: 12;
 }
 
-/* Event Log (FIX: Added missing panel) - 65% width */
+/* Event Log - system velocity (50% width) */
 #event-log {
-    width: 65%;
-    height: 1fr;  /* Fill available height in container */
+    width: 50%;
+    height: 1fr;
     border: solid yellow;
     border-title-color: yellow;
     margin-right: 1;
@@ -74,32 +62,14 @@
     border: double $accent;
 }
 
-/* Right bottom container - 35% width */
-#right-bottom {
-    width: 35%;
-    height: 1fr;  /* Fill available height in Horizontal container */
-}
-
-/* System Resources - CPU/RAM/GPU monitoring */
-#system-resources {
+/* Tamiyo Brain - learning + decisions (50% width) */
+#tamiyo-brain {
+    width: 50%;
     height: 1fr;
-    border: solid green;
-    margin-bottom: 1;
-    padding: 0 1;
+    border: solid magenta;
 }
 
-#system-resources:focus {
-    border: double $accent;
-}
-
-/* Training Health - entropy, gradients, actions */
-#training-health {
-    height: 1fr;
-    border: solid cyan;
-    padding: 0 1;
-}
-
-#training-health:focus {
+#tamiyo-brain:focus {
     border: double $accent;
 }
 
@@ -112,7 +82,7 @@
     border: double $accent;
 }
 
-/* Staleness indicator (FIX: Data staleness display) */
+/* Staleness indicator */
 .stale {
     opacity: 0.7;
 }
