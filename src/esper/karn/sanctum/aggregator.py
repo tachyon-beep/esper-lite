@@ -106,6 +106,11 @@ class SanctumAggregator:
     _current_episode: int = 0
     _current_epoch: int = 0
     _batches_completed: int = 0
+    _host_params: int = 0  # Baseline host model params (for growth_ratio)
+    _reward_mode: str = ""  # A/B test cohort (shaped, simplified, sparse)
+    _current_batch: int = 0  # Current batch index (from BATCH_COMPLETED)
+    _batch_avg_accuracy: float = 0.0  # Batch-level average accuracy
+    _batch_rolling_accuracy: float = 0.0  # Rolling average for trend display
 
     # Per-env state: env_id -> EnvState
     _envs: dict[int, EnvState] = field(default_factory=dict)
@@ -225,7 +230,7 @@ class SanctumAggregator:
             run_id=self._run_id,
             task_name=self._task_name,
             current_episode=self._current_episode,
-            current_batch=self._batches_completed,
+            current_batch=self._current_batch or self._batches_completed,
             current_epoch=self._current_epoch,
             max_epochs=self._max_epochs,
             runtime_seconds=runtime,
@@ -280,6 +285,12 @@ class SanctumAggregator:
         # Initialize num_envs from event
         n_envs = data.get("n_envs", self.num_envs)
         self.num_envs = n_envs
+
+        # Capture host params baseline (for growth_ratio calculation)
+        self._host_params = data.get("host_params", 0)
+
+        # Capture reward mode for A/B test cohort display
+        self._reward_mode = data.get("reward_mode", "")
 
         # Capture slot configuration from event (if provided)
         # Falls back to default 2x2 grid if not specified
@@ -413,6 +424,9 @@ class SanctumAggregator:
             self._tamiyo.layer_gradient_health = layer_health
         self._tamiyo.entropy_collapsed = data.get("entropy_collapsed", False)
 
+        # Performance timing
+        self._tamiyo.update_time_ms = data.get("update_time_ms", 0.0)
+
     def _handle_reward_computed(self, event: "TelemetryEvent") -> None:
         """Handle REWARD_COMPUTED event with per-env routing."""
         data = event.data or {}
@@ -522,11 +536,18 @@ class SanctumAggregator:
 
         elif event_type == "SEED_FOSSILIZED":
             seed.stage = "FOSSILIZED"
+            # Capture fossilization context (P1 telemetry gap fix)
+            seed.improvement = data.get("improvement", 0.0)
+            seed.blueprint_id = data.get("blueprint_id") or seed.blueprint_id
             env.fossilized_params += int(data.get("params_added", 0) or 0)
             env.fossilized_count += 1
             env.active_seed_count = max(0, env.active_seed_count - 1)
 
         elif event_type == "SEED_CULLED":
+            # Capture cull context before resetting (P1 telemetry gap fix)
+            seed.cull_reason = data.get("reason", "")
+            seed.improvement = data.get("improvement", 0.0)
+
             # Reset slot to DORMANT
             seed.stage = "DORMANT"
             seed.seed_params = 0
@@ -552,6 +573,11 @@ class SanctumAggregator:
         if isinstance(episodes_completed, (int, float)):
             self._current_episode = int(episodes_completed)
         self._batches_completed += 1
+
+        # Capture batch-level aggregates (P1 telemetry gap fix)
+        self._current_batch = data.get("batch_idx", self._batches_completed)
+        self._batch_avg_accuracy = data.get("avg_accuracy", 0.0)
+        self._batch_rolling_accuracy = data.get("rolling_accuracy", 0.0)
 
         # Calculate throughput
         now = time.time()
@@ -606,6 +632,8 @@ class SanctumAggregator:
         if env_id not in self._envs:
             self._envs[env_id] = EnvState(
                 env_id=env_id,
+                host_params=self._host_params,  # Set baseline for growth_ratio
+                reward_mode=self._reward_mode,  # A/B test cohort for colored pip
                 accuracy_history=deque(maxlen=self.max_history),
                 reward_history=deque(maxlen=self.max_history),
                 action_history=deque(maxlen=self.max_history),
@@ -640,7 +668,8 @@ class SanctumAggregator:
             elif event_type == "SEED_STAGE_CHANGED":
                 message = f"{slot_id} {data.get('from', '?')}->{data.get('to', '?')}"
             elif event_type == "SEED_FOSSILIZED":
-                message = f"{slot_id} fossilized"
+                improvement = data.get("improvement", 0.0)
+                message = f"{slot_id} fossilized" + (f" (+{improvement:.1f}%)" if improvement else "")
             elif event_type == "SEED_CULLED":
                 reason = data.get("reason", "")
                 message = f"{slot_id} culled" + (f" ({reason})" if reason else "")

@@ -36,6 +36,9 @@ class SeedState:
     has_exploding: bool = False
     # Stage progress - shown as "e5" in slot cell
     epochs_in_stage: int = 0
+    # Fossilization/cull context (P1 telemetry gap fix)
+    improvement: float = 0.0  # Accuracy improvement when fossilized
+    cull_reason: str = ""  # Why seed was culled (e.g., "gradient_explosion", "stagnation")
 
 
 @dataclass
@@ -264,6 +267,9 @@ class TamiyoState:
     nan_grad_count: int = 0  # NaN gradient count
     layer_gradient_health: float = 1.0  # GradHP percentage (0-1)
     entropy_collapsed: bool = False  # Entropy collapse detected
+
+    # Performance timing (for throughput monitoring)
+    update_time_ms: float = 0.0  # PPO update duration in milliseconds
 
     # Action distribution (Actions panel)
     action_counts: dict[str, int] = field(default_factory=dict)
