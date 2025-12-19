@@ -1,4 +1,5 @@
 """Test buffer can accept batched log_prob tensors."""
+import pytest
 import torch
 from esper.simic.agent.rollout_buffer import TamiyoRolloutBuffer
 
@@ -89,3 +90,50 @@ def test_buffer_add_still_accepts_float_log_probs():
     )
 
     assert buffer.slot_log_probs[0, 0].item() == -0.5
+
+
+def test_buffer_add_accepts_mixed_float_and_tensor():
+    """Buffer.add() should accept mix of floats and tensors."""
+    buffer = TamiyoRolloutBuffer(
+        num_envs=4,
+        max_steps_per_env=25,
+        state_dim=64,
+        device=torch.device("cpu"),
+    )
+
+    state = torch.randn(64)
+    slot_mask = torch.ones(3, dtype=torch.bool)
+    blueprint_mask = torch.ones(13, dtype=torch.bool)
+    blend_mask = torch.ones(3, dtype=torch.bool)
+    op_mask = torch.ones(4, dtype=torch.bool)
+    hidden_h = torch.randn(1, 1, 128)
+    hidden_c = torch.randn(1, 1, 128)
+
+    # Mix of tensor and float inputs
+    buffer.add(
+        env_id=0,
+        state=state,
+        slot_action=0,
+        blueprint_action=1,
+        blend_action=0,
+        op_action=1,
+        slot_log_prob=torch.tensor(-0.5),      # tensor
+        blueprint_log_prob=-1.0,                # float
+        blend_log_prob=torch.tensor(-0.3),      # tensor
+        op_log_prob=-0.7,                       # float
+        value=torch.tensor(0.5),                # tensor
+        reward=1.0,
+        done=False,
+        slot_mask=slot_mask,
+        blueprint_mask=blueprint_mask,
+        blend_mask=blend_mask,
+        op_mask=op_mask,
+        hidden_h=hidden_h,
+        hidden_c=hidden_c,
+        bootstrap_value=torch.tensor(0.2),      # tensor
+    )
+
+    assert buffer.slot_log_probs[0, 0].item() == -0.5
+    assert buffer.blueprint_log_probs[0, 0].item() == -1.0
+    assert buffer.values[0, 0].item() == pytest.approx(0.5)
+    assert buffer.bootstrap_values[0, 0].item() == pytest.approx(0.2)
