@@ -177,11 +177,11 @@ async def test_correct_columns(empty_snapshot):
         widget = app.query_one(EnvOverview)
         widget.update_snapshot(empty_snapshot)
 
-        # Expected columns: Env, Acc, Reward, Acc▁▃▅, Rwd▁▃▅, ΔAcc, Seed Δ, Rent, [slots...], Last, Stale, Status
-        # Fixed: 8 + 3 slots + 3 (Last, Stale, Status) = 14 total
-        # Env, Acc, Reward, Acc▁▃▅, Rwd▁▃▅, ΔAcc, Seed Δ, Rent (8) + R0C0, R0C1, R1C0 (3) + Last, Stale, Status (3) = 14
+        # Expected columns: Env, Acc, Growth, Reward, Acc▁▃▅, Rwd▁▃▅, ΔAcc, Seed Δ, Rent, [slots...], Last, Stale, Status
+        # Fixed: 9 + 3 slots + 3 (Last, Stale, Status) = 15 total
+        # Env, Acc, Growth, Reward, Acc▁▃▅, Rwd▁▃▅, ΔAcc, Seed Δ, Rent (9) + R0C0, R0C1, R1C0 (3) + Last, Stale, Status (3) = 15
         assert widget.table is not None
-        assert len(widget.table.columns) == 14
+        assert len(widget.table.columns) == 15
 
 
 @pytest.mark.asyncio
@@ -403,6 +403,42 @@ async def test_reward_threshold_colors():
 
         # Should have 3 envs + separator + aggregate = 5 rows
         assert widget.table.row_count == 5
+
+
+@pytest.mark.asyncio
+async def test_growth_ratio_color_coding():
+    """Growth ratio should be colored by severity: green < 1.3, yellow < 1.5, red >= 1.5."""
+    app = EnvOverviewTestApp()
+    async with app.run_test():
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+
+        # Test no growth (dim)
+        env0 = EnvState(env_id=0, host_params=1_000_000, fossilized_params=0)
+        snapshot.envs[0] = env0
+
+        # Test efficient growth (green): 1.2x
+        env1 = EnvState(env_id=1, host_params=1_000_000, fossilized_params=200_000)
+        snapshot.envs[1] = env1
+
+        # Test moderate growth (yellow): 1.4x
+        env2 = EnvState(env_id=2, host_params=1_000_000, fossilized_params=400_000)
+        snapshot.envs[2] = env2
+
+        # Test heavy growth (red): 1.6x
+        env3 = EnvState(env_id=3, host_params=1_000_000, fossilized_params=600_000)
+        snapshot.envs[3] = env3
+
+        widget = app.query_one(EnvOverview)
+        widget.update_snapshot(snapshot)
+
+        # Should have 4 envs + separator + aggregate = 6 rows
+        assert widget.table.row_count == 6
+
+        # Verify growth ratios are computed correctly
+        assert env0.growth_ratio == 1.0
+        assert env1.growth_ratio == 1.2
+        assert env2.growth_ratio == 1.4
+        assert env3.growth_ratio == 1.6
 
 
 @pytest.mark.asyncio

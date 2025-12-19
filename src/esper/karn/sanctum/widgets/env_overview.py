@@ -83,9 +83,10 @@ class EnvOverview(Static):
 
         self.table.clear(columns=True)
 
-        # Fixed columns
+        # Fixed columns - ordered: Identity → Performance → Trends → Reward breakdown
         self.table.add_column("Env", key="env")
         self.table.add_column("Acc", key="acc")
+        self.table.add_column("Growth", key="growth")  # growth_ratio: (host+foss)/host
         self.table.add_column("Reward", key="reward")
         self.table.add_column("Acc▁▃▅", key="acc_spark")
         self.table.add_column("Rwd▁▃▅", key="rwd_spark")
@@ -144,6 +145,9 @@ class EnvOverview(Static):
         # Accuracy with color coding
         acc_cell = self._format_accuracy(env)
 
+        # Growth ratio: (host+fossilized)/host
+        growth_cell = self._format_growth_ratio(env)
+
         # Reward (current and average)
         reward_cell = self._format_reward(env)
 
@@ -170,10 +174,11 @@ class EnvOverview(Static):
         # Status
         status_cell = self._format_status(env)
 
-        # Build row
+        # Build row - order matches column definition
         row = [
             env_id_cell,
             acc_cell,
+            growth_cell,
             reward_cell,
             acc_spark,
             rwd_spark,
@@ -215,10 +220,15 @@ class EnvOverview(Static):
         mean_delta = sum(deltas) / len(deltas) if deltas else 0.0
         mean_rent = sum(rents) / len(rents) if rents else 0.0
 
-        # Build aggregate row
+        # Calculate mean growth ratio
+        growth_ratios = [e.growth_ratio for e in self._snapshot.envs.values()]
+        mean_growth = sum(growth_ratios) / len(growth_ratios) if growth_ratios else 1.0
+
+        # Build aggregate row - order must match column definition
         agg_row = [
             "[bold]Σ[/bold]",
             f"[bold]{self._snapshot.aggregate_mean_accuracy:.1f}%[/bold]",
+            f"[dim]{mean_growth:.2f}x[/dim]",  # Growth ratio mean
             f"[bold]{self._snapshot.aggregate_mean_reward:+.2f}[/bold]",
             "",  # Acc sparkline
             "",  # Rwd sparkline
@@ -251,6 +261,24 @@ class EnvOverview(Static):
             pip, color = _AB_STYLES[env.reward_mode]
             return f"[{color}]{pip}[/{color}]{env.env_id}"
         return str(env.env_id)
+
+    def _format_growth_ratio(self, env: "EnvState") -> str:
+        """Format growth ratio: (host+fossilized)/host.
+
+        Shows how much larger the mutated model is vs baseline.
+        - 1.0x = no growth (baseline or no fossilized seeds)
+        - 1.2x = 20% larger due to fossilized seeds
+        - Green if efficient (<1.3x), yellow if moderate (1.3-1.5x), red if heavy (>1.5x)
+        """
+        ratio = env.growth_ratio
+        if ratio <= 1.0:
+            return "[dim]1.0x[/dim]"
+        elif ratio < 1.3:
+            return f"[green]{ratio:.2f}x[/green]"
+        elif ratio < 1.5:
+            return f"[yellow]{ratio:.2f}x[/yellow]"
+        else:
+            return f"[red]{ratio:.2f}x[/red]"
 
     def _format_accuracy(self, env: "EnvState") -> str:
         """Format accuracy with color coding.
