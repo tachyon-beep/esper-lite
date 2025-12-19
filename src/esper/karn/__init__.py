@@ -86,16 +86,11 @@ from esper.karn.health import (
     VitalSigns,
 )
 
-# TUI (terminal user interface)
-from esper.karn.tui import (
-    TUIOutput,
-    TUIState,
-    ThresholdConfig,
-    HealthStatus,
-)
-
-# Overwatch (live telemetry backend)
+# Overwatch (live telemetry backend for operators)
 from esper.karn.overwatch.backend import OverwatchBackend
+
+# Sanctum (developer diagnostic TUI backend)
+from esper.karn.sanctum.backend import SanctumBackend
 
 __all__ = [
     # Dashboard
@@ -143,11 +138,8 @@ __all__ = [
     "GradientHealth",
     "VitalSignsMonitor",
     "VitalSigns",
-    # TUI
-    "TUIOutput",
-    "TUIState",
-    "ThresholdConfig",
-    "HealthStatus",
-    # Overwatch
+    # Overwatch (operator monitoring)
     "OverwatchBackend",
+    # Sanctum (developer diagnostics)
+    "SanctumBackend",
 ]
