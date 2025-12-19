@@ -344,12 +344,12 @@ Scale:
 - **Pre-flight checklist:**
   - [ ] Confirm Step 8 is merged (this is a `vectorized.py` hot path patch).
   - [ ] Confirm Step 16 is merged (this should be the last behavior patch in the workstream).
-  - [ ] Identify resume + progress telemetry touchpoints in `src/esper/simic/vectorized.py` (`resume_path`, `episodes_completed`, `total_episodes`, `BATCH_COMPLETED`).
+  - [ ] Identify resume + progress telemetry touchpoints in `src/esper/simic/vectorized.py` (`resume_path`, `episodes_completed`, `total_episodes`, `BATCH_EPOCH_COMPLETED`).
   - [ ] Run a baseline Simic subset: `uv run pytest -q tests/test_simic_vectorized.py tests/cuda/test_vectorized_multi_gpu_smoke.py -m "not slow"`.
 - **Target:** `src/esper/simic/vectorized.py`, `tests/test_simic_vectorized.py`
 - **Action:**
   - Harden `make_telemetry_callback(...)` against `event.data is None` and shared dict mutation by defensively copying before injecting `env_id`.
-  - Fix `BATCH_COMPLETED.data["total_episodes"]` to match the actual run target (including resume offset); include `start_episode` + `requested_episodes` in payload for unambiguous UI math.
+  - Fix `BATCH_EPOCH_COMPLETED.data["total_episodes"]` to match the actual run target (including resume offset); include `start_episode` + `requested_episodes` in payload for unambiguous UI math.
   - Add tests:
     - Telemetry callback robustness (no crash on `data=None`; no cross-env contamination when events share a dict).
     - Resume progress telemetry uses consistent totals (no >100% completion).

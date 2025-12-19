@@ -48,11 +48,11 @@ def emit_batch_completed(
     start_episode: int,
     requested_episodes: int,
 ) -> None:
-    """Emit batch completion telemetry with resume-aware totals."""
+    """Emit batch epoch completion telemetry with resume-aware totals."""
     clamped_completed = min(episodes_completed, total_episodes)
     hub.emit(
         TelemetryEvent(
-            event_type=TelemetryEventType.BATCH_COMPLETED,
+            event_type=TelemetryEventType.BATCH_EPOCH_COMPLETED,
             data={
                 "batch_idx": batch_idx,
                 "episodes_completed": clamped_completed,

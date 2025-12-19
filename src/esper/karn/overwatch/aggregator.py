@@ -170,8 +170,8 @@ class TelemetryAggregator:
                     status="OK",
                 )
 
-    def _handle_batch_completed(self, event: "TelemetryEvent") -> None:
-        """Handle BATCH_COMPLETED event."""
+    def _handle_batch_epoch_completed(self, event: "TelemetryEvent") -> None:
+        """Handle BATCH_EPOCH_COMPLETED event."""
         data = event.data or {}
         self._batch = data.get("batch_idx", self._batch)
         self._episode = data.get("episodes_completed", self._episode)

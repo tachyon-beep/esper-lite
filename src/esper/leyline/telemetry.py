@@ -43,7 +43,7 @@ class TelemetryEventType(Enum):
 
     # Training events
     EPOCH_COMPLETED = auto()  # Per-env epoch (has env_id in data)
-    BATCH_EPOCH_COMPLETED = auto()  # Batch-level epoch summary (no env_id, commit barrier)
+    BATCH_EPOCH_COMPLETED = auto()  # Batch-level epoch summary + progress (commit barrier)
     PLATEAU_DETECTED = auto()
     DEGRADATION_DETECTED = auto()
     IMPROVEMENT_DETECTED = auto()
@@ -73,7 +73,6 @@ class TelemetryEventType(Enum):
     GOVERNOR_SNAPSHOT = auto()        # LKG checkpoint saved
 
     # === Training Progress Events ===
-    BATCH_COMPLETED = auto()          # PPO batch finished
     TRAINING_STARTED = auto()         # Training run initialized
     CHECKPOINT_SAVED = auto()         # Model checkpoint saved
     CHECKPOINT_LOADED = auto()        # Model checkpoint restored

@@ -60,7 +60,7 @@ In `src/esper/leyline/telemetry.py`, add after the Governor events:
 
 ```python
     # === Training Progress Events ===
-    BATCH_COMPLETED = auto()          # PPO batch finished
+    BATCH_EPOCH_COMPLETED = auto()          # PPO batch finished
     EPISODE_COMPLETED = auto()        # Single episode finished (already exists as EPOCH_COMPLETED for epochs)
     TRAINING_STARTED = auto()         # Training run initialized
     CHECKPOINT_SAVED = auto()         # Model checkpoint saved
@@ -69,8 +69,8 @@ In `src/esper/leyline/telemetry.py`, add after the Governor events:
 
 **Step 2: Run test to verify enum compiles**
 
-Run: `python -c "from esper.leyline import TelemetryEventType; print(TelemetryEventType.BATCH_COMPLETED)"`
-Expected: `TelemetryEventType.BATCH_COMPLETED`
+Run: `python -c "from esper.leyline import TelemetryEventType; print(TelemetryEventType.BATCH_EPOCH_COMPLETED)"`
+Expected: `TelemetryEventType.BATCH_EPOCH_COMPLETED`
 
 **Step 3: Commit**
 
@@ -171,7 +171,7 @@ git commit -m "feat(telemetry): add console formatters for Governor events"
 In `src/esper/nissa/output.py`, add after the Governor formatters:
 
 ```python
-        elif event_type == "BATCH_COMPLETED":
+        elif event_type == "BATCH_EPOCH_COMPLETED":
             data = event.data or {}
             batch_idx = data.get("batch_idx", "?")
             episodes = data.get("episodes_completed", "?")
@@ -207,7 +207,7 @@ from esper.nissa.output import ConsoleOutput
 from esper.leyline import TelemetryEvent, TelemetryEventType
 c = ConsoleOutput()
 c.emit(TelemetryEvent(
-    event_type=TelemetryEventType.BATCH_COMPLETED,
+    event_type=TelemetryEventType.BATCH_EPOCH_COMPLETED,
     data={'batch_idx': 3, 'episodes_completed': 24, 'total_episodes': 100, 'avg_accuracy': 67.2, 'rolling_accuracy': 65.1, 'avg_reward': 2.3}
 ))
 "`
@@ -620,7 +620,7 @@ Replace with:
         episodes_completed += envs_this_batch
         if hub:
             hub.emit(TelemetryEvent(
-                event_type=TelemetryEventType.BATCH_COMPLETED,
+                event_type=TelemetryEventType.BATCH_EPOCH_COMPLETED,
                 data={
                     "batch_idx": batch_idx + 1,
                     "episodes_completed": episodes_completed,
@@ -633,12 +633,12 @@ Replace with:
             ))
 ```
 
-**Step 2: Update console formatter for BATCH_COMPLETED to show env accuracies**
+**Step 2: Update console formatter for BATCH_EPOCH_COMPLETED to show env accuracies**
 
-In `src/esper/nissa/output.py`, update the BATCH_COMPLETED formatter to also show env accuracies:
+In `src/esper/nissa/output.py`, update the BATCH_EPOCH_COMPLETED formatter to also show env accuracies:
 
 ```python
-        elif event_type == "BATCH_COMPLETED":
+        elif event_type == "BATCH_EPOCH_COMPLETED":
             data = event.data or {}
             batch_idx = data.get("batch_idx", "?")
             episodes = data.get("episodes_completed", "?")
@@ -686,9 +686,9 @@ Replace with:
 
 ```python
                 successful_actions[a] += c
-        # Action distribution is included in BATCH_COMPLETED event data
+        # Action distribution is included in BATCH_EPOCH_COMPLETED event data
         if hub:
-            # Update the previous BATCH_COMPLETED event with action data
+            # Update the previous BATCH_EPOCH_COMPLETED event with action data
             # Note: Actions are already tracked in analytics, this is redundant console output
             pass  # Removed - action counts visible in analytics.summary_table()
 ```
@@ -890,8 +890,8 @@ git commit -m "refactor(telemetry): route PPO metrics through Nissa console back
 
 Check that `TelemetryEventType` is exported from `leyline/__init__.py`. The new enum values should be automatically available since they're part of the enum class.
 
-Run: `python -c "from esper.leyline import TelemetryEventType; print(TelemetryEventType.GOVERNOR_ROLLBACK, TelemetryEventType.BATCH_COMPLETED)"`
-Expected: `TelemetryEventType.GOVERNOR_ROLLBACK TelemetryEventType.BATCH_COMPLETED`
+Run: `python -c "from esper.leyline import TelemetryEventType; print(TelemetryEventType.GOVERNOR_ROLLBACK, TelemetryEventType.BATCH_EPOCH_COMPLETED)"`
+Expected: `TelemetryEventType.GOVERNOR_ROLLBACK TelemetryEventType.BATCH_EPOCH_COMPLETED`
 
 **Step 2: Commit if changes needed**
 
@@ -937,7 +937,7 @@ def test_governor_events_exist():
 
 def test_batch_events_exist():
     """Verify batch progress event types are defined."""
-    assert hasattr(TelemetryEventType, "BATCH_COMPLETED")
+    assert hasattr(TelemetryEventType, "BATCH_EPOCH_COMPLETED")
     assert hasattr(TelemetryEventType, "CHECKPOINT_SAVED")
     assert hasattr(TelemetryEventType, "CHECKPOINT_LOADED")
 
@@ -967,10 +967,10 @@ def test_console_output_formats_governor_rollback(capsys):
 
 
 def test_console_output_formats_batch_completed(capsys):
-    """Verify ConsoleOutput formats BATCH_COMPLETED correctly."""
+    """Verify ConsoleOutput formats BATCH_EPOCH_COMPLETED correctly."""
     console = ConsoleOutput()
     event = TelemetryEvent(
-        event_type=TelemetryEventType.BATCH_COMPLETED,
+        event_type=TelemetryEventType.BATCH_EPOCH_COMPLETED,
         data={
             "batch_idx": 3,
             "episodes_completed": 24,
@@ -1043,7 +1043,7 @@ git commit -m "docs: complete telemetry extraction implementation"
 | Category | Prints Converted | New Event Types |
 |----------|------------------|-----------------|
 | Governor | 2 | 3 (PANIC, ROLLBACK, SNAPSHOT) |
-| Batch Progress | 6 | 3 (BATCH_COMPLETED, CHECKPOINT_SAVED, CHECKPOINT_LOADED) |
+| Batch Progress | 6 | 3 (BATCH_EPOCH_COMPLETED, CHECKPOINT_SAVED, CHECKPOINT_LOADED) |
 | Counterfactual | 1 | 1 (COUNTERFACTUAL_COMPUTED) |
 | Anomaly | 6 (redundant) | 0 (already exist) |
 | PPO | 2 (redundant) | 0 (already exist) |

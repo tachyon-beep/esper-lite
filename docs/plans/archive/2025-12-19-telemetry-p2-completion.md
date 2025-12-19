@@ -16,7 +16,7 @@
 |-------|-------|--------|
 | TRAINING_STARTED | seed, n_episodes, lr, clip_ratio, entropy_coef, param_budget, resume_path, entropy_anneal | Not captured |
 | PPO_UPDATE_COMPLETED | head_slot_entropy, head_slot_grad_norm, head_blueprint_entropy, head_blueprint_grad_norm, inner_epoch, batch | Not captured |
-| BATCH_COMPLETED | avg_reward, total_episodes | Not captured |
+| BATCH_EPOCH_COMPLETED | avg_reward, total_episodes | Not captured |
 | SEED_CULLED | blueprint_id | Not captured |
 
 ---
@@ -98,7 +98,7 @@ Run: `PYTHONPATH=src uv run python -c "from esper.karn.sanctum.schema import Tam
 In `SanctumSnapshot` class, add after `aggregate_mean_reward` (~line 497):
 
 ```python
-    # Batch-level aggregates (from BATCH_COMPLETED)
+    # Batch-level aggregates (from BATCH_EPOCH_COMPLETED)
     batch_avg_reward: float = 0.0  # Average reward for last batch
     batch_total_episodes: int = 0  # Total episodes in training run
 ```
@@ -207,7 +207,7 @@ Run: `PYTHONPATH=src uv run python -c "from esper.karn.sanctum.aggregator import
 
 ---
 
-## Task 7: Capture Batch Aggregates in BATCH_COMPLETED
+## Task 7: Capture Batch Aggregates in BATCH_EPOCH_COMPLETED
 
 **Files:**
 - Modify: `src/esper/karn/sanctum/aggregator.py`
@@ -271,7 +271,7 @@ Schema additions:
 Aggregator captures:
 - TRAINING_STARTED: seed, n_episodes, lr, clip_ratio, entropy_coef, param_budget, resume_path, entropy_anneal
 - PPO_UPDATE_COMPLETED: head_slot_entropy, head_slot_grad_norm, head_blueprint_entropy, head_blueprint_grad_norm, inner_epoch, batch
-- BATCH_COMPLETED: avg_reward, total_episodes
+- BATCH_EPOCH_COMPLETED: avg_reward, total_episodes
 - SEED_CULLED: blueprint_id
 
 Telemetry capture improved from ~65% to ~75%.
@@ -294,8 +294,8 @@ After implementation, verify these fields are captured:
 | TRAINING_STARTED | lr | snapshot.run_config.lr |
 | PPO_UPDATE_COMPLETED | head_slot_entropy | snapshot.tamiyo.head_slot_entropy |
 | PPO_UPDATE_COMPLETED | head_blueprint_entropy | snapshot.tamiyo.head_blueprint_entropy |
-| BATCH_COMPLETED | avg_reward | snapshot.batch_avg_reward |
-| BATCH_COMPLETED | total_episodes | snapshot.batch_total_episodes |
+| BATCH_EPOCH_COMPLETED | avg_reward | snapshot.batch_avg_reward |
+| BATCH_EPOCH_COMPLETED | total_episodes | snapshot.batch_total_episodes |
 | SEED_CULLED | blueprint_id | env.seeds[slot_id].blueprint_id |
 
 ---

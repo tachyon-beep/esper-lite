@@ -548,7 +548,7 @@ class SanctumAggregator:
     - SEED_STAGE_CHANGED: Update seed stage
     - SEED_FOSSILIZED: Increment fossilized count
     - SEED_CULLED: Increment culled count
-    - BATCH_COMPLETED: Update episode/throughput
+    - BATCH_EPOCH_COMPLETED: Update episode/throughput
 
     Usage:
         agg = SanctumAggregator(num_envs=16)
@@ -650,7 +650,7 @@ class SanctumAggregator:
             self._handle_reward_computed(event)
         elif event_type.startswith("SEED_"):
             self._handle_seed_event(event, event_type)
-        elif event_type == "BATCH_COMPLETED":
+        elif event_type == "BATCH_EPOCH_COMPLETED":
             self._handle_batch_completed(event)
 
     def get_snapshot(self) -> SanctumSnapshot:
@@ -913,7 +913,7 @@ class SanctumAggregator:
             env.active_seed_count = max(0, env.active_seed_count - 1)
 
     def _handle_batch_completed(self, event: "TelemetryEvent") -> None:
-        """Handle BATCH_COMPLETED event (episode completion)."""
+        """Handle BATCH_EPOCH_COMPLETED event (episode completion)."""
         data = event.data or {}
 
         episodes_completed = data.get("episodes_completed")
@@ -983,7 +983,7 @@ class SanctumAggregator:
                 ent = data.get("entropy", 0.0)
                 clip = data.get("clip_fraction", 0.0)
                 message = f"ent={ent:.3f} clip={clip:.3f}"
-        elif event_type == "BATCH_COMPLETED":
+        elif event_type == "BATCH_EPOCH_COMPLETED":
             batch = data.get("batch_idx", "?")
             eps = data.get("episodes_completed", "?")
             message = f"batch={batch} ep={eps}"

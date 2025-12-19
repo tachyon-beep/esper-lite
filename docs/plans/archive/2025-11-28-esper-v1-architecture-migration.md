@@ -899,7 +899,7 @@ class TelemetryEventType(Enum):
     # Training events (Simic)
     EPOCH_COMPLETED = "training.epoch_completed"
     EPISODE_COMPLETED = "training.episode_completed"
-    BATCH_COMPLETED = "training.batch_completed"
+    BATCH_EPOCH_COMPLETED = "training.batch_completed"
 
     # System health (Nissa)
     GPU_UTILIZATION = "system.gpu_utilization"

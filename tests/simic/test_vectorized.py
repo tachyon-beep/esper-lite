@@ -961,7 +961,7 @@ def test_emit_with_env_context_handles_none_and_copies():
 
 
 def test_emit_batch_completed_is_resume_aware_and_clamped():
-    """BATCH_COMPLETED telemetry should include resume offsets and clamp totals."""
+    """BATCH_EPOCH_COMPLETED telemetry should include resume offsets and clamp totals."""
     hub = _StubHub()
     emit_batch_completed(
         hub,

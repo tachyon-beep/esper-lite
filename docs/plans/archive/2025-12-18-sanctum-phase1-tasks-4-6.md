@@ -1669,7 +1669,7 @@ class EventLog(Static):
         "SEED_FOSSILIZED": "magenta",
         "SEED_CULLED": "red",
         "PPO_UPDATE_COMPLETED": "blue",
-        "BATCH_COMPLETED": "yellow",
+        "BATCH_EPOCH_COMPLETED": "yellow",
         "TRAINING_STARTED": "bold green",
         "CRIT": "bold red",
         "ERROR": "bold red",

@@ -82,7 +82,7 @@ class SanctumAggregator:
     - SEED_STAGE_CHANGED: Update seed stage
     - SEED_FOSSILIZED: Increment fossilized count
     - SEED_CULLED: Increment culled count
-    - BATCH_COMPLETED: Update episode/throughput
+    - BATCH_EPOCH_COMPLETED: Update episode/throughput
 
     Usage:
         agg = SanctumAggregator(num_envs=16)
@@ -112,7 +112,7 @@ class SanctumAggregator:
     _batches_completed: int = 0
     _host_params: int = 0  # Baseline host model params (for growth_ratio)
     _reward_mode: str = ""  # A/B test cohort (shaped, simplified, sparse)
-    _current_batch: int = 0  # Current batch index (from BATCH_COMPLETED)
+    _current_batch: int = 0  # Current batch index (from BATCH_EPOCH_COMPLETED)
     _batch_avg_accuracy: float = 0.0  # Batch-level average accuracy
     _batch_rolling_accuracy: float = 0.0  # Rolling average for trend display
     _batch_avg_reward: float = 0.0  # Batch average reward
@@ -205,8 +205,8 @@ class SanctumAggregator:
             self._handle_reward_computed(event)
         elif event_type.startswith("SEED_"):
             self._handle_seed_event(event, event_type)
-        elif event_type == "BATCH_COMPLETED":
-            self._handle_batch_completed(event)
+        elif event_type == "BATCH_EPOCH_COMPLETED":
+            self._handle_batch_epoch_completed(event)
         elif event_type == "COUNTERFACTUAL_MATRIX_COMPUTED":
             self._handle_counterfactual_matrix(event)
 
@@ -705,11 +705,12 @@ class SanctumAggregator:
             seed.has_vanishing = False
             seed.has_exploding = False
             seed.epochs_in_stage = 0
+            seed.blend_tempo_epochs = 5
             env.culled_count += 1
             env.active_seed_count = max(0, env.active_seed_count - 1)
 
-    def _handle_batch_completed(self, event: "TelemetryEvent") -> None:
-        """Handle BATCH_COMPLETED event (episode completion)."""
+    def _handle_batch_epoch_completed(self, event: "TelemetryEvent") -> None:
+        """Handle BATCH_EPOCH_COMPLETED event (episode completion)."""
         data = event.data or {}
 
         # Capture current episode BEFORE updating for best_runs check
@@ -737,7 +738,7 @@ class SanctumAggregator:
             self._vitals.batches_per_hour = (self._batches_completed / elapsed) * 3600
 
         # Capture best_runs from current episode (before reset clears env.best_accuracy)
-        # Each episode can contribute records; we accumulate and keep top 10
+        # Allow multiple entries per env to reflect distinct episodes; keep top 10 overall.
         for env in self._envs.values():
             if env.best_accuracy > 0:
                 record = BestRunRecord(
@@ -888,7 +889,7 @@ class SanctumAggregator:
                 ent = data.get("entropy", 0.0)
                 clip = data.get("clip_fraction", 0.0)
                 message = f"ent={ent:.3f} clip={clip:.3f}"
-        elif event_type == "BATCH_COMPLETED":
+        elif event_type == "BATCH_EPOCH_COMPLETED":
             batch = data.get("batch_idx", "?")
             eps = data.get("episodes_completed", "?")
             message = f"batch={batch} ep={eps}"

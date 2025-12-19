@@ -60,7 +60,7 @@ class TestBatchAndEpisodeTracking:
     """Test batch/episode progress updates."""
 
     def test_batch_completed_updates_progress(self):
-        """BATCH_COMPLETED updates batch and episode counters."""
+        """BATCH_EPOCH_COMPLETED updates batch and episode counters."""
         agg = TelemetryAggregator()
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
@@ -68,7 +68,7 @@ class TestBatchAndEpisodeTracking:
         ))
 
         agg.process_event(TelemetryEvent(
-            event_type=TelemetryEventType.BATCH_COMPLETED,
+            event_type=TelemetryEventType.BATCH_EPOCH_COMPLETED,
             data={
                 "batch_idx": 5,
                 "episodes_completed": 10,
@@ -299,7 +299,7 @@ class TestThreadSafety:
             try:
                 for i in range(100):
                     agg.process_event(TelemetryEvent(
-                        event_type=TelemetryEventType.BATCH_COMPLETED,
+                        event_type=TelemetryEventType.BATCH_EPOCH_COMPLETED,
                         data={"batch_idx": i, "avg_accuracy": 50.0 + i * 0.1},
                     ))
             except Exception as e:

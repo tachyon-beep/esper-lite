@@ -629,7 +629,7 @@ class SanctumSnapshot:
     aggregate_mean_accuracy: float = 0.0
     aggregate_mean_reward: float = 0.0
 
-    # Batch-level aggregates (from BATCH_COMPLETED)
+    # Batch-level aggregates (from BATCH_EPOCH_COMPLETED)
     batch_avg_reward: float = 0.0  # Average reward for last batch
     batch_total_episodes: int = 0  # Total episodes in training run
 

@@ -21,8 +21,8 @@ Reference of what telemetry we capture, how it is produced, and where it flows. 
 - **Setup:** `vectorized.py` adds `BlueprintAnalytics` backend and emits `TRAINING_STARTED` (devices, task, reward mode, dataloader config, budgets).
 - **Lifecycle/Counterfactual:** Slot events from Kasmina (with injected `env_id`), `COUNTERFACTUAL_COMPUTED` per slot when baselines available (real_acc, baseline_acc, Δ).
 - **Batch cadence:**
-  - `BATCH_COMPLETED` (batch_idx, episodes_completed/total, env_accuracies, avg/rolling acc, avg reward).
-  - `EPOCH_COMPLETED` (commit barrier) with aggregated train/val loss/acc, n_envs, skipped_update flag.
+  - `BATCH_EPOCH_COMPLETED` (batch_idx, episodes_completed/total, env_accuracies, avg/rolling acc, avg reward, train/val loss/acc, n_envs, skipped_update, plateau_detected, inner_epoch).
+  - `EPOCH_COMPLETED` (per-env) with val loss/acc and seed telemetry (env_id scoped).
   - Progress markers: `PLATEAU_DETECTED` / `DEGRADATION_DETECTED` / `IMPROVEMENT_DETECTED` based on rolling_avg_accuracy deltas vs thresholds.
 - **PPO updates:** `PPO_UPDATE_COMPLETED` per batch epoch: policy/value loss, entropy + coef, KL, clip_fraction, ratio_max/min/std, explained_variance, batch + inner_epoch ids, avg/rolling acc/reward, entropy coef. Skips with reason when governor rollback clears buffer.
 - **Rewards:** When telemetry level DEBUG, `REWARD_COMPUTED` carries full `RewardComponentsTelemetry` (bounded_attribution, compute_rent, stage/pbrs bonuses, blending/probation penalties, terminal bonuses, action_success, seed_stage, val_acc, baselines, growth_ratio). Governor punishment also emits `REWARD_COMPUTED` with reason.

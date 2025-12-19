@@ -114,7 +114,6 @@ from esper.karn.health import HealthMonitor
 from esper.simic.attribution import CounterfactualHelper
 from esper.simic.telemetry.emitters import (
     emit_with_env_context,
-    emit_batch_completed,
     emit_last_action,
     compute_grad_norm_surrogate,
     aggregate_layer_gradient_health,
@@ -2749,18 +2748,6 @@ def train_ppo_vectorized(
 
         episodes_completed += envs_this_batch
         if hub:
-            emit_batch_completed(
-                hub,
-                batch_idx=batch_idx + 1,
-                episodes_completed=episodes_completed,
-                total_episodes=total_episodes,
-                env_final_accs=env_final_accs,
-                avg_acc=avg_acc,
-                rolling_avg_acc=rolling_avg_acc,
-                avg_reward=avg_reward,
-                start_episode=start_episode,
-                requested_episodes=n_episodes,
-            )
             avg_step_time_ms = throughput_step_time_ms_sum / max(max_epochs, 1)
             avg_dataloader_wait_ms = throughput_dataloader_wait_ms_sum / max(max_epochs, 1)
             for env_id in range(envs_this_batch):
@@ -2926,7 +2913,15 @@ def train_ppo_vectorized(
                 epoch=episodes_completed,
                 data={
                     "inner_epoch": epoch,
-                    "batch": batch_idx + 1,
+                    "batch_idx": batch_idx + 1,
+                    "episodes_completed": episodes_completed,
+                    "total_episodes": total_episodes,
+                    "start_episode": start_episode,
+                    "requested_episodes": n_episodes,
+                    "env_accuracies": env_final_accs,
+                    "avg_accuracy": avg_acc,
+                    "rolling_accuracy": rolling_avg_acc,
+                    "avg_reward": avg_reward,
                     "train_loss": sum(train_losses) / max(len(env_states) * num_train_batches, 1),
                     "train_accuracy": 100.0 * total_train_correct / max(total_train_samples, 1),
                     "val_loss": sum(val_losses) / max(len(env_states) * num_test_batches, 1),

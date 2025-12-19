@@ -15,7 +15,7 @@
 **In scope (legacy shims to remove):**
 - V3 observation path: `TensorSchema`, `TENSOR_SCHEMA_SIZE`, `FastTrainingSignals`, and `TrainingSignals.to_fast()` in `src/esper/leyline/signals.py`.
 - Telemetry env namespacing shim: `env_idx` fallback for `env_id` in `src/esper/karn/collector.py`.
-- UI schema shims: `batch` fallback for `batch_idx`, and `rolling_avg_accuracy` / `avg_accuracy` fallback for `rolling_accuracy` in `src/esper/karn/tui.py` (BATCH_COMPLETED formatting/handling only).
+- UI schema shims: `batch` fallback for `batch_idx`, and `rolling_avg_accuracy` / `avg_accuracy` fallback for `rolling_accuracy` in `src/esper/karn/tui.py` (BATCH_EPOCH_COMPLETED formatting/handling only).
 - “Backwards compatibility” behavior in PPO anomaly detection: remove the “no episode info” fallback in `src/esper/simic/anomaly_detector.py`.
 - Test-only “Backwards compatibility aliases” in `tests/test_stabilization_tracking.py`.
 
@@ -363,12 +363,12 @@ git commit -m "fix(karn): remove env_idx telemetry compatibility shim"
 
 ## Telemetry UI schema shims: remove alternate key names
 
-### Task 8: Add failing tests that reject alternate BATCH_COMPLETED keys
+### Task 8: Add failing tests that reject alternate BATCH_EPOCH_COMPLETED keys
 
 **Files:**
 - Modify: `tests/karn/test_tui_state.py`
 
-**Step 1: Add a test proving we don’t accept `rolling_avg_accuracy` for BATCH_COMPLETED**
+**Step 1: Add a test proving we don’t accept `rolling_avg_accuracy` for BATCH_EPOCH_COMPLETED**
 
 Add:
 ```python
@@ -382,7 +382,7 @@ def test_batch_completed_does_not_fallback_to_rolling_avg_accuracy():
     ))
 
     tui._handle_batch_completed(TelemetryEvent(
-        event_type=TelemetryEventType.BATCH_COMPLETED,
+        event_type=TelemetryEventType.BATCH_EPOCH_COMPLETED,
         data={
             "batch_idx": 1,
             "episodes_completed": 1,
@@ -410,12 +410,12 @@ Expected: FAIL because current code falls back to `rolling_avg_accuracy`.
 Run:
 ```bash
 git add tests/karn/test_tui_state.py
-git commit -m "test(karn): forbid legacy BATCH_COMPLETED key fallbacks"
+git commit -m "test(karn): forbid legacy BATCH_EPOCH_COMPLETED key fallbacks"
 ```
 
 ---
 
-### Task 9: Remove BATCH_COMPLETED key fallbacks in the TUI formatter + handler
+### Task 9: Remove BATCH_EPOCH_COMPLETED key fallbacks in the TUI formatter + handler
 
 **Files:**
 - Modify: `src/esper/karn/tui.py:589`
@@ -424,7 +424,7 @@ git commit -m "test(karn): forbid legacy BATCH_COMPLETED key fallbacks"
 **Step 1: Implement strict key usage**
 
 In `src/esper/karn/tui.py`:
-- In `_format_event_for_log` for `BATCH_COMPLETED`, replace:
+- In `_format_event_for_log` for `BATCH_EPOCH_COMPLETED`, replace:
   ```python
   batch_idx = data.get("batch_idx", data.get("batch", "?"))
   rolling_acc = data.get("rolling_accuracy", data.get("rolling_avg_accuracy", data.get("avg_accuracy")))
@@ -458,7 +458,7 @@ Expected: PASS.
 Run:
 ```bash
 git add src/esper/karn/tui.py
-git commit -m "refactor(karn): remove legacy BATCH_COMPLETED schema fallbacks"
+git commit -m "refactor(karn): remove legacy BATCH_EPOCH_COMPLETED schema fallbacks"
 ```
 
 ---

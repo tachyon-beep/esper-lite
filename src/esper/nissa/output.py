@@ -86,7 +86,7 @@ class ConsoleOutput(OutputBackend):
         seed_id = event.seed_id or "system"
 
         # Format message based on event type
-        if "EPOCH" in event_type:
+        if event_type == "EPOCH_COMPLETED":
             loss = event.data.get("val_loss", "?")
             acc = event.data.get("val_accuracy", "?")
             epoch = event.epoch or "?"
@@ -183,7 +183,7 @@ class ConsoleOutput(OutputBackend):
             if isinstance(loss, float):
                 loss = f"{loss:.4f}"
             print(f"[{timestamp}] GOVERNOR | ⚠️  PANIC #{panics}: loss={loss}")
-        elif event_type == "BATCH_COMPLETED":
+        elif event_type == "BATCH_EPOCH_COMPLETED":
             data = event.data or {}
             batch_idx = data.get("batch_idx", "?")
             episodes = data.get("episodes_completed", "?")

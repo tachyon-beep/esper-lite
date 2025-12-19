@@ -19,7 +19,7 @@
 | EPOCH_COMPLETED (aggregate) | 9 | 0 | 9 | P3 |
 | REWARD_COMPUTED | 21 | 20 | 1 | P3 |
 | PPO_UPDATE_COMPLETED | 27 | 14 | 13 | P1 |
-| BATCH_COMPLETED | 9 | 1 | 8 | P1 |
+| BATCH_EPOCH_COMPLETED | 9 | 1 | 8 | P1 |
 | SEED_GERMINATED | 9 | 9 | 0 | Done |
 | SEED_STAGE_CHANGED | 12 | 10 | 2 | P3 |
 | SEED_FOSSILIZED | 10 | 2 | 8 | P2 |
@@ -38,7 +38,7 @@
 
 ## Detailed Gap Analysis
 
-### BATCH_COMPLETED (P1 - 89% uncaptured)
+### BATCH_EPOCH_COMPLETED (P1 - 89% uncaptured)
 
 **Current capture:** Only `episodes_completed`
 
@@ -67,9 +67,9 @@
 | 2 | batch | ✓ | ✗ | P2 | Batch context |
 | 3 | train_steps | ✓ | ✗ | P3 | Debugging |
 | 4 | early_stop_epoch | ✓ | ✗ | P2 | KL early stopping indicator |
-| 5 | avg_accuracy | ✓ | ✗ | P2 | Batch average (redundant with BATCH_COMPLETED) |
-| 6 | avg_reward | ✓ | ✗ | P2 | Batch average (redundant with BATCH_COMPLETED) |
-| 7 | rolling_avg_accuracy | ✓ | ✗ | P2 | Trend (redundant with BATCH_COMPLETED) |
+| 5 | avg_accuracy | ✓ | ✗ | P2 | Batch average (redundant with BATCH_EPOCH_COMPLETED) |
+| 6 | avg_reward | ✓ | ✗ | P2 | Batch average (redundant with BATCH_EPOCH_COMPLETED) |
+| 7 | rolling_avg_accuracy | ✓ | ✗ | P2 | Trend (redundant with BATCH_EPOCH_COMPLETED) |
 | 8 | grad_norm | ✓ | ✗ | **P1** | **Critical gradient health metric** |
 | 9 | update_time_ms | ✓ | ✗ | P1 | Training speed monitoring |
 | 10 | head_slot_entropy | ✓ | ✗ | P2 | Per-head entropy (slot action head) |
@@ -179,7 +179,7 @@ This is an aggregate variant emitted at batch boundaries. Per-env EPOCH_COMPLETE
 | # | Field | Emitted | Captured | Priority | Impact |
 |---|-------|---------|----------|----------|--------|
 | 1 | inner_epoch | ✓ | ✗ | P3 | Redundant with per-env |
-| 2 | batch | ✓ | ✗ | P3 | Available in BATCH_COMPLETED |
+| 2 | batch | ✓ | ✗ | P3 | Available in BATCH_EPOCH_COMPLETED |
 | 3 | train_loss | ✓ | ✗ | P3 | Aggregate loss |
 | 4 | train_accuracy | ✓ | ✗ | P3 | Aggregate accuracy |
 | 5 | val_loss | ✓ | ✗ | P3 | Aggregate val loss |
@@ -188,7 +188,7 @@ This is an aggregate variant emitted at batch boundaries. Per-env EPOCH_COMPLETE
 | 8 | skipped_update | ✓ | ✗ | P3 | Skip indicator |
 | 9 | plateau_detected | ✓ | ✗ | P3 | Plateau flag |
 
-**Recommended action:** Skip - redundant with per-env events and BATCH_COMPLETED.
+**Recommended action:** Skip - redundant with per-env events and BATCH_EPOCH_COMPLETED.
 
 ---
 
@@ -209,7 +209,7 @@ This is an aggregate variant emitted at batch boundaries. Per-env EPOCH_COMPLETE
 - Add to TamiyoState or SystemVitals
 - Capture `data.get("update_time_ms", 0.0)`
 
-**Task 4: Enhance BATCH_COMPLETED handler**
+**Task 4: Enhance BATCH_EPOCH_COMPLETED handler**
 - File: `src/esper/karn/sanctum/aggregator.py`
 - Capture: batch_idx, avg_accuracy, rolling_accuracy, avg_reward
 - Update snapshot with batch-level aggregates

@@ -1084,7 +1084,7 @@ async def test_event_log_episode_grouping():
             ),
             EventLogEntry(
                 timestamp="12:33:12",
-                event_type="BATCH_COMPLETED",
+                event_type="BATCH_EPOCH_COMPLETED",
                 env_id=None,
                 message="Episode 4 complete",
                 episode=4,
@@ -1154,7 +1154,7 @@ _EVENT_COLORS: dict[str, str] = {
     "TRAINING_STARTED": "bright_green",
     "EPOCH_COMPLETED": "bright_blue",
     "PPO_UPDATE_COMPLETED": "bright_magenta",
-    "BATCH_COMPLETED": "bright_blue",
+    "BATCH_EPOCH_COMPLETED": "bright_blue",
 }
 
 # Event type emoji mapping
@@ -1163,7 +1163,7 @@ _EVENT_EMOJI: dict[str, str] = {
     "SEED_FOSSILIZED": "✅",
     "SEED_CULLED": "⚠️",
     "REWARD_COMPUTED": "📊",
-    "BATCH_COMPLETED": "🏆",
+    "BATCH_EPOCH_COMPLETED": "🏆",
 }
 
 
