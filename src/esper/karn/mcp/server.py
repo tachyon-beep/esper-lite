@@ -67,3 +67,39 @@ class KarnMCPServer:
     async def list_views(self) -> str:
         """Return view documentation."""
         return VIEW_DOCS
+
+
+# MCP Protocol Wiring
+try:
+    from mcp.server import FastMCP
+
+    _mcp_app = FastMCP("esper-karn")
+    _server_instance: KarnMCPServer | None = None
+
+    @_mcp_app.tool()
+    async def query_sql(query: str, limit: int = 100) -> str:
+        """Execute SQL against telemetry data. Returns Markdown table.
+
+        Args:
+            query: SQL query (views: runs, epochs, ppo_updates, seed_lifecycle, rewards, anomalies)
+            limit: Maximum rows to return (default 100)
+        """
+        assert _server_instance is not None
+        return await _server_instance.query_sql(query, limit)
+
+    @_mcp_app.tool()
+    async def list_views() -> str:
+        """List available telemetry views and example queries."""
+        assert _server_instance is not None
+        return await _server_instance.list_views()
+
+    def run_mcp_server(telemetry_dir: str = "telemetry") -> None:
+        """Run the MCP server (stdio transport)."""
+        global _server_instance
+        _server_instance = KarnMCPServer(telemetry_dir)
+        _mcp_app.run()
+
+except ImportError:
+    # MCP not installed - server class still usable for testing
+    def run_mcp_server(telemetry_dir: str = "telemetry") -> None:
+        raise ImportError("MCP package not installed. Run: uv add mcp")
