@@ -2162,7 +2162,7 @@ def train_ppo_vectorized(
                             slot_state = model.seed_slots[slot_id].state
                             if slot_state is not None:
                                 stage_name = slot_state.stage.name.title()
-                                progress = slot_state.metrics.epochs_in_stage if slot_state.metrics else 0
+                                progress = slot_state.metrics.epochs_in_current_stage if slot_state.metrics else 0
                                 slot_states_dict[slot_id] = f"{stage_name} {progress}ep"
                             else:
                                 slot_states_dict[slot_id] = "Empty"
