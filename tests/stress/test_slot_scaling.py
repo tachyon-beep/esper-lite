@@ -15,7 +15,7 @@ import torch
 
 from esper.leyline.slot_config import SlotConfig
 from esper.leyline.stages import SeedStage
-from esper.leyline.factored_actions import NUM_BLUEPRINTS, NUM_BLENDS, NUM_OPS
+from esper.leyline.factored_actions import NUM_BLUEPRINTS, NUM_BLENDS, NUM_OPS, NUM_TEMPO
 from esper.simic.agent import PPOAgent
 from esper.tamiyo.policy.features import get_feature_size
 from esper.tamiyo.policy.action_masks import compute_action_masks, MaskSeedInfo
@@ -217,10 +217,12 @@ class TestEpisodeCycling:
                         slot_action=step % config.num_slots,
                         blueprint_action=0,
                         blend_action=0,
+                        tempo_action=1,  # STANDARD tempo
                         op_action=0,
                         slot_log_prob=-0.5,
                         blueprint_log_prob=-0.5,
                         blend_log_prob=-0.5,
+                        tempo_log_prob=-0.5,
                         op_log_prob=-0.5,
                         value=0.5,
                         reward=1.0,
@@ -228,6 +230,7 @@ class TestEpisodeCycling:
                         slot_mask=torch.ones(config.num_slots, dtype=torch.bool),
                         blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
                         blend_mask=torch.ones(NUM_BLENDS, dtype=torch.bool),
+                        tempo_mask=torch.ones(NUM_TEMPO, dtype=torch.bool),
                         op_mask=torch.ones(NUM_OPS, dtype=torch.bool),
                         hidden_h=hidden_h,
                         hidden_c=hidden_c,

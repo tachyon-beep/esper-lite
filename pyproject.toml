@@ -41,6 +41,8 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.mutmut]
-paths-to-mutate = "src/esper/tamiyo/"
-tests_dir = "tests/tamiyo/"
-runner = "uv run pytest -q -x"
+# Mutmut v3: Configure paths here, run with: uv run mutmut run
+# Default: Tamiyo. To test Kasmina, add src/esper/kasmina/ to paths_to_mutate.
+paths_to_mutate = ["src/esper/tamiyo/"]
+tests_dir = ["tests/"]
+runner = "PYTHONPATH=src uv run pytest -q -x"
