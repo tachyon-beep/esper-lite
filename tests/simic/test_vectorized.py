@@ -86,9 +86,10 @@ def test_last_action_event_emitted():
             slot_idx=1,
             blueprint_idx=1,
             blend_idx=1,
+            tempo_idx=1,
             op_idx=1,
             slot_id="r0c1",
-            masked={"op": False, "slot": False, "blueprint": False, "blend": True},
+            masked={"op": False, "slot": False, "blueprint": False, "blend": True, "tempo": False},
             success=True,
         )
 

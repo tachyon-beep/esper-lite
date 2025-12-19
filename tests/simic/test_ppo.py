@@ -3,7 +3,7 @@ import pytest
 import torch
 
 from esper.leyline import DEFAULT_EPISODE_LENGTH, DEFAULT_VALUE_CLIP
-from esper.leyline.factored_actions import NUM_BLUEPRINTS
+from esper.leyline.factored_actions import NUM_BLUEPRINTS, NUM_TEMPO
 from esper.simic.agent import signals_to_features, PPOAgent
 from esper.tamiyo.policy.features import MULTISLOT_FEATURE_SIZE
 
@@ -48,6 +48,7 @@ def test_kl_early_stopping_triggers():
                 "slot": torch.ones(1, 3, dtype=torch.bool, device=agent.device),
                 "blueprint": torch.ones(1, NUM_BLUEPRINTS, dtype=torch.bool, device=agent.device),
                 "blend": torch.ones(1, 3, dtype=torch.bool, device=agent.device),
+                "tempo": torch.ones(1, NUM_TEMPO, dtype=torch.bool, device=agent.device),
                 "op": torch.ones(1, 4, dtype=torch.bool, device=agent.device),  # 4 lifecycle ops
             }
             result = agent._base_network.get_action(
@@ -55,6 +56,7 @@ def test_kl_early_stopping_triggers():
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
                 blend_mask=masks["blend"],
+                tempo_mask=masks["tempo"],
                 op_mask=masks["op"],
             )
             hidden = result.hidden  # Update hidden for next step
@@ -64,10 +66,12 @@ def test_kl_early_stopping_triggers():
                 slot_action=result.actions["slot"].item(),
                 blueprint_action=result.actions["blueprint"].item(),
                 blend_action=result.actions["blend"].item(),
+                tempo_action=result.actions["tempo"].item(),
                 op_action=result.actions["op"].item(),
                 slot_log_prob=result.log_probs["slot"].item(),
                 blueprint_log_prob=result.log_probs["blueprint"].item(),
                 blend_log_prob=result.log_probs["blend"].item(),
+                tempo_log_prob=result.log_probs["tempo"].item(),
                 op_log_prob=result.log_probs["op"].item(),
                 value=result.values.item(),
                 reward=1.0,
@@ -76,6 +80,7 @@ def test_kl_early_stopping_triggers():
                 slot_mask=masks["slot"].squeeze(0),
                 blueprint_mask=masks["blueprint"].squeeze(0),
                 blend_mask=masks["blend"].squeeze(0),
+                tempo_mask=masks["tempo"].squeeze(0),
                 op_mask=masks["op"].squeeze(0),
                 hidden_h=hidden[0],  # [num_layers, batch, hidden_dim]
                 hidden_c=hidden[1],
@@ -122,11 +127,13 @@ def test_kl_early_stopping_with_single_epoch():
                 slot_action=0,
                 blueprint_action=0,
                 blend_action=0,
+                tempo_action=0,
                 op_action=0,
                 # Fake log_probs that are very different from network's actual output
                 slot_log_prob=-10.0,  # Network won't produce this
                 blueprint_log_prob=-10.0,
                 blend_log_prob=-10.0,
+                tempo_log_prob=-10.0,
                 op_log_prob=-10.0,
                 value=1.0,
                 reward=1.0,
@@ -135,6 +142,7 @@ def test_kl_early_stopping_with_single_epoch():
                 slot_mask=torch.ones(3, dtype=torch.bool),
                 blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
                 blend_mask=torch.ones(3, dtype=torch.bool),
+                tempo_mask=torch.ones(NUM_TEMPO, dtype=torch.bool),
                 op_mask=torch.ones(4, dtype=torch.bool),
                 hidden_h=torch.zeros(1, 1, 128),
                 hidden_c=torch.zeros(1, 1, 128),
@@ -428,10 +436,12 @@ def test_ppo_agent_full_update_with_5_slots():
             slot_action=i % 5,  # Use all 5 slots
             blueprint_action=0,
             blend_action=0,
+            tempo_action=0,
             op_action=0,
             slot_log_prob=-1.0,
             blueprint_log_prob=-1.0,
             blend_log_prob=-1.0,
+            tempo_log_prob=-1.0,
             op_log_prob=-1.0,
             value=1.0,
             reward=1.0,
@@ -439,6 +449,7 @@ def test_ppo_agent_full_update_with_5_slots():
             slot_mask=torch.ones(5, dtype=torch.bool),  # 5 slots
             blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
             blend_mask=torch.ones(3, dtype=torch.bool),
+            tempo_mask=torch.ones(NUM_TEMPO, dtype=torch.bool),
             op_mask=torch.ones(4, dtype=torch.bool),
             hidden_h=torch.zeros(1, 1, 128),
             hidden_c=torch.zeros(1, 1, 128),

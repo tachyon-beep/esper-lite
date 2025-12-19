@@ -170,6 +170,10 @@ class SeedTelemetry:
     # Timestamp for staleness detection
     captured_at: datetime = field(default_factory=_utc_now)
 
+    # Tempo telemetry
+    blend_tempo_epochs: int = 5
+    blending_velocity: float = 0.0  # d(alpha) / d(epoch)
+
     def to_features(self) -> list[float]:
         """Convert to 10-dim feature vector for RL policies.
 
@@ -212,6 +216,8 @@ class SeedTelemetry:
             "epoch": self.epoch,
             "max_epochs": self.max_epochs,
             "captured_at": self.captured_at.isoformat() if self.captured_at else None,
+            "blend_tempo_epochs": self.blend_tempo_epochs,
+            "blending_velocity": self.blending_velocity,
         }
 
     @classmethod
@@ -235,4 +241,6 @@ class SeedTelemetry:
             epoch=data.get("epoch", 0),
             max_epochs=data.get("max_epochs", 25),
             captured_at=datetime.fromisoformat(data["captured_at"]) if data.get("captured_at") else _utc_now(),
+            blend_tempo_epochs=data.get("blend_tempo_epochs", 5),
+            blending_velocity=data.get("blending_velocity", 0.0),
         )

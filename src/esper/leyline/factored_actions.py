@@ -59,6 +59,33 @@ class BlendAction(IntEnum):
         return ["linear", "sigmoid", "gated"][self.value]
 
 
+class TempoAction(IntEnum):
+    """Blending tempo selection.
+
+    Controls how many epochs the alpha ramp takes during BLENDING stage.
+    Selected at GERMINATE time, stored in SeedState, used by start_blending().
+
+    Design rationale:
+    - FAST: Rapid integration, quick signal, higher risk of instability
+    - STANDARD: Current default (5 epochs), balanced approach
+    - SLOW: Gradual integration, better stability assessment, longer investment
+    """
+    FAST = 0      # 3 epochs
+    STANDARD = 1  # 5 epochs (current default)
+    SLOW = 2      # 8 epochs
+
+
+# Mapping from enum to actual epoch count
+TEMPO_TO_EPOCHS: dict[TempoAction, int] = {
+    TempoAction.FAST: 3,
+    TempoAction.STANDARD: 5,
+    TempoAction.SLOW: 8,
+}
+
+# Module-level constant for action space sizing (follows NUM_BLUEPRINTS pattern)
+NUM_TEMPO: int = len(TempoAction)
+
+
 class LifecycleOp(IntEnum):
     """Lifecycle operation."""
     WAIT = 0
@@ -83,6 +110,9 @@ BLUEPRINT_IDS: tuple[str | None, ...] = tuple(bp.to_blueprint_id() for bp in Blu
 # Blend algorithm ID lookup (matches BlendAction.to_algorithm_id())
 BLEND_IDS: tuple[str, ...] = tuple(blend.to_algorithm_id() for blend in BlendAction)
 
+# Tempo name lookup (matches TempoAction enum order)
+TEMPO_NAMES: tuple[str, ...] = tuple(t.name for t in TempoAction)
+
 # Operation index constants for direct comparison (avoids enum construction)
 OP_WAIT: int = LifecycleOp.WAIT.value
 OP_GERMINATE: int = LifecycleOp.GERMINATE.value
@@ -99,14 +129,26 @@ assert len(BLUEPRINT_IDS) == len(BlueprintAction), (
 assert len(BLEND_IDS) == len(BlendAction), (
     "BLEND_IDS length mismatch with BlendAction enum"
 )
+assert len(TEMPO_NAMES) == len(TempoAction), (
+    "TEMPO_NAMES length mismatch with TempoAction enum"
+)
 
 
 @dataclass(frozen=True, slots=True)
 class FactoredAction:
-    """Composed action from factored components."""
+    """Factored action representation for multi-slot morphogenetic control.
+
+    5 action heads:
+    - slot_idx: Which slot to target (0-2)
+    - blueprint: Which blueprint to germinate
+    - blend: Which blending algorithm
+    - tempo: How fast to blend
+    - op: Lifecycle operation
+    """
     slot_idx: int
     blueprint: BlueprintAction
     blend: BlendAction
+    tempo: TempoAction
     op: LifecycleOp
 
     @property
@@ -139,13 +181,26 @@ class FactoredAction:
         slot_idx: int,
         blueprint_idx: int,
         blend_idx: int,
+        tempo_idx: int,
         op_idx: int,
     ) -> "FactoredAction":
+        """Create from integer indices (used by network output)."""
         return cls(
             slot_idx=slot_idx,
             blueprint=BlueprintAction(blueprint_idx),
             blend=BlendAction(blend_idx),
+            tempo=TempoAction(tempo_idx),
             op=LifecycleOp(op_idx),
+        )
+
+    def to_indices(self) -> tuple[int, int, int, int, int]:
+        """Convert to integer indices for network input."""
+        return (
+            self.slot_idx,
+            self.blueprint.value,
+            self.blend.value,
+            self.tempo.value,
+            self.op.value,
         )
 
 
@@ -182,10 +237,12 @@ TRANSFORMER_BLUEPRINTS = frozenset({
 __all__ = [
     "BlueprintAction",
     "BlendAction",
+    "TempoAction",
     "LifecycleOp",
     "FactoredAction",
     "NUM_BLUEPRINTS",
     "NUM_BLENDS",
+    "NUM_TEMPO",
     "NUM_OPS",
     "CNN_BLUEPRINTS",
     "TRANSFORMER_BLUEPRINTS",
@@ -193,6 +250,8 @@ __all__ = [
     "OP_NAMES",
     "BLUEPRINT_IDS",
     "BLEND_IDS",
+    "TEMPO_NAMES",
+    "TEMPO_TO_EPOCHS",
     "OP_WAIT",
     "OP_GERMINATE",
     "OP_CULL",

@@ -255,6 +255,7 @@ def _convert_flat_to_factored(action, topology: str = "cnn") -> FactoredAction:
             slot_idx=0,  # Default to first slot
             blueprint_idx=blueprint.value,
             blend_idx=0,  # Default blend
+            tempo_idx=0,
             op_idx=LifecycleOp.GERMINATE,
         )
     elif action_name == "FOSSILIZE":
@@ -262,6 +263,7 @@ def _convert_flat_to_factored(action, topology: str = "cnn") -> FactoredAction:
             slot_idx=0,
             blueprint_idx=0,
             blend_idx=0,
+            tempo_idx=0,
             op_idx=LifecycleOp.FOSSILIZE,
         )
     elif action_name == "CULL":
@@ -269,6 +271,7 @@ def _convert_flat_to_factored(action, topology: str = "cnn") -> FactoredAction:
             slot_idx=0,
             blueprint_idx=0,
             blend_idx=0,
+            tempo_idx=0,
             op_idx=LifecycleOp.CULL,
         )
     else:  # WAIT or unknown
@@ -276,6 +279,7 @@ def _convert_flat_to_factored(action, topology: str = "cnn") -> FactoredAction:
             slot_idx=0,
             blueprint_idx=0,
             blend_idx=0,
+            tempo_idx=0,
             op_idx=LifecycleOp.WAIT,
         )
 

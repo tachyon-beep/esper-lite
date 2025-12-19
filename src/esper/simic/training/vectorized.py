@@ -74,6 +74,8 @@ from esper.leyline.factored_actions import (
     OP_NAMES,
     BLUEPRINT_IDS,
     BLEND_IDS,
+    TempoAction,
+    TEMPO_TO_EPOCHS,
     OP_WAIT,
     OP_GERMINATE,
     OP_CULL,
@@ -1893,16 +1895,17 @@ def train_ppo_vectorized(
                 value = values[env_idx]
 
                 # Parse factored action using direct indexing (no object creation)
-                action_dict = actions[env_idx]  # {slot: int, blueprint: int, blend: int, op: int}
+                action_dict = actions[env_idx]  # {slot: int, blueprint: int, blend: int, tempo: int, op: int}
                 slot_idx = action_dict["slot"]
                 blueprint_idx = action_dict["blueprint"]
                 blend_idx = action_dict["blend"]
+                tempo_idx = action_dict["tempo"]
                 op_idx = action_dict["op"]
 
                 # DEBUG: Verify direct indexing matches FactoredAction properties
                 # This block is stripped by Python when run with -O flag (production)
                 if __debug__:
-                    _fa = FactoredAction.from_indices(slot_idx, blueprint_idx, blend_idx, op_idx)
+                    _fa = FactoredAction.from_indices(slot_idx, blueprint_idx, blend_idx, tempo_idx, op_idx)
                     assert slot_idx == _fa.slot_idx, f"slot_idx mismatch: {slot_idx} != {_fa.slot_idx}"
                     assert OP_NAMES[op_idx] == _fa.op.name, f"op.name mismatch: {OP_NAMES[op_idx]} != {_fa.op.name}"
                     assert (op_idx == OP_GERMINATE) == _fa.is_germinate, "is_germinate mismatch"
@@ -2081,12 +2084,14 @@ def train_ppo_vectorized(
                         env_state.acc_at_germination[target_slot] = env_state.val_acc
                         blueprint_id = BLUEPRINT_IDS[blueprint_idx]
                         blend_algorithm_id = BLEND_IDS[blend_idx]
+                        tempo_epochs = TEMPO_TO_EPOCHS[TempoAction(tempo_idx)]
                         seed_id = f"env{env_idx}_seed_{env_state.seeds_created}"
                         model.germinate_seed(
                             blueprint_id,
                             seed_id,
                             slot=target_slot,
                             blend_algorithm_id=blend_algorithm_id,
+                            blend_tempo_epochs=tempo_epochs,
                         )
                         env_state.seeds_created += 1
                         env_state.seed_optimizers.pop(target_slot, None)

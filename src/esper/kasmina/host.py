@@ -551,6 +551,7 @@ class MorphogeneticModel(nn.Module):
         *,
         slot: str,
         blend_algorithm_id: str = "sigmoid",
+        blend_tempo_epochs: int = 5,
     ) -> None:
         """Germinate a new seed in a specific slot.
 
@@ -559,6 +560,7 @@ class MorphogeneticModel(nn.Module):
             seed_id: Unique identifier for the seed
             slot: Target slot ("r0c0", "r0c1", "r0c2")
             blend_algorithm_id: Blending algorithm ("linear", "sigmoid", "gated")
+            blend_tempo_epochs: Number of epochs for blending (3, 5, or 8)
         """
         if slot not in self.seed_slots:
             raise ValueError(f"Unknown slot: {slot}. Available: {list(self.seed_slots.keys())}")
@@ -568,6 +570,7 @@ class MorphogeneticModel(nn.Module):
             seed_id=seed_id,
             host_module=self.host,
             blend_algorithm_id=blend_algorithm_id,
+            blend_tempo_epochs=blend_tempo_epochs,
         )
 
     def cull_seed(self, *, slot: str) -> None:

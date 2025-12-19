@@ -83,6 +83,7 @@ class TestFactoredRecurrentActorCritic:
             "slot": torch.zeros(2, 5, dtype=torch.long),
             "blueprint": torch.zeros(2, 5, dtype=torch.long),
             "blend": torch.zeros(2, 5, dtype=torch.long),
+            "tempo": torch.zeros(2, 5, dtype=torch.long),
             "op": torch.zeros(2, 5, dtype=torch.long),
         }
 
@@ -92,6 +93,7 @@ class TestFactoredRecurrentActorCritic:
         assert "slot" in log_probs
         assert "blueprint" in log_probs
         assert "blend" in log_probs
+        assert "tempo" in log_probs
         assert "op" in log_probs
 
         # All should be [batch, seq]
@@ -109,11 +111,13 @@ class TestFactoredRecurrentActorCritic:
         assert "slot" in result.actions
         assert "blueprint" in result.actions
         assert "blend" in result.actions
+        assert "tempo" in result.actions
         assert "op" in result.actions
 
         assert "slot" in result.log_probs
         assert "blueprint" in result.log_probs
         assert "blend" in result.log_probs
+        assert "tempo" in result.log_probs
         assert "op" in result.log_probs
 
         # Actions should be batch-sized
@@ -128,13 +132,14 @@ class TestFactoredRecurrentActorCritic:
             "slot": torch.zeros(2, 5, dtype=torch.long),
             "blueprint": torch.zeros(2, 5, dtype=torch.long),
             "blend": torch.zeros(2, 5, dtype=torch.long),
+            "tempo": torch.zeros(2, 5, dtype=torch.long),
             "op": torch.zeros(2, 5, dtype=torch.long),
         }
 
         _, _, entropy, _ = net.evaluate_actions(state, actions)
 
         # Normalized entropy should be between 0 and 1
-        for key in ["slot", "blueprint", "blend", "op"]:
+        for key in ["slot", "blueprint", "blend", "tempo", "op"]:
             assert (entropy[key] >= 0).all(), f"{key} entropy has negative values"
             assert (entropy[key] <= 1.01).all(), f"{key} entropy exceeds 1 (not normalized)"
 
@@ -147,7 +152,7 @@ class TestFactoredRecurrentActorCritic:
         result1 = net.get_action(state, deterministic=True)
         result2 = net.get_action(state, deterministic=True)
 
-        for key in ["slot", "blueprint", "blend", "op"]:
+        for key in ["slot", "blueprint", "blend", "tempo", "op"]:
             assert result1.actions[key] == result2.actions[key], f"{key} action not deterministic"
 
 
@@ -199,7 +204,7 @@ def test_logits_no_inf_after_masking():
     output = net.forward(state, slot_mask=slot_mask)
 
     # Should not contain inf - masked values should use -1e4, not -inf
-    for key in ["slot_logits", "blueprint_logits", "blend_logits", "op_logits", "value"]:
+    for key in ["slot_logits", "blueprint_logits", "blend_logits", "tempo_logits", "op_logits", "value"]:
         tensor = output[key]
         assert not torch.isinf(tensor).any(), f"{key} should not contain -inf"
         assert not torch.isnan(tensor).any(), f"{key} should not contain NaN"
@@ -221,6 +226,7 @@ def test_entropy_normalization_with_single_action():
         "slot": torch.zeros(2, 3, dtype=torch.long),  # Only one option
         "blueprint": torch.randint(0, 5, (2, 3)),
         "blend": torch.randint(0, 3, (2, 3)),
+        "tempo": torch.randint(0, 3, (2, 3)),
         "op": torch.randint(0, 4, (2, 3)),
     }
 
@@ -242,6 +248,7 @@ def test_entropy_normalization_in_loss():
         "slot": torch.zeros(2, 3, dtype=torch.long),
         "blueprint": torch.randint(0, 5, (2, 3)),
         "blend": torch.randint(0, 3, (2, 3)),
+        "tempo": torch.randint(0, 3, (2, 3)),
         "op": torch.randint(0, 4, (2, 3)),
     }
 
@@ -271,6 +278,7 @@ def test_entropy_respects_valid_actions_only():
         "slot": torch.zeros(1, 2, dtype=torch.long),
         "blueprint": torch.zeros(1, 2, dtype=torch.long),
         "blend": torch.zeros(1, 2, dtype=torch.long),
+        "tempo": torch.zeros(1, 2, dtype=torch.long),
         "op": torch.zeros(1, 2, dtype=torch.long),
     }
 

@@ -265,6 +265,7 @@ class PPOAgent:
             "slot": 1.0,
             "blueprint": 1.0,
             "blend": 1.0,
+            "tempo": 1.0,
             "op": 1.0,
         }
         self.value_coef = value_coef
@@ -522,6 +523,7 @@ class PPOAgent:
                 "slot": data["slot_actions"],
                 "blueprint": data["blueprint_actions"],
                 "blend": data["blend_actions"],
+                "tempo": data["tempo_actions"],
                 "op": data["op_actions"],
             }
 
@@ -531,6 +533,7 @@ class PPOAgent:
                 slot_mask=data["slot_masks"],
                 blueprint_mask=data["blueprint_masks"],
                 blend_mask=data["blend_masks"],
+                tempo_mask=data["tempo_masks"],
                 op_mask=data["op_masks"],
                 hidden=(data["initial_hidden_h"], data["initial_hidden_c"]),
             )
@@ -564,6 +567,7 @@ class PPOAgent:
                 "slot": ~is_wait,  # slot relevant except WAIT
                 "blueprint": is_germinate,  # only for GERMINATE
                 "blend": is_germinate,  # only for GERMINATE
+                "tempo": is_germinate,  # only for GERMINATE (same as blueprint/blend)
             }
 
             # Compute per-head ratios
@@ -571,6 +575,7 @@ class PPOAgent:
                 "slot": data["slot_log_probs"][valid_mask],
                 "blueprint": data["blueprint_log_probs"][valid_mask],
                 "blend": data["blend_log_probs"][valid_mask],
+                "tempo": data["tempo_log_probs"][valid_mask],
                 "op": data["op_log_probs"][valid_mask],
             }
 

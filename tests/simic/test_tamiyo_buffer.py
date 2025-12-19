@@ -4,7 +4,7 @@ import pytest
 import torch
 
 from esper.leyline import DEFAULT_LSTM_HIDDEN_DIM
-from esper.leyline.factored_actions import NUM_BLUEPRINTS
+from esper.leyline.factored_actions import NUM_BLUEPRINTS, NUM_TEMPO
 from esper.simic.agent import TamiyoRolloutBuffer
 
 
@@ -33,10 +33,12 @@ class TestTamiyoRolloutBuffer:
                 slot_action=0,
                 blueprint_action=0,
                 blend_action=0,
+                tempo_action=0,
                 op_action=0,
                 slot_log_prob=-1.0,
                 blueprint_log_prob=-1.0,
                 blend_log_prob=-1.0,
+                tempo_log_prob=-1.0,
                 op_log_prob=-1.0,
                 value=1.0,
                 reward=1.0,
@@ -44,6 +46,7 @@ class TestTamiyoRolloutBuffer:
                 slot_mask=torch.ones(3, dtype=torch.bool),
                 blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
                 blend_mask=torch.ones(3, dtype=torch.bool),
+                tempo_mask=torch.ones(NUM_TEMPO, dtype=torch.bool),
                 op_mask=torch.ones(4, dtype=torch.bool),
                 hidden_h=torch.zeros(1, 1, 128),
                 hidden_c=torch.zeros(1, 1, 128),
@@ -59,10 +62,12 @@ class TestTamiyoRolloutBuffer:
                 slot_action=0,
                 blueprint_action=0,
                 blend_action=0,
+                tempo_action=0,
                 op_action=0,
                 slot_log_prob=-1.0,
                 blueprint_log_prob=-1.0,
                 blend_log_prob=-1.0,
+                tempo_log_prob=-1.0,
                 op_log_prob=-1.0,
                 value=50.0,
                 reward=100.0,  # HIGH reward
@@ -70,6 +75,7 @@ class TestTamiyoRolloutBuffer:
                 slot_mask=torch.ones(3, dtype=torch.bool),
                 blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
                 blend_mask=torch.ones(3, dtype=torch.bool),
+                tempo_mask=torch.ones(NUM_TEMPO, dtype=torch.bool),
                 op_mask=torch.ones(4, dtype=torch.bool),
                 hidden_h=torch.zeros(1, 1, 128),
                 hidden_c=torch.zeros(1, 1, 128),
@@ -107,10 +113,12 @@ class TestTamiyoRolloutBuffer:
             slot_action=1,
             blueprint_action=2,
             blend_action=0,
+            tempo_action=1,
             op_action=1,
             slot_log_prob=-0.5,
             blueprint_log_prob=-1.2,
             blend_log_prob=-0.3,
+            tempo_log_prob=-0.8,
             op_log_prob=-0.8,
             value=1.0,
             reward=1.0,
@@ -118,6 +126,7 @@ class TestTamiyoRolloutBuffer:
             slot_mask=torch.ones(3, dtype=torch.bool),
             blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
             blend_mask=torch.ones(3, dtype=torch.bool),
+            tempo_mask=torch.ones(NUM_TEMPO, dtype=torch.bool),
             op_mask=torch.ones(4, dtype=torch.bool),
             hidden_h=torch.zeros(1, 1, 128),
             hidden_c=torch.zeros(1, 1, 128),
@@ -128,6 +137,7 @@ class TestTamiyoRolloutBuffer:
         assert buffer.slot_log_probs[0, 0].item() == pytest.approx(-0.5)
         assert buffer.blueprint_log_probs[0, 0].item() == pytest.approx(-1.2)
         assert buffer.blend_log_probs[0, 0].item() == pytest.approx(-0.3)
+        assert buffer.tempo_log_probs[0, 0].item() == pytest.approx(-0.8)
         assert buffer.op_log_probs[0, 0].item() == pytest.approx(-0.8)
 
     def test_lstm_hidden_states_stored(self):
@@ -149,10 +159,12 @@ class TestTamiyoRolloutBuffer:
             slot_action=0,
             blueprint_action=0,
             blend_action=0,
+            tempo_action=0,
             op_action=0,
             slot_log_prob=-1.0,
             blueprint_log_prob=-1.0,
             blend_log_prob=-1.0,
+            tempo_log_prob=-1.0,
             op_log_prob=-1.0,
             value=1.0,
             reward=1.0,
@@ -160,6 +172,7 @@ class TestTamiyoRolloutBuffer:
             slot_mask=torch.ones(3, dtype=torch.bool),
             blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
             blend_mask=torch.ones(3, dtype=torch.bool),
+            tempo_mask=torch.ones(NUM_TEMPO, dtype=torch.bool),
             op_mask=torch.ones(4, dtype=torch.bool),
             hidden_h=hidden_h,
             hidden_c=hidden_c,
@@ -199,13 +212,14 @@ class TestTamiyoRolloutBuffer:
             buffer.add(
                 env_id=0,
                 state=torch.randn(50),
-                slot_action=0, blueprint_action=0, blend_action=0, op_action=0,
+                slot_action=0, blueprint_action=0, blend_action=0, tempo_action=0, op_action=0,
                 slot_log_prob=-1.0, blueprint_log_prob=-1.0,
-                blend_log_prob=-1.0, op_log_prob=-1.0,
+                blend_log_prob=-1.0, tempo_log_prob=-1.0, op_log_prob=-1.0,
                 value=1.0, reward=1.0, done=False,
                 slot_mask=torch.ones(3, dtype=torch.bool),
                 blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
                 blend_mask=torch.ones(3, dtype=torch.bool),
+                tempo_mask=torch.ones(NUM_TEMPO, dtype=torch.bool),
                 op_mask=torch.ones(4, dtype=torch.bool),
                 hidden_h=torch.zeros(1, 1, 128),
                 hidden_c=torch.zeros(1, 1, 128),
@@ -216,13 +230,14 @@ class TestTamiyoRolloutBuffer:
             buffer.add(
                 env_id=0,
                 state=torch.randn(50),
-                slot_action=0, blueprint_action=0, blend_action=0, op_action=0,
+                slot_action=0, blueprint_action=0, blend_action=0, tempo_action=0, op_action=0,
                 slot_log_prob=-1.0, blueprint_log_prob=-1.0,
-                blend_log_prob=-1.0, op_log_prob=-1.0,
+                blend_log_prob=-1.0, tempo_log_prob=-1.0, op_log_prob=-1.0,
                 value=1.0, reward=1.0, done=False,
                 slot_mask=torch.ones(3, dtype=torch.bool),
                 blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
                 blend_mask=torch.ones(3, dtype=torch.bool),
+                tempo_mask=torch.ones(NUM_TEMPO, dtype=torch.bool),
                 op_mask=torch.ones(4, dtype=torch.bool),
                 hidden_h=torch.zeros(1, 1, 128),
                 hidden_c=torch.zeros(1, 1, 128),
@@ -287,10 +302,12 @@ class TestTamiyoRolloutBuffer:
                 slot_action=i % 5,  # Use slots 0-4
                 blueprint_action=0,
                 blend_action=0,
+                tempo_action=0,
                 op_action=0,
                 slot_log_prob=-1.0,
                 blueprint_log_prob=-1.0,
                 blend_log_prob=-1.0,
+                tempo_log_prob=-1.0,
                 op_log_prob=-1.0,
                 value=1.0,
                 reward=1.0,
@@ -298,6 +315,7 @@ class TestTamiyoRolloutBuffer:
                 slot_mask=torch.ones(5, dtype=torch.bool),  # 5 slots
                 blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
                 blend_mask=torch.ones(3, dtype=torch.bool),
+                tempo_mask=torch.ones(NUM_TEMPO, dtype=torch.bool),
                 op_mask=torch.ones(4, dtype=torch.bool),
                 hidden_h=torch.zeros(1, 1, 128),
                 hidden_c=torch.zeros(1, 1, 128),

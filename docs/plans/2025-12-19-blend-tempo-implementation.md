@@ -1260,6 +1260,75 @@ RuntimeError: size mismatch for feature_net.0.weight
 
 ---
 
+## Pre-Implementation Risk Assessment (2025-12-20)
+
+> **Conducted by:** Claude Code (Risk & Complexity Audit)
+> **Status:** All 248 baseline tests passing
+
+### Verified Call Sites for FactoredAction.from_indices
+
+| File | Line | Context | Update Required |
+|------|------|---------|-----------------|
+| `vectorized.py` | 1905 | Debug assertion only (`if __debug__:`) | ✅ Yes - add tempo_idx |
+| `helpers.py` | 254, 261, 268, 275 | Heuristic policy helpers | ✅ Yes - add tempo_idx=0 |
+| `test_emit_last_action_indices.py` | 22 | Test fixture | ✅ Yes - add tempo_idx |
+
+### Tests with Hardcoded 4-Head Assumptions
+
+**HIGH PRIORITY** - These tests will fail after HEAD_NAMES changes:
+
+| File | Lines | Pattern | Fix Required |
+|------|-------|---------|--------------|
+| `test_vectorized_factored.py` | 34, 113 | `{"slot", "blueprint", "blend", "op"}` | Add "tempo" |
+| `test_ppo_integration.py` | 127, 200, 230, 240 | `["slot", "blueprint", "blend", "op"]` | Add "tempo" |
+| `test_batch_mask_stats.py` | 7, 52 | **Local HEAD_NAMES override!** | Delete local override |
+| `test_batch_action_extraction.py` | 37-38 | Dict key assertions | Add tempo key |
+| `test_batch_bootstrap.py` | 18-19 | Dict comprehensions | Add tempo key |
+| `test_tamiyo_network.py` | 137, 150, 202 | Key iterations | Add tempo_logits |
+| `test_tamiyo_buffer.py` | 202 | Buffer add() call | Add tempo params |
+| `test_emit_last_action_indices.py` | 19, 24, 55 | Masked dict and from_indices | Add tempo |
+
+### Feature Size Updates Required
+
+| File | Line | Current | New | Notes |
+|------|------|---------|-----|-------|
+| `features.py` | 70 | `SLOT_FEATURE_SIZE = 17` | 18 | +1 for tempo |
+| `features.py` | 76 | `MULTISLOT_FEATURE_SIZE = 74` | 77 | 23 + 3×18 |
+| `test_features.py` | 37 | `assert len(features) == 74` | 77 | Hardcoded! |
+
+### Additional Files Not in Original Plan
+
+The following files need updates but were **not explicitly listed** in the plan:
+
+1. **`tests/simic/training/test_batch_mask_stats.py`** - Has LOCAL `HEAD_NAMES` definition that shadows the import
+2. **`tests/simic/training/test_batch_action_extraction.py`** - Hardcoded action dict assertions
+3. **`tests/simic/training/test_batch_bootstrap.py`** - Hardcoded key lists
+4. **`tests/integration/test_vectorized_factored.py`** - Multiple hardcoded sets
+5. **`tests/integration/test_ppo_integration.py`** - Multiple hardcoded lists
+6. **`tests/simic/test_tamiyo_network.py`** - logits key assertions
+7. **`tests/simic/test_tamiyo_buffer.py`** - Buffer add call signature
+
+### Critical Implementation Order
+
+Based on dependency analysis, the **atomic implementation unit** is Tasks 1-11. These MUST be committed together to avoid runtime crashes.
+
+```
+Task 1 (HEAD_NAMES) ────┐
+                        │
+Tasks 2-3 (Enums) ──────┼─► ATOMIC COMMIT
+                        │
+Tasks 4-11 (Network) ───┘
+```
+
+### Baseline Test Results
+
+```
+$ PYTHONPATH=src HYPOTHESIS_PROFILE=ci uv run pytest tests/leyline/ tests/tamiyo/policy/ tests/simic/agent/ -x -q
+248 passed in 1.13s
+```
+
+---
+
 ## Revision History
 
 | Revision | Date | Changes |
@@ -1268,5 +1337,6 @@ RuntimeError: size mismatch for feature_net.0.weight
 | 2.0 | 2025-12-19 | First Go/No-Go review: HEAD_NAMES blocker, file paths corrected, rollout buffer + causal masking added (15 tasks) |
 | 2.1 | 2025-12-19 | Second Go/No-Go review: Task 3 clarified (to_indices ADDED), Task 10 expanded (advantages.py + entropy defaults), Task 11 fixed (Host layer added, inline code noted), Task 13 fixed (SLOT_FEATURE_SIZE constant name) |
 | 2.2 | 2025-12-19 | Third review: Task 2 amended (TEMPO_NAMES lookup table for hot-path optimization), Task 16 added (dashboard tempo visualization - optional) |
+| 2.3 | 2025-12-20 | Pre-implementation risk audit: Identified 5 from_indices call sites, 8 test files with hardcoded 4-head assumptions, 3 feature size locations. Added risk assessment section. |
 
-*Implementation plan revised after 3rd code review. TEMPO_NAMES added for pattern consistency with OP_NAMES/BLEND_IDS. Dashboard visualization task added for observability.*
+*Implementation plan revised after 3rd code review and pre-implementation risk audit. TEMPO_NAMES added for pattern consistency with OP_NAMES/BLEND_IDS. Dashboard visualization task added for observability. Risk audit identified additional test files requiring updates.*

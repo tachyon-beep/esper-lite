@@ -5,6 +5,7 @@ Architecture:
     shared_repr -> slot_head -> slot_logits
     shared_repr -> blueprint_head -> blueprint_logits
     shared_repr -> blend_head -> blend_logits
+    shared_repr -> tempo_head -> tempo_logits
     shared_repr -> op_head -> op_logits
     shared_repr -> value_head -> value
 
@@ -54,6 +55,7 @@ class _ForwardOutput(TypedDict):
     slot_logits: torch.Tensor
     blueprint_logits: torch.Tensor
     blend_logits: torch.Tensor
+    tempo_logits: torch.Tensor
     op_logits: torch.Tensor
     value: torch.Tensor
     hidden: tuple[torch.Tensor, torch.Tensor]
@@ -68,6 +70,7 @@ from esper.leyline.factored_actions import (
     NUM_BLUEPRINTS,
     NUM_BLENDS,
     NUM_OPS,
+    NUM_TEMPO,
 )
 from esper.leyline.slot_config import SlotConfig
 
@@ -76,7 +79,7 @@ class FactoredRecurrentActorCritic(nn.Module):
     """Recurrent actor-critic with factored action heads.
 
     Uses LSTM for temporal reasoning over 10-20 epoch seed learning cycles.
-    All 4 action heads share the same temporal context from the LSTM.
+    All 5 action heads share the same temporal context from the LSTM.
     """
 
     def __init__(
@@ -85,6 +88,7 @@ class FactoredRecurrentActorCritic(nn.Module):
         num_slots: int = SlotConfig.default().num_slots,
         num_blueprints: int = NUM_BLUEPRINTS,
         num_blends: int = NUM_BLENDS,
+        num_tempo: int = NUM_TEMPO,
         num_ops: int = NUM_OPS,
         feature_dim: int = DEFAULT_FEATURE_DIM,
         lstm_hidden_dim: int = DEFAULT_LSTM_HIDDEN_DIM,
@@ -96,6 +100,7 @@ class FactoredRecurrentActorCritic(nn.Module):
         self.num_slots = num_slots
         self.num_blueprints = num_blueprints
         self.num_blends = num_blends
+        self.num_tempo = num_tempo
         self.num_ops = num_ops
         self.lstm_hidden_dim = lstm_hidden_dim
         self.lstm_layers = lstm_layers
@@ -147,6 +152,11 @@ class FactoredRecurrentActorCritic(nn.Module):
             nn.ReLU(),
             nn.Linear(head_hidden, num_blends),
         )
+        self.tempo_head = nn.Sequential(
+            nn.Linear(lstm_hidden_dim, head_hidden),
+            nn.ReLU(),
+            nn.Linear(head_hidden, num_tempo),
+        )
         self.op_head = nn.Sequential(
             nn.Linear(lstm_hidden_dim, head_hidden),
             nn.ReLU(),
@@ -170,7 +180,7 @@ class FactoredRecurrentActorCritic(nn.Module):
                 nn.init.zeros_(module.bias)
 
         # Smaller init for output layers (policy stability)
-        for head in [self.slot_head, self.blueprint_head, self.blend_head, self.op_head]:
+        for head in [self.slot_head, self.blueprint_head, self.blend_head, self.tempo_head, self.op_head]:
             nn.init.orthogonal_(head[-1].weight, gain=0.01)
         nn.init.orthogonal_(self.value_head[-1].weight, gain=1.0)
 
@@ -212,6 +222,7 @@ class FactoredRecurrentActorCritic(nn.Module):
         slot_mask: torch.Tensor | None = None,
         blueprint_mask: torch.Tensor | None = None,
         blend_mask: torch.Tensor | None = None,
+        tempo_mask: torch.Tensor | None = None,
         op_mask: torch.Tensor | None = None,
     ) -> _ForwardOutput:
         """Forward pass returning logits, value, and new hidden state.
@@ -223,7 +234,7 @@ class FactoredRecurrentActorCritic(nn.Module):
 
         Returns:
             _ForwardOutput with slot_logits, blueprint_logits, blend_logits,
-            op_logits, value, and hidden tuple
+            tempo_logits, op_logits, value, and hidden tuple
         """
         batch_size = state.size(0)
         device = state.device
@@ -245,6 +256,7 @@ class FactoredRecurrentActorCritic(nn.Module):
         slot_logits = self.slot_head(lstm_out)
         blueprint_logits = self.blueprint_head(lstm_out)
         blend_logits = self.blend_head(lstm_out)
+        tempo_logits = self.tempo_head(lstm_out)
         op_logits = self.op_head(lstm_out)
 
         # Apply masks using canonical MASKED_LOGIT_VALUE from leyline
@@ -255,6 +267,8 @@ class FactoredRecurrentActorCritic(nn.Module):
             blueprint_logits = blueprint_logits.masked_fill(~blueprint_mask, MASKED_LOGIT_VALUE)
         if blend_mask is not None:
             blend_logits = blend_logits.masked_fill(~blend_mask, MASKED_LOGIT_VALUE)
+        if tempo_mask is not None:
+            tempo_logits = tempo_logits.masked_fill(~tempo_mask, MASKED_LOGIT_VALUE)
         if op_mask is not None:
             op_logits = op_logits.masked_fill(~op_mask, MASKED_LOGIT_VALUE)
 
@@ -265,6 +279,7 @@ class FactoredRecurrentActorCritic(nn.Module):
             "slot_logits": slot_logits,
             "blueprint_logits": blueprint_logits,
             "blend_logits": blend_logits,
+            "tempo_logits": tempo_logits,
             "op_logits": op_logits,
             "value": value,
             "hidden": new_hidden,
@@ -277,6 +292,7 @@ class FactoredRecurrentActorCritic(nn.Module):
         slot_mask: torch.Tensor | None = None,
         blueprint_mask: torch.Tensor | None = None,
         blend_mask: torch.Tensor | None = None,
+        tempo_mask: torch.Tensor | None = None,
         op_mask: torch.Tensor | None = None,
         deterministic: bool = False,
         return_op_logits: bool = False,
@@ -296,6 +312,7 @@ class FactoredRecurrentActorCritic(nn.Module):
             slot_mask: Boolean mask for slot actions [batch, num_slots]
             blueprint_mask: Boolean mask for blueprint actions [batch, num_blueprints]
             blend_mask: Boolean mask for blend actions [batch, num_blends]
+            tempo_mask: Boolean mask for tempo actions [batch, num_tempo]
             op_mask: Boolean mask for op actions [batch, num_ops]
             deterministic: If True, use argmax instead of sampling
             return_op_logits: If True, include raw masked op logits in result
@@ -316,12 +333,14 @@ class FactoredRecurrentActorCritic(nn.Module):
             blueprint_mask = blueprint_mask.unsqueeze(1)
         if blend_mask is not None and blend_mask.dim() == 2:
             blend_mask = blend_mask.unsqueeze(1)
+        if tempo_mask is not None and tempo_mask.dim() == 2:
+            tempo_mask = tempo_mask.unsqueeze(1)
         if op_mask is not None and op_mask.dim() == 2:
             op_mask = op_mask.unsqueeze(1)
 
         with torch.inference_mode():
             output = self.forward(
-                state, hidden, slot_mask, blueprint_mask, blend_mask, op_mask
+                state, hidden, slot_mask, blueprint_mask, blend_mask, tempo_mask, op_mask
             )
 
             # Sample from each head using MaskedCategorical for safety
@@ -332,6 +351,7 @@ class FactoredRecurrentActorCritic(nn.Module):
                 "slot": slot_mask[:, 0, :] if slot_mask is not None else None,
                 "blueprint": blueprint_mask[:, 0, :] if blueprint_mask is not None else None,
                 "blend": blend_mask[:, 0, :] if blend_mask is not None else None,
+                "tempo": tempo_mask[:, 0, :] if tempo_mask is not None else None,
                 "op": op_mask[:, 0, :] if op_mask is not None else None,
             }
 
@@ -340,6 +360,7 @@ class FactoredRecurrentActorCritic(nn.Module):
                 "slot": output["slot_logits"][:, 0, :],
                 "blueprint": output["blueprint_logits"][:, 0, :],
                 "blend": output["blend_logits"][:, 0, :],
+                "tempo": output["tempo_logits"][:, 0, :],
                 "op": output["op_logits"][:, 0, :],
             }
 
@@ -379,6 +400,7 @@ class FactoredRecurrentActorCritic(nn.Module):
         slot_mask: torch.Tensor | None = None,
         blueprint_mask: torch.Tensor | None = None,
         blend_mask: torch.Tensor | None = None,
+        tempo_mask: torch.Tensor | None = None,
         op_mask: torch.Tensor | None = None,
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> tuple[dict[str, torch.Tensor], torch.Tensor, dict[str, torch.Tensor], tuple]:
@@ -391,7 +413,7 @@ class FactoredRecurrentActorCritic(nn.Module):
             hidden: Final hidden state
         """
         output = self.forward(
-            states, hidden, slot_mask, blueprint_mask, blend_mask, op_mask
+            states, hidden, slot_mask, blueprint_mask, blend_mask, tempo_mask, op_mask
         )
 
         log_probs: dict[str, torch.Tensor] = {}
@@ -401,6 +423,7 @@ class FactoredRecurrentActorCritic(nn.Module):
             "slot": slot_mask,
             "blueprint": blueprint_mask,
             "blend": blend_mask,
+            "tempo": tempo_mask,
             "op": op_mask,
         }
 
@@ -409,6 +432,7 @@ class FactoredRecurrentActorCritic(nn.Module):
             "slot": output["slot_logits"],
             "blueprint": output["blueprint_logits"],
             "blend": output["blend_logits"],
+            "tempo": output["tempo_logits"],
             "op": output["op_logits"],
         }
 

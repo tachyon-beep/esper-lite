@@ -15,8 +15,8 @@ def test_batch_bootstrap_single_forward_pass():
         nonlocal forward_call_count
         forward_call_count += 1
         batch_size = state.shape[0]
-        actions = {key: torch.zeros(batch_size, dtype=torch.long) for key in ["slot", "blueprint", "blend", "op"]}
-        log_probs = {key: torch.zeros(batch_size) for key in ["slot", "blueprint", "blend", "op"]}
+        actions = {key: torch.zeros(batch_size, dtype=torch.long) for key in ["slot", "blueprint", "blend", "tempo", "op"]}
+        log_probs = {key: torch.zeros(batch_size) for key in ["slot", "blueprint", "blend", "tempo", "op"]}
         values = torch.randn(batch_size)  # Random values for each env
         return actions, log_probs, values, hidden
 

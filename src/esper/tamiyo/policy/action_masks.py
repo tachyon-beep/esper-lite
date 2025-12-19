@@ -33,6 +33,7 @@ from esper.leyline.factored_actions import (
     NUM_BLUEPRINTS,
     NUM_BLENDS,
     NUM_OPS,
+    NUM_TEMPO,
     CNN_BLUEPRINTS,
     TRANSFORMER_BLUEPRINTS,
 )
@@ -118,6 +119,7 @@ def compute_action_masks(
         - "slot": [num_slots] - which slots can be targeted (only enabled slots)
         - "blueprint": [NUM_BLUEPRINTS] - which blueprints can be used
         - "blend": [NUM_BLENDS] - which blend methods can be used
+        - "tempo": [NUM_TEMPO] - which tempo values can be used (all valid)
         - "op": [NUM_OPS] - which operations are valid (ANY enabled slot)
     """
     if slot_config is None:
@@ -148,6 +150,9 @@ def compute_action_masks(
 
     # Blend mask: all blend methods valid (network learns preferences)
     blend_mask = torch.ones(NUM_BLENDS, dtype=torch.bool, device=device)
+
+    # Tempo mask: all tempo values valid (choice only matters during GERMINATE)
+    tempo_mask = torch.ones(NUM_TEMPO, dtype=torch.bool, device=device)
 
     # Op mask: depends on slot states across ALL enabled slots
     op_mask = torch.zeros(NUM_OPS, dtype=torch.bool, device=device)
@@ -185,6 +190,7 @@ def compute_action_masks(
         "slot": slot_mask,
         "blueprint": blueprint_mask,
         "blend": blend_mask,
+        "tempo": tempo_mask,
         "op": op_mask,
     }
 

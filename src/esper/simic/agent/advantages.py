@@ -64,11 +64,16 @@ def compute_per_head_advantages(
     blend_mask = is_germinate
     blend_advantages = base_advantages * blend_mask.float()
 
+    # tempo head: only relevant for GERMINATE (same as blueprint/blend)
+    tempo_mask = is_germinate
+    tempo_advantages = base_advantages * tempo_mask.float()
+
     return {
         "op": op_advantages,
         "slot": slot_advantages,
         "blueprint": blueprint_advantages,
         "blend": blend_advantages,
+        "tempo": tempo_advantages,
     }
 
 

@@ -311,6 +311,7 @@ class SeedState:
     # Blending progress tracking
     blending_steps_done: int = 0
     blending_steps_total: int = 0
+    blend_tempo_epochs: int = 5  # Default to STANDARD (5 epochs)
 
     # Flags
     is_healthy: bool = True
@@ -372,6 +373,15 @@ class SeedState:
         self.telemetry.max_epochs = max_epochs
         self.telemetry.captured_at = datetime.now(timezone.utc)
 
+        # Compute blending velocity during BLENDING stage
+        if self.stage == SeedStage.BLENDING:
+            self.telemetry.blend_tempo_epochs = self.blend_tempo_epochs
+            epochs_in_blend = self.metrics.epochs_in_current_stage
+            if epochs_in_blend > 0:
+                self.telemetry.blending_velocity = self.alpha / epochs_in_blend
+            else:
+                self.telemetry.blending_velocity = 0.0
+
     def can_transition_to(self, new_stage: SeedStage) -> bool:
         """Check if transition to new_stage is valid per Leyline contract."""
         return is_valid_transition(self.stage, new_stage)
@@ -428,6 +438,7 @@ class SeedState:
             "telemetry": self.telemetry.to_dict() if self.telemetry else None,
             "blending_steps_done": self.blending_steps_done,
             "blending_steps_total": self.blending_steps_total,
+            "blend_tempo_epochs": self.blend_tempo_epochs,
             "is_healthy": self.is_healthy,
             "is_paused": self.is_paused,
             "previous_epochs_in_stage": self.previous_epochs_in_stage,
@@ -462,6 +473,7 @@ class SeedState:
             state.telemetry = SeedTelemetry.from_dict(data["telemetry"])
         state.blending_steps_done = data.get("blending_steps_done", 0)
         state.blending_steps_total = data.get("blending_steps_total", 0)
+        state.blend_tempo_epochs = data.get("blend_tempo_epochs", 5)
         state.is_healthy = data.get("is_healthy", True)
         state.is_paused = data.get("is_paused", False)
         state.previous_epochs_in_stage = data.get("previous_epochs_in_stage", 0)
@@ -939,6 +951,7 @@ class SeedSlot(nn.Module):
         seed_id: str | None = None,
         host_module: nn.Module | None = None,
         blend_algorithm_id: str = "sigmoid",
+        blend_tempo_epochs: int = 5,
     ) -> SeedState:
         """Germinate a new seed in this slot.
 
@@ -947,11 +960,13 @@ class SeedSlot(nn.Module):
             seed_id: Optional unique identifier for the seed
             host_module: Host network for gradient isolation (optional)
             blend_algorithm_id: Blending algorithm ("linear", "sigmoid", "gated")
+            blend_tempo_epochs: Number of epochs for blending (3, 5, or 8)
         """
         from esper.kasmina.blueprints import BlueprintRegistry
 
-        # Store blend algorithm for later use in start_blending()
+        # Store blend settings for later use in start_blending()
         self._blend_algorithm_id = blend_algorithm_id
+        self._blend_tempo_epochs = blend_tempo_epochs
 
         if self.is_active and not is_failure_stage(self.state.stage):
             raise RuntimeError(f"Slot {self.slot_id} already has active seed")
@@ -996,6 +1011,9 @@ class SeedSlot(nn.Module):
             slot_id=self.slot_id,
             stage=SeedStage.DORMANT,
         )
+
+        # Store blend tempo in state
+        self.state.blend_tempo_epochs = blend_tempo_epochs
 
         # Capture param counts once for gradient normalization (G2 gate)
         # This enables scale-invariant comparison across different host/seed sizes
@@ -1518,11 +1536,14 @@ class SeedSlot(nn.Module):
                 self.state.metrics._blending_started = True
 
             # Initialize blending schedule
-            total_steps = DEFAULT_BLENDING_TOTAL_STEPS
-            if self.task_config is not None:
-                configured_steps = self.task_config.blending_steps
-                if isinstance(configured_steps, int) and configured_steps > 0:
-                    total_steps = configured_steps
+            # Priority: stored tempo > TaskConfig > DEFAULT_BLENDING_TOTAL_STEPS
+            total_steps = getattr(self, '_blend_tempo_epochs', None)
+            if total_steps is None:
+                total_steps = DEFAULT_BLENDING_TOTAL_STEPS
+                if self.task_config is not None:
+                    configured_steps = self.task_config.blending_steps
+                    if isinstance(configured_steps, int) and configured_steps > 0:
+                        total_steps = configured_steps
             self.start_blending(total_steps=total_steps)
 
         elif new_stage == SeedStage.PROBATIONARY and old_stage == SeedStage.BLENDING:

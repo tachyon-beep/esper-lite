@@ -129,9 +129,9 @@ DEFAULT_RATIO_COLLAPSE_THRESHOLD = 0.1
 # Factored Action Space Constants
 # =============================================================================
 
-# Head names for factored action space (slot selection, blueprint, blend algorithm, lifecycle op).
-# Order matters: slot → blueprint → blend → op is the causal chain.
-HEAD_NAMES: tuple[str, ...] = ("slot", "blueprint", "blend", "op")
+# Head names for factored action space (slot selection, blueprint, blend algorithm, tempo, lifecycle op).
+# Order matters: slot → blueprint → blend → tempo → op is the causal chain.
+HEAD_NAMES: tuple[str, ...] = ("slot", "blueprint", "blend", "tempo", "op")
 
 # Action masking constant - safe for FP16/BF16, avoids softmax overflow
 # Used by MaskedCategorical to zero out invalid action probabilities

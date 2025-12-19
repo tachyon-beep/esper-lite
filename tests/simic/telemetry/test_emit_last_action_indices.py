@@ -16,12 +16,12 @@ class TestEmitLastActionWithIndices:
 
     def test_emit_with_indices_matches_factored_action(self):
         """Emitting with indices produces same data as with FactoredAction."""
-        slot_idx, blueprint_idx, blend_idx, op_idx = 0, 1, 2, 1  # GERMINATE with CONV_LIGHT, GATED
+        slot_idx, blueprint_idx, blend_idx, tempo_idx, op_idx = 0, 1, 2, 1, 1  # GERMINATE with CONV_LIGHT, GATED, STANDARD
 
         # Create FactoredAction for comparison
-        fa = FactoredAction.from_indices(slot_idx, blueprint_idx, blend_idx, op_idx)
+        fa = FactoredAction.from_indices(slot_idx, blueprint_idx, blend_idx, tempo_idx, op_idx)
 
-        masked = {"slot": False, "blueprint": True, "blend": False, "op": False}
+        masked = {"slot": False, "blueprint": True, "blend": False, "tempo": False, "op": False}
 
         # Call with indices
         result = emit_last_action(
@@ -30,6 +30,7 @@ class TestEmitLastActionWithIndices:
             slot_idx=slot_idx,
             blueprint_idx=blueprint_idx,
             blend_idx=blend_idx,
+            tempo_idx=tempo_idx,
             op_idx=op_idx,
             slot_id="r0c0",
             masked=masked,
@@ -50,9 +51,10 @@ class TestEmitLastActionWithIndices:
                 slot_idx=0,
                 blueprint_idx=0,
                 blend_idx=0,
+                tempo_idx=0,
                 op_idx=op_idx,
                 slot_id="r0c0",
-                masked={"slot": False, "blueprint": False, "blend": False, "op": False},
+                masked={"slot": False, "blueprint": False, "blend": False, "tempo": False, "op": False},
                 success=True,
             )
             assert result["op"] == OP_NAMES[op_idx]

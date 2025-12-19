@@ -75,6 +75,7 @@ def emit_last_action(
     slot_idx: int,
     blueprint_idx: int,
     blend_idx: int,
+    tempo_idx: int,
     op_idx: int,
     slot_id: str,
     masked: dict[str, bool],
@@ -88,6 +89,7 @@ def emit_last_action(
         slot_idx: Slot action index
         blueprint_idx: Blueprint action index
         blend_idx: Blend action index
+        tempo_idx: Tempo action index
         op_idx: Lifecycle operation index
         slot_id: Target slot ID string
         masked: Dict of head -> was_masked flags
@@ -105,10 +107,12 @@ def emit_last_action(
         "slot_id": slot_id,
         "blueprint_id": BLUEPRINT_IDS[blueprint_idx],
         "blend_id": BLEND_IDS[blend_idx],
+        "tempo_idx": tempo_idx,
         "op_masked": bool(masked.get("op", False)),
         "slot_masked": bool(masked.get("slot", False)),
         "blueprint_masked": bool(masked.get("blueprint", False)),
         "blend_masked": bool(masked.get("blend", False)),
+        "tempo_masked": bool(masked.get("tempo", False)),
         "action_success": success,
     }
     hub.emit(TelemetryEvent(
