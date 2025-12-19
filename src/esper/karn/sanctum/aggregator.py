@@ -27,6 +27,7 @@ from esper.karn.sanctum.schema import (
     GPUStats,
     RewardComponents,
     EventLogEntry,
+    BestRunRecord,
 )
 
 if TYPE_CHECKING:
@@ -121,6 +122,9 @@ class SanctumAggregator:
     # Focused env for reward panel
     _focused_env_id: int = 0
 
+    # Historical best runs leaderboard (updated at batch end)
+    _best_runs: list[BestRunRecord] = field(default_factory=list)
+
     # Thread safety
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -131,6 +135,7 @@ class SanctumAggregator:
         self._tamiyo = TamiyoState()
         self._vitals = SystemVitals()
         self._gpu_devices = []
+        self._best_runs = []
         self._start_time = time.time()
         self._lock = threading.Lock()
 
@@ -219,6 +224,8 @@ class SanctumAggregator:
             vitals=self._vitals,
             # Event log
             event_log=list(self._event_log),
+            # Historical best runs
+            best_runs=list(self._best_runs),
         )
 
     # =========================================================================
@@ -456,6 +463,27 @@ class SanctumAggregator:
             total_epochs = self._current_episode * self._max_epochs
             self._vitals.epochs_per_second = total_epochs / elapsed
             self._vitals.batches_per_hour = (self._batches_completed / elapsed) * 3600
+
+        # Capture best run records for envs that improved during this batch
+        # Do this BEFORE resetting seed state so we can snapshot the seeds
+        current_ep = self._current_episode
+        for env in self._envs.values():
+            # Check if this env achieved a new best during this episode
+            if env.best_accuracy_episode == current_ep and env.best_accuracy > 0:
+                record = BestRunRecord(
+                    env_id=env.env_id,
+                    episode=current_ep,
+                    peak_accuracy=env.best_accuracy,
+                    final_accuracy=env.host_accuracy,
+                    seeds={k: SeedState(**v.__dict__) for k, v in env.best_seeds.items()},
+                )
+                # Remove any existing record for this env (replace with new best)
+                self._best_runs = [r for r in self._best_runs if r.env_id != env.env_id]
+                self._best_runs.append(record)
+
+        # Sort by peak accuracy descending, keep top 10
+        self._best_runs.sort(key=lambda r: r.peak_accuracy, reverse=True)
+        self._best_runs = self._best_runs[:10]
 
         # Reset per-env seed state for next episode
         for env in self._envs.values():

@@ -88,8 +88,8 @@ class Scoreboard(Static):
         lb_table = Table(show_header=True, box=None, padding=(0, 1), expand=True)
         lb_table.add_column("#", style="dim", width=3)
         lb_table.add_column("@Ep", justify="right", width=4)
-        lb_table.add_column("High", justify="right", width=6)
-        lb_table.add_column("Cur", justify="right", width=6)
+        lb_table.add_column("Peak", justify="right", width=6)
+        lb_table.add_column("End", justify="right", width=6)
         lb_table.add_column("Seeds", justify="left", width=20)
 
         medals = ["🥇", "🥈", "🥉"]
