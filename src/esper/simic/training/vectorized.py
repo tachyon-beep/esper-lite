@@ -1595,6 +1595,37 @@ def train_ppo_vectorized(
 
                 slot_reports = model.get_slot_reports()
 
+                # Emit per-env EPOCH_COMPLETED with per-seed telemetry for TUI updates
+                if hub and use_telemetry:
+                    # Build per-seed telemetry dict for this env
+                    seeds_telemetry = {}
+                    for slot_id, report in slot_reports.items():
+                        if report.telemetry is not None:
+                            seeds_telemetry[slot_id] = {
+                                "stage": report.stage.name if report.stage else "UNKNOWN",
+                                "blueprint_id": report.blueprint_id,
+                                "accuracy_delta": report.telemetry.accuracy_delta,
+                                "epochs_in_stage": report.telemetry.epochs_in_stage,
+                                "alpha": report.telemetry.alpha,
+                                "grad_ratio": report.telemetry.gradient_health,
+                                "has_vanishing": report.telemetry.has_vanishing,
+                                "has_exploding": report.telemetry.has_exploding,
+                            }
+
+                    hub.emit(TelemetryEvent(
+                        event_type=TelemetryEventType.EPOCH_COMPLETED,
+                        epoch=epoch,
+                        data={
+                            "env_id": env_idx,
+                            "inner_epoch": epoch,
+                            "val_accuracy": val_acc,
+                            "val_loss": val_loss,
+                            "train_accuracy": train_acc,
+                            "train_loss": train_loss,
+                            "seeds": seeds_telemetry,
+                        },
+                    ))
+
                 # Update signal tracker
                 available_slots = sum(
                     1 for slot_id in slots if not model.has_active_seed_in_slot(slot_id)

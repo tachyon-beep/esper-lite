@@ -117,6 +117,67 @@ class TestSanctumAggregator:
         assert env.current_epoch == 10
         assert len(env.accuracy_history) == 1
 
+    def test_epoch_completed_updates_per_seed_telemetry(self):
+        """EPOCH_COMPLETED with seeds dict should update per-seed accuracy_delta."""
+        agg = SanctumAggregator(num_envs=4)
+
+        event = MagicMock()
+        event.event_type = MagicMock()
+        event.event_type.name = "EPOCH_COMPLETED"
+        event.timestamp = datetime.now(timezone.utc)
+        event.data = {
+            "env_id": 1,
+            "val_accuracy": 80.0,
+            "val_loss": 0.5,
+            "inner_epoch": 15,
+            "seeds": {
+                "r0c0": {
+                    "stage": "TRAINING",
+                    "blueprint_id": "conv_light",
+                    "accuracy_delta": 2.5,
+                    "epochs_in_stage": 8,
+                    "alpha": 0.0,
+                    "grad_ratio": 0.95,
+                    "has_vanishing": False,
+                    "has_exploding": False,
+                },
+                "r0c1": {
+                    "stage": "BLENDING",
+                    "blueprint_id": "attention",
+                    "accuracy_delta": 4.2,
+                    "epochs_in_stage": 3,
+                    "alpha": 0.6,
+                    "grad_ratio": 0.88,
+                    "has_vanishing": False,
+                    "has_exploding": False,
+                },
+            },
+        }
+
+        agg.process_event(event)
+        snapshot = agg.get_snapshot()
+
+        env = snapshot.envs[1]
+
+        # Check first seed
+        assert "r0c0" in env.seeds
+        seed0 = env.seeds["r0c0"]
+        assert seed0.stage == "TRAINING"
+        assert seed0.blueprint_id == "conv_light"
+        assert seed0.accuracy_delta == 2.5
+        assert seed0.epochs_in_stage == 8
+
+        # Check second seed
+        assert "r0c1" in env.seeds
+        seed1 = env.seeds["r0c1"]
+        assert seed1.stage == "BLENDING"
+        assert seed1.accuracy_delta == 4.2
+        assert seed1.alpha == 0.6
+
+        # Check slot_ids are tracked
+        assert "r0c0" in snapshot.slot_ids
+        assert "r0c1" in snapshot.slot_ids
+
     def test_reward_computed_updates_env_state(self):
         """REWARD_COMPUTED should update per-env state."""
         agg = SanctumAggregator(num_envs=4)

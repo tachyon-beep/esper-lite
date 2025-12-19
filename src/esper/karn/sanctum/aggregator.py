@@ -326,6 +326,30 @@ class SanctumAggregator:
         else:
             env.epochs_since_improvement += 1
 
+        # Update per-seed telemetry from EPOCH_COMPLETED event
+        # This provides per-tick accuracy_delta updates for all active seeds
+        seeds_data = data.get("seeds", {})
+        for slot_id, seed_telemetry in seeds_data.items():
+            # Ensure seed exists
+            if slot_id not in env.seeds:
+                env.seeds[slot_id] = SeedState(slot_id=slot_id)
+            seed = env.seeds[slot_id]
+
+            # Update from telemetry
+            seed.stage = seed_telemetry.get("stage", seed.stage)
+            seed.blueprint_id = seed_telemetry.get("blueprint_id", seed.blueprint_id)
+            seed.accuracy_delta = seed_telemetry.get("accuracy_delta", seed.accuracy_delta)
+            seed.epochs_in_stage = seed_telemetry.get("epochs_in_stage", seed.epochs_in_stage)
+            seed.alpha = seed_telemetry.get("alpha", seed.alpha)
+            seed.grad_ratio = seed_telemetry.get("grad_ratio", seed.grad_ratio)
+            seed.has_vanishing = seed_telemetry.get("has_vanishing", seed.has_vanishing)
+            seed.has_exploding = seed_telemetry.get("has_exploding", seed.has_exploding)
+
+            # Track slot_ids dynamically
+            if slot_id not in self._slot_ids and slot_id != "unknown":
+                self._slot_ids.append(slot_id)
+                self._slot_ids.sort()
+
         env.last_update = datetime.now(timezone.utc)
 
     def _handle_ppo_update(self, event: "TelemetryEvent") -> None:
