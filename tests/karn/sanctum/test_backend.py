@@ -638,8 +638,7 @@ class TestSanctumAggregator:
         assert record.env_id == 0
         assert record.peak_accuracy == 85.0
         assert record.episode == 0  # The episode when best was achieved
-        # Absolute episode: batch 0 * 4 envs + env_id 0 + 1 = 1
-        assert record.absolute_episode == 1
+        assert record.epoch == 10  # The inner epoch when best was achieved
 
     def test_batch_completed_captures_multiple_envs_best_runs(self):
         """BATCH_COMPLETED should capture best_runs for ALL envs that improved.
@@ -679,11 +678,10 @@ class TestSanctumAggregator:
         assert snapshot.best_runs[1].env_id == 3  # 83%
         assert snapshot.best_runs[2].env_id == 0  # 80%
 
-        # Verify absolute episode calculation
-        # batch 0 * 8 envs + env_id + 1
-        assert snapshot.best_runs[0].absolute_episode == 8  # 0*8 + 7 + 1
-        assert snapshot.best_runs[1].absolute_episode == 4  # 0*8 + 3 + 1
-        assert snapshot.best_runs[2].absolute_episode == 1  # 0*8 + 0 + 1
+        # All records achieved best at inner_epoch=10
+        assert snapshot.best_runs[0].epoch == 10
+        assert snapshot.best_runs[1].epoch == 10
+        assert snapshot.best_runs[2].epoch == 10
 
     def test_best_runs_preserves_across_episodes(self):
         """Best runs from different episodes should NOT deduplicate each other.
@@ -731,11 +729,11 @@ class TestSanctumAggregator:
         # Sorted by peak accuracy descending
         assert snapshot.best_runs[0].peak_accuracy == 85.0
         assert snapshot.best_runs[0].episode == 1  # Second batch
-        assert snapshot.best_runs[0].absolute_episode == 5  # 1*4 + 0 + 1
+        assert snapshot.best_runs[0].epoch == 0  # No inner_epoch in event, defaults to 0
 
         assert snapshot.best_runs[1].peak_accuracy == 80.0
         assert snapshot.best_runs[1].episode == 0  # First batch
-        assert snapshot.best_runs[1].absolute_episode == 1  # 0*4 + 0 + 1
+        assert snapshot.best_runs[1].epoch == 0  # No inner_epoch in event, defaults to 0
 
     def test_ppo_update_skipped_does_not_update_tamiyo(self):
         """PPO_UPDATE_COMPLETED with skipped=True should not update Tamiyo state."""

@@ -354,3 +354,21 @@ class SanctumApp(App):
                 slot_ids=self._snapshot.slot_ids,
             )
         )
+
+    def on_tamiyo_brain_decision_pin_toggled(
+        self, event: TamiyoBrain.DecisionPinToggled
+    ) -> None:
+        """Handle click on decision panel to toggle pin status.
+
+        Args:
+            event: The pin toggle event with decision_id.
+        """
+        if self._backend is None:
+            return
+
+        # Toggle pin in aggregator
+        new_status = self._backend.toggle_decision_pin(event.decision_id)
+        self.log.info(f"Decision {event.decision_id} pin toggled: {new_status}")
+
+        # Refresh to show updated pin status
+        self._poll_and_refresh()

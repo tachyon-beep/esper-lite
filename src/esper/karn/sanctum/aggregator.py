@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import threading
 import time
+import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -218,6 +219,22 @@ class SanctumAggregator:
         with self._lock:
             return self._get_snapshot_unlocked()
 
+    def toggle_decision_pin(self, decision_id: str) -> bool:
+        """Toggle pin status for a decision by ID.
+
+        Args:
+            decision_id: The decision_id to toggle.
+
+        Returns:
+            New pin status (True if now pinned, False if unpinned).
+        """
+        with self._lock:
+            for decision in self._tamiyo.recent_decisions:
+                if decision.decision_id == decision_id:
+                    decision.pinned = not decision.pinned
+                    return decision.pinned
+        return False
+
     def _get_snapshot_unlocked(self) -> SanctumSnapshot:
         """Get snapshot without locking (caller must hold lock)."""
         now = time.time()
@@ -238,11 +255,18 @@ class SanctumAggregator:
         self._tamiyo.action_counts = aggregated_actions
         self._tamiyo.total_actions = total_actions
 
-        # Expire recent decisions older than 10 seconds, keep max 3
-        self._tamiyo.recent_decisions = [
-            d for d in self._tamiyo.recent_decisions
-            if (now_dt - d.timestamp).total_seconds() <= 10.0
-        ][:3]
+        # Stable carousel: keep decisions for 30s minimum, never remove pinned
+        # Only expire if we have > 3 and oldest unpinned is > 30s old
+        decisions = self._tamiyo.recent_decisions
+        if len(decisions) > 3:
+            # Find oldest unpinned decision that's > 30s old
+            for i in range(len(decisions) - 1, -1, -1):
+                d = decisions[i]
+                age = (now_dt - d.timestamp).total_seconds()
+                if not d.pinned and age > 30.0:
+                    decisions.pop(i)
+                    break
+            self._tamiyo.recent_decisions = decisions[:3]
 
         # Get focused env's reward components for the detail panel
         focused_rewards = RewardComponents()
@@ -544,8 +568,9 @@ class SanctumAggregator:
         # Capture decision snapshot
         # Only capture if we have decision data (action_confidence present)
         if "action_confidence" in data:
+            now_dt = event.timestamp or datetime.now(timezone.utc)
             decision = DecisionSnapshot(
-                timestamp=event.timestamp or datetime.now(timezone.utc),
+                timestamp=now_dt,
                 slot_states=data.get("slot_states", {}),
                 host_accuracy=data.get("host_accuracy", env.host_accuracy),
                 chosen_action=action_name,
@@ -554,12 +579,32 @@ class SanctumAggregator:
                 expected_value=data.get("value_estimate", 0.0),
                 actual_reward=total_reward,
                 alternatives=data.get("alternatives", []),
+                decision_id=str(uuid.uuid4())[:8],  # Short unique ID for pinning
             )
-            # Add to recent decisions list (newest first)
-            self._tamiyo.recent_decisions.insert(0, decision)
-            # Keep max 3 for display
-            if len(self._tamiyo.recent_decisions) > 3:
-                self._tamiyo.recent_decisions = self._tamiyo.recent_decisions[:3]
+
+            # Stable carousel: only add if we can make room
+            # - If < 3 decisions: always add
+            # - If 3 decisions: only replace oldest unpinned if > 30s old
+            decisions = self._tamiyo.recent_decisions
+            can_add = len(decisions) < 3
+
+            if not can_add and len(decisions) >= 3:
+                # Find oldest unpinned decision
+                for i in range(len(decisions) - 1, -1, -1):
+                    d = decisions[i]
+                    if not d.pinned:
+                        age = (now_dt - d.timestamp).total_seconds()
+                        if age > 30.0:
+                            # Remove oldest unpinned, make room
+                            decisions.pop(i)
+                            can_add = True
+                        break
+
+            if can_add:
+                decisions.insert(0, decision)
+                # Cap at 3 (shouldn't exceed, but safety)
+                self._tamiyo.recent_decisions = decisions[:3]
+
             # Also keep last_decision for backwards compatibility
             self._tamiyo.last_decision = decision
 
@@ -695,13 +740,12 @@ class SanctumAggregator:
         # Each episode can contribute records; we accumulate and keep top 10
         for env in self._envs.values():
             if env.best_accuracy > 0:
-                absolute_ep = env.best_accuracy_episode * self.num_envs + env.env_id + 1
                 record = BestRunRecord(
                     env_id=env.env_id,
                     episode=env.best_accuracy_episode,
                     peak_accuracy=env.best_accuracy,
                     final_accuracy=env.host_accuracy,
-                    absolute_episode=absolute_ep,
+                    epoch=env.best_accuracy_epoch,
                     seeds={k: SeedState(**v.__dict__) for k, v in env.best_seeds.items()},
                     growth_ratio=env.growth_ratio,
                 )

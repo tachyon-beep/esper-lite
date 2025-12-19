@@ -454,11 +454,14 @@ def main():
 
                 print(config.summary())
 
+                # Use task from config if specified, otherwise CLI arg
+                effective_task = config.task if config.task else args.task
+
                 from esper.simic.training import train_ppo_vectorized
                 train_ppo_vectorized(
                     device=args.device,
                     devices=args.devices,
-                    task=args.task,
+                    task=effective_task,
                     save_path=args.save,
                     resume_path=args.resume,
                     num_workers=args.num_workers,

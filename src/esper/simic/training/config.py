@@ -101,6 +101,10 @@ class TrainingConfig:
     # === Reproducibility ===
     seed: int = 42
 
+    # === Task selection ===
+    # If set, overrides CLI --task. Valid: "cifar10", "cifar10_deep", "cifar10_blind", "tinystories"
+    task: str | None = None
+
     def __post_init__(self):
         """Validate and set defaults."""
         # Auto-match chunk_length to max_epochs if not set
@@ -289,6 +293,13 @@ class TrainingConfig:
             validate_slot_ids(list(self.slots))
         except SlotIdError as e:
             raise ValueError(f"Invalid slot configuration: {e}") from e
+
+        # Validate task if specified
+        valid_tasks = {"cifar10", "cifar10_deep", "cifar10_blind", "tinystories"}
+        if self.task is not None and self.task not in valid_tasks:
+            raise ValueError(
+                f"Invalid task '{self.task}'. Valid options: {sorted(valid_tasks)}"
+            )
 
         if self.param_budget <= 0:
             raise ValueError("param_budget must be positive")

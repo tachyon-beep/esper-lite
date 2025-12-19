@@ -45,16 +45,17 @@ class Scoreboard(Static):
         """Initialize Scoreboard widget."""
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
+        self.border_title = "BEST RUNS"  # Top-left title (CSS provides border)
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         """Update widget with new snapshot data."""
         self._snapshot = snapshot
         self.refresh()
 
-    def render(self) -> Panel:
-        """Render the scoreboard panel."""
+    def render(self):
+        """Render the scoreboard content (border provided by CSS)."""
         if self._snapshot is None:
-            return Panel("No data", title="BEST RUNS", border_style="cyan")
+            return Text("No data", style="dim")
 
         # === AGGREGATE STATS ===
         stats_table = Table(show_header=False, box=None, padding=(0, 1), expand=True)
@@ -87,7 +88,7 @@ class Scoreboard(Static):
         # === LEADERBOARD ===
         lb_table = Table(show_header=True, box=None, padding=(0, 1), expand=True)
         lb_table.add_column("#", style="dim", width=3)
-        lb_table.add_column("@Ep", justify="right", width=4)
+        lb_table.add_column("@Step", justify="right", width=5)  # Epoch within episode
         lb_table.add_column("Peak", justify="right", width=6)
         lb_table.add_column("End", justify="right", width=5)
         lb_table.add_column("Size", justify="right", width=5)  # Growth ratio
@@ -171,24 +172,18 @@ class Scoreboard(Static):
 
                 lb_table.add_row(
                     rank,
-                    str(record.absolute_episode),
+                    str(record.epoch),
                     f"[bold green]{record.peak_accuracy:.1f}[/]",
                     f"[{cur_style}]{record.final_accuracy:.1f}[/]",
                     growth_str,
                     seeds_str,
                 )
 
-        # Combine stats and leaderboard
-        content = Group(
+        # Combine stats and leaderboard (no Panel wrapper - CSS provides border)
+        return Group(
             stats_table,
             Text("─" * 40, style="dim"),
             lb_table,
-        )
-
-        return Panel(
-            content,
-            title="[bold]BEST RUNS[/bold]",
-            border_style="cyan",
         )
 
     def _format_seeds(self, seeds: dict[str, any]) -> str:
@@ -214,7 +209,7 @@ class Scoreboard(Static):
             seed_parts = []
             for seed in seeds.values():
                 bp = seed.blueprint_id[:6] if seed.blueprint_id else "?"
-                tempo = seed.blend_tempo_epochs
+                tempo = seed.blend_tempo_epochs or 5  # Default to medium if None
                 tempo_char = "F" if tempo <= 3 else ("M" if tempo <= 5 else "S")
                 if seed.stage == "FOSSILIZED":
                     seed_parts.append(f"[green]{bp}:{tempo_char}[/]")

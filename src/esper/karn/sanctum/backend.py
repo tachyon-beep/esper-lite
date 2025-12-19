@@ -80,3 +80,14 @@ class SanctumBackend:
         # Add event count for debugging
         snapshot.total_events_received = self._event_count
         return snapshot
+
+    def toggle_decision_pin(self, decision_id: str) -> bool:
+        """Toggle pin status for a decision.
+
+        Args:
+            decision_id: ID of the decision to toggle.
+
+        Returns:
+            New pin status (True if pinned, False if unpinned).
+        """
+        return self._aggregator.toggle_decision_pin(decision_id)

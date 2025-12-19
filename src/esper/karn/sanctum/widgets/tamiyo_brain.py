@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
+from textual.message import Message
 from textual.widgets import Static
 
 from esper.karn.constants import TUIThresholds
@@ -26,19 +27,61 @@ class TamiyoBrain(Static):
     New two-section layout:
     1. LEARNING VITALS - Action distribution bar + gauges (entropy, value loss, advantage)
     2. LAST DECISION - What Tamiyo saw, chose, and got
+
+    Click on a decision panel to pin it (prevents replacement).
     """
+
+    class DecisionPinToggled(Message):
+        """Posted when user clicks a decision to toggle pin status."""
+
+        def __init__(self, decision_id: str) -> None:
+            super().__init__()
+            self.decision_id = decision_id
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
+        self._decision_ids: list[str] = []  # IDs of currently displayed decisions
+        self.border_title = "TAMIYO"  # Top-left title like EventLog
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         self._snapshot = snapshot
         self.refresh()
 
-    def render(self) -> Panel:
+    def on_click(self, event) -> None:
+        """Handle click to toggle decision pin.
+
+        Decisions are in the bottom section of the widget.
+        Each decision panel is ~5 lines tall (border + 3 content + border).
+        We estimate which decision was clicked based on Y coordinate.
+        """
+        if not self._decision_ids:
+            return
+
+        # The RECENT DECISIONS section starts after LEARNING VITALS
+        # LEARNING VITALS is roughly: title(1) + action bar(1) + gauges(3) + padding(1) = 6 lines
+        # Then RECENT DECISIONS title(1), then each decision panel(~5 lines)
+        vitals_height = 7  # Approximate height of Learning Vitals section
+        decision_height = 5  # Each decision panel height
+
+        y = event.y
+        if y < vitals_height:
+            return  # Click was in Learning Vitals, not decisions
+
+        # Calculate which decision was clicked
+        decision_y = y - vitals_height
+        decision_index = decision_y // decision_height
+
+        if 0 <= decision_index < len(self._decision_ids):
+            decision_id = self._decision_ids[decision_index]
+            self.post_message(self.DecisionPinToggled(decision_id))
+
+    def render(self):
+        """Render Tamiyo content (border provided by CSS, not Rich Panel)."""
+        from rich.console import Group
+
         if self._snapshot is None:
-            return Panel("No data", title="TAMIYO", border_style="magenta")
+            return Text("No data", style="dim")
 
         if not self._snapshot.tamiyo.ppo_data_received:
             waiting_text = Text(justify="center")
@@ -47,11 +90,7 @@ class TamiyoBrain(Static):
                 f"Progress: {self._snapshot.current_epoch}/{self._snapshot.max_epochs} epochs",
                 style="cyan",
             )
-            return Panel(
-                waiting_text,
-                title="[bold magenta]TAMIYO[/bold magenta]",
-                border_style="magenta dim",
-            )
+            return waiting_text
 
         # Main layout: two sections stacked
         main_table = Table.grid(expand=True)
@@ -65,11 +104,7 @@ class TamiyoBrain(Static):
         decisions_panel = self._render_recent_decisions()
         main_table.add_row(decisions_panel)
 
-        return Panel(
-            main_table,
-            title="[bold magenta]TAMIYO[/bold magenta]",
-            border_style="magenta",
-        )
+        return main_table
 
     def _render_learning_vitals(self) -> Panel:
         """Render Learning Vitals section with action bar and gauges."""
@@ -112,14 +147,14 @@ class TamiyoBrain(Static):
         total = tamiyo.total_actions
 
         if total == 0:
-            return Text("Actions: [no data]", style="dim")
+            return Text("[no data]", style="dim")
 
         # Calculate percentages
         pcts = {a: (c / total) * 100 for a, c in tamiyo.action_counts.items()}
 
-        # Build stacked bar (width 40 chars)
-        bar_width = 40
-        bar = Text("Actions: [")
+        # Build stacked bar (width 25 chars for narrower display)
+        bar_width = 25
+        bar = Text("[")
 
         # Color mapping
         colors = {
@@ -136,13 +171,14 @@ class TamiyoBrain(Static):
             if width > 0:
                 bar.append("▓" * width, style=colors.get(action, "white"))
 
-        bar.append("]")
+        bar.append("] ")
 
-        # Add legend
-        bar.append("  ")
-        for action in ["GERMINATE", "WAIT", "FOSSILIZE"]:
-            if pcts.get(action, 0) > 0:
-                bar.append(f"{action[:4]} {pcts[action]:.0f}%  ", style=colors.get(action, "white"))
+        # Compact legend: G=50 W=25 F=25
+        abbrevs = {"GERMINATE": "G", "WAIT": "W", "FOSSILIZE": "F", "CULL": "C"}
+        for action in ["GERMINATE", "WAIT", "FOSSILIZE", "CULL"]:
+            pct = pcts.get(action, 0)
+            if pct > 0:
+                bar.append(f"{abbrevs[action]}={pct:.0f} ", style=colors.get(action, "white"))
 
         return bar
 
@@ -196,7 +232,13 @@ class TamiyoBrain(Static):
             return "Needs improvement"
 
     def _render_recent_decisions(self) -> Panel:
-        """Render Recent Decisions section (up to 3 full decision panels, each visible for 10s minimum)."""
+        """Render Recent Decisions section (up to 3, each visible for 30s minimum).
+
+        Stable carousel behavior:
+        - Each decision stays visible for at least 30 seconds
+        - Only the oldest unpinned decision can be replaced
+        - Click on a decision to pin it (📌 shown in title)
+        """
         from datetime import datetime, timezone
         from rich.console import Group
 
@@ -205,13 +247,16 @@ class TamiyoBrain(Static):
 
         if not decisions:
             return Panel(
-                Text("No decisions captured yet", style="dim italic"),
+                Text("No decisions captured yet\n[dim]Click to pin decisions[/dim]", style="dim italic"),
                 title="RECENT DECISIONS",
                 border_style="dim",
             )
 
         now = datetime.now(timezone.utc)
         decision_panels = []
+
+        # Store decision IDs for click handling
+        self._decision_ids = [d.decision_id for d in decisions[:3]]
 
         for i, decision in enumerate(decisions[:3]):
             age = (now - decision.timestamp).total_seconds()
@@ -263,9 +308,14 @@ class TamiyoBrain(Static):
                 result_line.append("pending...", style="dim italic")
             content.add_row(result_line)
 
-            decision_panels.append(Panel(content, title=f"DECISION {i+1} ({age_str})", border_style="dim"))
+            # Show pinned status in title
+            pin_icon = "📌 " if decision.pinned else ""
+            title = f"{pin_icon}DECISION {i+1} ({age_str})"
+            border = "cyan" if decision.pinned else "dim"
 
-        return Panel(Group(*decision_panels), title=f"RECENT DECISIONS ({len(decisions)})", border_style="dim")
+            decision_panels.append(Panel(content, title=title, border_style=border))
+
+        return Panel(Group(*decision_panels), title=f"RECENT DECISIONS ({len(decisions)}) [dim]click to pin[/dim]", border_style="dim")
 
     # ========================================================================
     # Legacy status helpers (kept for backward compatibility with existing tests)

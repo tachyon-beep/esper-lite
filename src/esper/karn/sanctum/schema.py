@@ -516,6 +516,11 @@ class DecisionSnapshot:
 
     Captures what Tamiyo saw, what she chose, and the outcome.
     Used for the "Last Decision" section of TamiyoBrain.
+
+    Stable carousel behavior:
+    - Each decision stays visible for at least 30 seconds
+    - Only the oldest unpinned decision can be replaced
+    - Pinned decisions never get replaced
     """
     timestamp: datetime
     slot_states: dict[str, str]  # slot_id -> "Training 12%" or "Empty"
@@ -526,6 +531,10 @@ class DecisionSnapshot:
     expected_value: float  # Value estimate before action
     actual_reward: float | None  # Actual reward received (None if pending)
     alternatives: list[tuple[str, float]]  # [(action_name, probability), ...]
+    # Unique ID for click-to-pin targeting
+    decision_id: str = ""
+    # Pinned decisions never get replaced
+    pinned: bool = False
 
 
 @dataclass
@@ -554,10 +563,10 @@ class BestRunRecord:
     Reference: tui.py lines 103-114 (BestRunRecord dataclass)
     """
     env_id: int
-    episode: int  # Batch number (0-indexed)
+    episode: int  # Batch/episode number (0-indexed)
     peak_accuracy: float  # Best accuracy achieved during this run
     final_accuracy: float  # Accuracy at the end of the batch
-    absolute_episode: int = 0  # Human-readable: episode * num_envs + env_id + 1
+    epoch: int = 0  # Epoch within episode when best was achieved
     seeds: dict[str, SeedState] = field(default_factory=dict)  # Seeds at peak
     growth_ratio: float = 1.0  # Model size ratio: (host + fossilized) / host
 

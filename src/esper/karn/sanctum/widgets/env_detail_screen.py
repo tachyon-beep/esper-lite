@@ -107,7 +107,7 @@ class SeedCard(Static):
         lines.append(Text(f"Blueprint: {blueprint}", style="white"))
 
         # Parameters
-        if seed.seed_params > 0:
+        if seed.seed_params and seed.seed_params > 0:
             if seed.seed_params >= 1_000_000:
                 params_str = f"{seed.seed_params / 1_000_000:.1f}M"
             elif seed.seed_params >= 1_000:
@@ -117,12 +117,12 @@ class SeedCard(Static):
             lines.append(Text(f"Params: {params_str}", style="dim"))
 
         # Alpha (blending progress)
-        if seed.alpha > 0 or seed.stage in ("BLENDING", "PROBATIONARY"):
+        if (seed.alpha and seed.alpha > 0) or seed.stage in ("BLENDING", "PROBATIONARY"):
             alpha_bar = self._make_alpha_bar(seed.alpha)
             lines.append(Text(f"Alpha: {seed.alpha:.2f} {alpha_bar}"))
 
         # Blend tempo (shown during BLENDING and for FOSSILIZED to show how they were blended)
-        if seed.stage in ("BLENDING", "FOSSILIZED"):
+        if seed.stage in ("BLENDING", "FOSSILIZED") and seed.blend_tempo_epochs is not None:
             tempo = seed.blend_tempo_epochs
             tempo_name = "FAST" if tempo <= 3 else ("STANDARD" if tempo <= 5 else "SLOW")
             tempo_arrows = "▸▸▸" if tempo <= 3 else ("▸▸" if tempo <= 5 else "▸")
@@ -136,7 +136,7 @@ class SeedCard(Static):
         # TRAINING/GERMINATED seeds have alpha=0 and cannot affect output
         if seed.stage in ("TRAINING", "GERMINATED"):
             lines.append(Text("Acc Δ: 0.0 (learning)", style="dim italic"))
-        elif seed.accuracy_delta != 0:
+        elif seed.accuracy_delta is not None and seed.accuracy_delta != 0:
             delta_style = "green" if seed.accuracy_delta > 0 else "red"
             lines.append(Text(f"Acc Δ: {seed.accuracy_delta:+.2f}%", style=delta_style))
         else:
@@ -148,7 +148,7 @@ class SeedCard(Static):
             grad_text.append("▲ EXPLODING", style="bold red")
         elif seed.has_vanishing:
             grad_text.append("▼ VANISHING", style="bold yellow")
-        elif seed.grad_ratio > 0:
+        elif seed.grad_ratio is not None and seed.grad_ratio > 0:
             grad_text.append(f"ratio={seed.grad_ratio:.2f}", style="green")
         else:
             grad_text.append("OK", style="green")
@@ -381,10 +381,11 @@ class EnvDetailScreen(ModalScreen[None]):
         header.append("  │  ")
 
         # Epochs since improvement
-        if env.epochs_since_improvement > 0:
-            stale_style = "red" if env.epochs_since_improvement > 10 else "yellow"
+        epochs_stale = env.epochs_since_improvement or 0
+        if epochs_stale > 0:
+            stale_style = "red" if epochs_stale > 10 else "yellow"
             header.append(
-                f"Stale: {env.epochs_since_improvement} epochs",
+                f"Stale: {epochs_stale} epochs",
                 style=stale_style,
             )
         else:
@@ -401,12 +402,13 @@ class EnvDetailScreen(ModalScreen[None]):
                 return f"{p / 1_000:.1f}K"
             return str(p)
 
-        host_str = _format_params(env.host_params)
-        seed_str = _format_params(env.fossilized_params)
-        growth = env.growth_ratio
+        host_str = _format_params(env.host_params or 0)
+        fossilized = env.fossilized_params or 0
+        seed_str = _format_params(fossilized)
+        growth = env.growth_ratio or 1.0
 
         header.append(f"Host: {host_str}", style="dim")
-        header.append(f"  +Seed: {seed_str}", style="green" if env.fossilized_params > 0 else "dim")
+        header.append(f"  +Seed: {seed_str}", style="green" if fossilized > 0 else "dim")
 
         # Growth ratio with color coding
         # 1.0x = no growth (dim), 1.0-1.2x = normal (green), >1.2x = significant (yellow)
@@ -447,20 +449,22 @@ class EnvDetailScreen(ModalScreen[None]):
         table.add_row("Seed Counts", seed_counts)
 
         # Fossilized params
-        if env.fossilized_params > 0:
-            if env.fossilized_params >= 1_000_000:
-                params_str = f"{env.fossilized_params / 1_000_000:.2f}M"
-            elif env.fossilized_params >= 1_000:
-                params_str = f"{env.fossilized_params / 1_000:.1f}K"
+        foss_params = env.fossilized_params or 0
+        if foss_params > 0:
+            if foss_params >= 1_000_000:
+                params_str = f"{foss_params / 1_000_000:.2f}M"
+            elif foss_params >= 1_000:
+                params_str = f"{foss_params / 1_000:.1f}K"
             else:
-                params_str = str(env.fossilized_params)
+                params_str = str(foss_params)
             table.add_row("Fossilized Params", params_str)
 
         # Action distribution
-        if env.total_actions > 0:
+        total_actions = env.total_actions or 0
+        if total_actions > 0:
             action_text = Text()
             for action, count in sorted(env.action_counts.items()):
-                pct = (count / env.total_actions) * 100
+                pct = (count / total_actions) * 100
                 # Color coding by action type
                 action_colors = {
                     "WAIT": "dim",
@@ -475,15 +479,15 @@ class EnvDetailScreen(ModalScreen[None]):
 
         # Reward components
         rc = env.reward_components
-        if rc.total != 0:
+        if rc.total is not None and rc.total != 0:
             reward_text = Text()
             reward_text.append(f"Total: {rc.total:+.3f}", style="bold")
-            if rc.base_acc_delta != 0:
+            if rc.base_acc_delta is not None and rc.base_acc_delta != 0:
                 style = "green" if rc.base_acc_delta > 0 else "red"
                 reward_text.append(f"  ΔAcc: {rc.base_acc_delta:+.3f}", style=style)
-            if rc.compute_rent != 0:
+            if rc.compute_rent is not None and rc.compute_rent != 0:
                 reward_text.append(f"  Rent: {rc.compute_rent:.3f}", style="red")
-            if rc.bounded_attribution != 0:
+            if rc.bounded_attribution is not None and rc.bounded_attribution != 0:
                 style = "green" if rc.bounded_attribution > 0 else "red"
                 reward_text.append(f"  Attr: {rc.bounded_attribution:+.3f}", style=style)
             table.add_row("Reward Breakdown", reward_text)

@@ -192,6 +192,10 @@ This project is a deep reinforcement learning system built on PyTorch. Given the
 - Working on Karn TUI or Overwatch dashboards → `elspeth-ux-specialist`
 - Fixing flaky tests or improving test coverage → `ordis-quality-engineering`
 
+### Karn MCP Server
+
+The `esper-karn` MCP server provides SQL access to training telemetry. Use `mcp__esper-karn__list_views` to see available views (`runs`, `epochs`, `ppo_updates`, `seed_lifecycle`, `rewards`, `anomalies`), then query with `mcp__esper-karn__query_sql`. Useful for analyzing training runs, debugging PPO health, and tracking seed fossilization rates.
+
 ### Package Manager: UV
 
 This project uses **UV** as the preferred package manager and Python executor.

@@ -1,4 +1,5 @@
 {
+  "task": "cifar10_blind",
   "n_episodes": 400,
   "n_envs": 24,
   "max_epochs": 75,
