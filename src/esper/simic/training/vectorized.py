@@ -1765,6 +1765,17 @@ def train_ppo_vectorized(
             # head_log_probs is dict of tensors {key: [batch]}
             # Keep as-is for tamiyo buffer storage
 
+            # Batch compute mask stats for telemetry (eliminates 16 .item() syncs)
+            # "masked" means not all actions are valid for this head
+            if hub and use_telemetry:
+                masked_batch = {
+                    key: ~masks_batch[key].all(dim=-1)  # [num_envs] bool tensor
+                    for key in HEAD_NAMES
+                }
+                masked_cpu = {key: masked_batch[key].cpu().numpy() for key in HEAD_NAMES}
+            else:
+                masked_cpu = None
+
             # Execute actions and store transitions for each environment
             for env_idx, env_state in enumerate(env_states):
                 model = env_state.model
@@ -1994,12 +2005,8 @@ def train_ppo_vectorized(
                 if hub and use_telemetry and (
                     telemetry_config is None or telemetry_config.should_collect("ops_normal")
                 ):
-                    masked_flags = {
-                        "slot": not bool(masks_batch["slot"][env_idx].all().item()),
-                        "blueprint": not bool(masks_batch["blueprint"][env_idx].all().item()),
-                        "blend": not bool(masks_batch["blend"][env_idx].all().item()),
-                        "op": not bool(masks_batch["op"][env_idx].all().item()),
-                    }
+                    # Use pre-computed batched mask stats (0 GPU syncs - already on CPU)
+                    masked_flags = {key: bool(masked_cpu[key][env_idx]) for key in HEAD_NAMES}
                     for head, masked in masked_flags.items():
                         mask_total[head] += 1
                         if masked:
