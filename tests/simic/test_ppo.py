@@ -50,25 +50,26 @@ def test_kl_early_stopping_triggers():
                 "blend": torch.ones(1, 3, dtype=torch.bool, device=agent.device),
                 "op": torch.ones(1, 4, dtype=torch.bool, device=agent.device),  # 4 lifecycle ops
             }
-            actions, log_probs, value, hidden = agent._base_network.get_action(
+            result = agent._base_network.get_action(
                 state, hidden,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
                 blend_mask=masks["blend"],
                 op_mask=masks["op"],
             )
+            hidden = result.hidden  # Update hidden for next step
             agent.buffer.add(
                 env_id=env_id,
                 state=state.squeeze(0),
-                slot_action=actions["slot"].item(),
-                blueprint_action=actions["blueprint"].item(),
-                blend_action=actions["blend"].item(),
-                op_action=actions["op"].item(),
-                slot_log_prob=log_probs["slot"].item(),
-                blueprint_log_prob=log_probs["blueprint"].item(),
-                blend_log_prob=log_probs["blend"].item(),
-                op_log_prob=log_probs["op"].item(),
-                value=value.item(),
+                slot_action=result.actions["slot"].item(),
+                blueprint_action=result.actions["blueprint"].item(),
+                blend_action=result.actions["blend"].item(),
+                op_action=result.actions["op"].item(),
+                slot_log_prob=result.log_probs["slot"].item(),
+                blueprint_log_prob=result.log_probs["blueprint"].item(),
+                blend_log_prob=result.log_probs["blend"].item(),
+                op_log_prob=result.log_probs["op"].item(),
+                value=result.values.item(),
                 reward=1.0,
                 done=step == 4,
                 truncated=False,

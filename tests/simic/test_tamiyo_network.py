@@ -103,22 +103,22 @@ class TestFactoredRecurrentActorCritic:
         net = FactoredRecurrentActorCritic(state_dim=50)
         state = torch.randn(2, 50)  # [batch, state_dim]
 
-        actions, log_probs, values, hidden = net.get_action(state)
+        result = net.get_action(state)
 
         # Should have per-head actions and log_probs
-        assert "slot" in actions
-        assert "blueprint" in actions
-        assert "blend" in actions
-        assert "op" in actions
+        assert "slot" in result.actions
+        assert "blueprint" in result.actions
+        assert "blend" in result.actions
+        assert "op" in result.actions
 
-        assert "slot" in log_probs
-        assert "blueprint" in log_probs
-        assert "blend" in log_probs
-        assert "op" in log_probs
+        assert "slot" in result.log_probs
+        assert "blueprint" in result.log_probs
+        assert "blend" in result.log_probs
+        assert "op" in result.log_probs
 
         # Actions should be batch-sized
-        assert actions["slot"].shape == (2,)
-        assert log_probs["slot"].shape == (2,)
+        assert result.actions["slot"].shape == (2,)
+        assert result.log_probs["slot"].shape == (2,)
 
     def test_entropy_normalized_per_head(self):
         """Entropy should be normalized by max entropy for each head."""
@@ -144,11 +144,11 @@ class TestFactoredRecurrentActorCritic:
         state = torch.randn(1, 50)
 
         # Run multiple times - deterministic should be consistent
-        actions1, _, _, _ = net.get_action(state, deterministic=True)
-        actions2, _, _, _ = net.get_action(state, deterministic=True)
+        result1 = net.get_action(state, deterministic=True)
+        result2 = net.get_action(state, deterministic=True)
 
         for key in ["slot", "blueprint", "blend", "op"]:
-            assert actions1[key] == actions2[key], f"{key} action not deterministic"
+            assert result1.actions[key] == result2.actions[key], f"{key} action not deterministic"
 
 
 def test_masking_produces_valid_softmax():

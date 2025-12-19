@@ -41,6 +41,7 @@ _logger = logging.getLogger(__name__)
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.cuda.amp as torch_amp
 
 # NOTE: get_task_spec imported lazily inside train_ppo_vectorized to avoid circular import:
@@ -446,7 +447,7 @@ def _compute_batched_bootstrap_values(
 
     # Single forward pass
     with torch.inference_mode():
-        _, _, values_tensor, _ = agent.network.get_action(
+        result = agent.network.get_action(
             features_normalized,
             hidden=(hidden_h, hidden_c),
             slot_mask=masks_batch["slot"],
@@ -456,7 +457,7 @@ def _compute_batched_bootstrap_values(
             deterministic=True,
         )
 
-    return values_tensor.tolist()
+    return result.values.tolist()
 
 
 def train_ppo_vectorized(
@@ -1817,8 +1818,9 @@ def train_ppo_vectorized(
                     env_c = init_c[:, env_idx:env_idx+1, :].clone()
                     pre_step_hiddens.append((env_h, env_c))
 
-            # get_action returns per-head log_probs as dict
-            actions_dict, head_log_probs, values_tensor, new_hidden = agent.network.get_action(
+            # get_action returns GetActionResult dataclass
+            # Request op_logits when telemetry is enabled for Decision Snapshot
+            action_result = agent.network.get_action(
                 states_batch_normalized,
                 hidden=batched_hidden,
                 slot_mask=masks_batch["slot"],
@@ -1826,7 +1828,13 @@ def train_ppo_vectorized(
                 blend_mask=masks_batch["blend"],
                 op_mask=masks_batch["op"],
                 deterministic=False,
+                return_op_logits=use_telemetry,
             )
+            actions_dict = action_result.actions
+            head_log_probs = action_result.log_probs
+            values_tensor = action_result.values
+            new_hidden = action_result.hidden
+            # op_logits available via action_result.op_logits when use_telemetry=True
 
             # Unbatch new hidden states back to per-env
             # new_hidden is (h, c) each [num_layers, batch, hidden_dim]
@@ -2137,6 +2145,44 @@ def train_ppo_vectorized(
                 # Emit reward telemetry if collecting (after action execution so we have action_success)
                 if emit_reward_components_event and reward_components is not None:
                     reward_components.action_success = action_success
+
+                    # Build Decision Snapshot fields
+                    # action_confidence: P(chosen_op) = exp(log_prob)
+                    action_confidence = float(
+                        head_log_probs["op"][env_idx].exp().item()
+                    )
+
+                    # value_estimate: V(s_t) from critic
+                    value_estimate = float(value)
+
+                    # slot_states: {slot_id: "Stage N%"} for each slot
+                    slot_states_dict: dict[str, str] = {}
+                    for slot_id in slots:
+                        if model.has_active_seed_in_slot(slot_id):
+                            slot_state = model.seed_slots[slot_id].state
+                            if slot_state is not None:
+                                stage_name = slot_state.stage.name.title()
+                                progress = slot_state.metrics.epochs_in_stage if slot_state.metrics else 0
+                                slot_states_dict[slot_id] = f"{stage_name} {progress}ep"
+                            else:
+                                slot_states_dict[slot_id] = "Empty"
+                        else:
+                            slot_states_dict[slot_id] = "Empty"
+
+                    # alternatives: top-2 ops excluding chosen (if op_logits available)
+                    alternatives: list[tuple[str, float]] = []
+                    if action_result.op_logits is not None:
+                        op_probs = F.softmax(action_result.op_logits[env_idx], dim=-1)
+                        # Zero out chosen action to find alternatives
+                        alt_probs = op_probs.clone()
+                        alt_probs[op_idx] = 0.0
+                        top_probs, top_indices = alt_probs.topk(k=min(2, len(alt_probs)), dim=-1)
+                        alternatives = [
+                            (OP_NAMES[int(idx)], float(prob))
+                            for idx, prob in zip(top_indices.tolist(), top_probs.tolist())
+                            if prob > 0.0
+                        ]
+
                     hub.emit(TelemetryEvent(
                         event_type=TelemetryEventType.REWARD_COMPUTED,
                         seed_id=seed_state.seed_id if seed_state else None,
@@ -2146,6 +2192,11 @@ def train_ppo_vectorized(
                             "episode": episodes_completed + env_idx,
                             "ab_group": env_reward_configs[env_idx].reward_mode.value,
                             **reward_components.to_dict(),
+                            # Decision Snapshot fields
+                            "action_confidence": action_confidence,
+                            "value_estimate": value_estimate,
+                            "slot_states": slot_states_dict,
+                            "alternatives": alternatives,
                         },
                         severity="debug",
                     ))

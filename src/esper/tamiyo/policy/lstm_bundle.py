@@ -90,14 +90,12 @@ class LSTMPolicyBundle:
             deterministic=deterministic,
         )
 
-        # Network returns (actions, log_probs, value, hidden)
-        actions, log_probs, value, new_hidden = result
-
+        # Network returns GetActionResult dataclass
         return ActionResult(
-            action=actions,
-            log_prob=log_probs,
-            value=value,
-            hidden=new_hidden,
+            action=result.actions,
+            log_prob=result.log_probs,
+            value=result.values,
+            hidden=result.hidden,
         )
 
     def forward(
