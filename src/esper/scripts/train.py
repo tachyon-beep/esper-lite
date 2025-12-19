@@ -70,6 +70,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Launch Overwatch TUI for real-time monitoring (replaces Rich TUI)",
     )
+    telemetry_parent.add_argument(
+        "--sanctum",
+        action="store_true",
+        help="Launch Sanctum TUI for developer debugging (replaces Rich TUI, mutually exclusive with --overwatch)",
+    )
 
     subparsers = parser.add_subparsers(dest="algorithm", required=True)
 
@@ -215,13 +220,18 @@ def main():
     # alongside training logs.
     hub = get_hub()
 
+    # Check mutual exclusion
+    if args.overwatch and args.sanctum:
+        parser.error("--overwatch and --sanctum are mutually exclusive. Choose one.")
+
     # Determine UI mode
     import sys
     tui_backend = None
     is_tty = sys.stdout.isatty()
     use_overwatch = args.overwatch
-    # Overwatch replaces Rich TUI (mutually exclusive)
-    use_tui = not args.no_tui and is_tty and not use_overwatch
+    use_sanctum = args.sanctum
+    # Overwatch and Sanctum replace Rich TUI (mutually exclusive with each other)
+    use_tui = not args.no_tui and is_tty and not use_overwatch and not use_sanctum
 
     if not is_tty and not args.no_tui:
         print("Non-TTY detected, using console output instead of TUI")
@@ -233,8 +243,8 @@ def main():
         tui_backend = TUIOutput(force_layout=layout)
         hub.add_backend(tui_backend)
         # TUI auto-starts on first event
-    elif not use_overwatch:
-        # Only add console if NOT using either TUI or Overwatch
+    elif not use_overwatch and not use_sanctum:
+        # Only add console if NOT using any TUI (Rich TUI, Overwatch, or Sanctum)
         hub.add_backend(ConsoleOutput(min_severity=console_min_severity))
 
     # Add file output if requested
@@ -347,6 +357,37 @@ def main():
         overwatch_backend = OverwatchBackend(num_envs=num_envs)
         hub.add_backend(overwatch_backend)
 
+    # Setup Sanctum backend if requested
+    sanctum_backend = None
+    if use_sanctum:
+        from esper.karn.sanctum import SanctumBackend
+        from esper.leyline import DEFAULT_N_ENVS
+
+        # Determine num_envs for Sanctum display (same logic as Overwatch)
+        if args.algorithm == "ppo":
+            # For PPO, get from config
+            if args.config_json:
+                temp_config = TrainingConfig.from_json_path(args.config_json)
+            else:
+                if args.preset == "cifar10":
+                    temp_config = TrainingConfig.for_cifar10()
+                elif args.preset == "cifar10_deep":
+                    temp_config = TrainingConfig.for_cifar10_deep()
+                elif args.preset == "cifar10_blind":
+                    temp_config = TrainingConfig.for_cifar10_blind()
+                else:
+                    temp_config = TrainingConfig.for_tinystories()
+            num_envs = temp_config.n_envs
+        elif args.algorithm == "heuristic":
+            # For heuristic, use number of slots
+            num_envs = len(args.slots)
+        else:
+            # Fallback for unknown algorithms
+            num_envs = DEFAULT_N_ENVS
+
+        sanctum_backend = SanctumBackend(num_envs=num_envs)
+        hub.add_backend(sanctum_backend)
+
     # Add Karn research telemetry collector
     # KarnCollector captures events into typed store for research analytics
     from esper.karn import get_collector
@@ -419,7 +460,7 @@ def main():
                     gpu_preload=args.gpu_preload,
                     telemetry_config=telemetry_config,
                     telemetry_lifecycle_only=args.telemetry_lifecycle_only,
-                    quiet_analytics=use_tui or use_overwatch,
+                    quiet_analytics=use_tui or use_overwatch or use_sanctum,
                     **config.to_train_kwargs(),
                 )
         except Exception:
@@ -438,6 +479,17 @@ def main():
 
             # Run Overwatch TUI in main thread (blocks until user quits)
             app = OverwatchApp(backend=overwatch_backend)
+            app.run()
+        elif use_sanctum:
+            # Sanctum mode: run training in background thread, Sanctum controls terminal
+            import threading
+            from esper.karn.sanctum import SanctumApp
+
+            training_thread = threading.Thread(target=run_training, daemon=True)
+            training_thread.start()
+
+            # Run Sanctum TUI in main thread (blocks until user quits)
+            app = SanctumApp(backend=sanctum_backend, num_envs=num_envs)
             app.run()
         else:
             # Normal mode: run training directly in main thread
