@@ -90,13 +90,15 @@ class SharedBatchIterator:
         """
         inputs, targets = next(self._iter)
 
-        # Split into per-env chunks
-        input_chunks = inputs.chunk(self.n_envs)
-        target_chunks = targets.chunk(self.n_envs)
+        # Split into per-env chunks (tensor_split preserves env count on partial batches)
+        input_chunks = torch.tensor_split(inputs, self.n_envs)
+        target_chunks = torch.tensor_split(targets, self.n_envs)
 
         # Move each chunk to its env's device (async)
         batches = []
         for i, (inp, tgt) in enumerate(zip(input_chunks, target_chunks)):
+            if inp.numel() == 0:
+                break
             device = self.env_devices[i % len(self.env_devices)]
             batches.append((
                 inp.to(device, non_blocking=True),
@@ -264,8 +266,8 @@ class SharedGPUBatchIterator:
 
             # Split into per-env chunks for environments on this device
             n_envs_on_device = len(env_indices)
-            input_chunks = inputs.chunk(n_envs_on_device)
-            target_chunks = targets.chunk(n_envs_on_device)
+            input_chunks = torch.tensor_split(inputs, n_envs_on_device)
+            target_chunks = torch.tensor_split(targets, n_envs_on_device)
 
             # Assign to correct environment indices
             for local_idx, (inp, tgt) in enumerate(zip(input_chunks, target_chunks)):
@@ -273,7 +275,7 @@ class SharedGPUBatchIterator:
                 result[global_env_idx] = (inp, tgt)
 
         # Type narrowing - all slots should be filled
-        return [(inp, tgt) for inp, tgt in result if inp is not None]
+        return [(inp, tgt) for inp, tgt in result if inp is not None and inp.numel() > 0]
 
 
 def load_cifar10_gpu(

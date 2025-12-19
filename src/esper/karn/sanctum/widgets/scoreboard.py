@@ -98,7 +98,42 @@ class Scoreboard(Static):
         best_runs = getattr(self._snapshot, 'best_runs', [])
 
         if not best_runs:
-            lb_table.add_row("-", "-", "-", "-", "-")
+            # Debug: Show why best_runs is empty with diagnostic info
+            all_envs = list(self._snapshot.envs.values())
+            envs_with_best = [e for e in all_envs if e.best_accuracy > 0]
+            batch_count = self._snapshot.current_batch
+            ep_count = self._snapshot.current_episode
+            total_events = self._snapshot.total_events_received
+
+            if total_events == 0:
+                lb_table.add_row("[dim]no events received yet[/]", "", "", "", "")
+            elif batch_count == 0 and ep_count == 0:
+                lb_table.add_row("[dim]waiting for first batch...[/]", "", "", "", "")
+            elif not envs_with_best:
+                lb_table.add_row(f"[dim]0/{len(all_envs)} envs have best[/]", "", "", "", "")
+            else:
+                # best_accuracy exists but best_runs empty - detailed diagnostic
+                # Show which episode envs think they improved in vs current
+                sample_env = envs_with_best[0] if envs_with_best else None
+                if sample_env:
+                    lb_table.add_row(
+                        f"[yellow]BUG: {len(envs_with_best)} envs[/]",
+                        f"[dim]cur_ep={ep_count}[/]",
+                        f"[dim]env0.best_ep={sample_env.best_accuracy_episode}[/]",
+                        "",
+                        ""
+                    )
+                    # Show if there's an episode mismatch
+                    if sample_env.best_accuracy_episode != ep_count:
+                        lb_table.add_row(
+                            "[red]MISMATCH[/]",
+                            "",
+                            f"[dim]{sample_env.best_accuracy_episode}!={ep_count}[/]",
+                            "",
+                            ""
+                        )
+                else:
+                    lb_table.add_row("[dim]diagnostic failed[/]", "", "", "", "")
         else:
             for i, record in enumerate(best_runs):
                 # Rank with medal or number
@@ -144,11 +179,12 @@ class Scoreboard(Static):
         )
 
     def _format_seeds(self, seeds: dict[str, any]) -> str:
-        """Format seeds at best accuracy.
+        """Format seeds at best accuracy with blend tempo.
 
-        ≤3 seeds: Show blueprint names (first 6 chars each) with stage-based colors
+        ≤3 seeds: Show blueprint names (first 5 chars) + tempo indicator
         >3 seeds: Show permanent+provisional count format
 
+        Tempo indicators: F=fast(≤3), M=medium(≤5), S=slow(>5)
         Colors:
         - FOSSILIZED → green
         - PROBATIONARY → yellow
@@ -161,26 +197,34 @@ class Scoreboard(Static):
         n_seeds = len(seeds)
 
         if n_seeds <= 3:
-            # Show individual blueprints with stage-based colors
+            # Show individual blueprints with stage-based colors + tempo
             seed_parts = []
             for seed in seeds.values():
                 bp = seed.blueprint_id[:6] if seed.blueprint_id else "?"
+                tempo = seed.blend_tempo_epochs
+                tempo_char = "F" if tempo <= 3 else ("M" if tempo <= 5 else "S")
                 if seed.stage == "FOSSILIZED":
-                    seed_parts.append(f"[green]{bp}[/]")
+                    seed_parts.append(f"[green]{bp}:{tempo_char}[/]")
                 elif seed.stage == "PROBATIONARY":
-                    seed_parts.append(f"[yellow]{bp}[/]")
+                    seed_parts.append(f"[yellow]{bp}:{tempo_char}[/]")
                 elif seed.stage == "BLENDING":
-                    seed_parts.append(f"[magenta]{bp}[/]")
+                    seed_parts.append(f"[magenta]{bp}:{tempo_char}[/]")
                 else:
-                    seed_parts.append(f"[dim]{bp}[/]")
+                    seed_parts.append(f"[dim]{bp}:{tempo_char}[/]")
             return " ".join(seed_parts)
         else:
-            # Count by stage for many seeds
+            # Count by stage for many seeds, show tempo distribution
             permanent = sum(1 for s in seeds.values() if s.stage == "FOSSILIZED")
             provisional = len(seeds) - permanent
+            # Count tempos
+            fast = sum(1 for s in seeds.values() if s.blend_tempo_epochs <= 3)
+            slow = sum(1 for s in seeds.values() if s.blend_tempo_epochs > 5)
+            tempo_str = ""
+            if fast or slow:
+                tempo_str = f" [dim]({fast}F/{slow}S)[/]"
             if permanent and provisional:
-                return f"[green]{permanent}[/]+[yellow]{provisional}[/]"
+                return f"[green]{permanent}[/]+[yellow]{provisional}[/]{tempo_str}"
             elif permanent:
-                return f"[green]{permanent} seeds[/]"
+                return f"[green]{permanent} seeds[/]{tempo_str}"
             else:
-                return f"[yellow]{provisional} prov[/]"
+                return f"[yellow]{provisional} prov[/]{tempo_str}"

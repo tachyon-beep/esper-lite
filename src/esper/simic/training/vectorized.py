@@ -2832,8 +2832,9 @@ def train_ppo_vectorized(
                         },
                     ))
 
-            # EPOCH_COMPLETED: Commit barrier for Karn.
-            # This MUST be emitted LAST for each batch epoch.
+            # BATCH_EPOCH_COMPLETED: Commit barrier for Karn.
+            # This is batch-level (no env_id), distinct from per-env EPOCH_COMPLETED.
+            # Must be emitted LAST for each batch epoch.
             total_train_correct = sum(train_corrects)
             total_train_samples = sum(train_totals)
             total_val_correct = sum(val_corrects)
@@ -2847,7 +2848,7 @@ def train_ppo_vectorized(
                 plateau_detected = False  # First batch, no plateau possible
 
             hub.emit(TelemetryEvent(
-                event_type=TelemetryEventType.EPOCH_COMPLETED,
+                event_type=TelemetryEventType.BATCH_EPOCH_COMPLETED,
                 epoch=episodes_completed,
                 data={
                     "inner_epoch": epoch,

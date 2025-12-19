@@ -42,7 +42,8 @@ class TelemetryEventType(Enum):
     SEED_CULLED = auto()
 
     # Training events
-    EPOCH_COMPLETED = auto()
+    EPOCH_COMPLETED = auto()  # Per-env epoch (has env_id in data)
+    BATCH_EPOCH_COMPLETED = auto()  # Batch-level epoch summary (no env_id, commit barrier)
     PLATEAU_DETECTED = auto()
     DEGRADATION_DETECTED = auto()
     IMPROVEMENT_DETECTED = auto()

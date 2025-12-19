@@ -339,9 +339,21 @@ class SanctumAggregator:
         self._best_runs = []
 
     def _handle_epoch_completed(self, event: "TelemetryEvent") -> None:
-        """Handle EPOCH_COMPLETED event."""
+        """Handle EPOCH_COMPLETED event (per-env only).
+
+        Only processes per-env EPOCH_COMPLETED events (with explicit env_id).
+        Batch-level events now use BATCH_EPOCH_COMPLETED, but we still skip
+        any event missing env_id as a defensive measure.
+        """
         data = event.data or {}
-        env_id = data.get("env_id", 0)
+
+        # Belt-and-suspenders: skip events without env_id
+        # Batch-level events now use BATCH_EPOCH_COMPLETED, but if any legacy
+        # EPOCH_COMPLETED without env_id arrives, don't corrupt env 0's tracking
+        if "env_id" not in data:
+            return
+
+        env_id = data["env_id"]
 
         self._ensure_env(env_id)
         env = self._envs[env_id]
@@ -655,28 +667,20 @@ class SanctumAggregator:
             self._vitals.epochs_per_second = total_epochs / elapsed
             self._vitals.batches_per_hour = (self._batches_completed / elapsed) * 3600
 
-        # Capture best run records for envs that improved during this batch
-        # Do this BEFORE resetting seed state so we can snapshot the seeds
+        # Rebuild best_runs from ALL envs with best_accuracy > 0
+        # This ensures the leaderboard always shows top 10, not just recent improvers
+        self._best_runs = []
         for env in self._envs.values():
-            # Check if this env achieved a new best during this episode
-            if env.best_accuracy_episode == current_ep and env.best_accuracy > 0:
-                # Compute absolute episode for human-readable display
-                # e.g., batch 3 with 8 envs and env_id=0 → absolute episode 25
-                absolute_ep = current_ep * self.num_envs + env.env_id + 1
+            if env.best_accuracy > 0:
+                absolute_ep = env.best_accuracy_episode * self.num_envs + env.env_id + 1
                 record = BestRunRecord(
                     env_id=env.env_id,
-                    episode=current_ep,
+                    episode=env.best_accuracy_episode,
                     peak_accuracy=env.best_accuracy,
                     final_accuracy=env.host_accuracy,
                     absolute_episode=absolute_ep,
                     seeds={k: SeedState(**v.__dict__) for k, v in env.best_seeds.items()},
                 )
-                # Remove existing record ONLY if same env in same episode (duplicate event)
-                # Different episodes are different training runs, keep both!
-                self._best_runs = [
-                    r for r in self._best_runs
-                    if not (r.env_id == env.env_id and r.episode == current_ep)
-                ]
                 self._best_runs.append(record)
 
         # Sort by peak accuracy descending, keep top 10
