@@ -67,6 +67,40 @@ class LifecycleOp(IntEnum):
     FOSSILIZE = 3  # was 4
 
 
+# =============================================================================
+# Lookup Tables for Hot Path Optimization
+# =============================================================================
+# These tables enable direct indexing without creating FactoredAction objects.
+# CRITICAL: These must stay in sync with enum definitions above.
+# Module-level assertions validate sync at import time.
+
+# Operation name lookup (matches LifecycleOp enum order)
+OP_NAMES: tuple[str, ...] = tuple(op.name for op in LifecycleOp)
+
+# Blueprint ID lookup (matches BlueprintAction.to_blueprint_id())
+BLUEPRINT_IDS: tuple[str | None, ...] = tuple(bp.to_blueprint_id() for bp in BlueprintAction)
+
+# Blend algorithm ID lookup (matches BlendAction.to_algorithm_id())
+BLEND_IDS: tuple[str, ...] = tuple(blend.to_algorithm_id() for blend in BlendAction)
+
+# Operation index constants for direct comparison (avoids enum construction)
+OP_WAIT: int = LifecycleOp.WAIT.value
+OP_GERMINATE: int = LifecycleOp.GERMINATE.value
+OP_CULL: int = LifecycleOp.CULL.value
+OP_FOSSILIZE: int = LifecycleOp.FOSSILIZE.value
+
+# Module-level validation: catch enum drift at import time
+assert OP_NAMES == tuple(op.name for op in LifecycleOp), (
+    "OP_NAMES out of sync with LifecycleOp enum - this is a bug"
+)
+assert len(BLUEPRINT_IDS) == len(BlueprintAction), (
+    "BLUEPRINT_IDS length mismatch with BlueprintAction enum"
+)
+assert len(BLEND_IDS) == len(BlendAction), (
+    "BLEND_IDS length mismatch with BlendAction enum"
+)
+
+
 @dataclass(frozen=True, slots=True)
 class FactoredAction:
     """Composed action from factored components."""
@@ -155,4 +189,12 @@ __all__ = [
     "NUM_OPS",
     "CNN_BLUEPRINTS",
     "TRANSFORMER_BLUEPRINTS",
+    # Lookup tables for hot path optimization
+    "OP_NAMES",
+    "BLUEPRINT_IDS",
+    "BLEND_IDS",
+    "OP_WAIT",
+    "OP_GERMINATE",
+    "OP_CULL",
+    "OP_FOSSILIZE",
 ]
