@@ -382,6 +382,62 @@ def _emit_anomaly_diagnostics(
 # Vectorized PPO Training
 # =============================================================================
 
+def _compute_batched_bootstrap_values(
+    agent,
+    post_action_data: list[dict],
+    obs_normalizer,
+    device: str,
+) -> list[float]:
+    """Compute bootstrap values for all truncated envs in single forward pass.
+
+    Args:
+        agent: PPO agent with network
+        post_action_data: List of dicts with keys:
+            - features: list[float] - post-action observation features
+            - hidden: tuple[Tensor, Tensor] - LSTM hidden state
+            - masks: dict[str, Tensor] - action masks for each head
+        obs_normalizer: Observation normalizer
+        device: Device string
+
+    Returns:
+        List of bootstrap values (one per entry in post_action_data)
+    """
+    if not post_action_data:
+        return []
+
+    # Stack all features
+    features_batch = torch.tensor(
+        [d["features"] for d in post_action_data],
+        dtype=torch.float32,
+        device=device,
+    )
+    features_normalized = obs_normalizer.normalize(features_batch)
+
+    # Stack hidden states: each is [layers, 1, hidden_dim], need [layers, batch, hidden_dim]
+    hidden_h = torch.cat([d["hidden"][0] for d in post_action_data], dim=1)
+    hidden_c = torch.cat([d["hidden"][1] for d in post_action_data], dim=1)
+
+    # Stack masks
+    masks_batch = {
+        key: torch.stack([d["masks"][key] for d in post_action_data])
+        for key in ("slot", "blueprint", "blend", "op")
+    }
+
+    # Single forward pass
+    with torch.inference_mode():
+        _, _, values_tensor, _ = agent.network.get_action(
+            features_normalized,
+            hidden=(hidden_h, hidden_c),
+            slot_mask=masks_batch["slot"],
+            blueprint_mask=masks_batch["blueprint"],
+            blend_mask=masks_batch["blend"],
+            op_mask=masks_batch["op"],
+            deterministic=True,
+        )
+
+    return values_tensor.tolist()
+
+
 def train_ppo_vectorized(
     n_episodes: int = 100,
     n_envs: int = DEFAULT_N_ENVS,
@@ -1776,7 +1832,11 @@ def train_ppo_vectorized(
             else:
                 masked_cpu = None
 
-            # Execute actions and store transitions for each environment
+            # PHASE 1: Execute actions and collect data for bootstrap computation
+            # We collect bootstrap data for all truncated envs, then compute in batch
+            bootstrap_data = []
+            transitions_data = []  # Store transition data for buffer storage
+
             for env_idx, env_state in enumerate(env_states):
                 model = env_state.model
                 signals = all_signals[env_idx]
@@ -2051,7 +2111,7 @@ def train_ppo_vectorized(
                 # Bootstrap value for truncation: use V(s_{t+1}), not V(s_t)
                 # For truncated episodes (time limit), we need the value of the POST-action
                 # state to correctly estimate returns. Using V(s_t) causes biased advantages.
-                # This requires an extra critic forward pass at the final step.
+                # Collect data now, compute in batch after loop to eliminate per-env GPU syncs.
                 if truncated:
                     # Get post-action slot reports (seed states changed by action)
                     post_action_slot_reports = model.get_slot_reports()
@@ -2093,12 +2153,6 @@ def train_ppo_vectorized(
                         slot_config=slot_config,
                     )
 
-                    # Normalize and get value from critic
-                    post_action_state = torch.tensor(
-                        [post_action_features], dtype=torch.float32, device=device
-                    )
-                    post_action_normalized = obs_normalizer.normalize(post_action_state)
-
                     # H4 FIX: Compute POST-action masks for bootstrap value computation.
                     # After GERMINATE, slot occupancy changes - using pre-action masks causes
                     # incorrect action masking for V(s_{t+1}). The critic needs masks that
@@ -2116,58 +2170,35 @@ def train_ppo_vectorized(
                         topology=task_spec.topology,
                     )
 
-                    # Get V(s_{t+1}) - use updated LSTM hidden state from this step
-                    with torch.inference_mode():
-                        _, _, bootstrap_tensor, _ = agent.network.get_action(
-                            post_action_normalized,
-                            hidden=env_state.lstm_hidden,
-                            slot_mask=bootstrap_masks["slot"].unsqueeze(0),
-                            blueprint_mask=bootstrap_masks["blueprint"].unsqueeze(0),
-                            blend_mask=bootstrap_masks["blend"].unsqueeze(0),
-                            op_mask=bootstrap_masks["op"].unsqueeze(0),
-                            deterministic=True,
-                        )
-                        bootstrap_value = bootstrap_tensor[0].item()
-                else:
-                    bootstrap_value = 0.0
+                    # Collect bootstrap data for batched computation (no forward pass yet)
+                    bootstrap_data.append({
+                        "features": post_action_features,
+                        "hidden": env_state.lstm_hidden,  # Updated LSTM state from this step
+                        "masks": bootstrap_masks,
+                    })
 
                 # Extract pre-action masks for buffer storage (needed for policy evaluation)
                 env_masks = {key: masks_batch[key][env_idx] for key in masks_batch}
 
-                # Store transition with per-head masks and LSTM states
-
+                # Collect transition data for buffer storage (store after bootstrap computation)
                 # Use PRE-STEP hidden states (captured before get_action)
                 # This is the hidden state that was INPUT to the network when selecting
                 # the action, enabling proper BPTT reconstruction during training.
                 hidden_h, hidden_c = pre_step_hiddens[env_idx]
 
-                agent.buffer.add(
-                    env_id=env_idx,
-                    state=states_batch_normalized[env_idx],
-                    slot_action=action_dict["slot"],
-                    blueprint_action=action_dict["blueprint"],
-                    blend_action=action_dict["blend"],
-                    op_action=action_dict["op"],
-                    slot_log_prob=head_log_probs["slot"][env_idx],
-                    blueprint_log_prob=head_log_probs["blueprint"][env_idx],
-                    blend_log_prob=head_log_probs["blend"][env_idx],
-                    op_log_prob=head_log_probs["op"][env_idx],
-                    value=value,
-                    reward=normalized_reward,
-                    done=done,
-                    slot_mask=env_masks["slot"],
-                    blueprint_mask=env_masks["blueprint"],
-                    blend_mask=env_masks["blend"],
-                    op_mask=env_masks["op"],
-                    hidden_h=hidden_h,
-                    hidden_c=hidden_c,
-                    truncated=truncated,
-                    bootstrap_value=bootstrap_value,
-                )
-
-                # Episode boundary: end episode on done
-                if done:
-                    agent.buffer.end_episode(env_id=env_idx)
+                transitions_data.append({
+                    "env_id": env_idx,
+                    "state": states_batch_normalized[env_idx],
+                    "action_dict": action_dict,
+                    "log_probs": {key: head_log_probs[key][env_idx] for key in HEAD_NAMES},
+                    "value": value,
+                    "reward": normalized_reward,
+                    "done": done,
+                    "env_masks": env_masks,
+                    "hidden_h": hidden_h,
+                    "hidden_c": hidden_c,
+                    "truncated": truncated,
+                })
 
                 env_state.episode_rewards.append(raw_reward)  # Display raw for interpretability
 
@@ -2241,6 +2272,59 @@ def train_ppo_vectorized(
                                 )
                             except Exception as e:
                                 _logger.warning(f"Shapley computation failed for env {env_idx}: {e}")
+
+            # PHASE 2: Compute all bootstrap values in single batched forward pass
+            # All episodes truncate at max_epochs, so we batch-compute all bootstrap values
+            # in one forward pass instead of N separate forward passes (eliminates N-1 GPU syncs)
+            bootstrap_values = _compute_batched_bootstrap_values(
+                agent=agent,
+                post_action_data=bootstrap_data,
+                obs_normalizer=obs_normalizer,
+                device=device,
+            )
+
+            # PHASE 3: Store transitions to buffer with pre-computed bootstrap values
+            bootstrap_idx = 0
+            for transition in transitions_data:
+                # Get bootstrap value if this transition was truncated
+                if transition["truncated"]:
+                    bootstrap_value = bootstrap_values[bootstrap_idx]
+                    bootstrap_idx += 1
+                else:
+                    bootstrap_value = 0.0
+
+                # Store transition to buffer
+                action_dict = transition["action_dict"]
+                log_probs = transition["log_probs"]
+                env_masks = transition["env_masks"]
+
+                agent.buffer.add(
+                    env_id=transition["env_id"],
+                    state=transition["state"],
+                    slot_action=action_dict["slot"],
+                    blueprint_action=action_dict["blueprint"],
+                    blend_action=action_dict["blend"],
+                    op_action=action_dict["op"],
+                    slot_log_prob=log_probs["slot"],
+                    blueprint_log_prob=log_probs["blueprint"],
+                    blend_log_prob=log_probs["blend"],
+                    op_log_prob=log_probs["op"],
+                    value=transition["value"],
+                    reward=transition["reward"],
+                    done=transition["done"],
+                    slot_mask=env_masks["slot"],
+                    blueprint_mask=env_masks["blueprint"],
+                    blend_mask=env_masks["blend"],
+                    op_mask=env_masks["op"],
+                    hidden_h=transition["hidden_h"],
+                    hidden_c=transition["hidden_c"],
+                    truncated=transition["truncated"],
+                    bootstrap_value=bootstrap_value,
+                )
+
+                # Episode boundary: end episode on done
+                if transition["done"]:
+                    agent.buffer.end_episode(env_id=transition["env_id"])
 
             throughput_step_time_ms_sum += step_timer.stop()  # GPU-accurate timing (P4-1)
             throughput_dataloader_wait_ms_sum += dataloader_wait_ms_epoch
