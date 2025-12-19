@@ -1891,6 +1891,19 @@ def train_ppo_vectorized(
                 blend_idx = action_dict["blend"]
                 op_idx = action_dict["op"]
 
+                # DEBUG: Verify direct indexing matches FactoredAction properties
+                # This block is stripped by Python when run with -O flag (production)
+                if __debug__:
+                    _fa = FactoredAction.from_indices(slot_idx, blueprint_idx, blend_idx, op_idx)
+                    assert slot_idx == _fa.slot_idx, f"slot_idx mismatch: {slot_idx} != {_fa.slot_idx}"
+                    assert OP_NAMES[op_idx] == _fa.op.name, f"op.name mismatch: {OP_NAMES[op_idx]} != {_fa.op.name}"
+                    assert (op_idx == OP_GERMINATE) == _fa.is_germinate, "is_germinate mismatch"
+                    assert (op_idx == OP_FOSSILIZE) == _fa.is_fossilize, "is_fossilize mismatch"
+                    assert (op_idx == OP_CULL) == _fa.is_cull, "is_cull mismatch"
+                    assert BLUEPRINT_IDS[blueprint_idx] == _fa.blueprint_id, f"blueprint_id mismatch"
+                    assert BLEND_IDS[blend_idx] == _fa.blend_algorithm_id, f"blend_id mismatch"
+                    del _fa  # Don't leak into scope
+
                 # Use the SAMPLED slot as target (multi-slot support)
                 # slot_idx is in canonical SlotConfig order, not caller slot list order.
                 target_slot, slot_is_enabled = _resolve_target_slot(
