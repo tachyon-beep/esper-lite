@@ -444,7 +444,7 @@ def _compute_batched_bootstrap_values(
     # Stack masks
     masks_batch = {
         key: torch.stack([d["masks"][key] for d in post_action_data])
-        for key in ("slot", "blueprint", "blend", "op")
+        for key in HEAD_NAMES
     }
 
     # Single forward pass
@@ -455,6 +455,7 @@ def _compute_batched_bootstrap_values(
             slot_mask=masks_batch["slot"],
             blueprint_mask=masks_batch["blueprint"],
             blend_mask=masks_batch["blend"],
+            tempo_mask=masks_batch["tempo"],
             op_mask=masks_batch["op"],
             deterministic=True,
         )
@@ -2381,6 +2382,27 @@ def train_ppo_vectorized(
                                     f"Env {env_idx}: Shapley computed for {len(active_slot_ids)} slots: "
                                     f"{', '.join(f'{s}={c.shapley_mean:.2f}' for s, c in contributions.items())}"
                                 )
+
+                                # Emit full counterfactual matrix for Sanctum visualization
+                                counterfactual_matrix = env_state.counterfactual_helper.last_matrix
+                                if hub and counterfactual_matrix is not None and counterfactual_matrix.configs:
+                                    matrix_data = {
+                                        "env_id": env_idx,
+                                        "slot_ids": list(counterfactual_matrix.configs[0].slot_ids),
+                                        "configs": [
+                                            {
+                                                "seed_mask": list(cfg.config),
+                                                "accuracy": cfg.val_accuracy,
+                                            }
+                                            for cfg in counterfactual_matrix.configs
+                                        ],
+                                        "strategy": counterfactual_matrix.strategy_used,
+                                        "compute_time_ms": counterfactual_matrix.compute_time_seconds * 1000,
+                                    }
+                                    hub.emit(TelemetryEvent(
+                                        event_type=TelemetryEventType.COUNTERFACTUAL_MATRIX_COMPUTED,
+                                        data=matrix_data,
+                                    ))
                             except Exception as e:
                                 _logger.warning(f"Shapley computation failed for env {env_idx}: {e}")
 
@@ -2425,10 +2447,12 @@ def train_ppo_vectorized(
                     slot_action=action_dict["slot"],
                     blueprint_action=action_dict["blueprint"],
                     blend_action=action_dict["blend"],
+                    tempo_action=action_dict["tempo"],
                     op_action=action_dict["op"],
                     slot_log_prob=log_probs["slot"],
                     blueprint_log_prob=log_probs["blueprint"],
                     blend_log_prob=log_probs["blend"],
+                    tempo_log_prob=log_probs["tempo"],
                     op_log_prob=log_probs["op"],
                     value=transition["value"],
                     reward=transition["reward"],
@@ -2436,6 +2460,7 @@ def train_ppo_vectorized(
                     slot_mask=env_masks["slot"],
                     blueprint_mask=env_masks["blueprint"],
                     blend_mask=env_masks["blend"],
+                    tempo_mask=env_masks["tempo"],
                     op_mask=env_masks["op"],
                     hidden_h=transition["hidden_h"],
                     hidden_c=transition["hidden_c"],
