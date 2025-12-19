@@ -275,6 +275,16 @@ class TamiyoState:
     update_time_ms: float = 0.0  # PPO update duration in milliseconds
     early_stop_epoch: int | None = None  # KL early stopping triggered at this epoch
 
+    # Per-head entropy and gradient norms (for multi-head policy)
+    head_slot_entropy: float = 0.0  # Entropy for slot action head
+    head_slot_grad_norm: float = 0.0  # Gradient norm for slot head
+    head_blueprint_entropy: float = 0.0  # Entropy for blueprint action head
+    head_blueprint_grad_norm: float = 0.0  # Gradient norm for blueprint head
+
+    # PPO inner loop context
+    inner_epoch: int = 0  # Current inner optimization epoch
+    ppo_batch: int = 0  # Current batch within PPO update (use ppo_batch to avoid conflict with any existing 'batch')
+
     # Action distribution (Actions panel)
     action_counts: dict[str, int] = field(default_factory=dict)
     # FIX: Added total_actions for percentage calculation in TamiyoBrain
@@ -422,6 +432,22 @@ class DecisionSnapshot:
 
 
 @dataclass
+class RunConfig:
+    """Training run configuration captured at TRAINING_STARTED.
+
+    Stores hyperparameters and config for display in run header.
+    """
+    seed: int | None = None  # Random seed for reproducibility
+    n_episodes: int = 0  # Total episodes to train
+    lr: float = 0.0  # Initial learning rate
+    clip_ratio: float = 0.2  # PPO clip ratio
+    entropy_coef: float = 0.01  # Initial entropy coefficient
+    param_budget: int = 0  # Seed parameter budget
+    resume_path: str = ""  # Checkpoint resume path (empty if fresh run)
+    entropy_anneal: dict = field(default_factory=dict)  # Entropy schedule config
+
+
+@dataclass
 class BestRunRecord:
     """Historical record of a best run for the leaderboard.
 
@@ -480,6 +506,7 @@ class SanctumSnapshot:
     max_epochs: int = 0
     run_id: str = ""
     task_name: str = ""
+    run_config: RunConfig = field(default_factory=RunConfig)
     start_time: datetime | None = None
 
     # Connection and timing (used by aggregator)
@@ -494,6 +521,10 @@ class SanctumSnapshot:
     # Aggregates (computed from envs)
     aggregate_mean_accuracy: float = 0.0
     aggregate_mean_reward: float = 0.0
+
+    # Batch-level aggregates (from BATCH_COMPLETED)
+    batch_avg_reward: float = 0.0  # Average reward for last batch
+    batch_total_episodes: int = 0  # Total episodes in training run
 
     # Rolling average history (mean accuracy across all envs over time)
     mean_accuracy_history: deque[float] = field(default_factory=lambda: deque(maxlen=50))

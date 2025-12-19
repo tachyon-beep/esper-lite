@@ -29,6 +29,7 @@ from esper.karn.sanctum.schema import (
     EventLogEntry,
     BestRunRecord,
     DecisionSnapshot,
+    RunConfig,
 )
 
 if TYPE_CHECKING:
@@ -111,6 +112,9 @@ class SanctumAggregator:
     _current_batch: int = 0  # Current batch index (from BATCH_COMPLETED)
     _batch_avg_accuracy: float = 0.0  # Batch-level average accuracy
     _batch_rolling_accuracy: float = 0.0  # Rolling average for trend display
+    _batch_avg_reward: float = 0.0  # Batch average reward
+    _batch_total_episodes: int = 0  # Total episodes in run
+    _run_config: "RunConfig" = field(default_factory=lambda: RunConfig())
 
     # Per-env state: env_id -> EnvState
     _envs: dict[int, EnvState] = field(default_factory=dict)
@@ -152,6 +156,7 @@ class SanctumAggregator:
         self._mean_accuracy_history = deque(maxlen=self.max_history)
         self._start_time = time.time()
         self._lock = threading.Lock()
+        self._run_config = RunConfig()
 
         # Pre-create env states
         for i in range(self.num_envs):
@@ -229,6 +234,7 @@ class SanctumAggregator:
             # Run context
             run_id=self._run_id,
             task_name=self._task_name,
+            run_config=self._run_config,
             current_episode=self._current_episode,
             current_batch=self._current_batch or self._batches_completed,
             current_epoch=self._current_epoch,
@@ -254,6 +260,9 @@ class SanctumAggregator:
             best_runs=list(self._best_runs),
             # Rolling mean accuracy history
             mean_accuracy_history=deque(self._mean_accuracy_history, maxlen=50),
+            # Batch-level aggregates
+            batch_avg_reward=self._batch_avg_reward,
+            batch_total_episodes=self._batch_total_episodes,
         )
 
     # =========================================================================
@@ -291,6 +300,18 @@ class SanctumAggregator:
 
         # Capture reward mode for A/B test cohort display
         self._reward_mode = data.get("reward_mode", "")
+
+        # Capture hyperparameters for run header display
+        self._run_config = RunConfig(
+            seed=data.get("seed"),
+            n_episodes=data.get("n_episodes", 0),
+            lr=data.get("lr", 0.0),
+            clip_ratio=data.get("clip_ratio", 0.2),
+            entropy_coef=data.get("entropy_coef", 0.01),
+            param_budget=data.get("param_budget", 0),
+            resume_path=data.get("resume_path", ""),
+            entropy_anneal=data.get("entropy_anneal") or {},
+        )
 
         # Capture slot configuration from event (if provided)
         # Falls back to default 2x2 grid if not specified
@@ -428,6 +449,16 @@ class SanctumAggregator:
         self._tamiyo.update_time_ms = data.get("update_time_ms", 0.0)
         self._tamiyo.early_stop_epoch = data.get("early_stop_epoch")
 
+        # Per-head entropy and gradient norms
+        self._tamiyo.head_slot_entropy = data.get("head_slot_entropy", 0.0)
+        self._tamiyo.head_slot_grad_norm = data.get("head_slot_grad_norm", 0.0)
+        self._tamiyo.head_blueprint_entropy = data.get("head_blueprint_entropy", 0.0)
+        self._tamiyo.head_blueprint_grad_norm = data.get("head_blueprint_grad_norm", 0.0)
+
+        # PPO inner loop context
+        self._tamiyo.inner_epoch = data.get("inner_epoch", 0)
+        self._tamiyo.ppo_batch = data.get("batch", 0)
+
     def _handle_reward_computed(self, event: "TelemetryEvent") -> None:
         """Handle REWARD_COMPUTED event with per-env routing."""
         data = event.data or {}
@@ -553,6 +584,7 @@ class SanctumAggregator:
             seed.auto_culled = data.get("auto_culled", False)
             seed.epochs_total = data.get("epochs_total", 0)
             seed.counterfactual = data.get("counterfactual", 0.0)
+            seed.blueprint_id = data.get("blueprint_id") or seed.blueprint_id
 
             # Reset slot to DORMANT
             seed.stage = "DORMANT"
@@ -584,6 +616,8 @@ class SanctumAggregator:
         self._current_batch = data.get("batch_idx", self._batches_completed)
         self._batch_avg_accuracy = data.get("avg_accuracy", 0.0)
         self._batch_rolling_accuracy = data.get("rolling_accuracy", 0.0)
+        self._batch_avg_reward = data.get("avg_reward", 0.0)
+        self._batch_total_episodes = data.get("total_episodes", 0)
 
         # Calculate throughput
         now = time.time()
