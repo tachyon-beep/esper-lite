@@ -33,7 +33,7 @@ import random
 import threading
 import time
 import warnings
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -1476,6 +1476,14 @@ def train_ppo_vectorized(
                     if i in slots_needing_counterfactual:
                         for slot_id in slots_needing_counterfactual[i]:
                             env_state.cf_correct_accums[slot_id].record_stream(env_state.stream)
+                        n_slots = len(slots_needing_counterfactual[i])
+                        # Register all-disabled accumulator when full factorial is active (2-4 seeds)
+                        if 2 <= n_slots <= 4:
+                            env_state.cf_all_disabled_accum.record_stream(env_state.stream)  # type: ignore[union-attr]
+                        # Register pair accumulators when 3-4 seeds (for 2 seeds, pair = all enabled)
+                        if 3 <= n_slots <= 4:
+                            for pair_key in env_state.cf_pair_accums:
+                                env_state.cf_pair_accums[pair_key].record_stream(env_state.stream)
 
             # Iterate validation batches using shared iterator (SharedBatchIterator or SharedGPUBatchIterator)
             test_iter = iter(shared_test_iter)
@@ -1512,7 +1520,11 @@ def train_ppo_vectorized(
                     # Data is already on GPU from the main validation pass.
                     # Compute per-slot counterfactual for multi-slot reward attribution
                     if i in slots_needing_counterfactual:
-                        for slot_id in slots_needing_counterfactual[i]:
+                        active_slot_list = list(slots_needing_counterfactual[i])
+                        n_active = len(active_slot_list)
+
+                        # Per-slot ablation (always computed - needed for Tamiyo)
+                        for slot_id in active_slot_list:
                             # Entire counterfactual pass in stream_ctx (PyTorch specialist fix)
                             with stream_ctx:
                                 with env_state.model.seed_slots[slot_id].force_alpha(0.0):
@@ -1521,6 +1533,36 @@ def train_ppo_vectorized(
                                     )
                                 env_state.cf_correct_accums[slot_id].add_(cf_correct_tensor)
                             env_state.cf_totals[slot_id] += cf_total
+
+                        # "All disabled" pass for full factorial (only when ≤4 seeds to limit 2^n blowup)
+                        if 2 <= n_active <= 4:
+                            with stream_ctx:
+                                # Disable ALL active seeds for true baseline measurement
+                                with ExitStack() as stack:
+                                    for slot_id in active_slot_list:
+                                        stack.enter_context(env_state.model.seed_slots[slot_id].force_alpha(0.0))
+                                    _, cf_all_correct, cf_all_total = process_val_batch(
+                                        env_state, inputs, targets, criterion, slots=slots
+                                    )
+                                env_state.cf_all_disabled_accum.add_(cf_all_correct)
+                            env_state.cf_all_disabled_total += cf_all_total
+
+                        # Pair passes for 3-4 seeds (enable only pair, disable others)
+                        # For 2 seeds, the "all enabled" config IS the pair, so no extra passes needed
+                        if 3 <= n_active <= 4:
+                            for i in range(n_active):
+                                for j in range(i + 1, n_active):
+                                    with stream_ctx:
+                                        with ExitStack() as stack:
+                                            # Disable seeds NOT in the pair
+                                            for k, slot_id in enumerate(active_slot_list):
+                                                if k != i and k != j:
+                                                    stack.enter_context(env_state.model.seed_slots[slot_id].force_alpha(0.0))
+                                            _, cf_pair_correct, cf_pair_total = process_val_batch(
+                                                env_state, inputs, targets, criterion, slots=slots
+                                            )
+                                        env_state.cf_pair_accums[(i, j)].add_(cf_pair_correct)
+                                    env_state.cf_pair_totals[(i, j)] += cf_pair_total
 
             # Single sync point at end (not once per pass)
             for env_state in env_states:
@@ -1533,6 +1575,7 @@ def train_ppo_vectorized(
             val_corrects = [env_state.val_correct_accum.item() for env_state in env_states]  # type: ignore[union-attr]
 
             # Compute per-slot baseline accuracies from counterfactual accumulators
+            all_disabled_accs: dict[int, float] = {}  # env_idx -> accuracy with all seeds disabled
             for i in slots_needing_counterfactual:
                 for slot_id in slots_needing_counterfactual[i]:
                     cf_total = env_states[i].cf_totals[slot_id]
@@ -1540,6 +1583,22 @@ def train_ppo_vectorized(
                         baseline_accs[i][slot_id] = (
                             100.0 * env_states[i].cf_correct_accums[slot_id].item() / cf_total
                         )
+                # Compute "all disabled" accuracy if measured
+                if env_states[i].cf_all_disabled_total > 0:
+                    all_disabled_accs[i] = (
+                        100.0 * env_states[i].cf_all_disabled_accum.item() / env_states[i].cf_all_disabled_total
+                    )
+
+            # Compute pair accuracies for 3-4 seeds
+            pair_accs: dict[int, dict[tuple[int, int], float]] = {}  # env_idx -> {(i,j): accuracy}
+            for i in slots_needing_counterfactual:
+                if len(slots_needing_counterfactual[i]) >= 3:
+                    pair_accs[i] = {}
+                    for pair_key, total in env_states[i].cf_pair_totals.items():
+                        if total > 0:
+                            pair_accs[i][pair_key] = (
+                                100.0 * env_states[i].cf_pair_accums[pair_key].item() / total
+                            )
 
             # ===== Compute epoch metrics and get BATCHED actions =====
             # NOTE: Telemetry sync (gradients/counterfactual) happens after record_accuracy()
@@ -1616,39 +1675,53 @@ def train_ppo_vectorized(
                             if seed_state and seed_state.metrics:
                                 seed_state.metrics.counterfactual_contribution = val_acc - baseline_acc
 
-                    # Emit live ablation-based counterfactual matrix for Sanctum real-time display
+                    # Emit live counterfactual matrix for Sanctum real-time display
                     # This shows "removing this seed decreases accuracy by X%" - useful for operators
-                    # Full factorial (2^n) is only computed at episode end, but ablation data is live.
+                    # When 2-4 seeds active, we measure full factorial (all-disabled pass included).
+                    # Otherwise, ablation-only with estimates.
                     if hub:
                         active_slots = list(baseline_accs[env_idx].keys())
                         if active_slots:
-                            # Build simplified matrix from ablation data:
-                            # - Combined (all enabled): val_acc
-                            # - Per-slot ablation: baseline_accs[slot_id]
-                            # Strategy = "ablation_only" to indicate incomplete factorial
+                            # Build matrix from ablation data + measured all-disabled when available
                             configs = []
                             n = len(active_slots)
 
-                            # All disabled - not available mid-episode, use min(ablations) as estimate
-                            all_disabled_estimate = min(baseline_accs[env_idx].values())
+                            # All disabled - use measured value when available (2-4 seeds),
+                            # otherwise fall back to estimate
+                            if env_idx in all_disabled_accs:
+                                all_disabled_acc = all_disabled_accs[env_idx]
+                                strategy = "full_factorial"
+                            else:
+                                all_disabled_acc = min(baseline_accs[env_idx].values())
+                                strategy = "ablation_only"
                             configs.append({
                                 "seed_mask": [False] * n,
-                                "accuracy": all_disabled_estimate,
+                                "accuracy": all_disabled_acc,
                             })
 
                             # Per-slot enabled (invert ablation: if removing A gives baseline_A,
                             # then A's solo contribution ≈ val_acc - baseline_A when A is the ONLY one removed)
                             # Actually, for single-slot enabled, we approximate by reflecting the ablation:
                             # If combined=75% and removing A gives 70%, A contributes 5% marginal
-                            # A's "solo" ≈ baseline_estimate + contribution
+                            # A's "solo" ≈ all_disabled_acc + contribution
                             for i, slot_id in enumerate(active_slots):
                                 contribution = val_acc - baseline_accs[env_idx][slot_id]
-                                solo_estimate = all_disabled_estimate + contribution
+                                solo_estimate = all_disabled_acc + contribution
                                 mask = [j == i for j in range(n)]
                                 configs.append({
                                     "seed_mask": mask,
                                     "accuracy": solo_estimate,
                                 })
+
+                            # Pair configs for 3-4 seeds (measured, not estimated)
+                            # For 2 seeds, "all enabled" IS the pair, so no separate pair config needed
+                            if env_idx in pair_accs and n >= 3:
+                                for (i, j), pair_acc in pair_accs[env_idx].items():
+                                    mask = [k == i or k == j for k in range(n)]
+                                    configs.append({
+                                        "seed_mask": mask,
+                                        "accuracy": pair_acc,
+                                    })
 
                             # All enabled - current accuracy
                             configs.append({
@@ -1662,8 +1735,8 @@ def train_ppo_vectorized(
                                     "env_id": env_idx,
                                     "slot_ids": active_slots,
                                     "configs": configs,
-                                    "strategy": "ablation_only",
-                                    "compute_time_ms": 0.0,  # No extra compute - using cached baselines
+                                    "strategy": strategy,
+                                    "compute_time_ms": 0.0,  # Extra pass only for 2-4 seeds
                                 },
                             ))
 

@@ -61,9 +61,9 @@ class TamiyoBrain(Static):
         vitals_panel = self._render_learning_vitals()
         main_table.add_row(vitals_panel)
 
-        # Section 2: Last Decision (if available)
-        decision_panel = self._render_last_decision()
-        main_table.add_row(decision_panel)
+        # Section 2: Recent Decisions (up to 3, each visible for 10s minimum)
+        decisions_panel = self._render_recent_decisions()
+        main_table.add_row(decisions_panel)
 
         return Panel(
             main_table,
@@ -147,7 +147,7 @@ class TamiyoBrain(Static):
         return bar
 
     def _render_gauge(self, label: str, value: float, min_val: float, max_val: float, description: str) -> Text:
-        """Render a single gauge with label and description."""
+        """Render a single gauge with label and description on separate lines."""
         # Normalize to 0-1
         normalized = (value - min_val) / (max_val - min_val) if max_val != min_val else 0.5
         normalized = max(0, min(1, normalized))
@@ -158,12 +158,15 @@ class TamiyoBrain(Static):
         empty = gauge_width - filled
 
         gauge = Text()
-        gauge.append(f"{label}: ", style="dim")
+        # Line 1: Label
+        gauge.append(f"{label}:\n", style="dim")
+        # Line 2: Bar and value
         gauge.append("[")
         gauge.append("█" * filled, style="cyan")
         gauge.append("░" * empty, style="dim")
         gauge.append("]")
-        gauge.append(f" {value:.2f}  ", style="cyan")
+        gauge.append(f" {value:.2f}\n", style="cyan")
+        # Line 3: Description
         gauge.append(f'"{description}"', style="italic dim")
 
         return gauge
@@ -192,68 +195,77 @@ class TamiyoBrain(Static):
         else:
             return "Needs improvement"
 
-    def _render_last_decision(self) -> Panel:
-        """Render Last Decision section."""
-        tamiyo = self._snapshot.tamiyo
-        decision = tamiyo.last_decision
+    def _render_recent_decisions(self) -> Panel:
+        """Render Recent Decisions section (up to 3 full decision panels, each visible for 10s minimum)."""
+        from datetime import datetime, timezone
+        from rich.console import Group
 
-        if decision is None:
+        tamiyo = self._snapshot.tamiyo
+        decisions = tamiyo.recent_decisions
+
+        if not decisions:
             return Panel(
                 Text("No decisions captured yet", style="dim italic"),
-                title="LAST DECISION",
+                title="RECENT DECISIONS",
                 border_style="dim",
             )
 
-        # Build decision display
-        content = Table.grid(expand=True)
-        content.add_column(ratio=1)
-
-        # Time since decision
-        from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
-        age = (now - decision.timestamp).total_seconds()
-        age_str = f"{age:.1f}s ago" if age < 60 else f"{age/60:.0f}m ago"
+        decision_panels = []
 
-        # SAW line
-        saw_line = Text()
-        saw_line.append("SAW:  ", style="bold")
-        for slot_id, state in decision.slot_states.items():
-            saw_line.append(f"{slot_id}: {state} │ ", style="dim")
-        saw_line.append(f"Host: {decision.host_accuracy:.0f}%", style="cyan")
-        content.add_row(saw_line)
+        for i, decision in enumerate(decisions[:3]):
+            age = (now - decision.timestamp).total_seconds()
+            age_str = f"{age:.1f}s ago" if age < 60 else f"{age/60:.0f}m ago"
 
-        # CHOSE line
-        chose_line = Text()
-        chose_line.append("CHOSE: ", style="bold")
-        chose_line.append(f"{decision.chosen_action}", style="green bold")
-        if decision.chosen_slot:
-            chose_line.append(f" {decision.chosen_slot}", style="cyan")
-        chose_line.append(f" ({decision.confidence:.0%})", style="dim")
-        content.add_row(chose_line)
+            # Build full decision display (like the original single panel)
+            content = Table.grid(expand=True)
+            content.add_column(ratio=1)
 
-        # EXPECTED vs GOT line
-        result_line = Text()
-        result_line.append("EXPECTED: ", style="dim")
-        result_line.append(f"{decision.expected_value:+.2f}", style="cyan")
-        result_line.append("  →  GOT: ", style="dim")
-        if decision.actual_reward is not None:
-            diff = decision.actual_reward - decision.expected_value
-            style = "green" if abs(diff) < 0.1 else ("yellow" if diff > 0 else "red")
-            result_line.append(f"{decision.actual_reward:+.2f} ", style=style)
-            result_line.append("✓" if abs(diff) < 0.1 else "✗", style=style)
-        else:
-            result_line.append("pending...", style="dim italic")
-        content.add_row(result_line)
+            # SAW line
+            saw_line = Text()
+            saw_line.append("SAW:  ", style="bold")
+            for slot_id, state in decision.slot_states.items():
+                saw_line.append(f"{slot_id}: {state} │ ", style="dim")
+            saw_line.append(f"Host: {decision.host_accuracy:.0f}%", style="cyan")
+            content.add_row(saw_line)
 
-        # Alternatives line
-        if decision.alternatives:
-            alt_line = Text()
-            alt_line.append("Also: ", style="dim")
-            for action, prob in decision.alternatives[:2]:
-                alt_line.append(f"{action} ({prob:.0%}), ", style="dim")
-            content.add_row(alt_line)
+            # CHOSE line (with Also alternatives on same line, tab-separated)
+            chose_line = Text()
+            chose_line.append("CHOSE: ", style="bold")
+            action_colors = {
+                "GERMINATE": "green bold",
+                "WAIT": "dim",
+                "FOSSILIZE": "blue bold",
+                "CULL": "red bold",
+            }
+            chose_line.append(f"{decision.chosen_action}", style=action_colors.get(decision.chosen_action, "white"))
+            if decision.chosen_slot:
+                chose_line.append(f" {decision.chosen_slot}", style="cyan")
+            chose_line.append(f" ({decision.confidence:.0%})", style="dim")
+            # Add alternatives on same line
+            if decision.alternatives:
+                chose_line.append("\t\tAlso: ", style="dim")
+                for action, prob in decision.alternatives[:2]:
+                    chose_line.append(f"{action} ({prob:.0%}) ", style="dim")
+            content.add_row(chose_line)
 
-        return Panel(content, title=f"LAST DECISION ({age_str})", border_style="dim")
+            # EXPECTED vs GOT line
+            result_line = Text()
+            result_line.append("EXPECTED: ", style="dim")
+            result_line.append(f"{decision.expected_value:+.2f}", style="cyan")
+            result_line.append("  →  GOT: ", style="dim")
+            if decision.actual_reward is not None:
+                diff = decision.actual_reward - decision.expected_value
+                style = "green" if abs(diff) < 0.1 else ("yellow" if diff > 0 else "red")
+                result_line.append(f"{decision.actual_reward:+.2f} ", style=style)
+                result_line.append("✓" if abs(diff) < 0.1 else "✗", style=style)
+            else:
+                result_line.append("pending...", style="dim italic")
+            content.add_row(result_line)
+
+            decision_panels.append(Panel(content, title=f"DECISION {i+1} ({age_str})", border_style="dim"))
+
+        return Panel(Group(*decision_panels), title=f"RECENT DECISIONS ({len(decisions)})", border_style="dim")
 
     # ========================================================================
     # Legacy status helpers (kept for backward compatibility with existing tests)

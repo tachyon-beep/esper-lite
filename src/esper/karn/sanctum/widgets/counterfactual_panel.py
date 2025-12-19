@@ -69,9 +69,9 @@ class CounterfactualPanel(Static):
                 label = f"  {slot_id} alone"
                 lines.append(self._make_bar_line(label, acc, baseline, combined, contrib))
 
-        # Pairs section (only for 2-3 seeds, or top 5 for 4+)
-        # Skip for ablation_only since we don't have pair data
-        if pairs and n_seeds <= 3 and not is_ablation:
+        # Pairs section - show when we have pair data (2-3 seeds inline, 4+ top 5)
+        # For 2 seeds, the "all enabled" config IS the pair, so pair_contributions() returns it
+        if pairs and n_seeds <= 3:
             lines.append(Text(""))
             lines.append(Text("Pairs:", style="bold"))
             for (s1, s2), contrib in pairs.items():
@@ -83,7 +83,7 @@ class CounterfactualPanel(Static):
                 pair_synergy = contrib - ind1 - ind2
                 style = "green" if pair_synergy > 0.5 else None
                 lines.append(self._make_bar_line(label, acc, baseline, combined, contrib, highlight=style))
-        elif pairs and n_seeds > 3 and not is_ablation:
+        elif pairs and n_seeds > 3:
             # Show top 5 by synergy
             lines.append(Text(""))
             lines.append(Text("Top Combinations (by synergy):", style="bold"))
@@ -118,8 +118,8 @@ class CounterfactualPanel(Static):
 
         # Interference is MORE critical to surface than synergy - seeds hurting each other
         # Use loud visual treatment for negative cases
-        # For ablation_only, synergy is estimated and may not be accurate
-        if is_ablation:
+        # Show "available at episode end" only when we don't have pair data yet
+        if is_ablation and not pairs:
             lines.append(Text("(Pair interactions available at episode end)", style="dim italic"))
         elif synergy < -0.5:
             # INTERFERENCE: Seeds are hurting each other - make this LOUD

@@ -109,10 +109,15 @@ class TestCounterfactualPanel:
         assert rendered.border_style == "cyan"
 
     def test_renders_ablation_only_with_indicator(self):
-        """Panel shows 'Live Ablation Analysis' for ablation_only strategy."""
+        """Panel shows 'Live Ablation Analysis' for ablation_only strategy.
+
+        When pair data IS present, pairs are shown and synergy is computed.
+        The 'episode end' message only shows when pair data is NOT available.
+        """
         from io import StringIO
         from rich.console import Console
 
+        # Ablation mode WITH pair data (the (True, True) config is the pair for 2 seeds)
         matrix = CounterfactualSnapshot(
             slot_ids=("r0c0", "r0c1"),
             configs=[
@@ -133,7 +138,41 @@ class TestCounterfactualPanel:
 
         # Should show live ablation header
         assert "Live Ablation" in content
-        # Should not show pairs (not available for ablation)
+        # When pair data is available, pairs ARE shown (even in ablation mode)
+        assert "Pairs:" in content
+        # When pair data is available, synergy is computed (not the "episode end" message)
+        assert "Synergy:" in content
+        assert "episode end" not in content
+
+    def test_renders_ablation_only_without_pairs(self):
+        """Panel shows 'episode end' message when ablation mode and NO pair data."""
+        from io import StringIO
+        from rich.console import Console
+
+        # Ablation mode WITHOUT pair data (only solo configs, no pair config)
+        matrix = CounterfactualSnapshot(
+            slot_ids=("r0c0", "r0c1", "r0c2"),  # 3 seeds
+            configs=[
+                CounterfactualConfig(seed_mask=(False, False, False), accuracy=25.0),
+                CounterfactualConfig(seed_mask=(True, False, False), accuracy=35.0),
+                CounterfactualConfig(seed_mask=(False, True, False), accuracy=30.0),
+                CounterfactualConfig(seed_mask=(False, False, True), accuracy=32.0),
+                # No pair configs like (True, True, False) - not computed yet
+                CounterfactualConfig(seed_mask=(True, True, True), accuracy=65.0),
+            ],
+            strategy="ablation_only",
+        )
+        panel = CounterfactualPanel(matrix)
+        rendered = panel.render()
+
+        console = Console(file=StringIO(), force_terminal=True, width=100)
+        console.print(rendered)
+        content = console.file.getvalue()
+
+        # Should show live ablation header
+        assert "Live Ablation" in content
+        # Without pair data, no pairs section
         assert "Pairs:" not in content
-        # Should show episode end note
+        assert "Top Combinations" not in content
+        # Should show episode end message (pairs not available)
         assert "episode end" in content

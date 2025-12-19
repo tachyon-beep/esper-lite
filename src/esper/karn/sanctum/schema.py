@@ -387,7 +387,11 @@ class TamiyoState:
     ppo_data_received: bool = False
 
     # Last decision snapshot (captured from REWARD_COMPUTED events)
+    # Deprecated: Use recent_decisions instead
     last_decision: "DecisionSnapshot | None" = None
+
+    # Recent decisions list (up to 3, each visible for at least 10 seconds)
+    recent_decisions: list["DecisionSnapshot"] = field(default_factory=list)
 
 
 @dataclass

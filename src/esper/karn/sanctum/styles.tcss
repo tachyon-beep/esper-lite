@@ -23,8 +23,10 @@
 /* Environment Overview - main table (68% width, +5 chars for columns) */
 #env-overview {
     width: 68%;
+    height: 1fr;
     border: solid $primary;
     margin-right: 1;
+    overflow-y: auto;
 }
 
 #env-overview:focus {

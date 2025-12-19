@@ -221,11 +221,28 @@ class SanctumAggregator:
     def _get_snapshot_unlocked(self) -> SanctumSnapshot:
         """Get snapshot without locking (caller must hold lock)."""
         now = time.time()
+        now_dt = datetime.now(timezone.utc)
         staleness = now - self._last_event_ts if self._last_event_ts else float("inf")
         runtime = now - self._start_time if self._connected else 0.0
 
         # Update system vitals
         self._update_system_vitals()
+
+        # Aggregate action counts from all envs into tamiyo state
+        aggregated_actions: dict[str, int] = {"WAIT": 0, "GERMINATE": 0, "CULL": 0, "FOSSILIZE": 0}
+        total_actions = 0
+        for env in self._envs.values():
+            for action, count in env.action_counts.items():
+                aggregated_actions[action] = aggregated_actions.get(action, 0) + count
+            total_actions += env.total_actions
+        self._tamiyo.action_counts = aggregated_actions
+        self._tamiyo.total_actions = total_actions
+
+        # Expire recent decisions older than 10 seconds, keep max 3
+        self._tamiyo.recent_decisions = [
+            d for d in self._tamiyo.recent_decisions
+            if (now_dt - d.timestamp).total_seconds() <= 10.0
+        ][:3]
 
         # Get focused env's reward components for the detail panel
         focused_rewards = RewardComponents()
@@ -524,10 +541,10 @@ class SanctumAggregator:
             env_id=env_id,
         )
 
-        # Capture decision snapshot (NEW)
+        # Capture decision snapshot
         # Only capture if we have decision data (action_confidence present)
         if "action_confidence" in data:
-            self._tamiyo.last_decision = DecisionSnapshot(
+            decision = DecisionSnapshot(
                 timestamp=event.timestamp or datetime.now(timezone.utc),
                 slot_states=data.get("slot_states", {}),
                 host_accuracy=data.get("host_accuracy", env.host_accuracy),
@@ -538,6 +555,13 @@ class SanctumAggregator:
                 actual_reward=total_reward,
                 alternatives=data.get("alternatives", []),
             )
+            # Add to recent decisions list (newest first)
+            self._tamiyo.recent_decisions.insert(0, decision)
+            # Keep max 3 for display
+            if len(self._tamiyo.recent_decisions) > 3:
+                self._tamiyo.recent_decisions = self._tamiyo.recent_decisions[:3]
+            # Also keep last_decision for backwards compatibility
+            self._tamiyo.last_decision = decision
 
         # Track focused env for reward panel
         self._focused_env_id = env_id
@@ -667,9 +691,8 @@ class SanctumAggregator:
             self._vitals.epochs_per_second = total_epochs / elapsed
             self._vitals.batches_per_hour = (self._batches_completed / elapsed) * 3600
 
-        # Rebuild best_runs from ALL envs with best_accuracy > 0
-        # This ensures the leaderboard always shows top 10, not just recent improvers
-        self._best_runs = []
+        # Capture best_runs from current episode (before reset clears env.best_accuracy)
+        # Each episode can contribute records; we accumulate and keep top 10
         for env in self._envs.values():
             if env.best_accuracy > 0:
                 absolute_ep = env.best_accuracy_episode * self.num_envs + env.env_id + 1
@@ -687,17 +710,45 @@ class SanctumAggregator:
         self._best_runs.sort(key=lambda r: r.peak_accuracy, reverse=True)
         self._best_runs = self._best_runs[:10]
 
-        # Reset per-env seed state for next episode
+        # Reset per-env state for next episode
+        # ALL episode-scoped fields must reset here
         for env in self._envs.values():
+            # Seed state
             env.seeds.clear()
             env.active_seed_count = 0
             env.fossilized_count = 0
             env.culled_count = 0
             env.fossilized_params = 0
-            # Reset counterfactual matrix - stale data from previous episode
-            # would confuse users when current seeds have different composition
+
+            # Epoch/progress tracking
+            env.current_epoch = 0
+            env.host_accuracy = 0.0
+            env.epochs_since_improvement = 0
+            env.status = "initializing"
+
+            # History (fresh sparklines each episode)
+            env.reward_history.clear()
+            env.accuracy_history.clear()
+
+            # Best tracking (fresh per episode)
+            env.best_reward = float('-inf')
+            env.best_reward_epoch = 0
+            env.best_accuracy = 0.0
+            env.best_accuracy_epoch = 0
+            env.best_seeds.clear()
+
+            # Action tracking (fresh distribution each episode)
+            env.action_history.clear()
+            env.action_counts = {"WAIT": 0, "GERMINATE": 0, "CULL": 0, "FOSSILIZE": 0}
+            env.total_actions = 0
+
+            # Reward components (stale from last step)
+            env.reward_components = RewardComponents()
+
+            # Counterfactual matrix (stale from previous episode)
             env.counterfactual_matrix = CounterfactualSnapshot()
-            # Reset graveyard stats for next episode
+
+            # Graveyard stats (per-episode)
             env.blueprint_spawns.clear()
             env.blueprint_culls.clear()
             env.blueprint_fossilized.clear()

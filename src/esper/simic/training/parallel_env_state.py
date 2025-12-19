@@ -66,6 +66,12 @@ class ParallelEnvState:
     # Per-slot counterfactual accumulators for multi-slot reward attribution
     cf_correct_accums: dict[str, torch.Tensor] = field(default_factory=dict)
     cf_totals: dict[str, int] = field(default_factory=dict)
+    # "All disabled" counterfactual for true pair synergy measurement
+    cf_all_disabled_accum: torch.Tensor | None = None
+    cf_all_disabled_total: int = 0
+    # Pair counterfactual accumulators for 3-4 seeds (key: tuple of slot indices)
+    cf_pair_accums: dict[tuple[int, int], torch.Tensor] = field(default_factory=dict)
+    cf_pair_totals: dict[tuple[int, int], int] = field(default_factory=dict)
     # LSTM hidden state for recurrent policy
     # Shape: (h, c) where each is [num_layers, 1, hidden_dim] for this single env
     # (Batched to [num_layers, num_envs, hidden_dim] during forward pass)
@@ -106,6 +112,18 @@ class ParallelEnvState:
             slot_id: torch.zeros(1, device=self.env_device) for slot_id in slots
         }
         self.cf_totals: dict[str, int] = {slot_id: 0 for slot_id in slots}
+        # "All disabled" accumulator for true pair synergy measurement
+        self.cf_all_disabled_accum = torch.zeros(1, device=self.env_device)
+        self.cf_all_disabled_total = 0
+        # Pair accumulators for 3-4 seeds (all C(n,2) pairs)
+        n = len(slots)
+        self.cf_pair_accums = {}
+        self.cf_pair_totals = {}
+        if 3 <= n <= 4:
+            for i in range(n):
+                for j in range(i + 1, n):
+                    self.cf_pair_accums[(i, j)] = torch.zeros(1, device=self.env_device)
+                    self.cf_pair_totals[(i, j)] = 0
 
     def zero_accumulators(self) -> None:
         """Zero accumulators at the start of each epoch (faster than reallocating).
@@ -125,6 +143,15 @@ class ParallelEnvState:
             self.cf_correct_accums[slot_id].zero_()
         for slot_id in self.cf_totals:
             self.cf_totals[slot_id] = 0
+        # Zero "all disabled" accumulator
+        if self.cf_all_disabled_accum is not None:
+            self.cf_all_disabled_accum.zero_()
+        self.cf_all_disabled_total = 0
+        # Zero pair accumulators
+        for pair_key in self.cf_pair_accums:
+            self.cf_pair_accums[pair_key].zero_()
+        for pair_key in self.cf_pair_totals:
+            self.cf_pair_totals[pair_key] = 0
 
 
 __all__ = ["ParallelEnvState"]
