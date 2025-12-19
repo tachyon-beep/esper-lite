@@ -74,6 +74,20 @@ class TestEnvState:
         env = EnvState(env_id=0, fossilized_params=128000)
         assert env.fossilized_params == 128000
 
+    def test_growth_ratio_property(self):
+        """Growth ratio shows mutation overhead: (host + fossilized) / host."""
+        # Standard case: 1M host + 200K fossilized = 1.2x growth
+        env = EnvState(env_id=0, host_params=1_000_000, fossilized_params=200_000)
+        assert env.growth_ratio == 1.2
+
+        # No fossilized seeds = 1.0x (no growth)
+        env_no_seeds = EnvState(env_id=0, host_params=1_000_000, fossilized_params=0)
+        assert env_no_seeds.growth_ratio == 1.0
+
+        # Edge case: no host params = 1.0 (avoid division by zero)
+        env_no_host = EnvState(env_id=0, host_params=0, fossilized_params=0)
+        assert env_no_host.growth_ratio == 1.0
+
 
 class TestTamiyoState:
     """TamiyoState must capture all policy agent metrics."""

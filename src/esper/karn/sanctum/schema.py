@@ -128,6 +128,17 @@ class EnvState:
             return 0.0
         return sum(self.reward_history) / len(self.reward_history)
 
+    @property
+    def growth_ratio(self) -> float:
+        """Ratio of mutated model size to original host size.
+
+        Shows mutation overhead: (host_params + fossilized_params) / host_params
+        A growth_ratio of 1.2 means the model is 20% larger due to fossilized seeds.
+        """
+        if self.host_params == 0:
+            return 1.0
+        return (self.host_params + self.fossilized_params) / self.host_params
+
     def add_reward(self, reward: float, epoch: int) -> None:
         """Add reward and update best tracking."""
         self.reward_history.append(reward)
