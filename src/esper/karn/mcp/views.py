@@ -5,10 +5,9 @@ Breaking changes to TelemetryEvent.data fields may require view updates.
 """
 from __future__ import annotations
 
+import duckdb
+from pathlib import Path
 from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    import duckdb
 
 VIEW_DEFINITIONS: dict[str, str] = {
     "raw_events": """
@@ -72,6 +71,7 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.slot_entropy')::DOUBLE as slot_entropy,
             json_extract(data, '$.blueprint_entropy')::DOUBLE as blueprint_entropy,
             json_extract(data, '$.blend_entropy')::DOUBLE as blend_entropy,
+            json_extract(data, '$.tempo_entropy')::DOUBLE as tempo_entropy,
             json_extract(data, '$.op_entropy')::DOUBLE as op_entropy
         FROM raw_events
         WHERE event_type = 'PPO_UPDATE_COMPLETED'
@@ -151,16 +151,13 @@ VIEW_DEFINITIONS: dict[str, str] = {
 }
 
 
-def create_views(conn: "duckdb.DuckDBPyConnection", telemetry_dir: str) -> None:
+def create_views(conn: duckdb.DuckDBPyConnection, telemetry_dir: str) -> None:
     """Create all telemetry views on the given connection.
 
     Args:
         conn: DuckDB connection (in-memory or file-based)
         telemetry_dir: Path to telemetry directory containing run subdirectories
     """
-    import duckdb
-    from pathlib import Path
-
     conn.execute("PRAGMA threads=4")
 
     # Check if any telemetry files exist
