@@ -28,6 +28,7 @@ from esper.karn.sanctum.schema import (
     RewardComponents,
     EventLogEntry,
     BestRunRecord,
+    DecisionSnapshot,
 )
 
 if TYPE_CHECKING:
@@ -454,6 +455,21 @@ class SanctumAggregator:
             last_action=action_name,
             env_id=env_id,
         )
+
+        # Capture decision snapshot (NEW)
+        # Only capture if we have decision data (action_confidence present)
+        if "action_confidence" in data:
+            self._tamiyo.last_decision = DecisionSnapshot(
+                timestamp=event.timestamp or datetime.now(timezone.utc),
+                slot_states=data.get("slot_states", {}),
+                host_accuracy=data.get("host_accuracy", env.host_accuracy),
+                chosen_action=action_name,
+                chosen_slot=data.get("action_slot"),
+                confidence=data.get("action_confidence", 0.0),
+                expected_value=data.get("value_estimate", 0.0),
+                actual_reward=total_reward,
+                alternatives=data.get("alternatives", []),
+            )
 
         # Track focused env for reward panel
         self._focused_env_id = env_id

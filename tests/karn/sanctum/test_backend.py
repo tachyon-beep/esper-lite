@@ -667,6 +667,46 @@ class TestSanctumAggregator:
         assert snapshot2.tamiyo.dead_layers == 0  # Still original value
         assert snapshot2.tamiyo.exploding_layers == 1  # Still original value
 
+    def test_aggregator_captures_decision_snapshot(self):
+        """Aggregator should capture DecisionSnapshot from REWARD_COMPUTED events."""
+        from esper.karn.sanctum.aggregator import SanctumAggregator
+        from esper.leyline import TelemetryEvent, TelemetryEventType
+
+        agg = SanctumAggregator(num_envs=4)
+
+        # Simulate REWARD_COMPUTED with decision data
+        event = TelemetryEvent(
+            event_type=TelemetryEventType.REWARD_COMPUTED,
+            timestamp=datetime.now(timezone.utc),
+            epoch=10,
+            data={
+                "env_id": 0,
+                "total_reward": 0.38,
+                "action_name": "GERMINATE",
+                "action_slot": "r0c1",
+                "action_confidence": 0.73,
+                "value_estimate": 0.42,
+                "slot_states": {"r0c0": "Training 12%", "r0c1": "Empty"},
+                "host_accuracy": 67.0,
+                "alternatives": [("WAIT", 0.15), ("BLEND", 0.12)],
+            },
+        )
+
+        agg.process_event(event)
+        snapshot = agg.get_snapshot()
+
+        # Decision should be captured
+        decision = snapshot.tamiyo.last_decision
+        assert decision is not None
+        assert decision.chosen_action == "GERMINATE"
+        assert decision.confidence == 0.73
+        assert decision.expected_value == 0.42
+        assert decision.actual_reward == 0.38
+        assert decision.chosen_slot == "r0c1"
+        assert decision.host_accuracy == 67.0
+        assert decision.slot_states == {"r0c0": "Training 12%", "r0c1": "Empty"}
+        assert decision.alternatives == [("WAIT", 0.15), ("BLEND", 0.12)]
+
 
 class TestSanctumBackend:
     """Test SanctumBackend OutputBackend protocol."""
