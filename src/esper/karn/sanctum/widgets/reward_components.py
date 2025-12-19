@@ -40,10 +40,23 @@ class RewardComponents(Static):
         """Initialize RewardComponents widget."""
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
+        self._override_env_id: int | None = None
 
-    def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
-        """Update widget with new snapshot data."""
+    def update_snapshot(self, snapshot: "SanctumSnapshot", env_id: int | None = None) -> None:
+        """Update widget with new snapshot data.
+
+        This method intentionally extends the SanctumWidget protocol by accepting an
+        optional env_id parameter. When provided, it overrides the focused_env_id in
+        the snapshot for rendering. This allows the reward components to display data
+        for a specific environment when explicitly requested (e.g., when user selects
+        an environment via keyboard shortcut).
+
+        Args:
+            snapshot: The current telemetry snapshot.
+            env_id: Optional environment ID to focus. If None, uses snapshot's focused_env_id.
+        """
         self._snapshot = snapshot
+        self._override_env_id = env_id
         self.refresh()
 
     def render(self) -> Panel:
@@ -55,8 +68,8 @@ class RewardComponents(Static):
         table.add_column("Component", style="dim")
         table.add_column("Value", justify="right")
 
-        # Get focused env
-        env_id = self._snapshot.focused_env_id
+        # Get focused env (use override if provided)
+        env_id = self._override_env_id if self._override_env_id is not None else self._snapshot.focused_env_id
         env_state = self._snapshot.envs.get(env_id)
 
         if env_state is None:

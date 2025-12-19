@@ -8,15 +8,27 @@ NOT embedded in right column. Event Log included at bottom-left.
 """
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
-from textual.widgets import Footer, Header, Static
+from textual.css.query import NoMatches
+from textual.widgets import Footer, Header
+
+from esper.karn.sanctum.widgets import (
+    EnvOverview,
+    EsperStatus,
+    EventLog,
+    RewardComponents,
+    Scoreboard,
+    TamiyoBrain,
+)
 
 if TYPE_CHECKING:
+    from esper.karn.sanctum.backend import SanctumBackend
     from esper.karn.sanctum.schema import SanctumSnapshot
 
 
@@ -30,121 +42,185 @@ class SanctumApp(App):
     - Minimum: 120x40 (width x height) for readable display
     - Recommended: 140x50 or larger
     - TamiyoBrain requires width ≥ 80 for 4-column layout
+
+    Args:
+        backend: SanctumBackend providing snapshot data.
+        num_envs: Number of training environments.
+        refresh_rate: Snapshot refresh rate in Hz (default: 4).
     """
 
-    TITLE = "Esper Sanctum"
-    SUB_TITLE = "Diagnostic Console"
+    TITLE = "Sanctum - Developer Diagnostics"
+    SUB_TITLE = "Esper Training Debugger"
 
     CSS_PATH = "styles.tcss"
 
     BINDINGS = [
         Binding("q", "quit", "Quit", show=True),
-        Binding("question_mark", "toggle_help", "Help", show=True),
         Binding("tab", "focus_next", "Next Panel", show=False),
         Binding("shift+tab", "focus_previous", "Prev Panel", show=False),
-        Binding("1-9", "focus_env", "Focus Env", show=False),
+        Binding("1", "focus_env(0)", "Env 0", show=False),
+        Binding("2", "focus_env(1)", "Env 1", show=False),
+        Binding("3", "focus_env(2)", "Env 2", show=False),
+        Binding("4", "focus_env(3)", "Env 3", show=False),
+        Binding("5", "focus_env(4)", "Env 4", show=False),
+        Binding("6", "focus_env(5)", "Env 5", show=False),
+        Binding("7", "focus_env(6)", "Env 6", show=False),
+        Binding("8", "focus_env(7)", "Env 7", show=False),
+        Binding("9", "focus_env(8)", "Env 8", show=False),
+        Binding("0", "focus_env(9)", "Env 9", show=False),
         Binding("r", "refresh", "Refresh", show=True),
+        Binding("?", "toggle_help", "Help", show=True),
     ]
 
-    def __init__(self, backend=None, num_envs: int = 16, **kwargs) -> None:
+    def __init__(
+        self,
+        backend: "SanctumBackend",
+        num_envs: int = 16,
+        refresh_rate: float = 4.0,
+    ):
         """Initialize Sanctum app.
 
         Args:
-            backend: Optional backend for live updates (can be None for testing)
-            num_envs: Number of training environments (default 16)
+            backend: SanctumBackend providing snapshot data.
+            num_envs: Number of training environments.
+            refresh_rate: Snapshot refresh rate in Hz.
         """
-        super().__init__(**kwargs)
+        super().__init__()
         self._backend = backend
-        self.num_envs = num_envs
-        self._snapshot: SanctumSnapshot | None = None
+        self._num_envs = num_envs
+        self._refresh_interval = 1.0 / refresh_rate
+        self._focused_env_id: int = 0
+        self._snapshot: "SanctumSnapshot" | None = None
+        self._lock = threading.Lock()
 
     def compose(self) -> ComposeResult:
-        """Compose the application layout.
+        """Build the Sanctum layout.
 
-        CORRECTED LAYOUT (FIX from review):
-        - Header: Run info
-        - Top section (horizontal):
-          - Left (65%): Environment Overview table
-          - Right (35%): Scoreboard (Best Runs)
-        - TamiyoBrain: Full-width dedicated row (size=11)
-        - Bottom section (horizontal):
-          - Left (65%): Event Log
-          - Right (35%): Reward Components + Esper Status (vertical stack)
+        Layout matches existing Rich TUI structure:
+        - Top row: EnvOverview (65%) | Scoreboard (35%)
+        - Middle row: TamiyoBrain (full width, fixed height)
+        - Bottom row: RewardComponents + EventLog (65%) | EsperStatus (35%)
         - Footer: Keybindings
         """
         yield Header()
 
         with Container(id="sanctum-main"):
-            # Top section: Env Overview + Scoreboard
+            # Top section: Environment Overview and Scoreboard
             with Horizontal(id="top-section"):
-                # Left: Environment Overview (65% width)
-                env_overview = Static("[Environment Overview]", id="env-overview", classes="panel focusable")
-                env_overview.can_focus = True
-                yield env_overview
+                yield EnvOverview(num_envs=self._num_envs, id="env-overview")
+                yield Scoreboard(id="scoreboard")
 
-                # Right: Scoreboard (35% width)
-                scoreboard = Static("[Best Runs]", id="scoreboard", classes="panel focusable")
-                scoreboard.can_focus = True
-                yield scoreboard
+            # Middle section: Tamiyo Brain (full width, fixed height)
+            yield TamiyoBrain(id="tamiyo-brain")
 
-            # TamiyoBrain: Full-width dedicated row
-            tamiyo = Static("[Tamiyo Brain]", id="tamiyo-brain", classes="panel focusable brain-panel")
-            tamiyo.can_focus = True
-            yield tamiyo
-
-            # Bottom section: Event Log + (Rewards + Status)
+            # Bottom section: Event Log + (Reward + Status)
             with Horizontal(id="bottom-section"):
-                # Left: Event Log (65% width)
-                event_log = Static("[Event Log]", id="event-log", classes="panel focusable")
-                event_log.can_focus = True
-                yield event_log
+                # Left side: Event Log (65%)
+                yield EventLog(id="event-log")
 
-                # Right: Reward Components + Esper Status (vertical stack, 35% width)
+                # Right side: Reward Components and Esper Status (35%)
                 with Vertical(id="right-bottom"):
-                    rewards = Static("[Reward Components]", id="reward-components", classes="panel focusable")
-                    rewards.can_focus = True
-                    yield rewards
-
-                    status = Static("[Esper Status]", id="esper-status", classes="panel focusable")
-                    status.can_focus = True
-                    yield status
+                    yield RewardComponents(id="reward-components")
+                    yield EsperStatus(id="esper-status")
 
         yield Footer()
 
-    def action_toggle_help(self) -> None:
-        """Toggle help overlay."""
-        self.notify("Help: q=quit, Tab=navigate, 1-9=focus env, r=refresh, ?=help")
+    def on_mount(self) -> None:
+        """Start refresh timer when app mounts."""
+        self.set_interval(self._refresh_interval, self._poll_and_refresh)
 
-    def action_focus_env(self, env_id: str) -> None:
-        """Focus a specific environment by number."""
+    def _poll_and_refresh(self) -> None:
+        """Poll backend for new snapshot and refresh all panels.
+
+        Called periodically by set_interval timer.
+        Thread-safe: backend.get_snapshot() is thread-safe.
+        """
+        if self._backend is None:
+            return
+
+        # Get snapshot from backend (thread-safe)
+        snapshot = self._backend.get_snapshot()
+
+        with self._lock:
+            self._snapshot = snapshot
+
+        # Update all widgets
+        self._refresh_all_panels(snapshot)
+
+    def _refresh_all_panels(self, snapshot: "SanctumSnapshot") -> None:
+        """Refresh all panels with new snapshot data.
+
+        Args:
+            snapshot: The current telemetry snapshot.
+        """
+        # Update each widget - query by ID and call update_snapshot
         try:
-            env_num = int(env_id) - 1  # 1-indexed for user
-            if 0 <= env_num < self.num_envs:
-                if self._snapshot:
-                    self._snapshot.focused_env_id = env_num
-                    self._refresh_focused_panels()
-        except ValueError:
-            pass
+            self.query_one("#env-overview", EnvOverview).update_snapshot(snapshot)
+        except NoMatches:
+            pass  # Widget hasn't mounted yet
+        except Exception as e:
+            self.log.warning(f"Failed to update env-overview: {e}")
+
+        try:
+            self.query_one("#scoreboard", Scoreboard).update_snapshot(snapshot)
+        except NoMatches:
+            pass  # Widget hasn't mounted yet
+        except Exception as e:
+            self.log.warning(f"Failed to update scoreboard: {e}")
+
+        try:
+            self.query_one("#tamiyo-brain", TamiyoBrain).update_snapshot(snapshot)
+        except NoMatches:
+            pass  # Widget hasn't mounted yet
+        except Exception as e:
+            self.log.warning(f"Failed to update tamiyo-brain: {e}")
+
+        try:
+            # RewardComponents needs focused env
+            reward_widget = self.query_one("#reward-components", RewardComponents)
+            reward_widget.update_snapshot(snapshot, env_id=self._focused_env_id)
+        except NoMatches:
+            pass  # Widget hasn't mounted yet
+        except Exception as e:
+            self.log.warning(f"Failed to update reward-components: {e}")
+
+        try:
+            self.query_one("#event-log", EventLog).update_snapshot(snapshot)
+        except NoMatches:
+            pass  # Widget hasn't mounted yet
+        except Exception as e:
+            self.log.warning(f"Failed to update event-log: {e}")
+
+        try:
+            self.query_one("#esper-status", EsperStatus).update_snapshot(snapshot)
+        except NoMatches:
+            pass  # Widget hasn't mounted yet
+        except Exception as e:
+            self.log.warning(f"Failed to update esper-status: {e}")
+
+    def action_focus_env(self, env_id: int) -> None:
+        """Focus on specific environment for detail panels.
+
+        Args:
+            env_id: Environment ID to focus (0-indexed).
+        """
+        if 0 <= env_id < self._num_envs:
+            self._focused_env_id = env_id
+            # Immediately refresh reward components with new focus
+            if self._snapshot:
+                try:
+                    reward_widget = self.query_one("#reward-components", RewardComponents)
+                    reward_widget.update_snapshot(self._snapshot, env_id=env_id)
+                except NoMatches:
+                    pass  # Widget hasn't mounted yet
+                except Exception as e:
+                    self.log.warning(f"Failed to update reward-components in focus: {e}")
 
     def action_refresh(self) -> None:
-        """Refresh display from backend."""
-        if self._backend:
-            self._snapshot = self._backend.get_snapshot()
-            self._refresh_all_panels()
-        else:
-            self.notify("No backend connected")
+        """Manually trigger refresh."""
+        self._poll_and_refresh()
 
-    def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
-        """Update all widgets with new snapshot."""
-        self._snapshot = snapshot
-        self._refresh_all_panels()
-
-    def _refresh_all_panels(self) -> None:
-        """Refresh all panels with current snapshot."""
-        # TODO: [Task 7] Implement when widgets are wired up
-        pass
-
-    def _refresh_focused_panels(self) -> None:
-        """Refresh panels that depend on focused env."""
-        # TODO: [Task 7] Implement when focused-env-aware widgets are added
+    def action_toggle_help(self) -> None:
+        """Toggle help display."""
+        # Textual built-in help
         pass

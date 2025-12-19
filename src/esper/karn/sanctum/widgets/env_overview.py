@@ -42,9 +42,14 @@ class EnvOverview(Static):
     3. A/B cohort: Colored pip (●) next to env ID based on reward_mode
     """
 
-    def __init__(self, **kwargs) -> None:
-        """Initialize EnvOverview widget."""
+    def __init__(self, num_envs: int = 16, **kwargs) -> None:
+        """Initialize EnvOverview widget.
+
+        Args:
+            num_envs: Number of training environments.
+        """
         super().__init__(**kwargs)
+        self._num_envs = num_envs
         self.table = DataTable(zebra_stripes=True, cursor_type="row")
         self._snapshot: SanctumSnapshot | None = None
 
