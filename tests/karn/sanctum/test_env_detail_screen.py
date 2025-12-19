@@ -67,6 +67,42 @@ def test_seed_card_training_stage():
     assert "Epochs: 5" in rendered
 
 
+def test_seed_card_training_stage_shows_learning_annotation():
+    """TRAINING stage seeds should show '(learning)' annotation for accuracy_delta.
+
+    Seeds in TRAINING have alpha=0 and cannot affect host output.
+    The UI should indicate this clearly rather than showing a misleading value.
+    """
+    seed = SeedState(
+        slot_id="r0c0",
+        stage="TRAINING",
+        blueprint_id="conv_light",
+        accuracy_delta=0.0,  # Will be 0 from sync_telemetry
+    )
+    card = SeedCard(seed=seed, slot_id="r0c0")
+    panel = card.render()
+    rendered = render_to_text(panel)
+
+    # Should show "(learning)" annotation to explain why delta is 0
+    assert "learning" in rendered.lower()
+    assert "Acc" in rendered  # Part of "Acc Δ"
+
+
+def test_seed_card_germinated_stage_shows_learning_annotation():
+    """GERMINATED stage seeds should also show '(learning)' annotation."""
+    seed = SeedState(
+        slot_id="r0c0",
+        stage="GERMINATED",
+        blueprint_id="attention",
+        accuracy_delta=0.0,
+    )
+    card = SeedCard(seed=seed, slot_id="r0c0")
+    panel = card.render()
+    rendered = render_to_text(panel)
+
+    assert "learning" in rendered.lower()
+
+
 def test_seed_card_blending_stage():
     """Test rendering of BLENDING stage with alpha."""
     seed = SeedState(

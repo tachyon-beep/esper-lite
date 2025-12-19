@@ -119,8 +119,11 @@ class SeedCard(Static):
             alpha_bar = self._make_alpha_bar(seed.alpha)
             lines.append(Text(f"Alpha: {seed.alpha:.2f} {alpha_bar}"))
 
-        # Accuracy delta
-        if seed.accuracy_delta != 0:
+        # Accuracy delta (stage-aware display)
+        # TRAINING/GERMINATED seeds have alpha=0 and cannot affect output
+        if seed.stage in ("TRAINING", "GERMINATED"):
+            lines.append(Text("Acc Δ: 0.0 (learning)", style="dim italic"))
+        elif seed.accuracy_delta != 0:
             delta_style = "green" if seed.accuracy_delta > 0 else "red"
             lines.append(Text(f"Acc Δ: {seed.accuracy_delta:+.2f}%", style=delta_style))
         else:

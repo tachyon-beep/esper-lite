@@ -343,11 +343,22 @@ class SeedState:
 
         Call this once per epoch after validation to update telemetry.
         SeedMetrics remains the source of truth for accuracy/epoch data.
+
+        IMPORTANT: accuracy_delta is stage-aware:
+        - TRAINING/GERMINATED (alpha=0): Always 0.0 because seed cannot affect output
+        - BLENDING+ (alpha>0): Stage-relative improvement (proxy for causal contribution)
         """
         from datetime import timezone
 
         self.telemetry.accuracy = self.metrics.current_val_accuracy
-        self.telemetry.accuracy_delta = self.metrics.improvement_since_stage_start
+
+        # Stage-aware accuracy_delta: seeds with alpha=0 have zero causal impact
+        # TRAINING and GERMINATED seeds are learning but not contributing to output
+        if self.stage in (SeedStage.TRAINING, SeedStage.GERMINATED, SeedStage.DORMANT):
+            self.telemetry.accuracy_delta = 0.0
+        else:
+            # BLENDING, PROBATIONARY, FOSSILIZED - seed is contributing via alpha
+            self.telemetry.accuracy_delta = self.metrics.improvement_since_stage_start
         self.telemetry.epochs_in_stage = self.metrics.epochs_in_current_stage
         self.telemetry.stage = self.stage.value
         self.telemetry.alpha = self.alpha
