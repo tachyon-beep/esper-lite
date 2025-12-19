@@ -510,6 +510,10 @@ class SanctumAggregator:
         """Handle BATCH_COMPLETED event (episode completion)."""
         data = event.data or {}
 
+        # Capture current episode BEFORE updating for best_runs check
+        # (best_accuracy_episode was set using the old value during EPOCH_COMPLETED)
+        current_ep = self._current_episode
+
         episodes_completed = data.get("episodes_completed")
         if isinstance(episodes_completed, (int, float)):
             self._current_episode = int(episodes_completed)
@@ -525,7 +529,6 @@ class SanctumAggregator:
 
         # Capture best run records for envs that improved during this batch
         # Do this BEFORE resetting seed state so we can snapshot the seeds
-        current_ep = self._current_episode
         for env in self._envs.values():
             # Check if this env achieved a new best during this episode
             if env.best_accuracy_episode == current_ep and env.best_accuracy > 0:

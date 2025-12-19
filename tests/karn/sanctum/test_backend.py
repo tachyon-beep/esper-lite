@@ -431,6 +431,49 @@ class TestSanctumAggregator:
         # Verify episode counter updated
         assert snapshot.current_episode == 1
 
+    def test_batch_completed_captures_best_runs(self):
+        """BATCH_COMPLETED should capture best_runs for envs that improved."""
+        agg = SanctumAggregator(num_envs=4)
+
+        # Emit EPOCH_COMPLETED with improving accuracy
+        epoch_event = MagicMock()
+        epoch_event.event_type = MagicMock()
+        epoch_event.event_type.name = "EPOCH_COMPLETED"
+        epoch_event.timestamp = datetime.now(timezone.utc)
+        epoch_event.data = {
+            "env_id": 0,
+            "val_accuracy": 85.0,
+            "val_loss": 0.3,
+            "inner_epoch": 10,
+        }
+        agg.process_event(epoch_event)
+
+        # Germinate a seed so we have seed state to snapshot
+        germ_event = MagicMock()
+        germ_event.event_type = MagicMock()
+        germ_event.event_type.name = "SEED_GERMINATED"
+        germ_event.timestamp = datetime.now(timezone.utc)
+        germ_event.slot_id = "r0c0"
+        germ_event.data = {"env_id": 0, "blueprint_id": "conv_light", "params": 1000}
+        agg.process_event(germ_event)
+
+        # Now emit BATCH_COMPLETED
+        batch_event = MagicMock()
+        batch_event.event_type = MagicMock()
+        batch_event.event_type.name = "BATCH_COMPLETED"
+        batch_event.timestamp = datetime.now(timezone.utc)
+        batch_event.data = {"episodes_completed": 1}
+        agg.process_event(batch_event)
+
+        snapshot = agg.get_snapshot()
+
+        # Verify best_runs was populated
+        assert len(snapshot.best_runs) == 1
+        record = snapshot.best_runs[0]
+        assert record.env_id == 0
+        assert record.peak_accuracy == 85.0
+        assert record.episode == 0  # The episode when best was achieved
+
     def test_ppo_update_skipped_does_not_update_tamiyo(self):
         """PPO_UPDATE_COMPLETED with skipped=True should not update Tamiyo state."""
         agg = SanctumAggregator(num_envs=4)
