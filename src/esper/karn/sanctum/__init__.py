@@ -8,6 +8,8 @@ Usage:
     python -m esper.scripts.train ppo --sanctum
 """
 from esper.karn.sanctum.app import SanctumApp
+from esper.karn.sanctum.aggregator import SanctumAggregator
+from esper.karn.sanctum.backend import SanctumBackend
 from esper.karn.sanctum.schema import (
     SanctumSnapshot,
     EnvState,
@@ -22,6 +24,8 @@ from esper.karn.sanctum.schema import (
 
 __all__ = [
     "SanctumApp",
+    "SanctumAggregator",
+    "SanctumBackend",
     "SanctumSnapshot",
     "EnvState",
     "SeedState",
