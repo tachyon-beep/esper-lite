@@ -383,9 +383,9 @@ def _emit_anomaly_diagnostics(
 # =============================================================================
 
 def _compute_batched_bootstrap_values(
-    agent,
-    post_action_data: list[dict],
-    obs_normalizer,
+    agent: PPOAgent,
+    post_action_data: list[dict[str, Any]],
+    obs_normalizer: RunningMeanStd,
     device: str,
 ) -> list[float]:
     """Compute bootstrap values for all truncated envs in single forward pass.
@@ -414,8 +414,18 @@ def _compute_batched_bootstrap_values(
     features_normalized = obs_normalizer.normalize(features_batch)
 
     # Stack hidden states: each is [layers, 1, hidden_dim], need [layers, batch, hidden_dim]
-    hidden_h = torch.cat([d["hidden"][0] for d in post_action_data], dim=1)
-    hidden_c = torch.cat([d["hidden"][1] for d in post_action_data], dim=1)
+    try:
+        hidden_h = torch.cat([d["hidden"][0] for d in post_action_data], dim=1)
+        hidden_c = torch.cat([d["hidden"][1] for d in post_action_data], dim=1)
+    except RuntimeError as e:
+        shapes_h = [d["hidden"][0].shape for d in post_action_data]
+        shapes_c = [d["hidden"][1].shape for d in post_action_data]
+        raise RuntimeError(
+            f"LSTM hidden state shape mismatch during bootstrap batching. "
+            f"Expected all states to be [layers, 1, hidden_dim]. "
+            f"Got h shapes: {shapes_h}, c shapes: {shapes_c}. "
+            f"Original error: {e}"
+        ) from e
 
     # Stack masks
     masks_batch = {
@@ -2276,11 +2286,21 @@ def train_ppo_vectorized(
             # PHASE 2: Compute all bootstrap values in single batched forward pass
             # All episodes truncate at max_epochs, so we batch-compute all bootstrap values
             # in one forward pass instead of N separate forward passes (eliminates N-1 GPU syncs)
+            # NOTE: bootstrap_data may be empty if no transitions were truncated (all done=True).
+            # This is valid - _compute_batched_bootstrap_values returns [] for empty input.
             bootstrap_values = _compute_batched_bootstrap_values(
                 agent=agent,
                 post_action_data=bootstrap_data,
                 obs_normalizer=obs_normalizer,
                 device=device,
+            )
+
+            # Validate bootstrap value count matches truncated transition count
+            truncated_count = sum(1 for t in transitions_data if t["truncated"])
+            assert len(bootstrap_values) == truncated_count, (
+                f"Bootstrap value count mismatch: expected {truncated_count} values "
+                f"for truncated transitions, got {len(bootstrap_values)}. "
+                f"Data collection failed in Phase 1."
             )
 
             # PHASE 3: Store transitions to buffer with pre-computed bootstrap values
