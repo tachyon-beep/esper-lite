@@ -388,9 +388,12 @@ class EnvOverview(Static):
         elif seed.has_vanishing:
             grad_indicator = "[yellow]▼[/yellow]"
 
-        # BLENDING shows alpha
+        # BLENDING shows tempo arrows and alpha
+        # Tempo: ▸▸▸ = FAST (3), ▸▸ = STANDARD (5), ▸ = SLOW (8)
         if seed.stage == "BLENDING" and seed.alpha > 0:
-            base = f"[{style}]{stage_short}:{blueprint} {seed.alpha:.1f}[/{style}]"
+            tempo = seed.blend_tempo_epochs
+            tempo_arrows = "▸▸▸" if tempo <= 3 else ("▸▸" if tempo <= 5 else "▸")
+            base = f"[{style}]{stage_short}:{blueprint} {tempo_arrows} {seed.alpha:.1f}[/{style}]"
             return f"{base}{grad_indicator}" if grad_indicator else base
 
         # Active seeds show epochs in stage

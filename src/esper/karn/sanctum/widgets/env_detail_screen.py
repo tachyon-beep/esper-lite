@@ -121,6 +121,13 @@ class SeedCard(Static):
             alpha_bar = self._make_alpha_bar(seed.alpha)
             lines.append(Text(f"Alpha: {seed.alpha:.2f} {alpha_bar}"))
 
+        # Blend tempo (shown during BLENDING)
+        if seed.stage == "BLENDING":
+            tempo = seed.blend_tempo_epochs
+            tempo_name = "FAST" if tempo <= 3 else ("STANDARD" if tempo <= 5 else "SLOW")
+            tempo_arrows = "▸▸▸" if tempo <= 3 else ("▸▸" if tempo <= 5 else "▸")
+            lines.append(Text(f"Tempo: {tempo_arrows} {tempo_name} ({tempo} epochs)"))
+
         # Accuracy delta (stage-aware display)
         # TRAINING/GERMINATED seeds have alpha=0 and cannot affect output
         if seed.stage in ("TRAINING", "GERMINATED"):

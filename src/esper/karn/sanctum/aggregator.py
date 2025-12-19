@@ -564,6 +564,7 @@ class SanctumAggregator:
             seed.has_vanishing = data.get("has_vanishing", False)
             seed.has_exploding = data.get("has_exploding", False)
             seed.epochs_in_stage = data.get("epochs_in_stage", 0)
+            seed.blend_tempo_epochs = data.get("blend_tempo_epochs", 5)
             env.active_seed_count += 1
 
         elif event_type == "SEED_STAGE_CHANGED":

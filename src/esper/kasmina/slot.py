@@ -1047,6 +1047,7 @@ class SeedSlot(nn.Module):
                 "blueprint_id": blueprint_id,
                 "seed_id": seed_id,
                 "params": sum(p.numel() for p in self.seed.parameters() if p.requires_grad),
+                "blend_tempo_epochs": blend_tempo_epochs,
             }
         )
         return self.state

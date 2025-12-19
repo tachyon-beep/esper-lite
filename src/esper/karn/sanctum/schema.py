@@ -123,6 +123,8 @@ class SeedState:
     auto_culled: bool = False  # True if system auto-culled vs policy decision
     epochs_total: int = 0  # Total epochs seed was alive
     counterfactual: float = 0.0  # Causal attribution score
+    # Blend tempo - Tamiyo's chosen integration speed (3=FAST, 5=STANDARD, 8=SLOW)
+    blend_tempo_epochs: int = 5
 
 
 @dataclass
