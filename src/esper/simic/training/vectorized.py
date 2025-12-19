@@ -1616,6 +1616,57 @@ def train_ppo_vectorized(
                             if seed_state and seed_state.metrics:
                                 seed_state.metrics.counterfactual_contribution = val_acc - baseline_acc
 
+                    # Emit live ablation-based counterfactual matrix for Sanctum real-time display
+                    # This shows "removing this seed decreases accuracy by X%" - useful for operators
+                    # Full factorial (2^n) is only computed at episode end, but ablation data is live.
+                    if hub:
+                        active_slots = list(baseline_accs[env_idx].keys())
+                        if active_slots:
+                            # Build simplified matrix from ablation data:
+                            # - Combined (all enabled): val_acc
+                            # - Per-slot ablation: baseline_accs[slot_id]
+                            # Strategy = "ablation_only" to indicate incomplete factorial
+                            configs = []
+                            n = len(active_slots)
+
+                            # All disabled - not available mid-episode, use min(ablations) as estimate
+                            all_disabled_estimate = min(baseline_accs[env_idx].values())
+                            configs.append({
+                                "seed_mask": [False] * n,
+                                "accuracy": all_disabled_estimate,
+                            })
+
+                            # Per-slot enabled (invert ablation: if removing A gives baseline_A,
+                            # then A's solo contribution ≈ val_acc - baseline_A when A is the ONLY one removed)
+                            # Actually, for single-slot enabled, we approximate by reflecting the ablation:
+                            # If combined=75% and removing A gives 70%, A contributes 5% marginal
+                            # A's "solo" ≈ baseline_estimate + contribution
+                            for i, slot_id in enumerate(active_slots):
+                                contribution = val_acc - baseline_accs[env_idx][slot_id]
+                                solo_estimate = all_disabled_estimate + contribution
+                                mask = [j == i for j in range(n)]
+                                configs.append({
+                                    "seed_mask": mask,
+                                    "accuracy": solo_estimate,
+                                })
+
+                            # All enabled - current accuracy
+                            configs.append({
+                                "seed_mask": [True] * n,
+                                "accuracy": val_acc,
+                            })
+
+                            hub.emit(TelemetryEvent(
+                                event_type=TelemetryEventType.COUNTERFACTUAL_MATRIX_COMPUTED,
+                                data={
+                                    "env_id": env_idx,
+                                    "slot_ids": active_slots,
+                                    "configs": configs,
+                                    "strategy": "ablation_only",
+                                    "compute_time_ms": 0.0,  # No extra compute - using cached baselines
+                                },
+                            ))
+
                 # Log counterfactual contribution at terminal epoch (for all active slots)
                 if epoch == max_epochs and hub and env_idx in slots_needing_counterfactual:
                     for slot_id in slots_needing_counterfactual[env_idx]:

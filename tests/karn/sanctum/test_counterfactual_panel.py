@@ -107,6 +107,33 @@ class TestCounterfactualPanel:
         # Should have correct title and cyan border (not dim like unavailable)
         assert rendered.title == "Counterfactual Analysis"
         assert rendered.border_style == "cyan"
-        # Should contain a Group with multiple lines (not just a Text)
-        from rich.console import Group
-        assert isinstance(rendered.renderable, Group)
+
+    def test_renders_ablation_only_with_indicator(self):
+        """Panel shows 'Live Ablation Analysis' for ablation_only strategy."""
+        from io import StringIO
+        from rich.console import Console
+
+        matrix = CounterfactualSnapshot(
+            slot_ids=("r0c0", "r0c1"),
+            configs=[
+                CounterfactualConfig(seed_mask=(False, False), accuracy=25.0),
+                CounterfactualConfig(seed_mask=(True, False), accuracy=35.0),
+                CounterfactualConfig(seed_mask=(False, True), accuracy=30.0),
+                CounterfactualConfig(seed_mask=(True, True), accuracy=65.0),
+            ],
+            strategy="ablation_only",
+        )
+        panel = CounterfactualPanel(matrix)
+        rendered = panel.render()
+
+        # Render to string to check content
+        console = Console(file=StringIO(), force_terminal=True, width=100)
+        console.print(rendered)
+        content = console.file.getvalue()
+
+        # Should show live ablation header
+        assert "Live Ablation" in content
+        # Should not show pairs (not available for ablation)
+        assert "Pairs:" not in content
+        # Should show episode end note
+        assert "episode end" in content

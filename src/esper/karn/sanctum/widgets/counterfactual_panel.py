@@ -49,6 +49,13 @@ class CounterfactualPanel(Static):
         pairs = self._matrix.pair_contributions()
         synergy = self._matrix.total_synergy()
         n_seeds = len(self._matrix.slot_ids)
+        is_ablation = self._matrix.strategy == "ablation_only"
+
+        # Show strategy indicator for ablation-based estimates
+        if is_ablation:
+            lines.append(Text("Live Ablation Analysis", style="bold cyan"))
+            lines.append(Text("(estimates based on cached baselines)", style="dim italic"))
+            lines.append(Text(""))
 
         # Baseline
         lines.append(self._make_bar_line("Baseline (Host only)", baseline, baseline, combined))
@@ -63,7 +70,8 @@ class CounterfactualPanel(Static):
                 lines.append(self._make_bar_line(label, acc, baseline, combined, contrib))
 
         # Pairs section (only for 2-3 seeds, or top 5 for 4+)
-        if pairs and n_seeds <= 3:
+        # Skip for ablation_only since we don't have pair data
+        if pairs and n_seeds <= 3 and not is_ablation:
             lines.append(Text(""))
             lines.append(Text("Pairs:", style="bold"))
             for (s1, s2), contrib in pairs.items():
@@ -75,7 +83,7 @@ class CounterfactualPanel(Static):
                 pair_synergy = contrib - ind1 - ind2
                 style = "green" if pair_synergy > 0.5 else None
                 lines.append(self._make_bar_line(label, acc, baseline, combined, contrib, highlight=style))
-        elif pairs and n_seeds > 3:
+        elif pairs and n_seeds > 3 and not is_ablation:
             # Show top 5 by synergy
             lines.append(Text(""))
             lines.append(Text("Top Combinations (by synergy):", style="bold"))
@@ -110,7 +118,10 @@ class CounterfactualPanel(Static):
 
         # Interference is MORE critical to surface than synergy - seeds hurting each other
         # Use loud visual treatment for negative cases
-        if synergy < -0.5:
+        # For ablation_only, synergy is estimated and may not be accurate
+        if is_ablation:
+            lines.append(Text("(Pair interactions available at episode end)", style="dim italic"))
+        elif synergy < -0.5:
             # INTERFERENCE: Seeds are hurting each other - make this LOUD
             lines.append(Text(""))
             lines.append(Text("✗ INTERFERENCE DETECTED", style="bold red reverse"))
