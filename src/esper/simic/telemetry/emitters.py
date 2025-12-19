@@ -15,6 +15,7 @@ import torch
 from torch import nn
 
 from esper.leyline import TelemetryEvent, TelemetryEventType, DEFAULT_ENTROPY_COLLAPSE_THRESHOLD
+from esper.leyline.factored_actions import OP_NAMES, BLUEPRINT_IDS, BLEND_IDS
 from .debug_telemetry import LayerGradientStats
 from esper.nissa import get_hub
 
@@ -71,21 +72,39 @@ def emit_last_action(
     *,
     env_id: int,
     epoch: int,
-    factored_action,
+    slot_idx: int,
+    blueprint_idx: int,
+    blend_idx: int,
+    op_idx: int,
     slot_id: str,
     masked: dict[str, bool],
     success: bool,
 ) -> dict:
-    """Emit per-step last-action detail for debugging and UIs."""
+    """Emit per-step last-action detail for debugging and UIs.
+
+    Args:
+        env_id: Environment index
+        epoch: Current epoch
+        slot_idx: Slot action index
+        blueprint_idx: Blueprint action index
+        blend_idx: Blend action index
+        op_idx: Lifecycle operation index
+        slot_id: Target slot ID string
+        masked: Dict of head -> was_masked flags
+        success: Whether the action executed successfully
+
+    Returns:
+        The emitted data dict (for testing)
+    """
     hub = get_hub()
     data = {
         "kind": "last_action",
         "env_id": env_id,
         "inner_epoch": epoch,
-        "op": factored_action.op.name,
+        "op": OP_NAMES[op_idx],
         "slot_id": slot_id,
-        "blueprint_id": factored_action.blueprint_id,
-        "blend_id": factored_action.blend_algorithm_id,
+        "blueprint_id": BLUEPRINT_IDS[blueprint_idx],
+        "blend_id": BLEND_IDS[blend_idx],
         "op_masked": bool(masked.get("op", False)),
         "slot_masked": bool(masked.get("slot", False)),
         "blueprint_masked": bool(masked.get("blueprint", False)),

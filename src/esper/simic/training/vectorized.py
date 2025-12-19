@@ -30,6 +30,7 @@ from __future__ import annotations
 import logging
 import math
 import random
+import threading
 import time
 import warnings
 from contextlib import nullcontext
@@ -488,6 +489,7 @@ def train_ppo_vectorized(
     ab_reward_modes: list[str] | None = None,
     quiet_analytics: bool = False,
     telemetry_dir: str | None = None,
+    ready_event: "threading.Event | None" = None,
 ) -> tuple[PPOAgent, list[dict]]:
     """Train PPO with vectorized environments using INVERTED CONTROL FLOW.
 
@@ -829,6 +831,24 @@ def train_ppo_vectorized(
         num_train_batches = len(shared_train_iter)
         num_test_batches = len(shared_test_iter)
         env_dataloaders = None  # Not using per-env dataloaders
+
+        # CRITICAL: Warm up DataLoader to spawn persistent workers BEFORE TUI starts.
+        # With persistent_workers=True, workers are spawned on first iter() and reused.
+        # If we don't do this here, workers spawn after Textual takes over the terminal,
+        # which corrupts file descriptors and causes "bad value(s) in fds_to_keep" errors.
+        if effective_workers > 0:
+            _warmup_iter = iter(shared_train_iter)
+            # Fetch one batch to ensure workers are fully initialized
+            try:
+                _warmup_batch = next(_warmup_iter)
+                del _warmup_batch  # Free memory
+            except StopIteration:
+                pass  # Empty dataset (shouldn't happen)
+            del _warmup_iter  # Iterator done, but workers persist
+
+    # Signal that DataLoaders are ready (workers spawned) - TUI can now safely start
+    if ready_event is not None:
+        ready_event.set()
 
     def loss_and_correct(outputs: torch.Tensor, targets: torch.Tensor, criterion: nn.Module):
         """Compute loss and correct counts for classification or LM."""
@@ -2084,7 +2104,10 @@ def train_ppo_vectorized(
                     emit_last_action(
                         env_id=env_idx,
                         epoch=epoch,
-                        factored_action=factored_action,
+                        slot_idx=factored_action.slot_idx,
+                        blueprint_idx=factored_action.blueprint_idx,
+                        blend_idx=factored_action.blend_idx,
+                        op_idx=factored_action.op.value,
                         slot_id=target_slot,
                         masked=masked_flags,
                         success=action_success,
