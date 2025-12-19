@@ -18,6 +18,8 @@ from textual.containers import Container, Grid, Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Static
 
+from esper.karn.sanctum.widgets.counterfactual_panel import CounterfactualPanel
+
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import EnvState, SeedState
 
@@ -214,6 +216,13 @@ class EnvDetailScreen(ModalScreen[None]):
         padding-top: 1;
     }
 
+    EnvDetailScreen .counterfactual-section {
+        height: auto;
+        margin-top: 1;
+        border-top: solid $primary-lighten-2;
+        padding-top: 1;
+    }
+
     EnvDetailScreen .footer-hint {
         height: 1;
         text-align: center;
@@ -259,6 +268,13 @@ class EnvDetailScreen(ModalScreen[None]):
             with Vertical(classes="metrics-section"):
                 yield Static(self._render_metrics(), id="detail-metrics")
 
+            # Counterfactual analysis section
+            with Vertical(classes="counterfactual-section"):
+                yield CounterfactualPanel(
+                    self._env.counterfactual_matrix,
+                    id="counterfactual-panel"
+                )
+
             # Footer hint
             yield Static(
                 "[dim]Press ESC or Q to close[/dim]",
@@ -288,6 +304,13 @@ class EnvDetailScreen(ModalScreen[None]):
             metrics.update(self._render_metrics())
         except Exception:
             pass  # Widget may not be mounted yet
+
+        # Update counterfactual panel
+        try:
+            cf_panel = self.query_one("#counterfactual-panel", CounterfactualPanel)
+            cf_panel.update_matrix(env_state.counterfactual_matrix)
+        except Exception:
+            pass
 
         # Update each seed card
         for slot_id in self._slot_ids:

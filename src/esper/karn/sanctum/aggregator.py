@@ -30,6 +30,8 @@ from esper.karn.sanctum.schema import (
     BestRunRecord,
     DecisionSnapshot,
     RunConfig,
+    CounterfactualConfig,
+    CounterfactualSnapshot,
 )
 
 if TYPE_CHECKING:
@@ -204,6 +206,8 @@ class SanctumAggregator:
             self._handle_seed_event(event, event_type)
         elif event_type == "BATCH_COMPLETED":
             self._handle_batch_completed(event)
+        elif event_type == "COUNTERFACTUAL_MATRIX_COMPUTED":
+            self._handle_counterfactual_matrix(event)
 
     def get_snapshot(self) -> SanctumSnapshot:
         """Get current SanctumSnapshot.
@@ -668,6 +672,37 @@ class SanctumAggregator:
             env.fossilized_count = 0
             env.culled_count = 0
             env.fossilized_params = 0
+
+    def _handle_counterfactual_matrix(self, event: "TelemetryEvent") -> None:
+        """Handle COUNTERFACTUAL_MATRIX_COMPUTED event."""
+        data = event.data or {}
+        env_id = data.get("env_id")
+
+        if env_id is None:
+            return
+
+        env = self._envs.get(env_id)
+        if env is None:
+            return
+
+        # Parse configs
+        slot_ids = tuple(data.get("slot_ids", []))
+        raw_configs = data.get("configs", [])
+
+        configs = [
+            CounterfactualConfig(
+                seed_mask=tuple(cfg.get("seed_mask", [])),
+                accuracy=cfg.get("accuracy", 0.0),
+            )
+            for cfg in raw_configs
+        ]
+
+        env.counterfactual_matrix = CounterfactualSnapshot(
+            slot_ids=slot_ids,
+            configs=configs,
+            strategy=data.get("strategy", "unavailable"),
+            compute_time_ms=data.get("compute_time_ms", 0.0),
+        )
 
     # =========================================================================
     # Helpers

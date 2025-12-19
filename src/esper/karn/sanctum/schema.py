@@ -19,6 +19,87 @@ from typing import Any
 
 
 @dataclass
+class CounterfactualConfig:
+    """Single configuration result from factorial evaluation.
+
+    Represents one row in the counterfactual matrix:
+    e.g., seed_mask=(True, False, True) means slots 0 and 2 enabled.
+    """
+    seed_mask: tuple[bool, ...]  # Which seeds are enabled
+    accuracy: float = 0.0  # Validation accuracy for this config
+
+
+@dataclass
+class CounterfactualSnapshot:
+    """Full factorial counterfactual matrix for an environment.
+
+    Contains all 2^n configurations for n active seeds.
+    Used to compute marginal contributions and interaction terms.
+    """
+    slot_ids: tuple[str, ...] = ()  # ("r0c0", "r0c1", "r0c2")
+    configs: list[CounterfactualConfig] = field(default_factory=list)
+    strategy: str = "unavailable"  # "full_factorial" or "unavailable"
+    compute_time_ms: float = 0.0
+
+    @property
+    def baseline_accuracy(self) -> float:
+        """Accuracy with all seeds disabled."""
+        for cfg in self.configs:
+            if not any(cfg.seed_mask):
+                return cfg.accuracy
+        return 0.0
+
+    @property
+    def combined_accuracy(self) -> float:
+        """Accuracy with all seeds enabled."""
+        for cfg in self.configs:
+            if all(cfg.seed_mask):
+                return cfg.accuracy
+        return 0.0
+
+    def get_accuracy(self, mask: tuple[bool, ...]) -> float | None:
+        """Get accuracy for a specific seed configuration."""
+        for cfg in self.configs:
+            if cfg.seed_mask == mask:
+                return cfg.accuracy
+        return None
+
+    def individual_contributions(self) -> dict[str, float]:
+        """Compute each seed's solo contribution over baseline."""
+        baseline = self.baseline_accuracy
+        result = {}
+        n = len(self.slot_ids)
+        for i, slot_id in enumerate(self.slot_ids):
+            mask = tuple(j == i for j in range(n))
+            acc = self.get_accuracy(mask)
+            if acc is not None:
+                result[slot_id] = acc - baseline
+        return result
+
+    def pair_contributions(self) -> dict[tuple[str, str], float]:
+        """Compute each pair's contribution over baseline."""
+        baseline = self.baseline_accuracy
+        result = {}
+        n = len(self.slot_ids)
+        for i in range(n):
+            for j in range(i + 1, n):
+                mask = tuple(k == i or k == j for k in range(n))
+                acc = self.get_accuracy(mask)
+                if acc is not None:
+                    pair = (self.slot_ids[i], self.slot_ids[j])
+                    result[pair] = acc - baseline
+        return result
+
+    def total_synergy(self) -> float:
+        """Compute total synergy: combined - baseline - sum(individual contributions)."""
+        baseline = self.baseline_accuracy
+        combined = self.combined_accuracy
+        individuals = self.individual_contributions()
+        expected = baseline + sum(individuals.values())
+        return combined - expected
+
+
+@dataclass
 class SeedState:
     """State of a single seed slot.
 
@@ -87,6 +168,11 @@ class EnvState:
     # Reward component breakdown (from REWARD_COMPUTED telemetry)
     # Uses RewardComponents dataclass for type safety. Populated by aggregator.
     reward_components: "RewardComponents" = field(default_factory=lambda: RewardComponents())
+
+    # Counterfactual matrix (from COUNTERFACTUAL_MATRIX_COMPUTED telemetry)
+    counterfactual_matrix: CounterfactualSnapshot = field(
+        default_factory=CounterfactualSnapshot
+    )
 
     # History for sparklines (maxlen=50)
     reward_history: deque[float] = field(default_factory=lambda: deque(maxlen=50))
