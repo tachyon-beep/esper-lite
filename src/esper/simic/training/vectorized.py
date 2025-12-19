@@ -2104,6 +2104,7 @@ def train_ppo_vectorized(
                         max_seeds=effective_max_seeds,
                         slot_config=slot_config,
                         device=torch.device(device),
+                        topology=task_spec.topology,
                     )
 
                     # Get V(s_{t+1}) - use updated LSTM hidden state from this step
