@@ -210,6 +210,19 @@ class SanctumApp(App):
         except Exception as e:
             self.log.warning(f"Failed to update esper-status: {e}")
 
+        # Update EnvDetailScreen modal if displayed
+        # Check if we have a modal screen on the stack
+        if len(self.screen_stack) > 1:
+            current_screen = self.screen_stack[-1]
+            if isinstance(current_screen, EnvDetailScreen):
+                # Get updated env state from snapshot
+                env = snapshot.envs.get(current_screen.env_id)
+                if env is not None:
+                    try:
+                        current_screen.update_env_state(env)
+                    except Exception as e:
+                        self.log.warning(f"Failed to update env-detail-screen: {e}")
+
     def action_focus_env(self, env_id: int) -> None:
         """Focus on specific environment for detail panels.
 

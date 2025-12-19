@@ -59,6 +59,15 @@ class SeedCard(Static):
         self._seed = seed
         self._slot_id = slot_id
 
+    def update_seed(self, seed: "SeedState | None") -> None:
+        """Update the seed state and refresh display.
+
+        Args:
+            seed: New SeedState for this slot, or None if dormant.
+        """
+        self._seed = seed
+        self.refresh()
+
     def compose(self):
         """No child widgets - we render directly."""
         yield from []
@@ -218,28 +227,67 @@ class EnvDetailScreen(ModalScreen[None]):
         super().__init__(**kwargs)
         self._env = env_state
         self._slot_ids = slot_ids
+        self._env_id = env_state.env_id  # Track env_id for updates
+
+    @property
+    def env_id(self) -> int:
+        """Return the environment ID this screen is showing."""
+        return self._env_id
 
     def compose(self):
         """Compose the modal layout."""
         with Container(id="modal-container"):
             # Header bar
-            yield Static(self._render_header(), classes="header-bar")
+            yield Static(self._render_header(), id="detail-header", classes="header-bar")
 
             # Seed grid
             with Horizontal(classes="seed-grid"):
                 for slot_id in self._slot_ids:
                     seed = self._env.seeds.get(slot_id)
-                    yield SeedCard(seed, slot_id)
+                    yield SeedCard(seed, slot_id, id=f"seed-card-{slot_id}")
 
             # Metrics section
             with Vertical(classes="metrics-section"):
-                yield Static(self._render_metrics())
+                yield Static(self._render_metrics(), id="detail-metrics")
 
             # Footer hint
             yield Static(
                 "[dim]Press ESC or Q to close[/dim]",
                 classes="footer-hint",
             )
+
+    def update_env_state(self, env_state: "EnvState") -> None:
+        """Update the displayed environment state.
+
+        Called by the app during refresh to keep modal in sync with live data.
+
+        Args:
+            env_state: Updated environment state.
+        """
+        self._env = env_state
+
+        # Update header
+        try:
+            header = self.query_one("#detail-header", Static)
+            header.update(self._render_header())
+        except Exception:
+            pass  # Widget may not be mounted yet
+
+        # Update metrics
+        try:
+            metrics = self.query_one("#detail-metrics", Static)
+            metrics.update(self._render_metrics())
+        except Exception:
+            pass  # Widget may not be mounted yet
+
+        # Update each seed card
+        for slot_id in self._slot_ids:
+            try:
+                seed = self._env.seeds.get(slot_id)
+                card = self.query_one(f"#seed-card-{slot_id}", SeedCard)
+                card.update_seed(seed)
+            except Exception:
+                pass  # Widget may not be mounted yet
 
     def _render_header(self) -> Text:
         """Render the header bar with env summary."""

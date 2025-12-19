@@ -335,3 +335,40 @@ def test_stage_colors_defined():
 
     for stage in expected_stages:
         assert stage in STAGE_COLORS, f"Missing color for stage: {stage}"
+
+
+def test_seed_card_update_seed():
+    """Test that SeedCard.update_seed() updates the seed state."""
+    initial_seed = SeedState(slot_id="r0c0", stage="TRAINING", accuracy_delta=1.0)
+    card = SeedCard(seed=initial_seed, slot_id="r0c0")
+
+    # Update to a new seed state
+    new_seed = SeedState(slot_id="r0c0", stage="BLENDING", accuracy_delta=5.0, alpha=0.5)
+    card.update_seed(new_seed)
+
+    # Verify internal state was updated
+    assert card._seed == new_seed
+    assert card._seed.stage == "BLENDING"
+    assert card._seed.alpha == 0.5
+
+
+def test_env_detail_screen_env_id_property():
+    """Test that EnvDetailScreen exposes env_id for modal refresh lookup."""
+    env = EnvState(env_id=7)
+    screen = EnvDetailScreen(env_state=env, slot_ids=[])
+
+    assert screen.env_id == 7
+
+
+def test_env_detail_screen_update_env_state():
+    """Test that EnvDetailScreen.update_env_state() updates internal state."""
+    env1 = EnvState(env_id=0, best_accuracy=80.0, host_accuracy=78.0)
+    screen = EnvDetailScreen(env_state=env1, slot_ids=["r0c0"])
+
+    # Update with new env state
+    env2 = EnvState(env_id=0, best_accuracy=85.0, host_accuracy=84.0)
+    screen.update_env_state(env2)
+
+    # Verify internal state was updated
+    assert screen._env == env2
+    assert screen._env.best_accuracy == 85.0
