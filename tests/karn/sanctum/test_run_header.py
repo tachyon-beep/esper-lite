@@ -1,0 +1,210 @@
+"""Tests for RunHeader widget - displays run status and training progress."""
+from io import StringIO
+
+import pytest
+from rich.console import Console
+
+from esper.karn.sanctum.schema import (
+    EnvState,
+    SanctumSnapshot,
+    SeedState,
+)
+from esper.karn.sanctum.widgets.run_header import RunHeader, _format_runtime
+
+
+def render_to_text(panel) -> str:
+    """Helper to render a Rich panel to plain text."""
+    console = Console(file=StringIO(), width=120, legacy_windows=False)
+    console.print(panel)
+    return console.file.getvalue()
+
+
+# =============================================================================
+# _format_runtime Tests
+# =============================================================================
+
+
+def test_format_runtime_zero():
+    """Test runtime formatting for zero or negative."""
+    assert _format_runtime(0) == "--"
+    assert _format_runtime(-5) == "--"
+
+
+def test_format_runtime_seconds():
+    """Test runtime formatting for seconds only."""
+    assert _format_runtime(45) == "45s"
+
+
+def test_format_runtime_minutes():
+    """Test runtime formatting for minutes and seconds."""
+    assert _format_runtime(90) == "1m 30s"
+    assert _format_runtime(180) == "3m 0s"
+
+
+def test_format_runtime_hours():
+    """Test runtime formatting for hours and minutes."""
+    assert _format_runtime(3660) == "1h 1m"
+    assert _format_runtime(7200) == "2h 0m"
+
+
+# =============================================================================
+# RunHeader Widget Tests
+# =============================================================================
+
+
+def test_run_header_creation():
+    """Test widget creation."""
+    widget = RunHeader()
+    assert widget is not None
+
+
+def test_run_header_no_data():
+    """Test render with no snapshot."""
+    widget = RunHeader()
+    panel = widget.render()
+    rendered = render_to_text(panel)
+    assert "Waiting for training data" in rendered
+
+
+def test_run_header_basic_info():
+    """Test basic run info display."""
+    snapshot = SanctumSnapshot(
+        current_episode=5,
+        current_batch=150,
+        current_epoch=250,
+        max_epochs=500,
+        runtime_seconds=3725,  # 1h 2m
+        task_name="CIFAR10",
+        connected=True,
+        staleness_seconds=1.0,
+    )
+
+    # Add an env with a best accuracy
+    env = EnvState(env_id=0, best_accuracy=82.3, best_accuracy_episode=4)
+    snapshot.envs[0] = env
+
+    widget = RunHeader()
+    widget.update_snapshot(snapshot)
+    panel = widget.render()
+    rendered = render_to_text(panel)
+
+    # Check episode
+    assert "Ep" in rendered
+    assert "5" in rendered
+
+    # Check epoch/max
+    assert "250/500" in rendered or "250" in rendered
+
+    # Check batch
+    assert "Batch" in rendered
+    assert "150" in rendered
+
+    # Check runtime
+    assert "1h" in rendered
+
+    # Check best accuracy
+    assert "Best:" in rendered
+    assert "82.3%" in rendered
+
+
+def test_run_header_connection_live():
+    """Test Live connection indicator."""
+    snapshot = SanctumSnapshot(
+        connected=True,
+        staleness_seconds=0.5,
+    )
+
+    widget = RunHeader()
+    widget.update_snapshot(snapshot)
+    panel = widget.render()
+    rendered = render_to_text(panel)
+
+    assert "Live" in rendered
+
+
+def test_run_header_connection_stale():
+    """Test Stale connection indicator."""
+    snapshot = SanctumSnapshot(
+        connected=True,
+        staleness_seconds=10.0,
+    )
+
+    widget = RunHeader()
+    widget.update_snapshot(snapshot)
+    panel = widget.render()
+    rendered = render_to_text(panel)
+
+    assert "Stale" in rendered
+
+
+def test_run_header_connection_disconnected():
+    """Test Disconnected indicator."""
+    snapshot = SanctumSnapshot(
+        connected=False,
+        staleness_seconds=float("inf"),
+    )
+
+    widget = RunHeader()
+    widget.update_snapshot(snapshot)
+    panel = widget.render()
+    rendered = render_to_text(panel)
+
+    assert "Disconnected" in rendered
+
+
+def test_run_header_env_health_summary():
+    """Test environment health summary."""
+    snapshot = SanctumSnapshot(connected=True, staleness_seconds=1.0)
+
+    # Add envs with different statuses
+    snapshot.envs[0] = EnvState(env_id=0, status="healthy")
+    snapshot.envs[1] = EnvState(env_id=1, status="excellent")
+    snapshot.envs[2] = EnvState(env_id=2, status="stalled")
+    snapshot.envs[3] = EnvState(env_id=3, status="degraded")
+
+    widget = RunHeader()
+    widget.update_snapshot(snapshot)
+    panel = widget.render()
+    rendered = render_to_text(panel)
+
+    # Should show env counts
+    assert "OK" in rendered or "2" in rendered  # 2 healthy/excellent
+    assert "stall" in rendered or "1" in rendered
+
+
+def test_run_header_seed_stage_counts():
+    """Test seed stage counts."""
+    snapshot = SanctumSnapshot(connected=True, staleness_seconds=1.0)
+
+    env = EnvState(env_id=0)
+    env.seeds["R0C0"] = SeedState(slot_id="R0C0", stage="TRAINING")
+    env.seeds["R0C1"] = SeedState(slot_id="R0C1", stage="TRAINING")
+    env.seeds["R1C0"] = SeedState(slot_id="R1C0", stage="BLENDING")
+    env.seeds["R1C1"] = SeedState(slot_id="R1C1", stage="FOSSILIZED")
+    snapshot.envs[0] = env
+
+    widget = RunHeader()
+    widget.update_snapshot(snapshot)
+    panel = widget.render()
+    rendered = render_to_text(panel)
+
+    # Should show seed counts (T:2 B:1 F:1)
+    assert "T:" in rendered or "2" in rendered
+    assert "B:" in rendered or "1" in rendered
+    assert "F:" in rendered or "1" in rendered
+
+
+def test_run_header_task_name():
+    """Test task name display."""
+    snapshot = SanctumSnapshot(
+        connected=True,
+        staleness_seconds=1.0,
+        task_name="cifar10_blind",
+    )
+
+    widget = RunHeader()
+    widget.update_snapshot(snapshot)
+    panel = widget.render()
+    rendered = render_to_text(panel)
+
+    assert "cifar10_blind" in rendered

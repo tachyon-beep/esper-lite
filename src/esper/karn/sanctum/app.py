@@ -16,13 +16,14 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
 from textual.css.query import NoMatches
-from textual.widgets import Footer, Header
+from textual.widgets import Footer
 
 from esper.karn.sanctum.widgets import (
     EnvOverview,
     EsperStatus,
     EventLog,
     RewardComponents,
+    RunHeader,
     Scoreboard,
     TamiyoBrain,
 )
@@ -96,13 +97,14 @@ class SanctumApp(App):
     def compose(self) -> ComposeResult:
         """Build the Sanctum layout.
 
-        Layout matches existing Rich TUI structure:
+        Layout structure:
+        - Run Header: Episode, Epoch, Batch, Runtime, Best Accuracy, Connection
         - Top row: EnvOverview (65%) | Scoreboard (35%)
         - Middle row: TamiyoBrain (full width, fixed height)
         - Bottom row: RewardComponents + EventLog (65%) | EsperStatus (35%)
         - Footer: Keybindings
         """
-        yield Header()
+        yield RunHeader(id="run-header")
 
         with Container(id="sanctum-main"):
             # Top section: Environment Overview and Scoreboard
@@ -153,6 +155,14 @@ class SanctumApp(App):
         Args:
             snapshot: The current telemetry snapshot.
         """
+        # Update run header first (most important context)
+        try:
+            self.query_one("#run-header", RunHeader).update_snapshot(snapshot)
+        except NoMatches:
+            pass  # Widget hasn't mounted yet
+        except Exception as e:
+            self.log.warning(f"Failed to update run-header: {e}")
+
         # Update each widget - query by ID and call update_snapshot
         try:
             self.query_one("#env-overview", EnvOverview).update_snapshot(snapshot)

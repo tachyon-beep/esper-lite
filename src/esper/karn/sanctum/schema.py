@@ -79,18 +79,8 @@ class EnvState:
     fossilized_params: int = 0
 
     # Reward component breakdown (from REWARD_COMPUTED telemetry)
-    # DOCUMENTED KEYS (all Esper-specific):
-    #   - base_acc_delta: Legacy shaped signal based on accuracy delta
-    #   - bounded_attribution: Contribution-primary attribution signal
-    #   - seed_contribution: Seed contribution percentage (alternative to bounded_attribution)
-    #   - compute_rent: Cost of active seeds (negative)
-    #   - ratio_penalty: Penalty for extreme policy ratios (negative)
-    #   - stage_bonus: Bonus for reaching advanced stages
-    #   - fossilize_terminal_bonus: Large bonus for successfully fossilizing
-    #   - blending_warning: Warning signal during blending (negative)
-    #   - probation_warning: Warning signal during probation
-    #   - val_acc: Validation accuracy context
-    reward_components: dict[str, float | None] = field(default_factory=dict)
+    # Uses RewardComponents dataclass for type safety. Populated by aggregator.
+    reward_components: "RewardComponents" = field(default_factory=lambda: RewardComponents())
 
     # History for sparklines (maxlen=50)
     reward_history: deque[float] = field(default_factory=lambda: deque(maxlen=50))

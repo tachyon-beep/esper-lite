@@ -174,16 +174,16 @@ class EnvOverview(Static):
         if self._snapshot is None or not self._snapshot.envs:
             return
 
-        # Calculate aggregates
+        # Calculate aggregates (reward_components is now a RewardComponents dataclass)
         deltas = [
-            float(e.reward_components.get("base_acc_delta", 0))
+            float(e.reward_components.base_acc_delta)
             for e in self._snapshot.envs.values()
-            if isinstance(e.reward_components.get("base_acc_delta"), (int, float))
+            if isinstance(e.reward_components.base_acc_delta, (int, float))
         ]
         rents = [
-            float(e.reward_components.get("compute_rent", 0))
+            float(e.reward_components.compute_rent)
             for e in self._snapshot.envs.values()
-            if isinstance(e.reward_components.get("compute_rent"), (int, float))
+            if isinstance(e.reward_components.compute_rent, (int, float))
         ]
 
         mean_delta = sum(deltas) / len(deltas) if deltas else 0.0
@@ -256,7 +256,8 @@ class EnvOverview(Static):
 
     def _format_delta_acc(self, env: "EnvState") -> str:
         """Format base accuracy delta component."""
-        base_delta = env.reward_components.get("base_acc_delta")
+        # env.reward_components is now a RewardComponents dataclass
+        base_delta = env.reward_components.base_acc_delta
         if isinstance(base_delta, (int, float)):
             style = "green" if float(base_delta) >= 0 else "red"
             return f"[{style}]{float(base_delta):+.2f}[/{style}]"
@@ -264,9 +265,9 @@ class EnvOverview(Static):
 
     def _format_seed_delta(self, env: "EnvState") -> str:
         """Format seed contribution component."""
-        # Check for seed_contribution first, then bounded_attribution
-        seed_contrib = env.reward_components.get("seed_contribution")
-        bounded_attr = env.reward_components.get("bounded_attribution")
+        # env.reward_components is now a RewardComponents dataclass
+        seed_contrib = env.reward_components.seed_contribution
+        bounded_attr = env.reward_components.bounded_attribution
 
         if isinstance(seed_contrib, (int, float)) and seed_contrib != 0:
             style = "green" if seed_contrib > 0 else "red"
@@ -279,7 +280,8 @@ class EnvOverview(Static):
 
     def _format_rent(self, env: "EnvState") -> str:
         """Format compute rent component."""
-        compute_rent = env.reward_components.get("compute_rent")
+        # env.reward_components is now a RewardComponents dataclass
+        compute_rent = env.reward_components.compute_rent
         if isinstance(compute_rent, (int, float)) and compute_rent != 0:
             return f"[red]{compute_rent:.2f}[/red]"
         return "─"

@@ -5,7 +5,13 @@ from datetime import datetime
 
 from textual.app import App
 
-from esper.karn.sanctum.schema import EnvState, SanctumSnapshot, SeedState, make_sparkline
+from esper.karn.sanctum.schema import (
+    EnvState,
+    RewardComponents,
+    SanctumSnapshot,
+    SeedState,
+    make_sparkline,
+)
 from esper.karn.sanctum.widgets.env_overview import EnvOverview
 
 
@@ -52,11 +58,11 @@ def populated_snapshot():
         status="excellent",
         reward_mode="shaped",  # Blue pip for A/B test
     )
-    env0.reward_components = {
-        "base_acc_delta": 0.15,
-        "bounded_attribution": 0.25,
-        "compute_rent": -0.05,
-    }
+    env0.reward_components = RewardComponents(
+        base_acc_delta=0.15,
+        bounded_attribution=0.25,
+        compute_rent=-0.05,
+    )
     env0.seeds["R0C0"] = SeedState(
         slot_id="R0C0",
         stage="BLENDING",
@@ -94,11 +100,11 @@ def populated_snapshot():
         status="stalled",
         reward_mode="simplified",  # Yellow pip for A/B test
     )
-    env1.reward_components = {
-        "base_acc_delta": -0.05,
-        "seed_contribution": -2.5,
-        "compute_rent": -0.08,
-    }
+    env1.reward_components = RewardComponents(
+        base_acc_delta=-0.05,
+        seed_contribution=-2.5,
+        compute_rent=-0.08,
+    )
     env1.seeds["R0C0"] = SeedState(
         slot_id="R0C0",
         stage="TRAINING",
@@ -124,11 +130,11 @@ def populated_snapshot():
         status="healthy",
         reward_mode="sparse",  # Cyan pip for A/B test
     )
-    env2.reward_components = {
-        "base_acc_delta": 0.02,
-        "bounded_attribution": 0.08,
-        "compute_rent": -0.03,
-    }
+    env2.reward_components = RewardComponents(
+        base_acc_delta=0.02,
+        bounded_attribution=0.08,
+        compute_rent=-0.03,
+    )
     snapshot.envs[2] = env2
 
     # Add some history for sparklines (using direct history manipulation to avoid status changes)

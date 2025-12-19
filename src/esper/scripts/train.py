@@ -56,7 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         choices=["compact", "standard", "wide", "auto"],
         default="auto",
-        help="TUI layout mode: compact (< 100 cols), standard (100-150), wide (150+), auto (detect)",
+        help="DEPRECATED: Use --sanctum instead. This flag is ignored.",
     )
     telemetry_parent.add_argument(
         "--export-karn",
@@ -226,25 +226,22 @@ def main():
 
     # Determine UI mode
     import sys
-    tui_backend = None
     is_tty = sys.stdout.isatty()
     use_overwatch = args.overwatch
     use_sanctum = args.sanctum
-    # Overwatch and Sanctum replace Rich TUI (mutually exclusive with each other)
-    use_tui = not args.no_tui and is_tty and not use_overwatch and not use_sanctum
 
     if not is_tty and not args.no_tui:
         print("Non-TTY detected, using console output instead of TUI")
 
-    if use_tui:
-        from esper.karn import TUIOutput
-        # Pass layout mode (None for auto-detect)
-        layout = None if args.tui_layout == "auto" else args.tui_layout
-        tui_backend = TUIOutput(force_layout=layout)
-        hub.add_backend(tui_backend)
-        # TUI auto-starts on first event
-    elif not use_overwatch and not use_sanctum:
-        # Only add console if NOT using any TUI (Rich TUI, Overwatch, or Sanctum)
+    # Warn about deprecated --tui-layout flag
+    if args.tui_layout != "auto":
+        print(
+            f"WARNING: --tui-layout is deprecated and ignored. "
+            f"Use --sanctum for the developer TUI or --overwatch for operator monitoring."
+        )
+
+    # Add console output if not using a TUI backend
+    if not use_overwatch and not use_sanctum:
         hub.add_backend(ConsoleOutput(min_severity=console_min_severity))
 
     # Add file output if requested
@@ -460,7 +457,7 @@ def main():
                     gpu_preload=args.gpu_preload,
                     telemetry_config=telemetry_config,
                     telemetry_lifecycle_only=args.telemetry_lifecycle_only,
-                    quiet_analytics=use_tui or use_overwatch or use_sanctum,
+                    quiet_analytics=use_overwatch or use_sanctum,
                     **config.to_train_kwargs(),
                 )
         except Exception:
@@ -502,10 +499,7 @@ def main():
             count = karn_collector.store.export_jsonl(export_path)
             print(f"Exported {count} Karn records to {export_path}")
 
-        # Clean up TUI backend if used
-        if tui_backend is not None:
-            tui_backend.close()
-        # Close all hub backends
+        # Close all hub backends (includes Overwatch/Sanctum if used)
         hub.close()
 
 if __name__ == "__main__":

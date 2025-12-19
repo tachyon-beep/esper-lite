@@ -204,11 +204,19 @@ class SanctumAggregator:
         # Update system vitals
         self._update_system_vitals()
 
+        # Get focused env's reward components for the detail panel
+        focused_rewards = RewardComponents()
+        if self._focused_env_id in self._envs:
+            focused_env = self._envs[self._focused_env_id]
+            if isinstance(focused_env.reward_components, RewardComponents):
+                focused_rewards = focused_env.reward_components
+
         return SanctumSnapshot(
             # Run context
             run_id=self._run_id,
             task_name=self._task_name,
             current_episode=self._current_episode,
+            current_batch=self._batches_completed,
             current_epoch=self._current_epoch,
             max_epochs=self._max_epochs,
             runtime_seconds=runtime,
@@ -218,6 +226,8 @@ class SanctumAggregator:
             # Per-env state
             envs=dict(self._envs),
             focused_env_id=self._focused_env_id,
+            # Focused env's reward breakdown (for RewardComponents widget)
+            rewards=focused_rewards,
             # Tamiyo state
             tamiyo=self._tamiyo,
             # System vitals
