@@ -267,12 +267,12 @@ class RunHeader(Static):
             row2.append(" events", style="dim")
         row2.append("  |  ", style="dim")
 
-        # Env health summary
-        row2.append(self._get_env_health_summary())
+        # Env health summary (uses Rich markup, need to parse it)
+        row2.append_text(Text.from_markup(self._get_env_health_summary()))
         row2.append("  |  ", style="dim")
 
-        # Seed stage counts
-        row2.append(self._get_seed_stage_counts())
+        # Seed stage counts (uses Rich markup, need to parse it)
+        row2.append_text(Text.from_markup(self._get_seed_stage_counts()))
 
         # Task name if available
         if s.task_name:
