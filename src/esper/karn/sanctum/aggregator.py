@@ -410,6 +410,9 @@ class SanctumAggregator:
         if data.get("skipped"):
             return
 
+        # Mark that we've received PPO data (enables TamiyoBrain display)
+        self._tamiyo.ppo_data_received = True
+
         # Update Tamiyo state with all PPO metrics
         self._tamiyo.entropy = data.get("entropy", 0.0)
         self._tamiyo.clip_fraction = data.get("clip_fraction", 0.0)
