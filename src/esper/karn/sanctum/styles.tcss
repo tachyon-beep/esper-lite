@@ -10,7 +10,8 @@
 
 /* Top section: Env Overview + Scoreboard */
 #top-section {
-    height: 16;
+    min-height: 20;
+    height: auto;
 }
 
 /* Environment Overview - main table (65% width) */

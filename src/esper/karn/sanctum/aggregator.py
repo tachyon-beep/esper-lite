@@ -125,6 +125,9 @@ class SanctumAggregator:
     # Historical best runs leaderboard (updated at batch end)
     _best_runs: list[BestRunRecord] = field(default_factory=list)
 
+    # Slot configuration (dynamic - populated from training config or observed seeds)
+    _slot_ids: list[str] = field(default_factory=list)
+
     # Thread safety
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -136,6 +139,7 @@ class SanctumAggregator:
         self._vitals = SystemVitals()
         self._gpu_devices = []
         self._best_runs = []
+        self._slot_ids = []
         self._start_time = time.time()
         self._lock = threading.Lock()
 
@@ -223,6 +227,8 @@ class SanctumAggregator:
             connected=self._connected,
             staleness_seconds=staleness,
             captured_at=datetime.now(timezone.utc).isoformat(),
+            # Slot configuration for dynamic columns
+            slot_ids=list(self._slot_ids),
             # Per-env state
             envs=dict(self._envs),
             focused_env_id=self._focused_env_id,
@@ -267,6 +273,16 @@ class SanctumAggregator:
         # Initialize num_envs from event
         n_envs = data.get("n_envs", self.num_envs)
         self.num_envs = n_envs
+
+        # Capture slot configuration from event (if provided)
+        # Falls back to default 2x2 grid if not specified
+        slot_ids = data.get("slot_ids")
+        if slot_ids and isinstance(slot_ids, (list, tuple)):
+            self._slot_ids = list(slot_ids)
+        else:
+            # Default to 2x2 grid (r0c0, r0c1, r1c0, r1c1)
+            from esper.leyline.slot_id import format_slot_id
+            self._slot_ids = [format_slot_id(r, c) for r in range(2) for c in range(2)]
 
         # Reset and recreate env states
         self._envs.clear()
@@ -410,6 +426,12 @@ class SanctumAggregator:
 
         self._ensure_env(env_id)
         env = self._envs[env_id]
+
+        # Dynamically track slot_ids as we observe them
+        if slot_id and slot_id not in self._slot_ids and slot_id != "unknown":
+            self._slot_ids.append(slot_id)
+            # Keep sorted for consistent column order
+            self._slot_ids.sort()
 
         # Get or create seed state
         if slot_id not in env.seeds:
