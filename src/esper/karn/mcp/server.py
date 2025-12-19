@@ -6,11 +6,10 @@ Run with: uv run python -m esper.karn.mcp.server
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 
 import duckdb
 
-from esper.karn.mcp.views import create_views, VIEW_DEFINITIONS
+from esper.karn.mcp.views import create_views
 from esper.karn.mcp.query import execute_query, format_as_markdown
 
 # View documentation for list_views tool

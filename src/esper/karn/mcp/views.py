@@ -15,7 +15,8 @@ VIEW_DEFINITIONS: dict[str, str] = {
         SELECT * FROM read_json_auto(
             '{telemetry_dir}/*/events.jsonl',
             ignore_errors=true,
-            maximum_object_size=16777216
+            maximum_object_size=16777216,
+            union_by_name=true
         )
     """,
     "runs": """
