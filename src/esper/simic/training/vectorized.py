@@ -1760,6 +1760,7 @@ def train_ppo_vectorized(
                 {key: int(actions_cpu[key][i]) for key in HEAD_NAMES}
                 for i in range(len(env_states))
             ]
+            # Single CPU transfer - .tolist() is efficient (no per-element sync)
             values = values_tensor.tolist()
             # head_log_probs is dict of tensors {key: [batch]}
             # Keep as-is for tamiyo buffer storage
