@@ -305,6 +305,9 @@ class SanctumAggregator:
         val_loss = data.get("val_loss", 0.0)
         inner_epoch = data.get("inner_epoch", data.get("epoch", 0))
 
+        # Capture previous accuracy for status update
+        prev_acc = env.accuracy_history[-1] if env.accuracy_history else 0.0
+
         env.host_accuracy = val_acc
         env.host_loss = val_loss
         env.current_epoch = inner_epoch
@@ -325,6 +328,9 @@ class SanctumAggregator:
             env.best_seeds = {k: SeedState(**v.__dict__) for k, v in env.seeds.items()}
         else:
             env.epochs_since_improvement += 1
+
+        # Update env status based on accuracy changes
+        env._update_status(prev_acc, val_acc)
 
         # Update per-seed telemetry from EPOCH_COMPLETED event
         # This provides per-tick accuracy_delta updates for all active seeds

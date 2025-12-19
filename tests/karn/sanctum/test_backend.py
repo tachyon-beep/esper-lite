@@ -178,6 +178,44 @@ class TestSanctumAggregator:
         assert "r0c0" in snapshot.slot_ids
         assert "r0c1" in snapshot.slot_ids
 
+    def test_epoch_completed_updates_env_status(self):
+        """EPOCH_COMPLETED should update env status based on accuracy."""
+        agg = SanctumAggregator(num_envs=4)
+
+        # Initial status should be "initializing"
+        snapshot = agg.get_snapshot()
+        assert snapshot.envs[0].status == "initializing"
+
+        # First epoch with accuracy > 0 should set "healthy"
+        event1 = MagicMock()
+        event1.event_type = MagicMock()
+        event1.event_type.name = "EPOCH_COMPLETED"
+        event1.timestamp = datetime.now(timezone.utc)
+        event1.data = {
+            "env_id": 0,
+            "val_accuracy": 70.0,
+            "val_loss": 1.0,
+            "inner_epoch": 1,
+        }
+        agg.process_event(event1)
+        snapshot = agg.get_snapshot()
+        assert snapshot.envs[0].status == "healthy"
+
+        # High accuracy (>80%) should set "excellent"
+        event2 = MagicMock()
+        event2.event_type = MagicMock()
+        event2.event_type.name = "EPOCH_COMPLETED"
+        event2.timestamp = datetime.now(timezone.utc)
+        event2.data = {
+            "env_id": 0,
+            "val_accuracy": 85.0,
+            "val_loss": 0.5,
+            "inner_epoch": 5,
+        }
+        agg.process_event(event2)
+        snapshot = agg.get_snapshot()
+        assert snapshot.envs[0].status == "excellent"
+
     def test_reward_computed_updates_env_state(self):
         """REWARD_COMPUTED should update per-env state."""
         agg = SanctumAggregator(num_envs=4)
