@@ -703,6 +703,7 @@ class SanctumAggregator:
                     final_accuracy=env.host_accuracy,
                     absolute_episode=absolute_ep,
                     seeds={k: SeedState(**v.__dict__) for k, v in env.best_seeds.items()},
+                    growth_ratio=env.growth_ratio,
                 )
                 self._best_runs.append(record)
 

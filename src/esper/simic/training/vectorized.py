@@ -1549,20 +1549,21 @@ def train_ppo_vectorized(
 
                         # Pair passes for 3-4 seeds (enable only pair, disable others)
                         # For 2 seeds, the "all enabled" config IS the pair, so no extra passes needed
+                        # NOTE: Use seed_i/seed_j to avoid shadowing outer env loop variable 'i'
                         if 3 <= n_active <= 4:
-                            for i in range(n_active):
-                                for j in range(i + 1, n_active):
+                            for seed_i in range(n_active):
+                                for seed_j in range(seed_i + 1, n_active):
                                     with stream_ctx:
                                         with ExitStack() as stack:
                                             # Disable seeds NOT in the pair
                                             for k, slot_id in enumerate(active_slot_list):
-                                                if k != i and k != j:
+                                                if k != seed_i and k != seed_j:
                                                     stack.enter_context(env_state.model.seed_slots[slot_id].force_alpha(0.0))
                                             _, cf_pair_correct, cf_pair_total = process_val_batch(
                                                 env_state, inputs, targets, criterion, slots=slots
                                             )
-                                        env_state.cf_pair_accums[(i, j)].add_(cf_pair_correct)
-                                    env_state.cf_pair_totals[(i, j)] += cf_pair_total
+                                        env_state.cf_pair_accums[(seed_i, seed_j)].add_(cf_pair_correct)
+                                    env_state.cf_pair_totals[(seed_i, seed_j)] += cf_pair_total
 
             # Single sync point at end (not once per pass)
             for env_state in env_states:

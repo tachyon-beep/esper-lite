@@ -89,8 +89,9 @@ class Scoreboard(Static):
         lb_table.add_column("#", style="dim", width=3)
         lb_table.add_column("@Ep", justify="right", width=4)
         lb_table.add_column("Peak", justify="right", width=6)
-        lb_table.add_column("End", justify="right", width=6)
-        lb_table.add_column("Seeds", justify="left", width=20)
+        lb_table.add_column("End", justify="right", width=5)
+        lb_table.add_column("Size", justify="right", width=5)  # Growth ratio
+        lb_table.add_column("Seeds", justify="left", width=18)
 
         medals = ["🥇", "🥈", "🥉"]
 
@@ -106,11 +107,11 @@ class Scoreboard(Static):
             total_events = self._snapshot.total_events_received
 
             if total_events == 0:
-                lb_table.add_row("[dim]no events received yet[/]", "", "", "", "")
+                lb_table.add_row("[dim]no events received yet[/]", "", "", "", "", "")
             elif batch_count == 0 and ep_count == 0:
-                lb_table.add_row("[dim]waiting for first batch...[/]", "", "", "", "")
+                lb_table.add_row("[dim]waiting for first batch...[/]", "", "", "", "", "")
             elif not envs_with_best:
-                lb_table.add_row(f"[dim]0/{len(all_envs)} envs have best[/]", "", "", "", "")
+                lb_table.add_row(f"[dim]0/{len(all_envs)} envs have best[/]", "", "", "", "", "")
             else:
                 # best_accuracy exists but best_runs empty - detailed diagnostic
                 # Show which episode envs think they improved in vs current
@@ -121,6 +122,7 @@ class Scoreboard(Static):
                         f"[dim]cur_ep={ep_count}[/]",
                         f"[dim]env0.best_ep={sample_env.best_accuracy_episode}[/]",
                         "",
+                        "",
                         ""
                     )
                     # Show if there's an episode mismatch
@@ -130,10 +132,11 @@ class Scoreboard(Static):
                             "",
                             f"[dim]{sample_env.best_accuracy_episode}!={ep_count}[/]",
                             "",
+                            "",
                             ""
                         )
                 else:
-                    lb_table.add_row("[dim]diagnostic failed[/]", "", "", "", "")
+                    lb_table.add_row("[dim]diagnostic failed[/]", "", "", "", "", "")
         else:
             for i, record in enumerate(best_runs):
                 # Rank with medal or number
@@ -157,11 +160,21 @@ class Scoreboard(Static):
                 # Format seeds at best
                 seeds_str = self._format_seeds(record.seeds)
 
+                # Format growth ratio (1.0 = no growth, >1.0 = model grew)
+                growth = record.growth_ratio
+                if growth <= 1.0:
+                    growth_str = "[dim]1.0x[/]"
+                elif growth < 1.1:
+                    growth_str = f"[cyan]{growth:.2f}x[/]"
+                else:
+                    growth_str = f"[bold cyan]{growth:.2f}x[/]"
+
                 lb_table.add_row(
                     rank,
                     str(record.absolute_episode),
                     f"[bold green]{record.peak_accuracy:.1f}[/]",
                     f"[{cur_style}]{record.final_accuracy:.1f}[/]",
+                    growth_str,
                     seeds_str,
                 )
 

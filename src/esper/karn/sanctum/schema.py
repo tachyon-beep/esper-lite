@@ -559,6 +559,7 @@ class BestRunRecord:
     final_accuracy: float  # Accuracy at the end of the batch
     absolute_episode: int = 0  # Human-readable: episode * num_envs + env_id + 1
     seeds: dict[str, SeedState] = field(default_factory=dict)  # Seeds at peak
+    growth_ratio: float = 1.0  # Model size ratio: (host + fossilized) / host
 
 
 @dataclass
