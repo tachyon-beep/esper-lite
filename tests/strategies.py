@@ -137,6 +137,38 @@ def seed_stages(draw):
 
 
 @st.composite
+def tempo_actions(draw):
+    """Generate valid TempoAction enum values.
+
+    Returns:
+        TempoAction enum value (FAST=0, STANDARD=1, SLOW=2)
+
+    Example:
+        @given(tempo_actions())
+        def test_tempo_property(tempo):
+            assert tempo in TempoAction
+    """
+    from esper.leyline.factored_actions import TempoAction
+    return draw(st.sampled_from(list(TempoAction)))
+
+
+@st.composite
+def tempo_epochs(draw):
+    """Generate valid blend tempo epoch counts.
+
+    Returns:
+        int: Valid tempo epoch count (3, 5, or 8)
+
+    Example:
+        @given(tempo_epochs())
+        def test_tempo_epochs(epochs):
+            assert epochs in {3, 5, 8}
+    """
+    from esper.leyline.factored_actions import TEMPO_TO_EPOCHS
+    return draw(st.sampled_from(list(TEMPO_TO_EPOCHS.values())))
+
+
+@st.composite
 def seed_telemetries(draw, seed_id: str | None = None):
     """Generate random but valid SeedTelemetry instances.
 
@@ -154,6 +186,13 @@ def seed_telemetries(draw, seed_id: str | None = None):
             assert len(features) == 10
     """
     from esper.leyline import SeedTelemetry
+
+    # Generate blend tempo epochs (3, 5, or 8)
+    blend_tempo = draw(tempo_epochs())
+
+    # Blending velocity is d(alpha)/d(epoch), bounded by 1/blend_tempo
+    max_velocity = 1.0 / blend_tempo
+    blending_vel = draw(bounded_floats(0.0, max_velocity))
 
     return SeedTelemetry(
         seed_id=seed_id or draw(st.text(min_size=1, max_size=16)),
@@ -174,6 +213,9 @@ def seed_telemetries(draw, seed_id: str | None = None):
         # Temporal context
         epoch=draw(st.integers(min_value=0, max_value=1000)),
         max_epochs=draw(st.integers(min_value=1, max_value=1000)),
+        # Tempo context (new)
+        blend_tempo_epochs=blend_tempo,
+        blending_velocity=blending_vel,
     )
 
 
@@ -668,6 +710,8 @@ __all__ = [
     "seed_telemetries",
     "training_metrics",
     "training_signals",
+    "tempo_actions",
+    "tempo_epochs",
     # Simic
     "action_members",
     "seed_infos",

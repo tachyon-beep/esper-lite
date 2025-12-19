@@ -530,3 +530,121 @@ class TestBlueprintMask:
                 assert masks["blueprint"][bp].item() is False, (
                     f"Non-CNN blueprint {bp.name} should be disabled for default topology"
                 )
+
+
+class TestTempoMaskDimensions:
+    """Property: Tempo mask has correct dimensions (NUM_TEMPO = 3)."""
+
+    @given(config=slot_configs(max_slots=10))
+    def test_tempo_mask_dimension_single_env(self, config: SlotConfig):
+        """Property: tempo mask has NUM_TEMPO dimensions for single env."""
+        from esper.leyline.factored_actions import NUM_TEMPO
+
+        slot_states = {slot_id: None for slot_id in config.slot_ids}
+        enabled = list(config.slot_ids)
+
+        masks = compute_action_masks(
+            slot_states=slot_states,
+            enabled_slots=enabled,
+            slot_config=config,
+        )
+
+        assert masks["tempo"].shape == (NUM_TEMPO,), (
+            f"Tempo mask shape {masks['tempo'].shape} != ({NUM_TEMPO},)"
+        )
+
+    @given(
+        config=slot_configs(max_slots=10),
+        n_envs=st.integers(min_value=1, max_value=8),
+    )
+    @settings(max_examples=50)
+    def test_tempo_mask_dimension_batch(self, config: SlotConfig, n_envs: int):
+        """Property: batched tempo mask has (n_envs, NUM_TEMPO) shape."""
+        from esper.leyline.factored_actions import NUM_TEMPO
+
+        batch_states = [{slot_id: None for slot_id in config.slot_ids} for _ in range(n_envs)]
+        enabled = list(config.slot_ids)
+
+        masks = compute_batch_masks(
+            batch_slot_states=batch_states,
+            enabled_slots=enabled,
+            slot_config=config,
+        )
+
+        assert masks["tempo"].shape == (n_envs, NUM_TEMPO), (
+            f"Batched tempo mask shape {masks['tempo'].shape} != ({n_envs}, {NUM_TEMPO})"
+        )
+
+
+class TestTempoMaskInvariants:
+    """Property: Tempo mask invariants that must hold for all states."""
+
+    @given(config=slot_configs())
+    def test_all_tempo_options_always_valid(self, config: SlotConfig):
+        """Property: All tempo options (FAST, STANDARD, SLOW) are always enabled.
+
+        Unlike blueprint/op masks, tempo has no invalid choices - all speeds
+        are always available. This is by design: tempo is a pure policy choice,
+        not constrained by state.
+        """
+        from esper.leyline.factored_actions import TempoAction
+
+        slot_states = {slot_id: None for slot_id in config.slot_ids}
+        enabled = list(config.slot_ids)
+
+        masks = compute_action_masks(
+            slot_states=slot_states,
+            enabled_slots=enabled,
+            slot_config=config,
+        )
+
+        # All tempo options should be enabled
+        for tempo in TempoAction:
+            assert masks["tempo"][tempo].item() is True, (
+                f"Tempo option {tempo.name} should always be enabled"
+            )
+
+    @given(
+        config=slot_configs(),
+        data=st.data(),
+    )
+    def test_tempo_mask_independent_of_slot_state(self, config: SlotConfig, data):
+        """Property: Tempo mask is independent of which slots are occupied."""
+        from esper.leyline.factored_actions import TempoAction
+
+        # Generate random slot states
+        slot_states = data.draw(slot_states_for_config(config))
+        enabled = data.draw(enabled_slots_for_config(config))
+
+        masks = compute_action_masks(
+            slot_states=slot_states,
+            enabled_slots=enabled,
+            slot_config=config,
+        )
+
+        # Regardless of slot state, all tempo options should be enabled
+        assert masks["tempo"].all(), (
+            f"Tempo mask should be all True regardless of slot state: {masks['tempo']}"
+        )
+
+    @given(
+        config=slot_configs(),
+        n_envs=st.integers(min_value=1, max_value=4),
+        data=st.data(),
+    )
+    @settings(max_examples=30)
+    def test_tempo_mask_batch_all_true(self, config: SlotConfig, n_envs: int, data):
+        """Property: Batched tempo mask is all True for all environments."""
+        batch_states = [data.draw(slot_states_for_config(config)) for _ in range(n_envs)]
+        enabled = data.draw(enabled_slots_for_config(config))
+
+        masks = compute_batch_masks(
+            batch_slot_states=batch_states,
+            enabled_slots=enabled,
+            slot_config=config,
+        )
+
+        # All envs, all tempo options should be True
+        assert masks["tempo"].all(), (
+            f"Batched tempo mask should be all True: {masks['tempo']}"
+        )

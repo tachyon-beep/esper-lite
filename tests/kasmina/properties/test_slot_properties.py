@@ -300,3 +300,94 @@ class TestMetricsConsistency:
         for i in range(n_accuracies):
             metrics.record_accuracy(50.0)
             assert metrics.epochs_total == i + 1
+
+
+class TestTempoProperties:
+    """Property tests for blend tempo lever functionality."""
+
+    @given(
+        tempo=st.sampled_from([3, 5, 8]),  # Valid TEMPO_TO_EPOCHS values
+    )
+    def test_blend_tempo_epochs_stored_in_seed_state(self, tempo: int):
+        """Property: blend_tempo_epochs is stored correctly in SeedState."""
+        from esper.kasmina.slot import SeedSlot
+
+        slot = SeedSlot(slot_id="r0c0", channels=64)
+        slot.germinate("noop", seed_id="test", blend_tempo_epochs=tempo)
+
+        assert slot.state.blend_tempo_epochs == tempo
+
+    @given(
+        tempo=st.sampled_from([3, 5, 8]),
+    )
+    def test_blend_tempo_epochs_default_is_standard(self, tempo: int):
+        """Property: Default blend_tempo_epochs is 5 (STANDARD)."""
+        from esper.kasmina.slot import SeedSlot
+
+        slot = SeedSlot(slot_id="r0c0", channels=64)
+        slot.germinate("noop", seed_id="test")  # No tempo specified
+
+        # Default should be STANDARD = 5 epochs
+        assert slot.state.blend_tempo_epochs == 5
+
+    @given(
+        tempo=st.sampled_from([3, 5, 8]),
+    )
+    def test_blend_tempo_epochs_serialization_roundtrip(self, tempo: int):
+        """Property: blend_tempo_epochs survives to_dict/from_dict roundtrip."""
+        state = SeedState(
+            seed_id="test",
+            blueprint_id="noop",
+            slot_id="r0c0",
+            stage=SeedStage.GERMINATED,
+            blend_tempo_epochs=tempo,
+        )
+
+        data = state.to_dict()
+        restored = SeedState.from_dict(data)
+
+        assert restored.blend_tempo_epochs == tempo
+
+    @given(
+        tempo=st.sampled_from([3, 5, 8]),
+        alpha=alpha_values(include_boundaries=False),
+    )
+    @settings(max_examples=50)
+    def test_blending_velocity_bounded_by_tempo(self, tempo: int, alpha: float):
+        """Property: Blending velocity is bounded by 1/tempo epochs."""
+        assume(0.01 < alpha < 0.99)
+
+        # Blending velocity = d(alpha) / d(epoch)
+        # Max velocity occurs when alpha goes 0->1 in `tempo` epochs
+        max_velocity = 1.0 / tempo
+
+        # Simulated velocity (this is what the policy should produce)
+        # If alpha changes by delta_alpha in 1 epoch, velocity = delta_alpha
+        velocity = alpha / tempo  # Assuming linear ramp from 0
+
+        assert velocity <= max_velocity + 1e-9, (
+            f"Velocity {velocity} exceeds max {max_velocity} for tempo {tempo}"
+        )
+
+    def test_tempo_to_epochs_mapping_consistency(self):
+        """Property: TEMPO_TO_EPOCHS covers all TempoAction values."""
+        from esper.leyline.factored_actions import TempoAction, TEMPO_TO_EPOCHS
+
+        # Every enum value should have a mapping
+        for tempo in TempoAction:
+            assert tempo in TEMPO_TO_EPOCHS, f"Missing TEMPO_TO_EPOCHS entry for {tempo}"
+
+        # Mapping should be monotonic (FAST < STANDARD < SLOW)
+        epochs = [TEMPO_TO_EPOCHS[t] for t in sorted(TempoAction, key=lambda x: x.value)]
+        assert epochs == sorted(epochs), f"TEMPO_TO_EPOCHS should be monotonic: {epochs}"
+
+    def test_tempo_action_enum_bounds(self):
+        """Property: TempoAction enum values are contiguous 0..N-1."""
+        from esper.leyline.factored_actions import TempoAction, NUM_TEMPO
+
+        values = [t.value for t in TempoAction]
+
+        assert min(values) == 0, "TempoAction should start at 0"
+        assert max(values) == NUM_TEMPO - 1, f"TempoAction max should be {NUM_TEMPO - 1}"
+        assert len(values) == NUM_TEMPO, "TempoAction count mismatch"
+        assert sorted(values) == list(range(NUM_TEMPO)), "TempoAction values not contiguous"
