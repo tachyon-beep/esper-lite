@@ -16,9 +16,10 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
 from textual.css.query import NoMatches
-from textual.widgets import Footer
+from textual.widgets import DataTable, Footer
 
 from esper.karn.sanctum.widgets import (
+    EnvDetailScreen,
     EnvOverview,
     EsperStatus,
     EventLog,
@@ -57,6 +58,7 @@ class SanctumApp(App):
 
     BINDINGS = [
         Binding("q", "quit", "Quit", show=True),
+        Binding("d", "show_env_detail", "Detail", show=True),
         Binding("tab", "focus_next", "Next Panel", show=False),
         Binding("shift+tab", "focus_previous", "Prev Panel", show=False),
         Binding("1", "focus_env(0)", "Env 0", show=False),
@@ -234,3 +236,59 @@ class SanctumApp(App):
         """Toggle help display."""
         # Textual built-in help
         pass
+
+    def action_show_env_detail(self) -> None:
+        """Show detailed view of focused environment.
+
+        Opens a full-screen modal with comprehensive seed and environment metrics.
+        """
+        if self._snapshot is None:
+            return
+
+        env = self._snapshot.envs.get(self._focused_env_id)
+        if env is None:
+            return
+
+        self.push_screen(
+            EnvDetailScreen(
+                env_state=env,
+                slot_ids=self._snapshot.slot_ids,
+            )
+        )
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Handle Enter key on DataTable row to show detail modal.
+
+        Args:
+            event: The row selection event from DataTable.
+        """
+        if self._snapshot is None:
+            return
+
+        # Get env_id from the row key
+        row_key = event.row_key
+        if row_key is None:
+            return
+
+        # Extract env_id from row_key.value (set in EnvOverview._add_env_row)
+        try:
+            env_id = int(row_key.value) if row_key.value is not None else None
+        except (ValueError, TypeError):
+            return
+
+        if env_id is None:
+            return
+
+        env = self._snapshot.envs.get(env_id)
+        if env is None:
+            return
+
+        # Update focused env to match selection
+        self._focused_env_id = env_id
+
+        self.push_screen(
+            EnvDetailScreen(
+                env_state=env,
+                slot_ids=self._snapshot.slot_ids,
+            )
+        )

@@ -458,6 +458,9 @@ class SanctumAggregator:
             seed.has_vanishing = data.get("has_vanishing", seed.has_vanishing)
             seed.has_exploding = data.get("has_exploding", seed.has_exploding)
             seed.epochs_in_stage = data.get("epochs_in_stage", 0)
+            # Capture accuracy_delta from enhanced telemetry
+            if "accuracy_delta" in data:
+                seed.accuracy_delta = data["accuracy_delta"]
 
         elif event_type == "SEED_FOSSILIZED":
             seed.stage = "FOSSILIZED"

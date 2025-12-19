@@ -161,7 +161,8 @@ class EnvOverview(Static):
             status_cell,
         ]
 
-        self.table.add_row(*row)
+        # Add row with key=env_id for row selection event handling
+        self.table.add_row(*row, key=str(env.env_id))
 
     def _add_separator_row(self) -> None:
         """Add separator row before aggregate."""
