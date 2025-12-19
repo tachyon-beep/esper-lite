@@ -670,6 +670,7 @@ def train_ppo_vectorized(
             "param_penalty_weight": param_penalty_weight,
             "sparse_reward_scale": sparse_reward_scale,
             "host_params": host_params_baseline,
+            "slot_ids": list(slot_config.slot_ids),
         },
     ))
 
