@@ -208,3 +208,53 @@ def test_run_header_task_name():
     rendered = render_to_text(panel)
 
     assert "cifar10_blind" in rendered
+
+
+def test_run_header_system_alarm_ok():
+    """Test OK indicator when no memory alarms."""
+    from esper.karn.sanctum.schema import SystemVitals
+
+    snapshot = SanctumSnapshot(
+        connected=True,
+        staleness_seconds=1.0,
+    )
+    snapshot.vitals = SystemVitals(
+        gpu_memory_used_gb=5.0,
+        gpu_memory_total_gb=10.0,
+        ram_used_gb=8.0,
+        ram_total_gb=16.0,
+    )
+
+    widget = RunHeader()
+    widget.update_snapshot(snapshot)
+    panel = widget.render()
+    rendered = render_to_text(panel)
+
+    # Should show OK indicator in subtitle
+    assert "OK" in rendered
+
+
+def test_run_header_system_alarm_triggered():
+    """Test alarm indicator when memory threshold exceeded."""
+    from esper.karn.sanctum.schema import SystemVitals, GPUStats
+
+    snapshot = SanctumSnapshot(
+        connected=True,
+        staleness_seconds=1.0,
+    )
+    snapshot.vitals = SystemVitals(
+        gpu_stats={0: GPUStats(
+            device_id=0,
+            memory_used_gb=9.5,
+            memory_total_gb=10.0,
+        )},
+    )
+
+    widget = RunHeader()
+    widget.update_snapshot(snapshot)
+    panel = widget.render()
+    rendered = render_to_text(panel)
+
+    # Should show alarm indicator with device and percentage
+    assert "cuda:0" in rendered
+    assert "95%" in rendered

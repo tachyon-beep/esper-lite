@@ -136,6 +136,37 @@ class RunHeader(Static):
 
         return " ".join(parts) if parts else "[dim]No seeds[/]"
 
+    def _get_system_alarm_indicator(self) -> str:
+        """Get system alarm indicator for header.
+
+        Returns:
+            "OK" if no memory alarm, or alarm indicator like "cuda:0 95% │ RAM 92%"
+        """
+        if self._snapshot is None:
+            return "OK"
+
+        vitals = self._snapshot.vitals
+        if not vitals.has_memory_alarm:
+            return "OK"
+
+        alarms = []
+        for device in vitals.memory_alarm_devices:
+            if device == "RAM":
+                pct = int((vitals.ram_used_gb / vitals.ram_total_gb) * 100)
+                alarms.append(f"RAM {pct}%")
+            elif device.startswith("cuda:"):
+                device_id = int(device.split(":")[1])
+                stats = vitals.gpu_stats.get(device_id)
+                if stats and stats.memory_total_gb > 0:
+                    pct = int((stats.memory_used_gb / stats.memory_total_gb) * 100)
+                    alarms.append(f"{device} {pct}%")
+                elif device_id == 0 and vitals.gpu_memory_total_gb > 0:
+                    # Fallback for single GPU
+                    pct = int((vitals.gpu_memory_used_gb / vitals.gpu_memory_total_gb) * 100)
+                    alarms.append(f"cuda:0 {pct}%")
+
+        return " │ ".join(alarms) if alarms else "OK"
+
     def render(self) -> Panel:
         """Render the run header panel."""
         if self._snapshot is None:
@@ -205,12 +236,35 @@ class RunHeader(Static):
 
         table.add_row(row1)
 
-        # === Row 2: Connection + Health ===
+        # === Row 2: Connection + Diagnostics + Health ===
         row2 = Text()
 
         # Connection status
         conn_text, conn_style = self._get_connection_status()
         row2.append(conn_text, style=conn_style)
+        row2.append("  |  ", style="dim")
+
+        # Thread status indicator (critical for debugging crashes)
+        if s.training_thread_alive is True:
+            row2.append("Thread ", style="dim")
+            row2.append("✓", style="green")
+        elif s.training_thread_alive is False:
+            row2.append("Thread ", style="dim")
+            row2.append("✗ DEAD", style="bold red")
+        else:
+            row2.append("Thread ", style="dim")
+            row2.append("?", style="dim")
+        row2.append("  |  ", style="dim")
+
+        # Event stats - show rate if meaningful
+        if s.total_events_received > 0 and s.runtime_seconds > 0:
+            events_per_sec = s.total_events_received / s.runtime_seconds
+            row2.append(f"{s.total_events_received:,}", style="cyan")
+            row2.append(" events ", style="dim")
+            row2.append(f"({events_per_sec:.1f}/s)", style="dim")
+        else:
+            row2.append(f"{s.total_events_received}", style="cyan")
+            row2.append(" events", style="dim")
         row2.append("  |  ", style="dim")
 
         # Env health summary
@@ -223,12 +277,18 @@ class RunHeader(Static):
         # Task name if available
         if s.task_name:
             row2.append("  |  ", style="dim")
-            row2.append(s.task_name, style="italic dim")
+            row2.append(s.task_name, style="italic cyan")
 
         table.add_row(row2)
+
+        # System alarm indicator
+        alarm_indicator = self._get_system_alarm_indicator()
+        alarm_style = "green" if alarm_indicator == "OK" else "bold red"
 
         return Panel(
             table,
             title="[bold]RUN STATUS[/bold]",
+            subtitle=f"[{alarm_style}]{alarm_indicator}[/]",
+            subtitle_align="right",
             border_style="blue",
         )
