@@ -2141,6 +2141,7 @@ def train_ppo_vectorized(
                         slot_idx=slot_idx,
                         blueprint_idx=blueprint_idx,
                         blend_idx=blend_idx,
+                        tempo_idx=tempo_idx,
                         op_idx=op_idx,
                         slot_id=target_slot,
                         masked=masked_flags,
