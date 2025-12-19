@@ -36,9 +36,12 @@ class SeedState:
     has_exploding: bool = False
     # Stage progress - shown as "e5" in slot cell
     epochs_in_stage: int = 0
-    # Fossilization/cull context (P1 telemetry gap fix)
+    # Fossilization/cull context (P1/P2 telemetry gap fix)
     improvement: float = 0.0  # Accuracy improvement when fossilized
     cull_reason: str = ""  # Why seed was culled (e.g., "gradient_explosion", "stagnation")
+    auto_culled: bool = False  # True if system auto-culled vs policy decision
+    epochs_total: int = 0  # Total epochs seed was alive
+    counterfactual: float = 0.0  # Causal attribution score
 
 
 @dataclass
@@ -270,6 +273,7 @@ class TamiyoState:
 
     # Performance timing (for throughput monitoring)
     update_time_ms: float = 0.0  # PPO update duration in milliseconds
+    early_stop_epoch: int | None = None  # KL early stopping triggered at this epoch
 
     # Action distribution (Actions panel)
     action_counts: dict[str, int] = field(default_factory=dict)

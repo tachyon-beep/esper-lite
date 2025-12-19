@@ -426,6 +426,7 @@ class SanctumAggregator:
 
         # Performance timing
         self._tamiyo.update_time_ms = data.get("update_time_ms", 0.0)
+        self._tamiyo.early_stop_epoch = data.get("early_stop_epoch")
 
     def _handle_reward_computed(self, event: "TelemetryEvent") -> None:
         """Handle REWARD_COMPUTED event with per-env routing."""
@@ -536,17 +537,22 @@ class SanctumAggregator:
 
         elif event_type == "SEED_FOSSILIZED":
             seed.stage = "FOSSILIZED"
-            # Capture fossilization context (P1 telemetry gap fix)
+            # Capture fossilization context (P1/P2 telemetry gap fix)
             seed.improvement = data.get("improvement", 0.0)
             seed.blueprint_id = data.get("blueprint_id") or seed.blueprint_id
+            seed.epochs_total = data.get("epochs_total", 0)
+            seed.counterfactual = data.get("counterfactual", 0.0)
             env.fossilized_params += int(data.get("params_added", 0) or 0)
             env.fossilized_count += 1
             env.active_seed_count = max(0, env.active_seed_count - 1)
 
         elif event_type == "SEED_CULLED":
-            # Capture cull context before resetting (P1 telemetry gap fix)
+            # Capture cull context before resetting (P1/P2 telemetry gap fix)
             seed.cull_reason = data.get("reason", "")
             seed.improvement = data.get("improvement", 0.0)
+            seed.auto_culled = data.get("auto_culled", False)
+            seed.epochs_total = data.get("epochs_total", 0)
+            seed.counterfactual = data.get("counterfactual", 0.0)
 
             # Reset slot to DORMANT
             seed.stage = "DORMANT"
