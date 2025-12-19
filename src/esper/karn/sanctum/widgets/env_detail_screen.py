@@ -121,12 +121,16 @@ class SeedCard(Static):
             alpha_bar = self._make_alpha_bar(seed.alpha)
             lines.append(Text(f"Alpha: {seed.alpha:.2f} {alpha_bar}"))
 
-        # Blend tempo (shown during BLENDING)
-        if seed.stage == "BLENDING":
+        # Blend tempo (shown during BLENDING and for FOSSILIZED to show how they were blended)
+        if seed.stage in ("BLENDING", "FOSSILIZED"):
             tempo = seed.blend_tempo_epochs
             tempo_name = "FAST" if tempo <= 3 else ("STANDARD" if tempo <= 5 else "SLOW")
             tempo_arrows = "▸▸▸" if tempo <= 3 else ("▸▸" if tempo <= 5 else "▸")
-            lines.append(Text(f"Tempo: {tempo_arrows} {tempo_name} ({tempo} epochs)"))
+            # For fossilized, show "was blended" in past tense
+            if seed.stage == "FOSSILIZED":
+                lines.append(Text(f"Blended: {tempo_arrows} {tempo_name}", style="dim"))
+            else:
+                lines.append(Text(f"Tempo: {tempo_arrows} {tempo_name} ({tempo} epochs)"))
 
         # Accuracy delta (stage-aware display)
         # TRAINING/GERMINATED seeds have alpha=0 and cannot affect output
@@ -230,6 +234,13 @@ class EnvDetailScreen(ModalScreen[None]):
         padding-top: 1;
     }
 
+    EnvDetailScreen .graveyard-section {
+        height: auto;
+        margin-top: 1;
+        border-top: solid $primary-lighten-2;
+        padding-top: 1;
+    }
+
     EnvDetailScreen .footer-hint {
         height: 1;
         text-align: center;
@@ -282,6 +293,10 @@ class EnvDetailScreen(ModalScreen[None]):
                     id="counterfactual-panel"
                 )
 
+            # Seed graveyard section
+            with Vertical(classes="graveyard-section"):
+                yield Static(self._render_graveyard(), id="seed-graveyard")
+
             # Footer hint
             yield Static(
                 "[dim]Press ESC or Q to close[/dim]",
@@ -328,6 +343,13 @@ class EnvDetailScreen(ModalScreen[None]):
             except Exception:
                 pass  # Widget may not be mounted yet
 
+        # Update graveyard
+        try:
+            graveyard = self.query_one("#seed-graveyard", Static)
+            graveyard.update(self._render_graveyard())
+        except Exception:
+            pass
+
     def _render_header(self) -> Text:
         """Render the header bar with env summary."""
         env = self._env
@@ -367,6 +389,34 @@ class EnvDetailScreen(ModalScreen[None]):
             )
         else:
             header.append("Improving", style="green")
+
+        # Host params, seed params, and growth ratio
+        header.append("  │  ")
+
+        # Format params in human-readable form
+        def _format_params(p: int) -> str:
+            if p >= 1_000_000:
+                return f"{p / 1_000_000:.1f}M"
+            elif p >= 1_000:
+                return f"{p / 1_000:.1f}K"
+            return str(p)
+
+        host_str = _format_params(env.host_params)
+        seed_str = _format_params(env.fossilized_params)
+        growth = env.growth_ratio
+
+        header.append(f"Host: {host_str}", style="dim")
+        header.append(f"  +Seed: {seed_str}", style="green" if env.fossilized_params > 0 else "dim")
+
+        # Growth ratio with color coding
+        # 1.0x = no growth (dim), 1.0-1.2x = normal (green), >1.2x = significant (yellow)
+        if growth > 1.2:
+            growth_style = "yellow"
+        elif growth > 1.0:
+            growth_style = "green"
+        else:
+            growth_style = "dim"
+        header.append(f"  = {growth:.2f}x", style=growth_style)
 
         return header
 
@@ -444,3 +494,47 @@ class EnvDetailScreen(ModalScreen[None]):
             table.add_row("Recent Actions", recent)
 
         return table
+
+    def _render_graveyard(self) -> Panel:
+        """Render the seed graveyard showing per-blueprint lifecycle stats.
+
+        Shows how many seeds of each blueprint type have been:
+        - Spawned (germinated)
+        - Fossilized (successfully integrated)
+        - Culled (removed due to poor performance)
+        """
+        env = self._env
+
+        # Combine all blueprints seen across spawns, fossilized, culled
+        all_blueprints = set(env.blueprint_spawns.keys())
+        all_blueprints.update(env.blueprint_fossilized.keys())
+        all_blueprints.update(env.blueprint_culls.keys())
+
+        if not all_blueprints:
+            content = Text("No seeds germinated yet", style="dim italic")
+            return Panel(content, title="Seed Graveyard", border_style="dim")
+
+        # Build graveyard display
+        lines = []
+        for blueprint in sorted(all_blueprints):
+            spawned = env.blueprint_spawns.get(blueprint, 0)
+            fossilized = env.blueprint_fossilized.get(blueprint, 0)
+            culled = env.blueprint_culls.get(blueprint, 0)
+
+            line = Text()
+            line.append(f"{blueprint:15s}", style="white")
+            line.append(f"  spawn:{spawned:2d}", style="cyan")
+            line.append(f"  foss:{fossilized:2d}", style="green")
+            line.append(f"  cull:{culled:2d}", style="red")
+
+            # Calculate success rate if any have terminated
+            terminated = fossilized + culled
+            if terminated > 0:
+                success_rate = fossilized / terminated * 100
+                rate_style = "green" if success_rate >= 50 else "yellow" if success_rate >= 25 else "red"
+                line.append(f"  ({success_rate:.0f}% success)", style=rate_style)
+
+            lines.append(line)
+
+        content = Text("\n").join(lines) if lines else Text("No activity", style="dim")
+        return Panel(content, title="Seed Graveyard", border_style="dim")

@@ -167,6 +167,11 @@ class EnvState:
     # FIX: Added fossilized_params for scoreboard display (total params in FOSSILIZED seeds)
     fossilized_params: int = 0
 
+    # Seed graveyard: per-blueprint lifecycle tracking
+    blueprint_spawns: dict[str, int] = field(default_factory=dict)  # blueprint -> spawn count
+    blueprint_culls: dict[str, int] = field(default_factory=dict)   # blueprint -> cull count
+    blueprint_fossilized: dict[str, int] = field(default_factory=dict)  # blueprint -> fossilized count
+
     # Reward component breakdown (from REWARD_COMPUTED telemetry)
     # Uses RewardComponents dataclass for type safety. Populated by aggregator.
     reward_components: "RewardComponents" = field(default_factory=lambda: RewardComponents())

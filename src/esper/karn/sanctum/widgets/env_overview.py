@@ -422,22 +422,23 @@ class EnvOverview(Static):
         """Format epochs since improvement with color coding.
 
         Returns the number of epochs since the last improvement, colored:
-        - Green: 0 (currently improving) with checkmark
+        - Green: 0 (currently improving) with + prefix
         - White: 1-5 (normal) numbers only
-        - Yellow: 6-15 (stagnating) with warning icon
-        - Red: >15 (severely stalled) with X icon
+        - Yellow: 6-15 (stagnating) with ! prefix
+        - Red: >15 (severely stalled) with x prefix
 
-        Icons provide color-independent indication (accessibility).
+        Uses fixed-width ASCII prefixes for consistent column alignment
+        (emojis have variable width and break table formatting).
         """
         epochs = env.epochs_since_improvement
         if epochs == 0:
-            return "[green]✓0[/green]"
+            return "[green]+0[/green]"
         elif epochs <= 5:
-            return f"[white]{epochs}[/white]"
+            return f"[white] {epochs}[/white]"
         elif epochs <= 15:
-            return f"[yellow]⚠{epochs}[/yellow]"
+            return f"[yellow]!{epochs}[/yellow]"
         else:
-            return f"[red]✗{epochs}[/red]"
+            return f"[red]x{epochs}[/red]"
 
     def _format_status(self, env: "EnvState") -> str:
         """Format status with color coding."""

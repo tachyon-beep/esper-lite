@@ -566,6 +566,11 @@ class SanctumAggregator:
             seed.epochs_in_stage = data.get("epochs_in_stage", 0)
             seed.blend_tempo_epochs = data.get("blend_tempo_epochs", 5)
             env.active_seed_count += 1
+            # Track blueprint spawn for graveyard
+            if seed.blueprint_id:
+                env.blueprint_spawns[seed.blueprint_id] = (
+                    env.blueprint_spawns.get(seed.blueprint_id, 0) + 1
+                )
 
         elif event_type == "SEED_STAGE_CHANGED":
             seed.stage = data.get("to", seed.stage)
@@ -584,9 +589,15 @@ class SanctumAggregator:
             seed.blueprint_id = data.get("blueprint_id") or seed.blueprint_id
             seed.epochs_total = data.get("epochs_total", 0)
             seed.counterfactual = data.get("counterfactual", 0.0)
+            # Preserve blend_tempo_epochs for fossilized display (already set at germination)
             env.fossilized_params += int(data.get("params_added", 0) or 0)
             env.fossilized_count += 1
             env.active_seed_count = max(0, env.active_seed_count - 1)
+            # Track blueprint fossilization for graveyard
+            if seed.blueprint_id:
+                env.blueprint_fossilized[seed.blueprint_id] = (
+                    env.blueprint_fossilized.get(seed.blueprint_id, 0) + 1
+                )
 
         elif event_type == "SEED_CULLED":
             # Capture cull context before resetting (P1/P2 telemetry gap fix)
@@ -595,7 +606,13 @@ class SanctumAggregator:
             seed.auto_culled = data.get("auto_culled", False)
             seed.epochs_total = data.get("epochs_total", 0)
             seed.counterfactual = data.get("counterfactual", 0.0)
-            seed.blueprint_id = data.get("blueprint_id") or seed.blueprint_id
+            culled_blueprint = data.get("blueprint_id") or seed.blueprint_id
+
+            # Track blueprint cull for graveyard BEFORE reset
+            if culled_blueprint:
+                env.blueprint_culls[culled_blueprint] = (
+                    env.blueprint_culls.get(culled_blueprint, 0) + 1
+                )
 
             # Reset slot to DORMANT
             seed.stage = "DORMANT"
@@ -676,6 +693,10 @@ class SanctumAggregator:
             # Reset counterfactual matrix - stale data from previous episode
             # would confuse users when current seeds have different composition
             env.counterfactual_matrix = CounterfactualSnapshot()
+            # Reset graveyard stats for next episode
+            env.blueprint_spawns.clear()
+            env.blueprint_culls.clear()
+            env.blueprint_fossilized.clear()
 
     def _handle_counterfactual_matrix(self, event: "TelemetryEvent") -> None:
         """Handle COUNTERFACTUAL_MATRIX_COMPUTED event."""
