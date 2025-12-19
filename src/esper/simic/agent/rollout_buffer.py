@@ -211,11 +211,11 @@ class TamiyoRolloutBuffer:
         blueprint_action: int,
         blend_action: int,
         op_action: int,
-        slot_log_prob: float,
-        blueprint_log_prob: float,
-        blend_log_prob: float,
-        op_log_prob: float,
-        value: float,
+        slot_log_prob: float | torch.Tensor,
+        blueprint_log_prob: float | torch.Tensor,
+        blend_log_prob: float | torch.Tensor,
+        op_log_prob: float | torch.Tensor,
+        value: float | torch.Tensor,
         reward: float,
         done: bool,
         slot_mask: torch.Tensor,
@@ -225,7 +225,7 @@ class TamiyoRolloutBuffer:
         hidden_h: torch.Tensor,
         hidden_c: torch.Tensor,
         truncated: bool = False,
-        bootstrap_value: float = 0.0,
+        bootstrap_value: float | torch.Tensor = 0.0,
     ) -> None:
         """Add a transition for a specific environment.
 
