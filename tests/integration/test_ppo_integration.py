@@ -11,15 +11,16 @@ import torch
 from esper.simic.agent import PPOAgent, signals_to_features
 from esper.tamiyo.policy.features import MULTISLOT_FEATURE_SIZE
 from esper.leyline import TrainingSignals, SeedTelemetry
+from esper.leyline.factored_actions import NUM_BLUEPRINTS, NUM_BLENDS, NUM_OPS
 
 
 def _create_all_valid_masks(batch_size: int = 1) -> dict[str, torch.Tensor]:
     """Create all-valid per-head action masks for testing."""
     return {
-        "slot": torch.ones(batch_size, 3, dtype=torch.bool),      # 3 slots
-        "blueprint": torch.ones(batch_size, 5, dtype=torch.bool), # 5 blueprints
-        "blend": torch.ones(batch_size, 3, dtype=torch.bool),     # 3 blend modes
-        "op": torch.ones(batch_size, 4, dtype=torch.bool),        # 4 ops (WAIT, GERMINATE, CULL, FOSSILIZE)
+        "slot": torch.ones(batch_size, 3, dtype=torch.bool),              # 3 slots
+        "blueprint": torch.ones(batch_size, NUM_BLUEPRINTS, dtype=torch.bool),
+        "blend": torch.ones(batch_size, NUM_BLENDS, dtype=torch.bool),
+        "op": torch.ones(batch_size, NUM_OPS, dtype=torch.bool),
     }
 
 
@@ -48,7 +49,7 @@ class TestPPOFeatureCompatibility:
 
         # Should work without errors
         with torch.no_grad():
-            actions, log_probs, values, hidden = agent.network.get_action(
+            result = agent.network.get_action(
                 state_tensor,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
@@ -57,9 +58,9 @@ class TestPPOFeatureCompatibility:
             )
 
         # Check outputs
-        assert "op" in actions, "Should have op action"
-        assert "slot" in actions, "Should have slot action"
-        assert values.shape == (1,), "Value should be scalar per batch item"
+        assert "op" in result.actions, "Should have op action"
+        assert "slot" in result.actions, "Should have slot action"
+        assert result.values.shape == (1,), "Value should be scalar per batch item"
 
     def test_features_with_telemetry_compatible_with_agent(self):
         """Features with telemetry should be compatible with network."""
@@ -82,7 +83,7 @@ class TestPPOFeatureCompatibility:
 
         # Should work without errors
         with torch.no_grad():
-            actions, log_probs, values, hidden = agent.network.get_action(
+            result = agent.network.get_action(
                 state_tensor,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
@@ -90,7 +91,7 @@ class TestPPOFeatureCompatibility:
                 op_mask=masks["op"],
             )
 
-        assert values.shape == (1,)
+        assert result.values.shape == (1,)
 
     def test_batch_compatibility(self):
         """Test that batched features work with agent."""
@@ -114,7 +115,7 @@ class TestPPOFeatureCompatibility:
 
         # Should handle batch without errors
         with torch.no_grad():
-            actions, log_probs, values, hidden = agent.network.get_action(
+            result = agent.network.get_action(
                 batch_tensor,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
@@ -122,9 +123,9 @@ class TestPPOFeatureCompatibility:
                 op_mask=masks["op"],
             )
 
-        assert values.shape == (batch_size,)
+        assert result.values.shape == (batch_size,)
         for key in ["slot", "blueprint", "blend", "op"]:
-            assert actions[key].shape == (batch_size,), f"{key} actions should have batch dim"
+            assert result.actions[key].shape == (batch_size,), f"{key} actions should have batch dim"
 
 
 class TestPPOForwardPass:
@@ -161,7 +162,7 @@ class TestPPOForwardPass:
         masks = _create_all_valid_masks(batch_size)
 
         with torch.no_grad():
-            actions, log_probs, values, hidden = agent.network.get_action(
+            result = agent.network.get_action(
                 states,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
@@ -169,7 +170,7 @@ class TestPPOForwardPass:
                 op_mask=masks["op"],
             )
 
-        assert values.shape == (batch_size,), f"Expected shape ({batch_size},), got {values.shape}"
+        assert result.values.shape == (batch_size,), f"Expected shape ({batch_size},), got {result.values.shape}"
 
     def test_forward_pass_deterministic(self):
         """Same input should produce same output in deterministic mode."""
@@ -180,14 +181,14 @@ class TestPPOForwardPass:
         agent.network.eval()
 
         with torch.no_grad():
-            actions1, _, values1, _ = agent.network.get_action(
+            result1 = agent.network.get_action(
                 state, deterministic=True,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
                 blend_mask=masks["blend"],
                 op_mask=masks["op"],
             )
-            actions2, _, values2, _ = agent.network.get_action(
+            result2 = agent.network.get_action(
                 state, deterministic=True,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
@@ -197,8 +198,8 @@ class TestPPOForwardPass:
 
         # Actions should be identical
         for key in ["slot", "blueprint", "blend", "op"]:
-            assert torch.equal(actions1[key], actions2[key]), f"{key} actions should be deterministic"
-        assert torch.allclose(values1, values2), "Values should be deterministic"
+            assert torch.equal(result1.actions[key], result2.actions[key]), f"{key} actions should be deterministic"
+        assert torch.allclose(result1.values, result2.values), "Values should be deterministic"
 
 
 class TestPPOActionSampling:
@@ -210,7 +211,7 @@ class TestPPOActionSampling:
         state = torch.randn(1, 50)
         masks = _create_all_valid_masks()
 
-        actions, log_probs, values, hidden = agent.network.get_action(
+        result = agent.network.get_action(
             state,
             slot_mask=masks["slot"],
             blueprint_mask=masks["blueprint"],
@@ -220,14 +221,14 @@ class TestPPOActionSampling:
         )
 
         # Check action ranges
-        assert 0 <= actions["slot"].item() < 3, "Slot action out of range"
-        assert 0 <= actions["blueprint"].item() < 5, "Blueprint action out of range"
-        assert 0 <= actions["blend"].item() < 3, "Blend action out of range"
-        assert 0 <= actions["op"].item() < 4, "Op action out of range"
+        assert 0 <= result.actions["slot"].item() < 3, "Slot action out of range"
+        assert 0 <= result.actions["blueprint"].item() < NUM_BLUEPRINTS, "Blueprint action out of range"
+        assert 0 <= result.actions["blend"].item() < NUM_BLENDS, "Blend action out of range"
+        assert 0 <= result.actions["op"].item() < NUM_OPS, "Op action out of range"
 
         # Log probs should be negative
         for key in ["slot", "blueprint", "blend", "op"]:
-            assert log_probs[key].item() <= 0, f"{key} log prob should be <= 0"
+            assert result.log_probs[key].item() <= 0, f"{key} log prob should be <= 0"
 
     def test_deterministic_action_selects_argmax(self):
         """Deterministic action should select highest probability action."""
@@ -238,7 +239,7 @@ class TestPPOActionSampling:
         # Get deterministic action multiple times
         all_actions = {key: [] for key in ["slot", "blueprint", "blend", "op"]}
         for _ in range(10):
-            actions, _, _, _ = agent.network.get_action(
+            result = agent.network.get_action(
                 state, deterministic=True,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
@@ -246,7 +247,7 @@ class TestPPOActionSampling:
                 op_mask=masks["op"],
             )
             for key in all_actions:
-                all_actions[key].append(actions[key].item())
+                all_actions[key].append(result.actions[key].item())
 
         # All should be the same
         for key, action_list in all_actions.items():
@@ -261,14 +262,14 @@ class TestPPOActionSampling:
         # Sample multiple times
         all_op_actions = []
         for _ in range(100):
-            actions, _, _, _ = agent.network.get_action(
+            result = agent.network.get_action(
                 state, deterministic=False,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
                 blend_mask=masks["blend"],
                 op_mask=masks["op"],
             )
-            all_op_actions.append(actions["op"].item())
+            all_op_actions.append(result.actions["op"].item())
 
         # Should have some variety (with high probability)
         unique_actions = set(all_op_actions)
@@ -300,7 +301,7 @@ class TestPPOEndToEnd:
         # Get action
         state_tensor = torch.tensor([features], dtype=torch.float32)
         masks = _create_all_valid_masks()
-        actions, log_probs, values, hidden = agent.network.get_action(
+        result = agent.network.get_action(
             state_tensor,
             slot_mask=masks["slot"],
             blueprint_mask=masks["blueprint"],
@@ -310,10 +311,10 @@ class TestPPOEndToEnd:
         )
 
         # All outputs should be valid
-        assert 0 <= actions["op"].item() < 4, "Invalid op action"
-        for key in log_probs:
-            assert log_probs[key].item() <= 0, f"Invalid {key} log prob"
-        assert values.shape == (1,), "Invalid value shape"
+        assert 0 <= result.actions["op"].item() < NUM_OPS, "Invalid op action"
+        for key in result.log_probs:
+            assert result.log_probs[key].item() <= 0, f"Invalid {key} log prob"
+        assert result.values.shape == (1,), "Invalid value shape"
 
     def test_telemetry_pipeline(self):
         """Pipeline with telemetry features."""
@@ -332,7 +333,7 @@ class TestPPOEndToEnd:
         # Get action
         state_tensor = torch.tensor([features], dtype=torch.float32)
         masks = _create_all_valid_masks()
-        actions, log_probs, values, hidden = agent.network.get_action(
+        result = agent.network.get_action(
             state_tensor,
             slot_mask=masks["slot"],
             blueprint_mask=masks["blueprint"],
@@ -340,8 +341,8 @@ class TestPPOEndToEnd:
             op_mask=masks["op"],
         )
 
-        assert 0 <= actions["op"].item() < 4
-        assert values.shape == (1,)
+        assert 0 <= result.actions["op"].item() < NUM_OPS
+        assert result.values.shape == (1,)
 
     def test_hidden_state_continuity(self):
         """LSTM hidden states should be maintained across calls."""
@@ -350,7 +351,7 @@ class TestPPOEndToEnd:
         masks = _create_all_valid_masks()
 
         # First call - no hidden state
-        actions1, _, values1, hidden1 = agent.network.get_action(
+        result1 = agent.network.get_action(
             state,
             slot_mask=masks["slot"],
             blueprint_mask=masks["blueprint"],
@@ -359,9 +360,9 @@ class TestPPOEndToEnd:
         )
 
         # Second call - pass hidden state from first call
-        actions2, _, values2, hidden2 = agent.network.get_action(
+        result2 = agent.network.get_action(
             state,
-            hidden=hidden1,
+            hidden=result1.hidden,
             slot_mask=masks["slot"],
             blueprint_mask=masks["blueprint"],
             blend_mask=masks["blend"],
@@ -369,13 +370,13 @@ class TestPPOEndToEnd:
         )
 
         # Hidden states should be valid tensors
-        assert hidden1 is not None
-        assert hidden2 is not None
-        assert len(hidden1) == 2, "Hidden should be (h, c) tuple"
-        assert len(hidden2) == 2, "Hidden should be (h, c) tuple"
+        assert result1.hidden is not None
+        assert result2.hidden is not None
+        assert len(result1.hidden) == 2, "Hidden should be (h, c) tuple"
+        assert len(result2.hidden) == 2, "Hidden should be (h, c) tuple"
 
         # Second hidden should differ from first (LSTM updates state)
-        h1, c1 = hidden1
-        h2, c2 = hidden2
+        h1, c1 = result1.hidden
+        h2, c2 = result2.hidden
         assert not torch.allclose(h1, h2) or not torch.allclose(c1, c2), \
             "Hidden state should change after processing input"

@@ -1,6 +1,6 @@
 {
   "n_episodes": 400,
-  "n_envs": 16,
+  "n_envs": 24,
   "max_epochs": 150,
   "lr": 0.0003,
   "clip_ratio": 0.2,

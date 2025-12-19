@@ -84,6 +84,19 @@ TEMPO_TO_EPOCHS: dict[TempoAction, int] = {
 
 # Module-level constant for action space sizing (follows NUM_BLUEPRINTS pattern)
 NUM_TEMPO: int = len(TempoAction)
+
+# =============================================================================
+# Lookup Table for Hot Path Optimization (follows OP_NAMES, BLEND_IDS pattern)
+# =============================================================================
+# Enables direct indexing without creating TempoAction objects.
+# CRITICAL: Must stay in sync with enum definition above.
+
+TEMPO_NAMES: tuple[str, ...] = tuple(t.name for t in TempoAction)
+
+# Module-level validation: catch enum drift at import time
+assert len(TEMPO_NAMES) == len(TempoAction), (
+    "TEMPO_NAMES length mismatch with TempoAction enum"
+)
 ```
 
 Add to `__all__`:
@@ -93,6 +106,7 @@ __all__ = [
     "TempoAction",
     "TEMPO_TO_EPOCHS",
     "NUM_TEMPO",
+    "TEMPO_NAMES",  # NEW - hot path lookup
 ]
 ```
 
@@ -104,6 +118,12 @@ def test_tempo_action_values():
     assert TEMPO_TO_EPOCHS[TempoAction.STANDARD] == 5
     assert TEMPO_TO_EPOCHS[TempoAction.FAST] == 3
     assert TEMPO_TO_EPOCHS[TempoAction.SLOW] == 8
+
+def test_tempo_names_lookup():
+    """TEMPO_NAMES enables hot-path lookups without enum construction."""
+    from esper.leyline.factored_actions import TEMPO_NAMES, TempoAction
+    assert TEMPO_NAMES == ("FAST", "STANDARD", "SLOW")
+    assert TEMPO_NAMES[TempoAction.STANDARD.value] == "STANDARD"
 ```
 
 ---
@@ -1014,6 +1034,107 @@ def test_head_names_includes_tempo():
 
 ---
 
+## Task 16: Dashboard Tempo Visualization (Optional)
+
+**File:** `src/esper/karn/dashboard.html`
+
+**Priority:** Optional enhancement - core RL functionality works without this, but observability is valuable.
+
+Add tempo display to the seed row in the dashboard. The seed list (line ~879) currently shows slot_id, blueprint, params, contribution, and efficiency. Add tempo badge for blending seeds.
+
+### 16.1 Add tempo badge CSS (in `<style>` section)
+
+```css
+.seed-item__tempo {
+    display: inline-block;
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 9px;
+    font-weight: 600;
+    margin-left: 4px;
+}
+
+.seed-item__tempo.fast { background: var(--status-warn); color: var(--bg-dark); }
+.seed-item__tempo.standard { background: var(--text-dim); }
+.seed-item__tempo.slow { background: var(--glow-cyan); color: var(--bg-dark); }
+```
+
+### 16.2 Update renderSeeds() function (line ~879)
+
+```javascript
+function renderSeeds() {
+    const container = document.getElementById('seed-list');
+
+    if (!state.seeds || state.seeds.length === 0) {
+        container.innerHTML = '<div class="empty-state">No active seeds</div>';
+        return;
+    }
+
+    const maxContrib = Math.max(...state.seeds.map(s => Math.abs(s.contribution || 0)), 1);
+
+    container.innerHTML = state.seeds.map(seed => {
+        const contrib = seed.contribution || 0;
+        const isPositive = contrib >= 0;
+        const efficiency = seed.efficiency || 0;
+        const isStar = efficiency > 10;
+        const barWidth = (Math.abs(contrib) / maxContrib) * 100;
+
+        // NEW: Tempo badge (only show during BLENDING)
+        const tempoEpochs = seed.blend_tempo_epochs || 5;
+        const tempoClass = tempoEpochs <= 3 ? 'fast' : (tempoEpochs >= 8 ? 'slow' : 'standard');
+        const tempoLabel = tempoEpochs <= 3 ? 'FAST' : (tempoEpochs >= 8 ? 'SLOW' : 'STD');
+        const isBlending = seed.stage === 'BLENDING';
+        const tempoBadge = isBlending
+            ? `<span class="seed-item__tempo ${tempoClass}">${tempoLabel}</span>`
+            : '';
+
+        return `
+            <div class="seed-item">
+                <span class="seed-item__name">${seed.slot_id || 'unknown'}${tempoBadge}</span>
+                <div>
+                    <span class="seed-item__details">
+                        <span class="seed-item__blueprint">${seed.blueprint || '--'}</span> ·
+                        ${formatParams(seed.params || 0)}
+                    </span>
+                    <div class="seed-item__bar">
+                        <div class="seed-item__bar-fill" style="width: ${barWidth}%; background: ${isPositive ? 'var(--status-win)' : 'var(--status-loss)'}"></div>
+                    </div>
+                </div>
+                <div style="text-align: right;">
+                    <span class="seed-item__contribution ${isPositive ? 'positive' : 'negative'}">${isPositive ? '+' : ''}${contrib.toFixed(1)}%</span>
+                    <div class="seed-item__efficiency ${isStar ? 'star' : ''}">${efficiency.toFixed(1)}</div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+```
+
+### 16.3 Ensure telemetry emits tempo
+
+**File:** `src/esper/nissa/tracker.py` (or wherever REWARD_COMPUTED events are built)
+
+Ensure `blend_tempo_epochs` and `stage` are included in the seed data sent over WebSocket:
+
+```python
+def build_seed_data(slot: SeedSlot) -> dict:
+    """Build seed data for telemetry emission."""
+    return {
+        "slot_id": slot.slot_id,
+        "blueprint": slot.state.blueprint_id if slot.state else None,
+        "stage": slot.state.stage.name if slot.state else None,  # NEW
+        "blend_tempo_epochs": slot.state.blend_tempo_epochs if slot.state else 5,  # NEW
+        # ... existing fields ...
+    }
+```
+
+**Verification:**
+1. Run training with dashboard open
+2. When a seed enters BLENDING stage, verify tempo badge appears
+3. Verify FAST (3 epochs) shows yellow, STD (5) shows gray, SLOW (8) shows cyan
+
+---
+
 ## Verification Checklist
 
 After implementation, verify:
@@ -1026,6 +1147,7 @@ After implementation, verify:
 - [ ] `TempoAction` enum has 3 values (FAST, STANDARD, SLOW)
 - [ ] `TEMPO_TO_EPOCHS` maps enum to epoch counts correctly
 - [ ] `NUM_TEMPO` equals 3
+- [ ] `TEMPO_NAMES` tuple exists and validates at import time (hot-path lookup)
 - [ ] `FactoredAction` includes `tempo: TempoAction` field
 - [ ] `from_indices()` accepts 5 parameters (includes tempo)
 - [ ] `to_indices()` method ADDED (did not exist before) and returns 5-tuple
@@ -1070,6 +1192,11 @@ After implementation, verify:
 - [ ] Property tests pass (test_factored_actions.py)
 - [ ] Integration tests pass (test_tempo_lever.py)
 - [ ] torch.compile still works (no graph breaks)
+
+### Dashboard Visualization (Task 16 - Optional)
+- [ ] Tempo badge CSS added to dashboard.html
+- [ ] `renderSeeds()` displays tempo badge during BLENDING
+- [ ] Telemetry emits `blend_tempo_epochs` and `stage` fields
 
 ---
 
@@ -1140,5 +1267,6 @@ RuntimeError: size mismatch for feature_net.0.weight
 | 1.0 | 2025-12-19 | Initial plan (13 tasks) |
 | 2.0 | 2025-12-19 | First Go/No-Go review: HEAD_NAMES blocker, file paths corrected, rollout buffer + causal masking added (15 tasks) |
 | 2.1 | 2025-12-19 | Second Go/No-Go review: Task 3 clarified (to_indices ADDED), Task 10 expanded (advantages.py + entropy defaults), Task 11 fixed (Host layer added, inline code noted), Task 13 fixed (SLOT_FEATURE_SIZE constant name) |
+| 2.2 | 2025-12-19 | Third review: Task 2 amended (TEMPO_NAMES lookup table for hot-path optimization), Task 16 added (dashboard tempo visualization - optional) |
 
-*Implementation plan revised after 2nd Go/No-Go review by PyTorch Engineering and DRL specialists. All caveats from both experts addressed.*
+*Implementation plan revised after 3rd code review. TEMPO_NAMES added for pattern consistency with OP_NAMES/BLEND_IDS. Dashboard visualization task added for observability.*

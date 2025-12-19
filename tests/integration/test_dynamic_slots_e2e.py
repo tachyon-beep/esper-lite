@@ -47,7 +47,7 @@ class TestTrainingWithDifferentSlotCounts:
         }
 
         with torch.no_grad():
-            actions, log_probs, values, hidden = agent.network.get_action(
+            result = agent.network.get_action(
                 states,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
@@ -55,8 +55,8 @@ class TestTrainingWithDifferentSlotCounts:
                 op_mask=masks["op"],
             )
 
-        assert actions["slot"].item() == 0  # Only slot available
-        assert values.shape == (1,)
+        assert result.actions["slot"].item() == 0  # Only slot available
+        assert result.values.shape == (1,)
 
     def test_agent_with_5_slots(self):
         """PPOAgent should work with 5 slot configuration."""
@@ -86,7 +86,7 @@ class TestTrainingWithDifferentSlotCounts:
         }
 
         with torch.no_grad():
-            actions, log_probs, values, hidden = agent.network.get_action(
+            result = agent.network.get_action(
                 states,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
@@ -94,9 +94,9 @@ class TestTrainingWithDifferentSlotCounts:
                 op_mask=masks["op"],
             )
 
-        assert actions["slot"].shape == (n_envs,)
-        assert all(0 <= a.item() < 5 for a in actions["slot"])
-        assert values.shape == (n_envs,)
+        assert result.actions["slot"].shape == (n_envs,)
+        assert all(0 <= a.item() < 5 for a in result.actions["slot"])
+        assert result.values.shape == (n_envs,)
 
     def test_agent_with_9_slots_3x3_grid(self):
         """PPOAgent should work with 9 slot (3x3 grid) configuration."""
@@ -131,7 +131,7 @@ class TestTrainingWithDifferentSlotCounts:
         }
 
         with torch.no_grad():
-            actions, log_probs, values, hidden = agent.network.get_action(
+            result = agent.network.get_action(
                 states,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
@@ -139,8 +139,8 @@ class TestTrainingWithDifferentSlotCounts:
                 op_mask=masks["op"],
             )
 
-        assert actions["slot"].shape == (n_envs,)
-        assert all(0 <= a.item() < 9 for a in actions["slot"])
+        assert result.actions["slot"].shape == (n_envs,)
+        assert all(0 <= a.item() < 9 for a in result.actions["slot"])
 
 
 class TestMultiEnvMaskIndependence:
@@ -349,7 +349,7 @@ class TestLargeSlotConfigurations:
         }
 
         with torch.no_grad():
-            actions, log_probs, values, hidden = agent.network.get_action(
+            result = agent.network.get_action(
                 states,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
@@ -357,7 +357,7 @@ class TestLargeSlotConfigurations:
                 op_mask=masks["op"],
             )
 
-        assert 0 <= actions["slot"].item() < 25
+        assert 0 <= result.actions["slot"].item() < 25
 
     def test_mask_dimensions_with_25_slots(self):
         """Action masks should have correct dimensions with 25 slots."""
