@@ -7,13 +7,25 @@ from __future__ import annotations
 
 import duckdb
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 VIEW_DEFINITIONS: dict[str, str] = {
     "raw_events": """
         CREATE OR REPLACE VIEW raw_events AS
         SELECT * FROM read_json_auto(
             '{telemetry_dir}/*/events.jsonl',
+            format='newline_delimited',
+            auto_detect=false,
+            columns={{
+                'event_id': 'VARCHAR',
+                'event_type': 'VARCHAR',
+                'timestamp': 'TIMESTAMP',
+                'seed_id': 'VARCHAR',
+                'slot_id': 'VARCHAR',
+                'epoch': 'BIGINT',
+                'message': 'VARCHAR',
+                'data': 'JSON',
+                'severity': 'VARCHAR'
+            }},
             ignore_errors=true,
             maximum_object_size=16777216,
             union_by_name=true
@@ -152,6 +164,29 @@ VIEW_DEFINITIONS: dict[str, str] = {
 }
 
 
+def telemetry_has_event_files(telemetry_dir: str) -> bool:
+    """Return True if the telemetry directory contains any events.jsonl files."""
+    telemetry_path = Path(telemetry_dir)
+    return any(telemetry_path.glob("*/events.jsonl"))
+
+
+def _create_empty_raw_events_view(conn: duckdb.DuckDBPyConnection) -> None:
+    conn.execute("""
+        CREATE OR REPLACE VIEW raw_events AS
+        SELECT
+            CAST(NULL AS VARCHAR) as event_id,
+            CAST(NULL AS VARCHAR) as event_type,
+            CAST(NULL AS TIMESTAMP) as timestamp,
+            CAST(NULL AS VARCHAR) as seed_id,
+            CAST(NULL AS VARCHAR) as slot_id,
+            CAST(NULL AS BIGINT) as epoch,
+            CAST(NULL AS VARCHAR) as message,
+            CAST(NULL AS JSON) as data,
+            CAST(NULL AS VARCHAR) as severity
+        WHERE false
+    """)
+
+
 def create_views(conn: duckdb.DuckDBPyConnection, telemetry_dir: str) -> None:
     """Create all telemetry views on the given connection.
 
@@ -161,31 +196,19 @@ def create_views(conn: duckdb.DuckDBPyConnection, telemetry_dir: str) -> None:
     """
     conn.execute("PRAGMA threads=4")
 
-    # Check if any telemetry files exist
-    telemetry_path = Path(telemetry_dir)
-    has_files = any(telemetry_path.glob("*/events.jsonl"))
+    has_files = telemetry_has_event_files(telemetry_dir)
 
     for view_name, view_sql in VIEW_DEFINITIONS.items():
+        if view_name == "raw_events" and not has_files:
+            _create_empty_raw_events_view(conn)
+            continue
+
         sql = view_sql.format(telemetry_dir=telemetry_dir)
         try:
             conn.execute(sql)
         except duckdb.IOException as e:
             # If no files exist, create empty views with proper schema
             if "No files found" in str(e) and view_name == "raw_events":
-                # Create a stub view that returns empty results with the expected columns
-                conn.execute("""
-                    CREATE OR REPLACE VIEW raw_events AS
-                    SELECT
-                        CAST(NULL AS VARCHAR) as event_id,
-                        CAST(NULL AS VARCHAR) as event_type,
-                        CAST(NULL AS TIMESTAMP) as timestamp,
-                        CAST(NULL AS VARCHAR) as seed_id,
-                        CAST(NULL AS VARCHAR) as slot_id,
-                        CAST(NULL AS BIGINT) as epoch,
-                        CAST(NULL AS VARCHAR) as message,
-                        CAST(NULL AS JSON) as data,
-                        CAST(NULL AS VARCHAR) as severity
-                    WHERE false
-                """)
+                _create_empty_raw_events_view(conn)
             else:
                 raise

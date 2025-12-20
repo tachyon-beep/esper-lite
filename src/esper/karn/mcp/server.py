@@ -6,10 +6,12 @@ Run with: uv run python -m esper.karn.mcp.server
 from __future__ import annotations
 
 import asyncio
+import threading
+from typing import Any
 
 import duckdb
 
-from esper.karn.mcp.views import create_views
+from esper.karn.mcp.views import create_views, telemetry_has_event_files
 from esper.karn.mcp.query import execute_query, format_as_markdown
 
 # View documentation for list_views tool
@@ -36,13 +38,47 @@ class KarnMCPServer:
     def __init__(self, telemetry_dir: str = "telemetry") -> None:
         """Initialize server with DuckDB connection."""
         self._conn = duckdb.connect(":memory:")
+        self._conn_lock = threading.Lock()
         self._telemetry_dir = telemetry_dir
-        create_views(self._conn, telemetry_dir)
+        with self._conn_lock:
+            create_views(self._conn, telemetry_dir)
+            self._raw_events_stubbed = self._is_raw_events_stubbed()
+
+    def _is_raw_events_stubbed(self) -> bool:
+        try:
+            row = self._conn.execute(
+                "SELECT sql FROM duckdb_views() WHERE view_name = 'raw_events'"
+            ).fetchone()
+        except duckdb.Error:
+            return False
+
+        if row is None:
+            return False
+        view_sql = row[0]
+        if view_sql is None:
+            return False
+        return "read_json_auto" not in view_sql.lower()
+
+    def _refresh_views_if_needed(self) -> None:
+        if not self._raw_events_stubbed:
+            return
+        if not telemetry_has_event_files(self._telemetry_dir):
+            return
+
+        create_views(self._conn, self._telemetry_dir)
+        self._raw_events_stubbed = self._is_raw_events_stubbed()
+
+    def _execute_query_with_refresh(
+        self, query: str, limit: int
+    ) -> tuple[list[str], list[tuple[Any, ...]]]:
+        with self._conn_lock:
+            self._refresh_views_if_needed()
+            return execute_query(self._conn, query, limit)
 
     def query_sql_sync(self, query: str, limit: int = 100) -> str:
         """Execute SQL query and return markdown result (sync version for testing)."""
         try:
-            columns, rows = execute_query(self._conn, query, limit)
+            columns, rows = self._execute_query_with_refresh(query, limit)
             return format_as_markdown(columns, rows)
         except duckdb.Error as e:
             return f"SQL Error: {e}"
@@ -55,7 +91,7 @@ class KarnMCPServer:
         """Execute SQL query and return markdown result."""
         try:
             columns, rows = await asyncio.wait_for(
-                asyncio.to_thread(execute_query, self._conn, query, limit),
+                asyncio.to_thread(self._execute_query_with_refresh, query, limit),
                 timeout=30.0,
             )
             return format_as_markdown(columns, rows)
