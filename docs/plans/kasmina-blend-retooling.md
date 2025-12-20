@@ -430,6 +430,88 @@ This plan assumes single-process for the initial implementation. If/when we add 
 6) **Reward shaping**: add alpha-weighted rent and shock penalty; restrict indecision penalty to full-amplitude hold.
 7) **Telemetry + tests**: ensure new modes are observable; add schedule property tests and instant-prune parity tests.
 
+### 12.1 Phases, Tasks, and Risk Reduction
+
+#### Phase 0 — Preflight (constants + invariants)
+
+**Tasks**
+- Choose constants: `BaseSlotRent`, `EMBARGOED` dwell ticks (default `5`), schedule tick lengths (`0/3/5/8`), and shock coefficient `k`.
+- Decide initial `alpha_target_head` menu (`{0.5, 0.7, 1.0}`) and confirm it’s non-zero only (`PRUNE` is the only path to `alpha_target=0`).
+
+**Risk reduction**
+- Add a tiny math sanity test to verify convex shock behaves as intended (slow ramps cheaper than fast).
+- Add a minimal forward/backward toy test to ensure `MULTIPLY` is identity at birth (`s≈0`, `alpha=0`).
+
+#### Phase 1 — Contracts, naming, and transitions (Leyline + docs)
+
+**Tasks**
+- Update lifecycle contracts: `src/esper/leyline/stages.py` (rename/replace `PROBATIONARY`→`HOLDING`, `CULLED`→`PRUNED`, ensure `EMBARGOED` dwell remains concrete).
+- Update transitions to support scheduled prune from `HOLDING → BLENDING` (since `HOLDING` is “alpha≈1 only”).
+- Update docs that codify lifecycle: `README.md` mermaid diagram + any plan references.
+
+**Risk reduction**
+- `rg` for old stage names + run `ruff`, `mypy`, and a focused `pytest` subset after renames to catch missed call sites early.
+- Keep hot-path lookup tables (`OP_NAMES`, etc.) validated by import-time assertions (no silent enum drift).
+
+#### Phase 2 — Alpha controller core (Kasmina state + checkpoint)
+
+**Tasks**
+- Add alpha-controller fields to `SeedState` and persist them via `to_dict()/from_dict()` in `src/esper/kasmina/slot.py`.
+- Implement controller tick update in `SeedSlot.step_epoch()`:
+  - monotone UP/DOWN, HOLD-only retarget, snap-to-target on completion.
+- Surface telemetry fields (`alpha_target`, `alpha_mode`, `alpha_steps_done/total`, etc.).
+
+**Risk reduction**
+- Property tests for controller invariants (monotone/no overshoot/snap-to-target).
+- Checkpoint roundtrip test: mid-transition resume preserves controller state (including `BLEND_OUT` freeze).
+
+#### Phase 3 — Blend modes (ADD/MULTIPLY/GATE) + ghost gradients
+
+**Tasks**
+- Implement `alpha_algorithm_head` wiring (HOLD-only changes).
+- Implement composition operators:
+  - `ADD`: `lerp(h, s, a)`
+  - `MULTIPLY`: `h * (1 + a * tanh(s))` + zero-init of final seed layer
+  - `GATE`: per-sample `gate(x)` multiplied into amplitude `alpha_amplitude(t)`
+- Enforce ghost-gradient requirement during `BLEND_OUT` (freeze params only; no detach/no `no_grad`).
+
+**Risk reduction**
+- Unit tests for identity-at-zero for all algorithms.
+- Gradient tests: in `BLEND_OUT`, seed params receive no grads/updates, but host still receives gradients.
+
+#### Phase 4 — Prune pipeline + cooldown + safety override
+
+**Tasks**
+- Replace `CULL` with explicit `PRUNE` op (see `src/esper/leyline/factored_actions.py`) and map `PRUNE_*` → internal `alpha_target=0`.
+- Implement prune completion: physical removal at `alpha==0`, then `EMBARGOED` dwell ticks, then `RESETTING → DORMANT`.
+- Remove PROBATIONARY auto-culls; keep catastrophic safety only.
+- Add Governor-only emergency override: force `PRUNE_INSTANT` from any mode/stage on NaN/divergence/collapse.
+
+**Risk reduction**
+- Integration test that germination is impossible during `EMBARGOED` dwell (prevents thrash).
+- Telemetry asserts: every removal records `prune_initiator` + reason.
+
+#### Phase 5 — Simic wiring (policy heads/masks, obs, rewards)
+
+**Tasks**
+- Update policy action space to include `SET_ALPHA_TARGET` + `PRUNE` operations and the new heads (`alpha_algorithm_head`, etc.).
+- Add observation fields: `alpha_target/mode/steps`, `time_to_target`, `alpha_velocity`, `alpha_algorithm`.
+- Implement reward updates: `BaseSlotRent` floor + convex shock + full-amplitude-only indecision pressure.
+
+**Risk reduction**
+- “Shape parity” tests: action tensors and observation tensors match expected dims across envs.
+- Run short PPO rollouts with verbose telemetry to validate reward component scales (avoid Goodhart traps).
+
+#### Phase 6 — End-to-end validation (CIFAR sanity + regressions)
+
+**Tasks**
+- Run a small heuristic episode and a short PPO episode (CIFAR) to validate:
+  - no NaNs/divergence, prune/fossilize still reachable, and telemetry fields are populated.
+- Compare against baseline runs for: prune rate, thrash rate, and reward component magnitudes.
+
+**Risk reduction**
+- Gate rollout on an acceptance checklist: freeze invariant holds, shock differentiates speeds, zombie seeds don’t squat cheaply, and `prune_initiator` is always visible.
+
 ---
 
 ## 13) Wiring Gotchas (PPO/Rewards)
