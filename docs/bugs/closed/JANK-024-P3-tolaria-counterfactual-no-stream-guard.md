@@ -10,5 +10,6 @@
   - A) Add optional stream context parameter to validation functions; default to current behavior.
   - B) Document serialization; ensure callers in multi-stream contexts are aware.
 - **Validation Plan:** Add a test or benchmark demonstrating stream-enabled validation doesn’t break correctness and can overlap transfers.
-- **Status:** Open
-- **Links:** `src/esper/tolaria/trainer.py` validation/counterfactual functions
+- **Status:** Closed (By design)
+- **Resolution:** Tolaria’s validation/counterfactual utilities are single-stream by design and are not part of the vectorized multi-stream Simic hot path. If/when we need multi-stream counterfactual validation, it should be implemented in the vectorized environment layer rather than retrofitting Tolaria’s baseline trainer.
+- **Links:** `src/esper/tolaria/trainer.py` (`validate_with_attribution`), `src/esper/simic/training/vectorized.py` (multi-stream vectorized path)

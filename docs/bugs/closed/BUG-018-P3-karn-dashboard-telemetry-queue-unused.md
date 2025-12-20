@@ -1,10 +1,11 @@
-# BUG-018: Karn dashboard telemetry queue (not an active bug)
+# BUG-018: Karn dashboard telemetry queue (not a bug)
 
-- **Title:** Karn dashboard telemetry queue handling (not an active bug)
+- **Title:** Karn dashboard telemetry queue handling (not a bug)
 - **Context:** Bug report claimed `dashboard_server.py` ignores telemetry_queue
 - **Impact:** P3 – Code review observation / no production impact
 - **Environment:** Main branch
-- **Status:** Deferred (downgraded from P1)
+- **Status:** Closed (Not a bug)
+- **Resolution:** Verified that both the integrated dashboard used by training and the standalone server consume their telemetry queues in broadcast loops.
 
 ## Analysis (2025-12-17)
 
@@ -51,4 +52,4 @@ The bug report author likely:
 
 - `src/esper/karn/integrated_dashboard.py` (actual production implementation)
 - `src/esper/karn/dashboard_server.py` (standalone mode, also works)
-- `src/esper/scripts/train.py:248` (DashboardServer integration)
+- `src/esper/scripts/train.py` (DashboardServer integration)

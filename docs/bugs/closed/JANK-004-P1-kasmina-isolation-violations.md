@@ -2,8 +2,8 @@
 
 - **Title:** Gradient isolation telemetry counts normal host grads as violations
 - **Category:** correctness-risk
-- **Symptoms:** `SeedSlot.capture_gradient_telemetry()` increments `isolation_violations` whenever `isolate_gradients` is True because any non-zero host gradient trips the check. With the current training loop, host gradients are expected (host keeps training while seeds incubate), so the counter steadily climbs even when isolation is healthy.
-- **Impact:** Seeds hit the `DEFAULT_MAX_ISOLATION_VIOLATIONS` threshold after ~11 captures (stride 10 ⇒ ~110 steps) and fail the G2 gate, stalling BLENDING for CNN slots. Isolation telemetry becomes unusable for diagnostics and can trigger unnecessary culls.
+- **Symptoms:** Older `SeedSlot.capture_gradient_telemetry()` logic incremented an `isolation_violations` counter whenever `isolate_gradients` was True because any non-zero host gradient tripped the check. With the current training loop, host gradients are expected (host keeps training while seeds incubate), so the counter steadily climbed even when isolation was healthy.
+- **Impact:** Would have caused seeds to hit the `DEFAULT_MAX_ISOLATION_VIOLATIONS` threshold and fail the G2 gate under normal training.
 - **Triggers:** Run any training loop with gradient telemetry enabled (e.g., Tolaria incubator) where `isolate_gradients=True` (TRAINING and CNN BLENDING). Minimal repro:
   ```bash
   PYTHONPATH=src python - <<'PY'
@@ -37,5 +37,6 @@
 - **Risks of Change:** Might mask real seed→host leakage if detection becomes too lax; Simic gating logic and telemetry consumers need alignment.
 - **Stopgap Mitigation:** Set `gradient_telemetry_stride=0` during incubator/BLENDING for CNNs or raise `DEFAULT_MAX_ISOLATION_VIOLATIONS` until detection is fixed.
 - **Validation Plan:** Add a unit test where host gradients exist but seed input is detached — violations should stay at 0; add a contrasting test with intentional leakage (seed input not detached) that increments violations. Verify G2 gate uses the corrected signal.
-- **Status:** Open
-- **Links:** `src/esper/kasmina/slot.py` around `capture_gradient_telemetry`
+- **Status:** Closed (Resolved by refactor)
+- **Resolution:** The `isolation_violations` counter and `DEFAULT_MAX_ISOLATION_VIOLATIONS` gating are no longer present. Gradient telemetry now computes a parameter-normalized `seed_gradient_norm_ratio` (sync or deferred-async) without treating normal host gradients as violations.
+- **Links:** `src/esper/kasmina/slot.py` (`capture_gradient_telemetry`, `capture_gradient_telemetry_async`, `finalize_gradient_telemetry`)

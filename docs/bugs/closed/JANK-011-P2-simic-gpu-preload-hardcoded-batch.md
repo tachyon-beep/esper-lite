@@ -11,5 +11,6 @@
   - B) Emit telemetry/warning when overriding batch size; make override opt-in.
   - C) Add VRAM-aware heuristic/flag to cap batch size.
 - **Validation Plan:** Add tests ensuring gpu_preload path uses provided batch size; run a smoke with a small batch to verify no silent override.
-- **Status:** Open
-- **Links:** `src/esper/simic/vectorized.py` gpu_preload branch (~600), `src/esper/utils/data.py::load_cifar10_gpu`
+- **Status:** Closed (Fixed)
+- **Resolution:** `train_ppo_vectorized` now accepts an explicit `batch_size_per_env` override and uses the effective value in both shared CPU and gpu_preload iterator paths (no hardcoded `512`). `TrainingConfig` exposes the field, and a regression test asserts the gpu_preload path receives the override.
+- **Links:** `src/esper/simic/training/vectorized.py`, `src/esper/simic/training/config.py`, `tests/simic/test_gpu_preload_batch_size.py`, `src/esper/utils/data.py`

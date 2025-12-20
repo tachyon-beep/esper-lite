@@ -11,5 +11,6 @@
   - B) Add a `clear()` or context manager that guarantees full state reset, with a unit test covering all fields; optionally make tracker dataclass frozen and reconstruct.
   - C) Emit telemetry when stabilization re-locks to catch reuse errors.
 - **Validation Plan:** Add a unit test reusing a tracker across two synthetic runs to ensure stabilization gating fires again (no latent True flag); assert reset covers all fields.
-- **Status:** Open
-- **Links:** `src/esper/tamiyo/tracker.py` reset logic
+- **Status:** Closed (Resolved)
+- **Resolution:** `SignalTracker.reset()` recreates histories and explicitly clears the stabilization latch (`_is_stabilized=False`, `_stable_count=0`), so reuse across runs/episodes does not retain stabilized state.
+- **Links:** `src/esper/tamiyo/tracker.py` (`reset`)

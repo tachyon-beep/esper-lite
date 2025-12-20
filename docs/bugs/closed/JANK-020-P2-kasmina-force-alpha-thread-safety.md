@@ -11,5 +11,6 @@
   - B) Add per-call lock or assert single-threaded eval; guard against DDP usage.
   - C) Provide a per-call clone/copy of seed slot for counterfactual passes to avoid shared mutation.
 - **Validation Plan:** Add tests to ensure force_alpha doesn’t leak state across concurrent calls; guard against DDP usage; ensure counterfactual runs remain correct.
-- **Status:** Open
-- **Links:** `src/esper/kasmina/slot.py::force_alpha` (TODO comment), counterfactual usage in `vectorized.py`
+- **Status:** Closed (Not a bug under current architecture)
+- **Resolution:** `force_alpha` is explicitly documented as not thread/DDP-safe, and current production usage is safe because counterfactual evaluation runs single-threaded per model instance (vectorized training uses one model per env). Future DDP-safe counterfactuals are tracked by the in-code TODO; this ticket is redundant until DDP is actually implemented.
+- **Links:** `src/esper/kasmina/slot.py` (`force_alpha` + DDP TODO), `src/esper/simic/training/vectorized.py` (counterfactual evaluation)

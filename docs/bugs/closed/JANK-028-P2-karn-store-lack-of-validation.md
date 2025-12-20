@@ -11,5 +11,6 @@
   - B) Introduce lightweight schema checks and logging for invalid fields.
   - C) Provide canonical constructors from Leyline telemetry to ensure consistency.
 - **Validation Plan:** Add tests feeding malformed data to store constructors and ensure validation catches issues; log warnings instead of silently accepting.
-- **Status:** Open
-- **Links:** `src/esper/karn/store.py` dataclasses
+- **Status:** Closed (Fixed)
+- **Resolution:** Added centralized ingest coercion and fixed JSONL imports to restore types (datetime/enums/nested dataclasses) instead of silently storing invalid shapes.
+- **Links:** `src/esper/karn/ingest.py`, `src/esper/karn/collector.py`, `src/esper/karn/store.py`, `tests/karn/test_collector_validation.py`, `tests/karn/test_store_import.py`

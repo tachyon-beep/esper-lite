@@ -13,5 +13,6 @@
 - **Risks of Change:** Potentially breaks code relying on process-global hub; must coordinate with Karn collector lifecycle.
 - **Stopgap Mitigation:** Document the leak and call `hub.reset()` (if added) in tests; avoid reusing processes for multiple runs.
 - **Validation Plan:** Add a test that runs two sequential training snippets in one process and asserts no duplicate backend emission after reset.
-- **Status:** Open
-- **Links:** `src/esper/nissa/__init__.py` (`get_hub` singleton), `src/esper/nissa/output.py` backends
+- **Status:** Closed (Fixed)
+- **Resolution:** `reset_hub()` already existed in `src/esper/nissa/output.py` but wasn't exported from `esper.nissa`; now exported and covered by regression test so interactive/test reuse can reliably clear the singleton’s backends.
+- **Links:** `src/esper/nissa/output.py`, `src/esper/nissa/__init__.py`, `tests/nissa/test_global_hub_reset.py`

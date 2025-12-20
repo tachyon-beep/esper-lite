@@ -1,10 +1,11 @@
-# BUG-017: Nissa BlueprintAnalytics seed event field handling
+# BUG-017: Nissa BlueprintAnalytics seed event field handling (not a bug)
 
 - **Title:** Nissa BlueprintAnalytics seed event field handling (not an active bug)
 - **Context:** Bug report claimed `BlueprintAnalytics.emit` expects fields that aren't guaranteed
 - **Impact:** P3 – Code review observation / no production impact
 - **Environment:** Main branch
-- **Status:** Deferred (downgraded from P1)
+- **Status:** Closed (Not a bug)
+- **Resolution:** Verified that training injects `env_id`/`device`, seed events include required fields, and analytics uses defensive defaults.
 
 ## Analysis (2025-12-17)
 
@@ -12,18 +13,21 @@
 
 ### 1. env_id IS Injected by Both Training Paths
 
-**Vectorized training** (`vectorized.py`):
+**Vectorized training** (`src/esper/simic/telemetry/emitters.py`):
 ```python
-def _emit_with_env_context(hub, env_idx: int, device: str, event: TelemetryEvent) -> None:
-    """Safely emit telemetry with env_id/device injected and no shared mutation."""
+def emit_with_env_context(hub, env_idx: int, device: str, event: TelemetryEvent) -> None:
+    """Safely emit telemetry with env_id/device injected and no shared mutation.
+
+    Creates a new event with the additional context rather than mutating the input.
+    """
     data = dict(event.data) if event.data else {}
     data["env_id"] = env_idx
     data["device"] = device
-    event.data = data
-    hub.emit(event)
+    new_event = dataclasses.replace(event, data=data)
+    hub.emit(new_event)
 ```
 
-**Heuristic training** (`training.py`):
+**Heuristic training** (`src/esper/simic/training/helpers.py`):
 ```python
 def telemetry_callback(event):
     event.data.setdefault("env_id", 0)
@@ -75,6 +79,6 @@ These are nice-to-haves, not bugs.
 ## Links
 
 - `src/esper/kasmina/slot.py::_emit_telemetry` (event emission)
-- `src/esper/simic/vectorized.py::_emit_with_env_context` (env_id injection)
-- `src/esper/simic/training.py::telemetry_callback` (env_id injection)
+- `src/esper/simic/telemetry/emitters.py::emit_with_env_context` (env_id injection)
+- `src/esper/simic/training/helpers.py::telemetry_callback` (env_id injection)
 - `src/esper/nissa/analytics.py::emit` (event consumption)

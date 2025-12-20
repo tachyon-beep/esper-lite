@@ -11,5 +11,6 @@
   - B) Return tensors instead of Python dict to avoid per-class iteration; leave dict building to callers when needed.
   - C) Use async CPU transfer or deferred aggregation.
 - **Validation Plan:** Benchmark per-class mode on large class count; ensure optional path avoids CPU sync.
-- **Status:** Open
-- **Links:** `src/esper/tolaria/trainer.py::validate_and_get_metrics` (per_class_acc section)
+- **Status:** Closed (By design)
+- **Resolution:** Per-class accuracy is already optional (`compute_per_class=False` by default) and is intended for diagnostic/research runs (typically with small class counts like CIFAR-10). The CPU materialization is an acceptable tradeoff for readability/telemetry in that mode.
+- **Links:** `src/esper/tolaria/trainer.py` (`validate_and_get_metrics` per-class section), `src/esper/nissa/config.py` (`PerClassConfig`)

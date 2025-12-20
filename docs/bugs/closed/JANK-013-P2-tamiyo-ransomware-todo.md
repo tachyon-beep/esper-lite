@@ -11,5 +11,6 @@
   - B) Emit telemetry when ransomware pattern detected to inform users.
   - C) Add config knob to align heuristic behavior with reward anti-ransomware logic.
 - **Validation Plan:** Add property test mirroring `TestRansomwareDetection` to ensure heuristic culls ransomware seeds; run heuristic smoke to confirm no regressions.
-- **Status:** Open
-- **Links:** `src/esper/tamiyo/heuristic.py` PROBATIONARY block (TODO comment), reward ransomware logic in `src/esper/simic/rewards.py`
+- **Status:** Closed (Resolved)
+- **Resolution:** Heuristic Tamiyo now implements ransomware detection in the PROBATIONARY branch (cull when counterfactual contribution is positive but total improvement is negative, with configurable thresholds), removing the earlier TODO gap.
+- **Links:** `src/esper/tamiyo/heuristic.py` (PROBATIONARY ransomware detection), `src/esper/simic/rewards/rewards.py` (anti-ransomware reward shaping)

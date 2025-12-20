@@ -1,10 +1,11 @@
-# BUG-016: Counterfactual validation uses mutation-based force_alpha
+# BUG-016: Counterfactual validation uses mutation-based force_alpha (not a bug)
 
 - **Title:** Counterfactual validation uses mutation-based `force_alpha`, unsafe for future DDP
 - **Context:** Tolaria `validate_with_attribution` uses `seed_slot.force_alpha(0.0)` (mutation) to compute baseline
 - **Impact:** P3 – Design smell / future tech debt. No current production impact.
 - **Environment:** Main branch
-- **Status:** Deferred (downgraded from P1)
+- **Status:** Closed (Not a bug)
+- **Resolution:** `force_alpha` is explicitly documented as not thread-safe/DDP-safe and is only used in non-production attribution helpers/tests; production training uses per-env model instances so mutations are isolated.
 
 ## Analysis (2025-12-17)
 
@@ -35,4 +36,4 @@ When implementing DDP support, counterfactual evaluation will need redesign:
 
 - `src/esper/tolaria/trainer.py::validate_with_attribution` (unused but exported)
 - `src/esper/kasmina/slot.py::force_alpha` (has TODO for DDP)
-- `src/esper/simic/vectorized.py` (safe implementation with per-env models)
+- `src/esper/simic/training/vectorized.py` (safe implementation with per-env models)

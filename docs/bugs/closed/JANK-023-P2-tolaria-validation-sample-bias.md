@@ -11,5 +11,6 @@
   - B) Emit telemetry noting sampled batches; avoid using sampled train metrics for decisions.
   - C) Separate “quick sample” from “true train metrics” to avoid misinterpretation.
 - **Validation Plan:** Add test ensuring configurable sample count; verify telemetry marks sampling; optionally compare sampled vs full metrics in CI.
-- **Status:** Open
-- **Links:** `src/esper/tolaria/trainer.py::validate_and_get_metrics` (itertools.islice(trainloader, 10))
+- **Status:** Closed (By design)
+- **Resolution:** `validate_and_get_metrics` intentionally samples a small number of training batches to keep validation overhead low; full-fidelity metrics should come from the training loop itself (or from validation on `testloader`). Stabilization/plateau logic in `SignalTracker` is driven by validation loss/accuracy, so sampled train metrics are informational only.
+- **Links:** `src/esper/tolaria/trainer.py` (`validate_and_get_metrics`), `src/esper/tamiyo/tracker.py` (stabilization/plateau uses validation metrics)

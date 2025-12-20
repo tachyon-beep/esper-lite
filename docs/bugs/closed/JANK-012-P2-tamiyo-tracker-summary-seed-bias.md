@@ -11,5 +11,6 @@
   - B) Emit per-slot summary metrics instead of a single summary seed, or include both highest-stage and highest-contribution identifiers.
   - C) At minimum, document the bias and ensure Simic/heuristic consumers use per-slot metrics.
 - **Validation Plan:** Add tests with multiple seeds to ensure summary selection matches the chosen policy; verify heuristics/telemetry aren’t misled in multi-slot scenarios.
-- **Status:** Open
-- **Links:** `src/esper/tamiyo/tracker.py` (summary seed key in `update`)
+- **Status:** Closed (By design)
+- **Resolution:** The summary seed selection is deterministic and explicitly documented in `SignalTracker` (favoring highest stage/alpha with a safety tie-break). Current controllers operate on per-seed/per-slot state (`active_seeds` / `SeedState` lists and slot reports), so the single-summary `TrainingSignals.seed_*` fields are informational only; consumers needing per-slot fidelity should use per-slot metrics rather than the summary seed.
+- **Links:** `src/esper/tamiyo/tracker.py` (summary seed selection), `src/esper/tamiyo/heuristic.py` (per-seed decisions)

@@ -11,5 +11,6 @@
   - B) Validate device compatibility and detach references when setting extra state.
   - C) Document that extra_state must not be mutated and add tests for device-safe restore.
 - **Validation Plan:** Add a test loading extra_state on a different device and ensure seed/alpha are correctly placed and isolated.
-- **Status:** Open
-- **Links:** `src/esper/kasmina/slot.py::get_extra_state/set_extra_state`, device move concerns
+- **Status:** Closed (Resolved by refactor)
+- **Resolution:** `SeedSlot.get_extra_state()` now returns only primitive types (e.g., `seed_state` via `SeedState.to_dict()` plus `alpha_schedule_config`). `set_extra_state()` reconstructs objects (`SeedState.from_dict()` and `start_blending()` for `alpha_schedule`) rather than storing/reattaching live object references.
+- **Links:** `src/esper/kasmina/slot.py` (`get_extra_state`, `set_extra_state`), `src/esper/kasmina/blending.py` (`BlendAlgorithm`)

@@ -4,7 +4,8 @@
 - **Context:** Tamiyo heuristic (`src/esper/tamiyo/heuristic.py`)
 - **Impact:** P3 – Design smell in baseline mode, no production impact
 - **Environment:** Main branch
-- **Status:** Deferred (downgraded from P1)
+- **Status:** Closed (Won't fix)
+- **Resolution:** Heuristic baseline is intentionally single-seed oriented (one germination decision only when no live seeds). Making embargo per-slot would require slot-aware decisions (and likely true multi-slot heuristic support), which is out of scope for the baseline. PPO/vectorized training is the production path and is unaffected.
 
 ## Analysis (2025-12-17)
 
@@ -22,7 +23,7 @@ The heuristic makes ONE decision per `decide()` call (one per epoch). Even with
 multiple empty slots, it would only germinate in one slot per epoch anyway.
 
 ```python
-# training.py lines 506-509
+# src/esper/simic/training/helpers.py
 germinate_slot = next(
     (slot_id for slot_id in enabled_slots if not model.has_active_seed_in_slot(slot_id)),
     None,
@@ -60,4 +61,4 @@ This would require design changes to pass slot context through the decision flow
 ## Links
 
 - `src/esper/tamiyo/heuristic.py` (embargo logic in `_decide_germination`, `_cull_seed`)
-- Production path: `src/esper/simic/vectorized.py` (no explicit embargo - learns via rewards)
+- Production path: `src/esper/simic/training/vectorized.py` (no explicit embargo - learns via rewards)

@@ -8,5 +8,6 @@
 - **Root-Cause Hypothesis:** Probe creation interleaved with compiled regions; caching partially mitigates.
 - **Remediation Options:** Pre-create probes per topology/device at init, keep deterministic shapes, and avoid creating new tensors inside compiled code paths; ensure cache invalidation is minimal.
 - **Validation Plan:** Measure guard churn before/after prefill; ensure no new probes are created during compiled forwards.
-- **Status:** Open
-- **Links:** `src/esper/kasmina/slot.py::_get_shape_probe`, torch.compile behavior notes
+- **Status:** Closed (Mitigated)
+- **Resolution:** `_get_shape_probe` is cached per-slot by `(topology, channels)` and device, and is only used during `SeedSlot.germinate()` shape smoke tests (not in the compiled `forward()` hot path). Under current semantics (fixed slot channels + stable topology), probe allocation happens at most once per slot per device.
+- **Links:** `src/esper/kasmina/slot.py` (`_shape_probe_cache`, `_get_shape_probe`, `germinate`)
