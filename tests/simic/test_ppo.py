@@ -192,6 +192,41 @@ def test_value_clipping_disabled_option():
     assert agent.clip_value is False, "clip_value should be configurable to False"
 
 
+def test_weight_decay_optimizer_covers_all_network_params() -> None:
+    """Weight-decay optimizer groups must include every network parameter.
+
+    Regression guard: when weight_decay>0, PPOAgent uses custom AdamW param groups
+    (actor/shared/critic). Missing a module in the grouping silently freezes it.
+    """
+    agent = PPOAgent(
+        state_dim=35,
+        weight_decay=0.01,
+        compile_network=False,
+        device="cpu",
+    )
+
+    network_params = {id(p) for p in agent._base_network.parameters()}
+
+    opt_params = [p for group in agent.optimizer.param_groups for p in group["params"]]
+    opt_param_ids = [id(p) for p in opt_params]
+
+    assert len(opt_param_ids) == len(set(opt_param_ids)), (
+        "Optimizer has duplicate parameters across param groups"
+    )
+
+    optimizer_params = set(opt_param_ids)
+
+    missing = network_params - optimizer_params
+    extra = optimizer_params - network_params
+
+    missing_names = [
+        name for name, p in agent._base_network.named_parameters() if id(p) in missing
+    ]
+
+    assert not missing_names, f"Optimizer missing network params: {missing_names}"
+    assert not extra, "Optimizer has params not in network"
+
+
 def test_signals_to_features_with_multislot_params():
     """Test signals_to_features accepts total_seeds and max_seeds params."""
     # Create minimal signals mock

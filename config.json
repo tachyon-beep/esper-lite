@@ -1,6 +1,6 @@
 {
   "task": "cifar10_blind",
-  "n_episodes": 1600,
+  "n_episodes": 3200,
   "n_envs": 16,
   "max_epochs": 75,
   "lr": 0.0003,
@@ -20,7 +20,7 @@
     "r0c1",
     "r0c2"
   ],
-  "max_seeds": 2,
+  "max_seeds": 3,
   "reward_mode": "shaped",
   "reward_family": "contribution",
   "param_budget": 500000,

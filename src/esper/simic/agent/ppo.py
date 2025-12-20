@@ -351,11 +351,12 @@ class PPOAgent:
             # smaller logits = sharper softmax), which kills exploration.
             # Shared layers feed into actor, so they must also have wd=0.
             # Reference: SAC, TD3 implementations apply WD only to critic.
-            # FactoredRecurrentActorCritic: slot_head, blueprint_head, blend_head, op_head are actors
+            # FactoredRecurrentActorCritic: slot_head, blueprint_head, blend_head, tempo_head, op_head are actors
             actor_params = (
                 list(self._base_network.slot_head.parameters()) +
                 list(self._base_network.blueprint_head.parameters()) +
                 list(self._base_network.blend_head.parameters()) +
+                list(self._base_network.tempo_head.parameters()) +
                 list(self._base_network.op_head.parameters())
             )
             critic_params = list(self._base_network.value_head.parameters())
