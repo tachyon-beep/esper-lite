@@ -2,7 +2,7 @@
 
 New layout focuses on answering:
 - "What is Tamiyo doing?" (Action distribution bar)
-- "Is she learning?" (Entropy, Value Loss gauges)
+- "Is she learning?" (Entropy, Value Loss, KL gauges)
 - "What did she just decide?" (Last Decision snapshot)
 """
 from __future__ import annotations
@@ -78,19 +78,8 @@ class TamiyoBrain(Static):
 
     def render(self):
         """Render Tamiyo content (border provided by CSS, not Rich Panel)."""
-        from rich.console import Group
-
         if self._snapshot is None:
             return Text("No data", style="dim")
-
-        if not self._snapshot.tamiyo.ppo_data_received:
-            waiting_text = Text(justify="center")
-            waiting_text.append("⏳ Waiting for PPO data...\n", style="dim italic")
-            waiting_text.append(
-                f"Progress: {self._snapshot.current_epoch}/{self._snapshot.max_epochs} epochs",
-                style="cyan",
-            )
-            return waiting_text
 
         # Main layout: two sections stacked
         main_table = Table.grid(expand=True)
@@ -117,7 +106,17 @@ class TamiyoBrain(Static):
         action_bar = self._render_action_distribution_bar()
         content.add_row(action_bar)
 
-        # Row 2: Gauges (Entropy, Value Loss, Advantage)
+        if not tamiyo.ppo_data_received:
+            waiting_text = Text(style="dim italic")
+            waiting_text.append("⏳ Waiting for PPO vitals\n")
+            waiting_text.append(
+                f"Progress: {self._snapshot.current_epoch}/{self._snapshot.max_epochs} epochs",
+                style="cyan",
+            )
+            content.add_row(waiting_text)
+            return Panel(content, title="LEARNING VITALS", border_style="dim")
+
+        # Row 2: Gauges (Entropy, Value Loss, KL)
         gauges = Table.grid(expand=True)
         gauges.add_column(ratio=1)
         gauges.add_column(ratio=1)
@@ -131,12 +130,12 @@ class TamiyoBrain(Static):
             "Value Loss", tamiyo.value_loss, 0, 1.0,
             self._get_value_loss_label(tamiyo.value_loss)
         )
-        advantage_gauge = self._render_gauge(
-            "Advantage", tamiyo.advantage_mean, -1.0, 1.0,
-            self._get_advantage_label(tamiyo.advantage_mean)
+        kl_gauge = self._render_gauge(
+            "KL", tamiyo.kl_divergence, 0.0, 0.1,
+            self._get_kl_label(tamiyo.kl_divergence)
         )
 
-        gauges.add_row(entropy_gauge, value_gauge, advantage_gauge)
+        gauges.add_row(entropy_gauge, value_gauge, kl_gauge)
         content.add_row(gauges)
 
         return Panel(content, title="LEARNING VITALS", border_style="dim")
@@ -160,12 +159,12 @@ class TamiyoBrain(Static):
         colors = {
             "GERMINATE": "green",
             "WAIT": "dim",
-            "BLEND": "cyan",  # Blending includes FOSSILIZE transitions
+            "BLEND": "cyan",
             "FOSSILIZE": "blue",
             "CULL": "red",
         }
 
-        for action in ["GERMINATE", "WAIT", "FOSSILIZE", "CULL"]:
+        for action in ["GERMINATE", "BLEND", "FOSSILIZE", "CULL", "WAIT"]:
             pct = pcts.get(action, 0)
             width = int((pct / 100) * bar_width)
             if width > 0:
@@ -174,8 +173,8 @@ class TamiyoBrain(Static):
         bar.append("] ")
 
         # Compact legend: G=50 W=25 F=25
-        abbrevs = {"GERMINATE": "G", "WAIT": "W", "FOSSILIZE": "F", "CULL": "C"}
-        for action in ["GERMINATE", "WAIT", "FOSSILIZE", "CULL"]:
+        abbrevs = {"GERMINATE": "G", "BLEND": "B", "WAIT": "W", "FOSSILIZE": "F", "CULL": "C"}
+        for action in ["GERMINATE", "BLEND", "FOSSILIZE", "CULL", "WAIT"]:
             pct = pcts.get(action, 0)
             if pct > 0:
                 bar.append(f"{abbrevs[action]}={pct:.0f} ", style=colors.get(action, "white"))
@@ -230,6 +229,11 @@ class TamiyoBrain(Static):
             return "Slight edge"
         else:
             return "Needs improvement"
+
+    def _get_kl_label(self, kl_divergence: float) -> str:
+        if kl_divergence > TUIThresholds.KL_WARNING:
+            return "Too fast"
+        return "Stable"
 
     def _render_recent_decisions(self) -> Panel:
         """Render Recent Decisions section (up to 3, each visible for 30s minimum).

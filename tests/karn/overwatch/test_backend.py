@@ -1,6 +1,5 @@
 """Tests for OverwatchBackend."""
 
-import pytest
 from esper.leyline import TelemetryEvent, TelemetryEventType
 from esper.karn.overwatch.backend import OverwatchBackend
 
@@ -24,7 +23,7 @@ class TestOverwatchBackend:
 
         event = TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"run_id": "test-run", "task": "cifar10"},
+            data={"episode_id": "test-run", "task": "cifar10"},
         )
         backend.emit(event)
 
@@ -39,7 +38,7 @@ class TestOverwatchBackend:
 
         backend.emit(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"run_id": "test"},
+            data={"episode_id": "test"},
         ))
 
         snapshot1 = backend.get_snapshot()

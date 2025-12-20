@@ -197,6 +197,52 @@ class TestTamiyoRolloutBuffer:
         buffer.compute_advantages_and_returns(gamma=0.99, gae_lambda=0.95)
         assert len(buffer) == 0
 
+    def test_normalize_advantages_single_transition_no_nan(self):
+        """normalize_advantages must not produce NaNs for batch size 1.
+
+        torch.std defaults to Bessel-corrected (correction=1), which yields NaN
+        for a single element. Advantage normalization runs every PPO update, so
+        this edge case must be numerically safe.
+        """
+        buffer = TamiyoRolloutBuffer(
+            num_envs=1,
+            max_steps_per_env=1,
+            state_dim=10,
+            lstm_hidden_dim=DEFAULT_LSTM_HIDDEN_DIM,
+        )
+
+        buffer.start_episode(env_id=0)
+        buffer.add(
+            env_id=0,
+            state=torch.randn(10),
+            slot_action=0,
+            blueprint_action=0,
+            blend_action=0,
+            tempo_action=0,
+            op_action=0,
+            slot_log_prob=-1.0,
+            blueprint_log_prob=-1.0,
+            blend_log_prob=-1.0,
+            tempo_log_prob=-1.0,
+            op_log_prob=-1.0,
+            value=0.0,
+            reward=1.0,
+            done=True,
+            slot_mask=torch.ones(3, dtype=torch.bool),
+            blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
+            blend_mask=torch.ones(3, dtype=torch.bool),
+            tempo_mask=torch.ones(NUM_TEMPO, dtype=torch.bool),
+            op_mask=torch.ones(4, dtype=torch.bool),
+            hidden_h=torch.zeros(1, 1, DEFAULT_LSTM_HIDDEN_DIM),
+            hidden_c=torch.zeros(1, 1, DEFAULT_LSTM_HIDDEN_DIM),
+        )
+        buffer.end_episode(env_id=0)
+
+        buffer.compute_advantages_and_returns(gamma=0.99, gae_lambda=0.95)
+        buffer.normalize_advantages()
+
+        assert torch.isfinite(buffer.advantages[0, 0]).item() is True
+
     def test_buffer_overflow_raises(self):
         """Exceeding max_steps_per_env should raise RuntimeError."""
         buffer = TamiyoRolloutBuffer(

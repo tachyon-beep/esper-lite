@@ -7,7 +7,6 @@ Reference: src/esper/karn/tui.py lines 1648-1748 (_render_esper_status method)
 """
 from __future__ import annotations
 
-from datetime import datetime
 from typing import TYPE_CHECKING
 
 from rich.panel import Panel
@@ -110,9 +109,9 @@ class EsperStatus(Static):
         table.add_row("Batches/hr:", f"{vitals.batches_per_hour:.0f}")
 
         # Runtime
-        if self._snapshot.start_time:
-            elapsed = datetime.now() - self._snapshot.start_time
-            hours, remainder = divmod(int(elapsed.total_seconds()), 3600)
+        if self._snapshot.runtime_seconds > 0:
+            elapsed_seconds = int(self._snapshot.runtime_seconds)
+            hours, remainder = divmod(elapsed_seconds, 3600)
             minutes, seconds = divmod(remainder, 60)
             table.add_row("Runtime:", f"{hours}h {minutes}m {seconds}s")
         else:
@@ -135,7 +134,7 @@ class EsperStatus(Static):
                     # Show utilization if available (from pynvml)
                     if stats.utilization > 0:
                         util_style = "red" if stats.utilization > 95 else "yellow" if stats.utilization > 80 else "green"
-                        util_label = f"  util:" if len(vitals.gpu_stats) > 1 else "GPU util:"
+                        util_label = "  util:" if len(vitals.gpu_stats) > 1 else "GPU util:"
                         table.add_row(
                             util_label,
                             Text(f"{stats.utilization:.0f}%", style=util_style)

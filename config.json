@@ -20,8 +20,8 @@
     "r0c1",
     "r0c2"
   ],
-  "max_seeds": 3,
-  "reward_mode": "shaped",
+  "max_seeds": 2,
+  "reward_mode": "simplified",
   "reward_family": "contribution",
   "param_budget": 500000,
   "param_penalty_weight": 0.1,

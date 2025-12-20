@@ -3,7 +3,7 @@ import pytest
 import torch
 
 from esper.leyline import DEFAULT_EPISODE_LENGTH, DEFAULT_VALUE_CLIP
-from esper.leyline.factored_actions import NUM_BLUEPRINTS, NUM_TEMPO
+from esper.leyline.factored_actions import LifecycleOp, NUM_BLUEPRINTS, NUM_TEMPO
 from esper.simic.agent import signals_to_features, PPOAgent
 from esper.tamiyo.policy.features import MULTISLOT_FEATURE_SIZE
 
@@ -225,6 +225,81 @@ def test_weight_decay_optimizer_covers_all_network_params() -> None:
 
     assert not missing_names, f"Optimizer missing network params: {missing_names}"
     assert not extra, "Optimizer has params not in network"
+
+
+def test_head_grad_norms_includes_tempo_head() -> None:
+    """Per-head gradient norm telemetry must include tempo head values (P4-6)."""
+    agent = PPOAgent(
+        state_dim=35,
+        num_envs=1,
+        max_steps_per_env=3,
+        target_kl=None,  # Ensure we reach backward() (no early stopping)
+        compile_network=False,
+        device="cpu",
+    )
+
+    device = torch.device(agent.device)
+    hidden = agent._base_network.get_initial_hidden(1, device)
+
+    agent.buffer.start_episode(env_id=0)
+    for step in range(3):
+        state = torch.randn(1, 35, device=device)
+        masks = {
+            "slot": torch.ones(1, 3, dtype=torch.bool, device=device),
+            "blueprint": torch.ones(1, NUM_BLUEPRINTS, dtype=torch.bool, device=device),
+            "blend": torch.ones(1, 3, dtype=torch.bool, device=device),
+            "tempo": torch.ones(1, NUM_TEMPO, dtype=torch.bool, device=device),
+            # Force GERMINATE so tempo head is causally relevant.
+            "op": torch.zeros(1, 4, dtype=torch.bool, device=device),
+        }
+        masks["op"][:, LifecycleOp.GERMINATE] = True
+
+        pre_hidden = hidden
+        result = agent._base_network.get_action(
+            state,
+            hidden,
+            slot_mask=masks["slot"],
+            blueprint_mask=masks["blueprint"],
+            blend_mask=masks["blend"],
+            tempo_mask=masks["tempo"],
+            op_mask=masks["op"],
+        )
+        hidden = result.hidden  # Update hidden for next step
+
+        agent.buffer.add(
+            env_id=0,
+            state=state.squeeze(0),
+            slot_action=result.actions["slot"].item(),
+            blueprint_action=result.actions["blueprint"].item(),
+            blend_action=result.actions["blend"].item(),
+            tempo_action=result.actions["tempo"].item(),
+            op_action=result.actions["op"].item(),
+            slot_log_prob=result.log_probs["slot"].item(),
+            blueprint_log_prob=result.log_probs["blueprint"].item(),
+            blend_log_prob=result.log_probs["blend"].item(),
+            tempo_log_prob=result.log_probs["tempo"].item(),
+            op_log_prob=result.log_probs["op"].item(),
+            value=result.values.item(),
+            reward=1.0,
+            done=step == 2,
+            truncated=False,
+            slot_mask=masks["slot"].squeeze(0),
+            blueprint_mask=masks["blueprint"].squeeze(0),
+            blend_mask=masks["blend"].squeeze(0),
+            tempo_mask=masks["tempo"].squeeze(0),
+            op_mask=masks["op"].squeeze(0),
+            # Store PRE-step hidden (input to get_action) for BPTT reconstruction.
+            hidden_h=pre_hidden[0],
+            hidden_c=pre_hidden[1],
+            bootstrap_value=0.0,
+        )
+    agent.buffer.end_episode(env_id=0)
+
+    metrics = agent.update(clear_buffer=True)
+    head_grad_norms = metrics["head_grad_norms"]
+
+    assert head_grad_norms["tempo"], "tempo grad norm history must not be empty"
+    assert len(head_grad_norms["tempo"]) == len(head_grad_norms["slot"])
 
 
 def test_signals_to_features_with_multislot_params():

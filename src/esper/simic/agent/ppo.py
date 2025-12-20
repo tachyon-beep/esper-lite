@@ -687,12 +687,14 @@ class PPOAgent:
             # Collect per-head gradient norms BEFORE clipping (P4-6)
             # Measures raw gradients to diagnose head dominance
             with torch.inference_mode():
+                base_net = self._base_network
                 for head_name, head_module in [
-                    ("slot", self.network.slot_head),
-                    ("blueprint", self.network.blueprint_head),
-                    ("blend", self.network.blend_head),
-                    ("op", self.network.op_head),
-                    ("value", self.network.value_head),
+                    ("slot", base_net.slot_head),
+                    ("blueprint", base_net.blueprint_head),
+                    ("blend", base_net.blend_head),
+                    ("tempo", base_net.tempo_head),
+                    ("op", base_net.op_head),
+                    ("value", base_net.value_head),
                 ]:
                     params_with_grad = [p for p in head_module.parameters() if p.grad is not None]
                     if params_with_grad:

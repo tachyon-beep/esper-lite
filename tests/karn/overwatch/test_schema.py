@@ -98,7 +98,7 @@ class TestEnvSummary:
 
     def test_env_summary_creation(self) -> None:
         """EnvSummary can be created with required fields."""
-        from esper.karn.overwatch.schema import EnvSummary, SlotChipState
+        from esper.karn.overwatch.schema import EnvSummary
 
         env = EnvSummary(
             env_id=0,
@@ -577,3 +577,7 @@ class TestPackageExports:
         assert TuiSnapshot is not None
         assert EnvSummary is not None
         assert SlotChipState is not None
+        assert TamiyoState is not None
+        assert ConnectionStatus is not None
+        assert DeviceVitals is not None
+        assert FeedEvent is not None

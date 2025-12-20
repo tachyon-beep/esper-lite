@@ -2321,6 +2321,7 @@ def train_ppo_vectorized(
                         data={
                             "env_id": env_idx,
                             "episode": episodes_completed + env_idx,
+                            "action_slot": target_slot,
                             "ab_group": env_reward_configs[env_idx].reward_mode.value,
                             **reward_components.to_dict(),
                             # Decision Snapshot fields

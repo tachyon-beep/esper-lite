@@ -1,6 +1,5 @@
 """Tests for Scoreboard widget."""
 import pytest
-from collections import deque
 
 from textual.app import App
 
@@ -362,7 +361,7 @@ async def test_seeds_display_individual_when_exactly_3():
 
         seed0 = SeedState(slot_id="R0C0", blueprint_id="conv_l", stage="FOSSILIZED")
         seed1 = SeedState(slot_id="R0C1", blueprint_id="dense_m", stage="BLENDING")
-        seed2 = SeedState(slot_id="R1C0", blueprint_id="attn_a", stage="TRAINING")
+        seed2 = SeedState(slot_id="R1C0", blueprint_id="attn_a", stage="PROBATIONARY")
 
         record = BestRunRecord(
             env_id=0,
@@ -376,27 +375,28 @@ async def test_seeds_display_individual_when_exactly_3():
         widget = app.query_one(Scoreboard)
         widget.update_snapshot(snapshot)
 
-        # Should show all three blueprints with stage-based colors
+        # Should show all three contributing blueprints with stage-based colors
         seeds_str = widget._format_seeds(record.seeds)
         assert "conv_l" in seeds_str  # FOSSILIZED → green (first 6 chars)
         assert "dense_" in seeds_str  # BLENDING → magenta (first 6 chars of "dense_m")
-        assert "attn_a" in seeds_str  # TRAINING → dim (first 6 chars)
+        assert "attn_a" in seeds_str  # PROBATIONARY → yellow (first 6 chars)
         assert "[green]" in seeds_str  # FOSSILIZED color
+        assert "[yellow]" in seeds_str  # PROBATIONARY color
 
 
 @pytest.mark.asyncio
 async def test_seeds_display_multi_stage_when_more_than_3():
-    """Seeds display should show multi-stage count when >3 seeds."""
+    """Seeds display should truncate with +N when >3 contributing seeds."""
     app = ScoreboardTestApp()
     async with app.run_test():
         snapshot = SanctumSnapshot(slot_ids=["R0C0", "R0C1", "R1C0", "R1C1"])
         env = EnvState(env_id=0)
         snapshot.envs[0] = env
 
-        # 2 FOSSILIZED, 2 others
+        # 2 FOSSILIZED, 2 provisional (all contributing)
         seed0 = SeedState(slot_id="R0C0", blueprint_id="conv_l", stage="FOSSILIZED")
         seed1 = SeedState(slot_id="R0C1", blueprint_id="dense_m", stage="FOSSILIZED")
-        seed2 = SeedState(slot_id="R1C0", blueprint_id="attn_a", stage="TRAINING")
+        seed2 = SeedState(slot_id="R1C0", blueprint_id="attn_a", stage="PROBATIONARY")
         seed3 = SeedState(slot_id="R1C1", blueprint_id="rnn_xx", stage="BLENDING")
 
         record = BestRunRecord(
@@ -411,16 +411,16 @@ async def test_seeds_display_multi_stage_when_more_than_3():
         widget = app.query_one(Scoreboard)
         widget.update_snapshot(snapshot)
 
-        # Should show "2+2" format (permanent+provisional)
+        # Should show first 3 seeds plus "+1"
         seeds_str = widget._format_seeds(record.seeds)
-        assert "2" in seeds_str  # Both permanent and provisional counts
+        assert "+1" in seeds_str
         assert "[green]" in seeds_str  # FOSSILIZED → green
-        assert "[yellow]" in seeds_str  # Provisional → yellow
+        assert "[magenta]" in seeds_str or "[yellow]" in seeds_str  # Provisional colors
 
 
 @pytest.mark.asyncio
 async def test_seeds_display_all_permanent_when_more_than_3():
-    """Seeds display should show permanent-only format when all >3 seeds are FOSSILIZED."""
+    """Seeds display should truncate with +N when all >3 seeds are FOSSILIZED."""
     app = ScoreboardTestApp()
     async with app.run_test():
         snapshot = SanctumSnapshot(slot_ids=["R0C0", "R0C1", "R1C0", "R1C1"])
@@ -445,26 +445,26 @@ async def test_seeds_display_all_permanent_when_more_than_3():
         widget = app.query_one(Scoreboard)
         widget.update_snapshot(snapshot)
 
-        # Should show "4 seeds" format
+        # Should show first 3 seeds plus "+1"
         seeds_str = widget._format_seeds(record.seeds)
-        assert "4 seeds" in seeds_str
+        assert "+1" in seeds_str
         assert "[green]" in seeds_str
 
 
 @pytest.mark.asyncio
 async def test_seeds_display_all_provisional_when_more_than_3():
-    """Seeds display should show provisional-only format when all >3 seeds are not FOSSILIZED."""
+    """Seeds display should truncate with +N when all >3 seeds are provisional."""
     app = ScoreboardTestApp()
     async with app.run_test():
         snapshot = SanctumSnapshot(slot_ids=["R0C0", "R0C1", "R1C0", "R1C1"])
         env = EnvState(env_id=0)
         snapshot.envs[0] = env
 
-        # All 4 non-FOSSILIZED
-        seed0 = SeedState(slot_id="R0C0", blueprint_id="conv_l", stage="TRAINING")
+        # All 4 contributing (no TRAINING/GERMINATED/DORMANT)
+        seed0 = SeedState(slot_id="R0C0", blueprint_id="conv_l", stage="BLENDING")
         seed1 = SeedState(slot_id="R0C1", blueprint_id="dense_m", stage="BLENDING")
         seed2 = SeedState(slot_id="R1C0", blueprint_id="attn_a", stage="PROBATIONARY")
-        seed3 = SeedState(slot_id="R1C1", blueprint_id="rnn_xx", stage="TRAINING")
+        seed3 = SeedState(slot_id="R1C1", blueprint_id="rnn_xx", stage="PROBATIONARY")
 
         record = BestRunRecord(
             env_id=0,
@@ -478,10 +478,10 @@ async def test_seeds_display_all_provisional_when_more_than_3():
         widget = app.query_one(Scoreboard)
         widget.update_snapshot(snapshot)
 
-        # Should show "4 prov" format
+        # Should show first 3 seeds plus "+1"
         seeds_str = widget._format_seeds(record.seeds)
-        assert "4 prov" in seeds_str
-        assert "[yellow]" in seeds_str
+        assert "+1" in seeds_str
+        assert "[magenta]" in seeds_str or "[yellow]" in seeds_str
 
 
 @pytest.mark.asyncio

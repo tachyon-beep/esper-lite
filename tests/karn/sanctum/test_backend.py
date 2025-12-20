@@ -2,6 +2,7 @@
 
 import pytest
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from esper.karn.sanctum.backend import SanctumBackend
@@ -46,7 +47,7 @@ class TestSanctumAggregator:
         event.event_type.name = "TRAINING_STARTED"
         event.timestamp = datetime.now(timezone.utc)
         event.data = {
-            "run_id": "test-run-123",
+            "episode_id": "test-run-123",
             "task": "mnist",
             "max_epochs": 50,
             "n_envs": 4,
@@ -116,6 +117,100 @@ class TestSanctumAggregator:
         assert env.host_loss == 0.8
         assert env.current_epoch == 10
         assert len(env.accuracy_history) == 1
+
+    def test_snapshot_computes_aggregate_mean_accuracy_and_reward(self) -> None:
+        """SanctumSnapshot should include aggregate mean metrics for EnvOverview Σ row."""
+        agg = SanctumAggregator(num_envs=2)
+
+        epoch0 = MagicMock()
+        epoch0.event_type = MagicMock()
+        epoch0.event_type.name = "EPOCH_COMPLETED"
+        epoch0.timestamp = datetime.now(timezone.utc)
+        epoch0.data = {"env_id": 0, "val_accuracy": 80.0, "val_loss": 0.1, "epoch": 1}
+
+        epoch1 = MagicMock()
+        epoch1.event_type = MagicMock()
+        epoch1.event_type.name = "EPOCH_COMPLETED"
+        epoch1.timestamp = datetime.now(timezone.utc)
+        epoch1.data = {"env_id": 1, "val_accuracy": 60.0, "val_loss": 0.2, "epoch": 1}
+
+        reward0 = MagicMock()
+        reward0.event_type = MagicMock()
+        reward0.event_type.name = "REWARD_COMPUTED"
+        reward0.timestamp = datetime.now(timezone.utc)
+        reward0.epoch = 1
+        reward0.data = {"env_id": 0, "total_reward": 1.0, "action_name": "WAIT"}
+
+        reward1 = MagicMock()
+        reward1.event_type = MagicMock()
+        reward1.event_type.name = "REWARD_COMPUTED"
+        reward1.timestamp = datetime.now(timezone.utc)
+        reward1.epoch = 1
+        reward1.data = {"env_id": 1, "total_reward": -0.5, "action_name": "WAIT"}
+
+        for ev in [epoch0, epoch1, reward0, reward1]:
+            agg.process_event(ev)
+
+        snapshot = agg.get_snapshot()
+        assert snapshot.aggregate_mean_accuracy == pytest.approx(70.0)
+        assert snapshot.aggregate_mean_reward == pytest.approx(0.25)
+
+    def test_system_vitals_populates_multi_gpu_stats_from_cuda(self, monkeypatch) -> None:
+        """GPU vitals should populate gpu_stats keyed by int device id (0/1/...)."""
+        import torch
+
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+        monkeypatch.setattr(torch.cuda, "memory_reserved", lambda idx: int(9.5 * (1024**3)))
+        monkeypatch.setattr(
+            torch.cuda,
+            "get_device_properties",
+            lambda idx: SimpleNamespace(total_memory=int(10.0 * (1024**3))),
+        )
+
+        agg = SanctumAggregator(num_envs=1)
+        start = MagicMock()
+        start.event_type = MagicMock()
+        start.event_type.name = "TRAINING_STARTED"
+        start.timestamp = datetime.now(timezone.utc)
+        start.data = {
+            "episode_id": "run-001",
+            "task": "mnist",
+            "max_epochs": 1,
+            "n_envs": 1,
+            "policy_device": "cuda:0",
+            "env_devices": ["cuda:0"],
+        }
+        agg.process_event(start)
+
+        snapshot = agg.get_snapshot()
+        assert 0 in snapshot.vitals.gpu_stats
+        stats0 = snapshot.vitals.gpu_stats[0]
+        assert stats0.device_id == 0
+        assert stats0.memory_total_gb == pytest.approx(10.0)
+        assert stats0.memory_used_gb == pytest.approx(9.5)
+        assert "cuda:0" in snapshot.vitals.memory_alarm_devices
+
+    def test_action_distribution_analytics_snapshot_populates_tamiyo_actions(self) -> None:
+        """ANALYTICS_SNAPSHOT(kind=action_distribution) should drive Tamiyo action bar."""
+        agg = SanctumAggregator(num_envs=1)
+
+        event = MagicMock()
+        event.event_type = MagicMock()
+        event.event_type.name = "ANALYTICS_SNAPSHOT"
+        event.timestamp = datetime.now(timezone.utc)
+        event.data = {
+            "kind": "action_distribution",
+            "action_counts": {"WAIT": 7, "GERMINATE": 3, "BLEND": 2},
+            "success_counts": {"WAIT": 7, "GERMINATE": 2, "BLEND": 1},
+        }
+
+        agg.process_event(event)
+        snapshot = agg.get_snapshot()
+
+        assert snapshot.tamiyo.action_counts["WAIT"] == 7
+        assert snapshot.tamiyo.action_counts["GERMINATE"] == 3
+        assert snapshot.tamiyo.action_counts["BLEND"] == 2
+        assert snapshot.tamiyo.total_actions == 12
 
     def test_epoch_completed_updates_per_seed_telemetry(self):
         """EPOCH_COMPLETED with seeds dict should update per-seed accuracy_delta."""
@@ -587,8 +682,6 @@ class TestSanctumAggregator:
         episode would persist and be displayed for environments that have completely
         different seeds in the new episode, causing confusion.
         """
-        from esper.karn.sanctum.schema import CounterfactualConfig, CounterfactualSnapshot
-
         agg = SanctumAggregator(num_envs=4)
 
         # Simulate receiving a counterfactual matrix
@@ -658,12 +751,12 @@ class TestSanctumAggregator:
         germ_event.data = {"env_id": 0, "blueprint_id": "conv_light", "params": 1000}
         agg.process_event(germ_event)
 
-        # Now emit BATCH_EPOCH_COMPLETED
+        # Now emit BATCH_EPOCH_COMPLETED (vectorized training increments by n_envs per batch)
         batch_event = MagicMock()
         batch_event.event_type = MagicMock()
         batch_event.event_type.name = "BATCH_EPOCH_COMPLETED"
         batch_event.timestamp = datetime.now(timezone.utc)
-        batch_event.data = {"episodes_completed": 1}
+        batch_event.data = {"episodes_completed": 4, "n_envs": 4}
         agg.process_event(batch_event)
 
         snapshot = agg.get_snapshot()
@@ -698,12 +791,12 @@ class TestSanctumAggregator:
             }
             agg.process_event(epoch_event)
 
-        # Emit BATCH_EPOCH_COMPLETED
+        # Emit BATCH_EPOCH_COMPLETED (vectorized training increments by n_envs per batch)
         batch_event = MagicMock()
         batch_event.event_type = MagicMock()
         batch_event.event_type.name = "BATCH_EPOCH_COMPLETED"
         batch_event.timestamp = datetime.now(timezone.utc)
-        batch_event.data = {"episodes_completed": 1}
+        batch_event.data = {"episodes_completed": 8, "n_envs": 8}
         agg.process_event(batch_event)
 
         snapshot = agg.get_snapshot()
@@ -739,7 +832,7 @@ class TestSanctumAggregator:
         batch_event.event_type = MagicMock()
         batch_event.event_type.name = "BATCH_EPOCH_COMPLETED"
         batch_event.timestamp = datetime.now(timezone.utc)
-        batch_event.data = {"episodes_completed": 1}
+        batch_event.data = {"episodes_completed": 4, "n_envs": 4}
         agg.process_event(batch_event)
 
         # Episode 1: env 0 achieves 85%
@@ -754,7 +847,7 @@ class TestSanctumAggregator:
         batch_event2.event_type = MagicMock()
         batch_event2.event_type.name = "BATCH_EPOCH_COMPLETED"
         batch_event2.timestamp = datetime.now(timezone.utc)
-        batch_event2.data = {"episodes_completed": 2}
+        batch_event2.data = {"episodes_completed": 8, "n_envs": 4}
         agg.process_event(batch_event2)
 
         snapshot = agg.get_snapshot()
@@ -764,11 +857,11 @@ class TestSanctumAggregator:
 
         # Sorted by peak accuracy descending
         assert snapshot.best_runs[0].peak_accuracy == 85.0
-        assert snapshot.best_runs[0].episode == 1  # Second batch
+        assert snapshot.best_runs[0].episode == 4  # Second batch (episode_start=4, env_id=0)
         assert snapshot.best_runs[0].epoch == 0  # No inner_epoch in event, defaults to 0
 
         assert snapshot.best_runs[1].peak_accuracy == 80.0
-        assert snapshot.best_runs[1].episode == 0  # First batch
+        assert snapshot.best_runs[1].episode == 0  # First batch (episode_start=0, env_id=0)
         assert snapshot.best_runs[1].epoch == 0  # No inner_epoch in event, defaults to 0
 
     def test_ppo_update_skipped_does_not_update_tamiyo(self):
@@ -889,7 +982,7 @@ class TestSanctumBackend:
         event.event_type = MagicMock()
         event.event_type.name = "TRAINING_STARTED"
         event.timestamp = datetime.now(timezone.utc)
-        event.data = {"run_id": "test"}
+        event.data = {"episode_id": "test"}
 
         # Emit before start
         backend.emit(event)
@@ -907,7 +1000,7 @@ class TestSanctumBackend:
         event.event_type = MagicMock()
         event.event_type.name = "TRAINING_STARTED"
         event.timestamp = datetime.now(timezone.utc)
-        event.data = {"run_id": "test-run"}
+        event.data = {"episode_id": "test-run"}
 
         backend.emit(event)
         snapshot = backend.get_snapshot()
@@ -924,7 +1017,7 @@ class TestSanctumBackend:
         event.event_type = MagicMock()
         event.event_type.name = "TRAINING_STARTED"
         event.timestamp = datetime.now(timezone.utc)
-        event.data = {"run_id": "ignored"}
+        event.data = {"episode_id": "ignored"}
 
         backend.emit(event)
         snapshot = backend.get_snapshot()

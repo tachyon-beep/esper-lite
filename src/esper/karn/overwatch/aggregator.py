@@ -28,6 +28,20 @@ if TYPE_CHECKING:
     from esper.leyline import TelemetryEvent
 
 
+def _parse_cuda_device_index(device: str) -> int | None:
+    """Parse a device string like 'cuda:0' into an integer index."""
+    if not device:
+        return None
+    lower = device.lower()
+    if not lower.startswith("cuda:"):
+        return None
+    suffix = lower.split("cuda:", 1)[1]
+    try:
+        return int(suffix)
+    except ValueError:
+        return None
+
+
 @dataclass
 class TelemetryAggregator:
     """Aggregates telemetry events into TuiSnapshot state.
@@ -155,18 +169,25 @@ class TelemetryAggregator:
     def _handle_training_started(self, event: "TelemetryEvent") -> None:
         """Handle TRAINING_STARTED event."""
         data = event.data or {}
-        self._run_id = data.get("run_id", data.get("episode_id", ""))
+        self._run_id = data.get("episode_id", "")
         self._task_name = data.get("task", "")
         self._connected = True
         self._start_time = time.time()
 
         # Initialize env summaries
-        num_envs = data.get("num_envs", self.num_envs)
-        for env_id in range(num_envs):
+        n_envs = data.get("n_envs", self.num_envs)
+        self.num_envs = n_envs
+        env_devices = data.get("env_devices", [])
+        for env_id in range(n_envs):
             if env_id not in self._envs:
+                device_id = 0
+                if isinstance(env_devices, list) and env_id < len(env_devices):
+                    parsed_device_id = _parse_cuda_device_index(str(env_devices[env_id]))
+                    if parsed_device_id is not None:
+                        device_id = parsed_device_id
                 self._envs[env_id] = EnvSummary(
                     env_id=env_id,
-                    device_id=0,  # Will be updated by device events
+                    device_id=device_id,
                     status="OK",
                 )
 
@@ -200,7 +221,8 @@ class TelemetryAggregator:
         self._tamiyo.clip_fraction = data.get("clip_fraction", 0.0)
         self._tamiyo.explained_variance = data.get("explained_variance", 0.0)
         self._tamiyo.grad_norm = data.get("grad_norm", 0.0)
-        self._tamiyo.learning_rate = data.get("learning_rate", 0.0)
+        self._tamiyo.learning_rate = data.get("lr", 0.0)
+        self._tamiyo.entropy_collapsed = data.get("entropy_collapsed", False)
 
         # Add PPO feed event for significant updates
         self._add_feed_event(
@@ -219,7 +241,35 @@ class TelemetryAggregator:
             return
 
         self._ensure_env(env_id)
-        self._envs[env_id].task_metric = data.get("val_accuracy", 0.0)
+        env = self._envs[env_id]
+        env.task_metric = data.get("val_accuracy", 0.0)
+        env.last_update_ts = self._last_event_ts
+
+        # Per-slot telemetry (emitted in vectorized training) updates alpha/stage live.
+        seeds = data.get("seeds")
+        if isinstance(seeds, dict):
+            for slot_id, info in seeds.items():
+                if not isinstance(slot_id, str) or not isinstance(info, dict):
+                    continue
+                stage = str(info.get("stage", "UNKNOWN"))
+                blueprint_id = str(info.get("blueprint_id", ""))
+                alpha = float(info.get("alpha", 0.0))
+                epochs_in_stage = int(info.get("epochs_in_stage", 0))
+
+                if slot_id not in env.slots:
+                    env.slots[slot_id] = SlotChipState(
+                        slot_id=slot_id,
+                        stage=stage,
+                        blueprint_id=blueprint_id,
+                        alpha=alpha,
+                        epochs_in_stage=epochs_in_stage,
+                    )
+                else:
+                    chip = env.slots[slot_id]
+                    chip.stage = stage
+                    chip.blueprint_id = blueprint_id
+                    chip.alpha = alpha
+                    chip.epochs_in_stage = epochs_in_stage
 
     def _handle_seed_germinated(self, event: "TelemetryEvent") -> None:
         """Handle SEED_GERMINATED event."""
@@ -361,6 +411,64 @@ class TelemetryAggregator:
             message=f"ROLLBACK: {data.get('reason', 'unknown')}",
             timestamp=event.timestamp,
         )
+
+    def _handle_analytics_snapshot(self, event: "TelemetryEvent") -> None:
+        """Handle ANALYTICS_SNAPSHOT events (UI wiring for high-frequency metrics)."""
+        data = event.data or {}
+        kind = data.get("kind")
+
+        if kind == "throughput":
+            env_id = data.get("env_id")
+            if env_id is None:
+                return
+            self._ensure_env(env_id)
+            env = self._envs[env_id]
+            fps = data.get("fps")
+            if fps is not None:
+                env.throughput_fps = float(fps)
+            env.step_time_ms = float(data.get("step_time_ms", env.step_time_ms))
+            env.last_update_ts = self._last_event_ts
+            return
+
+        if kind == "action_distribution":
+            action_counts = data.get("action_counts", {})
+            if isinstance(action_counts, dict):
+                self._tamiyo.action_counts = {
+                    str(action): int(count) for action, count in action_counts.items()
+                }
+            return
+
+        if kind == "last_action":
+            op = data.get("op")
+            if isinstance(op, str) and op:
+                code = op[0].upper()
+                if op.upper() == "WAIT":
+                    code = "W"
+                elif op.upper() == "GERMINATE":
+                    code = "G"
+                elif op.upper() == "CULL":
+                    code = "C"
+                elif op.upper() == "FOSSILIZE":
+                    code = "F"
+                self._tamiyo.recent_actions.append(code)
+                self._tamiyo.recent_actions = self._tamiyo.recent_actions[-20:]
+                # Keep counts roughly in sync even before the batch-level summary arrives.
+                self._tamiyo.action_counts[op] = self._tamiyo.action_counts.get(op, 0) + 1
+            return
+
+        # Full-state sync snapshot (emitted even when PPO update is skipped).
+        if kind is None:
+            if "episodes_completed" in data:
+                self._episode = int(data.get("episodes_completed", self._episode))
+            if "batch" in data:
+                self._batch = int(data.get("batch", self._batch))
+
+            if "kl_divergence" in data:
+                self._tamiyo.kl_divergence = float(data.get("kl_divergence", 0.0))
+            if "entropy" in data:
+                self._tamiyo.entropy = float(data.get("entropy", 0.0))
+            if "value_variance" in data:
+                self._tamiyo.explained_variance = float(data.get("value_variance", 0.0))
 
     # =========================================================================
     # Helpers

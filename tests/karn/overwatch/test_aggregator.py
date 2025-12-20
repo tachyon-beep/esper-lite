@@ -26,10 +26,10 @@ class TestAggregatorBasics:
         event = TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
             data={
-                "run_id": "run-abc123",
+                "episode_id": "run-abc123",
                 "task": "cifar10",
                 "max_epochs": 75,
-                "num_envs": 4,
+                "n_envs": 4,
             },
         )
         agg.process_event(event)
@@ -47,7 +47,7 @@ class TestAggregatorBasics:
         event = TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
             timestamp=datetime.now(timezone.utc),
-            data={"run_id": "test"},
+            data={"episode_id": "test"},
         )
         agg.process_event(event)
 
@@ -64,7 +64,7 @@ class TestBatchAndEpisodeTracking:
         agg = TelemetryAggregator()
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"run_id": "test", "num_envs": 2},
+            data={"episode_id": "test", "n_envs": 2},
         ))
 
         agg.process_event(TelemetryEvent(
@@ -93,7 +93,7 @@ class TestPPOVitals:
         agg = TelemetryAggregator()
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"run_id": "test"},
+            data={"episode_id": "test"},
         ))
 
         agg.process_event(TelemetryEvent(
@@ -106,7 +106,7 @@ class TestPPOVitals:
                 "policy_loss": -0.02,
                 "value_loss": 0.5,
                 "grad_norm": 1.5,
-                "learning_rate": 3e-4,
+                "lr": 3e-4,
             },
         ))
 
@@ -125,7 +125,7 @@ class TestEpochCompleted:
         agg = TelemetryAggregator(num_envs=2)
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"run_id": "test", "num_envs": 2},
+            data={"episode_id": "test", "n_envs": 2},
         ))
 
         agg.process_event(TelemetryEvent(
@@ -142,6 +142,104 @@ class TestEpochCompleted:
         assert env0 is not None
         assert env0.task_metric == pytest.approx(72.5)
 
+    def test_epoch_completed_updates_slot_chips_from_seed_telemetry(self):
+        """EPOCH_COMPLETED seeds payload should drive live slot chip state."""
+        agg = TelemetryAggregator(num_envs=1)
+        agg.process_event(TelemetryEvent(
+            event_type=TelemetryEventType.TRAINING_STARTED,
+            data={"episode_id": "test", "n_envs": 1},
+        ))
+
+        agg.process_event(TelemetryEvent(
+            event_type=TelemetryEventType.EPOCH_COMPLETED,
+            data={
+                "env_id": 0,
+                "val_accuracy": 72.5,
+                "seeds": {
+                    "r0c1": {
+                        "stage": "TRAINING",
+                        "blueprint_id": "conv3x3",
+                        "alpha": 0.35,
+                        "epochs_in_stage": 5,
+                    },
+                },
+            },
+        ))
+
+        snapshot = agg.get_snapshot()
+        env0 = snapshot.flight_board[0]
+        assert "r0c1" in env0.slots
+        assert env0.slots["r0c1"].stage == "TRAINING"
+        assert env0.slots["r0c1"].blueprint_id == "conv3x3"
+        assert env0.slots["r0c1"].alpha == pytest.approx(0.35)
+        assert env0.slots["r0c1"].epochs_in_stage == 5
+
+
+class TestAnalyticsSnapshot:
+    """Test ANALYTICS_SNAPSHOT event wiring."""
+
+    def test_throughput_updates_env_summary(self):
+        """Throughput analytics snapshot should populate EnvSummary throughput fields."""
+        agg = TelemetryAggregator(num_envs=1)
+        agg.process_event(TelemetryEvent(
+            event_type=TelemetryEventType.TRAINING_STARTED,
+            data={"episode_id": "test", "n_envs": 1},
+        ))
+
+        agg.process_event(TelemetryEvent(
+            event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+            data={
+                "kind": "throughput",
+                "env_id": 0,
+                "fps": 200.0,
+                "step_time_ms": 5.0,
+                "dataloader_wait_ms": 1.0,
+            },
+        ))
+
+        snapshot = agg.get_snapshot()
+        env0 = snapshot.flight_board[0]
+        assert env0.throughput_fps == pytest.approx(200.0)
+        assert env0.step_time_ms == pytest.approx(5.0)
+
+    def test_action_distribution_updates_tamiyo_action_counts(self):
+        """Action distribution analytics snapshot should populate TamiyoState.action_counts."""
+        agg = TelemetryAggregator(num_envs=1)
+        agg.process_event(TelemetryEvent(
+            event_type=TelemetryEventType.TRAINING_STARTED,
+            data={"episode_id": "test", "n_envs": 1},
+        ))
+
+        agg.process_event(TelemetryEvent(
+            event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+            data={
+                "kind": "action_distribution",
+                "action_counts": {"WAIT": 7, "GERMINATE": 3},
+                "success_counts": {"WAIT": 7, "GERMINATE": 2},
+            },
+        ))
+
+        snapshot = agg.get_snapshot()
+        assert snapshot.tamiyo.action_counts["WAIT"] == 7
+        assert snapshot.tamiyo.action_counts["GERMINATE"] == 3
+
+    def test_last_action_updates_recent_actions(self):
+        """Last-action analytics snapshots should drive TamiyoState.recent_actions."""
+        agg = TelemetryAggregator(num_envs=1)
+        agg.process_event(TelemetryEvent(
+            event_type=TelemetryEventType.TRAINING_STARTED,
+            data={"episode_id": "test", "n_envs": 1},
+        ))
+
+        for op in ["WAIT", "GERMINATE", "CULL", "FOSSILIZE"]:
+            agg.process_event(TelemetryEvent(
+                event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
+                data={"kind": "last_action", "env_id": 0, "op": op},
+            ))
+
+        snapshot = agg.get_snapshot()
+        assert "".join(snapshot.tamiyo.recent_actions[-4:]) == "WGCF"
+
 
 class TestSeedLifecycle:
     """Test seed events → SlotChipState + FeedEvent."""
@@ -151,7 +249,7 @@ class TestSeedLifecycle:
         agg = TelemetryAggregator(num_envs=2)
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"run_id": "test", "num_envs": 2},
+            data={"episode_id": "test", "n_envs": 2},
         ))
 
         agg.process_event(TelemetryEvent(
@@ -181,7 +279,7 @@ class TestSeedLifecycle:
         agg = TelemetryAggregator(num_envs=1)
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"run_id": "test", "num_envs": 1},
+            data={"episode_id": "test", "n_envs": 1},
         ))
 
         # Germinate first
@@ -207,7 +305,7 @@ class TestSeedLifecycle:
         agg = TelemetryAggregator(num_envs=1)
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"run_id": "test", "num_envs": 1},
+            data={"episode_id": "test", "n_envs": 1},
         ))
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.SEED_GERMINATED,
@@ -234,7 +332,7 @@ class TestGateEvaluation:
         agg = TelemetryAggregator(num_envs=1)
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"run_id": "test", "num_envs": 1},
+            data={"episode_id": "test", "n_envs": 1},
         ))
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.SEED_GERMINATED,
@@ -265,7 +363,7 @@ class TestEventFeedManagement:
         agg = TelemetryAggregator(num_envs=1, max_feed_events=5)
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"run_id": "test", "num_envs": 1},
+            data={"episode_id": "test", "n_envs": 1},
         ))
 
         # Add many events
@@ -290,7 +388,7 @@ class TestThreadSafety:
         agg = TelemetryAggregator(num_envs=2)
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"run_id": "test", "num_envs": 2},
+            data={"episode_id": "test", "n_envs": 2},
         ))
 
         errors = []

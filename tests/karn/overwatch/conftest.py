@@ -13,7 +13,6 @@ from esper.karn.overwatch import (
     TamiyoState,
     ConnectionStatus,
     DeviceVitals,
-    FeedEvent,
 )
 
 

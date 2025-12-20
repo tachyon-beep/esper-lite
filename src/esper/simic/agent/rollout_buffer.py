@@ -352,7 +352,9 @@ class TamiyoRolloutBuffer:
         # Compute global stats
         all_adv = torch.cat(all_advantages)
         mean = all_adv.mean()
-        std = all_adv.std()
+        # Use correction=0 to avoid NaNs for single-element tensors.
+        # (Bessel correction is undefined for n=1.)
+        std = all_adv.std(correction=0)
 
         # Normalize in-place
         for env_id in range(self.num_envs):
