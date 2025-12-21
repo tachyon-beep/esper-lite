@@ -64,7 +64,6 @@ from esper.leyline import (
     DEFAULT_MIN_TRAINING_IMPROVEMENT,
     DEFAULT_MIN_BLENDING_EPOCHS,
     DEFAULT_ALPHA_COMPLETE_THRESHOLD,
-    DEFAULT_MAX_PROBATION_EPOCHS,
     # Cooldown (Phase 4)
     DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE,
 )
@@ -86,7 +85,6 @@ MAX_GRADIENT_RATIO: float = 10.0
 
 # Probation stage constants (internal implementation details)
 PROBATION_HISTORY_MAXLEN: int = 100  # Rolling window for stage history
-# MAX_PROBATION_EPOCHS now imported from leyline as DEFAULT_MAX_PROBATION_EPOCHS
 
 # Canonical feature-shape probes for seed shape validation.
 # These are smoke tests: seeds must be shape-preserving for arbitrary H/W or seq_len.
@@ -150,10 +148,12 @@ class SeedMetrics:
     auto_pruned: bool = False
     auto_prune_reason: str = ""
 
-    # Known auto-prune reasons (for distinguishing explicit vs auto prunes)
+    # Known auto-prune reasons (catastrophic safety only; HOLDING auto-prunes removed in Phase 4).
     AUTO_PRUNE_REASONS: ClassVar[frozenset[str]] = frozenset({
-        "negative_counterfactual",  # Safety auto-prune: seed hurts performance
-        "holding_timeout",          # Timeout auto-prune: no decision made in time
+        "governor_nan",
+        "governor_lobotomy",
+        "governor_divergence",
+        "governor_rollback",
     })
 
     def record_accuracy(self, accuracy: float | torch.Tensor) -> None:
@@ -842,6 +842,10 @@ class SeedSlot(nn.Module):
         self._blend_out_freeze_active: bool = False
         self._blend_out_frozen_params: list[nn.Parameter] = []
 
+        # Scheduled prune bookkeeping (reason/initiator preserved until completion).
+        self._pending_prune_reason: str | None = None
+        self._pending_prune_initiator: str | None = None
+
     def _get_shape_probe(self, topology: str) -> torch.Tensor:
         """Get cached shape probe for topology, creating if needed."""
         # Include channels in key to handle slot reuse/reconfiguration (BUG-014)
@@ -1218,7 +1222,7 @@ class SeedSlot(nn.Module):
         return gate_result
 
     def prune(self, reason: str = "", *, initiator: str = "policy") -> bool:
-        """Prune the current seed immediately.
+        """Prune the current seed immediately (PRUNE_INSTANT).
 
         FOSSILIZED seeds cannot be pruned - they are permanent by design.
         The HOLDING stage exists as the last decision point before
@@ -1229,10 +1233,14 @@ class SeedSlot(nn.Module):
             True if prune succeeded, False if seed is unprunable (FOSSILIZED)
         """
         if not self.state:
+            self._pending_prune_reason = None
+            self._pending_prune_initiator = None
             return False
 
         # FOSSILIZED seeds are permanent - cannot be pruned
         if self.state.stage == SeedStage.FOSSILIZED:
+            self._pending_prune_reason = None
+            self._pending_prune_initiator = None
             return False
 
         # Capture metrics before transition clears state
@@ -1308,6 +1316,66 @@ class SeedSlot(nn.Module):
         # Clear any BLEND_OUT freeze tracking (avoid keeping param refs alive)
         self._blend_out_freeze_active = False
         self._blend_out_frozen_params.clear()
+        self._pending_prune_reason = None
+        self._pending_prune_initiator = None
+        return True
+
+    def schedule_prune(
+        self,
+        *,
+        steps: int,
+        curve: AlphaCurve | None = None,
+        reason: str = "",
+        initiator: str = "policy",
+    ) -> bool:
+        """Schedule a prune by ramping alpha down to 0 over N controller ticks."""
+        if not self.state:
+            return False
+
+        if self.state.stage == SeedStage.FOSSILIZED:
+            return False
+
+        if steps <= 0 or self.alpha <= 0.0:
+            return self.prune(reason=reason, initiator=initiator)
+
+        if self.state.alpha_controller.alpha_mode != AlphaMode.HOLD:
+            raise ValueError("schedule_prune requires alpha_controller to be in HOLD mode.")
+
+        if self.state.stage == SeedStage.HOLDING:
+            old_stage = self.state.stage
+            metrics = self.state.metrics
+            epochs_in_stage = metrics.epochs_in_current_stage
+            epochs_total = metrics.epochs_total
+            improvement = metrics.total_improvement
+            counterfactual = metrics.counterfactual_contribution
+
+            if not self.state.transition(SeedStage.BLENDING):
+                raise RuntimeError(
+                    f"Illegal lifecycle transition {old_stage} → BLENDING"
+                )
+            self._on_enter_stage(SeedStage.BLENDING, old_stage)
+            self._emit_telemetry(
+                TelemetryEventType.SEED_STAGE_CHANGED,
+                data={
+                    "from": old_stage.name,
+                    "to": SeedStage.BLENDING.name,
+                    "accuracy_delta": improvement,
+                    "epochs_in_stage": epochs_in_stage,
+                    "epochs_total": epochs_total,
+                    "counterfactual": counterfactual,
+                },
+            )
+        elif self.state.stage != SeedStage.BLENDING:
+            return self.prune(reason=reason, initiator=initiator)
+
+        self._pending_prune_reason = reason
+        self._pending_prune_initiator = initiator
+        self.state.alpha_controller.retarget(
+            alpha_target=0.0,
+            alpha_steps_total=steps,
+            alpha_curve=curve,
+        )
+        self._set_blend_out_freeze(True)
         return True
 
     def capture_gradient_telemetry(self) -> None:
@@ -1776,9 +1844,8 @@ class SeedSlot(nn.Module):
         """Advance lifecycle mechanically once per epoch (Kasmina timekeeper).
 
         Returns:
-            True if an auto-prune occurred (environment safety mechanism),
-            False otherwise. Used by the RL system to apply auto-prune penalties
-            that prevent degenerate WAIT-spam policies.
+            True if step_epoch triggers a system-initiated prune, False otherwise.
+            Phase 4 removes HOLDING auto-prunes, so this currently returns False.
         """
         if not self.state:
             return False
@@ -1866,20 +1933,26 @@ class SeedSlot(nn.Module):
 
         # BLENDING → HOLDING when alpha ramp completes and gate passes
         if stage == SeedStage.BLENDING:
-            reached_target = self.state.alpha_controller.step()
-            self.set_alpha(self.state.alpha_controller.alpha)
-            self.state.metrics.alpha_ramp_step = self.state.alpha_controller.alpha_steps_done
+            controller = self.state.alpha_controller
+            reached_target = controller.step()
+            self.set_alpha(controller.alpha)
+            self.state.metrics.alpha_ramp_step = controller.alpha_steps_done
 
             target_reached = (
                 reached_target
                 or (
-                    self.state.alpha_controller.alpha_mode == AlphaMode.HOLD
-                    and abs(self.state.alpha_controller.alpha - self.state.alpha_controller.alpha_target)
-                    <= 1e-6
+                    controller.alpha_mode == AlphaMode.HOLD
+                    and abs(controller.alpha - controller.alpha_target) <= 1e-6
                 )
             )
 
             if target_reached:
+                if controller.alpha_target <= 1e-6:
+                    reason = self._pending_prune_reason or "scheduled_prune"
+                    initiator = self._pending_prune_initiator or "policy"
+                    self.prune(reason=reason, initiator=initiator)
+                    return False
+
                 gate_result = self.gates.check_gate(self.state, SeedStage.HOLDING)
                 gate_result = self._sync_gate_decision(gate_result)
                 if not gate_result.passed:
@@ -1915,29 +1988,9 @@ class SeedSlot(nn.Module):
         # HOLDING: Decision point for Tamiyo
         # Fossilization requires explicit FOSSILIZE action - NO auto-advance
         # (DRL Expert review 2025-12-10: auto-fossilize violated credit assignment)
-        # Only handle safety auto-prunes and timeout.
+        # Phase 4: No auto-prunes here; policy/governor must decide explicitly.
         if stage == SeedStage.HOLDING:
-            # Calculate probation timeout (default DEFAULT_MAX_PROBATION_EPOCHS, or 10% of max_epochs)
-            # Minimum of 5 epochs ensures sufficient time for counterfactual validation
-            # (DRL Expert review 2025-12-09: 3 epochs was insufficient for reliable metrics)
-            max_probation_epochs = DEFAULT_MAX_PROBATION_EPOCHS
-            if self.task_config:
-                max_probation_epochs = max(5, int(self.task_config.max_epochs * 0.1))
-
-            # Safety auto-prune: negative counterfactual means seed actively hurts performance
-            # This is a safety mechanism, not a decision bypass - Tamiyo should learn to
-            # prune these earlier via the attribution penalty, but we don't let obviously
-            # harmful seeds persist indefinitely.
-            if self.state.metrics.counterfactual_contribution is not None:
-                if self.state.metrics.counterfactual_contribution <= 0:
-                    self.prune(reason="negative_counterfactual", initiator="kasmina")
-                    return True  # Auto-prune occurred
-
-            # Timeout: Tamiyo failed to decide in time
-            # The escalating WAIT penalty in rewards.py creates pressure to decide sooner.
-            if self.state.metrics.epochs_in_current_stage >= max_probation_epochs:
-                self.prune(reason="holding_timeout", initiator="kasmina")
-                return True  # Auto-prune occurred
+            return False
 
         # Phase 4: cooldown pipeline after pruning (seed removed, state retained).
         #

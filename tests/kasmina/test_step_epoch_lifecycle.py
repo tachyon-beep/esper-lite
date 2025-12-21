@@ -235,7 +235,7 @@ class TestStepEpochBlendingToHolding:
 
 
 class TestStepEpochHoldingOutcomes:
-    """Test HOLDING → FOSSILIZED or PRUNED transitions."""
+    """Test HOLDING behavior without explicit actions."""
 
     def test_holding_stays_with_positive_counterfactual(self):
         """HOLDING should STAY (not auto-fossilize) when counterfactual is positive.
@@ -254,8 +254,8 @@ class TestStepEpochHoldingOutcomes:
         # Should stay in HOLDING - fossilization requires explicit action
         assert slot.state.stage == SeedStage.HOLDING
 
-    def test_holding_prunes_with_negative_counterfactual(self):
-        """HOLDING should prune immediately when counterfactual is negative."""
+    def test_holding_stays_with_negative_counterfactual(self):
+        """HOLDING should not auto-prune when counterfactual is negative."""
         gates = MockGates()
         gates.set_gate_result(SeedStage.FOSSILIZED, False)  # G5 fails
         slot = create_test_slot(gates)
@@ -264,13 +264,12 @@ class TestStepEpochHoldingOutcomes:
 
         slot.step_epoch()
 
-        # Phase 4: prune keeps state for cooldown (PRUNED → EMBARGOED → RESETTING → DORMANT)
         assert slot.state is not None
-        assert slot.state.stage == SeedStage.PRUNED
-        assert slot.seed is None  # Seed is physically removed at prune completion
+        assert slot.state.stage == SeedStage.HOLDING
+        assert slot.seed is not None
 
-    def test_holding_prunes_with_zero_counterfactual(self):
-        """HOLDING should prune when counterfactual is exactly zero."""
+    def test_holding_stays_with_zero_counterfactual(self):
+        """HOLDING should not auto-prune when counterfactual is exactly zero."""
         gates = MockGates()
         gates.set_gate_result(SeedStage.FOSSILIZED, False)  # G5 must fail to reach <= 0 check
         slot = create_test_slot(gates)
@@ -280,11 +279,11 @@ class TestStepEpochHoldingOutcomes:
         slot.step_epoch()
 
         assert slot.state is not None
-        assert slot.state.stage == SeedStage.PRUNED
-        assert slot.seed is None
+        assert slot.state.stage == SeedStage.HOLDING
+        assert slot.seed is not None
 
-    def test_holding_prunes_on_timeout(self):
-        """HOLDING should prune when timeout is reached without counterfactual."""
+    def test_holding_stays_on_timeout(self):
+        """HOLDING should not auto-prune on timeout."""
         slot = create_test_slot()
         setup_state_at_stage(slot, SeedStage.HOLDING)
         slot.state.metrics.counterfactual_contribution = None  # Not yet evaluated
@@ -293,11 +292,11 @@ class TestStepEpochHoldingOutcomes:
         slot.step_epoch()
 
         assert slot.state is not None
-        assert slot.state.stage == SeedStage.PRUNED
-        assert slot.seed is None
+        assert slot.state.stage == SeedStage.HOLDING
+        assert slot.seed is not None
 
-    def test_holding_waits_for_counterfactual_before_timeout(self):
-        """HOLDING should wait for counterfactual evaluation before timeout."""
+    def test_holding_stays_before_timeout(self):
+        """HOLDING should remain unchanged before timeout."""
         slot = create_test_slot()
         setup_state_at_stage(slot, SeedStage.HOLDING)
         slot.state.metrics.counterfactual_contribution = None  # Not yet evaluated

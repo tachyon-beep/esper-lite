@@ -1680,7 +1680,7 @@ def train_ppo_vectorized(
                         seed_state.metrics.record_accuracy(val_acc)
 
                 # Update counterfactual contribution for any slot where we computed a baseline this epoch
-                # (used by G5 gate + HOLDING safety auto-prune).
+                # (used by G5 gate + Tamiyo pruning decisions).
                 if baseline_accs[env_idx]:
                     for slot_id, baseline_acc in baseline_accs[env_idx].items():
                         if model.has_active_seed_in_slot(slot_id):

@@ -596,6 +596,8 @@ This plan assumes single-process for the initial implementation. If/when we add 
 
 **Tasks**
 - Update policy action space to include `SET_ALPHA_TARGET` + `PRUNE` operations and the new heads (`alpha_algorithm_head`, etc.).
+- Wire `PRUNE` speeds/curves to `SeedSlot.schedule_prune()` (instant → `prune()`) and route PRUNE execution through the scheduled path.
+- Enforce HOLD-only constraints for `SET_ALPHA_TARGET`/`PRUNE` in action masks (no runtime errors from invalid actions).
 - Add observation fields: `alpha_target/mode/steps`, `time_to_target`, `alpha_velocity`, `alpha_algorithm`.
 - Implement reward updates: `BaseSlotRent` floor + convex shock + full-amplitude-only indecision pressure.
 

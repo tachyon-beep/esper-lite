@@ -175,8 +175,8 @@ class TestEarlyCullScenarios:
 class TestHoldingTimeout:
     """Tests for holding timeout behavior."""
 
-    def test_holding_timeout_culls_seed(self):
-        """Exceeding max holding epochs should auto-cull."""
+    def test_holding_timeout_does_not_prune(self):
+        """Exceeding max holding epochs should not auto-prune."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
         slot.state.transition(SeedStage.TRAINING)
@@ -190,9 +190,9 @@ class TestHoldingTimeout:
 
         slot.step_epoch()
 
-        # Should be culled due to timeout
+        # Should remain in holding without auto-prune
         assert slot.state is not None
-        assert slot.state.stage == SeedStage.PRUNED
+        assert slot.state.stage == SeedStage.HOLDING
 
     def test_holding_no_timeout_before_max_epochs(self):
         """Seed should survive if under max holding epochs."""
@@ -213,11 +213,11 @@ class TestHoldingTimeout:
         assert slot.state.stage == SeedStage.HOLDING
 
 
-class TestNegativeCounterfactualAutoCull:
-    """Tests for negative counterfactual auto-cull behavior."""
+class TestNegativeCounterfactualNoAutoPrune:
+    """Tests for negative counterfactual behavior without auto-prune."""
 
-    def test_negative_counterfactual_culls(self):
-        """Negative counterfactual in HOLDING should auto-cull."""
+    def test_negative_counterfactual_does_not_auto_prune(self):
+        """Negative counterfactual in HOLDING should not auto-prune."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
         slot.state.transition(SeedStage.TRAINING)
@@ -229,12 +229,11 @@ class TestNegativeCounterfactualAutoCull:
 
         slot.step_epoch()
 
-        # Should be culled
         assert slot.state is not None
-        assert slot.state.stage == SeedStage.PRUNED
+        assert slot.state.stage == SeedStage.HOLDING
 
-    def test_zero_counterfactual_culls(self):
-        """Zero counterfactual in HOLDING should auto-cull."""
+    def test_zero_counterfactual_does_not_auto_prune(self):
+        """Zero counterfactual in HOLDING should not auto-prune."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
         slot.state.transition(SeedStage.TRAINING)
@@ -245,9 +244,8 @@ class TestNegativeCounterfactualAutoCull:
 
         slot.step_epoch()
 
-        # Should be culled (0 is not positive contribution)
         assert slot.state is not None
-        assert slot.state.stage == SeedStage.PRUNED
+        assert slot.state.stage == SeedStage.HOLDING
 
     def test_positive_counterfactual_survives(self):
         """Positive counterfactual should not trigger auto-cull."""

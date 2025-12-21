@@ -72,6 +72,7 @@ class TolariaGovernor:
         self.min_panics_before_rollback = min_panics_before_rollback
         self._pending_panic: bool = False
         self._panic_loss: float | None = None  # Track loss that triggered panic
+        self._panic_reason: str | None = None  # Seed prune reason for catastrophic events
         # Random guessing loss = "lobotomy signature"
         # - CIFAR-10: ln(10) ≈ 2.3 (default)
         # - TinyStories: ln(50257) ≈ 10.8
@@ -145,6 +146,7 @@ class TolariaGovernor:
         if math.isnan(current_loss) or math.isinf(current_loss):
             self._pending_panic = False
             self._panic_loss = current_loss
+            self._panic_reason = "governor_nan"
             self.consecutive_panics = self.min_panics_before_rollback  # Skip to rollback
             return True
 
@@ -162,12 +164,14 @@ class TolariaGovernor:
                 abs(current_loss - self.random_guess_loss) < lobotomy_tolerance):
                 self._pending_panic = False
                 self._panic_loss = current_loss
+                self._panic_reason = "governor_lobotomy"
                 self.consecutive_panics = self.min_panics_before_rollback
                 return True
 
         # Need sufficient history for stable estimates
         if len(self.loss_history) < 10:
             self.loss_history.append(current_loss)
+            self._panic_reason = None
             return False
 
         # Statistical anomaly detection
@@ -193,6 +197,7 @@ class TolariaGovernor:
             self.consecutive_panics += 1
             self._pending_panic = True
             self._panic_loss = current_loss
+            self._panic_reason = "governor_divergence"
             # Only actually panic after consecutive anomalies
             if self.consecutive_panics >= self.min_panics_before_rollback:
                 return True
@@ -201,6 +206,7 @@ class TolariaGovernor:
             self.loss_history.append(current_loss)
             self.consecutive_panics = 0
             self._pending_panic = False
+            self._panic_reason = None
             return False
 
     def execute_rollback(
@@ -236,6 +242,7 @@ class TolariaGovernor:
 
         # Emit telemetry event (replaces print)
         hub = get_hub()
+        panic_reason = self._panic_reason or "governor_rollback"
         hub.emit(TelemetryEvent(
             event_type=TelemetryEventType.GOVERNOR_ROLLBACK,
             severity="critical",
@@ -247,6 +254,7 @@ class TolariaGovernor:
                 "loss_at_panic": self._panic_loss,
                 "loss_threshold": threshold,
                 "consecutive_panics": self.consecutive_panics,
+                "panic_reason": panic_reason,
             },
         ))
 
@@ -260,13 +268,13 @@ class TolariaGovernor:
         # Justification: Feature detection - MorphogeneticModel has seed_slots, base models may not
         if hasattr(self.model, 'seed_slots'):
             for slot in self.model.seed_slots.values():
-                slot.prune("governor_rollback", initiator="governor")
+                slot.prune(panic_reason, initiator="governor")
 
         # Restore host + fossilized seeds from snapshot
         # Use strict=False because:
         # 1. Snapshot excludes experimental seeds (by design)
         # 2. Current model may have different seed state than snapshot
-        # 3. execute_rollback culls all seeds before restore, so missing keys are expected
+        # 3. execute_rollback prunes all seeds before restore, so missing keys are expected
         # Move all tensors to model device in one batch before loading, avoiding
         # individual CPU->GPU transfers for each parameter.
         # Use non_blocking=True for async CPU->GPU transfer
@@ -311,6 +319,7 @@ class TolariaGovernor:
 
         # Reset panic counter after successful rollback to allow fresh recovery
         self.consecutive_panics = 0
+        self._panic_reason = None
 
         return GovernorReport(
             reason="Structural Collapse",
@@ -330,6 +339,7 @@ class TolariaGovernor:
         self.consecutive_panics = 0
         self._pending_panic = False
         self._panic_loss = None
+        self._panic_reason = None
         self.snapshot()
 
 

@@ -17,6 +17,7 @@ import torch.nn as nn
 
 from esper.kasmina.slot import SeedSlot
 from esper.leyline import DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE, SeedStage, TelemetryEventType
+from esper.leyline.alpha import AlphaMode
 
 
 def _drain_cooldown(slot: SeedSlot) -> None:
@@ -71,6 +72,31 @@ class TestPruneCooldownPipeline:
         assert slot.state is None
         assert slot.seed is None
         torch.testing.assert_close(slot(x), x)
+
+    def test_scheduled_prune_completes_when_alpha_hits_zero(self):
+        slot = SeedSlot(slot_id="r0c0", channels=64, device="cpu", fast_mode=True)
+        slot.germinate("noop", seed_id="seed0")
+        slot.state.transition(SeedStage.TRAINING)
+        slot.state.transition(SeedStage.BLENDING)
+
+        slot.set_alpha(1.0)
+        slot.state.alpha_controller.alpha = 1.0
+        slot.state.alpha_controller.alpha_target = 1.0
+        slot.state.alpha_controller.alpha_mode = AlphaMode.HOLD
+
+        ok = slot.schedule_prune(steps=2, reason="policy_prune")
+        assert ok is True
+        assert slot.state.stage == SeedStage.BLENDING
+        assert slot.seed is not None
+
+        slot.step_epoch()
+        assert slot.state.stage == SeedStage.BLENDING
+        assert slot.seed is not None
+
+        slot.step_epoch()
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.PRUNED
+        assert slot.seed is None
 
     def test_embargo_blocks_germinate_until_dwell_completes(self):
         slot = SeedSlot(slot_id="r0c0", channels=64, device="cpu", fast_mode=True)
@@ -138,4 +164,3 @@ class TestGovernorEmergencyPrune:
         payload = pruned_events[0]
         assert payload.get("reason") == "governor_nan"
         assert payload.get("initiator") == "governor"
-
