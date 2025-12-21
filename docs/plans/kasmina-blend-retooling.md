@@ -482,6 +482,14 @@ This plan assumes single-process for the initial implementation. If/when we add 
 - Suggested starting point (so worst-case instant shock stays “noticeable but not dominant”):
   - `shock_scale = seed_params/host_params`
   - `k = 0.1` (⇒ worst-case instant prune shock ≈ `-0.3` when ratio ≈ `3`)
+- Reward scale sanity (current `ContributionRewardConfig` defaults):
+  - rent penalty (uncapped) is `rent_weight * log(1 + growth_ratio)` with `rent_weight=0.5`
+    - `growth_ratio=0.1` ⇒ rent ≈ `-0.024`
+    - `growth_ratio=1.0` ⇒ rent ≈ `-0.347`
+    - `growth_ratio=3.0` ⇒ rent ≈ `-0.693`
+  - with `k=0.1` and `shock_scale=seed_params/host_params`:
+    - instant (`n=1`) shock is ≈ `-0.1 * ratio` (so `ratio≈3` ⇒ ≈ `-0.3`)
+    - slow (`n=8`, linear) shock is ≈ `-0.0125 * ratio` (so `ratio≈3` ⇒ ≈ `-0.0375`)
 
 #### Phase 1 — Contracts, naming, and transitions (Leyline + docs)
 
