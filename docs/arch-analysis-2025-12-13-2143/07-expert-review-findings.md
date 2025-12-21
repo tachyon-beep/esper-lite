@@ -57,12 +57,12 @@ The esper-lite codebase demonstrates **mature, production-quality implementation
 | Missing imports | training.py:193-197 | HIGH | BLUEPRINT_IDS, BLEND_IDS, SLOT_IDS not defined |
 | KL stopping disabled | ppo.py:489-493 | HIGH | With recurrent_n_epochs=1, KL check never applies |
 | Large value clip | ppo.py:158 | MEDIUM | value_clip=10.0 may hurt value learning |
-| Reward scale asymmetry | rewards.py:549-560 | MEDIUM | probation_warning up to -10.0 vs others ~[-1, 1] |
+| Reward scale asymmetry | rewards.py:549-560 | MEDIUM | holding_warning up to -10.0 vs others ~[-1, 1] |
 
 #### Recommendations
 1. Fix missing imports immediately
 2. Consider recurrent_n_epochs=2-3 with KL stopping
-3. Review probation_warning scale relative to other components
+3. Review holding_warning scale relative to other components
 4. Add learning rate warmup and decay
 
 ---
@@ -106,7 +106,7 @@ The esper-lite codebase demonstrates **mature, production-quality implementation
 | Counterfactual trend | Cannot detect ransomware early | MEDIUM |
 
 #### Reward Density
-- BLENDING/PROBATIONARY have much denser rewards than TRAINING
+- BLENDING/HOLDING have much denser rewards than TRAINING
 - May cause over-aggressive advancement to BLENDING
 
 #### Recommendations
@@ -255,7 +255,7 @@ The esper-lite codebase demonstrates **mature, production-quality implementation
 
 ### Medium Priority (P2)
 7. **Add gradient checkpointing** for LSTM in memory-constrained scenarios
-8. **Review reward scale asymmetry** (probation_warning vs. other components)
+8. **Review reward scale asymmetry** (holding_warning vs. other components)
 9. **Add LR warmup and decay** schedules
 
 ### Low Priority (P3)

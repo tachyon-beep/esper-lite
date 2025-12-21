@@ -69,7 +69,7 @@
 - [2025-12-13 21:49] Written architecture diagrams (03-diagrams.md)
   - 10 diagrams: Context, Container, Dependency Graph, Simic Components, Kasmina Components, State Machine, Data Flow, Telemetry Flow, Deployment View, Issue Hotspots
 - [2025-12-13 21:49] Diagram validation: PASS (after corrections)
-  - Fixed: State machine used wrong enum names (GERMINATING→GERMINATED, FAILED→CULLED)
+  - Fixed: State machine used wrong enum names (GERMINATING→GERMINATED, FAILED→PRUNED)
   - Fixed: Container diagram missing Scripts→Tamiyo dependency
   - LOC counts verified accurate
   - Quality gates G0-G5 verified

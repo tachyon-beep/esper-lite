@@ -46,7 +46,7 @@ We are measuring **Return on Investment (ROI)**, not just profit.
     *   *Did we spend our parameter budget wisely?*
 2.  **Decision Decisiveness:** Entropy trends.
     *   *Is the agent confident, or flailing?*
-3.  **Lifecycle Efficiency:** Ratio of `FOSSILIZED` to `CULLED` seeds.
+3.  **Lifecycle Efficiency:** Ratio of `FOSSILIZED` to `PRUNED` seeds.
     *   *Does the agent kill bad seeds early (high precision)?*
 
 ### 3.1 Pass Criteria

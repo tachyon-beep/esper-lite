@@ -160,7 +160,7 @@ class TelemetryConfig(BaseModel):
 | `TelemetryEventType.*` | `NissaHub.emit()` | Fan-out to `OutputBackend.emit()` |
 
 Notable consumers:
-- `BlueprintAnalytics` consumes `SEED_GERMINATED`, `SEED_FOSSILIZED`, `SEED_CULLED`. (`src/esper/nissa/analytics.py:147`)
+- `BlueprintAnalytics` consumes `SEED_GERMINATED`, `SEED_FOSSILIZED`, `SEED_PRUNED`. (`src/esper/nissa/analytics.py:147`)
 - `ConsoleOutput` formats many event families by name (EPOCH/COMMAND/SEED/etc). (`src/esper/nissa/output.py:83`)
 
 ---
@@ -248,7 +248,7 @@ References: `src/esper/nissa/tracker.py:150`, `src/esper/nissa/tracker.py:164`, 
 ```
 SEED_GERMINATED -> germinated++ ; scoreboard.live_blueprint=bp
 SEED_FOSSILIZED -> fossilized++ ; stats.acc_deltas+=Δacc ; scoreboard.fossilized_by_blueprint[bp]++
-SEED_CULLED     -> culled++     ; stats.churns+=Δacc
+SEED_PRUNED     -> pruned++     ; stats.churns+=Δacc
 ```
 
 References: `src/esper/nissa/analytics.py:145`, `src/esper/nissa/analytics.py:161`, `src/esper/nissa/analytics.py:190`
@@ -324,7 +324,7 @@ References: `src/esper/nissa/analytics.py:145`, `src/esper/nissa/analytics.py:16
 | 6 | Morphogenetic plane | ✅ | Observes slot/seed events without embedding slot logic. (`src/esper/nissa/analytics.py:145`) |
 | 7 | Governor prevents catastrophe | ✅ | Surfaces `GOVERNOR_*` events and formats them for humans. (`src/esper/nissa/output.py:163`) |
 | 8 | Hierarchical scaling | ⚠️ | Nissa is flat routing; hierarchy and dashboards increasingly live in Karn. (`src/esper/karn/__init__.py:1`) |
-| 9 | Frozen Core economy | ✅ | Telemetry logs fossilization/cull decisions and outcomes for later reuse. (`src/esper/nissa/output.py:92`) |
+| 9 | Frozen Core economy | ✅ | Telemetry logs fossilization/prune decisions and outcomes for later reuse. (`src/esper/nissa/output.py:92`) |
 
 ## 6.2 Biological Role
 
@@ -443,4 +443,3 @@ Training CLI wires Nissa backends into the global hub:
 | Date | Change | Commit | Impact |
 |------|--------|--------|--------|
 | 2025-12-14 | Added initial Nissa UMB bible | `40226ca` | Documentation only |
-

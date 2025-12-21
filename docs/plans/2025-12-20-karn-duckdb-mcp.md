@@ -224,14 +224,14 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.counterfactual')::DOUBLE as counterfactual,
             json_extract(data, '$.epochs_total')::INTEGER as epochs_total,
             json_extract(data, '$.gradient_health')::DOUBLE as gradient_health,
-            json_extract_string(data, '$.reason') as cull_reason,
-            json_extract(data, '$.auto_culled')::BOOLEAN as auto_culled
+            json_extract_string(data, '$.reason') as prune_reason,
+            json_extract(data, '$.auto_pruned')::BOOLEAN as auto_pruned
         FROM raw_events
         WHERE event_type IN (
             'SEED_GERMINATED',
             'SEED_STAGE_CHANGED',
             'SEED_FOSSILIZED',
-            'SEED_CULLED'
+            'SEED_PRUNED'
         )
     """,
     "rewards": """

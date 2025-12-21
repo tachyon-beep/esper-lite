@@ -14,7 +14,7 @@ Reference of what telemetry we capture, how it is produced, and where it flows. 
   - `SEED_GERMINATED` (blueprint_id, seed_id, params)
   - `SEED_STAGE_CHANGED` (from, to)
   - `SEED_FOSSILIZED` (blueprint_id, seed_id, improvement, blending_delta, counterfactual, params_added, epochs_total, epochs_in_stage)
-  - `SEED_CULLED` (reason, blueprint_id, seed_id, improvement, blending_delta, counterfactual, epochs_total, epochs_in_stage)
+  - `SEED_PRUNED` (reason, blueprint_id, seed_id, improvement, blending_delta, counterfactual, epochs_total, epochs_in_stage)
 - **SeedTelemetry:** 10-dim normalized snapshot (grad_norm/health, vanish/explode flags, accuracy/Δ, epochs_in_stage, stage, alpha, epoch/max_epochs) kept on `SeedState` and updated via `sync_telemetry`.
 
 ## PPO Vectorized Telemetry (Simic)
@@ -25,7 +25,7 @@ Reference of what telemetry we capture, how it is produced, and where it flows. 
   - `EPOCH_COMPLETED` (per-env) with val loss/acc and seed telemetry (env_id scoped).
   - Progress markers: `PLATEAU_DETECTED` / `DEGRADATION_DETECTED` / `IMPROVEMENT_DETECTED` based on rolling_avg_accuracy deltas vs thresholds.
 - **PPO updates:** `PPO_UPDATE_COMPLETED` per batch epoch: policy/value loss, entropy + coef, KL, clip_fraction, ratio_max/min/std, explained_variance, batch + inner_epoch ids, avg/rolling acc/reward, entropy coef. Skips with reason when governor rollback clears buffer.
-- **Rewards:** When telemetry level DEBUG, `REWARD_COMPUTED` carries full `RewardComponentsTelemetry` (bounded_attribution, compute_rent, stage/pbrs bonuses, blending/probation penalties, terminal bonuses, action_success, seed_stage, val_acc, baselines, growth_ratio). Governor punishment also emits `REWARD_COMPUTED` with reason.
+- **Rewards:** When telemetry level DEBUG, `REWARD_COMPUTED` carries full `RewardComponentsTelemetry` (bounded_attribution, compute_rent, stage/pbrs bonuses, blending/holding penalties, terminal bonuses, action_success, seed_stage, val_acc, baselines, growth_ratio). Governor punishment also emits `REWARD_COMPUTED` with reason.
 - **Anomalies:** `RATIO_EXPLOSION/COLLAPSE`, `VALUE_COLLAPSE`, `NUMERICAL_INSTABILITY`, fallback `GRADIENT_ANOMALY`. Optional payloads include per-layer grad stats and numerical stability report when debug gradients enabled.
 - **Governor:** `GOVERNOR_ROLLBACK` (env_id, reason, loss_at_panic, threshold, consecutive_panics) and injects negative reward; snapshots every 5 epochs (no event) and panic detection uses loss stats.
 - **Analytics sync:** `ANALYTICS_SNAPSHOT` every batch (rolling accuracy, entropy/KL/EV, seeds created/fossilized, skipped flag) plus summary/scoreboard strings every 5 batches when `quiet_analytics` is False.
@@ -42,11 +42,11 @@ Reference of what telemetry we capture, how it is produced, and where it flows. 
 - `SignalTracker.update` computes `TrainingSignals` (loss/acc deltas, plateau count, host_stabilized latch, histories, bests, seed summary). When stabilization latch trips, emits `TAMIYO_INITIATED` (env_id, epoch, stable_count, stabilization_epochs, val_loss). Signals feed PPO observations and heuristic policy; no other events.
 
 ## Governor (Tolaria)
-- `TolariaGovernor.execute_rollback` emits `GOVERNOR_ROLLBACK` (reason, loss_at_panic, loss_threshold, consecutive_panics) and culls live seeds before restoring snapshot. No periodic events; vital signs check and snapshot are internal.
+- `TolariaGovernor.execute_rollback` emits `GOVERNOR_ROLLBACK` (reason, loss_at_panic, loss_threshold, consecutive_panics) and prunes live seeds before restoring snapshot. No periodic events; vital signs check and snapshot are internal.
 
 ## Blueprint Analytics Backend (Nissa)
 - **Source:** Receives lifecycle events.
-- **Stats tracked:** Per-blueprint germinated/fossilized/culled counts; mean acc_delta, blending_delta, counterfactual, churn; fossilization rate. Per-env scoreboard: params added, compute_cost (multiplier table), fossilize/cull age, distribution by blueprint, params% of host.
+- **Stats tracked:** Per-blueprint germinated/fossilized/pruned counts; mean acc_delta, blending_delta, counterfactual, churn; fossilization rate. Per-env scoreboard: params added, compute_cost (multiplier table), fossilize/prune age, distribution by blueprint, params% of host.
 - **Outputs:** `summary_table()` and `scoreboard_table()` strings included in periodic `ANALYTICS_SNAPSHOT`; snapshot dict attached to final history entry in PPO.
 
 ## Diagnostic Tracker (Nissa)

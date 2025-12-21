@@ -53,7 +53,7 @@ if total_imp > max(config.improvement_safe_threshold, 1e-8):
     ratio = seed_contribution / total_imp
 ```
 
-### H2: Potential Exponential Overflow in Probation Warning
+### H2: Potential Exponential Overflow in Holding Warning
 
 **Location:** Lines 594-599
 
@@ -61,9 +61,9 @@ if total_imp > max(config.improvement_safe_threshold, 1e-8):
 # Exponential: epoch 2 -> -1.0, epoch 3 -> -3.0, epoch 4 -> -9.0
 # Formula: -1.0 * (3 ** (epochs_waiting - 1))
 epochs_waiting = seed_info.epochs_in_stage - 1
-probation_warning = -1.0 * (3 ** (epochs_waiting - 1))
+holding_warning = -1.0 * (3 ** (epochs_waiting - 1))
 # Cap at -10.0 (clip boundary) to avoid extreme penalties
-probation_warning = max(probation_warning, -10.0)
+holding_warning = max(holding_warning, -10.0)
 ```
 
 **Issue:** For very long episodes (edge case), `epochs_waiting` could grow large. While `max(..., -10.0)` caps the value, the intermediate calculation `3 ** (epochs_waiting - 1)` could overflow for extreme values:
@@ -76,10 +76,10 @@ probation_warning = max(probation_warning, -10.0)
 ```python
 # Safe exponential with early capping
 if epochs_waiting > 5:  # 3^4 = 81, already past -10 threshold
-    probation_warning = -10.0
+    holding_warning = -10.0
 else:
-    probation_warning = -1.0 * (3 ** max(0, epochs_waiting - 1))
-    probation_warning = max(probation_warning, -10.0)
+    holding_warning = -1.0 * (3 ** max(0, epochs_waiting - 1))
+    holding_warning = max(holding_warning, -10.0)
 ```
 
 ---
@@ -215,7 +215,7 @@ STAGE_GERMINATED = SeedStage.GERMINATED.value
 STAGE_TRAINING = SeedStage.TRAINING.value
 STAGE_BLENDING = SeedStage.BLENDING.value
 STAGE_FOSSILIZED = SeedStage.FOSSILIZED.value
-STAGE_PROBATIONARY = SeedStage.PROBATIONARY.value
+STAGE_HOLDING = SeedStage.HOLDING.value
 ```
 
 **Issue:** These constants duplicate values already available via `SeedStage` enum. They create maintenance burden if stage values change.
@@ -333,7 +333,7 @@ class RewardComponentsTelemetry:
 | Component | Risk | Mitigation |
 |-----------|------|------------|
 | Sigmoid attribution discount | Low | IEEE 754 inf handling works correctly |
-| Exponential probation warning | Low | Capped at -10.0, but intermediate can overflow |
+| Exponential holding warning | Low | Capped at -10.0, but intermediate can overflow |
 | Division for ratio penalty | Very Low | Guarded by threshold > 0.1 |
 | Log rent calculation | None | `math.log(1.0 + x)` for x >= 0 is safe |
 

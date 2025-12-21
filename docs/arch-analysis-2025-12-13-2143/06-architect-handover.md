@@ -72,9 +72,9 @@ python -m esper.scripts.train ppo --task cifar10 --episodes 100 --n-envs 4
 ### 3. Understand the seed lifecycle (20 min)
 
 ```
-DORMANT → GERMINATED → TRAINING → BLENDING → PROBATIONARY → FOSSILIZED
+DORMANT → GERMINATED → TRAINING → BLENDING → HOLDING → FOSSILIZED
    │           │           │          │            │
-   └──────────────────────────────────────────────────► CULLED (failure)
+   └──────────────────────────────────────────────────► PRUNED (failure)
 ```
 
 Quality gates (G0-G5) control advancement. See `kasmina/slot.py` for gate logic.

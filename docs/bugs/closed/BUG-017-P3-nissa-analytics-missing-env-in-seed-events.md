@@ -47,7 +47,7 @@ def telemetry_callback(event):
 | SEED_FOSSILIZED | improvement | ✓ |
 | SEED_FOSSILIZED | params_added | ✓ |
 | SEED_FOSSILIZED | epochs_total | ✓ |
-| SEED_CULLED | All required fields | ✓ |
+| SEED_PRUNED | All required fields | ✓ |
 
 ### 3. Analytics Uses Defensive Defaults
 

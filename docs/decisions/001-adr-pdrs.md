@@ -46,7 +46,7 @@ So strict Ng style PBRS guarantees (“shaping never changes the optimal policy�
 
 We want to:
 
-* Give the agent a strong positive signal for advancing seed stages (TRAINING → BLENDING → SHADOWING → PROBATIONARY → FOSSILIZED).
+* Give the agent a strong positive signal for advancing seed stages (TRAINING → BLENDING → SHADOWING → HOLDING → FOSSILIZED).
 * Avoid the “do nothing” local optimum caused by punishing short term accuracy dips.
 * Keep the reward logic understandable to future us.
 

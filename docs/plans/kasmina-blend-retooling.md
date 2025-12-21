@@ -272,13 +272,18 @@ Notes:
 
 **Operator semantics (must be explicit for implementation)**
 
-Let `a = alpha_effective(x)` (see §4.2), and let `s = seed_features` and `h = host_features`.
+Let `a = alpha_effective(x)` (see §4.2), and let `h = host_features` and `s = seed_features`.
+
+Note: most Kasmina seeds are *residual* modules (common shape: `seed(x) = x + Δ(x)`). For valve semantics we want a signal that is near-zero at birth when the seed is identity-like, so for `MULTIPLY` we treat the modulation signal as the residual around the seed’s *input reference*:
+- `x = seed_input` (the tensor we actually feed into the seed; `host_features` when non-isolated, `host_features.detach()` when `isolate_gradients=True`)
+- `m = (s - x)` (seed modulation / residual)
 
 - `ADD` (default): convex mix / cross-fade (matches today’s `torch.lerp` path).
   - Proposed: `y = lerp(h, s, a) = h + a * (s - h)`
 - `MULTIPLY` (valve): modulate host by an identity-at-zero multiplier (for “dampener/valve” scaffolds).
-  - Locked: `y = h * (1 + a * tanh(s))`
-  - Init: initialize the seed’s final layer weights/biases to `0` so `s≈0` at birth and the valve starts near identity.
+  - Locked: `y = h * (1 + a * tanh(m))`
+  - Init: initialize the seed’s final affine layer weights/biases to `0` so `m≈0` at birth and the valve starts near identity.
+  - Isolation note: `MULTIPLY` is allowed when `isolate_gradients=True`, but **must** define `m` around the detached `seed_input` reference (not raw `host_features`) to avoid host-gradient sign flips and seed-dependent `dy/dh` coupling.
 - `GATE`: enable per-sample gating so `a` depends on input (use the learned gate network), while keeping the `ADD` composition.
 
 ### 7.2 Transitional option (if we want minimal wiring first)
@@ -540,7 +545,7 @@ This plan assumes single-process for the initial implementation. If/when we add 
 - Implement `alpha_algorithm_head` wiring (HOLD-only changes).
 - Implement composition operators:
   - `ADD`: `lerp(h, s, a)`
-  - `MULTIPLY`: `h * (1 + a * tanh(s))` + zero-init of final seed layer
+  - `MULTIPLY`: `h * (1 + a * tanh(s - seed_input))` + zero-init of final seed layer
   - `GATE`: per-sample `gate(x)` multiplied into amplitude `alpha_amplitude(t)`
 - Enforce ghost-gradient requirement during `BLEND_OUT` (freeze params only; no detach/no `no_grad`).
 
@@ -553,6 +558,15 @@ This plan assumes single-process for the initial implementation. If/when we add 
 - Explicitly audit interaction with `isolate_gradients` + channels_last safety constraints (BUG-005): ensure no new detach patterns are introduced in `BLENDING+`.
 - Decide whether `GATE` reuses existing `GatedBlend` as the per-sample gate (and if so, how its parameters are frozen during `BLEND_OUT`), before any wiring changes.
 - Identify every seed blueprint that needs “final layer zero-init” support, and confirm it’s implementable without breaking initialization conventions.
+
+**Phase 3 risk-reduction artifacts (implemented now, no runtime changes)**
+- Blend operator contracts: `src/esper/kasmina/blend_ops.py`
+- Operator math tests: `tests/kasmina/test_blend_ops_contracts.py`
+- Gradient + ghost-gradient tests: `tests/kasmina/test_blend_ops_gradients.py`
+- Final-layer zero-init helper: `src/esper/kasmina/blueprints/initialization.py`
+- Identity-init blueprint tests: `tests/kasmina/test_blueprint_zero_init_final_layer.py`
+- torch.compile smoke tests: `tests/kasmina/test_compile_tensor_ops.py` + `tests/kasmina/test_pytorch_expert_compile.py`
+- isolate_gradients + channels_last regression: `tests/kasmina/test_isolation_channels_last_contracts.py`
 
 #### Phase 4 — Prune pipeline + cooldown + safety override
 

@@ -25,7 +25,7 @@ The rewards module implements a sophisticated multi-component reward function fo
 **Areas for Concern:**
 - PBRS gamma consistency relies on manual synchronization
 - Some reward component scales may need empirical validation
-- Probationary indecision penalty may be too aggressive in edge cases
+- Holding indecision penalty may be too aggressive in edge cases
 - Terminal bonus counting logic has potential double-counting risk
 
 ---
@@ -102,18 +102,18 @@ This is appropriate for CIFAR-10 where typical improvements are 1-5%, but may be
 
 ---
 
-### H2: Probationary Indecision Penalty Exponential Growth (rewards.py:594-599)
+### H2: Holding Indecision Penalty Exponential Growth (rewards.py:594-599)
 
 **Severity:** HIGH
 **Lines:** 594-599
 
-The probationary indecision penalty grows exponentially:
+The holding indecision penalty grows exponentially:
 
 ```python
 # Line 596-599
 epochs_waiting = seed_info.epochs_in_stage - 1
-probation_warning = -1.0 * (3 ** (epochs_waiting - 1))
-probation_warning = max(probation_warning, -10.0)  # Capped at -10
+holding_warning = -1.0 * (3 ** (epochs_waiting - 1))
+holding_warning = max(holding_warning, -10.0)  # Capped at -10
 ```
 
 **Schedule:**
@@ -334,7 +334,7 @@ STAGE_POTENTIALS = {
     ...
     4: 3.5,   # BLENDING
     # Value 5 intentionally skipped (was SHADOWING, removed)
-    6: 5.5,   # PROBATIONARY
+    6: 5.5,   # HOLDING
     ...
 }
 ```
@@ -482,7 +482,7 @@ Based on reviewed test files:
 
 ### Should Fix
 1. Document task-specific sigmoid steepness (H1)
-2. Consider softening probationary penalty for noisy environments (H2)
+2. Consider softening holding penalty for noisy environments (H2)
 3. Fix or document sparse reward clamping behavior (H3)
 4. Fix upstream SeedInfo construction for previous_epochs_in_stage (H4)
 
