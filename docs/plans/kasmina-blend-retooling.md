@@ -84,8 +84,8 @@ Remove “cleanup-by-architecture” auto-culls in the hold/decision region and 
 
 | Decision | Options | Recommended | Reason |
 |---|---|---|---|
-| Terminal naming | keep `CULLED` vs rename stage/event to `PRUNED` | rename to `PRUNED` | avoids semantic mismatch once removal is gradual |
-| Hold naming | keep `PROBATIONARY` vs rename to `HOLDING` | rename to `HOLDING` | matches new meaning and reduces confusion |
+| Terminal naming | legacy failure label vs `PRUNED` | `PRUNED` | avoids semantic mismatch once removal is gradual |
+| Hold naming | legacy hold label vs `HOLDING` | `HOLDING` | matches new meaning and reduces confusion |
 | Alpha control location | treat as new stages vs internal controller fields | internal controller fields | avoids exploding `SeedStage`, keeps code paths unified |
 | Action encoding | add many ops vs add factored heads | factored heads | PPO learns discrete knobs better than a giant enum |
 | Target alpha menu | `{0.5, 0.7, 1.0}` vs `{0.3, 0.5, 0.7, 1.0}` | start `{0.5, 0.7, 1.0}` | avoid starving learning at very low alpha initially |
@@ -146,7 +146,7 @@ Preferred design for the new alpha controller:
 
 We keep the botanical lifecycle (with rename adjustments):
 - `DORMANT → GERMINATED → TRAINING → BLENDING → HOLDING → FOSSILIZED`
-- Removal path ends in `PRUNED` (then optionally cooldown/cleanup).
+- Removal path ends in `PRUNED → EMBARGOED → RESETTING → DORMANT` (cooldown is first-class and always occurs after removal).
 
 Key semantics changes:
 - `BLENDING` means “seed influences output and alpha is under controller management” (UP / HOLD-at-partial / DOWN).
@@ -335,7 +335,7 @@ Existing HOLDING indecision penalties should apply only to the “final decision
 
 ### 9.1 Naming cleanup
 
-If we rename actions to `PRUNE`, we should avoid emitting “CULLED” to operators.
+If we rename actions to `PRUNE`, we should avoid mixed terminology in operator-facing telemetry.
 
 Proposal:
 - rename terminal lifecycle event to `SEED_PRUNED`.
@@ -423,7 +423,7 @@ This plan assumes single-process for the initial implementation. If/when we add 
 ## 12) Implementation Sequence (No Code Yet)
 
 1) **Confirm constants** (BaseSlotRent magnitude, multiply bounding, default target menu, EMBARGOED cooldown).
-2) **Naming refactor**: `cull`→`prune` across APIs + telemetry naming consistency (`PRUNED`, `HOLDING`) + update docs/mermaid diagrams that mention `CULLED`/`PROBATIONARY`.
+2) **Naming refactor**: `cull`→`prune` across APIs + telemetry naming consistency (`PRUNED`, `HOLDING`) + update docs/mermaid diagrams that mention `PRUNED`/`HOLDING`.
 3) **Alpha controller**: implement alpha_mode/target/curve/steps and integrate into `SeedSlot.step_epoch()` tick logic.
 4) **Partial holds**: enable blend-to-target and hold in BLENDING; constrain HOLDING to alpha≈1 decision point.
 5) **Prune schedules**: implement DOWN trajectories and physical removal at alpha==0.
@@ -496,13 +496,13 @@ This plan assumes single-process for the initial implementation. If/when we add 
 **Ratings:** Complexity 3/5, Risk 4/5
 
 **Tasks**
-- Update lifecycle contracts: `src/esper/leyline/stages.py` (rename/replace `PROBATIONARY`→`HOLDING`, `CULLED`→`PRUNED`, ensure `EMBARGOED` dwell remains concrete).
+- Update lifecycle contracts: `src/esper/leyline/stages.py` (align stage/event naming to `HOLDING`/`PRUNED`, ensure `EMBARGOED` dwell remains concrete).
 - Update transitions to support scheduled prune from `HOLDING → BLENDING` (since `HOLDING` is “alpha≈1 only”).
 - Update docs that codify lifecycle: `README.md` mermaid diagram + any plan references.
 
 **Pre-activities (to reduce Complexity/Risk → 2/5)**
 - Produce an explicit “rename inventory” checklist (`rg` targets + file list) for:
-  - `PROBATIONARY`, `CULLED`, `CULL`, `cull(`, telemetry event names, and any UI labels.
+  - `HOLDING`, `PRUNED`, `CULL`, `cull(`, telemetry event names, and any UI labels.
 - Identify all schema/serialization boundaries that embed stage/op integers (action tensors, saved reports, telemetry) so nothing silently deserializes to the wrong enum.
 - Add a fast “import all” smoke test (or a minimal `pytest -q` target) that imports policy + env modules to catch missing enum members early.
 - Keep the change strictly mechanical: update all call sites in one pass (no shims) and rely on existing import-time enum sync assertions (`OP_NAMES`, etc.) to prevent drift.
@@ -622,8 +622,9 @@ This plan assumes single-process for the initial implementation. If/when we add 
 ## 14) Final Decisions (Resolved)
 
 1) **Embargoed/resetting semantics**
-   - Decision: keep `EMBARGOED` as a concrete state in-slot.
-   - Add a “cooling off” dwell (default `5` controller ticks) after a prune completes before the slot returns to `DORMANT`.
+   - Decision: `EMBARGOED` is a **first-class `SeedStage`** and must be observable to masks and telemetry.
+   - Contract: after a prune completes, the slot does **not** clear its state immediately. It enters `PRUNED`, then `EMBARGOED` for a fixed dwell (default `5` controller ticks), then `RESETTING`, then finally `DORMANT` (available).
+   - Operational detail: the **seed module is physically removed at prune completion** (so compute/rent stops), but the slot remains occupied/unavailable until `DORMANT` to prevent prune/germinate thrashing.
 
 2) **Explicit `PRUNE_*` ops vs `alpha_target=0.0`**
    - Decision: keep `PRUNE` as an explicit lifecycle operation in the policy action space.
