@@ -112,9 +112,9 @@ class TestInvalidActionPenalties:
         config = ContributionRewardConfig()
         reward, components = compute_contribution_reward(**inputs, return_components=True)
 
-        assert components.action_shaping <= config.cull_fossilized_penalty, (
+        assert components.action_shaping <= config.prune_fossilized_penalty, (
             f"PRUNE fossilized got action_shaping {components.action_shaping}, "
-            f"expected <= {config.cull_fossilized_penalty}"
+            f"expected <= {config.prune_fossilized_penalty}"
         )
 
 

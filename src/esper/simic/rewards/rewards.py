@@ -179,24 +179,24 @@ class ContributionRewardConfig:
 
     # Enforcement penalties (state machine compliance)
     invalid_fossilize_penalty: float = -1.0
-    cull_fossilized_penalty: float = -1.0
+    prune_fossilized_penalty: float = -1.0
     germinate_with_seed_penalty: float = -0.3
 
     # Intervention costs (action friction)
     germinate_cost: float = -0.02
     fossilize_cost: float = -0.01
-    cull_cost: float = -0.005
+    prune_cost: float = -0.005
 
     # Fossilize shaping
     fossilize_base_bonus: float = 0.5
     fossilize_contribution_scale: float = 0.1
     fossilize_noncontributing_penalty: float = -0.2
 
-    # Cull shaping
-    cull_hurting_bonus: float = 0.3
-    cull_acceptable_bonus: float = 0.1
-    cull_good_seed_penalty: float = -0.3
-    cull_hurting_threshold: float = -0.5
+    # Prune shaping
+    prune_hurting_bonus: float = 0.3
+    prune_acceptable_bonus: float = 0.1
+    prune_good_seed_penalty: float = -0.3
+    prune_hurting_threshold: float = -0.5
 
     # Anti-gaming: attribution discount and ratio penalty thresholds
     # Prevents seeds from gaming counterfactual by creating dependencies
@@ -232,10 +232,10 @@ class ContributionRewardConfig:
     sparse_reward_scale: float = 1.0
 
     # === Minimal Mode Parameters ===
-    # Minimum seed age before cull (epochs)
-    early_cull_threshold: int = 5
-    # Penalty for culling young seeds
-    early_cull_penalty: float = -0.1
+    # Minimum seed age before prune (epochs)
+    early_prune_threshold: int = 5
+    # Penalty for pruning young seeds
+    early_prune_penalty: float = -0.1
 
     # === Auto-prune Penalty (degenerate policy prevention) ===
     # Penalty applied when environment auto-prunes a seed (safety or timeout)
@@ -510,15 +510,15 @@ def compute_contribution_reward(
                 ratio = seed_contribution / total_imp
                 if ratio > config.hacking_ratio_threshold:
                     # Contribution > threshold × improvement - possible dependency gaming
-                    # Escalating penalty: 0 at threshold, -0.1 at 2x threshold, capped at cull_good_seed_penalty
+                    # Escalating penalty: 0 at threshold, -0.1 at 2x threshold, capped at prune_good_seed_penalty
                     ratio_penalty = -min(
-                        -config.cull_good_seed_penalty,
+                        -config.prune_good_seed_penalty,
                         0.1 * (ratio - config.hacking_ratio_threshold) / config.hacking_ratio_threshold
                     )
             elif total_imp <= config.improvement_safe_threshold:
                 # Dangerous: high contribution but no real improvement
-                # Scale penalty by contribution magnitude (cap at cull_good_seed_penalty)
-                ratio_penalty = config.cull_good_seed_penalty * min(1.0, seed_contribution / 10.0)
+                # Scale penalty by contribution magnitude (cap at prune_good_seed_penalty)
+                ratio_penalty = config.prune_good_seed_penalty * min(1.0, seed_contribution / 10.0)
 
         # === H9: Wire telemetry for reward hacking detection ===
         # Emit telemetry events when attribution anomalies are detected
@@ -613,12 +613,12 @@ def compute_contribution_reward(
 
     # === 1b. BLENDING WARNING: Escalating penalty for negative trajectory ===
     # Provides early signal to PRUNE seeds that are hurting performance
-    # Credit assignment: penalize during BLENDING so policy learns to cull early
+    # Credit assignment: penalize during BLENDING so policy learns to prune early
     blending_warning = 0.0
     if seed_info is not None and seed_info.stage == STAGE_BLENDING:
         total_imp = seed_info.total_improvement
         if total_imp < 0:
-            # Escalating penalty: longer negative trajectory = stronger signal to cull
+            # Escalating penalty: longer negative trajectory = stronger signal to prune
             # Epoch 1: -0.15, Epoch 3: -0.25, Epoch 6+: -0.40
             escalation = min(seed_info.epochs_in_stage * 0.05, 0.3)
             blending_warning = -0.1 - escalation
@@ -693,7 +693,7 @@ def compute_contribution_reward(
             action_shaping += config.germinate_with_seed_penalty
         else:
             # PBRS bonus for successful germination (no existing seed)
-            # Balances the PBRS penalty applied when culling seeds
+            # Balances the PBRS penalty applied when pruning seeds
             phi_germinated = STAGE_POTENTIALS.get(STAGE_GERMINATED, 0.0)
             phi_no_seed = 0.0
             pbrs_germinate = config.gamma * phi_germinated - phi_no_seed
@@ -706,7 +706,7 @@ def compute_contribution_reward(
 
     elif action == LifecycleOp.PRUNE:
         action_shaping += _contribution_prune_shaping(seed_info, seed_contribution, config)
-        action_shaping += config.cull_cost
+        action_shaping += config.prune_cost
 
     # WAIT: No additional shaping (correct default action)
 
@@ -798,15 +798,15 @@ def compute_minimal_reward(
     seed_age: int | None,
     config: ContributionRewardConfig,
 ) -> float:
-    """Compute minimal reward (sparse + early-cull penalty).
+    """Compute minimal reward (sparse + early-prune penalty).
 
     This is a fallback if pure sparse rewards fail to learn. It adds
-    a single shaping signal: penalize culling seeds before they've had
+    a single shaping signal: penalize pruning seeds before they've had
     a chance to prove themselves.
 
     Design rationale:
     - Sparse base: Preserves most of the credit assignment challenge
-    - Early-cull penalty: Prevents degenerate "cull everything" policy
+    - Early-prune penalty: Prevents degenerate "prune everything" policy
     - No other shaping: Tests if minimal guidance is sufficient
 
     Args:
@@ -819,7 +819,7 @@ def compute_minimal_reward(
         config: Reward configuration
 
     Returns:
-        Sparse reward + early-cull penalty if applicable
+        Sparse reward + early-prune penalty if applicable
     """
     # Start with sparse reward
     reward = compute_sparse_reward(
@@ -832,8 +832,8 @@ def compute_minimal_reward(
 
     # Add early-prune penalty if applicable
     if action == LifecycleOp.PRUNE and seed_age is not None:
-        if seed_age < config.early_cull_threshold:
-            reward += config.early_cull_penalty
+        if seed_age < config.early_prune_threshold:
+            reward += config.early_prune_penalty
 
     return reward
 
@@ -925,7 +925,7 @@ def compute_reward(
     Routes to the appropriate reward function based on config.reward_mode:
     - SHAPED: Dense shaping with PBRS, attribution, warnings (default)
     - SPARSE: Terminal-only ground truth reward
-    - MINIMAL: Sparse + early-cull penalty
+    - MINIMAL: Sparse + early-prune penalty
     - SIMPLIFIED: PBRS + intervention cost + terminal (DRL Expert recommended)
 
     Args:
@@ -1196,7 +1196,7 @@ def _contribution_prune_shaping(
         return -0.2  # Nothing to prune
 
     if seed_info.stage == STAGE_FOSSILIZED:
-        return config.cull_fossilized_penalty
+        return config.prune_fossilized_penalty
 
     # Age gate: penalize pruning very young seeds
     if seed_info.seed_age_epochs < MIN_PRUNE_AGE:
@@ -1204,15 +1204,15 @@ def _contribution_prune_shaping(
 
     # Use seed_contribution if available (BLENDING+ stages)
     if seed_contribution is not None:
-        if seed_contribution < config.cull_hurting_threshold:
-            return config.cull_hurting_bonus  # Good: seed was hurting
+        if seed_contribution < config.prune_hurting_threshold:
+            return config.prune_hurting_bonus  # Good: seed was hurting
         elif seed_contribution < 0:
-            return config.cull_acceptable_bonus  # Acceptable: marginal harm
+            return config.prune_acceptable_bonus  # Acceptable: marginal harm
         else:
-            # M3 FIX: Penalize culling good seeds, scaled by how good, but BOUNDED.
+            # M3 FIX: Penalize pruning good seeds, scaled by how good, but BOUNDED.
             # Without cap: contribution=20 → penalty=-1.3, breaking reward scale.
             # Cap at 3x base penalty to keep in reasonable [-1, 0] range.
-            base_penalty = config.cull_good_seed_penalty  # -0.3 default
+            base_penalty = config.prune_good_seed_penalty  # -0.3 default
             scaled_penalty = base_penalty - 0.05 * seed_contribution
             # Cap at 3x base penalty magnitude (e.g., -0.9 with default -0.3)
             max_penalty = 3.0 * base_penalty  # More negative than base
@@ -1480,7 +1480,7 @@ INTERVENTION_COSTS: dict[LifecycleOp, float] = {
     LifecycleOp.WAIT: 0.0,
     LifecycleOp.GERMINATE: _default_config.germinate_cost,
     LifecycleOp.FOSSILIZE: _default_config.fossilize_cost,
-    LifecycleOp.PRUNE: _default_config.cull_cost,
+    LifecycleOp.PRUNE: _default_config.prune_cost,
 }
 del _default_config  # Don't pollute module namespace
 
