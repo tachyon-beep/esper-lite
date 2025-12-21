@@ -372,8 +372,8 @@ class _StubModel:
 
 
 def test_advance_active_seed_fossilizes_via_seed_slot():
-    """PROBATIONARY seeds should fossilize through SeedSlot.advance_stage (emits telemetry)."""
-    model = _StubModel(SeedStage.PROBATIONARY)
+    """HOLDING seeds should fossilize through SeedSlot.advance_stage (emits telemetry)."""
+    model = _StubModel(SeedStage.HOLDING)
     slot_id = "r0c1"
 
     _advance_active_seed(model, slot_id)
@@ -388,7 +388,7 @@ def test_advance_active_seed_fossilizes_via_seed_slot():
 def test_advance_active_seed_noop_on_failed_fossilization_gate():
     """Failed fossilization gate should be a no-op (Tamiyo learns from failed attempts)."""
     gate_result = _StubGateResult(passed=False, checks_failed=["no_improvement"])
-    model = _StubModel(SeedStage.PROBATIONARY, gate_result=gate_result)
+    model = _StubModel(SeedStage.HOLDING, gate_result=gate_result)
     slot_id = "r0c1"
 
     # Should not raise - failed gate is normal RL outcome

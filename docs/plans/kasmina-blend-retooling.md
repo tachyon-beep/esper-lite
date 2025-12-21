@@ -56,7 +56,7 @@ Add an explicit operator choice for how a seed affects the host stream:
 
 This is primarily to enable “valve scaffolding” behaviors (e.g., temporary dampeners) and to make that choice legible/learnable as a discrete action.
 
-### Change D — Remove PROBATIONARY auto-cull (keep catastrophic safety only)
+### Change D — Remove HOLDING auto-cull (keep catastrophic safety only)
 
 Remove “cleanup-by-architecture” auto-culls in the hold/decision region and make removal an explicit learned decision, while keeping a single catastrophic safety rail (Governor / NaN / divergence).
 
@@ -70,7 +70,7 @@ Remove “cleanup-by-architecture” auto-culls in the hold/decision region and 
 
 ### Kasmina state engine
 - `SeedState.transition()` resets stage baselines: `src/esper/kasmina/slot.py:389`
-- `SeedSlot.step_epoch()` handles mechanical stage progression and PROBATIONARY auto-culls: `src/esper/kasmina/slot.py:1627`
+- `SeedSlot.step_epoch()` handles mechanical stage progression and HOLDING auto-culls: `src/esper/kasmina/slot.py:1627`
 - `SeedSlot.cull()` immediately clears the slot: `src/esper/kasmina/slot.py:1152`
 
 ### Blending semantics
@@ -199,11 +199,11 @@ Implications:
 Concrete gate change:
 - Update G3 to use distance-to-target and to require full amplitude for stage advancement:
   - Replace `state.alpha >= DEFAULT_ALPHA_COMPLETE_THRESHOLD` in `src/esper/kasmina/slot.py:639` with `abs(alpha - alpha_target) <= eps`.
-  - Require `alpha_target == 1.0` (and mode HOLD) for the stage advance that is currently `BLENDING → PROBATIONARY` (future: `BLENDING → HOLDING`).
+  - Require `alpha_target == 1.0` (and mode HOLD) for the stage advance that is currently `BLENDING → HOLDING`.
 
-### 5.4 Where to remove PROBATIONARY auto-culls
+### 5.4 Where to remove HOLDING auto-culls
 
-Currently, PROBATIONARY auto-culls live in `SeedSlot.step_epoch()` (`src/esper/kasmina/slot.py:1759`).
+Currently, HOLDING auto-culls live in `SeedSlot.step_epoch()` (`src/esper/kasmina/slot.py:1759`).
 
 Plan:
 - remove negative-counterfactual auto-cull and timeout auto-cull from the slot engine;
@@ -326,7 +326,7 @@ This makes:
 
 ### 8.3 Keep indecision pressure only at the full-amplitude decision point
 
-Existing PROBATIONARY indecision penalties should apply only to the “final decision” region:
+Existing HOLDING indecision penalties should apply only to the “final decision” region:
 - i.e., only when alpha≈1 and we are in HOLDING, not during partial holds inside BLENDING.
 
 ---
@@ -561,7 +561,7 @@ This plan assumes single-process for the initial implementation. If/when we add 
 **Tasks**
 - Replace `CULL` with explicit `PRUNE` op (see `src/esper/leyline/factored_actions.py`) and map `PRUNE_*` → internal `alpha_target=0`.
 - Implement prune completion: physical removal at `alpha==0`, then `EMBARGOED` dwell ticks, then `RESETTING → DORMANT`.
-- Remove PROBATIONARY auto-culls; keep catastrophic safety only.
+- Remove HOLDING auto-culls; keep catastrophic safety only.
 - Add Governor-only emergency override: force `PRUNE_INSTANT` from any mode/stage on NaN/divergence/collapse.
 
 **Pre-activities (to reduce Complexity/Risk → 2/5)**

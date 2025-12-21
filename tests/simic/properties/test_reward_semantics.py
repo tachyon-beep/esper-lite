@@ -92,7 +92,7 @@ class TestInvalidActionPenalties:
     @given(inputs=fossilize_inputs(valid=False))
     @settings(max_examples=200)
     def test_invalid_fossilize_penalized(self, inputs):
-        """FOSSILIZE from non-PROBATIONARY stage should be penalized."""
+        """FOSSILIZE from non-HOLDING stage should be penalized."""
         config = ContributionRewardConfig()
         reward, components = compute_contribution_reward(**inputs, return_components=True)
 

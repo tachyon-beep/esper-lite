@@ -25,7 +25,7 @@ _EVENT_COLORS: dict[str, str] = {
     "SEED_GERMINATED": "bright_yellow",
     "SEED_STAGE_CHANGED": "bright_white",
     "SEED_FOSSILIZED": "bright_green",
-    "SEED_CULLED": "bright_red",
+    "SEED_PRUNED": "bright_red",
     # Tamiyo actions (cyan)
     "REWARD_COMPUTED": "bright_cyan",
     # Training events (blue)
@@ -39,7 +39,7 @@ _EVENT_COLORS: dict[str, str] = {
 _EVENT_EMOJI: dict[str, str] = {
     "SEED_GERMINATED": "🌱",
     "SEED_FOSSILIZED": "✅",
-    "SEED_CULLED": "⚠️",
+    "SEED_PRUNED": "⚠️",
     "REWARD_COMPUTED": "📊",
     "BATCH_EPOCH_COMPLETED": "🏆",
 }

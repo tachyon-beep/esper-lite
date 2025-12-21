@@ -84,7 +84,7 @@ class TolariaGovernor:
         """Save Last Known Good state to CPU memory to reduce GPU memory pressure.
 
         Only snapshots host parameters and fossilized seeds. Experimental
-        (non-fossilized) seeds are excluded because they may be culled
+        (non-fossilized) seeds are excluded because they may be pruned
         before rollback, causing state_dict key mismatches.
 
         Tensors are moved to CPU; non-tensor values are deep copied.

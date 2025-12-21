@@ -78,19 +78,19 @@ class TestFossilizationFarming:
     @given(inputs=fossilize_inputs(valid=True))
     @settings(max_examples=200)
     def test_rapid_fossilize_discounted(self, inputs):
-        """Fossilizing without sufficient PROBATIONARY time is discounted.
+        """Fossilizing without sufficient HOLDING time is discounted.
 
-        Seeds must "earn" fossilization by spending time in PROBATIONARY.
+        Seeds must "earn" fossilization by spending time in HOLDING.
         Rapid fossilization gets reduced bonus.
         """
-        from esper.leyline import MIN_PROBATION_EPOCHS
+        from esper.leyline import MIN_HOLDING_EPOCHS
 
         seed_info = inputs["seed_info"]
-        epochs_in_prob = seed_info.epochs_in_stage
+        epochs_in_hold = seed_info.epochs_in_stage
 
         _, components = compute_contribution_reward(**inputs, return_components=True)
 
-        if epochs_in_prob < MIN_PROBATION_EPOCHS:
+        if epochs_in_hold < MIN_HOLDING_EPOCHS:
             config = ContributionRewardConfig()
 
             if inputs["seed_contribution"] and inputs["seed_contribution"] > 0:
@@ -101,7 +101,7 @@ class TestFossilizationFarming:
                 )
 
                 assert components.action_shaping < max_possible, (
-                    f"Rapid fossilize (epoch {epochs_in_prob}/{MIN_PROBATION_EPOCHS}) should be discounted, "
+                    f"Rapid fossilize (epoch {epochs_in_hold}/{MIN_HOLDING_EPOCHS}) should be discounted, "
                     f"got action_shaping={components.action_shaping}, max_possible={max_possible}"
                 )
 

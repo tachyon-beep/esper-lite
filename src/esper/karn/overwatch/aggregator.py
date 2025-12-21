@@ -359,8 +359,8 @@ class TelemetryAggregator:
             timestamp=event.timestamp,
         )
 
-    def _handle_seed_culled(self, event: "TelemetryEvent") -> None:
-        """Handle SEED_CULLED event."""
+    def _handle_seed_pruned(self, event: "TelemetryEvent") -> None:
+        """Handle SEED_PRUNED event."""
         data = event.data or {}
         env_id = data.get("env_id")
         slot_id = event.slot_id or data.get("slot_id")
@@ -370,13 +370,13 @@ class TelemetryAggregator:
 
         self._ensure_env(env_id)
         if slot_id in self._envs[env_id].slots:
-            self._envs[env_id].slots[slot_id].stage = "CULLED"
+            self._envs[env_id].slots[slot_id].stage = "PRUNED"
 
         reason = data.get("reason", "")
         self._add_feed_event(
-            event_type="CULL",
+            event_type="PRUNE",
             env_id=env_id,
-            message=f"{slot_id} culled" + (f" ({reason})" if reason else ""),
+            message=f"{slot_id} pruned" + (f" ({reason})" if reason else ""),
             timestamp=event.timestamp,
         )
 

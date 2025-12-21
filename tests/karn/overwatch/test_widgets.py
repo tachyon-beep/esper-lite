@@ -107,7 +107,7 @@ class TestSlotChip:
 
         state = SlotChipState(
             slot_id="r0c0",
-            stage="PROBATIONARY",
+            stage="HOLDING",
             blueprint_id="bad_seed",
             alpha=0.3,
             gate_last="G1",

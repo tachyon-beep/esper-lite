@@ -29,10 +29,10 @@ STAGE_COLORS = {
     "DORMANT": "dim",
     "GERMINATED": "bright_blue",
     "TRAINING": "cyan",
-    "PROBATIONARY": "magenta",
+    "HOLDING": "magenta",
     "BLENDING": "yellow",
     "FOSSILIZED": "green",
-    "CULLED": "red",
+    "PRUNED": "red",
 }
 
 # Stage border styles for CSS classes
@@ -40,10 +40,10 @@ STAGE_CSS_CLASSES = {
     "DORMANT": "dormant",
     "GERMINATED": "training",  # Use training style for germinated
     "TRAINING": "training",
-    "PROBATIONARY": "blending",  # Use blending style
+    "HOLDING": "blending",  # Use blending style
     "BLENDING": "blending",
     "FOSSILIZED": "fossilized",
-    "CULLED": "culled",
+    "PRUNED": "pruned",
 }
 
 
@@ -117,7 +117,7 @@ class SeedCard(Static):
             lines.append(Text(f"Params: {params_str}", style="dim"))
 
         # Alpha (blending progress)
-        if (seed.alpha and seed.alpha > 0) or seed.stage in ("BLENDING", "PROBATIONARY"):
+        if (seed.alpha and seed.alpha > 0) or seed.stage in ("BLENDING", "HOLDING"):
             alpha_bar = self._make_alpha_bar(seed.alpha)
             lines.append(Text(f"Alpha: {seed.alpha:.2f} {alpha_bar}"))
 
@@ -445,7 +445,7 @@ class EnvDetailScreen(ModalScreen[None]):
         seed_counts.append("  ")
         seed_counts.append(f"Fossilized: {env.fossilized_count}", style="green")
         seed_counts.append("  ")
-        seed_counts.append(f"Culled: {env.culled_count}", style="red")
+        seed_counts.append(f"Pruned: {env.pruned_count}", style="red")
         table.add_row("Seed Counts", seed_counts)
 
         # Fossilized params
@@ -505,14 +505,14 @@ class EnvDetailScreen(ModalScreen[None]):
         Shows how many seeds of each blueprint type have been:
         - Spawned (germinated)
         - Fossilized (successfully integrated)
-        - Culled (removed due to poor performance)
+        - Pruned (removed due to poor performance)
         """
         env = self._env
 
-        # Combine all blueprints seen across spawns, fossilized, culled
+        # Combine all blueprints seen across spawns, fossilized, pruned
         all_blueprints = set(env.blueprint_spawns.keys())
         all_blueprints.update(env.blueprint_fossilized.keys())
-        all_blueprints.update(env.blueprint_culls.keys())
+        all_blueprints.update(env.blueprint_prunes.keys())
 
         if not all_blueprints:
             content = Text("No seeds germinated yet", style="dim italic")
@@ -523,16 +523,16 @@ class EnvDetailScreen(ModalScreen[None]):
         for blueprint in sorted(all_blueprints):
             spawned = env.blueprint_spawns.get(blueprint, 0)
             fossilized = env.blueprint_fossilized.get(blueprint, 0)
-            culled = env.blueprint_culls.get(blueprint, 0)
+            pruned = env.blueprint_prunes.get(blueprint, 0)
 
             line = Text()
             line.append(f"{blueprint:15s}", style="white")
             line.append(f"  spawn:{spawned:2d}", style="cyan")
             line.append(f"  foss:{fossilized:2d}", style="green")
-            line.append(f"  cull:{culled:2d}", style="red")
+            line.append(f"  prun:{pruned:2d}", style="red")
 
             # Calculate success rate if any have terminated
-            terminated = fossilized + culled
+            terminated = fossilized + pruned
             if terminated > 0:
                 success_rate = fossilized / terminated * 100
                 rate_style = "green" if success_rate >= 50 else "yellow" if success_rate >= 25 else "red"

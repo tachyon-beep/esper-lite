@@ -22,7 +22,7 @@ class Scoreboard(Static):
     """Best Runs scoreboard widget.
 
     Shows:
-    1. Stats header: global best, mean best, fossilized/culled counts
+    1. Stats header: global best, mean best, fossilized/pruned counts
     2. Leaderboard: top 10 completed env runs with peak accuracy + seed composition
     """
 
@@ -54,7 +54,7 @@ class Scoreboard(Static):
         # Compute aggregates (prefer best_runs so values don't disappear after batch reset)
         all_envs = list(self._snapshot.envs.values())
         total_fossilized = sum(e.fossilized_count for e in all_envs)
-        total_culled = sum(e.culled_count for e in all_envs)
+        total_pruned = sum(e.pruned_count for e in all_envs)
 
         if best_runs:
             global_best = max(r.peak_accuracy for r in best_runs)
@@ -73,8 +73,8 @@ class Scoreboard(Static):
         stats_table.add_row(
             "Fossilized:",
             f"[green]{total_fossilized}[/]",
-            "Culled:",
-            f"[red]{total_culled}[/]",
+            "Pruned:",
+            f"[red]{total_pruned}[/]",
         )
 
         # === LEADERBOARD (TOP 10) ===
@@ -110,13 +110,13 @@ class Scoreboard(Static):
         contributing = [
             seed
             for seed in seeds.values()
-            if seed.blueprint_id and seed.stage in {"FOSSILIZED", "BLENDING", "PROBATIONARY"}
+            if seed.blueprint_id and seed.stage in {"FOSSILIZED", "BLENDING", "HOLDING"}
         ]
         if not contributing:
             return "─"
 
-        stage_order = {"FOSSILIZED": 0, "BLENDING": 1, "PROBATIONARY": 2}
-        stage_colors = {"FOSSILIZED": "green", "BLENDING": "magenta", "PROBATIONARY": "yellow"}
+        stage_order = {"FOSSILIZED": 0, "BLENDING": 1, "HOLDING": 2}
+        stage_colors = {"FOSSILIZED": "green", "BLENDING": "magenta", "HOLDING": "yellow"}
         contributing.sort(key=lambda s: (stage_order.get(s.stage, 9), s.blueprint_id or ""))
 
         parts = []

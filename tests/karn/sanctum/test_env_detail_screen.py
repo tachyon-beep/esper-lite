@@ -300,7 +300,7 @@ def test_env_detail_screen_metrics_section():
     env.reward_history = deque([0.1, 0.2, 0.15, 0.25, 0.3], maxlen=50)
     env.active_seed_count = 2
     env.fossilized_count = 1
-    env.culled_count = 0
+    env.pruned_count = 0
     env.total_actions = 10
     env.action_counts = {"WAIT": 5, "GERMINATE": 3, "FOSSILIZE": 1, "CULL": 1}
 
@@ -365,8 +365,8 @@ def test_env_detail_screen_recent_actions():
 def test_stage_colors_defined():
     """Test that all stages have colors defined."""
     expected_stages = [
-        "DORMANT", "GERMINATED", "TRAINING", "PROBATIONARY",
-        "BLENDING", "FOSSILIZED", "CULLED"
+        "DORMANT", "GERMINATED", "TRAINING", "HOLDING",
+        "BLENDING", "FOSSILIZED", "PRUNED"
     ]
 
     for stage in expected_stages:

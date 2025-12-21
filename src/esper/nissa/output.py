@@ -114,15 +114,15 @@ class ConsoleOutput(OutputBackend):
                     msg = f"Fossilized ({blueprint_id}, \u0394acc {improvement:+.2f}%)"
                 else:
                     msg = f"Fossilized ({blueprint_id})"
-            elif event_type == "SEED_CULLED":
+            elif event_type == "SEED_PRUNED":
                 blueprint_id = data.get("blueprint_id", "?")
                 improvement = data.get("improvement")
                 reason = data.get("reason")
                 reason_str = f" ({reason})" if reason else ""
                 if isinstance(improvement, (int, float)):
-                    msg = f"Culled ({blueprint_id}, \u0394acc {improvement:+.2f}%){reason_str}"
+                    msg = f"Pruned ({blueprint_id}, \u0394acc {improvement:+.2f}%){reason_str}"
                 else:
-                    msg = f"Culled ({blueprint_id}){reason_str}"
+                    msg = f"Pruned ({blueprint_id}){reason_str}"
             else:
                 msg = event.message or event_type
             print(f"[{timestamp}] {seed_id} | {msg}")
@@ -138,7 +138,7 @@ class ConsoleOutput(OutputBackend):
             val_acc = data.get("val_acc", 0.0)
             # Warning signals telemetry
             blending_warning = data.get("blending_warning", 0.0)
-            probation_warning = data.get("probation_warning", 0.0)
+            holding_warning = data.get("holding_warning", 0.0)
             attribution_discount = data.get("attribution_discount", 1.0)
             ratio_penalty = data.get("ratio_penalty", 0.0)
             # Terminal bonus telemetry
@@ -151,8 +151,8 @@ class ConsoleOutput(OutputBackend):
             extra = ""
             if blending_warning < 0:
                 extra += f" BLEND={blending_warning:.2f}"
-            if probation_warning < 0:
-                extra += f" PROB={probation_warning:.2f}"
+            if holding_warning < 0:
+                extra += f" HOLD={holding_warning:.2f}"
             if attribution_discount < 1.0:
                 extra += f" disc={attribution_discount:.2f}"
             if ratio_penalty < 0:

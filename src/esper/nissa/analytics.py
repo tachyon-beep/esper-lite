@@ -51,7 +51,7 @@ class BlueprintStats:
 
     germinated: int = 0
     fossilized: int = 0
-    culled: int = 0
+    pruned: int = 0
     acc_deltas: list[float] = field(default_factory=list)
     churns: list[float] = field(default_factory=list)
     blending_deltas: list[float] = field(default_factory=list)  # Accuracy change during blending
@@ -64,7 +64,7 @@ class BlueprintStats:
 
     @property
     def mean_churn(self) -> float:
-        """Mean accuracy change on cull (usually negative)."""
+        """Mean accuracy change on prune (usually negative)."""
         return sum(self.churns) / len(self.churns) if self.churns else 0.0
 
     @property
@@ -79,8 +79,8 @@ class BlueprintStats:
 
     @property
     def fossilization_rate(self) -> float:
-        """Percentage of terminal seeds that fossilized (not culled)."""
-        total = self.fossilized + self.culled
+        """Percentage of terminal seeds that fossilized (not pruned)."""
+        total = self.fossilized + self.pruned
         return (self.fossilized / total * 100) if total > 0 else 0.0
 
 
@@ -90,13 +90,13 @@ class SeedScoreboard:
 
     total_germinated: int = 0
     total_fossilized: int = 0
-    total_culled: int = 0
+    total_pruned: int = 0
     fossilized_by_blueprint: defaultdict[str, int] = field(default_factory=lambda: defaultdict(int))
     live_blueprint: str | None = None
     params_added: int = 0
     host_params: int = 0
     total_fossilize_age_epochs: int = 0
-    total_cull_age_epochs: int = 0
+    total_prune_age_epochs: int = 0
 
     @property
     def compute_cost(self) -> float:
@@ -121,11 +121,11 @@ class SeedScoreboard:
         )
 
     @property
-    def avg_cull_age_epochs(self) -> float:
-        """Average total age (epochs) at cull."""
+    def avg_prune_age_epochs(self) -> float:
+        """Average total age (epochs) at prune."""
         return (
-            self.total_cull_age_epochs / self.total_culled
-            if self.total_culled > 0
+            self.total_prune_age_epochs / self.total_pruned
+            if self.total_pruned > 0
             else 0.0
         )
 
@@ -135,7 +135,7 @@ class BlueprintAnalytics(OutputBackend):
 
     Implements OutputBackend to receive events from NissaHub.
     Tracks:
-    - Per-blueprint stats (germinated, fossilized, culled, accuracy)
+    - Per-blueprint stats (germinated, fossilized, pruned, accuracy)
     - Per-environment scoreboards (params, compute cost, distribution)
 
     Args:
@@ -197,7 +197,7 @@ class BlueprintAnalytics(OutputBackend):
                 print(f"    [env{env_id}] Fossilized '{seed_id}' ({bp_id}, "
                       f"total Δacc {improvement:+.2f}%, blending Δ {blending_delta:+.2f}%{causal_str})")
 
-        elif event.event_type == TelemetryEventType.SEED_CULLED:
+        elif event.event_type == TelemetryEventType.SEED_PRUNED:
             bp_id = event.data.get("blueprint_id", "unknown")
             env_id = event.data.get("env_id", 0)
             seed_id = event.data.get("seed_id", "unknown")
@@ -207,22 +207,22 @@ class BlueprintAnalytics(OutputBackend):
             reason = event.data.get("reason", "")
             epochs_total = event.data.get("epochs_total", 0)
 
-            self.stats[bp_id].culled += 1
+            self.stats[bp_id].pruned += 1
             self.stats[bp_id].churns.append(improvement)
             self.stats[bp_id].blending_deltas.append(blending_delta)
             if counterfactual is not None:
                 self.stats[bp_id].counterfactuals.append(counterfactual)
 
             sb = self._get_scoreboard(env_id)
-            sb.total_culled += 1
-            sb.total_cull_age_epochs += int(epochs_total)
+            sb.total_pruned += 1
+            sb.total_prune_age_epochs += int(epochs_total)
             sb.live_blueprint = None
 
             # Show total improvement, blending delta, and causal contribution
             if not self.quiet:
                 reason_str = f" ({reason})" if reason else ""
                 causal_str = f", causal Δ {counterfactual:+.2f}%" if counterfactual is not None else ""
-                print(f"    [env{env_id}] Culled '{seed_id}' ({bp_id}, "
+                print(f"    [env{env_id}] Pruned '{seed_id}' ({bp_id}, "
                       f"total Δacc {improvement:+.2f}%, blending Δ {blending_delta:+.2f}%{causal_str}){reason_str}")
 
         elif event.event_type == TelemetryEventType.ANALYTICS_SNAPSHOT:
@@ -357,7 +357,7 @@ class BlueprintAnalytics(OutputBackend):
         lines = ["Blueprint Stats:"]
         lines.append("  " + "-" * 110)
         lines.append(
-            f"  {'Blueprint':<14} {'Germ':>5} {'Foss':>5} {'Cull':>5} "
+            f"  {'Blueprint':<14} {'Germ':>5} {'Foss':>5} {'Prun':>5} "
             f"{'Rate':>6} {'ΔAcc':>8} {'BlendΔ':>8} {'CausalΔ':>8} {'Churn':>8}"
         )
         lines.append("  " + "-" * 110)
@@ -366,7 +366,7 @@ class BlueprintAnalytics(OutputBackend):
             s = self.stats[bp_id]
             lines.append(
                 f"  {bp_id:<14} {s.germinated:>5} {s.fossilized:>5} "
-                f"{s.culled:>5} {s.fossilization_rate:>5.1f}% "
+                f"{s.pruned:>5} {s.fossilization_rate:>5.1f}% "
                 f"{s.mean_acc_delta:>+7.2f}% {s.mean_blending_delta:>+7.2f}% "
                 f"{s.mean_counterfactual:>+7.2f}% {s.mean_churn:>+7.2f}%"
             )
@@ -384,9 +384,9 @@ class BlueprintAnalytics(OutputBackend):
             f"Seed Scoreboard (env {env_id}):",
             f"  Fossilized: {sb.total_fossilized} "
             f"(+{sb.params_added/1000:.1f}K params, +{sb.params_percentage:.1f}% of host)",
-            f"  Culled: {sb.total_culled}",
+            f"  Pruned: {sb.total_pruned}",
             f"  Avg fossilize age: {sb.avg_fossilize_age_epochs:.1f} epochs",
-            f"  Avg cull age: {sb.avg_cull_age_epochs:.1f} epochs",
+            f"  Avg prune age: {sb.avg_prune_age_epochs:.1f} epochs",
             f"  Compute cost: {sb.compute_cost:.2f}x baseline",
             f"  Distribution: {dist or 'none'}",
         ]
@@ -399,7 +399,7 @@ class BlueprintAnalytics(OutputBackend):
                 bp: {
                     "germinated": s.germinated,
                     "fossilized": s.fossilized,
-                    "culled": s.culled,
+                    "pruned": s.pruned,
                     "mean_acc_delta": s.mean_acc_delta,
                     "mean_blending_delta": s.mean_blending_delta,
                     "mean_counterfactual": s.mean_counterfactual,
@@ -412,11 +412,11 @@ class BlueprintAnalytics(OutputBackend):
                 env_id: {
                     "total_germinated": sb.total_germinated,
                     "total_fossilized": sb.total_fossilized,
-                    "total_culled": sb.total_culled,
+                    "total_pruned": sb.total_pruned,
                     "params_added": sb.params_added,
                     "compute_cost": sb.compute_cost,
                     "total_fossilize_age_epochs": sb.total_fossilize_age_epochs,
-                    "total_cull_age_epochs": sb.total_cull_age_epochs,
+                    "total_prune_age_epochs": sb.total_prune_age_epochs,
                 }
                 for env_id, sb in self.scoreboards.items()
             },

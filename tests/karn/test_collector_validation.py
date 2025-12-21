@@ -53,3 +53,38 @@ class TestCollectorIngestValidation:
         assert slot.stage == SeedStage.GERMINATED
         assert isinstance(slot.seed_params, int)
         assert slot.seed_params == 17
+
+    def test_seed_stage_changed_ignores_unknown_to(self) -> None:
+        collector = KarnCollector()
+
+        collector.emit(
+            TelemetryEvent(
+                event_type=TelemetryEventType.TRAINING_STARTED,
+                data={"episode_id": "test", "max_epochs": 5, "n_envs": 1},
+            )
+        )
+
+        collector.emit(
+            TelemetryEvent(
+                event_type=TelemetryEventType.SEED_GERMINATED,
+                slot_id="r0c0",
+                data={"env_id": 0, "seed_id": "seed_0", "blueprint_id": "conv", "params": 17},
+            )
+        )
+
+        assert collector.store.current_epoch is not None
+        slot = collector.store.current_epoch.slots["env0:r0c0"]
+        slot.stage = SeedStage.TRAINING
+        slot.epochs_in_stage = 7
+
+        collector.emit(
+            TelemetryEvent(
+                event_type=TelemetryEventType.SEED_STAGE_CHANGED,
+                slot_id="r0c0",
+                data={"env_id": 0, "to": "NOT_A_STAGE"},
+            )
+        )
+
+        slot = collector.store.current_epoch.slots["env0:r0c0"]
+        assert slot.stage == SeedStage.TRAINING
+        assert slot.epochs_in_stage == 7

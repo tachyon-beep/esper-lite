@@ -128,7 +128,7 @@ def anomaly_snapshot() -> TuiSnapshot:
                     "High gradient ratio (15.2x)",
                     "Memory pressure (97%)",
                 ],
-                slots={"r0c1": SlotChipState("r0c1", "CULLED", "bad_blueprint", 0.0)},
+                slots={"r0c1": SlotChipState("r0c1", "PRUNED", "bad_blueprint", 0.0)},
             ),
         ],
         envs_ok=1,

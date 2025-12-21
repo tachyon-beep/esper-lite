@@ -325,7 +325,7 @@ class TestMultipleActiveSeedsHandling:
 
         seed_hurting_more = mock_seed_factory(
             seed_id="hurt_more",
-            stage=SeedStage.PROBATIONARY,
+            stage=SeedStage.HOLDING,
             epochs_in_stage=2,
             alpha=0.5,
             improvement=0.1,
@@ -333,7 +333,7 @@ class TestMultipleActiveSeedsHandling:
         )
         seed_hurting_less = mock_seed_factory(
             seed_id="hurt_less",
-            stage=SeedStage.PROBATIONARY,
+            stage=SeedStage.HOLDING,
             epochs_in_stage=5,
             alpha=0.5,
             improvement=0.2,
@@ -350,7 +350,7 @@ class TestMultipleActiveSeedsHandling:
             active_seeds=[seed_hurting_less, seed_hurting_more],
         )
 
-        assert signals.seed_stage == int(SeedStage.PROBATIONARY)
+        assert signals.seed_stage == int(SeedStage.HOLDING)
         assert signals.seed_alpha == 0.5
         assert signals.seed_epochs_in_stage == 2
         assert signals.seed_improvement == 0.1
@@ -381,13 +381,13 @@ class TestTerminalStageFiltering:
         # Should treat as no live seeds and try to germinate
         assert decision.action.name.startswith("GERMINATE_")
 
-    def test_culled_seeds_filtered(self, mock_signals_factory, mock_seed_factory):
-        """CULLED seeds should be filtered out as failure stage."""
+    def test_pruned_seeds_filtered(self, mock_signals_factory, mock_seed_factory):
+        """PRUNED seeds should be filtered out as failure stage."""
 
         policy = HeuristicTamiyo(topology="cnn")
 
-        culled = mock_seed_factory(
-            stage=SeedStage.CULLED,
+        pruned = mock_seed_factory(
+            stage=SeedStage.PRUNED,
             improvement=-10.0,
         )
 
@@ -397,7 +397,7 @@ class TestTerminalStageFiltering:
             host_stabilized=1,
         )
 
-        decision = policy.decide(signals, [culled])
+        decision = policy.decide(signals, [pruned])
 
         # Should treat as no live seeds
         assert decision.action.name.startswith("GERMINATE_")
@@ -411,7 +411,7 @@ class TestTerminalStageFiltering:
 
         # Mix of terminal and active
         fossilized = mock_seed_factory(stage=SeedStage.FOSSILIZED)
-        culled = mock_seed_factory(stage=SeedStage.CULLED)
+        pruned = mock_seed_factory(stage=SeedStage.PRUNED)
         active = mock_seed_factory(
             seed_id="active_one",
             stage=SeedStage.TRAINING,
@@ -422,7 +422,7 @@ class TestTerminalStageFiltering:
         signals = mock_signals_factory(epoch=10)
 
         # Order: terminal, active, terminal
-        decision = policy.decide(signals, [fossilized, active, culled])
+        decision = policy.decide(signals, [fossilized, active, pruned])
 
         # Should filter terminals and only see active_one
         assert decision.action.name == "WAIT"

@@ -144,7 +144,7 @@ def test_pbrs_stage_bonus_fossilized_small_increment():
             improvement_since_stage_start=0.0,
             total_improvement=5.0,
             epochs_in_stage=0,
-            previous_stage=SeedStage.PROBATIONARY.value,
+            previous_stage=SeedStage.HOLDING.value,
         ),
         config,
     )

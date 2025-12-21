@@ -11,7 +11,7 @@ import torch
 
 from esper.leyline.slot_config import SlotConfig
 from esper.leyline.stages import SeedStage
-from esper.leyline.factored_actions import NUM_BLUEPRINTS, NUM_BLENDS, NUM_OPS, LifecycleOp
+from esper.leyline.factored_actions import NUM_BLUEPRINTS, NUM_BLENDS, NUM_TEMPO, NUM_OPS, LifecycleOp
 from esper.simic.agent import PPOAgent
 from esper.tamiyo.policy.features import get_feature_size
 from esper.tamiyo.policy.action_masks import compute_action_masks, MaskSeedInfo
@@ -43,6 +43,7 @@ class TestTrainingWithDifferentSlotCounts:
             "slot": torch.ones(1, 1, dtype=torch.bool),
             "blueprint": torch.ones(1, NUM_BLUEPRINTS, dtype=torch.bool),
             "blend": torch.ones(1, NUM_BLENDS, dtype=torch.bool),
+            "tempo": torch.ones(1, NUM_TEMPO, dtype=torch.bool),
             "op": torch.ones(1, NUM_OPS, dtype=torch.bool),
         }
 
@@ -52,6 +53,7 @@ class TestTrainingWithDifferentSlotCounts:
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
                 blend_mask=masks["blend"],
+                tempo_mask=masks["tempo"],
                 op_mask=masks["op"],
             )
 
@@ -164,7 +166,7 @@ class TestMultiEnvMaskIndependence:
         slot_states_env2 = {
             "r0c0": MaskSeedInfo(stage=SeedStage.TRAINING, seed_age_epochs=3),
             "r0c1": MaskSeedInfo(stage=SeedStage.BLENDING, seed_age_epochs=2),
-            "r0c2": MaskSeedInfo(stage=SeedStage.PROBATIONARY, seed_age_epochs=1),
+            "r0c2": MaskSeedInfo(stage=SeedStage.HOLDING, seed_age_epochs=1),
         }
 
         masks_env0 = compute_action_masks(
@@ -238,7 +240,7 @@ class TestSlotSaturationAndRecovery:
         slot_states = {
             "r0c0": MaskSeedInfo(stage=SeedStage.TRAINING, seed_age_epochs=10),
             "r0c1": MaskSeedInfo(stage=SeedStage.BLENDING, seed_age_epochs=5),
-            "r0c2": MaskSeedInfo(stage=SeedStage.PROBATIONARY, seed_age_epochs=2),
+            "r0c2": MaskSeedInfo(stage=SeedStage.HOLDING, seed_age_epochs=2),
         }
 
         masks = compute_action_masks(
@@ -374,6 +376,7 @@ class TestLargeSlotConfigurations:
         assert masks["slot"].shape == (25,)
         assert masks["blueprint"].shape == (NUM_BLUEPRINTS,)
         assert masks["blend"].shape == (NUM_BLENDS,)
+        assert masks["tempo"].shape == (NUM_TEMPO,)
         assert masks["op"].shape == (NUM_OPS,)
 
 
@@ -409,10 +412,12 @@ class TestBufferWithDynamicSlots:
                 slot_action=env_idx % 5,
                 blueprint_action=0,
                 blend_action=0,
+                tempo_action=0,
                 op_action=0,
                 slot_log_prob=-0.5,
                 blueprint_log_prob=-0.5,
                 blend_log_prob=-0.5,
+                tempo_log_prob=-0.5,
                 op_log_prob=-0.5,
                 value=0.5,
                 reward=1.0,
@@ -420,6 +425,7 @@ class TestBufferWithDynamicSlots:
                 slot_mask=torch.ones(5, dtype=torch.bool),
                 blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
                 blend_mask=torch.ones(NUM_BLENDS, dtype=torch.bool),
+                tempo_mask=torch.ones(NUM_TEMPO, dtype=torch.bool),
                 op_mask=torch.ones(NUM_OPS, dtype=torch.bool),
                 hidden_h=hidden_h,
                 hidden_c=hidden_c,
@@ -453,10 +459,12 @@ class TestBufferWithDynamicSlots:
             slot_action=0,
             blueprint_action=0,
             blend_action=0,
+            tempo_action=0,
             op_action=0,
             slot_log_prob=-0.5,
             blueprint_log_prob=-0.5,
             blend_log_prob=-0.5,
+            tempo_log_prob=-0.5,
             op_log_prob=-0.5,
             value=0.5,
             reward=1.0,
@@ -464,6 +472,7 @@ class TestBufferWithDynamicSlots:
             slot_mask=torch.ones(5, dtype=torch.bool),  # Correct: 5 slots
             blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
             blend_mask=torch.ones(NUM_BLENDS, dtype=torch.bool),
+            tempo_mask=torch.ones(NUM_TEMPO, dtype=torch.bool),
             op_mask=torch.ones(NUM_OPS, dtype=torch.bool),
             hidden_h=hidden_h,
             hidden_c=hidden_c,

@@ -31,15 +31,15 @@ def snapshot_with_envs():
     snapshot = SanctumSnapshot(slot_ids=["R0C0", "R0C1"])
 
     # Env 0: best 95.0%
-    env0 = EnvState(env_id=0, best_accuracy=95.0, fossilized_count=2, culled_count=1)
+    env0 = EnvState(env_id=0, best_accuracy=95.0, fossilized_count=2, pruned_count=1)
     snapshot.envs[0] = env0
 
     # Env 1: best 88.0%
-    env1 = EnvState(env_id=1, best_accuracy=88.0, fossilized_count=1, culled_count=2)
+    env1 = EnvState(env_id=1, best_accuracy=88.0, fossilized_count=1, pruned_count=2)
     snapshot.envs[1] = env1
 
     # Env 2: best 92.0%
-    env2 = EnvState(env_id=2, best_accuracy=92.0, fossilized_count=3, culled_count=0)
+    env2 = EnvState(env_id=2, best_accuracy=92.0, fossilized_count=3, pruned_count=0)
     snapshot.envs[2] = env2
 
     return snapshot
@@ -74,7 +74,7 @@ def snapshot_with_best_runs():
     )
 
     # Record 2: Env 1, episode 15, peak 92.0, final 90.5 (delta -1.5, yellow)
-    seed1_0 = SeedState(slot_id="R0C0", blueprint_id="resnet", stage="PROBATIONARY")
+    seed1_0 = SeedState(slot_id="R0C0", blueprint_id="resnet", stage="HOLDING")
     seed1_1 = SeedState(slot_id="R0C1", blueprint_id="attn_a", stage="TRAINING")
     seed1_2 = SeedState(slot_id="R1C0", blueprint_id="ff_net", stage="FOSSILIZED")
     record1 = BestRunRecord(
@@ -161,14 +161,14 @@ async def test_stats_header_fossilized_count(snapshot_with_envs):
 
 
 @pytest.mark.asyncio
-async def test_stats_header_culled_count(snapshot_with_envs):
-    """Stats header should show total culled count."""
+async def test_stats_header_pruned_count(snapshot_with_envs):
+    """Stats header should show total pruned count."""
     app = ScoreboardTestApp()
     async with app.run_test():
         widget = app.query_one(Scoreboard)
         widget.update_snapshot(snapshot_with_envs)
 
-        # Total culled: 1 + 2 + 0 = 3
+        # Total pruned: 1 + 2 + 0 = 3
         # Rendered in stats table
         assert widget._snapshot is not None
 
@@ -361,7 +361,7 @@ async def test_seeds_display_individual_when_exactly_3():
 
         seed0 = SeedState(slot_id="R0C0", blueprint_id="conv_l", stage="FOSSILIZED")
         seed1 = SeedState(slot_id="R0C1", blueprint_id="dense_m", stage="BLENDING")
-        seed2 = SeedState(slot_id="R1C0", blueprint_id="attn_a", stage="PROBATIONARY")
+        seed2 = SeedState(slot_id="R1C0", blueprint_id="attn_a", stage="HOLDING")
 
         record = BestRunRecord(
             env_id=0,
@@ -379,9 +379,9 @@ async def test_seeds_display_individual_when_exactly_3():
         seeds_str = widget._format_seeds(record.seeds)
         assert "conv_l" in seeds_str  # FOSSILIZED → green (first 6 chars)
         assert "dense_" in seeds_str  # BLENDING → magenta (first 6 chars of "dense_m")
-        assert "attn_a" in seeds_str  # PROBATIONARY → yellow (first 6 chars)
+        assert "attn_a" in seeds_str  # HOLDING → yellow (first 6 chars)
         assert "[green]" in seeds_str  # FOSSILIZED color
-        assert "[yellow]" in seeds_str  # PROBATIONARY color
+        assert "[yellow]" in seeds_str  # HOLDING color
 
 
 @pytest.mark.asyncio
@@ -396,7 +396,7 @@ async def test_seeds_display_multi_stage_when_more_than_3():
         # 2 FOSSILIZED, 2 provisional (all contributing)
         seed0 = SeedState(slot_id="R0C0", blueprint_id="conv_l", stage="FOSSILIZED")
         seed1 = SeedState(slot_id="R0C1", blueprint_id="dense_m", stage="FOSSILIZED")
-        seed2 = SeedState(slot_id="R1C0", blueprint_id="attn_a", stage="PROBATIONARY")
+        seed2 = SeedState(slot_id="R1C0", blueprint_id="attn_a", stage="HOLDING")
         seed3 = SeedState(slot_id="R1C1", blueprint_id="rnn_xx", stage="BLENDING")
 
         record = BestRunRecord(
@@ -463,8 +463,8 @@ async def test_seeds_display_all_provisional_when_more_than_3():
         # All 4 contributing (no TRAINING/GERMINATED/DORMANT)
         seed0 = SeedState(slot_id="R0C0", blueprint_id="conv_l", stage="BLENDING")
         seed1 = SeedState(slot_id="R0C1", blueprint_id="dense_m", stage="BLENDING")
-        seed2 = SeedState(slot_id="R1C0", blueprint_id="attn_a", stage="PROBATIONARY")
-        seed3 = SeedState(slot_id="R1C1", blueprint_id="rnn_xx", stage="PROBATIONARY")
+        seed2 = SeedState(slot_id="R1C0", blueprint_id="attn_a", stage="HOLDING")
+        seed3 = SeedState(slot_id="R1C1", blueprint_id="rnn_xx", stage="HOLDING")
 
         record = BestRunRecord(
             env_id=0,

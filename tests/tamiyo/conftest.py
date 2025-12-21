@@ -208,7 +208,7 @@ def mock_seed_factory():
 
     Usage:
         def test_something(mock_seed_factory):
-            seed = mock_seed_factory(stage=SeedStage.PROBATIONARY, improvement=5.0)
+            seed = mock_seed_factory(stage=SeedStage.HOLDING, improvement=5.0)
             ...
     """
     from esper.leyline import SeedStage
@@ -282,12 +282,12 @@ def mock_signals_factory():
 
 # Stage parameters for parametrized tests
 ACTIVE_STAGES = pytest.param(
-    ["GERMINATED", "TRAINING", "BLENDING", "PROBATIONARY"],
+    ["GERMINATED", "TRAINING", "BLENDING", "HOLDING"],
     id="active_stages",
 )
 
 TERMINAL_STAGES = pytest.param(
-    ["FOSSILIZED", "CULLED"],
+    ["FOSSILIZED", "PRUNED"],
     id="terminal_stages",
 )
 

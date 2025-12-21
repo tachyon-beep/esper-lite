@@ -362,9 +362,9 @@ class EnvOverview(Static):
         stage_short = {
             "TRAINING": "Train",
             "BLENDING": "Blend",
-            "PROBATIONARY": "Prob",
+            "HOLDING": "Hold",
             "FOSSILIZED": "Foss",
-            "CULLED": "Cull",
+            "PRUNED": "Prune",
         }.get(seed.stage, seed.stage[:5])
 
         blueprint = seed.blueprint_id or "?"
@@ -375,9 +375,9 @@ class EnvOverview(Static):
         style_map = {
             "TRAINING": "cyan",
             "BLENDING": "yellow",
-            "PROBATIONARY": "magenta",
+            "HOLDING": "magenta",
             "FOSSILIZED": "green",
-            "CULLED": "red",
+            "PRUNED": "red",
         }
         style = style_map.get(seed.stage, "white")
 

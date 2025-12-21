@@ -129,7 +129,7 @@ def seed_stages(draw):
 
     Values:
         1=DORMANT, 2=GERMINATED, 3=TRAINING, 4=BLENDING,
-        5=SHADOWING (deprecated/reserved), 6=PROBATIONARY, 7=FOSSILIZED
+        5=SHADOWING (deprecated/reserved), 6=HOLDING, 7=FOSSILIZED
 
     Note: SeedStage is an IntEnum, so we return integers directly.
     """
@@ -484,7 +484,7 @@ def seed_stages_enum(draw, exclude_terminal: bool = False, exclude_failure: bool
     Args:
         draw: Hypothesis draw function
         exclude_terminal: If True, exclude FOSSILIZED (terminal success state)
-        exclude_failure: If True, exclude CULLED, EMBARGOED, RESETTING (failure states)
+        exclude_failure: If True, exclude PRUNED, EMBARGOED, RESETTING (failure states)
 
     Returns:
         SeedStage enum value
@@ -635,7 +635,7 @@ def seed_states_kasmina(draw, stage: "SeedStage | None" = None):
         alpha = 0.0
     elif stage == SeedStage.BLENDING:
         alpha = draw(alpha_values())
-    else:  # PROBATIONARY, FOSSILIZED
+    else:  # HOLDING, FOSSILIZED
         alpha = 1.0
 
     state = SeedState(

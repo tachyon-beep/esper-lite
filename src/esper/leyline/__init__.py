@@ -35,8 +35,8 @@ MIN_CULL_AGE = 1
 # Epochs needed for confident seed quality assessment
 FULL_EVALUATION_AGE = 10
 
-# Minimum epochs in PROBATIONARY to earn full fossilize bonus
-MIN_PROBATION_EPOCHS = 5
+# Minimum epochs in HOLDING to earn full fossilize bonus
+MIN_HOLDING_EPOCHS = 5
 
 # Seed limits (None = unlimited)
 DEFAULT_MAX_SEEDS = None           # Global limit across all slots
@@ -306,7 +306,7 @@ DEFAULT_MIN_BLENDING_EPOCHS = 3
 # Seeds must reach this alpha level to be considered fully blended.
 DEFAULT_ALPHA_COMPLETE_THRESHOLD = 0.95
 
-# Maximum epochs in PROBATIONARY stage before auto-cull timeout.
+# Maximum epochs in HOLDING stage before auto-cull timeout.
 # Prevents indecisive policies from holding seeds indefinitely.
 DEFAULT_MAX_PROBATION_EPOCHS = 5
 
@@ -390,7 +390,7 @@ __all__ = [
     # Lifecycle constants
     "MIN_CULL_AGE",
     "FULL_EVALUATION_AGE",
-    "MIN_PROBATION_EPOCHS",
+    "MIN_HOLDING_EPOCHS",
     "DEFAULT_MAX_SEEDS",
     "DEFAULT_GAMMA",
 

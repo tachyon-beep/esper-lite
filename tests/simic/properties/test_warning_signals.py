@@ -1,7 +1,7 @@
 # tests/simic/properties/test_warning_signals.py
 """Warning signal property tests.
 
-These properties verify that warning signals (blending_warning, probation_warning)
+These properties verify that warning signals (blending_warning, holding_warning)
 fire correctly and provide proper credit assignment.
 """
 
@@ -15,7 +15,7 @@ from esper.simic.rewards import (
     compute_contribution_reward,
     SeedInfo,
     STAGE_BLENDING,
-    STAGE_PROBATIONARY,
+    STAGE_HOLDING,
 )
 
 
@@ -102,15 +102,15 @@ class TestBlendingWarning:
 
 
 @pytest.mark.property
-class TestProbationWarning:
-    """Probation warning creates urgency to make FOSSILIZE/CULL decision."""
+class TestHoldingWarning:
+    """Holding warning creates urgency to make FOSSILIZE/CULL decision."""
 
     @given(epochs_in_stage=st.integers(2, 8))
     @settings(max_examples=100)
-    def test_wait_in_probation_penalized(self, epochs_in_stage):
-        """WAITing in PROBATIONARY with positive attribution should be penalized."""
+    def test_wait_in_holding_penalized(self, epochs_in_stage):
+        """WAITing in HOLDING with positive attribution should be penalized."""
         seed_info = SeedInfo(
-            stage=STAGE_PROBATIONARY,
+            stage=STAGE_HOLDING,
             improvement_since_stage_start=0.5,
             total_improvement=2.0,  # Positive trajectory
             epochs_in_stage=epochs_in_stage,
@@ -135,18 +135,18 @@ class TestProbationWarning:
         )
 
         # Warning should be negative (penalty for indecision)
-        assert components.probation_warning < 0, (
-            f"WAIT in PROBATIONARY epoch {epochs_in_stage} should be penalized, "
-            f"got {components.probation_warning}"
+        assert components.holding_warning < 0, (
+            f"WAIT in HOLDING epoch {epochs_in_stage} should be penalized, "
+            f"got {components.holding_warning}"
         )
 
     @given(epochs_in_stage=st.integers(2, 6))
     @settings(max_examples=100)
-    def test_probation_warning_exponential(self, epochs_in_stage):
-        """Probation warning should escalate exponentially."""
+    def test_holding_warning_exponential(self, epochs_in_stage):
+        """Holding warning should escalate exponentially."""
         def get_warning(epochs: int) -> float:
             seed_info = SeedInfo(
-                stage=STAGE_PROBATIONARY,
+                stage=STAGE_HOLDING,
                 improvement_since_stage_start=0.5,
                 total_improvement=2.0,
                 epochs_in_stage=epochs,
@@ -169,7 +169,7 @@ class TestProbationWarning:
                 acc_delta=0.3,
                 return_components=True,
             )
-            return components.probation_warning
+            return components.holding_warning
 
         # Compare consecutive epochs
         warning_n = get_warning(epochs_in_stage)

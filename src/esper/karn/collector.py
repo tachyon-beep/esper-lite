@@ -345,7 +345,7 @@ class KarnCollector:
 
         # P0 Fix: Increment epochs_in_stage for all active slots
         for slot in self.store.current_epoch.slots.values():
-            if slot.stage not in (SeedStage.DORMANT, SeedStage.CULLED, SeedStage.FOSSILIZED):
+            if slot.stage not in (SeedStage.DORMANT, SeedStage.PRUNED, SeedStage.FOSSILIZED):
                 slot.epochs_in_stage += 1
 
         # Tier 3: Check for anomalies before committing
@@ -415,8 +415,10 @@ class KarnCollector:
             slot.blueprint_id = coerce_str_or_none(data.get("blueprint_id"), field="blueprint_id")
             slot.seed_params = coerce_int(data.get("params", 0), field="params", default=0, minimum=0)
         elif event_type == "SEED_STAGE_CHANGED":
-            slot.stage = coerce_seed_stage(data.get("to"), field="to", default=SeedStage.DORMANT)
-            slot.epochs_in_stage = 0
+            new_stage = coerce_seed_stage(data.get("to"), field="to", default=slot.stage)
+            if new_stage != slot.stage:
+                slot.stage = new_stage
+                slot.epochs_in_stage = 0
         elif event_type == "SEED_GATE_EVALUATED":
             slot.last_gate_attempted = coerce_str_or_none(data.get("gate"), field="gate")
             slot.last_gate_passed = coerce_bool_or_none(data.get("passed"), field="passed")
@@ -427,8 +429,8 @@ class KarnCollector:
                     slot.last_gate_reason = ",".join(str(c) for c in checks_failed)
         elif event_type == "SEED_FOSSILIZED":
             slot.stage = SeedStage.FOSSILIZED
-        elif event_type == "SEED_CULLED":
-            slot.stage = SeedStage.CULLED
+        elif event_type == "SEED_PRUNED":
+            slot.stage = SeedStage.PRUNED
 
     def _handle_ppo_update(self, event: "TelemetryEvent") -> None:
         """Handle PPO_UPDATE_COMPLETED event."""

@@ -123,7 +123,7 @@ class RunHeader(Static):
                 stage = seed.stage.upper()
                 if stage == "TRAINING":
                     training += 1
-                elif stage in ("BLENDING", "PROBATIONARY"):
+                elif stage in ("BLENDING", "HOLDING"):
                     blending += 1
                 elif stage == "FOSSILIZED":
                     fossilized += 1

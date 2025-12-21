@@ -82,18 +82,20 @@ stateDiagram-v2
     DORMANT --> GERMINATED: Germinate Action
     GERMINATED --> TRAINING: Auto-Start
     TRAINING --> BLENDING: Advance (Gradient Health > 0.8)
-    TRAINING --> CULLED: Cull (Performance Drop)
-    BLENDING --> FOSSILIZED: Advance (Stability Check)
-    BLENDING --> CULLED: Cull (Regression)
+    TRAINING --> PRUNED: Prune (Performance Drop)
+    BLENDING --> HOLDING: Advance (Stability Check)
+    BLENDING --> PRUNED: Prune (Regression)
+    HOLDING --> FOSSILIZED: Fossilize (Stability Check)
     FOSSILIZED --> [*]: Terminal Success
-    CULLED --> EMBARGOED: Cleanup
+    PRUNED --> EMBARGOED: Cleanup
     EMBARGOED --> DORMANT: Cooldown Complete
 ```
 
 1. **Germinated:** Module created. Input connected, output detached.
 2. **Training:** Module trains on host errors. Host weights frozen relative to this path.
 3. **Blending:** Module output is alpha-blended into host stream.
-4. **Fossilized:** Weights permanently integrated. Module becomes part of the "Host" for future seeds.
+4. **Holding:** Full-amplitude hold (alpha≈1.0). Stable decision point for fossilization.
+5. **Fossilized:** Weights permanently integrated. Module becomes part of the "Host" for future seeds.
 
 -----
 

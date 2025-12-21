@@ -37,7 +37,7 @@ from .rewards import (
     STAGE_TRAINING,
     STAGE_BLENDING,
     STAGE_FOSSILIZED,
-    STAGE_PROBATIONARY,
+    STAGE_HOLDING,
     STAGE_GERMINATED,
     # Internal helpers (exported for testing)
     _contribution_pbrs_bonus,
@@ -79,7 +79,7 @@ __all__ = [
     "STAGE_TRAINING",
     "STAGE_BLENDING",
     "STAGE_FOSSILIZED",
-    "STAGE_PROBATIONARY",
+    "STAGE_HOLDING",
     "STAGE_GERMINATED",
     # Internal helpers (exported for testing)
     "_contribution_pbrs_bonus",

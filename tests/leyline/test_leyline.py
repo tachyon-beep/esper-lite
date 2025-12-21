@@ -22,7 +22,7 @@ class TestSeedStage:
     def test_all_stages_have_transitions(self):
         """Every stage should have an entry in VALID_TRANSITIONS."""
         # Exclude terminal/special stages that have no outgoing transitions
-        excluded_stages = {SeedStage.DORMANT, SeedStage.CULLED, SeedStage.FOSSILIZED}
+        excluded_stages = {SeedStage.DORMANT, SeedStage.PRUNED, SeedStage.FOSSILIZED}
         for stage in SeedStage:
             if stage not in excluded_stages:
                 assert stage in VALID_TRANSITIONS, f"{stage} missing from VALID_TRANSITIONS"
@@ -45,7 +45,7 @@ class TestSeedStage:
         """Test is_terminal_stage helper function."""
         assert is_terminal_stage(SeedStage.FOSSILIZED)
         assert not is_terminal_stage(SeedStage.TRAINING)
-        assert not is_terminal_stage(SeedStage.CULLED)
+        assert not is_terminal_stage(SeedStage.PRUNED)
 
     def test_active_stage_helper(self):
         """Test is_active_stage helper function."""
@@ -53,11 +53,11 @@ class TestSeedStage:
         assert is_active_stage(SeedStage.BLENDING)
         assert is_active_stage(SeedStage.FOSSILIZED)
         assert not is_active_stage(SeedStage.DORMANT)
-        assert not is_active_stage(SeedStage.CULLED)
+        assert not is_active_stage(SeedStage.PRUNED)
 
     def test_failure_stage_helper(self):
         """Test is_failure_stage helper function."""
-        assert is_failure_stage(SeedStage.CULLED)
+        assert is_failure_stage(SeedStage.PRUNED)
         assert is_failure_stage(SeedStage.EMBARGOED)
         assert is_failure_stage(SeedStage.RESETTING)
         assert not is_failure_stage(SeedStage.FOSSILIZED)
@@ -70,20 +70,20 @@ class TestSeedStage:
             SeedStage.GERMINATED,
             SeedStage.TRAINING,
             SeedStage.BLENDING,
-            SeedStage.PROBATIONARY,
+            SeedStage.HOLDING,
             SeedStage.FOSSILIZED,
         ]
         for i in range(len(happy_path) - 1):
             assert is_valid_transition(happy_path[i], happy_path[i + 1]), \
                 f"Transition {happy_path[i]} -> {happy_path[i + 1]} should be valid"
 
-    def test_cull_path_from_training(self):
-        """Test that TRAINING can transition to CULLED."""
-        assert is_valid_transition(SeedStage.TRAINING, SeedStage.CULLED)
+    def test_prune_path_from_training(self):
+        """Test that TRAINING can transition to PRUNED."""
+        assert is_valid_transition(SeedStage.TRAINING, SeedStage.PRUNED)
 
-    def test_recovery_path_after_cull(self):
-        """Test the recovery path: CULLED -> EMBARGOED -> RESETTING -> DORMANT."""
-        assert is_valid_transition(SeedStage.CULLED, SeedStage.EMBARGOED)
+    def test_recovery_path_after_prune(self):
+        """Test the recovery path: PRUNED -> EMBARGOED -> RESETTING -> DORMANT."""
+        assert is_valid_transition(SeedStage.PRUNED, SeedStage.EMBARGOED)
         assert is_valid_transition(SeedStage.EMBARGOED, SeedStage.RESETTING)
         assert is_valid_transition(SeedStage.RESETTING, SeedStage.DORMANT)
 

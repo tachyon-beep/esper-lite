@@ -8,7 +8,7 @@ import torch
 
 from esper.kasmina.blending import BlendCatalog, GatedBlend
 from esper.kasmina.host import CNNHost, TransformerHost, MorphogeneticModel
-from esper.leyline.factored_actions import BlendAction, FactoredAction, LifecycleOp, BlueprintAction
+from esper.leyline.factored_actions import BlendAction, FactoredAction, LifecycleOp, BlueprintAction, TempoAction
 from esper.tamiyo.policy.features import TaskConfig
 
 
@@ -169,6 +169,7 @@ class TestFactoredActionBlendExtraction:
             slot_idx=1,  # Was SlotAction.MID
             blueprint=BlueprintAction.NORM,
             blend=BlendAction.LINEAR,
+            tempo=TempoAction.STANDARD,
             op=LifecycleOp.GERMINATE,
         )
         assert action.blend_algorithm_id == "linear"
@@ -179,6 +180,7 @@ class TestFactoredActionBlendExtraction:
             slot_idx=1,  # Was SlotAction.MID
             blueprint=BlueprintAction.NORM,
             blend=BlendAction.SIGMOID,
+            tempo=TempoAction.STANDARD,
             op=LifecycleOp.GERMINATE,
         )
         assert action.blend_algorithm_id == "sigmoid"
@@ -189,6 +191,7 @@ class TestFactoredActionBlendExtraction:
             slot_idx=1,  # Was SlotAction.MID
             blueprint=BlueprintAction.NORM,
             blend=BlendAction.GATED,
+            tempo=TempoAction.STANDARD,
             op=LifecycleOp.GERMINATE,
         )
         assert action.blend_algorithm_id == "gated"

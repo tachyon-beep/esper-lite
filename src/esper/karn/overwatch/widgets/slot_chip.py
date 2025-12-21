@@ -21,9 +21,9 @@ STAGE_COLORS = {
     "GERMINATED": "stage-germinated",
     "TRAINING": "stage-training",
     "BLENDING": "stage-blending",
-    "PROBATIONARY": "stage-probationary",
+    "HOLDING": "stage-holding",
     "FOSSILIZED": "stage-fossilized",
-    "CULLED": "stage-culled",
+    "PRUNED": "stage-pruned",
     "EMBARGOED": "stage-embargoed",
     "RESETTING": "stage-resetting",
 }
@@ -34,9 +34,9 @@ STAGE_SHORT = {
     "GERMINATED": "GERM",
     "TRAINING": "TRAIN",
     "BLENDING": "BLEND",
-    "PROBATIONARY": "PROB",
+    "HOLDING": "HOLD",
     "FOSSILIZED": "FOSSIL",
-    "CULLED": "CULL",
+    "PRUNED": "PRUNE",
     "EMBARGOED": "EMBAR",
     "RESETTING": "RESET",
 }
@@ -78,7 +78,7 @@ class SlotChip(Static):
         color: #c678dd;
     }
 
-    SlotChip.stage-probationary {
+    SlotChip.stage-holding {
         color: #e5c07b;
     }
 
@@ -86,7 +86,7 @@ class SlotChip(Static):
         color: #56b6c2;
     }
 
-    SlotChip.stage-culled {
+    SlotChip.stage-pruned {
         color: #e06c75;
     }
 

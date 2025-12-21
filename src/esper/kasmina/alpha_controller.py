@@ -58,6 +58,7 @@ class AlphaController:
         self.alpha_target = _clamp01(self.alpha_target)
         self.alpha_steps_total = max(0, int(self.alpha_steps_total))
         self.alpha_steps_done = max(0, int(self.alpha_steps_done))
+        self.alpha_steps_done = min(self.alpha_steps_done, self.alpha_steps_total)
 
     def retarget(
         self,

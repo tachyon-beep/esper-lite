@@ -5,7 +5,7 @@ Displays timestamped lifecycle events with type badges:
 - STAGE: Stage transitions (blue)
 - PPO: Policy updates (magenta)
 - GERM: Seed germinations (green)
-- CULL: Seed cullings (red)
+- PRUNE: Seed prunes (red)
 
 Supports filtering by event type and compact/expanded modes.
 """
@@ -28,7 +28,7 @@ EVENT_COLORS: dict[str, str] = {
     "STAGE": "blue",
     "PPO": "magenta",
     "GERM": "green",
-    "CULL": "red",
+    "PRUNE": "red",
     "BLEND": "yellow",
     "WARN": "yellow",
     "ERROR": "red",

@@ -75,7 +75,7 @@ class TestRewardComposition:
         component_sum = (
             components.bounded_attribution
             + components.blending_warning
-            + components.probation_warning
+            + components.holding_warning
             + components.pbrs_bonus
             + components.compute_rent  # Already negative
             + components.action_shaping

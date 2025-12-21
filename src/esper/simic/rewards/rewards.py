@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import NamedTuple, cast
 
-from esper.leyline import SeedStage, MIN_CULL_AGE, MIN_PROBATION_EPOCHS, DEFAULT_GAMMA
+from esper.leyline import SeedStage, MIN_CULL_AGE, MIN_HOLDING_EPOCHS, DEFAULT_GAMMA
 from esper.leyline import DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
 from esper.leyline.factored_actions import LifecycleOp
 from esper.nissa import get_hub
@@ -86,7 +86,7 @@ class RewardFamily(Enum):
 # - TRAINING (2.0): +1.0 for successful G1 gate passage
 # - BLENDING (3.5): +1.5 (LARGEST delta) - critical integration phase
 #   This is where value is actually created; alpha ramp merges seed contribution
-# - PROBATIONARY (5.5): +2.0 for stability validation (value 5 skipped)
+# - HOLDING (5.5): +2.0 for stability validation (value 5 skipped)
 # - FOSSILIZED (6.0): +0.5 (SMALLEST delta) - terminal bonus
 #   Small to prevent "fossilization farming" (rushing to completion)
 #
@@ -115,7 +115,7 @@ STAGE_POTENTIALS = {
     3: 2.0,   # TRAINING
     4: 3.5,   # BLENDING (largest increment - this is where value is created)
     # Value 5 intentionally skipped (was SHADOWING, removed)
-    6: 5.5,   # PROBATIONARY
+    6: 5.5,   # HOLDING
     7: 6.0,   # FOSSILIZED (smallest increment - not a farming target)
 }
 
@@ -314,7 +314,7 @@ class SeedInfo(NamedTuple):
     Designed to avoid importing heavy classes in the hot path.
     Stage values match SeedStage IntEnum:
         0=UNKNOWN, 1=DORMANT, 2=GERMINATED, 3=TRAINING,
-        4=BLENDING, 6=PROBATIONARY, 7=FOSSILIZED, etc. (5 skipped)
+        4=BLENDING, 6=HOLDING, 7=FOSSILIZED, etc. (5 skipped)
     """
 
     stage: int  # SeedStage.value
@@ -364,7 +364,7 @@ STAGE_GERMINATED = SeedStage.GERMINATED.value
 STAGE_TRAINING = SeedStage.TRAINING.value
 STAGE_BLENDING = SeedStage.BLENDING.value
 STAGE_FOSSILIZED = SeedStage.FOSSILIZED.value
-STAGE_PROBATIONARY = SeedStage.PROBATIONARY.value
+STAGE_HOLDING = SeedStage.HOLDING.value
 
 
 # =============================================================================
@@ -385,7 +385,7 @@ _DEFAULT_CONTRIBUTION_CONFIG = ContributionRewardConfig()
 # a specific failure mode:
 #   1. Bounded attribution - prevents ransomware signatures (gaming via model corruption)
 #   2. Blending warning - early signal for problematic seeds before they cause damage
-#   3. Probationary indecision - prevents farming WAIT actions for positive rewards
+#   3. Holding indecision - prevents farming WAIT actions for positive rewards
 #   4. PBRS stage progression - potential-based shaping preserves optimal policy
 #   5. Compute rent - logarithmic parameter cost prevents model bloat
 #   6. Action shaping - state machine compliance penalties
@@ -626,8 +626,8 @@ def compute_contribution_reward(
     if components:
         components.blending_warning = blending_warning
 
-    # === 1c. PROBATIONARY INDECISION PENALTY ===
-    # Exponential escalation for WAITing too long in PROBATIONARY
+    # === 1c. HOLDING INDECISION PENALTY ===
+    # Exponential escalation for WAITing too long in HOLDING
     # Creates urgency to make FOSSILIZE/CULL decision before timeout
     # DRL Expert review 2025-12-10: steepened to overcome +7.5 attribution
     # Note: Orthogonal to blending_warning (different stage, different pathology)
@@ -637,8 +637,8 @@ def compute_contribution_reward(
     # CULL, not FOSSILIZE. Penalizing WAIT in this case provides no useful gradient -
     # the attribution discount already zeroed rewards. Penalty stacking creates an
     # unlearnable reward landscape where every action is punished.
-    probation_warning = 0.0
-    if seed_info is not None and seed_info.stage == STAGE_PROBATIONARY:
+    holding_warning = 0.0
+    if seed_info is not None and seed_info.stage == STAGE_HOLDING:
         if action == LifecycleOp.WAIT:
             # Only penalize when:
             # 1. Counterfactual data is available (agent has info to act)
@@ -653,12 +653,12 @@ def compute_contribution_reward(
                     # Exponential: epoch 2 -> -1.0, epoch 3 -> -3.0, epoch 4 -> -9.0
                     # Formula: -1.0 * (3 ** (epochs_waiting - 1))
                     epochs_waiting = seed_info.epochs_in_stage - 1
-                    probation_warning = -1.0 * (3 ** (epochs_waiting - 1))
+                    holding_warning = -1.0 * (3 ** (epochs_waiting - 1))
                     # Cap at -10.0 (clip boundary) to avoid extreme penalties
-                    probation_warning = max(probation_warning, -10.0)
-                    reward += probation_warning
+                    holding_warning = max(holding_warning, -10.0)
+                    reward += holding_warning
     if components:
-        components.probation_warning = probation_warning
+        components.holding_warning = holding_warning
 
     # === 2. PBRS: Stage Progression ===
     # Potential-based shaping preserves optimal policy (Ng et al., 1999)
@@ -859,7 +859,7 @@ def compute_simplified_reward(
     Removed vs SHAPED:
     - bounded_attribution (replace with terminal accuracy)
     - blending_warning (let terminal handle bad seeds)
-    - probation_warning (let PBRS + terminal handle pacing)
+    - holding_warning (let PBRS + terminal handle pacing)
     - ratio_penalty / attribution_discount (address via environment, not reward)
     - compute_rent (simplify - not critical for learning)
 
@@ -1132,7 +1132,7 @@ def _contribution_fossilize_shaping(
 ) -> float:
     """Shaping for FOSSILIZE action - with legitimacy and ransomware checks.
 
-    Rapid fossilization (short PROBATIONARY period) is discounted to prevent
+    Rapid fossilization (short HOLDING period) is discounted to prevent
     dependency gaming where seeds create artificial dependencies during
     BLENDING that inflate metrics.
 
@@ -1144,8 +1144,8 @@ def _contribution_fossilize_shaping(
     if seed_info is None:
         return config.invalid_fossilize_penalty
 
-    # FOSSILIZE only valid from PROBATIONARY
-    if seed_info.stage != STAGE_PROBATIONARY:
+    # FOSSILIZE only valid from HOLDING
+    if seed_info.stage != STAGE_HOLDING:
         return config.invalid_fossilize_penalty
 
     # === RANSOMWARE CHECK: total_improvement must be non-negative ===
@@ -1167,9 +1167,9 @@ def _contribution_fossilize_shaping(
 
         return base_penalty - damage_scale + ransomware_penalty
 
-    # Legitimacy discount: must have spent time in PROBATIONARY to earn full bonus
+    # Legitimacy discount: must have spent time in HOLDING to earn full bonus
     # This prevents rapid fossilization gaming
-    legitimacy_discount = min(1.0, seed_info.epochs_in_stage / MIN_PROBATION_EPOCHS)
+    legitimacy_discount = min(1.0, seed_info.epochs_in_stage / MIN_HOLDING_EPOCHS)
 
     # Use seed_contribution to determine if fossilization is earned
     # Aligned with G5 gate: require DEFAULT_MIN_FOSSILIZE_CONTRIBUTION to get bonus
@@ -1373,7 +1373,7 @@ def compute_seed_potential(obs: dict) -> float:
     Note:
         seed_stage values match SeedStage enum from leyline:
         - DORMANT=1, GERMINATED=2, TRAINING=3, BLENDING=4
-        - PROBATIONARY=6, FOSSILIZED=7
+        - HOLDING=6, FOSSILIZED=7
     """
     has_active = obs.get("has_active_seed", 0)
     seed_stage = obs.get("seed_stage", 0)
@@ -1529,5 +1529,5 @@ __all__ = [
     "STAGE_TRAINING",
     "STAGE_BLENDING",
     "STAGE_FOSSILIZED",
-    "STAGE_PROBATIONARY",
+    "STAGE_HOLDING",
 ]

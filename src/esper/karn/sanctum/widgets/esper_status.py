@@ -24,9 +24,9 @@ _STAGE_SHORT: dict[str, str] = {
     "GERMINATED": "Germ",
     "TRAINING": "Train",
     "BLENDING": "Blend",
-    "PROBATIONARY": "Prob",
+    "HOLDING": "Hold",
     "FOSSILIZED": "Foss",
-    "CULLED": "Cull",
+    "PRUNED": "Prune",
     "RESETTING": "Reset",
     "EMBARGOED": "Embar",
 }
@@ -35,9 +35,9 @@ _STAGE_SHORT: dict[str, str] = {
 _STAGE_STYLES: dict[str, str] = {
     "TRAINING": "yellow",
     "BLENDING": "cyan",
-    "PROBATIONARY": "blue",
+    "HOLDING": "blue",
     "FOSSILIZED": "magenta",
-    "CULLED": "red",
+    "PRUNED": "red",
     "GERMINATED": "green",
 }
 

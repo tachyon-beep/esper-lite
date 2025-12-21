@@ -125,10 +125,10 @@ class HeuristicPolicyStateMachine(RuleBasedStateMachine):
         counterfactual=st.floats(min_value=-5.0, max_value=10.0, allow_nan=False),
     )
     def make_decision_probationary(self, counterfactual):
-        """Make decision with PROBATIONARY seed."""
+        """Make decision with HOLDING seed."""
         seed = type('MockSeed', (), {
             'seed_id': f'seed_{self.epoch}',
-            'stage': SeedStage.PROBATIONARY,
+            'stage': SeedStage.HOLDING,
             'epochs_in_stage': 5,
             'alpha': 1.0,
             'blueprint_id': 'conv_light',

@@ -176,7 +176,7 @@ class TestEnvSummary:
             "slots": {
                 "r0c0": {
                     "slot_id": "r0c0",
-                    "stage": "CULLED",
+                    "stage": "PRUNED",
                     "blueprint_id": "bad_seed",
                     "alpha": 0.0,
                 }
@@ -191,7 +191,7 @@ class TestEnvSummary:
         assert env.status == "CRIT"
         assert env.anomaly_score == 0.85
         assert len(env.anomaly_reasons) == 2
-        assert env.slots["r0c0"].stage == "CULLED"
+        assert env.slots["r0c0"].stage == "PRUNED"
 
     def test_env_summary_json_roundtrip(self) -> None:
         """EnvSummary survives JSON serialization."""

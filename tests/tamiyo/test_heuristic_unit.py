@@ -436,7 +436,7 @@ class TestTerminalSeedFiltering:
         policy = HeuristicTamiyo(topology="cnn")
 
         # Create culled seed
-        culled_seed = mock_seed_factory(stage=SeedStage.CULLED)
+        culled_seed = mock_seed_factory(stage=SeedStage.PRUNED)
 
         signals = mock_signals_factory(
             epoch=10, plateau_epochs=5, host_stabilized=1

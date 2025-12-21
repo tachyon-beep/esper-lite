@@ -31,7 +31,7 @@ ACTIVE_STAGES = [
     SeedStage.GERMINATED,
     SeedStage.TRAINING,
     SeedStage.BLENDING,
-    SeedStage.PROBATIONARY,
+    SeedStage.HOLDING,
 ]
 
 # Early stages (before counterfactual is available)
@@ -43,7 +43,7 @@ PRE_BLENDING_STAGES = [
 # Stages where counterfactual contribution is available
 BLENDING_PLUS_STAGES = [
     SeedStage.BLENDING,
-    SeedStage.PROBATIONARY,
+    SeedStage.HOLDING,
 ]
 
 
@@ -215,7 +215,7 @@ def mock_seed_states(draw, stage: SeedStage | None = None) -> MockSeedState:
         epochs = draw(st.integers(min_value=0, max_value=15))
     elif stage == SeedStage.BLENDING:
         epochs = draw(st.integers(min_value=0, max_value=20))
-    else:  # PROBATIONARY
+    else:  # HOLDING
         epochs = draw(st.integers(min_value=0, max_value=10))
 
     # Alpha based on stage (increases through lifecycle)
@@ -225,7 +225,7 @@ def mock_seed_states(draw, stage: SeedStage | None = None) -> MockSeedState:
         alpha = 0.0
     elif stage == SeedStage.BLENDING:
         alpha = draw(bounded_floats(0.0, 1.0))
-    else:  # PROBATIONARY
+    else:  # HOLDING
         alpha = 1.0
 
     return MockSeedState(
@@ -274,7 +274,7 @@ def failing_seed_states(draw) -> MockSeedState:
 @composite
 def succeeding_seed_states(draw) -> MockSeedState:
     """Generate seeds that are succeeding (positive improvement)."""
-    stage = draw(st.sampled_from([SeedStage.TRAINING, SeedStage.BLENDING, SeedStage.PROBATIONARY]))
+    stage = draw(st.sampled_from([SeedStage.TRAINING, SeedStage.BLENDING, SeedStage.HOLDING]))
 
     counterfactual = None
     if stage in BLENDING_PLUS_STAGES:
@@ -284,7 +284,7 @@ def succeeding_seed_states(draw) -> MockSeedState:
         seed_id=draw(st.text(min_size=1, max_size=8, alphabet="abcdefgh")),
         stage=stage,
         epochs_in_stage=draw(st.integers(min_value=1, max_value=10)),
-        alpha=1.0 if stage == SeedStage.PROBATIONARY else (
+        alpha=1.0 if stage == SeedStage.HOLDING else (
             draw(bounded_floats(0.3, 1.0)) if stage == SeedStage.BLENDING else 0.0
         ),
         blueprint_id=draw(st.sampled_from(["conv_light", "conv_heavy", "attention"])),
@@ -296,7 +296,7 @@ def succeeding_seed_states(draw) -> MockSeedState:
 
 @composite
 def probationary_seed_states(draw, with_counterfactual: bool = True) -> MockSeedState:
-    """Generate PROBATIONARY seeds for fossilization testing.
+    """Generate HOLDING seeds for fossilization testing.
 
     Args:
         with_counterfactual: Whether to include counterfactual contribution.
@@ -307,7 +307,7 @@ def probationary_seed_states(draw, with_counterfactual: bool = True) -> MockSeed
 
     return MockSeedState(
         seed_id=draw(st.text(min_size=1, max_size=8, alphabet="abcdefgh")),
-        stage=SeedStage.PROBATIONARY,
+        stage=SeedStage.HOLDING,
         epochs_in_stage=draw(st.integers(min_value=1, max_value=10)),
         alpha=1.0,
         blueprint_id=draw(st.sampled_from(["conv_light", "conv_heavy", "attention"])),
@@ -403,7 +403,7 @@ def fossilization_contexts(draw) -> tuple[MockTrainingSignals, list[MockSeedStat
     """Generate contexts where fossilization might trigger.
 
     Returns:
-        Tuple of (signals, active_seeds) with PROBATIONARY seed that has positive contribution.
+        Tuple of (signals, active_seeds) with HOLDING seed that has positive contribution.
     """
     signals = draw(stabilized_signals())
     seed = draw(probationary_seed_states(with_counterfactual=True))

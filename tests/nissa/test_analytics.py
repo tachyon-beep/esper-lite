@@ -13,7 +13,7 @@ class TestBlueprintStats:
         stats = BlueprintStats()
         assert stats.germinated == 0
         assert stats.fossilized == 0
-        assert stats.culled == 0
+        assert stats.pruned == 0
         assert stats.acc_deltas == []
         assert stats.churns == []
 
@@ -34,12 +34,12 @@ class TestBlueprintStats:
 
     def test_fossilization_rate_all_fossilized(self):
         """Rate is 100% when all seeds fossilized."""
-        stats = BlueprintStats(germinated=5, fossilized=5, culled=0)
+        stats = BlueprintStats(germinated=5, fossilized=5, pruned=0)
         assert stats.fossilization_rate == 100.0
 
     def test_fossilization_rate_mixed(self):
         """Rate calculated correctly for mixed outcomes."""
-        stats = BlueprintStats(germinated=10, fossilized=3, culled=7)
+        stats = BlueprintStats(germinated=10, fossilized=3, pruned=7)
         assert stats.fossilization_rate == 30.0
 
 
@@ -111,11 +111,11 @@ class TestBlueprintAnalytics:
         assert analytics.scoreboards[0].params_added == 10000
         assert analytics.scoreboards[0].fossilized_by_blueprint["depthwise"] == 1
 
-    def test_tracks_cull(self):
-        """Cull events update stats with churn."""
+    def test_tracks_prune(self):
+        """Prune events update stats with churn."""
         analytics = BlueprintAnalytics()
         event = TelemetryEvent(
-            event_type=TelemetryEventType.SEED_CULLED,
+            event_type=TelemetryEventType.SEED_PRUNED,
             seed_id="seed_001",
             data={
                 "blueprint_id": "attention",
@@ -126,9 +126,9 @@ class TestBlueprintAnalytics:
         )
         analytics.emit(event)
 
-        assert analytics.stats["attention"].culled == 1
+        assert analytics.stats["attention"].pruned == 1
         assert analytics.stats["attention"].churns == [-0.3]
-        assert analytics.scoreboards[1].total_culled == 1
+        assert analytics.scoreboards[1].total_pruned == 1
 
     def test_ignores_irrelevant_events(self):
         """Non-lifecycle events are ignored."""
@@ -149,7 +149,7 @@ class TestBlueprintAnalytics:
         # Add some test data
         analytics.stats["depthwise"].germinated = 10
         analytics.stats["depthwise"].fossilized = 6
-        analytics.stats["depthwise"].culled = 4
+        analytics.stats["depthwise"].pruned = 4
         analytics.stats["depthwise"].acc_deltas = [2.0, 2.5, 3.0, 2.0, 2.5, 3.0]
 
         table = analytics.summary_table()

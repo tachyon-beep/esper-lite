@@ -60,7 +60,7 @@ class SlotSummary:
     slot_id: str
     total_seeds: int = 0
     fossilized: int = 0
-    culled: int = 0
+    pruned: int = 0
     current_stage: SeedStage = SeedStage.DORMANT
     epochs_active: int = 0  # Epochs with seed present
 
@@ -71,12 +71,12 @@ class SlotSummary:
 
     # Stage durations
     mean_germination_to_foster: int = 0
-    mean_germination_to_cull: int = 0
+    mean_germination_to_prune: int = 0
 
     @property
     def fossilization_rate(self) -> float:
-        """Percentage of seeds that fossilized vs culled."""
-        total = self.fossilized + self.culled
+        """Percentage of seeds that fossilized vs pruned."""
+        total = self.fossilized + self.pruned
         return (self.fossilized / total * 100) if total > 0 else 0.0
 
 
@@ -93,7 +93,7 @@ class EpisodeSummary:
     # Seed statistics
     total_seeds_germinated: int = 0
     total_seeds_fossilized: int = 0
-    total_seeds_culled: int = 0
+    total_seeds_pruned: int = 0
 
     # Convergence
     convergence: ConvergenceInfo = field(default_factory=ConvergenceInfo)
@@ -286,7 +286,7 @@ class EpisodeAnalytics:
                 contributions.append(slot.counterfactual_contribution)
 
             # Count active epochs
-            if slot.stage not in (SeedStage.DORMANT, SeedStage.CULLED):
+            if slot.stage not in (SeedStage.DORMANT, SeedStage.PRUNED):
                 summary.epochs_active += 1
 
             # Track lifecycle events
@@ -294,8 +294,8 @@ class EpisodeAnalytics:
                 summary.total_seeds += 1
             elif slot.stage == SeedStage.FOSSILIZED and slot.epochs_in_stage == 0:
                 summary.fossilized += 1
-            elif slot.stage == SeedStage.CULLED and slot.epochs_in_stage == 0:
-                summary.culled += 1
+            elif slot.stage == SeedStage.PRUNED and slot.epochs_in_stage == 0:
+                summary.pruned += 1
 
         # Compute statistics
         if contributions:
@@ -399,7 +399,7 @@ class EpisodeAnalytics:
         for slot_summary in summary.slot_summaries.values():
             summary.total_seeds_germinated += slot_summary.total_seeds
             summary.total_seeds_fossilized += slot_summary.fossilized
-            summary.total_seeds_culled += slot_summary.culled
+            summary.total_seeds_pruned += slot_summary.pruned
 
         return summary
 

@@ -45,8 +45,8 @@ class TestEnrichedTelemetry:
         self.slot.state.metrics.current_val_accuracy = 75.0
         self.slot.state.metrics.counterfactual_contribution = 5.0  # Required for G5
 
-        # Advance through stages to FOSSILIZED (must go through PROBATIONARY)
-        self.slot.state.stage = SeedStage.PROBATIONARY
+        # Advance through stages to FOSSILIZED (must go through HOLDING)
+        self.slot.state.stage = SeedStage.HOLDING
         self.slot.state.is_healthy = True  # G5 also requires health
         self.slot.advance_stage(SeedStage.FOSSILIZED)
 
@@ -60,8 +60,8 @@ class TestEnrichedTelemetry:
         assert event.data["improvement"] == 5.0  # 75 - 70
         assert "params_added" in event.data
 
-    def test_cull_emits_improvement(self):
-        """Cull event includes improvement (churn metric)."""
+    def test_prune_emits_improvement(self):
+        """Prune event includes improvement (churn metric)."""
         self.slot.germinate("attention", "seed_002")
         self.events.clear()
 
@@ -71,12 +71,11 @@ class TestEnrichedTelemetry:
 
         self.slot.cull("no_improvement")
 
-        cull_events = [e for e in self.events
-                       if e.event_type == TelemetryEventType.SEED_CULLED]
-        assert len(cull_events) == 1
+        prune_events = [e for e in self.events
+                        if e.event_type == TelemetryEventType.SEED_PRUNED]
+        assert len(prune_events) == 1
 
-        event = cull_events[0]
+        event = prune_events[0]
         assert event.data["blueprint_id"] == "attention"
         assert event.data["improvement"] == -0.5
         assert event.data["reason"] == "no_improvement"
-

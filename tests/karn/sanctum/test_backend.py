@@ -534,8 +534,8 @@ class TestSanctumAggregator:
         assert env.seeds["r0c1"].has_exploding is False
         assert env.seeds["r0c1"].epochs_in_stage == 5
 
-    def test_seed_culled_resets_slot(self):
-        """SEED_CULLED should reset all seed fields and update counts."""
+    def test_seed_pruned_resets_slot(self):
+        """SEED_PRUNED should reset all seed fields and update counts."""
         agg = SanctumAggregator(num_envs=4)
 
         # First germinate a seed
@@ -557,7 +557,7 @@ class TestSanctumAggregator:
         # Then cull the seed
         cull_event = MagicMock()
         cull_event.event_type = MagicMock()
-        cull_event.event_type.name = "SEED_CULLED"
+        cull_event.event_type.name = "SEED_PRUNED"
         cull_event.timestamp = datetime.now(timezone.utc)
         cull_event.slot_id = "r0c1"
         cull_event.data = {
@@ -583,11 +583,11 @@ class TestSanctumAggregator:
         assert seed.epochs_in_stage == 0
 
         # Verify counts updated
-        assert env.culled_count == 1
+        assert env.pruned_count == 1
         assert env.active_seed_count == 0
 
-    def test_seed_culled_resets_blend_tempo(self):
-        """SEED_CULLED should reset blend tempo to default."""
+    def test_seed_pruned_resets_blend_tempo(self):
+        """SEED_PRUNED should reset blend tempo to default."""
         agg = SanctumAggregator(num_envs=4)
 
         germ_event = MagicMock()
@@ -608,7 +608,7 @@ class TestSanctumAggregator:
 
         cull_event = MagicMock()
         cull_event.event_type = MagicMock()
-        cull_event.event_type.name = "SEED_CULLED"
+        cull_event.event_type.name = "SEED_PRUNED"
         cull_event.timestamp = datetime.now(timezone.utc)
         cull_event.slot_id = "r0c1"
         cull_event.data = {
@@ -670,7 +670,7 @@ class TestSanctumAggregator:
         assert len(env.seeds) == 0
         assert env.active_seed_count == 0
         assert env.fossilized_count == 0
-        assert env.culled_count == 0
+        assert env.pruned_count == 0
         assert env.fossilized_params == 0
         # Verify episode counter updated
         assert snapshot.current_episode == 1

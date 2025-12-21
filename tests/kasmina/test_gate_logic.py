@@ -4,7 +4,7 @@ Tests verify correct behavior of individual quality gates:
 - G0: Basic sanity (seed_id, blueprint_id present)
 - G1: Training readiness (stage == GERMINATED)
 - G2: Blending readiness (improvement, gradient ratio, seed readiness)
-- G3: Probation readiness (alpha complete, blending epochs)
+- G3: Holding readiness (alpha complete, blending epochs)
 - G5: Fossilization readiness (counterfactual, health)
 """
 
@@ -223,7 +223,7 @@ class TestG2Gate:
 
 
 class TestG3Gate:
-    """Tests for G3 gate (probation readiness)."""
+    """Tests for G3 gate (holding readiness)."""
 
     def test_g3_passes_with_alpha_and_epochs(self):
         """G3 should pass when alpha >= threshold and enough blending epochs."""
@@ -237,7 +237,7 @@ class TestG3Gate:
         state.alpha = DEFAULT_ALPHA_COMPLETE_THRESHOLD
         state.metrics.epochs_in_current_stage = DEFAULT_MIN_BLENDING_EPOCHS
 
-        result = gates.check_gate(state, SeedStage.PROBATIONARY)
+        result = gates.check_gate(state, SeedStage.HOLDING)
 
         assert result.passed
         assert result.gate == GateLevel.G3
@@ -256,7 +256,7 @@ class TestG3Gate:
         state.alpha = DEFAULT_ALPHA_COMPLETE_THRESHOLD - 0.1  # Below threshold
         state.metrics.epochs_in_current_stage = DEFAULT_MIN_BLENDING_EPOCHS
 
-        result = gates.check_gate(state, SeedStage.PROBATIONARY)
+        result = gates.check_gate(state, SeedStage.HOLDING)
 
         assert not result.passed
         assert any("alpha_low" in check for check in result.checks_failed)
@@ -273,7 +273,7 @@ class TestG3Gate:
         state.alpha = 1.0  # Full alpha
         state.metrics.epochs_in_current_stage = DEFAULT_MIN_BLENDING_EPOCHS - 1
 
-        result = gates.check_gate(state, SeedStage.PROBATIONARY)
+        result = gates.check_gate(state, SeedStage.HOLDING)
 
         assert not result.passed
         assert any("blending_incomplete" in check for check in result.checks_failed)
@@ -288,7 +288,7 @@ class TestG5Gate:
         state = SeedState(
             seed_id="test",
             blueprint_id="noop",
-            stage=SeedStage.PROBATIONARY,
+            stage=SeedStage.HOLDING,
         )
 
         state.metrics.counterfactual_contribution = DEFAULT_MIN_FOSSILIZE_CONTRIBUTION + 1.0
@@ -307,7 +307,7 @@ class TestG5Gate:
         state = SeedState(
             seed_id="test",
             blueprint_id="noop",
-            stage=SeedStage.PROBATIONARY,
+            stage=SeedStage.HOLDING,
         )
 
         state.metrics.counterfactual_contribution = None
@@ -324,7 +324,7 @@ class TestG5Gate:
         state = SeedState(
             seed_id="test",
             blueprint_id="noop",
-            stage=SeedStage.PROBATIONARY,
+            stage=SeedStage.HOLDING,
         )
 
         state.metrics.counterfactual_contribution = DEFAULT_MIN_FOSSILIZE_CONTRIBUTION - 0.5
@@ -341,7 +341,7 @@ class TestG5Gate:
         state = SeedState(
             seed_id="test",
             blueprint_id="noop",
-            stage=SeedStage.PROBATIONARY,
+            stage=SeedStage.HOLDING,
         )
 
         state.metrics.counterfactual_contribution = DEFAULT_MIN_FOSSILIZE_CONTRIBUTION + 1.0
@@ -430,7 +430,7 @@ class TestCustomGateThresholds:
         state.alpha = 1.0
         state.metrics.epochs_in_current_stage = 5  # Less than 10
 
-        result = gates.check_gate(state, SeedStage.PROBATIONARY)
+        result = gates.check_gate(state, SeedStage.HOLDING)
 
         assert not result.passed
 
@@ -485,19 +485,19 @@ class TestGateLevelMapping:
 
         assert result.gate == GateLevel.G2
 
-    def test_probationary_maps_to_g3(self):
-        """PROBATIONARY target should map to G3."""
+    def test_holding_maps_to_g3(self):
+        """HOLDING target should map to G3."""
         gates = QualityGates()
         state = SeedState(seed_id="test", blueprint_id="noop", stage=SeedStage.BLENDING)
 
-        result = gates.check_gate(state, SeedStage.PROBATIONARY)
+        result = gates.check_gate(state, SeedStage.HOLDING)
 
         assert result.gate == GateLevel.G3
 
     def test_fossilized_maps_to_g5(self):
         """FOSSILIZED target should map to G5."""
         gates = QualityGates()
-        state = SeedState(seed_id="test", blueprint_id="noop", stage=SeedStage.PROBATIONARY)
+        state = SeedState(seed_id="test", blueprint_id="noop", stage=SeedStage.HOLDING)
 
         result = gates.check_gate(state, SeedStage.FOSSILIZED)
 

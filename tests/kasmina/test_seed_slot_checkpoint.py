@@ -104,8 +104,8 @@ class TestSeedSlotCheckpoint:
 class TestAlphaScheduleCleanup:
     """Test alpha_schedule is discarded after BLENDING."""
 
-    def test_alpha_schedule_cleared_on_probationary_transition(self):
-        """alpha_schedule should be None after BLENDING -> PROBATIONARY."""
+    def test_alpha_schedule_cleared_on_holding_transition(self):
+        """alpha_schedule should be None after BLENDING -> HOLDING."""
         slot = SeedSlot(
             slot_id="r0c0",
             channels=64,
@@ -132,9 +132,9 @@ class TestAlphaScheduleCleanup:
         # Verify schedule exists during BLENDING
         assert slot.alpha_schedule is not None
 
-        # Force transition to PROBATIONARY
+        # Force transition to HOLDING
         slot.state.alpha = 1.0
-        slot.state.transition(SeedStage.PROBATIONARY)
+        slot.state.transition(SeedStage.HOLDING)
         slot._on_blending_complete()  # Cleanup hook
 
         # Schedule should be cleared

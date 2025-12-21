@@ -236,19 +236,19 @@ class TestSlotStateSerialization:
         assert restored.blending_steps_done == 5
         assert restored.blending_steps_total == 20
 
-    def test_slot_probationary_state_serialization(self):
-        """Slot in PROBATIONARY stage should serialize correctly."""
+    def test_slot_holding_state_serialization(self):
+        """Slot in HOLDING stage should serialize correctly."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
         slot.state.transition(SeedStage.TRAINING)
         slot.state.transition(SeedStage.BLENDING)
-        slot.state.transition(SeedStage.PROBATIONARY)
+        slot.state.transition(SeedStage.HOLDING)
         slot.state.metrics.counterfactual_contribution = 3.5
 
         data = slot.state.to_dict()
         restored = SeedState.from_dict(data)
 
-        assert restored.stage == SeedStage.PROBATIONARY
+        assert restored.stage == SeedStage.HOLDING
         assert restored.metrics.counterfactual_contribution == 3.5
 
     def test_slot_fossilized_state_serialization(self):

@@ -175,7 +175,7 @@ class TestRewardComponents:
             stage_bonus=0.2,
             fossilize_terminal_bonus=1.0,
             blending_warning=-0.1,
-            probation_warning=0.0,
+            holding_warning=0.0,
             val_acc=75.5,
         )
         assert rewards.base_acc_delta == 0.5

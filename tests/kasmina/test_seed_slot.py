@@ -205,7 +205,7 @@ class TestG5RequiresCounterfactual:
         state = SeedState(
             seed_id="test",
             blueprint_id="test_bp",
-            stage=SeedStage.PROBATIONARY,
+            stage=SeedStage.HOLDING,
         )
         # Set high total_improvement but NO counterfactual
         state.metrics.initial_val_accuracy = 50.0
@@ -226,7 +226,7 @@ class TestG5RequiresCounterfactual:
         state = SeedState(
             seed_id="test",
             blueprint_id="test_bp",
-            stage=SeedStage.PROBATIONARY,
+            stage=SeedStage.HOLDING,
             is_healthy=True,
         )
         state.metrics.counterfactual_contribution = 2.5  # Positive contribution
@@ -245,7 +245,7 @@ class TestG5RequiresCounterfactual:
         state = SeedState(
             seed_id="test",
             blueprint_id="test_bp",
-            stage=SeedStage.PROBATIONARY,
+            stage=SeedStage.HOLDING,
             is_healthy=True,
         )
         state.metrics.counterfactual_contribution = -1.0  # Negative!
@@ -264,7 +264,7 @@ class TestG5RequiresCounterfactual:
         state = SeedState(
             seed_id="test",
             blueprint_id="test_bp",
-            stage=SeedStage.PROBATIONARY,
+            stage=SeedStage.HOLDING,
             is_healthy=True,
         )
         state.metrics.counterfactual_contribution = 0.0  # Zero = no value added

@@ -231,9 +231,9 @@ class TestRapidStageTransitions:
             slot.start_blending(total_steps=5)
             assert slot.state.stage == SeedStage.BLENDING
 
-            # -> PROBATIONARY
-            slot.state.transition(SeedStage.PROBATIONARY)
-            assert slot.state.stage == SeedStage.PROBATIONARY
+            # -> HOLDING
+            slot.state.transition(SeedStage.HOLDING)
+            assert slot.state.stage == SeedStage.HOLDING
 
             # Cull
             slot.cull()

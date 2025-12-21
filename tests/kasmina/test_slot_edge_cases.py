@@ -95,7 +95,7 @@ class TestGerminationErrors:
         slot.state.transition(SeedStage.TRAINING)
         result = slot.cull()
 
-        # cull() clears state and seed after transitioning to CULLED
+        # cull() clears state and seed after transitioning to PRUNED
         assert result is True
         assert slot.state is None
         assert slot.seed is None

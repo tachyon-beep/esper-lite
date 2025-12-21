@@ -39,7 +39,7 @@ class TelemetryEventType(Enum):
     SEED_STAGE_CHANGED = auto()
     SEED_GATE_EVALUATED = auto()
     SEED_FOSSILIZED = auto()
-    SEED_CULLED = auto()
+    SEED_PRUNED = auto()
 
     # Training events
     EPOCH_COMPLETED = auto()  # Per-env epoch (has env_id in data)

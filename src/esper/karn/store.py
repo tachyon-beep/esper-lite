@@ -164,7 +164,7 @@ class RewardComponents:
     bounded_attribution: float | None = None  # For contribution mode
     compute_rent: float = 0.0
     blending_warning: float = 0.0
-    probation_warning: float = 0.0
+    holding_warning: float = 0.0
     ratio_penalty: float = 0.0
     terminal_bonus: float = 0.0
 
@@ -587,7 +587,7 @@ class TelemetryStore:
                 "accuracy_delta",
                 "compute_rent",
                 "blending_warning",
-                "probation_warning",
+                "holding_warning",
                 "ratio_penalty",
                 "terminal_bonus",
             ):

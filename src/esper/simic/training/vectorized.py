@@ -195,8 +195,8 @@ def _advance_active_seed(model, slot_id: str) -> bool:
     current_stage = seed_state.stage
 
     # Tamiyo only finalizes; mechanical blending/advancement handled by Kasmina.
-    # NOTE: Leyline VALID_TRANSITIONS only allow PROBATIONARY → FOSSILIZED.
-    if current_stage == SeedStage.PROBATIONARY:
+    # NOTE: Leyline VALID_TRANSITIONS allow HOLDING → FOSSILIZED (finalize).
+    if current_stage == SeedStage.HOLDING:
         gate_result = slot.advance_stage(SeedStage.FOSSILIZED)
         if gate_result.passed:
             slot.set_alpha(1.0)
@@ -1212,7 +1212,7 @@ def train_ppo_vectorized(
                 if seed_state is None:
                     continue
 
-                # Seeds can continue training through BLENDING/PROBATIONARY/FOSSILIZED.
+                # Seeds can continue training through BLENDING/HOLDING/FOSSILIZED.
                 slots_to_step.append(slot_id)
                 if slot_id not in env_state.seed_optimizers:
                     seed_params = list(model.get_seed_parameters(slot_id))
@@ -1680,7 +1680,7 @@ def train_ppo_vectorized(
                         seed_state.metrics.record_accuracy(val_acc)
 
                 # Update counterfactual contribution for any slot where we computed a baseline this epoch
-                # (used by G5 gate + PROBATIONARY safety auto-cull).
+                # (used by G5 gate + HOLDING safety auto-cull).
                 if baseline_accs[env_idx]:
                     for slot_id, baseline_acc in baseline_accs[env_idx].items():
                         if model.has_active_seed_in_slot(slot_id):

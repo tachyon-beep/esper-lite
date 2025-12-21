@@ -4,7 +4,7 @@
 The mask system only blocks PHYSICALLY IMPOSSIBLE actions:
 - SLOT: only enabled slots (from --slots arg) are selectable
 - GERMINATE: blocked if ALL enabled slots occupied OR at seed limit
-- FOSSILIZE: blocked if NO enabled slot has a PROBATIONARY seed
+- FOSSILIZE: blocked if NO enabled slot has a HOLDING seed
 - CULL: blocked if NO enabled slot has a cullable seed with age >= MIN_CULL_AGE
 - WAIT: always valid
 - BLUEPRINT: NOOP always blocked (0 trainable parameters)
@@ -89,22 +89,22 @@ def test_compute_action_masks_active_slot_training_stage():
     # CULL valid (mid has seed age >= MIN_CULL_AGE)
     assert masks["op"][LifecycleOp.CULL]
 
-    # FOSSILIZE not valid (no PROBATIONARY seed)
+    # FOSSILIZE not valid (no HOLDING seed)
     assert not masks["op"][LifecycleOp.FOSSILIZE]
 
 
-def test_compute_action_masks_probationary_stage():
-    """PROBATIONARY stage should allow FOSSILIZE."""
+def test_compute_action_masks_holding_stage():
+    """HOLDING stage should allow FOSSILIZE."""
     slot_states = {
         "r0c1": MaskSeedInfo(
-            stage=SeedStage.PROBATIONARY.value,
+            stage=SeedStage.HOLDING.value,
             seed_age_epochs=10,
         ),
     }
 
     masks = compute_action_masks(slot_states, enabled_slots=["r0c1"])
 
-    # FOSSILIZE valid from PROBATIONARY
+    # FOSSILIZE valid from HOLDING
     assert masks["op"][LifecycleOp.FOSSILIZE]
 
     # CULL valid (seed exists and age >= 1)
@@ -387,19 +387,19 @@ def test_min_cull_age_constant():
 
 
 def test_compute_action_masks_fossilize_any_slot():
-    """FOSSILIZE should be valid if ANY enabled slot is PROBATIONARY."""
+    """FOSSILIZE should be valid if ANY enabled slot is HOLDING."""
     slot_states = {
         "r0c0": MaskSeedInfo(
             stage=SeedStage.TRAINING.value,  # Not fossilizable
             seed_age_epochs=10,
         ),
         "r0c1": MaskSeedInfo(
-            stage=SeedStage.PROBATIONARY.value,  # Fossilizable
+            stage=SeedStage.HOLDING.value,  # Fossilizable
             seed_age_epochs=10,
         ),
     }
 
-    # Both slots enabled - FOSSILIZE valid because r0c1 is PROBATIONARY
+    # Both slots enabled - FOSSILIZE valid because r0c1 is HOLDING
     masks = compute_action_masks(slot_states, enabled_slots=["r0c0", "r0c1"])
     assert masks["op"][LifecycleOp.FOSSILIZE]
 
@@ -460,7 +460,7 @@ def test_compute_action_masks_enabled_slots_required():
     """enabled_slots is required - raises TypeError if not provided."""
     slot_states = {
         "r0c1": MaskSeedInfo(
-            stage=SeedStage.PROBATIONARY.value,
+            stage=SeedStage.HOLDING.value,
             seed_age_epochs=10,
         ),
     }
@@ -697,7 +697,7 @@ class TestActionMaskEdgeCases:
         assert masks["op"][LifecycleOp.WAIT], "WAIT must always be valid"
         assert not masks["op"][LifecycleOp.GERMINATE], "GERMINATE requires enabled empty slot"
         assert not masks["op"][LifecycleOp.CULL], "CULL requires enabled slot with seed"
-        assert not masks["op"][LifecycleOp.FOSSILIZE], "FOSSILIZE requires enabled PROBATIONARY"
+        assert not masks["op"][LifecycleOp.FOSSILIZE], "FOSSILIZE requires enabled HOLDING"
 
     def test_large_config_9_slots(self):
         """9-slot (3x3) grid should mask correctly."""
@@ -710,7 +710,7 @@ class TestActionMaskEdgeCases:
             "r0c0": None,
             "r0c1": MaskSeedInfo(stage=SeedStage.TRAINING.value, seed_age_epochs=5),
             "r0c2": None,
-            "r1c0": MaskSeedInfo(stage=SeedStage.PROBATIONARY.value, seed_age_epochs=10),
+            "r1c0": MaskSeedInfo(stage=SeedStage.HOLDING.value, seed_age_epochs=10),
             "r1c1": None,
             "r1c2": MaskSeedInfo(stage=SeedStage.BLENDING.value, seed_age_epochs=3),
             "r2c0": None,
@@ -736,7 +736,7 @@ class TestActionMaskEdgeCases:
         assert masks["op"][LifecycleOp.WAIT]  # Always valid
         assert masks["op"][LifecycleOp.GERMINATE]  # Empty slots exist
         assert masks["op"][LifecycleOp.CULL]  # Seeds with age >= 1 exist
-        assert masks["op"][LifecycleOp.FOSSILIZE]  # PROBATIONARY seed exists
+        assert masks["op"][LifecycleOp.FOSSILIZE]  # HOLDING seed exists
 
     def test_large_config_25_slots(self):
         """25-slot (5x5) grid should mask correctly."""
@@ -796,9 +796,9 @@ class TestActionMaskEdgeCases:
 
         slot_config = SlotConfig(slot_ids=("r0c0",))
 
-        # Test with PROBATIONARY seed (allows FOSSILIZE and CULL)
+        # Test with HOLDING seed (allows FOSSILIZE and CULL)
         slot_states = {
-            "r0c0": MaskSeedInfo(stage=SeedStage.PROBATIONARY.value, seed_age_epochs=5),
+            "r0c0": MaskSeedInfo(stage=SeedStage.HOLDING.value, seed_age_epochs=5),
         }
 
         masks = compute_action_masks(
@@ -817,7 +817,7 @@ class TestActionMaskEdgeCases:
         # GERMINATE blocked (slot occupied)
         assert not masks["op"][LifecycleOp.GERMINATE]
 
-        # FOSSILIZE valid (PROBATIONARY)
+        # FOSSILIZE valid (HOLDING)
         assert masks["op"][LifecycleOp.FOSSILIZE]
 
         # CULL valid (age >= MIN_CULL_AGE)
@@ -864,13 +864,13 @@ class TestActionMaskEdgeCases:
 
     def test_all_stages_fossilize_conditions(self):
         """Test FOSSILIZE masking for all seed stages."""
-        # Only PROBATIONARY should allow FOSSILIZE
-        fossilizable_stages = {SeedStage.PROBATIONARY}
+        # Only HOLDING should allow FOSSILIZE
+        fossilizable_stages = {SeedStage.HOLDING}
         all_stages = [
             SeedStage.GERMINATED,
             SeedStage.TRAINING,
             SeedStage.BLENDING,
-            SeedStage.PROBATIONARY,
+            SeedStage.HOLDING,
             SeedStage.FOSSILIZED,
         ]
 
@@ -889,18 +889,18 @@ class TestActionMaskEdgeCases:
 
     def test_all_stages_cull_conditions(self):
         """Test CULL masking for all seed stages (with sufficient age)."""
-        # Stages that can transition to CULLED
+        # Stages that can transition to PRUNED
         cullable_stages = {
             SeedStage.GERMINATED,
             SeedStage.TRAINING,
             SeedStage.BLENDING,
-            SeedStage.PROBATIONARY,
+            SeedStage.HOLDING,
         }
         all_stages = [
             SeedStage.GERMINATED,
             SeedStage.TRAINING,
             SeedStage.BLENDING,
-            SeedStage.PROBATIONARY,
+            SeedStage.HOLDING,
             SeedStage.FOSSILIZED,
         ]
 

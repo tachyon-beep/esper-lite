@@ -109,20 +109,17 @@ class TestStepEpochAutoAdvance:
         assert slot.alpha >= 0.99  # Should be at or near 1.0
 
     def test_step_epoch_auto_advances_when_blending_complete(self):
-        """step_epoch should auto-advance BLENDING→SHADOWING→PROBATIONARY when α=1.0."""
+        """step_epoch should auto-advance BLENDING→HOLDING when α=1.0."""
         slot = self._create_blending_slot()
 
-        # Run through all blending steps
-        for _ in range(3):
+        # Drive epochs until blending completes and the slot enters HOLDING.
+        for _ in range(10):
             slot.state.metrics.record_accuracy(0.0)
             slot.step_epoch()
+            if slot.state.stage == SeedStage.HOLDING:
+                break
 
-        # Record metrics to simulate validation and allow dwell accounting in SHADOWING
-        slot.state.metrics.record_accuracy(0.0)
-
-        # One more epoch to complete SHADOWING dwell
-        slot.step_epoch()
-        assert slot.state.stage == SeedStage.PROBATIONARY
+        assert slot.state.stage == SeedStage.HOLDING
         assert slot.alpha >= 0.99
 
     def test_step_epoch_noop_when_not_blending(self):
@@ -162,17 +159,17 @@ class TestStrategicFossilizeOnly:
         assert ok is False
         assert model.seed_slots["r0c1"].state.stage == SeedStage.TRAINING
 
-    def test_fossilize_from_probationary(self):
-        """FOSSILIZE from PROBATIONARY should transition to FOSSILIZED."""
+    def test_fossilize_from_holding(self):
+        """FOSSILIZE from HOLDING should transition to FOSSILIZED."""
         from esper.kasmina.host import MorphogeneticModel, CNNHost
 
         model = MorphogeneticModel(CNNHost(), device="cpu", slots=["r0c1"])
         model.germinate_seed("conv_heavy", "test_seed", slot="r0c1")
         model.seed_slots["r0c1"].state.transition(SeedStage.TRAINING)
         model.seed_slots["r0c1"].state.transition(SeedStage.BLENDING)
-        model.seed_slots["r0c1"].state.transition(SeedStage.PROBATIONARY)
+        model.seed_slots["r0c1"].state.transition(SeedStage.HOLDING)
 
-        # FOSSILIZE from PROBATIONARY should work
+        # FOSSILIZE from HOLDING should work
         ok = model.seed_slots["r0c1"].state.transition(SeedStage.FOSSILIZED)
 
         assert ok is True
@@ -198,7 +195,7 @@ class TestLifecycleIntegration:
     """Integration test for full lifecycle flow."""
 
     def test_full_lifecycle_with_auto_advance(self):
-        """Test TRAINING→BLENDING→(auto)→PROBATIONARY→FOSSILIZED."""
+        """Test TRAINING→BLENDING→(auto)→HOLDING→FOSSILIZED."""
         from esper.kasmina.host import MorphogeneticModel, CNNHost
 
         model = MorphogeneticModel(CNNHost(), device="cpu", slots=["r0c1"])
@@ -212,15 +209,13 @@ class TestLifecycleIntegration:
         assert model.seed_slots["r0c1"].state.stage == SeedStage.BLENDING
 
         # Kasmina: auto-advance via step_epoch
-        for _ in range(3):
+        for _ in range(10):
             model.seed_slots["r0c1"].state.metrics.record_accuracy(0.0)
             model.seed_slots["r0c1"].step_epoch()  # advance blending progress
+            if model.seed_slots["r0c1"].state.stage == SeedStage.HOLDING:
+                break
 
-        # Shadowing dwell requires a recorded epoch
-        model.seed_slots["r0c1"].state.metrics.record_accuracy(0.0)
-        model.seed_slots["r0c1"].step_epoch()  # dwell → PROBATIONARY
-
-        assert model.seed_slots["r0c1"].state.stage == SeedStage.PROBATIONARY
+        assert model.seed_slots["r0c1"].state.stage == SeedStage.HOLDING
 
         # Tamiyo: FOSSILIZE to finalize
         ok = model.seed_slots["r0c1"].state.transition(SeedStage.FOSSILIZED)
@@ -228,8 +223,8 @@ class TestLifecycleIntegration:
         assert ok is True
         assert model.seed_slots["r0c1"].state.stage == SeedStage.FOSSILIZED
 
-    def test_full_state_machine_reaches_probationary(self):
-        """Germinate → TRAINING → BLENDING → SHADOWING → PROBATIONARY via Kasmina mechanics."""
+    def test_full_state_machine_reaches_holding(self):
+        """Germinate → TRAINING → BLENDING → HOLDING via Kasmina mechanics."""
         from esper.kasmina.host import MorphogeneticModel, CNNHost
 
         model = MorphogeneticModel(CNNHost(), device="cpu", slots=["r0c1"])
@@ -254,16 +249,16 @@ class TestLifecycleIntegration:
         assert model.seed_slots["r0c1"].state.stage == SeedStage.BLENDING, \
             f"Seed failed to leave TRAINING; current stage: {model.seed_slots['r0c1'].state.stage}"
 
-        # Continue driving epochs so BLENDING → SHADOWING → PROBATIONARY auto-advance.
+        # Continue driving epochs so BLENDING → HOLDING auto-advance.
         for _ in range(20):
             model.seed_slots["r0c1"].state.metrics.record_accuracy(acc)
             model.seed_slots["r0c1"].step_epoch()
             acc += 0.5
-            if model.seed_slots["r0c1"].state.stage == SeedStage.PROBATIONARY:
+            if model.seed_slots["r0c1"].state.stage == SeedStage.HOLDING:
                 break
 
-        assert model.seed_slots["r0c1"].state.stage == SeedStage.PROBATIONARY, \
-            f"Seed failed to reach PROBATIONARY; current stage: {model.seed_slots['r0c1'].state.stage}"
+        assert model.seed_slots["r0c1"].state.stage == SeedStage.HOLDING, \
+            f"Seed failed to reach HOLDING; current stage: {model.seed_slots['r0c1'].state.stage}"
 
     def test_fossilization_emits_telemetry(self):
         """Test that fossilization emits SEED_FOSSILIZED telemetry."""
@@ -287,12 +282,12 @@ class TestLifecycleIntegration:
         model.seed_slots["r0c1"].start_blending(total_steps=3)
 
         # Simulate training/validation metrics to drive dwell counters and gates
-        for acc in (60.0, 61.0, 62.0):
-            model.seed_slots["r0c1"].state.metrics.record_accuracy(acc)
-            model.seed_slots["r0c1"].step_epoch()  # advance blending progress
-
-        model.seed_slots["r0c1"].state.metrics.record_accuracy(63.0)  # shadowing dwell epoch
-        model.seed_slots["r0c1"].step_epoch()
+        for _ in range(10):
+            model.seed_slots["r0c1"].state.metrics.record_accuracy(60.0)
+            model.seed_slots["r0c1"].step_epoch()
+            if model.seed_slots["r0c1"].state.stage == SeedStage.HOLDING:
+                break
+        assert model.seed_slots["r0c1"].state.stage == SeedStage.HOLDING
 
         # Set counterfactual and health required for G5 gate
         model.seed_slots["r0c1"].state.metrics.counterfactual_contribution = 3.0
@@ -326,12 +321,12 @@ class TestFossilizedCullProtection:
         model.seed_slots["r0c1"].state.transition(SeedStage.BLENDING)
         model.seed_slots["r0c1"].start_blending(total_steps=3)
 
-        for acc in (60.0, 61.0, 62.0):
-            model.seed_slots["r0c1"].state.metrics.record_accuracy(acc)
+        for _ in range(10):
+            model.seed_slots["r0c1"].state.metrics.record_accuracy(60.0)
             model.seed_slots["r0c1"].step_epoch()
-
-        model.seed_slots["r0c1"].state.metrics.record_accuracy(63.0)
-        model.seed_slots["r0c1"].step_epoch()
+            if model.seed_slots["r0c1"].state.stage == SeedStage.HOLDING:
+                break
+        assert model.seed_slots["r0c1"].state.stage == SeedStage.HOLDING
 
         # Fossilize
         ok = model.seed_slots["r0c1"].state.transition(SeedStage.FOSSILIZED)

@@ -404,14 +404,14 @@ class SeedSlotStateMachine(RuleBasedStateMachine):
     """Stateful test: Random lifecycle operations don't violate invariants.
 
     This state machine simulates a seed going through its lifecycle:
-    DORMANT → GERMINATED → TRAINING → BLENDING → PROBATIONARY → FOSSILIZED
+    DORMANT → GERMINATED → TRAINING → BLENDING → HOLDING → FOSSILIZED
 
     Rules:
     - germinate: Create a new seed in the slot
     - step_training: Simulate a training epoch
     - start_blending: Transition to blending stage
     - step_blending: Advance alpha during blending
-    - promote_to_probationary: Complete blending
+    - promote_to_holding: Complete blending
     - fossilize: Permanently integrate seed
     - cull: Remove underperforming seed
 
@@ -482,13 +482,13 @@ class SeedSlotStateMachine(RuleBasedStateMachine):
                   self.slot.state.stage == SeedStage.BLENDING and
                   self.slot.state.alpha >= 0.99)
     def promote_to_probationary(self):
-        """Complete blending, enter probationary period."""
-        self.slot.state.transition(SeedStage.PROBATIONARY)
+        """Complete blending, enter holding period."""
+        self.slot.state.transition(SeedStage.HOLDING)
         self.operation_history.append(("promote_to_probationary",))
 
     @rule()
     @precondition(lambda self: self.slot.state is not None and
-                  self.slot.state.stage == SeedStage.PROBATIONARY)
+                  self.slot.state.stage == SeedStage.HOLDING)
     def fossilize(self):
         """Permanently integrate the seed."""
         self.slot.state.transition(SeedStage.FOSSILIZED)
@@ -511,7 +511,7 @@ class SeedSlotStateMachine(RuleBasedStateMachine):
     @rule()
     @precondition(lambda self: self.slot.state is not None and
                   self.slot.state.stage in (SeedStage.TRAINING, SeedStage.BLENDING,
-                                            SeedStage.PROBATIONARY))
+                                            SeedStage.HOLDING))
     def cull(self):
         """Remove underperforming seed.
 
@@ -578,7 +578,7 @@ class SeedSlotStateMachine(RuleBasedStateMachine):
             assert alpha == 0.0, f"Alpha should be 0 in {stage.name}, got {alpha}"
 
         # Post-blending stages should have alpha = 1 (fully integrated)
-        if stage in (SeedStage.PROBATIONARY, SeedStage.FOSSILIZED):
+        if stage in (SeedStage.HOLDING, SeedStage.FOSSILIZED):
             # Allow small epsilon for floating point
             assert alpha >= 0.99, f"Alpha should be ~1.0 in {stage.name}, got {alpha}"
 

@@ -105,7 +105,7 @@ class SeedStateReport:
 class FieldReport:
     """Report of a seed's complete lifecycle for Simic learning.
 
-    Collected when a seed reaches a terminal state (FOSSILIZED or CULLED).
+    Collected when a seed reaches a terminal state (FOSSILIZED or PRUNED).
     """
 
     # Identity
@@ -136,6 +136,6 @@ class FieldReport:
     # Commands received
     commands_received: list[str] = field(default_factory=list)  # command_ids
 
-    # Failure info (if culled)
+    # Failure info (if pruned)
     failure_reason: str = ""
     failure_stage: SeedStage = SeedStage.UNKNOWN

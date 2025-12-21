@@ -194,11 +194,11 @@ class TestFossilizeDecisions:
     """Tests for fossilize decision logic."""
 
     def test_fossilize_contributing_seed(self):
-        """Should FOSSILIZE a seed with positive contribution in PROBATIONARY."""
+        """Should FOSSILIZE a seed with positive contribution in HOLDING."""
         policy = HeuristicTamiyo(topology="cnn")
 
         seed = MockSeedState(
-            stage=SeedStage.PROBATIONARY,
+            stage=SeedStage.HOLDING,
             epochs_in_stage=3,
             improvement=2.0,
             total_improvement=5.0,
@@ -212,11 +212,11 @@ class TestFossilizeDecisions:
         assert "contribution" in decision.reason.lower()
 
     def test_cull_non_contributing_seed_in_probationary(self):
-        """Should CULL a non-contributing seed in PROBATIONARY."""
+        """Should CULL a non-contributing seed in HOLDING."""
         policy = HeuristicTamiyo(topology="cnn")
 
         seed = MockSeedState(
-            stage=SeedStage.PROBATIONARY,
+            stage=SeedStage.HOLDING,
             epochs_in_stage=3,
             improvement=-1.0,
             total_improvement=-2.0,
@@ -235,7 +235,7 @@ class TestFossilizeDecisions:
         # Total improvement is zero (neutral), but counterfactual is positive
         # NOTE: Negative total_improvement + positive counterfactual = ransomware (P2-B)
         seed = MockSeedState(
-            stage=SeedStage.PROBATIONARY,
+            stage=SeedStage.HOLDING,
             epochs_in_stage=3,
             improvement=-1.0,
             total_improvement=0.5,  # Slightly positive to avoid ransomware detection

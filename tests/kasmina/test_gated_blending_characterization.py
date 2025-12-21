@@ -160,10 +160,10 @@ class TestGatedBlendLifecycleIntegration:
 
         # G3 checks state.alpha >= threshold
         state.alpha = 0.5  # Step 5 of 10 = 50% progress
-        result_low = gates.check_gate(state, SeedStage.PROBATIONARY)
+        result_low = gates.check_gate(state, SeedStage.HOLDING)
 
         state.alpha = 1.0  # Step 10 of 10 = 100% progress
-        result_high = gates.check_gate(state, SeedStage.PROBATIONARY)
+        result_high = gates.check_gate(state, SeedStage.HOLDING)
 
         # G3 uses state.alpha from step-based progress
         # With fixed gated blending, state.alpha tracks lifecycle correctly

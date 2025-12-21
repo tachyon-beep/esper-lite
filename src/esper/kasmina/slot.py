@@ -141,16 +141,16 @@ class SeedMetrics:
     host_param_count: int = 0
     seed_param_count: int = 0
 
-    # Auto-cull tracking for degenerate policy detection
+    # Auto-prune tracking for degenerate policy detection
     # (DRL Expert review 2025-12-17: policies could learn to rely on environment
     # cleanup rather than proactive culling, creating reward hacking via WAIT spam)
-    auto_culled: bool = False
-    auto_cull_reason: str = ""
+    auto_pruned: bool = False
+    auto_prune_reason: str = ""
 
-    # Known auto-cull reasons (for distinguishing explicit vs auto culls)
-    AUTO_CULL_REASONS: ClassVar[frozenset[str]] = frozenset({
-        "negative_counterfactual",  # Safety auto-cull: seed hurts performance
-        "probation_timeout",        # Timeout auto-cull: no decision made in time
+    # Known auto-prune reasons (for distinguishing explicit vs auto prunes)
+    AUTO_PRUNE_REASONS: ClassVar[frozenset[str]] = frozenset({
+        "negative_counterfactual",  # Safety auto-prune: seed hurts performance
+        "holding_timeout",          # Timeout auto-prune: no decision made in time
     })
 
     def record_accuracy(self, accuracy: float | torch.Tensor) -> None:
@@ -365,7 +365,7 @@ class SeedState:
         if self.stage in (SeedStage.TRAINING, SeedStage.GERMINATED, SeedStage.DORMANT):
             self.telemetry.accuracy_delta = 0.0
         else:
-            # BLENDING, PROBATIONARY, FOSSILIZED - seed is contributing via alpha
+            # BLENDING, HOLDING, FOSSILIZED - seed is contributing via alpha
             self.telemetry.accuracy_delta = self.metrics.improvement_since_stage_start
         self.telemetry.epochs_in_stage = self.metrics.epochs_in_current_stage
         self.telemetry.stage = self.stage.value
@@ -467,7 +467,13 @@ class SeedState:
         )
         state.stage_entered_at = datetime.fromisoformat(data["stage_entered_at"])
         state.alpha = data.get("alpha", 0.0)
-        state.alpha_controller = AlphaController.from_dict(data["alpha_controller"])
+        alpha_controller = data.get("alpha_controller")
+        if not isinstance(alpha_controller, dict):
+            raise ValueError(
+                "Checkpoint seed_state is missing required 'alpha_controller' (Phase 1+). "
+                "Pre-Phase-1 checkpoints are not supported for resume."
+            )
+        state.alpha_controller = AlphaController.from_dict(alpha_controller)
         # Scalar alpha is the source of truth at runtime; keep controller synced.
         state.alpha_controller.alpha = state.alpha
         state.stage_history = deque(
@@ -540,7 +546,7 @@ class QualityGates:
             SeedStage.GERMINATED: GateLevel.G0,
             SeedStage.TRAINING: GateLevel.G1,
             SeedStage.BLENDING: GateLevel.G2,
-            SeedStage.PROBATIONARY: GateLevel.G3,  # Was G4, now G3 (direct from BLENDING)
+            SeedStage.HOLDING: GateLevel.G3,  # Was G4, now G3 (direct from BLENDING)
             SeedStage.FOSSILIZED: GateLevel.G5,
         }
         return mapping.get(target_stage, GateLevel.G0)
@@ -648,7 +654,7 @@ class QualityGates:
         )
 
     def _check_g3(self, state: SeedState) -> GateResult:
-        """G3: Probation readiness - blending completed with stable integration."""
+        """G3: Holding readiness - blending completed with stable integration."""
         checks_passed = []
         checks_failed = []
 
@@ -676,7 +682,7 @@ class QualityGates:
     def _check_g5(self, state: SeedState) -> GateResult:
         """G5: Fossilization readiness - requires counterfactual validation.
 
-        G5 is only reachable from PROBATIONARY stage where counterfactual
+        G5 is only reachable from HOLDING stage where counterfactual
         validation is mandatory. No fallback to total_improvement.
         """
         checks_passed = []
@@ -1166,7 +1172,7 @@ class SeedSlot(nn.Module):
         """Cull the current seed.
 
         FOSSILIZED seeds cannot be culled - they are permanent by design.
-        The PROBATIONARY stage exists as the last decision point before
+        The HOLDING stage exists as the last decision point before
         permanent integration. A future pruning subsystem will handle
         removal of non-performant fossilized nodes.
 
@@ -1189,14 +1195,14 @@ class SeedSlot(nn.Module):
         blueprint_id = self.state.blueprint_id
         seed_id = self.state.seed_id
 
-        # Track auto-cull status for degenerate policy detection
-        # Auto-culls happen via environment safety mechanisms, not explicit RL actions
-        is_auto_cull = reason in SeedMetrics.AUTO_CULL_REASONS
-        self.state.metrics.auto_culled = is_auto_cull
-        self.state.metrics.auto_cull_reason = reason if is_auto_cull else ""
+        # Track auto-prune status for degenerate policy detection.
+        # Auto-prunes happen via environment safety mechanisms, not explicit RL actions.
+        is_auto_prune = reason in SeedMetrics.AUTO_PRUNE_REASONS
+        self.state.metrics.auto_pruned = is_auto_prune
+        self.state.metrics.auto_prune_reason = reason if is_auto_prune else ""
 
         old_stage = self.state.stage
-        if not self.state.transition(SeedStage.CULLED):
+        if not self.state.transition(SeedStage.PRUNED):
             # Transition failed (shouldn't happen for non-FOSSILIZED)
             return False
 
@@ -1204,7 +1210,7 @@ class SeedSlot(nn.Module):
             TelemetryEventType.SEED_STAGE_CHANGED,
             data={
                 "from": old_stage.name,
-                "to": SeedStage.CULLED.name,
+                "to": SeedStage.PRUNED.name,
                 "accuracy_delta": improvement,
                 "epochs_in_stage": epochs_in_stage,
                 "epochs_total": epochs_total,
@@ -1212,10 +1218,10 @@ class SeedSlot(nn.Module):
             },
         )
         self._emit_telemetry(
-            TelemetryEventType.SEED_CULLED,
+            TelemetryEventType.SEED_PRUNED,
             data={
                 "reason": reason,
-                "auto_culled": is_auto_cull,  # Distinguish explicit vs environment culls
+                "auto_pruned": is_auto_prune,  # Distinguish explicit vs environment prunes
                 "blueprint_id": blueprint_id,
                 "seed_id": seed_id,
                 "improvement": improvement,
@@ -1405,7 +1411,7 @@ class SeedSlot(nn.Module):
         # blend_with_isolation imported at module level for torch.compile compatibility
 
         # 1. Early exit if there is no active seed or the lifecycle
-        #    stage is inactive (CULLED/EMBARGOED/RESETTING).
+        #    stage is inactive (PRUNED/EMBARGOED/RESETTING).
         if not self.is_active or not is_active_stage(self.state.stage):
             return host_features
 
@@ -1579,7 +1585,7 @@ class SeedSlot(nn.Module):
                         total_steps = configured_steps
             self.start_blending(total_steps=total_steps)
 
-        elif new_stage == SeedStage.PROBATIONARY and old_stage == SeedStage.BLENDING:
+        elif new_stage == SeedStage.HOLDING and old_stage == SeedStage.BLENDING:
             # Clean up blending resources
             self._on_blending_complete()
 
@@ -1600,16 +1606,26 @@ class SeedSlot(nn.Module):
     def update_alpha_for_step(self, step: int) -> float:
         """Update alpha based on schedule."""
         if self.alpha_schedule is not None:
+            step = max(0, int(step))
+            schedule_total_steps = getattr(self.alpha_schedule, "total_steps", None)
+            if isinstance(schedule_total_steps, int) and schedule_total_steps > 0:
+                step = min(step, schedule_total_steps)
+
             self.alpha_schedule.step(step)
             alpha = self.alpha_schedule.get_alpha(step)
 
             self.set_alpha(alpha)
             if self.state:
-                self.state.metrics.alpha_ramp_step = step
-                self.state.alpha_controller.alpha_steps_done = step
                 if self.state.alpha_controller.alpha_steps_total <= 0:
                     self.state.alpha_controller.alpha_steps_total = self.state.blending_steps_total
-                if step >= self.state.alpha_controller.alpha_steps_total:
+
+                total = self.state.alpha_controller.alpha_steps_total
+                clamped_step = min(step, total) if total > 0 else step
+
+                self.state.metrics.alpha_ramp_step = clamped_step
+                self.state.alpha_controller.alpha_steps_done = clamped_step
+
+                if clamped_step >= total and total > 0:
                     self.state.alpha_controller.alpha_mode = AlphaMode.HOLD
             return alpha
         return self.alpha
@@ -1752,16 +1768,21 @@ class SeedSlot(nn.Module):
             )
             return False
 
-        # BLENDING → PROBATIONARY when alpha ramp completes and gate passes
+        # BLENDING → HOLDING when alpha ramp completes and gate passes
         if stage == SeedStage.BLENDING:
-            self.state.blending_steps_done += 1
+            if self.state.blending_steps_total > 0:
+                self.state.blending_steps_done = min(
+                    self.state.blending_steps_done + 1, self.state.blending_steps_total
+                )
+            else:
+                self.state.blending_steps_done += 1
 
             if self.alpha_schedule is not None:
                 self.update_alpha_for_step(self.state.blending_steps_done)
 
             if self.state.blending_steps_done >= self.state.blending_steps_total:
                 self.set_alpha(1.0)  # Ensure fully blended
-                gate_result = self.gates.check_gate(self.state, SeedStage.PROBATIONARY)
+                gate_result = self.gates.check_gate(self.state, SeedStage.HOLDING)
                 gate_result = self._sync_gate_decision(gate_result)
                 if not gate_result.passed:
                     return False
@@ -1773,13 +1794,13 @@ class SeedSlot(nn.Module):
                 improvement = metrics.total_improvement
                 counterfactual = metrics.counterfactual_contribution
 
-                ok = self.state.transition(SeedStage.PROBATIONARY)
+                ok = self.state.transition(SeedStage.HOLDING)
                 if not ok:
                     raise RuntimeError(
-                        f"Illegal lifecycle transition {self.state.stage} → PROBATIONARY"
+                        f"Illegal lifecycle transition {self.state.stage} → HOLDING"
                     )
                 # Call unified stage entry hook
-                self._on_enter_stage(SeedStage.PROBATIONARY, old_stage)
+                self._on_enter_stage(SeedStage.HOLDING, old_stage)
                 self._emit_telemetry(
                     TelemetryEventType.SEED_STAGE_CHANGED,
                     data={
@@ -1793,11 +1814,11 @@ class SeedSlot(nn.Module):
                 )
             return False
 
-        # PROBATIONARY: Decision point for Tamiyo
+        # HOLDING: Decision point for Tamiyo
         # Fossilization requires explicit FOSSILIZE action - NO auto-advance
         # (DRL Expert review 2025-12-10: auto-fossilize violated credit assignment)
         # Only handle safety auto-culls and timeout
-        if stage == SeedStage.PROBATIONARY:
+        if stage == SeedStage.HOLDING:
             # Calculate probation timeout (default DEFAULT_MAX_PROBATION_EPOCHS, or 10% of max_epochs)
             # Minimum of 5 epochs ensures sufficient time for counterfactual validation
             # (DRL Expert review 2025-12-09: 3 epochs was insufficient for reliable metrics)
@@ -1817,7 +1838,7 @@ class SeedSlot(nn.Module):
             # Timeout: Tamiyo failed to decide in time
             # The escalating WAIT penalty in rewards.py creates pressure to decide sooner
             if self.state.metrics.epochs_in_current_stage >= max_probation_epochs:
-                self.cull(reason="probation_timeout")
+                self.cull(reason="holding_timeout")
                 return True  # Auto-cull occurred
 
         return False  # No auto-cull
@@ -1918,7 +1939,13 @@ class SeedSlot(nn.Module):
                 # Re-restore blending_steps_done (start_blending resets it to 0)
                 self.state.blending_steps_done = state["seed_state"].get("blending_steps_done", 0)
                 # Re-restore alpha controller (start_blending resets it)
-                self.state.alpha_controller = AlphaController.from_dict(state["seed_state"]["alpha_controller"])
+                alpha_controller = state["seed_state"].get("alpha_controller")
+                if not isinstance(alpha_controller, dict):
+                    raise ValueError(
+                        "Checkpoint seed_state is missing required 'alpha_controller' (Phase 1+). "
+                        "Pre-Phase-1 checkpoints are not supported for resume."
+                    )
+                self.state.alpha_controller = AlphaController.from_dict(alpha_controller)
                 self.state.alpha_controller.alpha = self.state.alpha
 
 

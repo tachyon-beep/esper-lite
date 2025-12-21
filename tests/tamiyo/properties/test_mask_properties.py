@@ -4,7 +4,7 @@ Tests invariants for action masks that must hold for ALL valid inputs:
 - WAIT always valid
 - Mask dimensions match slot configuration
 - GERMINATE requires empty enabled slot
-- FOSSILIZE requires PROBATIONARY seed in enabled slot
+- FOSSILIZE requires HOLDING seed in enabled slot
 - CULL requires cullable stage + minimum age
 """
 
@@ -252,15 +252,15 @@ class TestGerminateRequiresEmptySlot:
         )
 
 
-class TestFossilizeRequiresProbationary:
-    """Property: FOSSILIZE valid iff there exists a PROBATIONARY seed in enabled slot."""
+class TestFossilizeRequiresHolding:
+    """Property: FOSSILIZE valid iff there exists a HOLDING seed in enabled slot."""
 
     @given(config=slot_configs())
     def test_fossilize_enabled_with_probationary_seed(self, config: SlotConfig):
-        """Property: FOSSILIZE enabled when PROBATIONARY seed exists in enabled slot."""
+        """Property: FOSSILIZE enabled when HOLDING seed exists in enabled slot."""
         slot_states = {
             slot_id: (
-                MaskSeedInfo(stage=SeedStage.PROBATIONARY.value, seed_age_epochs=10)
+                MaskSeedInfo(stage=SeedStage.HOLDING.value, seed_age_epochs=10)
                 if i == 0 else None
             )
             for i, slot_id in enumerate(config.slot_ids)
@@ -274,13 +274,13 @@ class TestFossilizeRequiresProbationary:
         )
 
         assert masks["op"][LifecycleOp.FOSSILIZE].item() is True, (
-            "FOSSILIZE should be enabled when PROBATIONARY seed exists"
+            "FOSSILIZE should be enabled when HOLDING seed exists"
         )
 
     @given(config=slot_configs())
     def test_fossilize_disabled_without_probationary(self, config: SlotConfig):
-        """Property: FOSSILIZE disabled when no PROBATIONARY seed in enabled slots."""
-        # Seeds in TRAINING stage (not PROBATIONARY)
+        """Property: FOSSILIZE disabled when no HOLDING seed in enabled slots."""
+        # Seeds in TRAINING stage (not HOLDING)
         slot_states = {
             slot_id: MaskSeedInfo(stage=SeedStage.TRAINING.value, seed_age_epochs=5)
             for slot_id in config.slot_ids
@@ -294,7 +294,7 @@ class TestFossilizeRequiresProbationary:
         )
 
         assert masks["op"][LifecycleOp.FOSSILIZE].item() is False, (
-            "FOSSILIZE should be disabled without PROBATIONARY seed"
+            "FOSSILIZE should be disabled without HOLDING seed"
         )
 
     @given(config=slot_configs())
@@ -317,12 +317,12 @@ class TestFossilizeRequiresProbationary:
 class TestCullRequiresCullableStageAndAge:
     """Property: CULL valid iff seed in cullable stage AND age >= MIN_CULL_AGE."""
 
-    # Stages that can transition to CULLED (based on VALID_TRANSITIONS)
+    # Stages that can transition to PRUNED (based on VALID_TRANSITIONS)
     CULLABLE_STAGES = [
         SeedStage.GERMINATED,
         SeedStage.TRAINING,
         SeedStage.BLENDING,
-        SeedStage.PROBATIONARY,
+        SeedStage.HOLDING,
     ]
 
     @given(

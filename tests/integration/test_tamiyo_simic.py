@@ -371,7 +371,7 @@ class TestSeedMetricsTrackedDuringTraining:
 
         Note: In Simic, record_accuracy() is called after each validation epoch,
         which is what actually tracks epochs_in_stage. step_epoch() handles
-        lifecycle transitions (GERMINATED → TRAINING → BLENDING → PROBATIONARY).
+        lifecycle transitions (GERMINATED → TRAINING → BLENDING → HOLDING).
         """
         trainloader, valloader = simple_dataloader
         model = morphogenetic_model
@@ -488,7 +488,7 @@ class TestEndToEndGerminateToFossilize:
         Integration flow:
         1. Start with host-only training
         2. Germinate a seed when stable
-        3. Train through stages (GERMINATED → TRAINING → BLENDING → PROBATIONARY)
+        3. Train through stages (GERMINATED → TRAINING → BLENDING → HOLDING)
         4. Verify fossilization decision when counterfactual is positive
 
         This test simulates the full Tamiyo-Simic interaction lifecycle.

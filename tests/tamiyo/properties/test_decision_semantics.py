@@ -125,7 +125,7 @@ class TestActionReachability:
     @given(seed=probationary_seed_states(with_counterfactual=True))
     @settings(max_examples=50)
     def test_fossilize_reachable(self, seed):
-        """Property: FOSSILIZE is reachable for contributing PROBATIONARY seeds."""
+        """Property: FOSSILIZE is reachable for contributing HOLDING seeds."""
         policy = HeuristicTamiyo(topology="cnn")
 
         # Ensure positive contribution AND positive total_improvement
@@ -286,7 +286,7 @@ class TestWaitDefault:
         policy = HeuristicTamiyo(topology="cnn")
 
         # Ensure seed is healthy but not ready to fossilize
-        if seed.stage == SeedStage.PROBATIONARY:
+        if seed.stage == SeedStage.HOLDING:
             seed.stage = SeedStage.BLENDING  # Move to earlier stage
 
         class MockSignals:

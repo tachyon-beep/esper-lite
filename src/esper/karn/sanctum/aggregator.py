@@ -81,7 +81,7 @@ class SanctumAggregator:
     - SEED_GERMINATED: Add seed to env
     - SEED_STAGE_CHANGED: Update seed stage
     - SEED_FOSSILIZED: Increment fossilized count
-    - SEED_CULLED: Increment culled count
+    - SEED_PRUNED: Increment pruned count
     - BATCH_EPOCH_COMPLETED: Update episode/throughput
 
     Usage:
@@ -558,7 +558,7 @@ class SanctumAggregator:
             stage_bonus=data.get("stage_bonus", 0.0),
             fossilize_terminal_bonus=data.get("fossilize_terminal_bonus", 0.0),
             blending_warning=data.get("blending_warning", 0.0),
-            probation_warning=data.get("probation_warning", 0.0),
+            holding_warning=data.get("holding_warning", 0.0),
             val_acc=data.get("val_acc", env.host_accuracy),
             total=total_reward,
             last_action=action_name,
@@ -680,19 +680,19 @@ class SanctumAggregator:
                     env.blueprint_fossilized.get(seed.blueprint_id, 0) + 1
                 )
 
-        elif event_type == "SEED_CULLED":
-            # Capture cull context before resetting (P1/P2 telemetry gap fix)
-            seed.cull_reason = data.get("reason", "")
+        elif event_type == "SEED_PRUNED":
+            # Capture prune context before resetting (P1/P2 telemetry gap fix)
+            seed.prune_reason = data.get("reason", "")
             seed.improvement = data.get("improvement", 0.0)
-            seed.auto_culled = data.get("auto_culled", False)
+            seed.auto_pruned = data.get("auto_pruned", False)
             seed.epochs_total = data.get("epochs_total", 0)
             seed.counterfactual = data.get("counterfactual", 0.0)
-            culled_blueprint = data.get("blueprint_id") or seed.blueprint_id
+            pruned_blueprint = data.get("blueprint_id") or seed.blueprint_id
 
-            # Track blueprint cull for graveyard BEFORE reset
-            if culled_blueprint:
-                env.blueprint_culls[culled_blueprint] = (
-                    env.blueprint_culls.get(culled_blueprint, 0) + 1
+            # Track blueprint prune for graveyard BEFORE reset
+            if pruned_blueprint:
+                env.blueprint_prunes[pruned_blueprint] = (
+                    env.blueprint_prunes.get(pruned_blueprint, 0) + 1
                 )
 
             # Reset slot to DORMANT
@@ -706,7 +706,7 @@ class SanctumAggregator:
             seed.has_exploding = False
             seed.epochs_in_stage = 0
             seed.blend_tempo_epochs = 5
-            env.culled_count += 1
+            env.pruned_count += 1
             env.active_seed_count = max(0, env.active_seed_count - 1)
 
     def _handle_batch_epoch_completed(self, event: "TelemetryEvent") -> None:
@@ -776,7 +776,7 @@ class SanctumAggregator:
             env.seeds.clear()
             env.active_seed_count = 0
             env.fossilized_count = 0
-            env.culled_count = 0
+            env.pruned_count = 0
             env.fossilized_params = 0
 
             # Epoch/progress tracking
@@ -810,7 +810,7 @@ class SanctumAggregator:
 
             # Graveyard stats (per-episode)
             env.blueprint_spawns.clear()
-            env.blueprint_culls.clear()
+            env.blueprint_prunes.clear()
             env.blueprint_fossilized.clear()
 
     def _handle_counterfactual_matrix(self, event: "TelemetryEvent") -> None:
@@ -906,9 +906,9 @@ class SanctumAggregator:
             elif event_type == "SEED_FOSSILIZED":
                 improvement = data.get("improvement", 0.0)
                 message = f"{slot_id} fossilized" + (f" (+{improvement:.1f}%)" if improvement else "")
-            elif event_type == "SEED_CULLED":
+            elif event_type == "SEED_PRUNED":
                 reason = data.get("reason", "")
-                message = f"{slot_id} culled" + (f" ({reason})" if reason else "")
+                message = f"{slot_id} pruned" + (f" ({reason})" if reason else "")
             else:
                 message = slot_id
         elif event_type == "PPO_UPDATE_COMPLETED":

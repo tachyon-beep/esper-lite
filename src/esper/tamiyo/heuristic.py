@@ -3,7 +3,7 @@
 Implements a heuristic policy for seed lifecycle management.
 Stages auto-advance via SeedSlot.step_epoch(); this controller only handles:
 - GERMINATE: when to start a new seed
-- FOSSILIZE: when to permanently integrate a seed (from PROBATIONARY only)
+- FOSSILIZE: when to permanently integrate a seed (from HOLDING only)
 - CULL: when to abandon a failing seed
 - WAIT: let the system proceed normally
 """
@@ -85,7 +85,7 @@ class HeuristicTamiyo:
 
     Simplified decision making since stages auto-advance:
     - Germinate when training plateaus (no active seed)
-    - Fossilize when seed reaches PROBATIONARY with improvement
+    - Fossilize when seed reaches HOLDING with improvement
     - Cull when seed is failing
     - Wait otherwise (let auto-advance handle stage transitions)
     """
@@ -227,8 +227,8 @@ class HeuristicTamiyo:
                     reason=f"Blending: alpha={seed.alpha:.2f}"
                 )
 
-            # PROBATIONARY: decision point - fossilize or cull
-            if stage == SeedStage.PROBATIONARY:
+            # HOLDING: decision point - fossilize or cull
+            if stage == SeedStage.HOLDING:
                 # Prefer counterfactual contribution (true causal impact) when available
                 contribution = seed.metrics.counterfactual_contribution
                 total_improvement = seed.metrics.total_improvement
@@ -260,7 +260,7 @@ class HeuristicTamiyo:
                 else:
                     return self._cull_seed(
                         signals, seed,
-                        f"No improvement in PROBATIONARY ({improvement:+.2f}%)"
+                        f"No improvement in HOLDING ({improvement:+.2f}%)"
                     )
 
         return TamiyoDecision(

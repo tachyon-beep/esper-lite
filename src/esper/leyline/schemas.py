@@ -23,7 +23,7 @@ class SeedOperation(Enum):
     GERMINATE = auto()
     START_TRAINING = auto()
     START_BLENDING = auto()
-    START_PROBATION = auto()
+    START_HOLDING = auto()
     FOSSILIZE = auto()
     CULL = auto()
     EMBARGO = auto()
@@ -35,9 +35,9 @@ OPERATION_TARGET_STAGE: dict[SeedOperation, SeedStage] = {
     SeedOperation.GERMINATE: SeedStage.GERMINATED,
     SeedOperation.START_TRAINING: SeedStage.TRAINING,
     SeedOperation.START_BLENDING: SeedStage.BLENDING,
-    SeedOperation.START_PROBATION: SeedStage.PROBATIONARY,
+    SeedOperation.START_HOLDING: SeedStage.HOLDING,
     SeedOperation.FOSSILIZE: SeedStage.FOSSILIZED,
-    SeedOperation.CULL: SeedStage.CULLED,
+    SeedOperation.CULL: SeedStage.PRUNED,
     SeedOperation.EMBARGO: SeedStage.EMBARGOED,
     SeedOperation.RESET: SeedStage.RESETTING,
 }
@@ -48,9 +48,9 @@ class GateLevel(IntEnum):
     G0 = 0  # Basic sanity (DORMANT → GERMINATED)
     G1 = 1  # Training readiness (GERMINATED → TRAINING)
     G2 = 2  # Blending readiness (TRAINING → BLENDING)
-    G3 = 3  # Probation readiness (BLENDING → PROBATIONARY)
+    G3 = 3  # Holding readiness (BLENDING → HOLDING)
     # Value 4 intentionally skipped (was G4/SHADOWING gate, removed)
-    G5 = 5  # Fossilization readiness (PROBATIONARY → FOSSILIZED)
+    G5 = 5  # Fossilization readiness (HOLDING → FOSSILIZED)
 
 
 @dataclass

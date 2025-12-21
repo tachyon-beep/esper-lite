@@ -119,8 +119,8 @@ class SeedState:
     epochs_in_stage: int = 0
     # Fossilization/cull context (P1/P2 telemetry gap fix)
     improvement: float = 0.0  # Accuracy improvement when fossilized
-    cull_reason: str = ""  # Why seed was culled (e.g., "gradient_explosion", "stagnation")
-    auto_culled: bool = False  # True if system auto-culled vs policy decision
+    prune_reason: str = ""  # Why seed was pruned (e.g., "gradient_explosion", "stagnation")
+    auto_pruned: bool = False  # True if system auto-pruned vs policy decision
     epochs_total: int = 0  # Total epochs seed was alive
     counterfactual: float = 0.0  # Causal attribution score
     # Blend tempo - Tamiyo's chosen integration speed (3=FAST, 5=STANDARD, 8=SLOW)
@@ -162,14 +162,14 @@ class EnvState:
     seeds: dict[str, SeedState] = field(default_factory=dict)
     active_seed_count: int = 0
     fossilized_count: int = 0
-    culled_count: int = 0
+    pruned_count: int = 0
 
     # FIX: Added fossilized_params for scoreboard display (total params in FOSSILIZED seeds)
     fossilized_params: int = 0
 
     # Seed graveyard: per-blueprint lifecycle tracking
     blueprint_spawns: dict[str, int] = field(default_factory=dict)  # blueprint -> spawn count
-    blueprint_culls: dict[str, int] = field(default_factory=dict)   # blueprint -> cull count
+    blueprint_prunes: dict[str, int] = field(default_factory=dict)   # blueprint -> prune count
     blueprint_fossilized: dict[str, int] = field(default_factory=dict)  # blueprint -> fossilized count
 
     # Reward component breakdown (from REWARD_COMPUTED telemetry)
@@ -257,8 +257,8 @@ class EnvState:
             self.best_accuracy_episode = episode
             self.epochs_since_improvement = 0
             # Snapshot contributing seeds when new best is achieved
-            # Include permanent (FOSSILIZED) and provisional (PROBATIONARY, BLENDING)
-            _contributing_stages = {"FOSSILIZED", "PROBATIONARY", "BLENDING"}
+            # Include permanent (FOSSILIZED) and provisional (HOLDING, BLENDING)
+            _contributing_stages = {"FOSSILIZED", "HOLDING", "BLENDING"}
             self.best_seeds = {
                 slot_id: SeedState(
                     slot_id=seed.slot_id,
@@ -479,7 +479,7 @@ class RewardComponents:
     - stage_bonus: Bonus for reaching advanced lifecycle stages (BLENDING+)
     - fossilize_terminal_bonus: Large terminal bonus for successful fossilization
     - blending_warning: Warning signal during blending phase (negative)
-    - probation_warning: Warning signal during probationary period
+    - holding_warning: Warning signal during holding period
     - val_acc: Validation accuracy context (not a reward component, metadata)
     """
     # Total reward
@@ -502,7 +502,7 @@ class RewardComponents:
 
     # Warnings
     blending_warning: float = 0.0
-    probation_warning: float = 0.0
+    holding_warning: float = 0.0
 
     # Context
     env_id: int = 0

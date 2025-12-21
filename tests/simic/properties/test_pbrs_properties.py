@@ -375,7 +375,7 @@ class TestPotentialMonotonicity:
             SeedStage.GERMINATED.value,
             SeedStage.TRAINING.value,
             SeedStage.BLENDING.value,
-            SeedStage.PROBATIONARY.value,
+            SeedStage.HOLDING.value,
             SeedStage.FOSSILIZED.value,
         ]
 
@@ -433,7 +433,7 @@ class TestStageIncrementProperties:
         This is where actual value is created through alpha ramping.
         The increment incentivizes reaching this critical stage.
 
-        Note: With SHADOWING removed, PROBATIONARY now has a larger increment
+        Note: With SHADOWING removed, HOLDING now has a larger increment
         because it absorbs the transition directly from BLENDING. The key
         property is that BLENDING increment >= GERMINATED and FOSSILIZED.
         """
@@ -441,7 +441,7 @@ class TestStageIncrementProperties:
             "GERMINATED": STAGE_POTENTIALS[2] - STAGE_POTENTIALS[1],
             "TRAINING": STAGE_POTENTIALS[3] - STAGE_POTENTIALS[2],
             "BLENDING": STAGE_POTENTIALS[4] - STAGE_POTENTIALS[3],
-            "PROBATIONARY": STAGE_POTENTIALS[6] - STAGE_POTENTIALS[4],  # 5 skipped
+            "HOLDING": STAGE_POTENTIALS[6] - STAGE_POTENTIALS[4],  # 5 skipped
             "FOSSILIZED": STAGE_POTENTIALS[7] - STAGE_POTENTIALS[6],
         }
 
@@ -458,9 +458,9 @@ class TestStageIncrementProperties:
         )
 
     def test_value_creation_largest_delta(self):
-        """Value creation phases (BLENDING/PROBATIONARY) should have the largest increments."""
-        # Both BLENDING and PROBATIONARY are value creation phases where counterfactual
-        # attribution becomes available. PROBATIONARY has the largest delta (2.0) as seeds
+        """Value creation phases (BLENDING/HOLDING) should have the largest increments."""
+        # Both BLENDING and HOLDING are value creation phases where counterfactual
+        # attribution becomes available. HOLDING has the largest delta (2.0) as seeds
         # must prove their worth before fossilization.
         blending_delta = (
             STAGE_POTENTIALS[SeedStage.BLENDING.value]
@@ -476,22 +476,22 @@ class TestStageIncrementProperties:
             STAGE_POTENTIALS[SeedStage.TRAINING.value]
             - STAGE_POTENTIALS[SeedStage.GERMINATED.value]
         )
-        probationary_delta = (
-            STAGE_POTENTIALS[SeedStage.PROBATIONARY.value]
+        holding_delta = (
+            STAGE_POTENTIALS[SeedStage.HOLDING.value]
             - STAGE_POTENTIALS[SeedStage.BLENDING.value]
         )
         fossilized_delta = (
             STAGE_POTENTIALS[SeedStage.FOSSILIZED.value]
-            - STAGE_POTENTIALS[SeedStage.PROBATIONARY.value]
+            - STAGE_POTENTIALS[SeedStage.HOLDING.value]
         )
 
-        # Either BLENDING or PROBATIONARY should have the largest increment
+        # Either BLENDING or HOLDING should have the largest increment
         # (Both are value creation phases)
-        max_delta = max(blending_delta, probationary_delta)
+        max_delta = max(blending_delta, holding_delta)
         other_deltas = [germinated_delta, training_delta, fossilized_delta]
 
         assert max_delta >= max(other_deltas), (
-            f"Value creation deltas (BLENDING={blending_delta}, PROBATIONARY={probationary_delta}) "
+            f"Value creation deltas (BLENDING={blending_delta}, HOLDING={holding_delta}) "
             f"should be largest, but max others is {max(other_deltas)}"
         )
 
@@ -505,7 +505,7 @@ class TestStageIncrementProperties:
             "GERMINATED": STAGE_POTENTIALS[2] - STAGE_POTENTIALS[1],
             "TRAINING": STAGE_POTENTIALS[3] - STAGE_POTENTIALS[2],
             "BLENDING": STAGE_POTENTIALS[4] - STAGE_POTENTIALS[3],
-            "PROBATIONARY": STAGE_POTENTIALS[6] - STAGE_POTENTIALS[4],  # 5 skipped
+            "HOLDING": STAGE_POTENTIALS[6] - STAGE_POTENTIALS[4],  # 5 skipped
             "FOSSILIZED": STAGE_POTENTIALS[7] - STAGE_POTENTIALS[6],
         }
 
@@ -717,10 +717,10 @@ class TestCullGerminationTransitions:
         )
 
     def test_full_lifecycle_vs_culled_comparison(self):
-        """Compare PBRS totals for successful vs culled seed lifecycles.
+        """Compare PBRS totals for successful vs pruned seed lifecycles.
 
         A seed that reaches FOSSILIZED should accumulate more PBRS reward
-        than one that gets culled early.
+        than one that gets pruned early.
         """
         gamma = 0.99
 
@@ -730,17 +730,16 @@ class TestCullGerminationTransitions:
             {"has_active_seed": 1, "seed_stage": 2, "seed_epochs_in_stage": 0},  # GERMINATED
             {"has_active_seed": 1, "seed_stage": 3, "seed_epochs_in_stage": 0},  # TRAINING
             {"has_active_seed": 1, "seed_stage": 4, "seed_epochs_in_stage": 0},  # BLENDING
-            {"has_active_seed": 1, "seed_stage": 5, "seed_epochs_in_stage": 0},  # SHADOWING
-            {"has_active_seed": 1, "seed_stage": 6, "seed_epochs_in_stage": 0},  # PROBATIONARY
+            {"has_active_seed": 1, "seed_stage": 6, "seed_epochs_in_stage": 0},  # HOLDING
             {"has_active_seed": 1, "seed_stage": 7, "seed_epochs_in_stage": 0},  # FOSSILIZED
         ]
 
-        # Culled early
+        # Pruned early
         culled_trajectory = [
             {"has_active_seed": 0, "seed_stage": 0, "seed_epochs_in_stage": 0},
             {"has_active_seed": 1, "seed_stage": 2, "seed_epochs_in_stage": 0},  # GERMINATED
             {"has_active_seed": 1, "seed_stage": 3, "seed_epochs_in_stage": 0},  # TRAINING
-            {"has_active_seed": 0, "seed_stage": 0, "seed_epochs_in_stage": 0},  # Culled
+            {"has_active_seed": 0, "seed_stage": 0, "seed_epochs_in_stage": 0},  # Pruned
         ]
 
         # Calculate totals

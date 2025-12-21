@@ -91,7 +91,7 @@ Screen {
     color: #c678dd;  /* Purple/magenta - integration */
 }
 
-.stage-probationary {
+.stage-holding {
     color: #e5c07b;  /* Yellow/amber - under observation */
 }
 
@@ -99,7 +99,7 @@ Screen {
     color: #56b6c2;  /* Cyan - permanent/stable */
 }
 
-.stage-culled {
+.stage-pruned {
     color: #e06c75;  /* Red - removed */
 }
 

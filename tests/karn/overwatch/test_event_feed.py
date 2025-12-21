@@ -40,12 +40,12 @@ class TestEventBadge:
         assert "GERM" in badge
         assert "green" in badge
 
-    def test_event_badge_cull(self) -> None:
-        """CULL events get red badge."""
+    def test_event_badge_prune(self) -> None:
+        """PRUNE events get red badge."""
         from esper.karn.overwatch.widgets.event_feed import event_badge
 
-        badge = event_badge("CULL")
-        assert "CULL" in badge
+        badge = event_badge("PRUNE")
+        assert "PRUNE" in badge
         assert "red" in badge
 
     def test_event_badge_unknown(self) -> None:

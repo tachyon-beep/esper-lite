@@ -88,8 +88,8 @@ class TestCNNHostSingleSeedTraining:
 
         assert slot.state.stage == SeedStage.BLENDING
 
-    def test_cnn_complete_lifecycle_to_probationary(self):
-        """CNN seed should complete lifecycle through PROBATIONARY."""
+    def test_cnn_complete_lifecycle_to_holding(self):
+        """CNN seed should complete lifecycle through HOLDING."""
         host = CNNHost(n_blocks=3, base_channels=32, memory_format=torch.contiguous_format)
         model = MorphogeneticModel(host, slots=["r0c0"])
 
@@ -109,8 +109,8 @@ class TestCNNHostSingleSeedTraining:
             slot.state.metrics.record_accuracy(60.0)
             slot.step_epoch()
 
-        # Should be in PROBATIONARY
-        assert slot.state.stage == SeedStage.PROBATIONARY
+        # Should be in HOLDING
+        assert slot.state.stage == SeedStage.HOLDING
 
 
 class TestTransformerHostSingleSeedTraining:
@@ -216,12 +216,12 @@ class TestMultiSlotTraining:
         model.seed_slots["r0c1"].state.transition(SeedStage.BLENDING)
         model.seed_slots["r0c2"].step_epoch()  # -> TRAINING
         model.seed_slots["r0c2"].state.transition(SeedStage.BLENDING)
-        model.seed_slots["r0c2"].state.transition(SeedStage.PROBATIONARY)
+        model.seed_slots["r0c2"].state.transition(SeedStage.HOLDING)
 
         # Verify stages
         assert model.seed_slots["r0c0"].state.stage == SeedStage.TRAINING
         assert model.seed_slots["r0c1"].state.stage == SeedStage.BLENDING
-        assert model.seed_slots["r0c2"].state.stage == SeedStage.PROBATIONARY
+        assert model.seed_slots["r0c2"].state.stage == SeedStage.HOLDING
 
         # Forward pass should work with mixed stages
         x = torch.randn(4, 3, 32, 32)
@@ -329,10 +329,10 @@ class TestCounterfactualValidation:
         model.germinate_seed("noop", "seed_0", slot="r0c0")
         slot = model.seed_slots["r0c0"]
 
-        # Progress to PROBATIONARY
+        # Progress to HOLDING
         slot.step_epoch()  # -> TRAINING
         slot.state.transition(SeedStage.BLENDING)
-        slot.state.transition(SeedStage.PROBATIONARY)
+        slot.state.transition(SeedStage.HOLDING)
 
         # Simulate counterfactual validation
         # In real training, this would compare accuracy with alpha=1 vs alpha=0

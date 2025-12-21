@@ -344,7 +344,7 @@ class TestCounterfactualGuard:
 
         seed = type('MockSeed', (), {
             'seed_id': 'test_seed',
-            'stage': SeedStage.PROBATIONARY,
+            'stage': SeedStage.HOLDING,
             'epochs_in_stage': 5,
             'alpha': 1.0,
             'blueprint_id': 'conv_light',
@@ -421,7 +421,7 @@ class TestRansomwareDetection:
 
         seed = type('MockSeed', (), {
             'seed_id': 'ransomware_seed',
-            'stage': SeedStage.PROBATIONARY,
+            'stage': SeedStage.HOLDING,
             'epochs_in_stage': 10,
             'alpha': 1.0,
             'blueprint_id': 'conv_light',

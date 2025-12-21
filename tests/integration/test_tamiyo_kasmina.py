@@ -62,18 +62,18 @@ class TestTamiyoKasminaIntegration:
     def test_fossilize_transitions_seed(self, slot, action_enum):
         """FOSSILIZE command transitions seed to FOSSILIZED stage.
 
-        Tests the lifecycle advancement from PROBATIONARY → FOSSILIZED
+        Tests the lifecycle advancement from HOLDING → FOSSILIZED
         when fossilization decision is made.
         """
-        # Setup: Create seed and advance to PROBATIONARY
+        # Setup: Create seed and advance to HOLDING
         state = slot.germinate(blueprint_id="norm", seed_id="test_seed")
 
-        # Manually advance through lifecycle to PROBATIONARY
+        # Manually advance through lifecycle to HOLDING
         # (normally done by step_epoch, but we control it explicitly here)
         state.transition(SeedStage.TRAINING)
         state.transition(SeedStage.BLENDING)
         slot.set_alpha(1.0)  # Complete blending
-        state.transition(SeedStage.PROBATIONARY)
+        state.transition(SeedStage.HOLDING)
 
         # Set counterfactual contribution (required for G5 gate)
         state.metrics.counterfactual_contribution = 2.5
@@ -87,11 +87,11 @@ class TestTamiyoKasminaIntegration:
         assert slot.is_active  # Fossilized seeds remain active
 
     def test_cull_removes_seed(self, slot, action_enum):
-        """CULL command removes seed and transitions to CULLED stage.
+        """CULL command removes seed and transitions to PRUNED stage.
 
         Verifies that:
         1. Cull decision removes seed from slot
-        2. Seed transitions to CULLED (terminal failure state)
+        2. Seed transitions to PRUNED (terminal failure state)
         3. Slot becomes inactive after culling
         """
         # Setup: Create seed in TRAINING

@@ -3,7 +3,7 @@
 Only masks PHYSICALLY IMPOSSIBLE actions:
 - SLOT: only enabled slots (from --slots arg) are selectable
 - GERMINATE: blocked if ALL enabled slots occupied OR at seed limit
-- FOSSILIZE: blocked if NO enabled slot has a PROBATIONARY seed
+- FOSSILIZE: blocked if NO enabled slot has a HOLDING seed
 - CULL: blocked if NO enabled slot has a cullable seed with age >= MIN_CULL_AGE
 - WAIT: always valid
 - BLUEPRINT: NOOP always blocked (0 trainable parameters)
@@ -48,10 +48,10 @@ _FOSSILIZABLE_STAGES = frozenset({
     if SeedStage.FOSSILIZED in transitions
 })
 
-# Stages from which CULLED is a valid transition
+# Stages from which PRUNED is a valid transition
 _CULLABLE_STAGES = frozenset({
     stage.value for stage, transitions in VALID_TRANSITIONS.items()
-    if SeedStage.CULLED in transitions
+    if SeedStage.PRUNED in transitions
 })
 
 
@@ -178,7 +178,7 @@ def compute_action_masks(
             stage = seed_info.stage
             age = seed_info.seed_age_epochs
 
-            # FOSSILIZE: only from PROBATIONARY
+            # FOSSILIZE: only from HOLDING
             if stage in _FOSSILIZABLE_STAGES:
                 op_mask[LifecycleOp.FOSSILIZE] = True
 

@@ -553,7 +553,7 @@ def run_heuristic_episode(
             if decision.target_seed_id:
                 target_slot = resolve_slot_for_seed_id(decision.target_seed_id)
                 slot_state = model.seed_slots[target_slot].state
-                if slot_state is not None and slot_state.stage == SeedStage.PROBATIONARY:
+                if slot_state is not None and slot_state.stage == SeedStage.HOLDING:
                     slot = model.seed_slots[target_slot]
                     gate_result = slot.advance_stage(SeedStage.FOSSILIZED)
                     if gate_result.passed:

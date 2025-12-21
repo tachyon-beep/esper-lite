@@ -300,8 +300,8 @@ class TestSeedLifecycle:
         env0 = snapshot.flight_board[0]
         assert env0.slots["r0c0"].stage == "TRAINING"
 
-    def test_seed_culled_adds_feed_event(self):
-        """SEED_CULLED adds CULL event to feed."""
+    def test_seed_pruned_adds_feed_event(self):
+        """SEED_PRUNED adds PRUNE event to feed."""
         agg = TelemetryAggregator(num_envs=1)
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
@@ -313,15 +313,15 @@ class TestSeedLifecycle:
             data={"env_id": 0, "blueprint_id": "conv3x3"},
         ))
         agg.process_event(TelemetryEvent(
-            event_type=TelemetryEventType.SEED_CULLED,
+            event_type=TelemetryEventType.SEED_PRUNED,
             slot_id="r0c0",
             data={"env_id": 0, "reason": "degradation"},
         ))
 
         snapshot = agg.get_snapshot()
-        cull_events = [e for e in snapshot.event_feed if e.event_type == "CULL"]
-        assert len(cull_events) == 1
-        assert "degradation" in cull_events[0].message
+        prune_events = [e for e in snapshot.event_feed if e.event_type == "PRUNE"]
+        assert len(prune_events) == 1
+        assert "degradation" in prune_events[0].message
 
 
 class TestGateEvaluation:
