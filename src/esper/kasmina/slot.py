@@ -32,6 +32,8 @@ import torch
 import torch.nn as nn
 
 from esper.kasmina.isolation import GradientHealthMonitor, blend_with_isolation, ste_forward
+from esper.kasmina.alpha_controller import AlphaController
+from esper.leyline.alpha import AlphaCurve, AlphaMode
 
 from esper.leyline import (
     # Lifecycle
@@ -308,6 +310,9 @@ class SeedState:
     alpha: float = 0.0
     metrics: SeedMetrics = field(default_factory=SeedMetrics)
 
+    # Alpha controller state (persisted; future: enables partial holds + prune schedules)
+    alpha_controller: AlphaController = field(default_factory=AlphaController)
+
     # Blending progress tracking
     blending_steps_done: int = 0
     blending_steps_total: int = 0
@@ -330,6 +335,8 @@ class SeedState:
                 seed_id=self.seed_id,
                 blueprint_id=self.blueprint_id,
             )
+        # Keep controller alpha in sync with the scalar alpha used throughout Kasmina.
+        self.alpha_controller.alpha = self.alpha
 
     def sync_telemetry(
         self,
@@ -436,6 +443,7 @@ class SeedState:
             ],  # deque of (Enum, datetime) -> list of (int, str)
             "metrics": self.metrics.to_dict() if self.metrics else None,
             "telemetry": self.telemetry.to_dict() if self.telemetry else None,
+            "alpha_controller": self.alpha_controller.to_dict(),
             "blending_steps_done": self.blending_steps_done,
             "blending_steps_total": self.blending_steps_total,
             "blend_tempo_epochs": self.blend_tempo_epochs,
@@ -459,6 +467,9 @@ class SeedState:
         )
         state.stage_entered_at = datetime.fromisoformat(data["stage_entered_at"])
         state.alpha = data.get("alpha", 0.0)
+        state.alpha_controller = AlphaController.from_dict(data["alpha_controller"])
+        # Scalar alpha is the source of truth at runtime; keep controller synced.
+        state.alpha_controller.alpha = state.alpha
         state.stage_history = deque(
             (
                 (SeedStage(stage), datetime.fromisoformat(ts))
@@ -921,12 +932,14 @@ class SeedSlot(nn.Module):
 
         # Override alpha AND disable schedule to force forward() to use state.alpha
         self.state.alpha = value
+        self.state.alpha_controller.alpha = value
         self.alpha_schedule = None
 
         try:
             yield
         finally:
             self.state.alpha = prev_alpha
+            self.state.alpha_controller.alpha = prev_alpha
             self.alpha_schedule = prev_schedule
             # Invalidate cache again to restore original behavior
             self._cached_alpha_tensor = None
@@ -1478,6 +1491,7 @@ class SeedSlot(nn.Module):
             if self.state.alpha != new_alpha:
                 self._cached_alpha_tensor = None
             self.state.alpha = new_alpha
+            self.state.alpha_controller.alpha = new_alpha
             self.state.metrics.current_alpha = self.state.alpha
 
     def start_blending(self, total_steps: int) -> None:
@@ -1488,12 +1502,32 @@ class SeedSlot(nn.Module):
         """
         from esper.kasmina.blending import BlendCatalog
 
+        algorithm_id = getattr(self, "_blend_algorithm_id", "sigmoid")
+
         # Initialize blending progress tracking
         if self.state:
             self.state.blending_steps_total = total_steps
             self.state.blending_steps_done = 0
+            match algorithm_id:
+                case "linear":
+                    curve = AlphaCurve.LINEAR
+                case "sigmoid":
+                    curve = AlphaCurve.SIGMOID
+                case "gated":
+                    curve = AlphaCurve.LINEAR
+                case _:
+                    raise ValueError(
+                        f"Unknown blend algorithm: {algorithm_id}. "
+                        f"Valid options: linear, sigmoid, gated"
+                    )
+            # Record the controller state even if we still use alpha_schedule for now.
+            self.state.alpha_controller = AlphaController(alpha=self.state.alpha)
+            self.state.alpha_controller.retarget(
+                alpha_target=1.0,
+                alpha_steps_total=total_steps,
+                alpha_curve=curve,
+            )
 
-        algorithm_id = getattr(self, "_blend_algorithm_id", "sigmoid")
         topology = self.task_config.topology if self.task_config else "cnn"
 
         # Create blend algorithm with appropriate kwargs
@@ -1510,10 +1544,8 @@ class SeedSlot(nn.Module):
                 algorithm_id, total_steps=total_steps
             )
         else:
-            raise ValueError(
-                f"Unknown blend algorithm: {algorithm_id}. "
-                f"Valid options: linear, sigmoid, gated"
-            )
+            # Exhaustive match above should prevent this, but keep a sanity fallback.
+            raise AssertionError(f"Unhandled blend algorithm: {algorithm_id!r}")
 
     def _on_enter_stage(self, new_stage: SeedStage, old_stage: SeedStage) -> None:
         """Handle stage entry logic uniformly for both advance_stage() and step_epoch().
@@ -1559,7 +1591,11 @@ class SeedSlot(nn.Module):
         """
         self.alpha_schedule = None
         if self.state:
-            self.state.alpha = 1.0
+            self.set_alpha(1.0)
+            self.state.alpha_controller.alpha_start = 1.0
+            self.state.alpha_controller.alpha_target = 1.0
+            self.state.alpha_controller.alpha_mode = AlphaMode.HOLD
+            self.state.alpha_controller.alpha_steps_done = self.state.alpha_controller.alpha_steps_total
 
     def update_alpha_for_step(self, step: int) -> float:
         """Update alpha based on schedule."""
@@ -1570,6 +1606,11 @@ class SeedSlot(nn.Module):
             self.set_alpha(alpha)
             if self.state:
                 self.state.metrics.alpha_ramp_step = step
+                self.state.alpha_controller.alpha_steps_done = step
+                if self.state.alpha_controller.alpha_steps_total <= 0:
+                    self.state.alpha_controller.alpha_steps_total = self.state.blending_steps_total
+                if step >= self.state.alpha_controller.alpha_steps_total:
+                    self.state.alpha_controller.alpha_mode = AlphaMode.HOLD
             return alpha
         return self.alpha
 
@@ -1876,6 +1917,9 @@ class SeedSlot(nn.Module):
                 self.alpha_schedule._current_step = config.get("current_step", 0)
                 # Re-restore blending_steps_done (start_blending resets it to 0)
                 self.state.blending_steps_done = state["seed_state"].get("blending_steps_done", 0)
+                # Re-restore alpha controller (start_blending resets it)
+                self.state.alpha_controller = AlphaController.from_dict(state["seed_state"]["alpha_controller"])
+                self.state.alpha_controller.alpha = self.state.alpha
 
 
 __all__ = [
