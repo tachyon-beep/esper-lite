@@ -31,9 +31,10 @@ from typing import Callable, ClassVar, TYPE_CHECKING
 import torch
 import torch.nn as nn
 
+from esper.kasmina.blend_ops import blend_gate, blend_multiply
 from esper.kasmina.isolation import GradientHealthMonitor, blend_with_isolation, ste_forward
 from esper.kasmina.alpha_controller import AlphaController
-from esper.leyline.alpha import AlphaCurve, AlphaMode
+from esper.leyline.alpha import AlphaAlgorithm, AlphaCurve, AlphaMode
 
 from esper.leyline import (
     # Lifecycle
@@ -313,6 +314,9 @@ class SeedState:
     # Alpha controller state (persisted; future: enables partial holds + prune schedules)
     alpha_controller: AlphaController = field(default_factory=AlphaController)
 
+    # Blend operator / gating mode (persisted; Phase 3+).
+    alpha_algorithm: AlphaAlgorithm = AlphaAlgorithm.ADD
+
     blend_tempo_epochs: int = 5  # Default to STANDARD (5 epochs)
 
     # Flags
@@ -441,6 +445,7 @@ class SeedState:
             "metrics": self.metrics.to_dict() if self.metrics else None,
             "telemetry": self.telemetry.to_dict() if self.telemetry else None,
             "alpha_controller": self.alpha_controller.to_dict(),
+            "alpha_algorithm": int(self.alpha_algorithm),
             "blend_tempo_epochs": self.blend_tempo_epochs,
             "is_healthy": self.is_healthy,
             "is_paused": self.is_paused,
@@ -453,12 +458,19 @@ class SeedState:
         from datetime import datetime
         from collections import deque
 
+        alpha_algorithm_raw = data.get("alpha_algorithm")
+        if alpha_algorithm_raw is None:
+            raise ValueError(
+                "Checkpoint seed_state is missing required 'alpha_algorithm' (Phase 3+)."
+            )
+
         state = cls(
             seed_id=data["seed_id"],
             blueprint_id=data["blueprint_id"],
             slot_id=data["slot_id"],
             stage=SeedStage(data["stage"]),
             previous_stage=SeedStage(data["previous_stage"]) if data.get("previous_stage") is not None else None,
+            alpha_algorithm=AlphaAlgorithm(int(alpha_algorithm_raw)),
         )
         state.stage_entered_at = datetime.fromisoformat(data["stage_entered_at"])
         state.alpha = data.get("alpha", 0.0)
@@ -823,6 +835,11 @@ class SeedSlot(nn.Module):
         # Used by capture_gradient_telemetry_async() / finalize_gradient_telemetry() pair
         self._pending_gradient_stats: dict | None = None
 
+        # Phase 3: BLEND_OUT freeze tracking (mandatory invariant during DOWN schedules).
+        # We record which params were trainable so we can restore on exit.
+        self._blend_out_freeze_active: bool = False
+        self._blend_out_frozen_params: list[nn.Parameter] = []
+
     def _get_shape_probe(self, topology: str) -> torch.Tensor:
         """Get cached shape probe for topology, creating if needed."""
         # Include channels in key to handle slot reuse/reconfiguration (BUG-014)
@@ -975,6 +992,7 @@ class SeedSlot(nn.Module):
         host_module: nn.Module | None = None,
         blend_algorithm_id: str = "sigmoid",
         blend_tempo_epochs: int = 5,
+        alpha_algorithm: AlphaAlgorithm = AlphaAlgorithm.ADD,
     ) -> SeedState:
         """Germinate a new seed in this slot.
 
@@ -984,12 +1002,21 @@ class SeedSlot(nn.Module):
             host_module: Host network for gradient isolation (optional)
             blend_algorithm_id: Blending algorithm ("linear", "sigmoid", "gated")
             blend_tempo_epochs: Number of epochs for blending (3, 5, or 8)
+            alpha_algorithm: Blend operator / gating mode (ADD, MULTIPLY, or GATE).
         """
         from esper.kasmina.blueprints import BlueprintRegistry
 
         # Store blend settings for later use in start_blending()
         self._blend_algorithm_id = blend_algorithm_id
         self._blend_tempo_epochs = blend_tempo_epochs
+
+        resolved_alpha_algorithm = alpha_algorithm
+        if blend_algorithm_id == "gated":
+            if alpha_algorithm == AlphaAlgorithm.MULTIPLY:
+                raise ValueError("blend_algorithm_id='gated' is incompatible with alpha_algorithm=MULTIPLY")
+            resolved_alpha_algorithm = AlphaAlgorithm.GATE
+        elif alpha_algorithm == AlphaAlgorithm.GATE:
+            raise ValueError("alpha_algorithm=GATE requires blend_algorithm_id='gated'")
 
         if self.is_active and not is_failure_stage(self.state.stage):
             raise RuntimeError(f"Slot {self.slot_id} already has active seed")
@@ -1033,6 +1060,7 @@ class SeedSlot(nn.Module):
             blueprint_id=blueprint_id,
             slot_id=self.slot_id,
             stage=SeedStage.DORMANT,
+            alpha_algorithm=resolved_alpha_algorithm,
         )
 
         # Store blend tempo in state
@@ -1250,6 +1278,9 @@ class SeedSlot(nn.Module):
         self._cached_alpha_tensor = None
         # Clear pending async gradient stats
         self._pending_gradient_stats = None
+        # Clear any BLEND_OUT freeze tracking (avoid keeping param refs alive)
+        self._blend_out_freeze_active = False
+        self._blend_out_frozen_params.clear()
         return True
 
     def capture_gradient_telemetry(self) -> None:
@@ -1467,22 +1498,41 @@ class SeedSlot(nn.Module):
         # may come from seed OR host adaptation. Use counterfactual_contribution
         # (not blending_delta) for causal attribution.
 
-        # Get alpha from blend algorithm's unified interface
-        # All BlendAlgorithm subclasses implement get_alpha_for_blend(x) -> Tensor
-        if self.alpha_schedule is not None:
-            alpha = self.alpha_schedule.get_alpha_for_blend(host_features)
-        else:
-            # Use cached alpha tensor to avoid per-forward allocation overhead
-            # Cache is invalidated in set_alpha() when value changes
-            if (self._cached_alpha_tensor is None or
-                self._cached_alpha_tensor.device != host_features.device or
-                self._cached_alpha_tensor.dtype != host_features.dtype):
-                self._cached_alpha_tensor = torch.tensor(
-                    self.alpha, device=host_features.device, dtype=host_features.dtype
-                )
-            alpha = self._cached_alpha_tensor
+        # Phase 3: alpha amplitude is always scheduled by AlphaController and stored
+        # in self.alpha (scalar). We cache a 0-dim tensor for torch.compile-friendly
+        # blending ops and to avoid per-forward allocations.
+        if (
+            self._cached_alpha_tensor is None
+            or self._cached_alpha_tensor.device != host_features.device
+            or self._cached_alpha_tensor.dtype != host_features.dtype
+        ):
+            self._cached_alpha_tensor = torch.tensor(
+                self.alpha, device=host_features.device, dtype=host_features.dtype
+            )
+        alpha_amplitude = self._cached_alpha_tensor
 
-        return blend_with_isolation(host_features, seed_features, alpha)
+        match self.state.alpha_algorithm:
+            case AlphaAlgorithm.ADD:
+                if self.alpha_schedule is not None:
+                    raise RuntimeError("alpha_schedule is reserved for GATE only (Phase 3+).")
+                return blend_with_isolation(host_features, seed_features, alpha_amplitude)
+            case AlphaAlgorithm.MULTIPLY:
+                if self.alpha_schedule is not None:
+                    raise RuntimeError("alpha_schedule is reserved for GATE only (Phase 3+).")
+                return blend_multiply(
+                    host_features,
+                    seed_features,
+                    alpha_amplitude,
+                    seed_input=seed_input,
+                )
+            case AlphaAlgorithm.GATE:
+                if self.alpha_schedule is None:
+                    raise RuntimeError("alpha_schedule is required when alpha_algorithm=GATE.")
+                # Isolation contract: use the same input reference that the seed sees.
+                gate = self.alpha_schedule.get_alpha_for_blend(seed_input)
+                return blend_gate(host_features, seed_features, alpha_amplitude, gate)
+            case algo:
+                raise ValueError(f"Unknown alpha_algorithm: {algo!r}")
 
     def get_parameters(self):
         """Get trainable parameters of the seed."""
@@ -1504,6 +1554,33 @@ class SeedSlot(nn.Module):
             self.state.alpha_controller.alpha = new_alpha
             self.state.metrics.current_alpha = self.state.alpha
 
+    def _set_blend_out_freeze(self, enabled: bool) -> None:
+        """Freeze/unfreeze learnable params during BLEND_OUT (alpha_mode == DOWN).
+
+        Freeze semantics are param-only (requires_grad=False). The forward graph
+        MUST remain intact to preserve "ghost gradients" to the host.
+        """
+        if enabled == self._blend_out_freeze_active:
+            return
+
+        if enabled:
+            self._blend_out_frozen_params.clear()
+            for module in (self.seed, self.alpha_schedule):
+                if module is None:
+                    continue
+                for param in module.parameters():
+                    if param.requires_grad:
+                        param.requires_grad_(False)
+                        self._blend_out_frozen_params.append(param)
+            self._blend_out_freeze_active = True
+            return
+
+        # Restore exactly the params that were trainable before freeze.
+        for param in self._blend_out_frozen_params:
+            param.requires_grad_(True)
+        self._blend_out_frozen_params.clear()
+        self._blend_out_freeze_active = False
+
     def start_blending(self, total_steps: int) -> None:
         """Initialize blending with selected algorithm.
 
@@ -1520,6 +1597,13 @@ class SeedSlot(nn.Module):
 
         # Initialize blending progress tracking
         if self.state:
+            # Phase 3 contract: alpha_schedule is reserved for per-sample gating only.
+            # We treat "gated" as enabling the GATE alpha_algorithm.
+            if algorithm_id == "gated":
+                self.state.alpha_algorithm = AlphaAlgorithm.GATE
+            elif self.state.alpha_algorithm == AlphaAlgorithm.GATE:
+                raise ValueError("alpha_algorithm=GATE requires blend_algorithm_id='gated'")
+
             match algorithm_id:
                 case "linear":
                     curve = AlphaCurve.LINEAR
@@ -1668,6 +1752,11 @@ class SeedSlot(nn.Module):
             return False
 
         stage = self.state.stage
+
+        # Phase 3 invariant: during BLEND_OUT (alpha_mode == DOWN) we freeze all
+        # learnable params that could "fight" decay, but keep the forward graph
+        # intact so host gradients still flow ("ghost gradients").
+        self._set_blend_out_freeze(self.state.alpha_controller.alpha_mode == AlphaMode.DOWN)
 
         # GERMINATED → TRAINING: immediate advance (no dwell required)
         if stage == SeedStage.GERMINATED:
@@ -1929,6 +2018,10 @@ class SeedSlot(nn.Module):
                     )
                 self.state.alpha_controller = AlphaController.from_dict(alpha_controller)
                 self.state.alpha_controller.alpha = self.state.alpha
+
+        # Ensure BLEND_OUT freeze invariant holds immediately after checkpoint load.
+        if self.state is not None:
+            self._set_blend_out_freeze(self.state.alpha_controller.alpha_mode == AlphaMode.DOWN)
 
 
 __all__ = [

@@ -124,3 +124,17 @@ class TestSeedStateToDict:
 
         with pytest.raises(ValueError, match="alpha_controller"):
             SeedState.from_dict(data)
+
+    def test_from_dict_requires_alpha_algorithm(self) -> None:
+        """Pre-Phase-3 checkpoints (missing alpha_algorithm) are not resumable."""
+        state = SeedState(
+            seed_id="test-seed",
+            blueprint_id="norm",
+            slot_id="r0c0",
+            stage=SeedStage.TRAINING,
+        )
+        data = state.to_dict()
+        data.pop("alpha_algorithm", None)
+
+        with pytest.raises(ValueError, match="alpha_algorithm"):
+            SeedState.from_dict(data)

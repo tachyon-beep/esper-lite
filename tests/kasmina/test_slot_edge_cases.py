@@ -359,11 +359,11 @@ class TestForceAlphaContext:
 
     def test_force_alpha_disables_schedule(self):
         """force_alpha() should disable alpha_schedule temporarily."""
-        from esper.kasmina.blending import LinearBlend
+        from esper.kasmina.blending import GatedBlend
 
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
-        slot.alpha_schedule = LinearBlend(total_steps=10)
+        slot.alpha_schedule = GatedBlend(channels=64, topology="cnn", total_steps=10)
 
         with slot.force_alpha(0.0):
             assert slot.alpha_schedule is None

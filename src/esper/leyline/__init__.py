@@ -381,6 +381,7 @@ from esper.leyline.telemetry import (
 from esper.leyline.alpha import (
     AlphaMode,
     AlphaCurve,
+    AlphaAlgorithm,
 )
 
 __all__ = [
@@ -524,4 +525,5 @@ __all__ = [
     # Alpha controller
     "AlphaMode",
     "AlphaCurve",
+    "AlphaAlgorithm",
 ]

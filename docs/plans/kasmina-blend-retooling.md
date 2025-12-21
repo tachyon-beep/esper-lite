@@ -285,6 +285,7 @@ Note: most Kasmina seeds are *residual* modules (common shape: `seed(x) = x + Δ
   - Init: initialize the seed’s final affine layer weights/biases to `0` so `m≈0` at birth and the valve starts near identity.
   - Isolation note: `MULTIPLY` is allowed when `isolate_gradients=True`, but **must** define `m` around the detached `seed_input` reference (not raw `host_features`) to avoid host-gradient sign flips and seed-dependent `dy/dh` coupling.
 - `GATE`: enable per-sample gating so `a` depends on input (use the learned gate network), while keeping the `ADD` composition.
+  - Isolation note: when `isolate_gradients=True`, compute the gate from the detached `seed_input` reference (same as the seed sees) to avoid introducing a new gradient path from gate(x) into host params.
 
 ### 7.2 Transitional option (if we want minimal wiring first)
 

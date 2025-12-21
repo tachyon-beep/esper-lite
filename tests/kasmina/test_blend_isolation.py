@@ -136,19 +136,22 @@ class TestSeedSlotFallbackPath:
         assert result.dtype == dtype
 
     def test_seedslot_with_alpha_schedule(self):
-        """Verify SeedSlot with alpha_schedule still returns tensor alpha."""
-        from esper.kasmina.blending import LinearBlend
+        """Verify SeedSlot with alpha_schedule (GATE) still runs.
+
+        Phase 3 contract: alpha_schedule is reserved for per-sample gating only.
+        """
+        from esper.kasmina.blending import GatedBlend
 
         slot = SeedSlot(slot_id="test", channels=16)
 
-        # Germinate and transition to BLENDING using 'noop' blueprint
-        slot.state = slot.germinate("noop", seed_id="test-seed")
+        # Germinate with gated blending so alpha_schedule is valid.
+        slot.state = slot.germinate("noop", seed_id="test-seed", blend_algorithm_id="gated")
         slot.state.transition(SeedStage.TRAINING)
         slot.state.transition(SeedStage.BLENDING)
 
-        # Use alpha_schedule
-        slot.alpha_schedule = LinearBlend(total_steps=10)
-        slot.alpha_schedule.step(5)
+        slot.start_blending(total_steps=10)
+        assert isinstance(slot.alpha_schedule, GatedBlend)
+        slot.set_alpha(0.5)
 
         # Forward pass
         host = torch.randn(2, 16, 8, 8)

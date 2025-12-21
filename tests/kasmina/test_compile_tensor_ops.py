@@ -1,6 +1,7 @@
 """Test that tensor operations are torch.compile compatible."""
 import torch
 
+from esper.kasmina.blend_ops import blend_add, blend_gate, blend_multiply
 from esper.kasmina.isolation import blend_with_isolation, ste_forward
 
 
@@ -48,3 +49,22 @@ class TestCompilableTensorOps:
         result = compiled_blend(host, seed, alpha)
 
         assert result.shape == host.shape
+
+    def test_blend_ops_compile_fullgraph(self):
+        """Phase 3 smoke: blend operators are fullgraph-compilable."""
+        compiled_add = torch.compile(blend_add, fullgraph=True)
+        compiled_mul = torch.compile(blend_multiply, fullgraph=True)
+        compiled_gate = torch.compile(blend_gate, fullgraph=True)
+
+        host = torch.randn(2, 32, 8, 8)
+        seed = torch.randn(2, 32, 8, 8)
+        alpha = torch.tensor(0.7)
+        gate = torch.rand(2, 1, 1, 1)
+
+        out_add = compiled_add(host, seed, alpha)
+        out_mul = compiled_mul(host, seed, alpha)
+        out_gate = compiled_gate(host, seed, alpha, gate)
+
+        assert out_add.shape == host.shape
+        assert out_mul.shape == host.shape
+        assert out_gate.shape == host.shape

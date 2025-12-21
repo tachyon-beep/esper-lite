@@ -25,7 +25,23 @@ class AlphaCurve(IntEnum):
     SIGMOID = 3
 
 
+class AlphaAlgorithm(IntEnum):
+    """Blend composition / per-sample gating mode.
+
+    This is a shared contract because Tamiyo/Simic will observe and act on it.
+
+    Notes:
+    - This is intentionally separate from AlphaCurve (schedule shape).
+    - "GATE" means per-sample gating is enabled; the composition remains ADD.
+    """
+
+    ADD = 1
+    MULTIPLY = 2
+    GATE = 3
+
+
 __all__ = [
     "AlphaMode",
     "AlphaCurve",
+    "AlphaAlgorithm",
 ]
