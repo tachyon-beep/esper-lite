@@ -161,7 +161,7 @@ class SeedTelemetry:
     epochs_in_stage: int = 0
 
     # Stage context
-    stage: int = 1  # SeedStage enum value (1-7)
+    stage: int = 1  # SeedStage enum value (1-10); feature scaling clamps >=10 to 1.0
     alpha: float = 0.0  # blending weight (0-1)
 
     # Temporal context
@@ -189,7 +189,7 @@ class SeedTelemetry:
             min(self.epochs_in_stage, _EPOCHS_IN_STAGE_MAX) / _EPOCHS_IN_STAGE_MAX,
             self.accuracy / 100.0,
             max(-1.0, min(1.0, self.accuracy_delta / _ACCURACY_DELTA_SCALE)),
-            min((self.stage - 1) / 6.0, 1.0),  # stages 1-7 -> [0, 1], clamp overflow
+            min((self.stage - 1) / 9.0, 1.0),  # stages 1-10 -> [0, 1], clamps >=10
             self.alpha,
             self.epoch / max(self.max_epochs, 1),  # temporal position
         ]

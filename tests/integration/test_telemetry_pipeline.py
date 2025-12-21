@@ -203,7 +203,7 @@ class TestSeedTelemetryFeatures:
 
     def test_telemetry_features_stage_normalized(self):
         """Stage should be normalized to [0, 1] range."""
-        # Stage 4 (out of 1-7) should map to 0.5
+        # Stage 4 (out of 1-10) should map to 0.333...
         telemetry = SeedTelemetry(
             seed_id="test",
             stage=4,
@@ -212,8 +212,8 @@ class TestSeedTelemetryFeatures:
         features = telemetry.to_features()
         stage_feature = features[7]
 
-        # (4 - 1) / 6 = 3 / 6 = 0.5
-        assert abs(stage_feature - 0.5) < 1e-5
+        # (4 - 1) / 9 = 3 / 9 = 0.333...
+        assert abs(stage_feature - (3.0 / 9.0)) < 1e-5
 
 
 class TestTelemetryToFeaturesIntegration:

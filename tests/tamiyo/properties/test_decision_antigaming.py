@@ -441,6 +441,6 @@ class TestRansomwareDetection:
 
         decision = policy.decide(MockSignals(), active_seeds=[seed])
 
-        # Ransomware seeds should be CULLED, not FOSSILIZED
+        # Ransomware seeds should be PRUNED, not FOSSILIZED
         assert decision.action.name == "CULL", \
             f"Ransomware pattern should trigger CULL, got {decision.action.name}"

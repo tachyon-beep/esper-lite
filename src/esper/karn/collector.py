@@ -431,6 +431,7 @@ class KarnCollector:
             slot.stage = SeedStage.FOSSILIZED
         elif event_type == "SEED_PRUNED":
             slot.stage = SeedStage.PRUNED
+            slot.epochs_in_stage = 0
 
     def _handle_ppo_update(self, event: "TelemetryEvent") -> None:
         """Handle PPO_UPDATE_COMPLETED event."""

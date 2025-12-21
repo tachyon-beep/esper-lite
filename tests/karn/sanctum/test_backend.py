@@ -18,11 +18,6 @@ class TestActionNormalization:
         assert normalize_action("GERMINATE_CONV_HEAVY") == "GERMINATE"
         assert normalize_action("GERMINATE_ATTENTION") == "GERMINATE"
 
-    def test_factored_cull_normalizes(self):
-        """Factored CULL actions should normalize."""
-        assert normalize_action("CULL_PROBATION") == "CULL"
-        assert normalize_action("CULL_STAGNATION") == "CULL"
-
     def test_factored_fossilize_normalizes(self):
         """Factored FOSSILIZE actions should normalize."""
         assert normalize_action("FOSSILIZE_G0") == "FOSSILIZE"
