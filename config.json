@@ -17,8 +17,7 @@
   "chunk_length": 75,
   "slots": [
     "r0c0",
-    "r0c1",
-    "r0c2"
+    "r0c1"
   ],
   "max_seeds": 2,
   "reward_mode": "simplified",

@@ -6,6 +6,7 @@ with room to grow for ImageNet, synthetic datasets, etc.
 
 from __future__ import annotations
 
+from pathlib import Path
 import warnings
 
 import torch
@@ -112,16 +113,61 @@ class SharedBatchIterator:
 # GPU-Resident Data Loading (8x faster for small datasets)
 # =============================================================================
 
-# Global cache for GPU-resident datasets (avoid re-uploading)
-_GPU_DATASET_CACHE: dict[str, tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]] = {}
+# Global cache for GPU-resident datasets (avoid re-uploading).
+#
+# Keying includes data_root so callers can safely vary dataset locations within
+# a long-lived interpreter (e.g., notebooks/tests) without stale tensor reuse.
+_GPU_DATASET_CACHE: dict[
+    tuple[str, str, str, str],
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
+] = {}
+
+_CIFAR10_GPU_CACHE_VERSION = "v1"
 
 
-def _ensure_cifar10_cached(device: str, data_root: str = "./data") -> None:
+def _normalize_data_root(data_root: str) -> str:
+    return str(Path(data_root).expanduser().resolve())
+
+
+def _cifar10_cache_key(device: str, data_root: str) -> tuple[str, str, str, str]:
+    return ("cifar10", device, _normalize_data_root(data_root), _CIFAR10_GPU_CACHE_VERSION)
+
+
+def clear_gpu_dataset_cache(
+    *,
+    dataset: str | None = None,
+    device: str | None = None,
+    data_root: str | None = None,
+) -> None:
+    """Clear cached GPU-resident datasets.
+
+    Intended for long-lived processes and tests where callers may want to vary
+    data roots or free GPU memory.
+    """
+    global _GPU_DATASET_CACHE
+    normalized_root = _normalize_data_root(data_root) if data_root is not None else None
+
+    keys_to_delete: list[tuple[str, str, str, str]] = []
+    for cache_key in _GPU_DATASET_CACHE:
+        key_dataset, key_device, key_root, _key_version = cache_key
+        if dataset is not None and key_dataset != dataset:
+            continue
+        if device is not None and key_device != device:
+            continue
+        if normalized_root is not None and key_root != normalized_root:
+            continue
+        keys_to_delete.append(cache_key)
+
+    for cache_key in keys_to_delete:
+        del _GPU_DATASET_CACHE[cache_key]
+
+
+def _ensure_cifar10_cached(device: str, data_root: str = "./data", *, refresh: bool = False) -> None:
     """Ensure CIFAR-10 is cached on the specified device."""
     global _GPU_DATASET_CACHE
-    cache_key = f"cifar10_{device}"
+    cache_key = _cifar10_cache_key(device, data_root)
 
-    if cache_key not in _GPU_DATASET_CACHE:
+    if refresh or cache_key not in _GPU_DATASET_CACHE:
         # Load raw data (no augmentation for GPU-resident - applied at batch time)
         train_transform = transforms.Compose([
             transforms.ToTensor(),
@@ -213,7 +259,7 @@ class SharedGPUBatchIterator:
             n_envs_on_device = len(env_indices)
             total_batch = batch_size_per_env * n_envs_on_device
 
-            cache_key = f"cifar10_{device}"
+            cache_key = _cifar10_cache_key(device, data_root)
             train_x, train_y, test_x, test_y = _GPU_DATASET_CACHE[cache_key]
 
             if is_train:
@@ -283,6 +329,8 @@ def load_cifar10_gpu(
     generator: torch.Generator | None = None,
     data_root: str = "./data",
     device: str = "cuda:0",
+    *,
+    refresh: bool = False,
 ) -> tuple[DataLoader, DataLoader]:
     """Load CIFAR-10 with data pre-loaded to GPU for maximum throughput.
 
@@ -297,44 +345,13 @@ def load_cifar10_gpu(
         generator: Optional torch.Generator for reproducible shuffling.
         data_root: Root directory for dataset storage.
         device: GPU device to preload data to.
+        refresh: If True, reload tensors even if cached.
 
     Returns:
         Tuple of (trainloader, testloader) with GPU-resident data.
     """
-    global _GPU_DATASET_CACHE
-    cache_key = f"cifar10_{device}"
-
-    if cache_key not in _GPU_DATASET_CACHE:
-        # Load raw data (no augmentation for GPU-resident - applied at batch time)
-        train_transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
-        ])
-        test_transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
-        ])
-
-        trainset = torchvision.datasets.CIFAR10(
-            root=data_root, train=True, download=True, transform=train_transform
-        )
-        testset = torchvision.datasets.CIFAR10(
-            root=data_root, train=False, download=True, transform=test_transform
-        )
-
-        # Preload to GPU (one-time cost ~12s, amortized over training)
-        train_x = torch.stack([trainset[i][0] for i in range(len(trainset))])
-        train_y = torch.tensor([trainset[i][1] for i in range(len(trainset))])
-        test_x = torch.stack([testset[i][0] for i in range(len(testset))])
-        test_y = torch.tensor([testset[i][1] for i in range(len(testset))])
-
-        _GPU_DATASET_CACHE[cache_key] = (
-            train_x.to(device),
-            train_y.to(device),
-            test_x.to(device),
-            test_y.to(device),
-        )
-
+    _ensure_cifar10_cached(device, data_root, refresh=refresh)
+    cache_key = _cifar10_cache_key(device, data_root)
     train_x, train_y, test_x, test_y = _GPU_DATASET_CACHE[cache_key]
 
     # Create GPU-resident DataLoaders (no workers needed - data already on GPU)

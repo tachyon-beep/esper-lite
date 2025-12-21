@@ -56,6 +56,7 @@ class TrainingConfig:
     n_episodes: int = 100
     n_envs: int = DEFAULT_N_ENVS
     max_epochs: int = DEFAULT_EPISODE_LENGTH
+    batch_size_per_env: int | None = None
 
     # === PPO core (from leyline defaults) ===
     lr: float = DEFAULT_LEARNING_RATE
@@ -220,6 +221,7 @@ class TrainingConfig:
             "n_episodes": self.n_episodes,
             "n_envs": self.n_envs,
             "max_epochs": self.max_epochs,
+            "batch_size_per_env": self.batch_size_per_env,
             "use_telemetry": self.use_telemetry,
             "lr": self.lr,
             "clip_ratio": self.clip_ratio,
@@ -273,6 +275,8 @@ class TrainingConfig:
         self._validate_positive(self.n_envs, "n_envs")
         self._validate_positive(self.max_epochs, "max_epochs")
         self._validate_positive(self.ppo_updates_per_batch, "ppo_updates_per_batch")
+        if self.batch_size_per_env is not None:
+            self._validate_positive(self.batch_size_per_env, "batch_size_per_env")
 
         if self.chunk_length != self.max_epochs:
             raise ValueError(

@@ -42,6 +42,7 @@ from esper.nissa.output import (
     DirectoryOutput,
     NissaHub,
     get_hub,
+    reset_hub,
     emit,
 )
 from esper.nissa.analytics import (
@@ -70,6 +71,7 @@ __all__ = [
     "DirectoryOutput",
     "NissaHub",
     "get_hub",
+    "reset_hub",
     "emit",
     # Analytics
     "BlueprintStats",

@@ -484,6 +484,7 @@ def train_ppo_vectorized(
     resume_path: str | None = None,
     seed: int = 42,
     num_workers: int | None = None,
+    batch_size_per_env: int | None = None,
     gpu_preload: bool = False,
     amp: bool = False,
     lstm_hidden_dim: int = DEFAULT_LSTM_HIDDEN_DIM,
@@ -528,6 +529,8 @@ def train_ppo_vectorized(
         save_path: Optional path to save model
         resume_path: Optional path to resume from checkpoint
         seed: Random seed for reproducibility
+        batch_size_per_env: Optional per-environment batch size override. When unset, uses
+            the task defaults (with CIFAR-10 tuned for high throughput).
         plateau_threshold: Rolling average delta threshold below which training is considered
             plateaued (emits PLATEAU_DETECTED event). Compares current vs previous batch's
             rolling average. Scale-dependent: adjust for accuracy scales (e.g., 0-1 vs 0-100).
@@ -656,9 +659,16 @@ def train_ppo_vectorized(
     env_device_map = [devices[i % len(devices)] for i in range(n_envs)]
 
     # DataLoader settings (used for SharedBatchIterator + diagnostics).
-    batch_size_per_env = task_spec.dataloader_defaults.get("batch_size", 128)
+    default_batch_size_per_env = task_spec.dataloader_defaults.get("batch_size", 128)
     if task_spec.name == "cifar10":
-        batch_size_per_env = 512  # High-throughput setting for CIFAR
+        default_batch_size_per_env = 512  # High-throughput setting for CIFAR
+    effective_batch_size_per_env = (
+        batch_size_per_env if batch_size_per_env is not None else default_batch_size_per_env
+    )
+    if effective_batch_size_per_env < 1:
+        raise ValueError(
+            f"batch_size_per_env must be >= 1 (got {effective_batch_size_per_env})"
+        )
     effective_workers = num_workers if num_workers is not None else 4
 
     # State dimension: base features (dynamic based on slot count) + telemetry features when enabled
@@ -713,7 +723,7 @@ def train_ppo_vectorized(
 
     dataloader_summary = {
         "mode": "gpu_preload" if gpu_preload else "shared_batch_iterator",
-        "batch_size_per_env": batch_size_per_env,
+        "batch_size_per_env": effective_batch_size_per_env,
         "num_workers": None if gpu_preload else effective_workers,
         "pin_memory": not gpu_preload,
     }
@@ -784,21 +794,24 @@ def train_ppo_vectorized(
         gen.manual_seed(seed)
 
         # Create shared GPU iterators for train and test
+        data_root = task_spec.dataloader_defaults.get("data_root", "./data")
         shared_train_iter = SharedGPUBatchIterator(
-            batch_size_per_env=512,
+            batch_size_per_env=effective_batch_size_per_env,
             n_envs=n_envs,
             env_devices=env_device_map,
             shuffle=True,
             generator=gen,
+            data_root=data_root,
             is_train=True,
         )
 
         shared_test_iter = SharedGPUBatchIterator(
-            batch_size_per_env=512,
+            batch_size_per_env=effective_batch_size_per_env,
             n_envs=n_envs,
             env_devices=env_device_map,
             shuffle=False,
             generator=gen,
+            data_root=data_root,
             is_train=False,
         )
 
@@ -818,7 +831,7 @@ def train_ppo_vectorized(
         # Create shared iterators for train and test
         shared_train_iter = SharedBatchIterator(
             dataset=train_dataset,
-            batch_size_per_env=batch_size_per_env,
+            batch_size_per_env=effective_batch_size_per_env,
             n_envs=n_envs,
             env_devices=env_device_map,
             num_workers=effective_workers,
@@ -832,7 +845,7 @@ def train_ppo_vectorized(
         # No point spawning persistent workers for ~2% of total iteration time
         shared_test_iter = SharedBatchIterator(
             dataset=test_dataset,
-            batch_size_per_env=batch_size_per_env,
+            batch_size_per_env=effective_batch_size_per_env,
             n_envs=n_envs,
             env_devices=env_device_map,
             num_workers=0,  # Validation is fast enough without workers
