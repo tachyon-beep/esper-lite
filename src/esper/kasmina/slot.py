@@ -313,9 +313,6 @@ class SeedState:
     # Alpha controller state (persisted; future: enables partial holds + prune schedules)
     alpha_controller: AlphaController = field(default_factory=AlphaController)
 
-    # Blending progress tracking
-    blending_steps_done: int = 0
-    blending_steps_total: int = 0
     blend_tempo_epochs: int = 5  # Default to STANDARD (5 epochs)
 
     # Flags
@@ -444,8 +441,6 @@ class SeedState:
             "metrics": self.metrics.to_dict() if self.metrics else None,
             "telemetry": self.telemetry.to_dict() if self.telemetry else None,
             "alpha_controller": self.alpha_controller.to_dict(),
-            "blending_steps_done": self.blending_steps_done,
-            "blending_steps_total": self.blending_steps_total,
             "blend_tempo_epochs": self.blend_tempo_epochs,
             "is_healthy": self.is_healthy,
             "is_paused": self.is_paused,
@@ -488,8 +483,6 @@ class SeedState:
         if data.get("telemetry"):
             from esper.leyline.telemetry import SeedTelemetry
             state.telemetry = SeedTelemetry.from_dict(data["telemetry"])
-        state.blending_steps_done = data.get("blending_steps_done", 0)
-        state.blending_steps_total = data.get("blending_steps_total", 0)
         state.blend_tempo_epochs = data.get("blend_tempo_epochs", 5)
         state.is_healthy = data.get("is_healthy", True)
         state.is_paused = data.get("is_paused", False)
@@ -664,17 +657,28 @@ class QualityGates:
         else:
             checks_failed.append(f"blending_incomplete_{state.metrics.epochs_in_current_stage}")
 
-        # Check alpha reached target (from leyline)
-        if state.alpha >= DEFAULT_ALPHA_COMPLETE_THRESHOLD:
-            checks_passed.append("alpha_high")
+        controller = state.alpha_controller
+        eps = 1e-6
+
+        # BLENDING -> HOLDING is only legal at full amplitude (alpha_target==1.0).
+        if controller.alpha_target >= 1.0 - eps:
+            checks_passed.append("alpha_target_full")
         else:
-            checks_failed.append(f"alpha_low_{state.alpha:.2f}")
+            checks_failed.append(f"alpha_target_not_full_{controller.alpha_target:.2f}")
+
+        # Completion is defined by reaching the controller target and entering HOLD.
+        if controller.alpha_mode == AlphaMode.HOLD and abs(controller.alpha - controller.alpha_target) <= eps:
+            checks_passed.append("alpha_target_reached")
+        else:
+            checks_failed.append(
+                f"alpha_not_at_target_{controller.alpha:.2f}_target_{controller.alpha_target:.2f}_mode_{controller.alpha_mode.name}"
+            )
 
         passed = len(checks_failed) == 0
         return GateResult(
             gate=GateLevel.G3,
             passed=passed,
-            score=state.alpha,
+            score=controller.alpha,
             checks_passed=checks_passed,
             checks_failed=checks_failed,
         )
@@ -1505,6 +1509,10 @@ class SeedSlot(nn.Module):
 
         Uses blend_algorithm_id set during germinate(). Falls back to sigmoid
         if not specified.
+
+        Phase 2 contract: alpha amplitude is scheduled exclusively by
+        AlphaController. alpha_schedule is reserved for per-sample gating
+        (currently: "gated").
         """
         from esper.kasmina.blending import BlendCatalog
 
@@ -1512,8 +1520,6 @@ class SeedSlot(nn.Module):
 
         # Initialize blending progress tracking
         if self.state:
-            self.state.blending_steps_total = total_steps
-            self.state.blending_steps_done = 0
             match algorithm_id:
                 case "linear":
                     curve = AlphaCurve.LINEAR
@@ -1526,7 +1532,7 @@ class SeedSlot(nn.Module):
                         f"Unknown blend algorithm: {algorithm_id}. "
                         f"Valid options: linear, sigmoid, gated"
                     )
-            # Record the controller state even if we still use alpha_schedule for now.
+            # Alpha amplitude scheduling is handled by AlphaController.
             self.state.alpha_controller = AlphaController(alpha=self.state.alpha)
             self.state.alpha_controller.retarget(
                 alpha_target=1.0,
@@ -1536,22 +1542,18 @@ class SeedSlot(nn.Module):
 
         topology = self.task_config.topology if self.task_config else "cnn"
 
-        # Create blend algorithm with appropriate kwargs
+        # Create blend algorithm with appropriate kwargs.
+        #
+        # Phase 2: linear/sigmoid are curves for AlphaController only, so we do
+        # not create an alpha_schedule module for them. We keep alpha_schedule
+        # only for per-sample gating so its parameters are tracked and checkpointed.
+        self.alpha_schedule = None
         if algorithm_id == "gated":
-            # GatedBlend needs channels, topology, and total_steps
             self.alpha_schedule = BlendCatalog.create(
                 algorithm_id, channels=self.channels, topology=topology, total_steps=total_steps
             )
-            # Move gated blend to same device as seed
             if isinstance(self.alpha_schedule, nn.Module):
                 self.alpha_schedule = self.alpha_schedule.to(self.device)
-        elif algorithm_id in ("linear", "sigmoid"):
-            self.alpha_schedule = BlendCatalog.create(
-                algorithm_id, total_steps=total_steps
-            )
-        else:
-            # Exhaustive match above should prevent this, but keep a sanity fallback.
-            raise AssertionError(f"Unhandled blend algorithm: {algorithm_id!r}")
 
     def _on_enter_stage(self, new_stage: SeedStage, old_stage: SeedStage) -> None:
         """Handle stage entry logic uniformly for both advance_stage() and step_epoch().
@@ -1602,33 +1604,6 @@ class SeedSlot(nn.Module):
             self.state.alpha_controller.alpha_target = 1.0
             self.state.alpha_controller.alpha_mode = AlphaMode.HOLD
             self.state.alpha_controller.alpha_steps_done = self.state.alpha_controller.alpha_steps_total
-
-    def update_alpha_for_step(self, step: int) -> float:
-        """Update alpha based on schedule."""
-        if self.alpha_schedule is not None:
-            step = max(0, int(step))
-            schedule_total_steps = getattr(self.alpha_schedule, "total_steps", None)
-            if isinstance(schedule_total_steps, int) and schedule_total_steps > 0:
-                step = min(step, schedule_total_steps)
-
-            self.alpha_schedule.step(step)
-            alpha = self.alpha_schedule.get_alpha(step)
-
-            self.set_alpha(alpha)
-            if self.state:
-                if self.state.alpha_controller.alpha_steps_total <= 0:
-                    self.state.alpha_controller.alpha_steps_total = self.state.blending_steps_total
-
-                total = self.state.alpha_controller.alpha_steps_total
-                clamped_step = min(step, total) if total > 0 else step
-
-                self.state.metrics.alpha_ramp_step = clamped_step
-                self.state.alpha_controller.alpha_steps_done = clamped_step
-
-                if clamped_step >= total and total > 0:
-                    self.state.alpha_controller.alpha_mode = AlphaMode.HOLD
-            return alpha
-        return self.alpha
 
     def _sync_gate_decision(self, gate_result: GateResult) -> GateResult:
         """Ensure all DDP ranks agree on lifecycle transitions (Unanimous Consensus).
@@ -1770,18 +1745,20 @@ class SeedSlot(nn.Module):
 
         # BLENDING → HOLDING when alpha ramp completes and gate passes
         if stage == SeedStage.BLENDING:
-            if self.state.blending_steps_total > 0:
-                self.state.blending_steps_done = min(
-                    self.state.blending_steps_done + 1, self.state.blending_steps_total
+            reached_target = self.state.alpha_controller.step()
+            self.set_alpha(self.state.alpha_controller.alpha)
+            self.state.metrics.alpha_ramp_step = self.state.alpha_controller.alpha_steps_done
+
+            target_reached = (
+                reached_target
+                or (
+                    self.state.alpha_controller.alpha_mode == AlphaMode.HOLD
+                    and abs(self.state.alpha_controller.alpha - self.state.alpha_controller.alpha_target)
+                    <= 1e-6
                 )
-            else:
-                self.state.blending_steps_done += 1
+            )
 
-            if self.alpha_schedule is not None:
-                self.update_alpha_for_step(self.state.blending_steps_done)
-
-            if self.state.blending_steps_done >= self.state.blending_steps_total:
-                self.set_alpha(1.0)  # Ensure fully blended
+            if target_reached:
                 gate_result = self.gates.check_gate(self.state, SeedStage.HOLDING)
                 gate_result = self._sync_gate_decision(gate_result)
                 if not gate_result.passed:
@@ -1928,6 +1905,12 @@ class SeedSlot(nn.Module):
         if state.get("alpha_schedule_config"):
             config = state["alpha_schedule_config"]
             if config.get("algorithm_id") and self.state and self.state.stage == SeedStage.BLENDING:
+                if config["algorithm_id"] != "gated":
+                    raise ValueError(
+                        "Checkpoint contains legacy alpha_schedule_config for "
+                        f"algorithm_id={config['algorithm_id']!r}. "
+                        "Phase 2+ only supports alpha_schedule_config for 'gated'."
+                    )
                 # CRITICAL: Restore algorithm_id BEFORE start_blending()
                 # Without this, start_blending() defaults to "sigmoid" and
                 # GatedBlend weights become orphaned "unexpected_keys".
@@ -1935,9 +1918,8 @@ class SeedSlot(nn.Module):
                 self._blend_algorithm_id = config["algorithm_id"]
                 self.start_blending(total_steps=config.get("total_steps", 10))
                 # Restore step count (_current_step guaranteed to exist on all BlendAlgorithm instances)
-                self.alpha_schedule._current_step = config.get("current_step", 0)
-                # Re-restore blending_steps_done (start_blending resets it to 0)
-                self.state.blending_steps_done = state["seed_state"].get("blending_steps_done", 0)
+                if self.alpha_schedule is not None:
+                    self.alpha_schedule._current_step = config.get("current_step", 0)
                 # Re-restore alpha controller (start_blending resets it)
                 alpha_controller = state["seed_state"].get("alpha_controller")
                 if not isinstance(alpha_controller, dict):

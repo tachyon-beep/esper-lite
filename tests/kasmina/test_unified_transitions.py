@@ -5,10 +5,11 @@ import torch
 
 from esper.kasmina.slot import SeedSlot
 from esper.leyline.stages import SeedStage
+from esper.leyline.alpha import AlphaMode
 from esper.tamiyo.policy.features import TaskConfig
 
 
-def create_slot_in_training() -> SeedSlot:
+def create_slot_in_training(*, blend_algorithm_id: str = "linear") -> SeedSlot:
     """Create a SeedSlot with a seed in TRAINING stage."""
     task_config = TaskConfig(
         task_type="classification",
@@ -32,7 +33,7 @@ def create_slot_in_training() -> SeedSlot:
     slot.germinate(
         blueprint_id="norm",
         seed_id="test-seed",
-        blend_algorithm_id="linear",
+        blend_algorithm_id=blend_algorithm_id,
     )
 
     # Advance to TRAINING
@@ -61,7 +62,7 @@ class TestUnifiedTransitions:
     """Test advance_stage() and step_epoch() behave identically."""
 
     def test_advance_stage_initializes_blending(self):
-        """advance_stage() to BLENDING should initialize schedule and set _blending_started."""
+        """advance_stage() to BLENDING should initialize alpha control and set _blending_started."""
         slot = create_slot_in_training()
 
         # Don't record additional accuracy here - create_slot_in_training() already did it
@@ -75,8 +76,10 @@ class TestUnifiedTransitions:
         # CRITICAL: These should be initialized by advance_stage()
         assert slot.state.metrics._blending_started is True, \
             "advance_stage() should set _blending_started flag"
-        assert slot.alpha_schedule is not None, \
-            "advance_stage() should initialize alpha_schedule"
+        assert slot.state.alpha_controller.alpha_steps_total > 0
+        assert slot.state.alpha_controller.alpha_target == 1.0
+        assert slot.alpha_schedule is None, \
+            "Phase 2: alpha_schedule is reserved for per-sample gating only"
         # accuracy_at_blending_start is already set by advance_stage() (line 1026)
         assert slot.state.metrics.accuracy_at_blending_start == slot.state.metrics.current_val_accuracy, \
             "advance_stage() should snapshot accuracy_at_blending_start"
@@ -99,8 +102,10 @@ class TestUnifiedTransitions:
         # These should be initialized by step_epoch()
         assert slot.state.metrics._blending_started is True, \
             "step_epoch() should set _blending_started flag"
-        assert slot.alpha_schedule is not None, \
-            "step_epoch() should initialize alpha_schedule"
+        assert slot.state.alpha_controller.alpha_steps_total > 0
+        assert slot.state.alpha_controller.alpha_target == 1.0
+        assert slot.alpha_schedule is None, \
+            "Phase 2: alpha_schedule is reserved for per-sample gating only"
         assert slot.state.metrics.accuracy_at_blending_start == current_accuracy, \
             "step_epoch() should snapshot accuracy_at_blending_start"
 
@@ -136,7 +141,7 @@ class TestUnifiedTransitions:
 
     def test_advance_stage_blending_to_holding_cleanup(self):
         """advance_stage() BLENDING→HOLDING should clean up alpha_schedule."""
-        slot = create_slot_in_training()
+        slot = create_slot_in_training(blend_algorithm_id="gated")
 
         # Advance to BLENDING (already has enough improvement from create_slot_in_training)
         result = slot.advance_stage(SeedStage.BLENDING)
@@ -147,8 +152,9 @@ class TestUnifiedTransitions:
         # Need to record some epochs in BLENDING stage to pass G3 gate min_blending_epochs check
         for _ in range(5):
             slot.state.metrics.record_accuracy(slot.state.metrics.current_val_accuracy)
-        slot.state.blending_steps_done = slot.state.blending_steps_total
         slot.set_alpha(1.0)
+        slot.state.alpha_controller.alpha_mode = AlphaMode.HOLD
+        slot.state.alpha_controller.alpha_steps_done = slot.state.alpha_controller.alpha_steps_total
 
         # Advance to HOLDING
         result = slot.advance_stage(SeedStage.HOLDING)

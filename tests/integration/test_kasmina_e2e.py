@@ -405,7 +405,7 @@ class TestBlendingAlgorithmIntegration:
 
     def test_linear_blending_progression(self):
         """Linear blending should progress alpha correctly."""
-        from esper.kasmina.blending import LinearBlend
+        from esper.leyline.alpha import AlphaCurve
 
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test", blend_algorithm_id="linear")
@@ -413,17 +413,19 @@ class TestBlendingAlgorithmIntegration:
         slot.state.transition(SeedStage.BLENDING)
         slot.start_blending(total_steps=10)
 
-        # Alpha should be linear
-        assert isinstance(slot.alpha_schedule, LinearBlend)
+        assert slot.alpha_schedule is None
+        assert slot.state.alpha_controller.alpha_curve == AlphaCurve.LINEAR
 
-        for step in range(11):
-            expected_alpha = step / 10
-            actual_alpha = slot.alpha_schedule.get_alpha(step)
-            assert actual_alpha == pytest.approx(expected_alpha)
+        # Alpha should be linear: step i -> i/total_steps
+        assert slot.state.alpha == 0.0
+        for step in range(1, 11):
+            slot.state.alpha_controller.step()
+            slot.set_alpha(slot.state.alpha_controller.alpha)
+            assert slot.state.alpha == pytest.approx(step / 10)
 
     def test_sigmoid_blending_progression(self):
         """Sigmoid blending should have S-curve alpha progression."""
-        from esper.kasmina.blending import SigmoidBlend
+        from esper.leyline.alpha import AlphaCurve
 
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test", blend_algorithm_id="sigmoid")
@@ -431,11 +433,17 @@ class TestBlendingAlgorithmIntegration:
         slot.state.transition(SeedStage.BLENDING)
         slot.start_blending(total_steps=10)
 
-        assert isinstance(slot.alpha_schedule, SigmoidBlend)
+        assert slot.alpha_schedule is None
+        assert slot.state.alpha_controller.alpha_curve == AlphaCurve.SIGMOID
 
         # Sigmoid should be slower at start and end
-        alpha_start = slot.alpha_schedule.get_alpha(0)
-        alpha_mid = slot.alpha_schedule.get_alpha(5)
-        alpha_end = slot.alpha_schedule.get_alpha(10)
+        alpha_start = slot.state.alpha_controller.alpha
+        for _ in range(5):
+            slot.state.alpha_controller.step()
+        alpha_mid = slot.state.alpha_controller.alpha
+        for _ in range(5):
+            slot.state.alpha_controller.step()
+        alpha_end = slot.state.alpha_controller.alpha
 
         assert alpha_start < alpha_mid < alpha_end
+        assert alpha_end == pytest.approx(1.0)

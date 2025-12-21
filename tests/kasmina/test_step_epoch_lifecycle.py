@@ -178,15 +178,14 @@ class TestStepEpochBlendingToHolding:
     """Test BLENDING → HOLDING transition."""
 
     def test_blending_increments_steps(self):
-        """BLENDING should increment blending_steps_done each epoch."""
+        """BLENDING should increment alpha controller steps each epoch."""
         slot = create_test_slot()
         setup_state_at_stage(slot, SeedStage.BLENDING)
-        slot.state.blending_steps_done = 0
-        slot.state.blending_steps_total = 5
+        slot.state.alpha_controller.retarget(alpha_target=1.0, alpha_steps_total=5)
 
         slot.step_epoch()
 
-        assert slot.state.blending_steps_done == 1
+        assert slot.state.alpha_controller.alpha_steps_done == 1
 
     def test_blending_stays_until_steps_complete(self):
         """BLENDING should not advance until all blending steps complete."""
@@ -194,13 +193,15 @@ class TestStepEpochBlendingToHolding:
         gates.set_gate_result(SeedStage.HOLDING, True)
         slot = create_test_slot(gates)
         setup_state_at_stage(slot, SeedStage.BLENDING)
-        slot.state.blending_steps_done = 2
-        slot.state.blending_steps_total = 5
+        slot.state.alpha_controller.retarget(alpha_target=1.0, alpha_steps_total=5)
+        for _ in range(2):
+            slot.state.alpha_controller.step()
+        slot.set_alpha(slot.state.alpha_controller.alpha)
 
         slot.step_epoch()
 
         assert slot.state.stage == SeedStage.BLENDING
-        assert slot.state.blending_steps_done == 3
+        assert slot.state.alpha_controller.alpha_steps_done == 3
 
     def test_blending_advances_to_holding_when_complete(self):
         """BLENDING should advance to HOLDING when steps complete and G3 passes."""
@@ -208,8 +209,10 @@ class TestStepEpochBlendingToHolding:
         gates.set_gate_result(SeedStage.HOLDING, True)
         slot = create_test_slot(gates)
         setup_state_at_stage(slot, SeedStage.BLENDING)
-        slot.state.blending_steps_done = 4  # Will become 5 (== total)
-        slot.state.blending_steps_total = 5
+        slot.state.alpha_controller.retarget(alpha_target=1.0, alpha_steps_total=5)
+        for _ in range(4):
+            slot.state.alpha_controller.step()
+        slot.set_alpha(slot.state.alpha_controller.alpha)
 
         slot.step_epoch()
 
@@ -221,8 +224,10 @@ class TestStepEpochBlendingToHolding:
         gates.set_gate_result(SeedStage.HOLDING, False)
         slot = create_test_slot(gates)
         setup_state_at_stage(slot, SeedStage.BLENDING)
-        slot.state.blending_steps_done = 4
-        slot.state.blending_steps_total = 5
+        slot.state.alpha_controller.retarget(alpha_target=1.0, alpha_steps_total=5)
+        for _ in range(4):
+            slot.state.alpha_controller.step()
+        slot.set_alpha(slot.state.alpha_controller.alpha)
 
         slot.step_epoch()
 

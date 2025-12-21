@@ -8,6 +8,7 @@ import torch
 
 from esper.kasmina.blending import BlendCatalog, GatedBlend
 from esper.kasmina.host import CNNHost, TransformerHost, MorphogeneticModel
+from esper.leyline.alpha import AlphaCurve
 from esper.leyline.factored_actions import BlendAction, FactoredAction, LifecycleOp, BlueprintAction, TempoAction
 from esper.tamiyo.policy.features import TaskConfig
 
@@ -84,7 +85,7 @@ class TestBlendActionIntegration:
 
     @pytest.mark.parametrize("algorithm", ["linear", "sigmoid"])
     def test_cnn_blend_algorithms(self, algorithm: str):
-        """Each blend algorithm produces valid alpha schedules for CNN."""
+        """Each blend algorithm configures alpha control correctly for CNN."""
         config = TaskConfig.for_cifar10()
         host = CNNHost(num_classes=10, n_blocks=3)
         model = MorphogeneticModel(host, device="cpu", slots=["r0c1"], task_config=config)
@@ -101,13 +102,15 @@ class TestBlendActionIntegration:
         # Trigger blending
         slot.start_blending(total_steps=10)
 
-        # Verify alpha schedule created with correct type
-        assert slot.alpha_schedule is not None
-        assert slot.alpha_schedule.algorithm_id == algorithm
+        # Phase 2: linear/sigmoid are curves for AlphaController (no alpha_schedule module)
+        assert slot.alpha_schedule is None
+        assert slot.state.alpha_controller.alpha_steps_total == 10
+        expected_curve = AlphaCurve.LINEAR if algorithm == "linear" else AlphaCurve.SIGMOID
+        assert slot.state.alpha_controller.alpha_curve == expected_curve
 
     @pytest.mark.parametrize("algorithm", ["linear", "sigmoid"])
     def test_transformer_blend_algorithms(self, algorithm: str):
-        """Each blend algorithm works for transformer topology."""
+        """Each blend algorithm configures alpha control for transformer topology."""
         config = TaskConfig.for_tinystories()
         host = TransformerHost(vocab_size=1000, n_layer=3, n_embd=64, n_head=4, num_segments=3)
         model = MorphogeneticModel(host, device="cpu", slots=["r0c1"], task_config=config)
@@ -120,8 +123,10 @@ class TestBlendActionIntegration:
         slot = model.seed_slots["r0c1"]
         slot.start_blending(total_steps=10)
 
-        assert slot.alpha_schedule is not None
-        assert slot.alpha_schedule.algorithm_id == algorithm
+        assert slot.alpha_schedule is None
+        assert slot.state.alpha_controller.alpha_steps_total == 10
+        expected_curve = AlphaCurve.LINEAR if algorithm == "linear" else AlphaCurve.SIGMOID
+        assert slot.state.alpha_controller.alpha_curve == expected_curve
 
     def test_gated_blend_cnn_integration(self):
         """GatedBlend creates learnable gate network for CNN."""

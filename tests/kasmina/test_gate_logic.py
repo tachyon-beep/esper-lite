@@ -20,6 +20,7 @@ from esper.leyline import (
     DEFAULT_MIN_FOSSILIZE_CONTRIBUTION,
     DEFAULT_GRADIENT_RATIO_THRESHOLD,
 )
+from esper.leyline.alpha import AlphaMode
 
 
 class TestG0Gate:
@@ -226,7 +227,7 @@ class TestG3Gate:
     """Tests for G3 gate (holding readiness)."""
 
     def test_g3_passes_with_alpha_and_epochs(self):
-        """G3 should pass when alpha >= threshold and enough blending epochs."""
+        """G3 should pass when alpha target is reached and epochs are sufficient."""
         gates = QualityGates()
         state = SeedState(
             seed_id="test",
@@ -234,18 +235,22 @@ class TestG3Gate:
             stage=SeedStage.BLENDING,
         )
 
-        state.alpha = DEFAULT_ALPHA_COMPLETE_THRESHOLD
+        state.alpha = 1.0
+        state.alpha_controller.alpha = state.alpha
+        state.alpha_controller.alpha_target = 1.0
+        state.alpha_controller.alpha_mode = AlphaMode.HOLD
         state.metrics.epochs_in_current_stage = DEFAULT_MIN_BLENDING_EPOCHS
 
         result = gates.check_gate(state, SeedStage.HOLDING)
 
         assert result.passed
         assert result.gate == GateLevel.G3
-        assert "alpha_high" in result.checks_passed
+        assert "alpha_target_full" in result.checks_passed
+        assert "alpha_target_reached" in result.checks_passed
         assert "blending_complete" in result.checks_passed
 
     def test_g3_fails_with_low_alpha(self):
-        """G3 should fail when alpha below threshold."""
+        """G3 should fail when alpha is not at the controller target."""
         gates = QualityGates()
         state = SeedState(
             seed_id="test",
@@ -253,13 +258,16 @@ class TestG3Gate:
             stage=SeedStage.BLENDING,
         )
 
-        state.alpha = DEFAULT_ALPHA_COMPLETE_THRESHOLD - 0.1  # Below threshold
+        state.alpha = 0.5
+        state.alpha_controller.alpha = state.alpha
+        state.alpha_controller.alpha_target = 1.0
+        state.alpha_controller.alpha_mode = AlphaMode.UP
         state.metrics.epochs_in_current_stage = DEFAULT_MIN_BLENDING_EPOCHS
 
         result = gates.check_gate(state, SeedStage.HOLDING)
 
         assert not result.passed
-        assert any("alpha_low" in check for check in result.checks_failed)
+        assert any("alpha_not_at_target" in check for check in result.checks_failed)
 
     def test_g3_fails_with_insufficient_epochs(self):
         """G3 should fail when not enough epochs in blending stage."""
@@ -270,7 +278,10 @@ class TestG3Gate:
             stage=SeedStage.BLENDING,
         )
 
-        state.alpha = 1.0  # Full alpha
+        state.alpha = 1.0
+        state.alpha_controller.alpha = state.alpha
+        state.alpha_controller.alpha_target = 1.0
+        state.alpha_controller.alpha_mode = AlphaMode.HOLD
         state.metrics.epochs_in_current_stage = DEFAULT_MIN_BLENDING_EPOCHS - 1
 
         result = gates.check_gate(state, SeedStage.HOLDING)

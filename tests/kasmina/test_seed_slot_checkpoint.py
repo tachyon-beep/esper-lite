@@ -123,7 +123,7 @@ class TestAlphaScheduleCleanup:
         slot.germinate(
             blueprint_id="norm",
             seed_id="test-seed",
-            blend_algorithm_id="linear",
+            blend_algorithm_id="gated",
         )
         slot.state.transition(SeedStage.TRAINING)
         slot.state.transition(SeedStage.BLENDING)

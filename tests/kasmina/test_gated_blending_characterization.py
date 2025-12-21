@@ -9,6 +9,7 @@ import torch
 
 from esper.kasmina.blending import GatedBlend, LinearBlend, SigmoidBlend, BlendCatalog
 from esper.kasmina.slot import SeedSlot, SeedState, QualityGates
+from esper.leyline.alpha import AlphaMode
 from esper.leyline.stages import SeedStage
 from esper.tamiyo.policy.features import TaskConfig
 
@@ -118,12 +119,14 @@ class TestSeedSlotWithGatedBlend:
         slot.state.transition(SeedStage.BLENDING)
         slot.start_blending(total_steps=10)
 
-        # State alpha is updated from get_alpha() which now tracks progress
-        slot.update_alpha_for_step(5)
+        # State alpha is driven by the AlphaController schedule.
+        for _ in range(5):
+            slot.state.alpha_controller.step()
+            slot.set_alpha(slot.state.alpha_controller.alpha)
         state_alpha = slot.state.alpha
 
         # state.alpha = 0.5 (step 5 of 10)
-        assert state_alpha == 0.5
+        assert state_alpha == pytest.approx(0.5)
 
         # forward() uses get_alpha_for_blend(x) which may differ (learned gate)
         # This is intentional: lifecycle uses step progress, forward uses learned gate
@@ -143,11 +146,7 @@ class TestGatedBlendLifecycleIntegration:
     """Test gated blend behavior through lifecycle gates."""
 
     def test_g3_gate_uses_state_alpha_from_step_progress(self):
-        """FIXED: G3 gate checks state.alpha, which now tracks step progress.
-
-        After M2 fix, get_alpha() returns step-based progress (step / total_steps),
-        allowing G3 gate to pass naturally when blending completes.
-        """
+        """G3 gate passes only when the alpha controller reports completion."""
         gates = QualityGates()
 
         state = SeedState(
@@ -158,21 +157,20 @@ class TestGatedBlendLifecycleIntegration:
         )
         state.metrics.epochs_in_current_stage = 5
 
-        # G3 checks state.alpha >= threshold
-        state.alpha = 0.5  # Step 5 of 10 = 50% progress
+        state.alpha = 0.5  # mid-progress
+        state.alpha_controller.alpha = state.alpha
+        state.alpha_controller.alpha_target = 1.0
+        state.alpha_controller.alpha_mode = AlphaMode.UP
         result_low = gates.check_gate(state, SeedStage.HOLDING)
 
-        state.alpha = 1.0  # Step 10 of 10 = 100% progress
+        state.alpha = 1.0  # complete
+        state.alpha_controller.alpha = state.alpha
+        state.alpha_controller.alpha_target = 1.0
+        state.alpha_controller.alpha_mode = AlphaMode.HOLD
         result_high = gates.check_gate(state, SeedStage.HOLDING)
 
-        # G3 uses state.alpha from step-based progress
-        # With fixed gated blending, state.alpha tracks lifecycle correctly
-
-        # Document actual gate behavior
-        assert result_low.passed is False, "G3 should FAIL with alpha=0.5 (mid-blending)"
-        assert result_high.passed is True, "G3 should PASS with alpha=1.0 (complete)"
-
-        # FIXED: Gated blending now compatible with lifecycle gates
+        assert result_low.passed is False, "G3 should fail mid-transition"
+        assert result_high.passed is True, "G3 should pass on completion"
 
 
 class TestBlendCatalogGated:

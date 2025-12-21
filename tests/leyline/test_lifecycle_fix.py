@@ -2,33 +2,35 @@
 
 from esper.kasmina.slot import SeedState, SeedSlot
 from esper.leyline import SeedStage
+from esper.leyline.alpha import AlphaMode
 
 
 class TestBlendingProgressTracking:
-    """Test that SeedState tracks blending progress."""
+    """Test that SeedState tracks blending progress via AlphaController."""
 
-    def test_seedstate_has_blending_fields(self):
-        """SeedState should have blending progress fields."""
+    def test_seedstate_has_alpha_controller_defaults(self):
+        """SeedState should have alpha controller fields with safe defaults."""
         state = SeedState(seed_id="test", blueprint_id="conv_heavy")
 
-        assert state.blending_steps_done == 0
-        assert state.blending_steps_total == 0
+        assert state.alpha_controller.alpha_steps_done == 0
+        assert state.alpha_controller.alpha_steps_total == 0
+        assert state.alpha_controller.alpha_mode == AlphaMode.HOLD
 
-    def test_blending_fields_increment(self):
-        """Blending fields should be mutable."""
+    def test_alpha_controller_fields_mutate(self):
+        """Alpha controller should be mutable (via retarget)."""
         state = SeedState(seed_id="test", blueprint_id="conv_heavy")
-        state.blending_steps_total = 5
-        state.blending_steps_done = 3
+        state.alpha_controller.retarget(alpha_target=1.0, alpha_steps_total=5)
 
-        assert state.blending_steps_total == 5
-        assert state.blending_steps_done == 3
+        assert state.alpha_controller.alpha_steps_total == 5
+        assert state.alpha_controller.alpha_steps_done == 0
+        assert state.alpha_controller.alpha_mode == AlphaMode.UP
 
 
 class TestStartBlendingProgress:
-    """Test that start_blending initializes progress tracking."""
+    """Test that start_blending initializes alpha controller state."""
 
     def test_start_blending_sets_total_steps(self):
-        """start_blending should set blending_steps_total."""
+        """start_blending should configure alpha controller steps."""
         slot = SeedSlot(slot_id="test", channels=64, device="cpu")
 
         # Germinate a seed first
@@ -44,11 +46,11 @@ class TestStartBlendingProgress:
         # Start blending with 5 steps
         slot.start_blending(total_steps=5)
 
-        assert slot.state.blending_steps_total == 5
-        assert slot.state.blending_steps_done == 0
+        assert slot.state.alpha_controller.alpha_steps_total == 5
+        assert slot.state.alpha_controller.alpha_steps_done == 0
 
     def test_start_blending_resets_done_counter(self):
-        """start_blending should reset blending_steps_done to 0."""
+        """start_blending should reset alpha controller progress to 0."""
         slot = SeedSlot(slot_id="test", channels=64, device="cpu")
 
         from unittest.mock import MagicMock
@@ -58,13 +60,14 @@ class TestStartBlendingProgress:
         slot.state.transition(SeedStage.TRAINING)
         slot.state.transition(SeedStage.BLENDING)
 
-        # Manually set done to simulate prior state
-        slot.state.blending_steps_done = 3
+        # Manually set progress to simulate prior state
+        slot.state.alpha_controller.alpha_steps_total = 5
+        slot.state.alpha_controller.alpha_steps_done = 3
 
         # Start blending should reset
         slot.start_blending(total_steps=5)
 
-        assert slot.state.blending_steps_done == 0
+        assert slot.state.alpha_controller.alpha_steps_done == 0
 
 
 class TestStepEpochAutoAdvance:
@@ -85,16 +88,16 @@ class TestStepEpochAutoAdvance:
         return slot
 
     def test_step_epoch_increments_blending_progress(self):
-        """step_epoch should increment blending_steps_done."""
+        """step_epoch should increment alpha controller progress."""
         slot = self._create_blending_slot()
 
-        assert slot.state.blending_steps_done == 0
+        assert slot.state.alpha_controller.alpha_steps_done == 0
 
         slot.step_epoch()
-        assert slot.state.blending_steps_done == 1
+        assert slot.state.alpha_controller.alpha_steps_done == 1
 
         slot.step_epoch()
-        assert slot.state.blending_steps_done == 2
+        assert slot.state.alpha_controller.alpha_steps_done == 2
 
     def test_step_epoch_updates_alpha(self):
         """step_epoch should update alpha based on progress."""

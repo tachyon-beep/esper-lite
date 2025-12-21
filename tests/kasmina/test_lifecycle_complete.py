@@ -367,21 +367,21 @@ class TestBlendingProgressTracking:
     """Tests for blending progress tracking."""
 
     def test_blending_steps_done_increments(self):
-        """blending_steps_done should increment each step_epoch in BLENDING."""
+        """alpha_controller steps should increment each step_epoch in BLENDING."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
         slot.state.transition(SeedStage.TRAINING)
         slot.state.transition(SeedStage.BLENDING)
         slot.start_blending(total_steps=10)
 
-        initial_steps = slot.state.blending_steps_done
+        initial_steps = slot.state.alpha_controller.alpha_steps_done
 
         slot.step_epoch()
 
-        assert slot.state.blending_steps_done == initial_steps + 1
+        assert slot.state.alpha_controller.alpha_steps_done == initial_steps + 1
 
     def test_blending_steps_total_set_at_start(self):
-        """blending_steps_total should be set when blending starts."""
+        """alpha_controller steps_total should be set when blending starts."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
         slot.state.transition(SeedStage.TRAINING)
@@ -390,7 +390,7 @@ class TestBlendingProgressTracking:
         total_steps = 15
         slot.start_blending(total_steps=total_steps)
 
-        assert slot.state.blending_steps_total == total_steps
+        assert slot.state.alpha_controller.alpha_steps_total == total_steps
 
     def test_alpha_updates_during_blending(self):
         """Alpha should update each step during BLENDING."""
