@@ -507,6 +507,10 @@ This plan assumes single-process for the initial implementation. If/when we add 
 - Add a fast “import all” smoke test (or a minimal `pytest -q` target) that imports policy + env modules to catch missing enum members early.
 - Keep the change strictly mechanical: update all call sites in one pass (no shims) and rely on existing import-time enum sync assertions (`OP_NAMES`, etc.) to prevent drift.
 
+**Phase 1 risk-reduction artifacts (implemented now, no runtime changes)**
+- Inventory script: `scripts/lifecycle_phase1_inventory.sh`
+- Import smoke test: `tests/leyline/test_import_smoke.py`
+
 #### Phase 2 — Alpha controller core (Kasmina state + checkpoint)
 
 **Ratings:** Complexity 4/5, Risk 4/5
