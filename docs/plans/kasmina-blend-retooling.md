@@ -527,6 +527,11 @@ This plan assumes single-process for the initial implementation. If/when we add 
 - Decide the definitive state fields for gating (`alpha_target`, `alpha_mode`, `blend_substage`) and make G3 depend only on these (not implicit stage timing).
 - Add a dedicated checkpoint/resume roundtrip test for a mid-transition seed (UP, HOLD, DOWN) before integrating into the full env.
 
+**Phase 2 risk-reduction artifacts (implemented now, no runtime changes)**
+- Alpha controller module: `src/esper/kasmina/alpha_controller.py`
+- Alpha mode/curve contracts: `src/esper/leyline/alpha.py`
+- Property + checkpoint math tests: `tests/kasmina/properties/test_alpha_controller_properties.py`
+
 #### Phase 3 — Blend modes (ADD/MULTIPLY/GATE) + ghost gradients
 
 **Ratings:** Complexity 5/5, Risk 5/5

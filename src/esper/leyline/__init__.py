@@ -377,6 +377,12 @@ from esper.leyline.telemetry import (
     SeedTelemetry,
 )
 
+# Alpha controller contracts
+from esper.leyline.alpha import (
+    AlphaMode,
+    AlphaCurve,
+)
+
 __all__ = [
     # Version
     "LEYLINE_VERSION",
@@ -514,4 +520,8 @@ __all__ = [
     "PerformanceBudgets",
     "DEFAULT_BUDGETS",
     "SeedTelemetry",
+
+    # Alpha controller
+    "AlphaMode",
+    "AlphaCurve",
 ]
