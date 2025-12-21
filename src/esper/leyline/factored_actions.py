@@ -90,7 +90,7 @@ class LifecycleOp(IntEnum):
     """Lifecycle operation."""
     WAIT = 0
     GERMINATE = 1
-    CULL = 2       # was 3
+    PRUNE = 2      # was 3
     FOSSILIZE = 3  # was 4
 
 
@@ -116,7 +116,7 @@ TEMPO_NAMES: tuple[str, ...] = tuple(t.name for t in TempoAction)
 # Operation index constants for direct comparison (avoids enum construction)
 OP_WAIT: int = LifecycleOp.WAIT.value
 OP_GERMINATE: int = LifecycleOp.GERMINATE.value
-OP_CULL: int = LifecycleOp.CULL.value
+OP_PRUNE: int = LifecycleOp.PRUNE.value
 OP_FOSSILIZE: int = LifecycleOp.FOSSILIZE.value
 
 # Module-level validation: catch enum drift at import time
@@ -156,8 +156,8 @@ class FactoredAction:
         return self.op == LifecycleOp.GERMINATE
 
     @property
-    def is_cull(self) -> bool:
-        return self.op == LifecycleOp.CULL
+    def is_prune(self) -> bool:
+        return self.op == LifecycleOp.PRUNE
 
     @property
     def is_fossilize(self) -> bool:
@@ -254,6 +254,6 @@ __all__ = [
     "TEMPO_TO_EPOCHS",
     "OP_WAIT",
     "OP_GERMINATE",
-    "OP_CULL",
+    "OP_PRUNE",
     "OP_FOSSILIZE",
 ]

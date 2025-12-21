@@ -1,7 +1,7 @@
 """Kasmina Slot - Seed lifecycle management.
 
 The SeedSlot manages a single seed module through its lifecycle:
-germination -> training -> blending -> fossilization/culling.
+germination -> training -> blending -> fossilization/pruning.
 
 torch.compile Strategy
 ----------------------
@@ -65,6 +65,8 @@ from esper.leyline import (
     DEFAULT_MIN_BLENDING_EPOCHS,
     DEFAULT_ALPHA_COMPLETE_THRESHOLD,
     DEFAULT_MAX_PROBATION_EPOCHS,
+    # Cooldown (Phase 4)
+    DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE,
 )
 
 if TYPE_CHECKING:
@@ -144,7 +146,7 @@ class SeedMetrics:
 
     # Auto-prune tracking for degenerate policy detection
     # (DRL Expert review 2025-12-17: policies could learn to rely on environment
-    # cleanup rather than proactive culling, creating reward hacking via WAIT spam)
+    # cleanup rather than proactive pruning, creating reward hacking via WAIT spam)
     auto_pruned: bool = False
     auto_prune_reason: str = ""
 
@@ -922,9 +924,10 @@ class SeedSlot(nn.Module):
         Used for differential validation to measure true seed contribution
         by comparing real output (current alpha) vs host-only (alpha=0).
 
-        This method temporarily disables any active alpha_schedule to ensure
-        forward() uses the forced value. This is essential for correct
-        counterfactual attribution during BLENDING stage.
+        For `AlphaAlgorithm.GATE`, we preserve `alpha_schedule` because
+        `forward()` requires it; forcing `alpha=0.0` still yields host-only
+        output because amplitude is zero. For non-gated algorithms,
+        `alpha_schedule` should be absent and is cleared defensively.
 
         Warning:
             NOT THREAD-SAFE. Do not use during concurrent forward passes
@@ -936,7 +939,8 @@ class SeedSlot(nn.Module):
 
         Note:
             When using torch.compile, this will cause graph specialization
-            for the alpha_schedule=None path. This is acceptable as
+            for the forced-alpha path (and for non-gated algorithms,
+            the alpha_schedule=None path). This is acceptable as
             counterfactual evaluation runs once per epoch in eval mode.
 
         Args:
@@ -952,15 +956,17 @@ class SeedSlot(nn.Module):
 
         # Store previous state
         prev_alpha = self.state.alpha
+        prev_algorithm = self.state.alpha_algorithm
         prev_schedule = self.alpha_schedule
 
         # Invalidate cache ensures forward() picks up the forced value
         self._cached_alpha_tensor = None
 
-        # Override alpha AND disable schedule to force forward() to use state.alpha
+        # Override alpha (and invalidate cached alpha tensor).
         self.state.alpha = value
         self.state.alpha_controller.alpha = value
-        self.alpha_schedule = None
+        if prev_algorithm != AlphaAlgorithm.GATE:
+            self.alpha_schedule = None
 
         try:
             yield
@@ -1018,8 +1024,15 @@ class SeedSlot(nn.Module):
         elif alpha_algorithm == AlphaAlgorithm.GATE:
             raise ValueError("alpha_algorithm=GATE requires blend_algorithm_id='gated'")
 
+        # Phase 4 contract: PRUNED/EMBARGOED/RESETTING are first-class and keep
+        # state even after physical removal (seed=None). The slot is unavailable
+        # for germination until it fully returns to DORMANT (state cleared).
         if self.is_active and not is_failure_stage(self.state.stage):
             raise RuntimeError(f"Slot {self.slot_id} already has active seed")
+        if self.state is not None and self.state.stage != SeedStage.DORMANT:
+            raise RuntimeError(
+                f"Slot {self.slot_id} is unavailable for germination (stage={self.state.stage.name})"
+            )
 
         # Default to "cnn" when no TaskConfig is provided to match legacy CNN tests.
         topology = self.task_config.topology if self.task_config is not None else "cnn"
@@ -1034,6 +1047,10 @@ class SeedSlot(nn.Module):
                 f"Blueprint '{blueprint_id}' not available for topology '{topology}'. Available: {names}"
             ) from exc
         self.seed = self.seed.to(self.device)
+        if resolved_alpha_algorithm == AlphaAlgorithm.MULTIPLY:
+            from esper.kasmina.blueprints.initialization import zero_init_final_layer
+
+            zero_init_final_layer(self.seed, allow_missing=True)
 
         # Validate shape: ensure seed preserves feature shape in a host-agnostic way
         # without mutating host BatchNorm statistics. Smoke test only.
@@ -1200,21 +1217,21 @@ class SeedSlot(nn.Module):
 
         return gate_result
 
-    def cull(self, reason: str = "") -> bool:
-        """Cull the current seed.
+    def prune(self, reason: str = "", *, initiator: str = "policy") -> bool:
+        """Prune the current seed immediately.
 
-        FOSSILIZED seeds cannot be culled - they are permanent by design.
+        FOSSILIZED seeds cannot be pruned - they are permanent by design.
         The HOLDING stage exists as the last decision point before
         permanent integration. A future pruning subsystem will handle
         removal of non-performant fossilized nodes.
 
         Returns:
-            True if cull succeeded, False if seed is uncullable (FOSSILIZED)
+            True if prune succeeded, False if seed is unprunable (FOSSILIZED)
         """
         if not self.state:
             return False
 
-        # FOSSILIZED seeds are permanent - cannot be culled
+        # FOSSILIZED seeds are permanent - cannot be pruned
         if self.state.stage == SeedStage.FOSSILIZED:
             return False
 
@@ -1253,6 +1270,7 @@ class SeedSlot(nn.Module):
             TelemetryEventType.SEED_PRUNED,
             data={
                 "reason": reason,
+                "initiator": initiator,
                 "auto_pruned": is_auto_prune,  # Distinguish explicit vs environment prunes
                 "blueprint_id": blueprint_id,
                 "seed_id": seed_id,
@@ -1264,17 +1282,26 @@ class SeedSlot(nn.Module):
             }
         )
         self.seed = None
-        self.state = None
+        # Phase 4 contract: keep state after physical removal so PRUNED/EMBARGOED/
+        # RESETTING are observable to masks + telemetry (anti-thrashing).
+        #
+        # Prune completion is equivalent to alpha==0 and controller HOLD at 0.
+        self.set_alpha(0.0)
+        self.state.alpha_controller.alpha_start = 0.0
+        self.state.alpha_controller.alpha_target = 0.0
+        self.state.alpha_controller.alpha_steps_total = 0
+        self.state.alpha_controller.alpha_steps_done = 0
+        self.state.alpha_controller.alpha_mode = AlphaMode.HOLD
         self.alpha_schedule = None
         self.isolate_gradients = False
         if self.isolation_monitor is not None:
             self.isolation_monitor.reset()
         # Clear shape probe cache to prevent memory leak
         # (DRL Expert review 2025-12-17: cache holds intermediate tensors from shape
-        # validation; in PPO rollouts with frequent cull/regerminate cycles, this can
+        # validation; in PPO rollouts with frequent prune/regerminate cycles, this can
         # accumulate significant GPU memory)
         self._shape_probe_cache.clear()
-        # Clear cached alpha tensor (invalidate on cull)
+        # Clear cached alpha tensor (invalidate on prune)
         self._cached_alpha_tensor = None
         # Clear pending async gradient stats
         self._pending_gradient_stats = None
@@ -1678,16 +1705,21 @@ class SeedSlot(nn.Module):
     def _on_blending_complete(self) -> None:
         """Clean up after BLENDING stage completes.
 
-        Discards alpha_schedule (no longer needed after full integration).
+        Discards alpha_schedule for non-gated algorithms.
         Sets state.alpha = 1.0 (permanently fully blended).
         """
-        self.alpha_schedule = None
-        if self.state:
-            self.set_alpha(1.0)
-            self.state.alpha_controller.alpha_start = 1.0
-            self.state.alpha_controller.alpha_target = 1.0
-            self.state.alpha_controller.alpha_mode = AlphaMode.HOLD
-            self.state.alpha_controller.alpha_steps_done = self.state.alpha_controller.alpha_steps_total
+        if self.state is None:
+            self.alpha_schedule = None
+            return
+
+        if self.state.alpha_algorithm != AlphaAlgorithm.GATE:
+            self.alpha_schedule = None
+
+        self.set_alpha(1.0)
+        self.state.alpha_controller.alpha_start = 1.0
+        self.state.alpha_controller.alpha_target = 1.0
+        self.state.alpha_controller.alpha_mode = AlphaMode.HOLD
+        self.state.alpha_controller.alpha_steps_done = self.state.alpha_controller.alpha_steps_total
 
     def _sync_gate_decision(self, gate_result: GateResult) -> GateResult:
         """Ensure all DDP ranks agree on lifecycle transitions (Unanimous Consensus).
@@ -1744,8 +1776,8 @@ class SeedSlot(nn.Module):
         """Advance lifecycle mechanically once per epoch (Kasmina timekeeper).
 
         Returns:
-            True if an auto-cull occurred (environment safety mechanism),
-            False otherwise. Used by the RL system to apply auto-cull penalties
+            True if an auto-prune occurred (environment safety mechanism),
+            False otherwise. Used by the RL system to apply auto-prune penalties
             that prevent degenerate WAIT-spam policies.
         """
         if not self.state:
@@ -1883,7 +1915,7 @@ class SeedSlot(nn.Module):
         # HOLDING: Decision point for Tamiyo
         # Fossilization requires explicit FOSSILIZE action - NO auto-advance
         # (DRL Expert review 2025-12-10: auto-fossilize violated credit assignment)
-        # Only handle safety auto-culls and timeout
+        # Only handle safety auto-prunes and timeout.
         if stage == SeedStage.HOLDING:
             # Calculate probation timeout (default DEFAULT_MAX_PROBATION_EPOCHS, or 10% of max_epochs)
             # Minimum of 5 epochs ensures sufficient time for counterfactual validation
@@ -1892,22 +1924,106 @@ class SeedSlot(nn.Module):
             if self.task_config:
                 max_probation_epochs = max(5, int(self.task_config.max_epochs * 0.1))
 
-            # Safety auto-cull: negative counterfactual means seed actively hurts performance
+            # Safety auto-prune: negative counterfactual means seed actively hurts performance
             # This is a safety mechanism, not a decision bypass - Tamiyo should learn to
-            # cull these earlier via the attribution penalty, but we don't let obviously
-            # harmful seeds persist indefinitely
+            # prune these earlier via the attribution penalty, but we don't let obviously
+            # harmful seeds persist indefinitely.
             if self.state.metrics.counterfactual_contribution is not None:
                 if self.state.metrics.counterfactual_contribution <= 0:
-                    self.cull(reason="negative_counterfactual")
-                    return True  # Auto-cull occurred
+                    self.prune(reason="negative_counterfactual", initiator="kasmina")
+                    return True  # Auto-prune occurred
 
             # Timeout: Tamiyo failed to decide in time
-            # The escalating WAIT penalty in rewards.py creates pressure to decide sooner
+            # The escalating WAIT penalty in rewards.py creates pressure to decide sooner.
             if self.state.metrics.epochs_in_current_stage >= max_probation_epochs:
-                self.cull(reason="holding_timeout")
-                return True  # Auto-cull occurred
+                self.prune(reason="holding_timeout", initiator="kasmina")
+                return True  # Auto-prune occurred
 
-        return False  # No auto-cull
+        # Phase 4: cooldown pipeline after pruning (seed removed, state retained).
+        #
+        # IMPORTANT: In PRUNED/EMBARGOED/RESETTING the seed is not active, so
+        # SeedMetrics.record_accuracy() is not called. We therefore advance the
+        # stage tick counters here (per step_epoch call) so the dwell completes.
+        if stage == SeedStage.PRUNED:
+            old_stage = self.state.stage
+            metrics = self.state.metrics
+            epochs_in_stage = metrics.epochs_in_current_stage
+            epochs_total = metrics.epochs_total
+
+            ok = self.state.transition(SeedStage.EMBARGOED)
+            if not ok:
+                raise RuntimeError(
+                    f"Illegal lifecycle transition {old_stage} → EMBARGOED"
+                )
+            self._emit_telemetry(
+                TelemetryEventType.SEED_STAGE_CHANGED,
+                data={
+                    "from": old_stage.name,
+                    "to": self.state.stage.name,
+                    "epochs_in_stage": epochs_in_stage,
+                    "epochs_total": epochs_total,
+                },
+            )
+            return False
+
+        if stage == SeedStage.EMBARGOED:
+            # Advance dwell tick (not tied to validation accuracy).
+            self.state.metrics.epochs_total += 1
+            self.state.metrics.epochs_in_current_stage += 1
+
+            embargo_epochs = DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE
+            if self.state.metrics.epochs_in_current_stage < embargo_epochs:
+                return False
+
+            old_stage = self.state.stage
+            metrics = self.state.metrics
+            epochs_in_stage = metrics.epochs_in_current_stage
+            epochs_total = metrics.epochs_total
+
+            ok = self.state.transition(SeedStage.RESETTING)
+            if not ok:
+                raise RuntimeError(
+                    f"Illegal lifecycle transition {old_stage} → RESETTING"
+                )
+            self._emit_telemetry(
+                TelemetryEventType.SEED_STAGE_CHANGED,
+                data={
+                    "from": old_stage.name,
+                    "to": self.state.stage.name,
+                    "epochs_in_stage": epochs_in_stage,
+                    "epochs_total": epochs_total,
+                },
+            )
+            return False
+
+        if stage == SeedStage.RESETTING:
+            self.state.metrics.epochs_total += 1
+            self.state.metrics.epochs_in_current_stage += 1
+
+            # Resetting is a short cleanup dwell; keep it 1 tick for now.
+            if self.state.metrics.epochs_in_current_stage < 1:
+                return False
+
+            old_stage = self.state.stage
+            metrics = self.state.metrics
+            epochs_in_stage = metrics.epochs_in_current_stage
+            epochs_total = metrics.epochs_total
+
+            # Emit explicit "back to DORMANT" transition for telemetry/UI, then
+            # clear state so slot_reports treat the slot as empty.
+            self._emit_telemetry(
+                TelemetryEventType.SEED_STAGE_CHANGED,
+                data={
+                    "from": old_stage.name,
+                    "to": SeedStage.DORMANT.name,
+                    "epochs_in_stage": epochs_in_stage,
+                    "epochs_total": epochs_total,
+                },
+            )
+            self.state = None
+            return False
+
+        return False  # No auto-prune
 
     def get_state_report(self) -> SeedStateReport | None:
         """Get current state as Leyline report."""
@@ -1993,12 +2109,19 @@ class SeedSlot(nn.Module):
         # We only need to restore config and ensure the correct algorithm type.
         if state.get("alpha_schedule_config"):
             config = state["alpha_schedule_config"]
-            if config.get("algorithm_id") and self.state and self.state.stage == SeedStage.BLENDING:
+            if config.get("algorithm_id"):
+                if self.state is None:
+                    raise ValueError("Checkpoint contains alpha_schedule_config but seed_state is missing.")
                 if config["algorithm_id"] != "gated":
                     raise ValueError(
                         "Checkpoint contains legacy alpha_schedule_config for "
                         f"algorithm_id={config['algorithm_id']!r}. "
                         "Phase 2+ only supports alpha_schedule_config for 'gated'."
+                    )
+                if self.state.alpha_algorithm != AlphaAlgorithm.GATE:
+                    raise ValueError(
+                        "Checkpoint contains alpha_schedule_config for 'gated' but "
+                        f"alpha_algorithm={self.state.alpha_algorithm!r}."
                     )
                 # CRITICAL: Restore algorithm_id BEFORE start_blending()
                 # Without this, start_blending() defaults to "sigmoid" and

@@ -3,7 +3,7 @@
 import pytest
 from enum import IntEnum
 
-from esper.leyline import MIN_CULL_AGE
+from esper.leyline import MIN_PRUNE_AGE
 from esper.leyline.factored_actions import LifecycleOp
 from esper.simic.rewards import (
     SeedInfo,
@@ -14,7 +14,7 @@ from esper.simic.rewards import (
     STAGE_FOSSILIZED,
     compute_seed_potential,
     compute_contribution_reward,
-    _contribution_cull_shaping,
+    _contribution_prune_shaping,
     _contribution_fossilize_shaping,
     ContributionRewardConfig,
 )
@@ -141,8 +141,8 @@ class TestPBRSStageBonus:
         assert 0.0 < r2 < r1
 
 
-class TestCullContributionShaping:
-    """Tests for CULL action shaping in contribution reward."""
+class TestPruneContributionShaping:
+    """Tests for PRUNE action shaping in contribution reward."""
 
     def _make_seed_info(self, stage: int, age: int, improvement: float = 0.0) -> SeedInfo:
         return SeedInfo(
@@ -155,36 +155,36 @@ class TestCullContributionShaping:
             seed_age_epochs=age,
         )
 
-    def test_cull_toxic_seed_rewarded(self):
-        """Culling a toxic seed (negative contribution) should be rewarded."""
+    def test_prune_toxic_seed_rewarded(self):
+        """Pruning a toxic seed (negative contribution) should be rewarded."""
         config = ContributionRewardConfig()
-        # Use age >= MIN_CULL_AGE to avoid age penalty
-        seed_info = self._make_seed_info(STAGE_BLENDING, age=MIN_CULL_AGE, improvement=-1.0)
+        # Use age >= MIN_PRUNE_AGE to avoid age penalty
+        seed_info = self._make_seed_info(STAGE_BLENDING, age=MIN_PRUNE_AGE, improvement=-1.0)
 
         # Toxic seed: contribution < hurting_threshold (-0.5)
-        shaping = _contribution_cull_shaping(seed_info, seed_contribution=-1.0, config=config)
+        shaping = _contribution_prune_shaping(seed_info, seed_contribution=-1.0, config=config)
 
         # Should get positive shaping (reward for culling toxic seed)
-        assert shaping > 0, f"Culling toxic seed should be rewarded: {shaping}"
+        assert shaping > 0, f"Pruning toxic seed should be rewarded: {shaping}"
 
-    def test_cull_good_seed_penalized(self):
-        """Culling a good seed (positive contribution) should be penalized."""
+    def test_prune_good_seed_penalized(self):
+        """Pruning a good seed (positive contribution) should be penalized."""
         config = ContributionRewardConfig()
-        # Use age >= MIN_CULL_AGE to avoid age penalty interfering with test
-        seed_info = self._make_seed_info(STAGE_BLENDING, age=MIN_CULL_AGE, improvement=2.0)
+        # Use age >= MIN_PRUNE_AGE to avoid age penalty interfering with test
+        seed_info = self._make_seed_info(STAGE_BLENDING, age=MIN_PRUNE_AGE, improvement=2.0)
 
         # Good seed: contribution > 0
-        shaping = _contribution_cull_shaping(seed_info, seed_contribution=2.0, config=config)
+        shaping = _contribution_prune_shaping(seed_info, seed_contribution=2.0, config=config)
 
         # Should get negative shaping (penalty for culling good seed)
-        assert shaping < 0, f"Culling good seed should be penalized: {shaping}"
+        assert shaping < 0, f"Pruning good seed should be penalized: {shaping}"
 
-    def test_cull_good_seed_inverts_attribution(self):
-        """Culling a good seed should invert attribution to negative total reward."""
-        seed_info = self._make_seed_info(STAGE_BLENDING, age=MIN_CULL_AGE, improvement=3.0)
+    def test_prune_good_seed_inverts_attribution(self):
+        """Pruning a good seed should invert attribution to negative total reward."""
+        seed_info = self._make_seed_info(STAGE_BLENDING, age=MIN_PRUNE_AGE, improvement=3.0)
 
         reward, components = compute_contribution_reward(
-            action=LifecycleOp.CULL,
+            action=LifecycleOp.PRUNE,
             seed_contribution=3.52,  # Good seed with +3.52% contribution
             val_acc=68.0,
             seed_info=seed_info,
@@ -196,19 +196,19 @@ class TestCullContributionShaping:
 
         # Attribution should be NEGATIVE (inverted) for culling good seed
         assert components.bounded_attribution < 0, (
-            f"CULL of good seed should have negative attribution: {components.bounded_attribution}"
+            f"PRUNE of good seed should have negative attribution: {components.bounded_attribution}"
         )
         # Total reward should be negative
         assert reward < 0, (
-            f"CULL of good seed should have negative total reward: {reward}"
+            f"PRUNE of good seed should have negative total reward: {reward}"
         )
 
-    def test_cull_bad_seed_inverts_attribution_to_positive(self):
-        """Culling a bad seed should invert negative attribution to positive."""
-        seed_info = self._make_seed_info(STAGE_BLENDING, age=MIN_CULL_AGE, improvement=-1.0)
+    def test_prune_bad_seed_inverts_attribution_to_positive(self):
+        """Pruning a bad seed should invert negative attribution to positive."""
+        seed_info = self._make_seed_info(STAGE_BLENDING, age=MIN_PRUNE_AGE, improvement=-1.0)
 
         reward, components = compute_contribution_reward(
-            action=LifecycleOp.CULL,
+            action=LifecycleOp.PRUNE,
             seed_contribution=-2.0,  # Bad seed hurting accuracy
             val_acc=63.0,
             seed_info=seed_info,
@@ -220,11 +220,11 @@ class TestCullContributionShaping:
 
         # Attribution should be POSITIVE (inverted from negative)
         assert components.bounded_attribution > 0, (
-            f"CULL of bad seed should have positive attribution: {components.bounded_attribution}"
+            f"PRUNE of bad seed should have positive attribution: {components.bounded_attribution}"
         )
         # Total reward should be positive (good decision to remove harmful seed)
         assert reward > 0, (
-            f"CULL of bad seed should have positive total reward: {reward}"
+            f"PRUNE of bad seed should have positive total reward: {reward}"
         )
 
 
@@ -410,7 +410,7 @@ class TestContributionRewardComponents:
 
         from enum import IntEnum
         class MockAction(IntEnum):
-            CULL = 1
+            PRUNE = 1
 
         seed_info = SeedInfo(
             stage=SeedStage.TRAINING.value,
@@ -423,7 +423,7 @@ class TestContributionRewardComponents:
         )
 
         reward, components = compute_contribution_reward(
-            action=MockAction.CULL,
+            action=MockAction.PRUNE,
             seed_contribution=-0.5,
             val_acc=68.0,
             seed_info=seed_info,
@@ -432,7 +432,7 @@ class TestContributionRewardComponents:
             return_components=True,
         )
 
-        assert components.action_name == "CULL"
+        assert components.action_name == "PRUNE"
         assert components.epoch == 12
         assert components.seed_stage == SeedStage.TRAINING.value
 

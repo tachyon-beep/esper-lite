@@ -5,13 +5,13 @@ Tests invariants for action masks that must hold for ALL valid inputs:
 - Mask dimensions match slot configuration
 - GERMINATE requires empty enabled slot
 - FOSSILIZE requires HOLDING seed in enabled slot
-- CULL requires cullable stage + minimum age
+- PRUNE requires prunable stage + minimum age
 """
 
 from hypothesis import given, assume, settings
 from hypothesis import strategies as st
 
-from esper.leyline import SeedStage, MIN_CULL_AGE
+from esper.leyline import SeedStage, MIN_PRUNE_AGE
 from esper.leyline.slot_config import SlotConfig
 from esper.leyline.factored_actions import LifecycleOp, NUM_OPS, NUM_BLUEPRINTS, NUM_BLENDS
 from esper.tamiyo.policy.action_masks import (
@@ -314,11 +314,11 @@ class TestFossilizeRequiresHolding:
         )
 
 
-class TestCullRequiresCullableStageAndAge:
-    """Property: CULL valid iff seed in cullable stage AND age >= MIN_CULL_AGE."""
+class TestPruneRequiresPrunableStageAndAge:
+    """Property: PRUNE valid iff seed in prunable stage AND age >= MIN_PRUNE_AGE."""
 
     # Stages that can transition to PRUNED (based on VALID_TRANSITIONS)
-    CULLABLE_STAGES = [
+    PRUNABLE_STAGES = [
         SeedStage.GERMINATED,
         SeedStage.TRAINING,
         SeedStage.BLENDING,
@@ -327,15 +327,15 @@ class TestCullRequiresCullableStageAndAge:
 
     @given(
         config=slot_configs(),
-        stage=st.sampled_from(CULLABLE_STAGES),
+        stage=st.sampled_from(PRUNABLE_STAGES),
     )
-    def test_cull_enabled_with_cullable_stage_and_sufficient_age(
+    def test_prune_enabled_with_prunable_stage_and_sufficient_age(
         self, config: SlotConfig, stage: SeedStage
     ):
-        """Property: CULL enabled when seed in cullable stage with age >= MIN_CULL_AGE."""
+        """Property: PRUNE enabled when seed in prunable stage with age >= MIN_PRUNE_AGE."""
         slot_states = {
             slot_id: (
-                MaskSeedInfo(stage=stage.value, seed_age_epochs=MIN_CULL_AGE)
+                MaskSeedInfo(stage=stage.value, seed_age_epochs=MIN_PRUNE_AGE)
                 if i == 0 else None
             )
             for i, slot_id in enumerate(config.slot_ids)
@@ -348,21 +348,21 @@ class TestCullRequiresCullableStageAndAge:
             slot_config=config,
         )
 
-        assert masks["op"][LifecycleOp.CULL].item() is True, (
-            f"CULL should be enabled for stage {stage.name} with age {MIN_CULL_AGE}"
+        assert masks["op"][LifecycleOp.PRUNE].item() is True, (
+            f"PRUNE should be enabled for stage {stage.name} with age {MIN_PRUNE_AGE}"
         )
 
     @given(
         config=slot_configs(),
-        stage=st.sampled_from(CULLABLE_STAGES),
+        stage=st.sampled_from(PRUNABLE_STAGES),
     )
-    def test_cull_disabled_with_insufficient_age(
+    def test_prune_disabled_with_insufficient_age(
         self, config: SlotConfig, stage: SeedStage
     ):
-        """Property: CULL disabled when seed age < MIN_CULL_AGE."""
+        """Property: PRUNE disabled when seed age < MIN_PRUNE_AGE."""
         slot_states = {
             slot_id: (
-                MaskSeedInfo(stage=stage.value, seed_age_epochs=0)  # Below MIN_CULL_AGE
+                MaskSeedInfo(stage=stage.value, seed_age_epochs=0)  # Below MIN_PRUNE_AGE
                 if i == 0 else None
             )
             for i, slot_id in enumerate(config.slot_ids)
@@ -375,13 +375,13 @@ class TestCullRequiresCullableStageAndAge:
             slot_config=config,
         )
 
-        assert masks["op"][LifecycleOp.CULL].item() is False, (
-            f"CULL should be disabled for stage {stage.name} with age 0 < MIN_CULL_AGE"
+        assert masks["op"][LifecycleOp.PRUNE].item() is False, (
+            f"PRUNE should be disabled for stage {stage.name} with age 0 < MIN_PRUNE_AGE"
         )
 
     @given(config=slot_configs())
-    def test_cull_disabled_with_non_cullable_stage(self, config: SlotConfig):
-        """Property: CULL disabled when seed in non-cullable stage."""
+    def test_prune_disabled_with_non_prunable_stage(self, config: SlotConfig):
+        """Property: PRUNE disabled when seed in non-prunable stage."""
         # FOSSILIZED is terminal and cannot be culled
         slot_states = {
             slot_id: (
@@ -398,13 +398,13 @@ class TestCullRequiresCullableStageAndAge:
             slot_config=config,
         )
 
-        assert masks["op"][LifecycleOp.CULL].item() is False, (
-            "CULL should be disabled for FOSSILIZED seed"
+        assert masks["op"][LifecycleOp.PRUNE].item() is False, (
+            "PRUNE should be disabled for FOSSILIZED seed"
         )
 
     @given(config=slot_configs())
-    def test_cull_disabled_with_empty_slots(self, config: SlotConfig):
-        """Property: CULL disabled when all enabled slots are empty."""
+    def test_prune_disabled_with_empty_slots(self, config: SlotConfig):
+        """Property: PRUNE disabled when all enabled slots are empty."""
         slot_states = {slot_id: None for slot_id in config.slot_ids}
         enabled = list(config.slot_ids)
 
@@ -414,8 +414,8 @@ class TestCullRequiresCullableStageAndAge:
             slot_config=config,
         )
 
-        assert masks["op"][LifecycleOp.CULL].item() is False, (
-            "CULL should be disabled when all slots are empty"
+        assert masks["op"][LifecycleOp.PRUNE].item() is False, (
+            "PRUNE should be disabled when all slots are empty"
         )
 
 

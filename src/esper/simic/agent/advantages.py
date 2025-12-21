@@ -4,7 +4,7 @@ Causal structure for Tamiyo's factored action space:
 
     DECISION TREE AT EACH EPOCH:
 
-    op_head decides: [WAIT, GERMINATE, FOSSILIZE, CULL]
+    op_head decides: [WAIT, GERMINATE, FOSSILIZE, PRUNE]
         |
         +-- WAIT: No other heads matter
         |
@@ -16,7 +16,7 @@ Causal structure for Tamiyo's factored action space:
         +-- FOSSILIZE:
         |   +-- slot_head: WHICH seed to fossilize (target_slot)
         |
-        +-- CULL:
+        +-- PRUNE:
             +-- slot_head: WHICH seed to remove (target_slot)
 
 When computing advantages, we mask out heads that had no causal effect
@@ -52,7 +52,7 @@ def compute_per_head_advantages(
     # Other heads use multiplication which creates new tensors anyway.
     op_advantages = base_advantages
 
-    # slot head: relevant for GERMINATE, FOSSILIZE, CULL (not WAIT)
+    # slot head: relevant for GERMINATE, FOSSILIZE, PRUNE (not WAIT)
     slot_mask = ~is_wait
     slot_advantages = base_advantages * slot_mask.float()
 

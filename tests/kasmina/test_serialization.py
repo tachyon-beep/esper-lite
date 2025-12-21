@@ -412,7 +412,7 @@ class TestEdgeCaseSerialization:
         data = slot.state.to_dict()
 
         # Cull
-        slot.cull()
+        slot.prune()
 
         # Verify we can still deserialize the pre-cull state
         restored = SeedState.from_dict(data)

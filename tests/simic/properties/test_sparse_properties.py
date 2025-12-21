@@ -211,20 +211,20 @@ class TestMinimalRewardProperties:
             "total_params": 100_000,
             "epoch": 10,  # Non-terminal
             "max_epochs": 25,
-            "action": LifecycleOp.CULL,
+            "action": LifecycleOp.PRUNE,
             "config": config,
         }
 
         r_young = compute_minimal_reward(**base_inputs, seed_age=young_age)
         r_old = compute_minimal_reward(**base_inputs, seed_age=old_age)
 
-        assert r_young == -0.1, f"Young cull should get penalty, got {r_young}"
-        assert r_old == 0.0, f"Old cull should get no penalty, got {r_old}"
+        assert r_young == -0.1, f"Young prune should get penalty, got {r_young}"
+        assert r_old == 0.0, f"Old prune should get no penalty, got {r_old}"
 
     @given(st.sampled_from([LifecycleOp.WAIT, LifecycleOp.GERMINATE, LifecycleOp.FOSSILIZE]))
     @settings(max_examples=50, deadline=None)
     def test_non_cull_no_penalty(self, action):
-        """INVARIANT: Non-CULL actions get no early-cull penalty."""
+        """INVARIANT: Non-PRUNE actions get no early-prune penalty."""
         config = ContributionRewardConfig(
             reward_mode=RewardMode.MINIMAL,
             early_cull_threshold=5,
@@ -241,8 +241,8 @@ class TestMinimalRewardProperties:
             config=config,
         )
 
-        # Non-terminal, non-CULL -> 0.0 (no penalty regardless of seed age)
-        assert reward == 0.0, f"Non-CULL action should get no penalty, got {reward}"
+        # Non-terminal, non-PRUNE -> 0.0 (no penalty regardless of seed age)
+        assert reward == 0.0, f"Non-PRUNE action should get no penalty, got {reward}"
 
     def test_minimal_equals_sparse_plus_penalty(self):
         """INVARIANT: MINIMAL = SPARSE + early_cull_penalty (when applicable)."""
@@ -261,13 +261,13 @@ class TestMinimalRewardProperties:
             config=config,
         )
 
-        # Minimal with young cull
+        # Minimal with young prune
         minimal_reward = compute_minimal_reward(
             host_max_acc=75.0,
             total_params=100_000,
             epoch=10,
             max_epochs=25,
-            action=LifecycleOp.CULL,
+            action=LifecycleOp.PRUNE,
             seed_age=3,
             config=config,
         )

@@ -470,7 +470,7 @@ class EnvDetailScreen(ModalScreen[None]):
                     "WAIT": "dim",
                     "GERMINATE": "cyan",
                     "FOSSILIZE": "green",
-                    "CULL": "red",
+                    "PRUNE": "red",
                 }
                 color = action_colors.get(action, "white")
                 action_text.append(f"{action}: {pct:.0f}%", style=color)

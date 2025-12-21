@@ -178,7 +178,7 @@ class PolicySnapshot:
     observation_summary: dict[str, float] = field(default_factory=dict)  # Key stats
 
     # Action (what the agent did)
-    action_op: str = ""  # "WAIT", "GERMINATE", "CULL", etc.
+    action_op: str = ""  # "WAIT", "GERMINATE", "PRUNE", etc.
     action_slot: str | None = None
     action_blueprint: str | None = None
     action_was_masked: bool = False  # Was this action forced by mask?

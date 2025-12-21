@@ -102,10 +102,10 @@ class TestSeedSlotCheckpoint:
 
 
 class TestAlphaScheduleCleanup:
-    """Test alpha_schedule is discarded after BLENDING."""
+    """Test alpha_schedule retention rules after BLENDING."""
 
-    def test_alpha_schedule_cleared_on_holding_transition(self):
-        """alpha_schedule should be None after BLENDING -> HOLDING."""
+    def test_alpha_schedule_kept_for_gate_on_holding_transition(self):
+        """alpha_schedule should remain for AlphaAlgorithm.GATE after BLENDING -> HOLDING."""
         slot = SeedSlot(
             slot_id="r0c0",
             channels=64,
@@ -137,6 +137,6 @@ class TestAlphaScheduleCleanup:
         slot.state.transition(SeedStage.HOLDING)
         slot._on_blending_complete()  # Cleanup hook
 
-        # Schedule should be cleared
-        assert slot.alpha_schedule is None
+        # Schedule must persist for GATE (forward requires it).
+        assert slot.alpha_schedule is not None
         assert slot.state.alpha == 1.0

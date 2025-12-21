@@ -69,7 +69,7 @@ class TestEnrichedTelemetry:
         self.slot.state.metrics.initial_val_accuracy = 70.0
         self.slot.state.metrics.current_val_accuracy = 69.5
 
-        self.slot.cull("no_improvement")
+        self.slot.prune("no_improvement")
 
         prune_events = [e for e in self.events
                         if e.event_type == TelemetryEventType.SEED_PRUNED]

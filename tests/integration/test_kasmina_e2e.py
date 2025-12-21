@@ -19,6 +19,7 @@ from esper.leyline import (
     DEFAULT_MIN_TRAINING_IMPROVEMENT,
     DEFAULT_MIN_BLENDING_EPOCHS,
     DEFAULT_GRADIENT_RATIO_THRESHOLD,
+    DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE,
 )
 
 
@@ -245,8 +246,13 @@ class TestCullAndRecycle:
         slot.state.metrics.record_accuracy(50.0)
 
         # Cull
-        model.cull_seed(slot="r0c0")
+        model.prune_seed(slot="r0c0")
         assert model.count_active_seeds() == 0
+
+        # Phase 4: cooldown blocks immediate re-germination.
+        for _ in range(DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE + 2):
+            slot.step_epoch()
+        assert slot.state is None
 
         # Second seed lifecycle
         model.germinate_seed("norm", "seed_1", slot="r0c0")
@@ -269,10 +275,12 @@ class TestCullAndRecycle:
         model.seed_slots["r0c1"].step_epoch()
 
         # Cull r0c0
-        model.cull_seed(slot="r0c0")
+        model.prune_seed(slot="r0c0")
 
         assert model.count_active_seeds() == 1
-        assert model.seed_slots["r0c0"].state is None
+        assert model.seed_slots["r0c0"].state is not None
+        assert model.seed_slots["r0c0"].state.stage == SeedStage.PRUNED
+        assert model.seed_slots["r0c0"].seed is None
         assert model.seed_slots["r0c1"].state.stage == SeedStage.TRAINING
 
 

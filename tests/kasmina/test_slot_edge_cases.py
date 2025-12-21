@@ -14,7 +14,7 @@ import torch
 
 from esper.kasmina.slot import SeedSlot, SeedMetrics, SeedState, QualityGates
 from esper.kasmina.isolation import blend_with_isolation
-from esper.leyline import SeedStage
+from esper.leyline import SeedStage, DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE
 
 
 class TestAlphaBoundaryValues:
@@ -93,12 +93,17 @@ class TestGerminationErrors:
         # First lifecycle
         slot.germinate("noop", seed_id="seed1")
         slot.state.transition(SeedStage.TRAINING)
-        result = slot.cull()
+        result = slot.prune()
 
-        # cull() clears state and seed after transitioning to PRUNED
         assert result is True
-        assert slot.state is None
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.PRUNED
         assert slot.seed is None
+
+        # Cooldown must complete before slot is available again.
+        for _ in range(DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE + 2):
+            slot.step_epoch()
+        assert slot.state is None
 
         # Second germination should work (slot is now empty)
         state = slot.germinate("noop", seed_id="seed2")
@@ -128,30 +133,30 @@ class TestCullBehavior:
     """Tests for cull behavior at different stages."""
 
     def test_cull_from_training_succeeds(self):
-        """Culling from TRAINING stage should succeed and clear state."""
+        """Culling from TRAINING stage should succeed and remove seed."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
         slot.state.transition(SeedStage.TRAINING)
 
-        result = slot.cull()
+        result = slot.prune()
 
-        # cull() returns True and clears the slot
         assert result is True
-        assert slot.state is None
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.PRUNED
         assert slot.seed is None
 
     def test_cull_from_blending_succeeds(self):
-        """Culling from BLENDING stage should succeed and clear state."""
+        """Culling from BLENDING stage should succeed and remove seed."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
         slot.state.transition(SeedStage.TRAINING)
         slot.state.transition(SeedStage.BLENDING)
 
-        result = slot.cull()
+        result = slot.prune()
 
-        # cull() returns True and clears the slot
         assert result is True
-        assert slot.state is None
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.PRUNED
         assert slot.seed is None
 
     def test_cull_fossilized_returns_false(self):
@@ -163,7 +168,7 @@ class TestCullBehavior:
         slot.state.stage = SeedStage.FOSSILIZED
 
         # FOSSILIZED has no valid transitions
-        result = slot.cull()
+        result = slot.prune()
 
         assert result is False
 
@@ -171,7 +176,7 @@ class TestCullBehavior:
         """Culling when no seed is active should return False."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
 
-        result = slot.cull()
+        result = slot.prune()
 
         assert result is False
 

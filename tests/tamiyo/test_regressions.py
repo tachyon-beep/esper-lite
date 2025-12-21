@@ -366,7 +366,7 @@ class TestCounterfactualPreferredForFossilize:
         decision = policy.decide(signals, [seed])
 
         # Should cull based on negative counterfactual
-        assert decision.action.name == "CULL"
+        assert decision.action.name == "PRUNE"
         assert decision.target_seed_id == "ransomware_seed"
         # Reason should show the negative contribution
         assert "-1.5" in decision.reason or "-1.50" in decision.reason
@@ -419,4 +419,4 @@ class TestCounterfactualPreferredForFossilize:
         decision = policy.decide(signals, [seed])
 
         # Should cull (counterfactual=1.0 < threshold=2.0)
-        assert decision.action.name == "CULL"
+        assert decision.action.name == "PRUNE"

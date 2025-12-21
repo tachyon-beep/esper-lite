@@ -15,7 +15,7 @@ class PolicyBundle(Protocol):
     """Interface for swappable Tamiyo policy implementations.
 
     Tamiyo is the "brain" of Esper - she makes strategic decisions about
-    seed lifecycle (germinate, fossilize, cull, wait). Different PolicyBundle
+    seed lifecycle (germinate, fossilize, prune, wait). Different PolicyBundle
     implementations provide different decision-making strategies:
 
     - LSTMPolicyBundle: Recurrent neural policy with temporal memory

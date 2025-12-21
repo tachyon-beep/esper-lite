@@ -118,7 +118,7 @@ def test_minimal_reward_no_penalty_for_old_cull():
         total_params=100_000,
         epoch=10,
         max_epochs=25,
-        action=LifecycleOp.CULL,
+        action=LifecycleOp.PRUNE,
         seed_age=5,  # Exactly at threshold
         config=config,
     )
@@ -142,7 +142,7 @@ def test_minimal_reward_penalty_for_young_cull():
         total_params=100_000,
         epoch=10,
         max_epochs=25,
-        action=LifecycleOp.CULL,
+        action=LifecycleOp.PRUNE,
         seed_age=3,  # Below threshold
         config=config,
     )
@@ -275,7 +275,7 @@ def test_compute_reward_minimal_mode():
 
     # Cull action on young seed
     reward = compute_reward(
-        action=LifecycleOp.CULL,
+        action=LifecycleOp.PRUNE,
         seed_contribution=None,
         val_acc=70.0,
         host_max_acc=70.0,

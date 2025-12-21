@@ -117,7 +117,7 @@ class SeedState:
     has_exploding: bool = False
     # Stage progress - shown as "e5" in slot cell
     epochs_in_stage: int = 0
-    # Fossilization/cull context (P1/P2 telemetry gap fix)
+    # Fossilization/prune context (P1/P2 telemetry gap fix)
     improvement: float = 0.0  # Accuracy improvement when fossilized
     prune_reason: str = ""  # Why seed was pruned (e.g., "gradient_explosion", "stagnation")
     auto_pruned: bool = False  # True if system auto-pruned vs policy decision
@@ -198,10 +198,10 @@ class EnvState:
     #   GERMINATE_CONV_LIGHT → GERMINATE
     #   GERMINATE_DENSE_HEAVY → GERMINATE
     #   FOSSILIZE_R0C0 → FOSSILIZE
-    #   CULL_R1C1 → CULL
+    #   PRUNE_R1C1 → PRUNE
     action_history: deque[str] = field(default_factory=lambda: deque(maxlen=10))
     action_counts: dict[str, int] = field(default_factory=lambda: {
-        "WAIT": 0, "GERMINATE": 0, "CULL": 0, "FOSSILIZE": 0
+        "WAIT": 0, "GERMINATE": 0, "PRUNE": 0, "FOSSILIZE": 0
     })
     total_actions: int = 0
 
@@ -287,7 +287,7 @@ class EnvState:
         - GERMINATE_CONV_LIGHT → GERMINATE
         - GERMINATE_DENSE_HEAVY → GERMINATE
         - FOSSILIZE_R0C0 → FOSSILIZE
-        - CULL_R1C1 → CULL
+        - PRUNE_R1C1 → PRUNE
         - WAIT → WAIT (unchanged)
         """
         self.action_history.append(action_name)
@@ -298,8 +298,8 @@ class EnvState:
             normalized = "GERMINATE"
         elif action_name.startswith("FOSSILIZE"):
             normalized = "FOSSILIZE"
-        elif action_name.startswith("CULL"):
-            normalized = "CULL"
+        elif action_name.startswith("PRUNE"):
+            normalized = "PRUNE"
         elif action_name.startswith("WAIT"):
             normalized = "WAIT"
 
@@ -525,7 +525,7 @@ class DecisionSnapshot:
     timestamp: datetime
     slot_states: dict[str, str]  # slot_id -> "Training 12%" or "Empty"
     host_accuracy: float
-    chosen_action: str  # "GERMINATE", "WAIT", "CULL", "FOSSILIZE"
+    chosen_action: str  # "GERMINATE", "WAIT", "PRUNE", "FOSSILIZE"
     chosen_slot: str | None  # Target slot for action (None for WAIT)
     confidence: float  # Action probability (0-1)
     expected_value: float  # Value estimate before action

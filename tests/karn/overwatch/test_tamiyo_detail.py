@@ -19,7 +19,7 @@ class TestTamiyoDetailPanel:
         from esper.karn.overwatch.widgets.tamiyo_detail import TamiyoDetailPanel
 
         tamiyo = TamiyoState(
-            action_counts={"GERMINATE": 34, "BLEND": 28, "CULL": 12, "WAIT": 26},
+            action_counts={"GERMINATE": 34, "BLEND": 28, "PRUNE": 12, "WAIT": 26},
         )
         panel = TamiyoDetailPanel()
         panel.update_tamiyo(tamiyo)
@@ -36,7 +36,7 @@ class TestTamiyoDetailPanel:
         from esper.karn.overwatch.widgets.tamiyo_detail import TamiyoDetailPanel
 
         tamiyo = TamiyoState(
-            recent_actions=["G", "B", "B", "W", "G", "C", "W", "W", "B", "G"],
+            recent_actions=["G", "B", "B", "W", "G", "P", "W", "W", "B", "G"],
         )
         panel = TamiyoDetailPanel()
         panel.update_tamiyo(tamiyo)

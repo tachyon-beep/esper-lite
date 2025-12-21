@@ -302,7 +302,7 @@ def test_env_detail_screen_metrics_section():
     env.fossilized_count = 1
     env.pruned_count = 0
     env.total_actions = 10
-    env.action_counts = {"WAIT": 5, "GERMINATE": 3, "FOSSILIZE": 1, "CULL": 1}
+    env.action_counts = {"WAIT": 5, "GERMINATE": 3, "FOSSILIZE": 1, "PRUNE": 1}
 
     screen = EnvDetailScreen(env_state=env, slot_ids=[])
     table = screen._render_metrics()
@@ -320,7 +320,7 @@ def test_env_detail_screen_action_distribution():
     """Test action distribution display in metrics."""
     env = EnvState(env_id=0)
     env.total_actions = 100
-    env.action_counts = {"WAIT": 50, "GERMINATE": 30, "FOSSILIZE": 15, "CULL": 5}
+    env.action_counts = {"WAIT": 50, "GERMINATE": 30, "FOSSILIZE": 15, "PRUNE": 5}
 
     screen = EnvDetailScreen(env_state=env, slot_ids=[])
     table = screen._render_metrics()

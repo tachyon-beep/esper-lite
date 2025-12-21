@@ -161,10 +161,10 @@ class TamiyoBrain(Static):
             "WAIT": "dim",
             "BLEND": "cyan",
             "FOSSILIZE": "blue",
-            "CULL": "red",
+            "PRUNE": "red",
         }
 
-        for action in ["GERMINATE", "BLEND", "FOSSILIZE", "CULL", "WAIT"]:
+        for action in ["GERMINATE", "BLEND", "FOSSILIZE", "PRUNE", "WAIT"]:
             pct = pcts.get(action, 0)
             width = int((pct / 100) * bar_width)
             if width > 0:
@@ -173,8 +173,8 @@ class TamiyoBrain(Static):
         bar.append("] ")
 
         # Compact legend: G=50 W=25 F=25
-        abbrevs = {"GERMINATE": "G", "BLEND": "B", "WAIT": "W", "FOSSILIZE": "F", "CULL": "C"}
-        for action in ["GERMINATE", "BLEND", "FOSSILIZE", "CULL", "WAIT"]:
+        abbrevs = {"GERMINATE": "G", "BLEND": "B", "WAIT": "W", "FOSSILIZE": "F", "PRUNE": "P"}
+        for action in ["GERMINATE", "BLEND", "FOSSILIZE", "PRUNE", "WAIT"]:
             pct = pcts.get(action, 0)
             if pct > 0:
                 bar.append(f"{abbrevs[action]}={pct:.0f} ", style=colors.get(action, "white"))
@@ -285,7 +285,7 @@ class TamiyoBrain(Static):
                 "GERMINATE": "green bold",
                 "WAIT": "dim",
                 "FOSSILIZE": "blue bold",
-                "CULL": "red bold",
+                "PRUNE": "red bold",
             }
             chose_line.append(f"{decision.chosen_action}", style=action_colors.get(decision.chosen_action, "white"))
             if decision.chosen_slot:

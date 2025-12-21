@@ -277,14 +277,14 @@ class TestEmbargoEnforcementProperties:
     def test_embargo_blocks_germination(self, embargo_epochs, cull_epoch):
         """Property: If epoch - last_cull_epoch < embargo, decision MUST be WAIT."""
         config = HeuristicPolicyConfig(
-            embargo_epochs_after_cull=embargo_epochs,
+            embargo_epochs_after_prune=embargo_epochs,
             plateau_epochs_to_germinate=1,  # Easy to trigger
             min_epochs_before_germinate=0,  # No minimum
         )
         policy = HeuristicTamiyo(config=config, topology="cnn")
 
         # Set cull epoch
-        policy._last_cull_epoch = cull_epoch
+        policy._last_prune_epoch = cull_epoch
 
         # Test epochs during embargo
         for offset in range(embargo_epochs):
@@ -376,7 +376,7 @@ class TamiyoStateMachine(RuleBasedStateMachine):
             valid = (
                 action_name == "WAIT" or
                 action_name == "FOSSILIZE" or
-                action_name == "CULL" or
+                action_name == "PRUNE" or
                 action_name.startswith("GERMINATE_")
             )
             assert valid, f"Invalid action: {action_name}"

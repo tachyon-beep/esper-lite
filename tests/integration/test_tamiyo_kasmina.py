@@ -86,8 +86,8 @@ class TestTamiyoKasminaIntegration:
         assert state.stage == SeedStage.FOSSILIZED
         assert slot.is_active  # Fossilized seeds remain active
 
-    def test_cull_removes_seed(self, slot, action_enum):
-        """CULL command removes seed and transitions to PRUNED stage.
+    def test_prune_removes_seed(self, slot, action_enum):
+        """PRUNE command removes seed and transitions to PRUNED stage.
 
         Verifies that:
         1. Cull decision removes seed from slot
@@ -98,21 +98,22 @@ class TestTamiyoKasminaIntegration:
         state = slot.germinate(blueprint_id="norm", seed_id="test_seed")
         state.transition(SeedStage.TRAINING)
 
-        # Create CULL decision
+        # Create PRUNE decision
         decision = TamiyoDecision(
-            action=action_enum.CULL,
+            action=action_enum.PRUNE,
             target_seed_id="test_seed",
             reason="Seed not improving",
         )
 
         # Execute cull
-        success = slot.cull(reason=decision.reason)
+        success = slot.prune(reason=decision.reason)
 
         # Verify seed removal
         assert success
         assert not slot.is_active  # Slot is now empty
         assert slot.seed is None
-        assert slot.state is None
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.PRUNED
 
 
 class TestTamiyoKasminaDecisionProperties:

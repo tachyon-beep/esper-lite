@@ -413,7 +413,7 @@ class EnvOverview(Static):
             "WAIT": "WAIT",
             "GERMINATE": "GERM",
             "FOSSILIZE": "FOSS",
-            "CULL": "CULL",
+            "PRUNE": "PRUNE",
         }.get(last_action, last_action[:4] if last_action else "—")
 
         return action_short

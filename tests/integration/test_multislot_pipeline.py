@@ -68,7 +68,7 @@ def test_end_to_end_multislot_lifecycle():
     assert model.active_seed_params > 0
 
     # Cull a seed
-    model.cull_seed(slot="r0c0")
+    model.prune_seed(slot="r0c0")
     assert not model.has_active_seed_in_slot("r0c0")
     assert model.has_active_seed_in_slot("r0c2")
 
@@ -77,6 +77,6 @@ def test_end_to_end_multislot_lifecycle():
     assert out.shape == (2, 10)
 
     # Cull remaining seed
-    model.cull_seed(slot="r0c2")
+    model.prune_seed(slot="r0c2")
     assert not model.has_active_seed
     assert model.active_seed_params == 0

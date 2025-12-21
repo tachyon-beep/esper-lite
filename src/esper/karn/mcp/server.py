@@ -20,7 +20,7 @@ VIEW_DOCS = """Available telemetry views:
 - `runs` - Run metadata (task, hyperparameters, devices)
 - `epochs` - Per-environment training progress (accuracy, loss per epoch)
 - `ppo_updates` - PPO health metrics (entropy, KL divergence, clip fraction)
-- `seed_lifecycle` - Seed state machine (germinate, stage changes, fossilize, cull)
+- `seed_lifecycle` - Seed state machine (germinate, stage changes, fossilize, prune)
 - `rewards` - Per-step reward breakdown (all reward components)
 - `anomalies` - Training pathologies (collapses, rollbacks, plateaus)
 - `raw_events` - All events (use for custom queries)

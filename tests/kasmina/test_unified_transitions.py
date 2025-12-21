@@ -139,8 +139,8 @@ class TestUnifiedTransitions:
         assert slot_via_advance.state.metrics.accuracy_at_blending_start > 0
         assert slot_via_step_epoch.state.metrics.accuracy_at_blending_start > 0
 
-    def test_advance_stage_blending_to_holding_cleanup(self):
-        """advance_stage() BLENDING→HOLDING should clean up alpha_schedule."""
+    def test_advance_stage_blending_to_holding_keeps_gate_schedule(self):
+        """advance_stage() BLENDING→HOLDING should keep alpha_schedule for GATE."""
         slot = create_slot_in_training(blend_algorithm_id="gated")
 
         # Advance to BLENDING (already has enough improvement from create_slot_in_training)
@@ -161,8 +161,8 @@ class TestUnifiedTransitions:
         assert result.passed
         assert slot.state.stage == SeedStage.HOLDING
 
-        # alpha_schedule should be cleaned up via _on_enter_stage() hook
-        assert slot.alpha_schedule is None, \
-            "advance_stage() should clean up alpha_schedule when entering HOLDING"
+        # alpha_schedule must persist for AlphaAlgorithm.GATE (forward requires it)
+        assert slot.alpha_schedule is not None, \
+            "advance_stage() should keep alpha_schedule when entering HOLDING under GATE"
         assert slot.state.alpha == 1.0, \
             "advance_stage() should set alpha=1.0 permanently after BLENDING"

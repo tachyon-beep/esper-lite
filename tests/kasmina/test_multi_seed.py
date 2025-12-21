@@ -17,7 +17,7 @@ import torch.nn as nn
 
 from esper.kasmina.host import CNNHost, TransformerHost, MorphogeneticModel
 from esper.kasmina.slot import SeedSlot, SeedState, SeedMetrics
-from esper.leyline import SeedStage
+from esper.leyline import SeedStage, DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE
 
 
 class TestSequentialSeedsInSameSlot:
@@ -33,9 +33,15 @@ class TestSequentialSeedsInSameSlot:
         slot.state.transition(SeedStage.TRAINING)
 
         # Cull first seed
-        slot.cull()
-        assert slot.state is None
+        slot.prune()
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.PRUNED
         assert slot.seed is None
+
+        # Cooldown must complete before slot is available again.
+        for _ in range(DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE + 2):
+            slot.step_epoch()
+        assert slot.state is None
 
         # Second seed should work correctly
         state2 = slot.germinate("noop", seed_id="seed2")
@@ -58,7 +64,10 @@ class TestSequentialSeedsInSameSlot:
         slot.state.transition(SeedStage.TRAINING)
 
         # Cull and create new seed
-        slot.cull()
+        slot.prune()
+        for _ in range(DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE + 2):
+            slot.step_epoch()
+        assert slot.state is None
         slot.germinate("noop", seed_id="seed2")
 
         # Second seed should have fresh state
@@ -80,7 +89,9 @@ class TestSequentialSeedsInSameSlot:
             slot.state.metrics.record_accuracy(50.0 + i)
 
             # Cull
-            slot.cull()
+            slot.prune()
+            for _ in range(DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE + 2):
+                slot.step_epoch()
             assert slot.state is None
 
     def test_different_blueprints_same_slot(self):
@@ -99,7 +110,10 @@ class TestSequentialSeedsInSameSlot:
             assert output.shape == x.shape
 
             slot.state.transition(SeedStage.TRAINING)
-            slot.cull()
+            slot.prune()
+            for _ in range(DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE + 2):
+                slot.step_epoch()
+            assert slot.state is None
 
 
 class TestConcurrentSeedsDifferentSlots:
@@ -220,7 +234,7 @@ class TestGradientIndependence:
         model.seed_slots["r0c1"].state.transition(SeedStage.TRAINING)
 
         # Cull seed0
-        model.cull_seed(slot="r0c0")
+        model.prune_seed(slot="r0c0")
 
         # Verify seed1 still works
         model.seed_slots["r0c1"].state.transition(SeedStage.BLENDING)
@@ -342,10 +356,12 @@ class TestCullOneKeepsOther:
             slot.state.transition(SeedStage.TRAINING)
 
         # Cull first
-        model.cull_seed(slot="r0c0")
+        model.prune_seed(slot="r0c0")
 
         # Others should be unaffected
-        assert model.seed_slots["r0c0"].state is None
+        assert model.seed_slots["r0c0"].state is not None
+        assert model.seed_slots["r0c0"].state.stage == SeedStage.PRUNED
+        assert model.seed_slots["r0c0"].seed is None
         assert model.seed_slots["r0c1"].state.seed_id == "seed1"
         assert model.seed_slots["r0c2"].state.seed_id == "seed2"
         assert model.count_active_seeds() == 2
@@ -362,10 +378,12 @@ class TestCullOneKeepsOther:
         for slot in model.seed_slots.values():
             slot.state.transition(SeedStage.TRAINING)
 
-        model.cull_seed(slot="r0c1")
+        model.prune_seed(slot="r0c1")
 
         assert model.seed_slots["r0c0"].state.seed_id == "seed0"
-        assert model.seed_slots["r0c1"].state is None
+        assert model.seed_slots["r0c1"].state is not None
+        assert model.seed_slots["r0c1"].state.stage == SeedStage.PRUNED
+        assert model.seed_slots["r0c1"].seed is None
         assert model.seed_slots["r0c2"].state.seed_id == "seed2"
 
     def test_cull_all_sequentially(self):
@@ -380,13 +398,13 @@ class TestCullOneKeepsOther:
         for slot in model.seed_slots.values():
             slot.state.transition(SeedStage.TRAINING)
 
-        model.cull_seed(slot="r0c0")
+        model.prune_seed(slot="r0c0")
         assert model.count_active_seeds() == 2
 
-        model.cull_seed(slot="r0c1")
+        model.prune_seed(slot="r0c1")
         assert model.count_active_seeds() == 1
 
-        model.cull_seed(slot="r0c2")
+        model.prune_seed(slot="r0c2")
         assert model.count_active_seeds() == 0
         assert not model.has_active_seed
 

@@ -20,7 +20,7 @@ class TestRewardComponentsTelemetry:
             WAIT = 0
             GERMINATE = 1
             FOSSILIZE = 2
-            CULL = 3
+            PRUNE = 3
 
         seed_info = SeedInfo(
             stage=3,  # TRAINING

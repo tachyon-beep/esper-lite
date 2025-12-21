@@ -4,7 +4,7 @@ These properties verify domain-specific rules that must always hold.
 
 Tier 2: Semantic Invariants
 - Fossilized seeds don't generate attribution rewards
-- CULL inverts attribution signal
+- PRUNE inverts attribution signal
 - Invalid actions are always penalized
 - Terminal bonus only at terminal epoch
 """
@@ -24,7 +24,7 @@ from tests.simic.strategies import (
     reward_inputs,
     reward_inputs_with_seed,
     fossilize_inputs,
-    cull_inputs,
+    prune_inputs,
 )
 
 
@@ -53,14 +53,14 @@ class TestFossilizedSeedBehavior:
 
 @pytest.mark.property
 class TestCullBehavior:
-    """CULL action should invert attribution signal."""
+    """PRUNE action should invert attribution signal."""
 
     @given(inputs=reward_inputs_with_seed())
     @settings(max_examples=300)
-    def test_cull_inverts_attribution(self, inputs):
-        """Culling good seed = bad, culling bad seed = good.
+    def test_prune_inverts_attribution(self, inputs):
+        """Pruning good seed = bad, pruning bad seed = good.
 
-        Without inversion, policy learns 'CULL everything for +attribution rewards'.
+        Without inversion, policy learns 'PRUNE everything for +attribution rewards'.
         """
         # Need a seed with counterfactual (BLENDING+ stage)
         seed_info = inputs["seed_info"]
@@ -73,14 +73,14 @@ class TestCullBehavior:
         wait_inputs = {**inputs, "action": LifecycleOp.WAIT}
         _, comp_wait = compute_contribution_reward(**wait_inputs, return_components=True)
 
-        # Get attribution with CULL
-        cull_test_inputs = {**inputs, "action": LifecycleOp.CULL}
-        _, comp_cull = compute_contribution_reward(**cull_test_inputs, return_components=True)
+        # Get attribution with PRUNE
+        prune_test_inputs = {**inputs, "action": LifecycleOp.PRUNE}
+        _, comp_prune = compute_contribution_reward(**prune_test_inputs, return_components=True)
 
-        # If WAIT gave positive attribution, CULL should give negative (and vice versa)
+        # If WAIT gave positive attribution, PRUNE should give negative (and vice versa)
         if abs(comp_wait.bounded_attribution) > 0.01:
-            assert comp_cull.bounded_attribution * comp_wait.bounded_attribution <= 0, (
-                f"CULL attribution {comp_cull.bounded_attribution} should oppose "
+            assert comp_prune.bounded_attribution * comp_wait.bounded_attribution <= 0, (
+                f"PRUNE attribution {comp_prune.bounded_attribution} should oppose "
                 f"WAIT attribution {comp_wait.bounded_attribution}"
             )
 
@@ -102,10 +102,10 @@ class TestInvalidActionPenalties:
             f"expected <= {config.invalid_fossilize_penalty}"
         )
 
-    @given(inputs=cull_inputs(valid=False))
+    @given(inputs=prune_inputs(valid=False))
     @settings(max_examples=200)
-    def test_cull_fossilized_penalized(self, inputs):
-        """CULL on fossilized seed should be penalized."""
+    def test_prune_fossilized_penalized(self, inputs):
+        """PRUNE on fossilized seed should be penalized."""
         if inputs["seed_info"].stage != STAGE_FOSSILIZED:
             return  # This test specifically for fossilized
 
@@ -113,7 +113,7 @@ class TestInvalidActionPenalties:
         reward, components = compute_contribution_reward(**inputs, return_components=True)
 
         assert components.action_shaping <= config.cull_fossilized_penalty, (
-            f"CULL fossilized got action_shaping {components.action_shaping}, "
+            f"PRUNE fossilized got action_shaping {components.action_shaping}, "
             f"expected <= {config.cull_fossilized_penalty}"
         )
 

@@ -13,7 +13,7 @@ from tests.simic.strategies import (
     reward_inputs_with_seed,
     ransomware_seed_inputs,
     fossilize_inputs,
-    cull_inputs,
+    prune_inputs,
 )
 
 
@@ -45,8 +45,8 @@ class TestStrategiesGenerateValidInputs:
         """fossilize_inputs() generates valid inputs."""
         compute_contribution_reward(**inputs)
 
-    @given(inputs=cull_inputs(valid=True))
+    @given(inputs=prune_inputs(valid=True))
     @settings(max_examples=50)
-    def test_cull_inputs_valid(self, inputs):
-        """cull_inputs() generates valid inputs."""
+    def test_prune_inputs_valid(self, inputs):
+        """prune_inputs() generates valid inputs."""
         compute_contribution_reward(**inputs)

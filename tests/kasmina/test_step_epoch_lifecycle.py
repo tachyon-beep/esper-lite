@@ -264,9 +264,10 @@ class TestStepEpochHoldingOutcomes:
 
         slot.step_epoch()
 
-        # cull() sets state to None after transitioning to PRUNED
-        assert slot.state is None
-        assert slot.seed is None  # Seed also cleared
+        # Phase 4: prune keeps state for cooldown (PRUNED → EMBARGOED → RESETTING → DORMANT)
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.PRUNED
+        assert slot.seed is None  # Seed is physically removed at prune completion
 
     def test_holding_prunes_with_zero_counterfactual(self):
         """HOLDING should prune when counterfactual is exactly zero."""
@@ -278,8 +279,8 @@ class TestStepEpochHoldingOutcomes:
 
         slot.step_epoch()
 
-        # cull() sets state to None after transitioning to PRUNED
-        assert slot.state is None
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.PRUNED
         assert slot.seed is None
 
     def test_holding_prunes_on_timeout(self):
@@ -291,8 +292,8 @@ class TestStepEpochHoldingOutcomes:
 
         slot.step_epoch()
 
-        # cull() sets state to None after transitioning to PRUNED
-        assert slot.state is None
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.PRUNED
         assert slot.seed is None
 
     def test_holding_waits_for_counterfactual_before_timeout(self):

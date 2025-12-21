@@ -4,7 +4,7 @@ Only masks PHYSICALLY IMPOSSIBLE actions:
 - SLOT: only enabled slots (from --slots arg) are selectable
 - GERMINATE: blocked if ALL enabled slots occupied OR at seed limit
 - FOSSILIZE: blocked if NO enabled slot has a HOLDING seed
-- CULL: blocked if NO enabled slot has a cullable seed with age >= MIN_CULL_AGE
+- PRUNE: blocked if NO enabled slot has a prunable seed with age >= MIN_PRUNE_AGE
 - WAIT: always valid
 - BLUEPRINT: NOOP always blocked (0 trainable parameters)
 
@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 import torch
 from torch.distributions import Categorical
 
-from esper.leyline import SeedStage, MIN_CULL_AGE, MASKED_LOGIT_VALUE
+from esper.leyline import SeedStage, MIN_PRUNE_AGE, MASKED_LOGIT_VALUE
 from esper.leyline.stages import VALID_TRANSITIONS
 from esper.leyline.slot_config import SlotConfig
 from esper.leyline.factored_actions import (
@@ -49,7 +49,7 @@ _FOSSILIZABLE_STAGES = frozenset({
 })
 
 # Stages from which PRUNED is a valid transition
-_CULLABLE_STAGES = frozenset({
+_PRUNABLE_STAGES = frozenset({
     stage.value for stage, transitions in VALID_TRANSITIONS.items()
     if SeedStage.PRUNED in transitions
 })
@@ -170,7 +170,7 @@ def compute_action_masks(
         if not seed_limit_reached:
             op_mask[LifecycleOp.GERMINATE] = True
 
-    # FOSSILIZE/CULL: valid if ANY enabled slot has a valid state
+    # FOSSILIZE/PRUNE: valid if ANY enabled slot has a valid state
     # (optimistic masking - network learns slot+op associations)
     for slot_id in ordered:
         seed_info = slot_states.get(slot_id)
@@ -182,9 +182,9 @@ def compute_action_masks(
             if stage in _FOSSILIZABLE_STAGES:
                 op_mask[LifecycleOp.FOSSILIZE] = True
 
-            # CULL: only from cullable stages AND if seed age >= MIN_CULL_AGE
-            if stage in _CULLABLE_STAGES and age >= MIN_CULL_AGE:
-                op_mask[LifecycleOp.CULL] = True
+            # PRUNE: only from prunable stages AND if seed age >= MIN_PRUNE_AGE
+            if stage in _PRUNABLE_STAGES and age >= MIN_PRUNE_AGE:
+                op_mask[LifecycleOp.PRUNE] = True
 
     return {
         "slot": slot_mask,

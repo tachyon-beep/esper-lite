@@ -8,7 +8,7 @@ input space.
 from hypothesis import strategies as st
 from hypothesis.strategies import composite, sampled_from
 
-from esper.leyline import SeedStage, MIN_CULL_AGE
+from esper.leyline import SeedStage, MIN_PRUNE_AGE
 from esper.leyline.factored_actions import LifecycleOp
 from esper.simic.rewards import SeedInfo
 
@@ -77,7 +77,7 @@ def seed_infos_at_stage(draw, stage: int):
 
 def lifecycle_ops():
     """Strategy for lifecycle operations."""
-    return sampled_from([LifecycleOp.WAIT, LifecycleOp.GERMINATE, LifecycleOp.CULL, LifecycleOp.FOSSILIZE])
+    return sampled_from([LifecycleOp.WAIT, LifecycleOp.GERMINATE, LifecycleOp.PRUNE, LifecycleOp.FOSSILIZE])
 
 
 @composite
@@ -235,11 +235,11 @@ def fossilize_inputs(draw, valid: bool = True):
 
 
 @composite
-def cull_inputs(draw, valid: bool = True):
-    """Generate inputs for CULL action.
+def prune_inputs(draw, valid: bool = True):
+    """Generate inputs for PRUNE action.
 
     Args:
-        valid: If True, generate valid cull context (not FOSSILIZED, meets age).
+        valid: If True, generate valid prune context (not FOSSILIZED, meets age).
                If False, generate invalid context.
     """
     if valid:
@@ -249,7 +249,7 @@ def cull_inputs(draw, valid: bool = True):
             SeedStage.BLENDING.value,
             SeedStage.HOLDING.value,
         ]))
-        seed_age = draw(st.integers(MIN_CULL_AGE, 25))
+        seed_age = draw(st.integers(MIN_PRUNE_AGE, 25))
     else:
         # Invalid: either fossilized or too young
         if draw(st.booleans()):
@@ -275,7 +275,7 @@ def cull_inputs(draw, valid: bool = True):
         seed_contribution = draw(st.floats(-5.0, 5.0, allow_nan=False))
 
     return {
-        "action": LifecycleOp.CULL,
+        "action": LifecycleOp.PRUNE,
         "seed_contribution": seed_contribution,
         "val_acc": draw(st.floats(50.0, 90.0, allow_nan=False)),
         "seed_info": seed_info,

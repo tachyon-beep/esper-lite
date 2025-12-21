@@ -104,7 +104,7 @@ class TestGerminationDecisions:
     def test_no_germinate_during_embargo(self):
         """Should WAIT during embargo period after cull."""
         policy = HeuristicTamiyo(topology="cnn")
-        policy._last_cull_epoch = 8  # Culled 2 epochs ago
+        policy._last_prune_epoch = 8  # Culled 2 epochs ago
 
         signals = MockTrainingSignals(MockTrainingMetrics(
             epoch=10,
@@ -136,10 +136,10 @@ class TestCullDecisions:
     """Tests for cull decision logic."""
 
     def test_cull_failing_seed_in_training(self):
-        """Should CULL a seed that's failing in TRAINING stage."""
+        """Should PRUNE a seed that's failing in TRAINING stage."""
         config = HeuristicPolicyConfig(
-            cull_after_epochs_without_improvement=3,
-            cull_if_accuracy_drops_by=1.0,
+            prune_after_epochs_without_improvement=3,
+            prune_if_accuracy_drops_by=1.0,
         )
         policy = HeuristicTamiyo(config=config, topology="cnn")
 
@@ -152,7 +152,7 @@ class TestCullDecisions:
 
         decision = policy.decide(signals, active_seeds=[seed])
 
-        assert decision.action.name == "CULL"
+        assert decision.action.name == "PRUNE"
         assert "Failing" in decision.reason
 
     def test_no_cull_improving_seed(self):
@@ -173,8 +173,8 @@ class TestCullDecisions:
     def test_no_cull_before_patience_expires(self):
         """Should WAIT even for failing seed if patience hasn't expired."""
         config = HeuristicPolicyConfig(
-            cull_after_epochs_without_improvement=5,
-            cull_if_accuracy_drops_by=1.0,
+            prune_after_epochs_without_improvement=5,
+            prune_if_accuracy_drops_by=1.0,
         )
         policy = HeuristicTamiyo(config=config, topology="cnn")
 
@@ -212,7 +212,7 @@ class TestFossilizeDecisions:
         assert "contribution" in decision.reason.lower()
 
     def test_cull_non_contributing_seed_in_probationary(self):
-        """Should CULL a non-contributing seed in HOLDING."""
+        """Should PRUNE a non-contributing seed in HOLDING."""
         policy = HeuristicTamiyo(topology="cnn")
 
         seed = MockSeedState(
@@ -226,7 +226,7 @@ class TestFossilizeDecisions:
 
         decision = policy.decide(signals, active_seeds=[seed])
 
-        assert decision.action.name == "CULL"
+        assert decision.action.name == "PRUNE"
 
     def test_fossilize_uses_counterfactual_over_total(self):
         """Should prefer counterfactual contribution over total improvement."""
@@ -344,7 +344,7 @@ class TestReset:
         # Modify internal state
         policy._blueprint_index = 5
         policy._germination_count = 3
-        policy._last_cull_epoch = 10
+        policy._last_prune_epoch = 10
         policy._blueprint_penalties["conv_light"] = 2.0
         policy._decisions_made.append("fake")
 
@@ -352,6 +352,6 @@ class TestReset:
 
         assert policy._blueprint_index == 0
         assert policy._germination_count == 0
-        assert policy._last_cull_epoch == -100
+        assert policy._last_prune_epoch == -100
         assert len(policy._blueprint_penalties) == 0
         assert len(policy._decisions_made) == 0

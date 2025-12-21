@@ -4,7 +4,7 @@ Displays PPO vitals, trend arrows, and action distribution in two rows
 below the header. Color-coded health indicators show policy status.
 
 Row 1: KL↑ 0.015 | Ent↓ 1.5 | EV→ 0.75 | Clip 8% | ∇ 0.5
-Row 2: Actions: G:10% B:20% C:5% W:65% | Recent: GBWWC
+Row 2: Actions: G:10% B:20% P:5% W:65% | Recent: GBWWP
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 ACTION_CODES = {
     "GERMINATE": "G",
     "BLEND": "B",
-    "CULL": "C",
+    "PRUNE": "P",
     "WAIT": "W",
     "ADVANCE": "A",
     "HOLD": "H",
@@ -42,7 +42,7 @@ class TamiyoStrip(Container):
 
     Two-line format with health-colored indicators:
         KL↑ 0.015 | Ent↓ 1.5 | EV→ 0.75 | Clip 8% | ∇ 0.5
-        Actions: G:10% B:20% C:5% W:65% | Recent: GBWWC
+        Actions: G:10% B:20% P:5% W:65% | Recent: GBWWP
     """
 
     DEFAULT_CSS = """

@@ -3,7 +3,7 @@
 Tier 2 properties verify semantic correctness of decisions:
 1. Decision completeness - decide() always returns valid TamiyoDecision
 2. Action coverage - Every action type is reachable from some input
-3. Target consistency - CULL/FOSSILIZE always specify target_seed_id
+3. Target consistency - PRUNE/FOSSILIZE always specify target_seed_id
 4. WAIT as default - WAIT returned when no criteria met
 5. Stage appropriateness - Actions appropriate for seed stage
 6. Reason non-empty - Decisions always have reasons
@@ -109,7 +109,7 @@ class TestActionReachability:
         config = HeuristicPolicyConfig(
             plateau_epochs_to_germinate=3,
             min_epochs_before_germinate=0,
-            embargo_epochs_after_cull=0,
+            embargo_epochs_after_prune=0,
         )
         policy = HeuristicTamiyo(config=config, topology="cnn")
 
@@ -147,12 +147,12 @@ class TestActionReachability:
 
     @given(seed=failing_seed_states())
     @settings(max_examples=50)
-    def test_cull_reachable(self, seed):
-        """Property: CULL is reachable for failing seeds."""
+    def test_prune_reachable(self, seed):
+        """Property: PRUNE is reachable for failing seeds."""
         # Use strict config that culls quickly
         config = HeuristicPolicyConfig(
-            cull_after_epochs_without_improvement=1,
-            cull_if_accuracy_drops_by=0.1,
+            prune_after_epochs_without_improvement=1,
+            prune_if_accuracy_drops_by=0.1,
         )
         policy = HeuristicTamiyo(config=config, topology="cnn")
 
@@ -169,8 +169,8 @@ class TestActionReachability:
 
         decision = policy.decide(MockSignals(), active_seeds=[seed])
 
-        assert decision.action.name == "CULL", \
-            f"Expected CULL, got {decision.action.name}: {decision.reason}"
+        assert decision.action.name == "PRUNE", \
+            f"Expected PRUNE, got {decision.action.name}: {decision.reason}"
 
     @given(signals=early_training_signals(max_epoch=2))
     @settings(max_examples=50)
@@ -223,11 +223,11 @@ class TestTargetConsistency:
 
     @given(seed=failing_seed_states())
     @settings(max_examples=100)
-    def test_cull_has_target(self, seed):
-        """Property: CULL decisions always have target_seed_id."""
+    def test_prune_has_target(self, seed):
+        """Property: PRUNE decisions always have target_seed_id."""
         config = HeuristicPolicyConfig(
-            cull_after_epochs_without_improvement=1,
-            cull_if_accuracy_drops_by=0.1,
+            prune_after_epochs_without_improvement=1,
+            prune_if_accuracy_drops_by=0.1,
         )
         policy = HeuristicTamiyo(config=config, topology="cnn")
 
@@ -243,9 +243,9 @@ class TestTargetConsistency:
 
         decision = policy.decide(MockSignals(), active_seeds=[seed])
 
-        if decision.action.name == "CULL":
+        if decision.action.name == "PRUNE":
             assert decision.target_seed_id is not None, \
-                "CULL must have target_seed_id"
+                "PRUNE must have target_seed_id"
             assert decision.target_seed_id == seed.seed_id
 
     @given(signals=plateau_signals(min_plateau=5))
@@ -255,7 +255,7 @@ class TestTargetConsistency:
         config = HeuristicPolicyConfig(
             plateau_epochs_to_germinate=3,
             min_epochs_before_germinate=0,
-            embargo_epochs_after_cull=0,
+            embargo_epochs_after_prune=0,
         )
         policy = HeuristicTamiyo(config=config, topology="cnn")
 
@@ -365,7 +365,7 @@ class TestStageAppropriateness:
 
         decision = policy.decide(MockSignals(), active_seeds=[seed])
 
-        # TRAINING seeds should either WAIT or CULL (if failing), never FOSSILIZE
+        # TRAINING seeds should either WAIT or PRUNE (if failing), never FOSSILIZE
         assert decision.action.name != "FOSSILIZE", \
             "TRAINING seeds cannot be fossilized directly"
 
@@ -384,7 +384,7 @@ class TestStageAppropriateness:
 
         decision = policy.decide(MockSignals(), active_seeds=[seed])
 
-        # BLENDING seeds should WAIT or CULL, never FOSSILIZE
+        # BLENDING seeds should WAIT or PRUNE, never FOSSILIZE
         assert decision.action.name != "FOSSILIZE", \
             "BLENDING seeds cannot be fossilized directly"
 

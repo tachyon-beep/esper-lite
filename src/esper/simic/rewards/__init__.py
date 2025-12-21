@@ -41,7 +41,7 @@ from .rewards import (
     STAGE_GERMINATED,
     # Internal helpers (exported for testing)
     _contribution_pbrs_bonus,
-    _contribution_cull_shaping,
+    _contribution_prune_shaping,
     _contribution_fossilize_shaping,
     _check_reward_hacking,
     _check_ransomware_signature,
@@ -83,7 +83,7 @@ __all__ = [
     "STAGE_GERMINATED",
     # Internal helpers (exported for testing)
     "_contribution_pbrs_bonus",
-    "_contribution_cull_shaping",
+    "_contribution_prune_shaping",
     "_contribution_fossilize_shaping",
     "_check_reward_hacking",
     "_check_ransomware_signature",

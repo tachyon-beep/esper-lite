@@ -1,7 +1,7 @@
 """Tests for lifecycle state machine fix."""
 
 from esper.kasmina.slot import SeedState, SeedSlot
-from esper.leyline import SeedStage
+from esper.leyline import SeedStage, DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE
 from esper.leyline.alpha import AlphaMode
 
 
@@ -337,7 +337,7 @@ class TestFossilizedCullProtection:
         assert model.seed_slots["r0c1"].state.stage == SeedStage.FOSSILIZED
 
         # Attempt to cull - should return False
-        cull_result = model.seed_slots["r0c1"].cull("test_cull_attempt")
+        cull_result = model.seed_slots["r0c1"].prune("test_cull_attempt")
         assert cull_result is False, "FOSSILIZED seeds should not be cullable"
 
         # Seed should still be FOSSILIZED
@@ -355,8 +355,14 @@ class TestFossilizedCullProtection:
         assert model.seed_slots["r0c1"].state.stage == SeedStage.TRAINING
 
         # Cull from TRAINING - should work
-        cull_result = model.seed_slots["r0c1"].cull("performance_issue")
+        cull_result = model.seed_slots["r0c1"].prune("performance_issue")
         assert cull_result is True, "Non-FOSSILIZED seeds should be cullable"
 
-        # Seed should be gone
+        # Phase 4: seed is physically removed, but state persists for cooldown.
+        assert model.seed_slots["r0c1"].seed is None
+        assert model.seed_slots["r0c1"].state is not None
+        assert model.seed_slots["r0c1"].state.stage == SeedStage.PRUNED
+
+        for _ in range(DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE + 2):
+            model.seed_slots["r0c1"].step_epoch()
         assert model.seed_slots["r0c1"].state is None

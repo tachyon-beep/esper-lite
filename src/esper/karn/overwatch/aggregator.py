@@ -446,8 +446,8 @@ class TelemetryAggregator:
                     code = "W"
                 elif op.upper() == "GERMINATE":
                     code = "G"
-                elif op.upper() == "CULL":
-                    code = "C"
+                elif op.upper() == "PRUNE":
+                    code = "P"
                 elif op.upper() == "FOSSILIZE":
                     code = "F"
                 self._tamiyo.recent_actions.append(code)

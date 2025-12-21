@@ -22,6 +22,7 @@ from esper.leyline import (
     DEFAULT_MIN_FOSSILIZE_CONTRIBUTION,
     DEFAULT_GRADIENT_RATIO_THRESHOLD,
     DEFAULT_MAX_PROBATION_EPOCHS,
+    DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE,
 )
 
 
@@ -122,10 +123,11 @@ class TestEarlyCullScenarios:
         slot.germinate("noop", seed_id="test")
         slot.state.transition(SeedStage.TRAINING)
 
-        result = slot.cull(reason="test_cull")
+        result = slot.prune(reason="test_cull")
 
         assert result is True
-        assert slot.state is None
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.PRUNED
         assert slot.seed is None
 
     def test_cull_from_blending(self):
@@ -135,10 +137,11 @@ class TestEarlyCullScenarios:
         slot.state.transition(SeedStage.TRAINING)
         slot.state.transition(SeedStage.BLENDING)
 
-        result = slot.cull(reason="test_cull")
+        result = slot.prune(reason="test_cull")
 
         assert result is True
-        assert slot.state is None
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.PRUNED
 
     def test_cull_from_holding(self):
         """Culling from HOLDING should succeed."""
@@ -148,10 +151,11 @@ class TestEarlyCullScenarios:
         slot.state.transition(SeedStage.BLENDING)
         slot.state.transition(SeedStage.HOLDING)
 
-        result = slot.cull(reason="test_cull")
+        result = slot.prune(reason="test_cull")
 
         assert result is True
-        assert slot.state is None
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.PRUNED
 
     def test_cull_fossilized_fails(self):
         """Culling FOSSILIZED seed should fail (permanent)."""
@@ -161,7 +165,7 @@ class TestEarlyCullScenarios:
         # Force to FOSSILIZED
         slot.state.stage = SeedStage.FOSSILIZED
 
-        result = slot.cull(reason="test_cull")
+        result = slot.prune(reason="test_cull")
 
         assert result is False
         assert slot.state is not None
@@ -187,7 +191,8 @@ class TestHoldingTimeout:
         slot.step_epoch()
 
         # Should be culled due to timeout
-        assert slot.state is None
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.PRUNED
 
     def test_holding_no_timeout_before_max_epochs(self):
         """Seed should survive if under max holding epochs."""
@@ -225,7 +230,8 @@ class TestNegativeCounterfactualAutoCull:
         slot.step_epoch()
 
         # Should be culled
-        assert slot.state is None
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.PRUNED
 
     def test_zero_counterfactual_culls(self):
         """Zero counterfactual in HOLDING should auto-cull."""
@@ -240,7 +246,8 @@ class TestNegativeCounterfactualAutoCull:
         slot.step_epoch()
 
         # Should be culled (0 is not positive contribution)
-        assert slot.state is None
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.PRUNED
 
     def test_positive_counterfactual_survives(self):
         """Positive counterfactual should not trigger auto-cull."""
@@ -418,10 +425,16 @@ class TestRecycledSlot:
         # First lifecycle
         slot.germinate("noop", seed_id="seed1")
         slot.state.transition(SeedStage.TRAINING)
-        slot.cull()
+        slot.prune()
 
-        assert slot.state is None
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.PRUNED
         assert slot.seed is None
+
+        # Cooldown must complete before slot is available again.
+        for _ in range(DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE + 2):
+            slot.step_epoch()
+        assert slot.state is None
 
         # Second lifecycle
         state = slot.germinate("noop", seed_id="seed2")
@@ -438,7 +451,12 @@ class TestRecycledSlot:
         slot.state.metrics.record_accuracy(50.0)
         slot.state.metrics.record_accuracy(60.0)
         slot.state.transition(SeedStage.TRAINING)
-        slot.cull()
+        slot.prune()
+
+        # Cooldown must complete before slot is available again.
+        for _ in range(DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE + 2):
+            slot.step_epoch()
+        assert slot.state is None
 
         # Second lifecycle
         slot.germinate("noop", seed_id="seed2")

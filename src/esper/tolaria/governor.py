@@ -260,7 +260,7 @@ class TolariaGovernor:
         # Justification: Feature detection - MorphogeneticModel has seed_slots, base models may not
         if hasattr(self.model, 'seed_slots'):
             for slot in self.model.seed_slots.values():
-                slot.cull("governor_rollback")
+                slot.prune("governor_rollback", initiator="governor")
 
         # Restore host + fossilized seeds from snapshot
         # Use strict=False because:

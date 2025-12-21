@@ -382,7 +382,7 @@ class TestDetailPanelIntegration:
                 captured_at="2025-12-18T14:00:00Z",
                 connection=ConnectionStatus(True, 1000.0, 0.5),
                 tamiyo=TamiyoState(
-                    action_counts={"GERMINATE": 34, "BLEND": 28, "CULL": 12, "WAIT": 26},
+                    action_counts={"GERMINATE": 34, "BLEND": 28, "PRUNE": 12, "WAIT": 26},
                     recent_actions=["G", "B", "W", "W", "C"],
                     confidence_mean=0.73,
                     confidence_min=0.45,

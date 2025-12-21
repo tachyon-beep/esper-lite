@@ -232,7 +232,7 @@ class TestTamiyoState:
         from esper.karn.overwatch.schema import TamiyoState
 
         state = TamiyoState(
-            action_counts={"GERMINATE": 34, "BLEND": 28, "CULL": 12, "WAIT": 26},
+            action_counts={"GERMINATE": 34, "BLEND": 28, "PRUNE": 12, "WAIT": 26},
             recent_actions=["G", "B", "B", "W", "G"],
             confidence_mean=0.73,
             confidence_min=0.42,
@@ -271,7 +271,7 @@ class TestTamiyoState:
         from esper.karn.overwatch.schema import TamiyoState
 
         d = {
-            "action_counts": {"BLEND": 5, "CULL": 3},
+            "action_counts": {"BLEND": 5, "PRUNE": 3},
             "recent_actions": ["B", "C"],
             "confidence_mean": 0.65,
             "confidence_min": 0.4,

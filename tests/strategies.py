@@ -292,7 +292,7 @@ def action_members(draw):
     for i in range(1, germinate_count + 1):
         members[f"GERMINATE_{i}"] = i
     members["FOSSILIZE"] = germinate_count + 1
-    members["CULL"] = germinate_count + 2
+    members["PRUNE"] = germinate_count + 2
     ActionEnum = IntEnum("TestAction", members)
     return draw(st.sampled_from(list(ActionEnum)))
 

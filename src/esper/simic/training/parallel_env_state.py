@@ -81,16 +81,16 @@ class ParallelEnvState:
     # Per-slot EMA tracking for seed gradient ratio (for G2 gate)
     # Smooths per-step ratio noise with momentum=0.9
     gradient_ratio_ema: dict[str, float] = field(default_factory=dict)
-    # Pending auto-cull penalty to be applied on next reward computation
+    # Pending auto-prune penalty to be applied on next reward computation
     # (DRL Expert review 2025-12-17: prevents degenerate WAIT-spam policies
     # that rely on environment cleanup rather than proactive lifecycle management)
-    pending_auto_cull_penalty: float = 0.0
+    pending_auto_prune_penalty: float = 0.0
     # Pre-computed autocast decision for hot path performance
     # Avoids repeated device type checks and amp flag evaluation per batch
     autocast_enabled: bool = False
 
     def __post_init__(self) -> None:
-        # Initialize counters with LifecycleOp names (WAIT, GERMINATE, FOSSILIZE, CULL)
+        # Initialize counters with LifecycleOp names (WAIT, GERMINATE, FOSSILIZE, PRUNE)
         # since factored actions use op.name for counting, not flat action enum names
         if not self.action_counts:
             base_counts = {op.name: 0 for op in LifecycleOp}

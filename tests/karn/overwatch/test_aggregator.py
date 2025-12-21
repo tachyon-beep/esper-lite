@@ -231,14 +231,14 @@ class TestAnalyticsSnapshot:
             data={"episode_id": "test", "n_envs": 1},
         ))
 
-        for op in ["WAIT", "GERMINATE", "CULL", "FOSSILIZE"]:
+        for op in ["WAIT", "GERMINATE", "PRUNE", "FOSSILIZE"]:
             agg.process_event(TelemetryEvent(
                 event_type=TelemetryEventType.ANALYTICS_SNAPSHOT,
                 data={"kind": "last_action", "env_id": 0, "op": op},
             ))
 
         snapshot = agg.get_snapshot()
-        assert "".join(snapshot.tamiyo.recent_actions[-4:]) == "WGCF"
+        assert "".join(snapshot.tamiyo.recent_actions[-4:]) == "WGPF"
 
 
 class TestSeedLifecycle:

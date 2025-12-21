@@ -573,11 +573,11 @@ class MorphogeneticModel(nn.Module):
             blend_tempo_epochs=blend_tempo_epochs,
         )
 
-    def cull_seed(self, *, slot: str) -> None:
-        """Cull the seed in a specific slot."""
+    def prune_seed(self, *, slot: str) -> None:
+        """Prune the seed in a specific slot (immediate removal)."""
         if slot not in self.seed_slots:
             raise ValueError(f"Unknown slot: {slot}. Available: {list(self.seed_slots.keys())}")
-        self.seed_slots[slot].cull()
+        self.seed_slots[slot].prune()
 
     def get_seed_parameters(self, slot: str | None = None):
         """Get seed parameters from specific slot or all slots."""

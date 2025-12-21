@@ -78,7 +78,7 @@ from esper.leyline.factored_actions import (
     TEMPO_TO_EPOCHS,
     OP_WAIT,
     OP_GERMINATE,
-    OP_CULL,
+    OP_PRUNE,
     OP_FOSSILIZE,
 )
 from esper.tamiyo.policy.action_masks import build_slot_states, compute_action_masks
@@ -1623,7 +1623,7 @@ def train_ppo_vectorized(
             all_signals = []
             governor_panic_envs = []  # Track which envs need rollback
 
-            # Number of germinate actions = total actions - 3 (WAIT, FOSSILIZE, CULL)
+            # Number of germinate actions = total actions - 3 (WAIT, FOSSILIZE, PRUNE)
             for env_idx, env_state in enumerate(env_states):
                 model = env_state.model
 
@@ -1680,7 +1680,7 @@ def train_ppo_vectorized(
                         seed_state.metrics.record_accuracy(val_acc)
 
                 # Update counterfactual contribution for any slot where we computed a baseline this epoch
-                # (used by G5 gate + HOLDING safety auto-cull).
+                # (used by G5 gate + HOLDING safety auto-prune).
                 if baseline_accs[env_idx]:
                     for slot_id, baseline_acc in baseline_accs[env_idx].items():
                         if model.has_active_seed_in_slot(slot_id):
@@ -1865,8 +1865,10 @@ def train_ppo_vectorized(
                     ))
 
                 # Update signal tracker
+                # Phase 4: embargo/cooldown stages keep state while seed is removed.
+                # Availability for germination is therefore "no state", not merely "no active seed".
                 available_slots = sum(
-                    1 for slot_id in slots if not model.has_active_seed_in_slot(slot_id)
+                    1 for slot_id in slots if model.seed_slots[slot_id].state is None
                 )
                 signals = env_state.signal_tracker.update(
                     epoch=epoch,
@@ -2048,7 +2050,7 @@ def train_ppo_vectorized(
                     assert OP_NAMES[op_idx] == _fa.op.name, f"op.name mismatch: {OP_NAMES[op_idx]} != {_fa.op.name}"
                     assert (op_idx == OP_GERMINATE) == _fa.is_germinate, "is_germinate mismatch"
                     assert (op_idx == OP_FOSSILIZE) == _fa.is_fossilize, "is_fossilize mismatch"
-                    assert (op_idx == OP_CULL) == _fa.is_cull, "is_cull mismatch"
+                    assert (op_idx == OP_PRUNE) == _fa.is_prune, "is_prune mismatch"
                     assert BLUEPRINT_IDS[blueprint_idx] == _fa.blueprint_id, f"blueprint_id mismatch"
                     assert BLEND_IDS[blend_idx] == _fa.blend_algorithm_id, f"blend_id mismatch"
                     del _fa  # Don't leak into scope
@@ -2094,7 +2096,7 @@ def train_ppo_vectorized(
                 seed_contribution = None
                 if target_slot in baseline_accs[env_idx]:
                     seed_contribution = env_state.val_acc - baseline_accs[env_idx][target_slot]
-                    # Store in metrics for telemetry at fossilize/cull
+                    # Store in metrics for telemetry at fossilize/prune
                     if seed_state and seed_state.metrics:
                         seed_state.metrics.counterfactual_contribution = seed_contribution
 
@@ -2183,23 +2185,23 @@ def train_ppo_vectorized(
                             },
                         ))
 
-                # Apply pending auto-cull penalty from previous step_epoch()
+                # Apply pending auto-prune penalty from previous step_epoch()
                 # (DRL Expert review 2025-12-17: prevents degenerate WAIT-spam policies)
-                if env_state.pending_auto_cull_penalty != 0.0:
-                    reward += env_state.pending_auto_cull_penalty
+                if env_state.pending_auto_prune_penalty != 0.0:
+                    reward += env_state.pending_auto_prune_penalty
                     if hub:
                         hub.emit(TelemetryEvent(
                             event_type=TelemetryEventType.REWARD_COMPUTED,
                             severity="info",
                             data={
                                 "env_id": env_idx,
-                                "action_name": "AUTO_CULL_PENALTY",
+                                "action_name": "AUTO_PRUNE_PENALTY",
                                 "total_reward": reward,
-                                "penalty": env_state.pending_auto_cull_penalty,
-                                "reason": "auto_cull_from_prev_step",
+                                "penalty": env_state.pending_auto_prune_penalty,
+                                "reason": "auto_prune_from_prev_step",
                             },
                         ))
-                    env_state.pending_auto_cull_penalty = 0.0  # Clear after application
+                    env_state.pending_auto_prune_penalty = 0.0  # Clear after application
 
                 if collect_reward_summary and reward_components is not None:
                     summary = reward_summary_accum[env_idx]
@@ -2249,10 +2251,10 @@ def train_ppo_vectorized(
                             env_state.contributing_fossilized += 1
                         env_state.acc_at_germination.pop(target_slot, None)
 
-                elif op_idx == OP_CULL:
-                    # Cull the seed in the SAMPLED slot
+                elif op_idx == OP_PRUNE:
+                    # Prune the seed in the SAMPLED slot
                     if model.has_active_seed_in_slot(target_slot):
-                        model.cull_seed(slot=target_slot)
+                        model.prune_seed(slot=target_slot)
                         env_state.seed_optimizers.pop(target_slot, None)
                         env_state.acc_at_germination.pop(target_slot, None)
                         action_success = True
@@ -2375,8 +2377,9 @@ def train_ppo_vectorized(
                                 post_action_seeds.append(seed_state)
 
                     # Compute post-action available slots
+                    # Phase 4: availability is "no state" (DORMANT), not "no active seed".
                     post_action_available = sum(
-                        1 for slot_id in slots if not model.has_active_seed_in_slot(slot_id)
+                        1 for slot_id in slots if model.seed_slots[slot_id].state is None
                     )
 
                     # Build post-action signals (epoch/accuracy same, seed states changed)
@@ -2455,14 +2458,14 @@ def train_ppo_vectorized(
                 # Mechanical lifecycle advance (blending/shadowing dwell) AFTER RL transition
                 # This ensures state/action/reward alignment - advance happens after the step is recorded
                 # Advance ALL enabled slots so non-targeted seeds still progress mechanically.
-                # Cleanup per-slot bookkeeping if a seed is auto-culled during step_epoch().
-                # Track auto-culls and accumulate penalty for next reward computation.
+                # Cleanup per-slot bookkeeping if a seed is auto-pruned during step_epoch().
+                # Track auto-prunes and accumulate penalty for next reward computation.
                 for slot_id in slots:
-                    was_auto_culled = model.seed_slots[slot_id].step_epoch()
-                    if was_auto_culled:
-                        # Accumulate auto-cull penalty for next step's reward
+                    was_auto_pruned = model.seed_slots[slot_id].step_epoch()
+                    if was_auto_pruned:
+                        # Accumulate auto-prune penalty for next step's reward
                         # (prevents WAIT-spam policies relying on env cleanup)
-                        env_state.pending_auto_cull_penalty += reward_config.auto_cull_penalty
+                        env_state.pending_auto_prune_penalty += reward_config.auto_prune_penalty
                     if not model.has_active_seed_in_slot(slot_id):
                         env_state.seed_optimizers.pop(slot_id, None)
                         env_state.acc_at_germination.pop(slot_id, None)

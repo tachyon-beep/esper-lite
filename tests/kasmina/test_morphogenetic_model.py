@@ -55,14 +55,14 @@ class TestMorphogeneticModelMultiSlot:
             model.germinate_seed("noop", "seed_1")
 
     def test_cull_requires_slot(self):
-        """cull_seed must require explicit slot parameter."""
+        """prune_seed must require explicit slot parameter."""
         host = CNNHost(num_classes=10)
         model = MorphogeneticModel(host, device="cpu", slots=["r0c1"])
         model.germinate_seed("noop", "seed_1", slot="r0c1")
 
         # Without slot should raise TypeError
         with pytest.raises(TypeError):
-            model.cull_seed()
+            model.prune_seed()
 
     def test_forward_with_cnn_host(self):
         """Forward pass should work with CNNHost multi-slot."""

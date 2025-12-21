@@ -33,7 +33,7 @@ SPARKLINE_CHARS = "▁▂▃▄▅▆▇█"
 ACTION_NAMES = {
     "GERMINATE": "GERM",
     "BLEND": "BLEND",
-    "CULL": "CULL",
+    "PRUNE": "PRUNE",
     "WAIT": "WAIT",
     "ADVANCE": "ADV",
     "HOLD": "HOLD",

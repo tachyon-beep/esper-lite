@@ -6,7 +6,7 @@ import torch
 from torch.utils.data import DataLoader, TensorDataset
 
 
-def test_heuristic_episode_germinates_and_culls_across_slots(monkeypatch) -> None:
+def test_heuristic_episode_germinates_and_prunes_across_slots(monkeypatch) -> None:
     """Heuristic path should target multiple slots and resolve target_seed_id → slot."""
     from esper.kasmina.host import MorphogeneticModel
     from esper.leyline.actions import build_action_enum
@@ -28,7 +28,7 @@ def test_heuristic_episode_germinates_and_culls_across_slots(monkeypatch) -> Non
                 case 2:
                     return TamiyoDecision(action=Action.GERMINATE_NORM)
                 case 3:
-                    return TamiyoDecision(action=Action.CULL, target_seed_id="seed_1")
+                    return TamiyoDecision(action=Action.PRUNE, target_seed_id="seed_1")
                 case _:
                     return TamiyoDecision(action=Action.WAIT)
 
@@ -81,11 +81,10 @@ def test_heuristic_episode_germinates_and_culls_across_slots(monkeypatch) -> Non
 
     assert germinate_slots == ["r0c0", "r0c1"]  # Was ["r0c0", "r0c1"]
     assert action_counts["GERMINATE"] == 2
-    assert action_counts["CULL"] == 1
+    assert action_counts["PRUNE"] == 1
 
     model = created["model"]
     assert isinstance(model, MorphogeneticModel)
     assert model.has_active_seed_in_slot("r0c0")  # Was "r0c0"
     assert not model.has_active_seed_in_slot("r0c1")  # Was "r0c1"
     assert not model.has_active_seed_in_slot("r0c2")  # Was "r0c2"
-

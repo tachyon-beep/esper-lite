@@ -22,7 +22,7 @@ from esper.simic.rewards import (
 
 @pytest.mark.property
 class TestBlendingWarning:
-    """Blending warning provides early signal to CULL bad seeds."""
+    """Blending warning provides early signal to PRUNE bad seeds."""
 
     @given(
         total_improvement=st.floats(-3.0, -0.1, allow_nan=False),
@@ -103,7 +103,7 @@ class TestBlendingWarning:
 
 @pytest.mark.property
 class TestHoldingWarning:
-    """Holding warning creates urgency to make FOSSILIZE/CULL decision."""
+    """Holding warning creates urgency to make FOSSILIZE/PRUNE decision."""
 
     @given(epochs_in_stage=st.integers(2, 8))
     @settings(max_examples=100)

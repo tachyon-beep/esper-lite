@@ -25,7 +25,7 @@ class SeedOperation(Enum):
     START_BLENDING = auto()
     START_HOLDING = auto()
     FOSSILIZE = auto()
-    CULL = auto()
+    PRUNE = auto()
     EMBARGO = auto()
     RESET = auto()
 
@@ -37,7 +37,7 @@ OPERATION_TARGET_STAGE: dict[SeedOperation, SeedStage] = {
     SeedOperation.START_BLENDING: SeedStage.BLENDING,
     SeedOperation.START_HOLDING: SeedStage.HOLDING,
     SeedOperation.FOSSILIZE: SeedStage.FOSSILIZED,
-    SeedOperation.CULL: SeedStage.PRUNED,
+    SeedOperation.PRUNE: SeedStage.PRUNED,
     SeedOperation.EMBARGO: SeedStage.EMBARGOED,
     SeedOperation.RESET: SeedStage.RESETTING,
 }

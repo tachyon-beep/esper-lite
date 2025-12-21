@@ -117,9 +117,9 @@ class HeuristicPolicyStateMachine(RuleBasedStateMachine):
         self.decision_count += 1
         self.epoch += 1
 
-        if decision.action.name == "CULL":
+        if decision.action.name == "PRUNE":
             self.cull_count += 1
-            self.policy._last_cull_epoch = self.epoch
+            self.policy._last_prune_epoch = self.epoch
 
     @rule(
         counterfactual=st.floats(min_value=-5.0, max_value=10.0, allow_nan=False),
@@ -152,7 +152,7 @@ class HeuristicPolicyStateMachine(RuleBasedStateMachine):
         self.decision_count += 1
         self.epoch += 1
 
-        if decision.action.name == "CULL":
+        if decision.action.name == "PRUNE":
             self.cull_count += 1
 
     @rule()
@@ -430,7 +430,7 @@ class TestResetCompleteness:
 
         # Add penalties
         policy._blueprint_penalties["conv_light"] = 5.0
-        policy._last_cull_epoch = 10
+        policy._last_prune_epoch = 10
 
         # Reset
         policy.reset()
@@ -439,7 +439,7 @@ class TestResetCompleteness:
         assert policy._blueprint_index == 0
         assert policy._germination_count == 0
         assert len(policy._decisions_made) == 0
-        assert policy._last_cull_epoch == -100
+        assert policy._last_prune_epoch == -100
         assert len(policy._blueprint_penalties) == 0
         assert policy._last_decay_epoch == -1
 

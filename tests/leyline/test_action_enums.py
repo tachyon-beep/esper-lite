@@ -21,7 +21,7 @@ def test_build_action_enum_cnn():
     assert CNNAction.WAIT.value == 0
     assert hasattr(CNNAction, "GERMINATE_NORM")
     assert hasattr(CNNAction, "FOSSILIZE")
-    assert hasattr(CNNAction, "CULL")
+    assert hasattr(CNNAction, "PRUNE")
 
 
 def test_build_action_enum_transformer():
@@ -34,7 +34,7 @@ def test_build_action_enum_transformer():
     assert TransformerAction.WAIT.value == 0
     assert hasattr(TransformerAction, "GERMINATE_LORA")
     assert hasattr(TransformerAction, "FOSSILIZE")
-    assert hasattr(TransformerAction, "CULL")
+    assert hasattr(TransformerAction, "PRUNE")
 
 
 def test_action_enum_values_sequential():
@@ -47,13 +47,13 @@ def test_action_enum_values_sequential():
     assert values == list(range(len(Action)))
 
 
-def test_action_enum_cull_is_last():
-    """CULL is always the last action."""
+def test_action_enum_prune_is_last():
+    """PRUNE is always the last action."""
     from esper.leyline.actions import build_action_enum
 
     Action = build_action_enum("cnn")
 
-    assert Action.CULL.value == len(Action) - 1
+    assert Action.PRUNE.value == len(Action) - 1
 
 
 def test_get_blueprint_from_action():
@@ -67,4 +67,4 @@ def test_get_blueprint_from_action():
 
     assert _get_blueprint_from_action(Action.WAIT) is None
     assert _get_blueprint_from_action(Action.FOSSILIZE) is None
-    assert _get_blueprint_from_action(Action.CULL) is None
+    assert _get_blueprint_from_action(Action.PRUNE) is None

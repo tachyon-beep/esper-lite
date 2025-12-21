@@ -49,7 +49,7 @@ def snapshot_with_ppo_data():
         exploding_layers=0,
         layer_gradient_health=0.95,
         # Actions
-        action_counts={"WAIT": 10, "GERMINATE": 5, "CULL": 2, "FOSSILIZE": 3},
+        action_counts={"WAIT": 10, "GERMINATE": 5, "PRUNE": 2, "FOSSILIZE": 3},
         total_actions=20,
         ppo_data_received=True,
     )
@@ -365,7 +365,7 @@ async def test_wait_dominance_warning():
         widget = app.query_one(TamiyoBrain)
         snapshot = SanctumSnapshot(slot_ids=["R0C0"])
         snapshot.tamiyo = TamiyoState(
-            action_counts={"WAIT": 80, "GERMINATE": 10, "CULL": 5, "FOSSILIZE": 5},
+            action_counts={"WAIT": 80, "GERMINATE": 10, "PRUNE": 5, "FOSSILIZE": 5},
             total_actions=100,
             ppo_data_received=True,
         )
@@ -385,14 +385,14 @@ async def test_action_distribution_sorting():
         widget = app.query_one(TamiyoBrain)
         snapshot = SanctumSnapshot(slot_ids=["R0C0"])
         snapshot.tamiyo = TamiyoState(
-            action_counts={"WAIT": 5, "GERMINATE": 20, "CULL": 10, "FOSSILIZE": 15},
+            action_counts={"WAIT": 5, "GERMINATE": 20, "PRUNE": 10, "FOSSILIZE": 15},
             total_actions=50,
             ppo_data_received=True,
         )
 
         widget.update_snapshot(snapshot)
 
-        # Expected order: GERMINATE (40%), FOSSILIZE (30%), CULL (20%), WAIT (10%)
+        # Expected order: GERMINATE (40%), FOSSILIZE (30%), PRUNE (20%), WAIT (10%)
         tamiyo = snapshot.tamiyo
         total = tamiyo.total_actions
         percentages = {a: (c / total) * 100 for a, c in tamiyo.action_counts.items()}
@@ -437,7 +437,7 @@ async def test_zero_actions_display():
         widget = app.query_one(TamiyoBrain)
         snapshot = SanctumSnapshot(slot_ids=["R0C0"])
         snapshot.tamiyo = TamiyoState(
-            action_counts={"WAIT": 0, "GERMINATE": 0, "CULL": 0, "FOSSILIZE": 0},
+            action_counts={"WAIT": 0, "GERMINATE": 0, "PRUNE": 0, "FOSSILIZE": 0},
             total_actions=0,
             ppo_data_received=True,
         )
@@ -454,7 +454,7 @@ async def test_tamiyo_brain_action_distribution_bar():
         widget = app.query_one(TamiyoBrain)
         snapshot = SanctumSnapshot(slot_ids=["R0C0"])
         snapshot.tamiyo = TamiyoState(
-            action_counts={"WAIT": 35, "GERMINATE": 25, "CULL": 0, "FOSSILIZE": 40},
+            action_counts={"WAIT": 35, "GERMINATE": 25, "PRUNE": 0, "FOSSILIZE": 40},
             total_actions=100,
             ppo_data_received=True,
         )
@@ -474,7 +474,7 @@ async def test_tamiyo_brain_learning_vitals_gauges():
         widget = app.query_one(TamiyoBrain)
         snapshot = SanctumSnapshot(slot_ids=["R0C0"])
         snapshot.tamiyo = TamiyoState(
-            action_counts={"WAIT": 35, "GERMINATE": 25, "CULL": 0, "FOSSILIZE": 40},
+            action_counts={"WAIT": 35, "GERMINATE": 25, "PRUNE": 0, "FOSSILIZE": 40},
             total_actions=100,
             entropy=0.42,
             value_loss=0.08,

@@ -30,8 +30,8 @@ def tamiyo_snapshot() -> TuiSnapshot:
             ev_trend=0.01,
             entropy_collapsed=False,
             ev_warning=False,
-            action_counts={"GERMINATE": 10, "BLEND": 20, "CULL": 5, "WAIT": 65},
-            recent_actions=["G", "B", "W", "W", "C"],
+            action_counts={"GERMINATE": 10, "BLEND": 20, "PRUNE": 5, "WAIT": 65},
+            recent_actions=["G", "B", "W", "W", "P"],
         ),
     )
 

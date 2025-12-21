@@ -9,7 +9,7 @@ from tests.simic.strategies.reward_strategies import (
     reward_inputs_without_seed,
     ransomware_seed_inputs,
     fossilize_inputs,
-    cull_inputs,
+    prune_inputs,
     stage_sequences,
 )
 
@@ -22,6 +22,6 @@ __all__ = [
     "reward_inputs_without_seed",
     "ransomware_seed_inputs",
     "fossilize_inputs",
-    "cull_inputs",
+    "prune_inputs",
     "stage_sequences",
 ]

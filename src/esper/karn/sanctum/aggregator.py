@@ -247,7 +247,7 @@ class SanctumAggregator:
         # Aggregate action counts from per-step reward telemetry when available.
         # If debug REWARD_COMPUTED telemetry is disabled, fall back to
         # ANALYTICS_SNAPSHOT(action_distribution) which populates self._tamiyo directly.
-        aggregated_actions: dict[str, int] = {"WAIT": 0, "GERMINATE": 0, "CULL": 0, "FOSSILIZE": 0}
+        aggregated_actions: dict[str, int] = {"WAIT": 0, "GERMINATE": 0, "PRUNE": 0, "FOSSILIZE": 0}
         total_actions = 0
         for env in self._envs.values():
             for action, count in env.action_counts.items():
@@ -796,7 +796,7 @@ class SanctumAggregator:
 
             # Action tracking (fresh distribution each episode)
             env.action_history.clear()
-            env.action_counts = {"WAIT": 0, "GERMINATE": 0, "CULL": 0, "FOSSILIZE": 0}
+            env.action_counts = {"WAIT": 0, "GERMINATE": 0, "PRUNE": 0, "FOSSILIZE": 0}
             env.total_actions = 0
 
             # Reward components (stale from last step)

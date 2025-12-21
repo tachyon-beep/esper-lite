@@ -29,7 +29,7 @@ def test_lifecycle_op_enum():
 
     assert LifecycleOp.WAIT.value == 0
     assert LifecycleOp.GERMINATE.value == 1
-    assert LifecycleOp.CULL.value == 2
+    assert LifecycleOp.PRUNE.value == 2
     assert LifecycleOp.FOSSILIZE.value == 3
     assert len(LifecycleOp) == 4
 
@@ -68,10 +68,10 @@ def test_factored_action_execution_properties():
     assert germ.blueprint_id == "conv_light"  # CONV_LIGHT maps to registered name
     assert germ.blend_algorithm_id == "sigmoid"
 
-    # CULL action
-    cull = FactoredAction(slot_idx=1, blueprint=BlueprintAction.NOOP, blend=BlendAction.LINEAR, tempo=TempoAction.STANDARD, op=LifecycleOp.CULL)
-    assert cull.is_cull
-    assert cull.slot_idx == 1
+    # PRUNE action
+    prune = FactoredAction(slot_idx=1, blueprint=BlueprintAction.NOOP, blend=BlendAction.LINEAR, tempo=TempoAction.STANDARD, op=LifecycleOp.PRUNE)
+    assert prune.is_prune
+    assert prune.slot_idx == 1
 
     # FOSSILIZE action
     fossilize = FactoredAction(slot_idx=2, blueprint=BlueprintAction.NOOP, blend=BlendAction.LINEAR, tempo=TempoAction.SLOW, op=LifecycleOp.FOSSILIZE)

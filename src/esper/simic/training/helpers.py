@@ -266,13 +266,13 @@ def _convert_flat_to_factored(action, topology: str = "cnn") -> FactoredAction:
             tempo_idx=0,
             op_idx=LifecycleOp.FOSSILIZE,
         )
-    elif action_name == "CULL":
+    elif action_name == "PRUNE":
         return FactoredAction.from_indices(
             slot_idx=0,
             blueprint_idx=0,
             blend_idx=0,
             tempo_idx=0,
-            op_idx=LifecycleOp.CULL,
+            op_idx=LifecycleOp.PRUNE,
         )
     else:  # WAIT or unknown
         return FactoredAction.from_indices(
@@ -471,8 +471,10 @@ def run_heuristic_episode(
                 seed_state.metrics.record_accuracy(val_acc)
 
         # Update signal tracker
+        # Phase 4: embargo/cooldown stages keep state while seed is physically removed.
+        # Availability for germination is therefore "no state", not merely "no active seed".
         available_slots = sum(
-            1 for slot_id in enabled_slots if not model.has_active_seed_in_slot(slot_id)
+            1 for slot_id in enabled_slots if model.seed_slots[slot_id].state is None
         )
         signals = signal_tracker.update(
             epoch=epoch,
@@ -559,10 +561,10 @@ def run_heuristic_episode(
                     if gate_result.passed:
                         slot.set_alpha(1.0)
 
-        elif factored_action.is_cull:
+        elif factored_action.is_prune:
             if decision.target_seed_id:
                 target_slot = resolve_slot_for_seed_id(decision.target_seed_id)
-                model.cull_seed(slot=target_slot)
+                model.prune_seed(slot=target_slot)
                 seed_optimizer = (
                     torch.optim.SGD(model.get_seed_parameters(), lr=task_spec.seed_lr, momentum=0.9)
                     if model.has_active_seed else None

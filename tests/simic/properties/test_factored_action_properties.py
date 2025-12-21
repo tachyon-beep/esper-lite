@@ -7,7 +7,7 @@ This module tests the 5-head factored action space:
 2. Blueprint head - which blueprint to use for germination
 3. Blend head - blend intensity control
 4. Tempo head - blend tempo (epochs for blending phase)
-5. Op head - lifecycle operation (WAIT, GERMINATE, CULL, FOSSILIZE)
+5. Op head - lifecycle operation (WAIT, GERMINATE, PRUNE, FOSSILIZE)
 
 Key invariants tested:
 - All heads have correct dimensions matching NUM_* constants

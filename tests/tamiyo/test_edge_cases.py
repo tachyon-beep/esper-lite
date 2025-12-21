@@ -465,10 +465,10 @@ class TestVeryLongTraining:
 
     def test_embargo_with_large_epochs(self, mock_signals_factory):
         """Embargo calculation should work with large epochs."""
-        config = HeuristicPolicyConfig(embargo_epochs_after_cull=5)
+        config = HeuristicPolicyConfig(embargo_epochs_after_prune=5)
         policy = HeuristicTamiyo(config=config, topology="cnn")
 
-        policy._last_cull_epoch = 100000
+        policy._last_prune_epoch = 100000
 
         signals = mock_signals_factory(
             epoch=100002,  # 2 epochs after cull
@@ -491,9 +491,9 @@ class TestConfigEdgeValues:
         """embargo=0 should not block germination."""
 
         config = HeuristicPolicyConfig(
-            embargo_epochs_after_cull=0,  # No embargo
-            cull_after_epochs_without_improvement=1,
-            cull_if_accuracy_drops_by=1.0,
+            embargo_epochs_after_prune=0,  # No embargo
+            prune_after_epochs_without_improvement=1,
+            prune_if_accuracy_drops_by=1.0,
         )
         policy = HeuristicTamiyo(config=config, topology="cnn")
 
@@ -505,7 +505,7 @@ class TestConfigEdgeValues:
         )
         signals1 = mock_signals_factory(epoch=10)
         decision1 = policy.decide(signals1, [seed])
-        assert decision1.action.name == "CULL"
+        assert decision1.action.name == "PRUNE"
 
         # Immediately try to germinate (same epoch)
         signals2 = mock_signals_factory(
@@ -559,11 +559,11 @@ class TestConfigEdgeValues:
     def test_cull_threshold_zero_culls_any_drop(
         self, mock_signals_factory, mock_seed_factory
     ):
-        """cull_if_accuracy_drops_by=0 should cull on any negative improvement."""
+        """prune_if_accuracy_drops_by=0 should cull on any negative improvement."""
 
         config = HeuristicPolicyConfig(
-            cull_if_accuracy_drops_by=0.0,  # Cull on any drop
-            cull_after_epochs_without_improvement=1,
+            prune_if_accuracy_drops_by=0.0,  # Cull on any drop
+            prune_after_epochs_without_improvement=1,
         )
         policy = HeuristicTamiyo(config=config, topology="cnn")
 
@@ -578,7 +578,7 @@ class TestConfigEdgeValues:
         decision = policy.decide(signals, [seed])
 
         # Should cull (improvement < -0.0)
-        assert decision.action.name == "CULL"
+        assert decision.action.name == "PRUNE"
 
     def test_stabilization_epochs_zero_disables_gate(self):
         """stabilization_epochs=0 should disable stabilization gating."""

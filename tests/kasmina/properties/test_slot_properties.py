@@ -17,7 +17,12 @@ from hypothesis import strategies as st
 
 from esper.kasmina.slot import SeedSlot, SeedMetrics, SeedState, QualityGates
 from esper.kasmina.isolation import ste_forward, blend_with_isolation
-from esper.leyline import SeedStage, VALID_TRANSITIONS, is_valid_transition
+from esper.leyline import (
+    SeedStage,
+    VALID_TRANSITIONS,
+    is_valid_transition,
+    DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE,
+)
 
 from tests.strategies import (
     alpha_values,
@@ -515,16 +520,23 @@ class SeedSlotStateMachine(RuleBasedStateMachine):
     def cull(self):
         """Remove underperforming seed.
 
-        Uses SeedSlot.cull() which handles the transition AND clears state internally.
-        After cull(), self.slot.state becomes None (slot is empty again).
+        Phase 4: cull/prune keeps state for cooldown (PRUNED → EMBARGOED → RESETTING).
+        For this state machine, we advance the cooldown ticks to return the slot
+        to an empty/DORMANT state before continuing.
         """
-        result = self.slot.cull(reason="stateful_test")
+        result = self.slot.prune(reason="stateful_test")
         assert result is True, "Cull should succeed for non-FOSSILIZED stages"
-        assert self.slot.state is None, "Slot state should be None after cull"
+        assert self.slot.state is not None
+        assert self.slot.state.stage == SeedStage.PRUNED
+        assert self.slot.seed is None
+
+        for _ in range(DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE + 2):
+            self.slot.step_epoch()
+        assert self.slot.state is None, "Slot should return to DORMANT after cooldown"
         self.operation_history.append(("cull",))
 
     # Note: No clear_fossilized rule - FOSSILIZED is terminal by design.
-    # Fossilized seeds cannot be culled (SeedSlot.cull() returns False).
+    # Fossilized seeds cannot be culled (SeedSlot.prune() returns False).
     # This is intentional: fossilization is permanent integration.
 
     # -------------------------------------------------------------------------

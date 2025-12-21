@@ -22,7 +22,7 @@ import torch.nn as nn
 from esper.kasmina.host import CNNHost, TransformerHost, MorphogeneticModel
 from esper.kasmina.slot import SeedSlot, SeedState
 from esper.kasmina.isolation import blend_with_isolation, GradientHealthMonitor
-from esper.leyline import SeedStage
+from esper.leyline import SeedStage, DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE
 
 
 @pytest.mark.stress
@@ -125,7 +125,9 @@ class TestGerminateCullCycles:
             slot.state.metrics.record_accuracy(50.0 + i * 0.1)
 
             # Cull
-            slot.cull()
+            slot.prune()
+            for _ in range(DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE + 2):
+                slot.step_epoch()
 
             # Check memory every 10 cycles
             if i % 10 == 9:
@@ -164,7 +166,10 @@ class TestGerminateCullCycles:
 
             # Cull all slots
             for slot_id in ["r0c0", "r0c1", "r0c2"]:
-                model.seed_slots[slot_id].cull()
+                model.seed_slots[slot_id].prune()
+            for _ in range(DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE + 2):
+                for slot_id in ["r0c0", "r0c1", "r0c2"]:
+                    model.seed_slots[slot_id].step_epoch()
 
             if cycle % 5 == 4:
                 gc.collect()
@@ -236,7 +241,9 @@ class TestRapidStageTransitions:
             assert slot.state.stage == SeedStage.HOLDING
 
             # Cull
-            slot.cull()
+            slot.prune()
+            for _ in range(DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE + 2):
+                slot.step_epoch()
 
         elapsed_s = time.perf_counter() - start
         transitions_per_sec = n_transitions / elapsed_s

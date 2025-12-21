@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import NamedTuple, cast
 
-from esper.leyline import SeedStage, MIN_CULL_AGE, MIN_HOLDING_EPOCHS, DEFAULT_GAMMA
+from esper.leyline import SeedStage, MIN_PRUNE_AGE, MIN_HOLDING_EPOCHS, DEFAULT_GAMMA
 from esper.leyline import DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
 from esper.leyline.factored_actions import LifecycleOp
 from esper.nissa import get_hub
@@ -46,7 +46,7 @@ class RewardMode(Enum):
 
     SHAPED: Current dense shaping with PBRS, attribution, warnings (default)
     SPARSE: Terminal-only ground truth (accuracy - param_cost)
-    MINIMAL: Sparse + early-cull penalty only
+    MINIMAL: Sparse + early-prune penalty only
     SIMPLIFIED: DRL Expert recommended - PBRS + intervention cost + terminal only
     """
     SHAPED = "shaped"
@@ -237,12 +237,12 @@ class ContributionRewardConfig:
     # Penalty for culling young seeds
     early_cull_penalty: float = -0.1
 
-    # === Auto-cull Penalty (degenerate policy prevention) ===
-    # Penalty applied when environment auto-culls a seed (safety or timeout)
-    # instead of the policy explicitly choosing to cull.
+    # === Auto-prune Penalty (degenerate policy prevention) ===
+    # Penalty applied when environment auto-prunes a seed (safety or timeout)
+    # instead of the policy explicitly choosing to prune.
     # (DRL Expert review 2025-12-17: prevents WAIT-spam policies that rely on
     # environment cleanup rather than learning proactive lifecycle management)
-    auto_cull_penalty: float = -0.2
+    auto_prune_penalty: float = -0.2
 
     @staticmethod
     def default() -> "ContributionRewardConfig":
@@ -595,11 +595,11 @@ def compute_contribution_reward(
         if seed_info.total_improvement < 0:
             bounded_attribution = 0.0
 
-    # CULL: Invert attribution signal to align incentives correctly
-    # - Culling a GOOD seed (positive contribution) = BAD decision → negative reward
-    # - Culling a BAD seed (negative contribution) = GOOD decision → positive reward
-    # Without this, the policy learns "CULL everything for +attribution rewards"
-    if action == LifecycleOp.CULL:
+    # PRUNE: Invert attribution signal to align incentives correctly
+    # - Pruning a GOOD seed (positive contribution) = BAD decision → negative reward
+    # - Pruning a BAD seed (negative contribution) = GOOD decision → positive reward
+    # Without this, the policy learns "PRUNE everything for +attribution rewards"
+    if action == LifecycleOp.PRUNE:
         bounded_attribution = -bounded_attribution
 
     reward += bounded_attribution
@@ -612,7 +612,7 @@ def compute_contribution_reward(
         components.ratio_penalty = ratio_penalty
 
     # === 1b. BLENDING WARNING: Escalating penalty for negative trajectory ===
-    # Provides early signal to CULL seeds that are hurting performance
+    # Provides early signal to PRUNE seeds that are hurting performance
     # Credit assignment: penalize during BLENDING so policy learns to cull early
     blending_warning = 0.0
     if seed_info is not None and seed_info.stage == STAGE_BLENDING:
@@ -628,13 +628,13 @@ def compute_contribution_reward(
 
     # === 1c. HOLDING INDECISION PENALTY ===
     # Exponential escalation for WAITing too long in HOLDING
-    # Creates urgency to make FOSSILIZE/CULL decision before timeout
+    # Creates urgency to make FOSSILIZE/PRUNE decision before timeout
     # DRL Expert review 2025-12-10: steepened to overcome +7.5 attribution
     # Note: Orthogonal to blending_warning (different stage, different pathology)
     #
     # IMPORTANT: Only apply when bounded_attribution > 0 (legitimate seed being farmed).
     # For ransomware seeds (attr ~= 0 due to discount), the agent's correct action is
-    # CULL, not FOSSILIZE. Penalizing WAIT in this case provides no useful gradient -
+    # PRUNE, not FOSSILIZE. Penalizing WAIT in this case provides no useful gradient -
     # the attribution discount already zeroed rewards. Penalty stacking creates an
     # unlearnable reward landscape where every action is punished.
     holding_warning = 0.0
@@ -704,8 +704,8 @@ def compute_contribution_reward(
         action_shaping += _contribution_fossilize_shaping(seed_info, seed_contribution, config)
         action_shaping += config.fossilize_cost
 
-    elif action == LifecycleOp.CULL:
-        action_shaping += _contribution_cull_shaping(seed_info, seed_contribution, config)
+    elif action == LifecycleOp.PRUNE:
+        action_shaping += _contribution_prune_shaping(seed_info, seed_contribution, config)
         action_shaping += config.cull_cost
 
     # WAIT: No additional shaping (correct default action)
@@ -830,8 +830,8 @@ def compute_minimal_reward(
         config=config,
     )
 
-    # Add early-cull penalty if applicable
-    if action == LifecycleOp.CULL and seed_age is not None:
+    # Add early-prune penalty if applicable
+    if action == LifecycleOp.PRUNE and seed_age is not None:
         if seed_age < config.early_cull_threshold:
             reward += config.early_cull_penalty
 
@@ -1186,21 +1186,21 @@ def _contribution_fossilize_shaping(
     return config.fossilize_noncontributing_penalty
 
 
-def _contribution_cull_shaping(
+def _contribution_prune_shaping(
     seed_info: SeedInfo | None,
     seed_contribution: float | None,
     config: ContributionRewardConfig,
 ) -> float:
-    """Shaping for CULL action - simplified with counterfactual."""
+    """Shaping for PRUNE action - simplified with counterfactual."""
     if seed_info is None:
-        return -0.2  # Nothing to cull
+        return -0.2  # Nothing to prune
 
     if seed_info.stage == STAGE_FOSSILIZED:
         return config.cull_fossilized_penalty
 
-    # Age gate: penalize culling very young seeds
-    if seed_info.seed_age_epochs < MIN_CULL_AGE:
-        return -0.3 * (MIN_CULL_AGE - seed_info.seed_age_epochs)
+    # Age gate: penalize pruning very young seeds
+    if seed_info.seed_age_epochs < MIN_PRUNE_AGE:
+        return -0.3 * (MIN_PRUNE_AGE - seed_info.seed_age_epochs)
 
     # Use seed_contribution if available (BLENDING+ stages)
     if seed_contribution is not None:
@@ -1219,7 +1219,7 @@ def _contribution_cull_shaping(
             return max(scaled_penalty, max_penalty)
 
     # No counterfactual (TRAINING stage) - neutral
-    # We don't have information yet, so CULL is neither good nor bad
+    # We don't have information yet, so PRUNE is neither good nor bad
     return 0.0
 
 
@@ -1480,7 +1480,7 @@ INTERVENTION_COSTS: dict[LifecycleOp, float] = {
     LifecycleOp.WAIT: 0.0,
     LifecycleOp.GERMINATE: _default_config.germinate_cost,
     LifecycleOp.FOSSILIZE: _default_config.fossilize_cost,
-    LifecycleOp.CULL: _default_config.cull_cost,
+    LifecycleOp.PRUNE: _default_config.cull_cost,
 }
 del _default_config  # Don't pollute module namespace
 

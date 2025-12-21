@@ -71,7 +71,7 @@ Remove “cleanup-by-architecture” auto-culls in the hold/decision region and 
 ### Kasmina state engine
 - `SeedState.transition()` resets stage baselines: `src/esper/kasmina/slot.py:389`
 - `SeedSlot.step_epoch()` handles mechanical stage progression and HOLDING auto-culls: `src/esper/kasmina/slot.py:1627`
-- `SeedSlot.cull()` immediately clears the slot: `src/esper/kasmina/slot.py:1152`
+- `SeedSlot.cull()` (currently: PRUNE_INSTANT) removes the seed module but keeps state for cooldown (PRUNED → EMBARGOED → RESETTING): `src/esper/kasmina/slot.py:1203`
 
 ### Blending semantics
 - Blending is output gating (`torch.lerp`), not weight interpolation: `src/esper/kasmina/isolation.py:22`
@@ -345,7 +345,7 @@ If we rename actions to `PRUNE`, we should avoid mixed terminology in operator-f
 
 Proposal:
 - rename terminal lifecycle event to `SEED_PRUNED`.
-- add an explicit initiator field for removals: `prune_initiator ∈ {policy, governor, manual}` (and record the reason string / code).
+- add an explicit initiator field for removals: `initiator ∈ {policy, kasmina, governor, manual}` (and record the reason string / code).
 - rename stage/event names consistently (`PRUNED`, `HOLDING`) so telemetry reads correctly.
 
 ### 9.2 Add alpha controller fields to telemetry
@@ -585,6 +585,11 @@ This plan assumes single-process for the initial implementation. If/when we add 
 - Identify the exact “physical removal” pathway today (optimizer cleanup, seed module clearing, telemetry) and ensure prune completion reuses it (no new cleanup bugs).
 - Add an embargo/thrash regression test that attempts rapid prune/germinate loops and asserts the dwell prevents it.
 
+**Phase 4 risk-reduction artifacts (implemented now)**
+- Inventory script for rename blast radius: `scripts/lifecycle_phase4_inventory.sh`
+- Cooldown pipeline + thrash tests: `tests/kasmina/test_prune_cooldown_pipeline.py`
+- Action/schema drift guard (op tables + masks + rewards + vectorized sync): `tests/leyline/test_action_schema_drift.py`
+
 #### Phase 5 — Simic wiring (policy heads/masks, obs, rewards)
 
 **Ratings:** Complexity 5/5, Risk 5/5
@@ -615,7 +620,7 @@ This plan assumes single-process for the initial implementation. If/when we add 
   - freeze invariant holds,
   - shock differentiates speeds,
   - BaseSlotRent prevents squatting,
-  - `prune_initiator` always populated,
+  - `initiator` always populated,
   - no stage dead-ends in telemetry.
 - Decide the minimal run matrix (configs + seeds + episode count) so validation is time-bounded and comparable.
 - Add a small telemetry summary script/query (even a pytest helper) that asserts the key invariants from the logged run artifacts.
@@ -629,7 +634,7 @@ This plan assumes single-process for the initial implementation. If/when we add 
 - Governor may force `PRUNE_INSTANT` from any mode/stage for catastrophic safety; the policy cannot (constraints remain HOLD-only).
 - Schedules are defined in controller ticks (`alpha_steps_total`), not the word “epoch”; clamp `alpha=target` exactly on completion.
 - Add `time_to_target` and `alpha_velocity` to observations to improve learnability of “hold then promote/prune” patterns.
-- Always record `prune_initiator` in telemetry so disappearances are debuggable.
+- Always record `initiator` in telemetry so disappearances are debuggable.
 - Contract reminder: `HOLDING` is full-amplitude only; partial holds live inside `BLENDING` (`BLEND_HOLD`).
 
 ---
