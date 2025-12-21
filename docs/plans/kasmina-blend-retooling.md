@@ -432,28 +432,76 @@ This plan assumes single-process for the initial implementation. If/when we add 
 
 ### 12.1 Phases, Tasks, and Risk Reduction
 
+**Ratings scale**
+- **Complexity (1–5):** engineering effort + cross-cutting surface area.
+- **Risk (1–5):** likelihood of regressions, training instability, or hard-to-debug failures.
+
+**Phase ratings (as-written)**
+
+| Phase | Complexity | Risk |
+|---|---:|---:|
+| 0 — Preflight | 2/5 | 3/5 |
+| 1 — Contracts/Naming | 3/5 | 4/5 |
+| 2 — Alpha Controller Core | 4/5 | 4/5 |
+| 3 — Blend Modes + Ghost Grads | 5/5 | 5/5 |
+| 4 — Prune Pipeline + Safety | 4/5 | 4/5 |
+| 5 — Simic Wiring (Actions/Obs/Rewards) | 5/5 | 5/5 |
+| 6 — End-to-End Validation | 3/5 | 3/5 |
+
 #### Phase 0 — Preflight (constants + invariants)
+
+**Ratings:** Complexity 2/5, Risk 3/5
 
 **Tasks**
 - Choose constants: `BaseSlotRent`, `EMBARGOED` dwell ticks (default `5`), schedule tick lengths (`0/3/5/8`), and shock coefficient `k`.
 - Decide initial `alpha_target_head` menu (`{0.5, 0.7, 1.0}`) and confirm it’s non-zero only (`PRUNE` is the only path to `alpha_target=0`).
 
-**Risk reduction**
-- Add a tiny math sanity test to verify convex shock behaves as intended (slow ramps cheaper than fast).
-- Add a minimal forward/backward toy test to ensure `MULTIPLY` is identity at birth (`s≈0`, `alpha=0`).
+**Pre-activities (to reduce Risk → 2/5)**
+- Measure baseline reward component magnitudes from a short heuristic run (or existing telemetry): accuracy deltas, rent term, and expected shock range.
+- Pick `k` by simulating the schedule deltas (`instant/fast/medium/slow`) and verifying: `shock_instant > shock_fast > shock_medium > shock_slow` under the chosen curve(s).
+- Add a math unit test that asserts “slow ramps are cheaper than fast” for the convex shock formula (independent of model code).
+- Keep a tiny forward/backward toy test validating `MULTIPLY` identity at birth (`s≈0` from init; `alpha=0` is exact identity).
+
+**Phase 0 calibration (initial numbers)**
+
+- Host param counts (TaskSpec defaults, CPU instantiation):
+  - `cifar10`: `6,418` host params
+  - `cifar10_deep`: `99,922` host params
+  - `cifar10_blind`: `12,074` host params
+- CNN seed param scales quickly with channels (examples):
+  - `conv_light(C=32)=9,280` (≈`1.45×` `cifar10` host); `conv_heavy(C=32)=18,560` (≈`2.89×`)
+  - worst-case ratios in current CNN presets are on the order of `~3×` host (so shock scaling by `seed_params/host_params` can exceed `1.0`)
+- Convex shock schedule sums for a 1→0 ramp (snap-to-target endpoints), `Σ(Δalpha^2)`:
+
+  | Curve | `n=1` | `n=3` | `n=5` | `n=8` |
+  |---|---:|---:|---:|---:|
+  | linear | 1.000 | 0.333 | 0.200 | 0.125 |
+  | cosine | 1.000 | 0.375 | 0.239 | 0.152 |
+  | sigmoid | 1.000 | 0.608 | 0.374 | 0.241 |
+
+- Suggested starting point (so worst-case instant shock stays “noticeable but not dominant”):
+  - `shock_scale = seed_params/host_params`
+  - `k = 0.1` (⇒ worst-case instant prune shock ≈ `-0.3` when ratio ≈ `3`)
 
 #### Phase 1 — Contracts, naming, and transitions (Leyline + docs)
+
+**Ratings:** Complexity 3/5, Risk 4/5
 
 **Tasks**
 - Update lifecycle contracts: `src/esper/leyline/stages.py` (rename/replace `PROBATIONARY`→`HOLDING`, `CULLED`→`PRUNED`, ensure `EMBARGOED` dwell remains concrete).
 - Update transitions to support scheduled prune from `HOLDING → BLENDING` (since `HOLDING` is “alpha≈1 only”).
 - Update docs that codify lifecycle: `README.md` mermaid diagram + any plan references.
 
-**Risk reduction**
-- `rg` for old stage names + run `ruff`, `mypy`, and a focused `pytest` subset after renames to catch missed call sites early.
-- Keep hot-path lookup tables (`OP_NAMES`, etc.) validated by import-time assertions (no silent enum drift).
+**Pre-activities (to reduce Complexity/Risk → 2/5)**
+- Produce an explicit “rename inventory” checklist (`rg` targets + file list) for:
+  - `PROBATIONARY`, `CULLED`, `CULL`, `cull(`, telemetry event names, and any UI labels.
+- Identify all schema/serialization boundaries that embed stage/op integers (action tensors, saved reports, telemetry) so nothing silently deserializes to the wrong enum.
+- Add a fast “import all” smoke test (or a minimal `pytest -q` target) that imports policy + env modules to catch missing enum members early.
+- Keep the change strictly mechanical: update all call sites in one pass (no shims) and rely on existing import-time enum sync assertions (`OP_NAMES`, etc.) to prevent drift.
 
 #### Phase 2 — Alpha controller core (Kasmina state + checkpoint)
+
+**Ratings:** Complexity 4/5, Risk 4/5
 
 **Tasks**
 - Add alpha-controller fields to `SeedState` and persist them via `to_dict()/from_dict()` in `src/esper/kasmina/slot.py`.
@@ -461,11 +509,15 @@ This plan assumes single-process for the initial implementation. If/when we add 
   - monotone UP/DOWN, HOLD-only retarget, snap-to-target on completion.
 - Surface telemetry fields (`alpha_target`, `alpha_mode`, `alpha_steps_done/total`, etc.).
 
-**Risk reduction**
-- Property tests for controller invariants (monotone/no overshoot/snap-to-target).
-- Checkpoint roundtrip test: mid-transition resume preserves controller state (including `BLEND_OUT` freeze).
+**Pre-activities (to reduce Complexity/Risk → 2/5)**
+- Prototype the alpha controller as a pure, isolated object (`step()` / `retarget()`), with full unit + property tests, before touching `SeedSlot`.
+- Write down the exact mapping between “controller ticks” and existing counters (`blending_steps_done/total`) so we don’t double-advance or mix semantics.
+- Decide the definitive state fields for gating (`alpha_target`, `alpha_mode`, `blend_substage`) and make G3 depend only on these (not implicit stage timing).
+- Add a dedicated checkpoint/resume roundtrip test for a mid-transition seed (UP, HOLD, DOWN) before integrating into the full env.
 
 #### Phase 3 — Blend modes (ADD/MULTIPLY/GATE) + ghost gradients
+
+**Ratings:** Complexity 5/5, Risk 5/5
 
 **Tasks**
 - Implement `alpha_algorithm_head` wiring (HOLD-only changes).
@@ -475,11 +527,19 @@ This plan assumes single-process for the initial implementation. If/when we add 
   - `GATE`: per-sample `gate(x)` multiplied into amplitude `alpha_amplitude(t)`
 - Enforce ghost-gradient requirement during `BLEND_OUT` (freeze params only; no detach/no `no_grad`).
 
-**Risk reduction**
-- Unit tests for identity-at-zero for all algorithms.
-- Gradient tests: in `BLEND_OUT`, seed params receive no grads/updates, but host still receives gradients.
+**Pre-activities (to reduce Complexity/Risk → 2/5)**
+- Implement the blend operators in isolation (no Kasmina) and test:
+  - identity-at-zero,
+  - monotone behavior under alpha ramps,
+  - gradients for host vs seed under each operator.
+- Run `torch.compile` on the isolated blend ops (and a minimal `SeedSlot` forward) to ensure no graph breaks or pathological specialization.
+- Explicitly audit interaction with `isolate_gradients` + channels_last safety constraints (BUG-005): ensure no new detach patterns are introduced in `BLENDING+`.
+- Decide whether `GATE` reuses existing `GatedBlend` as the per-sample gate (and if so, how its parameters are frozen during `BLEND_OUT`), before any wiring changes.
+- Identify every seed blueprint that needs “final layer zero-init” support, and confirm it’s implementable without breaking initialization conventions.
 
 #### Phase 4 — Prune pipeline + cooldown + safety override
+
+**Ratings:** Complexity 4/5, Risk 4/5
 
 **Tasks**
 - Replace `CULL` with explicit `PRUNE` op (see `src/esper/leyline/factored_actions.py`) and map `PRUNE_*` → internal `alpha_target=0`.
@@ -487,30 +547,46 @@ This plan assumes single-process for the initial implementation. If/when we add 
 - Remove PROBATIONARY auto-culls; keep catastrophic safety only.
 - Add Governor-only emergency override: force `PRUNE_INSTANT` from any mode/stage on NaN/divergence/collapse.
 
-**Risk reduction**
-- Integration test that germination is impossible during `EMBARGOED` dwell (prevents thrash).
-- Telemetry asserts: every removal records `prune_initiator` + reason.
+**Pre-activities (to reduce Complexity/Risk → 2/5)**
+- Inventory all `cull` call sites and classify them: policy op vs safety mechanism vs manual/debug. This prevents accidental behavior loss.
+- Write an explicit stage transition table (current vs proposed) and add a test that enumerates all legal transitions (prevents lifecycle dead-ends).
+- Identify the exact “physical removal” pathway today (optimizer cleanup, seed module clearing, telemetry) and ensure prune completion reuses it (no new cleanup bugs).
+- Add an embargo/thrash regression test that attempts rapid prune/germinate loops and asserts the dwell prevents it.
 
 #### Phase 5 — Simic wiring (policy heads/masks, obs, rewards)
+
+**Ratings:** Complexity 5/5, Risk 5/5
 
 **Tasks**
 - Update policy action space to include `SET_ALPHA_TARGET` + `PRUNE` operations and the new heads (`alpha_algorithm_head`, etc.).
 - Add observation fields: `alpha_target/mode/steps`, `time_to_target`, `alpha_velocity`, `alpha_algorithm`.
 - Implement reward updates: `BaseSlotRent` floor + convex shock + full-amplitude-only indecision pressure.
 
-**Risk reduction**
-- “Shape parity” tests: action tensors and observation tensors match expected dims across envs.
-- Run short PPO rollouts with verbose telemetry to validate reward component scales (avoid Goodhart traps).
+**Pre-activities (to reduce Complexity/Risk → 2/5)**
+- Write a “shape contract” table: exact head sizes and enum orders, then update the policy network output dims accordingly.
+- Add unit tests for action masking across stages/modes (including HOLD-only constraints and Governor-only overrides).
+- Add observation schema tests that assert fields exist, have correct dtype/range, and are stable across env resets/checkpoints.
+- Calibrate reward coefficients offline using telemetry from short runs (heuristic + a few random actions) to keep rent/shock on comparable scale and avoid immediate reward hacking.
+- Add a deterministic “scripted policy” runner used only for smoke tests (no PPO training) to validate end-to-end wiring before RL introduces noise.
 
 #### Phase 6 — End-to-end validation (CIFAR sanity + regressions)
+
+**Ratings:** Complexity 3/5, Risk 3/5
 
 **Tasks**
 - Run a small heuristic episode and a short PPO episode (CIFAR) to validate:
   - no NaNs/divergence, prune/fossilize still reachable, and telemetry fields are populated.
 - Compare against baseline runs for: prune rate, thrash rate, and reward component magnitudes.
 
-**Risk reduction**
-- Gate rollout on an acceptance checklist: freeze invariant holds, shock differentiates speeds, zombie seeds don’t squat cheaply, and `prune_initiator` is always visible.
+**Pre-activities (to reduce Complexity/Risk → 2/5)**
+- Define an explicit acceptance checklist (pass/fail) before running experiments:
+  - freeze invariant holds,
+  - shock differentiates speeds,
+  - BaseSlotRent prevents squatting,
+  - `prune_initiator` always populated,
+  - no stage dead-ends in telemetry.
+- Decide the minimal run matrix (configs + seeds + episode count) so validation is time-bounded and comparable.
+- Add a small telemetry summary script/query (even a pytest helper) that asserts the key invariants from the logged run artifacts.
 
 ---
 
