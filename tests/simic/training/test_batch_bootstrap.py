@@ -3,13 +3,12 @@ import torch
 from unittest.mock import MagicMock
 
 from esper.leyline.factored_actions import (
-    NUM_ALPHA_ALGORITHMS,
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,
     NUM_ALPHA_TARGETS,
     NUM_BLUEPRINTS,
-    NUM_BLENDS,
     NUM_OPS,
+    NUM_STYLES,
     NUM_TEMPO,
 )
 
@@ -29,12 +28,11 @@ def test_batch_bootstrap_single_forward_pass():
         head_names = [
             "slot",
             "blueprint",
-            "blend",
+            "style",
             "tempo",
             "alpha_target",
             "alpha_speed",
             "alpha_curve",
-            "alpha_algorithm",
             "op",
         ]
         actions = {key: torch.zeros(batch_size, dtype=torch.long) for key in head_names}
@@ -54,12 +52,11 @@ def test_batch_bootstrap_single_forward_pass():
             states, hidden=hidden,
             slot_mask=torch.ones(num_envs, 5, dtype=torch.bool),
             blueprint_mask=torch.ones(num_envs, NUM_BLUEPRINTS, dtype=torch.bool),
-            blend_mask=torch.ones(num_envs, NUM_BLENDS, dtype=torch.bool),
+            style_mask=torch.ones(num_envs, NUM_STYLES, dtype=torch.bool),
             tempo_mask=torch.ones(num_envs, NUM_TEMPO, dtype=torch.bool),
             alpha_target_mask=torch.ones(num_envs, NUM_ALPHA_TARGETS, dtype=torch.bool),
             alpha_speed_mask=torch.ones(num_envs, NUM_ALPHA_SPEEDS, dtype=torch.bool),
             alpha_curve_mask=torch.ones(num_envs, NUM_ALPHA_CURVES, dtype=torch.bool),
-            alpha_algorithm_mask=torch.ones(num_envs, NUM_ALPHA_ALGORITHMS, dtype=torch.bool),
             op_mask=torch.ones(num_envs, NUM_OPS, dtype=torch.bool),
         )
 

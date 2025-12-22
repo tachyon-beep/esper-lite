@@ -17,6 +17,7 @@ from dataclasses import dataclass
 import math
 from typing import TYPE_CHECKING
 
+from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
 from esper.leyline.slot_config import SlotConfig
 
 # HOT PATH: ONLY leyline imports allowed!
@@ -66,14 +67,24 @@ def safe(v, default: float = 0.0, max_val: float = 100.0) -> float:
 # Base features (training state without per-slot features)
 BASE_FEATURE_SIZE = 23
 
-# Per-slot features: 5 state (is_active, stage, alpha, improvement, tempo) + 13 blueprint one-hot
-SLOT_FEATURE_SIZE = 18
+# Per-slot features:
+# 12 state (is_active, stage, alpha, improvement, tempo, alpha_target, alpha_mode,
+#          alpha_steps_total, alpha_steps_done, time_to_target, alpha_velocity, alpha_algorithm)
+# + 13 blueprint one-hot
+SLOT_FEATURE_SIZE = 25
 
-# Feature size (with telemetry off): 23 base + 3 slots * 18 features per slot = 77
-# Per-slot: 5 state (is_active, stage, alpha, improvement, tempo) + 13 blueprint one-hot
-# With telemetry on: + 3 slots * SeedTelemetry.feature_dim() (17) = 128 total
+# Feature size (with telemetry off): 23 base + 3 slots * 25 features per slot = 98
+# With telemetry on: + 3 slots * SeedTelemetry.feature_dim() (17) = 149 total
 # NOTE: Default for 3-slot configuration. Use get_feature_size(slot_config) for dynamic slot counts.
-MULTISLOT_FEATURE_SIZE = 77
+MULTISLOT_FEATURE_SIZE = 98
+
+# Observation normalization bounds (kept local to avoid heavier imports on the HOT PATH)
+_IMPROVEMENT_CLAMP_PCT_PTS: float = 10.0  # Clamp improvement to ±10 percentage points → [-1, 1]
+_DEFAULT_MAX_EPOCHS_DEN: float = 25.0  # Fallback when obs['max_epochs'] not provided
+_ALPHA_MODE_MAX: int = max(mode.value for mode in AlphaMode)
+_ALPHA_ALGO_MIN: int = min(algo.value for algo in AlphaAlgorithm)
+_ALPHA_ALGO_MAX: int = max(algo.value for algo in AlphaAlgorithm)
+_ALPHA_ALGO_RANGE: int = max(_ALPHA_ALGO_MAX - _ALPHA_ALGO_MIN, 1)
 
 
 def get_feature_size(slot_config: SlotConfig) -> int:
@@ -127,12 +138,19 @@ def obs_to_multislot_features(
     - Total params: total_params (1)
     - Resource management: seed_utilization (1) [new - for resource awareness]
 
-    Per-slot features (18 dims each):
+    Per-slot features (25 dims each):
     - is_active: 1.0 if seed active, 0.0 otherwise
     - stage: seed lifecycle stage (SeedStage enum int, 0-10)
     - alpha: blending alpha (0.0-1.0)
-    - improvement: counterfactual contribution delta
+    - improvement: counterfactual contribution delta (normalized to [-1, 1])
     - tempo: blend tempo epochs normalized (0-1)
+    - alpha_target: controller target alpha (0.0-1.0)
+    - alpha_mode: controller mode normalized to [0, 1] (AlphaMode enum)
+    - alpha_steps_total: schedule length normalized to [0, 1]
+    - alpha_steps_done: schedule progress normalized to [0, 1]
+    - time_to_target: remaining controller steps normalized to [0, 1]
+    - alpha_velocity: schedule velocity (clamped to [-1, 1])
+    - alpha_algorithm: composition/gating mode normalized to [0, 1] (AlphaAlgorithm enum)
     - blueprint_id: one-hot encoding of blueprint type (13 dims)
 
     This keeps each slot's local state visible, while still giving Tamiyo
@@ -148,9 +166,9 @@ def obs_to_multislot_features(
     [16-20] Accuracy history (5 values)
     [21]    Total params
     [22]    Seed utilization
-    [23-40] Slot 0 (is_active, stage, alpha, improvement, tempo, blueprint[13])
-    [41-58] Slot 1 (is_active, stage, alpha, improvement, tempo, blueprint[13])
-    [59-76] Slot 2 (is_active, stage, alpha, improvement, tempo, blueprint[13])
+    [23-47] Slot 0 (12 state + blueprint[13])
+    [48-72] Slot 1 (12 state + blueprint[13])
+    [73-97] Slot 2 (12 state + blueprint[13])
 
     Args:
         obs: Observation dictionary with optional 'slots' key
@@ -159,7 +177,7 @@ def obs_to_multislot_features(
         slot_config: Slot configuration (default: 3-slot config)
 
     Returns:
-        List of floats: 23 base + num_slots * 18 slot features
+        List of floats: 23 base + num_slots * 25 slot features
 
     Note (P2-9 Design Decision):
         Returns list[float] instead of torch.Tensor for flexibility during
@@ -192,22 +210,50 @@ def obs_to_multislot_features(
         float(seed_utilization),  # New: resource management
     ]
 
-    # Per-slot features (18 dims per slot, num_slots determined by slot_config)
-    # 5 state features + 13 blueprint one-hot
+    # Per-slot features (25 dims per slot, num_slots determined by slot_config)
+    # 12 state features + 13 blueprint one-hot
+    max_epochs_den = max(float(obs.get("max_epochs") or _DEFAULT_MAX_EPOCHS_DEN), 1.0)
     slot_features = []
     for slot_id in slot_config.slot_ids:
         slot = obs.get('slots', {}).get(slot_id, {})
-        # State features (5 dims)
+        alpha = safe(slot.get("alpha", 0.0), 0.0, max_val=1.0)
+        alpha = max(0.0, alpha)  # safe() clamps symmetrically; alpha should be >= 0
+        alpha_target = safe(slot.get("alpha_target", alpha), alpha, max_val=1.0)
+        alpha_target = max(0.0, alpha_target)
+
+        alpha_mode_raw = int(slot.get("alpha_mode", AlphaMode.HOLD.value) or AlphaMode.HOLD.value)
+        alpha_mode_raw = max(0, min(alpha_mode_raw, _ALPHA_MODE_MAX))
+        alpha_mode_norm = alpha_mode_raw / max(_ALPHA_MODE_MAX, 1)
+
+        alpha_steps_total = max(0.0, float(slot.get("alpha_steps_total", 0) or 0))
+        alpha_steps_done = max(0.0, float(slot.get("alpha_steps_done", 0) or 0))
+        time_to_target = max(0.0, float(slot.get("time_to_target", 0) or 0))
+
+        alpha_steps_total_norm = min(alpha_steps_total, max_epochs_den) / max_epochs_den
+        alpha_steps_done_norm = min(alpha_steps_done, max_epochs_den) / max_epochs_den
+        time_to_target_norm = min(time_to_target, max_epochs_den) / max_epochs_den
+
+        alpha_velocity = safe(slot.get("alpha_velocity", 0.0), 0.0, max_val=1.0)
+
+        alpha_algorithm_raw = int(slot.get("alpha_algorithm", _ALPHA_ALGO_MIN) or _ALPHA_ALGO_MIN)
+        alpha_algorithm_raw = max(_ALPHA_ALGO_MIN, min(alpha_algorithm_raw, _ALPHA_ALGO_MAX))
+        alpha_algorithm_norm = (alpha_algorithm_raw - _ALPHA_ALGO_MIN) / _ALPHA_ALGO_RANGE
+
+        # State features (12 dims)
         slot_features.extend([
             float(slot.get('is_active', 0)),
             float(slot.get('stage', 0)),
-            float(slot.get('alpha', 0.0)),
-            # TODO: [OBS NORMALIZATION AUDIT] - Audit PPO observation scaling/clamping for
-            # per-slot improvement/counterfactual (currently raw percentage points) and
-            # align with the ~[-1, 1] normalization contract for stable policy learning.
-            float(slot.get('improvement', 0.0)),
+            alpha,
+            safe(slot.get("improvement", 0.0), 0.0, max_val=_IMPROVEMENT_CLAMP_PCT_PTS) / _IMPROVEMENT_CLAMP_PCT_PTS,
             # Tempo normalized to 0-1 range (max is ~12 epochs)
             float(slot.get('blend_tempo_epochs', 5)) / 12.0,
+            alpha_target,
+            alpha_mode_norm,
+            alpha_steps_total_norm,
+            alpha_steps_done_norm,
+            time_to_target_norm,
+            alpha_velocity,
+            alpha_algorithm_norm,
         ])
         # Blueprint one-hot (13 dims)
         blueprint_id = slot.get('blueprint_id', None)

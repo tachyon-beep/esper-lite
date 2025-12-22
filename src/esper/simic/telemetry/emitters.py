@@ -18,11 +18,12 @@ from esper.leyline import TelemetryEvent, TelemetryEventType, DEFAULT_ENTROPY_CO
 from esper.leyline.factored_actions import (
     OP_NAMES,
     BLUEPRINT_IDS,
-    BLEND_IDS,
+    STYLE_NAMES,
+    STYLE_BLEND_IDS,
+    STYLE_ALPHA_ALGORITHMS,
     ALPHA_TARGET_VALUES,
     ALPHA_SPEED_NAMES,
     ALPHA_CURVE_NAMES,
-    ALPHA_ALGORITHM_NAMES,
 )
 from .debug_telemetry import LayerGradientStats
 from esper.nissa import get_hub
@@ -82,12 +83,11 @@ def emit_last_action(
     epoch: int,
     slot_idx: int,
     blueprint_idx: int,
-    blend_idx: int,
+    style_idx: int,
     tempo_idx: int,
     alpha_target_idx: int,
     alpha_speed_idx: int,
     alpha_curve_idx: int,
-    alpha_algorithm_idx: int,
     op_idx: int,
     slot_id: str,
     masked: dict[str, bool],
@@ -100,7 +100,7 @@ def emit_last_action(
         epoch: Current epoch
         slot_idx: Slot action index
         blueprint_idx: Blueprint action index
-        blend_idx: Blend action index
+        style_idx: Germination style action index
         tempo_idx: Tempo action index
         op_idx: Lifecycle operation index
         slot_id: Target slot ID string
@@ -118,21 +118,21 @@ def emit_last_action(
         "op": OP_NAMES[op_idx],
         "slot_id": slot_id,
         "blueprint_id": BLUEPRINT_IDS[blueprint_idx],
-        "blend_id": BLEND_IDS[blend_idx],
+        "style": STYLE_NAMES[style_idx],
+        "blend_id": STYLE_BLEND_IDS[style_idx],
         "tempo_idx": tempo_idx,
         "alpha_target": ALPHA_TARGET_VALUES[alpha_target_idx],
         "alpha_speed": ALPHA_SPEED_NAMES[alpha_speed_idx],
         "alpha_curve": ALPHA_CURVE_NAMES[alpha_curve_idx],
-        "alpha_algorithm": ALPHA_ALGORITHM_NAMES[alpha_algorithm_idx],
+        "alpha_algorithm": STYLE_ALPHA_ALGORITHMS[style_idx].name,
         "op_masked": bool(masked.get("op", False)),
         "slot_masked": bool(masked.get("slot", False)),
         "blueprint_masked": bool(masked.get("blueprint", False)),
-        "blend_masked": bool(masked.get("blend", False)),
+        "style_masked": bool(masked.get("style", False)),
         "tempo_masked": bool(masked.get("tempo", False)),
         "alpha_target_masked": bool(masked.get("alpha_target", False)),
         "alpha_speed_masked": bool(masked.get("alpha_speed", False)),
         "alpha_curve_masked": bool(masked.get("alpha_curve", False)),
-        "alpha_algorithm_masked": bool(masked.get("alpha_algorithm", False)),
         "action_success": success,
     }
     hub.emit(TelemetryEvent(

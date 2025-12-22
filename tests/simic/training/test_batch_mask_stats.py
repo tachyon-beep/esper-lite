@@ -2,13 +2,12 @@
 import torch
 from esper.leyline import HEAD_NAMES
 from esper.leyline.factored_actions import (
-    NUM_ALPHA_ALGORITHMS,
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,
     NUM_ALPHA_TARGETS,
     NUM_BLUEPRINTS,
-    NUM_BLENDS,
     NUM_OPS,
+    NUM_STYLES,
     NUM_TEMPO,
 )
 
@@ -26,12 +25,11 @@ def test_batch_mask_stats_no_item_in_loop():
             [True, True, False, False, False],
         ]),
         "blueprint": torch.ones(4, NUM_BLUEPRINTS, dtype=torch.bool),
-        "blend": torch.ones(4, NUM_BLENDS, dtype=torch.bool),
+        "style": torch.ones(4, NUM_STYLES, dtype=torch.bool),
         "tempo": torch.ones(4, NUM_TEMPO, dtype=torch.bool),
         "alpha_target": torch.ones(4, NUM_ALPHA_TARGETS, dtype=torch.bool),
         "alpha_speed": torch.ones(4, NUM_ALPHA_SPEEDS, dtype=torch.bool),
         "alpha_curve": torch.ones(4, NUM_ALPHA_CURVES, dtype=torch.bool),
-        "alpha_algorithm": torch.ones(4, NUM_ALPHA_ALGORITHMS, dtype=torch.bool),
         "op": torch.tensor([
             [True, True, False, False, False],
             [True, True, True, False, False],
@@ -73,12 +71,11 @@ def test_batch_mask_stats_values_match_item_approach():
             [True, False, False, False, False],
         ]),
         "blueprint": torch.ones(2, NUM_BLUEPRINTS, dtype=torch.bool),
-        "blend": torch.ones(2, NUM_BLENDS, dtype=torch.bool),
+        "style": torch.ones(2, NUM_STYLES, dtype=torch.bool),
         "tempo": torch.ones(2, NUM_TEMPO, dtype=torch.bool),
         "alpha_target": torch.ones(2, NUM_ALPHA_TARGETS, dtype=torch.bool),
         "alpha_speed": torch.ones(2, NUM_ALPHA_SPEEDS, dtype=torch.bool),
         "alpha_curve": torch.ones(2, NUM_ALPHA_CURVES, dtype=torch.bool),
-        "alpha_algorithm": torch.ones(2, NUM_ALPHA_ALGORITHMS, dtype=torch.bool),
         "op": torch.tensor([
             [True, True, False, False, False],
             [True, True, True, False, False],

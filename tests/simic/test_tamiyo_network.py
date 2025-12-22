@@ -4,21 +4,18 @@ import pytest
 import torch
 
 from esper.leyline.factored_actions import (
-    AlphaAlgorithmAction,
-    BlendAction,
+    GerminationStyle,
     LifecycleOp,
-    NUM_ALPHA_ALGORITHMS,
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,
     NUM_ALPHA_TARGETS,
     NUM_BLUEPRINTS,
-    NUM_BLENDS,
     NUM_OPS,
+    NUM_STYLES,
     NUM_TEMPO,
 )
 from esper.tamiyo.policy.action_masks import InvalidStateMachineError
 from esper.simic.agent import FactoredRecurrentActorCritic
-from esper.simic.agent.network import _apply_alpha_algorithm_compatibility_mask
 
 
 class TestFactoredRecurrentActorCritic:
@@ -33,12 +30,11 @@ class TestFactoredRecurrentActorCritic:
 
         assert "slot_logits" in output
         assert "blueprint_logits" in output
-        assert "blend_logits" in output
+        assert "style_logits" in output
         assert "tempo_logits" in output
         assert "alpha_target_logits" in output
         assert "alpha_speed_logits" in output
         assert "alpha_curve_logits" in output
-        assert "alpha_algorithm_logits" in output
         assert "op_logits" in output
         assert "value" in output
         assert "hidden" in output
@@ -46,12 +42,11 @@ class TestFactoredRecurrentActorCritic:
         # Check shapes
         assert output["slot_logits"].shape == (2, 1, 3)  # NUM_SLOTS=3
         assert output["blueprint_logits"].shape == (2, 1, NUM_BLUEPRINTS)
-        assert output["blend_logits"].shape == (2, 1, NUM_BLENDS)
+        assert output["style_logits"].shape == (2, 1, NUM_STYLES)
         assert output["tempo_logits"].shape == (2, 1, NUM_TEMPO)
         assert output["alpha_target_logits"].shape == (2, 1, NUM_ALPHA_TARGETS)
         assert output["alpha_speed_logits"].shape == (2, 1, NUM_ALPHA_SPEEDS)
         assert output["alpha_curve_logits"].shape == (2, 1, NUM_ALPHA_CURVES)
-        assert output["alpha_algorithm_logits"].shape == (2, 1, NUM_ALPHA_ALGORITHMS)
         assert output["op_logits"].shape == (2, 1, NUM_OPS)
         assert output["value"].shape == (2, 1)
 
@@ -88,7 +83,7 @@ class TestFactoredRecurrentActorCritic:
             state,
             slot_mask=slot_mask,
             blueprint_mask=None,
-            blend_mask=None,
+            style_mask=None,
             op_mask=op_mask,
         )
 
@@ -105,12 +100,11 @@ class TestFactoredRecurrentActorCritic:
         actions = {
             "slot": torch.zeros(2, 5, dtype=torch.long),
             "blueprint": torch.zeros(2, 5, dtype=torch.long),
-            "blend": torch.zeros(2, 5, dtype=torch.long),
+            "style": torch.zeros(2, 5, dtype=torch.long),
             "tempo": torch.zeros(2, 5, dtype=torch.long),
             "alpha_target": torch.zeros(2, 5, dtype=torch.long),
             "alpha_speed": torch.zeros(2, 5, dtype=torch.long),
             "alpha_curve": torch.zeros(2, 5, dtype=torch.long),
-            "alpha_algorithm": torch.zeros(2, 5, dtype=torch.long),
             "op": torch.zeros(2, 5, dtype=torch.long),
         }
 
@@ -119,12 +113,11 @@ class TestFactoredRecurrentActorCritic:
         # Per-head log probs
         assert "slot" in log_probs
         assert "blueprint" in log_probs
-        assert "blend" in log_probs
+        assert "style" in log_probs
         assert "tempo" in log_probs
         assert "alpha_target" in log_probs
         assert "alpha_speed" in log_probs
         assert "alpha_curve" in log_probs
-        assert "alpha_algorithm" in log_probs
         assert "op" in log_probs
 
         # All should be [batch, seq]
@@ -141,22 +134,20 @@ class TestFactoredRecurrentActorCritic:
         # Should have per-head actions and log_probs
         assert "slot" in result.actions
         assert "blueprint" in result.actions
-        assert "blend" in result.actions
+        assert "style" in result.actions
         assert "tempo" in result.actions
         assert "alpha_target" in result.actions
         assert "alpha_speed" in result.actions
         assert "alpha_curve" in result.actions
-        assert "alpha_algorithm" in result.actions
         assert "op" in result.actions
 
         assert "slot" in result.log_probs
         assert "blueprint" in result.log_probs
-        assert "blend" in result.log_probs
+        assert "style" in result.log_probs
         assert "tempo" in result.log_probs
         assert "alpha_target" in result.log_probs
         assert "alpha_speed" in result.log_probs
         assert "alpha_curve" in result.log_probs
-        assert "alpha_algorithm" in result.log_probs
         assert "op" in result.log_probs
 
         # Actions should be batch-sized
@@ -170,12 +161,11 @@ class TestFactoredRecurrentActorCritic:
         actions = {
             "slot": torch.zeros(2, 5, dtype=torch.long),
             "blueprint": torch.zeros(2, 5, dtype=torch.long),
-            "blend": torch.zeros(2, 5, dtype=torch.long),
+            "style": torch.zeros(2, 5, dtype=torch.long),
             "tempo": torch.zeros(2, 5, dtype=torch.long),
             "alpha_target": torch.zeros(2, 5, dtype=torch.long),
             "alpha_speed": torch.zeros(2, 5, dtype=torch.long),
             "alpha_curve": torch.zeros(2, 5, dtype=torch.long),
-            "alpha_algorithm": torch.zeros(2, 5, dtype=torch.long),
             "op": torch.zeros(2, 5, dtype=torch.long),
         }
 
@@ -185,12 +175,11 @@ class TestFactoredRecurrentActorCritic:
         for key in [
             "slot",
             "blueprint",
-            "blend",
+            "style",
             "tempo",
             "alpha_target",
             "alpha_speed",
             "alpha_curve",
-            "alpha_algorithm",
             "op",
         ]:
             assert (entropy[key] >= 0).all(), f"{key} entropy has negative values"
@@ -208,43 +197,64 @@ class TestFactoredRecurrentActorCritic:
         for key in [
             "slot",
             "blueprint",
-            "blend",
+            "style",
             "tempo",
             "alpha_target",
             "alpha_speed",
             "alpha_curve",
-            "alpha_algorithm",
             "op",
         ]:
             assert result1.actions[key] == result2.actions[key], f"{key} action not deterministic"
 
 
-def test_alpha_algorithm_compatibility_mask_germinate():
-    """Germinate should restrict alpha_algorithm to blend-compatible options."""
-    base_mask = torch.ones(2, NUM_ALPHA_ALGORITHMS, dtype=torch.bool)
-    op_actions = torch.tensor([LifecycleOp.GERMINATE, LifecycleOp.GERMINATE])
-    blend_actions = torch.tensor([BlendAction.GATED, BlendAction.SIGMOID])
+def test_style_mask_forces_default_when_not_germinate():
+    """Non-GERMINATE ops should force style to a single default choice."""
+    net = FactoredRecurrentActorCritic(state_dim=20)
+    state = torch.randn(3, 20)
 
-    compat = _apply_alpha_algorithm_compatibility_mask(base_mask, op_actions, blend_actions)
-    assert compat[0, AlphaAlgorithmAction.ADD].item() is False
-    assert compat[0, AlphaAlgorithmAction.MULTIPLY].item() is False
-    assert compat[0, AlphaAlgorithmAction.GATE].item() is True
-    assert compat[1, AlphaAlgorithmAction.GATE].item() is False
-    assert compat[1, AlphaAlgorithmAction.MULTIPLY].item() is True
+    op_mask = torch.zeros(3, NUM_OPS, dtype=torch.bool)
+    op_mask[:, LifecycleOp.WAIT] = True
+    style_mask = torch.ones(3, NUM_STYLES, dtype=torch.bool)
 
-    nongerminate = _apply_alpha_algorithm_compatibility_mask(
-        base_mask,
-        torch.tensor([LifecycleOp.WAIT, LifecycleOp.FOSSILIZE]),
-        torch.tensor([BlendAction.GATED, BlendAction.GATED]),
+    result = net.get_action(
+        state,
+        op_mask=op_mask,
+        style_mask=style_mask,
     )
-    assert torch.equal(nongerminate, base_mask)
 
-    seq_mask = torch.ones(1, 2, NUM_ALPHA_ALGORITHMS, dtype=torch.bool)
-    seq_op = torch.tensor([[LifecycleOp.GERMINATE, LifecycleOp.WAIT]])
-    seq_blend = torch.tensor([[BlendAction.GATED, BlendAction.GATED]])
-    seq_compat = _apply_alpha_algorithm_compatibility_mask(seq_mask, seq_op, seq_blend)
-    assert seq_compat[0, 0, AlphaAlgorithmAction.MULTIPLY].item() is False
-    assert seq_compat[0, 1, AlphaAlgorithmAction.MULTIPLY].item() is True
+    assert (result.actions["op"] == LifecycleOp.WAIT).all()
+    assert (result.actions["style"] == int(GerminationStyle.SIGMOID_ADD)).all()
+
+
+def test_style_not_forced_for_set_alpha_target():
+    """SET_ALPHA_TARGET should not force style to the default choice."""
+    net = FactoredRecurrentActorCritic(state_dim=20)
+    state = torch.randn(2, 20)
+
+    # Force op = SET_ALPHA_TARGET
+    op_mask = torch.zeros(2, NUM_OPS, dtype=torch.bool)
+    op_mask[:, LifecycleOp.SET_ALPHA_TARGET] = True
+
+    # Force style logits to prefer GATED_GATE (a non-default style).
+    style_mask = torch.ones(2, NUM_STYLES, dtype=torch.bool)
+    with torch.no_grad():
+        # style_head is Linear -> ReLU -> Linear; zeroing the first layer makes the
+        # second layer bias dominate, giving deterministic argmax control.
+        net.style_head[0].weight.zero_()
+        net.style_head[0].bias.zero_()
+        net.style_head[2].weight.zero_()
+        net.style_head[2].bias.zero_()
+        net.style_head[2].bias[int(GerminationStyle.GATED_GATE)] = 10.0
+
+    result = net.get_action(
+        state,
+        deterministic=True,
+        op_mask=op_mask,
+        style_mask=style_mask,
+    )
+
+    assert (result.actions["op"] == LifecycleOp.SET_ALPHA_TARGET).all()
+    assert (result.actions["style"] == int(GerminationStyle.GATED_GATE)).all()
 
 
 def test_masking_produces_valid_softmax():
@@ -298,12 +308,11 @@ def test_logits_no_inf_after_masking():
     for key in [
         "slot_logits",
         "blueprint_logits",
-        "blend_logits",
+        "style_logits",
         "tempo_logits",
         "alpha_target_logits",
         "alpha_speed_logits",
         "alpha_curve_logits",
-        "alpha_algorithm_logits",
         "op_logits",
         "value",
     ]:
@@ -319,12 +328,11 @@ def test_entropy_normalization_with_single_action():
         state_dim=35,
         num_slots=1,  # log(1) = 0!
         num_blueprints=5,
-        num_blends=NUM_BLENDS,
+        num_styles=NUM_STYLES,
         num_tempo=NUM_TEMPO,
         num_alpha_targets=NUM_ALPHA_TARGETS,
         num_alpha_speeds=NUM_ALPHA_SPEEDS,
         num_alpha_curves=NUM_ALPHA_CURVES,
-        num_alpha_algorithms=NUM_ALPHA_ALGORITHMS,
         num_ops=NUM_OPS,
     )
 
@@ -332,12 +340,11 @@ def test_entropy_normalization_with_single_action():
     actions = {
         "slot": torch.zeros(2, 3, dtype=torch.long),  # Only one option
         "blueprint": torch.randint(0, 5, (2, 3)),
-        "blend": torch.randint(0, NUM_BLENDS, (2, 3)),
+        "style": torch.randint(0, NUM_STYLES, (2, 3)),
         "tempo": torch.randint(0, NUM_TEMPO, (2, 3)),
         "alpha_target": torch.randint(0, NUM_ALPHA_TARGETS, (2, 3)),
         "alpha_speed": torch.randint(0, NUM_ALPHA_SPEEDS, (2, 3)),
         "alpha_curve": torch.randint(0, NUM_ALPHA_CURVES, (2, 3)),
-        "alpha_algorithm": torch.randint(0, NUM_ALPHA_ALGORITHMS, (2, 3)),
         "op": torch.randint(0, NUM_OPS, (2, 3)),
     }
 
@@ -358,12 +365,11 @@ def test_entropy_normalization_in_loss():
     actions = {
         "slot": torch.zeros(2, 3, dtype=torch.long),
         "blueprint": torch.randint(0, 5, (2, 3)),
-        "blend": torch.randint(0, NUM_BLENDS, (2, 3)),
+        "style": torch.randint(0, NUM_STYLES, (2, 3)),
         "tempo": torch.randint(0, NUM_TEMPO, (2, 3)),
         "alpha_target": torch.randint(0, NUM_ALPHA_TARGETS, (2, 3)),
         "alpha_speed": torch.randint(0, NUM_ALPHA_SPEEDS, (2, 3)),
         "alpha_curve": torch.randint(0, NUM_ALPHA_CURVES, (2, 3)),
-        "alpha_algorithm": torch.randint(0, NUM_ALPHA_ALGORITHMS, (2, 3)),
         "op": torch.randint(0, NUM_OPS, (2, 3)),
     }
 
@@ -392,12 +398,11 @@ def test_entropy_respects_valid_actions_only():
     actions = {
         "slot": torch.zeros(1, 2, dtype=torch.long),
         "blueprint": torch.zeros(1, 2, dtype=torch.long),
-        "blend": torch.zeros(1, 2, dtype=torch.long),
+        "style": torch.zeros(1, 2, dtype=torch.long),
         "tempo": torch.zeros(1, 2, dtype=torch.long),
         "alpha_target": torch.zeros(1, 2, dtype=torch.long),
         "alpha_speed": torch.zeros(1, 2, dtype=torch.long),
         "alpha_curve": torch.zeros(1, 2, dtype=torch.long),
-        "alpha_algorithm": torch.zeros(1, 2, dtype=torch.long),
         "op": torch.zeros(1, 2, dtype=torch.long),
     }
 

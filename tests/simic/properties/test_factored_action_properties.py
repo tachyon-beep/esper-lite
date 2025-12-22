@@ -2,16 +2,15 @@
 
 Tier 7: Factored Action Space Invariants
 
-This module tests the 9-head factored action space:
+This module tests the 8-head factored action space:
 1. Slot head - which slot to operate on
 2. Blueprint head - which blueprint to use for germination
-3. Blend head - blend algorithm selection
+3. Style head - germination style (blend + alpha algorithm, fused)
 4. Tempo head - blend tempo (epochs for blending phase)
 5. Alpha target head - non-zero amplitude targets
 6. Alpha speed head - schedule speed
 7. Alpha curve head - schedule shape
-8. Alpha algorithm head - blend operator/gating mode
-9. Op head - lifecycle operation (WAIT, GERMINATE, SET_ALPHA_TARGET, PRUNE, FOSSILIZE)
+8. Op head - lifecycle operation (WAIT, GERMINATE, SET_ALPHA_TARGET, PRUNE, FOSSILIZE)
 
 Key invariants tested:
 - All heads have correct dimensions matching NUM_* constants
@@ -28,17 +27,16 @@ from hypothesis import strategies as st
 
 from esper.leyline import HEAD_NAMES
 from esper.leyline.factored_actions import (
-    NUM_ALPHA_ALGORITHMS,
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,
     NUM_ALPHA_TARGETS,
     NUM_BLUEPRINTS,
-    NUM_BLENDS,
     NUM_OPS,
+    NUM_STYLES,
     NUM_TEMPO,
+    GerminationStyle,
     TempoAction,
     TEMPO_TO_EPOCHS,
-    BlendAction,
     LifecycleOp,
 )
 
@@ -51,21 +49,20 @@ from esper.leyline.factored_actions import (
 class TestHeadNamesConsistency:
     """HEAD_NAMES tuple must be complete and correctly ordered."""
 
-    def test_head_names_has_nine_entries(self):
-        """Property: HEAD_NAMES contains exactly 9 heads."""
-        assert len(HEAD_NAMES) == 9, f"Expected 9 heads, got {len(HEAD_NAMES)}"
+    def test_head_names_has_eight_entries(self):
+        """Property: HEAD_NAMES contains exactly 8 heads."""
+        assert len(HEAD_NAMES) == 8, f"Expected 8 heads, got {len(HEAD_NAMES)}"
 
     def test_head_names_order(self):
         """Property: HEAD_NAMES is in canonical order."""
         expected = (
             "slot",
             "blueprint",
-            "blend",
+            "style",
             "tempo",
             "alpha_target",
             "alpha_speed",
             "alpha_curve",
-            "alpha_algorithm",
             "op",
         )
         assert HEAD_NAMES == expected, f"Expected {expected}, got {HEAD_NAMES}"
@@ -91,10 +88,10 @@ class TestEnumDimensions:
             f"TempoAction has {len(TempoAction)} members, expected {NUM_TEMPO}"
         )
 
-    def test_blend_action_count_matches_num_blends(self):
-        """Property: BlendAction enum has exactly NUM_BLENDS members."""
-        assert len(BlendAction) == NUM_BLENDS, (
-            f"BlendAction has {len(BlendAction)} members, expected {NUM_BLENDS}"
+    def test_style_count_matches_num_styles(self):
+        """Property: GerminationStyle enum has exactly NUM_STYLES members."""
+        assert len(GerminationStyle) == NUM_STYLES, (
+            f"GerminationStyle has {len(GerminationStyle)} members, expected {NUM_STYLES}"
         )
 
     def test_lifecycle_op_count_matches_num_ops(self):
@@ -176,10 +173,10 @@ class TestMaskDimensions:
         mask = torch.ones(NUM_BLUEPRINTS, dtype=torch.bool)
         assert mask.shape == (NUM_BLUEPRINTS,)
 
-    def test_blend_mask_dimension(self):
-        """Property: Blend mask has NUM_BLENDS elements."""
-        mask = torch.ones(NUM_BLENDS, dtype=torch.bool)
-        assert mask.shape == (NUM_BLENDS,)
+    def test_style_mask_dimension(self):
+        """Property: Style mask has NUM_STYLES elements."""
+        mask = torch.ones(NUM_STYLES, dtype=torch.bool)
+        assert mask.shape == (NUM_STYLES,)
 
     def test_tempo_mask_dimension(self):
         """Property: Tempo mask has NUM_TEMPO elements."""
@@ -201,11 +198,6 @@ class TestMaskDimensions:
         mask = torch.ones(NUM_ALPHA_CURVES, dtype=torch.bool)
         assert mask.shape == (NUM_ALPHA_CURVES,)
 
-    def test_alpha_algorithm_mask_dimension(self):
-        """Property: Alpha algorithm mask has NUM_ALPHA_ALGORITHMS elements."""
-        mask = torch.ones(NUM_ALPHA_ALGORITHMS, dtype=torch.bool)
-        assert mask.shape == (NUM_ALPHA_ALGORITHMS,)
-
     def test_op_mask_dimension(self):
         """Property: Op mask has NUM_OPS elements."""
         mask = torch.ones(NUM_OPS, dtype=torch.bool)
@@ -225,23 +217,21 @@ class TestMaskBatchDimensions:
         masks = {
             "slot": torch.ones(batch_size, num_slots, dtype=torch.bool),
             "blueprint": torch.ones(batch_size, NUM_BLUEPRINTS, dtype=torch.bool),
-            "blend": torch.ones(batch_size, NUM_BLENDS, dtype=torch.bool),
+            "style": torch.ones(batch_size, NUM_STYLES, dtype=torch.bool),
             "tempo": torch.ones(batch_size, NUM_TEMPO, dtype=torch.bool),
             "alpha_target": torch.ones(batch_size, NUM_ALPHA_TARGETS, dtype=torch.bool),
             "alpha_speed": torch.ones(batch_size, NUM_ALPHA_SPEEDS, dtype=torch.bool),
             "alpha_curve": torch.ones(batch_size, NUM_ALPHA_CURVES, dtype=torch.bool),
-            "alpha_algorithm": torch.ones(batch_size, NUM_ALPHA_ALGORITHMS, dtype=torch.bool),
             "op": torch.ones(batch_size, NUM_OPS, dtype=torch.bool),
         }
 
         assert masks["slot"].shape == (batch_size, num_slots)
         assert masks["blueprint"].shape == (batch_size, NUM_BLUEPRINTS)
-        assert masks["blend"].shape == (batch_size, NUM_BLENDS)
+        assert masks["style"].shape == (batch_size, NUM_STYLES)
         assert masks["tempo"].shape == (batch_size, NUM_TEMPO)
         assert masks["alpha_target"].shape == (batch_size, NUM_ALPHA_TARGETS)
         assert masks["alpha_speed"].shape == (batch_size, NUM_ALPHA_SPEEDS)
         assert masks["alpha_curve"].shape == (batch_size, NUM_ALPHA_CURVES)
-        assert masks["alpha_algorithm"].shape == (batch_size, NUM_ALPHA_ALGORITHMS)
         assert masks["op"].shape == (batch_size, NUM_OPS)
 
 
@@ -302,6 +292,14 @@ class TestActionIndexValidity:
         """Property: Blueprint action index is always < NUM_BLUEPRINTS."""
         assert 0 <= blueprint_idx < NUM_BLUEPRINTS
 
+    @given(style_idx=st.integers(min_value=0, max_value=NUM_STYLES - 1))
+    @settings(max_examples=10)
+    def test_style_within_bounds(self, style_idx: int):
+        """Property: Style index is always < NUM_STYLES."""
+        assert 0 <= style_idx < NUM_STYLES
+        style = GerminationStyle(style_idx)
+        assert style.value == style_idx
+
     @given(tempo_idx=st.integers(min_value=0, max_value=NUM_TEMPO - 1))
     @settings(max_examples=10)
     def test_tempo_action_within_bounds(self, tempo_idx: int):
@@ -328,12 +326,6 @@ class TestActionIndexValidity:
     def test_alpha_curve_within_bounds(self, alpha_curve_idx: int):
         """Property: Alpha curve index is always < NUM_ALPHA_CURVES."""
         assert 0 <= alpha_curve_idx < NUM_ALPHA_CURVES
-
-    @given(alpha_algorithm_idx=st.integers(min_value=0, max_value=NUM_ALPHA_ALGORITHMS - 1))
-    @settings(max_examples=10)
-    def test_alpha_algorithm_within_bounds(self, alpha_algorithm_idx: int):
-        """Property: Alpha algorithm index is always < NUM_ALPHA_ALGORITHMS."""
-        assert 0 <= alpha_algorithm_idx < NUM_ALPHA_ALGORITHMS
 
     @given(op_idx=st.integers(min_value=0, max_value=NUM_OPS - 1))
     @settings(max_examples=10)
@@ -365,13 +357,6 @@ class TestBlendingMaskInvariants:
         assert tempo_mask.all(), "All tempo options should be valid during blending"
         assert tempo_mask.sum() == NUM_TEMPO
 
-    @given(blend_idx=st.integers(min_value=0, max_value=NUM_BLENDS - 1))
-    @settings(max_examples=10)
-    def test_blend_action_options(self, blend_idx: int):
-        """Property: Blend action indices map to valid enum values."""
-        blend = BlendAction(blend_idx)
-        assert 0 <= blend.value < NUM_BLENDS
-
 
 # =============================================================================
 # Property Tests: Cross-Head Consistency
@@ -386,12 +371,11 @@ class TestCrossHeadConsistency:
         expected_heads = {
             "slot",
             "blueprint",
-            "blend",
+            "style",
             "tempo",
             "alpha_target",
             "alpha_speed",
             "alpha_curve",
-            "alpha_algorithm",
             "op",
         }
         actual_heads = set(HEAD_NAMES)
@@ -412,8 +396,8 @@ class TestCrossHeadConsistency:
                 masks[head] = torch.ones(batch_size, num_slots, dtype=torch.bool)
             elif head == "blueprint":
                 masks[head] = torch.ones(batch_size, NUM_BLUEPRINTS, dtype=torch.bool)
-            elif head == "blend":
-                masks[head] = torch.ones(batch_size, NUM_BLENDS, dtype=torch.bool)
+            elif head == "style":
+                masks[head] = torch.ones(batch_size, NUM_STYLES, dtype=torch.bool)
             elif head == "tempo":
                 masks[head] = torch.ones(batch_size, NUM_TEMPO, dtype=torch.bool)
             elif head == "alpha_target":
@@ -422,8 +406,6 @@ class TestCrossHeadConsistency:
                 masks[head] = torch.ones(batch_size, NUM_ALPHA_SPEEDS, dtype=torch.bool)
             elif head == "alpha_curve":
                 masks[head] = torch.ones(batch_size, NUM_ALPHA_CURVES, dtype=torch.bool)
-            elif head == "alpha_algorithm":
-                masks[head] = torch.ones(batch_size, NUM_ALPHA_ALGORITHMS, dtype=torch.bool)
             elif head == "op":
                 masks[head] = torch.ones(batch_size, NUM_OPS, dtype=torch.bool)
 

@@ -178,7 +178,7 @@ class TelemetryConfig(BaseModel):
 
     def feature_count_estimate(self) -> int:
         """Estimate total feature count for this configuration."""
-        count = 50  # V4 base observation dims (simic.features.MULTISLOT_FEATURE_SIZE)
+        count = 98  # V4 base observation dims (tamiyo.policy.features.MULTISLOT_FEATURE_SIZE)
 
         if self.gradients.enabled:
             # Assume ~4 tracked layers, 3 stats each

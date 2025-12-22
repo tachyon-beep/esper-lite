@@ -3,7 +3,7 @@
 The action space is factored into:
 - slot_idx: which slot to target (integer index)
 - BlueprintAction: what blueprint to germinate
-- BlendAction: which blending algorithm to use
+- GerminationStyle: which germination style (blend + alpha algorithm) to use
 - LifecycleOp: what operation to perform
 """
 
@@ -52,14 +52,25 @@ class BlueprintAction(IntEnum):
         return mapping.get(self.value)
 
 
-class BlendAction(IntEnum):
-    """Blending algorithm selection."""
-    LINEAR = 0
-    SIGMOID = 1
-    GATED = 2
+class GerminationStyle(IntEnum):
+    """Germination style (composite decision: blend + alpha algorithm).
 
-    def to_algorithm_id(self) -> str:
-        return ["linear", "sigmoid", "gated"][self.value]
+    This eliminates invalid blend/alpha_algorithm combinations by making them
+    unrepresentable at the action space level.
+    """
+
+    LINEAR_ADD = 0
+    LINEAR_MULTIPLY = 1
+    SIGMOID_ADD = 2
+    GATED_GATE = 3
+
+
+STYLE_TO_KASMINA: dict[GerminationStyle, tuple[str, AlphaAlgorithm]] = {
+    GerminationStyle.LINEAR_ADD: ("linear", AlphaAlgorithm.ADD),
+    GerminationStyle.LINEAR_MULTIPLY: ("linear", AlphaAlgorithm.MULTIPLY),
+    GerminationStyle.SIGMOID_ADD: ("sigmoid", AlphaAlgorithm.ADD),
+    GerminationStyle.GATED_GATE: ("gated", AlphaAlgorithm.GATE),
+}
 
 
 class TempoAction(IntEnum):
@@ -134,30 +145,6 @@ class AlphaCurveAction(IntEnum):
         }[self]
 
 
-class AlphaAlgorithmAction(IntEnum):
-    """Blend composition / gating algorithm selection."""
-    ADD = 0
-    MULTIPLY = 1
-    GATE = 2
-
-    def to_algorithm(self) -> AlphaAlgorithm:
-        return {
-            AlphaAlgorithmAction.ADD: AlphaAlgorithm.ADD,
-            AlphaAlgorithmAction.MULTIPLY: AlphaAlgorithm.MULTIPLY,
-            AlphaAlgorithmAction.GATE: AlphaAlgorithm.GATE,
-        }[self]
-
-
-def is_valid_blend_alpha_combo(
-    blend: BlendAction,
-    alpha_algorithm: AlphaAlgorithmAction,
-) -> bool:
-    """Return True when blend/alpha algorithm pairing is compatible."""
-    if blend == BlendAction.GATED:
-        return alpha_algorithm == AlphaAlgorithmAction.GATE
-    return alpha_algorithm != AlphaAlgorithmAction.GATE
-
-
 # Alpha target values (non-zero targets only; removal uses PRUNE)
 ALPHA_TARGET_VALUES: tuple[float, ...] = (0.5, 0.7, 1.0)
 
@@ -183,8 +170,11 @@ OP_NAMES: tuple[str, ...] = tuple(op.name for op in LifecycleOp)
 # Blueprint ID lookup (matches BlueprintAction.to_blueprint_id())
 BLUEPRINT_IDS: tuple[str | None, ...] = tuple(bp.to_blueprint_id() for bp in BlueprintAction)
 
-# Blend algorithm ID lookup (matches BlendAction.to_algorithm_id())
-BLEND_IDS: tuple[str, ...] = tuple(blend.to_algorithm_id() for blend in BlendAction)
+STYLE_NAMES: tuple[str, ...] = tuple(style.name for style in GerminationStyle)
+STYLE_BLEND_IDS: tuple[str, ...] = tuple(STYLE_TO_KASMINA[style][0] for style in GerminationStyle)
+STYLE_ALPHA_ALGORITHMS: tuple[AlphaAlgorithm, ...] = tuple(
+    STYLE_TO_KASMINA[style][1] for style in GerminationStyle
+)
 
 # Tempo name lookup (matches TempoAction enum order)
 TEMPO_NAMES: tuple[str, ...] = tuple(t.name for t in TempoAction)
@@ -197,9 +187,6 @@ ALPHA_SPEED_NAMES: tuple[str, ...] = tuple(s.name for s in AlphaSpeedAction)
 
 # Alpha curve name lookup (matches AlphaCurveAction enum order)
 ALPHA_CURVE_NAMES: tuple[str, ...] = tuple(c.name for c in AlphaCurveAction)
-
-# Alpha algorithm name lookup (matches AlphaAlgorithmAction enum order)
-ALPHA_ALGORITHM_NAMES: tuple[str, ...] = tuple(a.name for a in AlphaAlgorithmAction)
 
 # Operation index constants for direct comparison (avoids enum construction)
 OP_WAIT: int = LifecycleOp.WAIT.value
@@ -216,8 +203,14 @@ assert OP_NAMES == tuple(op.name for op in LifecycleOp), (
 assert len(BLUEPRINT_IDS) == len(BlueprintAction), (
     "BLUEPRINT_IDS length mismatch with BlueprintAction enum"
 )
-assert len(BLEND_IDS) == len(BlendAction), (
-    "BLEND_IDS length mismatch with BlendAction enum"
+assert len(STYLE_NAMES) == len(GerminationStyle), (
+    "STYLE_NAMES length mismatch with GerminationStyle enum"
+)
+assert len(STYLE_BLEND_IDS) == len(GerminationStyle), (
+    "STYLE_BLEND_IDS length mismatch with GerminationStyle enum"
+)
+assert len(STYLE_ALPHA_ALGORITHMS) == len(GerminationStyle), (
+    "STYLE_ALPHA_ALGORITHMS length mismatch with GerminationStyle enum"
 )
 assert len(TEMPO_NAMES) == len(TempoAction), (
     "TEMPO_NAMES length mismatch with TempoAction enum"
@@ -231,34 +224,29 @@ assert len(ALPHA_SPEED_NAMES) == len(AlphaSpeedAction), (
 assert len(ALPHA_CURVE_NAMES) == len(AlphaCurveAction), (
     "ALPHA_CURVE_NAMES length mismatch with AlphaCurveAction enum"
 )
-assert len(ALPHA_ALGORITHM_NAMES) == len(AlphaAlgorithmAction), (
-    "ALPHA_ALGORITHM_NAMES length mismatch with AlphaAlgorithmAction enum"
-)
 
 
 @dataclass(frozen=True, slots=True)
 class FactoredAction:
     """Factored action representation for multi-slot morphogenetic control.
 
-    9 action heads:
+    8 action heads:
     - slot_idx: Which slot to target (0-2)
     - blueprint: Which blueprint to germinate
-    - blend: Which blending algorithm
+    - style: Germination style (blend + alpha algorithm)
     - tempo: How fast to blend
     - alpha_target: Target alpha amplitude (non-zero)
     - alpha_speed: Schedule speed (controller ticks)
     - alpha_curve: Schedule curve
-    - alpha_algorithm: Blend composition / gating mode
     - op: Lifecycle operation
     """
     slot_idx: int
     blueprint: BlueprintAction
-    blend: BlendAction
+    style: GerminationStyle
     tempo: TempoAction
     alpha_target: AlphaTargetAction
     alpha_speed: AlphaSpeedAction
     alpha_curve: AlphaCurveAction
-    alpha_algorithm: AlphaAlgorithmAction
     op: LifecycleOp
 
     @property
@@ -283,7 +271,11 @@ class FactoredAction:
 
     @property
     def blend_algorithm_id(self) -> str:
-        return self.blend.to_algorithm_id()
+        return STYLE_TO_KASMINA[self.style][0]
+
+    @property
+    def alpha_algorithm_value(self) -> AlphaAlgorithm:
+        return STYLE_TO_KASMINA[self.style][1]
 
     @property
     def alpha_target_value(self) -> float:
@@ -297,59 +289,51 @@ class FactoredAction:
     def alpha_curve_value(self) -> AlphaCurve:
         return self.alpha_curve.to_curve()
 
-    @property
-    def alpha_algorithm_value(self) -> AlphaAlgorithm:
-        return self.alpha_algorithm.to_algorithm()
-
     @classmethod
     def from_indices(
         cls,
         slot_idx: int,
         blueprint_idx: int,
-        blend_idx: int,
+        style_idx: int,
         tempo_idx: int,
         alpha_target_idx: int,
         alpha_speed_idx: int,
         alpha_curve_idx: int,
-        alpha_algorithm_idx: int,
         op_idx: int,
     ) -> "FactoredAction":
         """Create from integer indices (used by network output)."""
         return cls(
             slot_idx=slot_idx,
             blueprint=BlueprintAction(blueprint_idx),
-            blend=BlendAction(blend_idx),
+            style=GerminationStyle(style_idx),
             tempo=TempoAction(tempo_idx),
             alpha_target=AlphaTargetAction(alpha_target_idx),
             alpha_speed=AlphaSpeedAction(alpha_speed_idx),
             alpha_curve=AlphaCurveAction(alpha_curve_idx),
-            alpha_algorithm=AlphaAlgorithmAction(alpha_algorithm_idx),
             op=LifecycleOp(op_idx),
         )
 
-    def to_indices(self) -> tuple[int, int, int, int, int, int, int, int, int]:
+    def to_indices(self) -> tuple[int, int, int, int, int, int, int, int]:
         """Convert to integer indices for network input."""
         return (
             self.slot_idx,
             self.blueprint.value,
-            self.blend.value,
+            self.style.value,
             self.tempo.value,
             self.alpha_target.value,
             self.alpha_speed.value,
             self.alpha_curve.value,
-            self.alpha_algorithm.value,
             self.op.value,
         )
 
 
 # Dimension sizes for policy network
 NUM_BLUEPRINTS = len(BlueprintAction)
-NUM_BLENDS = len(BlendAction)
+NUM_STYLES = len(GerminationStyle)
 NUM_OPS = len(LifecycleOp)
 NUM_ALPHA_TARGETS = len(AlphaTargetAction)
 NUM_ALPHA_SPEEDS = len(AlphaSpeedAction)
 NUM_ALPHA_CURVES = len(AlphaCurveAction)
-NUM_ALPHA_ALGORITHMS = len(AlphaAlgorithmAction)
 
 
 @dataclass(frozen=True, slots=True)
@@ -380,12 +364,11 @@ class ActionHeadSpec:
 ACTION_HEAD_SPECS: tuple[ActionHeadSpec, ...] = (
     ActionHeadSpec(name="slot", enum=None, slot_dependent=True),
     ActionHeadSpec(name="blueprint", enum=BlueprintAction),
-    ActionHeadSpec(name="blend", enum=BlendAction),
+    ActionHeadSpec(name="style", enum=GerminationStyle),
     ActionHeadSpec(name="tempo", enum=TempoAction),
     ActionHeadSpec(name="alpha_target", enum=AlphaTargetAction),
     ActionHeadSpec(name="alpha_speed", enum=AlphaSpeedAction),
     ActionHeadSpec(name="alpha_curve", enum=AlphaCurveAction),
-    ActionHeadSpec(name="alpha_algorithm", enum=AlphaAlgorithmAction),
     ActionHeadSpec(name="op", enum=LifecycleOp),
 )
 
@@ -423,23 +406,21 @@ TRANSFORMER_BLUEPRINTS = frozenset({
 
 __all__ = [
     "BlueprintAction",
-    "BlendAction",
+    "GerminationStyle",
+    "STYLE_TO_KASMINA",
     "TempoAction",
     "AlphaTargetAction",
     "AlphaSpeedAction",
     "AlphaCurveAction",
-    "AlphaAlgorithmAction",
     "LifecycleOp",
     "FactoredAction",
     "NUM_BLUEPRINTS",
-    "NUM_BLENDS",
+    "NUM_STYLES",
     "NUM_TEMPO",
     "NUM_OPS",
     "NUM_ALPHA_TARGETS",
     "NUM_ALPHA_SPEEDS",
     "NUM_ALPHA_CURVES",
-    "NUM_ALPHA_ALGORITHMS",
-    "is_valid_blend_alpha_combo",
     "ActionHeadSpec",
     "ACTION_HEAD_SPECS",
     "ACTION_HEAD_NAMES",
@@ -449,12 +430,13 @@ __all__ = [
     # Lookup tables for hot path optimization
     "OP_NAMES",
     "BLUEPRINT_IDS",
-    "BLEND_IDS",
+    "STYLE_NAMES",
+    "STYLE_BLEND_IDS",
+    "STYLE_ALPHA_ALGORITHMS",
     "TEMPO_NAMES",
     "ALPHA_TARGET_NAMES",
     "ALPHA_SPEED_NAMES",
     "ALPHA_CURVE_NAMES",
-    "ALPHA_ALGORITHM_NAMES",
     "TEMPO_TO_EPOCHS",
     "ALPHA_TARGET_VALUES",
     "ALPHA_SPEED_TO_STEPS",

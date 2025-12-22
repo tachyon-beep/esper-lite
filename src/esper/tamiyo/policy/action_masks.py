@@ -30,17 +30,16 @@ from esper.leyline import AlphaMode, SeedStage, MIN_PRUNE_AGE, MASKED_LOGIT_VALU
 from esper.leyline.stages import VALID_TRANSITIONS
 from esper.leyline.slot_config import SlotConfig
 from esper.leyline.factored_actions import (
-    AlphaAlgorithmAction,
     AlphaTargetAction,
     BlueprintAction,
+    GerminationStyle,
     LifecycleOp,
-    NUM_ALPHA_ALGORITHMS,
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,
     NUM_ALPHA_TARGETS,
     NUM_BLUEPRINTS,
-    NUM_BLENDS,
     NUM_OPS,
+    NUM_STYLES,
     NUM_TEMPO,
     CNN_BLUEPRINTS,
     TRANSFORMER_BLUEPRINTS,
@@ -137,12 +136,11 @@ def compute_action_masks(
         Dict of boolean tensors for each action head:
         - "slot": [num_slots] - which slots can be targeted (only enabled slots)
         - "blueprint": [NUM_BLUEPRINTS] - which blueprints can be used
-        - "blend": [NUM_BLENDS] - which blend methods can be used
+        - "style": [NUM_STYLES] - which germination styles can be used
         - "tempo": [NUM_TEMPO] - which tempo values can be used (all valid)
         - "alpha_target": [NUM_ALPHA_TARGETS] - which alpha targets can be used
         - "alpha_speed": [NUM_ALPHA_SPEEDS] - which alpha speeds can be used
         - "alpha_curve": [NUM_ALPHA_CURVES] - which alpha curves can be used
-        - "alpha_algorithm": [NUM_ALPHA_ALGORITHMS] - which algorithms can be used
         - "op": [NUM_OPS] - which operations are valid (ANY enabled slot)
     """
     if slot_config is None:
@@ -171,17 +169,19 @@ def compute_action_masks(
     # NOOP is a placeholder seed with no trainable parameters - always disable
     blueprint_mask[BlueprintAction.NOOP] = False
 
-    # Blend mask: all blend methods valid (network learns preferences)
-    blend_mask = torch.ones(NUM_BLENDS, dtype=torch.bool, device=device)
+    # Style mask: relevant when GERMINATE is possible, or when HOLD retargeting is possible
+    # (SET_ALPHA_TARGET can change alpha_algorithm). Default to SIGMOID_ADD when irrelevant
+    # so the head remains well-defined.
+    style_mask = torch.zeros(NUM_STYLES, dtype=torch.bool, device=device)
+    style_mask[GerminationStyle.SIGMOID_ADD] = True
 
     # Tempo mask: all tempo values valid (choice only matters during GERMINATE)
     tempo_mask = torch.ones(NUM_TEMPO, dtype=torch.bool, device=device)
 
-    # Alpha heads: target/algorithm changes are HOLD-only or germinate.
+    # Alpha heads: target changes are HOLD-only or germinate.
     alpha_target_mask = torch.zeros(NUM_ALPHA_TARGETS, dtype=torch.bool, device=device)
     alpha_speed_mask = torch.ones(NUM_ALPHA_SPEEDS, dtype=torch.bool, device=device)
     alpha_curve_mask = torch.ones(NUM_ALPHA_CURVES, dtype=torch.bool, device=device)
-    alpha_algorithm_mask = torch.zeros(NUM_ALPHA_ALGORITHMS, dtype=torch.bool, device=device)
 
     # Op mask: depends on slot states across ALL enabled slots
     op_mask = torch.zeros(NUM_OPS, dtype=torch.bool, device=device)
@@ -228,21 +228,19 @@ def compute_action_masks(
                     has_retargetable_hold_slot = True
 
     if can_germinate or has_retargetable_hold_slot:
+        style_mask[:] = True
         alpha_target_mask[:] = True
-        alpha_algorithm_mask[:] = True
     else:
         alpha_target_mask[AlphaTargetAction.FULL] = True
-        alpha_algorithm_mask[AlphaAlgorithmAction.ADD] = True
 
     return {
         "slot": slot_mask,
         "blueprint": blueprint_mask,
-        "blend": blend_mask,
+        "style": style_mask,
         "tempo": tempo_mask,
         "alpha_target": alpha_target_mask,
         "alpha_speed": alpha_speed_mask,
         "alpha_curve": alpha_curve_mask,
-        "alpha_algorithm": alpha_algorithm_mask,
         "op": op_mask,
     }
 

@@ -27,7 +27,11 @@ class HeadGradientNorms(TypedDict):
 
     slot: float
     blueprint: float
-    blend: float
+    style: float
+    tempo: float
+    alpha_target: float
+    alpha_speed: float
+    alpha_curve: float
     op: float
     value: float
 
@@ -64,7 +68,11 @@ class HeadLogProbs(TypedDict):
 
     slot: torch.Tensor
     blueprint: torch.Tensor
-    blend: torch.Tensor
+    style: torch.Tensor
+    tempo: torch.Tensor
+    alpha_target: torch.Tensor
+    alpha_speed: torch.Tensor
+    alpha_curve: torch.Tensor
     op: torch.Tensor
 
 
@@ -73,7 +81,11 @@ class HeadEntropies(TypedDict):
 
     slot: torch.Tensor
     blueprint: torch.Tensor
-    blend: torch.Tensor
+    style: torch.Tensor
+    tempo: torch.Tensor
+    alpha_target: torch.Tensor
+    alpha_speed: torch.Tensor
+    alpha_curve: torch.Tensor
     op: torch.Tensor
 
 
@@ -82,7 +94,11 @@ class ActionDict(TypedDict):
 
     slot: int
     blueprint: int
-    blend: int
+    style: int
+    tempo: int
+    alpha_target: int
+    alpha_speed: int
+    alpha_curve: int
     op: int
 
 

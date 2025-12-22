@@ -4,11 +4,12 @@ import pytest
 
 from esper.leyline.factored_actions import (
     BlueprintAction,
-    BlendAction,
+    GerminationStyle,
     LifecycleOp,
     OP_NAMES,
     BLUEPRINT_IDS,
-    BLEND_IDS,
+    STYLE_BLEND_IDS,
+    STYLE_TO_KASMINA,
     OP_GERMINATE,
     OP_FOSSILIZE,
     OP_PRUNE,
@@ -40,16 +41,17 @@ class TestLookupTableSync:
         """BLUEPRINT_IDS length must equal BlueprintAction enum length."""
         assert len(BLUEPRINT_IDS) == len(BlueprintAction)
 
-    def test_blend_ids_match_enum_method(self):
-        """BLEND_IDS must match BlendAction.to_algorithm_id() for all values."""
-        for i, blend in enumerate(BlendAction):
-            assert BLEND_IDS[i] == blend.to_algorithm_id(), (
-                f"BLEND_IDS[{i}] = {BLEND_IDS[i]} != {blend.to_algorithm_id()}"
+    def test_style_blend_ids_match_mapping(self):
+        """STYLE_BLEND_IDS must match STYLE_TO_KASMINA blend_id in enum order."""
+        for i, style in enumerate(GerminationStyle):
+            expected_blend_id, _ = STYLE_TO_KASMINA[style]
+            assert STYLE_BLEND_IDS[i] == expected_blend_id, (
+                f"STYLE_BLEND_IDS[{i}] = {STYLE_BLEND_IDS[i]} != {expected_blend_id}"
             )
 
-    def test_blend_ids_length_matches_enum(self):
-        """BLEND_IDS length must equal BlendAction enum length."""
-        assert len(BLEND_IDS) == len(BlendAction)
+    def test_style_blend_ids_length_matches_enum(self):
+        """STYLE_BLEND_IDS length must equal GerminationStyle enum length."""
+        assert len(STYLE_BLEND_IDS) == len(GerminationStyle)
 
 
 class TestOpIndexConstants:

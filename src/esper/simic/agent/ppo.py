@@ -63,7 +63,7 @@ def signals_to_features(
     *,
     slot_reports: dict[str, "SeedStateReport"],
     use_telemetry: bool = True,
-    max_epochs: int = 200,
+    max_epochs: int = DEFAULT_EPISODE_LENGTH,
     slots: list[str] | None = None,
     total_params: int = 0,
     total_seeds: int = 0,
@@ -84,7 +84,7 @@ def signals_to_features(
         slot_config: Slot configuration (default: 3-slot config)
 
     Returns:
-        Feature vector: base (23 + num_slots*18) + telemetry per slot (num_slots * 17) when telemetry enabled.
+        Feature vector: base (23 + num_slots*25) + telemetry per slot (num_slots * 17) when telemetry enabled.
 
     Note:
         TrainingSignals.active_seeds contains seed IDs (strings), not SeedState
@@ -128,6 +128,7 @@ def signals_to_features(
         'loss_history_5': loss_hist,
         'accuracy_history_5': acc_hist,
         'total_params': total_params,
+        'max_epochs': max_epochs,
     }
 
     # Build per-slot state dict from reports
@@ -143,10 +144,32 @@ def signals_to_features(
                 'stage': report.stage.value,
                 'alpha': report.metrics.current_alpha,
                 'improvement': contribution,
+                'alpha_target': report.alpha_target,
+                'alpha_mode': report.alpha_mode,
+                'alpha_steps_total': report.alpha_steps_total,
+                'alpha_steps_done': report.alpha_steps_done,
+                'time_to_target': report.time_to_target,
+                'alpha_velocity': report.alpha_velocity,
+                'alpha_algorithm': report.alpha_algorithm,
+                'blend_tempo_epochs': report.blend_tempo_epochs,
                 'blueprint_id': report.blueprint_id,
             }
         else:
-            slot_states[slot_id] = {'is_active': 0.0, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0, 'blueprint_id': None}
+            slot_states[slot_id] = {
+                'is_active': 0.0,
+                'stage': 0,
+                'alpha': 0.0,
+                'improvement': 0.0,
+                'alpha_target': 0.0,
+                'alpha_mode': 0,
+                'alpha_steps_total': 0,
+                'alpha_steps_done': 0,
+                'time_to_target': 0,
+                'alpha_velocity': 0.0,
+                'alpha_algorithm': 1,  # AlphaAlgorithm.ADD.value
+                'blend_tempo_epochs': 5,
+                'blueprint_id': None,
+            }
 
     obs['slots'] = slot_states
 
@@ -200,7 +223,7 @@ class PPOAgent:
         adaptive_entropy_floor: bool = False,  # Scale floor with valid action count
         entropy_anneal_steps: int = 0,
         # Per-head entropy coefficients for relative weighting.
-        # Blueprint/blend heads may warrant different entropy weighting since they
+        # Blueprint/style heads may warrant different entropy weighting since they
         # are only active during GERMINATE actions (less frequent than slot/op).
         entropy_coef_per_head: dict[str, float] | None = None,
         value_coef: float = DEFAULT_VALUE_COEF,
@@ -264,12 +287,11 @@ class PPOAgent:
         self.entropy_coef_per_head = entropy_coef_per_head or {
             "slot": 1.0,
             "blueprint": 1.0,
-            "blend": 1.0,
+            "style": 1.0,
             "tempo": 1.0,
             "alpha_target": 1.0,
             "alpha_speed": 1.0,
             "alpha_curve": 1.0,
-            "alpha_algorithm": 1.0,
             "op": 1.0,
         }
         self.value_coef = value_coef
@@ -355,16 +377,15 @@ class PPOAgent:
             # smaller logits = sharper softmax), which kills exploration.
             # Shared layers feed into actor, so they must also have wd=0.
             # Reference: SAC, TD3 implementations apply WD only to critic.
-            # FactoredRecurrentActorCritic: slot/blueprint/blend/tempo/alpha_* /op heads are actors
+            # FactoredRecurrentActorCritic: slot/blueprint/style/tempo/alpha_* /op heads are actors
             actor_params = (
                 list(self._base_network.slot_head.parameters()) +
                 list(self._base_network.blueprint_head.parameters()) +
-                list(self._base_network.blend_head.parameters()) +
+                list(self._base_network.style_head.parameters()) +
                 list(self._base_network.tempo_head.parameters()) +
                 list(self._base_network.alpha_target_head.parameters()) +
                 list(self._base_network.alpha_speed_head.parameters()) +
                 list(self._base_network.alpha_curve_head.parameters()) +
-                list(self._base_network.alpha_algorithm_head.parameters()) +
                 list(self._base_network.op_head.parameters())
             )
             critic_params = list(self._base_network.value_head.parameters())
@@ -531,12 +552,11 @@ class PPOAgent:
             actions = {
                 "slot": data["slot_actions"],
                 "blueprint": data["blueprint_actions"],
-                "blend": data["blend_actions"],
+                "style": data["style_actions"],
                 "tempo": data["tempo_actions"],
                 "alpha_target": data["alpha_target_actions"],
                 "alpha_speed": data["alpha_speed_actions"],
                 "alpha_curve": data["alpha_curve_actions"],
-                "alpha_algorithm": data["alpha_algorithm_actions"],
                 "op": data["op_actions"],
             }
 
@@ -545,12 +565,11 @@ class PPOAgent:
                 actions,
                 slot_mask=data["slot_masks"],
                 blueprint_mask=data["blueprint_masks"],
-                blend_mask=data["blend_masks"],
+                style_mask=data["style_masks"],
                 tempo_mask=data["tempo_masks"],
                 alpha_target_mask=data["alpha_target_masks"],
                 alpha_speed_mask=data["alpha_speed_masks"],
                 alpha_curve_mask=data["alpha_curve_masks"],
-                alpha_algorithm_mask=data["alpha_algorithm_masks"],
                 op_mask=data["op_masks"],
                 hidden=(data["initial_hidden_h"], data["initial_hidden_c"]),
             )
@@ -585,24 +604,22 @@ class PPOAgent:
                 "op": torch.ones_like(is_wait),  # op always relevant
                 "slot": ~is_wait,  # slot relevant except WAIT
                 "blueprint": is_germinate,  # only for GERMINATE
-                "blend": is_germinate,  # only for GERMINATE
-                "tempo": is_germinate,  # only for GERMINATE (same as blueprint/blend)
+                "style": is_germinate | is_set_alpha,  # GERMINATE + SET_ALPHA_TARGET
+                "tempo": is_germinate,  # only for GERMINATE
                 "alpha_target": is_set_alpha | is_germinate,
                 "alpha_speed": is_set_alpha | is_prune,
                 "alpha_curve": is_set_alpha | is_prune,
-                "alpha_algorithm": is_set_alpha | is_germinate,
             }
 
             # Compute per-head ratios
             old_log_probs = {
                 "slot": data["slot_log_probs"][valid_mask],
                 "blueprint": data["blueprint_log_probs"][valid_mask],
-                "blend": data["blend_log_probs"][valid_mask],
+                "style": data["style_log_probs"][valid_mask],
                 "tempo": data["tempo_log_probs"][valid_mask],
                 "alpha_target": data["alpha_target_log_probs"][valid_mask],
                 "alpha_speed": data["alpha_speed_log_probs"][valid_mask],
                 "alpha_curve": data["alpha_curve_log_probs"][valid_mask],
-                "alpha_algorithm": data["alpha_algorithm_log_probs"][valid_mask],
                 "op": data["op_log_probs"][valid_mask],
             }
 
@@ -618,7 +635,7 @@ class PPOAgent:
             # KL(old||new) ≈ E[(ratio - 1) - log(ratio)] (KL3 estimator from Schulman)
             #
             # H6 FIX: Weight per-head KL by causal relevance.
-            # Sparse heads (blueprint, blend) are only active during GERMINATE (~5-15%).
+            # Sparse heads (blueprint, style) are only active during GERMINATE (~5-15%).
             # Without weighting, they contribute full KL to the sum despite being rarely
             # causally relevant, inflating joint KL and triggering premature early stopping.
             # Weight = (n_valid for head) / (total timesteps) to scale by relevance.
@@ -687,7 +704,7 @@ class PPOAgent:
                 value_loss = F.mse_loss(values, valid_returns)
 
             # Entropy loss with per-head weighting and causal masking.
-            # H3 FIX: Use masked mean for sparse heads (blueprint, blend).
+            # H3 FIX: Use masked mean for sparse heads (blueprint, style).
             # These heads are only active during GERMINATE (~5-15% of timesteps).
             # Without masking, entropy gradient is diluted by averaging over zeros,
             # starving exploration signal for rare-but-important action heads.
@@ -717,12 +734,11 @@ class PPOAgent:
                 for head_name, head_module in [
                     ("slot", base_net.slot_head),
                     ("blueprint", base_net.blueprint_head),
-                    ("blend", base_net.blend_head),
+                    ("style", base_net.style_head),
                     ("tempo", base_net.tempo_head),
                     ("alpha_target", base_net.alpha_target_head),
                     ("alpha_speed", base_net.alpha_speed_head),
                     ("alpha_curve", base_net.alpha_curve_head),
-                    ("alpha_algorithm", base_net.alpha_algorithm_head),
                     ("op", base_net.op_head),
                     ("value", base_net.value_head),
                 ]:

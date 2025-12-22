@@ -83,7 +83,7 @@ VIEW_DEFINITIONS: dict[str, str] = {
             json_extract(data, '$.entropy_collapsed')::BOOLEAN as entropy_collapsed,
             json_extract(data, '$.slot_entropy')::DOUBLE as slot_entropy,
             json_extract(data, '$.blueprint_entropy')::DOUBLE as blueprint_entropy,
-            json_extract(data, '$.blend_entropy')::DOUBLE as blend_entropy,
+            json_extract(data, '$.style_entropy')::DOUBLE as style_entropy,
             json_extract(data, '$.tempo_entropy')::DOUBLE as tempo_entropy,
             json_extract(data, '$.op_entropy')::DOUBLE as op_entropy
         FROM raw_events

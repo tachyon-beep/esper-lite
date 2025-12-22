@@ -83,31 +83,29 @@ def test_last_action_event_emitted():
             epoch=3,
             slot_idx=1,
             blueprint_idx=1,
-            blend_idx=1,
+            style_idx=1,
             tempo_idx=1,
             alpha_target_idx=0,
             alpha_speed_idx=0,
             alpha_curve_idx=0,
-            alpha_algorithm_idx=0,
             op_idx=1,
             slot_id="r0c1",
             masked={
                 "op": False,
                 "slot": False,
                 "blueprint": False,
-                "blend": True,
+                "style": True,
                 "tempo": False,
                 "alpha_target": False,
                 "alpha_speed": False,
                 "alpha_curve": False,
-                "alpha_algorithm": False,
             },
             success=True,
         )
 
         emitted = hub.emit.call_args[0][0]
         assert emitted.data["slot_id"] == "r0c1"
-        assert emitted.data["blend_masked"] is True
+        assert emitted.data["style_masked"] is True
 
 
 def test_ppo_update_event_includes_vitals():

@@ -7,13 +7,12 @@ import torch.nn as nn
 
 from esper.kasmina import MorphogeneticModel
 from esper.leyline.factored_actions import (
-    AlphaAlgorithmAction,
     AlphaCurveAction,
     AlphaSpeedAction,
     AlphaTargetAction,
-    BlendAction,
     BlueprintAction,
     FactoredAction,
+    GerminationStyle,
     LifecycleOp,
     TempoAction,
     TEMPO_TO_EPOCHS,
@@ -161,45 +160,41 @@ def test_scripted_policy_runner_smoke() -> None:
         FactoredAction(
             slot_idx=0,
             blueprint=BlueprintAction.NORM,
-            blend=BlendAction.LINEAR,
+            style=GerminationStyle.SIGMOID_ADD,
             tempo=TempoAction.STANDARD,
             alpha_target=AlphaTargetAction.FULL,
             alpha_speed=AlphaSpeedAction.MEDIUM,
             alpha_curve=AlphaCurveAction.LINEAR,
-            alpha_algorithm=AlphaAlgorithmAction.ADD,
             op=LifecycleOp.GERMINATE,
         ),
         FactoredAction(
             slot_idx=0,
             blueprint=BlueprintAction.NOOP,
-            blend=BlendAction.LINEAR,
+            style=GerminationStyle.SIGMOID_ADD,
             tempo=TempoAction.STANDARD,
             alpha_target=AlphaTargetAction.SEVENTY,
             alpha_speed=AlphaSpeedAction.MEDIUM,
             alpha_curve=AlphaCurveAction.COSINE,
-            alpha_algorithm=AlphaAlgorithmAction.ADD,
             op=LifecycleOp.WAIT,
         ),
         FactoredAction(
             slot_idx=0,
             blueprint=BlueprintAction.NOOP,
-            blend=BlendAction.LINEAR,
+            style=GerminationStyle.SIGMOID_ADD,
             tempo=TempoAction.STANDARD,
             alpha_target=AlphaTargetAction.FULL,
             alpha_speed=AlphaSpeedAction.INSTANT,
             alpha_curve=AlphaCurveAction.COSINE,
-            alpha_algorithm=AlphaAlgorithmAction.ADD,
             op=LifecycleOp.SET_ALPHA_TARGET,
         ),
         FactoredAction(
             slot_idx=0,
             blueprint=BlueprintAction.NOOP,
-            blend=BlendAction.LINEAR,
+            style=GerminationStyle.SIGMOID_ADD,
             tempo=TempoAction.STANDARD,
             alpha_target=AlphaTargetAction.FULL,
             alpha_speed=AlphaSpeedAction.SLOW,
             alpha_curve=AlphaCurveAction.SIGMOID,
-            alpha_algorithm=AlphaAlgorithmAction.ADD,
             op=LifecycleOp.PRUNE,
         ),
     ]
@@ -217,13 +212,12 @@ def test_scripted_policy_runner_smoke() -> None:
         assert masks["op"][action.op.value].item() is True
         if action.op == LifecycleOp.GERMINATE:
             assert masks["blueprint"][action.blueprint.value].item() is True
-            assert masks["blend"][action.blend.value].item() is True
+            assert masks["style"][action.style.value].item() is True
             assert masks["tempo"][action.tempo.value].item() is True
         if action.op in (LifecycleOp.SET_ALPHA_TARGET, LifecycleOp.PRUNE):
             assert masks["alpha_target"][action.alpha_target.value].item() is True
             assert masks["alpha_speed"][action.alpha_speed.value].item() is True
             assert masks["alpha_curve"][action.alpha_curve.value].item() is True
-            assert masks["alpha_algorithm"][action.alpha_algorithm.value].item() is True
 
         success, seed_counter = _apply_factored_action(
             model,

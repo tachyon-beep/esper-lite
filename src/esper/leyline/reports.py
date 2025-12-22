@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import Any, TYPE_CHECKING
 from uuid import uuid4
 
-from esper.leyline.alpha import AlphaMode
+from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
 from esper.leyline.stages import SeedStage
 from esper.leyline.signals import TrainingSignals
 
@@ -84,6 +84,17 @@ class SeedStateReport:
     previous_epochs_in_stage: int = 0  # Epochs in previous stage at transition (for PBRS)
     stage_entered_at: datetime = field(default_factory=_utc_now)
     alpha_mode: int = AlphaMode.HOLD.value
+
+    # Alpha controller state (for observation parity + action masking learnability)
+    alpha_target: float = 0.0
+    alpha_steps_total: int = 0
+    alpha_steps_done: int = 0
+    time_to_target: int = 0
+    alpha_velocity: float = 0.0
+    alpha_algorithm: int = AlphaAlgorithm.ADD.value
+
+    # Seed tempo (chosen at germination)
+    blend_tempo_epochs: int = 5
 
     # Metrics
     metrics: SeedMetrics = field(default_factory=SeedMetrics)

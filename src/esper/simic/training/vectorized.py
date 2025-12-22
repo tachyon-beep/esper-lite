@@ -71,18 +71,16 @@ from esper.leyline import (
 )
 from esper.leyline.factored_actions import (
     FactoredAction,
-    AlphaAlgorithmAction,
     AlphaCurveAction,
     AlphaSpeedAction,
     AlphaTargetAction,
     ALPHA_SPEED_TO_STEPS,
     ALPHA_TARGET_VALUES,
     LifecycleOp,
-    BlendAction,
-    is_valid_blend_alpha_combo,
     OP_NAMES,
     BLUEPRINT_IDS,
-    BLEND_IDS,
+    STYLE_ALPHA_ALGORITHMS,
+    STYLE_BLEND_IDS,
     TempoAction,
     TEMPO_TO_EPOCHS,
     OP_WAIT,
@@ -465,12 +463,11 @@ def _compute_batched_bootstrap_values(
             hidden=(hidden_h, hidden_c),
             slot_mask=masks_batch["slot"],
             blueprint_mask=masks_batch["blueprint"],
-            blend_mask=masks_batch["blend"],
+            style_mask=masks_batch["style"],
             tempo_mask=masks_batch["tempo"],
             alpha_target_mask=masks_batch["alpha_target"],
             alpha_speed_mask=masks_batch["alpha_speed"],
             alpha_curve_mask=masks_batch["alpha_curve"],
-            alpha_algorithm_mask=masks_batch["alpha_algorithm"],
             op_mask=masks_batch["op"],
             deterministic=True,
         )
@@ -688,7 +685,7 @@ def train_ppo_vectorized(
     effective_workers = num_workers if num_workers is not None else 4
 
     # State dimension: base features (dynamic based on slot count) + telemetry features when enabled.
-    # For 3 slots: 23 base + 3*18 slot features = 77, plus 3*17 telemetry = 128.
+    # For 3 slots: 23 base + 3*25 slot features = 98, plus 3*17 telemetry = 149.
     base_feature_size = get_feature_size(slot_config)
     telemetry_size = slot_config.num_slots * SeedTelemetry.feature_dim() if use_telemetry else 0
     state_dim = base_feature_size + telemetry_size
@@ -1907,6 +1904,7 @@ def train_ppo_vectorized(
                     signals,
                     slot_reports=slot_reports,
                     use_telemetry=use_telemetry,
+                    max_epochs=max_epochs,
                     slots=slots,
                     total_params=model.total_params if model else 0,
                     total_seeds=model.total_seeds() if model else 0,
@@ -1995,12 +1993,11 @@ def train_ppo_vectorized(
                 hidden=batched_hidden,
                 slot_mask=masks_batch["slot"],
                 blueprint_mask=masks_batch["blueprint"],
-                blend_mask=masks_batch["blend"],
+                style_mask=masks_batch["style"],
                 tempo_mask=masks_batch["tempo"],
                 alpha_target_mask=masks_batch["alpha_target"],
                 alpha_speed_mask=masks_batch["alpha_speed"],
                 alpha_curve_mask=masks_batch["alpha_curve"],
-                alpha_algorithm_mask=masks_batch["alpha_algorithm"],
                 op_mask=masks_batch["op"],
                 deterministic=False,
                 return_op_logits=use_telemetry,
@@ -2068,15 +2065,14 @@ def train_ppo_vectorized(
                 value = values[env_idx]
 
                 # Parse factored action using direct indexing (no object creation)
-                action_dict = actions[env_idx]  # {slot, blueprint, blend, tempo, alpha_*, op}
+                action_dict = actions[env_idx]  # {slot, blueprint, style, tempo, alpha_*, op}
                 slot_idx = action_dict["slot"]
                 blueprint_idx = action_dict["blueprint"]
-                blend_idx = action_dict["blend"]
+                style_idx = action_dict["style"]
                 tempo_idx = action_dict["tempo"]
                 alpha_target_idx = action_dict["alpha_target"]
                 alpha_speed_idx = action_dict["alpha_speed"]
                 alpha_curve_idx = action_dict["alpha_curve"]
-                alpha_algorithm_idx = action_dict["alpha_algorithm"]
                 op_idx = action_dict["op"]
 
                 # DEBUG: Verify direct indexing matches FactoredAction properties
@@ -2085,12 +2081,11 @@ def train_ppo_vectorized(
                     _fa = FactoredAction.from_indices(
                         slot_idx,
                         blueprint_idx,
-                        blend_idx,
+                        style_idx,
                         tempo_idx,
                         alpha_target_idx,
                         alpha_speed_idx,
                         alpha_curve_idx,
-                        alpha_algorithm_idx,
                         op_idx,
                     )
                     assert slot_idx == _fa.slot_idx, f"slot_idx mismatch: {slot_idx} != {_fa.slot_idx}"
@@ -2099,7 +2094,7 @@ def train_ppo_vectorized(
                     assert (op_idx == OP_FOSSILIZE) == _fa.is_fossilize, "is_fossilize mismatch"
                     assert (op_idx == OP_PRUNE) == _fa.is_prune, "is_prune mismatch"
                     assert BLUEPRINT_IDS[blueprint_idx] == _fa.blueprint_id, f"blueprint_id mismatch"
-                    assert BLEND_IDS[blend_idx] == _fa.blend_algorithm_id, f"blend_id mismatch"
+                    assert STYLE_BLEND_IDS[style_idx] == _fa.blend_algorithm_id, f"blend_id mismatch"
                     del _fa  # Don't leak into scope
 
                 # Use the SAMPLED slot as target (multi-slot support)
@@ -2113,15 +2108,9 @@ def train_ppo_vectorized(
                 seed_state = slot_state if slot_is_enabled and model.has_active_seed_in_slot(target_slot) else None
                 # Use op name for action counting
                 env_state.action_counts[OP_NAMES[op_idx]] = env_state.action_counts.get(OP_NAMES[op_idx], 0) + 1
-                alpha_algorithm_action = AlphaAlgorithmAction(alpha_algorithm_idx)
-                blend_action = BlendAction(blend_idx)
-                blend_algorithm_id = BLEND_IDS[blend_idx]
-                alpha_algorithm = alpha_algorithm_action.to_algorithm()
+                blend_algorithm_id = STYLE_BLEND_IDS[style_idx]
+                alpha_algorithm = STYLE_ALPHA_ALGORITHMS[style_idx]
                 alpha_target = ALPHA_TARGET_VALUES[alpha_target_idx]
-                invalid_germinate_combo = (
-                    op_idx == OP_GERMINATE
-                    and not is_valid_blend_alpha_combo(blend_action, alpha_algorithm_action)
-                )
 
                 action_valid_for_reward = True
                 if not slot_is_enabled:
@@ -2129,7 +2118,6 @@ def train_ppo_vectorized(
                 elif op_idx == OP_GERMINATE:
                     action_valid_for_reward = (
                         slot_state is None
-                        and not invalid_germinate_combo
                     )
                 elif op_idx == OP_FOSSILIZE:
                     action_valid_for_reward = (
@@ -2214,18 +2202,6 @@ def train_ppo_vectorized(
                 # Unified reward computation - family selector: contribution vs loss-primary
                 reward_components = None
                 seed_info = SeedInfo.from_seed_state(seed_state, seed_params_for_slot)
-                if invalid_germinate_combo:
-                    # Treat invalid combo like an invalid germinate (penalize, no PBRS bonus).
-                    seed_info = SeedInfo(
-                        stage=SeedStage.DORMANT.value,
-                        improvement_since_stage_start=0.0,
-                        total_improvement=0.0,
-                        epochs_in_stage=0,
-                        seed_params=0,
-                        previous_stage=SeedStage.DORMANT.value,
-                        previous_epochs_in_stage=0,
-                        seed_age_epochs=0,
-                    )
                 if reward_family_enum == RewardFamily.CONTRIBUTION:
                     need_reward_components = emit_reward_components_event or collect_reward_summary
                     if need_reward_components:
@@ -2336,9 +2312,7 @@ def train_ppo_vectorized(
                 elif op_idx == OP_GERMINATE:
                     # Germinate in the SAMPLED slot (multi-slot support)
                     # Phase 4: EMBARGOED/RESETTING retain state, so only state==None is available.
-                    if invalid_germinate_combo:
-                        action_success = False
-                    elif model.seed_slots[target_slot].state is None:
+                    if model.seed_slots[target_slot].state is None:
                         env_state.acc_at_germination[target_slot] = env_state.val_acc
                         blueprint_id = BLUEPRINT_IDS[blueprint_idx]
                         tempo_epochs = TEMPO_TO_EPOCHS[TempoAction(tempo_idx)]
@@ -2403,12 +2377,11 @@ def train_ppo_vectorized(
                         target = ALPHA_TARGET_VALUES[alpha_target_idx]
                         speed_steps = ALPHA_SPEED_TO_STEPS[AlphaSpeedAction(alpha_speed_idx)]
                         curve = AlphaCurveAction(alpha_curve_idx).to_curve()
-                        algorithm = AlphaAlgorithmAction(alpha_algorithm_idx).to_algorithm()
                         action_success = model.seed_slots[target_slot].set_alpha_target(
                             alpha_target=target,
                             steps=speed_steps,
                             curve=curve,
-                            alpha_algorithm=algorithm,
+                            alpha_algorithm=alpha_algorithm,
                             initiator="policy",
                         )
 
@@ -2450,12 +2423,11 @@ def train_ppo_vectorized(
                         epoch=epoch,
                         slot_idx=slot_idx,
                         blueprint_idx=blueprint_idx,
-                        blend_idx=blend_idx,
+                        style_idx=style_idx,
                         tempo_idx=tempo_idx,
                         alpha_target_idx=alpha_target_idx,
                         alpha_speed_idx=alpha_speed_idx,
                         alpha_curve_idx=alpha_curve_idx,
-                        alpha_algorithm_idx=alpha_algorithm_idx,
                         op_idx=op_idx,
                         slot_id=target_slot,
                         masked=masked_flags,
@@ -2573,6 +2545,7 @@ def train_ppo_vectorized(
                         post_action_signals,
                         slot_reports=post_action_slot_reports,
                         use_telemetry=use_telemetry,
+                        max_epochs=max_epochs,
                         slots=slots,
                         total_params=model.total_params if model else 0,
                         total_seeds=model.total_seeds() if model else 0,
@@ -2768,33 +2741,30 @@ def train_ppo_vectorized(
                     state=transition["state"],
                     slot_action=action_dict["slot"],
                     blueprint_action=action_dict["blueprint"],
-                    blend_action=action_dict["blend"],
+                    style_action=action_dict["style"],
                     tempo_action=action_dict["tempo"],
                     alpha_target_action=action_dict["alpha_target"],
                     alpha_speed_action=action_dict["alpha_speed"],
                     alpha_curve_action=action_dict["alpha_curve"],
-                    alpha_algorithm_action=action_dict["alpha_algorithm"],
                     op_action=action_dict["op"],
                     slot_log_prob=log_probs["slot"],
                     blueprint_log_prob=log_probs["blueprint"],
-                    blend_log_prob=log_probs["blend"],
+                    style_log_prob=log_probs["style"],
                     tempo_log_prob=log_probs["tempo"],
                     alpha_target_log_prob=log_probs["alpha_target"],
                     alpha_speed_log_prob=log_probs["alpha_speed"],
                     alpha_curve_log_prob=log_probs["alpha_curve"],
-                    alpha_algorithm_log_prob=log_probs["alpha_algorithm"],
                     op_log_prob=log_probs["op"],
                     value=transition["value"],
                     reward=transition["reward"],
                     done=transition["done"],
                     slot_mask=env_masks["slot"],
                     blueprint_mask=env_masks["blueprint"],
-                    blend_mask=env_masks["blend"],
+                    style_mask=env_masks["style"],
                     tempo_mask=env_masks["tempo"],
                     alpha_target_mask=env_masks["alpha_target"],
                     alpha_speed_mask=env_masks["alpha_speed"],
                     alpha_curve_mask=env_masks["alpha_curve"],
-                    alpha_algorithm_mask=env_masks["alpha_algorithm"],
                     op_mask=env_masks["op"],
                     hidden_h=transition["hidden_h"],
                     hidden_c=transition["hidden_c"],

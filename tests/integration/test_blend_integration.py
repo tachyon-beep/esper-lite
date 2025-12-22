@@ -10,13 +10,12 @@ from esper.kasmina.blending import BlendCatalog, GatedBlend
 from esper.kasmina.host import CNNHost, TransformerHost, MorphogeneticModel
 from esper.leyline.alpha import AlphaAlgorithm, AlphaCurve
 from esper.leyline.factored_actions import (
-    AlphaAlgorithmAction,
     AlphaCurveAction,
     AlphaSpeedAction,
     AlphaTargetAction,
-    BlendAction,
     BlueprintAction,
     FactoredAction,
+    GerminationStyle,
     LifecycleOp,
     TempoAction,
 )
@@ -177,53 +176,53 @@ class TestBlendActionIntegration:
         assert slot.alpha_schedule.topology == "transformer"
 
 
-class TestFactoredActionBlendExtraction:
-    """Test FactoredAction correctly extracts blend_algorithm_id."""
+class TestFactoredActionStyleExtraction:
+    """Test FactoredAction correctly extracts germination style mapping."""
 
-    def test_linear_blend_action(self):
-        """BlendAction.LINEAR maps to 'linear'."""
+    def test_linear_add_style(self):
+        """GerminationStyle.LINEAR_ADD maps to ('linear', ADD)."""
         action = FactoredAction(
             slot_idx=1,  # Was SlotAction.MID
             blueprint=BlueprintAction.NORM,
-            blend=BlendAction.LINEAR,
+            style=GerminationStyle.LINEAR_ADD,
             tempo=TempoAction.STANDARD,
             alpha_target=AlphaTargetAction.FULL,
             alpha_speed=AlphaSpeedAction.MEDIUM,
             alpha_curve=AlphaCurveAction.LINEAR,
-            alpha_algorithm=AlphaAlgorithmAction.ADD,
             op=LifecycleOp.GERMINATE,
         )
         assert action.blend_algorithm_id == "linear"
+        assert action.alpha_algorithm_value == AlphaAlgorithm.ADD
 
-    def test_sigmoid_blend_action(self):
-        """BlendAction.SIGMOID maps to 'sigmoid'."""
+    def test_sigmoid_add_style(self):
+        """GerminationStyle.SIGMOID_ADD maps to ('sigmoid', ADD)."""
         action = FactoredAction(
             slot_idx=1,  # Was SlotAction.MID
             blueprint=BlueprintAction.NORM,
-            blend=BlendAction.SIGMOID,
+            style=GerminationStyle.SIGMOID_ADD,
             tempo=TempoAction.STANDARD,
             alpha_target=AlphaTargetAction.FULL,
             alpha_speed=AlphaSpeedAction.MEDIUM,
             alpha_curve=AlphaCurveAction.LINEAR,
-            alpha_algorithm=AlphaAlgorithmAction.ADD,
             op=LifecycleOp.GERMINATE,
         )
         assert action.blend_algorithm_id == "sigmoid"
+        assert action.alpha_algorithm_value == AlphaAlgorithm.ADD
 
-    def test_gated_blend_action(self):
-        """BlendAction.GATED maps to 'gated'."""
+    def test_gated_gate_style(self):
+        """GerminationStyle.GATED_GATE maps to ('gated', GATE)."""
         action = FactoredAction(
             slot_idx=1,  # Was SlotAction.MID
             blueprint=BlueprintAction.NORM,
-            blend=BlendAction.GATED,
+            style=GerminationStyle.GATED_GATE,
             tempo=TempoAction.STANDARD,
             alpha_target=AlphaTargetAction.FULL,
             alpha_speed=AlphaSpeedAction.MEDIUM,
             alpha_curve=AlphaCurveAction.LINEAR,
-            alpha_algorithm=AlphaAlgorithmAction.GATE,
             op=LifecycleOp.GERMINATE,
         )
         assert action.blend_algorithm_id == "gated"
+        assert action.alpha_algorithm_value == AlphaAlgorithm.GATE
 
 
 class TestTransformerNoopBlueprint:

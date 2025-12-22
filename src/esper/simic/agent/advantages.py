@@ -11,19 +11,18 @@ Causal structure for Tamiyo's factored action space:
         +-- GERMINATE:
         |   +-- slot_head: WHERE to place seed
         |   +-- blueprint_head: WHAT architecture
-        |   +-- blend_head: HOW to blend
+        |   +-- style_head: HOW to germinate (blend + alpha algorithm)
         |   +-- alpha_target_head: TARGET amplitude for initial blend
-        |   +-- alpha_algorithm_head: BLEND composition / gating mode
         |
         +-- FOSSILIZE:
         |   +-- slot_head: WHICH seed to fossilize (target_slot)
         |
         +-- SET_ALPHA_TARGET:
         |   +-- slot_head: WHICH seed to retarget
+        |   +-- style_head: WHICH alpha algorithm to use
         |   +-- alpha_target_head: TARGET alpha
         |   +-- alpha_speed_head: SPEED of schedule
         |   +-- alpha_curve_head: CURVE of schedule
-        |   +-- alpha_algorithm_head: BLEND composition / gating mode
         |
         +-- PRUNE:
             +-- slot_head: WHICH seed to remove (target_slot)
@@ -76,11 +75,11 @@ def compute_per_head_advantages(
     blueprint_mask = is_germinate
     blueprint_advantages = base_advantages * blueprint_mask.float()
 
-    # blend head: only relevant for GERMINATE
-    blend_mask = is_germinate
-    blend_advantages = base_advantages * blend_mask.float()
+    # style head: relevant for GERMINATE and SET_ALPHA_TARGET (alpha_algorithm selection)
+    style_mask = is_germinate | is_set_alpha
+    style_advantages = base_advantages * style_mask.float()
 
-    # tempo head: only relevant for GERMINATE (same as blueprint/blend)
+    # tempo head: only relevant for GERMINATE (same as blueprint/style)
     tempo_mask = is_germinate
     tempo_advantages = base_advantages * tempo_mask.float()
 
@@ -94,20 +93,15 @@ def compute_per_head_advantages(
     alpha_curve_mask = is_set_alpha | is_prune
     alpha_curve_advantages = base_advantages * alpha_curve_mask.float()
 
-    # alpha_algorithm head: relevant for GERMINATE and SET_ALPHA_TARGET
-    alpha_algorithm_mask = is_set_alpha | is_germinate
-    alpha_algorithm_advantages = base_advantages * alpha_algorithm_mask.float()
-
     return {
         "op": op_advantages,
         "slot": slot_advantages,
         "blueprint": blueprint_advantages,
-        "blend": blend_advantages,
+        "style": style_advantages,
         "tempo": tempo_advantages,
         "alpha_target": alpha_target_advantages,
         "alpha_speed": alpha_speed_advantages,
         "alpha_curve": alpha_curve_advantages,
-        "alpha_algorithm": alpha_algorithm_advantages,
     }
 
 

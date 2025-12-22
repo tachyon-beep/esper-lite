@@ -435,6 +435,15 @@ class SeedState:
 
     def to_report(self) -> SeedStateReport:
         """Convert to Leyline SeedStateReport."""
+        controller = self.alpha_controller
+        alpha_steps_total = int(controller.alpha_steps_total)
+        alpha_steps_done = int(controller.alpha_steps_done)
+        time_to_target = max(alpha_steps_total - alpha_steps_done, 0)
+        if controller.alpha_mode == AlphaMode.HOLD or alpha_steps_total == 0:
+            alpha_velocity = 0.0
+        else:
+            alpha_velocity = (controller.alpha_target - controller.alpha_start) / alpha_steps_total
+
         return SeedStateReport(
             seed_id=self.seed_id,
             slot_id=self.slot_id,
@@ -443,7 +452,14 @@ class SeedState:
             previous_stage=self.previous_stage,
             previous_epochs_in_stage=self.previous_epochs_in_stage,
             stage_entered_at=self.stage_entered_at,
-            alpha_mode=int(self.alpha_controller.alpha_mode),
+            alpha_mode=int(controller.alpha_mode),
+            alpha_target=controller.alpha_target,
+            alpha_steps_total=alpha_steps_total,
+            alpha_steps_done=alpha_steps_done,
+            time_to_target=time_to_target,
+            alpha_velocity=alpha_velocity,
+            alpha_algorithm=int(self.alpha_algorithm),
+            blend_tempo_epochs=self.blend_tempo_epochs,
             metrics=self.metrics.to_leyline(),
             telemetry=replace(self.telemetry) if self.telemetry is not None else None,
             is_healthy=self.is_healthy,

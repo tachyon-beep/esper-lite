@@ -25,15 +25,15 @@ from esper.tamiyo.policy.action_masks import (
 )
 from esper.leyline import AlphaMode, SeedStage, MIN_PRUNE_AGE
 from esper.leyline.factored_actions import (
-    AlphaAlgorithmAction,
     AlphaTargetAction,
+    GerminationStyle,
     LifecycleOp,
-    NUM_ALPHA_ALGORITHMS,
     NUM_ALPHA_CURVES,
     NUM_ALPHA_SPEEDS,
     NUM_ALPHA_TARGETS,
     NUM_OPS,
     NUM_BLUEPRINTS,
+    NUM_STYLES,
 )
 
 
@@ -125,14 +125,14 @@ def test_compute_action_masks_holding_stage():
     assert masks["op"][LifecycleOp.SET_ALPHA_TARGET]
 
 
-def test_compute_action_masks_alpha_algorithm_open_on_germinate():
-    """Alpha algorithm head should be open when GERMINATE is possible."""
+def test_compute_action_masks_style_open_on_germinate():
+    """Germination style head should be open when GERMINATE is possible."""
     slot_states = {"r0c1": None}
 
     masks = compute_action_masks(slot_states, enabled_slots=["r0c1"])
 
     assert masks["op"][LifecycleOp.GERMINATE]
-    assert masks["alpha_algorithm"].all()
+    assert masks["style"].all()
 
 
 def test_compute_action_masks_alpha_target_open_on_germinate():
@@ -145,8 +145,8 @@ def test_compute_action_masks_alpha_target_open_on_germinate():
     assert masks["alpha_target"].all()
 
 
-def test_compute_action_masks_alpha_algorithm_requires_hold_or_germinate():
-    """Alpha algorithm changes should be HOLD-only when no GERMINATE is possible."""
+def test_compute_action_masks_style_defaults_when_no_germinate():
+    """Style head should default when GERMINATE is impossible."""
     slot_states = {
         "r0c1": MaskSeedInfo(
             stage=SeedStage.BLENDING.value,
@@ -159,8 +159,8 @@ def test_compute_action_masks_alpha_algorithm_requires_hold_or_germinate():
 
     assert not masks["op"][LifecycleOp.GERMINATE]
     assert not masks["op"][LifecycleOp.SET_ALPHA_TARGET]
-    assert masks["alpha_algorithm"][AlphaAlgorithmAction.ADD]
-    assert masks["alpha_algorithm"].sum().item() == 1
+    assert masks["style"][GerminationStyle.SIGMOID_ADD]
+    assert masks["style"].sum().item() == 1
 
 
 def test_compute_action_masks_alpha_target_requires_hold_or_germinate():
@@ -181,8 +181,8 @@ def test_compute_action_masks_alpha_target_requires_hold_or_germinate():
     assert masks["alpha_target"].sum().item() == 1
 
 
-def test_compute_action_masks_alpha_algorithm_open_on_hold_retarget():
-    """Alpha algorithm head should be open when HOLD retargeting is allowed."""
+def test_compute_action_masks_style_open_on_hold_retarget():
+    """Style head should be open when HOLD retargeting is allowed."""
     slot_states = {
         "r0c1": MaskSeedInfo(
             stage=SeedStage.BLENDING.value,
@@ -194,7 +194,7 @@ def test_compute_action_masks_alpha_algorithm_open_on_hold_retarget():
     masks = compute_action_masks(slot_states, enabled_slots=["r0c1"])
 
     assert masks["op"][LifecycleOp.SET_ALPHA_TARGET]
-    assert masks["alpha_algorithm"].all()
+    assert masks["style"].all()
 
 
 def test_compute_action_masks_alpha_target_open_on_hold_retarget():
@@ -258,8 +258,8 @@ def test_compute_action_masks_wait_always_valid():
     assert masks_active["op"][LifecycleOp.WAIT]
 
 
-def test_compute_action_masks_blueprint_blend_masks():
-    """Blueprint mask excludes NOOP (0 params); blend mask is all-valid."""
+def test_compute_action_masks_blueprint_style_masks():
+    """Blueprint mask excludes NOOP (0 params); style mask is all-valid when GERMINATE possible."""
     from esper.leyline.factored_actions import BlueprintAction
 
     slot_states = {"r0c0": None, "r0c1": None, "r0c2": None}
@@ -272,8 +272,8 @@ def test_compute_action_masks_blueprint_blend_masks():
     assert masks["blueprint"][BlueprintAction.NORM]
     assert masks["blueprint"][BlueprintAction.DEPTHWISE]
 
-    # All blends should be valid
-    assert masks["blend"].all()
+    # All styles should be valid when GERMINATE is possible
+    assert masks["style"].all()
 
 
 def test_compute_action_masks_min_prune_age():
@@ -352,12 +352,11 @@ def test_compute_batch_masks():
     # Check shapes (NUM_OPS now includes ADVANCE)
     assert masks["slot"].shape == (2, 3)
     assert masks["blueprint"].shape == (2, NUM_BLUEPRINTS)
-    assert masks["blend"].shape == (2, 3)
+    assert masks["style"].shape == (2, NUM_STYLES)
     assert masks["tempo"].shape == (2, 3)
     assert masks["alpha_target"].shape == (2, NUM_ALPHA_TARGETS)
     assert masks["alpha_speed"].shape == (2, NUM_ALPHA_SPEEDS)
     assert masks["alpha_curve"].shape == (2, NUM_ALPHA_CURVES)
-    assert masks["alpha_algorithm"].shape == (2, NUM_ALPHA_ALGORITHMS)
     assert masks["op"].shape == (2, NUM_OPS)
 
     # WAIT always valid for both

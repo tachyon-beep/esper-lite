@@ -94,13 +94,12 @@ class LSTMPolicyBundle:
             hidden,
             slot_mask=masks.get("slot"),
             blueprint_mask=masks.get("blueprint"),
-            blend_mask=masks.get("blend"),
+            style_mask=masks.get("style"),
             tempo_mask=masks.get("tempo"),
             op_mask=masks.get("op"),
             alpha_target_mask=masks.get("alpha_target"),
             alpha_speed_mask=masks.get("alpha_speed"),
             alpha_curve_mask=masks.get("alpha_curve"),
-            alpha_algorithm_mask=masks.get("alpha_algorithm"),
             deterministic=deterministic,
         )
 
@@ -152,13 +151,12 @@ class LSTMPolicyBundle:
             hidden,
             slot_mask=expand_mask(masks.get("slot")),
             blueprint_mask=expand_mask(masks.get("blueprint")),
-            blend_mask=expand_mask(masks.get("blend")),
+            style_mask=expand_mask(masks.get("style")),
             tempo_mask=expand_mask(masks.get("tempo")),
             op_mask=expand_mask(masks.get("op")),
             alpha_target_mask=expand_mask(masks.get("alpha_target")),
             alpha_speed_mask=expand_mask(masks.get("alpha_speed")),
             alpha_curve_mask=expand_mask(masks.get("alpha_curve")),
-            alpha_algorithm_mask=expand_mask(masks.get("alpha_algorithm")),
         )
 
         return ForwardResult(
@@ -185,13 +183,12 @@ class LSTMPolicyBundle:
             actions,
             slot_mask=masks.get("slot"),
             blueprint_mask=masks.get("blueprint"),
-            blend_mask=masks.get("blend"),
+            style_mask=masks.get("style"),
             tempo_mask=masks.get("tempo"),
             op_mask=masks.get("op"),
             alpha_target_mask=masks.get("alpha_target"),
             alpha_speed_mask=masks.get("alpha_speed"),
             alpha_curve_mask=masks.get("alpha_curve"),
-            alpha_algorithm_mask=masks.get("alpha_algorithm"),
             hidden=hidden,
         )
 
