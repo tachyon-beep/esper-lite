@@ -1,6 +1,6 @@
 # Kasmina Blend Retooling: `prune` + Partial-Alpha Holds
 
-> **Status:** Locked (design decisions committed; ready to implement)
+> **Status:** Implemented (Dec 22, 2025)
 >
 > **Date:** 2025-12-20
 >
@@ -668,5 +668,5 @@ This plan assumes single-process for the initial implementation. If/when we add 
    - Decision: no `PROMOTE` op; promotion is `SET_ALPHA_TARGET(1.0)`.
 
 4) **`MULTIPLY` bounding**
-   - Decision: use `y = h * (1 + a * tanh(s))`.
-   - Critical init note: initialize the seed’s final layer weights/biases to `0` so `s≈0` at birth and the valve starts near identity.
+   - Decision: use `y = h * (1 + a * tanh(s - seed_input))`.
+   - Critical init note: initialize the seed’s final layer weights/biases to `0` so the seed starts near identity and `s - seed_input≈0` at birth (valve near identity).

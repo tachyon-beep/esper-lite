@@ -33,16 +33,17 @@ def test_gated_blend_schedule():
     """Gated blend should use learned gate."""
     from esper.kasmina.blending import GatedBlend
 
-    blend = GatedBlend(channels=64)
+    for channels in (1, 4, 64):
+        blend = GatedBlend(channels=channels)
 
-    # Should have learnable parameters
-    assert sum(p.numel() for p in blend.parameters()) > 0
+        # Should have learnable parameters
+        assert sum(p.numel() for p in blend.parameters()) > 0
 
-    # Should produce valid alpha tensor via unified interface
-    x = torch.randn(2, 64, 8, 8)
-    alpha = blend.get_alpha_for_blend(x)
-    assert alpha.shape == (2, 1, 1, 1)  # (batch, 1, 1, 1) for broadcasting
-    assert (alpha >= 0).all() and (alpha <= 1).all()
+        # Should produce valid alpha tensor via unified interface
+        x = torch.randn(2, channels, 8, 8)
+        alpha = blend.get_alpha_for_blend(x)
+        assert alpha.shape == (2, 1, 1, 1)  # (batch, 1, 1, 1) for broadcasting
+        assert (alpha >= 0).all() and (alpha <= 1).all()
 
 
 def test_blend_registry():

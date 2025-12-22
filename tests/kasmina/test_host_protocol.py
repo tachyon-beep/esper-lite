@@ -14,11 +14,16 @@ def test_host_protocol_has_required_methods():
     """HostProtocol should define required interface methods."""
     from esper.kasmina.protocol import HostProtocol
 
-    assert hasattr(HostProtocol, "injection_points")
-    assert hasattr(HostProtocol, "segment_channels")
-    assert hasattr(HostProtocol, "forward")
-    assert hasattr(HostProtocol, "forward_to_segment")
-    assert hasattr(HostProtocol, "forward_from_segment")
+    required = {
+        "injection_specs",
+        "injection_points",
+        "segment_channels",
+        "forward",
+        "forward_to_segment",
+        "forward_from_segment",
+    }
+    missing = required.difference(set(dir(HostProtocol)))
+    assert not missing, f"HostProtocol is missing required members: {sorted(missing)}"
     # register_slot/unregister_slot removed - slots managed by MorphogeneticModel
 
 

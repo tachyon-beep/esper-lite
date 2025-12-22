@@ -114,7 +114,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ppo_parser.add_argument(
         "--preset",
-        choices=["cifar10", "cifar10_deep", "cifar10_blind", "tinystories"],
+        choices=["cifar10", "cifar10_stable", "cifar10_deep", "cifar10_blind", "tinystories"],
         default="cifar10",
         help="TrainingConfig preset to use (hyperparameters + slots)",
     )
@@ -337,6 +337,8 @@ def main():
             else:
                 if args.preset == "cifar10":
                     temp_config = TrainingConfig.for_cifar10()
+                elif args.preset == "cifar10_stable":
+                    temp_config = TrainingConfig.for_cifar10_stable()
                 elif args.preset == "cifar10_deep":
                     temp_config = TrainingConfig.for_cifar10_deep()
                 elif args.preset == "cifar10_blind":
@@ -368,6 +370,8 @@ def main():
             else:
                 if args.preset == "cifar10":
                     temp_config = TrainingConfig.for_cifar10()
+                elif args.preset == "cifar10_stable":
+                    temp_config = TrainingConfig.for_cifar10_stable()
                 elif args.preset == "cifar10_deep":
                     temp_config = TrainingConfig.for_cifar10_deep()
                 elif args.preset == "cifar10_blind":
@@ -427,6 +431,8 @@ def main():
                 else:
                     if args.preset == "cifar10":
                         config = TrainingConfig.for_cifar10()
+                    elif args.preset == "cifar10_stable":
+                        config = TrainingConfig.for_cifar10_stable()
                     elif args.preset == "cifar10_deep":
                         config = TrainingConfig.for_cifar10_deep()
                     elif args.preset == "cifar10_blind":

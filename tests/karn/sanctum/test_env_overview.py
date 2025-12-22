@@ -236,6 +236,46 @@ async def test_slot_cell_formatting(populated_snapshot):
 
 
 @pytest.mark.asyncio
+async def test_slot_cell_germinated_uses_titlecase():
+    """GERMINATED seeds should show Germi (not GERMI)."""
+    app = EnvOverviewTestApp()
+    async with app.run_test():
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        env = EnvState(env_id=0, host_accuracy=50.0, best_accuracy=50.0)
+        env.seeds["R0C0"] = SeedState(
+            slot_id="R0C0",
+            stage="GERMINATED",
+            blueprint_id="conv_l",
+        )
+        snapshot.envs[0] = env
+
+        widget = app.query_one(EnvOverview)
+        widget.update_snapshot(snapshot)
+
+        row0 = get_row_text(widget.table, 0)
+        assert "Germi:conv_l" in row0
+        assert "GERMI:conv_l" not in row0
+
+
+@pytest.mark.asyncio
+async def test_last_action_germinate_is_uppercase_code():
+    """Last action GERMINATE should render as GERM (not Germi)."""
+    app = EnvOverviewTestApp()
+    async with app.run_test():
+        snapshot = SanctumSnapshot(slot_ids=["R0C0"])
+        env = EnvState(env_id=0, host_accuracy=50.0, best_accuracy=50.0)
+        env.add_action("GERMINATE")
+        snapshot.envs[0] = env
+
+        widget = app.query_one(EnvOverview)
+        widget.update_snapshot(snapshot)
+
+        row0 = get_row_text(widget.table, 0)
+        assert " GERM " in f" {row0} "
+        assert " Germi " not in f" {row0} "
+
+
+@pytest.mark.asyncio
 async def test_blending_seeds_show_alpha(populated_snapshot):
     """BLENDING seeds should show alpha instead of epochs."""
     app = EnvOverviewTestApp()

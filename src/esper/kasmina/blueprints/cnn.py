@@ -146,6 +146,8 @@ def create_attention_seed(channels: int, reduction: int = 4) -> nn.Module:
             # Initialize for identity-like behavior (output ≈ 1.0)
             # Weight 0 ensures input independence at start
             # Bias 3.0 gives sigmoid(3.0) ≈ 0.95 (near-identity scaling)
+            # TODO: [EXPERIMENT] - Evaluate higher bias (e.g., 6.0 -> ~0.997) for
+            # closer-to-identity scaling at birth, and measure stability/learning impact.
             nn.init.zeros_(self.fc[2].weight)
             nn.init.constant_(self.fc[2].bias, 3.0)
 

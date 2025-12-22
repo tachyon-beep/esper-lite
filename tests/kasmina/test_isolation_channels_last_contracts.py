@@ -59,6 +59,12 @@ class TestIsolationChannelsLastContracts:
 
         # BUG-005 workaround: isolate_gradients=True makes host_features contiguous()
         # before detach(), which converts channels_last -> contiguous_format.
+        #
+        # TODO: [PERF EXPERIMENT] - Preserve channels_last output under isolation by
+        # making only the seed_input contiguous (keep host_features channels_last).
+        # If adopted, this assertion should flip to channels_last=True and the
+        # segfault regression `tests/kasmina/test_bug005_channels_last_segfault.py`
+        # must continue to pass.
         assert out.is_contiguous()
         assert not out.is_contiguous(memory_format=torch.channels_last)
         assert out.dtype == x.dtype

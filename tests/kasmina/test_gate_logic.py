@@ -378,11 +378,11 @@ class TestGateResultStructure:
 
         result = gates.check_gate(state, SeedStage.TRAINING)
 
-        assert hasattr(result, "gate")
-        assert hasattr(result, "passed")
-        assert hasattr(result, "score")
-        assert hasattr(result, "checks_passed")
-        assert hasattr(result, "checks_failed")
+        assert result.gate is not None
+        assert isinstance(result.passed, bool)
+        assert isinstance(result.score, float)
+        assert isinstance(result.checks_passed, list)
+        assert isinstance(result.checks_failed, list)
 
     def test_gate_result_score_bounded(self):
         """GateResult score should be in [0, 1]."""

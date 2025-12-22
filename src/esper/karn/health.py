@@ -160,6 +160,15 @@ class HealthMonitor:
         self._epoch_times: list[float] = []
         self._last_memory_warning: float = 0.0
 
+    def reset(self) -> None:
+        """Reset per-episode tracking state.
+
+        Keeps configuration and TelemetryStore wiring intact.
+        """
+        self._last_check_time = time.monotonic()
+        self._epoch_times.clear()
+        self._last_memory_warning = 0.0
+
     def _check_memory_and_warn(
         self,
         gpu_utilization: float,

@@ -1676,6 +1676,15 @@ class SeedSlot(nn.Module):
         #
         #    The fix is to make host_features contiguous BEFORE detach, so that
         #    the entire computation and its autograd graph use contiguous tensors.
+        #
+        # TODO: [PERF EXPERIMENT] - Preserve channels_last under isolation.
+        # Current workaround coerces host_features to contiguous_format, which can
+        # reduce CNN throughput after a slot (host conv blocks lose channels_last).
+        # Hypothesis: keep host_features channels_last and instead feed the seed a
+        # contiguous_format detached copy:
+        #   seed_input = host_features.contiguous().detach()
+        # If attempted, update `tests/kasmina/test_isolation_channels_last_contracts.py`
+        # and re-run `tests/kasmina/test_bug005_channels_last_segfault.py`.
         if self.isolate_gradients and not host_features.is_contiguous():
             # Make contiguous to avoid channels_last + detach segfault (BUG-005)
             host_features = host_features.contiguous()
@@ -1826,6 +1835,18 @@ class SeedSlot(nn.Module):
                 case "sigmoid":
                     curve = AlphaCurve.SIGMOID
                 case "gated":
+                    # Design Decision: Enforce LINEAR amplitude ramp for gated blending.
+                    #
+                    # Rationale:
+                    # 1. Avoids "Double Dynamics": The learned gate `gate(x)` is already non-linear
+                    #    and starts near zero. Adding a Sigmoid amplitude ramp (which also stays
+                    #    near zero) creates a "compound silence" that starves the gate of gradients.
+                    # 2. Predictable Ceiling: A linear ramp provides a steady, predictable increase
+                    #    in the *maximum possible influence* (allowance), putting the onus on the
+                    #    gate network to modulate the effective alpha.
+                    #
+                    # Future: If early-phase instability occurs, we may expose curve selection,
+                    # but Linear is the safer default to prevent "silent death" of gates.
                     curve = AlphaCurve.LINEAR
                 case _:
                     raise ValueError(

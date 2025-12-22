@@ -87,7 +87,7 @@ class TestMorphogeneticModelMultiSlot:
         host = CNNHost(num_classes=10)
         model = MorphogeneticModel(host, device="cpu", slots=["r0c1"])
 
-        assert not hasattr(model, "_legacy_single_slot")
+        assert "_legacy_single_slot" not in dir(model)
 
 
 class TestMorphogeneticModelDynamicSlots:

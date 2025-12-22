@@ -13,6 +13,7 @@ Usage:
 
     # Task-specific presets
     config = TrainingConfig.for_cifar10()
+    config = TrainingConfig.for_cifar10_stable()
     config = TrainingConfig.for_cifar10_deep()
     config = TrainingConfig.for_tinystories()
 
@@ -129,6 +130,21 @@ class TrainingConfig:
     def for_cifar10() -> "TrainingConfig":
         """Optimized configuration for CIFAR-10 classification."""
         return TrainingConfig(entropy_coef=0.1, plateau_threshold=0.4)
+
+    @staticmethod
+    def for_cifar10_stable() -> "TrainingConfig":
+        """Conservative configuration for CIFAR-10 (slower, more stable PPO)."""
+        return TrainingConfig(
+            n_episodes=200,
+            lr=1e-4,
+            clip_ratio=0.1,
+            entropy_coef=0.06,
+            entropy_coef_start=0.06,
+            entropy_coef_end=0.03,
+            entropy_anneal_episodes=200,
+            adaptive_entropy_floor=True,
+            plateau_threshold=0.4,
+        )
 
     @staticmethod
     def for_cifar10_blind() -> "TrainingConfig":

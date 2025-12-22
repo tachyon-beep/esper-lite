@@ -360,6 +360,7 @@ class EnvOverview(Static):
 
         # Stage abbreviations
         stage_short = {
+            "GERMINATED": "Germi",
             "TRAINING": "Train",
             "BLENDING": "Blend",
             "HOLDING": "Hold",

@@ -1,6 +1,15 @@
-"""Kasmina Blending Algorithms - Tamiyo's blending library.
+"""Kasmina blending / gating primitives.
 
-Each algorithm defines how a seed's influence ramps from 0 to 1.
+Phase 2+ contract:
+- Alpha *amplitude* scheduling is owned by `AlphaController` (scalar, time-based).
+- `SeedSlot.alpha_schedule` is reserved for per-sample gating only (currently: `GatedBlend`).
+
+`LinearBlend` and `SigmoidBlend` are retained as curve utilities for tests and
+numerical characterization; SeedSlot does not instantiate them for runtime
+blending.
+
+TODO: [MAINTENANCE] - If we fully commit to AlphaController-only scheduling,
+consider removing schedule-based BlendAlgorithm types and keeping only gating.
 """
 
 from __future__ import annotations
@@ -147,12 +156,17 @@ class GatedBlend(BlendAlgorithm):
 
     def __init__(self, channels: int, topology: str = "cnn", total_steps: int = 10):
         super().__init__()
+        if channels <= 0:
+            raise ValueError("GatedBlend requires channels > 0")
+        if topology not in ("cnn", "transformer"):
+            raise ValueError(f"Unknown topology '{topology}' for GatedBlend")
         self.topology = topology
         self.total_steps = max(1, total_steps)
+        hidden_dim = max(1, channels // 4)
         self.gate = nn.Sequential(
-            nn.Linear(channels, channels // 4),
+            nn.Linear(channels, hidden_dim),
             nn.ReLU(),
-            nn.Linear(channels // 4, 1),
+            nn.Linear(hidden_dim, 1),
             nn.Sigmoid(),
         )
 
