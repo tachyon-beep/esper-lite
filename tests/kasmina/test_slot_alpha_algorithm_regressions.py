@@ -11,7 +11,12 @@ from esper.leyline.stages import SeedStage
 
 def test_gate_alpha_schedule_survives_blending_complete_and_checkpoint_roundtrip() -> None:
     slot = SeedSlot(slot_id="r0c0", channels=16, device="cpu")
-    slot.germinate(blueprint_id="norm", seed_id="test-seed", blend_algorithm_id="gated")
+    slot.germinate(
+        blueprint_id="norm",
+        seed_id="test-seed",
+        blend_algorithm_id="gated",
+        alpha_algorithm=AlphaAlgorithm.GATE,
+    )
     slot.state.transition(SeedStage.TRAINING)
     slot.state.transition(SeedStage.BLENDING)
     slot.start_blending(total_steps=3)
@@ -35,7 +40,12 @@ def test_gate_alpha_schedule_survives_blending_complete_and_checkpoint_roundtrip
     state_dict = slot.state_dict()
 
     restored = SeedSlot(slot_id="r0c0", channels=16, device="cpu")
-    restored.germinate(blueprint_id="norm", seed_id="test-seed", blend_algorithm_id="gated")
+    restored.germinate(
+        blueprint_id="norm",
+        seed_id="test-seed",
+        blend_algorithm_id="gated",
+        alpha_algorithm=AlphaAlgorithm.GATE,
+    )
     restored.load_state_dict(state_dict)
     assert restored.state is not None
     assert restored.state.stage == SeedStage.HOLDING
@@ -47,7 +57,12 @@ def test_gate_alpha_schedule_survives_blending_complete_and_checkpoint_roundtrip
 
 def test_force_alpha_host_only_preserves_gate_schedule() -> None:
     slot = SeedSlot(slot_id="r0c0", channels=16, device="cpu")
-    slot.germinate(blueprint_id="norm", seed_id="test-seed", blend_algorithm_id="gated")
+    slot.germinate(
+        blueprint_id="norm",
+        seed_id="test-seed",
+        blend_algorithm_id="gated",
+        alpha_algorithm=AlphaAlgorithm.GATE,
+    )
     slot.state.transition(SeedStage.TRAINING)
     slot.state.transition(SeedStage.BLENDING)
     slot.start_blending(total_steps=3)
@@ -78,4 +93,3 @@ def test_germinate_multiply_applies_identity_init_for_conv_light() -> None:
     x = torch.randn(2, 16, 8, 8)
     seed_out = slot.seed(x)
     assert torch.allclose(seed_out, x, atol=0.0, rtol=0.0)
-

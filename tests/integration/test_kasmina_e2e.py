@@ -45,7 +45,8 @@ class TestCNNHostSingleSeedTraining:
         target = torch.randint(0, 10, (4,))
 
         # Transition to TRAINING
-        slot.step_epoch()
+        result = slot.advance_stage(SeedStage.TRAINING)
+        assert result.passed
         assert slot.state.stage == SeedStage.TRAINING
 
         # Training loop
@@ -72,7 +73,8 @@ class TestCNNHostSingleSeedTraining:
         slot = model.seed_slots["r0c0"]
 
         # Transition to TRAINING
-        slot.step_epoch()
+        result = slot.advance_stage(SeedStage.TRAINING)
+        assert result.passed
         assert slot.state.stage == SeedStage.TRAINING
 
         # Set up conditions for G2 gate
@@ -85,8 +87,8 @@ class TestCNNHostSingleSeedTraining:
             slot.state.metrics.epochs_in_current_stage += 1
 
         # Try to advance
-        slot.step_epoch()
-
+        result = slot.advance_stage(SeedStage.BLENDING)
+        assert result.passed
         assert slot.state.stage == SeedStage.BLENDING
 
     def test_cnn_complete_lifecycle_to_holding(self):
@@ -98,19 +100,27 @@ class TestCNNHostSingleSeedTraining:
         slot = model.seed_slots["r0c0"]
 
         # GERMINATED -> TRAINING
-        slot.step_epoch()
+        result = slot.advance_stage(SeedStage.TRAINING)
+        assert result.passed
         assert slot.state.stage == SeedStage.TRAINING
 
         # TRAINING -> BLENDING
-        slot.state.transition(SeedStage.BLENDING)
-        slot.start_blending(total_steps=5)
+        slot.state.metrics.record_accuracy(50.0)
+        slot.state.metrics.record_accuracy(51.0)
+        slot.state.metrics.record_accuracy(52.0)
+        slot.state.metrics.seed_gradient_norm_ratio = DEFAULT_GRADIENT_RATIO_THRESHOLD + 0.1
+        for _ in range(DEFAULT_MIN_BLENDING_EPOCHS):
+            slot.state.metrics.epochs_in_current_stage += 1
+        result = slot.advance_stage(SeedStage.BLENDING)
+        assert result.passed
 
         # Complete blending
         for _ in range(5):
             slot.state.metrics.record_accuracy(60.0)
             slot.step_epoch()
 
-        # Should be in HOLDING
+        result = slot.advance_stage(SeedStage.HOLDING)
+        assert result.passed
         assert slot.state.stage == SeedStage.HOLDING
 
 
@@ -143,7 +153,8 @@ class TestTransformerHostSingleSeedTraining:
         target = torch.randint(0, 1000, (4, 16))
 
         # Transition to TRAINING
-        slot.step_epoch()
+        result = slot.advance_stage(SeedStage.TRAINING)
+        assert result.passed
         assert slot.state.stage == SeedStage.TRAINING
 
         # Training loop
@@ -183,7 +194,8 @@ class TestMultiSlotTraining:
 
         # Advance all to TRAINING
         for slot in model.seed_slots.values():
-            slot.step_epoch()
+            result = slot.advance_stage(SeedStage.TRAINING)
+            assert result.passed
 
         # Train for a few epochs
         for epoch in range(3):
@@ -212,10 +224,13 @@ class TestMultiSlotTraining:
         model.germinate_seed("noop", "seed_2", slot="r0c2")
 
         # Different stages
-        model.seed_slots["r0c0"].step_epoch()  # -> TRAINING
-        model.seed_slots["r0c1"].step_epoch()  # -> TRAINING
+        result = model.seed_slots["r0c0"].advance_stage(SeedStage.TRAINING)
+        assert result.passed
+        result = model.seed_slots["r0c1"].advance_stage(SeedStage.TRAINING)
+        assert result.passed
         model.seed_slots["r0c1"].state.transition(SeedStage.BLENDING)
-        model.seed_slots["r0c2"].step_epoch()  # -> TRAINING
+        result = model.seed_slots["r0c2"].advance_stage(SeedStage.TRAINING)
+        assert result.passed
         model.seed_slots["r0c2"].state.transition(SeedStage.BLENDING)
         model.seed_slots["r0c2"].state.transition(SeedStage.HOLDING)
 
@@ -242,7 +257,8 @@ class TestCullAndRecycle:
         model.germinate_seed("noop", "seed_0", slot="r0c0")
         slot = model.seed_slots["r0c0"]
 
-        slot.step_epoch()  # -> TRAINING
+        result = slot.advance_stage(SeedStage.TRAINING)
+        assert result.passed
         slot.state.metrics.record_accuracy(50.0)
 
         # Cull
@@ -271,8 +287,10 @@ class TestCullAndRecycle:
         model.germinate_seed("norm", "seed_1", slot="r0c1")
 
         # Advance both to TRAINING
-        model.seed_slots["r0c0"].step_epoch()
-        model.seed_slots["r0c1"].step_epoch()
+        result = model.seed_slots["r0c0"].advance_stage(SeedStage.TRAINING)
+        assert result.passed
+        result = model.seed_slots["r0c1"].advance_stage(SeedStage.TRAINING)
+        assert result.passed
 
         # Cull r0c0
         model.prune_seed(slot="r0c0")
@@ -296,7 +314,8 @@ class TestGradientTelemetryIntegration:
         slot = model.seed_slots["r0c0"]
 
         # Advance to BLENDING for gradient flow
-        slot.step_epoch()  # -> TRAINING
+        result = slot.advance_stage(SeedStage.TRAINING)
+        assert result.passed
         slot.state.transition(SeedStage.BLENDING)
         slot.set_alpha(0.5)
 
@@ -338,7 +357,8 @@ class TestCounterfactualValidation:
         slot = model.seed_slots["r0c0"]
 
         # Progress to HOLDING
-        slot.step_epoch()  # -> TRAINING
+        result = slot.advance_stage(SeedStage.TRAINING)
+        assert result.passed
         slot.state.transition(SeedStage.BLENDING)
         slot.state.transition(SeedStage.HOLDING)
 
@@ -356,7 +376,8 @@ class TestCounterfactualValidation:
         model.germinate_seed("noop", "seed_0", slot="r0c0")
         slot = model.seed_slots["r0c0"]
 
-        slot.step_epoch()  # -> TRAINING
+        result = slot.advance_stage(SeedStage.TRAINING)
+        assert result.passed
         slot.state.transition(SeedStage.BLENDING)
         slot.set_alpha(0.8)
 
@@ -381,7 +402,8 @@ class TestEndToEndAccuracyTracking:
         """Accuracy improvement should be tracked correctly through training."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
-        slot.step_epoch()  # -> TRAINING
+        result = slot.advance_stage(SeedStage.TRAINING)
+        assert result.passed
 
         # Simulate improving accuracy
         accuracies = [40.0, 45.0, 50.0, 52.0, 55.0, 58.0, 60.0]
@@ -397,7 +419,8 @@ class TestEndToEndAccuracyTracking:
         """Accuracy regression should be tracked without losing best."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
-        slot.step_epoch()  # -> TRAINING
+        result = slot.advance_stage(SeedStage.TRAINING)
+        assert result.passed
 
         # Accuracy goes up then down
         slot.state.metrics.record_accuracy(50.0)
@@ -417,7 +440,8 @@ class TestBlendingAlgorithmIntegration:
 
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test", blend_algorithm_id="linear")
-        slot.step_epoch()  # -> TRAINING
+        result = slot.advance_stage(SeedStage.TRAINING)
+        assert result.passed
         slot.state.transition(SeedStage.BLENDING)
         slot.start_blending(total_steps=10)
 
@@ -437,7 +461,8 @@ class TestBlendingAlgorithmIntegration:
 
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test", blend_algorithm_id="sigmoid")
-        slot.step_epoch()  # -> TRAINING
+        result = slot.advance_stage(SeedStage.TRAINING)
+        assert result.passed
         slot.state.transition(SeedStage.BLENDING)
         slot.start_blending(total_steps=10)
 

@@ -2,6 +2,7 @@
 
 
 from esper.leyline import SeedStage, DEFAULT_BLUEPRINT_PENALTY_THRESHOLD
+from esper.kasmina.alpha_controller import AlphaController
 from esper.tamiyo.heuristic import HeuristicTamiyo, HeuristicPolicyConfig
 
 
@@ -40,6 +41,7 @@ class MockSeedState:
         self.epochs_in_stage = epochs_in_stage
         self.alpha = alpha
         self.blueprint_id = blueprint_id
+        self.alpha_controller = AlphaController(alpha=alpha)
         self.metrics = MockSeedMetrics(
             improvement_since_stage_start=improvement,
             total_improvement=total_improvement,
@@ -156,7 +158,7 @@ class TestCullDecisions:
         assert "Failing" in decision.reason
 
     def test_no_cull_improving_seed(self):
-        """Should WAIT for a seed that's improving."""
+        """Should ADVANCE for a seed that's improving."""
         policy = HeuristicTamiyo(topology="cnn")
 
         seed = MockSeedState(
@@ -168,10 +170,10 @@ class TestCullDecisions:
 
         decision = policy.decide(signals, active_seeds=[seed])
 
-        assert decision.action.name == "WAIT"
+        assert decision.action.name == "ADVANCE"
 
     def test_no_cull_before_patience_expires(self):
-        """Should WAIT even for failing seed if patience hasn't expired."""
+        """Should ADVANCE even for failing seed if patience hasn't expired."""
         config = HeuristicPolicyConfig(
             prune_after_epochs_without_improvement=5,
             prune_if_accuracy_drops_by=1.0,
@@ -187,7 +189,7 @@ class TestCullDecisions:
 
         decision = policy.decide(signals, active_seeds=[seed])
 
-        assert decision.action.name == "WAIT"
+        assert decision.action.name == "ADVANCE"
 
 
 class TestFossilizeDecisions:
@@ -253,7 +255,7 @@ class TestWaitDecisions:
     """Tests for wait/patience decision logic."""
 
     def test_wait_during_blending(self):
-        """Should WAIT during BLENDING stage (auto-advance handles it)."""
+        """Should WAIT during BLENDING stage until full amplitude is reached."""
         policy = HeuristicTamiyo(topology="cnn")
 
         seed = MockSeedState(
@@ -269,8 +271,8 @@ class TestWaitDecisions:
         assert decision.action.name == "WAIT"
         assert "Blending" in decision.reason
 
-    def test_wait_for_germinated_seed(self):
-        """Should WAIT for GERMINATED seed to auto-advance to TRAINING."""
+    def test_advance_for_germinated_seed(self):
+        """Should ADVANCE for GERMINATED seed to enter TRAINING."""
         policy = HeuristicTamiyo(topology="cnn")
 
         seed = MockSeedState(
@@ -281,8 +283,8 @@ class TestWaitDecisions:
 
         decision = policy.decide(signals, active_seeds=[seed])
 
-        assert decision.action.name == "WAIT"
-        assert "auto-advance" in decision.reason.lower()
+        assert decision.action.name == "ADVANCE"
+        assert "advance" in decision.reason.lower()
 
 
 class TestBlueprintRotation:

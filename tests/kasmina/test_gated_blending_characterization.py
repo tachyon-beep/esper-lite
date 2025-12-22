@@ -9,7 +9,7 @@ import torch
 
 from esper.kasmina.blending import GatedBlend, LinearBlend, SigmoidBlend, BlendCatalog
 from esper.kasmina.slot import SeedSlot, SeedState, QualityGates
-from esper.leyline.alpha import AlphaMode
+from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
 from esper.leyline.stages import SeedStage
 from esper.tamiyo.policy.features import TaskConfig
 
@@ -85,6 +85,7 @@ class TestSeedSlotWithGatedBlend:
             blueprint_id="norm",
             seed_id="test-seed",
             blend_algorithm_id="gated",
+            alpha_algorithm=AlphaAlgorithm.GATE,
         )
         return slot
 
@@ -226,6 +227,7 @@ class TestGatedBlendParameterRegistration:
             blueprint_id="norm",
             seed_id="test-seed",
             blend_algorithm_id="gated",
+            alpha_algorithm=AlphaAlgorithm.GATE,
         )
         slot.state.transition(SeedStage.TRAINING)
         slot.state.transition(SeedStage.BLENDING)
@@ -269,6 +271,27 @@ class TestGatedBlendParameterRegistration:
         # All gate params should be in slot params
         assert gate_param_ids.issubset(slot_param_ids), (
             "All gate parameters should be in slot parameters"
+        )
+
+    def test_get_parameters_includes_gate_params(self, slot_with_gated_blend):
+        """SeedSlot.get_parameters() must include alpha_schedule params when present.
+
+        Vectorized training builds per-slot seed optimizers from
+        MorphogeneticModel.get_seed_parameters(), which delegates to
+        SeedSlot.get_parameters(). If gated params are omitted, the per-sample
+        gate network never trains (Phase 3/5 contract).
+        """
+        slot = slot_with_gated_blend
+        assert slot.alpha_schedule is not None
+
+        params = list(slot.get_parameters())
+        param_ids = {id(p) for p in params}
+
+        gate_params = list(slot.alpha_schedule.parameters())
+        gate_param_ids = {id(p) for p in gate_params}
+
+        assert gate_param_ids.issubset(param_ids), (
+            "alpha_schedule parameters must be included in SeedSlot.get_parameters()"
         )
 
     def test_alpha_schedule_is_registered_submodule(self, slot_with_gated_blend):

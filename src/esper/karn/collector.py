@@ -343,7 +343,8 @@ class KarnCollector:
             data.get("grad_norm"), field="grad_norm", default=0.0
         )
 
-        # P0 Fix: Increment epochs_in_stage for all active slots
+        # P0 Fix: Increment epochs_in_stage for all occupied slots
+        # (includes EMBARGOED/RESETTING dwell while excluding PRUNED + terminal).
         for slot in self.store.current_epoch.slots.values():
             if slot.stage not in (SeedStage.DORMANT, SeedStage.PRUNED, SeedStage.FOSSILIZED):
                 slot.epochs_in_stage += 1

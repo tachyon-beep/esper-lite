@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from esper.karn.store import SeedStage
+from esper.leyline import is_active_stage
 
 if TYPE_CHECKING:
     from esper.karn.store import TelemetryStore
@@ -286,7 +287,7 @@ class EpisodeAnalytics:
                 contributions.append(slot.counterfactual_contribution)
 
             # Count active epochs
-            if slot.stage not in (SeedStage.DORMANT, SeedStage.PRUNED):
+            if is_active_stage(slot.stage):
                 summary.epochs_active += 1
 
             # Track lifecycle events

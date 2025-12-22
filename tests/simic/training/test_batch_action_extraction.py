@@ -11,6 +11,10 @@ def test_batch_action_extraction_single_cpu_call():
         "blueprint": torch.tensor([5, 6, 7, 8]),
         "blend": torch.tensor([0, 1, 0, 1]),
         "tempo": torch.tensor([2, 3, 1, 0]),
+        "alpha_target": torch.tensor([0, 1, 2, 0]),
+        "alpha_speed": torch.tensor([0, 1, 2, 3]),
+        "alpha_curve": torch.tensor([0, 1, 2, 0]),
+        "alpha_algorithm": torch.tensor([0, 1, 2, 1]),
         "op": torch.tensor([1, 2, 0, 3]),
     }
 
@@ -35,8 +39,28 @@ def test_batch_action_extraction_single_cpu_call():
     assert item_call_count == 0, f"Expected 0 .item() calls, got {item_call_count}"
 
     # Verify correct values extracted
-    assert actions[0] == {"slot": 0, "blueprint": 5, "blend": 0, "tempo": 2, "op": 1}
-    assert actions[3] == {"slot": 3, "blueprint": 8, "blend": 1, "tempo": 0, "op": 3}
+    assert actions[0] == {
+        "slot": 0,
+        "blueprint": 5,
+        "blend": 0,
+        "tempo": 2,
+        "alpha_target": 0,
+        "alpha_speed": 0,
+        "alpha_curve": 0,
+        "alpha_algorithm": 0,
+        "op": 1,
+    }
+    assert actions[3] == {
+        "slot": 3,
+        "blueprint": 8,
+        "blend": 1,
+        "tempo": 0,
+        "alpha_target": 0,
+        "alpha_speed": 3,
+        "alpha_curve": 0,
+        "alpha_algorithm": 1,
+        "op": 3,
+    }
 
 
 def test_batch_action_extraction_values_match_item():
@@ -46,6 +70,10 @@ def test_batch_action_extraction_values_match_item():
         "blueprint": torch.tensor([5, 6, 7, 8]),
         "blend": torch.tensor([0, 1, 0, 1]),
         "tempo": torch.tensor([2, 3, 1, 0]),
+        "alpha_target": torch.tensor([0, 1, 2, 0]),
+        "alpha_speed": torch.tensor([0, 1, 2, 3]),
+        "alpha_curve": torch.tensor([0, 1, 2, 0]),
+        "alpha_algorithm": torch.tensor([0, 1, 2, 1]),
         "op": torch.tensor([1, 2, 0, 3]),
     }
 

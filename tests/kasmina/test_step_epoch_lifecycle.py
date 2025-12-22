@@ -1,11 +1,7 @@
-"""Test step_epoch() lifecycle transitions.
+"""Test step_epoch() lifecycle mechanics.
 
-Covers all stage transitions in the seed lifecycle state machine:
-- GERMINATED → TRAINING
-- TRAINING → BLENDING (with dwell time)
-- BLENDING → HOLDING (with blending steps)
-- HOLDING → FOSSILIZED (positive counterfactual)
-- HOLDING → PRUNED (negative counterfactual or timeout)
+step_epoch() no longer advances stages; it only ticks alpha schedules and
+handles cooldown transitions after pruning.
 """
 
 import torch.nn as nn
@@ -69,10 +65,10 @@ def setup_state_at_stage(slot: SeedSlot, stage: SeedStage) -> None:
 
 
 class TestStepEpochGerminatedToTraining:
-    """Test GERMINATED → TRAINING transition."""
+    """Test GERMINATED stage behavior under step_epoch."""
 
-    def test_germinated_advances_to_training_when_gate_passes(self):
-        """GERMINATED should immediately advance to TRAINING when G1 passes."""
+    def test_germinated_does_not_advance_when_gate_passes(self):
+        """GERMINATED should not advance via step_epoch (policy must ADVANCE)."""
         gates = MockGates()
         gates.set_gate_result(SeedStage.TRAINING, True)
         slot = create_test_slot(gates)
@@ -80,11 +76,11 @@ class TestStepEpochGerminatedToTraining:
 
         slot.step_epoch()
 
-        assert slot.state.stage == SeedStage.TRAINING
-        assert slot.isolate_gradients is True  # Incubator isolation enabled
+        assert slot.state.stage == SeedStage.GERMINATED
+        assert slot.isolate_gradients is False  # Incubator isolation not yet enabled
 
     def test_germinated_stays_when_gate_fails(self):
-        """GERMINATED should not advance if G1 fails."""
+        """GERMINATED should remain unchanged when G1 fails."""
         gates = MockGates()
         gates.set_gate_result(SeedStage.TRAINING, False)
         slot = create_test_slot(gates)
@@ -96,10 +92,10 @@ class TestStepEpochGerminatedToTraining:
 
 
 class TestStepEpochTrainingToBlending:
-    """Test TRAINING → BLENDING transition."""
+    """Test TRAINING stage behavior under step_epoch."""
 
     def test_training_stays_during_dwell(self):
-        """TRAINING should not advance before dwell period completes."""
+        """TRAINING should not advance via step_epoch."""
         gates = MockGates()
         gates.set_gate_result(SeedStage.BLENDING, True)
         slot = create_test_slot(gates)
@@ -110,12 +106,8 @@ class TestStepEpochTrainingToBlending:
 
         assert slot.state.stage == SeedStage.TRAINING
 
-    def test_training_advances_to_blending_after_dwell(self):
-        """TRAINING should advance to BLENDING after dwell when G2 passes.
-
-        Note: Without task_config, topology defaults to "cnn", which keeps
-        isolate_gradients=True after BLENDING (CNNs don't co-adapt).
-        """
+    def test_training_does_not_advance_after_dwell(self):
+        """TRAINING should not advance via step_epoch even when gates pass."""
         gates = MockGates()
         gates.set_gate_result(SeedStage.BLENDING, True)
         slot = create_test_slot(gates)
@@ -124,12 +116,11 @@ class TestStepEpochTrainingToBlending:
 
         slot.step_epoch()
 
-        assert slot.state.stage == SeedStage.BLENDING
-        # CNN topology (default): isolation kept to prevent co-adaptation
-        assert slot.isolate_gradients is True
+        assert slot.state.stage == SeedStage.TRAINING
+        assert slot.isolate_gradients is False
 
-    def test_training_advances_to_blending_transformer_disables_isolation(self):
-        """Transformer topology should disable isolation at BLENDING for co-adaptation."""
+    def test_advance_stage_to_blending_transformer_disables_isolation(self):
+        """advance_stage should disable isolation at BLENDING for transformers."""
         from esper.tamiyo.policy.features import TaskConfig
 
         gates = MockGates()
@@ -155,7 +146,7 @@ class TestStepEpochTrainingToBlending:
         # Dwell = max(1, int(25 * 0.1)) = 2, so we need epochs >= 2
         slot.state.metrics.epochs_in_current_stage = 2
 
-        slot.step_epoch()
+        slot.advance_stage(SeedStage.BLENDING)
 
         assert slot.state.stage == SeedStage.BLENDING
         # Transformer topology: isolation disabled for co-adaptation
@@ -175,7 +166,7 @@ class TestStepEpochTrainingToBlending:
 
 
 class TestStepEpochBlendingToHolding:
-    """Test BLENDING → HOLDING transition."""
+    """Test BLENDING alpha schedule behavior."""
 
     def test_blending_increments_steps(self):
         """BLENDING should increment alpha controller steps each epoch."""
@@ -188,7 +179,7 @@ class TestStepEpochBlendingToHolding:
         assert slot.state.alpha_controller.alpha_steps_done == 1
 
     def test_blending_stays_until_steps_complete(self):
-        """BLENDING should not advance until all blending steps complete."""
+        """BLENDING should not advance via step_epoch while blending progresses."""
         gates = MockGates()
         gates.set_gate_result(SeedStage.HOLDING, True)
         slot = create_test_slot(gates)
@@ -203,8 +194,8 @@ class TestStepEpochBlendingToHolding:
         assert slot.state.stage == SeedStage.BLENDING
         assert slot.state.alpha_controller.alpha_steps_done == 3
 
-    def test_blending_advances_to_holding_when_complete(self):
-        """BLENDING should advance to HOLDING when steps complete and G3 passes."""
+    def test_blending_does_not_advance_when_complete(self):
+        """BLENDING should not auto-advance to HOLDING when steps complete."""
         gates = MockGates()
         gates.set_gate_result(SeedStage.HOLDING, True)
         slot = create_test_slot(gates)
@@ -216,7 +207,7 @@ class TestStepEpochBlendingToHolding:
 
         slot.step_epoch()
 
-        assert slot.state.stage == SeedStage.HOLDING
+        assert slot.state.stage == SeedStage.BLENDING
 
     def test_blending_stays_when_gate_fails(self):
         """BLENDING should not advance if G3 fails even when steps complete."""
@@ -228,6 +219,18 @@ class TestStepEpochBlendingToHolding:
         for _ in range(4):
             slot.state.alpha_controller.step()
         slot.set_alpha(slot.state.alpha_controller.alpha)
+
+        slot.step_epoch()
+
+        assert slot.state.stage == SeedStage.BLENDING
+
+    def test_blending_stays_on_partial_target_even_if_gate_passes(self):
+        """Partial alpha targets should remain in BLENDING (BLEND_HOLD)."""
+        gates = MockGates()
+        gates.set_gate_result(SeedStage.HOLDING, True)
+        slot = create_test_slot(gates)
+        setup_state_at_stage(slot, SeedStage.BLENDING)
+        slot.state.alpha_controller.retarget(alpha_target=0.7, alpha_steps_total=1)
 
         slot.step_epoch()
 

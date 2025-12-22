@@ -1,6 +1,16 @@
 """Test batched mask stat computation."""
 import torch
 from esper.leyline import HEAD_NAMES
+from esper.leyline.factored_actions import (
+    NUM_ALPHA_ALGORITHMS,
+    NUM_ALPHA_CURVES,
+    NUM_ALPHA_SPEEDS,
+    NUM_ALPHA_TARGETS,
+    NUM_BLUEPRINTS,
+    NUM_BLENDS,
+    NUM_OPS,
+    NUM_TEMPO,
+)
 
 
 def test_batch_mask_stats_no_item_in_loop():
@@ -15,15 +25,19 @@ def test_batch_mask_stats_no_item_in_loop():
             [True, True, True, True, True],
             [True, True, False, False, False],
         ]),
-        "blueprint": torch.ones(4, 13, dtype=torch.bool),
-        "blend": torch.ones(4, 4, dtype=torch.bool),
-        "tempo": torch.ones(4, 3, dtype=torch.bool),
+        "blueprint": torch.ones(4, NUM_BLUEPRINTS, dtype=torch.bool),
+        "blend": torch.ones(4, NUM_BLENDS, dtype=torch.bool),
+        "tempo": torch.ones(4, NUM_TEMPO, dtype=torch.bool),
+        "alpha_target": torch.ones(4, NUM_ALPHA_TARGETS, dtype=torch.bool),
+        "alpha_speed": torch.ones(4, NUM_ALPHA_SPEEDS, dtype=torch.bool),
+        "alpha_curve": torch.ones(4, NUM_ALPHA_CURVES, dtype=torch.bool),
+        "alpha_algorithm": torch.ones(4, NUM_ALPHA_ALGORITHMS, dtype=torch.bool),
         "op": torch.tensor([
-            [True, True, False, False],
-            [True, True, True, False],
-            [True, False, False, False],
-            [True, True, True, True],
-        ]),
+            [True, True, False, False, False],
+            [True, True, True, False, False],
+            [True, False, False, False, False],
+            [True, True, True, True, True],
+        ], dtype=torch.bool),
     }
 
     # BATCHED approach: compute all at once, then transfer
@@ -58,13 +72,17 @@ def test_batch_mask_stats_values_match_item_approach():
             [True, True, False, False, False],
             [True, False, False, False, False],
         ]),
-        "blueprint": torch.ones(2, 13, dtype=torch.bool),
-        "blend": torch.ones(2, 4, dtype=torch.bool),
-        "tempo": torch.ones(2, 3, dtype=torch.bool),
+        "blueprint": torch.ones(2, NUM_BLUEPRINTS, dtype=torch.bool),
+        "blend": torch.ones(2, NUM_BLENDS, dtype=torch.bool),
+        "tempo": torch.ones(2, NUM_TEMPO, dtype=torch.bool),
+        "alpha_target": torch.ones(2, NUM_ALPHA_TARGETS, dtype=torch.bool),
+        "alpha_speed": torch.ones(2, NUM_ALPHA_SPEEDS, dtype=torch.bool),
+        "alpha_curve": torch.ones(2, NUM_ALPHA_CURVES, dtype=torch.bool),
+        "alpha_algorithm": torch.ones(2, NUM_ALPHA_ALGORITHMS, dtype=torch.bool),
         "op": torch.tensor([
-            [True, True, False, False],
-            [True, True, True, False],
-        ]),
+            [True, True, False, False, False],
+            [True, True, True, False, False],
+        ], dtype=torch.bool),
     }
 
     # Old approach (per-env .item())

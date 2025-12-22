@@ -24,7 +24,13 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable
 
 from esper.karn.constants import HealthThresholds, VitalSignsThresholds
-from esper.leyline import TelemetryEvent, TelemetryEventType, SeedStage, is_active_stage
+from esper.leyline import (
+    TelemetryEvent,
+    TelemetryEventType,
+    SeedStage,
+    is_active_stage,
+    is_failure_stage,
+)
 
 if TYPE_CHECKING:
     from esper.karn.store import TelemetryStore
@@ -424,7 +430,7 @@ class VitalSignsMonitor:
             if slot.stage != SeedStage.DORMANT and slot.stage != SeedStage.UNKNOWN:
                 total_seeds += 1
             # Count pruned seeds for failure rate
-            if slot.stage == SeedStage.PRUNED:
+            if is_failure_stage(slot.stage):
                 pruned_seeds += 1
             # Count active seeds (contributing to forward pass)
             if is_active_stage(slot.stage):

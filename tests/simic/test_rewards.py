@@ -397,12 +397,43 @@ class TestContributionRewardComponents:
         component_sum = (
             (components.bounded_attribution or 0.0)
             + components.compute_rent
+            + components.alpha_shock
             + components.pbrs_bonus
             + components.action_shaping
             + components.terminal_bonus
         )
         assert abs(reward - component_sum) < 0.001, f"Sum {component_sum} != total {reward}"
         assert components.total_reward == reward
+
+    def test_alpha_shock_penalty_applied(self):
+        """Alpha shock should be applied as a convex penalty when provided."""
+        seed_info = SeedInfo(
+            stage=STAGE_BLENDING,
+            improvement_since_stage_start=1.0,
+            total_improvement=1.5,
+            epochs_in_stage=2,
+            seed_params=5000,
+            previous_stage=STAGE_TRAINING,
+            seed_age_epochs=5,
+        )
+        config = ContributionRewardConfig(alpha_shock_coef=1.0)
+        reward, components = compute_contribution_reward(
+            action=LifecycleOp.WAIT,
+            seed_contribution=1.0,
+            val_acc=70.0,
+            seed_info=seed_info,
+            epoch=5,
+            max_epochs=25,
+            total_params=105_000,
+            host_params=100_000,
+            acc_at_germination=68.0,
+            acc_delta=0.2,
+            alpha_delta_sq_sum=0.25,
+            return_components=True,
+            config=config,
+        )
+        assert components.alpha_shock == pytest.approx(-0.25)
+        assert reward == pytest.approx(components.total_reward)
 
     def test_components_track_context(self):
         """Test that components include action and epoch context."""

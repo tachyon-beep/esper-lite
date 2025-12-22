@@ -7,7 +7,16 @@ from esper.tamiyo.policy import PolicyBundle, get_policy, list_policies
 from esper.tamiyo.policy.lstm_bundle import LSTMPolicyBundle
 from esper.tamiyo.policy.types import ActionResult, EvalResult, ForwardResult
 from esper.leyline.slot_config import SlotConfig
-from esper.leyline.factored_actions import NUM_BLUEPRINTS, NUM_BLENDS, NUM_TEMPO, NUM_OPS
+from esper.leyline.factored_actions import (
+    NUM_ALPHA_ALGORITHMS,
+    NUM_ALPHA_CURVES,
+    NUM_ALPHA_SPEEDS,
+    NUM_ALPHA_TARGETS,
+    NUM_BLUEPRINTS,
+    NUM_BLENDS,
+    NUM_OPS,
+    NUM_TEMPO,
+)
 
 
 @pytest.fixture
@@ -57,6 +66,10 @@ def test_lstm_bundle_get_action(lstm_bundle, slot_config):
         "blueprint": torch.ones(1, NUM_BLUEPRINTS, dtype=torch.bool),
         "blend": torch.ones(1, NUM_BLENDS, dtype=torch.bool),
         "tempo": torch.ones(1, NUM_TEMPO, dtype=torch.bool),
+        "alpha_target": torch.ones(1, NUM_ALPHA_TARGETS, dtype=torch.bool),
+        "alpha_speed": torch.ones(1, NUM_ALPHA_SPEEDS, dtype=torch.bool),
+        "alpha_curve": torch.ones(1, NUM_ALPHA_CURVES, dtype=torch.bool),
+        "alpha_algorithm": torch.ones(1, NUM_ALPHA_ALGORITHMS, dtype=torch.bool),
         "op": torch.ones(1, NUM_OPS, dtype=torch.bool),
     }
     hidden = lstm_bundle.initial_hidden(batch_size=1)
@@ -77,6 +90,10 @@ def test_lstm_bundle_evaluate_actions(lstm_bundle, slot_config):
         "blueprint": torch.ones(1, 10, NUM_BLUEPRINTS, dtype=torch.bool),
         "blend": torch.ones(1, 10, NUM_BLENDS, dtype=torch.bool),
         "tempo": torch.ones(1, 10, NUM_TEMPO, dtype=torch.bool),
+        "alpha_target": torch.ones(1, 10, NUM_ALPHA_TARGETS, dtype=torch.bool),
+        "alpha_speed": torch.ones(1, 10, NUM_ALPHA_SPEEDS, dtype=torch.bool),
+        "alpha_curve": torch.ones(1, 10, NUM_ALPHA_CURVES, dtype=torch.bool),
+        "alpha_algorithm": torch.ones(1, 10, NUM_ALPHA_ALGORITHMS, dtype=torch.bool),
         "op": torch.ones(1, 10, NUM_OPS, dtype=torch.bool),
     }
     actions = {
@@ -84,6 +101,10 @@ def test_lstm_bundle_evaluate_actions(lstm_bundle, slot_config):
         "blueprint": torch.zeros(1, 10, dtype=torch.long),
         "blend": torch.zeros(1, 10, dtype=torch.long),
         "tempo": torch.zeros(1, 10, dtype=torch.long),
+        "alpha_target": torch.zeros(1, 10, dtype=torch.long),
+        "alpha_speed": torch.zeros(1, 10, dtype=torch.long),
+        "alpha_curve": torch.zeros(1, 10, dtype=torch.long),
+        "alpha_algorithm": torch.zeros(1, 10, dtype=torch.long),
         "op": torch.zeros(1, 10, dtype=torch.long),
     }
     # Don't use initial_hidden() here as it creates inference-mode tensors
@@ -143,6 +164,10 @@ def test_lstm_bundle_forward(lstm_bundle, slot_config):
         "blueprint": torch.ones(1, NUM_BLUEPRINTS, dtype=torch.bool),
         "blend": torch.ones(1, NUM_BLENDS, dtype=torch.bool),
         "tempo": torch.ones(1, NUM_TEMPO, dtype=torch.bool),
+        "alpha_target": torch.ones(1, NUM_ALPHA_TARGETS, dtype=torch.bool),
+        "alpha_speed": torch.ones(1, NUM_ALPHA_SPEEDS, dtype=torch.bool),
+        "alpha_curve": torch.ones(1, NUM_ALPHA_CURVES, dtype=torch.bool),
+        "alpha_algorithm": torch.ones(1, NUM_ALPHA_ALGORITHMS, dtype=torch.bool),
         "op": torch.ones(1, NUM_OPS, dtype=torch.bool),
     }
     # Pass None for hidden - network creates its own initial state

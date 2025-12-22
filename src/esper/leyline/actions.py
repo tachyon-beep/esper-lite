@@ -21,6 +21,7 @@ def build_action_enum(topology: str) -> type[IntEnum]:
         1-N: GERMINATE_<BLUEPRINT> (sorted by param count)
         N+1: FOSSILIZE
         N+2: PRUNE
+        N+3: ADVANCE
 
     Note: This is used by HeuristicTamiyo for baseline comparison.
     PPO training uses factored actions instead.
@@ -37,6 +38,7 @@ def build_action_enum(topology: str) -> type[IntEnum]:
         members[f"GERMINATE_{spec.name.upper()}"] = i
     members["FOSSILIZE"] = len(blueprints) + 1
     members["PRUNE"] = len(blueprints) + 2
+    members["ADVANCE"] = len(blueprints) + 3
 
     enum_name = f"{topology.title()}Action"
     action_enum = IntEnum(enum_name, members)

@@ -8,8 +8,18 @@ import torch
 
 from esper.kasmina.blending import BlendCatalog, GatedBlend
 from esper.kasmina.host import CNNHost, TransformerHost, MorphogeneticModel
-from esper.leyline.alpha import AlphaCurve
-from esper.leyline.factored_actions import BlendAction, FactoredAction, LifecycleOp, BlueprintAction, TempoAction
+from esper.leyline.alpha import AlphaAlgorithm, AlphaCurve
+from esper.leyline.factored_actions import (
+    AlphaAlgorithmAction,
+    AlphaCurveAction,
+    AlphaSpeedAction,
+    AlphaTargetAction,
+    BlendAction,
+    BlueprintAction,
+    FactoredAction,
+    LifecycleOp,
+    TempoAction,
+)
 from esper.tamiyo.policy.features import TaskConfig
 
 
@@ -137,6 +147,7 @@ class TestBlendActionIntegration:
         model.germinate_seed(
             "norm", "test_gated", slot="r0c1",
             blend_algorithm_id="gated",
+            alpha_algorithm=AlphaAlgorithm.GATE,
         )
 
         slot = model.seed_slots["r0c1"]
@@ -156,6 +167,7 @@ class TestBlendActionIntegration:
         model.germinate_seed(
             "lora", "test_gated", slot="r0c1",
             blend_algorithm_id="gated",
+            alpha_algorithm=AlphaAlgorithm.GATE,
         )
 
         slot = model.seed_slots["r0c1"]
@@ -175,6 +187,10 @@ class TestFactoredActionBlendExtraction:
             blueprint=BlueprintAction.NORM,
             blend=BlendAction.LINEAR,
             tempo=TempoAction.STANDARD,
+            alpha_target=AlphaTargetAction.FULL,
+            alpha_speed=AlphaSpeedAction.MEDIUM,
+            alpha_curve=AlphaCurveAction.LINEAR,
+            alpha_algorithm=AlphaAlgorithmAction.ADD,
             op=LifecycleOp.GERMINATE,
         )
         assert action.blend_algorithm_id == "linear"
@@ -186,6 +202,10 @@ class TestFactoredActionBlendExtraction:
             blueprint=BlueprintAction.NORM,
             blend=BlendAction.SIGMOID,
             tempo=TempoAction.STANDARD,
+            alpha_target=AlphaTargetAction.FULL,
+            alpha_speed=AlphaSpeedAction.MEDIUM,
+            alpha_curve=AlphaCurveAction.LINEAR,
+            alpha_algorithm=AlphaAlgorithmAction.ADD,
             op=LifecycleOp.GERMINATE,
         )
         assert action.blend_algorithm_id == "sigmoid"
@@ -197,6 +217,10 @@ class TestFactoredActionBlendExtraction:
             blueprint=BlueprintAction.NORM,
             blend=BlendAction.GATED,
             tempo=TempoAction.STANDARD,
+            alpha_target=AlphaTargetAction.FULL,
+            alpha_speed=AlphaSpeedAction.MEDIUM,
+            alpha_curve=AlphaCurveAction.LINEAR,
+            alpha_algorithm=AlphaAlgorithmAction.GATE,
             op=LifecycleOp.GERMINATE,
         )
         assert action.blend_algorithm_id == "gated"

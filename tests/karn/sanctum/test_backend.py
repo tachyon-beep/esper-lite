@@ -195,8 +195,8 @@ class TestSanctumAggregator:
         event.timestamp = datetime.now(timezone.utc)
         event.data = {
             "kind": "action_distribution",
-            "action_counts": {"WAIT": 7, "GERMINATE": 3, "BLEND": 2},
-            "success_counts": {"WAIT": 7, "GERMINATE": 2, "BLEND": 1},
+            "action_counts": {"WAIT": 7, "GERMINATE": 3, "SET_ALPHA_TARGET": 2},
+            "success_counts": {"WAIT": 7, "GERMINATE": 2, "SET_ALPHA_TARGET": 1},
         }
 
         agg.process_event(event)
@@ -204,7 +204,7 @@ class TestSanctumAggregator:
 
         assert snapshot.tamiyo.action_counts["WAIT"] == 7
         assert snapshot.tamiyo.action_counts["GERMINATE"] == 3
-        assert snapshot.tamiyo.action_counts["BLEND"] == 2
+        assert snapshot.tamiyo.action_counts["SET_ALPHA_TARGET"] == 2
         assert snapshot.tamiyo.total_actions == 12
 
     def test_epoch_completed_updates_per_seed_telemetry(self):
@@ -937,7 +937,7 @@ class TestSanctumAggregator:
                 "value_estimate": 0.42,
                 "slot_states": {"r0c0": "Training 12%", "r0c1": "Empty"},
                 "host_accuracy": 67.0,
-                "alternatives": [("WAIT", 0.15), ("BLEND", 0.12)],
+                "alternatives": [("WAIT", 0.15), ("SET_ALPHA_TARGET", 0.12)],
             },
         )
 
@@ -954,7 +954,7 @@ class TestSanctumAggregator:
         assert decision.chosen_slot == "r0c1"
         assert decision.host_accuracy == 67.0
         assert decision.slot_states == {"r0c0": "Training 12%", "r0c1": "Empty"}
-        assert decision.alternatives == [("WAIT", 0.15), ("BLEND", 0.12)]
+        assert decision.alternatives == [("WAIT", 0.15), ("SET_ALPHA_TARGET", 0.12)]
 
 
 class TestSanctumBackend:

@@ -40,19 +40,21 @@ class TestFullLifecycleHappyPath:
         assert state.blueprint_id == "noop"
 
     def test_lifecycle_germinated_to_training(self):
-        """step_epoch() should advance GERMINATED → TRAINING."""
+        """advance_stage() should transition GERMINATED → TRAINING."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
 
-        slot.step_epoch()
+        result = slot.advance_stage(SeedStage.TRAINING)
 
+        assert result.passed
         assert slot.state.stage == SeedStage.TRAINING
 
     def test_lifecycle_training_to_blending(self):
-        """step_epoch() should advance TRAINING → BLENDING when gate passes."""
+        """advance_stage() should transition TRAINING → BLENDING when gate passes."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
-        slot.step_epoch()  # → TRAINING
+        result = slot.advance_stage(SeedStage.TRAINING)
+        assert result.passed
 
         # Simulate conditions for G2 gate
         slot.state.metrics.record_accuracy(50.0)
@@ -65,12 +67,13 @@ class TestFullLifecycleHappyPath:
         for _ in range(DEFAULT_MIN_BLENDING_EPOCHS):
             slot.state.metrics.epochs_in_current_stage += 1
 
-        slot.step_epoch()
+        result = slot.advance_stage(SeedStage.BLENDING)
 
+        assert result.passed
         assert slot.state.stage == SeedStage.BLENDING
 
     def test_lifecycle_blending_to_holding(self):
-        """step_epoch() should advance BLENDING → HOLDING when complete."""
+        """advance_stage() should transition BLENDING → HOLDING when ready."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
         slot.state.transition(SeedStage.TRAINING)
@@ -91,6 +94,8 @@ class TestFullLifecycleHappyPath:
             slot.state.metrics.record_accuracy(65.0)  # G3 needs epochs_in_current_stage
             slot.step_epoch()
 
+        result = slot.advance_stage(SeedStage.HOLDING)
+        assert result.passed
         assert slot.state.stage == SeedStage.HOLDING
 
     def test_lifecycle_holding_to_fossilized(self):
@@ -352,7 +357,9 @@ class TestDwellEpochEnforcement:
         """TRAINING → BLENDING should not happen before dwell epochs."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
-        slot.step_epoch()  # → TRAINING
+        gate_result = slot.advance_stage(target_stage=SeedStage.TRAINING)
+        assert gate_result.passed
+        assert slot.state.stage == SeedStage.TRAINING
 
         # Set conditions that would pass G2 except for dwell
         slot.state.metrics.record_accuracy(50.0)
@@ -362,7 +369,8 @@ class TestDwellEpochEnforcement:
         # Only 1 epoch in TRAINING, but need more for dwell
         slot.state.metrics.epochs_in_current_stage = 0
 
-        slot.step_epoch()
+        gate_result = slot.advance_stage(target_stage=SeedStage.BLENDING)
+        assert not gate_result.passed
 
         # Should still be in TRAINING (dwell not satisfied)
         assert slot.state.stage == SeedStage.TRAINING

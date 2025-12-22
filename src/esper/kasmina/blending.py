@@ -13,7 +13,7 @@ import torch
 import torch.nn as nn
 
 
-class BlendAlgorithm(ABC, nn.Module):
+class BlendAlgorithm(nn.Module, ABC):
     """Base class for blending algorithms.
 
     All implementations must provide `get_alpha_for_blend()` which returns
@@ -33,6 +33,7 @@ class BlendAlgorithm(ABC, nn.Module):
     _current_step: int = 0  # Tracked internally for schedule-based blends
 
     def __init__(self):
+        # nn.Module must initialize first in the MRO so submodules register correctly.
         super().__init__()
         # Thread-local cache for alpha tensor to avoid per-forward allocation
         # Uses thread-local storage for multi-GPU DataParallel safety

@@ -66,12 +66,12 @@ Remove “cleanup-by-architecture” auto-culls in the hold/decision region and 
 
 ### Lifecycle contracts
 - Stages and transitions: `src/esper/leyline/stages.py:13`
-- Factored action space includes `LifecycleOp.CULL`: `src/esper/leyline/factored_actions.py:89`
+- Factored action space includes `LifecycleOp.PRUNE` and `LifecycleOp.ADVANCE`: `src/esper/leyline/factored_actions.py:89`
 
 ### Kasmina state engine
 - `SeedState.transition()` resets stage baselines: `src/esper/kasmina/slot.py:389`
-- `SeedSlot.step_epoch()` handles mechanical stage progression and HOLDING auto-culls: `src/esper/kasmina/slot.py:1627`
-- `SeedSlot.cull()` (currently: PRUNE_INSTANT) removes the seed module but keeps state for cooldown (PRUNED → EMBARGOED → RESETTING): `src/esper/kasmina/slot.py:1203`
+- `SeedSlot.step_epoch()` ticks alpha schedules and cooldown transitions (no stage auto-advance): `src/esper/kasmina/slot.py:1627`
+- `SeedSlot.prune()` (PRUNE_INSTANT) removes the seed module but keeps state for cooldown (PRUNED → EMBARGOED → RESETTING): `src/esper/kasmina/slot.py:1203`
 
 ### Blending semantics
 - Blending is output gating (`torch.lerp`), not weight interpolation: `src/esper/kasmina/isolation.py:22`
@@ -160,7 +160,7 @@ Treat BLENDING as the “center” of the lifecycle terrain: you can drive towar
 stateDiagram-v2
     [*] --> DORMANT
     DORMANT --> GERMINATED: GERMINATE
-    GERMINATED --> TRAINING: auto
+    GERMINATED --> TRAINING: ADVANCE
     TRAINING --> BLENDING: G2
 
     state BLENDING {
@@ -252,7 +252,7 @@ Add a constraint:
 ### 7.1 Recommended: factored heads, small op set
 
 Update `LifecycleOp` (the existing `op` head) and add discrete heads:
-- `LifecycleOp`: `{WAIT, GERMINATE, SET_ALPHA_TARGET, PRUNE, FOSSILIZE}` (replace `CULL`)
+- `LifecycleOp`: `{WAIT, GERMINATE, SET_ALPHA_TARGET, PRUNE, FOSSILIZE, ADVANCE}` (replace `CULL`)
 - `alpha_target_head`: `{0.5, 0.7, 1.0}` (non-zero only; removal uses `PRUNE`)
 - `alpha_speed_head`: `{instant, fast, medium, slow}`
 - `alpha_curve_head`: `{linear, cosine, sigmoid}`
@@ -607,6 +607,17 @@ This plan assumes single-process for the initial implementation. If/when we add 
 - Add observation schema tests that assert fields exist, have correct dtype/range, and are stable across env resets/checkpoints.
 - Calibrate reward coefficients offline using telemetry from short runs (heuristic + a few random actions) to keep rent/shock on comparable scale and avoid immediate reward hacking.
 - Add a deterministic “scripted policy” runner used only for smoke tests (no PPO training) to validate end-to-end wiring before RL introduces noise.
+
+**Calibration snapshot (telemetry_2025-12-20_044944, 20k events)**
+- Median |total_reward| ~ 0.0783; p90(alpha_delta^2) ~ 0.04.
+- Suggested BaseSlotRent ~ 0.0039; shock_coef ~ 0.1958 (target shock ~ 0.00783 at p90).
+- Full JSON summaries:
+  - `docs/phase5_reward_calibration.json` (telemetry + cifar10 mock)
+  - `docs/phase5_reward_calibration_tinystories.json` (tinystories mock)
+- Mock calibration (cifar10, 5 episodes, 5 epochs, 10 batches, random_germinate_bias=1.0):
+  - Heuristic median |total_reward| ~ 0.0 (p90 ~ 0.3906); random median |total_reward| ~ 0.0811 (p90 ~ 0.4688).
+- Mock calibration (tinystories, 3 episodes, 3 epochs, 4 batches, random_germinate_bias=1.0, random only):
+  - Random median |total_reward| ~ 0.0816 (p90 ~ 0.2785).
 
 #### Phase 6 — End-to-end validation (CIFAR sanity + regressions)
 

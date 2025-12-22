@@ -4,8 +4,10 @@ Tests end-to-end gradient collection, snapshot generation, and feature extractio
 """
 
 import torch
+
 from esper.simic.telemetry import SeedGradientCollector
 from esper.leyline import SeedTelemetry
+from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
 
 
 class TestGradientCollectionPipeline:
@@ -122,8 +124,8 @@ class TestGradientCollectionPipeline:
 class TestSeedTelemetryFeatures:
     """Test SeedTelemetry feature conversion."""
 
-    def test_telemetry_to_features_10_dim(self):
-        """SeedTelemetry.to_features() must return 10-dim vector."""
+    def test_telemetry_to_features_17_dim(self):
+        """SeedTelemetry.to_features() must return 17-dim vector."""
         telemetry = SeedTelemetry(
             seed_id="test",
             gradient_norm=1.0,
@@ -133,7 +135,7 @@ class TestSeedTelemetryFeatures:
 
         features = telemetry.to_features()
 
-        assert len(features) == 10
+        assert len(features) == 17
 
     def test_telemetry_feature_dim_matches(self):
         """SeedTelemetry.feature_dim() should match actual dimension."""
@@ -215,6 +217,53 @@ class TestSeedTelemetryFeatures:
         # (4 - 1) / 9 = 3 / 9 = 0.333...
         assert abs(stage_feature - (3.0 / 9.0)) < 1e-5
 
+    def test_telemetry_features_alpha_controller_normalized(self):
+        """Alpha controller fields should be normalized and stable."""
+        telemetry = SeedTelemetry(
+            seed_id="test",
+            alpha_target=0.7,
+            alpha_mode=AlphaMode.DOWN.value,
+            alpha_steps_total=10,
+            alpha_steps_done=4,
+            time_to_target=6,
+            alpha_velocity=-0.1,
+            alpha_algorithm=AlphaAlgorithm.GATE.value,
+            max_epochs=20,
+        )
+
+        features = telemetry.to_features()
+
+        assert abs(features[10] - 0.7) < 1e-6
+        assert abs(features[11] - 1.0) < 1e-6  # DOWN -> 2 / 2
+        assert abs(features[12] - 0.5) < 1e-6  # 10 / 20
+        assert abs(features[13] - 0.2) < 1e-6  # 4 / 20
+        assert abs(features[14] - 0.3) < 1e-6  # 6 / 20
+        assert abs(features[15] + 0.1) < 1e-6
+        assert abs(features[16] - 1.0) < 1e-6  # (3-1)/(3-1)
+
+    def test_telemetry_roundtrip_preserves_alpha_fields(self):
+        """to_dict() -> from_dict() preserves alpha controller fields."""
+        telemetry = SeedTelemetry(
+            seed_id="test",
+            alpha_target=0.4,
+            alpha_mode=AlphaMode.UP.value,
+            alpha_steps_total=12,
+            alpha_steps_done=9,
+            time_to_target=3,
+            alpha_velocity=0.05,
+            alpha_algorithm=AlphaAlgorithm.MULTIPLY.value,
+        )
+
+        restored = SeedTelemetry.from_dict(telemetry.to_dict())
+
+        assert restored.alpha_target == telemetry.alpha_target
+        assert restored.alpha_mode == telemetry.alpha_mode
+        assert restored.alpha_steps_total == telemetry.alpha_steps_total
+        assert restored.alpha_steps_done == telemetry.alpha_steps_done
+        assert restored.time_to_target == telemetry.time_to_target
+        assert restored.alpha_velocity == telemetry.alpha_velocity
+        assert restored.alpha_algorithm == telemetry.alpha_algorithm
+
 
 class TestTelemetryToFeaturesIntegration:
     """Test end-to-end flow from gradients to features."""
@@ -248,7 +297,7 @@ class TestTelemetryToFeaturesIntegration:
         features = telemetry.to_features()
 
         # Verify complete pipeline
-        assert len(features) == 10
+        assert len(features) == 17
         assert all(isinstance(f, float) for f in features)
         assert all(-5.0 < f < 5.0 for f in features)
 

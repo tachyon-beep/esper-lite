@@ -29,7 +29,6 @@ EVENT_COLORS: dict[str, str] = {
     "PPO": "magenta",
     "GERM": "green",
     "PRUNE": "red",
-    "BLEND": "yellow",
     "WARN": "yellow",
     "ERROR": "red",
 }

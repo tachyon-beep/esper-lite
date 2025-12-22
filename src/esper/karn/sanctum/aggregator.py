@@ -60,7 +60,19 @@ def normalize_action(action: str) -> str:
     Returns:
         Base action name (e.g., "GERMINATE").
     """
-    return ACTION_NORMALIZATION.get(action, action)
+    normalized = ACTION_NORMALIZATION.get(action, action)
+    if normalized == action:
+        if action.startswith("GERMINATE"):
+            return "GERMINATE"
+        if action.startswith("SET_ALPHA_TARGET"):
+            return "SET_ALPHA_TARGET"
+        if action.startswith("FOSSILIZE"):
+            return "FOSSILIZE"
+        if action.startswith("PRUNE"):
+            return "PRUNE"
+        if action.startswith("WAIT"):
+            return "WAIT"
+    return normalized
 
 
 @dataclass
@@ -247,7 +259,13 @@ class SanctumAggregator:
         # Aggregate action counts from per-step reward telemetry when available.
         # If debug REWARD_COMPUTED telemetry is disabled, fall back to
         # ANALYTICS_SNAPSHOT(action_distribution) which populates self._tamiyo directly.
-        aggregated_actions: dict[str, int] = {"WAIT": 0, "GERMINATE": 0, "PRUNE": 0, "FOSSILIZE": 0}
+        aggregated_actions: dict[str, int] = {
+            "WAIT": 0,
+            "GERMINATE": 0,
+            "SET_ALPHA_TARGET": 0,
+            "PRUNE": 0,
+            "FOSSILIZE": 0,
+        }
         total_actions = 0
         for env in self._envs.values():
             for action, count in env.action_counts.items():
@@ -551,6 +569,7 @@ class SanctumAggregator:
             bounded_attribution=data.get("bounded_attribution", 0.0),
             seed_contribution=data.get("seed_contribution", 0.0),
             compute_rent=data.get("compute_rent", 0.0),
+            alpha_shock=data.get("alpha_shock", 0.0),
             ratio_penalty=data.get("ratio_penalty", 0.0),
             stage_bonus=data.get("stage_bonus", 0.0),
             fossilize_terminal_bonus=data.get("fossilize_terminal_bonus", 0.0),
@@ -796,7 +815,13 @@ class SanctumAggregator:
 
             # Action tracking (fresh distribution each episode)
             env.action_history.clear()
-            env.action_counts = {"WAIT": 0, "GERMINATE": 0, "PRUNE": 0, "FOSSILIZE": 0}
+            env.action_counts = {
+                "WAIT": 0,
+                "GERMINATE": 0,
+                "SET_ALPHA_TARGET": 0,
+                "PRUNE": 0,
+                "FOSSILIZE": 0,
+            }
             env.total_actions = 0
 
             # Reward components (stale from last step)

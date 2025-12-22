@@ -163,6 +163,7 @@ class RewardComponents:
     accuracy_delta: float = 0.0
     bounded_attribution: float | None = None  # For contribution mode
     compute_rent: float = 0.0
+    alpha_shock: float = 0.0
     blending_warning: float = 0.0
     holding_warning: float = 0.0
     ratio_penalty: float = 0.0
@@ -586,6 +587,7 @@ class TelemetryStore:
                 "total",
                 "accuracy_delta",
                 "compute_rent",
+                "alpha_shock",
                 "blending_warning",
                 "holding_warning",
                 "ratio_penalty",

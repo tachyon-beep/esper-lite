@@ -85,12 +85,15 @@ class ParallelEnvState:
     # (DRL Expert review 2025-12-17: prevents degenerate WAIT-spam policies
     # that rely on environment cleanup rather than proactive lifecycle management)
     pending_auto_prune_penalty: float = 0.0
+    # Previous alpha/param snapshots for convex shock penalty (Phase 5)
+    prev_slot_alphas: dict[str, float] = field(default_factory=dict)
+    prev_slot_params: dict[str, int] = field(default_factory=dict)
     # Pre-computed autocast decision for hot path performance
     # Avoids repeated device type checks and amp flag evaluation per batch
     autocast_enabled: bool = False
 
     def __post_init__(self) -> None:
-        # Initialize counters with LifecycleOp names (WAIT, GERMINATE, FOSSILIZE, PRUNE)
+        # Initialize counters with LifecycleOp names (WAIT, GERMINATE, SET_ALPHA_TARGET, PRUNE, FOSSILIZE, ADVANCE)
         # since factored actions use op.name for counting, not flat action enum names
         if not self.action_counts:
             base_counts = {op.name: 0 for op in LifecycleOp}
@@ -152,6 +155,37 @@ class ParallelEnvState:
             self.cf_pair_accums[pair_key].zero_()
         for pair_key in self.cf_pair_totals:
             self.cf_pair_totals[pair_key] = 0
+
+    def reset_episode_state(self, slots: list[str]) -> None:
+        """Reset per-episode state when reusing env instances."""
+        self.seeds_created = 0
+        self.seeds_fossilized = 0
+        self.contributing_fossilized = 0
+        self.episode_rewards.clear()
+
+        base_counts = {op.name: 0 for op in LifecycleOp}
+        self.action_counts = base_counts.copy()
+        self.successful_action_counts = base_counts.copy()
+
+        self.seed_optimizers.clear()
+        self.acc_at_germination.clear()
+        self.host_max_acc = 0.0
+        self.pending_auto_prune_penalty = 0.0
+        self.prev_slot_alphas = {slot_id: 0.0 for slot_id in slots}
+        self.prev_slot_params = {slot_id: 0 for slot_id in slots}
+        self.gradient_ratio_ema = {slot_id: 0.0 for slot_id in slots}
+        self.lstm_hidden = None
+        self.signal_tracker.reset()
+        self.governor.reset()
+        if self.health_monitor is not None:
+            self.health_monitor.reset()
+        if self.counterfactual_helper is not None:
+            self.counterfactual_helper._last_matrix = None
+
+        if self.train_loss_accum is None:
+            self.init_accumulators(slots)
+        else:
+            self.zero_accumulators()
 
 
 __all__ = ["ParallelEnvState"]

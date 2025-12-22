@@ -3,8 +3,10 @@
 Only masks PHYSICALLY IMPOSSIBLE actions:
 - SLOT: only enabled slots (from --slots arg) are selectable
 - GERMINATE: blocked if ALL enabled slots occupied OR at seed limit
+- ADVANCE: blocked if NO enabled slot is in GERMINATED/TRAINING/BLENDING
 - FOSSILIZE: blocked if NO enabled slot has a HOLDING seed
 - PRUNE: blocked if NO enabled slot has a prunable seed with age >= MIN_PRUNE_AGE
+         while the alpha controller is HOLD (unless governor override)
 - WAIT: always valid
 - BLUEPRINT: NOOP always blocked (0 trainable parameters)
 
@@ -24,12 +26,18 @@ from typing import TYPE_CHECKING
 import torch
 from torch.distributions import Categorical
 
-from esper.leyline import SeedStage, MIN_PRUNE_AGE, MASKED_LOGIT_VALUE
+from esper.leyline import AlphaMode, SeedStage, MIN_PRUNE_AGE, MASKED_LOGIT_VALUE
 from esper.leyline.stages import VALID_TRANSITIONS
 from esper.leyline.slot_config import SlotConfig
 from esper.leyline.factored_actions import (
+    AlphaAlgorithmAction,
+    AlphaTargetAction,
     BlueprintAction,
     LifecycleOp,
+    NUM_ALPHA_ALGORITHMS,
+    NUM_ALPHA_CURVES,
+    NUM_ALPHA_SPEEDS,
+    NUM_ALPHA_TARGETS,
     NUM_BLUEPRINTS,
     NUM_BLENDS,
     NUM_OPS,
@@ -54,6 +62,13 @@ _PRUNABLE_STAGES = frozenset({
     if SeedStage.PRUNED in transitions
 })
 
+# Stages from which ADVANCE is meaningful (explicit policy decision)
+_ADVANCABLE_STAGES = frozenset({
+    SeedStage.GERMINATED.value,
+    SeedStage.TRAINING.value,
+    SeedStage.BLENDING.value,
+})
+
 
 @dataclass(frozen=True, slots=True)
 class MaskSeedInfo:
@@ -64,6 +79,7 @@ class MaskSeedInfo:
 
     stage: int  # SeedStage.value
     seed_age_epochs: int
+    alpha_mode: int = AlphaMode.HOLD.value
 
 
 def build_slot_states(
@@ -88,6 +104,7 @@ def build_slot_states(
             slot_states[slot_id] = MaskSeedInfo(
                 stage=report.stage.value,
                 seed_age_epochs=report.metrics.epochs_total,
+                alpha_mode=report.alpha_mode,
             )
     return slot_states
 
@@ -100,6 +117,7 @@ def compute_action_masks(
     slot_config: SlotConfig | None = None,
     device: torch.device | None = None,
     topology: str = "cnn",
+    allow_governor_override: bool = False,
 ) -> dict[str, torch.Tensor]:
     """Compute action masks based on slot states.
 
@@ -113,6 +131,7 @@ def compute_action_masks(
         slot_config: Slot configuration (defaults to SlotConfig.default())
         device: Torch device for tensors
         topology: Task topology ("cnn" or "transformer") for blueprint masking
+        allow_governor_override: Allow PRUNE even if alpha_mode != HOLD
 
     Returns:
         Dict of boolean tensors for each action head:
@@ -120,6 +139,10 @@ def compute_action_masks(
         - "blueprint": [NUM_BLUEPRINTS] - which blueprints can be used
         - "blend": [NUM_BLENDS] - which blend methods can be used
         - "tempo": [NUM_TEMPO] - which tempo values can be used (all valid)
+        - "alpha_target": [NUM_ALPHA_TARGETS] - which alpha targets can be used
+        - "alpha_speed": [NUM_ALPHA_SPEEDS] - which alpha speeds can be used
+        - "alpha_curve": [NUM_ALPHA_CURVES] - which alpha curves can be used
+        - "alpha_algorithm": [NUM_ALPHA_ALGORITHMS] - which algorithms can be used
         - "op": [NUM_OPS] - which operations are valid (ANY enabled slot)
     """
     if slot_config is None:
@@ -154,6 +177,12 @@ def compute_action_masks(
     # Tempo mask: all tempo values valid (choice only matters during GERMINATE)
     tempo_mask = torch.ones(NUM_TEMPO, dtype=torch.bool, device=device)
 
+    # Alpha heads: target/algorithm changes are HOLD-only or germinate.
+    alpha_target_mask = torch.zeros(NUM_ALPHA_TARGETS, dtype=torch.bool, device=device)
+    alpha_speed_mask = torch.ones(NUM_ALPHA_SPEEDS, dtype=torch.bool, device=device)
+    alpha_curve_mask = torch.ones(NUM_ALPHA_CURVES, dtype=torch.bool, device=device)
+    alpha_algorithm_mask = torch.zeros(NUM_ALPHA_ALGORITHMS, dtype=torch.bool, device=device)
+
     # Op mask: depends on slot states across ALL enabled slots
     op_mask = torch.zeros(NUM_OPS, dtype=torch.bool, device=device)
     op_mask[LifecycleOp.WAIT] = True  # WAIT always valid
@@ -164,33 +193,56 @@ def compute_action_masks(
         for slot_id in ordered
     )
 
-    # GERMINATE: valid if ANY enabled slot is empty AND under seed limit
-    if has_empty_enabled_slot:
-        seed_limit_reached = max_seeds > 0 and total_seeds >= max_seeds
-        if not seed_limit_reached:
-            op_mask[LifecycleOp.GERMINATE] = True
+    seed_limit_reached = max_seeds > 0 and total_seeds >= max_seeds
+    can_germinate = has_empty_enabled_slot and not seed_limit_reached
 
-    # FOSSILIZE/PRUNE: valid if ANY enabled slot has a valid state
+    # GERMINATE: valid if ANY enabled slot is empty AND under seed limit
+    if can_germinate:
+        op_mask[LifecycleOp.GERMINATE] = True
+
+    # ADVANCE/FOSSILIZE/PRUNE: valid if ANY enabled slot has a valid state
     # (optimistic masking - network learns slot+op associations)
+    has_retargetable_hold_slot = False
     for slot_id in ordered:
         seed_info = slot_states.get(slot_id)
         if seed_info is not None:
             stage = seed_info.stage
             age = seed_info.seed_age_epochs
 
+            # ADVANCE: only from explicit policy-controlled stages
+            if stage in _ADVANCABLE_STAGES:
+                op_mask[LifecycleOp.ADVANCE] = True
+
             # FOSSILIZE: only from HOLDING
             if stage in _FOSSILIZABLE_STAGES:
                 op_mask[LifecycleOp.FOSSILIZE] = True
 
-            # PRUNE: only from prunable stages AND if seed age >= MIN_PRUNE_AGE
+            # PRUNE: only from prunable stages, seed age >= MIN_PRUNE_AGE, and HOLD-only
             if stage in _PRUNABLE_STAGES and age >= MIN_PRUNE_AGE:
-                op_mask[LifecycleOp.PRUNE] = True
+                if allow_governor_override or seed_info.alpha_mode == AlphaMode.HOLD.value:
+                    op_mask[LifecycleOp.PRUNE] = True
+            # SET_ALPHA_TARGET: HOLD-only, only when a seed is in a retargetable stage.
+            if stage in (SeedStage.BLENDING.value, SeedStage.HOLDING.value):
+                if seed_info.alpha_mode == AlphaMode.HOLD.value:
+                    op_mask[LifecycleOp.SET_ALPHA_TARGET] = True
+                    has_retargetable_hold_slot = True
+
+    if can_germinate or has_retargetable_hold_slot:
+        alpha_target_mask[:] = True
+        alpha_algorithm_mask[:] = True
+    else:
+        alpha_target_mask[AlphaTargetAction.FULL] = True
+        alpha_algorithm_mask[AlphaAlgorithmAction.ADD] = True
 
     return {
         "slot": slot_mask,
         "blueprint": blueprint_mask,
         "blend": blend_mask,
         "tempo": tempo_mask,
+        "alpha_target": alpha_target_mask,
+        "alpha_speed": alpha_speed_mask,
+        "alpha_curve": alpha_curve_mask,
+        "alpha_algorithm": alpha_algorithm_mask,
         "op": op_mask,
     }
 
@@ -203,6 +255,7 @@ def compute_batch_masks(
     slot_config: SlotConfig | None = None,
     device: torch.device | None = None,
     topology: str = "cnn",
+    allow_governor_override: bool = False,
 ) -> dict[str, torch.Tensor]:
     """Compute action masks for a batch of observations.
 
@@ -217,6 +270,7 @@ def compute_batch_masks(
         slot_config: Slot configuration (defaults to SlotConfig.default())
         device: Torch device for tensors
         topology: Task topology ("cnn" or "transformer") for blueprint masking
+        allow_governor_override: Allow PRUNE even if alpha_mode != HOLD
 
     Returns:
         Dict of boolean tensors (batch_size, num_actions) for each head
@@ -233,6 +287,7 @@ def compute_batch_masks(
             slot_config=slot_config,
             device=device,
             topology=topology,
+            allow_governor_override=allow_governor_override,
         )
         for i, slot_states in enumerate(batch_slot_states)
     ]

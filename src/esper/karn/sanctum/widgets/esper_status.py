@@ -39,6 +39,8 @@ _STAGE_STYLES: dict[str, str] = {
     "FOSSILIZED": "magenta",
     "PRUNED": "red",
     "GERMINATED": "green",
+    "EMBARGOED": "red",
+    "RESETTING": "dim",
 }
 
 

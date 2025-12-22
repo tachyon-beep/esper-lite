@@ -71,7 +71,7 @@ class TestStartBlendingProgress:
 
 
 class TestStepEpochAutoAdvance:
-    """Test that step_epoch auto-advances through mechanical stages."""
+    """Test that step_epoch advances alpha schedules without stage transitions."""
 
     def _create_blending_slot(self) -> SeedSlot:
         """Helper to create a slot in BLENDING stage."""
@@ -111,18 +111,16 @@ class TestStepEpochAutoAdvance:
 
         assert slot.alpha >= 0.99  # Should be at or near 1.0
 
-    def test_step_epoch_auto_advances_when_blending_complete(self):
-        """step_epoch should auto-advance BLENDING→HOLDING when α=1.0."""
+    def test_step_epoch_does_not_advance_when_blending_complete(self):
+        """step_epoch should not auto-advance BLENDING→HOLDING when α=1.0."""
         slot = self._create_blending_slot()
 
-        # Drive epochs until blending completes and the slot enters HOLDING.
+        # Drive epochs until blending completes.
         for _ in range(10):
             slot.state.metrics.record_accuracy(0.0)
             slot.step_epoch()
-            if slot.state.stage == SeedStage.HOLDING:
-                break
 
-        assert slot.state.stage == SeedStage.HOLDING
+        assert slot.state.stage == SeedStage.BLENDING
         assert slot.alpha >= 0.99
 
     def test_step_epoch_noop_when_not_blending(self):
@@ -197,37 +195,43 @@ class TestStrategicFossilizeOnly:
 class TestLifecycleIntegration:
     """Integration test for full lifecycle flow."""
 
-    def test_full_lifecycle_with_auto_advance(self):
-        """Test TRAINING→BLENDING→(auto)→HOLDING→FOSSILIZED."""
+    def test_full_lifecycle_with_explicit_advance(self):
+        """Test TRAINING→BLENDING→HOLDING→FOSSILIZED with explicit ADVANCE."""
         from esper.kasmina.host import MorphogeneticModel, CNNHost
 
         model = MorphogeneticModel(CNNHost(), device="cpu", slots=["r0c1"])
         model.germinate_seed("conv_heavy", "test_seed", slot="r0c1")
-        model.seed_slots["r0c1"].state.transition(SeedStage.TRAINING)
+        result = model.seed_slots["r0c1"].advance_stage(SeedStage.TRAINING)
+        assert result.passed
 
-        # Tamiyo: action triggers blending start (mechanical now)
-        model.seed_slots["r0c1"].state.transition(SeedStage.BLENDING)
-        model.seed_slots["r0c1"].start_blending(total_steps=3)
+        slot = model.seed_slots["r0c1"]
+        # Prepare G2 gate inputs before ADVANCE to BLENDING.
+        for acc in (50.0, 51.0, 52.0):
+            slot.state.metrics.record_accuracy(acc)
+        slot.state.metrics.seed_gradient_norm_ratio = 0.2
+        result = slot.advance_stage(SeedStage.BLENDING)
+        assert result.passed
 
-        assert model.seed_slots["r0c1"].state.stage == SeedStage.BLENDING
+        assert slot.state.stage == SeedStage.BLENDING
 
-        # Kasmina: auto-advance via step_epoch
-        for _ in range(10):
-            model.seed_slots["r0c1"].state.metrics.record_accuracy(0.0)
-            model.seed_slots["r0c1"].step_epoch()  # advance blending progress
-            if model.seed_slots["r0c1"].state.stage == SeedStage.HOLDING:
-                break
+        # Tick blending progress.
+        for _ in range(5):
+            slot.state.metrics.record_accuracy(60.0)
+            slot.step_epoch()
 
-        assert model.seed_slots["r0c1"].state.stage == SeedStage.HOLDING
+        result = slot.advance_stage(SeedStage.HOLDING)
+        assert result.passed
 
         # Tamiyo: FOSSILIZE to finalize
-        ok = model.seed_slots["r0c1"].state.transition(SeedStage.FOSSILIZED)
+        slot.state.metrics.counterfactual_contribution = 3.0
+        slot.state.is_healthy = True
+        ok = slot.advance_stage(SeedStage.FOSSILIZED)
 
-        assert ok is True
-        assert model.seed_slots["r0c1"].state.stage == SeedStage.FOSSILIZED
+        assert ok.passed is True
+        assert slot.state.stage == SeedStage.FOSSILIZED
 
     def test_full_state_machine_reaches_holding(self):
-        """Germinate → TRAINING → BLENDING → HOLDING via Kasmina mechanics."""
+        """Germinate → TRAINING → BLENDING → HOLDING with explicit ADVANCE."""
         from esper.kasmina.host import MorphogeneticModel, CNNHost
 
         model = MorphogeneticModel(CNNHost(), device="cpu", slots=["r0c1"])
@@ -238,30 +242,27 @@ class TestLifecycleIntegration:
         assert result.passed
         assert model.seed_slots["r0c1"].state.stage == SeedStage.TRAINING
 
-        # Drive metrics until TRAINING → BLENDING triggers via step_epoch.
+        # Drive metrics until TRAINING → BLENDING gate passes, then ADVANCE.
         acc = 60.0
-        for _ in range(10):
-            model.seed_slots["r0c1"].state.metrics.record_accuracy(acc)
-            # Set gradient ratio to pass G2 gradient activity check
-            model.seed_slots["r0c1"].state.metrics.seed_gradient_norm_ratio = 0.1
-            model.seed_slots["r0c1"].step_epoch()
+        slot = model.seed_slots["r0c1"]
+        for _ in range(3):
+            slot.state.metrics.record_accuracy(acc)
+            slot.state.metrics.seed_gradient_norm_ratio = 0.2
             acc += 1.0
-            if model.seed_slots["r0c1"].state.stage == SeedStage.BLENDING:
-                break
 
-        assert model.seed_slots["r0c1"].state.stage == SeedStage.BLENDING, \
-            f"Seed failed to leave TRAINING; current stage: {model.seed_slots['r0c1'].state.stage}"
+        result = slot.advance_stage(SeedStage.BLENDING)
+        assert result.passed, f"Seed failed to leave TRAINING; current stage: {slot.state.stage}"
+        assert slot.state.stage == SeedStage.BLENDING
 
-        # Continue driving epochs so BLENDING → HOLDING auto-advance.
-        for _ in range(20):
-            model.seed_slots["r0c1"].state.metrics.record_accuracy(acc)
-            model.seed_slots["r0c1"].step_epoch()
+        # Continue driving epochs to reach full amplitude, then ADVANCE.
+        for _ in range(5):
+            slot.state.metrics.record_accuracy(acc)
+            slot.step_epoch()
             acc += 0.5
-            if model.seed_slots["r0c1"].state.stage == SeedStage.HOLDING:
-                break
 
-        assert model.seed_slots["r0c1"].state.stage == SeedStage.HOLDING, \
-            f"Seed failed to reach HOLDING; current stage: {model.seed_slots['r0c1'].state.stage}"
+        result = slot.advance_stage(SeedStage.HOLDING)
+        assert result.passed, f"Seed failed to reach HOLDING; current stage: {slot.state.stage}"
+        assert slot.state.stage == SeedStage.HOLDING
 
     def test_fossilization_emits_telemetry(self):
         """Test that fossilization emits SEED_FOSSILIZED telemetry."""
@@ -281,23 +282,28 @@ class TestLifecycleIntegration:
         # Run through lifecycle
         model.germinate_seed("conv_heavy", "test_seed", slot="r0c1")
         model.seed_slots["r0c1"].state.transition(SeedStage.TRAINING)
-        model.seed_slots["r0c1"].state.transition(SeedStage.BLENDING)
-        model.seed_slots["r0c1"].start_blending(total_steps=3)
+        slot = model.seed_slots["r0c1"]
+        slot.state.metrics.record_accuracy(60.0)
+        slot.state.metrics.record_accuracy(61.0)
+        slot.state.metrics.record_accuracy(62.0)
+        slot.state.metrics.seed_gradient_norm_ratio = 0.2
+        result = slot.advance_stage(SeedStage.BLENDING)
+        assert result.passed
 
-        # Simulate training/validation metrics to drive dwell counters and gates
-        for _ in range(10):
-            model.seed_slots["r0c1"].state.metrics.record_accuracy(60.0)
-            model.seed_slots["r0c1"].step_epoch()
-            if model.seed_slots["r0c1"].state.stage == SeedStage.HOLDING:
-                break
-        assert model.seed_slots["r0c1"].state.stage == SeedStage.HOLDING
+        # Simulate training/validation metrics to drive dwell counters and alpha
+        for _ in range(5):
+            slot.state.metrics.record_accuracy(60.0)
+            slot.step_epoch()
+        result = slot.advance_stage(SeedStage.HOLDING)
+        assert result.passed
+        assert slot.state.stage == SeedStage.HOLDING
 
         # Set counterfactual and health required for G5 gate
-        model.seed_slots["r0c1"].state.metrics.counterfactual_contribution = 3.0
-        model.seed_slots["r0c1"].state.is_healthy = True
+        slot.state.metrics.counterfactual_contribution = 3.0
+        slot.state.is_healthy = True
 
         # Use advance_stage to fossilize (this emits telemetry)
-        result = model.seed_slots["r0c1"].advance_stage(target_stage=SeedStage.FOSSILIZED)
+        result = slot.advance_stage(target_stage=SeedStage.FOSSILIZED)
         assert result.passed, f"Gate should pass with mocked improvement: {result}"
 
         # Check we got SEED_FOSSILIZED event
@@ -319,17 +325,12 @@ class TestFossilizedCullProtection:
         model = MorphogeneticModel(CNNHost(), device="cpu", slots=["r0c1"])
         model.germinate_seed("conv_heavy", "test_seed", slot="r0c1")
 
-        # Drive through lifecycle to FOSSILIZED
+        # Drive through lifecycle to FOSSILIZED (Phase 5+: stage advancement is explicit).
         model.seed_slots["r0c1"].state.transition(SeedStage.TRAINING)
         model.seed_slots["r0c1"].state.transition(SeedStage.BLENDING)
         model.seed_slots["r0c1"].start_blending(total_steps=3)
-
-        for _ in range(10):
-            model.seed_slots["r0c1"].state.metrics.record_accuracy(60.0)
-            model.seed_slots["r0c1"].step_epoch()
-            if model.seed_slots["r0c1"].state.stage == SeedStage.HOLDING:
-                break
-        assert model.seed_slots["r0c1"].state.stage == SeedStage.HOLDING
+        model.seed_slots["r0c1"].state.transition(SeedStage.HOLDING)
+        model.seed_slots["r0c1"].set_alpha(1.0)
 
         # Fossilize
         ok = model.seed_slots["r0c1"].state.transition(SeedStage.FOSSILIZED)

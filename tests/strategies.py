@@ -183,9 +183,10 @@ def seed_telemetries(draw, seed_id: str | None = None):
         @given(seed_telemetries())
         def test_telemetry_features(telemetry):
             features = telemetry.to_features()
-            assert len(features) == 10
+            assert len(features) == 17
     """
     from esper.leyline import SeedTelemetry
+    from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
 
     # Generate blend tempo epochs (3, 5, or 8)
     blend_tempo = draw(tempo_epochs())
@@ -193,6 +194,12 @@ def seed_telemetries(draw, seed_id: str | None = None):
     # Blending velocity is d(alpha)/d(epoch), bounded by 1/blend_tempo
     max_velocity = 1.0 / blend_tempo
     blending_vel = draw(bounded_floats(0.0, max_velocity))
+    alpha_steps_total = draw(st.integers(min_value=0, max_value=50))
+    alpha_steps_done = draw(st.integers(min_value=0, max_value=alpha_steps_total))
+    alpha_target = draw(probabilities())
+    alpha_mode = draw(st.sampled_from([mode.value for mode in AlphaMode]))
+    alpha_algorithm = draw(st.sampled_from([algo.value for algo in AlphaAlgorithm]))
+    alpha_velocity = draw(bounded_floats(-1.0, 1.0))
 
     return SeedTelemetry(
         seed_id=seed_id or draw(st.text(min_size=1, max_size=16)),
@@ -210,6 +217,13 @@ def seed_telemetries(draw, seed_id: str | None = None):
         # Stage context
         stage=draw(seed_stages()),
         alpha=draw(probabilities()),
+        alpha_target=alpha_target,
+        alpha_mode=alpha_mode,
+        alpha_steps_total=alpha_steps_total,
+        alpha_steps_done=alpha_steps_done,
+        time_to_target=max(alpha_steps_total - alpha_steps_done, 0),
+        alpha_velocity=alpha_velocity,
+        alpha_algorithm=alpha_algorithm,
         # Temporal context
         epoch=draw(st.integers(min_value=0, max_value=1000)),
         max_epochs=draw(st.integers(min_value=1, max_value=1000)),

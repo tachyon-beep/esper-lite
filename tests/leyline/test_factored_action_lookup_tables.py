@@ -13,6 +13,7 @@ from esper.leyline.factored_actions import (
     OP_FOSSILIZE,
     OP_PRUNE,
     OP_WAIT,
+    OP_ADVANCE,
 )
 
 
@@ -65,3 +66,6 @@ class TestOpIndexConstants:
 
     def test_op_fossilize_matches_enum(self):
         assert OP_FOSSILIZE == LifecycleOp.FOSSILIZE.value
+
+    def test_op_advance_matches_enum(self):
+        assert OP_ADVANCE == LifecycleOp.ADVANCE.value

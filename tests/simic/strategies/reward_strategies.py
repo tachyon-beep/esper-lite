@@ -77,7 +77,13 @@ def seed_infos_at_stage(draw, stage: int):
 
 def lifecycle_ops():
     """Strategy for lifecycle operations."""
-    return sampled_from([LifecycleOp.WAIT, LifecycleOp.GERMINATE, LifecycleOp.PRUNE, LifecycleOp.FOSSILIZE])
+    return sampled_from([
+        LifecycleOp.WAIT,
+        LifecycleOp.GERMINATE,
+        LifecycleOp.PRUNE,
+        LifecycleOp.FOSSILIZE,
+        LifecycleOp.ADVANCE,
+    ])
 
 
 @composite

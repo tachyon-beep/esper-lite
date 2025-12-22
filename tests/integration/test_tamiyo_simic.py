@@ -367,11 +367,11 @@ class TestSeedMetricsTrackedDuringTraining:
         1. Train with active seed
         2. Validate to get accuracy
         3. Call record_accuracy() to update seed metrics (increments epochs_in_stage)
-        4. Call step_epoch() for lifecycle advancement
+        4. Call step_epoch() for alpha/cooldown mechanics
 
         Note: In Simic, record_accuracy() is called after each validation epoch,
-        which is what actually tracks epochs_in_stage. step_epoch() handles
-        lifecycle transitions (GERMINATED → TRAINING → BLENDING → HOLDING).
+        which is what actually tracks epochs_in_stage. step_epoch() only
+        handles alpha ticking and cooldown transitions.
         """
         trainloader, valloader = simple_dataloader
         model = morphogenetic_model
@@ -410,7 +410,7 @@ class TestSeedMetricsTrackedDuringTraining:
         # (This is what Simic's training loop does after validation)
         seed_state.metrics.record_accuracy(val_accuracy)
 
-        # Step epoch for lifecycle advancement
+        # Step epoch for alpha/cooldown mechanics
         model.seed_slots["r0c1"].step_epoch()
 
         # Verify metrics were updated
@@ -566,6 +566,11 @@ class TestEndToEndGerminateToFossilize:
                 )
                 seed_created = True
 
+            elif decision.action.name == "ADVANCE":  # ADVANCE
+                gate_result = model.seed_slots["r0c1"].advance_stage()
+                if gate_result.passed:
+                    pass
+
             elif decision.action.name == "FOSSILIZE":  # FOSSILIZE
                 seed_state = model.seed_slots["r0c1"].state
                 # Set positive counterfactual for G5 gate
@@ -576,7 +581,7 @@ class TestEndToEndGerminateToFossilize:
                     seed_fossilized = True
                     break
 
-            # Step epoch to advance seed lifecycle
+            # Step epoch for alpha/cooldown mechanics
             if model.has_active_seed:
                 model.seed_slots["r0c1"].step_epoch()
 

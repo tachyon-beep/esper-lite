@@ -84,7 +84,7 @@ def signals_to_features(
         slot_config: Slot configuration (default: 3-slot config)
 
     Returns:
-        Feature vector: base (23 + num_slots*9) + telemetry per slot (num_slots * 10) when telemetry enabled.
+        Feature vector: base (23 + num_slots*18) + telemetry per slot (num_slots * 17) when telemetry enabled.
 
     Note:
         TrainingSignals.active_seeds contains seed IDs (strings), not SeedState
@@ -192,7 +192,7 @@ class PPOAgent:
         clip_ratio: float = DEFAULT_CLIP_RATIO,
         # Entropy coef operates on NORMALIZED entropy [0, 1] from MaskedCategorical.
         # See MaskedCategorical.entropy() docstring for normalization details.
-        # 0.05 normalized ≈ 0.098 raw nats with 7 actions (log(7) ≈ 1.95)
+        # 0.05 normalized ≈ 0.08 raw nats with 5 actions (log(5) ≈ 1.61)
         entropy_coef: float = DEFAULT_ENTROPY_COEF,
         entropy_coef_start: float | None = None,
         entropy_coef_end: float | None = None,
@@ -266,6 +266,10 @@ class PPOAgent:
             "blueprint": 1.0,
             "blend": 1.0,
             "tempo": 1.0,
+            "alpha_target": 1.0,
+            "alpha_speed": 1.0,
+            "alpha_curve": 1.0,
+            "alpha_algorithm": 1.0,
             "op": 1.0,
         }
         self.value_coef = value_coef
@@ -351,12 +355,16 @@ class PPOAgent:
             # smaller logits = sharper softmax), which kills exploration.
             # Shared layers feed into actor, so they must also have wd=0.
             # Reference: SAC, TD3 implementations apply WD only to critic.
-            # FactoredRecurrentActorCritic: slot_head, blueprint_head, blend_head, tempo_head, op_head are actors
+            # FactoredRecurrentActorCritic: slot/blueprint/blend/tempo/alpha_* /op heads are actors
             actor_params = (
                 list(self._base_network.slot_head.parameters()) +
                 list(self._base_network.blueprint_head.parameters()) +
                 list(self._base_network.blend_head.parameters()) +
                 list(self._base_network.tempo_head.parameters()) +
+                list(self._base_network.alpha_target_head.parameters()) +
+                list(self._base_network.alpha_speed_head.parameters()) +
+                list(self._base_network.alpha_curve_head.parameters()) +
+                list(self._base_network.alpha_algorithm_head.parameters()) +
                 list(self._base_network.op_head.parameters())
             )
             critic_params = list(self._base_network.value_head.parameters())
@@ -421,8 +429,8 @@ class PPOAgent:
         scale_factor = log(num_total) / log(num_valid)
 
         This maintains the same "relative exploration" level - if we want
-        10% of max entropy with 7 actions, we want 10% of max entropy with
-        2 actions, but max_entropy(2) = log(2) < max_entropy(7) = log(7).
+        10% of max entropy with 5 actions, we want 10% of max entropy with
+        2 actions, but max_entropy(2) = log(2) < max_entropy(5) = log(5).
 
         Args:
             action_mask: Binary mask of valid actions [action_dim] or None
@@ -525,6 +533,10 @@ class PPOAgent:
                 "blueprint": data["blueprint_actions"],
                 "blend": data["blend_actions"],
                 "tempo": data["tempo_actions"],
+                "alpha_target": data["alpha_target_actions"],
+                "alpha_speed": data["alpha_speed_actions"],
+                "alpha_curve": data["alpha_curve_actions"],
+                "alpha_algorithm": data["alpha_algorithm_actions"],
                 "op": data["op_actions"],
             }
 
@@ -535,6 +547,10 @@ class PPOAgent:
                 blueprint_mask=data["blueprint_masks"],
                 blend_mask=data["blend_masks"],
                 tempo_mask=data["tempo_masks"],
+                alpha_target_mask=data["alpha_target_masks"],
+                alpha_speed_mask=data["alpha_speed_masks"],
+                alpha_curve_mask=data["alpha_curve_masks"],
+                alpha_algorithm_mask=data["alpha_algorithm_masks"],
                 op_mask=data["op_masks"],
                 hidden=(data["initial_hidden_h"], data["initial_hidden_c"]),
             )
@@ -563,12 +579,18 @@ class PPOAgent:
             # (avoid bias from averaging zeros with real values)
             is_wait = valid_op_actions == LifecycleOp.WAIT
             is_germinate = valid_op_actions == LifecycleOp.GERMINATE
+            is_set_alpha = valid_op_actions == LifecycleOp.SET_ALPHA_TARGET
+            is_prune = valid_op_actions == LifecycleOp.PRUNE
             head_masks = {
                 "op": torch.ones_like(is_wait),  # op always relevant
                 "slot": ~is_wait,  # slot relevant except WAIT
                 "blueprint": is_germinate,  # only for GERMINATE
                 "blend": is_germinate,  # only for GERMINATE
                 "tempo": is_germinate,  # only for GERMINATE (same as blueprint/blend)
+                "alpha_target": is_set_alpha | is_germinate,
+                "alpha_speed": is_set_alpha | is_prune,
+                "alpha_curve": is_set_alpha | is_prune,
+                "alpha_algorithm": is_set_alpha | is_germinate,
             }
 
             # Compute per-head ratios
@@ -577,6 +599,10 @@ class PPOAgent:
                 "blueprint": data["blueprint_log_probs"][valid_mask],
                 "blend": data["blend_log_probs"][valid_mask],
                 "tempo": data["tempo_log_probs"][valid_mask],
+                "alpha_target": data["alpha_target_log_probs"][valid_mask],
+                "alpha_speed": data["alpha_speed_log_probs"][valid_mask],
+                "alpha_curve": data["alpha_curve_log_probs"][valid_mask],
+                "alpha_algorithm": data["alpha_algorithm_log_probs"][valid_mask],
                 "op": data["op_log_probs"][valid_mask],
             }
 
@@ -693,6 +719,10 @@ class PPOAgent:
                     ("blueprint", base_net.blueprint_head),
                     ("blend", base_net.blend_head),
                     ("tempo", base_net.tempo_head),
+                    ("alpha_target", base_net.alpha_target_head),
+                    ("alpha_speed", base_net.alpha_speed_head),
+                    ("alpha_curve", base_net.alpha_curve_head),
+                    ("alpha_algorithm", base_net.alpha_algorithm_head),
                     ("op", base_net.op_head),
                     ("value", base_net.value_head),
                 ]:

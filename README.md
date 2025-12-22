@@ -80,10 +80,10 @@ Esper treats neural modules like living organisms. They must earn their place in
 stateDiagram-v2
     [*] --> DORMANT
     DORMANT --> GERMINATED: Germinate Action
-    GERMINATED --> TRAINING: Auto-Start
-    TRAINING --> BLENDING: Advance (Gradient Health > 0.8)
+    GERMINATED --> TRAINING: Advance (G1)
+    TRAINING --> BLENDING: Advance (G2)
     TRAINING --> PRUNED: Prune (Performance Drop)
-    BLENDING --> HOLDING: Advance (Stability Check)
+    BLENDING --> HOLDING: Advance (G3)
     BLENDING --> PRUNED: Prune (Regression)
     HOLDING --> FOSSILIZED: Fossilize (Stability Check)
     FOSSILIZED --> [*]: Terminal Success

@@ -6,6 +6,7 @@ Architecture:
     shared_repr -> blueprint_head -> blueprint_logits
     shared_repr -> blend_head -> blend_logits
     shared_repr -> tempo_head -> tempo_logits
+    shared_repr -> alpha_target/speed/curve/algorithm heads -> alpha logits
     shared_repr -> op_head -> op_logits
     shared_repr -> value_head -> value
 
@@ -56,6 +57,10 @@ class _ForwardOutput(TypedDict):
     blueprint_logits: torch.Tensor
     blend_logits: torch.Tensor
     tempo_logits: torch.Tensor
+    alpha_target_logits: torch.Tensor
+    alpha_speed_logits: torch.Tensor
+    alpha_curve_logits: torch.Tensor
+    alpha_algorithm_logits: torch.Tensor
     op_logits: torch.Tensor
     value: torch.Tensor
     hidden: tuple[torch.Tensor, torch.Tensor]
@@ -67,41 +72,88 @@ from esper.leyline import (
     MASKED_LOGIT_VALUE,
 )
 from esper.leyline.factored_actions import (
-    NUM_BLUEPRINTS,
-    NUM_BLENDS,
-    NUM_OPS,
-    NUM_TEMPO,
+    AlphaAlgorithmAction,
+    BlendAction,
+    LifecycleOp,
+    get_action_head_sizes,
 )
 from esper.leyline.slot_config import SlotConfig
+
+
+def _apply_alpha_algorithm_compatibility_mask(
+    mask: torch.Tensor,
+    op_actions: torch.Tensor,
+    blend_actions: torch.Tensor,
+) -> torch.Tensor:
+    """Restrict alpha_algorithm choices to blend-compatible options during GERMINATE."""
+    if mask.dim() not in (2, 3):
+        raise ValueError(f"Unexpected alpha_algorithm mask shape: {mask.shape}")
+
+    compat_mask = mask.clone()
+    germinate = op_actions == LifecycleOp.GERMINATE
+    gated = blend_actions == BlendAction.GATED
+
+    if mask.dim() == 2:
+        compat_mask[:, AlphaAlgorithmAction.ADD][germinate & gated] = False
+        compat_mask[:, AlphaAlgorithmAction.MULTIPLY][germinate & gated] = False
+        compat_mask[:, AlphaAlgorithmAction.GATE][germinate & ~gated] = False
+    else:
+        compat_mask[..., AlphaAlgorithmAction.ADD][germinate & gated] = False
+        compat_mask[..., AlphaAlgorithmAction.MULTIPLY][germinate & gated] = False
+        compat_mask[..., AlphaAlgorithmAction.GATE][germinate & ~gated] = False
+
+    return compat_mask
 
 
 class FactoredRecurrentActorCritic(nn.Module):
     """Recurrent actor-critic with factored action heads.
 
     Uses LSTM for temporal reasoning over 10-20 epoch seed learning cycles.
-    All 5 action heads share the same temporal context from the LSTM.
+    All action heads share the same temporal context from the LSTM.
     """
 
     def __init__(
         self,
         state_dim: int,
-        num_slots: int = SlotConfig.default().num_slots,
-        num_blueprints: int = NUM_BLUEPRINTS,
-        num_blends: int = NUM_BLENDS,
-        num_tempo: int = NUM_TEMPO,
-        num_ops: int = NUM_OPS,
+        num_slots: int | None = None,
+        num_blueprints: int | None = None,
+        num_blends: int | None = None,
+        num_tempo: int | None = None,
+        num_alpha_targets: int | None = None,
+        num_alpha_speeds: int | None = None,
+        num_alpha_curves: int | None = None,
+        num_alpha_algorithms: int | None = None,
+        num_ops: int | None = None,
         feature_dim: int = DEFAULT_FEATURE_DIM,
         lstm_hidden_dim: int = DEFAULT_LSTM_HIDDEN_DIM,
         lstm_layers: int = 1,
+        slot_config: SlotConfig | None = None,
     ):
         super().__init__()
 
+        if slot_config is None:
+            slot_config = SlotConfig.default()
+
+        head_sizes = get_action_head_sizes(slot_config)
+
         self.state_dim = state_dim
-        self.num_slots = num_slots
-        self.num_blueprints = num_blueprints
-        self.num_blends = num_blends
-        self.num_tempo = num_tempo
-        self.num_ops = num_ops
+        self.num_slots = head_sizes["slot"] if num_slots is None else num_slots
+        self.num_blueprints = head_sizes["blueprint"] if num_blueprints is None else num_blueprints
+        self.num_blends = head_sizes["blend"] if num_blends is None else num_blends
+        self.num_tempo = head_sizes["tempo"] if num_tempo is None else num_tempo
+        self.num_alpha_targets = (
+            head_sizes["alpha_target"] if num_alpha_targets is None else num_alpha_targets
+        )
+        self.num_alpha_speeds = (
+            head_sizes["alpha_speed"] if num_alpha_speeds is None else num_alpha_speeds
+        )
+        self.num_alpha_curves = (
+            head_sizes["alpha_curve"] if num_alpha_curves is None else num_alpha_curves
+        )
+        self.num_alpha_algorithms = (
+            head_sizes["alpha_algorithm"] if num_alpha_algorithms is None else num_alpha_algorithms
+        )
+        self.num_ops = head_sizes["op"] if num_ops is None else num_ops
         self.lstm_hidden_dim = lstm_hidden_dim
         self.lstm_layers = lstm_layers
 
@@ -140,27 +192,47 @@ class FactoredRecurrentActorCritic(nn.Module):
         self.slot_head = nn.Sequential(
             nn.Linear(lstm_hidden_dim, head_hidden),
             nn.ReLU(),
-            nn.Linear(head_hidden, num_slots),
+            nn.Linear(head_hidden, self.num_slots),
         )
         self.blueprint_head = nn.Sequential(
             nn.Linear(lstm_hidden_dim, head_hidden),
             nn.ReLU(),
-            nn.Linear(head_hidden, num_blueprints),
+            nn.Linear(head_hidden, self.num_blueprints),
         )
         self.blend_head = nn.Sequential(
             nn.Linear(lstm_hidden_dim, head_hidden),
             nn.ReLU(),
-            nn.Linear(head_hidden, num_blends),
+            nn.Linear(head_hidden, self.num_blends),
         )
         self.tempo_head = nn.Sequential(
             nn.Linear(lstm_hidden_dim, head_hidden),
             nn.ReLU(),
-            nn.Linear(head_hidden, num_tempo),
+            nn.Linear(head_hidden, self.num_tempo),
+        )
+        self.alpha_target_head = nn.Sequential(
+            nn.Linear(lstm_hidden_dim, head_hidden),
+            nn.ReLU(),
+            nn.Linear(head_hidden, self.num_alpha_targets),
+        )
+        self.alpha_speed_head = nn.Sequential(
+            nn.Linear(lstm_hidden_dim, head_hidden),
+            nn.ReLU(),
+            nn.Linear(head_hidden, self.num_alpha_speeds),
+        )
+        self.alpha_curve_head = nn.Sequential(
+            nn.Linear(lstm_hidden_dim, head_hidden),
+            nn.ReLU(),
+            nn.Linear(head_hidden, self.num_alpha_curves),
+        )
+        self.alpha_algorithm_head = nn.Sequential(
+            nn.Linear(lstm_hidden_dim, head_hidden),
+            nn.ReLU(),
+            nn.Linear(head_hidden, self.num_alpha_algorithms),
         )
         self.op_head = nn.Sequential(
             nn.Linear(lstm_hidden_dim, head_hidden),
             nn.ReLU(),
-            nn.Linear(head_hidden, num_ops),
+            nn.Linear(head_hidden, self.num_ops),
         )
 
         # Value head
@@ -180,7 +252,17 @@ class FactoredRecurrentActorCritic(nn.Module):
                 nn.init.zeros_(module.bias)
 
         # Smaller init for output layers (policy stability)
-        for head in [self.slot_head, self.blueprint_head, self.blend_head, self.tempo_head, self.op_head]:
+        for head in [
+            self.slot_head,
+            self.blueprint_head,
+            self.blend_head,
+            self.tempo_head,
+            self.alpha_target_head,
+            self.alpha_speed_head,
+            self.alpha_curve_head,
+            self.alpha_algorithm_head,
+            self.op_head,
+        ]:
             nn.init.orthogonal_(head[-1].weight, gain=0.01)
         nn.init.orthogonal_(self.value_head[-1].weight, gain=1.0)
 
@@ -223,6 +305,10 @@ class FactoredRecurrentActorCritic(nn.Module):
         blueprint_mask: torch.Tensor | None = None,
         blend_mask: torch.Tensor | None = None,
         tempo_mask: torch.Tensor | None = None,
+        alpha_target_mask: torch.Tensor | None = None,
+        alpha_speed_mask: torch.Tensor | None = None,
+        alpha_curve_mask: torch.Tensor | None = None,
+        alpha_algorithm_mask: torch.Tensor | None = None,
         op_mask: torch.Tensor | None = None,
     ) -> _ForwardOutput:
         """Forward pass returning logits, value, and new hidden state.
@@ -257,6 +343,10 @@ class FactoredRecurrentActorCritic(nn.Module):
         blueprint_logits = self.blueprint_head(lstm_out)
         blend_logits = self.blend_head(lstm_out)
         tempo_logits = self.tempo_head(lstm_out)
+        alpha_target_logits = self.alpha_target_head(lstm_out)
+        alpha_speed_logits = self.alpha_speed_head(lstm_out)
+        alpha_curve_logits = self.alpha_curve_head(lstm_out)
+        alpha_algorithm_logits = self.alpha_algorithm_head(lstm_out)
         op_logits = self.op_head(lstm_out)
 
         # Apply masks using canonical MASKED_LOGIT_VALUE from leyline
@@ -269,6 +359,14 @@ class FactoredRecurrentActorCritic(nn.Module):
             blend_logits = blend_logits.masked_fill(~blend_mask, MASKED_LOGIT_VALUE)
         if tempo_mask is not None:
             tempo_logits = tempo_logits.masked_fill(~tempo_mask, MASKED_LOGIT_VALUE)
+        if alpha_target_mask is not None:
+            alpha_target_logits = alpha_target_logits.masked_fill(~alpha_target_mask, MASKED_LOGIT_VALUE)
+        if alpha_speed_mask is not None:
+            alpha_speed_logits = alpha_speed_logits.masked_fill(~alpha_speed_mask, MASKED_LOGIT_VALUE)
+        if alpha_curve_mask is not None:
+            alpha_curve_logits = alpha_curve_logits.masked_fill(~alpha_curve_mask, MASKED_LOGIT_VALUE)
+        if alpha_algorithm_mask is not None:
+            alpha_algorithm_logits = alpha_algorithm_logits.masked_fill(~alpha_algorithm_mask, MASKED_LOGIT_VALUE)
         if op_mask is not None:
             op_logits = op_logits.masked_fill(~op_mask, MASKED_LOGIT_VALUE)
 
@@ -280,6 +378,10 @@ class FactoredRecurrentActorCritic(nn.Module):
             "blueprint_logits": blueprint_logits,
             "blend_logits": blend_logits,
             "tempo_logits": tempo_logits,
+            "alpha_target_logits": alpha_target_logits,
+            "alpha_speed_logits": alpha_speed_logits,
+            "alpha_curve_logits": alpha_curve_logits,
+            "alpha_algorithm_logits": alpha_algorithm_logits,
             "op_logits": op_logits,
             "value": value,
             "hidden": new_hidden,
@@ -293,6 +395,10 @@ class FactoredRecurrentActorCritic(nn.Module):
         blueprint_mask: torch.Tensor | None = None,
         blend_mask: torch.Tensor | None = None,
         tempo_mask: torch.Tensor | None = None,
+        alpha_target_mask: torch.Tensor | None = None,
+        alpha_speed_mask: torch.Tensor | None = None,
+        alpha_curve_mask: torch.Tensor | None = None,
+        alpha_algorithm_mask: torch.Tensor | None = None,
         op_mask: torch.Tensor | None = None,
         deterministic: bool = False,
         return_op_logits: bool = False,
@@ -335,12 +441,30 @@ class FactoredRecurrentActorCritic(nn.Module):
             blend_mask = blend_mask.unsqueeze(1)
         if tempo_mask is not None and tempo_mask.dim() == 2:
             tempo_mask = tempo_mask.unsqueeze(1)
+        if alpha_target_mask is not None and alpha_target_mask.dim() == 2:
+            alpha_target_mask = alpha_target_mask.unsqueeze(1)
+        if alpha_speed_mask is not None and alpha_speed_mask.dim() == 2:
+            alpha_speed_mask = alpha_speed_mask.unsqueeze(1)
+        if alpha_curve_mask is not None and alpha_curve_mask.dim() == 2:
+            alpha_curve_mask = alpha_curve_mask.unsqueeze(1)
+        if alpha_algorithm_mask is not None and alpha_algorithm_mask.dim() == 2:
+            alpha_algorithm_mask = alpha_algorithm_mask.unsqueeze(1)
         if op_mask is not None and op_mask.dim() == 2:
             op_mask = op_mask.unsqueeze(1)
 
         with torch.inference_mode():
             output = self.forward(
-                state, hidden, slot_mask, blueprint_mask, blend_mask, tempo_mask, op_mask
+                state,
+                hidden,
+                slot_mask,
+                blueprint_mask,
+                blend_mask,
+                tempo_mask,
+                alpha_target_mask,
+                alpha_speed_mask,
+                alpha_curve_mask,
+                alpha_algorithm_mask,
+                op_mask,
             )
 
             # Sample from each head using MaskedCategorical for safety
@@ -352,6 +476,10 @@ class FactoredRecurrentActorCritic(nn.Module):
                 "blueprint": blueprint_mask[:, 0, :] if blueprint_mask is not None else None,
                 "blend": blend_mask[:, 0, :] if blend_mask is not None else None,
                 "tempo": tempo_mask[:, 0, :] if tempo_mask is not None else None,
+                "alpha_target": alpha_target_mask[:, 0, :] if alpha_target_mask is not None else None,
+                "alpha_speed": alpha_speed_mask[:, 0, :] if alpha_speed_mask is not None else None,
+                "alpha_curve": alpha_curve_mask[:, 0, :] if alpha_curve_mask is not None else None,
+                "alpha_algorithm": alpha_algorithm_mask[:, 0, :] if alpha_algorithm_mask is not None else None,
                 "op": op_mask[:, 0, :] if op_mask is not None else None,
             }
 
@@ -361,12 +489,20 @@ class FactoredRecurrentActorCritic(nn.Module):
                 "blueprint": output["blueprint_logits"][:, 0, :],
                 "blend": output["blend_logits"][:, 0, :],
                 "tempo": output["tempo_logits"][:, 0, :],
+                "alpha_target": output["alpha_target_logits"][:, 0, :],
+                "alpha_speed": output["alpha_speed_logits"][:, 0, :],
+                "alpha_curve": output["alpha_curve_logits"][:, 0, :],
+                "alpha_algorithm": output["alpha_algorithm_logits"][:, 0, :],
                 "op": output["op_logits"][:, 0, :],
             }
 
-            for key in HEAD_NAMES:
+            def _sample_head(
+                key: str,
+                *,
+                mask_override: torch.Tensor | None = None,
+            ) -> None:
                 logits = head_logits[key]  # [batch, action_dim]
-                mask = masks[key]
+                mask = mask_override if mask_override is not None else masks[key]
                 if mask is None:
                     mask = torch.ones_like(logits, dtype=torch.bool)
                 dist = MaskedCategorical(logits=logits, mask=mask)
@@ -378,6 +514,28 @@ class FactoredRecurrentActorCritic(nn.Module):
 
                 actions[key] = action
                 log_probs[key] = dist.log_prob(action)
+
+            _sample_head("op")
+            _sample_head("blend")
+            for key in [
+                "slot",
+                "blueprint",
+                "tempo",
+                "alpha_target",
+                "alpha_speed",
+                "alpha_curve",
+            ]:
+                _sample_head(key)
+
+            alpha_mask = masks["alpha_algorithm"]
+            if alpha_mask is None:
+                alpha_mask = torch.ones_like(head_logits["alpha_algorithm"], dtype=torch.bool)
+            alpha_mask = _apply_alpha_algorithm_compatibility_mask(
+                alpha_mask,
+                actions["op"],
+                actions["blend"],
+            )
+            _sample_head("alpha_algorithm", mask_override=alpha_mask)
 
             value = output["value"][:, 0]  # [batch]
             new_hidden = output["hidden"]
@@ -401,6 +559,10 @@ class FactoredRecurrentActorCritic(nn.Module):
         blueprint_mask: torch.Tensor | None = None,
         blend_mask: torch.Tensor | None = None,
         tempo_mask: torch.Tensor | None = None,
+        alpha_target_mask: torch.Tensor | None = None,
+        alpha_speed_mask: torch.Tensor | None = None,
+        alpha_curve_mask: torch.Tensor | None = None,
+        alpha_algorithm_mask: torch.Tensor | None = None,
         op_mask: torch.Tensor | None = None,
         hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> tuple[dict[str, torch.Tensor], torch.Tensor, dict[str, torch.Tensor], tuple]:
@@ -413,17 +575,34 @@ class FactoredRecurrentActorCritic(nn.Module):
             hidden: Final hidden state
         """
         output = self.forward(
-            states, hidden, slot_mask, blueprint_mask, blend_mask, tempo_mask, op_mask
+            states,
+            hidden,
+            slot_mask,
+            blueprint_mask,
+            blend_mask,
+            tempo_mask,
+            alpha_target_mask,
+            alpha_speed_mask,
+            alpha_curve_mask,
+            alpha_algorithm_mask,
+            op_mask,
         )
 
         log_probs: dict[str, torch.Tensor] = {}
         entropy: dict[str, torch.Tensor] = {}
+
+        op_actions = actions["op"]
+        blend_actions = actions["blend"]
 
         masks = {
             "slot": slot_mask,
             "blueprint": blueprint_mask,
             "blend": blend_mask,
             "tempo": tempo_mask,
+            "alpha_target": alpha_target_mask,
+            "alpha_speed": alpha_speed_mask,
+            "alpha_curve": alpha_curve_mask,
+            "alpha_algorithm": alpha_algorithm_mask,
             "op": op_mask,
         }
 
@@ -433,6 +612,10 @@ class FactoredRecurrentActorCritic(nn.Module):
             "blueprint": output["blueprint_logits"],
             "blend": output["blend_logits"],
             "tempo": output["tempo_logits"],
+            "alpha_target": output["alpha_target_logits"],
+            "alpha_speed": output["alpha_speed_logits"],
+            "alpha_curve": output["alpha_curve_logits"],
+            "alpha_algorithm": output["alpha_algorithm_logits"],
             "op": output["op_logits"],
         }
 
@@ -447,9 +630,14 @@ class FactoredRecurrentActorCritic(nn.Module):
 
             mask = masks[key]
             if mask is None:
-                mask_flat = torch.ones_like(logits_flat, dtype=torch.bool)
-            else:
-                mask_flat = mask.reshape(-1, action_dim)
+                mask = torch.ones_like(logits, dtype=torch.bool)
+            if key == "alpha_algorithm":
+                mask = _apply_alpha_algorithm_compatibility_mask(
+                    mask,
+                    op_actions,
+                    blend_actions,
+                )
+            mask_flat = mask.reshape(-1, action_dim)
 
             dist = MaskedCategorical(logits=logits_flat, mask=mask_flat)
             log_probs[key] = dist.log_prob(action_flat).reshape(batch, seq)

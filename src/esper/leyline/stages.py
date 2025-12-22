@@ -62,7 +62,7 @@ VALID_TRANSITIONS: dict[SeedStage, tuple[SeedStage, ...]] = {
     SeedStage.BLENDING: (SeedStage.HOLDING, SeedStage.PRUNED),
     # HOLDING is the full-amplitude (alpha≈1.0) decision point.
     # We also allow HOLDING -> BLENDING to support scheduled prune (phase 4),
-    # but keep FOSSILIZED first so default auto-advance remains "finalize".
+    # but keep FOSSILIZED first so advance_stage() defaults to "finalize".
     SeedStage.HOLDING: (SeedStage.FOSSILIZED, SeedStage.BLENDING, SeedStage.PRUNED),
     SeedStage.FOSSILIZED: (),  # Terminal - no transitions out
     SeedStage.PRUNED: (SeedStage.EMBARGOED,),

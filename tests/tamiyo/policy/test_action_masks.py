@@ -6,6 +6,7 @@ The mask system only blocks PHYSICALLY IMPOSSIBLE actions:
 - GERMINATE: blocked if ALL enabled slots occupied OR at seed limit
 - FOSSILIZE: blocked if NO enabled slot has a HOLDING seed
 - PRUNE: blocked if NO enabled slot has a prunable seed with age >= MIN_PRUNE_AGE
+         while alpha_mode is HOLD (governor override can bypass)
 - WAIT: always valid
 - BLUEPRINT: NOOP always blocked (0 trainable parameters)
 """
@@ -22,8 +23,18 @@ from esper.tamiyo.policy.action_masks import (
     MaskedCategorical,
     InvalidStateMachineError,
 )
-from esper.leyline import SeedStage, MIN_PRUNE_AGE
-from esper.leyline.factored_actions import LifecycleOp, NUM_OPS, NUM_BLUEPRINTS
+from esper.leyline import AlphaMode, SeedStage, MIN_PRUNE_AGE
+from esper.leyline.factored_actions import (
+    AlphaAlgorithmAction,
+    AlphaTargetAction,
+    LifecycleOp,
+    NUM_ALPHA_ALGORITHMS,
+    NUM_ALPHA_CURVES,
+    NUM_ALPHA_SPEEDS,
+    NUM_ALPHA_TARGETS,
+    NUM_OPS,
+    NUM_BLUEPRINTS,
+)
 
 
 def test_compute_action_masks_empty_slots():
@@ -48,6 +59,7 @@ def test_compute_action_masks_empty_slots():
     # No seed means no PRUNE/FOSSILIZE
     assert not masks["op"][LifecycleOp.PRUNE]
     assert not masks["op"][LifecycleOp.FOSSILIZE]
+    assert not masks["op"][LifecycleOp.SET_ALPHA_TARGET]
 
 
 def test_compute_action_masks_single_slot_enabled():
@@ -91,6 +103,7 @@ def test_compute_action_masks_active_slot_training_stage():
 
     # FOSSILIZE not valid (no HOLDING seed)
     assert not masks["op"][LifecycleOp.FOSSILIZE]
+    assert not masks["op"][LifecycleOp.SET_ALPHA_TARGET]
 
 
 def test_compute_action_masks_holding_stage():
@@ -109,6 +122,95 @@ def test_compute_action_masks_holding_stage():
 
     # PRUNE valid (seed exists and age >= 1)
     assert masks["op"][LifecycleOp.PRUNE]
+    assert masks["op"][LifecycleOp.SET_ALPHA_TARGET]
+
+
+def test_compute_action_masks_alpha_algorithm_open_on_germinate():
+    """Alpha algorithm head should be open when GERMINATE is possible."""
+    slot_states = {"r0c1": None}
+
+    masks = compute_action_masks(slot_states, enabled_slots=["r0c1"])
+
+    assert masks["op"][LifecycleOp.GERMINATE]
+    assert masks["alpha_algorithm"].all()
+
+
+def test_compute_action_masks_alpha_target_open_on_germinate():
+    """Alpha target head should be open when GERMINATE is possible."""
+    slot_states = {"r0c1": None}
+
+    masks = compute_action_masks(slot_states, enabled_slots=["r0c1"])
+
+    assert masks["op"][LifecycleOp.GERMINATE]
+    assert masks["alpha_target"].all()
+
+
+def test_compute_action_masks_alpha_algorithm_requires_hold_or_germinate():
+    """Alpha algorithm changes should be HOLD-only when no GERMINATE is possible."""
+    slot_states = {
+        "r0c1": MaskSeedInfo(
+            stage=SeedStage.BLENDING.value,
+            seed_age_epochs=5,
+            alpha_mode=AlphaMode.UP.value,
+        ),
+    }
+
+    masks = compute_action_masks(slot_states, enabled_slots=["r0c1"])
+
+    assert not masks["op"][LifecycleOp.GERMINATE]
+    assert not masks["op"][LifecycleOp.SET_ALPHA_TARGET]
+    assert masks["alpha_algorithm"][AlphaAlgorithmAction.ADD]
+    assert masks["alpha_algorithm"].sum().item() == 1
+
+
+def test_compute_action_masks_alpha_target_requires_hold_or_germinate():
+    """Alpha target changes should be HOLD-only when no GERMINATE is possible."""
+    slot_states = {
+        "r0c1": MaskSeedInfo(
+            stage=SeedStage.BLENDING.value,
+            seed_age_epochs=5,
+            alpha_mode=AlphaMode.UP.value,
+        ),
+    }
+
+    masks = compute_action_masks(slot_states, enabled_slots=["r0c1"])
+
+    assert not masks["op"][LifecycleOp.GERMINATE]
+    assert not masks["op"][LifecycleOp.SET_ALPHA_TARGET]
+    assert masks["alpha_target"][AlphaTargetAction.FULL]
+    assert masks["alpha_target"].sum().item() == 1
+
+
+def test_compute_action_masks_alpha_algorithm_open_on_hold_retarget():
+    """Alpha algorithm head should be open when HOLD retargeting is allowed."""
+    slot_states = {
+        "r0c1": MaskSeedInfo(
+            stage=SeedStage.BLENDING.value,
+            seed_age_epochs=5,
+            alpha_mode=AlphaMode.HOLD.value,
+        ),
+    }
+
+    masks = compute_action_masks(slot_states, enabled_slots=["r0c1"])
+
+    assert masks["op"][LifecycleOp.SET_ALPHA_TARGET]
+    assert masks["alpha_algorithm"].all()
+
+
+def test_compute_action_masks_alpha_target_open_on_hold_retarget():
+    """Alpha target head should be open when HOLD retargeting is allowed."""
+    slot_states = {
+        "r0c1": MaskSeedInfo(
+            stage=SeedStage.BLENDING.value,
+            seed_age_epochs=5,
+            alpha_mode=AlphaMode.HOLD.value,
+        ),
+    }
+
+    masks = compute_action_masks(slot_states, enabled_slots=["r0c1"])
+
+    assert masks["op"][LifecycleOp.SET_ALPHA_TARGET]
+    assert masks["alpha_target"].all()
 
 
 def test_compute_action_masks_fossilized_stage():
@@ -133,6 +235,7 @@ def test_compute_action_masks_fossilized_stage():
 
     # No PRUNE - FOSSILIZED is terminal success, cannot be removed
     assert not masks["op"][LifecycleOp.PRUNE]
+    assert not masks["op"][LifecycleOp.SET_ALPHA_TARGET]
 
 
 def test_compute_action_masks_wait_always_valid():
@@ -196,6 +299,38 @@ def test_compute_action_masks_min_prune_age():
     assert masks_age1["op"][LifecycleOp.PRUNE]
 
 
+def test_compute_action_masks_prune_requires_hold():
+    """PRUNE should be blocked if alpha_mode is not HOLD."""
+    slot_states = {
+        "r0c1": MaskSeedInfo(
+            stage=SeedStage.TRAINING.value,
+            seed_age_epochs=MIN_PRUNE_AGE,
+            alpha_mode=AlphaMode.UP.value,
+        ),
+    }
+
+    masks = compute_action_masks(slot_states, enabled_slots=["r0c1"])
+    assert not masks["op"][LifecycleOp.PRUNE]
+
+
+def test_compute_action_masks_governor_override_allows_prune():
+    """Governor override should allow PRUNE even if alpha_mode is not HOLD."""
+    slot_states = {
+        "r0c1": MaskSeedInfo(
+            stage=SeedStage.TRAINING.value,
+            seed_age_epochs=MIN_PRUNE_AGE,
+            alpha_mode=AlphaMode.DOWN.value,
+        ),
+    }
+
+    masks = compute_action_masks(
+        slot_states,
+        enabled_slots=["r0c1"],
+        allow_governor_override=True,
+    )
+    assert masks["op"][LifecycleOp.PRUNE]
+
+
 def test_compute_batch_masks():
     """Should compute masks for a batch of observations."""
     batch_slot_states = [
@@ -214,10 +349,15 @@ def test_compute_batch_masks():
 
     masks = compute_batch_masks(batch_slot_states, enabled_slots=["r0c0", "r0c1", "r0c2"])
 
-    # Check shapes (NUM_OPS=4 now)
+    # Check shapes (NUM_OPS now includes ADVANCE)
     assert masks["slot"].shape == (2, 3)
     assert masks["blueprint"].shape == (2, NUM_BLUEPRINTS)
     assert masks["blend"].shape == (2, 3)
+    assert masks["tempo"].shape == (2, 3)
+    assert masks["alpha_target"].shape == (2, NUM_ALPHA_TARGETS)
+    assert masks["alpha_speed"].shape == (2, NUM_ALPHA_SPEEDS)
+    assert masks["alpha_curve"].shape == (2, NUM_ALPHA_CURVES)
+    assert masks["alpha_algorithm"].shape == (2, NUM_ALPHA_ALGORITHMS)
     assert masks["op"].shape == (2, NUM_OPS)
 
     # WAIT always valid for both
@@ -228,11 +368,13 @@ def test_compute_batch_masks():
     assert masks["op"][0, LifecycleOp.GERMINATE]
     assert not masks["op"][0, LifecycleOp.PRUNE]
     assert not masks["op"][0, LifecycleOp.FOSSILIZE]
+    assert not masks["op"][0, LifecycleOp.ADVANCE]
 
     # Env 1: can GERMINATE (empty slots), PRUNE; not FOSSILIZE
     assert masks["op"][1, LifecycleOp.GERMINATE]
     assert masks["op"][1, LifecycleOp.PRUNE]
     assert not masks["op"][1, LifecycleOp.FOSSILIZE]
+    assert masks["op"][1, LifecycleOp.ADVANCE]
 
 
 def test_compute_action_masks_at_seed_limit():
@@ -637,10 +779,14 @@ class TestBuildSlotStates:
     def test_active_seed_returns_mask_seed_info(self):
         """Active seed returns MaskSeedInfo with correct stage and age."""
         # build_slot_states imported at module level, MaskSeedInfo
-        from esper.leyline import SeedMetrics, SeedStage, SeedStateReport
+        from esper.leyline import AlphaMode, SeedMetrics, SeedStage, SeedStateReport
 
         slot_reports = {
-            "r0c1": SeedStateReport(stage=SeedStage.TRAINING, metrics=SeedMetrics(epochs_total=5)),
+            "r0c1": SeedStateReport(
+                stage=SeedStage.TRAINING,
+                metrics=SeedMetrics(epochs_total=5),
+                alpha_mode=AlphaMode.DOWN.value,
+            ),
         }
 
         result = build_slot_states(slot_reports, ["r0c1"])
@@ -649,6 +795,7 @@ class TestBuildSlotStates:
         assert isinstance(result["r0c1"], MaskSeedInfo)
         assert result["r0c1"].stage == SeedStage.TRAINING.value
         assert result["r0c1"].seed_age_epochs == 5
+        assert result["r0c1"].alpha_mode == AlphaMode.DOWN.value
 
     def test_multiple_slots(self):
         """Multiple slots are all processed."""

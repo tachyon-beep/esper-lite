@@ -251,8 +251,8 @@ class TestMultipleActiveSeedsHandling:
 
         decision = policy.decide(signals, [seed1, seed2])
 
-        # Should wait for seed1 (not cull seed2)
-        assert decision.action.name == "WAIT"
+        # Should advance seed1 (and not prune seed2)
+        assert decision.action.name == "ADVANCE"
         assert decision.target_seed_id == "seed_1"
 
     def test_tracker_summary_seed_selection_is_deterministic(self, signal_tracker, mock_seed_factory):
@@ -425,7 +425,7 @@ class TestTerminalStageFiltering:
         decision = policy.decide(signals, [fossilized, active, pruned])
 
         # Should filter terminals and only see active_one
-        assert decision.action.name == "WAIT"
+        assert decision.action.name == "ADVANCE"
         assert decision.target_seed_id == "active_one"
 
 

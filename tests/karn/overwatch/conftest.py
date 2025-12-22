@@ -27,8 +27,8 @@ def healthy_snapshot() -> TuiSnapshot:
         captured_at="2025-12-18T12:00:00Z",
         connection=ConnectionStatus(True, 1000.0, 0.5),
         tamiyo=TamiyoState(
-            action_counts={"GERMINATE": 10, "BLEND": 20, "PRUNE": 5, "WAIT": 65},
-            recent_actions=["W", "W", "B", "G", "W"],
+            action_counts={"GERMINATE": 10, "SET_ALPHA_TARGET": 20, "PRUNE": 5, "WAIT": 65},
+            recent_actions=["W", "W", "A", "G", "W"],
             kl_divergence=0.019,
             entropy=1.24,
             clip_fraction=0.048,

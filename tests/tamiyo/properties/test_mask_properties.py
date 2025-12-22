@@ -5,7 +5,7 @@ Tests invariants for action masks that must hold for ALL valid inputs:
 - Mask dimensions match slot configuration
 - GERMINATE requires empty enabled slot
 - FOSSILIZE requires HOLDING seed in enabled slot
-- PRUNE requires prunable stage + minimum age
+- PRUNE requires prunable stage + minimum age + HOLD alpha_mode
 """
 
 from hypothesis import given, assume, settings
@@ -13,7 +13,17 @@ from hypothesis import strategies as st
 
 from esper.leyline import SeedStage, MIN_PRUNE_AGE
 from esper.leyline.slot_config import SlotConfig
-from esper.leyline.factored_actions import LifecycleOp, NUM_OPS, NUM_BLUEPRINTS, NUM_BLENDS
+from esper.leyline.factored_actions import (
+    LifecycleOp,
+    NUM_ALPHA_ALGORITHMS,
+    NUM_ALPHA_CURVES,
+    NUM_ALPHA_SPEEDS,
+    NUM_ALPHA_TARGETS,
+    NUM_OPS,
+    NUM_BLUEPRINTS,
+    NUM_BLENDS,
+    NUM_TEMPO,
+)
 from esper.tamiyo.policy.action_masks import (
     compute_action_masks,
     compute_batch_masks,
@@ -139,6 +149,86 @@ class TestMaskDimensions:
             f"Blend mask shape {masks['blend'].shape} != ({NUM_BLENDS},)"
         )
 
+    @given(config=slot_configs(max_slots=10))
+    def test_tempo_mask_dimension(self, config: SlotConfig):
+        """Property: tempo mask has NUM_TEMPO dimensions."""
+        slot_states = {slot_id: None for slot_id in config.slot_ids}
+        enabled = list(config.slot_ids)
+
+        masks = compute_action_masks(
+            slot_states=slot_states,
+            enabled_slots=enabled,
+            slot_config=config,
+        )
+
+        assert masks["tempo"].shape == (NUM_TEMPO,), (
+            f"Tempo mask shape {masks['tempo'].shape} != ({NUM_TEMPO},)"
+        )
+
+    @given(config=slot_configs(max_slots=10))
+    def test_alpha_target_mask_dimension(self, config: SlotConfig):
+        """Property: alpha_target mask has NUM_ALPHA_TARGETS dimensions."""
+        slot_states = {slot_id: None for slot_id in config.slot_ids}
+        enabled = list(config.slot_ids)
+
+        masks = compute_action_masks(
+            slot_states=slot_states,
+            enabled_slots=enabled,
+            slot_config=config,
+        )
+
+        assert masks["alpha_target"].shape == (NUM_ALPHA_TARGETS,), (
+            f"Alpha target mask shape {masks['alpha_target'].shape} != ({NUM_ALPHA_TARGETS},)"
+        )
+
+    @given(config=slot_configs(max_slots=10))
+    def test_alpha_speed_mask_dimension(self, config: SlotConfig):
+        """Property: alpha_speed mask has NUM_ALPHA_SPEEDS dimensions."""
+        slot_states = {slot_id: None for slot_id in config.slot_ids}
+        enabled = list(config.slot_ids)
+
+        masks = compute_action_masks(
+            slot_states=slot_states,
+            enabled_slots=enabled,
+            slot_config=config,
+        )
+
+        assert masks["alpha_speed"].shape == (NUM_ALPHA_SPEEDS,), (
+            f"Alpha speed mask shape {masks['alpha_speed'].shape} != ({NUM_ALPHA_SPEEDS},)"
+        )
+
+    @given(config=slot_configs(max_slots=10))
+    def test_alpha_curve_mask_dimension(self, config: SlotConfig):
+        """Property: alpha_curve mask has NUM_ALPHA_CURVES dimensions."""
+        slot_states = {slot_id: None for slot_id in config.slot_ids}
+        enabled = list(config.slot_ids)
+
+        masks = compute_action_masks(
+            slot_states=slot_states,
+            enabled_slots=enabled,
+            slot_config=config,
+        )
+
+        assert masks["alpha_curve"].shape == (NUM_ALPHA_CURVES,), (
+            f"Alpha curve mask shape {masks['alpha_curve'].shape} != ({NUM_ALPHA_CURVES},)"
+        )
+
+    @given(config=slot_configs(max_slots=10))
+    def test_alpha_algorithm_mask_dimension(self, config: SlotConfig):
+        """Property: alpha_algorithm mask has NUM_ALPHA_ALGORITHMS dimensions."""
+        slot_states = {slot_id: None for slot_id in config.slot_ids}
+        enabled = list(config.slot_ids)
+
+        masks = compute_action_masks(
+            slot_states=slot_states,
+            enabled_slots=enabled,
+            slot_config=config,
+        )
+
+        assert masks["alpha_algorithm"].shape == (NUM_ALPHA_ALGORITHMS,), (
+            f"Alpha algorithm mask shape {masks['alpha_algorithm'].shape} != ({NUM_ALPHA_ALGORITHMS},)"
+        )
+
     @given(
         config=slot_configs(max_slots=10),
         n_envs=st.integers(min_value=1, max_value=8),
@@ -159,6 +249,11 @@ class TestMaskDimensions:
         assert masks["op"].shape == (n_envs, NUM_OPS)
         assert masks["blueprint"].shape == (n_envs, NUM_BLUEPRINTS)
         assert masks["blend"].shape == (n_envs, NUM_BLENDS)
+        assert masks["tempo"].shape == (n_envs, NUM_TEMPO)
+        assert masks["alpha_target"].shape == (n_envs, NUM_ALPHA_TARGETS)
+        assert masks["alpha_speed"].shape == (n_envs, NUM_ALPHA_SPEEDS)
+        assert masks["alpha_curve"].shape == (n_envs, NUM_ALPHA_CURVES)
+        assert masks["alpha_algorithm"].shape == (n_envs, NUM_ALPHA_ALGORITHMS)
 
 
 class TestGerminateRequiresEmptySlot:

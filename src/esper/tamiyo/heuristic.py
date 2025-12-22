@@ -1,11 +1,13 @@
 """Tamiyo Heuristic - Rule-based strategic controller.
 
 Implements a heuristic policy for seed lifecycle management.
-Stages auto-advance via SeedSlot.step_epoch(); this controller only handles:
+Stages advance via explicit ADVANCE actions; this controller handles:
 - GERMINATE: when to start a new seed
+- ADVANCE: when to progress lifecycle stages
 - FOSSILIZE: when to permanently integrate a seed (from HOLDING only)
 - PRUNE: when to abandon a failing seed
 - WAIT: let the system proceed normally
+Heuristic germinations always target full amplitude (no partial holds).
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from typing import Protocol, TYPE_CHECKING
 
 from esper.leyline import (
     SeedStage,
+    AlphaMode,
     is_terminal_stage,
     is_failure_stage,
     TrainingSignals,
@@ -83,11 +86,12 @@ class HeuristicPolicyConfig:
 class HeuristicTamiyo:
     """Heuristic-based Tamiyo policy.
 
-    Simplified decision making since stages auto-advance:
+    Simplified decision making with explicit ADVANCE:
     - Germinate when training plateaus (no active seed)
+    - Advance when a seed is ready to move stages
     - Fossilize when seed reaches HOLDING with improvement
     - Prune when seed is failing
-    - Wait otherwise (let auto-advance handle stage transitions)
+    - Wait otherwise
     """
 
     def __init__(self, config: HeuristicPolicyConfig | None = None, topology: str = "cnn"):
@@ -202,28 +206,39 @@ class HeuristicTamiyo:
             improvement = seed.metrics.improvement_since_stage_start
             epochs_in_stage = seed.epochs_in_stage
 
-            # GERMINATED: wait for auto-advance to TRAINING
+            # GERMINATED: explicitly advance to TRAINING
             if stage == SeedStage.GERMINATED:
                 return TamiyoDecision(
-                    action=Action.WAIT,
+                    action=Action.ADVANCE,
                     target_seed_id=seed.seed_id,
-                    reason="Awaiting auto-advance to TRAINING"
+                    reason="Advance to TRAINING"
                 )
 
-            # TRAINING: check for failure, otherwise wait for auto-advance
+            # TRAINING: check for failure, otherwise attempt ADVANCE
             if stage == SeedStage.TRAINING:
                 if self._should_prune(improvement, epochs_in_stage):
                     return self._prune_seed(signals, seed, "Failing in TRAINING")
                 return TamiyoDecision(
-                    action=Action.WAIT,
+                    action=Action.ADVANCE,
                     target_seed_id=seed.seed_id,
-                    reason=f"Training: {improvement:+.2f}% improvement"
+                    reason=f"Advance to BLENDING (improvement {improvement:+.2f}%)"
                 )
 
-            # BLENDING: check for failure, otherwise wait for auto-advance
+            # BLENDING: check for failure, otherwise advance when full amplitude reached
             if stage == SeedStage.BLENDING:
                 if self._should_prune(improvement, epochs_in_stage):
                     return self._prune_seed(signals, seed, "Failing in BLENDING")
+                controller = seed.alpha_controller
+                if (
+                    controller.alpha_target >= 1.0 - 1e-6
+                    and controller.alpha_mode == AlphaMode.HOLD
+                    and abs(seed.alpha - controller.alpha_target) <= 1e-6
+                ):
+                    return TamiyoDecision(
+                        action=Action.ADVANCE,
+                        target_seed_id=seed.seed_id,
+                        reason="Advance to HOLDING (full amplitude reached)",
+                    )
                 return TamiyoDecision(
                     action=Action.WAIT,
                     target_seed_id=seed.seed_id,

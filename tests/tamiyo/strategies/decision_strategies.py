@@ -16,6 +16,7 @@ from hypothesis import strategies as st
 from hypothesis.strategies import composite
 
 from esper.leyline import SeedStage
+from esper.kasmina.alpha_controller import AlphaController
 from esper.tamiyo.heuristic import HeuristicPolicyConfig
 
 # Import shared strategies from tests.strategies
@@ -87,6 +88,7 @@ class MockSeedState:
         self.epochs_in_stage = epochs_in_stage
         self.alpha = alpha
         self.blueprint_id = blueprint_id
+        self.alpha_controller = AlphaController(alpha=alpha)
         self.metrics = MockSeedMetrics(improvement, total, counterfactual)
 
 

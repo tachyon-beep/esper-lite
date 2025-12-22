@@ -199,9 +199,15 @@ class EnvState:
     #   GERMINATE_DENSE_HEAVY → GERMINATE
     #   FOSSILIZE_R0C0 → FOSSILIZE
     #   PRUNE_R1C1 → PRUNE
+    #   ADVANCE_R1C1 → ADVANCE
     action_history: deque[str] = field(default_factory=lambda: deque(maxlen=10))
     action_counts: dict[str, int] = field(default_factory=lambda: {
-        "WAIT": 0, "GERMINATE": 0, "PRUNE": 0, "FOSSILIZE": 0
+        "WAIT": 0,
+        "GERMINATE": 0,
+        "SET_ALPHA_TARGET": 0,
+        "PRUNE": 0,
+        "FOSSILIZE": 0,
+        "ADVANCE": 0,
     })
     total_actions: int = 0
 
@@ -286,8 +292,10 @@ class EnvState:
         ACTION NORMALIZATION: Normalizes factored germination actions to base types:
         - GERMINATE_CONV_LIGHT → GERMINATE
         - GERMINATE_DENSE_HEAVY → GERMINATE
+        - SET_ALPHA_TARGET_R0C0 → SET_ALPHA_TARGET
         - FOSSILIZE_R0C0 → FOSSILIZE
         - PRUNE_R1C1 → PRUNE
+        - ADVANCE_R1C1 → ADVANCE
         - WAIT → WAIT (unchanged)
         """
         self.action_history.append(action_name)
@@ -296,10 +304,14 @@ class EnvState:
         normalized = action_name
         if action_name.startswith("GERMINATE"):
             normalized = "GERMINATE"
+        elif action_name.startswith("SET_ALPHA_TARGET"):
+            normalized = "SET_ALPHA_TARGET"
         elif action_name.startswith("FOSSILIZE"):
             normalized = "FOSSILIZE"
         elif action_name.startswith("PRUNE"):
             normalized = "PRUNE"
+        elif action_name.startswith("ADVANCE"):
+            normalized = "ADVANCE"
         elif action_name.startswith("WAIT"):
             normalized = "WAIT"
 
@@ -475,6 +487,7 @@ class RewardComponents:
     - bounded_attribution: Contribution-primary attribution signal (replaces seed_contribution)
     - seed_contribution: Seed contribution percentage (older format, may coexist)
     - compute_rent: Cost of active seeds (always negative)
+    - alpha_shock: Convex penalty on alpha deltas (negative if triggered)
     - ratio_penalty: Penalty for extreme policy ratios (negative if triggered)
     - stage_bonus: Bonus for reaching advanced lifecycle stages (BLENDING+)
     - fossilize_terminal_bonus: Large terminal bonus for successful fossilization
@@ -494,6 +507,7 @@ class RewardComponents:
 
     # Costs
     compute_rent: float = 0.0
+    alpha_shock: float = 0.0
     ratio_penalty: float = 0.0
 
     # Bonuses
@@ -525,7 +539,7 @@ class DecisionSnapshot:
     timestamp: datetime
     slot_states: dict[str, str]  # slot_id -> "Training 12%" or "Empty"
     host_accuracy: float
-    chosen_action: str  # "GERMINATE", "WAIT", "PRUNE", "FOSSILIZE"
+    chosen_action: str  # "GERMINATE", "ADVANCE", "SET_ALPHA_TARGET", "PRUNE", "FOSSILIZE", "WAIT"
     chosen_slot: str | None  # Target slot for action (None for WAIT)
     confidence: float  # Action probability (0-1)
     expected_value: float  # Value estimate before action

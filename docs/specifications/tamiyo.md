@@ -197,14 +197,15 @@ Note: Latch intentionally never resets. Call tracker.reset() for full reset.
 [GERMINATION_CHECK] --(plateau detected)--> GERMINATE_<BLUEPRINT>
 [GERMINATION_CHECK] --(progressing normally)--> WAIT
 
-[SEED_MANAGEMENT] --(stage=GERMINATED)--> WAIT (auto-advance pending)
-[SEED_MANAGEMENT] --(stage=TRAINING, failing)--> CULL
-[SEED_MANAGEMENT] --(stage=TRAINING, ok)--> WAIT
-[SEED_MANAGEMENT] --(stage=BLENDING, failing)--> CULL
-[SEED_MANAGEMENT] --(stage=BLENDING, ok)--> WAIT
+[SEED_MANAGEMENT] --(stage=GERMINATED)--> ADVANCE
+[SEED_MANAGEMENT] --(stage=TRAINING, failing)--> PRUNE
+[SEED_MANAGEMENT] --(stage=TRAINING, ok)--> ADVANCE
+[SEED_MANAGEMENT] --(stage=BLENDING, failing)--> PRUNE
+[SEED_MANAGEMENT] --(stage=BLENDING, full amplitude)--> ADVANCE
+[SEED_MANAGEMENT] --(stage=BLENDING, otherwise)--> WAIT
 [SEED_MANAGEMENT] --(stage=HOLDING, no counterfactual)--> WAIT
 [SEED_MANAGEMENT] --(stage=HOLDING, contribution > threshold)--> FOSSILIZE
-[SEED_MANAGEMENT] --(stage=HOLDING, contribution <= threshold)--> CULL
+[SEED_MANAGEMENT] --(stage=HOLDING, contribution <= threshold)--> PRUNE
 ```
 
 ## 4.2 Data Governance

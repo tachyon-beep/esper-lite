@@ -31,7 +31,7 @@ class TestOverwatchIntegration:
                 tamiyo=TamiyoState(
                     kl_divergence=0.019,
                     entropy=1.24,
-                    action_counts={"GERMINATE": 10, "BLEND": 20},
+                    action_counts={"GERMINATE": 10, "SET_ALPHA_TARGET": 20},
                 ),
                 run_id="test-run-001",
                 task_name="cifar10",
@@ -382,8 +382,8 @@ class TestDetailPanelIntegration:
                 captured_at="2025-12-18T14:00:00Z",
                 connection=ConnectionStatus(True, 1000.0, 0.5),
                 tamiyo=TamiyoState(
-                    action_counts={"GERMINATE": 34, "BLEND": 28, "PRUNE": 12, "WAIT": 26},
-                    recent_actions=["G", "B", "W", "W", "C"],
+                    action_counts={"GERMINATE": 34, "SET_ALPHA_TARGET": 28, "PRUNE": 12, "WAIT": 26},
+                    recent_actions=["G", "A", "W", "W", "P"],
                     confidence_mean=0.73,
                     confidence_min=0.45,
                     confidence_max=0.92,

@@ -71,7 +71,7 @@ SLOT_FEATURE_SIZE = 18
 
 # Feature size (with telemetry off): 23 base + 3 slots * 18 features per slot = 77
 # Per-slot: 5 state (is_active, stage, alpha, improvement, tempo) + 13 blueprint one-hot
-# With telemetry on: + 3 slots * SeedTelemetry.feature_dim() (10) = 107 total
+# With telemetry on: + 3 slots * SeedTelemetry.feature_dim() (17) = 128 total
 # NOTE: Default for 3-slot configuration. Use get_feature_size(slot_config) for dynamic slot counts.
 MULTISLOT_FEATURE_SIZE = 77
 
@@ -129,7 +129,7 @@ def obs_to_multislot_features(
 
     Per-slot features (18 dims each):
     - is_active: 1.0 if seed active, 0.0 otherwise
-    - stage: seed lifecycle stage (0-7)
+    - stage: seed lifecycle stage (SeedStage enum int, 0-10)
     - alpha: blending alpha (0.0-1.0)
     - improvement: counterfactual contribution delta
     - tempo: blend tempo epochs normalized (0-1)

@@ -365,6 +365,8 @@ class EnvOverview(Static):
             "HOLDING": "Hold",
             "FOSSILIZED": "Foss",
             "PRUNED": "Prune",
+            "EMBARGOED": "Embar",
+            "RESETTING": "Reset",
         }.get(seed.stage, seed.stage[:5])
 
         blueprint = seed.blueprint_id or "?"
@@ -378,6 +380,8 @@ class EnvOverview(Static):
             "HOLDING": "magenta",
             "FOSSILIZED": "green",
             "PRUNED": "red",
+            "EMBARGOED": "bright_red",
+            "RESETTING": "dim",
         }
         style = style_map.get(seed.stage, "white")
 
@@ -412,8 +416,9 @@ class EnvOverview(Static):
         action_short = {
             "WAIT": "WAIT",
             "GERMINATE": "GERM",
+            "SET_ALPHA_TARGET": "ALPH",
             "FOSSILIZE": "FOSS",
-            "PRUNE": "PRUNE",
+            "PRUNE": "PRUN",
         }.get(last_action, last_action[:4] if last_action else "—")
 
         return action_short

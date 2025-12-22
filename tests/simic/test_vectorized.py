@@ -74,8 +74,6 @@ def test_emit_with_env_context_includes_device():
 
 
 def test_last_action_event_emitted():
-    from esper.leyline.factored_actions import FactoredAction
-
     with patch("esper.simic.telemetry.emitters.get_hub") as get_hub:
         hub = Mock()
         get_hub.return_value = hub
@@ -87,9 +85,23 @@ def test_last_action_event_emitted():
             blueprint_idx=1,
             blend_idx=1,
             tempo_idx=1,
+            alpha_target_idx=0,
+            alpha_speed_idx=0,
+            alpha_curve_idx=0,
+            alpha_algorithm_idx=0,
             op_idx=1,
             slot_id="r0c1",
-            masked={"op": False, "slot": False, "blueprint": False, "blend": True, "tempo": False},
+            masked={
+                "op": False,
+                "slot": False,
+                "blueprint": False,
+                "blend": True,
+                "tempo": False,
+                "alpha_target": False,
+                "alpha_speed": False,
+                "alpha_curve": False,
+                "alpha_algorithm": False,
+            },
             success=True,
         )
 

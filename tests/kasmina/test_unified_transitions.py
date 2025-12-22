@@ -1,11 +1,11 @@
-"""Test unified transition handling between advance_stage() and step_epoch()."""
+"""Test transition handling between advance_stage() and step_epoch()."""
 
 import pytest
 import torch
 
 from esper.kasmina.slot import SeedSlot
 from esper.leyline.stages import SeedStage
-from esper.leyline.alpha import AlphaMode
+from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
 from esper.tamiyo.policy.features import TaskConfig
 
 
@@ -30,10 +30,14 @@ def create_slot_in_training(*, blend_algorithm_id: str = "linear") -> SeedSlot:
     )
 
     # Germinate and advance to TRAINING
+    alpha_algorithm = (
+        AlphaAlgorithm.GATE if blend_algorithm_id == "gated" else AlphaAlgorithm.ADD
+    )
     slot.germinate(
         blueprint_id="norm",
         seed_id="test-seed",
         blend_algorithm_id=blend_algorithm_id,
+        alpha_algorithm=alpha_algorithm,
     )
 
     # Advance to TRAINING
@@ -59,7 +63,7 @@ def create_slot_in_training(*, blend_algorithm_id: str = "linear") -> SeedSlot:
 
 
 class TestUnifiedTransitions:
-    """Test advance_stage() and step_epoch() behave identically."""
+    """Test advance_stage() vs step_epoch() behavior."""
 
     def test_advance_stage_initializes_blending(self):
         """advance_stage() to BLENDING should initialize alpha control and set _blending_started."""
@@ -84,8 +88,8 @@ class TestUnifiedTransitions:
         assert slot.state.metrics.accuracy_at_blending_start == slot.state.metrics.current_val_accuracy, \
             "advance_stage() should snapshot accuracy_at_blending_start"
 
-    def test_step_epoch_initializes_blending(self):
-        """step_epoch() to BLENDING should initialize schedule and set _blending_started."""
+    def test_step_epoch_does_not_initialize_blending(self):
+        """step_epoch() should not advance to BLENDING or initialize blending state."""
         slot = create_slot_in_training()
 
         # create_slot_in_training() already gave us 0.9 accuracy (0.6 improvement from 0.3)
@@ -94,23 +98,14 @@ class TestUnifiedTransitions:
         while slot.state.metrics.epochs_in_current_stage < 10:
             slot.state.metrics.record_accuracy(current_accuracy)
 
-        # Use step_epoch() to advance
+        # step_epoch should not advance stages
         slot.step_epoch()
 
-        assert slot.state.stage == SeedStage.BLENDING
+        assert slot.state.stage == SeedStage.TRAINING
+        assert slot.state.metrics._blending_started is False
 
-        # These should be initialized by step_epoch()
-        assert slot.state.metrics._blending_started is True, \
-            "step_epoch() should set _blending_started flag"
-        assert slot.state.alpha_controller.alpha_steps_total > 0
-        assert slot.state.alpha_controller.alpha_target == 1.0
-        assert slot.alpha_schedule is None, \
-            "Phase 2: alpha_schedule is reserved for per-sample gating only"
-        assert slot.state.metrics.accuracy_at_blending_start == current_accuracy, \
-            "step_epoch() should snapshot accuracy_at_blending_start"
-
-    def test_both_methods_produce_same_state(self):
-        """advance_stage() and step_epoch() should produce identical state."""
+    def test_advance_stage_and_step_epoch_diverge(self):
+        """advance_stage() should transition while step_epoch() should not."""
         # Create two identical slots
         slot_via_advance = create_slot_in_training()
         slot_via_step_epoch = create_slot_in_training()
@@ -125,19 +120,11 @@ class TestUnifiedTransitions:
         slot_via_advance.advance_stage(SeedStage.BLENDING)
         slot_via_step_epoch.step_epoch()
 
-        # Both should be in BLENDING
+        # advance_stage transitions, step_epoch does not
         assert slot_via_advance.state.stage == SeedStage.BLENDING
-        assert slot_via_step_epoch.state.stage == SeedStage.BLENDING
-
-        # Both should have blending initialized
-        assert slot_via_advance.state.metrics._blending_started == \
-               slot_via_step_epoch.state.metrics._blending_started
-        assert (slot_via_advance.alpha_schedule is not None) == \
-               (slot_via_step_epoch.alpha_schedule is not None)
-        # Note: accuracy_at_blending_start might differ slightly due to when transition() resets baseline
-        # but both should be non-zero and close to current accuracy
-        assert slot_via_advance.state.metrics.accuracy_at_blending_start > 0
-        assert slot_via_step_epoch.state.metrics.accuracy_at_blending_start > 0
+        assert slot_via_step_epoch.state.stage == SeedStage.TRAINING
+        assert slot_via_advance.state.metrics._blending_started is True
+        assert slot_via_step_epoch.state.metrics._blending_started is False
 
     def test_advance_stage_blending_to_holding_keeps_gate_schedule(self):
         """advance_stage() BLENDING→HOLDING should keep alpha_schedule for GATE."""

@@ -83,7 +83,7 @@ class TestGerminationErrors:
         slot.germinate("noop", seed_id="seed1")
 
         # Second germination should fail
-        with pytest.raises(RuntimeError, match="already has active seed"):
+        with pytest.raises(RuntimeError, match="unavailable for germination"):
             slot.germinate("noop", seed_id="seed2")
 
     def test_germinate_after_cull_succeeds(self):
@@ -127,6 +127,17 @@ class TestGerminationErrors:
             state = slot.germinate(bp, seed_id=f"test_{bp}")
             assert state.blueprint_id == bp
             assert state.stage == SeedStage.GERMINATED
+
+    def test_germinate_sets_initial_alpha_target(self):
+        """Germinate should honor the requested initial alpha target."""
+        slot = SeedSlot(slot_id="r0c0", channels=64, fast_mode=True)
+
+        slot.germinate("noop", seed_id="seed0", alpha_target=0.7)
+        slot.state.transition(SeedStage.TRAINING)
+        slot.state.transition(SeedStage.BLENDING)
+        slot.start_blending(total_steps=5)
+
+        assert slot.state.alpha_controller.alpha_target == pytest.approx(0.7)
 
 
 class TestCullBehavior:
@@ -191,18 +202,18 @@ class TestStepEpochBehavior:
         # Should be a no-op, not raise
         slot.step_epoch()
 
-    def test_step_epoch_germinated_advances_to_training(self):
-        """step_epoch() in GERMINATED stage advances to TRAINING."""
+    def test_step_epoch_germinated_does_not_advance(self):
+        """step_epoch() in GERMINATED stage does not advance."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
 
         # After germination, stage is GERMINATED
         assert slot.state.stage == SeedStage.GERMINATED
 
-        # step_epoch should advance to TRAINING
+        # step_epoch should not advance stages
         slot.step_epoch()
 
-        assert slot.state.stage == SeedStage.TRAINING
+        assert slot.state.stage == SeedStage.GERMINATED
 
     def test_step_epoch_training_stays_in_training(self):
         """step_epoch() in TRAINING stage stays in TRAINING (no auto-advance)."""
@@ -210,10 +221,10 @@ class TestStepEpochBehavior:
         slot.germinate("noop", seed_id="test")
         slot.state.transition(SeedStage.TRAINING)
 
-        # step_epoch doesn't auto-advance from TRAINING without passing G2
+        # step_epoch doesn't advance from TRAINING
         slot.step_epoch()
 
-        # Should still be in TRAINING (G2 gate not passed)
+        # Should still be in TRAINING
         assert slot.state.stage == SeedStage.TRAINING
 
 
@@ -337,6 +348,33 @@ class TestStateTransitionEdgeCases:
         state.transition(SeedStage.TRAINING)
 
         assert state.metrics.epochs_in_current_stage == 0
+
+    def test_transition_records_previous_epochs_in_stage(self):
+        """Transition should snapshot previous_epochs_in_stage before reset."""
+        state = SeedState(
+            seed_id="test",
+            blueprint_id="noop",
+            stage=SeedStage.GERMINATED,
+        )
+        state.metrics.epochs_in_current_stage = 7
+
+        state.transition(SeedStage.TRAINING)
+
+        assert state.previous_epochs_in_stage == 7
+
+    def test_transition_appends_stage_history(self):
+        """Transition should append to stage_history."""
+        state = SeedState(
+            seed_id="test",
+            blueprint_id="noop",
+            stage=SeedStage.GERMINATED,
+        )
+        initial_len = len(state.stage_history)
+
+        state.transition(SeedStage.TRAINING)
+
+        assert len(state.stage_history) == initial_len + 1
+        assert state.stage_history[-1][0] == SeedStage.TRAINING
 
 
 class TestForceAlphaContext:

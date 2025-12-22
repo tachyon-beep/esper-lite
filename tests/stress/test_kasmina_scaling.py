@@ -119,7 +119,8 @@ class TestGerminateCullCycles:
         for i in range(n_cycles):
             # Germinate
             slot.germinate("noop", seed_id=f"seed_{i}")
-            slot.step_epoch()  # -> TRAINING
+            result = slot.advance_stage(SeedStage.TRAINING)
+            assert result.passed
 
             # Record some metrics
             slot.state.metrics.record_accuracy(50.0 + i * 0.1)
@@ -222,7 +223,8 @@ class TestRapidStageTransitions:
             assert slot.state.stage == SeedStage.GERMINATED
 
             # -> TRAINING
-            slot.step_epoch()
+            result = slot.advance_stage(SeedStage.TRAINING)
+            assert result.passed
             assert slot.state.stage == SeedStage.TRAINING
 
             # Setup for BLENDING
@@ -263,7 +265,8 @@ class TestGradientHealthMonitorOverhead:
         host = CNNHost(n_blocks=3, base_channels=32, memory_format=torch.contiguous_format)
         model = MorphogeneticModel(host, slots=["r0c0"])
         model.germinate_seed("noop", "seed_0", slot="r0c0")
-        model.seed_slots["r0c0"].step_epoch()  # -> TRAINING
+        result = model.seed_slots["r0c0"].advance_stage(SeedStage.TRAINING)
+        assert result.passed
 
         x = torch.randn(4, 3, 32, 32)
         criterion = nn.MSELoss()

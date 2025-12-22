@@ -210,7 +210,7 @@ class TestSnapshotReader:
                 captured_at="2025-12-18T12:00:00Z",
                 connection=ConnectionStatus(True, 1000.0, 0.5),
                 tamiyo=TamiyoState(
-                    action_counts={"BLEND": 10, "PRUNE": 5},
+                    action_counts={"SET_ALPHA_TARGET": 10, "PRUNE": 5},
                     kl_divergence=0.019,
                 ),
                 flight_board=[
@@ -236,7 +236,7 @@ class TestSnapshotReader:
         reader = SnapshotReader(path)
         restored = list(reader)[0]
 
-        assert restored.tamiyo.action_counts["BLEND"] == 10
+        assert restored.tamiyo.action_counts["SET_ALPHA_TARGET"] == 10
         assert restored.tamiyo.kl_divergence == 0.019
         assert restored.flight_board[0].slots["r0c1"].alpha == 0.7
         assert restored.flight_board[0].slots["r0c1"].gate_passed is True

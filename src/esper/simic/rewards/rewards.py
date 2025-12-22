@@ -176,6 +176,12 @@ class ContributionRewardConfig:
     # Compute rent (logarithmic scaling)
     rent_weight: float = 0.5
     max_rent: float = 8.0
+    # Alpha-weighted rent floor (BaseSlotRent): ratio of host params per occupied slot.
+    # Calibrated from telemetry_2025-12-20_044944: ~0.0039.
+    base_slot_rent_ratio: float = 0.0039
+    # Convex alpha shock coefficient (penalizes fast alpha changes).
+    # Calibrated from telemetry_2025-12-20_044944: ~0.1958.
+    alpha_shock_coef: float = 0.1958
 
     # Enforcement penalties (state machine compliance)
     invalid_fossilize_penalty: float = -1.0
@@ -186,6 +192,7 @@ class ContributionRewardConfig:
     germinate_cost: float = -0.02
     fossilize_cost: float = -0.01
     prune_cost: float = -0.005
+    set_alpha_target_cost: float = -0.005
 
     # Fossilize shaping
     fossilize_base_bonus: float = 0.5
@@ -414,6 +421,8 @@ def compute_contribution_reward(
     num_contributing_fossilized: int = 0,
     slot_id: str | None = None,
     seed_id: str | None = None,
+    effective_seed_params: float | None = None,
+    alpha_delta_sq_sum: float = 0.0,
 ) -> float | tuple[float, RewardComponentsTelemetry]:
     """Compute reward using bounded attribution (ransomware-resistant).
 
@@ -452,6 +461,9 @@ def compute_contribution_reward(
             Only these seeds receive terminal bonus. This prevents bad fossilizations from being NPV-positive.
         slot_id: Optional slot identifier for telemetry events (enables reward hacking detection)
         seed_id: Optional seed identifier for telemetry events (enables reward hacking detection)
+        effective_seed_params: Optional alpha-weighted + BaseSlotRent param count.
+            If None, uses total_params - host_params.
+        alpha_delta_sq_sum: Sum of per-slot (Δalpha^2 * scale) for convex shock penalty.
 
     Returns:
         Shaped reward value, or (reward, components) if return_components=True
@@ -670,19 +682,33 @@ def compute_contribution_reward(
         components.pbrs_bonus = pbrs_bonus
 
     # === 3. RENT: Compute Cost ===
-    # Logarithmic penalty on parameter bloat from seeds
+    # Logarithmic penalty on parameter bloat from seeds (alpha-weighted + BaseSlotRent)
     rent_penalty = 0.0
     growth_ratio = 0.0
-    if host_params > 0 and total_params > host_params:
-        # Measure EXCESS params from seeds, not total ratio
-        # growth_ratio = 0 when no seeds, so no rent penalty
-        growth_ratio = (total_params - host_params) / host_params
-        scaled_cost = math.log(1.0 + growth_ratio)
-        rent_penalty = min(config.rent_weight * scaled_cost, config.max_rent)
-        reward -= rent_penalty
+    if host_params > 0:
+        effective_overhead = (
+            effective_seed_params
+            if effective_seed_params is not None
+            else max(total_params - host_params, 0)
+        )
+        if effective_overhead > 0:
+            # Measure EXCESS params from seeds, not total ratio
+            # growth_ratio = 0 when no seeds, so no rent penalty
+            growth_ratio = effective_overhead / host_params
+            scaled_cost = math.log(1.0 + growth_ratio)
+            rent_penalty = min(config.rent_weight * scaled_cost, config.max_rent)
+            reward -= rent_penalty
     if components:
         components.compute_rent = -rent_penalty  # Negative because it's a penalty
         components.growth_ratio = growth_ratio  # DRL Expert diagnostic field
+
+    # === 3b. SHOCK: Convex penalty on alpha changes ===
+    alpha_shock = 0.0
+    if alpha_delta_sq_sum > 0 and config.alpha_shock_coef != 0.0:
+        alpha_shock = -config.alpha_shock_coef * alpha_delta_sq_sum
+        reward += alpha_shock
+    if components:
+        components.alpha_shock = alpha_shock
 
     # === 4. ACTION SHAPING ===
     # Minimal - just state machine enforcement and intervention costs
@@ -707,6 +733,8 @@ def compute_contribution_reward(
     elif action == LifecycleOp.PRUNE:
         action_shaping += _contribution_prune_shaping(seed_info, seed_contribution, config)
         action_shaping += config.prune_cost
+    elif action == LifecycleOp.SET_ALPHA_TARGET:
+        action_shaping += config.set_alpha_target_cost
 
     # WAIT: No additional shaping (correct default action)
 
@@ -919,6 +947,8 @@ def compute_reward(
     num_contributing_fossilized: int = 0,
     config: ContributionRewardConfig | None = None,
     return_components: bool = False,
+    effective_seed_params: float | None = None,
+    alpha_delta_sq_sum: float = 0.0,
 ) -> float | tuple[float, "RewardComponentsTelemetry"]:
     """Unified reward computation dispatcher.
 
@@ -944,6 +974,8 @@ def compute_reward(
         num_contributing_fossilized: Count of contributing fossilized seeds
         config: Reward configuration (uses default if None)
         return_components: If True, return (reward, components) tuple
+        effective_seed_params: Optional alpha-weighted + BaseSlotRent param count.
+        alpha_delta_sq_sum: Sum of per-slot (Δalpha^2 * scale) for convex shock penalty.
 
     Returns:
         Reward value, or (reward, components) if return_components=True
@@ -968,6 +1000,8 @@ def compute_reward(
             return_components=return_components,
             num_fossilized_seeds=num_fossilized_seeds,
             num_contributing_fossilized=num_contributing_fossilized,
+            effective_seed_params=effective_seed_params,
+            alpha_delta_sq_sum=alpha_delta_sq_sum,
         )
 
     elif config.reward_mode == RewardMode.SPARSE:
@@ -1038,6 +1072,8 @@ def compute_reward_for_family(
     loss_config: LossRewardConfig | None = None,
     loss_delta: float = 0.0,
     val_loss: float = 0.0,
+    effective_seed_params: float | None = None,
+    alpha_delta_sq_sum: float = 0.0,
 ) -> float:
     """Dispatch reward based on family (contribution vs loss-primary)."""
     if contribution_config is None:
@@ -1064,6 +1100,8 @@ def compute_reward_for_family(
             num_contributing_fossilized=num_contributing_fossilized,
             config=contribution_config,
             return_components=False,
+            effective_seed_params=effective_seed_params,
+            alpha_delta_sq_sum=alpha_delta_sq_sum,
         ))
     if reward_family == RewardFamily.LOSS:
         return compute_loss_reward(
@@ -1481,6 +1519,8 @@ INTERVENTION_COSTS: dict[LifecycleOp, float] = {
     LifecycleOp.GERMINATE: _default_config.germinate_cost,
     LifecycleOp.FOSSILIZE: _default_config.fossilize_cost,
     LifecycleOp.PRUNE: _default_config.prune_cost,
+    LifecycleOp.SET_ALPHA_TARGET: _default_config.set_alpha_target_cost,
+    LifecycleOp.ADVANCE: 0.0,
 }
 del _default_config  # Don't pollute module namespace
 

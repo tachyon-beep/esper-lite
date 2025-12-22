@@ -373,6 +373,22 @@ class SeedState:
         self.telemetry.epochs_in_stage = self.metrics.epochs_in_current_stage
         self.telemetry.stage = self.stage.value
         self.telemetry.alpha = self.alpha
+        self.telemetry.alpha_target = self.alpha_controller.alpha_target
+        self.telemetry.alpha_mode = int(self.alpha_controller.alpha_mode)
+        self.telemetry.alpha_steps_total = self.alpha_controller.alpha_steps_total
+        self.telemetry.alpha_steps_done = self.alpha_controller.alpha_steps_done
+        self.telemetry.time_to_target = max(
+            self.alpha_controller.alpha_steps_total - self.alpha_controller.alpha_steps_done,
+            0,
+        )
+        if self.alpha_controller.alpha_mode == AlphaMode.HOLD or self.alpha_controller.alpha_steps_total == 0:
+            self.telemetry.alpha_velocity = 0.0
+        else:
+            self.telemetry.alpha_velocity = (
+                (self.alpha_controller.alpha_target - self.alpha_controller.alpha_start)
+                / self.alpha_controller.alpha_steps_total
+            )
+        self.telemetry.alpha_algorithm = int(self.alpha_algorithm)
 
         self.telemetry.gradient_norm = gradient_norm
         self.telemetry.gradient_health = gradient_health
@@ -383,14 +399,17 @@ class SeedState:
         self.telemetry.max_epochs = max_epochs
         self.telemetry.captured_at = datetime.now(timezone.utc)
 
-        # Compute blending velocity during BLENDING stage
+        # Tempo is chosen at germination and should be observable regardless of stage.
+        self.telemetry.blend_tempo_epochs = self.blend_tempo_epochs
+
+        # Compute blending velocity during BLENDING stage only.
         if self.stage == SeedStage.BLENDING:
-            self.telemetry.blend_tempo_epochs = self.blend_tempo_epochs
             epochs_in_blend = self.metrics.epochs_in_current_stage
-            if epochs_in_blend > 0:
-                self.telemetry.blending_velocity = self.alpha / epochs_in_blend
-            else:
-                self.telemetry.blending_velocity = 0.0
+            self.telemetry.blending_velocity = (
+                (self.alpha / epochs_in_blend) if epochs_in_blend > 0 else 0.0
+            )
+        else:
+            self.telemetry.blending_velocity = 0.0
 
     def can_transition_to(self, new_stage: SeedStage) -> bool:
         """Check if transition to new_stage is valid per Leyline contract."""
@@ -424,6 +443,7 @@ class SeedState:
             previous_stage=self.previous_stage,
             previous_epochs_in_stage=self.previous_epochs_in_stage,
             stage_entered_at=self.stage_entered_at,
+            alpha_mode=int(self.alpha_controller.alpha_mode),
             metrics=self.metrics.to_leyline(),
             telemetry=replace(self.telemetry) if self.telemetry is not None else None,
             is_healthy=self.is_healthy,
@@ -990,10 +1010,17 @@ class SeedSlot(nn.Module):
 
     @property
     def active_seed_params(self) -> int:
-        """Return trainable params of active seed, or 0 if no seed."""
+        """Return trainable params of the active seed subsystem (seed + optional gate)."""
         if self.seed is None:
             return 0
-        return sum(p.numel() for p in self.seed.parameters() if p.requires_grad)
+        total = 0
+        for module in (self.seed, self.alpha_schedule):
+            if module is None:
+                continue
+            for param in module.parameters():
+                if param.requires_grad:
+                    total += param.numel()
+        return total
 
     def germinate(
         self,
@@ -1003,6 +1030,7 @@ class SeedSlot(nn.Module):
         blend_algorithm_id: str = "sigmoid",
         blend_tempo_epochs: int = 5,
         alpha_algorithm: AlphaAlgorithm = AlphaAlgorithm.ADD,
+        alpha_target: float | None = None,
     ) -> SeedState:
         """Germinate a new seed in this slot.
 
@@ -1013,29 +1041,34 @@ class SeedSlot(nn.Module):
             blend_algorithm_id: Blending algorithm ("linear", "sigmoid", "gated")
             blend_tempo_epochs: Number of epochs for blending (3, 5, or 8)
             alpha_algorithm: Blend operator / gating mode (ADD, MULTIPLY, or GATE).
+            alpha_target: Initial blend target (defaults to full amplitude).
         """
         from esper.kasmina.blueprints import BlueprintRegistry
 
         # Store blend settings for later use in start_blending()
         self._blend_algorithm_id = blend_algorithm_id
         self._blend_tempo_epochs = blend_tempo_epochs
+        if alpha_target is None:
+            self._blend_alpha_target = 1.0
+        else:
+            if not (0.0 < alpha_target <= 1.0):
+                raise ValueError("alpha_target must be within (0, 1].")
+            self._blend_alpha_target = float(alpha_target)
 
         resolved_alpha_algorithm = alpha_algorithm
         if blend_algorithm_id == "gated":
-            if alpha_algorithm == AlphaAlgorithm.MULTIPLY:
-                raise ValueError("blend_algorithm_id='gated' is incompatible with alpha_algorithm=MULTIPLY")
-            resolved_alpha_algorithm = AlphaAlgorithm.GATE
+            if alpha_algorithm != AlphaAlgorithm.GATE:
+                raise ValueError("blend_algorithm_id='gated' requires alpha_algorithm=GATE")
         elif alpha_algorithm == AlphaAlgorithm.GATE:
             raise ValueError("alpha_algorithm=GATE requires blend_algorithm_id='gated'")
 
         # Phase 4 contract: PRUNED/EMBARGOED/RESETTING are first-class and keep
         # state even after physical removal (seed=None). The slot is unavailable
         # for germination until it fully returns to DORMANT (state cleared).
-        if self.is_active and not is_failure_stage(self.state.stage):
-            raise RuntimeError(f"Slot {self.slot_id} already has active seed")
-        if self.state is not None and self.state.stage != SeedStage.DORMANT:
+        if self.state is not None or self.seed is not None:
+            stage_name = self.state.stage.name if self.state is not None else "UNKNOWN"
             raise RuntimeError(
-                f"Slot {self.slot_id} is unavailable for germination (stage={self.state.stage.name})"
+                f"Slot {self.slot_id} is unavailable for germination (stage={stage_name})"
             )
 
         # Default to "cnn" when no TaskConfig is provided to match legacy CNN tests.
@@ -1339,7 +1372,7 @@ class SeedSlot(nn.Module):
             return self.prune(reason=reason, initiator=initiator)
 
         if self.state.alpha_controller.alpha_mode != AlphaMode.HOLD:
-            raise ValueError("schedule_prune requires alpha_controller to be in HOLD mode.")
+            return False
 
         if self.state.stage == SeedStage.HOLDING:
             old_stage = self.state.stage
@@ -1376,6 +1409,93 @@ class SeedSlot(nn.Module):
             alpha_curve=curve,
         )
         self._set_blend_out_freeze(True)
+        return True
+
+    def set_alpha_target(
+        self,
+        *,
+        alpha_target: float,
+        steps: int,
+        curve: AlphaCurve | None = None,
+        alpha_algorithm: AlphaAlgorithm | None = None,
+        initiator: str = "policy",
+    ) -> bool:
+        """Retarget alpha to a non-zero target from HOLD mode.
+
+        Returns False for invalid requests (e.g., non-HOLD controller, zero target,
+        or unsupported lifecycle stage).
+        """
+        if not self.state:
+            return False
+
+        if self.state.stage == SeedStage.FOSSILIZED:
+            return False
+
+        if alpha_target <= 0.0:
+            return False
+
+        controller = self.state.alpha_controller
+        if controller.alpha_mode != AlphaMode.HOLD:
+            return False
+
+        if self.state.stage not in (SeedStage.BLENDING, SeedStage.HOLDING):
+            return False
+
+        # HOLDING is full-amplitude only; partial targets must re-enter BLENDING.
+        if self.state.stage == SeedStage.HOLDING and alpha_target < 1.0 - 1e-6:
+            old_stage = self.state.stage
+            metrics = self.state.metrics
+            epochs_in_stage = metrics.epochs_in_current_stage
+            epochs_total = metrics.epochs_total
+            improvement = metrics.total_improvement
+            counterfactual = metrics.counterfactual_contribution
+
+            if not self.state.transition(SeedStage.BLENDING):
+                raise RuntimeError(
+                    f"Illegal lifecycle transition {old_stage} → BLENDING"
+                )
+            self._on_enter_stage(SeedStage.BLENDING, old_stage)
+            self._emit_telemetry(
+                TelemetryEventType.SEED_STAGE_CHANGED,
+                data={
+                    "from": old_stage.name,
+                    "to": SeedStage.BLENDING.name,
+                    "accuracy_delta": improvement,
+                    "epochs_in_stage": epochs_in_stage,
+                    "epochs_total": epochs_total,
+                    "counterfactual": counterfactual,
+                },
+            )
+
+        # Update alpha algorithm if requested (HOLD-only changes).
+        if alpha_algorithm is not None and alpha_algorithm != self.state.alpha_algorithm:
+            if alpha_algorithm == AlphaAlgorithm.GATE:
+                if self.alpha_schedule is None:
+                    from esper.kasmina.blending import BlendCatalog
+
+                    topology = self.task_config.topology if self.task_config else "cnn"
+                    total_steps = max(1, int(steps))
+                    self.alpha_schedule = BlendCatalog.create(
+                        "gated",
+                        channels=self.channels,
+                        topology=topology,
+                        total_steps=total_steps,
+                    )
+                    if isinstance(self.alpha_schedule, nn.Module):
+                        self.alpha_schedule = self.alpha_schedule.to(self.device)
+            else:
+                # Non-gated algorithms must not carry a gate schedule.
+                self.alpha_schedule = None
+            self.state.alpha_algorithm = alpha_algorithm
+
+        controller.retarget(
+            alpha_target=alpha_target,
+            alpha_steps_total=steps,
+            alpha_curve=curve,
+        )
+
+        # Freeze learnable params when blending down.
+        self._set_blend_out_freeze(controller.alpha_mode == AlphaMode.DOWN)
         return True
 
     def capture_gradient_telemetry(self) -> None:
@@ -1630,10 +1750,11 @@ class SeedSlot(nn.Module):
                 raise ValueError(f"Unknown alpha_algorithm: {algo!r}")
 
     def get_parameters(self):
-        """Get trainable parameters of the seed."""
-        if self.seed is None:
-            return iter([])
-        return self.seed.parameters()
+        """Yield trainable parameters for the seed (and alpha_schedule when present)."""
+        if self.seed is not None:
+            yield from self.seed.parameters()
+        if self.alpha_schedule is not None:
+            yield from self.alpha_schedule.parameters()
 
     def set_alpha(self, alpha: float) -> None:
         """Set the blending alpha.
@@ -1712,9 +1833,12 @@ class SeedSlot(nn.Module):
                         f"Valid options: linear, sigmoid, gated"
                     )
             # Alpha amplitude scheduling is handled by AlphaController.
+            alpha_target = getattr(self, "_blend_alpha_target", None)
+            if alpha_target is None:
+                alpha_target = 1.0
             self.state.alpha_controller = AlphaController(alpha=self.state.alpha)
             self.state.alpha_controller.retarget(
-                alpha_target=1.0,
+                alpha_target=alpha_target,
                 alpha_steps_total=total_steps,
                 alpha_curve=curve,
             )
@@ -1841,11 +1965,12 @@ class SeedSlot(nn.Module):
         )
 
     def step_epoch(self) -> bool:
-        """Advance lifecycle mechanically once per epoch (Kasmina timekeeper).
+        """Advance lifecycle mechanics once per epoch (Kasmina timekeeper).
 
         Returns:
             True if step_epoch triggers a system-initiated prune, False otherwise.
-            Phase 4 removes HOLDING auto-prunes, so this currently returns False.
+            Stage advancement is explicit via advance_stage(); step_epoch only
+            ticks alpha schedules and cooldown transitions.
         """
         if not self.state:
             return False
@@ -1857,81 +1982,7 @@ class SeedSlot(nn.Module):
         # intact so host gradients still flow ("ghost gradients").
         self._set_blend_out_freeze(self.state.alpha_controller.alpha_mode == AlphaMode.DOWN)
 
-        # GERMINATED → TRAINING: immediate advance (no dwell required)
-        if stage == SeedStage.GERMINATED:
-            gate_result = self.gates.check_gate(self.state, SeedStage.TRAINING)
-            gate_result = self._sync_gate_decision(gate_result)
-            if not gate_result.passed:
-                return False
-
-            old_stage = self.state.stage
-            # Capture metrics before transition
-            metrics = self.state.metrics
-            epochs_in_stage = metrics.epochs_in_current_stage
-            epochs_total = metrics.epochs_total
-            improvement = metrics.total_improvement
-
-            ok = self.state.transition(SeedStage.TRAINING)
-            if not ok:
-                raise RuntimeError(
-                    f"Illegal lifecycle transition {self.state.stage} → TRAINING"
-                )
-            # Call unified stage entry hook
-            self._on_enter_stage(SeedStage.TRAINING, old_stage)
-            self._emit_telemetry(
-                TelemetryEventType.SEED_STAGE_CHANGED,
-                data={
-                    "from": old_stage.name,
-                    "to": self.state.stage.name,
-                    "accuracy_delta": improvement,
-                    "epochs_in_stage": epochs_in_stage,
-                    "epochs_total": epochs_total,
-                },
-            )
-            return False
-
-        # TRAINING → BLENDING when dwell satisfied and gate passes
-        if stage == SeedStage.TRAINING:
-            dwell_epochs = 1
-            if self.task_config:
-                dwell_epochs = max(
-                    1, int(self.task_config.max_epochs * self.task_config.train_to_blend_fraction)
-                )
-            if self.state.metrics.epochs_in_current_stage < dwell_epochs:
-                return False
-
-            gate_result = self.gates.check_gate(self.state, SeedStage.BLENDING)
-            gate_result = self._sync_gate_decision(gate_result)
-            if not gate_result.passed:
-                return False
-
-            old_stage = self.state.stage
-            # Capture metrics before transition
-            metrics = self.state.metrics
-            epochs_in_stage = metrics.epochs_in_current_stage
-            epochs_total = metrics.epochs_total
-            improvement = metrics.total_improvement
-
-            ok = self.state.transition(SeedStage.BLENDING)
-            if not ok:
-                raise RuntimeError(
-                    f"Illegal lifecycle transition {self.state.stage} → BLENDING"
-                )
-            # Call unified stage entry hook
-            self._on_enter_stage(SeedStage.BLENDING, old_stage)
-            self._emit_telemetry(
-                TelemetryEventType.SEED_STAGE_CHANGED,
-                data={
-                    "from": old_stage.name,
-                    "to": self.state.stage.name,
-                    "accuracy_delta": improvement,
-                    "epochs_in_stage": epochs_in_stage,
-                    "epochs_total": epochs_total,
-                },
-            )
-            return False
-
-        # BLENDING → HOLDING when alpha ramp completes and gate passes
+        # BLENDING: tick alpha controller and enforce scheduled prune completion
         if stage == SeedStage.BLENDING:
             controller = self.state.alpha_controller
             reached_target = controller.step()
@@ -1952,37 +2003,6 @@ class SeedSlot(nn.Module):
                     initiator = self._pending_prune_initiator or "policy"
                     self.prune(reason=reason, initiator=initiator)
                     return False
-
-                gate_result = self.gates.check_gate(self.state, SeedStage.HOLDING)
-                gate_result = self._sync_gate_decision(gate_result)
-                if not gate_result.passed:
-                    return False
-                old_stage = self.state.stage
-                # Capture metrics before transition
-                metrics = self.state.metrics
-                epochs_in_stage = metrics.epochs_in_current_stage
-                epochs_total = metrics.epochs_total
-                improvement = metrics.total_improvement
-                counterfactual = metrics.counterfactual_contribution
-
-                ok = self.state.transition(SeedStage.HOLDING)
-                if not ok:
-                    raise RuntimeError(
-                        f"Illegal lifecycle transition {self.state.stage} → HOLDING"
-                    )
-                # Call unified stage entry hook
-                self._on_enter_stage(SeedStage.HOLDING, old_stage)
-                self._emit_telemetry(
-                    TelemetryEventType.SEED_STAGE_CHANGED,
-                    data={
-                        "from": old_stage.name,
-                        "to": self.state.stage.name,
-                        "accuracy_delta": improvement,
-                        "epochs_in_stage": epochs_in_stage,
-                        "epochs_total": epochs_total,
-                        "counterfactual": counterfactual,
-                    },
-                )
             return False
 
         # HOLDING: Decision point for Tamiyo
@@ -2131,6 +2151,9 @@ class SeedSlot(nn.Module):
         """
         state_dict = {
             "isolate_gradients": self.isolate_gradients,
+            "blend_algorithm_id": getattr(self, "_blend_algorithm_id", None),
+            "blend_tempo_epochs": getattr(self, "_blend_tempo_epochs", None),
+            "blend_alpha_target": getattr(self, "_blend_alpha_target", None),
         }
 
         if self.state is not None:
@@ -2152,6 +2175,12 @@ class SeedSlot(nn.Module):
     def set_extra_state(self, state: dict) -> None:
         """Restore SeedState from primitive dict."""
         self.isolate_gradients = state.get("isolate_gradients", False)
+        if "blend_algorithm_id" in state:
+            self._blend_algorithm_id = state.get("blend_algorithm_id")
+        if "blend_tempo_epochs" in state:
+            self._blend_tempo_epochs = state.get("blend_tempo_epochs")
+        if "blend_alpha_target" in state:
+            self._blend_alpha_target = state.get("blend_alpha_target")
 
         if state.get("seed_state"):
             self.state = SeedState.from_dict(state["seed_state"])

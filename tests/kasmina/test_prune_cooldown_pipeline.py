@@ -98,6 +98,23 @@ class TestPruneCooldownPipeline:
         assert slot.state.stage == SeedStage.PRUNED
         assert slot.seed is None
 
+        slot.step_epoch()
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.EMBARGOED
+
+        for _ in range(DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE - 1):
+            slot.step_epoch()
+            assert slot.state is not None
+            assert slot.state.stage == SeedStage.EMBARGOED
+
+        slot.step_epoch()
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.RESETTING
+
+        slot.step_epoch()
+        assert slot.state is None
+        assert slot.seed is None
+
     def test_embargo_blocks_germinate_until_dwell_completes(self):
         slot = SeedSlot(slot_id="r0c0", channels=64, device="cpu", fast_mode=True)
 

@@ -27,7 +27,7 @@ from esper.leyline.factored_actions import FactoredAction, LifecycleOp
 from esper.leyline import TelemetryEvent, TelemetryEventType
 # NOTE: get_task_spec imported lazily inside functions to avoid circular import:
 #   runtime -> simic.rewards -> simic -> simic.training -> helpers -> runtime
-from esper.simic.rewards import compute_contribution_reward, SeedInfo
+from esper.simic.rewards import compute_contribution_reward, ContributionRewardConfig, SeedInfo
 from esper.simic.telemetry import (
     collect_seed_gradients_async,
     materialize_grad_stats,
@@ -37,6 +37,61 @@ from esper.leyline.slot_config import SlotConfig
 from esper.leyline.slot_id import validate_slot_ids
 from esper.nissa import get_hub
 from esper.utils.loss import compute_task_loss_with_metrics
+
+
+def compute_rent_and_shock_inputs(
+    *,
+    model: object,
+    slot_ids: list[str],
+    host_params: int,
+    base_slot_rent_ratio: float,
+    prev_slot_alphas: dict[str, float],
+    prev_slot_params: dict[str, int],
+) -> tuple[float, float]:
+    """Compute effective params and convex alpha-shock inputs for reward shaping.
+
+    Phase 5 contract:
+    - BaseSlotRent applies only while a seed module is present (cooldown pays no rent).
+    - Param counts are invariant to BLEND_OUT freeze (requires_grad toggles).
+    - Gate network params (alpha_schedule) count toward overhead when present.
+
+    Updates prev_slot_alphas/prev_slot_params in place.
+    """
+    base_slot_rent_params = base_slot_rent_ratio * host_params if host_params > 0 else 0.0
+
+    effective_seed_params = 0.0
+    alpha_delta_sq_sum = 0.0
+
+    for slot_id in slot_ids:
+        slot = model.seed_slots[slot_id]
+        has_active_seed = model.has_active_seed_in_slot(slot_id)
+        current_alpha = slot.alpha if has_active_seed else 0.0
+
+        slot_param_count = 0
+        if has_active_seed and slot.state is not None:
+            # Use cached counts to avoid per-step parameter iteration and to be
+            # invariant to BLEND_OUT requires_grad freezing.
+            slot_param_count = int(getattr(slot.state.metrics, "seed_param_count", 0))
+            if slot_param_count <= 0 and slot.seed is not None:
+                slot_param_count = sum(p.numel() for p in slot.seed.parameters())
+
+            # Gate network params (GATE alpha_algorithm) must also count as overhead.
+            if slot.alpha_schedule is not None:
+                slot_param_count += sum(p.numel() for p in slot.alpha_schedule.parameters())
+
+            effective_seed_params += base_slot_rent_params
+            effective_seed_params += current_alpha * slot_param_count
+
+        prev_alpha = prev_slot_alphas.get(slot_id, 0.0)
+        prev_params = prev_slot_params.get(slot_id, 0)
+        if host_params > 0 and prev_params > 0:
+            delta = current_alpha - prev_alpha
+            alpha_delta_sq_sum += (delta * delta) * (prev_params / host_params)
+
+        prev_slot_alphas[slot_id] = current_alpha
+        prev_slot_params[slot_id] = slot_param_count if has_active_seed else 0
+
+    return effective_seed_params, alpha_delta_sq_sum
 
 
 # =============================================================================
@@ -239,7 +294,7 @@ def _convert_flat_to_factored(action, topology: str = "cnn") -> FactoredAction:
 
     Maps flat action names to factored action components.
     """
-    from esper.leyline.factored_actions import BlueprintAction
+    from esper.leyline.factored_actions import AlphaTargetAction, BlueprintAction
 
     action_name = action.name
 
@@ -256,6 +311,10 @@ def _convert_flat_to_factored(action, topology: str = "cnn") -> FactoredAction:
             blueprint_idx=blueprint.value,
             blend_idx=0,  # Default blend
             tempo_idx=0,
+            alpha_target_idx=AlphaTargetAction.FULL.value,
+            alpha_speed_idx=0,
+            alpha_curve_idx=0,
+            alpha_algorithm_idx=0,
             op_idx=LifecycleOp.GERMINATE,
         )
     elif action_name == "FOSSILIZE":
@@ -264,6 +323,10 @@ def _convert_flat_to_factored(action, topology: str = "cnn") -> FactoredAction:
             blueprint_idx=0,
             blend_idx=0,
             tempo_idx=0,
+            alpha_target_idx=AlphaTargetAction.FULL.value,
+            alpha_speed_idx=0,
+            alpha_curve_idx=0,
+            alpha_algorithm_idx=0,
             op_idx=LifecycleOp.FOSSILIZE,
         )
     elif action_name == "PRUNE":
@@ -272,7 +335,23 @@ def _convert_flat_to_factored(action, topology: str = "cnn") -> FactoredAction:
             blueprint_idx=0,
             blend_idx=0,
             tempo_idx=0,
+            alpha_target_idx=AlphaTargetAction.FULL.value,
+            alpha_speed_idx=0,
+            alpha_curve_idx=0,
+            alpha_algorithm_idx=0,
             op_idx=LifecycleOp.PRUNE,
+        )
+    elif action_name == "ADVANCE":
+        return FactoredAction.from_indices(
+            slot_idx=0,
+            blueprint_idx=0,
+            blend_idx=0,
+            tempo_idx=0,
+            alpha_target_idx=AlphaTargetAction.FULL.value,
+            alpha_speed_idx=0,
+            alpha_curve_idx=0,
+            alpha_algorithm_idx=0,
+            op_idx=LifecycleOp.ADVANCE,
         )
     else:  # WAIT or unknown
         return FactoredAction.from_indices(
@@ -280,6 +359,10 @@ def _convert_flat_to_factored(action, topology: str = "cnn") -> FactoredAction:
             blueprint_idx=0,
             blend_idx=0,
             tempo_idx=0,
+            alpha_target_idx=AlphaTargetAction.FULL.value,
+            alpha_speed_idx=0,
+            alpha_curve_idx=0,
+            alpha_algorithm_idx=0,
             op_idx=LifecycleOp.WAIT,
         )
 
@@ -359,6 +442,9 @@ def run_heuristic_episode(
 
     # Calculate host_params before emitting (needed for Karn TUI)
     host_params = sum(p.numel() for p in model.get_host_parameters() if p.requires_grad)
+    reward_config = ContributionRewardConfig()
+    prev_slot_alphas = {slot_id: 0.0 for slot_id in enabled_slots}
+    prev_slot_params = {slot_id: 0 for slot_id in enabled_slots}
 
     # Emit TRAINING_STARTED to activate Karn (P1 fix)
     hub.emit(TelemetryEvent(
@@ -489,7 +575,7 @@ def run_heuristic_episode(
 
         acc_delta = signals.metrics.accuracy_delta
 
-        # Mechanical lifecycle advance
+        # Mechanical lifecycle advance (alpha ticking + cooldown pipeline)
         for slot_id in enabled_slots:
             model.seed_slots[slot_id].step_epoch()
 
@@ -519,6 +605,14 @@ def run_heuristic_episode(
             target_slot = resolve_slot_for_seed_id(decision.target_seed_id)
             reward_seed_state = model.seed_slots[target_slot].state
             reward_seed_params = model.seed_slots[target_slot].active_seed_params
+        effective_seed_params, alpha_delta_sq_sum = compute_rent_and_shock_inputs(
+            model=model,
+            slot_ids=enabled_slots,
+            host_params=host_params,
+            base_slot_rent_ratio=reward_config.base_slot_rent_ratio,
+            prev_slot_alphas=prev_slot_alphas,
+            prev_slot_params=prev_slot_params,
+        )
         reward = compute_contribution_reward(
             action=factored_action.op,  # Pass the LifecycleOp enum
             seed_contribution=None,  # No counterfactual in heuristic path
@@ -532,11 +626,15 @@ def run_heuristic_episode(
             total_params=total_params,
             host_params=host_params,
             acc_delta=acc_delta,  # Used as proxy signal
+            effective_seed_params=effective_seed_params,
+            alpha_delta_sq_sum=alpha_delta_sq_sum,
+            config=reward_config,
         )
         episode_rewards.append(reward)
 
         germinate_slot = next(
-            (slot_id for slot_id in enabled_slots if not model.has_active_seed_in_slot(slot_id)),
+            # Phase 4: EMBARGOED/RESETTING retain state, so only state==None is available.
+            (slot_id for slot_id in enabled_slots if model.seed_slots[slot_id].state is None),
             None,
         )
 
@@ -569,6 +667,13 @@ def run_heuristic_episode(
                     torch.optim.SGD(model.get_seed_parameters(), lr=task_spec.seed_lr, momentum=0.9)
                     if model.has_active_seed else None
                 )
+        elif factored_action.op == LifecycleOp.ADVANCE:
+            if decision.target_seed_id:
+                target_slot = resolve_slot_for_seed_id(decision.target_seed_id)
+                slot = model.seed_slots[target_slot]
+                gate_result = slot.advance_stage()
+                if not gate_result.passed:
+                    pass
 
         summary_seed_id = signals.active_seeds[0] if signals.active_seeds else None
         hub.emit(TelemetryEvent(

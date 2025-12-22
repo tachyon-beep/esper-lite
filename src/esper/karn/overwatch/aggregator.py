@@ -450,6 +450,8 @@ class TelemetryAggregator:
                     code = "P"
                 elif op.upper() == "FOSSILIZE":
                     code = "F"
+                elif op.upper() == "SET_ALPHA_TARGET":
+                    code = "A"
                 self._tamiyo.recent_actions.append(code)
                 self._tamiyo.recent_actions = self._tamiyo.recent_actions[-20:]
                 # Keep counts roughly in sync even before the batch-level summary arrives.

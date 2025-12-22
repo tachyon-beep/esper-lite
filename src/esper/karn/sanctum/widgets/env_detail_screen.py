@@ -33,6 +33,8 @@ STAGE_COLORS = {
     "BLENDING": "yellow",
     "FOSSILIZED": "green",
     "PRUNED": "red",
+    "EMBARGOED": "bright_red",
+    "RESETTING": "dim",
 }
 
 # Stage border styles for CSS classes
@@ -44,6 +46,8 @@ STAGE_CSS_CLASSES = {
     "BLENDING": "blending",
     "FOSSILIZED": "fossilized",
     "PRUNED": "pruned",
+    "EMBARGOED": "embargoed",
+    "RESETTING": "resetting",
 }
 
 
@@ -469,6 +473,7 @@ class EnvDetailScreen(ModalScreen[None]):
                 action_colors = {
                     "WAIT": "dim",
                     "GERMINATE": "cyan",
+                    "SET_ALPHA_TARGET": "yellow",
                     "FOSSILIZE": "green",
                     "PRUNE": "red",
                 }
@@ -487,6 +492,8 @@ class EnvDetailScreen(ModalScreen[None]):
                 reward_text.append(f"  ΔAcc: {rc.base_acc_delta:+.3f}", style=style)
             if rc.compute_rent is not None and rc.compute_rent != 0:
                 reward_text.append(f"  Rent: {rc.compute_rent:.3f}", style="red")
+            if rc.alpha_shock is not None and rc.alpha_shock != 0:
+                reward_text.append(f"  Shock: {rc.alpha_shock:.3f}", style="red")
             if rc.bounded_attribution is not None and rc.bounded_attribution != 0:
                 style = "green" if rc.bounded_attribution > 0 else "red"
                 reward_text.append(f"  Attr: {rc.bounded_attribution:+.3f}", style=style)

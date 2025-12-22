@@ -84,6 +84,7 @@ class TestRewardComponentsTelemetry:
         computed_sum = (
             components.bounded_attribution
             + components.compute_rent
+            + components.alpha_shock
             + components.pbrs_bonus
             + components.action_shaping
             + components.terminal_bonus

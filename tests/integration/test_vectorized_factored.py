@@ -9,7 +9,16 @@ from esper.tamiyo.policy.features import MULTISLOT_FEATURE_SIZE
 
 from esper.simic.agent import PPOAgent
 from esper.tamiyo.policy.action_masks import compute_action_masks
-from esper.leyline.factored_actions import NUM_BLUEPRINTS, NUM_BLENDS, NUM_TEMPO, NUM_OPS
+from esper.leyline.factored_actions import (
+    NUM_ALPHA_ALGORITHMS,
+    NUM_ALPHA_CURVES,
+    NUM_ALPHA_SPEEDS,
+    NUM_ALPHA_TARGETS,
+    NUM_BLUEPRINTS,
+    NUM_BLENDS,
+    NUM_OPS,
+    NUM_TEMPO,
+)
 from esper.leyline.slot_config import SlotConfig
 
 
@@ -31,11 +40,25 @@ class TestFactoredActionMasksInVectorized:
         )
 
         assert isinstance(masks, dict)
-        assert set(masks.keys()) == {"slot", "blueprint", "blend", "tempo", "op"}
+        assert set(masks.keys()) == {
+            "slot",
+            "blueprint",
+            "blend",
+            "tempo",
+            "alpha_target",
+            "alpha_speed",
+            "alpha_curve",
+            "alpha_algorithm",
+            "op",
+        }
         assert masks["slot"].shape == (slot_config.num_slots,)
         assert masks["blueprint"].shape == (NUM_BLUEPRINTS,)
         assert masks["blend"].shape == (NUM_BLENDS,)
         assert masks["tempo"].shape == (NUM_TEMPO,)
+        assert masks["alpha_target"].shape == (NUM_ALPHA_TARGETS,)
+        assert masks["alpha_speed"].shape == (NUM_ALPHA_SPEEDS,)
+        assert masks["alpha_curve"].shape == (NUM_ALPHA_CURVES,)
+        assert masks["alpha_algorithm"].shape == (NUM_ALPHA_ALGORITHMS,)
         assert masks["op"].shape == (NUM_OPS,)
         assert masks["slot"].dtype == torch.bool
 
@@ -70,6 +93,10 @@ class TestFactoredActionMasksInVectorized:
         assert batched_masks["blueprint"].shape == (n_envs, NUM_BLUEPRINTS)
         assert batched_masks["blend"].shape == (n_envs, NUM_BLENDS)
         assert batched_masks["tempo"].shape == (n_envs, NUM_TEMPO)
+        assert batched_masks["alpha_target"].shape == (n_envs, NUM_ALPHA_TARGETS)
+        assert batched_masks["alpha_speed"].shape == (n_envs, NUM_ALPHA_SPEEDS)
+        assert batched_masks["alpha_curve"].shape == (n_envs, NUM_ALPHA_CURVES)
+        assert batched_masks["alpha_algorithm"].shape == (n_envs, NUM_ALPHA_ALGORITHMS)
         assert batched_masks["op"].shape == (n_envs, NUM_OPS)
 
 
@@ -97,6 +124,10 @@ class TestPPOAgentFactoredInVectorized:
             "blueprint": torch.ones(n_envs, NUM_BLUEPRINTS, dtype=torch.bool),
             "blend": torch.ones(n_envs, NUM_BLENDS, dtype=torch.bool),
             "tempo": torch.ones(n_envs, NUM_TEMPO, dtype=torch.bool),
+            "alpha_target": torch.ones(n_envs, NUM_ALPHA_TARGETS, dtype=torch.bool),
+            "alpha_speed": torch.ones(n_envs, NUM_ALPHA_SPEEDS, dtype=torch.bool),
+            "alpha_curve": torch.ones(n_envs, NUM_ALPHA_CURVES, dtype=torch.bool),
+            "alpha_algorithm": torch.ones(n_envs, NUM_ALPHA_ALGORITHMS, dtype=torch.bool),
             "op": torch.ones(n_envs, NUM_OPS, dtype=torch.bool),
         }
 
@@ -108,13 +139,27 @@ class TestPPOAgentFactoredInVectorized:
                 blueprint_mask=masks["blueprint"],
                 blend_mask=masks["blend"],
                 tempo_mask=masks["tempo"],
+                alpha_target_mask=masks["alpha_target"],
+                alpha_speed_mask=masks["alpha_speed"],
+                alpha_curve_mask=masks["alpha_curve"],
+                alpha_algorithm_mask=masks["alpha_algorithm"],
                 op_mask=masks["op"],
                 deterministic=False,
             )
 
         # Actions should be dict of tensors
         assert isinstance(result.actions, dict)
-        assert set(result.actions.keys()) == {"slot", "blueprint", "blend", "tempo", "op"}
+        assert set(result.actions.keys()) == {
+            "slot",
+            "blueprint",
+            "blend",
+            "tempo",
+            "alpha_target",
+            "alpha_speed",
+            "alpha_curve",
+            "alpha_algorithm",
+            "op",
+        }
         assert result.actions["slot"].shape == (n_envs,)
         assert result.actions["op"].shape == (n_envs,)
 
@@ -153,11 +198,19 @@ class TestPPOAgentFactoredInVectorized:
                 blueprint_action=env_idx % NUM_BLUEPRINTS,
                 blend_action=env_idx % NUM_BLENDS,
                 tempo_action=env_idx % NUM_TEMPO,
+                alpha_target_action=env_idx % NUM_ALPHA_TARGETS,
+                alpha_speed_action=env_idx % NUM_ALPHA_SPEEDS,
+                alpha_curve_action=env_idx % NUM_ALPHA_CURVES,
+                alpha_algorithm_action=env_idx % NUM_ALPHA_ALGORITHMS,
                 op_action=env_idx % NUM_OPS,
                 slot_log_prob=-0.5,
                 blueprint_log_prob=-0.5,
                 blend_log_prob=-0.5,
                 tempo_log_prob=-0.5,
+                alpha_target_log_prob=-0.5,
+                alpha_speed_log_prob=-0.5,
+                alpha_curve_log_prob=-0.5,
+                alpha_algorithm_log_prob=-0.5,
                 op_log_prob=-0.5,
                 value=0.5,
                 reward=1.0,
@@ -166,6 +219,10 @@ class TestPPOAgentFactoredInVectorized:
                 blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
                 blend_mask=torch.ones(NUM_BLENDS, dtype=torch.bool),
                 tempo_mask=torch.ones(NUM_TEMPO, dtype=torch.bool),
+                alpha_target_mask=torch.ones(NUM_ALPHA_TARGETS, dtype=torch.bool),
+                alpha_speed_mask=torch.ones(NUM_ALPHA_SPEEDS, dtype=torch.bool),
+                alpha_curve_mask=torch.ones(NUM_ALPHA_CURVES, dtype=torch.bool),
+                alpha_algorithm_mask=torch.ones(NUM_ALPHA_ALGORITHMS, dtype=torch.bool),
                 op_mask=torch.ones(NUM_OPS, dtype=torch.bool),
                 hidden_h=hidden_h,
                 hidden_c=hidden_c,

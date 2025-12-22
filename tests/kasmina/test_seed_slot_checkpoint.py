@@ -7,6 +7,7 @@ from pathlib import Path
 
 from esper.kasmina.slot import SeedSlot
 from esper.tamiyo.policy.features import TaskConfig
+from esper.leyline.alpha import AlphaAlgorithm
 from esper.leyline.stages import SeedStage
 
 
@@ -124,6 +125,7 @@ class TestAlphaScheduleCleanup:
             blueprint_id="norm",
             seed_id="test-seed",
             blend_algorithm_id="gated",
+            alpha_algorithm=AlphaAlgorithm.GATE,
         )
         slot.state.transition(SeedStage.TRAINING)
         slot.state.transition(SeedStage.BLENDING)

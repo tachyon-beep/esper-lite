@@ -11,6 +11,7 @@ import torch
 from esper.kasmina.isolation import blend_with_isolation
 from esper.kasmina.slot import SeedSlot
 from esper.leyline import SeedStage
+from esper.leyline.alpha import AlphaAlgorithm
 
 
 class TestBlendWithIsolation:
@@ -145,7 +146,12 @@ class TestSeedSlotFallbackPath:
         slot = SeedSlot(slot_id="test", channels=16)
 
         # Germinate with gated blending so alpha_schedule is valid.
-        slot.state = slot.germinate("noop", seed_id="test-seed", blend_algorithm_id="gated")
+        slot.state = slot.germinate(
+            "noop",
+            seed_id="test-seed",
+            blend_algorithm_id="gated",
+            alpha_algorithm=AlphaAlgorithm.GATE,
+        )
         slot.state.transition(SeedStage.TRAINING)
         slot.state.transition(SeedStage.BLENDING)
 

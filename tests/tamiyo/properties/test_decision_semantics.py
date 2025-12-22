@@ -17,7 +17,7 @@ import pytest
 from hypothesis import given, settings, HealthCheck
 from hypothesis import strategies as st
 
-from esper.leyline import SeedStage
+from esper.leyline import AlphaMode, SeedStage
 from esper.tamiyo.heuristic import HeuristicTamiyo, HeuristicPolicyConfig
 from esper.tamiyo.decisions import TamiyoDecision
 
@@ -282,12 +282,16 @@ class TestWaitDefault:
     @given(seed=succeeding_seed_states())
     @settings(max_examples=100)
     def test_wait_for_healthy_seed(self, seed):
-        """Property: Healthy seeds in non-terminal stages get WAIT."""
+        """Property: Healthy BLENDING seeds not yet at full amplitude should WAIT."""
         policy = HeuristicTamiyo(topology="cnn")
 
-        # Ensure seed is healthy but not ready to fossilize
-        if seed.stage == SeedStage.HOLDING:
-            seed.stage = SeedStage.BLENDING  # Move to earlier stage
+        # Force a healthy BLENDING seed that is not yet eligible to ADVANCE.
+        seed.stage = SeedStage.BLENDING
+        seed.epochs_in_stage = 1
+        seed.alpha = 0.5
+        seed.alpha_controller.alpha_target = 1.0
+        seed.alpha_controller.alpha_mode = AlphaMode.UP
+        seed.alpha_controller.alpha = seed.alpha
 
         class MockSignals:
             class metrics:
@@ -333,8 +337,8 @@ class TestStageAppropriateness:
 
     @given(seed=mock_seed_states_at_stage(SeedStage.GERMINATED))
     @settings(max_examples=50)
-    def test_germinated_seed_waits(self, seed):
-        """Property: GERMINATED seeds always get WAIT (awaiting auto-advance)."""
+    def test_germinated_seed_advances(self, seed):
+        """Property: GERMINATED seeds request ADVANCE to enter TRAINING."""
         policy = HeuristicTamiyo(topology="cnn")
 
         class MockSignals:
@@ -346,9 +350,9 @@ class TestStageAppropriateness:
 
         decision = policy.decide(MockSignals(), active_seeds=[seed])
 
-        assert decision.action.name == "WAIT", \
-            f"GERMINATED should WAIT, got {decision.action.name}"
-        assert "auto-advance" in decision.reason.lower() or "await" in decision.reason.lower()
+        assert decision.action.name == "ADVANCE", \
+            f"GERMINATED should ADVANCE, got {decision.action.name}"
+        assert "advance" in decision.reason.lower()
 
     @given(seed=mock_seed_states_at_stage(SeedStage.TRAINING))
     @settings(max_examples=50)

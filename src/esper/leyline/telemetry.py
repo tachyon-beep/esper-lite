@@ -18,12 +18,16 @@ from enum import Enum, auto
 from typing import Any
 from uuid import uuid4
 
+from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
 
 # Feature normalization constants for RL observation space
 # These define the expected ranges for seed telemetry values
 _GRADIENT_NORM_MAX: float = 10.0  # 99th percentile typical gradient norm
 _EPOCHS_IN_STAGE_MAX: int = 50  # Typical max epochs in single stage
 _ACCURACY_DELTA_SCALE: float = 10.0  # Scale factor for accuracy deltas
+_ALPHA_MODE_MAX: int = max(mode.value for mode in AlphaMode)
+_ALPHA_ALGO_MIN: int = min(algo.value for algo in AlphaAlgorithm)
+_ALPHA_ALGO_MAX: int = max(algo.value for algo in AlphaAlgorithm)
 
 
 def _utc_now() -> datetime:
@@ -164,6 +168,15 @@ class SeedTelemetry:
     stage: int = 1  # SeedStage enum value (1-10); feature scaling clamps >=10 to 1.0
     alpha: float = 0.0  # blending weight (0-1)
 
+    # Alpha controller context
+    alpha_target: float = 0.0
+    alpha_mode: int = 0
+    alpha_steps_total: int = 0
+    alpha_steps_done: int = 0
+    time_to_target: int = 0
+    alpha_velocity: float = 0.0
+    alpha_algorithm: int = AlphaAlgorithm.ADD.value
+
     # Temporal context
     epoch: int = 0
     max_epochs: int = 25
@@ -176,11 +189,13 @@ class SeedTelemetry:
     blending_velocity: float = 0.0  # d(alpha) / d(epoch)
 
     def to_features(self) -> list[float]:
-        """Convert to 10-dim feature vector for RL policies.
+        """Convert to 17-dim feature vector for RL policies.
 
         All features normalized to approximately [0, 1] range.
         Uses module constants for normalization bounds.
         """
+        steps_den = max(self.max_epochs, 1)
+        alpha_algo_range = max(_ALPHA_ALGO_MAX - _ALPHA_ALGO_MIN, 1)
         return [
             min(self.gradient_norm, _GRADIENT_NORM_MAX) / _GRADIENT_NORM_MAX,
             self.gradient_health,
@@ -192,12 +207,19 @@ class SeedTelemetry:
             min((self.stage - 1) / 9.0, 1.0),  # stages 1-10 -> [0, 1], clamps >=10
             self.alpha,
             self.epoch / max(self.max_epochs, 1),  # temporal position
+            self.alpha_target,
+            self.alpha_mode / max(_ALPHA_MODE_MAX, 1),
+            min(self.alpha_steps_total, steps_den) / steps_den,
+            min(self.alpha_steps_done, steps_den) / steps_den,
+            min(self.time_to_target, steps_den) / steps_den,
+            max(-1.0, min(1.0, self.alpha_velocity)),
+            (self.alpha_algorithm - _ALPHA_ALGO_MIN) / alpha_algo_range,
         ]
 
     @classmethod
     def feature_dim(cls) -> int:
         """Return current feature vector dimension."""
-        return 10
+        return 17
 
     def to_dict(self) -> dict:
         """Convert to primitive dict for serialization."""
@@ -214,6 +236,13 @@ class SeedTelemetry:
             "epochs_in_stage": self.epochs_in_stage,
             "stage": self.stage,
             "alpha": self.alpha,
+            "alpha_target": self.alpha_target,
+            "alpha_mode": self.alpha_mode,
+            "alpha_steps_total": self.alpha_steps_total,
+            "alpha_steps_done": self.alpha_steps_done,
+            "time_to_target": self.time_to_target,
+            "alpha_velocity": self.alpha_velocity,
+            "alpha_algorithm": self.alpha_algorithm,
             "epoch": self.epoch,
             "max_epochs": self.max_epochs,
             "captured_at": self.captured_at.isoformat() if self.captured_at else None,
@@ -239,6 +268,13 @@ class SeedTelemetry:
             epochs_in_stage=data.get("epochs_in_stage", 0),
             stage=data.get("stage", 1),
             alpha=data.get("alpha", 0.0),
+            alpha_target=data.get("alpha_target", 0.0),
+            alpha_mode=data.get("alpha_mode", AlphaMode.HOLD.value),
+            alpha_steps_total=data.get("alpha_steps_total", 0),
+            alpha_steps_done=data.get("alpha_steps_done", 0),
+            time_to_target=data.get("time_to_target", 0),
+            alpha_velocity=data.get("alpha_velocity", 0.0),
+            alpha_algorithm=data.get("alpha_algorithm", AlphaAlgorithm.ADD.value),
             epoch=data.get("epoch", 0),
             max_epochs=data.get("max_epochs", 25),
             captured_at=datetime.fromisoformat(data["captured_at"]) if data.get("captured_at") else _utc_now(),

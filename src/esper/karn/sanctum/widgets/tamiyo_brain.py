@@ -158,13 +158,13 @@ class TamiyoBrain(Static):
         # Color mapping
         colors = {
             "GERMINATE": "green",
+            "SET_ALPHA_TARGET": "cyan",
             "WAIT": "dim",
-            "BLEND": "cyan",
             "FOSSILIZE": "blue",
             "PRUNE": "red",
         }
 
-        for action in ["GERMINATE", "BLEND", "FOSSILIZE", "PRUNE", "WAIT"]:
+        for action in ["GERMINATE", "SET_ALPHA_TARGET", "FOSSILIZE", "PRUNE", "WAIT"]:
             pct = pcts.get(action, 0)
             width = int((pct / 100) * bar_width)
             if width > 0:
@@ -173,8 +173,14 @@ class TamiyoBrain(Static):
         bar.append("] ")
 
         # Compact legend: G=50 W=25 F=25
-        abbrevs = {"GERMINATE": "G", "BLEND": "B", "WAIT": "W", "FOSSILIZE": "F", "PRUNE": "P"}
-        for action in ["GERMINATE", "BLEND", "FOSSILIZE", "PRUNE", "WAIT"]:
+        abbrevs = {
+            "GERMINATE": "G",
+            "SET_ALPHA_TARGET": "A",
+            "WAIT": "W",
+            "FOSSILIZE": "F",
+            "PRUNE": "P",
+        }
+        for action in ["GERMINATE", "SET_ALPHA_TARGET", "FOSSILIZE", "PRUNE", "WAIT"]:
             pct = pcts.get(action, 0)
             if pct > 0:
                 bar.append(f"{abbrevs[action]}={pct:.0f} ", style=colors.get(action, "white"))

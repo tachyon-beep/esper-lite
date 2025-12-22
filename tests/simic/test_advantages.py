@@ -61,6 +61,18 @@ class TestPerHeadAdvantages:
         assert torch.allclose(per_head["blueprint"], torch.zeros(1))
         assert torch.allclose(per_head["blend"], torch.zeros(1))
 
+    def test_advance_slot_active_others_masked(self):
+        """When op=ADVANCE, slot and op active, other heads masked."""
+        op_actions = torch.tensor([LifecycleOp.ADVANCE])
+        base_advantages = torch.tensor([4.0])
+
+        per_head = compute_per_head_advantages(base_advantages, op_actions)
+
+        assert torch.allclose(per_head["op"], base_advantages)
+        assert torch.allclose(per_head["slot"], base_advantages)
+        assert torch.allclose(per_head["blueprint"], torch.zeros(1))
+        assert torch.allclose(per_head["blend"], torch.zeros(1))
+
     def test_mixed_ops_correct_masking(self):
         """Mixed op types should apply correct masking per timestep."""
         op_actions = torch.tensor([

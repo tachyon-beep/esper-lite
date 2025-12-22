@@ -26,6 +26,7 @@ class RewardComponents(Static):
     - ΔAcc (base_acc_delta): Always show, green if ≥0, red if <0
     - Attr (bounded_attribution): Show only if non-zero, green/red
     - Rent (compute_rent): Always show, red if <0
+    - Shock (alpha_shock): Show only if non-zero, red if <0
     - Penalty (ratio_penalty): Show only if non-zero, red if <0
     - Stage (stage_bonus): Show only if non-zero, blue
     - Fossil (fossilize_terminal_bonus): Show only if non-zero, blue
@@ -107,6 +108,11 @@ class RewardComponents(Static):
         if isinstance(components.compute_rent, (int, float)):
             style = "red" if components.compute_rent < 0 else "dim"
             table.add_row("Rent:", Text(f"{components.compute_rent:+.2f}", style=style))
+
+        # Alpha shock (convex penalty on alpha deltas)
+        if isinstance(components.alpha_shock, (int, float)) and components.alpha_shock != 0.0:
+            style = "red" if components.alpha_shock < 0 else "dim"
+            table.add_row("Shock:", Text(f"{components.alpha_shock:+.2f}", style=style))
 
         # Ratio penalty (ransomware / attribution mismatch)
         if isinstance(components.ratio_penalty, (int, float)) and components.ratio_penalty != 0.0:

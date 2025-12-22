@@ -21,7 +21,9 @@ from hypothesis.stateful import (
     initialize,
 )
 
+from esper.kasmina.alpha_controller import AlphaController
 from esper.leyline import SeedStage
+from esper.leyline.alpha import AlphaMode
 from esper.tamiyo.heuristic import HeuristicTamiyo
 from esper.tamiyo.tracker import SignalTracker
 from esper.tamiyo.decisions import TamiyoDecision
@@ -91,12 +93,18 @@ class HeuristicPolicyStateMachine(RuleBasedStateMachine):
     )
     def make_decision_with_seed(self, stage, improvement, epochs_in_stage):
         """Make decision with an active seed."""
+        alpha = 0.5 if stage == SeedStage.BLENDING else 0.0
+        alpha_controller = AlphaController(alpha=alpha)
+        alpha_controller.alpha_target = 1.0
+        alpha_controller.alpha_mode = AlphaMode.UP
+
         seed = type('MockSeed', (), {
             'seed_id': f'seed_{self.epoch}',
             'stage': stage,
             'epochs_in_stage': epochs_in_stage,
-            'alpha': 0.5 if stage == SeedStage.BLENDING else 0.0,
+            'alpha': alpha,
             'blueprint_id': 'conv_light',
+            'alpha_controller': alpha_controller,
             'metrics': type('Metrics', (), {
                 'improvement_since_stage_start': improvement,
                 'total_improvement': improvement,
@@ -126,12 +134,17 @@ class HeuristicPolicyStateMachine(RuleBasedStateMachine):
     )
     def make_decision_probationary(self, counterfactual):
         """Make decision with HOLDING seed."""
+        alpha_controller = AlphaController(alpha=1.0)
+        alpha_controller.alpha_target = 1.0
+        alpha_controller.alpha_mode = AlphaMode.HOLD
+
         seed = type('MockSeed', (), {
             'seed_id': f'seed_{self.epoch}',
             'stage': SeedStage.HOLDING,
             'epochs_in_stage': 5,
             'alpha': 1.0,
             'blueprint_id': 'conv_light',
+            'alpha_controller': alpha_controller,
             'metrics': type('Metrics', (), {
                 'improvement_since_stage_start': counterfactual,
                 'total_improvement': counterfactual,
