@@ -17,23 +17,23 @@ class TestConfiguration:
         # Verify default values are applied
         assert policy.config.plateau_epochs_to_germinate == 3
         assert policy.config.min_epochs_before_germinate == 5
-        assert policy.config.cull_after_epochs_without_improvement == 5
-        assert policy.config.cull_if_accuracy_drops_by == 2.0
+        assert policy.config.prune_after_epochs_without_improvement == 5
+        assert policy.config.prune_if_accuracy_drops_by == 2.0
         assert policy.config.min_improvement_to_fossilize == 0.5
-        assert policy.config.embargo_epochs_after_cull == 5
+        assert policy.config.embargo_epochs_after_prune == 5
 
     def test_custom_config_respected(self):
         """Should use custom config when provided."""
         custom_config = HeuristicPolicyConfig(
             plateau_epochs_to_germinate=10,
             min_epochs_before_germinate=20,
-            embargo_epochs_after_cull=15,
+            embargo_epochs_after_prune=15,
         )
         policy = HeuristicTamiyo(config=custom_config, topology="cnn")
 
         assert policy.config.plateau_epochs_to_germinate == 10
         assert policy.config.min_epochs_before_germinate == 20
-        assert policy.config.embargo_epochs_after_cull == 15
+        assert policy.config.embargo_epochs_after_prune == 15
 
     def test_topology_affects_actions(self):
         """Different topologies should have different action enums."""
@@ -127,9 +127,9 @@ class TestBlueprintPenaltySystem:
         from esper.leyline import SeedStage
 
         config = HeuristicPolicyConfig(
-            blueprint_penalty_on_cull=2.0,
-            cull_after_epochs_without_improvement=1,
-            cull_if_accuracy_drops_by=1.0,
+            blueprint_penalty_on_prune=2.0,
+            prune_after_epochs_without_improvement=1,
+            prune_if_accuracy_drops_by=1.0,
         )
         policy = HeuristicTamiyo(config=config, topology="cnn")
 
@@ -147,7 +147,7 @@ class TestBlueprintPenaltySystem:
 
         # Make decision (should cull)
         decision = policy.decide(signals, [seed])
-        assert decision.action.name == "CULL"
+        assert decision.action.name == "PRUNE"
 
         # Penalty should be applied
         assert policy._blueprint_penalties["conv_light"] == 2.0
@@ -347,10 +347,10 @@ class TestEmbargoMechanism:
 
     def test_embargo_blocks_germination(self, mock_signals_factory):
         """Should block germination during embargo period."""
-        config = HeuristicPolicyConfig(embargo_epochs_after_cull=5)
+        config = HeuristicPolicyConfig(embargo_epochs_after_prune=5)
         policy = HeuristicTamiyo(config=config, topology="cnn")
 
-        policy._last_cull_epoch = 8
+        policy._last_prune_epoch = 8
 
         # Try to germinate at epoch 10 (2 epochs after cull, within embargo)
         signals = mock_signals_factory(
@@ -363,10 +363,10 @@ class TestEmbargoMechanism:
 
     def test_embargo_expires_after_period(self, mock_signals_factory):
         """Should allow germination after embargo expires."""
-        config = HeuristicPolicyConfig(embargo_epochs_after_cull=3)
+        config = HeuristicPolicyConfig(embargo_epochs_after_prune=3)
         policy = HeuristicTamiyo(config=config, topology="cnn")
 
-        policy._last_cull_epoch = 5
+        policy._last_prune_epoch = 5
 
         # Try to germinate at epoch 10 (5 epochs after cull, past embargo)
         signals = mock_signals_factory(
@@ -382,12 +382,12 @@ class TestEmbargoMechanism:
         from esper.leyline import SeedStage
 
         config = HeuristicPolicyConfig(
-            cull_after_epochs_without_improvement=1,
-            cull_if_accuracy_drops_by=1.0,
+            prune_after_epochs_without_improvement=1,
+            prune_if_accuracy_drops_by=1.0,
         )
         policy = HeuristicTamiyo(config=config, topology="cnn")
 
-        initial_cull_epoch = policy._last_cull_epoch
+        initial_cull_epoch = policy._last_prune_epoch
         assert initial_cull_epoch == -100  # Default
 
         # Create failing seed
@@ -401,9 +401,9 @@ class TestEmbargoMechanism:
         decision = policy.decide(signals, [seed])
 
         # Should cull
-        assert decision.action.name == "CULL"
+        assert decision.action.name == "PRUNE"
         # Should update last_cull_epoch
-        assert policy._last_cull_epoch == 15
+        assert policy._last_prune_epoch == 15
 
 
 @pytest.mark.tamiyo
@@ -436,7 +436,7 @@ class TestTerminalSeedFiltering:
         policy = HeuristicTamiyo(topology="cnn")
 
         # Create culled seed
-        culled_seed = mock_seed_factory(stage=SeedStage.CULLED)
+        culled_seed = mock_seed_factory(stage=SeedStage.PRUNED)
 
         signals = mock_signals_factory(
             epoch=10, plateau_epochs=5, host_stabilized=1
@@ -470,7 +470,7 @@ class TestBlueprintIndexRotation:
         assert policy._blueprint_index == 1
 
         # Second germination (simulate conditions allow it)
-        policy._last_cull_epoch = -100  # Reset embargo
+        policy._last_prune_epoch = -100  # Reset embargo
         decision2 = policy.decide(signals, [])
         assert decision2.action.name == "GERMINATE_CONV_HEAVY"
         assert policy._blueprint_index == 2
@@ -489,7 +489,7 @@ class TestBlueprintIndexRotation:
         # Germinate through all blueprints
         blueprints = []
         for _ in range(4):  # More than rotation length
-            policy._last_cull_epoch = -100  # Reset embargo
+            policy._last_prune_epoch = -100  # Reset embargo
             decision = policy.decide(signals, [])
             if decision.action.name.startswith("GERMINATE_"):
                 blueprint = decision.action.name.replace("GERMINATE_", "").lower()
@@ -519,7 +519,7 @@ class TestResetCompleteness:
         # Modify all state
         policy._blueprint_index = 10
         policy._germination_count = 5
-        policy._last_cull_epoch = 50
+        policy._last_prune_epoch = 50
         policy._blueprint_penalties = {"conv_light": 3.0, "conv_heavy": 2.0}
         policy._last_decay_epoch = 45
         # Add some fake decisions
@@ -534,7 +534,7 @@ class TestResetCompleteness:
         # Verify all fields reset
         assert policy._blueprint_index == 0
         assert policy._germination_count == 0
-        assert policy._last_cull_epoch == -100
+        assert policy._last_prune_epoch == -100
         assert len(policy._blueprint_penalties) == 0
         assert policy._last_decay_epoch == -1
         assert len(policy._decisions_made) == 0

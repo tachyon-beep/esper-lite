@@ -48,9 +48,9 @@ class TestBatchEventTypes:
     """Verify batch progress event types are defined."""
 
     def test_batch_completed_exists(self) -> None:
-        """BATCH_COMPLETED should be a valid event type."""
-        event_type = TelemetryEventType.BATCH_COMPLETED
-        assert event_type.name == "BATCH_COMPLETED"
+        """BATCH_EPOCH_COMPLETED should be a valid event type."""
+        event_type = TelemetryEventType.BATCH_EPOCH_COMPLETED
+        assert event_type.name == "BATCH_EPOCH_COMPLETED"
 
     def test_checkpoint_saved_exists(self) -> None:
         """CHECKPOINT_SAVED should be a valid event type."""
@@ -108,10 +108,10 @@ class TestConsoleOutputFormatters:
         assert "Structural Collapse" in captured.out
 
     def test_formats_batch_completed(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """Verify ConsoleOutput formats BATCH_COMPLETED correctly."""
+        """Verify ConsoleOutput formats BATCH_EPOCH_COMPLETED correctly."""
         console = ConsoleOutput()
         event = TelemetryEvent(
-            event_type=TelemetryEventType.BATCH_COMPLETED,
+            event_type=TelemetryEventType.BATCH_EPOCH_COMPLETED,
             data={
                 "batch_idx": 3,
                 "episodes_completed": 24,
@@ -210,11 +210,11 @@ class TestNissaHubRouting:
         mock = MockBackend()
         hub.add_backend(mock)
 
-        hub.emit(TelemetryEvent(event_type=TelemetryEventType.BATCH_COMPLETED))
+        hub.emit(TelemetryEvent(event_type=TelemetryEventType.BATCH_EPOCH_COMPLETED))
         hub.emit(TelemetryEvent(event_type=TelemetryEventType.GOVERNOR_PANIC))
         hub.emit(TelemetryEvent(event_type=TelemetryEventType.CHECKPOINT_SAVED))
 
         assert len(mock.events) == 3
-        assert mock.events[0].event_type == TelemetryEventType.BATCH_COMPLETED
+        assert mock.events[0].event_type == TelemetryEventType.BATCH_EPOCH_COMPLETED
         assert mock.events[1].event_type == TelemetryEventType.GOVERNOR_PANIC
         assert mock.events[2].event_type == TelemetryEventType.CHECKPOINT_SAVED

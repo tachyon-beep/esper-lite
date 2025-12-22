@@ -73,7 +73,7 @@ last_reviewed_commit: "db3b9c1"
 | G0 | GERMINATED | seed_id and blueprint_id present |
 | G1 | TRAINING | Currently GERMINATED |
 | G2 | BLENDING | Global improvement + seed ready + gradient active |
-| G3 | PROBATIONARY | Blending complete + alpha ≥ 0.95 |
+| G3 | HOLDING | Blending complete + alpha ≥ 0.95 |
 | G5 | FOSSILIZED | Counterfactual contribution ≥ 1% |
 
 ### Module: `kasmina.host`
@@ -86,7 +86,7 @@ last_reviewed_commit: "db3b9c1"
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `germinate_seed()` | `(blueprint_id, seed_id, slot, blend_algorithm_id)` | Germinate in specific slot |
-| `cull_seed()` | `(slot)` | Cull seed in slot |
+| `cull_seed()` | `(slot)` | Cull seed in slot (transitions to PRUNED) |
 | `get_seed_parameters()` | `(slot) -> Iterator[Parameter]` | Get seed params |
 | `get_host_parameters()` | `() -> Iterator[Parameter]` | Get host-only params |
 
@@ -134,7 +134,7 @@ class QualityGates:
     min_training_improvement: float = 0.5    # % improvement for G2
     min_blending_epochs: int = 3             # Epochs before blending allowed
     max_isolation_violations: int = 10       # Violations before unhealthy
-    min_probation_stability: float = 0.95    # Stability threshold
+    min_holding_stability: float = 0.95      # Stability threshold
     min_seed_gradient_ratio: float = 0.05    # G2 gradient activity check
 ```
 
@@ -145,7 +145,7 @@ class QualityGates:
 | `SEED_GERMINATED` | New seed created | `blueprint_id`, `seed_id`, `params` |
 | `SEED_STAGE_CHANGED` | Lifecycle transition | `from`, `to` |
 | `SEED_FOSSILIZED` | Permanent integration | `improvement`, `counterfactual`, `params_added` |
-| `SEED_CULLED` | Seed removed | `reason`, `counterfactual`, `epochs_total` |
+| `SEED_PRUNED` | Seed removed | `reason`, `counterfactual`, `epochs_total` |
 
 ---
 
@@ -218,7 +218,7 @@ BLENDING+ stages: Standard lerp gradient attribution
                                         │              │          │
                                         │              │ G3       │
                                         │              ▼          │
-                                        │        [PROBATIONARY]   │
+                                        │         [HOLDING]       │
                                         │              │          │
                                         │         ┌────┴────┐     │
                                         │         │         │     │
@@ -227,7 +227,7 @@ BLENDING+ stages: Standard lerp gradient attribution
                                         │   [FOSSILIZED] contrib  │
                                         │    (permanent) │        │
                                         │                ▼        │
-                                        └──────────> [CULLED] <───┘
+                                        └──────────> [PRUNED] <───┘
 ```
 
 **Gate Descriptions:**
@@ -235,12 +235,12 @@ BLENDING+ stages: Standard lerp gradient attribution
 - **G1:** Germination complete
 - **G2:** Global improvement + seed training duration + gradient activity
 - **G3:** Blending duration + alpha reached target
-- **G5:** Counterfactual contribution ≥ 1% (requires PROBATIONARY validation)
+- **G5:** Counterfactual contribution ≥ 1% (requires HOLDING validation)
 
 **Key Invariants:**
-- FOSSILIZED is permanent—cannot be culled (only future pruning system)
-- Negative counterfactual in PROBATIONARY → automatic cull (safety)
-- Probation timeout → automatic cull (Tamiyo failed to decide)
+- FOSSILIZED is permanent—cannot be pruned (only future pruning system)
+- Negative counterfactual in HOLDING → automatic prune (safety)
+- Holding timeout → automatic prune (Tamiyo failed to decide)
 
 ## 4.2 Data Governance
 
@@ -308,7 +308,7 @@ BLENDING+ stages: Standard lerp gradient attribution
 
 | # | Commandment | Status | Notes |
 |---|-------------|--------|-------|
-| 1 | Sensors match capabilities | ✅ | Emits stage/germinate/cull events |
+| 1 | Sensors match capabilities | ✅ | Emits stage/germinate/prune events |
 | 2 | Complexity pays rent | ✅ | Tracks `active_seed_params` |
 | 3 | GPU-first iteration | ✅ | All ops on CUDA, async gradient capture |
 | 4 | Progressive curriculum | N/A | Curriculum is Tamiyo's domain |
@@ -322,7 +322,7 @@ BLENDING+ stages: Standard lerp gradient attribution
 
 **Analogy:** Stem Cell / Morphogenetic Field
 
-Kasmina is the biological machinery for growing new neural tissue. Just as stem cells differentiate into specialized tissue, Kasmina's seeds start undifferentiated (DORMANT) and mature through stages until permanently integrated (FOSSILIZED) or removed (CULLED).
+Kasmina is the biological machinery for growing new neural tissue. Just as stem cells differentiate into specialized tissue, Kasmina's seeds start undifferentiated (DORMANT) and mature through stages until permanently integrated (FOSSILIZED) or removed (PRUNED).
 
 **Responsibilities in the organism:**
 - Maintain the "morphogenetic plane" where growth occurs
@@ -386,7 +386,7 @@ Kasmina is the biological machinery for growing new neural tissue. Just as stem 
 | One seed per slot at a time | Can't have multiple concurrent seeds in same slot | Use multiple slots (early/mid/late) |
 | `force_alpha()` not DDP-safe | Counterfactual evaluation breaks with DataParallel | Use `model.eval()` + single-threaded validation |
 | GatedBlend not in `state_dict()` | GatedBlend params only saved via `get_extra_state()` | Ensure checkpoint code handles extra_state |
-| FOSSILIZED cannot be undone | Permanent—no way to remove fossilized seed | Make PROBATIONARY decision carefully |
+| FOSSILIZED cannot be undone | Permanent—no way to remove fossilized seed | Make HOLDING decision carefully |
 
 ## 8.2 Performance Cliffs
 

@@ -63,15 +63,20 @@ class TestActionSpaceCompleteness:
             assert isinstance(blueprint_id, str)
 
     def test_non_germinate_actions_have_no_blueprints(self):
-        """WAIT/FOSSILIZE/CULL have no blueprint mappings."""
+        """WAIT/FOSSILIZE/PRUNE/ADVANCE have no blueprint mappings."""
         ActionEnum = build_action_enum("cnn")
-        non_germinate = [ActionEnum.WAIT, ActionEnum.FOSSILIZE, ActionEnum.CULL]
+        non_germinate = [
+            ActionEnum.WAIT,
+            ActionEnum.FOSSILIZE,
+            ActionEnum.PRUNE,
+            ActionEnum.ADVANCE,
+        ]
         for action in non_germinate:
             assert _get_blueprint_from_action(action) is None
 
     def test_action_enum_completeness(self):
-        """Every action is germinate or one of WAIT/FOSSILIZE/CULL."""
+        """Every action is germinate or one of WAIT/FOSSILIZE/PRUNE/ADVANCE."""
         ActionEnum = build_action_enum("cnn")
         germinate = {a for a in ActionEnum if _is_germinate_action(a)}
-        non_germinate = {ActionEnum.WAIT, ActionEnum.FOSSILIZE, ActionEnum.CULL}
+        non_germinate = {ActionEnum.WAIT, ActionEnum.FOSSILIZE, ActionEnum.PRUNE, ActionEnum.ADVANCE}
         assert set(ActionEnum) == germinate | non_germinate

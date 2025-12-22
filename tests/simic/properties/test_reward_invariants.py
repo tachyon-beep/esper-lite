@@ -38,6 +38,7 @@ class TestRewardFiniteness:
         assert math.isfinite(components.bounded_attribution), "bounded_attribution not finite"
         assert math.isfinite(components.pbrs_bonus), "pbrs_bonus not finite"
         assert math.isfinite(components.compute_rent), "compute_rent not finite"
+        assert math.isfinite(components.alpha_shock), "alpha_shock not finite"
         assert math.isfinite(components.action_shaping), "action_shaping not finite"
         assert math.isfinite(components.terminal_bonus), "terminal_bonus not finite"
         assert math.isfinite(components.total_reward), "total_reward not finite"
@@ -75,9 +76,10 @@ class TestRewardComposition:
         component_sum = (
             components.bounded_attribution
             + components.blending_warning
-            + components.probation_warning
+            + components.holding_warning
             + components.pbrs_bonus
             + components.compute_rent  # Already negative
+            + components.alpha_shock
             + components.action_shaping
             + components.terminal_bonus
         )

@@ -27,14 +27,14 @@ class TestStringRepresentation:
         """Should include target seed ID when present."""
         Action = build_action_enum("cnn")
         decision = TamiyoDecision(
-            action=Action.CULL,
+            action=Action.PRUNE,
             target_seed_id="seed_123",
             reason="Failing seed",
         )
 
         result = str(decision)
 
-        assert "Action: CULL" in result
+        assert "Action: PRUNE" in result
         assert "Target: seed_123" in result
         assert "Reason: Failing seed" in result
 
@@ -95,10 +95,10 @@ class TestBlueprintIdExtraction:
 
         assert decision.blueprint_id is None
 
-    def test_blueprint_id_none_for_cull(self):
-        """Should return None for CULL action."""
+    def test_blueprint_id_none_for_prune(self):
+        """Should return None for PRUNE action."""
         Action = build_action_enum("cnn")
-        decision = TamiyoDecision(action=Action.CULL)
+        decision = TamiyoDecision(action=Action.PRUNE)
 
         assert decision.blueprint_id is None
 

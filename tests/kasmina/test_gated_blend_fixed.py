@@ -67,7 +67,6 @@ class TestGatedBlendFixed:
         """GatedBlend should accept total_steps parameter."""
         gate = GatedBlend(channels=64, topology="cnn", total_steps=20)
 
-        assert hasattr(gate, 'total_steps')
         assert gate.total_steps == 20
 
     def test_get_alpha_with_different_total_steps(self):

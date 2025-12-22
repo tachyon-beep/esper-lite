@@ -1,10 +1,10 @@
 """Leyline Stages - Seed lifecycle stages and transitions.
 
 Defines the state machine for seed development:
-DORMANT -> GERMINATED -> TRAINING -> BLENDING -> PROBATIONARY -> FOSSILIZED
+DORMANT -> GERMINATED -> TRAINING -> BLENDING -> HOLDING -> FOSSILIZED
                               |          |           |
                               v          v           v
-                            CULLED <- EMBARGOED <- RESETTING <- DORMANT
+                            PRUNED <- EMBARGOED <- RESETTING <- DORMANT
 """
 
 from enum import Enum, IntEnum, auto
@@ -15,28 +15,28 @@ class SeedStage(IntEnum):
 
     The full lifecycle represents a trust escalation model:
 
-    DORMANT ──► GERMINATED ──► TRAINING ──► BLENDING ──► PROBATIONARY
+    DORMANT ──► GERMINATED ──► TRAINING ──► BLENDING ──► HOLDING
                     │              │            │            │
                     ▼              ▼            ▼            ▼
-                 CULLED ◄───────────────────────────────────────
+                 PRUNED ◄───────────────────────────────────────
                     │
                     ▼
                EMBARGOED ──► RESETTING ──► DORMANT (slot recycled)
 
-    PROBATIONARY ──► FOSSILIZED (terminal success)
+    HOLDING ──► FOSSILIZED (terminal success)
          │
          ▼
-      CULLED (failure path)
+      PRUNED (failure path)
 
     Stages explained:
     - DORMANT: Empty slot, waiting for a seed
     - GERMINATED: Seed attached, sanity checks passed, ready to train
     - TRAINING: Isolated training with gradient isolation from host
     - BLENDING: Alpha-managed grafting, gradually blending into host
-    - PROBATIONARY: Final validation period before permanent integration
+    - HOLDING: Final validation period before permanent integration
     - FOSSILIZED: Permanently integrated into the model (terminal success)
-    - CULLED: Removed due to failure or poor performance
-    - EMBARGOED: Cooldown period after culling to prevent thrashing
+    - PRUNED: Removed due to failure or poor performance
+    - EMBARGOED: Cooldown period after removal to prevent thrashing
     - RESETTING: Cleanup before slot can be reused
     """
 
@@ -46,10 +46,10 @@ class SeedStage(IntEnum):
     TRAINING = 3
     BLENDING = 4
     # Value 5 intentionally skipped (was SHADOWING, removed)
-    PROBATIONARY = 6
+    HOLDING = 6
     FOSSILIZED = 7      # Terminal state (success)
-    CULLED = 8          # Failure state
-    EMBARGOED = 9       # Post-cull cooldown
+    PRUNED = 8          # Failure state
+    EMBARGOED = 9       # Post-removal cooldown
     RESETTING = 10      # Cleanup before reuse
 
 
@@ -57,12 +57,15 @@ class SeedStage(IntEnum):
 VALID_TRANSITIONS: dict[SeedStage, tuple[SeedStage, ...]] = {
     SeedStage.UNKNOWN: (SeedStage.DORMANT,),
     SeedStage.DORMANT: (SeedStage.GERMINATED,),
-    SeedStage.GERMINATED: (SeedStage.TRAINING, SeedStage.CULLED),
-    SeedStage.TRAINING: (SeedStage.BLENDING, SeedStage.CULLED),
-    SeedStage.BLENDING: (SeedStage.PROBATIONARY, SeedStage.CULLED),
-    SeedStage.PROBATIONARY: (SeedStage.FOSSILIZED, SeedStage.CULLED),
+    SeedStage.GERMINATED: (SeedStage.TRAINING, SeedStage.PRUNED),
+    SeedStage.TRAINING: (SeedStage.BLENDING, SeedStage.PRUNED),
+    SeedStage.BLENDING: (SeedStage.HOLDING, SeedStage.PRUNED),
+    # HOLDING is the full-amplitude (alpha≈1.0) decision point.
+    # We also allow HOLDING -> BLENDING to support scheduled prune (phase 4),
+    # but keep FOSSILIZED first so advance_stage() defaults to "finalize".
+    SeedStage.HOLDING: (SeedStage.FOSSILIZED, SeedStage.BLENDING, SeedStage.PRUNED),
     SeedStage.FOSSILIZED: (),  # Terminal - no transitions out
-    SeedStage.CULLED: (SeedStage.EMBARGOED,),
+    SeedStage.PRUNED: (SeedStage.EMBARGOED,),
     SeedStage.EMBARGOED: (SeedStage.RESETTING,),
     SeedStage.RESETTING: (SeedStage.DORMANT,),
 }
@@ -83,11 +86,11 @@ def is_active_stage(stage: SeedStage) -> bool:
     return stage in (
         SeedStage.TRAINING,
         SeedStage.BLENDING,
-        SeedStage.PROBATIONARY,
+        SeedStage.HOLDING,
         SeedStage.FOSSILIZED,
     )
 
 
 def is_failure_stage(stage: SeedStage) -> bool:
     """Check if a stage represents a failed seed."""
-    return stage in (SeedStage.CULLED, SeedStage.EMBARGOED, SeedStage.RESETTING)
+    return stage in (SeedStage.PRUNED, SeedStage.EMBARGOED, SeedStage.RESETTING)

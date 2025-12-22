@@ -1,0 +1,59 @@
+"""Integration tests using real telemetry data."""
+from pathlib import Path
+
+import pytest
+
+from esper.karn.mcp.server import KarnMCPServer
+
+
+# Skip if no telemetry directory exists
+TELEMETRY_DIR = Path("telemetry")
+pytestmark = pytest.mark.skipif(
+    not TELEMETRY_DIR.exists() or not any(TELEMETRY_DIR.iterdir()),
+    reason="No telemetry data available"
+)
+
+
+@pytest.fixture
+def real_server():
+    """Create server pointing to real telemetry."""
+    return KarnMCPServer(str(TELEMETRY_DIR))
+
+
+def test_runs_view_has_data(real_server):
+    """runs view returns real training runs."""
+    result = real_server.query_sql_sync("SELECT run_id, task FROM runs LIMIT 5")
+    # Should have header row at minimum
+    assert "|" in result
+
+
+def test_epochs_aggregation_works(real_server):
+    """Can aggregate epochs data."""
+    result = real_server.query_sql_sync(
+        "SELECT env_id, MAX(val_accuracy) as peak FROM epochs GROUP BY env_id LIMIT 5"
+    )
+    assert "peak" in result or "0 rows" in result
+
+
+def test_seed_lifecycle_query_works(real_server):
+    """Can query seed lifecycle events."""
+    result = real_server.query_sql_sync(
+        "SELECT blueprint_id, COUNT(*) as cnt FROM seed_lifecycle "
+        "WHERE event_type = 'SEED_FOSSILIZED' GROUP BY blueprint_id"
+    )
+    # Either has data or returns 0 rows message
+    assert "|" in result or "0 rows" in result
+
+
+def test_complex_join_works(real_server):
+    """Can join across views."""
+    result = real_server.query_sql_sync("""
+        SELECT
+            r.run_id,
+            COUNT(DISTINCT e.env_id) as envs_seen
+        FROM runs r
+        LEFT JOIN epochs e ON e.timestamp > r.started_at
+        GROUP BY r.run_id
+        LIMIT 3
+    """)
+    assert "|" in result or "0 rows" in result

@@ -4,12 +4,12 @@
  Stage transition: TRAINING → BLENDING
 [21:00:32] env1_seed_0 | Stage transition: BLENDING → SHADOWING
 [21:00:34] env0_seed_0 | Stage transition: BLENDING → SHADOWING
-[21:00:36] env1_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:00:36] env1_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:00:36] env1_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:00:36] env1_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:00:36] env1_seed_0 | Fossilized (norm, Δacc +16.77%)
     [env1] Fossilized 'env1_seed_0' (norm, Δacc +16.77%)
-[21:00:37] env0_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:00:37] env0_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:00:37] env0_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:00:37] env0_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:00:37] env0_seed_0 | Fossilized (norm, Δacc +16.30%)
     [env0] Fossilized 'env0_seed_0' (norm, Δacc +16.30%)
 Batch 84: Episodes 168/200
@@ -29,11 +29,11 @@ Batch 84: Episodes 168/200
 [21:02:30] env1_seed_0 | Stage transition: TRAINING → BLENDING
 [21:02:38] env0_seed_0 | Stage transition: BLENDING → SHADOWING
 [21:02:38] env1_seed_0 | Stage transition: BLENDING → SHADOWING
-[21:02:38] env1_seed_0 | Stage transition: SHADOWING → CULLED
-[21:02:38] env1_seed_0 | Culled (norm, Δacc +15.77%)
-    [env1] Culled 'env1_seed_0' (norm, Δacc +15.77%)
-[21:02:41] env0_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:02:43] env0_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:02:38] env1_seed_0 | Stage transition: SHADOWING → PRUNED
+[21:02:38] env1_seed_0 | Pruned (norm, Δacc +15.77%)
+    [env1] Pruned 'env1_seed_0' (norm, Δacc +15.77%)
+[21:02:41] env0_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:02:43] env0_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:02:43] env0_seed_0 | Fossilized (norm, Δacc +16.77%)
     [env0] Fossilized 'env0_seed_0' (norm, Δacc +16.77%)
 [21:02:43] env1_seed_1 | Germinated (conv_heavy, 74.0K params)
@@ -41,8 +41,8 @@ Batch 84: Episodes 168/200
 [21:02:43] env1_seed_1 | Stage transition: GERMINATED → TRAINING
 [21:02:50] env1_seed_1 | Stage transition: TRAINING → BLENDING
 [21:02:59] env1_seed_1 | Stage transition: BLENDING → SHADOWING
-[21:03:03] env1_seed_1 | Stage transition: SHADOWING → PROBATIONARY
-[21:03:03] env1_seed_1 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:03:03] env1_seed_1 | Stage transition: SHADOWING → HOLDING
+[21:03:03] env1_seed_1 | Stage transition: HOLDING → FOSSILIZED
 [21:03:03] env1_seed_1 | Fossilized (conv_heavy, Δacc +4.34%)
     [env1] Fossilized 'env1_seed_1' (conv_heavy, Δacc +4.34%)
 Batch 85: Episodes 170/200
@@ -66,14 +66,14 @@ Blueprint       Germ  Foss  Cull   Rate     ΔAcc    Churn
   norm             510    88   400  18.0%  +14.69%   +2.93%
 Seed Scoreboard (env 0):
   Fossilized: 48 (+84.7K params, +89.4% of host)
-  Culled: 527
+  Pruned: 527
   Avg fossilize age: 11.2 epochs
   Avg cull age: 4.1 epochs
   Compute cost: 2.10x baseline
   Distribution: norm x46, conv_heavy x1, depthwise x1
 Seed Scoreboard (env 1):
   Fossilized: 45 (+118.4K params, +125.0% of host)
-  Culled: 548
+  Pruned: 548
   Avg fossilize age: 11.3 epochs
   Avg cull age: 4.3 epochs
   Compute cost: 2.39x baseline
@@ -89,12 +89,12 @@ Seed Scoreboard (env 1):
 [21:04:44] env1_seed_0 | Stage transition: TRAINING → BLENDING
 [21:04:52] env0_seed_0 | Stage transition: BLENDING → SHADOWING
 [21:04:52] env1_seed_0 | Stage transition: BLENDING → SHADOWING
-[21:04:56] env0_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:04:56] env1_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:04:56] env0_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:04:56] env0_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:04:56] env1_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:04:56] env0_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:04:56] env0_seed_0 | Fossilized (norm, Δacc +11.91%)
     [env0] Fossilized 'env0_seed_0' (norm, Δacc +11.91%)
-[21:04:56] env1_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:04:56] env1_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:04:56] env1_seed_0 | Fossilized (norm, Δacc +13.07%)
     [env1] Fossilized 'env1_seed_0' (norm, Δacc +13.07%)
 Batch 86: Episodes 172/200
@@ -114,12 +114,12 @@ Batch 86: Episodes 172/200
 [21:06:50] env1_seed_0 | Stage transition: TRAINING → BLENDING
 [21:06:58] env0_seed_0 | Stage transition: BLENDING → SHADOWING
 [21:06:58] env1_seed_0 | Stage transition: BLENDING → SHADOWING
-[21:07:01] env0_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:07:01] env1_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:07:01] env0_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:07:01] env0_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:07:01] env1_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:07:01] env0_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:07:01] env0_seed_0 | Fossilized (norm, Δacc +14.56%)
     [env0] Fossilized 'env0_seed_0' (norm, Δacc +14.56%)
-[21:07:01] env1_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:07:01] env1_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:07:01] env1_seed_0 | Fossilized (norm, Δacc +13.88%)
     [env1] Fossilized 'env1_seed_0' (norm, Δacc +13.88%)
 Batch 87: Episodes 174/200
@@ -139,12 +139,12 @@ Batch 87: Episodes 174/200
 [21:08:55] env1_seed_0 | Stage transition: TRAINING → BLENDING
 [21:09:04] env0_seed_0 | Stage transition: BLENDING → SHADOWING
 [21:09:04] env1_seed_0 | Stage transition: BLENDING → SHADOWING
-[21:09:07] env0_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:09:07] env1_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:09:07] env0_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:09:07] env0_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:09:07] env1_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:09:07] env0_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:09:07] env0_seed_0 | Fossilized (norm, Δacc +17.61%)
     [env0] Fossilized 'env0_seed_0' (norm, Δacc +17.61%)
-[21:09:07] env1_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:09:07] env1_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:09:07] env1_seed_0 | Fossilized (norm, Δacc +17.50%)
     [env1] Fossilized 'env1_seed_0' (norm, Δacc +17.50%)
 Batch 88: Episodes 176/200
@@ -164,12 +164,12 @@ Batch 88: Episodes 176/200
 [21:11:03] env0_seed_0 | Stage transition: TRAINING → BLENDING
 [21:11:09] env1_seed_0 | Stage transition: BLENDING → SHADOWING
 [21:11:11] env0_seed_0 | Stage transition: BLENDING → SHADOWING
-[21:11:13] env1_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:11:13] env1_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:11:13] env1_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:11:13] env1_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:11:13] env1_seed_0 | Fossilized (norm, Δacc +15.49%)
     [env1] Fossilized 'env1_seed_0' (norm, Δacc +15.49%)
-[21:11:14] env0_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:11:14] env0_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:11:14] env0_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:11:14] env0_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:11:14] env0_seed_0 | Fossilized (norm, Δacc +15.67%)
     [env0] Fossilized 'env0_seed_0' (norm, Δacc +15.67%)
 Batch 89: Episodes 178/200
@@ -189,12 +189,12 @@ Batch 89: Episodes 178/200
 [21:13:08] env1_seed_0 | Stage transition: TRAINING → BLENDING
 [21:13:15] env0_seed_0 | Stage transition: BLENDING → SHADOWING
 [21:13:17] env1_seed_0 | Stage transition: BLENDING → SHADOWING
-[21:13:18] env0_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:13:18] env0_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:13:18] env0_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:13:18] env0_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:13:18] env0_seed_0 | Fossilized (norm, Δacc +19.23%)
     [env0] Fossilized 'env0_seed_0' (norm, Δacc +19.23%)
-[21:13:20] env1_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:13:20] env1_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:13:20] env1_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:13:20] env1_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:13:20] env1_seed_0 | Fossilized (norm, Δacc +17.17%)
     [env1] Fossilized 'env1_seed_0' (norm, Δacc +17.17%)
 Batch 90: Episodes 180/200
@@ -218,14 +218,14 @@ Blueprint       Germ  Foss  Cull   Rate     ΔAcc    Churn
   norm             520    98   400  19.7%  +14.78%   +2.93%
 Seed Scoreboard (env 0):
   Fossilized: 53 (+85.4K params, +90.1% of host)
-  Culled: 527
+  Pruned: 527
   Avg fossilize age: 11.2 epochs
   Avg cull age: 4.1 epochs
   Compute cost: 2.20x baseline
   Distribution: norm x51, conv_heavy x1, depthwise x1
 Seed Scoreboard (env 1):
   Fossilized: 50 (+119.1K params, +125.7% of host)
-  Culled: 548
+  Pruned: 548
   Avg fossilize age: 11.3 epochs
   Avg cull age: 4.3 epochs
   Compute cost: 2.49x baseline
@@ -241,12 +241,12 @@ Seed Scoreboard (env 1):
 [21:15:12] env1_seed_0 | Stage transition: TRAINING → BLENDING
 [21:15:20] env0_seed_0 | Stage transition: BLENDING → SHADOWING
 [21:15:20] env1_seed_0 | Stage transition: BLENDING → SHADOWING
-[21:15:24] env0_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:15:24] env1_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:15:24] env0_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:15:24] env0_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:15:24] env1_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:15:24] env0_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:15:24] env0_seed_0 | Fossilized (norm, Δacc +16.81%)
     [env0] Fossilized 'env0_seed_0' (norm, Δacc +16.81%)
-[21:15:24] env1_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:15:24] env1_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:15:24] env1_seed_0 | Fossilized (norm, Δacc +11.68%)
     [env1] Fossilized 'env1_seed_0' (norm, Δacc +11.68%)
 Batch 91: Episodes 182/200
@@ -266,12 +266,12 @@ Batch 91: Episodes 182/200
 [21:17:18] env1_seed_0 | Stage transition: TRAINING → BLENDING
 [21:17:26] env0_seed_0 | Stage transition: BLENDING → SHADOWING
 [21:17:26] env1_seed_0 | Stage transition: BLENDING → SHADOWING
-[21:17:29] env0_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:17:29] env1_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:17:29] env0_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:17:29] env0_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:17:29] env1_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:17:29] env0_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:17:29] env0_seed_0 | Fossilized (norm, Δacc +16.20%)
     [env0] Fossilized 'env0_seed_0' (norm, Δacc +16.20%)
-[21:17:29] env1_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:17:29] env1_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:17:29] env1_seed_0 | Fossilized (norm, Δacc +12.47%)
     [env1] Fossilized 'env1_seed_0' (norm, Δacc +12.47%)
 Batch 92: Episodes 184/200
@@ -291,12 +291,12 @@ Batch 92: Episodes 184/200
 [21:19:23] env1_seed_0 | Stage transition: TRAINING → BLENDING
 [21:19:32] env0_seed_0 | Stage transition: BLENDING → SHADOWING
 [21:19:32] env1_seed_0 | Stage transition: BLENDING → SHADOWING
-[21:19:35] env0_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:19:35] env1_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:19:35] env0_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:19:35] env0_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:19:35] env1_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:19:35] env0_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:19:35] env0_seed_0 | Fossilized (norm, Δacc +14.72%)
     [env0] Fossilized 'env0_seed_0' (norm, Δacc +14.72%)
-[21:19:35] env1_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:19:35] env1_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:19:35] env1_seed_0 | Fossilized (norm, Δacc +15.26%)
     [env1] Fossilized 'env1_seed_0' (norm, Δacc +15.26%)
 Batch 93: Episodes 186/200
@@ -316,12 +316,12 @@ Batch 93: Episodes 186/200
 [21:21:31] env0_seed_0 | Stage transition: TRAINING → BLENDING
 [21:21:37] env1_seed_0 | Stage transition: BLENDING → SHADOWING
 [21:21:39] env0_seed_0 | Stage transition: BLENDING → SHADOWING
-[21:21:41] env1_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:21:41] env1_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:21:41] env1_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:21:41] env1_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:21:41] env1_seed_0 | Fossilized (norm, Δacc +15.73%)
     [env1] Fossilized 'env1_seed_0' (norm, Δacc +15.73%)
-[21:21:42] env0_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:21:42] env0_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:21:42] env0_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:21:42] env0_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:21:42] env0_seed_0 | Fossilized (norm, Δacc +12.82%)
     [env0] Fossilized 'env0_seed_0' (norm, Δacc +12.82%)
 Batch 94: Episodes 188/200
@@ -341,12 +341,12 @@ Batch 94: Episodes 188/200
 [21:23:36] env1_seed_0 | Stage transition: TRAINING → BLENDING
 [21:23:43] env0_seed_0 | Stage transition: BLENDING → SHADOWING
 [21:23:45] env1_seed_0 | Stage transition: BLENDING → SHADOWING
-[21:23:46] env0_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:23:46] env0_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:23:46] env0_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:23:46] env0_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:23:46] env0_seed_0 | Fossilized (norm, Δacc +17.18%)
     [env0] Fossilized 'env0_seed_0' (norm, Δacc +17.18%)
-[21:23:48] env1_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:23:48] env1_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:23:48] env1_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:23:48] env1_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:23:48] env1_seed_0 | Fossilized (norm, Δacc +13.67%)
     [env1] Fossilized 'env1_seed_0' (norm, Δacc +13.67%)
 Batch 95: Episodes 190/200
@@ -370,14 +370,14 @@ Blueprint       Germ  Foss  Cull   Rate     ΔAcc    Churn
   norm             530   108   400  21.3%  +14.77%   +2.93%
 Seed Scoreboard (env 0):
   Fossilized: 58 (+86.0K params, +90.8% of host)
-  Culled: 527
+  Pruned: 527
   Avg fossilize age: 11.2 epochs
   Avg cull age: 4.1 epochs
   Compute cost: 2.30x baseline
   Distribution: norm x56, conv_heavy x1, depthwise x1
 Seed Scoreboard (env 1):
   Fossilized: 55 (+119.7K params, +126.4% of host)
-  Culled: 548
+  Pruned: 548
   Avg fossilize age: 11.3 epochs
   Avg cull age: 4.3 epochs
   Compute cost: 2.59x baseline
@@ -393,12 +393,12 @@ Seed Scoreboard (env 1):
 [21:25:40] env1_seed_0 | Stage transition: TRAINING → BLENDING
 [21:25:49] env0_seed_0 | Stage transition: BLENDING → SHADOWING
 [21:25:49] env1_seed_0 | Stage transition: BLENDING → SHADOWING
-[21:25:52] env0_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:25:52] env1_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:25:52] env0_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:25:52] env0_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:25:52] env1_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:25:52] env0_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:25:52] env0_seed_0 | Fossilized (norm, Δacc +18.79%)
     [env0] Fossilized 'env0_seed_0' (norm, Δacc +18.79%)
-[21:25:52] env1_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:25:52] env1_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:25:52] env1_seed_0 | Fossilized (norm, Δacc +17.67%)
     [env1] Fossilized 'env1_seed_0' (norm, Δacc +17.67%)
 Batch 96: Episodes 192/200
@@ -418,12 +418,12 @@ Batch 96: Episodes 192/200
 [21:27:46] env1_seed_0 | Stage transition: TRAINING → BLENDING
 [21:27:54] env0_seed_0 | Stage transition: BLENDING → SHADOWING
 [21:27:54] env1_seed_0 | Stage transition: BLENDING → SHADOWING
-[21:27:58] env0_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:27:58] env1_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:27:58] env0_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:27:58] env0_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:27:58] env1_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:27:58] env0_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:27:58] env0_seed_0 | Fossilized (norm, Δacc +17.10%)
     [env0] Fossilized 'env0_seed_0' (norm, Δacc +17.10%)
-[21:27:58] env1_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:27:58] env1_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:27:58] env1_seed_0 | Fossilized (norm, Δacc +8.68%)
     [env1] Fossilized 'env1_seed_0' (norm, Δacc +8.68%)
 Batch 97: Episodes 194/200
@@ -443,12 +443,12 @@ Batch 97: Episodes 194/200
 [21:29:52] env1_seed_0 | Stage transition: TRAINING → BLENDING
 [21:30:00] env0_seed_0 | Stage transition: BLENDING → SHADOWING
 [21:30:00] env1_seed_0 | Stage transition: BLENDING → SHADOWING
-[21:30:03] env0_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:30:03] env1_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:30:03] env0_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:30:03] env0_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:30:03] env1_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:30:03] env0_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:30:03] env0_seed_0 | Fossilized (norm, Δacc +16.46%)
     [env0] Fossilized 'env0_seed_0' (norm, Δacc +16.46%)
-[21:30:03] env1_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:30:03] env1_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:30:03] env1_seed_0 | Fossilized (norm, Δacc +22.14%)
     [env1] Fossilized 'env1_seed_0' (norm, Δacc +22.14%)
 Batch 98: Episodes 196/200
@@ -468,12 +468,12 @@ Batch 98: Episodes 196/200
 [21:31:57] env1_seed_0 | Stage transition: TRAINING → BLENDING
 [21:32:06] env0_seed_0 | Stage transition: BLENDING → SHADOWING
 [21:32:06] env1_seed_0 | Stage transition: BLENDING → SHADOWING
-[21:32:09] env0_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:32:09] env1_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:32:09] env0_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:32:09] env0_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:32:09] env1_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:32:09] env0_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:32:09] env0_seed_0 | Fossilized (norm, Δacc +11.77%)
     [env0] Fossilized 'env0_seed_0' (norm, Δacc +11.77%)
-[21:32:09] env1_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:32:09] env1_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:32:09] env1_seed_0 | Fossilized (norm, Δacc +11.94%)
     [env1] Fossilized 'env1_seed_0' (norm, Δacc +11.94%)
 Batch 99: Episodes 198/200
@@ -493,12 +493,12 @@ Batch 99: Episodes 198/200
 [21:34:03] env1_seed_0 | Stage transition: TRAINING → BLENDING
 [21:34:11] env0_seed_0 | Stage transition: BLENDING → SHADOWING
 [21:34:11] env1_seed_0 | Stage transition: BLENDING → SHADOWING
-[21:34:15] env0_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:34:15] env1_seed_0 | Stage transition: SHADOWING → PROBATIONARY
-[21:34:15] env0_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:34:15] env0_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:34:15] env1_seed_0 | Stage transition: SHADOWING → HOLDING
+[21:34:15] env0_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:34:15] env0_seed_0 | Fossilized (norm, Δacc +22.01%)
     [env0] Fossilized 'env0_seed_0' (norm, Δacc +22.01%)
-[21:34:15] env1_seed_0 | Stage transition: PROBATIONARY → FOSSILIZED
+[21:34:15] env1_seed_0 | Stage transition: HOLDING → FOSSILIZED
 [21:34:15] env1_seed_0 | Fossilized (norm, Δacc +13.11%)
     [env1] Fossilized 'env1_seed_0' (norm, Δacc +13.11%)
 Batch 100: Episodes 200/200
@@ -522,14 +522,14 @@ Blueprint       Germ  Foss  Cull   Rate     ΔAcc    Churn
   norm             540   118   400  22.8%  +14.87%   +2.93%
 Seed Scoreboard (env 0):
   Fossilized: 63 (+86.7K params, +91.4% of host)
-  Culled: 527
+  Pruned: 527
   Avg fossilize age: 11.2 epochs
   Avg cull age: 4.1 epochs
   Compute cost: 2.40x baseline
   Distribution: norm x61, conv_heavy x1, depthwise x1
 Seed Scoreboard (env 1):
   Fossilized: 60 (+120.4K params, +127.0% of host)
-  Culled: 548
+  Pruned: 548
   Avg fossilize age: 11.2 epochs
   Avg cull age: 4.3 epochs
   Compute cost: 2.69x baseline

@@ -14,7 +14,7 @@ import torch
 
 from esper.kasmina.slot import SeedSlot, SeedMetrics, SeedState, QualityGates
 from esper.kasmina.isolation import blend_with_isolation
-from esper.leyline import SeedStage
+from esper.leyline import SeedStage, DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE
 
 
 class TestAlphaBoundaryValues:
@@ -83,7 +83,7 @@ class TestGerminationErrors:
         slot.germinate("noop", seed_id="seed1")
 
         # Second germination should fail
-        with pytest.raises(RuntimeError, match="already has active seed"):
+        with pytest.raises(RuntimeError, match="unavailable for germination"):
             slot.germinate("noop", seed_id="seed2")
 
     def test_germinate_after_cull_succeeds(self):
@@ -93,12 +93,17 @@ class TestGerminationErrors:
         # First lifecycle
         slot.germinate("noop", seed_id="seed1")
         slot.state.transition(SeedStage.TRAINING)
-        result = slot.cull()
+        result = slot.prune()
 
-        # cull() clears state and seed after transitioning to CULLED
         assert result is True
-        assert slot.state is None
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.PRUNED
         assert slot.seed is None
+
+        # Cooldown must complete before slot is available again.
+        for _ in range(DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE + 2):
+            slot.step_epoch()
+        assert slot.state is None
 
         # Second germination should work (slot is now empty)
         state = slot.germinate("noop", seed_id="seed2")
@@ -123,35 +128,46 @@ class TestGerminationErrors:
             assert state.blueprint_id == bp
             assert state.stage == SeedStage.GERMINATED
 
+    def test_germinate_sets_initial_alpha_target(self):
+        """Germinate should honor the requested initial alpha target."""
+        slot = SeedSlot(slot_id="r0c0", channels=64, fast_mode=True)
+
+        slot.germinate("noop", seed_id="seed0", alpha_target=0.7)
+        slot.state.transition(SeedStage.TRAINING)
+        slot.state.transition(SeedStage.BLENDING)
+        slot.start_blending(total_steps=5)
+
+        assert slot.state.alpha_controller.alpha_target == pytest.approx(0.7)
+
 
 class TestCullBehavior:
     """Tests for cull behavior at different stages."""
 
     def test_cull_from_training_succeeds(self):
-        """Culling from TRAINING stage should succeed and clear state."""
+        """Culling from TRAINING stage should succeed and remove seed."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
         slot.state.transition(SeedStage.TRAINING)
 
-        result = slot.cull()
+        result = slot.prune()
 
-        # cull() returns True and clears the slot
         assert result is True
-        assert slot.state is None
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.PRUNED
         assert slot.seed is None
 
     def test_cull_from_blending_succeeds(self):
-        """Culling from BLENDING stage should succeed and clear state."""
+        """Culling from BLENDING stage should succeed and remove seed."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
         slot.state.transition(SeedStage.TRAINING)
         slot.state.transition(SeedStage.BLENDING)
 
-        result = slot.cull()
+        result = slot.prune()
 
-        # cull() returns True and clears the slot
         assert result is True
-        assert slot.state is None
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.PRUNED
         assert slot.seed is None
 
     def test_cull_fossilized_returns_false(self):
@@ -163,7 +179,7 @@ class TestCullBehavior:
         slot.state.stage = SeedStage.FOSSILIZED
 
         # FOSSILIZED has no valid transitions
-        result = slot.cull()
+        result = slot.prune()
 
         assert result is False
 
@@ -171,7 +187,7 @@ class TestCullBehavior:
         """Culling when no seed is active should return False."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
 
-        result = slot.cull()
+        result = slot.prune()
 
         assert result is False
 
@@ -186,18 +202,18 @@ class TestStepEpochBehavior:
         # Should be a no-op, not raise
         slot.step_epoch()
 
-    def test_step_epoch_germinated_advances_to_training(self):
-        """step_epoch() in GERMINATED stage advances to TRAINING."""
+    def test_step_epoch_germinated_does_not_advance(self):
+        """step_epoch() in GERMINATED stage does not advance."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
 
         # After germination, stage is GERMINATED
         assert slot.state.stage == SeedStage.GERMINATED
 
-        # step_epoch should advance to TRAINING
+        # step_epoch should not advance stages
         slot.step_epoch()
 
-        assert slot.state.stage == SeedStage.TRAINING
+        assert slot.state.stage == SeedStage.GERMINATED
 
     def test_step_epoch_training_stays_in_training(self):
         """step_epoch() in TRAINING stage stays in TRAINING (no auto-advance)."""
@@ -205,10 +221,10 @@ class TestStepEpochBehavior:
         slot.germinate("noop", seed_id="test")
         slot.state.transition(SeedStage.TRAINING)
 
-        # step_epoch doesn't auto-advance from TRAINING without passing G2
+        # step_epoch doesn't advance from TRAINING
         slot.step_epoch()
 
-        # Should still be in TRAINING (G2 gate not passed)
+        # Should still be in TRAINING
         assert slot.state.stage == SeedStage.TRAINING
 
 
@@ -333,6 +349,33 @@ class TestStateTransitionEdgeCases:
 
         assert state.metrics.epochs_in_current_stage == 0
 
+    def test_transition_records_previous_epochs_in_stage(self):
+        """Transition should snapshot previous_epochs_in_stage before reset."""
+        state = SeedState(
+            seed_id="test",
+            blueprint_id="noop",
+            stage=SeedStage.GERMINATED,
+        )
+        state.metrics.epochs_in_current_stage = 7
+
+        state.transition(SeedStage.TRAINING)
+
+        assert state.previous_epochs_in_stage == 7
+
+    def test_transition_appends_stage_history(self):
+        """Transition should append to stage_history."""
+        state = SeedState(
+            seed_id="test",
+            blueprint_id="noop",
+            stage=SeedStage.GERMINATED,
+        )
+        initial_len = len(state.stage_history)
+
+        state.transition(SeedStage.TRAINING)
+
+        assert len(state.stage_history) == initial_len + 1
+        assert state.stage_history[-1][0] == SeedStage.TRAINING
+
 
 class TestForceAlphaContext:
     """Tests for force_alpha context manager."""
@@ -359,11 +402,11 @@ class TestForceAlphaContext:
 
     def test_force_alpha_disables_schedule(self):
         """force_alpha() should disable alpha_schedule temporarily."""
-        from esper.kasmina.blending import LinearBlend
+        from esper.kasmina.blending import GatedBlend
 
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
-        slot.alpha_schedule = LinearBlend(total_steps=10)
+        slot.alpha_schedule = GatedBlend(channels=64, topology="cnn", total_steps=10)
 
         with slot.force_alpha(0.0):
             assert slot.alpha_schedule is None

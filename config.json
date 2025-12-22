@@ -1,7 +1,8 @@
 {
-  "n_episodes": 400,
-  "n_envs": 24,
-  "max_epochs": 150,
+  "task": "cifar10_blind",
+  "n_episodes": 3200,
+  "n_envs": 16,
+  "max_epochs": 75,
   "lr": 0.0003,
   "clip_ratio": 0.2,
   "gamma": 0.995,
@@ -13,14 +14,13 @@
   "use_telemetry": true,
   "amp": false,
   "lstm_hidden_dim": 128,
-  "chunk_length": 150,
+  "chunk_length": 75,
   "slots": [
     "r0c0",
-    "r0c1",
-    "r0c2"
+    "r0c1"
   ],
   "max_seeds": 2,
-  "reward_mode": "shaped",
+  "reward_mode": "simplified",
   "reward_family": "contribution",
   "param_budget": 500000,
   "param_penalty_weight": 0.1,

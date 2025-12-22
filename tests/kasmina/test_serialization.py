@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from esper.kasmina.slot import SeedSlot, SeedState, SeedMetrics
 from esper.kasmina.blending import LinearBlend, SigmoidBlend, GatedBlend
 from esper.leyline import SeedStage
+from esper.leyline.alpha import AlphaCurve, AlphaMode
 
 
 class TestSeedMetricsSerialization:
@@ -91,8 +92,13 @@ class TestSeedStateSerialization:
         )
         state.alpha = 0.5
         state.is_healthy = True
-        state.blending_steps_done = 3
-        state.blending_steps_total = 10
+        state.alpha_controller.alpha = state.alpha
+        state.alpha_controller.alpha_start = 0.0
+        state.alpha_controller.alpha_target = 1.0
+        state.alpha_controller.alpha_mode = AlphaMode.UP
+        state.alpha_controller.alpha_curve = AlphaCurve.LINEAR
+        state.alpha_controller.alpha_steps_total = 10
+        state.alpha_controller.alpha_steps_done = 3
         state.metrics.record_accuracy(60.0)
 
         data = state.to_dict()
@@ -104,8 +110,10 @@ class TestSeedStateSerialization:
         assert restored.stage == SeedStage.TRAINING
         assert restored.alpha == 0.5
         assert restored.is_healthy is True
-        assert restored.blending_steps_done == 3
-        assert restored.blending_steps_total == 10
+        assert restored.alpha_controller.alpha_steps_done == 3
+        assert restored.alpha_controller.alpha_steps_total == 10
+        assert restored.alpha_controller.alpha_target == 1.0
+        assert restored.alpha_controller.alpha_mode == AlphaMode.UP
         assert restored.metrics.current_val_accuracy == 60.0
 
     def test_state_stage_enum_serialization(self):
@@ -223,32 +231,30 @@ class TestSlotStateSerialization:
         slot.state.transition(SeedStage.TRAINING)
         slot.state.transition(SeedStage.BLENDING)
         slot.start_blending(total_steps=20)
-        slot.set_alpha(0.5)
-
-        # Record some progress
-        slot.state.blending_steps_done = 5
+        for _ in range(5):
+            slot.state.alpha_controller.step()
+            slot.set_alpha(slot.state.alpha_controller.alpha)
 
         data = slot.state.to_dict()
         restored = SeedState.from_dict(data)
 
         assert restored.stage == SeedStage.BLENDING
-        assert restored.alpha == 0.5
-        assert restored.blending_steps_done == 5
-        assert restored.blending_steps_total == 20
+        assert restored.alpha_controller.alpha_steps_done == 5
+        assert restored.alpha_controller.alpha_steps_total == 20
 
-    def test_slot_probationary_state_serialization(self):
-        """Slot in PROBATIONARY stage should serialize correctly."""
+    def test_slot_holding_state_serialization(self):
+        """Slot in HOLDING stage should serialize correctly."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
         slot.state.transition(SeedStage.TRAINING)
         slot.state.transition(SeedStage.BLENDING)
-        slot.state.transition(SeedStage.PROBATIONARY)
+        slot.state.transition(SeedStage.HOLDING)
         slot.state.metrics.counterfactual_contribution = 3.5
 
         data = slot.state.to_dict()
         restored = SeedState.from_dict(data)
 
-        assert restored.stage == SeedStage.PROBATIONARY
+        assert restored.stage == SeedStage.HOLDING
         assert restored.metrics.counterfactual_contribution == 3.5
 
     def test_slot_fossilized_state_serialization(self):
@@ -361,8 +367,8 @@ class TestResumeTrainingAfterCheckpoint:
         state_data = slot.state.to_dict()
         restored = SeedState.from_dict(state_data)
 
-        assert restored.blending_steps_done == 30
-        assert restored.blending_steps_total == 100
+        assert restored.alpha_controller.alpha_steps_done == 30
+        assert restored.alpha_controller.alpha_steps_total == 100
 
 
 class TestTelemetrySerialization:
@@ -406,7 +412,7 @@ class TestEdgeCaseSerialization:
         data = slot.state.to_dict()
 
         # Cull
-        slot.cull()
+        slot.prune()
 
         # Verify we can still deserialize the pre-cull state
         restored = SeedState.from_dict(data)

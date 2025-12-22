@@ -1,6 +1,15 @@
-"""Kasmina Blending Algorithms - Tamiyo's blending library.
+"""Kasmina blending / gating primitives.
 
-Each algorithm defines how a seed's influence ramps from 0 to 1.
+Phase 2+ contract:
+- Alpha *amplitude* scheduling is owned by `AlphaController` (scalar, time-based).
+- `SeedSlot.alpha_schedule` is reserved for per-sample gating only (currently: `GatedBlend`).
+
+`LinearBlend` and `SigmoidBlend` are retained as curve utilities for tests and
+numerical characterization; SeedSlot does not instantiate them for runtime
+blending.
+
+TODO: [MAINTENANCE] - If we fully commit to AlphaController-only scheduling,
+consider removing schedule-based BlendAlgorithm types and keeping only gating.
 """
 
 from __future__ import annotations
@@ -13,7 +22,7 @@ import torch
 import torch.nn as nn
 
 
-class BlendAlgorithm(ABC, nn.Module):
+class BlendAlgorithm(nn.Module, ABC):
     """Base class for blending algorithms.
 
     All implementations must provide `get_alpha_for_blend()` which returns
@@ -33,6 +42,7 @@ class BlendAlgorithm(ABC, nn.Module):
     _current_step: int = 0  # Tracked internally for schedule-based blends
 
     def __init__(self):
+        # nn.Module must initialize first in the MRO so submodules register correctly.
         super().__init__()
         # Thread-local cache for alpha tensor to avoid per-forward allocation
         # Uses thread-local storage for multi-GPU DataParallel safety
@@ -146,12 +156,17 @@ class GatedBlend(BlendAlgorithm):
 
     def __init__(self, channels: int, topology: str = "cnn", total_steps: int = 10):
         super().__init__()
+        if channels <= 0:
+            raise ValueError("GatedBlend requires channels > 0")
+        if topology not in ("cnn", "transformer"):
+            raise ValueError(f"Unknown topology '{topology}' for GatedBlend")
         self.topology = topology
         self.total_steps = max(1, total_steps)
+        hidden_dim = max(1, channels // 4)
         self.gate = nn.Sequential(
-            nn.Linear(channels, channels // 4),
+            nn.Linear(channels, hidden_dim),
             nn.ReLU(),
-            nn.Linear(channels // 4, 1),
+            nn.Linear(hidden_dim, 1),
             nn.Sigmoid(),
         )
 

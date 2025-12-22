@@ -32,11 +32,10 @@ SPARKLINE_CHARS = "▁▂▃▄▅▆▇█"
 # Action display names
 ACTION_NAMES = {
     "GERMINATE": "GERM",
-    "BLEND": "BLEND",
-    "CULL": "CULL",
+    "SET_ALPHA_TARGET": "ALPH",
+    "PRUNE": "PRUNE",
     "WAIT": "WAIT",
-    "ADVANCE": "ADV",
-    "HOLD": "HOLD",
+    "FOSSILIZE": "FOSS",
 }
 
 
@@ -207,12 +206,11 @@ class TamiyoDetailPanel(Container):
     def _action_color(self, action: str) -> str:
         """Get color for action code."""
         colors = {
-            "G": "green",      # Germinate
-            "B": "magenta",    # Blend
-            "C": "red",        # Cull
-            "W": "dim",        # Wait
-            "A": "blue",       # Advance
-            "H": "yellow",     # Hold
+            "G": "green",   # Germinate
+            "A": "cyan",    # Set alpha target
+            "P": "red",     # Prune
+            "F": "blue",    # Fossilize
+            "W": "dim",     # Wait
         }
         return colors.get(action, "white")
 

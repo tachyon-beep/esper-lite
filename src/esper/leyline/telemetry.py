@@ -18,12 +18,16 @@ from enum import Enum, auto
 from typing import Any
 from uuid import uuid4
 
+from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
 
 # Feature normalization constants for RL observation space
 # These define the expected ranges for seed telemetry values
 _GRADIENT_NORM_MAX: float = 10.0  # 99th percentile typical gradient norm
 _EPOCHS_IN_STAGE_MAX: int = 50  # Typical max epochs in single stage
 _ACCURACY_DELTA_SCALE: float = 10.0  # Scale factor for accuracy deltas
+_ALPHA_MODE_MAX: int = max(mode.value for mode in AlphaMode)
+_ALPHA_ALGO_MIN: int = min(algo.value for algo in AlphaAlgorithm)
+_ALPHA_ALGO_MAX: int = max(algo.value for algo in AlphaAlgorithm)
 
 
 def _utc_now() -> datetime:
@@ -39,10 +43,11 @@ class TelemetryEventType(Enum):
     SEED_STAGE_CHANGED = auto()
     SEED_GATE_EVALUATED = auto()
     SEED_FOSSILIZED = auto()
-    SEED_CULLED = auto()
+    SEED_PRUNED = auto()
 
     # Training events
-    EPOCH_COMPLETED = auto()
+    EPOCH_COMPLETED = auto()  # Per-env epoch (has env_id in data)
+    BATCH_EPOCH_COMPLETED = auto()  # Batch-level epoch summary + progress (commit barrier)
     PLATEAU_DETECTED = auto()
     DEGRADATION_DETECTED = auto()
     IMPROVEMENT_DETECTED = auto()
@@ -72,13 +77,13 @@ class TelemetryEventType(Enum):
     GOVERNOR_SNAPSHOT = auto()        # LKG checkpoint saved
 
     # === Training Progress Events ===
-    BATCH_COMPLETED = auto()          # PPO batch finished
     TRAINING_STARTED = auto()         # Training run initialized
     CHECKPOINT_SAVED = auto()         # Model checkpoint saved
     CHECKPOINT_LOADED = auto()        # Model checkpoint restored
 
     # === Counterfactual Attribution Events ===
     COUNTERFACTUAL_COMPUTED = auto()  # Per-slot counterfactual contribution measured
+    COUNTERFACTUAL_MATRIX_COMPUTED = auto()  # Full factorial matrix for env
 
     # === Analytics Events ===
     ANALYTICS_SNAPSHOT = auto()       # Full state snapshot for dashboard sync
@@ -160,8 +165,17 @@ class SeedTelemetry:
     epochs_in_stage: int = 0
 
     # Stage context
-    stage: int = 1  # SeedStage enum value (1-7)
+    stage: int = 1  # SeedStage enum value (1-10); feature scaling clamps >=10 to 1.0
     alpha: float = 0.0  # blending weight (0-1)
+
+    # Alpha controller context
+    alpha_target: float = 0.0
+    alpha_mode: int = 0
+    alpha_steps_total: int = 0
+    alpha_steps_done: int = 0
+    time_to_target: int = 0
+    alpha_velocity: float = 0.0
+    alpha_algorithm: int = AlphaAlgorithm.ADD.value
 
     # Temporal context
     epoch: int = 0
@@ -170,12 +184,18 @@ class SeedTelemetry:
     # Timestamp for staleness detection
     captured_at: datetime = field(default_factory=_utc_now)
 
+    # Tempo telemetry
+    blend_tempo_epochs: int = 5
+    blending_velocity: float = 0.0  # d(alpha) / d(epoch)
+
     def to_features(self) -> list[float]:
-        """Convert to 10-dim feature vector for RL policies.
+        """Convert to 17-dim feature vector for RL policies.
 
         All features normalized to approximately [0, 1] range.
         Uses module constants for normalization bounds.
         """
+        steps_den = max(self.max_epochs, 1)
+        alpha_algo_range = max(_ALPHA_ALGO_MAX - _ALPHA_ALGO_MIN, 1)
         return [
             min(self.gradient_norm, _GRADIENT_NORM_MAX) / _GRADIENT_NORM_MAX,
             self.gradient_health,
@@ -184,15 +204,22 @@ class SeedTelemetry:
             min(self.epochs_in_stage, _EPOCHS_IN_STAGE_MAX) / _EPOCHS_IN_STAGE_MAX,
             self.accuracy / 100.0,
             max(-1.0, min(1.0, self.accuracy_delta / _ACCURACY_DELTA_SCALE)),
-            min((self.stage - 1) / 6.0, 1.0),  # stages 1-7 -> [0, 1], clamp overflow
+            min((self.stage - 1) / 9.0, 1.0),  # stages 1-10 -> [0, 1], clamps >=10
             self.alpha,
             self.epoch / max(self.max_epochs, 1),  # temporal position
+            self.alpha_target,
+            self.alpha_mode / max(_ALPHA_MODE_MAX, 1),
+            min(self.alpha_steps_total, steps_den) / steps_den,
+            min(self.alpha_steps_done, steps_den) / steps_den,
+            min(self.time_to_target, steps_den) / steps_den,
+            max(-1.0, min(1.0, self.alpha_velocity)),
+            (self.alpha_algorithm - _ALPHA_ALGO_MIN) / alpha_algo_range,
         ]
 
     @classmethod
     def feature_dim(cls) -> int:
         """Return current feature vector dimension."""
-        return 10
+        return 17
 
     def to_dict(self) -> dict:
         """Convert to primitive dict for serialization."""
@@ -209,9 +236,18 @@ class SeedTelemetry:
             "epochs_in_stage": self.epochs_in_stage,
             "stage": self.stage,
             "alpha": self.alpha,
+            "alpha_target": self.alpha_target,
+            "alpha_mode": self.alpha_mode,
+            "alpha_steps_total": self.alpha_steps_total,
+            "alpha_steps_done": self.alpha_steps_done,
+            "time_to_target": self.time_to_target,
+            "alpha_velocity": self.alpha_velocity,
+            "alpha_algorithm": self.alpha_algorithm,
             "epoch": self.epoch,
             "max_epochs": self.max_epochs,
             "captured_at": self.captured_at.isoformat() if self.captured_at else None,
+            "blend_tempo_epochs": self.blend_tempo_epochs,
+            "blending_velocity": self.blending_velocity,
         }
 
     @classmethod
@@ -232,7 +268,16 @@ class SeedTelemetry:
             epochs_in_stage=data.get("epochs_in_stage", 0),
             stage=data.get("stage", 1),
             alpha=data.get("alpha", 0.0),
+            alpha_target=data.get("alpha_target", 0.0),
+            alpha_mode=data.get("alpha_mode", AlphaMode.HOLD.value),
+            alpha_steps_total=data.get("alpha_steps_total", 0),
+            alpha_steps_done=data.get("alpha_steps_done", 0),
+            time_to_target=data.get("time_to_target", 0),
+            alpha_velocity=data.get("alpha_velocity", 0.0),
+            alpha_algorithm=data.get("alpha_algorithm", AlphaAlgorithm.ADD.value),
             epoch=data.get("epoch", 0),
             max_epochs=data.get("max_epochs", 25),
             captured_at=datetime.fromisoformat(data["captured_at"]) if data.get("captured_at") else _utc_now(),
+            blend_tempo_epochs=data.get("blend_tempo_epochs", 5),
+            blending_velocity=data.get("blending_velocity", 0.0),
         )

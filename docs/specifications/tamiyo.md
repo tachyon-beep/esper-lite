@@ -114,7 +114,7 @@ class HeuristicPolicyConfig:
 
     # Blueprint selection with penalty tracking
     blueprint_rotation: list[str] = ["conv_light", "conv_heavy", "attention", "norm", "depthwise"]
-    blueprint_penalty_on_cull: float = 2.0    # Penalty applied when blueprint is culled
+    blueprint_penalty_on_cull: float = 2.0    # Penalty applied when blueprint is pruned
     blueprint_penalty_decay: float = 0.5      # Per-epoch multiplicative decay
     blueprint_penalty_threshold: float = 3.0  # Skip blueprints above this penalty
 ```
@@ -197,14 +197,15 @@ Note: Latch intentionally never resets. Call tracker.reset() for full reset.
 [GERMINATION_CHECK] --(plateau detected)--> GERMINATE_<BLUEPRINT>
 [GERMINATION_CHECK] --(progressing normally)--> WAIT
 
-[SEED_MANAGEMENT] --(stage=GERMINATED)--> WAIT (auto-advance pending)
-[SEED_MANAGEMENT] --(stage=TRAINING, failing)--> CULL
-[SEED_MANAGEMENT] --(stage=TRAINING, ok)--> WAIT
-[SEED_MANAGEMENT] --(stage=BLENDING, failing)--> CULL
-[SEED_MANAGEMENT] --(stage=BLENDING, ok)--> WAIT
-[SEED_MANAGEMENT] --(stage=PROBATIONARY, no counterfactual)--> WAIT
-[SEED_MANAGEMENT] --(stage=PROBATIONARY, contribution > threshold)--> FOSSILIZE
-[SEED_MANAGEMENT] --(stage=PROBATIONARY, contribution <= threshold)--> CULL
+[SEED_MANAGEMENT] --(stage=GERMINATED)--> ADVANCE
+[SEED_MANAGEMENT] --(stage=TRAINING, failing)--> PRUNE
+[SEED_MANAGEMENT] --(stage=TRAINING, ok)--> ADVANCE
+[SEED_MANAGEMENT] --(stage=BLENDING, failing)--> PRUNE
+[SEED_MANAGEMENT] --(stage=BLENDING, full amplitude)--> ADVANCE
+[SEED_MANAGEMENT] --(stage=BLENDING, otherwise)--> WAIT
+[SEED_MANAGEMENT] --(stage=HOLDING, no counterfactual)--> WAIT
+[SEED_MANAGEMENT] --(stage=HOLDING, contribution > threshold)--> FOSSILIZE
+[SEED_MANAGEMENT] --(stage=HOLDING, contribution <= threshold)--> PRUNE
 ```
 
 ## 4.2 Data Governance
@@ -404,7 +405,7 @@ Note: Latch intentionally never resets. Call tracker.reset() for full reset.
   - **Diagnostic:** Log relative improvements: `(prev_loss - curr_loss) / prev_loss`
   - **Fix:** Increase `stabilization_threshold` (e.g., 5% for volatile tasks)
 
-- **Symptom:** Same blueprint keeps getting selected then culled
+- **Symptom:** Same blueprint keeps getting selected then pruned
   - **Likely Cause:** Blueprint penalty decays too fast (0.5^N per epoch)
   - **Diagnostic:** Check `_blueprint_penalties` dict values
   - **Fix:** Increase `blueprint_penalty_on_cull` or decrease `blueprint_penalty_decay`

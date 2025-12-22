@@ -245,6 +245,26 @@ class TestCompilerDisabledPaths:
         assert not getattr(forward_method, '_torchdynamo_disable', False), \
             "SeedSlot.forward should NOT have @torch.compiler.disable - allow graph specialization"
 
+    def test_seed_slot_forward_compiles_smoke(self):
+        """Phase 3 smoke: a minimal BLENDING forward path compiles and runs."""
+        from esper.kasmina.slot import SeedSlot
+        from esper.leyline import SeedStage
+
+        slot = SeedSlot(slot_id="r0c0", channels=16, fast_mode=False)
+        slot.germinate("noop", seed_id="seed-compile-smoke")
+        slot.state.transition(SeedStage.TRAINING)
+        slot.state.transition(SeedStage.BLENDING)
+        slot.set_alpha(0.5)
+
+        x = torch.randn(2, 16, 8, 8)
+        compiled_slot = torch.compile(slot)  # allow specialization (not fullgraph)
+
+        out1 = compiled_slot(x)
+        out2 = compiled_slot(x)
+
+        assert out1.shape == x.shape
+        assert out2.shape == x.shape
+
     def test_validate_action_mask_has_compiler_disable(self):
         """_validate_action_mask should have @torch.compiler.disable decorator."""
         from esper.tamiyo.policy.action_masks import _validate_action_mask

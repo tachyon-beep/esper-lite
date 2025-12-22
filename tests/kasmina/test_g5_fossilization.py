@@ -9,7 +9,7 @@ from esper.leyline import SeedStage, DEFAULT_MIN_FOSSILIZE_CONTRIBUTION
 
 
 def create_probationary_state(contribution: float, healthy: bool = True) -> SeedState:
-    """Create a SeedState in PROBATIONARY stage with given contribution.
+    """Create a SeedState in HOLDING stage with given contribution.
 
     SeedState is a dataclass with required fields seed_id and blueprint_id.
     SeedMetrics.counterfactual_contribution is a settable field.
@@ -20,7 +20,7 @@ def create_probationary_state(contribution: float, healthy: bool = True) -> Seed
     state = SeedState(
         seed_id="test-seed",
         blueprint_id="test-blueprint",
-        stage=SeedStage.PROBATIONARY,
+        stage=SeedStage.HOLDING,
         metrics=metrics,
         is_healthy=healthy,
     )

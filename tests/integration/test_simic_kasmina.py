@@ -176,7 +176,8 @@ class TestGradientCollection:
         # Forward/backward
         x = torch.randn(2, 3, 32, 32)
         output = model(x)
-        loss = output.sum()
+        # Use mean to keep gradients well below exploding threshold in a deterministic test.
+        loss = output.mean()
         loss.backward()
 
         # Collect with enhanced metrics

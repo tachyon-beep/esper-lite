@@ -13,6 +13,7 @@ Usage:
 
     # Task-specific presets
     config = TrainingConfig.for_cifar10()
+    config = TrainingConfig.for_cifar10_stable()
     config = TrainingConfig.for_cifar10_deep()
     config = TrainingConfig.for_tinystories()
 
@@ -56,6 +57,7 @@ class TrainingConfig:
     n_episodes: int = 100
     n_envs: int = DEFAULT_N_ENVS
     max_epochs: int = DEFAULT_EPISODE_LENGTH
+    batch_size_per_env: int | None = None
 
     # === PPO core (from leyline defaults) ===
     lr: float = DEFAULT_LEARNING_RATE
@@ -101,6 +103,10 @@ class TrainingConfig:
     # === Reproducibility ===
     seed: int = 42
 
+    # === Task selection ===
+    # If set, overrides CLI --task. Valid: "cifar10", "cifar10_deep", "cifar10_blind", "tinystories"
+    task: str | None = None
+
     def __post_init__(self):
         """Validate and set defaults."""
         # Auto-match chunk_length to max_epochs if not set
@@ -124,6 +130,21 @@ class TrainingConfig:
     def for_cifar10() -> "TrainingConfig":
         """Optimized configuration for CIFAR-10 classification."""
         return TrainingConfig(entropy_coef=0.1, plateau_threshold=0.4)
+
+    @staticmethod
+    def for_cifar10_stable() -> "TrainingConfig":
+        """Conservative configuration for CIFAR-10 (slower, more stable PPO)."""
+        return TrainingConfig(
+            n_episodes=200,
+            lr=1e-4,
+            clip_ratio=0.1,
+            entropy_coef=0.06,
+            entropy_coef_start=0.06,
+            entropy_coef_end=0.03,
+            entropy_anneal_episodes=200,
+            adaptive_entropy_floor=True,
+            plateau_threshold=0.4,
+        )
 
     @staticmethod
     def for_cifar10_blind() -> "TrainingConfig":
@@ -216,6 +237,7 @@ class TrainingConfig:
             "n_episodes": self.n_episodes,
             "n_envs": self.n_envs,
             "max_epochs": self.max_epochs,
+            "batch_size_per_env": self.batch_size_per_env,
             "use_telemetry": self.use_telemetry,
             "lr": self.lr,
             "clip_ratio": self.clip_ratio,
@@ -269,6 +291,8 @@ class TrainingConfig:
         self._validate_positive(self.n_envs, "n_envs")
         self._validate_positive(self.max_epochs, "max_epochs")
         self._validate_positive(self.ppo_updates_per_batch, "ppo_updates_per_batch")
+        if self.batch_size_per_env is not None:
+            self._validate_positive(self.batch_size_per_env, "batch_size_per_env")
 
         if self.chunk_length != self.max_epochs:
             raise ValueError(
@@ -289,6 +313,13 @@ class TrainingConfig:
             validate_slot_ids(list(self.slots))
         except SlotIdError as e:
             raise ValueError(f"Invalid slot configuration: {e}") from e
+
+        # Validate task if specified
+        valid_tasks = {"cifar10", "cifar10_deep", "cifar10_blind", "tinystories"}
+        if self.task is not None and self.task not in valid_tasks:
+            raise ValueError(
+                f"Invalid task '{self.task}'. Valid options: {sorted(valid_tasks)}"
+            )
 
         if self.param_budget <= 0:
             raise ValueError("param_budget must be positive")

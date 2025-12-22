@@ -1,11 +1,7 @@
-"""Test step_epoch() lifecycle transitions.
+"""Test step_epoch() lifecycle mechanics.
 
-Covers all stage transitions in the seed lifecycle state machine:
-- GERMINATED → TRAINING
-- TRAINING → BLENDING (with dwell time)
-- BLENDING → PROBATIONARY (with blending steps)
-- PROBATIONARY → FOSSILIZED (positive counterfactual)
-- PROBATIONARY → CULLED (negative counterfactual or timeout)
+step_epoch() no longer advances stages; it only ticks alpha schedules and
+handles cooldown transitions after pruning.
 """
 
 import torch.nn as nn
@@ -32,7 +28,7 @@ class MockGates(QualityGates):
             SeedStage.GERMINATED: GateLevel.G0,
             SeedStage.TRAINING: GateLevel.G1,
             SeedStage.BLENDING: GateLevel.G2,
-            SeedStage.PROBATIONARY: GateLevel.G3,
+            SeedStage.HOLDING: GateLevel.G3,
             SeedStage.FOSSILIZED: GateLevel.G5,
         }.get(target_stage, GateLevel.G0)
 
@@ -69,10 +65,10 @@ def setup_state_at_stage(slot: SeedSlot, stage: SeedStage) -> None:
 
 
 class TestStepEpochGerminatedToTraining:
-    """Test GERMINATED → TRAINING transition."""
+    """Test GERMINATED stage behavior under step_epoch."""
 
-    def test_germinated_advances_to_training_when_gate_passes(self):
-        """GERMINATED should immediately advance to TRAINING when G1 passes."""
+    def test_germinated_does_not_advance_when_gate_passes(self):
+        """GERMINATED should not advance via step_epoch (policy must ADVANCE)."""
         gates = MockGates()
         gates.set_gate_result(SeedStage.TRAINING, True)
         slot = create_test_slot(gates)
@@ -80,11 +76,11 @@ class TestStepEpochGerminatedToTraining:
 
         slot.step_epoch()
 
-        assert slot.state.stage == SeedStage.TRAINING
-        assert slot.isolate_gradients is True  # Incubator isolation enabled
+        assert slot.state.stage == SeedStage.GERMINATED
+        assert slot.isolate_gradients is False  # Incubator isolation not yet enabled
 
     def test_germinated_stays_when_gate_fails(self):
-        """GERMINATED should not advance if G1 fails."""
+        """GERMINATED should remain unchanged when G1 fails."""
         gates = MockGates()
         gates.set_gate_result(SeedStage.TRAINING, False)
         slot = create_test_slot(gates)
@@ -96,10 +92,10 @@ class TestStepEpochGerminatedToTraining:
 
 
 class TestStepEpochTrainingToBlending:
-    """Test TRAINING → BLENDING transition."""
+    """Test TRAINING stage behavior under step_epoch."""
 
     def test_training_stays_during_dwell(self):
-        """TRAINING should not advance before dwell period completes."""
+        """TRAINING should not advance via step_epoch."""
         gates = MockGates()
         gates.set_gate_result(SeedStage.BLENDING, True)
         slot = create_test_slot(gates)
@@ -110,12 +106,8 @@ class TestStepEpochTrainingToBlending:
 
         assert slot.state.stage == SeedStage.TRAINING
 
-    def test_training_advances_to_blending_after_dwell(self):
-        """TRAINING should advance to BLENDING after dwell when G2 passes.
-
-        Note: Without task_config, topology defaults to "cnn", which keeps
-        isolate_gradients=True after BLENDING (CNNs don't co-adapt).
-        """
+    def test_training_does_not_advance_after_dwell(self):
+        """TRAINING should not advance via step_epoch even when gates pass."""
         gates = MockGates()
         gates.set_gate_result(SeedStage.BLENDING, True)
         slot = create_test_slot(gates)
@@ -124,12 +116,11 @@ class TestStepEpochTrainingToBlending:
 
         slot.step_epoch()
 
-        assert slot.state.stage == SeedStage.BLENDING
-        # CNN topology (default): isolation kept to prevent co-adaptation
-        assert slot.isolate_gradients is True
+        assert slot.state.stage == SeedStage.TRAINING
+        assert slot.isolate_gradients is False
 
-    def test_training_advances_to_blending_transformer_disables_isolation(self):
-        """Transformer topology should disable isolation at BLENDING for co-adaptation."""
+    def test_advance_stage_to_blending_transformer_disables_isolation(self):
+        """advance_stage should disable isolation at BLENDING for transformers."""
         from esper.tamiyo.policy.features import TaskConfig
 
         gates = MockGates()
@@ -155,7 +146,7 @@ class TestStepEpochTrainingToBlending:
         # Dwell = max(1, int(25 * 0.1)) = 2, so we need epochs >= 2
         slot.state.metrics.epochs_in_current_stage = 2
 
-        slot.step_epoch()
+        slot.advance_stage(SeedStage.BLENDING)
 
         assert slot.state.stage == SeedStage.BLENDING
         # Transformer topology: isolation disabled for co-adaptation
@@ -174,66 +165,83 @@ class TestStepEpochTrainingToBlending:
         assert slot.state.stage == SeedStage.TRAINING
 
 
-class TestStepEpochBlendingToProbationary:
-    """Test BLENDING → PROBATIONARY transition."""
+class TestStepEpochBlendingToHolding:
+    """Test BLENDING alpha schedule behavior."""
 
     def test_blending_increments_steps(self):
-        """BLENDING should increment blending_steps_done each epoch."""
+        """BLENDING should increment alpha controller steps each epoch."""
         slot = create_test_slot()
         setup_state_at_stage(slot, SeedStage.BLENDING)
-        slot.state.blending_steps_done = 0
-        slot.state.blending_steps_total = 5
+        slot.state.alpha_controller.retarget(alpha_target=1.0, alpha_steps_total=5)
 
         slot.step_epoch()
 
-        assert slot.state.blending_steps_done == 1
+        assert slot.state.alpha_controller.alpha_steps_done == 1
 
     def test_blending_stays_until_steps_complete(self):
-        """BLENDING should not advance until all blending steps complete."""
+        """BLENDING should not advance via step_epoch while blending progresses."""
         gates = MockGates()
-        gates.set_gate_result(SeedStage.PROBATIONARY, True)
+        gates.set_gate_result(SeedStage.HOLDING, True)
         slot = create_test_slot(gates)
         setup_state_at_stage(slot, SeedStage.BLENDING)
-        slot.state.blending_steps_done = 2
-        slot.state.blending_steps_total = 5
+        slot.state.alpha_controller.retarget(alpha_target=1.0, alpha_steps_total=5)
+        for _ in range(2):
+            slot.state.alpha_controller.step()
+        slot.set_alpha(slot.state.alpha_controller.alpha)
 
         slot.step_epoch()
 
         assert slot.state.stage == SeedStage.BLENDING
-        assert slot.state.blending_steps_done == 3
+        assert slot.state.alpha_controller.alpha_steps_done == 3
 
-    def test_blending_advances_to_probationary_when_complete(self):
-        """BLENDING should advance to PROBATIONARY when steps complete and G3 passes."""
+    def test_blending_does_not_advance_when_complete(self):
+        """BLENDING should not auto-advance to HOLDING when steps complete."""
         gates = MockGates()
-        gates.set_gate_result(SeedStage.PROBATIONARY, True)
+        gates.set_gate_result(SeedStage.HOLDING, True)
         slot = create_test_slot(gates)
         setup_state_at_stage(slot, SeedStage.BLENDING)
-        slot.state.blending_steps_done = 4  # Will become 5 (== total)
-        slot.state.blending_steps_total = 5
+        slot.state.alpha_controller.retarget(alpha_target=1.0, alpha_steps_total=5)
+        for _ in range(4):
+            slot.state.alpha_controller.step()
+        slot.set_alpha(slot.state.alpha_controller.alpha)
 
         slot.step_epoch()
 
-        assert slot.state.stage == SeedStage.PROBATIONARY
+        assert slot.state.stage == SeedStage.BLENDING
 
     def test_blending_stays_when_gate_fails(self):
         """BLENDING should not advance if G3 fails even when steps complete."""
         gates = MockGates()
-        gates.set_gate_result(SeedStage.PROBATIONARY, False)
+        gates.set_gate_result(SeedStage.HOLDING, False)
         slot = create_test_slot(gates)
         setup_state_at_stage(slot, SeedStage.BLENDING)
-        slot.state.blending_steps_done = 4
-        slot.state.blending_steps_total = 5
+        slot.state.alpha_controller.retarget(alpha_target=1.0, alpha_steps_total=5)
+        for _ in range(4):
+            slot.state.alpha_controller.step()
+        slot.set_alpha(slot.state.alpha_controller.alpha)
+
+        slot.step_epoch()
+
+        assert slot.state.stage == SeedStage.BLENDING
+
+    def test_blending_stays_on_partial_target_even_if_gate_passes(self):
+        """Partial alpha targets should remain in BLENDING (BLEND_HOLD)."""
+        gates = MockGates()
+        gates.set_gate_result(SeedStage.HOLDING, True)
+        slot = create_test_slot(gates)
+        setup_state_at_stage(slot, SeedStage.BLENDING)
+        slot.state.alpha_controller.retarget(alpha_target=0.7, alpha_steps_total=1)
 
         slot.step_epoch()
 
         assert slot.state.stage == SeedStage.BLENDING
 
 
-class TestStepEpochProbationaryOutcomes:
-    """Test PROBATIONARY → FOSSILIZED or CULLED transitions."""
+class TestStepEpochHoldingOutcomes:
+    """Test HOLDING behavior without explicit actions."""
 
-    def test_probationary_stays_with_positive_counterfactual(self):
-        """PROBATIONARY should STAY (not auto-fossilize) when counterfactual is positive.
+    def test_holding_stays_with_positive_counterfactual(self):
+        """HOLDING should STAY (not auto-fossilize) when counterfactual is positive.
 
         Fossilization requires explicit FOSSILIZE action from Tamiyo, not auto-advance.
         (DRL Expert review 2025-12-10: auto-fossilize violated credit assignment)
@@ -241,79 +249,79 @@ class TestStepEpochProbationaryOutcomes:
         gates = MockGates()
         gates.set_gate_result(SeedStage.FOSSILIZED, True)
         slot = create_test_slot(gates)
-        setup_state_at_stage(slot, SeedStage.PROBATIONARY)
+        setup_state_at_stage(slot, SeedStage.HOLDING)
         slot.state.metrics.counterfactual_contribution = 2.5  # Positive contribution
 
         slot.step_epoch()
 
-        # Should stay in PROBATIONARY - fossilization requires explicit action
-        assert slot.state.stage == SeedStage.PROBATIONARY
+        # Should stay in HOLDING - fossilization requires explicit action
+        assert slot.state.stage == SeedStage.HOLDING
 
-    def test_probationary_culls_with_negative_counterfactual(self):
-        """PROBATIONARY should CULL immediately when counterfactual is negative."""
+    def test_holding_stays_with_negative_counterfactual(self):
+        """HOLDING should not auto-prune when counterfactual is negative."""
         gates = MockGates()
         gates.set_gate_result(SeedStage.FOSSILIZED, False)  # G5 fails
         slot = create_test_slot(gates)
-        setup_state_at_stage(slot, SeedStage.PROBATIONARY)
+        setup_state_at_stage(slot, SeedStage.HOLDING)
         slot.state.metrics.counterfactual_contribution = -1.0  # Negative = hurts performance
 
         slot.step_epoch()
 
-        # cull() sets state to None after transitioning to CULLED
-        assert slot.state is None
-        assert slot.seed is None  # Seed also cleared
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.HOLDING
+        assert slot.seed is not None
 
-    def test_probationary_culls_with_zero_counterfactual(self):
-        """PROBATIONARY should CULL when counterfactual is exactly zero."""
+    def test_holding_stays_with_zero_counterfactual(self):
+        """HOLDING should not auto-prune when counterfactual is exactly zero."""
         gates = MockGates()
         gates.set_gate_result(SeedStage.FOSSILIZED, False)  # G5 must fail to reach <= 0 check
         slot = create_test_slot(gates)
-        setup_state_at_stage(slot, SeedStage.PROBATIONARY)
+        setup_state_at_stage(slot, SeedStage.HOLDING)
         slot.state.metrics.counterfactual_contribution = 0.0  # No benefit
 
         slot.step_epoch()
 
-        # cull() sets state to None after transitioning to CULLED
-        assert slot.state is None
-        assert slot.seed is None
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.HOLDING
+        assert slot.seed is not None
 
-    def test_probationary_culls_on_timeout(self):
-        """PROBATIONARY should CULL when timeout is reached without counterfactual."""
+    def test_holding_stays_on_timeout(self):
+        """HOLDING should not auto-prune on timeout."""
         slot = create_test_slot()
-        setup_state_at_stage(slot, SeedStage.PROBATIONARY)
+        setup_state_at_stage(slot, SeedStage.HOLDING)
         slot.state.metrics.counterfactual_contribution = None  # Not yet evaluated
         slot.state.metrics.epochs_in_current_stage = DEFAULT_MAX_PROBATION_EPOCHS
 
         slot.step_epoch()
 
-        # cull() sets state to None after transitioning to CULLED
-        assert slot.state is None
-        assert slot.seed is None
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.HOLDING
+        assert slot.seed is not None
 
-    def test_probationary_waits_for_counterfactual_before_timeout(self):
-        """PROBATIONARY should wait for counterfactual evaluation before timeout."""
+    def test_holding_stays_before_timeout(self):
+        """HOLDING should remain unchanged before timeout."""
         slot = create_test_slot()
-        setup_state_at_stage(slot, SeedStage.PROBATIONARY)
+        setup_state_at_stage(slot, SeedStage.HOLDING)
         slot.state.metrics.counterfactual_contribution = None  # Not yet evaluated
         slot.state.metrics.epochs_in_current_stage = 2  # Below timeout
 
         slot.step_epoch()
 
-        assert slot.state.stage == SeedStage.PROBATIONARY
+        assert slot.state.stage == SeedStage.HOLDING
 
-    def test_probationary_stays_when_g5_fails_with_positive_counterfactual(self):
-        """PROBATIONARY should stay if G5 fails even with positive counterfactual."""
+    def test_holding_stays_when_g5_fails_with_positive_counterfactual(self):
+        """HOLDING should stay if G5 fails even with positive counterfactual."""
         gates = MockGates()
         gates.set_gate_result(SeedStage.FOSSILIZED, False)
         slot = create_test_slot(gates)
-        setup_state_at_stage(slot, SeedStage.PROBATIONARY)
+        setup_state_at_stage(slot, SeedStage.HOLDING)
         slot.state.metrics.counterfactual_contribution = 2.5  # Positive but G5 fails
         slot.state.metrics.epochs_in_current_stage = 0  # Not timed out
 
         slot.step_epoch()
 
-        # Should stay in PROBATIONARY (G5 failed, not timed out, positive contribution)
-        assert slot.state.stage == SeedStage.PROBATIONARY
+        # Should stay in HOLDING (G5 failed, not timed out, positive contribution)
+        assert slot.state.stage == SeedStage.HOLDING
 
 
 class TestStepEpochNoState:

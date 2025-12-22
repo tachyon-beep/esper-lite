@@ -2,6 +2,17 @@
 import torch
 from unittest.mock import MagicMock
 
+from esper.leyline.factored_actions import (
+    NUM_ALPHA_ALGORITHMS,
+    NUM_ALPHA_CURVES,
+    NUM_ALPHA_SPEEDS,
+    NUM_ALPHA_TARGETS,
+    NUM_BLUEPRINTS,
+    NUM_BLENDS,
+    NUM_OPS,
+    NUM_TEMPO,
+)
+
 
 def test_batch_bootstrap_single_forward_pass():
     """Bootstrap values should use single batched forward pass."""
@@ -15,8 +26,19 @@ def test_batch_bootstrap_single_forward_pass():
         nonlocal forward_call_count
         forward_call_count += 1
         batch_size = state.shape[0]
-        actions = {key: torch.zeros(batch_size, dtype=torch.long) for key in ["slot", "blueprint", "blend", "op"]}
-        log_probs = {key: torch.zeros(batch_size) for key in ["slot", "blueprint", "blend", "op"]}
+        head_names = [
+            "slot",
+            "blueprint",
+            "blend",
+            "tempo",
+            "alpha_target",
+            "alpha_speed",
+            "alpha_curve",
+            "alpha_algorithm",
+            "op",
+        ]
+        actions = {key: torch.zeros(batch_size, dtype=torch.long) for key in head_names}
+        log_probs = {key: torch.zeros(batch_size) for key in head_names}
         values = torch.randn(batch_size)  # Random values for each env
         return actions, log_probs, values, hidden
 
@@ -31,9 +53,14 @@ def test_batch_bootstrap_single_forward_pass():
         _, _, bootstrap_values, _ = mock_network.get_action(
             states, hidden=hidden,
             slot_mask=torch.ones(num_envs, 5, dtype=torch.bool),
-            blueprint_mask=torch.ones(num_envs, 13, dtype=torch.bool),
-            blend_mask=torch.ones(num_envs, 4, dtype=torch.bool),
-            op_mask=torch.ones(num_envs, 4, dtype=torch.bool),
+            blueprint_mask=torch.ones(num_envs, NUM_BLUEPRINTS, dtype=torch.bool),
+            blend_mask=torch.ones(num_envs, NUM_BLENDS, dtype=torch.bool),
+            tempo_mask=torch.ones(num_envs, NUM_TEMPO, dtype=torch.bool),
+            alpha_target_mask=torch.ones(num_envs, NUM_ALPHA_TARGETS, dtype=torch.bool),
+            alpha_speed_mask=torch.ones(num_envs, NUM_ALPHA_SPEEDS, dtype=torch.bool),
+            alpha_curve_mask=torch.ones(num_envs, NUM_ALPHA_CURVES, dtype=torch.bool),
+            alpha_algorithm_mask=torch.ones(num_envs, NUM_ALPHA_ALGORITHMS, dtype=torch.bool),
+            op_mask=torch.ones(num_envs, NUM_OPS, dtype=torch.bool),
         )
 
     assert forward_call_count == 1, f"Expected 1 forward pass, got {forward_call_count}"

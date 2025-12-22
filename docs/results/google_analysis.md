@@ -122,9 +122,9 @@ The PPO observation layout is documented directly in `obs_to_multislot_features`
 The `SeedStage` definition in `stages.py` is robust. It supports the concept of a "Trust Escalation" model—seeds must earn their right to exist.
 
 **Critique on Transitions:**
-In `VALID_TRANSITIONS`, you allow `PROBATIONARY -> CULLED`.
+In `VALID_TRANSITIONS`, you allow `HOLDING -> PRUNED`.
 
-* *Observation:* This implies that even after passing Shadowing (G3) and Blending (G2), a seed can still fail during Probation. This is good design—it prevents "regression" seeds (modules that looked good in isolation but degrade the host over time) from permanently entering the model.
+* *Observation:* This implies that even after passing Shadowing (G3) and Blending (G2), a seed can still fail during Holding. This is good design—it prevents "regression" seeds (modules that looked good in isolation but degrade the host over time) from permanently entering the model.
 
 ### 3\. Critical Technical Review
 
@@ -174,7 +174,7 @@ Leyline is a solid foundation. It feels "Corporate Grade" in the best way—safe
 
 * **Explicit feature layout:** Solves the "what is index 5?" problem in RL.
 * **Performance Awareness:** Clear separation of logging data vs. training data.
-* **Rich Lifecycle:** The seed stages (Shadowing, Probation) enable complex evolutionary strategies.
+* **Rich Lifecycle:** The seed stages (Shadowing, Holding) enable complex evolutionary strategies.
 
 This implementation of **Tamiyo** successfully establishes the decision-making loop for your Morphogenetic Neural Network. You have correctly separated the **Observation** (`SignalTracker`) from the **Policy** (`HeuristicTamiyo`), allowing you to swap in a Reinforcement Learning agent (Simic) later without rewriting the tracking logic.
 
@@ -218,7 +218,7 @@ if not active_seeds:
     decision = self._decide_germination(signals)
 ```
 
-**Risk:** If a seed is culled because it caused a massive accuracy drop, the slot becomes free immediately. `HeuristicTamiyo` will likely see the *same* plateau (since accuracy just dropped) and immediately germinate *another* seed in the same slot.
+**Risk:** If a seed is pruned because it caused a massive accuracy drop, the slot becomes free immediately. `HeuristicTamiyo` will likely see the *same* plateau (since accuracy just dropped) and immediately germinate *another* seed in the same slot.
 **Result:** A "Thrashing Loop" where Tamiyo germinates -\> culls -\> germinates -\> culls every few epochs, destroying training stability.
 **Fix:** The tracker or the policy needs to respect a cooldown timer (Embargo) after a Cull action.
 

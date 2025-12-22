@@ -11,8 +11,9 @@ from esper.leyline.factored_actions import (
     BLEND_IDS,
     OP_GERMINATE,
     OP_FOSSILIZE,
-    OP_CULL,
+    OP_PRUNE,
     OP_WAIT,
+    OP_ADVANCE,
 )
 
 
@@ -60,8 +61,11 @@ class TestOpIndexConstants:
     def test_op_germinate_matches_enum(self):
         assert OP_GERMINATE == LifecycleOp.GERMINATE.value
 
-    def test_op_cull_matches_enum(self):
-        assert OP_CULL == LifecycleOp.CULL.value
+    def test_op_prune_matches_enum(self):
+        assert OP_PRUNE == LifecycleOp.PRUNE.value
 
     def test_op_fossilize_matches_enum(self):
         assert OP_FOSSILIZE == LifecycleOp.FOSSILIZE.value
+
+    def test_op_advance_matches_enum(self):
+        assert OP_ADVANCE == LifecycleOp.ADVANCE.value

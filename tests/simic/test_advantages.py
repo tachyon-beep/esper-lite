@@ -49,10 +49,22 @@ class TestPerHeadAdvantages:
         assert torch.allclose(per_head["blueprint"], torch.zeros(1))
         assert torch.allclose(per_head["blend"], torch.zeros(1))
 
-    def test_cull_slot_active_others_masked(self):
-        """When op=CULL, slot and op active, blueprint/blend masked."""
-        op_actions = torch.tensor([LifecycleOp.CULL])
+    def test_prune_slot_active_others_masked(self):
+        """When op=PRUNE, slot and op active, blueprint/blend masked."""
+        op_actions = torch.tensor([LifecycleOp.PRUNE])
         base_advantages = torch.tensor([3.0])
+
+        per_head = compute_per_head_advantages(base_advantages, op_actions)
+
+        assert torch.allclose(per_head["op"], base_advantages)
+        assert torch.allclose(per_head["slot"], base_advantages)
+        assert torch.allclose(per_head["blueprint"], torch.zeros(1))
+        assert torch.allclose(per_head["blend"], torch.zeros(1))
+
+    def test_advance_slot_active_others_masked(self):
+        """When op=ADVANCE, slot and op active, other heads masked."""
+        op_actions = torch.tensor([LifecycleOp.ADVANCE])
+        base_advantages = torch.tensor([4.0])
 
         per_head = compute_per_head_advantages(base_advantages, op_actions)
 
@@ -67,7 +79,7 @@ class TestPerHeadAdvantages:
             LifecycleOp.WAIT,
             LifecycleOp.GERMINATE,
             LifecycleOp.FOSSILIZE,
-            LifecycleOp.CULL,
+            LifecycleOp.PRUNE,
         ])
         base_advantages = torch.tensor([1.0, 2.0, 3.0, 4.0])
 
@@ -76,7 +88,7 @@ class TestPerHeadAdvantages:
         # op always active
         assert torch.allclose(per_head["op"], base_advantages)
 
-        # slot: active for GERMINATE, FOSSILIZE, CULL (indices 1, 2, 3)
+        # slot: active for GERMINATE, FOSSILIZE, PRUNE (indices 1, 2, 3)
         expected_slot = torch.tensor([0.0, 2.0, 3.0, 4.0])
         assert torch.allclose(per_head["slot"], expected_slot)
 
@@ -114,7 +126,7 @@ class TestPerHeadAdvantages:
         """Should work with batched [batch, seq] input."""
         op_actions = torch.tensor([
             [LifecycleOp.WAIT, LifecycleOp.GERMINATE],
-            [LifecycleOp.CULL, LifecycleOp.FOSSILIZE],
+            [LifecycleOp.PRUNE, LifecycleOp.FOSSILIZE],
         ])
         base_advantages = torch.tensor([
             [1.0, 2.0],
@@ -126,7 +138,7 @@ class TestPerHeadAdvantages:
         # op always active
         assert torch.allclose(per_head["op"], base_advantages)
 
-        # slot: WAIT=masked, GERMINATE=active, CULL=active, FOSSILIZE=active
+        # slot: WAIT=masked, GERMINATE=active, PRUNE=active, FOSSILIZE=active
         expected_slot = torch.tensor([
             [0.0, 2.0],
             [3.0, 4.0],

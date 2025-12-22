@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from esper.leyline import SeedStage, is_terminal_stage
+from esper.leyline import AlphaAlgorithm, SeedStage, is_terminal_stage
 from esper.kasmina.slot import SeedSlot
 from esper.kasmina.blueprints.cnn import ConvBlock  # Reuse shared building block
 
@@ -540,7 +540,8 @@ class MorphogeneticModel(nn.Module):
         prev_segment = None
         for slot_id in self._active_slots:
             x = self.host.forward_to_segment(slot_id, x, from_segment=prev_segment)
-            x = self.seed_slots[slot_id].forward(x)
+            # Use __call__ to preserve hooks/wrappers (e.g., torch.compile, profilers).
+            x = self.seed_slots[slot_id](x)
             prev_segment = slot_id
         return self.host.forward_from_segment(prev_segment, x)
 
@@ -551,6 +552,9 @@ class MorphogeneticModel(nn.Module):
         *,
         slot: str,
         blend_algorithm_id: str = "sigmoid",
+        blend_tempo_epochs: int = 5,
+        alpha_algorithm: AlphaAlgorithm = AlphaAlgorithm.ADD,
+        alpha_target: float | None = None,
     ) -> None:
         """Germinate a new seed in a specific slot.
 
@@ -559,6 +563,9 @@ class MorphogeneticModel(nn.Module):
             seed_id: Unique identifier for the seed
             slot: Target slot ("r0c0", "r0c1", "r0c2")
             blend_algorithm_id: Blending algorithm ("linear", "sigmoid", "gated")
+            blend_tempo_epochs: Number of epochs for blending (3, 5, or 8)
+            alpha_algorithm: Blend operator / gating mode (ADD, MULTIPLY, or GATE)
+            alpha_target: Initial blend target (defaults to full amplitude)
         """
         if slot not in self.seed_slots:
             raise ValueError(f"Unknown slot: {slot}. Available: {list(self.seed_slots.keys())}")
@@ -568,13 +575,16 @@ class MorphogeneticModel(nn.Module):
             seed_id=seed_id,
             host_module=self.host,
             blend_algorithm_id=blend_algorithm_id,
+            blend_tempo_epochs=blend_tempo_epochs,
+            alpha_algorithm=alpha_algorithm,
+            alpha_target=alpha_target,
         )
 
-    def cull_seed(self, *, slot: str) -> None:
-        """Cull the seed in a specific slot."""
+    def prune_seed(self, *, slot: str) -> None:
+        """Prune the seed in a specific slot (immediate removal)."""
         if slot not in self.seed_slots:
             raise ValueError(f"Unknown slot: {slot}. Available: {list(self.seed_slots.keys())}")
-        self.seed_slots[slot].cull()
+        self.seed_slots[slot].prune()
 
     def get_seed_parameters(self, slot: str | None = None):
         """Get seed parameters from specific slot or all slots."""

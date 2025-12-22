@@ -2,7 +2,7 @@
 
 This buffer combines:
 - Per-environment storage (fixes GAE interleaving bug)
-- Factored action space (4 heads: slot, blueprint, blend, op)
+    - Factored action space (9 heads: slot, blueprint, blend, tempo, alpha_*, op)
 - Per-head log probs (enables head-specific credit assignment)
 - LSTM hidden state tracking (enables temporal reasoning)
 - Pre-allocated tensors (memory efficiency)
@@ -23,9 +23,14 @@ import torch
 
 from esper.leyline import DEFAULT_GAMMA, DEFAULT_LSTM_HIDDEN_DIM
 from esper.leyline.factored_actions import (
+    NUM_ALPHA_ALGORITHMS,
+    NUM_ALPHA_CURVES,
+    NUM_ALPHA_SPEEDS,
+    NUM_ALPHA_TARGETS,
     NUM_BLUEPRINTS,
     NUM_BLENDS,
     NUM_OPS,
+    NUM_TEMPO,
 )
 from esper.leyline.slot_config import SlotConfig
 
@@ -40,16 +45,26 @@ class TamiyoRolloutStep(NamedTuple):
     # Core state
     state: torch.Tensor  # [state_dim]
 
-    # Factored actions (4 heads)
+    # Factored actions (9 heads)
     slot_action: int
     blueprint_action: int
     blend_action: int
+    tempo_action: int
+    alpha_target_action: int
+    alpha_speed_action: int
+    alpha_curve_action: int
+    alpha_algorithm_action: int
     op_action: int
 
     # Per-head log probs (NOT joint) - see PyTorch expert rationale
     slot_log_prob: float
     blueprint_log_prob: float
     blend_log_prob: float
+    tempo_log_prob: float
+    alpha_target_log_prob: float
+    alpha_speed_log_prob: float
+    alpha_curve_log_prob: float
+    alpha_algorithm_log_prob: float
     op_log_prob: float
 
     # Value and reward
@@ -61,10 +76,15 @@ class TamiyoRolloutStep(NamedTuple):
     truncated: bool
     bootstrap_value: float
 
-    # Action masks (4 heads)
+    # Action masks (9 heads)
     slot_mask: torch.Tensor
     blueprint_mask: torch.Tensor
     blend_mask: torch.Tensor
+    tempo_mask: torch.Tensor
+    alpha_target_mask: torch.Tensor
+    alpha_speed_mask: torch.Tensor
+    alpha_curve_mask: torch.Tensor
+    alpha_algorithm_mask: torch.Tensor
     op_mask: torch.Tensor
 
     # LSTM hidden state at this step
@@ -79,7 +99,7 @@ class TamiyoRolloutBuffer:
     Designed for:
     - N parallel environments
     - 25 epochs per episode (max_steps_per_env)
-    - Factored action space (4 heads)
+    - Factored action space (9 heads)
     - LSTM hidden state tracking
 
     Pre-allocation rationale (PyTorch expert):
@@ -97,7 +117,12 @@ class TamiyoRolloutBuffer:
     slot_config: SlotConfig = field(default_factory=SlotConfig.default)
     num_blueprints: int = NUM_BLUEPRINTS
     num_blends: int = NUM_BLENDS
+    num_tempo: int = NUM_TEMPO
     num_ops: int = NUM_OPS
+    num_alpha_targets: int = NUM_ALPHA_TARGETS
+    num_alpha_speeds: int = NUM_ALPHA_SPEEDS
+    num_alpha_curves: int = NUM_ALPHA_CURVES
+    num_alpha_algorithms: int = NUM_ALPHA_ALGORITHMS
     device: torch.device = field(default_factory=lambda: torch.device("cpu"))
 
     # Initialized in __post_init__
@@ -108,10 +133,20 @@ class TamiyoRolloutBuffer:
     slot_actions: torch.Tensor = field(init=False)
     blueprint_actions: torch.Tensor = field(init=False)
     blend_actions: torch.Tensor = field(init=False)
+    tempo_actions: torch.Tensor = field(init=False)
+    alpha_target_actions: torch.Tensor = field(init=False)
+    alpha_speed_actions: torch.Tensor = field(init=False)
+    alpha_curve_actions: torch.Tensor = field(init=False)
+    alpha_algorithm_actions: torch.Tensor = field(init=False)
     op_actions: torch.Tensor = field(init=False)
     slot_log_probs: torch.Tensor = field(init=False)
     blueprint_log_probs: torch.Tensor = field(init=False)
     blend_log_probs: torch.Tensor = field(init=False)
+    tempo_log_probs: torch.Tensor = field(init=False)
+    alpha_target_log_probs: torch.Tensor = field(init=False)
+    alpha_speed_log_probs: torch.Tensor = field(init=False)
+    alpha_curve_log_probs: torch.Tensor = field(init=False)
+    alpha_algorithm_log_probs: torch.Tensor = field(init=False)
     op_log_probs: torch.Tensor = field(init=False)
     values: torch.Tensor = field(init=False)
     rewards: torch.Tensor = field(init=False)
@@ -121,6 +156,11 @@ class TamiyoRolloutBuffer:
     slot_masks: torch.Tensor = field(init=False)
     blueprint_masks: torch.Tensor = field(init=False)
     blend_masks: torch.Tensor = field(init=False)
+    tempo_masks: torch.Tensor = field(init=False)
+    alpha_target_masks: torch.Tensor = field(init=False)
+    alpha_speed_masks: torch.Tensor = field(init=False)
+    alpha_curve_masks: torch.Tensor = field(init=False)
+    alpha_algorithm_masks: torch.Tensor = field(init=False)
     op_masks: torch.Tensor = field(init=False)
     hidden_h: torch.Tensor = field(init=False)
     hidden_c: torch.Tensor = field(init=False)
@@ -152,12 +192,22 @@ class TamiyoRolloutBuffer:
         self.slot_actions = torch.zeros(n, m, dtype=torch.long, device=device)
         self.blueprint_actions = torch.zeros(n, m, dtype=torch.long, device=device)
         self.blend_actions = torch.zeros(n, m, dtype=torch.long, device=device)
+        self.tempo_actions = torch.zeros(n, m, dtype=torch.long, device=device)
+        self.alpha_target_actions = torch.zeros(n, m, dtype=torch.long, device=device)
+        self.alpha_speed_actions = torch.zeros(n, m, dtype=torch.long, device=device)
+        self.alpha_curve_actions = torch.zeros(n, m, dtype=torch.long, device=device)
+        self.alpha_algorithm_actions = torch.zeros(n, m, dtype=torch.long, device=device)
         self.op_actions = torch.zeros(n, m, dtype=torch.long, device=device)
 
         # Per-head log probs
         self.slot_log_probs = torch.zeros(n, m, device=device)
         self.blueprint_log_probs = torch.zeros(n, m, device=device)
         self.blend_log_probs = torch.zeros(n, m, device=device)
+        self.tempo_log_probs = torch.zeros(n, m, device=device)
+        self.alpha_target_log_probs = torch.zeros(n, m, device=device)
+        self.alpha_speed_log_probs = torch.zeros(n, m, device=device)
+        self.alpha_curve_log_probs = torch.zeros(n, m, device=device)
+        self.alpha_algorithm_log_probs = torch.zeros(n, m, device=device)
         self.op_log_probs = torch.zeros(n, m, device=device)
 
         # Values, rewards, dones
@@ -177,6 +227,16 @@ class TamiyoRolloutBuffer:
         self.blueprint_masks[:, :, 0] = True  # First blueprint always valid
         self.blend_masks = torch.zeros(n, m, self.num_blends, dtype=torch.bool, device=device)
         self.blend_masks[:, :, 0] = True  # First blend always valid
+        self.tempo_masks = torch.zeros(n, m, self.num_tempo, dtype=torch.bool, device=device)
+        self.tempo_masks[:, :, 0] = True  # First tempo always valid
+        self.alpha_target_masks = torch.zeros(n, m, self.num_alpha_targets, dtype=torch.bool, device=device)
+        self.alpha_target_masks[:, :, 0] = True  # First alpha target always valid
+        self.alpha_speed_masks = torch.zeros(n, m, self.num_alpha_speeds, dtype=torch.bool, device=device)
+        self.alpha_speed_masks[:, :, 0] = True  # First alpha speed always valid
+        self.alpha_curve_masks = torch.zeros(n, m, self.num_alpha_curves, dtype=torch.bool, device=device)
+        self.alpha_curve_masks[:, :, 0] = True  # First alpha curve always valid
+        self.alpha_algorithm_masks = torch.zeros(n, m, self.num_alpha_algorithms, dtype=torch.bool, device=device)
+        self.alpha_algorithm_masks[:, :, 0] = True  # First alpha algorithm always valid
         self.op_masks = torch.zeros(n, m, self.num_ops, dtype=torch.bool, device=device)
         self.op_masks[:, :, 0] = True  # First op always valid
 
@@ -210,10 +270,20 @@ class TamiyoRolloutBuffer:
         slot_action: int,
         blueprint_action: int,
         blend_action: int,
+        tempo_action: int,
+        alpha_target_action: int,
+        alpha_speed_action: int,
+        alpha_curve_action: int,
+        alpha_algorithm_action: int,
         op_action: int,
         slot_log_prob: float | torch.Tensor,
         blueprint_log_prob: float | torch.Tensor,
         blend_log_prob: float | torch.Tensor,
+        tempo_log_prob: float | torch.Tensor,
+        alpha_target_log_prob: float | torch.Tensor,
+        alpha_speed_log_prob: float | torch.Tensor,
+        alpha_curve_log_prob: float | torch.Tensor,
+        alpha_algorithm_log_prob: float | torch.Tensor,
         op_log_prob: float | torch.Tensor,
         value: float | torch.Tensor,
         reward: float,
@@ -221,6 +291,11 @@ class TamiyoRolloutBuffer:
         slot_mask: torch.Tensor,
         blueprint_mask: torch.Tensor,
         blend_mask: torch.Tensor,
+        tempo_mask: torch.Tensor,
+        alpha_target_mask: torch.Tensor,
+        alpha_speed_mask: torch.Tensor,
+        alpha_curve_mask: torch.Tensor,
+        alpha_algorithm_mask: torch.Tensor,
         op_mask: torch.Tensor,
         hidden_h: torch.Tensor,
         hidden_c: torch.Tensor,
@@ -244,10 +319,20 @@ class TamiyoRolloutBuffer:
         self.slot_actions[env_id, step_idx] = slot_action
         self.blueprint_actions[env_id, step_idx] = blueprint_action
         self.blend_actions[env_id, step_idx] = blend_action
+        self.tempo_actions[env_id, step_idx] = tempo_action
+        self.alpha_target_actions[env_id, step_idx] = alpha_target_action
+        self.alpha_speed_actions[env_id, step_idx] = alpha_speed_action
+        self.alpha_curve_actions[env_id, step_idx] = alpha_curve_action
+        self.alpha_algorithm_actions[env_id, step_idx] = alpha_algorithm_action
         self.op_actions[env_id, step_idx] = op_action
         self.slot_log_probs[env_id, step_idx] = slot_log_prob
         self.blueprint_log_probs[env_id, step_idx] = blueprint_log_prob
         self.blend_log_probs[env_id, step_idx] = blend_log_prob
+        self.tempo_log_probs[env_id, step_idx] = tempo_log_prob
+        self.alpha_target_log_probs[env_id, step_idx] = alpha_target_log_prob
+        self.alpha_speed_log_probs[env_id, step_idx] = alpha_speed_log_prob
+        self.alpha_curve_log_probs[env_id, step_idx] = alpha_curve_log_prob
+        self.alpha_algorithm_log_probs[env_id, step_idx] = alpha_algorithm_log_prob
         self.op_log_probs[env_id, step_idx] = op_log_prob
         self.values[env_id, step_idx] = value
         self.rewards[env_id, step_idx] = reward
@@ -257,6 +342,11 @@ class TamiyoRolloutBuffer:
         self.slot_masks[env_id, step_idx] = slot_mask.detach().bool()
         self.blueprint_masks[env_id, step_idx] = blueprint_mask.detach().bool()
         self.blend_masks[env_id, step_idx] = blend_mask.detach().bool()
+        self.tempo_masks[env_id, step_idx] = tempo_mask.detach().bool()
+        self.alpha_target_masks[env_id, step_idx] = alpha_target_mask.detach().bool()
+        self.alpha_speed_masks[env_id, step_idx] = alpha_speed_mask.detach().bool()
+        self.alpha_curve_masks[env_id, step_idx] = alpha_curve_mask.detach().bool()
+        self.alpha_algorithm_masks[env_id, step_idx] = alpha_algorithm_mask.detach().bool()
         self.op_masks[env_id, step_idx] = op_mask.detach().bool()
         # Hidden state: LSTM returns [num_layers, batch, hidden_dim]
         # Squeeze batch dim (dim=1) to get [num_layers, hidden_dim]
@@ -334,7 +424,9 @@ class TamiyoRolloutBuffer:
         # Compute global stats
         all_adv = torch.cat(all_advantages)
         mean = all_adv.mean()
-        std = all_adv.std()
+        # Use correction=0 to avoid NaNs for single-element tensors.
+        # (Bessel correction is undefined for n=1.)
+        std = all_adv.std(correction=0)
 
         # Normalize in-place
         for env_id in range(self.num_envs):
@@ -370,10 +462,20 @@ class TamiyoRolloutBuffer:
             "slot_actions": self.slot_actions.to(device, non_blocking=nb),
             "blueprint_actions": self.blueprint_actions.to(device, non_blocking=nb),
             "blend_actions": self.blend_actions.to(device, non_blocking=nb),
+            "tempo_actions": self.tempo_actions.to(device, non_blocking=nb),
+            "alpha_target_actions": self.alpha_target_actions.to(device, non_blocking=nb),
+            "alpha_speed_actions": self.alpha_speed_actions.to(device, non_blocking=nb),
+            "alpha_curve_actions": self.alpha_curve_actions.to(device, non_blocking=nb),
+            "alpha_algorithm_actions": self.alpha_algorithm_actions.to(device, non_blocking=nb),
             "op_actions": self.op_actions.to(device, non_blocking=nb),
             "slot_log_probs": self.slot_log_probs.to(device, non_blocking=nb),
             "blueprint_log_probs": self.blueprint_log_probs.to(device, non_blocking=nb),
             "blend_log_probs": self.blend_log_probs.to(device, non_blocking=nb),
+            "tempo_log_probs": self.tempo_log_probs.to(device, non_blocking=nb),
+            "alpha_target_log_probs": self.alpha_target_log_probs.to(device, non_blocking=nb),
+            "alpha_speed_log_probs": self.alpha_speed_log_probs.to(device, non_blocking=nb),
+            "alpha_curve_log_probs": self.alpha_curve_log_probs.to(device, non_blocking=nb),
+            "alpha_algorithm_log_probs": self.alpha_algorithm_log_probs.to(device, non_blocking=nb),
             "op_log_probs": self.op_log_probs.to(device, non_blocking=nb),
             "values": self.values.to(device, non_blocking=nb),
             "rewards": self.rewards.to(device, non_blocking=nb),
@@ -382,6 +484,11 @@ class TamiyoRolloutBuffer:
             "slot_masks": self.slot_masks.to(device, non_blocking=nb),
             "blueprint_masks": self.blueprint_masks.to(device, non_blocking=nb),
             "blend_masks": self.blend_masks.to(device, non_blocking=nb),
+            "tempo_masks": self.tempo_masks.to(device, non_blocking=nb),
+            "alpha_target_masks": self.alpha_target_masks.to(device, non_blocking=nb),
+            "alpha_speed_masks": self.alpha_speed_masks.to(device, non_blocking=nb),
+            "alpha_curve_masks": self.alpha_curve_masks.to(device, non_blocking=nb),
+            "alpha_algorithm_masks": self.alpha_algorithm_masks.to(device, non_blocking=nb),
             "op_masks": self.op_masks.to(device, non_blocking=nb),
             "hidden_h": self.hidden_h.to(device, non_blocking=nb),
             "hidden_c": self.hidden_c.to(device, non_blocking=nb),

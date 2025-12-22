@@ -5,7 +5,7 @@ description = "Morphogenetic neural network training - proof of concept"
 requires-python = ">=3.11"
 dependencies = [
     "torch>=2.8.0",
-    "torchvision>=0.18.0",  # CIFAR-10 data loading
+    "torchvision>=0.18.0", # CIFAR-10 data loading
     "numpy>=1.24.0",
     "hypothesis>=6.148.3",
     "datasets>=4.4.1",
@@ -15,6 +15,8 @@ dependencies = [
     "ruff>=0.14.9",
     "pydantic>=2.0.0", # Config validation for Nissa
     "PyYAML>=6.0", # Config file parsing
+    "duckdb>=1.4.3",
+    "mcp>=1.25.0",
 ]
 
 [project.optional-dependencies]
@@ -41,6 +43,8 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.mutmut]
-paths-to-mutate = "src/esper/tamiyo/"
-tests_dir = "tests/tamiyo/"
-runner = "uv run pytest -q -x"
+# Mutmut v3: Configure paths here, run with: uv run mutmut run
+# Default: Tamiyo + Kasmina state engine (slot.py). Expand to full Kasmina if needed.
+paths_to_mutate = ["src/esper/tamiyo/", "src/esper/kasmina/slot.py"]
+tests_dir = ["tests/"]
+runner = "PYTHONPATH=src uv run pytest -q -x"

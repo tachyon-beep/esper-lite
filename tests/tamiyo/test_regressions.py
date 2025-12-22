@@ -284,7 +284,7 @@ class TestCounterfactualPreferredForFossilize:
     "ransomware seeds" to claim credit for improvements they didn't cause.
 
     DESIGN:
-    When a seed reaches PROBATIONARY stage, counterfactual_contribution should
+    When a seed reaches HOLDING stage, counterfactual_contribution should
     be available from Kasmina's rollback test. HeuristicTamiyo should prefer
     this over total_improvement for more accurate credit assignment.
 
@@ -307,7 +307,7 @@ class TestCounterfactualPreferredForFossilize:
         # counterfactual=2.0 (true impact), total=5.0 (includes natural progress)
         seed = mock_seed_factory(
             seed_id="test_seed",
-            stage=SeedStage.PROBATIONARY,
+            stage=SeedStage.HOLDING,
             improvement=0.0,  # stage-specific improvement
             total=5.0,         # total_improvement (inflated)
             counterfactual=2.0,  # counterfactual_contribution (accurate)
@@ -332,7 +332,7 @@ class TestCounterfactualPreferredForFossilize:
         # Seed with no counterfactual (early implementation, or test mode)
         seed = mock_seed_factory(
             seed_id="test_seed",
-            stage=SeedStage.PROBATIONARY,
+            stage=SeedStage.HOLDING,
             improvement=0.0,
             total=3.5,          # total_improvement
             counterfactual=None,  # Not available
@@ -356,7 +356,7 @@ class TestCounterfactualPreferredForFossilize:
         # Ransomware seed: total looks good, but counterfactual reveals harm
         seed = mock_seed_factory(
             seed_id="ransomware_seed",
-            stage=SeedStage.PROBATIONARY,
+            stage=SeedStage.HOLDING,
             improvement=0.0,
             total=4.0,           # Looks good (misleading)
             counterfactual=-1.5,  # Actually harmful
@@ -366,7 +366,7 @@ class TestCounterfactualPreferredForFossilize:
         decision = policy.decide(signals, [seed])
 
         # Should cull based on negative counterfactual
-        assert decision.action.name == "CULL"
+        assert decision.action.name == "PRUNE"
         assert decision.target_seed_id == "ransomware_seed"
         # Reason should show the negative contribution
         assert "-1.5" in decision.reason or "-1.50" in decision.reason
@@ -384,7 +384,7 @@ class TestCounterfactualPreferredForFossilize:
 
         seed = mock_seed_factory(
             seed_id="test_seed",
-            stage=SeedStage.PROBATIONARY,
+            stage=SeedStage.HOLDING,
             improvement=0.0,
             total=2.5,
             counterfactual=None,  # Not available
@@ -409,7 +409,7 @@ class TestCounterfactualPreferredForFossilize:
 
         seed = mock_seed_factory(
             seed_id="test_seed",
-            stage=SeedStage.PROBATIONARY,
+            stage=SeedStage.HOLDING,
             improvement=0.0,
             total=1.5,           # Below threshold
             counterfactual=1.0,  # Below threshold
@@ -419,4 +419,4 @@ class TestCounterfactualPreferredForFossilize:
         decision = policy.decide(signals, [seed])
 
         # Should cull (counterfactual=1.0 < threshold=2.0)
-        assert decision.action.name == "CULL"
+        assert decision.action.name == "PRUNE"

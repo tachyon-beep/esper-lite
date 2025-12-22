@@ -19,6 +19,87 @@ from typing import Any
 
 
 @dataclass
+class CounterfactualConfig:
+    """Single configuration result from factorial evaluation.
+
+    Represents one row in the counterfactual matrix:
+    e.g., seed_mask=(True, False, True) means slots 0 and 2 enabled.
+    """
+    seed_mask: tuple[bool, ...]  # Which seeds are enabled
+    accuracy: float = 0.0  # Validation accuracy for this config
+
+
+@dataclass
+class CounterfactualSnapshot:
+    """Full factorial counterfactual matrix for an environment.
+
+    Contains all 2^n configurations for n active seeds.
+    Used to compute marginal contributions and interaction terms.
+    """
+    slot_ids: tuple[str, ...] = ()  # ("r0c0", "r0c1", "r0c2")
+    configs: list[CounterfactualConfig] = field(default_factory=list)
+    strategy: str = "unavailable"  # "full_factorial" or "unavailable"
+    compute_time_ms: float = 0.0
+
+    @property
+    def baseline_accuracy(self) -> float:
+        """Accuracy with all seeds disabled."""
+        for cfg in self.configs:
+            if not any(cfg.seed_mask):
+                return cfg.accuracy
+        return 0.0
+
+    @property
+    def combined_accuracy(self) -> float:
+        """Accuracy with all seeds enabled."""
+        for cfg in self.configs:
+            if all(cfg.seed_mask):
+                return cfg.accuracy
+        return 0.0
+
+    def get_accuracy(self, mask: tuple[bool, ...]) -> float | None:
+        """Get accuracy for a specific seed configuration."""
+        for cfg in self.configs:
+            if cfg.seed_mask == mask:
+                return cfg.accuracy
+        return None
+
+    def individual_contributions(self) -> dict[str, float]:
+        """Compute each seed's solo contribution over baseline."""
+        baseline = self.baseline_accuracy
+        result = {}
+        n = len(self.slot_ids)
+        for i, slot_id in enumerate(self.slot_ids):
+            mask = tuple(j == i for j in range(n))
+            acc = self.get_accuracy(mask)
+            if acc is not None:
+                result[slot_id] = acc - baseline
+        return result
+
+    def pair_contributions(self) -> dict[tuple[str, str], float]:
+        """Compute each pair's contribution over baseline."""
+        baseline = self.baseline_accuracy
+        result = {}
+        n = len(self.slot_ids)
+        for i in range(n):
+            for j in range(i + 1, n):
+                mask = tuple(k == i or k == j for k in range(n))
+                acc = self.get_accuracy(mask)
+                if acc is not None:
+                    pair = (self.slot_ids[i], self.slot_ids[j])
+                    result[pair] = acc - baseline
+        return result
+
+    def total_synergy(self) -> float:
+        """Compute total synergy: combined - baseline - sum(individual contributions)."""
+        baseline = self.baseline_accuracy
+        combined = self.combined_accuracy
+        individuals = self.individual_contributions()
+        expected = baseline + sum(individuals.values())
+        return combined - expected
+
+
+@dataclass
 class SeedState:
     """State of a single seed slot.
 
@@ -36,12 +117,14 @@ class SeedState:
     has_exploding: bool = False
     # Stage progress - shown as "e5" in slot cell
     epochs_in_stage: int = 0
-    # Fossilization/cull context (P1/P2 telemetry gap fix)
+    # Fossilization/prune context (P1/P2 telemetry gap fix)
     improvement: float = 0.0  # Accuracy improvement when fossilized
-    cull_reason: str = ""  # Why seed was culled (e.g., "gradient_explosion", "stagnation")
-    auto_culled: bool = False  # True if system auto-culled vs policy decision
+    prune_reason: str = ""  # Why seed was pruned (e.g., "gradient_explosion", "stagnation")
+    auto_pruned: bool = False  # True if system auto-pruned vs policy decision
     epochs_total: int = 0  # Total epochs seed was alive
     counterfactual: float = 0.0  # Causal attribution score
+    # Blend tempo - Tamiyo's chosen integration speed (3=FAST, 5=STANDARD, 8=SLOW)
+    blend_tempo_epochs: int = 5
 
 
 @dataclass
@@ -79,14 +162,24 @@ class EnvState:
     seeds: dict[str, SeedState] = field(default_factory=dict)
     active_seed_count: int = 0
     fossilized_count: int = 0
-    culled_count: int = 0
+    pruned_count: int = 0
 
     # FIX: Added fossilized_params for scoreboard display (total params in FOSSILIZED seeds)
     fossilized_params: int = 0
 
+    # Seed graveyard: per-blueprint lifecycle tracking
+    blueprint_spawns: dict[str, int] = field(default_factory=dict)  # blueprint -> spawn count
+    blueprint_prunes: dict[str, int] = field(default_factory=dict)   # blueprint -> prune count
+    blueprint_fossilized: dict[str, int] = field(default_factory=dict)  # blueprint -> fossilized count
+
     # Reward component breakdown (from REWARD_COMPUTED telemetry)
     # Uses RewardComponents dataclass for type safety. Populated by aggregator.
     reward_components: "RewardComponents" = field(default_factory=lambda: RewardComponents())
+
+    # Counterfactual matrix (from COUNTERFACTUAL_MATRIX_COMPUTED telemetry)
+    counterfactual_matrix: CounterfactualSnapshot = field(
+        default_factory=CounterfactualSnapshot
+    )
 
     # History for sparklines (maxlen=50)
     reward_history: deque[float] = field(default_factory=lambda: deque(maxlen=50))
@@ -105,10 +198,16 @@ class EnvState:
     #   GERMINATE_CONV_LIGHT → GERMINATE
     #   GERMINATE_DENSE_HEAVY → GERMINATE
     #   FOSSILIZE_R0C0 → FOSSILIZE
-    #   CULL_R1C1 → CULL
+    #   PRUNE_R1C1 → PRUNE
+    #   ADVANCE_R1C1 → ADVANCE
     action_history: deque[str] = field(default_factory=lambda: deque(maxlen=10))
     action_counts: dict[str, int] = field(default_factory=lambda: {
-        "WAIT": 0, "GERMINATE": 0, "CULL": 0, "FOSSILIZE": 0
+        "WAIT": 0,
+        "GERMINATE": 0,
+        "SET_ALPHA_TARGET": 0,
+        "PRUNE": 0,
+        "FOSSILIZE": 0,
+        "ADVANCE": 0,
     })
     total_actions: int = 0
 
@@ -164,8 +263,8 @@ class EnvState:
             self.best_accuracy_episode = episode
             self.epochs_since_improvement = 0
             # Snapshot contributing seeds when new best is achieved
-            # Include permanent (FOSSILIZED) and provisional (PROBATIONARY, BLENDING)
-            _contributing_stages = {"FOSSILIZED", "PROBATIONARY", "BLENDING"}
+            # Include permanent (FOSSILIZED) and provisional (HOLDING, BLENDING)
+            _contributing_stages = {"FOSSILIZED", "HOLDING", "BLENDING"}
             self.best_seeds = {
                 slot_id: SeedState(
                     slot_id=seed.slot_id,
@@ -193,8 +292,10 @@ class EnvState:
         ACTION NORMALIZATION: Normalizes factored germination actions to base types:
         - GERMINATE_CONV_LIGHT → GERMINATE
         - GERMINATE_DENSE_HEAVY → GERMINATE
+        - SET_ALPHA_TARGET_R0C0 → SET_ALPHA_TARGET
         - FOSSILIZE_R0C0 → FOSSILIZE
-        - CULL_R1C1 → CULL
+        - PRUNE_R1C1 → PRUNE
+        - ADVANCE_R1C1 → ADVANCE
         - WAIT → WAIT (unchanged)
         """
         self.action_history.append(action_name)
@@ -203,10 +304,14 @@ class EnvState:
         normalized = action_name
         if action_name.startswith("GERMINATE"):
             normalized = "GERMINATE"
+        elif action_name.startswith("SET_ALPHA_TARGET"):
+            normalized = "SET_ALPHA_TARGET"
         elif action_name.startswith("FOSSILIZE"):
             normalized = "FOSSILIZE"
-        elif action_name.startswith("CULL"):
-            normalized = "CULL"
+        elif action_name.startswith("PRUNE"):
+            normalized = "PRUNE"
+        elif action_name.startswith("ADVANCE"):
+            normalized = "ADVANCE"
         elif action_name.startswith("WAIT"):
             normalized = "WAIT"
 
@@ -294,7 +399,11 @@ class TamiyoState:
     ppo_data_received: bool = False
 
     # Last decision snapshot (captured from REWARD_COMPUTED events)
+    # Deprecated: Use recent_decisions instead
     last_decision: "DecisionSnapshot | None" = None
+
+    # Recent decisions list (up to 3, each visible for at least 10 seconds)
+    recent_decisions: list["DecisionSnapshot"] = field(default_factory=list)
 
 
 @dataclass
@@ -378,11 +487,12 @@ class RewardComponents:
     - bounded_attribution: Contribution-primary attribution signal (replaces seed_contribution)
     - seed_contribution: Seed contribution percentage (older format, may coexist)
     - compute_rent: Cost of active seeds (always negative)
+    - alpha_shock: Convex penalty on alpha deltas (negative if triggered)
     - ratio_penalty: Penalty for extreme policy ratios (negative if triggered)
     - stage_bonus: Bonus for reaching advanced lifecycle stages (BLENDING+)
     - fossilize_terminal_bonus: Large terminal bonus for successful fossilization
     - blending_warning: Warning signal during blending phase (negative)
-    - probation_warning: Warning signal during probationary period
+    - holding_warning: Warning signal during holding period
     - val_acc: Validation accuracy context (not a reward component, metadata)
     """
     # Total reward
@@ -397,6 +507,7 @@ class RewardComponents:
 
     # Costs
     compute_rent: float = 0.0
+    alpha_shock: float = 0.0
     ratio_penalty: float = 0.0
 
     # Bonuses
@@ -405,7 +516,7 @@ class RewardComponents:
 
     # Warnings
     blending_warning: float = 0.0
-    probation_warning: float = 0.0
+    holding_warning: float = 0.0
 
     # Context
     env_id: int = 0
@@ -419,16 +530,25 @@ class DecisionSnapshot:
 
     Captures what Tamiyo saw, what she chose, and the outcome.
     Used for the "Last Decision" section of TamiyoBrain.
+
+    Stable carousel behavior:
+    - Each decision stays visible for at least 30 seconds
+    - Only the oldest unpinned decision can be replaced
+    - Pinned decisions never get replaced
     """
     timestamp: datetime
     slot_states: dict[str, str]  # slot_id -> "Training 12%" or "Empty"
     host_accuracy: float
-    chosen_action: str  # "GERMINATE", "WAIT", "CULL", "FOSSILIZE"
+    chosen_action: str  # "GERMINATE", "ADVANCE", "SET_ALPHA_TARGET", "PRUNE", "FOSSILIZE", "WAIT"
     chosen_slot: str | None  # Target slot for action (None for WAIT)
     confidence: float  # Action probability (0-1)
     expected_value: float  # Value estimate before action
     actual_reward: float | None  # Actual reward received (None if pending)
     alternatives: list[tuple[str, float]]  # [(action_name, probability), ...]
+    # Unique ID for click-to-pin targeting
+    decision_id: str = ""
+    # Pinned decisions never get replaced
+    pinned: bool = False
 
 
 @dataclass
@@ -457,11 +577,12 @@ class BestRunRecord:
     Reference: tui.py lines 103-114 (BestRunRecord dataclass)
     """
     env_id: int
-    episode: int  # Batch number (0-indexed)
+    episode: int  # Batch/episode number (0-indexed)
     peak_accuracy: float  # Best accuracy achieved during this run
     final_accuracy: float  # Accuracy at the end of the batch
-    absolute_episode: int = 0  # Human-readable: episode * num_envs + env_id + 1
+    epoch: int = 0  # Epoch within episode when best was achieved
     seeds: dict[str, SeedState] = field(default_factory=dict)  # Seeds at peak
+    growth_ratio: float = 1.0  # Model size ratio: (host + fossilized) / host
 
 
 @dataclass
@@ -522,7 +643,7 @@ class SanctumSnapshot:
     aggregate_mean_accuracy: float = 0.0
     aggregate_mean_reward: float = 0.0
 
-    # Batch-level aggregates (from BATCH_COMPLETED)
+    # Batch-level aggregates (from BATCH_EPOCH_COMPLETED)
     batch_avg_reward: float = 0.0  # Average reward for last batch
     batch_total_episodes: int = 0  # Total episodes in training run
 

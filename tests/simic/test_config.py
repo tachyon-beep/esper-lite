@@ -35,6 +35,22 @@ class TestTrainingConfigDefaults:
         assert config.chunk_length == 25
 
 
+class TestTrainingConfigPresets:
+    """Tests for TrainingConfig preset helpers."""
+
+    def test_cifar10_stable_preset_is_conservative(self):
+        """Stable preset should slow policy updates and anneal exploration."""
+        config = TrainingConfig.for_cifar10_stable()
+        assert config.n_episodes == 200
+        assert config.lr == 1e-4
+        assert config.clip_ratio == 0.1
+        assert config.entropy_coef == 0.06
+        assert config.entropy_coef_start == 0.06
+        assert config.entropy_coef_end == 0.03
+        assert config.entropy_anneal_episodes == 200
+        assert config.adaptive_entropy_floor is True
+
+
 class TestTrainingConfigConversion:
     """Tests for TrainingConfig to kwargs conversion methods."""
 

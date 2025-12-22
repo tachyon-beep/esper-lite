@@ -2,6 +2,7 @@
 
 
 from esper.leyline import SeedStage, DEFAULT_BLUEPRINT_PENALTY_THRESHOLD
+from esper.kasmina.alpha_controller import AlphaController
 from esper.tamiyo.heuristic import HeuristicTamiyo, HeuristicPolicyConfig
 
 
@@ -40,6 +41,7 @@ class MockSeedState:
         self.epochs_in_stage = epochs_in_stage
         self.alpha = alpha
         self.blueprint_id = blueprint_id
+        self.alpha_controller = AlphaController(alpha=alpha)
         self.metrics = MockSeedMetrics(
             improvement_since_stage_start=improvement,
             total_improvement=total_improvement,
@@ -104,7 +106,7 @@ class TestGerminationDecisions:
     def test_no_germinate_during_embargo(self):
         """Should WAIT during embargo period after cull."""
         policy = HeuristicTamiyo(topology="cnn")
-        policy._last_cull_epoch = 8  # Culled 2 epochs ago
+        policy._last_prune_epoch = 8  # Culled 2 epochs ago
 
         signals = MockTrainingSignals(MockTrainingMetrics(
             epoch=10,
@@ -136,10 +138,10 @@ class TestCullDecisions:
     """Tests for cull decision logic."""
 
     def test_cull_failing_seed_in_training(self):
-        """Should CULL a seed that's failing in TRAINING stage."""
+        """Should PRUNE a seed that's failing in TRAINING stage."""
         config = HeuristicPolicyConfig(
-            cull_after_epochs_without_improvement=3,
-            cull_if_accuracy_drops_by=1.0,
+            prune_after_epochs_without_improvement=3,
+            prune_if_accuracy_drops_by=1.0,
         )
         policy = HeuristicTamiyo(config=config, topology="cnn")
 
@@ -152,11 +154,11 @@ class TestCullDecisions:
 
         decision = policy.decide(signals, active_seeds=[seed])
 
-        assert decision.action.name == "CULL"
+        assert decision.action.name == "PRUNE"
         assert "Failing" in decision.reason
 
     def test_no_cull_improving_seed(self):
-        """Should WAIT for a seed that's improving."""
+        """Should ADVANCE for a seed that's improving."""
         policy = HeuristicTamiyo(topology="cnn")
 
         seed = MockSeedState(
@@ -168,13 +170,13 @@ class TestCullDecisions:
 
         decision = policy.decide(signals, active_seeds=[seed])
 
-        assert decision.action.name == "WAIT"
+        assert decision.action.name == "ADVANCE"
 
     def test_no_cull_before_patience_expires(self):
-        """Should WAIT even for failing seed if patience hasn't expired."""
+        """Should ADVANCE even for failing seed if patience hasn't expired."""
         config = HeuristicPolicyConfig(
-            cull_after_epochs_without_improvement=5,
-            cull_if_accuracy_drops_by=1.0,
+            prune_after_epochs_without_improvement=5,
+            prune_if_accuracy_drops_by=1.0,
         )
         policy = HeuristicTamiyo(config=config, topology="cnn")
 
@@ -187,18 +189,18 @@ class TestCullDecisions:
 
         decision = policy.decide(signals, active_seeds=[seed])
 
-        assert decision.action.name == "WAIT"
+        assert decision.action.name == "ADVANCE"
 
 
 class TestFossilizeDecisions:
     """Tests for fossilize decision logic."""
 
     def test_fossilize_contributing_seed(self):
-        """Should FOSSILIZE a seed with positive contribution in PROBATIONARY."""
+        """Should FOSSILIZE a seed with positive contribution in HOLDING."""
         policy = HeuristicTamiyo(topology="cnn")
 
         seed = MockSeedState(
-            stage=SeedStage.PROBATIONARY,
+            stage=SeedStage.HOLDING,
             epochs_in_stage=3,
             improvement=2.0,
             total_improvement=5.0,
@@ -212,11 +214,11 @@ class TestFossilizeDecisions:
         assert "contribution" in decision.reason.lower()
 
     def test_cull_non_contributing_seed_in_probationary(self):
-        """Should CULL a non-contributing seed in PROBATIONARY."""
+        """Should PRUNE a non-contributing seed in HOLDING."""
         policy = HeuristicTamiyo(topology="cnn")
 
         seed = MockSeedState(
-            stage=SeedStage.PROBATIONARY,
+            stage=SeedStage.HOLDING,
             epochs_in_stage=3,
             improvement=-1.0,
             total_improvement=-2.0,
@@ -226,7 +228,7 @@ class TestFossilizeDecisions:
 
         decision = policy.decide(signals, active_seeds=[seed])
 
-        assert decision.action.name == "CULL"
+        assert decision.action.name == "PRUNE"
 
     def test_fossilize_uses_counterfactual_over_total(self):
         """Should prefer counterfactual contribution over total improvement."""
@@ -235,7 +237,7 @@ class TestFossilizeDecisions:
         # Total improvement is zero (neutral), but counterfactual is positive
         # NOTE: Negative total_improvement + positive counterfactual = ransomware (P2-B)
         seed = MockSeedState(
-            stage=SeedStage.PROBATIONARY,
+            stage=SeedStage.HOLDING,
             epochs_in_stage=3,
             improvement=-1.0,
             total_improvement=0.5,  # Slightly positive to avoid ransomware detection
@@ -253,7 +255,7 @@ class TestWaitDecisions:
     """Tests for wait/patience decision logic."""
 
     def test_wait_during_blending(self):
-        """Should WAIT during BLENDING stage (auto-advance handles it)."""
+        """Should WAIT during BLENDING stage until full amplitude is reached."""
         policy = HeuristicTamiyo(topology="cnn")
 
         seed = MockSeedState(
@@ -269,8 +271,8 @@ class TestWaitDecisions:
         assert decision.action.name == "WAIT"
         assert "Blending" in decision.reason
 
-    def test_wait_for_germinated_seed(self):
-        """Should WAIT for GERMINATED seed to auto-advance to TRAINING."""
+    def test_advance_for_germinated_seed(self):
+        """Should ADVANCE for GERMINATED seed to enter TRAINING."""
         policy = HeuristicTamiyo(topology="cnn")
 
         seed = MockSeedState(
@@ -281,8 +283,8 @@ class TestWaitDecisions:
 
         decision = policy.decide(signals, active_seeds=[seed])
 
-        assert decision.action.name == "WAIT"
-        assert "auto-advance" in decision.reason.lower()
+        assert decision.action.name == "ADVANCE"
+        assert "advance" in decision.reason.lower()
 
 
 class TestBlueprintRotation:
@@ -344,7 +346,7 @@ class TestReset:
         # Modify internal state
         policy._blueprint_index = 5
         policy._germination_count = 3
-        policy._last_cull_epoch = 10
+        policy._last_prune_epoch = 10
         policy._blueprint_penalties["conv_light"] = 2.0
         policy._decisions_made.append("fake")
 
@@ -352,6 +354,6 @@ class TestReset:
 
         assert policy._blueprint_index == 0
         assert policy._germination_count == 0
-        assert policy._last_cull_epoch == -100
+        assert policy._last_prune_epoch == -100
         assert len(policy._blueprint_penalties) == 0
         assert len(policy._decisions_made) == 0

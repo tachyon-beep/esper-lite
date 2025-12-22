@@ -30,8 +30,8 @@ def tamiyo_snapshot() -> TuiSnapshot:
             ev_trend=0.01,
             entropy_collapsed=False,
             ev_warning=False,
-            action_counts={"GERMINATE": 10, "BLEND": 20, "CULL": 5, "WAIT": 65},
-            recent_actions=["G", "B", "W", "W", "C"],
+            action_counts={"GERMINATE": 10, "SET_ALPHA_TARGET": 20, "PRUNE": 5, "WAIT": 65},
+            recent_actions=["G", "A", "W", "W", "P"],
         ),
     )
 
@@ -99,7 +99,7 @@ class TestTamiyoStrip:
         content = strip.render_actions()
         # Should show action names and counts/percentages
         assert "G" in content or "GERM" in content
-        assert "B" in content or "BLEND" in content
+        assert "A" in content or "ALPH" in content
 
     def test_tamiyo_strip_renders_recent_actions(self, tamiyo_snapshot: TuiSnapshot) -> None:
         """TamiyoStrip shows recent action sequence."""
@@ -109,7 +109,7 @@ class TestTamiyoStrip:
         strip.update_snapshot(tamiyo_snapshot)
 
         content = strip.render_actions()
-        # recent_actions = ["G", "B", "W", "W", "C"]
+        # recent_actions = ["G", "A", "W", "W", "P"]
         assert "G" in content
         assert "W" in content
 

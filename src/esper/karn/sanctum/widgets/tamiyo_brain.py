@@ -2,7 +2,7 @@
 
 New layout focuses on answering:
 - "What is Tamiyo doing?" (Action distribution bar)
-- "Is she learning?" (Entropy, Value Loss gauges)
+- "Is she learning?" (Entropy, Value Loss, KL gauges)
 - "What did she just decide?" (Last Decision snapshot)
 """
 from __future__ import annotations
@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
+from textual.message import Message
 from textual.widgets import Static
 
 from esper.karn.constants import TUIThresholds
@@ -26,32 +27,59 @@ class TamiyoBrain(Static):
     New two-section layout:
     1. LEARNING VITALS - Action distribution bar + gauges (entropy, value loss, advantage)
     2. LAST DECISION - What Tamiyo saw, chose, and got
+
+    Click on a decision panel to pin it (prevents replacement).
     """
+
+    class DecisionPinToggled(Message):
+        """Posted when user clicks a decision to toggle pin status."""
+
+        def __init__(self, decision_id: str) -> None:
+            super().__init__()
+            self.decision_id = decision_id
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._snapshot: SanctumSnapshot | None = None
+        self._decision_ids: list[str] = []  # IDs of currently displayed decisions
+        self.border_title = "TAMIYO"  # Top-left title like EventLog
 
     def update_snapshot(self, snapshot: "SanctumSnapshot") -> None:
         self._snapshot = snapshot
         self.refresh()
 
-    def render(self) -> Panel:
-        if self._snapshot is None:
-            return Panel("No data", title="TAMIYO", border_style="magenta")
+    def on_click(self, event) -> None:
+        """Handle click to toggle decision pin.
 
-        if not self._snapshot.tamiyo.ppo_data_received:
-            waiting_text = Text(justify="center")
-            waiting_text.append("⏳ Waiting for PPO data...\n", style="dim italic")
-            waiting_text.append(
-                f"Progress: {self._snapshot.current_epoch}/{self._snapshot.max_epochs} epochs",
-                style="cyan",
-            )
-            return Panel(
-                waiting_text,
-                title="[bold magenta]TAMIYO[/bold magenta]",
-                border_style="magenta dim",
-            )
+        Decisions are in the bottom section of the widget.
+        Each decision panel is ~5 lines tall (border + 3 content + border).
+        We estimate which decision was clicked based on Y coordinate.
+        """
+        if not self._decision_ids:
+            return
+
+        # The RECENT DECISIONS section starts after LEARNING VITALS
+        # LEARNING VITALS is roughly: title(1) + action bar(1) + gauges(3) + padding(1) = 6 lines
+        # Then RECENT DECISIONS title(1), then each decision panel(~5 lines)
+        vitals_height = 7  # Approximate height of Learning Vitals section
+        decision_height = 5  # Each decision panel height
+
+        y = event.y
+        if y < vitals_height:
+            return  # Click was in Learning Vitals, not decisions
+
+        # Calculate which decision was clicked
+        decision_y = y - vitals_height
+        decision_index = decision_y // decision_height
+
+        if 0 <= decision_index < len(self._decision_ids):
+            decision_id = self._decision_ids[decision_index]
+            self.post_message(self.DecisionPinToggled(decision_id))
+
+    def render(self):
+        """Render Tamiyo content (border provided by CSS, not Rich Panel)."""
+        if self._snapshot is None:
+            return Text("No data", style="dim")
 
         # Main layout: two sections stacked
         main_table = Table.grid(expand=True)
@@ -61,15 +89,11 @@ class TamiyoBrain(Static):
         vitals_panel = self._render_learning_vitals()
         main_table.add_row(vitals_panel)
 
-        # Section 2: Last Decision (if available)
-        decision_panel = self._render_last_decision()
-        main_table.add_row(decision_panel)
+        # Section 2: Recent Decisions (up to 3, each visible for 10s minimum)
+        decisions_panel = self._render_recent_decisions()
+        main_table.add_row(decisions_panel)
 
-        return Panel(
-            main_table,
-            title="[bold magenta]TAMIYO[/bold magenta]",
-            border_style="magenta",
-        )
+        return main_table
 
     def _render_learning_vitals(self) -> Panel:
         """Render Learning Vitals section with action bar and gauges."""
@@ -82,7 +106,17 @@ class TamiyoBrain(Static):
         action_bar = self._render_action_distribution_bar()
         content.add_row(action_bar)
 
-        # Row 2: Gauges (Entropy, Value Loss, Advantage)
+        if not tamiyo.ppo_data_received:
+            waiting_text = Text(style="dim italic")
+            waiting_text.append("⏳ Waiting for PPO vitals\n")
+            waiting_text.append(
+                f"Progress: {self._snapshot.current_epoch}/{self._snapshot.max_epochs} epochs",
+                style="cyan",
+            )
+            content.add_row(waiting_text)
+            return Panel(content, title="LEARNING VITALS", border_style="dim")
+
+        # Row 2: Gauges (Entropy, Value Loss, KL)
         gauges = Table.grid(expand=True)
         gauges.add_column(ratio=1)
         gauges.add_column(ratio=1)
@@ -96,12 +130,12 @@ class TamiyoBrain(Static):
             "Value Loss", tamiyo.value_loss, 0, 1.0,
             self._get_value_loss_label(tamiyo.value_loss)
         )
-        advantage_gauge = self._render_gauge(
-            "Advantage", tamiyo.advantage_mean, -1.0, 1.0,
-            self._get_advantage_label(tamiyo.advantage_mean)
+        kl_gauge = self._render_gauge(
+            "KL", tamiyo.kl_divergence, 0.0, 0.1,
+            self._get_kl_label(tamiyo.kl_divergence)
         )
 
-        gauges.add_row(entropy_gauge, value_gauge, advantage_gauge)
+        gauges.add_row(entropy_gauge, value_gauge, kl_gauge)
         content.add_row(gauges)
 
         return Panel(content, title="LEARNING VITALS", border_style="dim")
@@ -112,42 +146,49 @@ class TamiyoBrain(Static):
         total = tamiyo.total_actions
 
         if total == 0:
-            return Text("Actions: [no data]", style="dim")
+            return Text("[no data]", style="dim")
 
         # Calculate percentages
         pcts = {a: (c / total) * 100 for a, c in tamiyo.action_counts.items()}
 
-        # Build stacked bar (width 40 chars)
-        bar_width = 40
-        bar = Text("Actions: [")
+        # Build stacked bar (width 25 chars for narrower display)
+        bar_width = 25
+        bar = Text("[")
 
         # Color mapping
         colors = {
             "GERMINATE": "green",
+            "SET_ALPHA_TARGET": "cyan",
             "WAIT": "dim",
-            "BLEND": "cyan",  # Blending includes FOSSILIZE transitions
             "FOSSILIZE": "blue",
-            "CULL": "red",
+            "PRUNE": "red",
         }
 
-        for action in ["GERMINATE", "WAIT", "FOSSILIZE", "CULL"]:
+        for action in ["GERMINATE", "SET_ALPHA_TARGET", "FOSSILIZE", "PRUNE", "WAIT"]:
             pct = pcts.get(action, 0)
             width = int((pct / 100) * bar_width)
             if width > 0:
                 bar.append("▓" * width, style=colors.get(action, "white"))
 
-        bar.append("]")
+        bar.append("] ")
 
-        # Add legend
-        bar.append("  ")
-        for action in ["GERMINATE", "WAIT", "FOSSILIZE"]:
-            if pcts.get(action, 0) > 0:
-                bar.append(f"{action[:4]} {pcts[action]:.0f}%  ", style=colors.get(action, "white"))
+        # Compact legend: G=50 W=25 F=25
+        abbrevs = {
+            "GERMINATE": "G",
+            "SET_ALPHA_TARGET": "A",
+            "WAIT": "W",
+            "FOSSILIZE": "F",
+            "PRUNE": "P",
+        }
+        for action in ["GERMINATE", "SET_ALPHA_TARGET", "FOSSILIZE", "PRUNE", "WAIT"]:
+            pct = pcts.get(action, 0)
+            if pct > 0:
+                bar.append(f"{abbrevs[action]}={pct:.0f} ", style=colors.get(action, "white"))
 
         return bar
 
     def _render_gauge(self, label: str, value: float, min_val: float, max_val: float, description: str) -> Text:
-        """Render a single gauge with label and description."""
+        """Render a single gauge with label and description on separate lines."""
         # Normalize to 0-1
         normalized = (value - min_val) / (max_val - min_val) if max_val != min_val else 0.5
         normalized = max(0, min(1, normalized))
@@ -158,12 +199,15 @@ class TamiyoBrain(Static):
         empty = gauge_width - filled
 
         gauge = Text()
-        gauge.append(f"{label}: ", style="dim")
+        # Line 1: Label
+        gauge.append(f"{label}:\n", style="dim")
+        # Line 2: Bar and value
         gauge.append("[")
         gauge.append("█" * filled, style="cyan")
         gauge.append("░" * empty, style="dim")
         gauge.append("]")
-        gauge.append(f" {value:.2f}  ", style="cyan")
+        gauge.append(f" {value:.2f}\n", style="cyan")
+        # Line 3: Description
         gauge.append(f'"{description}"', style="italic dim")
 
         return gauge
@@ -192,68 +236,96 @@ class TamiyoBrain(Static):
         else:
             return "Needs improvement"
 
-    def _render_last_decision(self) -> Panel:
-        """Render Last Decision section."""
-        tamiyo = self._snapshot.tamiyo
-        decision = tamiyo.last_decision
+    def _get_kl_label(self, kl_divergence: float) -> str:
+        if kl_divergence > TUIThresholds.KL_WARNING:
+            return "Too fast"
+        return "Stable"
 
-        if decision is None:
+    def _render_recent_decisions(self) -> Panel:
+        """Render Recent Decisions section (up to 3, each visible for 30s minimum).
+
+        Stable carousel behavior:
+        - Each decision stays visible for at least 30 seconds
+        - Only the oldest unpinned decision can be replaced
+        - Click on a decision to pin it (📌 shown in title)
+        """
+        from datetime import datetime, timezone
+        from rich.console import Group
+
+        tamiyo = self._snapshot.tamiyo
+        decisions = tamiyo.recent_decisions
+
+        if not decisions:
             return Panel(
-                Text("No decisions captured yet", style="dim italic"),
-                title="LAST DECISION",
+                Text("No decisions captured yet\n[dim]Click to pin decisions[/dim]", style="dim italic"),
+                title="RECENT DECISIONS",
                 border_style="dim",
             )
 
-        # Build decision display
-        content = Table.grid(expand=True)
-        content.add_column(ratio=1)
-
-        # Time since decision
-        from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
-        age = (now - decision.timestamp).total_seconds()
-        age_str = f"{age:.1f}s ago" if age < 60 else f"{age/60:.0f}m ago"
+        decision_panels = []
 
-        # SAW line
-        saw_line = Text()
-        saw_line.append("SAW:  ", style="bold")
-        for slot_id, state in decision.slot_states.items():
-            saw_line.append(f"{slot_id}: {state} │ ", style="dim")
-        saw_line.append(f"Host: {decision.host_accuracy:.0f}%", style="cyan")
-        content.add_row(saw_line)
+        # Store decision IDs for click handling
+        self._decision_ids = [d.decision_id for d in decisions[:3]]
 
-        # CHOSE line
-        chose_line = Text()
-        chose_line.append("CHOSE: ", style="bold")
-        chose_line.append(f"{decision.chosen_action}", style="green bold")
-        if decision.chosen_slot:
-            chose_line.append(f" {decision.chosen_slot}", style="cyan")
-        chose_line.append(f" ({decision.confidence:.0%})", style="dim")
-        content.add_row(chose_line)
+        for i, decision in enumerate(decisions[:3]):
+            age = (now - decision.timestamp).total_seconds()
+            age_str = f"{age:.1f}s ago" if age < 60 else f"{age/60:.0f}m ago"
 
-        # EXPECTED vs GOT line
-        result_line = Text()
-        result_line.append("EXPECTED: ", style="dim")
-        result_line.append(f"{decision.expected_value:+.2f}", style="cyan")
-        result_line.append("  →  GOT: ", style="dim")
-        if decision.actual_reward is not None:
-            diff = decision.actual_reward - decision.expected_value
-            style = "green" if abs(diff) < 0.1 else ("yellow" if diff > 0 else "red")
-            result_line.append(f"{decision.actual_reward:+.2f} ", style=style)
-            result_line.append("✓" if abs(diff) < 0.1 else "✗", style=style)
-        else:
-            result_line.append("pending...", style="dim italic")
-        content.add_row(result_line)
+            # Build full decision display (like the original single panel)
+            content = Table.grid(expand=True)
+            content.add_column(ratio=1)
 
-        # Alternatives line
-        if decision.alternatives:
-            alt_line = Text()
-            alt_line.append("Also: ", style="dim")
-            for action, prob in decision.alternatives[:2]:
-                alt_line.append(f"{action} ({prob:.0%}), ", style="dim")
-            content.add_row(alt_line)
+            # SAW line
+            saw_line = Text()
+            saw_line.append("SAW:  ", style="bold")
+            for slot_id, state in decision.slot_states.items():
+                saw_line.append(f"{slot_id}: {state} │ ", style="dim")
+            saw_line.append(f"Host: {decision.host_accuracy:.0f}%", style="cyan")
+            content.add_row(saw_line)
 
-        return Panel(content, title=f"LAST DECISION ({age_str})", border_style="dim")
+            # CHOSE line (with Also alternatives on same line, tab-separated)
+            chose_line = Text()
+            chose_line.append("CHOSE: ", style="bold")
+            action_colors = {
+                "GERMINATE": "green bold",
+                "WAIT": "dim",
+                "FOSSILIZE": "blue bold",
+                "PRUNE": "red bold",
+            }
+            chose_line.append(f"{decision.chosen_action}", style=action_colors.get(decision.chosen_action, "white"))
+            if decision.chosen_slot:
+                chose_line.append(f" {decision.chosen_slot}", style="cyan")
+            chose_line.append(f" ({decision.confidence:.0%})", style="dim")
+            # Add alternatives on same line
+            if decision.alternatives:
+                chose_line.append("\t\tAlso: ", style="dim")
+                for action, prob in decision.alternatives[:2]:
+                    chose_line.append(f"{action} ({prob:.0%}) ", style="dim")
+            content.add_row(chose_line)
+
+            # EXPECTED vs GOT line
+            result_line = Text()
+            result_line.append("EXPECTED: ", style="dim")
+            result_line.append(f"{decision.expected_value:+.2f}", style="cyan")
+            result_line.append("  →  GOT: ", style="dim")
+            if decision.actual_reward is not None:
+                diff = decision.actual_reward - decision.expected_value
+                style = "green" if abs(diff) < 0.1 else ("yellow" if diff > 0 else "red")
+                result_line.append(f"{decision.actual_reward:+.2f} ", style=style)
+                result_line.append("✓" if abs(diff) < 0.1 else "✗", style=style)
+            else:
+                result_line.append("pending...", style="dim italic")
+            content.add_row(result_line)
+
+            # Show pinned status in title
+            pin_icon = "📌 " if decision.pinned else ""
+            title = f"{pin_icon}DECISION {i+1} ({age_str})"
+            border = "cyan" if decision.pinned else "dim"
+
+            decision_panels.append(Panel(content, title=title, border_style=border))
+
+        return Panel(Group(*decision_panels), title=f"RECENT DECISIONS ({len(decisions)}) [dim]click to pin[/dim]", border_style="dim")
 
     # ========================================================================
     # Legacy status helpers (kept for backward compatibility with existing tests)

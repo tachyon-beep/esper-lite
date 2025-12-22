@@ -139,7 +139,6 @@ class TestTransformerHostSegments:
     def test_segment_channels_exists(self):
         """TransformerHost must expose segment_channels attribute."""
         host = TransformerHost(vocab_size=100, n_embd=64, n_head=2, n_layer=6, block_size=32)
-        assert hasattr(host, "segment_channels")
         assert isinstance(host.segment_channels, dict)
         assert set(host.segment_channels.keys()) == {"r0c0", "r0c1", "r0c2"}
 

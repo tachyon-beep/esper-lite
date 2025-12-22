@@ -31,7 +31,7 @@ class TestOverwatchIntegration:
                 tamiyo=TamiyoState(
                     kl_divergence=0.019,
                     entropy=1.24,
-                    action_counts={"GERMINATE": 10, "BLEND": 20},
+                    action_counts={"GERMINATE": 10, "SET_ALPHA_TARGET": 20},
                 ),
                 run_id="test-run-001",
                 task_name="cifar10",
@@ -63,7 +63,7 @@ class TestOverwatchIntegration:
 
         app = OverwatchApp(replay_path=sample_replay_path)
 
-        async with app.run_test() as pilot:
+        async with app.run_test():
             # App should have loaded the snapshot
             assert app._snapshot is not None
             assert app._snapshot.run_id == "test-run-001"
@@ -113,7 +113,7 @@ class TestAppWithoutReplay:
 
         app = OverwatchApp()
 
-        async with app.run_test() as pilot:
+        async with app.run_test():
             # Should show placeholder content
             header = app.query_one(RunHeader)
             assert "Waiting" in header.render_line1()
@@ -304,7 +304,7 @@ class TestHeaderAndStripIntegration:
 
         app = OverwatchApp(replay_path=tamiyo_replay)
 
-        async with app.run_test() as pilot:
+        async with app.run_test():
             header = app.query_one(RunHeader)
             content = header.render_line1()
 
@@ -320,7 +320,7 @@ class TestHeaderAndStripIntegration:
 
         app = OverwatchApp(replay_path=tamiyo_replay)
 
-        async with app.run_test() as pilot:
+        async with app.run_test():
             strip = app.query_one(TamiyoStrip)
             content = strip.render_vitals()
 
@@ -336,7 +336,7 @@ class TestHeaderAndStripIntegration:
 
         app = OverwatchApp(replay_path=tamiyo_replay)
 
-        async with app.run_test() as pilot:
+        async with app.run_test():
             strip = app.query_one(TamiyoStrip)
             content = strip.render_vitals()
 
@@ -351,7 +351,7 @@ class TestHeaderAndStripIntegration:
 
         app = OverwatchApp(replay_path=tamiyo_replay)
 
-        async with app.run_test() as pilot:
+        async with app.run_test():
             header = app.query_one(RunHeader)
             content = header.render_line2()
 
@@ -382,8 +382,8 @@ class TestDetailPanelIntegration:
                 captured_at="2025-12-18T14:00:00Z",
                 connection=ConnectionStatus(True, 1000.0, 0.5),
                 tamiyo=TamiyoState(
-                    action_counts={"GERMINATE": 34, "BLEND": 28, "CULL": 12, "WAIT": 26},
-                    recent_actions=["G", "B", "W", "W", "C"],
+                    action_counts={"GERMINATE": 34, "SET_ALPHA_TARGET": 28, "PRUNE": 12, "WAIT": 26},
+                    recent_actions=["G", "A", "W", "W", "P"],
                     confidence_mean=0.73,
                     confidence_min=0.45,
                     confidence_max=0.92,
@@ -419,7 +419,7 @@ class TestDetailPanelIntegration:
 
         app = OverwatchApp(replay_path=detail_replay)
 
-        async with app.run_test() as pilot:
+        async with app.run_test():
             panel = app.query_one(DetailPanel)
             assert panel.mode == "context"
 
@@ -465,7 +465,7 @@ class TestDetailPanelIntegration:
 
         app = OverwatchApp(replay_path=detail_replay)
 
-        async with app.run_test() as pilot:
+        async with app.run_test():
             # Initial selection should be highest anomaly (env 3)
             context = app.query_one(ContextPanel)
             content = context.render_content()
@@ -534,7 +534,7 @@ class TestEventFeedIntegration:
 
         app = OverwatchApp(replay_path=events_replay)
 
-        async with app.run_test() as pilot:
+        async with app.run_test():
             feed = app.query_one(EventFeed)
             content = feed.render_events()
 
@@ -599,7 +599,7 @@ class TestReplayControlsIntegration:
 
         app = OverwatchApp(replay_path=multi_snapshot_replay)
 
-        async with app.run_test() as pilot:
+        async with app.run_test():
             bar = app.query_one(ReplayStatusBar)
             assert bar.is_visible is True
 
@@ -684,9 +684,9 @@ class TestLiveModeIntegration:
         backend.emit(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
             data={
-                "run_id": "integration-test",
+                "episode_id": "integration-test",
                 "task": "cifar10",
-                "num_envs": 2,
+                "n_envs": 2,
                 "max_epochs": 75,
             },
         ))
@@ -747,7 +747,7 @@ class TestLiveModeIntegration:
 
         backend.emit(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"run_id": "stale-test"},
+            data={"episode_id": "stale-test"},
         ))
 
         app = OverwatchApp(backend=backend)

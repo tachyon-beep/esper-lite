@@ -304,7 +304,7 @@ simic
 │   ├── SeedStage         # Stage enumeration
 │   ├── FactoredAction    # Action space definition
 │   ├── TelemetryEvent    # Event types
-│   └── MIN_CULL_AGE, MIN_PROBATION_EPOCHS  # Constants
+│   └── MIN_CULL_AGE, MIN_HOLDING_EPOCHS  # Constants
 ├── kasmina (model)
 │   ├── MorphogeneticModel  # Model with seed slots
 │   ├── SeedSlot           # Per-slot management

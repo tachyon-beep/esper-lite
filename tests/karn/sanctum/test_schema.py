@@ -175,7 +175,7 @@ class TestRewardComponents:
             stage_bonus=0.2,
             fossilize_terminal_bonus=1.0,
             blending_warning=-0.1,
-            probation_warning=0.0,
+            holding_warning=0.0,
             val_acc=75.5,
         )
         assert rewards.base_acc_delta == 0.5
@@ -270,7 +270,7 @@ def test_decision_snapshot_creation():
         confidence=0.73,
         expected_value=0.42,
         actual_reward=0.38,
-        alternatives=[("WAIT", 0.15), ("BLEND r0c0", 0.12)],
+        alternatives=[("WAIT", 0.15), ("SET_ALPHA_TARGET r0c0", 0.12)],
     )
 
     assert decision.chosen_action == "GERMINATE"

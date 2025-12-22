@@ -16,6 +16,7 @@ Usage:
     python scripts/checkpoint_audit.py --generate-test
     python scripts/checkpoint_audit.py --generate-morphogenetic
     python scripts/checkpoint_audit.py --generate-blending
+    python scripts/checkpoint_audit.py --generate-holding
     python scripts/checkpoint_audit.py --iterative <checkpoint.pt>
 
 Examples:
@@ -371,7 +372,7 @@ def generate_morphogenetic_checkpoint() -> Path:
 
     try:
         from esper.kasmina.host import CNNHost, MorphogeneticModel
-        from esper.simic.features import TaskConfig
+        from esper.tamiyo.policy.features import TaskConfig
     except ImportError as e:
         print(f"Cannot import Kasmina modules: {e}")
         print("Make sure PYTHONPATH includes src/")
@@ -392,7 +393,7 @@ def generate_morphogenetic_checkpoint() -> Path:
     model = MorphogeneticModel(
         host=host,
         device="cpu",
-        slots=["early", "mid", "late"],
+        slots=["r0c0", "r0c1", "r0c2"],
         task_config=task_config,
     )
 
@@ -400,7 +401,7 @@ def generate_morphogenetic_checkpoint() -> Path:
     model.germinate_seed(
         blueprint_id="norm",
         seed_id="test-seed-001",
-        slot="mid",
+        slot="r0c1",
         blend_algorithm_id="sigmoid",
     )
 
@@ -412,7 +413,7 @@ def generate_morphogenetic_checkpoint() -> Path:
     torch.save(
         {
             "model_state_dict": state_dict,
-            "config": {"slots": ["early", "mid", "late"]},
+            "config": {"slots": ["r0c0", "r0c1", "r0c2"]},
         },
         checkpoint_path,
     )
@@ -433,7 +434,7 @@ def generate_blending_checkpoint() -> Path:
     try:
         from esper.kasmina.host import CNNHost, MorphogeneticModel
         from esper.leyline.stages import SeedStage
-        from esper.simic.features import TaskConfig
+        from esper.tamiyo.policy.features import TaskConfig
     except ImportError as e:
         print(f"Cannot import Kasmina modules: {e}")
         print("Make sure PYTHONPATH includes src/")
@@ -454,7 +455,7 @@ def generate_blending_checkpoint() -> Path:
     model = MorphogeneticModel(
         host=host,
         device="cpu",
-        slots=["early", "mid", "late"],
+        slots=["r0c0", "r0c1", "r0c2"],
         task_config=task_config,
     )
 
@@ -462,12 +463,12 @@ def generate_blending_checkpoint() -> Path:
     model.germinate_seed(
         blueprint_id="norm",
         seed_id="test-seed-blending",
-        slot="mid",
+        slot="r0c1",
         blend_algorithm_id="gated",  # Use gated to get nn.Module alpha_schedule
     )
 
     # Transition to TRAINING then BLENDING
-    slot = model.seed_slots["mid"]
+    slot = model.seed_slots["r0c1"]
     slot.state.transition(SeedStage.TRAINING)
     slot.state.transition(SeedStage.BLENDING)
     slot.start_blending(total_steps=10)
@@ -484,7 +485,7 @@ def generate_blending_checkpoint() -> Path:
     torch.save(
         {
             "model_state_dict": state_dict,
-            "config": {"slots": ["early", "mid", "late"]},
+            "config": {"slots": ["r0c0", "r0c1", "r0c2"]},
         },
         checkpoint_path,
     )
@@ -493,18 +494,18 @@ def generate_blending_checkpoint() -> Path:
     return checkpoint_path
 
 
-def generate_probationary_checkpoint() -> Path:
-    """Generate a checkpoint with PROBATIONARY state (after blending).
+def generate_holding_checkpoint() -> Path:
+    """Generate a checkpoint with HOLDING state (after blending).
 
     This tests what state persists after blending completes.
     """
-    print("Generating MorphogeneticModel checkpoint (PROBATIONARY state)...")
+    print("Generating MorphogeneticModel checkpoint (HOLDING state)...")
     print("=" * 60)
 
     try:
         from esper.kasmina.host import CNNHost, MorphogeneticModel
         from esper.leyline.stages import SeedStage
-        from esper.simic.features import TaskConfig
+        from esper.tamiyo.policy.features import TaskConfig
     except ImportError as e:
         print(f"Cannot import Kasmina modules: {e}")
         print("Make sure PYTHONPATH includes src/")
@@ -525,20 +526,20 @@ def generate_probationary_checkpoint() -> Path:
     model = MorphogeneticModel(
         host=host,
         device="cpu",
-        slots=["early", "mid", "late"],
+        slots=["r0c0", "r0c1", "r0c2"],
         task_config=task_config,
     )
 
     # Germinate a seed
     model.germinate_seed(
         blueprint_id="norm",
-        seed_id="test-seed-probationary",
-        slot="mid",
+        seed_id="test-seed-holding",
+        slot="r0c1",
         blend_algorithm_id="linear",
     )
 
-    # Full lifecycle to PROBATIONARY
-    slot = model.seed_slots["mid"]
+    # Full lifecycle to HOLDING
+    slot = model.seed_slots["r0c1"]
     slot.state.transition(SeedStage.TRAINING)
     slot.state.transition(SeedStage.BLENDING)
     slot.start_blending(total_steps=3)
@@ -546,7 +547,7 @@ def generate_probationary_checkpoint() -> Path:
     # Complete blending
     slot.state.alpha = 1.0  # Force alpha to completion threshold
     slot.state.metrics.epochs_in_current_stage = 5  # Meet minimum epochs
-    slot.state.transition(SeedStage.PROBATIONARY)
+    slot.state.transition(SeedStage.HOLDING)
 
     print(f"Stage: {slot.state.stage.name}")
     print(f"alpha_schedule: {slot.alpha_schedule}")
@@ -555,16 +556,16 @@ def generate_probationary_checkpoint() -> Path:
     state_dict = model.state_dict()
 
     # Save
-    checkpoint_path = Path("/tmp/esper_probationary_checkpoint.pt")
+    checkpoint_path = Path("/tmp/esper_holding_checkpoint.pt")
     torch.save(
         {
             "model_state_dict": state_dict,
-            "config": {"slots": ["early", "mid", "late"]},
+            "config": {"slots": ["r0c0", "r0c1", "r0c2"]},
         },
         checkpoint_path,
     )
 
-    print(f"Saved PROBATIONARY checkpoint to: {checkpoint_path}")
+    print(f"Saved HOLDING checkpoint to: {checkpoint_path}")
     return checkpoint_path
 
 
@@ -591,9 +592,9 @@ def main() -> None:
         path = generate_blending_checkpoint()
         print("\n")
         audit_checkpoint(path)
-    elif arg == "--generate-probationary":
-        # Generate and audit checkpoint with PROBATIONARY state
-        path = generate_probationary_checkpoint()
+    elif arg == "--generate-holding":
+        # Generate and audit checkpoint with HOLDING state
+        path = generate_holding_checkpoint()
         print("\n")
         audit_checkpoint(path)
     elif arg == "--iterative":

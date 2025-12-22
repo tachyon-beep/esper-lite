@@ -69,13 +69,15 @@ class RunHeader(Static):
         if not self._snapshot.connected:
             return ("○ Disconnected", "red")
 
+        # Icons provide color-independent status (accessibility):
+        # ● filled = good, ◐ half = warning, ○ empty = bad
         staleness = self._snapshot.staleness_seconds
         if staleness < 2.0:
-            return ("● Live", "green")
+            return ("● LIVE", "green")
         elif staleness < 5.0:
-            return (f"● Live ({staleness:.0f}s)", "yellow")
+            return (f"◐ SLOW ({staleness:.0f}s)", "yellow")
         else:
-            return (f"◐ Stale ({staleness:.0f}s)", "red")
+            return (f"○ STALE ({staleness:.0f}s)", "red")
 
     def _get_env_health_summary(self) -> str:
         """Get environment health summary."""
@@ -121,7 +123,7 @@ class RunHeader(Static):
                 stage = seed.stage.upper()
                 if stage == "TRAINING":
                     training += 1
-                elif stage in ("BLENDING", "PROBATIONARY"):
+                elif stage in ("BLENDING", "HOLDING"):
                     blending += 1
                 elif stage == "FOSSILIZED":
                     fossilized += 1

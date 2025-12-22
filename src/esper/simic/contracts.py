@@ -64,7 +64,7 @@ class SeedSlotProtocol(Protocol):
         """Advance lifecycle mechanically once per epoch.
 
         Returns:
-            True if an auto-cull occurred, False otherwise.
+            True if an auto-prune occurred, False otherwise.
         """
         ...
 

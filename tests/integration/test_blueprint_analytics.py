@@ -41,9 +41,9 @@ class TestBlueprintAnalyticsIntegration:
         model.seed_slots["r0c1"].state.metrics.current_val_accuracy = 75.0
         model.seed_slots["r0c1"].state.metrics.counterfactual_contribution = 5.0  # Required for G5
 
-        # Force to PROBATIONARY stage for fossilization (per instructions)
+        # Force to HOLDING stage for fossilization (per instructions)
         from esper.leyline import SeedStage
-        model.seed_slots["r0c1"].state.stage = SeedStage.PROBATIONARY
+        model.seed_slots["r0c1"].state.stage = SeedStage.HOLDING
         model.seed_slots["r0c1"].state.is_healthy = True  # G5 also requires health
         model.seed_slots["r0c1"].advance_stage(SeedStage.FOSSILIZED)
 
@@ -59,12 +59,12 @@ class TestBlueprintAnalyticsIntegration:
         # Add test data
         analytics.stats["depthwise"].germinated = 20
         analytics.stats["depthwise"].fossilized = 12
-        analytics.stats["depthwise"].culled = 8
+        analytics.stats["depthwise"].pruned = 8
         analytics.stats["depthwise"].acc_deltas = [2.0] * 12
 
         analytics.stats["attention"].germinated = 10
         analytics.stats["attention"].fossilized = 1
-        analytics.stats["attention"].culled = 9
+        analytics.stats["attention"].pruned = 9
         analytics.stats["attention"].churns = [-0.5] * 9
 
         analytics.scoreboards[0] = SeedScoreboard(

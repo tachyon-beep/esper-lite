@@ -24,7 +24,13 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable
 
 from esper.karn.constants import HealthThresholds, VitalSignsThresholds
-from esper.leyline import TelemetryEvent, TelemetryEventType, SeedStage, is_active_stage
+from esper.leyline import (
+    TelemetryEvent,
+    TelemetryEventType,
+    SeedStage,
+    is_active_stage,
+    is_failure_stage,
+)
 
 if TYPE_CHECKING:
     from esper.karn.store import TelemetryStore
@@ -153,6 +159,15 @@ class HealthMonitor:
         self._last_check_time = time.monotonic()
         self._epoch_times: list[float] = []
         self._last_memory_warning: float = 0.0
+
+    def reset(self) -> None:
+        """Reset per-episode tracking state.
+
+        Keeps configuration and TelemetryStore wiring intact.
+        """
+        self._last_check_time = time.monotonic()
+        self._epoch_times.clear()
+        self._last_memory_warning = 0.0
 
     def _check_memory_and_warn(
         self,
@@ -345,7 +360,7 @@ class VitalSigns:
     epochs_without_improvement: int = 0
 
     # Seed health
-    seed_failure_rate: float = 0.0  # Fraction of seeds culled
+    seed_failure_rate: float = 0.0  # Fraction of seeds pruned
     active_seeds: int = 0
 
     # Overall
@@ -417,21 +432,21 @@ class VitalSignsMonitor:
 
         # Check seed health
         total_seeds = 0
-        culled_seeds = 0
+        pruned_seeds = 0
         active = 0
         for slot in latest.slots.values():
             # Count seeds that have been germinated (past DORMANT)
             if slot.stage != SeedStage.DORMANT and slot.stage != SeedStage.UNKNOWN:
                 total_seeds += 1
-            # Count culled seeds for failure rate
-            if slot.stage == SeedStage.CULLED:
-                culled_seeds += 1
+            # Count pruned seeds for failure rate
+            if is_failure_stage(slot.stage):
+                pruned_seeds += 1
             # Count active seeds (contributing to forward pass)
             if is_active_stage(slot.stage):
                 active += 1
 
         vitals.active_seeds = active
-        vitals.seed_failure_rate = culled_seeds / total_seeds if total_seeds > 0 else 0.0
+        vitals.seed_failure_rate = pruned_seeds / total_seeds if total_seeds > 0 else 0.0
 
         # Determine if critical
         if self._epochs_since_improvement > self.stagnation_epochs:

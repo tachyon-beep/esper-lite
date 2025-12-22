@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import threading
 import time
+import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -30,6 +31,8 @@ from esper.karn.sanctum.schema import (
     BestRunRecord,
     DecisionSnapshot,
     RunConfig,
+    CounterfactualConfig,
+    CounterfactualSnapshot,
 )
 
 if TYPE_CHECKING:
@@ -45,9 +48,6 @@ ACTION_NORMALIZATION = {
     "FOSSILIZE_G0": "FOSSILIZE",
     "FOSSILIZE_G1": "FOSSILIZE",
     "FOSSILIZE_G2": "FOSSILIZE",
-    "CULL_PROBATION": "CULL",
-    "CULL_STAGNATION": "CULL",
-    "CULL_ACCURACY": "CULL",
 }
 
 
@@ -60,7 +60,19 @@ def normalize_action(action: str) -> str:
     Returns:
         Base action name (e.g., "GERMINATE").
     """
-    return ACTION_NORMALIZATION.get(action, action)
+    normalized = ACTION_NORMALIZATION.get(action, action)
+    if normalized == action:
+        if action.startswith("GERMINATE"):
+            return "GERMINATE"
+        if action.startswith("SET_ALPHA_TARGET"):
+            return "SET_ALPHA_TARGET"
+        if action.startswith("FOSSILIZE"):
+            return "FOSSILIZE"
+        if action.startswith("PRUNE"):
+            return "PRUNE"
+        if action.startswith("WAIT"):
+            return "WAIT"
+    return normalized
 
 
 @dataclass
@@ -78,8 +90,8 @@ class SanctumAggregator:
     - SEED_GERMINATED: Add seed to env
     - SEED_STAGE_CHANGED: Update seed stage
     - SEED_FOSSILIZED: Increment fossilized count
-    - SEED_CULLED: Increment culled count
-    - BATCH_COMPLETED: Update episode/throughput
+    - SEED_PRUNED: Increment pruned count
+    - BATCH_EPOCH_COMPLETED: Update episode/throughput
 
     Usage:
         agg = SanctumAggregator(num_envs=16)
@@ -109,7 +121,7 @@ class SanctumAggregator:
     _batches_completed: int = 0
     _host_params: int = 0  # Baseline host model params (for growth_ratio)
     _reward_mode: str = ""  # A/B test cohort (shaped, simplified, sparse)
-    _current_batch: int = 0  # Current batch index (from BATCH_COMPLETED)
+    _current_batch: int = 0  # Current batch index (from BATCH_EPOCH_COMPLETED)
     _batch_avg_accuracy: float = 0.0  # Batch-level average accuracy
     _batch_rolling_accuracy: float = 0.0  # Rolling average for trend display
     _batch_avg_reward: float = 0.0  # Batch average reward
@@ -202,8 +214,12 @@ class SanctumAggregator:
             self._handle_reward_computed(event)
         elif event_type.startswith("SEED_"):
             self._handle_seed_event(event, event_type)
-        elif event_type == "BATCH_COMPLETED":
-            self._handle_batch_completed(event)
+        elif event_type == "BATCH_EPOCH_COMPLETED":
+            self._handle_batch_epoch_completed(event)
+        elif event_type == "COUNTERFACTUAL_MATRIX_COMPUTED":
+            self._handle_counterfactual_matrix(event)
+        elif event_type == "ANALYTICS_SNAPSHOT":
+            self._handle_analytics_snapshot(event)
 
     def get_snapshot(self) -> SanctumSnapshot:
         """Get current SanctumSnapshot.
@@ -214,14 +230,63 @@ class SanctumAggregator:
         with self._lock:
             return self._get_snapshot_unlocked()
 
+    def toggle_decision_pin(self, decision_id: str) -> bool:
+        """Toggle pin status for a decision by ID.
+
+        Args:
+            decision_id: The decision_id to toggle.
+
+        Returns:
+            New pin status (True if now pinned, False if unpinned).
+        """
+        with self._lock:
+            for decision in self._tamiyo.recent_decisions:
+                if decision.decision_id == decision_id:
+                    decision.pinned = not decision.pinned
+                    return decision.pinned
+        return False
+
     def _get_snapshot_unlocked(self) -> SanctumSnapshot:
         """Get snapshot without locking (caller must hold lock)."""
         now = time.time()
+        now_dt = datetime.now(timezone.utc)
         staleness = now - self._last_event_ts if self._last_event_ts else float("inf")
         runtime = now - self._start_time if self._connected else 0.0
 
         # Update system vitals
         self._update_system_vitals()
+
+        # Aggregate action counts from per-step reward telemetry when available.
+        # If debug REWARD_COMPUTED telemetry is disabled, fall back to
+        # ANALYTICS_SNAPSHOT(action_distribution) which populates self._tamiyo directly.
+        aggregated_actions: dict[str, int] = {
+            "WAIT": 0,
+            "GERMINATE": 0,
+            "SET_ALPHA_TARGET": 0,
+            "PRUNE": 0,
+            "FOSSILIZE": 0,
+        }
+        total_actions = 0
+        for env in self._envs.values():
+            for action, count in env.action_counts.items():
+                aggregated_actions[action] = aggregated_actions.get(action, 0) + count
+            total_actions += env.total_actions
+        if total_actions > 0:
+            self._tamiyo.action_counts = aggregated_actions
+            self._tamiyo.total_actions = total_actions
+
+        # Stable carousel: keep decisions for 30s minimum, never remove pinned
+        # Only expire if we have > 3 and oldest unpinned is > 30s old
+        decisions = self._tamiyo.recent_decisions
+        if len(decisions) > 3:
+            # Find oldest unpinned decision that's > 30s old
+            for i in range(len(decisions) - 1, -1, -1):
+                d = decisions[i]
+                age = (now_dt - d.timestamp).total_seconds()
+                if not d.pinned and age > 30.0:
+                    decisions.pop(i)
+                    break
+            self._tamiyo.recent_decisions = decisions[:3]
 
         # Get focused env's reward components for the detail panel
         focused_rewards = RewardComponents()
@@ -229,6 +294,12 @@ class SanctumAggregator:
             focused_env = self._envs[self._focused_env_id]
             if isinstance(focused_env.reward_components, RewardComponents):
                 focused_rewards = focused_env.reward_components
+
+        # Aggregate mean metrics for EnvOverview Σ row
+        accuracies = [e.host_accuracy for e in self._envs.values() if e.accuracy_history]
+        rewards = [e.current_reward for e in self._envs.values() if e.reward_history]
+        mean_accuracy = sum(accuracies) / len(accuracies) if accuracies else 0.0
+        mean_reward = sum(rewards) / len(rewards) if rewards else 0.0
 
         return SanctumSnapshot(
             # Run context
@@ -243,6 +314,8 @@ class SanctumAggregator:
             connected=self._connected,
             staleness_seconds=staleness,
             captured_at=datetime.now(timezone.utc).isoformat(),
+            aggregate_mean_accuracy=mean_accuracy,
+            aggregate_mean_reward=mean_reward,
             # Slot configuration for dynamic columns
             slot_ids=list(self._slot_ids),
             # Per-env state
@@ -272,12 +345,13 @@ class SanctumAggregator:
     def _handle_training_started(self, event: "TelemetryEvent") -> None:
         """Handle TRAINING_STARTED event."""
         data = event.data or {}
-        self._run_id = data.get("run_id", data.get("episode_id", ""))
+        self._run_id = data.get("episode_id", "")
         self._task_name = data.get("task", "")
         self._max_epochs = data.get("max_epochs", 75)
         self._connected = True
         self._start_time = time.time()
-        self._current_episode = 0
+        start_episode = data.get("start_episode", 0)
+        self._current_episode = int(start_episode) if isinstance(start_episode, (int, float)) else 0
         self._current_epoch = 0
 
         # Capture GPU devices
@@ -297,6 +371,7 @@ class SanctumAggregator:
 
         # Capture host params baseline (for growth_ratio calculation)
         self._host_params = data.get("host_params", 0)
+        self._vitals.host_params = self._host_params
 
         # Capture reward mode for A/B test cohort display
         self._reward_mode = data.get("reward_mode", "")
@@ -335,9 +410,21 @@ class SanctumAggregator:
         self._best_runs = []
 
     def _handle_epoch_completed(self, event: "TelemetryEvent") -> None:
-        """Handle EPOCH_COMPLETED event."""
+        """Handle EPOCH_COMPLETED event (per-env only).
+
+        Only processes per-env EPOCH_COMPLETED events (with explicit env_id).
+        Batch-level events now use BATCH_EPOCH_COMPLETED, but we still skip
+        any event missing env_id as a defensive measure.
+        """
         data = event.data or {}
-        env_id = data.get("env_id", 0)
+
+        # Belt-and-suspenders: skip events without env_id
+        # Batch-level events now use BATCH_EPOCH_COMPLETED, but if any legacy
+        # EPOCH_COMPLETED without env_id arrives, don't corrupt env 0's tracking
+        if "env_id" not in data:
+            return
+
+        env_id = data["env_id"]
 
         self._ensure_env(env_id)
         env = self._envs[env_id]
@@ -347,32 +434,11 @@ class SanctumAggregator:
         val_loss = data.get("val_loss", 0.0)
         inner_epoch = data.get("inner_epoch", data.get("epoch", 0))
 
-        # Capture previous accuracy for status update
-        prev_acc = env.accuracy_history[-1] if env.accuracy_history else 0.0
-
-        env.host_accuracy = val_acc
         env.host_loss = val_loss
         env.current_epoch = inner_epoch
 
         # Update global epoch
         self._current_epoch = inner_epoch
-
-        # Add to accuracy history
-        env.accuracy_history.append(val_acc)
-
-        # Track best accuracy
-        if val_acc > env.best_accuracy:
-            env.epochs_since_improvement = 0
-            env.best_accuracy = val_acc
-            env.best_accuracy_epoch = inner_epoch
-            env.best_accuracy_episode = self._current_episode
-            # Snapshot seeds at best accuracy
-            env.best_seeds = {k: SeedState(**v.__dict__) for k, v in env.seeds.items()}
-        else:
-            env.epochs_since_improvement += 1
-
-        # Update env status based on accuracy changes
-        env._update_status(prev_acc, val_acc)
 
         # Update per-seed telemetry from EPOCH_COMPLETED event
         # This provides per-tick accuracy_delta updates for all active seeds
@@ -397,6 +463,12 @@ class SanctumAggregator:
             if slot_id not in self._slot_ids and slot_id != "unknown":
                 self._slot_ids.append(slot_id)
                 self._slot_ids.sort()
+
+        # Update accuracy AFTER seeds are refreshed so best_seeds snapshots are accurate.
+        # Episode numbering: BATCH_EPOCH_COMPLETED increments episodes_completed by envs_this_batch,
+        # so the absolute episode for this env is base + env_id.
+        episode_id = self._current_episode + env_id
+        env.add_accuracy(val_acc, inner_epoch, episode=episode_id)
 
         env.last_update = datetime.now(timezone.utc)
 
@@ -497,22 +569,24 @@ class SanctumAggregator:
             bounded_attribution=data.get("bounded_attribution", 0.0),
             seed_contribution=data.get("seed_contribution", 0.0),
             compute_rent=data.get("compute_rent", 0.0),
+            alpha_shock=data.get("alpha_shock", 0.0),
             ratio_penalty=data.get("ratio_penalty", 0.0),
             stage_bonus=data.get("stage_bonus", 0.0),
             fossilize_terminal_bonus=data.get("fossilize_terminal_bonus", 0.0),
             blending_warning=data.get("blending_warning", 0.0),
-            probation_warning=data.get("probation_warning", 0.0),
+            holding_warning=data.get("holding_warning", 0.0),
             val_acc=data.get("val_acc", env.host_accuracy),
             total=total_reward,
             last_action=action_name,
             env_id=env_id,
         )
 
-        # Capture decision snapshot (NEW)
+        # Capture decision snapshot
         # Only capture if we have decision data (action_confidence present)
         if "action_confidence" in data:
-            self._tamiyo.last_decision = DecisionSnapshot(
-                timestamp=event.timestamp or datetime.now(timezone.utc),
+            now_dt = event.timestamp or datetime.now(timezone.utc)
+            decision = DecisionSnapshot(
+                timestamp=now_dt,
                 slot_states=data.get("slot_states", {}),
                 host_accuracy=data.get("host_accuracy", env.host_accuracy),
                 chosen_action=action_name,
@@ -521,7 +595,34 @@ class SanctumAggregator:
                 expected_value=data.get("value_estimate", 0.0),
                 actual_reward=total_reward,
                 alternatives=data.get("alternatives", []),
+                decision_id=str(uuid.uuid4())[:8],  # Short unique ID for pinning
             )
+
+            # Stable carousel: only add if we can make room
+            # - If < 3 decisions: always add
+            # - If 3 decisions: only replace oldest unpinned if > 30s old
+            decisions = self._tamiyo.recent_decisions
+            can_add = len(decisions) < 3
+
+            if not can_add and len(decisions) >= 3:
+                # Find oldest unpinned decision
+                for i in range(len(decisions) - 1, -1, -1):
+                    d = decisions[i]
+                    if not d.pinned:
+                        age = (now_dt - d.timestamp).total_seconds()
+                        if age > 30.0:
+                            # Remove oldest unpinned, make room
+                            decisions.pop(i)
+                            can_add = True
+                        break
+
+            if can_add:
+                decisions.insert(0, decision)
+                # Cap at 3 (shouldn't exceed, but safety)
+                self._tamiyo.recent_decisions = decisions[:3]
+
+            # Also keep last_decision for backwards compatibility
+            self._tamiyo.last_decision = decision
 
         # Track focused env for reward panel
         self._focused_env_id = env_id
@@ -560,7 +661,13 @@ class SanctumAggregator:
             seed.has_vanishing = data.get("has_vanishing", False)
             seed.has_exploding = data.get("has_exploding", False)
             seed.epochs_in_stage = data.get("epochs_in_stage", 0)
+            seed.blend_tempo_epochs = data.get("blend_tempo_epochs", 5)
             env.active_seed_count += 1
+            # Track blueprint spawn for graveyard
+            if seed.blueprint_id:
+                env.blueprint_spawns[seed.blueprint_id] = (
+                    env.blueprint_spawns.get(seed.blueprint_id, 0) + 1
+                )
 
         elif event_type == "SEED_STAGE_CHANGED":
             seed.stage = data.get("to", seed.stage)
@@ -579,18 +686,30 @@ class SanctumAggregator:
             seed.blueprint_id = data.get("blueprint_id") or seed.blueprint_id
             seed.epochs_total = data.get("epochs_total", 0)
             seed.counterfactual = data.get("counterfactual", 0.0)
+            # Preserve blend_tempo_epochs for fossilized display (already set at germination)
             env.fossilized_params += int(data.get("params_added", 0) or 0)
             env.fossilized_count += 1
             env.active_seed_count = max(0, env.active_seed_count - 1)
+            # Track blueprint fossilization for graveyard
+            if seed.blueprint_id:
+                env.blueprint_fossilized[seed.blueprint_id] = (
+                    env.blueprint_fossilized.get(seed.blueprint_id, 0) + 1
+                )
 
-        elif event_type == "SEED_CULLED":
-            # Capture cull context before resetting (P1/P2 telemetry gap fix)
-            seed.cull_reason = data.get("reason", "")
+        elif event_type == "SEED_PRUNED":
+            # Capture prune context before resetting (P1/P2 telemetry gap fix)
+            seed.prune_reason = data.get("reason", "")
             seed.improvement = data.get("improvement", 0.0)
-            seed.auto_culled = data.get("auto_culled", False)
+            seed.auto_pruned = data.get("auto_pruned", False)
             seed.epochs_total = data.get("epochs_total", 0)
             seed.counterfactual = data.get("counterfactual", 0.0)
-            seed.blueprint_id = data.get("blueprint_id") or seed.blueprint_id
+            pruned_blueprint = data.get("blueprint_id") or seed.blueprint_id
+
+            # Track blueprint prune for graveyard BEFORE reset
+            if pruned_blueprint:
+                env.blueprint_prunes[pruned_blueprint] = (
+                    env.blueprint_prunes.get(pruned_blueprint, 0) + 1
+                )
 
             # Reset slot to DORMANT
             seed.stage = "DORMANT"
@@ -602,16 +721,13 @@ class SanctumAggregator:
             seed.has_vanishing = False
             seed.has_exploding = False
             seed.epochs_in_stage = 0
-            env.culled_count += 1
+            seed.blend_tempo_epochs = 5
+            env.pruned_count += 1
             env.active_seed_count = max(0, env.active_seed_count - 1)
 
-    def _handle_batch_completed(self, event: "TelemetryEvent") -> None:
-        """Handle BATCH_COMPLETED event (episode completion)."""
+    def _handle_batch_epoch_completed(self, event: "TelemetryEvent") -> None:
+        """Handle BATCH_EPOCH_COMPLETED event (episode completion)."""
         data = event.data or {}
-
-        # Capture current episode BEFORE updating for best_runs check
-        # (best_accuracy_episode was set using the old value during EPOCH_COMPLETED)
-        current_ep = self._current_episode
 
         episodes_completed = data.get("episodes_completed")
         if isinstance(episodes_completed, (int, float)):
@@ -633,41 +749,137 @@ class SanctumAggregator:
             self._vitals.epochs_per_second = total_epochs / elapsed
             self._vitals.batches_per_hour = (self._batches_completed / elapsed) * 3600
 
-        # Capture best run records for envs that improved during this batch
-        # Do this BEFORE resetting seed state so we can snapshot the seeds
+        # Capture best_runs from current episode (before reset clears env.best_accuracy)
+        # Allow multiple entries per env to reflect distinct episodes; keep top 10 overall.
+        n_envs = data.get("n_envs")
+        if not isinstance(n_envs, int) or n_envs <= 0:
+            env_accuracies = data.get("env_accuracies")
+            if isinstance(env_accuracies, (list, tuple)):
+                n_envs = len(env_accuracies)
+            else:
+                n_envs = self.num_envs
+        episode_start = self._current_episode - n_envs
         for env in self._envs.values():
-            # Check if this env achieved a new best during this episode
-            if env.best_accuracy_episode == current_ep and env.best_accuracy > 0:
-                # Compute absolute episode for human-readable display
-                # e.g., batch 3 with 8 envs and env_id=0 → absolute episode 25
-                absolute_ep = current_ep * self.num_envs + env.env_id + 1
+            if env.best_accuracy > 0:
+                base_params = env.host_params
+                seed_params_total = sum(
+                    int(seed.seed_params or 0) for seed in env.best_seeds.values()
+                )
+                growth_ratio = (
+                    (base_params + seed_params_total) / base_params
+                    if base_params > 0
+                    else 1.0
+                )
                 record = BestRunRecord(
                     env_id=env.env_id,
-                    episode=current_ep,
+                    episode=episode_start + env.env_id,
                     peak_accuracy=env.best_accuracy,
                     final_accuracy=env.host_accuracy,
-                    absolute_episode=absolute_ep,
+                    epoch=env.best_accuracy_epoch,
                     seeds={k: SeedState(**v.__dict__) for k, v in env.best_seeds.items()},
+                    growth_ratio=growth_ratio,
                 )
-                # Remove existing record ONLY if same env in same episode (duplicate event)
-                # Different episodes are different training runs, keep both!
-                self._best_runs = [
-                    r for r in self._best_runs
-                    if not (r.env_id == env.env_id and r.episode == current_ep)
-                ]
                 self._best_runs.append(record)
 
         # Sort by peak accuracy descending, keep top 10
         self._best_runs.sort(key=lambda r: r.peak_accuracy, reverse=True)
         self._best_runs = self._best_runs[:10]
 
-        # Reset per-env seed state for next episode
+        # Reset per-env state for next episode
+        # ALL episode-scoped fields must reset here
         for env in self._envs.values():
+            # Seed state
             env.seeds.clear()
             env.active_seed_count = 0
             env.fossilized_count = 0
-            env.culled_count = 0
+            env.pruned_count = 0
             env.fossilized_params = 0
+
+            # Epoch/progress tracking
+            env.current_epoch = 0
+            env.host_accuracy = 0.0
+            env.epochs_since_improvement = 0
+            env.status = "initializing"
+
+            # History (fresh sparklines each episode)
+            env.reward_history.clear()
+            env.accuracy_history.clear()
+
+            # Best tracking (fresh per episode)
+            env.best_reward = float('-inf')
+            env.best_reward_epoch = 0
+            env.best_accuracy = 0.0
+            env.best_accuracy_epoch = 0
+            env.best_accuracy_episode = 0
+            env.best_seeds.clear()
+
+            # Action tracking (fresh distribution each episode)
+            env.action_history.clear()
+            env.action_counts = {
+                "WAIT": 0,
+                "GERMINATE": 0,
+                "SET_ALPHA_TARGET": 0,
+                "PRUNE": 0,
+                "FOSSILIZE": 0,
+            }
+            env.total_actions = 0
+
+            # Reward components (stale from last step)
+            env.reward_components = RewardComponents()
+
+            # Counterfactual matrix (stale from previous episode)
+            env.counterfactual_matrix = CounterfactualSnapshot()
+
+            # Graveyard stats (per-episode)
+            env.blueprint_spawns.clear()
+            env.blueprint_prunes.clear()
+            env.blueprint_fossilized.clear()
+
+    def _handle_counterfactual_matrix(self, event: "TelemetryEvent") -> None:
+        """Handle COUNTERFACTUAL_MATRIX_COMPUTED event."""
+        data = event.data or {}
+        env_id = data.get("env_id")
+
+        if env_id is None:
+            return
+
+        env = self._envs.get(env_id)
+        if env is None:
+            return
+
+        # Parse configs
+        slot_ids = tuple(data.get("slot_ids", []))
+        raw_configs = data.get("configs", [])
+
+        configs = [
+            CounterfactualConfig(
+                seed_mask=tuple(cfg.get("seed_mask", [])),
+                accuracy=cfg.get("accuracy", 0.0),
+            )
+            for cfg in raw_configs
+        ]
+
+        env.counterfactual_matrix = CounterfactualSnapshot(
+            slot_ids=slot_ids,
+            configs=configs,
+            strategy=data.get("strategy", "unavailable"),
+            compute_time_ms=data.get("compute_time_ms", 0.0),
+        )
+
+    def _handle_analytics_snapshot(self, event: "TelemetryEvent") -> None:
+        """Handle ANALYTICS_SNAPSHOT events used by Sanctum/Tamiyo UI."""
+        data = event.data or {}
+        kind = data.get("kind")
+
+        # Batch-level action distribution is emitted at ops_normal and provides
+        # Tamiyo panel coverage even when debug REWARD_COMPUTED is disabled.
+        if kind == "action_distribution":
+            action_counts = data.get("action_counts", {})
+            if isinstance(action_counts, dict):
+                counts = {str(action): int(count) for action, count in action_counts.items()}
+                self._tamiyo.action_counts = counts
+                self._tamiyo.total_actions = sum(counts.values())
+            return
 
     # =========================================================================
     # Helpers
@@ -716,9 +928,9 @@ class SanctumAggregator:
             elif event_type == "SEED_FOSSILIZED":
                 improvement = data.get("improvement", 0.0)
                 message = f"{slot_id} fossilized" + (f" (+{improvement:.1f}%)" if improvement else "")
-            elif event_type == "SEED_CULLED":
+            elif event_type == "SEED_PRUNED":
                 reason = data.get("reason", "")
-                message = f"{slot_id} culled" + (f" ({reason})" if reason else "")
+                message = f"{slot_id} pruned" + (f" ({reason})" if reason else "")
             else:
                 message = slot_id
         elif event_type == "PPO_UPDATE_COMPLETED":
@@ -728,7 +940,7 @@ class SanctumAggregator:
                 ent = data.get("entropy", 0.0)
                 clip = data.get("clip_fraction", 0.0)
                 message = f"ent={ent:.3f} clip={clip:.3f}"
-        elif event_type == "BATCH_COMPLETED":
+        elif event_type == "BATCH_EPOCH_COMPLETED":
             batch = data.get("batch_idx", "?")
             eps = data.get("episodes_completed", "?")
             message = f"batch={batch} ep={eps}"
@@ -764,23 +976,31 @@ class SanctumAggregator:
         try:
             import torch
             if torch.cuda.is_available():
-                self._vitals.gpu_stats = {}
+                gpu_stats: dict[int, GPUStats] = {}
                 for i, device in enumerate(self._gpu_devices):
                     if device.startswith("cuda"):
                         device_idx = int(device.split(":")[-1]) if ":" in device else i
                         try:
-                            mem_allocated = torch.cuda.memory_allocated(device_idx) / (1024**3)
+                            # Use reserved memory (allocator footprint) for OOM risk visibility.
                             mem_reserved = torch.cuda.memory_reserved(device_idx) / (1024**3)
                             props = torch.cuda.get_device_properties(device_idx)
                             mem_total = props.total_memory / (1024**3)
 
-                            self._vitals.gpu_stats[device] = GPUStats(
-                                device_id=device,
-                                memory_used_gb=mem_allocated,
+                            gpu_stats[device_idx] = GPUStats(
+                                device_id=device_idx,
+                                memory_used_gb=mem_reserved,
                                 memory_total_gb=mem_total,
-                                utilization=mem_allocated / mem_total if mem_total > 0 else 0.0,
+                                # Only set when actual utilization is available (e.g., via NVML).
+                                utilization=0.0,
                             )
                         except Exception:
                             pass
+                self._vitals.gpu_stats = gpu_stats
+                if 0 in gpu_stats:
+                    stats0 = gpu_stats[0]
+                    self._vitals.gpu_memory_used_gb = stats0.memory_used_gb
+                    self._vitals.gpu_memory_total_gb = stats0.memory_total_gb
+                    self._vitals.gpu_utilization = stats0.utilization
+                    self._vitals.gpu_temperature = stats0.temperature
         except ImportError:
             pass

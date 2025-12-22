@@ -20,7 +20,7 @@ from esper.simic.rewards import (
     ContributionRewardConfig,
     SeedInfo,
     STAGE_TRAINING,
-    STAGE_PROBATIONARY,
+    STAGE_HOLDING,
 )
 from esper.leyline.factored_actions import LifecycleOp
 
@@ -91,12 +91,12 @@ class TestComputeSimplifiedReward:
         """SIMPLIFIED should NOT include bounded_attribution."""
         config = ContributionRewardConfig()
         seed_info = SeedInfo(
-            stage=STAGE_PROBATIONARY,
+            stage=STAGE_HOLDING,
             improvement_since_stage_start=5.0,  # High improvement
             total_improvement=10.0,
             epochs_in_stage=3,
             seed_params=1000,
-            previous_stage=STAGE_PROBATIONARY,
+            previous_stage=STAGE_HOLDING,
             previous_epochs_in_stage=2,
             seed_age_epochs=15,
         )
@@ -118,20 +118,20 @@ class TestComputeSimplifiedReward:
         assert abs(reward) < 1.0
 
     def test_no_warning_components(self):
-        """SIMPLIFIED should NOT include blending_warning or probation_warning."""
+        """SIMPLIFIED should NOT include blending_warning or holding_warning."""
         config = ContributionRewardConfig()
         seed_info = SeedInfo(
-            stage=STAGE_PROBATIONARY,
+            stage=STAGE_HOLDING,
             improvement_since_stage_start=-5.0,  # Negative (would trigger warnings)
             total_improvement=-3.0,
-            epochs_in_stage=5,  # Long time (would trigger probation_warning)
+            epochs_in_stage=5,  # Long time (would trigger holding_warning)
             seed_params=1000,
-            previous_stage=STAGE_PROBATIONARY,
+            previous_stage=STAGE_HOLDING,
             previous_epochs_in_stage=4,
             seed_age_epochs=20,
         )
 
-        # With SHAPED, this would trigger severe probation_warning (-9.0 or worse)
+        # With SHAPED, this would trigger severe holding_warning (-9.0 or worse)
         # With SIMPLIFIED, no warning penalties
         reward = compute_simplified_reward(
             action=LifecycleOp.WAIT,
@@ -143,7 +143,7 @@ class TestComputeSimplifiedReward:
             config=config,
         )
 
-        # Should NOT have the -9.0 probation_warning
+        # Should NOT have the -9.0 holding_warning
         assert reward > -2.0
 
 
@@ -157,12 +157,12 @@ class TestComputeRewardDispatcher:
         """compute_reward with SIMPLIFIED mode should use simplified logic."""
         config = ContributionRewardConfig(reward_mode=RewardMode.SIMPLIFIED)
         seed_info = SeedInfo(
-            stage=STAGE_PROBATIONARY,
+            stage=STAGE_HOLDING,
             improvement_since_stage_start=-5.0,  # Would trigger warnings in SHAPED
             total_improvement=-3.0,
             epochs_in_stage=5,
             seed_params=1000,
-            previous_stage=STAGE_PROBATIONARY,
+            previous_stage=STAGE_HOLDING,
             previous_epochs_in_stage=4,
             seed_age_epochs=20,
         )
@@ -185,7 +185,7 @@ class TestComputeRewardDispatcher:
             config=config,
         )
 
-        # Should NOT have probation_warning (-9.0) or attribution (+5.0)
+        # Should NOT have holding_warning (-9.0) or attribution (+5.0)
         # Should be small (just PBRS)
         assert -2.0 < reward < 2.0
 

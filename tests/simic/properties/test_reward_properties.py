@@ -167,7 +167,7 @@ class TestInterventionCosts:
     def test_wait_has_zero_cost(self):
         """Property: WAIT action should have zero cost."""
         from enum import IntEnum
-        TestAction = IntEnum("TestAction", {"WAIT": 0, "FOSSILIZE": 1, "CULL": 2})
+        TestAction = IntEnum("TestAction", {"WAIT": 0, "FOSSILIZE": 1, "PRUNE": 2})
         cost = get_intervention_cost(TestAction.WAIT)
 
         assert cost == 0.0

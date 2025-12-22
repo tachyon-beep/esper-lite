@@ -11,7 +11,17 @@ import torch
 
 from esper.leyline.slot_config import SlotConfig
 from esper.leyline.stages import SeedStage
-from esper.leyline.factored_actions import NUM_BLUEPRINTS, NUM_BLENDS, NUM_OPS, LifecycleOp
+from esper.leyline.factored_actions import (
+    LifecycleOp,
+    NUM_ALPHA_ALGORITHMS,
+    NUM_ALPHA_CURVES,
+    NUM_ALPHA_SPEEDS,
+    NUM_ALPHA_TARGETS,
+    NUM_BLUEPRINTS,
+    NUM_BLENDS,
+    NUM_OPS,
+    NUM_TEMPO,
+)
 from esper.simic.agent import PPOAgent
 from esper.tamiyo.policy.features import get_feature_size
 from esper.tamiyo.policy.action_masks import compute_action_masks, MaskSeedInfo
@@ -43,6 +53,11 @@ class TestTrainingWithDifferentSlotCounts:
             "slot": torch.ones(1, 1, dtype=torch.bool),
             "blueprint": torch.ones(1, NUM_BLUEPRINTS, dtype=torch.bool),
             "blend": torch.ones(1, NUM_BLENDS, dtype=torch.bool),
+            "tempo": torch.ones(1, NUM_TEMPO, dtype=torch.bool),
+            "alpha_target": torch.ones(1, NUM_ALPHA_TARGETS, dtype=torch.bool),
+            "alpha_speed": torch.ones(1, NUM_ALPHA_SPEEDS, dtype=torch.bool),
+            "alpha_curve": torch.ones(1, NUM_ALPHA_CURVES, dtype=torch.bool),
+            "alpha_algorithm": torch.ones(1, NUM_ALPHA_ALGORITHMS, dtype=torch.bool),
             "op": torch.ones(1, NUM_OPS, dtype=torch.bool),
         }
 
@@ -52,6 +67,11 @@ class TestTrainingWithDifferentSlotCounts:
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
                 blend_mask=masks["blend"],
+                tempo_mask=masks["tempo"],
+                alpha_target_mask=masks["alpha_target"],
+                alpha_speed_mask=masks["alpha_speed"],
+                alpha_curve_mask=masks["alpha_curve"],
+                alpha_algorithm_mask=masks["alpha_algorithm"],
                 op_mask=masks["op"],
             )
 
@@ -82,6 +102,11 @@ class TestTrainingWithDifferentSlotCounts:
             "slot": torch.ones(n_envs, 5, dtype=torch.bool),
             "blueprint": torch.ones(n_envs, NUM_BLUEPRINTS, dtype=torch.bool),
             "blend": torch.ones(n_envs, NUM_BLENDS, dtype=torch.bool),
+            "tempo": torch.ones(n_envs, NUM_TEMPO, dtype=torch.bool),
+            "alpha_target": torch.ones(n_envs, NUM_ALPHA_TARGETS, dtype=torch.bool),
+            "alpha_speed": torch.ones(n_envs, NUM_ALPHA_SPEEDS, dtype=torch.bool),
+            "alpha_curve": torch.ones(n_envs, NUM_ALPHA_CURVES, dtype=torch.bool),
+            "alpha_algorithm": torch.ones(n_envs, NUM_ALPHA_ALGORITHMS, dtype=torch.bool),
             "op": torch.ones(n_envs, NUM_OPS, dtype=torch.bool),
         }
 
@@ -91,6 +116,11 @@ class TestTrainingWithDifferentSlotCounts:
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
                 blend_mask=masks["blend"],
+                tempo_mask=masks["tempo"],
+                alpha_target_mask=masks["alpha_target"],
+                alpha_speed_mask=masks["alpha_speed"],
+                alpha_curve_mask=masks["alpha_curve"],
+                alpha_algorithm_mask=masks["alpha_algorithm"],
                 op_mask=masks["op"],
             )
 
@@ -127,6 +157,11 @@ class TestTrainingWithDifferentSlotCounts:
             "slot": torch.ones(n_envs, 9, dtype=torch.bool),
             "blueprint": torch.ones(n_envs, NUM_BLUEPRINTS, dtype=torch.bool),
             "blend": torch.ones(n_envs, NUM_BLENDS, dtype=torch.bool),
+            "tempo": torch.ones(n_envs, NUM_TEMPO, dtype=torch.bool),
+            "alpha_target": torch.ones(n_envs, NUM_ALPHA_TARGETS, dtype=torch.bool),
+            "alpha_speed": torch.ones(n_envs, NUM_ALPHA_SPEEDS, dtype=torch.bool),
+            "alpha_curve": torch.ones(n_envs, NUM_ALPHA_CURVES, dtype=torch.bool),
+            "alpha_algorithm": torch.ones(n_envs, NUM_ALPHA_ALGORITHMS, dtype=torch.bool),
             "op": torch.ones(n_envs, NUM_OPS, dtype=torch.bool),
         }
 
@@ -136,6 +171,11 @@ class TestTrainingWithDifferentSlotCounts:
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
                 blend_mask=masks["blend"],
+                tempo_mask=masks["tempo"],
+                alpha_target_mask=masks["alpha_target"],
+                alpha_speed_mask=masks["alpha_speed"],
+                alpha_curve_mask=masks["alpha_curve"],
+                alpha_algorithm_mask=masks["alpha_algorithm"],
                 op_mask=masks["op"],
             )
 
@@ -164,7 +204,7 @@ class TestMultiEnvMaskIndependence:
         slot_states_env2 = {
             "r0c0": MaskSeedInfo(stage=SeedStage.TRAINING, seed_age_epochs=3),
             "r0c1": MaskSeedInfo(stage=SeedStage.BLENDING, seed_age_epochs=2),
-            "r0c2": MaskSeedInfo(stage=SeedStage.PROBATIONARY, seed_age_epochs=1),
+            "r0c2": MaskSeedInfo(stage=SeedStage.HOLDING, seed_age_epochs=1),
         }
 
         masks_env0 = compute_action_masks(
@@ -238,7 +278,7 @@ class TestSlotSaturationAndRecovery:
         slot_states = {
             "r0c0": MaskSeedInfo(stage=SeedStage.TRAINING, seed_age_epochs=10),
             "r0c1": MaskSeedInfo(stage=SeedStage.BLENDING, seed_age_epochs=5),
-            "r0c2": MaskSeedInfo(stage=SeedStage.PROBATIONARY, seed_age_epochs=2),
+            "r0c2": MaskSeedInfo(stage=SeedStage.HOLDING, seed_age_epochs=2),
         }
 
         masks = compute_action_masks(
@@ -345,6 +385,11 @@ class TestLargeSlotConfigurations:
             "slot": torch.ones(1, 25, dtype=torch.bool),
             "blueprint": torch.ones(1, NUM_BLUEPRINTS, dtype=torch.bool),
             "blend": torch.ones(1, NUM_BLENDS, dtype=torch.bool),
+            "tempo": torch.ones(1, NUM_TEMPO, dtype=torch.bool),
+            "alpha_target": torch.ones(1, NUM_ALPHA_TARGETS, dtype=torch.bool),
+            "alpha_speed": torch.ones(1, NUM_ALPHA_SPEEDS, dtype=torch.bool),
+            "alpha_curve": torch.ones(1, NUM_ALPHA_CURVES, dtype=torch.bool),
+            "alpha_algorithm": torch.ones(1, NUM_ALPHA_ALGORITHMS, dtype=torch.bool),
             "op": torch.ones(1, NUM_OPS, dtype=torch.bool),
         }
 
@@ -354,6 +399,11 @@ class TestLargeSlotConfigurations:
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
                 blend_mask=masks["blend"],
+                tempo_mask=masks["tempo"],
+                alpha_target_mask=masks["alpha_target"],
+                alpha_speed_mask=masks["alpha_speed"],
+                alpha_curve_mask=masks["alpha_curve"],
+                alpha_algorithm_mask=masks["alpha_algorithm"],
                 op_mask=masks["op"],
             )
 
@@ -374,6 +424,11 @@ class TestLargeSlotConfigurations:
         assert masks["slot"].shape == (25,)
         assert masks["blueprint"].shape == (NUM_BLUEPRINTS,)
         assert masks["blend"].shape == (NUM_BLENDS,)
+        assert masks["tempo"].shape == (NUM_TEMPO,)
+        assert masks["alpha_target"].shape == (NUM_ALPHA_TARGETS,)
+        assert masks["alpha_speed"].shape == (NUM_ALPHA_SPEEDS,)
+        assert masks["alpha_curve"].shape == (NUM_ALPHA_CURVES,)
+        assert masks["alpha_algorithm"].shape == (NUM_ALPHA_ALGORITHMS,)
         assert masks["op"].shape == (NUM_OPS,)
 
 
@@ -409,10 +464,20 @@ class TestBufferWithDynamicSlots:
                 slot_action=env_idx % 5,
                 blueprint_action=0,
                 blend_action=0,
+                tempo_action=0,
+                alpha_target_action=0,
+                alpha_speed_action=0,
+                alpha_curve_action=0,
+                alpha_algorithm_action=0,
                 op_action=0,
                 slot_log_prob=-0.5,
                 blueprint_log_prob=-0.5,
                 blend_log_prob=-0.5,
+                tempo_log_prob=-0.5,
+                alpha_target_log_prob=-0.5,
+                alpha_speed_log_prob=-0.5,
+                alpha_curve_log_prob=-0.5,
+                alpha_algorithm_log_prob=-0.5,
                 op_log_prob=-0.5,
                 value=0.5,
                 reward=1.0,
@@ -420,6 +485,11 @@ class TestBufferWithDynamicSlots:
                 slot_mask=torch.ones(5, dtype=torch.bool),
                 blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
                 blend_mask=torch.ones(NUM_BLENDS, dtype=torch.bool),
+                tempo_mask=torch.ones(NUM_TEMPO, dtype=torch.bool),
+                alpha_target_mask=torch.ones(NUM_ALPHA_TARGETS, dtype=torch.bool),
+                alpha_speed_mask=torch.ones(NUM_ALPHA_SPEEDS, dtype=torch.bool),
+                alpha_curve_mask=torch.ones(NUM_ALPHA_CURVES, dtype=torch.bool),
+                alpha_algorithm_mask=torch.ones(NUM_ALPHA_ALGORITHMS, dtype=torch.bool),
                 op_mask=torch.ones(NUM_OPS, dtype=torch.bool),
                 hidden_h=hidden_h,
                 hidden_c=hidden_c,
@@ -453,10 +523,20 @@ class TestBufferWithDynamicSlots:
             slot_action=0,
             blueprint_action=0,
             blend_action=0,
+            tempo_action=0,
+            alpha_target_action=0,
+            alpha_speed_action=0,
+            alpha_curve_action=0,
+            alpha_algorithm_action=0,
             op_action=0,
             slot_log_prob=-0.5,
             blueprint_log_prob=-0.5,
             blend_log_prob=-0.5,
+            tempo_log_prob=-0.5,
+            alpha_target_log_prob=-0.5,
+            alpha_speed_log_prob=-0.5,
+            alpha_curve_log_prob=-0.5,
+            alpha_algorithm_log_prob=-0.5,
             op_log_prob=-0.5,
             value=0.5,
             reward=1.0,
@@ -464,6 +544,11 @@ class TestBufferWithDynamicSlots:
             slot_mask=torch.ones(5, dtype=torch.bool),  # Correct: 5 slots
             blueprint_mask=torch.ones(NUM_BLUEPRINTS, dtype=torch.bool),
             blend_mask=torch.ones(NUM_BLENDS, dtype=torch.bool),
+            tempo_mask=torch.ones(NUM_TEMPO, dtype=torch.bool),
+            alpha_target_mask=torch.ones(NUM_ALPHA_TARGETS, dtype=torch.bool),
+            alpha_speed_mask=torch.ones(NUM_ALPHA_SPEEDS, dtype=torch.bool),
+            alpha_curve_mask=torch.ones(NUM_ALPHA_CURVES, dtype=torch.bool),
+            alpha_algorithm_mask=torch.ones(NUM_ALPHA_ALGORITHMS, dtype=torch.bool),
             op_mask=torch.ones(NUM_OPS, dtype=torch.bool),
             hidden_h=hidden_h,
             hidden_c=hidden_c,

@@ -72,11 +72,11 @@ fossilize_terminal_bonus = math.sqrt(num_contributing_fossilized) * config.fossi
 | `bounded_attribution` | 0.0 to 7.5+ | Can reach high values with good seeds |
 | `pbrs_bonus` | -0.5 to +1.5 | Per STAGE_POTENTIALS deltas |
 | `compute_rent` | -0.05 to -0.5 | Logarithmic, usually small |
-| `probation_warning` | -10.0 to 0.0 | Exponential escalation |
+| `holding_warning` | -10.0 to 0.0 | Exponential escalation |
 | `blending_warning` | -0.4 to 0.0 | Capped escalation |
 | `terminal_bonus` | 0.0 to 34.0+ | Only at max_epochs |
 
-The 100x difference between `probation_warning` (-10.0) and `compute_rent` (-0.05) means the policy will heavily optimize to avoid probation penalties while essentially ignoring compute efficiency.
+The 100x difference between `holding_warning` (-10.0) and `compute_rent` (-0.05) means the policy will heavily optimize to avoid holding penalties while essentially ignoring compute efficiency.
 
 **Impact**:
 - Multi-objective reward balancing is implicitly determined by magnitude, not deliberate design
@@ -90,7 +90,7 @@ reward = (
     attribution_scale * bounded_attribution +  # e.g., 1.0
     pbrs_scale * pbrs_bonus +                   # e.g., 0.5
     rent_scale * compute_rent +                 # e.g., 2.0 to amplify
-    warning_scale * (blending_warning + probation_warning) +  # e.g., 0.3
+    warning_scale * (blending_warning + holding_warning) +  # e.g., 0.3
     terminal_scale * terminal_bonus             # e.g., 0.5
 )
 ```
@@ -132,18 +132,18 @@ With 25-epoch episodes and gamma=0.995, credit must propagate 25 steps. While th
 
 ## High-Priority Issues
 
-### H1: Probation Warning Exponential Escalation
+### H1: Holding Warning Exponential Escalation
 
 **Location**: Lines 594-600
 
-**Problem**: The probation penalty escalates exponentially:
+**Problem**: The holding penalty escalates exponentially:
 
 ```python
 # Lines 596-599
 epochs_waiting = seed_info.epochs_in_stage - 1
-probation_warning = -1.0 * (3 ** (epochs_waiting - 1))
+holding_warning = -1.0 * (3 ** (epochs_waiting - 1))
 # Cap at -10.0 (clip boundary) to avoid extreme penalties
-probation_warning = max(probation_warning, -10.0)
+holding_warning = max(holding_warning, -10.0)
 ```
 
 Schedule: epoch 2 -> -1.0, epoch 3 -> -3.0, epoch 4 -> -9.0, epoch 5+ -> -10.0
@@ -151,14 +151,14 @@ Schedule: epoch 2 -> -1.0, epoch 3 -> -3.0, epoch 4 -> -9.0, epoch 5+ -> -10.0
 **Impact**:
 - Single timestep penalties can dominate entire episode returns
 - Creates sharp cliffs in the reward landscape
-- Policy may learn to avoid PROBATIONARY entirely rather than making informed decisions
+- Policy may learn to avoid HOLDING entirely rather than making informed decisions
 
 **The guard at line 588 (`if bounded_attribution > 0`) partially mitigates this**, but legitimate seeds being "farmed" still face severe penalties.
 
 **Recommendation**: Consider softer escalation or restructure as opportunity cost:
 ```python
 # Linear escalation with max
-probation_warning = -min(epochs_waiting * 1.5, 8.0)
+holding_warning = -min(epochs_waiting * 1.5, 8.0)
 
 # Or: Use discounted foregone returns instead of penalties
 # This measures "what you gave up by not deciding" more directly
@@ -273,13 +273,13 @@ This is correct in principle (culling a good seed = bad, culling a bad seed = go
 if action == LifecycleOp.CULL:
     if seed_contribution is not None:
         if seed_contribution < 0:
-            # Good: Culled harmful seed
+            # Good: Pruned harmful seed
             bounded_attribution = abs(seed_contribution) * config.contribution_weight
         elif seed_info.total_improvement < -0.2:
-            # Good: Culled ransomware seed (high contribution but hurt performance)
+            # Good: Pruned ransomware seed (high contribution but hurt performance)
             bounded_attribution = 0.5  # Fixed bonus for correct detection
         else:
-            # Bad: Culled beneficial seed
+            # Bad: Pruned beneficial seed
             bounded_attribution = -seed_contribution * config.contribution_weight
 ```
 
@@ -359,7 +359,7 @@ reward += (-clipped) * config.loss_delta_weight
 **Analysis**: Reward normalization divides by running std (correctly not subtracting mean for critic stability), but the reward distribution changes significantly as:
 1. Seeds progress through lifecycle stages (different attribution magnitudes)
 2. Terminal bonuses appear (large positive spikes)
-3. Probation warnings escalate (large negative spikes)
+3. Holding warnings escalate (large negative spikes)
 
 **Impact**: Early training sees small rewards; late training may see 10x larger rewards. Normalization statistics may lag behind, causing value function instability during phase transitions.
 
@@ -505,7 +505,7 @@ These match `ContributionRewardConfig` defaults but are hardcoded.
 | C1 | Unbounded terminal bonus | Critical | Value function instability |
 | C2 | Reward magnitude imbalance | Critical | Multi-objective failure |
 | C3 | Sparse mode credit assignment | Critical | Mode may be unlearnable |
-| H1 | Exponential probation penalty | High | Harsh optimization landscape |
+| H1 | Exponential holding penalty | High | Harsh optimization landscape |
 | H2 | Aggressive attribution discount | High | Lost learning signal |
 | H3 | Geometric mean edge cases | High | Potential hacking vector |
 | H4 | CULL attribution logic | High | Weak ransomware removal signal |
@@ -525,7 +525,7 @@ The main concerns center on reward magnitude balancing and the practical challen
 
 1. **Immediate**: Cap terminal bonuses (C1)
 2. **Short-term**: Normalize reward component magnitudes (C2)
-3. **Medium-term**: Reconsider sigmoid steepness and probation escalation (H1, H2)
+3. **Medium-term**: Reconsider sigmoid steepness and holding escalation (H1, H2)
 4. **Long-term**: Comprehensive hyperparameter sensitivity analysis across reward weights
 
 The codebase shows evidence of iterative refinement (DRL Expert review comments, multiple configuration options), suggesting an empirically-driven development process. Continue this approach with ablation studies on the identified issues.

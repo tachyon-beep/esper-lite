@@ -95,12 +95,12 @@ def strict_config() -> "HeuristicPolicyConfig":
     return HeuristicPolicyConfig(
         plateau_epochs_to_germinate=1,
         min_epochs_before_germinate=0,
-        cull_after_epochs_without_improvement=1,
-        cull_if_accuracy_drops_by=0.5,
+        prune_after_epochs_without_improvement=1,
+        prune_if_accuracy_drops_by=0.5,
         min_improvement_to_fossilize=0.0,
-        embargo_epochs_after_cull=0,
+        embargo_epochs_after_prune=0,
         blueprint_rotation=["conv_light"],
-        blueprint_penalty_on_cull=1.0,
+        blueprint_penalty_on_prune=1.0,
         blueprint_penalty_decay=DEFAULT_BLUEPRINT_PENALTY_DECAY,  # Uses leyline default
         blueprint_penalty_threshold=5.0,
     )
@@ -113,12 +113,12 @@ def lenient_config() -> "HeuristicPolicyConfig":
     return HeuristicPolicyConfig(
         plateau_epochs_to_germinate=10,
         min_epochs_before_germinate=20,
-        cull_after_epochs_without_improvement=10,
-        cull_if_accuracy_drops_by=5.0,
+        prune_after_epochs_without_improvement=10,
+        prune_if_accuracy_drops_by=5.0,
         min_improvement_to_fossilize=1.0,
-        embargo_epochs_after_cull=10,
+        embargo_epochs_after_prune=10,
         blueprint_rotation=["conv_light", "conv_heavy", "attention", "norm", "depthwise"],
-        blueprint_penalty_on_cull=3.0,
+        blueprint_penalty_on_prune=3.0,
         blueprint_penalty_decay=0.7,
         blueprint_penalty_threshold=10.0,
     )
@@ -208,7 +208,7 @@ def mock_seed_factory():
 
     Usage:
         def test_something(mock_seed_factory):
-            seed = mock_seed_factory(stage=SeedStage.PROBATIONARY, improvement=5.0)
+            seed = mock_seed_factory(stage=SeedStage.HOLDING, improvement=5.0)
             ...
     """
     from esper.leyline import SeedStage
@@ -282,12 +282,12 @@ def mock_signals_factory():
 
 # Stage parameters for parametrized tests
 ACTIVE_STAGES = pytest.param(
-    ["GERMINATED", "TRAINING", "BLENDING", "PROBATIONARY"],
+    ["GERMINATED", "TRAINING", "BLENDING", "HOLDING"],
     id="active_stages",
 )
 
 TERMINAL_STAGES = pytest.param(
-    ["FOSSILIZED", "CULLED"],
+    ["FOSSILIZED", "PRUNED"],
     id="terminal_stages",
 )
 

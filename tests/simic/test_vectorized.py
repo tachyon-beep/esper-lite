@@ -74,8 +74,6 @@ def test_emit_with_env_context_includes_device():
 
 
 def test_last_action_event_emitted():
-    from esper.leyline.factored_actions import FactoredAction
-
     with patch("esper.simic.telemetry.emitters.get_hub") as get_hub:
         hub = Mock()
         get_hub.return_value = hub
@@ -86,9 +84,24 @@ def test_last_action_event_emitted():
             slot_idx=1,
             blueprint_idx=1,
             blend_idx=1,
+            tempo_idx=1,
+            alpha_target_idx=0,
+            alpha_speed_idx=0,
+            alpha_curve_idx=0,
+            alpha_algorithm_idx=0,
             op_idx=1,
             slot_id="r0c1",
-            masked={"op": False, "slot": False, "blueprint": False, "blend": True},
+            masked={
+                "op": False,
+                "slot": False,
+                "blueprint": False,
+                "blend": True,
+                "tempo": False,
+                "alpha_target": False,
+                "alpha_speed": False,
+                "alpha_curve": False,
+                "alpha_algorithm": False,
+            },
             success=True,
         )
 
@@ -371,8 +384,8 @@ class _StubModel:
 
 
 def test_advance_active_seed_fossilizes_via_seed_slot():
-    """PROBATIONARY seeds should fossilize through SeedSlot.advance_stage (emits telemetry)."""
-    model = _StubModel(SeedStage.PROBATIONARY)
+    """HOLDING seeds should fossilize through SeedSlot.advance_stage (emits telemetry)."""
+    model = _StubModel(SeedStage.HOLDING)
     slot_id = "r0c1"
 
     _advance_active_seed(model, slot_id)
@@ -387,7 +400,7 @@ def test_advance_active_seed_fossilizes_via_seed_slot():
 def test_advance_active_seed_noop_on_failed_fossilization_gate():
     """Failed fossilization gate should be a no-op (Tamiyo learns from failed attempts)."""
     gate_result = _StubGateResult(passed=False, checks_failed=["no_improvement"])
-    model = _StubModel(SeedStage.PROBATIONARY, gate_result=gate_result)
+    model = _StubModel(SeedStage.HOLDING, gate_result=gate_result)
     slot_id = "r0c1"
 
     # Should not raise - failed gate is normal RL outcome
@@ -960,7 +973,7 @@ def test_emit_with_env_context_handles_none_and_copies():
 
 
 def test_emit_batch_completed_is_resume_aware_and_clamped():
-    """BATCH_COMPLETED telemetry should include resume offsets and clamp totals."""
+    """BATCH_EPOCH_COMPLETED telemetry should include resume offsets and clamp totals."""
     hub = _StubHub()
     emit_batch_completed(
         hub,

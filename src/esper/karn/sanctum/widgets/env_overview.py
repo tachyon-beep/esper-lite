@@ -360,11 +360,14 @@ class EnvOverview(Static):
 
         # Stage abbreviations
         stage_short = {
+            "GERMINATED": "Germi",
             "TRAINING": "Train",
             "BLENDING": "Blend",
-            "PROBATIONARY": "Prob",
+            "HOLDING": "Hold",
             "FOSSILIZED": "Foss",
-            "CULLED": "Cull",
+            "PRUNED": "Prune",
+            "EMBARGOED": "Embar",
+            "RESETTING": "Reset",
         }.get(seed.stage, seed.stage[:5])
 
         blueprint = seed.blueprint_id or "?"
@@ -375,9 +378,11 @@ class EnvOverview(Static):
         style_map = {
             "TRAINING": "cyan",
             "BLENDING": "yellow",
-            "PROBATIONARY": "magenta",
+            "HOLDING": "magenta",
             "FOSSILIZED": "green",
-            "CULLED": "red",
+            "PRUNED": "red",
+            "EMBARGOED": "bright_red",
+            "RESETTING": "dim",
         }
         style = style_map.get(seed.stage, "white")
 
@@ -388,9 +393,12 @@ class EnvOverview(Static):
         elif seed.has_vanishing:
             grad_indicator = "[yellow]▼[/yellow]"
 
-        # BLENDING shows alpha
+        # BLENDING shows tempo arrows and alpha
+        # Tempo: ▸▸▸ = FAST (3), ▸▸ = STANDARD (5), ▸ = SLOW (8)
         if seed.stage == "BLENDING" and seed.alpha > 0:
-            base = f"[{style}]{stage_short}:{blueprint} {seed.alpha:.1f}[/{style}]"
+            tempo = seed.blend_tempo_epochs
+            tempo_arrows = "▸▸▸" if tempo <= 3 else ("▸▸" if tempo <= 5 else "▸")
+            base = f"[{style}]{stage_short}:{blueprint} {tempo_arrows} {seed.alpha:.1f}[/{style}]"
             return f"{base}{grad_indicator}" if grad_indicator else base
 
         # Active seeds show epochs in stage
@@ -409,8 +417,9 @@ class EnvOverview(Static):
         action_short = {
             "WAIT": "WAIT",
             "GERMINATE": "GERM",
+            "SET_ALPHA_TARGET": "ALPH",
             "FOSSILIZE": "FOSS",
-            "CULL": "CULL",
+            "PRUNE": "PRUN",
         }.get(last_action, last_action[:4] if last_action else "—")
 
         return action_short
@@ -419,20 +428,23 @@ class EnvOverview(Static):
         """Format epochs since improvement with color coding.
 
         Returns the number of epochs since the last improvement, colored:
-        - Green: 0 (currently improving)
-        - White: 1-5 (normal)
-        - Yellow: 6-15 (stagnating)
-        - Red: >15 (severely stalled)
+        - Green: 0 (currently improving) with + prefix
+        - White: 1-5 (normal) numbers only
+        - Yellow: 6-15 (stagnating) with ! prefix
+        - Red: >15 (severely stalled) with x prefix
+
+        Uses fixed-width ASCII prefixes for consistent column alignment
+        (emojis have variable width and break table formatting).
         """
         epochs = env.epochs_since_improvement
         if epochs == 0:
-            return "[green]✓[/green]"
+            return "[green]+0[/green]"
         elif epochs <= 5:
-            return f"[white]{epochs}[/white]"
+            return f"[white] {epochs}[/white]"
         elif epochs <= 15:
-            return f"[yellow]{epochs}[/yellow]"
+            return f"[yellow]!{epochs}[/yellow]"
         else:
-            return f"[red]{epochs}[/red]"
+            return f"[red]x{epochs}[/red]"
 
     def _format_status(self, env: "EnvState") -> str:
         """Format status with color coding."""
@@ -444,12 +456,13 @@ class EnvOverview(Static):
             "degraded": "red",
         }
 
+        # Icons provide color-independent status indication (accessibility)
         status_short = {
-            "excellent": "EXCL",
-            "healthy": "OK",
-            "initializing": "INIT",
-            "stalled": "STAL",
-            "degraded": "DEGR",
+            "excellent": "★EXCL",
+            "healthy": "●OK",
+            "initializing": "○INIT",
+            "stalled": "◐STAL",
+            "degraded": "▼DEGR",
         }.get(env.status, env.status[:4].upper())
 
         status_style = status_styles.get(env.status, "white")

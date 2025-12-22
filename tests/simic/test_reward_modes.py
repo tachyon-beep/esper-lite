@@ -30,8 +30,8 @@ def test_config_has_sparse_fields():
     assert config.sparse_reward_scale == 1.0  # DRL Expert: try 2.0-3.0 if learning fails
 
     # Minimal mode parameters
-    assert config.early_cull_threshold == 5
-    assert config.early_cull_penalty == -0.1
+    assert config.early_prune_threshold == 5
+    assert config.early_prune_penalty == -0.1
 
 
 def test_reward_mode_exported():
@@ -103,13 +103,13 @@ def test_sparse_reward_with_scale():
     assert abs(reward - 1.95) < 1e-6, f"Scale should be effective, got {reward}"
 
 
-def test_minimal_reward_no_penalty_for_old_cull():
-    """MINIMAL mode: no penalty for culling old seeds."""
+def test_minimal_reward_no_penalty_for_old_prune():
+    """MINIMAL mode: no penalty for pruning old seeds."""
     from esper.simic.rewards import compute_minimal_reward
     config = ContributionRewardConfig(
         reward_mode=RewardMode.MINIMAL,
-        early_cull_threshold=5,
-        early_cull_penalty=-0.1,
+        early_prune_threshold=5,
+        early_prune_penalty=-0.1,
     )
 
     # Cull a seed that's old enough (age >= threshold)
@@ -118,7 +118,7 @@ def test_minimal_reward_no_penalty_for_old_cull():
         total_params=100_000,
         epoch=10,
         max_epochs=25,
-        action=LifecycleOp.CULL,
+        action=LifecycleOp.PRUNE,
         seed_age=5,  # Exactly at threshold
         config=config,
     )
@@ -127,13 +127,13 @@ def test_minimal_reward_no_penalty_for_old_cull():
     assert reward == 0.0
 
 
-def test_minimal_reward_penalty_for_young_cull():
-    """MINIMAL mode: penalty for culling young seeds."""
+def test_minimal_reward_penalty_for_young_prune():
+    """MINIMAL mode: penalty for pruning young seeds."""
     from esper.simic.rewards import compute_minimal_reward
     config = ContributionRewardConfig(
         reward_mode=RewardMode.MINIMAL,
-        early_cull_threshold=5,
-        early_cull_penalty=-0.1,
+        early_prune_threshold=5,
+        early_prune_penalty=-0.1,
     )
 
     # Cull a seed that's too young
@@ -142,13 +142,13 @@ def test_minimal_reward_penalty_for_young_cull():
         total_params=100_000,
         epoch=10,
         max_epochs=25,
-        action=LifecycleOp.CULL,
+        action=LifecycleOp.PRUNE,
         seed_age=3,  # Below threshold
         config=config,
     )
 
     # Non-terminal but penalty applies -> -0.1
-    assert reward == config.early_cull_penalty
+    assert reward == config.early_prune_penalty
 
 
 def test_compute_reward_for_family_dispatches_contribution():
@@ -257,8 +257,8 @@ def test_compute_reward_minimal_mode():
     from esper.simic.rewards import compute_reward, SeedInfo
     config = ContributionRewardConfig(
         reward_mode=RewardMode.MINIMAL,
-        early_cull_threshold=5,
-        early_cull_penalty=-0.1,
+        early_prune_threshold=5,
+        early_prune_penalty=-0.1,
     )
 
     # Create a young seed
@@ -273,9 +273,9 @@ def test_compute_reward_minimal_mode():
         seed_age_epochs=3,  # Young seed
     )
 
-    # Cull action on young seed
+    # Prune action on young seed
     reward = compute_reward(
-        action=LifecycleOp.CULL,
+        action=LifecycleOp.PRUNE,
         seed_contribution=None,
         val_acc=70.0,
         host_max_acc=70.0,
@@ -289,7 +289,7 @@ def test_compute_reward_minimal_mode():
         config=config,
     )
 
-    # Should get early-cull penalty
+    # Should get early-prune penalty
     assert reward == -0.1
 
 

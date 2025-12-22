@@ -7,7 +7,7 @@ OWNERSHIP BOUNDARY:
     This module owns all TRAINING BEHAVIOR constants - anything that affects:
     - Model updates (PPO hyperparameters, learning rates, clipping)
     - Reward calculation (PBRS weights, terminal bonuses)
-    - Lifecycle gates (fossilization thresholds, cull criteria)
+    - Lifecycle gates (fossilization thresholds, prune criteria)
     - Anomaly detection thresholds for training (entropy collapse, ratio explosion)
     - Architecture constants (LSTM dim, episode length, batch sizes)
 
@@ -28,15 +28,15 @@ LEYLINE_VERSION = "0.2.0"
 # Lifecycle Constants (shared across simic modules)
 # =============================================================================
 
-# Minimum seed age before CULL is allowed (need at least one counterfactual measurement)
+# Minimum seed age before PRUNE is allowed (need at least one counterfactual measurement)
 # Reduced from 10 to 1: let agent LEARN optimal timing via rewards, not hard masks
-MIN_CULL_AGE = 1
+MIN_PRUNE_AGE = 1
 
 # Epochs needed for confident seed quality assessment
 FULL_EVALUATION_AGE = 10
 
-# Minimum epochs in PROBATIONARY to earn full fossilize bonus
-MIN_PROBATION_EPOCHS = 5
+# Minimum epochs in HOLDING to earn full fossilize bonus
+MIN_HOLDING_EPOCHS = 5
 
 # Seed limits (None = unlimited)
 DEFAULT_MAX_SEEDS = None           # Global limit across all slots
@@ -129,9 +129,13 @@ DEFAULT_RATIO_COLLAPSE_THRESHOLD = 0.1
 # Factored Action Space Constants
 # =============================================================================
 
-# Head names for factored action space (slot selection, blueprint, blend algorithm, lifecycle op).
-# Order matters: slot → blueprint → blend → op is the causal chain.
-HEAD_NAMES: tuple[str, ...] = ("slot", "blueprint", "blend", "op")
+# Head names for factored action space (slot selection, blueprint, blend algorithm, tempo,
+# alpha target/speed/curve/algorithm, lifecycle op).
+# Order matters: slot → blueprint → blend → tempo → alpha_target → alpha_speed → alpha_curve
+# → alpha_algorithm → op is the causal chain.
+from esper.leyline.factored_actions import ACTION_HEAD_NAMES
+
+HEAD_NAMES: tuple[str, ...] = ACTION_HEAD_NAMES
 
 # Action masking constant - safe for FP16/BF16, avoids softmax overflow
 # Used by MaskedCategorical to zero out invalid action probabilities
@@ -224,14 +228,14 @@ DEFAULT_PLATEAU_EPOCHS_TO_GERMINATE = 3
 # Prevents premature seed creation during initial training.
 DEFAULT_MIN_EPOCHS_BEFORE_GERMINATE = 5
 
-# Epochs without improvement before culling a seed.
-DEFAULT_CULL_AFTER_EPOCHS_WITHOUT_IMPROVEMENT = 5
+# Epochs without improvement before pruning a seed.
+DEFAULT_PRUNE_AFTER_EPOCHS_WITHOUT_IMPROVEMENT = 5
 
-# Accuracy drop (%) that triggers immediate cull.
-DEFAULT_CULL_IF_ACCURACY_DROPS_BY = 2.0
+# Accuracy drop (%) that triggers immediate prune.
+DEFAULT_PRUNE_IF_ACCURACY_DROPS_BY = 2.0
 
-# Cooldown epochs after a cull before next germination allowed (anti-thrashing).
-DEFAULT_EMBARGO_EPOCHS_AFTER_CULL = 5
+# Cooldown epochs after a prune before next germination allowed (anti-thrashing).
+DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE = 5
 
 # Fossilization threshold: minimum improvement required to fossilize a seed.
 # Set to 0.5% to prevent reward hacking via marginal fossilization.
@@ -278,9 +282,9 @@ DEFAULT_FEATURE_DIM = 128
 # Blueprint Penalty System (Anti-Thrashing)
 # =============================================================================
 
-# Penalty added to a blueprint when its seed is culled.
+# Penalty added to a blueprint when its seed is pruned.
 # Higher = more aggressive avoidance of failed blueprints.
-DEFAULT_BLUEPRINT_PENALTY_ON_CULL = 2.0
+DEFAULT_BLUEPRINT_PENALTY_ON_PRUNE = 2.0
 
 # Multiplicative decay applied to blueprint penalties each epoch.
 # Lower = penalties persist longer; 0.5 means ~10 epoch half-life.
@@ -306,7 +310,7 @@ DEFAULT_MIN_BLENDING_EPOCHS = 3
 # Seeds must reach this alpha level to be considered fully blended.
 DEFAULT_ALPHA_COMPLETE_THRESHOLD = 0.95
 
-# Maximum epochs in PROBATIONARY stage before auto-cull timeout.
+# Maximum epochs in HOLDING stage before auto-prune timeout.
 # Prevents indecisive policies from holding seeds indefinitely.
 DEFAULT_MAX_PROBATION_EPOCHS = 5
 
@@ -377,14 +381,21 @@ from esper.leyline.telemetry import (
     SeedTelemetry,
 )
 
+# Alpha controller contracts
+from esper.leyline.alpha import (
+    AlphaMode,
+    AlphaCurve,
+    AlphaAlgorithm,
+)
+
 __all__ = [
     # Version
     "LEYLINE_VERSION",
 
     # Lifecycle constants
-    "MIN_CULL_AGE",
+    "MIN_PRUNE_AGE",
     "FULL_EVALUATION_AGE",
-    "MIN_PROBATION_EPOCHS",
+    "MIN_HOLDING_EPOCHS",
     "DEFAULT_MAX_SEEDS",
     "DEFAULT_GAMMA",
 
@@ -438,9 +449,9 @@ __all__ = [
     # Heuristic Policy (Tamiyo)
     "DEFAULT_PLATEAU_EPOCHS_TO_GERMINATE",
     "DEFAULT_MIN_EPOCHS_BEFORE_GERMINATE",
-    "DEFAULT_CULL_AFTER_EPOCHS_WITHOUT_IMPROVEMENT",
-    "DEFAULT_CULL_IF_ACCURACY_DROPS_BY",
-    "DEFAULT_EMBARGO_EPOCHS_AFTER_CULL",
+    "DEFAULT_PRUNE_AFTER_EPOCHS_WITHOUT_IMPROVEMENT",
+    "DEFAULT_PRUNE_IF_ACCURACY_DROPS_BY",
+    "DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE",
     "DEFAULT_MIN_IMPROVEMENT_TO_FOSSILIZE",
     "DEFAULT_BLENDING_TOTAL_STEPS",
 
@@ -455,7 +466,7 @@ __all__ = [
     "DEFAULT_FEATURE_DIM",
 
     # Blueprint Penalty System
-    "DEFAULT_BLUEPRINT_PENALTY_ON_CULL",
+    "DEFAULT_BLUEPRINT_PENALTY_ON_PRUNE",
     "DEFAULT_BLUEPRINT_PENALTY_DECAY",
     "DEFAULT_BLUEPRINT_PENALTY_THRESHOLD",
 
@@ -514,4 +525,9 @@ __all__ = [
     "PerformanceBudgets",
     "DEFAULT_BUDGETS",
     "SeedTelemetry",
+
+    # Alpha controller
+    "AlphaMode",
+    "AlphaCurve",
+    "AlphaAlgorithm",
 ]

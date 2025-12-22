@@ -10,7 +10,7 @@ import torch.nn as nn
 import pytest
 
 from esper.kasmina.slot import SeedSlot, SeedState
-from esper.kasmina.blending import GatedBlend, LinearBlend
+from esper.kasmina.blending import GatedBlend
 from esper.leyline import SeedStage
 
 
@@ -113,14 +113,16 @@ class TestGatedBlendSerialization:
             )
 
     def test_linear_blend_step_restored(self):
-        """LinearBlend current_step should also round-trip correctly."""
+        """Linear blend controller progress should round-trip correctly."""
         slot = SeedSlot(slot_id="test", channels=64, device="cpu")
         slot._blend_algorithm_id = "linear"
         slot.seed = nn.Linear(64, 64)
         slot.state = SeedState(seed_id="test_seed", blueprint_id="test_blueprint", slot_id="test")
         slot.state.stage = SeedStage.BLENDING
         slot.start_blending(total_steps=10)
-        slot.alpha_schedule.step(5)
+        for _ in range(5):
+            slot.state.alpha_controller.step()
+            slot.set_alpha(slot.state.alpha_controller.alpha)
 
         with tempfile.NamedTemporaryFile(suffix=".pt") as f:
             torch.save(slot.state_dict(), f.name)
@@ -131,7 +133,10 @@ class TestGatedBlendSerialization:
             state_dict = torch.load(f.name, weights_only=True)
             new_slot.load_state_dict(state_dict, strict=False)
 
-        assert new_slot.alpha_schedule._current_step == 5
+        assert new_slot.state is not None
+        assert new_slot.alpha_schedule is None
+        assert new_slot.state.alpha_controller.alpha_steps_done == 5
+        assert new_slot.state.alpha_controller.alpha_steps_total == 10
 
     def test_non_blending_slot_loads_without_alpha_schedule(self):
         """Slot not in BLENDING stage should not create alpha_schedule on load."""

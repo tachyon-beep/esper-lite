@@ -19,14 +19,14 @@ class TestTamiyoDetailPanel:
         from esper.karn.overwatch.widgets.tamiyo_detail import TamiyoDetailPanel
 
         tamiyo = TamiyoState(
-            action_counts={"GERMINATE": 34, "BLEND": 28, "CULL": 12, "WAIT": 26},
+            action_counts={"GERMINATE": 34, "SET_ALPHA_TARGET": 28, "PRUNE": 12, "WAIT": 26},
         )
         panel = TamiyoDetailPanel()
         panel.update_tamiyo(tamiyo)
 
         content = panel.render_content()
         assert "GERM" in content or "Germinate" in content
-        assert "BLEND" in content or "Blend" in content
+        assert "ALPH" in content or "Set" in content
         assert "34%" in content or "34" in content
         # Should have visual bars
         assert "█" in content or "▓" in content or "=" in content
@@ -36,7 +36,7 @@ class TestTamiyoDetailPanel:
         from esper.karn.overwatch.widgets.tamiyo_detail import TamiyoDetailPanel
 
         tamiyo = TamiyoState(
-            recent_actions=["G", "B", "B", "W", "G", "C", "W", "W", "B", "G"],
+            recent_actions=["G", "A", "A", "W", "G", "P", "W", "W", "A", "G"],
         )
         panel = TamiyoDetailPanel()
         panel.update_tamiyo(tamiyo)
@@ -45,7 +45,7 @@ class TestTamiyoDetailPanel:
         assert "Recent" in content
         # Should show the action codes
         assert "G" in content
-        assert "B" in content
+        assert "A" in content
         assert "W" in content
 
     def test_tamiyo_detail_renders_confidence(self) -> None:

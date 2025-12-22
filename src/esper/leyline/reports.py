@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from typing import Any, TYPE_CHECKING
 from uuid import uuid4
 
+from esper.leyline.alpha import AlphaMode
 from esper.leyline.stages import SeedStage
 from esper.leyline.signals import TrainingSignals
 
@@ -82,6 +83,7 @@ class SeedStateReport:
     previous_stage: SeedStage = SeedStage.UNKNOWN
     previous_epochs_in_stage: int = 0  # Epochs in previous stage at transition (for PBRS)
     stage_entered_at: datetime = field(default_factory=_utc_now)
+    alpha_mode: int = AlphaMode.HOLD.value
 
     # Metrics
     metrics: SeedMetrics = field(default_factory=SeedMetrics)
@@ -105,7 +107,7 @@ class SeedStateReport:
 class FieldReport:
     """Report of a seed's complete lifecycle for Simic learning.
 
-    Collected when a seed reaches a terminal state (FOSSILIZED or CULLED).
+    Collected when a seed reaches a terminal state (FOSSILIZED or PRUNED).
     """
 
     # Identity
@@ -136,6 +138,6 @@ class FieldReport:
     # Commands received
     commands_received: list[str] = field(default_factory=list)  # command_ids
 
-    # Failure info (if culled)
+    # Failure info (if pruned)
     failure_reason: str = ""
     failure_stage: SeedStage = SeedStage.UNKNOWN

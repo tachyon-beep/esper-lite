@@ -16,7 +16,8 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
 from textual.css.query import NoMatches
-from textual.widgets import DataTable, Footer
+from textual.screen import ModalScreen
+from textual.widgets import DataTable, Footer, Static
 
 from esper.karn.sanctum.widgets import (
     EnvDetailScreen,
@@ -30,6 +31,64 @@ from esper.karn.sanctum.widgets import (
 if TYPE_CHECKING:
     from esper.karn.sanctum.backend import SanctumBackend
     from esper.karn.sanctum.schema import SanctumSnapshot
+
+
+HELP_TEXT = """\
+[bold cyan]Sanctum Keyboard Shortcuts[/bold cyan]
+
+[bold]Navigation[/bold]
+  [cyan]1-9, 0[/cyan]    Jump to environment 0-9
+  [cyan]Tab[/cyan]       Cycle to next panel
+  [cyan]↑/↓[/cyan]       Navigate rows in table
+  [cyan]Enter[/cyan]     Open detail modal for selected env
+  [cyan]d[/cyan]         Open detail modal (same as Enter)
+
+[bold]Actions[/bold]
+  [cyan]r[/cyan]         Manual refresh
+  [cyan]q[/cyan]         Quit Sanctum
+
+[bold]In Detail Modal[/bold]
+  [cyan]Esc[/cyan]       Close modal
+  [cyan]q[/cyan]         Close modal
+
+[bold]Status Icons[/bold]
+  [green]●[/green] OK     [yellow]◐[/yellow] Warning    [red]○[/red] Error
+  [green]★[/green] Excellent   [green]✓[/green] Improving
+  [yellow]⚠[/yellow] Stalling    [red]✗[/red] Severely stalled
+
+[dim]Press Esc or ? to close this help[/dim]
+"""
+
+
+class HelpScreen(ModalScreen[None]):
+    """Help overlay showing keyboard shortcuts."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss", "Close"),
+        Binding("?", "dismiss", "Close"),
+        Binding("q", "dismiss", "Close"),
+    ]
+
+    DEFAULT_CSS = """
+    HelpScreen {
+        align: center middle;
+        background: $surface-darken-1 80%;
+    }
+
+    HelpScreen > #help-container {
+        width: 60;
+        height: auto;
+        max-height: 80%;
+        background: $surface;
+        border: thick $primary;
+        padding: 1 2;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        """Compose the help screen."""
+        with Container(id="help-container"):
+            yield Static(HELP_TEXT)
 
 
 class SanctumApp(App):
@@ -238,8 +297,7 @@ class SanctumApp(App):
 
     def action_toggle_help(self) -> None:
         """Toggle help display."""
-        # Textual built-in help
-        pass
+        self.push_screen(HelpScreen())
 
     def action_show_env_detail(self) -> None:
         """Show detailed view of focused environment.
@@ -296,3 +354,21 @@ class SanctumApp(App):
                 slot_ids=self._snapshot.slot_ids,
             )
         )
+
+    def on_tamiyo_brain_decision_pin_toggled(
+        self, event: TamiyoBrain.DecisionPinToggled
+    ) -> None:
+        """Handle click on decision panel to toggle pin status.
+
+        Args:
+            event: The pin toggle event with decision_id.
+        """
+        if self._backend is None:
+            return
+
+        # Toggle pin in aggregator
+        new_status = self._backend.toggle_decision_pin(event.decision_id)
+        self.log.info(f"Decision {event.decision_id} pin toggled: {new_status}")
+
+        # Refresh to show updated pin status
+        self._poll_and_refresh()

@@ -1,0 +1,23 @@
+# JANK Template
+
+- **Title:** Global `USE_COMPILED_TRAIN_STEP` flag leaks across runs/agents
+- **Category:** maintainability / correctness-risk
+- **Symptoms:** Torch compile toggle was a module-level global in an older Simic training module. One failure to compile (or a test toggling it) could flip the flag for all subsequent calls in the same process, including other agents/environments.
+- **Impact:** Affects determinism and makes DDP/multi-env scenarios brittle; a single worker disabling compilation disables it everywhere, hiding perf regressions and complicating debugging. Cross-test contamination risk in pytest.
+- **Triggers:** 
+  - Running a PPO job after a failed `torch.compile` attempt in the same interpreter.
+  - Import-order differences between ranks when adding DDP.
+  - Tests that patch the flag to force fallback.
+- **Root-Cause Hypothesis:** The compile toggle was global module state mutated inside a try/except and optionally by callers; not scoped to an agent/config instance.
+- **Remediation Options:** 
+  - A) Move the flag into a `TrainingConfig`/function argument and default from config; keep per-call control.
+  - B) Lazily compile per-instance with an explicit `use_compile` knob; never mutate module globals.
+  - C) Provide a context manager to temporarily disable compile, restoring on exit.
+- **Risks of Change:** Need to thread the knob through callers; small API churn for heuristic path; must ensure existing torch.compile fallback behavior remains.
+- **Stopgap Mitigation:** Document flag mutability; avoid sharing interpreters between tests/ranks; explicitly set desired compile behavior in entrypoints.
+- **Validation Plan:** 
+  - Unit: ensure two `compiled_train_step` calls with different settings do not interfere.
+  - Integration: run `train_heuristic` and PPO back-to-back in same process with different compile settings and confirm behavior matches per-call config.
+- **Status:** Closed (Resolved by refactor)
+- **Resolution:** The global `USE_COMPILED_TRAIN_STEP` flag no longer exists. Training-step compilation is now selected via `compiled_train_step(..., use_compile=...)` with thread-safe lazy caching, avoiding a shared mutable toggle that can be flipped by one run/test.
+- **Links:** `src/esper/simic/training/helpers.py` (`compiled_train_step`, `_get_compiled_train_step`)

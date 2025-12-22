@@ -295,23 +295,23 @@ stateDiagram-v2
 
     DORMANT --> GERMINATED: germinate()
     GERMINATED --> TRAINING: G0 pass
-    GERMINATED --> CULLED: G0 fail
+    GERMINATED --> PRUNED: G0 fail
 
     TRAINING --> TRAINING: continue training
     TRAINING --> BLENDING: G1+G2 pass
-    TRAINING --> CULLED: anomaly detected
+    TRAINING --> PRUNED: anomaly detected
 
     BLENDING --> BLENDING: continue blending
-    BLENDING --> PROBATIONARY: G3 pass
-    BLENDING --> CULLED: G3 fail
+    BLENDING --> HOLDING: G3 pass
+    BLENDING --> PRUNED: G3 fail
 
-    PROBATIONARY --> PROBATIONARY: monitoring
-    PROBATIONARY --> FOSSILIZED: G5 pass
-    PROBATIONARY --> CULLED: G5 fail
+    HOLDING --> HOLDING: monitoring
+    HOLDING --> FOSSILIZED: G5 pass
+    HOLDING --> PRUNED: G5 fail
 
     FOSSILIZED --> [*]: Permanent integration
 
-    CULLED --> EMBARGOED: cooldown period
+    PRUNED --> EMBARGOED: cooldown period
     EMBARGOED --> RESETTING: cleanup
     RESETTING --> DORMANT: ready to retry
 

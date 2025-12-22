@@ -4,16 +4,26 @@ Tests invariants for action masks that must hold for ALL valid inputs:
 - WAIT always valid
 - Mask dimensions match slot configuration
 - GERMINATE requires empty enabled slot
-- FOSSILIZE requires PROBATIONARY seed in enabled slot
-- CULL requires cullable stage + minimum age
+- FOSSILIZE requires HOLDING seed in enabled slot
+- PRUNE requires prunable stage + minimum age + HOLD alpha_mode
 """
 
 from hypothesis import given, assume, settings
 from hypothesis import strategies as st
 
-from esper.leyline import SeedStage, MIN_CULL_AGE
+from esper.leyline import SeedStage, MIN_PRUNE_AGE
 from esper.leyline.slot_config import SlotConfig
-from esper.leyline.factored_actions import LifecycleOp, NUM_OPS, NUM_BLUEPRINTS, NUM_BLENDS
+from esper.leyline.factored_actions import (
+    LifecycleOp,
+    NUM_ALPHA_ALGORITHMS,
+    NUM_ALPHA_CURVES,
+    NUM_ALPHA_SPEEDS,
+    NUM_ALPHA_TARGETS,
+    NUM_OPS,
+    NUM_BLUEPRINTS,
+    NUM_BLENDS,
+    NUM_TEMPO,
+)
 from esper.tamiyo.policy.action_masks import (
     compute_action_masks,
     compute_batch_masks,
@@ -139,6 +149,86 @@ class TestMaskDimensions:
             f"Blend mask shape {masks['blend'].shape} != ({NUM_BLENDS},)"
         )
 
+    @given(config=slot_configs(max_slots=10))
+    def test_tempo_mask_dimension(self, config: SlotConfig):
+        """Property: tempo mask has NUM_TEMPO dimensions."""
+        slot_states = {slot_id: None for slot_id in config.slot_ids}
+        enabled = list(config.slot_ids)
+
+        masks = compute_action_masks(
+            slot_states=slot_states,
+            enabled_slots=enabled,
+            slot_config=config,
+        )
+
+        assert masks["tempo"].shape == (NUM_TEMPO,), (
+            f"Tempo mask shape {masks['tempo'].shape} != ({NUM_TEMPO},)"
+        )
+
+    @given(config=slot_configs(max_slots=10))
+    def test_alpha_target_mask_dimension(self, config: SlotConfig):
+        """Property: alpha_target mask has NUM_ALPHA_TARGETS dimensions."""
+        slot_states = {slot_id: None for slot_id in config.slot_ids}
+        enabled = list(config.slot_ids)
+
+        masks = compute_action_masks(
+            slot_states=slot_states,
+            enabled_slots=enabled,
+            slot_config=config,
+        )
+
+        assert masks["alpha_target"].shape == (NUM_ALPHA_TARGETS,), (
+            f"Alpha target mask shape {masks['alpha_target'].shape} != ({NUM_ALPHA_TARGETS},)"
+        )
+
+    @given(config=slot_configs(max_slots=10))
+    def test_alpha_speed_mask_dimension(self, config: SlotConfig):
+        """Property: alpha_speed mask has NUM_ALPHA_SPEEDS dimensions."""
+        slot_states = {slot_id: None for slot_id in config.slot_ids}
+        enabled = list(config.slot_ids)
+
+        masks = compute_action_masks(
+            slot_states=slot_states,
+            enabled_slots=enabled,
+            slot_config=config,
+        )
+
+        assert masks["alpha_speed"].shape == (NUM_ALPHA_SPEEDS,), (
+            f"Alpha speed mask shape {masks['alpha_speed'].shape} != ({NUM_ALPHA_SPEEDS},)"
+        )
+
+    @given(config=slot_configs(max_slots=10))
+    def test_alpha_curve_mask_dimension(self, config: SlotConfig):
+        """Property: alpha_curve mask has NUM_ALPHA_CURVES dimensions."""
+        slot_states = {slot_id: None for slot_id in config.slot_ids}
+        enabled = list(config.slot_ids)
+
+        masks = compute_action_masks(
+            slot_states=slot_states,
+            enabled_slots=enabled,
+            slot_config=config,
+        )
+
+        assert masks["alpha_curve"].shape == (NUM_ALPHA_CURVES,), (
+            f"Alpha curve mask shape {masks['alpha_curve'].shape} != ({NUM_ALPHA_CURVES},)"
+        )
+
+    @given(config=slot_configs(max_slots=10))
+    def test_alpha_algorithm_mask_dimension(self, config: SlotConfig):
+        """Property: alpha_algorithm mask has NUM_ALPHA_ALGORITHMS dimensions."""
+        slot_states = {slot_id: None for slot_id in config.slot_ids}
+        enabled = list(config.slot_ids)
+
+        masks = compute_action_masks(
+            slot_states=slot_states,
+            enabled_slots=enabled,
+            slot_config=config,
+        )
+
+        assert masks["alpha_algorithm"].shape == (NUM_ALPHA_ALGORITHMS,), (
+            f"Alpha algorithm mask shape {masks['alpha_algorithm'].shape} != ({NUM_ALPHA_ALGORITHMS},)"
+        )
+
     @given(
         config=slot_configs(max_slots=10),
         n_envs=st.integers(min_value=1, max_value=8),
@@ -159,6 +249,11 @@ class TestMaskDimensions:
         assert masks["op"].shape == (n_envs, NUM_OPS)
         assert masks["blueprint"].shape == (n_envs, NUM_BLUEPRINTS)
         assert masks["blend"].shape == (n_envs, NUM_BLENDS)
+        assert masks["tempo"].shape == (n_envs, NUM_TEMPO)
+        assert masks["alpha_target"].shape == (n_envs, NUM_ALPHA_TARGETS)
+        assert masks["alpha_speed"].shape == (n_envs, NUM_ALPHA_SPEEDS)
+        assert masks["alpha_curve"].shape == (n_envs, NUM_ALPHA_CURVES)
+        assert masks["alpha_algorithm"].shape == (n_envs, NUM_ALPHA_ALGORITHMS)
 
 
 class TestGerminateRequiresEmptySlot:
@@ -252,15 +347,15 @@ class TestGerminateRequiresEmptySlot:
         )
 
 
-class TestFossilizeRequiresProbationary:
-    """Property: FOSSILIZE valid iff there exists a PROBATIONARY seed in enabled slot."""
+class TestFossilizeRequiresHolding:
+    """Property: FOSSILIZE valid iff there exists a HOLDING seed in enabled slot."""
 
     @given(config=slot_configs())
     def test_fossilize_enabled_with_probationary_seed(self, config: SlotConfig):
-        """Property: FOSSILIZE enabled when PROBATIONARY seed exists in enabled slot."""
+        """Property: FOSSILIZE enabled when HOLDING seed exists in enabled slot."""
         slot_states = {
             slot_id: (
-                MaskSeedInfo(stage=SeedStage.PROBATIONARY.value, seed_age_epochs=10)
+                MaskSeedInfo(stage=SeedStage.HOLDING.value, seed_age_epochs=10)
                 if i == 0 else None
             )
             for i, slot_id in enumerate(config.slot_ids)
@@ -274,13 +369,13 @@ class TestFossilizeRequiresProbationary:
         )
 
         assert masks["op"][LifecycleOp.FOSSILIZE].item() is True, (
-            "FOSSILIZE should be enabled when PROBATIONARY seed exists"
+            "FOSSILIZE should be enabled when HOLDING seed exists"
         )
 
     @given(config=slot_configs())
     def test_fossilize_disabled_without_probationary(self, config: SlotConfig):
-        """Property: FOSSILIZE disabled when no PROBATIONARY seed in enabled slots."""
-        # Seeds in TRAINING stage (not PROBATIONARY)
+        """Property: FOSSILIZE disabled when no HOLDING seed in enabled slots."""
+        # Seeds in TRAINING stage (not HOLDING)
         slot_states = {
             slot_id: MaskSeedInfo(stage=SeedStage.TRAINING.value, seed_age_epochs=5)
             for slot_id in config.slot_ids
@@ -294,7 +389,7 @@ class TestFossilizeRequiresProbationary:
         )
 
         assert masks["op"][LifecycleOp.FOSSILIZE].item() is False, (
-            "FOSSILIZE should be disabled without PROBATIONARY seed"
+            "FOSSILIZE should be disabled without HOLDING seed"
         )
 
     @given(config=slot_configs())
@@ -314,28 +409,28 @@ class TestFossilizeRequiresProbationary:
         )
 
 
-class TestCullRequiresCullableStageAndAge:
-    """Property: CULL valid iff seed in cullable stage AND age >= MIN_CULL_AGE."""
+class TestPruneRequiresPrunableStageAndAge:
+    """Property: PRUNE valid iff seed in prunable stage AND age >= MIN_PRUNE_AGE."""
 
-    # Stages that can transition to CULLED (based on VALID_TRANSITIONS)
-    CULLABLE_STAGES = [
+    # Stages that can transition to PRUNED (based on VALID_TRANSITIONS)
+    PRUNABLE_STAGES = [
         SeedStage.GERMINATED,
         SeedStage.TRAINING,
         SeedStage.BLENDING,
-        SeedStage.PROBATIONARY,
+        SeedStage.HOLDING,
     ]
 
     @given(
         config=slot_configs(),
-        stage=st.sampled_from(CULLABLE_STAGES),
+        stage=st.sampled_from(PRUNABLE_STAGES),
     )
-    def test_cull_enabled_with_cullable_stage_and_sufficient_age(
+    def test_prune_enabled_with_prunable_stage_and_sufficient_age(
         self, config: SlotConfig, stage: SeedStage
     ):
-        """Property: CULL enabled when seed in cullable stage with age >= MIN_CULL_AGE."""
+        """Property: PRUNE enabled when seed in prunable stage with age >= MIN_PRUNE_AGE."""
         slot_states = {
             slot_id: (
-                MaskSeedInfo(stage=stage.value, seed_age_epochs=MIN_CULL_AGE)
+                MaskSeedInfo(stage=stage.value, seed_age_epochs=MIN_PRUNE_AGE)
                 if i == 0 else None
             )
             for i, slot_id in enumerate(config.slot_ids)
@@ -348,21 +443,21 @@ class TestCullRequiresCullableStageAndAge:
             slot_config=config,
         )
 
-        assert masks["op"][LifecycleOp.CULL].item() is True, (
-            f"CULL should be enabled for stage {stage.name} with age {MIN_CULL_AGE}"
+        assert masks["op"][LifecycleOp.PRUNE].item() is True, (
+            f"PRUNE should be enabled for stage {stage.name} with age {MIN_PRUNE_AGE}"
         )
 
     @given(
         config=slot_configs(),
-        stage=st.sampled_from(CULLABLE_STAGES),
+        stage=st.sampled_from(PRUNABLE_STAGES),
     )
-    def test_cull_disabled_with_insufficient_age(
+    def test_prune_disabled_with_insufficient_age(
         self, config: SlotConfig, stage: SeedStage
     ):
-        """Property: CULL disabled when seed age < MIN_CULL_AGE."""
+        """Property: PRUNE disabled when seed age < MIN_PRUNE_AGE."""
         slot_states = {
             slot_id: (
-                MaskSeedInfo(stage=stage.value, seed_age_epochs=0)  # Below MIN_CULL_AGE
+                MaskSeedInfo(stage=stage.value, seed_age_epochs=0)  # Below MIN_PRUNE_AGE
                 if i == 0 else None
             )
             for i, slot_id in enumerate(config.slot_ids)
@@ -375,13 +470,13 @@ class TestCullRequiresCullableStageAndAge:
             slot_config=config,
         )
 
-        assert masks["op"][LifecycleOp.CULL].item() is False, (
-            f"CULL should be disabled for stage {stage.name} with age 0 < MIN_CULL_AGE"
+        assert masks["op"][LifecycleOp.PRUNE].item() is False, (
+            f"PRUNE should be disabled for stage {stage.name} with age 0 < MIN_PRUNE_AGE"
         )
 
     @given(config=slot_configs())
-    def test_cull_disabled_with_non_cullable_stage(self, config: SlotConfig):
-        """Property: CULL disabled when seed in non-cullable stage."""
+    def test_prune_disabled_with_non_prunable_stage(self, config: SlotConfig):
+        """Property: PRUNE disabled when seed in non-prunable stage."""
         # FOSSILIZED is terminal and cannot be culled
         slot_states = {
             slot_id: (
@@ -398,13 +493,13 @@ class TestCullRequiresCullableStageAndAge:
             slot_config=config,
         )
 
-        assert masks["op"][LifecycleOp.CULL].item() is False, (
-            "CULL should be disabled for FOSSILIZED seed"
+        assert masks["op"][LifecycleOp.PRUNE].item() is False, (
+            "PRUNE should be disabled for FOSSILIZED seed"
         )
 
     @given(config=slot_configs())
-    def test_cull_disabled_with_empty_slots(self, config: SlotConfig):
-        """Property: CULL disabled when all enabled slots are empty."""
+    def test_prune_disabled_with_empty_slots(self, config: SlotConfig):
+        """Property: PRUNE disabled when all enabled slots are empty."""
         slot_states = {slot_id: None for slot_id in config.slot_ids}
         enabled = list(config.slot_ids)
 
@@ -414,8 +509,8 @@ class TestCullRequiresCullableStageAndAge:
             slot_config=config,
         )
 
-        assert masks["op"][LifecycleOp.CULL].item() is False, (
-            "CULL should be disabled when all slots are empty"
+        assert masks["op"][LifecycleOp.PRUNE].item() is False, (
+            "PRUNE should be disabled when all slots are empty"
         )
 
 
@@ -530,3 +625,121 @@ class TestBlueprintMask:
                 assert masks["blueprint"][bp].item() is False, (
                     f"Non-CNN blueprint {bp.name} should be disabled for default topology"
                 )
+
+
+class TestTempoMaskDimensions:
+    """Property: Tempo mask has correct dimensions (NUM_TEMPO = 3)."""
+
+    @given(config=slot_configs(max_slots=10))
+    def test_tempo_mask_dimension_single_env(self, config: SlotConfig):
+        """Property: tempo mask has NUM_TEMPO dimensions for single env."""
+        from esper.leyline.factored_actions import NUM_TEMPO
+
+        slot_states = {slot_id: None for slot_id in config.slot_ids}
+        enabled = list(config.slot_ids)
+
+        masks = compute_action_masks(
+            slot_states=slot_states,
+            enabled_slots=enabled,
+            slot_config=config,
+        )
+
+        assert masks["tempo"].shape == (NUM_TEMPO,), (
+            f"Tempo mask shape {masks['tempo'].shape} != ({NUM_TEMPO},)"
+        )
+
+    @given(
+        config=slot_configs(max_slots=10),
+        n_envs=st.integers(min_value=1, max_value=8),
+    )
+    @settings(max_examples=50)
+    def test_tempo_mask_dimension_batch(self, config: SlotConfig, n_envs: int):
+        """Property: batched tempo mask has (n_envs, NUM_TEMPO) shape."""
+        from esper.leyline.factored_actions import NUM_TEMPO
+
+        batch_states = [{slot_id: None for slot_id in config.slot_ids} for _ in range(n_envs)]
+        enabled = list(config.slot_ids)
+
+        masks = compute_batch_masks(
+            batch_slot_states=batch_states,
+            enabled_slots=enabled,
+            slot_config=config,
+        )
+
+        assert masks["tempo"].shape == (n_envs, NUM_TEMPO), (
+            f"Batched tempo mask shape {masks['tempo'].shape} != ({n_envs}, {NUM_TEMPO})"
+        )
+
+
+class TestTempoMaskInvariants:
+    """Property: Tempo mask invariants that must hold for all states."""
+
+    @given(config=slot_configs())
+    def test_all_tempo_options_always_valid(self, config: SlotConfig):
+        """Property: All tempo options (FAST, STANDARD, SLOW) are always enabled.
+
+        Unlike blueprint/op masks, tempo has no invalid choices - all speeds
+        are always available. This is by design: tempo is a pure policy choice,
+        not constrained by state.
+        """
+        from esper.leyline.factored_actions import TempoAction
+
+        slot_states = {slot_id: None for slot_id in config.slot_ids}
+        enabled = list(config.slot_ids)
+
+        masks = compute_action_masks(
+            slot_states=slot_states,
+            enabled_slots=enabled,
+            slot_config=config,
+        )
+
+        # All tempo options should be enabled
+        for tempo in TempoAction:
+            assert masks["tempo"][tempo].item() is True, (
+                f"Tempo option {tempo.name} should always be enabled"
+            )
+
+    @given(
+        config=slot_configs(),
+        data=st.data(),
+    )
+    def test_tempo_mask_independent_of_slot_state(self, config: SlotConfig, data):
+        """Property: Tempo mask is independent of which slots are occupied."""
+        from esper.leyline.factored_actions import TempoAction
+
+        # Generate random slot states
+        slot_states = data.draw(slot_states_for_config(config))
+        enabled = data.draw(enabled_slots_for_config(config))
+
+        masks = compute_action_masks(
+            slot_states=slot_states,
+            enabled_slots=enabled,
+            slot_config=config,
+        )
+
+        # Regardless of slot state, all tempo options should be enabled
+        assert masks["tempo"].all(), (
+            f"Tempo mask should be all True regardless of slot state: {masks['tempo']}"
+        )
+
+    @given(
+        config=slot_configs(),
+        n_envs=st.integers(min_value=1, max_value=4),
+        data=st.data(),
+    )
+    @settings(max_examples=30)
+    def test_tempo_mask_batch_all_true(self, config: SlotConfig, n_envs: int, data):
+        """Property: Batched tempo mask is all True for all environments."""
+        batch_states = [data.draw(slot_states_for_config(config)) for _ in range(n_envs)]
+        enabled = data.draw(enabled_slots_for_config(config))
+
+        masks = compute_batch_masks(
+            batch_slot_states=batch_states,
+            enabled_slots=enabled,
+            slot_config=config,
+        )
+
+        # All envs, all tempo options should be True
+        assert masks["tempo"].all(), (
+            f"Batched tempo mask should be all True: {masks['tempo']}"
+        )

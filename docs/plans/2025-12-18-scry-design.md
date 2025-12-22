@@ -419,7 +419,7 @@ This ensures colorblind users (8% of males) can distinguish states.
 | BLENDING | Bright text with accent border (critical transition) |
 | FOSSILIZED | Dim text (completed, safe to ignore) |
 | DORMANT | Very dim, condensed display |
-| CULLED | Strikethrough or dim red |
+| PRUNED | Strikethrough or dim red |
 
 ---
 

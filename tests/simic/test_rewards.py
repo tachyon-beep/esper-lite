@@ -3,18 +3,18 @@
 import pytest
 from enum import IntEnum
 
-from esper.leyline import MIN_CULL_AGE
+from esper.leyline import MIN_PRUNE_AGE
 from esper.leyline.factored_actions import LifecycleOp
 from esper.simic.rewards import (
     SeedInfo,
     STAGE_BLENDING,
     STAGE_GERMINATED,
     STAGE_TRAINING,
-    STAGE_PROBATIONARY,
+    STAGE_HOLDING,
     STAGE_FOSSILIZED,
     compute_seed_potential,
     compute_contribution_reward,
-    _contribution_cull_shaping,
+    _contribution_prune_shaping,
     _contribution_fossilize_shaping,
     ContributionRewardConfig,
 )
@@ -25,7 +25,7 @@ class TestComputeSeedPotential:
 
     SeedStage enum values (from leyline):
     - DORMANT=1, GERMINATED=2, TRAINING=3, BLENDING=4
-    - PROBATIONARY=6, FOSSILIZED=7 (5 skipped)
+    - HOLDING=6, FOSSILIZED=7 (5 skipped)
     """
 
     def test_no_seed_returns_zero(self):
@@ -57,17 +57,17 @@ class TestComputeSeedPotential:
         potential = compute_seed_potential(obs)
         assert potential == 3.5  # From unified STAGE_POTENTIALS
 
-    def test_probationary_has_highest_potential(self):
-        """Test PROBATIONARY stage (6) has high potential before FOSSILIZED."""
+    def test_holding_has_highest_potential(self):
+        """Test HOLDING stage (6) has high potential before FOSSILIZED."""
         obs = {'has_active_seed': 1, 'seed_stage': 6, 'seed_epochs_in_stage': 0}
         potential = compute_seed_potential(obs)
         assert potential == 5.5  # From unified STAGE_POTENTIALS
 
     def test_fossilized_has_highest_potential(self):
-        """Test FOSSILIZED stage (7) has slightly higher potential than PROBATIONARY."""
+        """Test FOSSILIZED stage (7) has slightly higher potential than HOLDING."""
         obs = {'has_active_seed': 1, 'seed_stage': 7, 'seed_epochs_in_stage': 0}
         potential = compute_seed_potential(obs)
-        assert potential == 6.0  # Small +0.5 over PROBATIONARY, not a farming target
+        assert potential == 6.0  # Small +0.5 over HOLDING, not a farming target
 
     def test_progress_bonus_capped(self):
         """Test that progress bonus is capped at 2.0."""
@@ -79,7 +79,7 @@ class TestComputeSeedPotential:
     def test_stage_progression_increases_potential(self):
         """Test that potential generally increases through stages until FOSSILIZED."""
         potentials = []
-        for stage in [2, 3, 4, 6]:  # GERMINATED through PROBATIONARY (5 skipped)
+        for stage in [2, 3, 4, 6]:  # GERMINATED through HOLDING (5 skipped)
             obs = {'has_active_seed': 1, 'seed_stage': stage, 'seed_epochs_in_stage': 0}
             potentials.append(compute_seed_potential(obs))
 
@@ -141,8 +141,8 @@ class TestPBRSStageBonus:
         assert 0.0 < r2 < r1
 
 
-class TestCullContributionShaping:
-    """Tests for CULL action shaping in contribution reward."""
+class TestPruneContributionShaping:
+    """Tests for PRUNE action shaping in contribution reward."""
 
     def _make_seed_info(self, stage: int, age: int, improvement: float = 0.0) -> SeedInfo:
         return SeedInfo(
@@ -155,36 +155,36 @@ class TestCullContributionShaping:
             seed_age_epochs=age,
         )
 
-    def test_cull_toxic_seed_rewarded(self):
-        """Culling a toxic seed (negative contribution) should be rewarded."""
+    def test_prune_toxic_seed_rewarded(self):
+        """Pruning a toxic seed (negative contribution) should be rewarded."""
         config = ContributionRewardConfig()
-        # Use age >= MIN_CULL_AGE to avoid age penalty
-        seed_info = self._make_seed_info(STAGE_BLENDING, age=MIN_CULL_AGE, improvement=-1.0)
+        # Use age >= MIN_PRUNE_AGE to avoid age penalty
+        seed_info = self._make_seed_info(STAGE_BLENDING, age=MIN_PRUNE_AGE, improvement=-1.0)
 
         # Toxic seed: contribution < hurting_threshold (-0.5)
-        shaping = _contribution_cull_shaping(seed_info, seed_contribution=-1.0, config=config)
+        shaping = _contribution_prune_shaping(seed_info, seed_contribution=-1.0, config=config)
 
         # Should get positive shaping (reward for culling toxic seed)
-        assert shaping > 0, f"Culling toxic seed should be rewarded: {shaping}"
+        assert shaping > 0, f"Pruning toxic seed should be rewarded: {shaping}"
 
-    def test_cull_good_seed_penalized(self):
-        """Culling a good seed (positive contribution) should be penalized."""
+    def test_prune_good_seed_penalized(self):
+        """Pruning a good seed (positive contribution) should be penalized."""
         config = ContributionRewardConfig()
-        # Use age >= MIN_CULL_AGE to avoid age penalty interfering with test
-        seed_info = self._make_seed_info(STAGE_BLENDING, age=MIN_CULL_AGE, improvement=2.0)
+        # Use age >= MIN_PRUNE_AGE to avoid age penalty interfering with test
+        seed_info = self._make_seed_info(STAGE_BLENDING, age=MIN_PRUNE_AGE, improvement=2.0)
 
         # Good seed: contribution > 0
-        shaping = _contribution_cull_shaping(seed_info, seed_contribution=2.0, config=config)
+        shaping = _contribution_prune_shaping(seed_info, seed_contribution=2.0, config=config)
 
         # Should get negative shaping (penalty for culling good seed)
-        assert shaping < 0, f"Culling good seed should be penalized: {shaping}"
+        assert shaping < 0, f"Pruning good seed should be penalized: {shaping}"
 
-    def test_cull_good_seed_inverts_attribution(self):
-        """Culling a good seed should invert attribution to negative total reward."""
-        seed_info = self._make_seed_info(STAGE_BLENDING, age=MIN_CULL_AGE, improvement=3.0)
+    def test_prune_good_seed_inverts_attribution(self):
+        """Pruning a good seed should invert attribution to negative total reward."""
+        seed_info = self._make_seed_info(STAGE_BLENDING, age=MIN_PRUNE_AGE, improvement=3.0)
 
         reward, components = compute_contribution_reward(
-            action=LifecycleOp.CULL,
+            action=LifecycleOp.PRUNE,
             seed_contribution=3.52,  # Good seed with +3.52% contribution
             val_acc=68.0,
             seed_info=seed_info,
@@ -196,19 +196,19 @@ class TestCullContributionShaping:
 
         # Attribution should be NEGATIVE (inverted) for culling good seed
         assert components.bounded_attribution < 0, (
-            f"CULL of good seed should have negative attribution: {components.bounded_attribution}"
+            f"PRUNE of good seed should have negative attribution: {components.bounded_attribution}"
         )
         # Total reward should be negative
         assert reward < 0, (
-            f"CULL of good seed should have negative total reward: {reward}"
+            f"PRUNE of good seed should have negative total reward: {reward}"
         )
 
-    def test_cull_bad_seed_inverts_attribution_to_positive(self):
-        """Culling a bad seed should invert negative attribution to positive."""
-        seed_info = self._make_seed_info(STAGE_BLENDING, age=MIN_CULL_AGE, improvement=-1.0)
+    def test_prune_bad_seed_inverts_attribution_to_positive(self):
+        """Pruning a bad seed should invert negative attribution to positive."""
+        seed_info = self._make_seed_info(STAGE_BLENDING, age=MIN_PRUNE_AGE, improvement=-1.0)
 
         reward, components = compute_contribution_reward(
-            action=LifecycleOp.CULL,
+            action=LifecycleOp.PRUNE,
             seed_contribution=-2.0,  # Bad seed hurting accuracy
             val_acc=63.0,
             seed_info=seed_info,
@@ -220,11 +220,11 @@ class TestCullContributionShaping:
 
         # Attribution should be POSITIVE (inverted from negative)
         assert components.bounded_attribution > 0, (
-            f"CULL of bad seed should have positive attribution: {components.bounded_attribution}"
+            f"PRUNE of bad seed should have positive attribution: {components.bounded_attribution}"
         )
         # Total reward should be positive (good decision to remove harmful seed)
         assert reward > 0, (
-            f"CULL of bad seed should have positive total reward: {reward}"
+            f"PRUNE of bad seed should have positive total reward: {reward}"
         )
 
 
@@ -266,47 +266,47 @@ class TestWaitBlendingShaping:
 class TestFossilizeLegitimacyDiscount:
     """Fossilization bonus should be discounted for rapid fossilization."""
 
-    def test_short_probation_gets_discounted(self):
-        """Seeds with short PROBATIONARY get reduced fossilize bonus."""
-        from esper.leyline import MIN_PROBATION_EPOCHS
+    def test_short_holding_gets_discounted(self):
+        """Seeds with short HOLDING get reduced fossilize bonus."""
+        from esper.leyline import MIN_HOLDING_EPOCHS
 
         config = ContributionRewardConfig()
 
-        # Seed with very short probation (1 epoch)
-        short_probation = SeedInfo(
-            stage=STAGE_PROBATIONARY,
+        # Seed with very short holding (1 epoch)
+        short_holding = SeedInfo(
+            stage=STAGE_HOLDING,
             improvement_since_stage_start=5.0,
             total_improvement=10.0,
-            epochs_in_stage=1,  # Just entered probation
+            epochs_in_stage=1,  # Just entered holding
             seed_age_epochs=15,
         )
 
-        # Seed with full probation
-        full_probation = SeedInfo(
-            stage=STAGE_PROBATIONARY,
+        # Seed with full holding
+        full_holding = SeedInfo(
+            stage=STAGE_HOLDING,
             improvement_since_stage_start=5.0,
             total_improvement=10.0,
-            epochs_in_stage=MIN_PROBATION_EPOCHS,  # Full probation
+            epochs_in_stage=MIN_HOLDING_EPOCHS,  # Full holding
             seed_age_epochs=20,
         )
 
-        short_bonus = _contribution_fossilize_shaping(short_probation, 3.0, config)
-        full_bonus = _contribution_fossilize_shaping(full_probation, 3.0, config)
+        short_bonus = _contribution_fossilize_shaping(short_holding, 3.0, config)
+        full_bonus = _contribution_fossilize_shaping(full_holding, 3.0, config)
 
-        # Short probation should get less bonus
+        # Short holding should get less bonus
         assert short_bonus < full_bonus, (
-            f"Short probation ({short_bonus}) should be less than full ({full_bonus})"
+            f"Short holding ({short_bonus}) should be less than full ({full_bonus})"
         )
 
         # Discount should be proportional
-        expected_discount = 1 / MIN_PROBATION_EPOCHS
+        expected_discount = 1 / MIN_HOLDING_EPOCHS
         assert short_bonus == pytest.approx(full_bonus * expected_discount, rel=0.01)
 
-    def test_zero_probation_gets_zero_bonus(self):
-        """Seeds with 0 epochs in PROBATIONARY get no bonus."""
+    def test_zero_holding_gets_zero_bonus(self):
+        """Seeds with 0 epochs in HOLDING get no bonus."""
         config = ContributionRewardConfig()
         seed = SeedInfo(
-            stage=STAGE_PROBATIONARY,
+            stage=STAGE_HOLDING,
             improvement_since_stage_start=5.0,
             total_improvement=10.0,
             epochs_in_stage=0,  # Just entered, no validation yet
@@ -316,7 +316,7 @@ class TestFossilizeLegitimacyDiscount:
         bonus = _contribution_fossilize_shaping(seed, 3.0, config)
 
         # Should get penalty, not bonus (legitimacy_discount = 0)
-        assert bonus <= 0, f"Zero probation should not get positive bonus: {bonus}"
+        assert bonus <= 0, f"Zero holding should not get positive bonus: {bonus}"
 
 
 class TestContributionRewardComponents:
@@ -397,6 +397,7 @@ class TestContributionRewardComponents:
         component_sum = (
             (components.bounded_attribution or 0.0)
             + components.compute_rent
+            + components.alpha_shock
             + components.pbrs_bonus
             + components.action_shaping
             + components.terminal_bonus
@@ -404,13 +405,43 @@ class TestContributionRewardComponents:
         assert abs(reward - component_sum) < 0.001, f"Sum {component_sum} != total {reward}"
         assert components.total_reward == reward
 
+    def test_alpha_shock_penalty_applied(self):
+        """Alpha shock should be applied as a convex penalty when provided."""
+        seed_info = SeedInfo(
+            stage=STAGE_BLENDING,
+            improvement_since_stage_start=1.0,
+            total_improvement=1.5,
+            epochs_in_stage=2,
+            seed_params=5000,
+            previous_stage=STAGE_TRAINING,
+            seed_age_epochs=5,
+        )
+        config = ContributionRewardConfig(alpha_shock_coef=1.0)
+        reward, components = compute_contribution_reward(
+            action=LifecycleOp.WAIT,
+            seed_contribution=1.0,
+            val_acc=70.0,
+            seed_info=seed_info,
+            epoch=5,
+            max_epochs=25,
+            total_params=105_000,
+            host_params=100_000,
+            acc_at_germination=68.0,
+            acc_delta=0.2,
+            alpha_delta_sq_sum=0.25,
+            return_components=True,
+            config=config,
+        )
+        assert components.alpha_shock == pytest.approx(-0.25)
+        assert reward == pytest.approx(components.total_reward)
+
     def test_components_track_context(self):
         """Test that components include action and epoch context."""
         from esper.leyline import SeedStage
 
         from enum import IntEnum
         class MockAction(IntEnum):
-            CULL = 1
+            PRUNE = 1
 
         seed_info = SeedInfo(
             stage=SeedStage.TRAINING.value,
@@ -423,7 +454,7 @@ class TestContributionRewardComponents:
         )
 
         reward, components = compute_contribution_reward(
-            action=MockAction.CULL,
+            action=MockAction.PRUNE,
             seed_contribution=-0.5,
             val_acc=68.0,
             seed_info=seed_info,
@@ -432,7 +463,7 @@ class TestContributionRewardComponents:
             return_components=True,
         )
 
-        assert components.action_name == "CULL"
+        assert components.action_name == "PRUNE"
         assert components.epoch == 12
         assert components.seed_stage == SeedStage.TRAINING.value
 
@@ -580,7 +611,7 @@ class TestRansomwareSeedDetection:
 
         # Ransomware seed: high contribution but negative total delta
         ransomware_seed = SeedInfo(
-            stage=STAGE_PROBATIONARY,
+            stage=STAGE_HOLDING,
             improvement_since_stage_start=-0.3,
             total_improvement=-0.48,  # Hurt performance
             epochs_in_stage=3,
@@ -603,7 +634,7 @@ class TestRansomwareSeedDetection:
 
         # Ransomware signature: contribution > 0.1 and total_delta < -0.2
         ransomware_seed = SeedInfo(
-            stage=STAGE_PROBATIONARY,
+            stage=STAGE_HOLDING,
             improvement_since_stage_start=-0.5,
             total_improvement=-0.5,  # < -0.2 threshold
             epochs_in_stage=3,
@@ -612,7 +643,7 @@ class TestRansomwareSeedDetection:
 
         # Non-ransomware: same negative delta but low contribution
         non_ransomware_seed = SeedInfo(
-            stage=STAGE_PROBATIONARY,
+            stage=STAGE_HOLDING,
             improvement_since_stage_start=-0.5,
             total_improvement=-0.5,
             epochs_in_stage=3,
@@ -820,9 +851,9 @@ class TestRansomwareSeedDetection:
         class MockAction(IntEnum):
             FOSSILIZE = 1
 
-        # PROBATIONARY seed with high contribution but negative total improvement
+        # HOLDING seed with high contribution but negative total improvement
         ransomware_seed = SeedInfo(
-            stage=STAGE_PROBATIONARY,
+            stage=STAGE_HOLDING,
             improvement_since_stage_start=-0.5,
             total_improvement=-0.02,  # Negative!
             epochs_in_stage=3,
@@ -848,17 +879,17 @@ class TestRansomwareSeedDetection:
         assert reward < 0, f"Should be penalized for fossilizing negative-delta seed: {reward}"
 
 
-class TestProbationaryIndecisionPenalty:
-    """Test escalating WAIT penalty in PROBATIONARY stage."""
+class TestHoldingIndecisionPenalty:
+    """Test escalating WAIT penalty in HOLDING stage."""
 
     def test_no_penalty_epoch_1_grace_period(self):
-        """Epoch 1 in PROBATIONARY should have no WAIT penalty (grace period)."""
+        """Epoch 1 in HOLDING should have no WAIT penalty (grace period)."""
         from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
 
-        probationary_seed = SeedInfo(
-            stage=STAGE_PROBATIONARY,
+        holding_seed = SeedInfo(
+            stage=STAGE_HOLDING,
             improvement_since_stage_start=1.0,
             total_improvement=2.0,
             epochs_in_stage=1,  # First epoch - grace period
@@ -869,19 +900,19 @@ class TestProbationaryIndecisionPenalty:
             action=MockAction.WAIT,
             seed_contribution=5.0,
             val_acc=65.0,
-            seed_info=probationary_seed,
+            seed_info=holding_seed,
             epoch=10,
             max_epochs=25,
             acc_at_germination=63.0,
             return_components=True,
         )
 
-        assert components.probation_warning == 0.0, (
-            f"Epoch 1 should have no penalty: {components.probation_warning}"
+        assert components.holding_warning == 0.0, (
+            f"Epoch 1 should have no penalty: {components.holding_warning}"
         )
 
     def test_penalty_starts_epoch_2(self):
-        """Epoch 2 in PROBATIONARY should have WAIT penalty (-1.0).
+        """Epoch 2 in HOLDING should have WAIT penalty (-1.0).
 
         DRL Expert review 2025-12-10: exponential penalty to overcome +7.5 attribution.
         """
@@ -889,8 +920,8 @@ class TestProbationaryIndecisionPenalty:
         class MockAction(IntEnum):
             WAIT = 0
 
-        probationary_seed = SeedInfo(
-            stage=STAGE_PROBATIONARY,
+        holding_seed = SeedInfo(
+            stage=STAGE_HOLDING,
             improvement_since_stage_start=1.0,
             total_improvement=2.0,
             epochs_in_stage=2,  # Second epoch
@@ -901,7 +932,7 @@ class TestProbationaryIndecisionPenalty:
             action=MockAction.WAIT,
             seed_contribution=5.0,
             val_acc=65.0,
-            seed_info=probationary_seed,
+            seed_info=holding_seed,
             epoch=11,
             max_epochs=25,
             acc_at_germination=63.0,
@@ -909,12 +940,12 @@ class TestProbationaryIndecisionPenalty:
         )
 
         # Epoch 2: -1.0 * (3 ** 0) = -1.0
-        assert components.probation_warning == -1.0, (
-            f"Epoch 2 should have -1.0 penalty: {components.probation_warning}"
+        assert components.holding_warning == -1.0, (
+            f"Epoch 2 should have -1.0 penalty: {components.holding_warning}"
         )
 
     def test_penalty_escalates_over_epochs(self):
-        """WAIT penalty should escalate exponentially each epoch in PROBATIONARY.
+        """WAIT penalty should escalate exponentially each epoch in HOLDING.
 
         DRL Expert review 2025-12-10: exponential to overcome +7.5 attribution.
         Schedule: epoch 2 -> -1.0, epoch 3 -> -3.0, epoch 4 -> -9.0, capped at -10.0
@@ -925,7 +956,7 @@ class TestProbationaryIndecisionPenalty:
 
         def get_penalty(epochs_in_stage: int) -> float:
             seed = SeedInfo(
-                stage=STAGE_PROBATIONARY,
+                stage=STAGE_HOLDING,
                 improvement_since_stage_start=1.0,
                 total_improvement=2.0,
                 epochs_in_stage=epochs_in_stage,
@@ -941,7 +972,7 @@ class TestProbationaryIndecisionPenalty:
                 acc_at_germination=63.0,
                 return_components=True,
             )
-            return components.probation_warning
+            return components.holding_warning
 
         # Verify exponential escalation: 0, -1.0, -3.0, -9.0, -10.0 (capped)
         # Formula: -1.0 * (3 ** (epochs_waiting - 1)), capped at -10.0
@@ -958,8 +989,8 @@ class TestProbationaryIndecisionPenalty:
         class MockAction(IntEnum):
             FOSSILIZE = 1
 
-        probationary_seed = SeedInfo(
-            stage=STAGE_PROBATIONARY,
+        holding_seed = SeedInfo(
+            stage=STAGE_HOLDING,
             improvement_since_stage_start=1.0,
             total_improvement=2.0,
             epochs_in_stage=5,  # Would have penalty if WAIT
@@ -970,15 +1001,15 @@ class TestProbationaryIndecisionPenalty:
             action=MockAction.FOSSILIZE,
             seed_contribution=5.0,
             val_acc=65.0,
-            seed_info=probationary_seed,
+            seed_info=holding_seed,
             epoch=15,
             max_epochs=25,
             acc_at_germination=63.0,
             return_components=True,
         )
 
-        assert components.probation_warning == 0.0, (
-            f"FOSSILIZE should have no indecision penalty: {components.probation_warning}"
+        assert components.holding_warning == 0.0, (
+            f"FOSSILIZE should have no indecision penalty: {components.holding_warning}"
         )
 
     def test_no_penalty_without_counterfactual_data(self):
@@ -988,8 +1019,8 @@ class TestProbationaryIndecisionPenalty:
             WAIT = 0
 
         # Seed with no improvement data (waiting for counterfactual)
-        probationary_seed = SeedInfo(
-            stage=STAGE_PROBATIONARY,
+        holding_seed = SeedInfo(
+            stage=STAGE_HOLDING,
             improvement_since_stage_start=None,  # No data yet
             total_improvement=None,  # No data yet
             epochs_in_stage=3,  # Would have penalty if data available
@@ -1000,15 +1031,15 @@ class TestProbationaryIndecisionPenalty:
             action=MockAction.WAIT,
             seed_contribution=None,  # No counterfactual
             val_acc=65.0,
-            seed_info=probationary_seed,
+            seed_info=holding_seed,
             epoch=13,
             max_epochs=25,
             acc_at_germination=63.0,
             return_components=True,
         )
 
-        assert components.probation_warning == 0.0, (
-            f"No penalty without counterfactual data: {components.probation_warning}"
+        assert components.holding_warning == 0.0, (
+            f"No penalty without counterfactual data: {components.holding_warning}"
         )
 
 
@@ -1321,7 +1352,7 @@ class TestPenaltyAntiStacking:
     """Test that penalties don't stack on ransomware seeds.
 
     Fix for training collapse: when attribution_discount zeros attribution,
-    ratio_penalty and probation_warning should NOT add additional penalties.
+    ratio_penalty and holding_warning should NOT add additional penalties.
     This prevents an unlearnable reward landscape.
     """
 
@@ -1330,7 +1361,7 @@ class TestPenaltyAntiStacking:
 
         When a seed has negative total_improvement (ransomware pattern), the
         attribution_discount zeros the attribution. Additional penalties via
-        ratio_penalty or probation_warning create an unlearnable landscape.
+        ratio_penalty or holding_warning create an unlearnable landscape.
         """
         from enum import IntEnum
         class MockAction(IntEnum):
@@ -1338,7 +1369,7 @@ class TestPenaltyAntiStacking:
 
         # Classic ransomware: high contribution but negative trajectory
         ransomware_seed = SeedInfo(
-            stage=STAGE_PROBATIONARY,
+            stage=STAGE_HOLDING,
             improvement_since_stage_start=-1.0,
             total_improvement=-2.0,  # Negative = ransomware
             epochs_in_stage=3,  # Would normally trigger PROB penalty
@@ -1366,9 +1397,9 @@ class TestPenaltyAntiStacking:
             f"Ratio penalty should be skipped to avoid stacking: {components.ratio_penalty}"
         )
 
-        # PROB penalty should be SKIPPED (bounded_attribution <= 0)
-        assert components.probation_warning == 0.0, (
-            f"PROB penalty should be skipped to avoid stacking: {components.probation_warning}"
+        # HOLD penalty should be SKIPPED (bounded_attribution <= 0)
+        assert components.holding_warning == 0.0, (
+            f"HOLD penalty should be skipped to avoid stacking: {components.holding_warning}"
         )
 
         # bounded_attribution should be near-zero (not negative)
@@ -1376,15 +1407,15 @@ class TestPenaltyAntiStacking:
             f"Attribution should be zeroed, not heavily negative: {components.bounded_attribution}"
         )
 
-    def test_legitimate_seed_still_gets_probation_penalty(self):
-        """Legitimate seed farming should still receive PROB penalty."""
+    def test_legitimate_seed_still_gets_holding_penalty(self):
+        """Legitimate seed farming should still receive HOLD penalty."""
         from enum import IntEnum
         class MockAction(IntEnum):
             WAIT = 0
 
-        # Good seed being farmed in PROBATIONARY
+        # Good seed being farmed in HOLDING
         good_seed = SeedInfo(
-            stage=STAGE_PROBATIONARY,
+            stage=STAGE_HOLDING,
             improvement_since_stage_start=2.0,
             total_improvement=5.0,  # Positive trajectory
             epochs_in_stage=3,  # Should trigger PROB penalty
@@ -1412,10 +1443,10 @@ class TestPenaltyAntiStacking:
             f"Good seed should have positive attribution: {components.bounded_attribution}"
         )
 
-        # PROB penalty SHOULD fire (bounded_attribution > 0, epoch 3)
+        # HOLD penalty SHOULD fire (bounded_attribution > 0, epoch 3)
         # Epoch 3: -1.0 * (3 ** 1) = -3.0
-        assert components.probation_warning == pytest.approx(-3.0), (
-            f"Good seed farming should receive PROB penalty: {components.probation_warning}"
+        assert components.holding_warning == pytest.approx(-3.0), (
+            f"Good seed farming should receive HOLD penalty: {components.holding_warning}"
         )
 
 
@@ -1540,7 +1571,7 @@ class TestFossilizeTerminalBonus:
     """Test terminal bonus for fossilized seeds.
 
     DRL Expert review 2025-12-10: Terminal bonus makes FOSSILIZE NPV-positive
-    vs WAIT-farming in PROBATIONARY. Addresses H4 (terminating action problem).
+    vs WAIT-farming in HOLDING. Addresses H4 (terminating action problem).
     """
 
     def test_terminal_bonus_scales_with_contributing_fossilized_count(self):

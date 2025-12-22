@@ -98,7 +98,7 @@ class TestEnvSummary:
 
     def test_env_summary_creation(self) -> None:
         """EnvSummary can be created with required fields."""
-        from esper.karn.overwatch.schema import EnvSummary, SlotChipState
+        from esper.karn.overwatch.schema import EnvSummary
 
         env = EnvSummary(
             env_id=0,
@@ -176,7 +176,7 @@ class TestEnvSummary:
             "slots": {
                 "r0c0": {
                     "slot_id": "r0c0",
-                    "stage": "CULLED",
+                    "stage": "PRUNED",
                     "blueprint_id": "bad_seed",
                     "alpha": 0.0,
                 }
@@ -191,7 +191,7 @@ class TestEnvSummary:
         assert env.status == "CRIT"
         assert env.anomaly_score == 0.85
         assert len(env.anomaly_reasons) == 2
-        assert env.slots["r0c0"].stage == "CULLED"
+        assert env.slots["r0c0"].stage == "PRUNED"
 
     def test_env_summary_json_roundtrip(self) -> None:
         """EnvSummary survives JSON serialization."""
@@ -232,8 +232,8 @@ class TestTamiyoState:
         from esper.karn.overwatch.schema import TamiyoState
 
         state = TamiyoState(
-            action_counts={"GERMINATE": 34, "BLEND": 28, "CULL": 12, "WAIT": 26},
-            recent_actions=["G", "B", "B", "W", "G"],
+            action_counts={"GERMINATE": 34, "SET_ALPHA_TARGET": 28, "PRUNE": 12, "WAIT": 26},
+            recent_actions=["G", "A", "A", "W", "G"],
             confidence_mean=0.73,
             confidence_min=0.42,
             confidence_max=0.94,
@@ -271,8 +271,8 @@ class TestTamiyoState:
         from esper.karn.overwatch.schema import TamiyoState
 
         d = {
-            "action_counts": {"BLEND": 5, "CULL": 3},
-            "recent_actions": ["B", "C"],
+            "action_counts": {"SET_ALPHA_TARGET": 5, "PRUNE": 3},
+            "recent_actions": ["A", "P"],
             "confidence_mean": 0.65,
             "confidence_min": 0.4,
             "confidence_max": 0.9,
@@ -286,7 +286,7 @@ class TestTamiyoState:
 
         state = TamiyoState.from_dict(d)
 
-        assert state.action_counts["BLEND"] == 5
+        assert state.action_counts["SET_ALPHA_TARGET"] == 5
         assert state.entropy == 1.5
 
     def test_tamiyo_state_json_roundtrip(self) -> None:
@@ -492,7 +492,7 @@ class TestTuiSnapshot:
             "schema_version": 1,
             "captured_at": "2025-12-18T12:00:00Z",
             "connection": {"connected": True, "last_event_ts": 1000.0, "staleness_s": 1.0},
-            "tamiyo": {"kl_divergence": 0.015, "action_counts": {"BLEND": 5}},
+            "tamiyo": {"kl_divergence": 0.015, "action_counts": {"SET_ALPHA_TARGET": 5}},
             "run_id": "test-run",
             "task_name": "mnist",
             "episode": 10,
@@ -516,7 +516,7 @@ class TestTuiSnapshot:
 
         assert snap.schema_version == 1
         assert snap.tamiyo.kl_divergence == 0.015
-        assert snap.tamiyo.action_counts["BLEND"] == 5
+        assert snap.tamiyo.action_counts["SET_ALPHA_TARGET"] == 5
         assert len(snap.devices) == 1
         assert snap.devices[0].name == "GPU 0"
 
@@ -536,7 +536,7 @@ class TestTuiSnapshot:
             captured_at="2025-12-18T12:00:00Z",
             connection=ConnectionStatus(True, 1000.0, 0.5),
             tamiyo=TamiyoState(
-                action_counts={"GERMINATE": 10, "BLEND": 20},
+                action_counts={"GERMINATE": 10, "SET_ALPHA_TARGET": 20},
                 kl_divergence=0.019,
             ),
             devices=[DeviceVitals(0, "GPU 0", 90.0, 10.0, 12.0, 68)],
@@ -577,3 +577,7 @@ class TestPackageExports:
         assert TuiSnapshot is not None
         assert EnvSummary is not None
         assert SlotChipState is not None
+        assert TamiyoState is not None
+        assert ConnectionStatus is not None
+        assert DeviceVitals is not None
+        assert FeedEvent is not None

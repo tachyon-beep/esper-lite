@@ -26,7 +26,7 @@ class TestVitalSignsEnumComparisons:
 
         vitals = monitor.check_vitals()
         # GERMINATED should count as started (total_seeds)
-        # but active_seeds counts only TRAINING/BLENDING/PROBATIONARY/FOSSILIZED
+        # but active_seeds counts only TRAINING/BLENDING/HOLDING/FOSSILIZED
         assert vitals.active_seeds == 0, "GERMINATED should not count as active"
 
     def test_counts_training_as_active(self) -> None:
@@ -63,8 +63,8 @@ class TestVitalSignsEnumComparisons:
         vitals = monitor.check_vitals()
         assert vitals.active_seeds == 1, "BLENDING should count as active"
 
-    def test_counts_probationary_as_active(self) -> None:
-        """PROBATIONARY seeds should count as active."""
+    def test_counts_holding_as_active(self) -> None:
+        """HOLDING seeds should count as active."""
         store = TelemetryStore()
         monitor = VitalSignsMonitor(store=store)
 
@@ -72,13 +72,13 @@ class TestVitalSignsEnumComparisons:
         snapshot = store.start_epoch(1)
         snapshot.slots["r0c0"] = SlotSnapshot(
             slot_id="r0c0",
-            stage=SeedStage.PROBATIONARY,
+            stage=SeedStage.HOLDING,
         )
         snapshot.host.val_accuracy = 0.5
         store.commit_epoch()
 
         vitals = monitor.check_vitals()
-        assert vitals.active_seeds == 1, "PROBATIONARY should count as active"
+        assert vitals.active_seeds == 1, "HOLDING should count as active"
 
     def test_counts_fossilized_as_active(self) -> None:
         """FOSSILIZED seeds should count as active (terminal success)."""
@@ -97,8 +97,8 @@ class TestVitalSignsEnumComparisons:
         vitals = monitor.check_vitals()
         assert vitals.active_seeds == 1, "FOSSILIZED should count as active"
 
-    def test_counts_culled_correctly(self) -> None:
-        """CULLED seeds should be counted in failure rate."""
+    def test_counts_pruned_correctly(self) -> None:
+        """PRUNED seeds should be counted in failure rate."""
         store = TelemetryStore()
         monitor = VitalSignsMonitor(store=store)
 
@@ -111,13 +111,13 @@ class TestVitalSignsEnumComparisons:
         )
         snapshot.slots["r0c1"] = SlotSnapshot(
             slot_id="r0c1",
-            stage=SeedStage.CULLED,
+            stage=SeedStage.PRUNED,
         )
         snapshot.host.val_accuracy = 0.5
         store.commit_epoch()
 
         vitals = monitor.check_vitals()
-        # Failure rate should be 1 culled / 2 total = 0.5
+        # Failure rate should be 1 pruned / 2 total = 0.5
         assert vitals.seed_failure_rate == 0.5, f"Expected 0.5, got {vitals.seed_failure_rate}"
 
     def test_does_not_count_dormant(self) -> None:

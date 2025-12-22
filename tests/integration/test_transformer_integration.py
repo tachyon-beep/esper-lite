@@ -35,7 +35,7 @@ def test_transformer_with_seed_lifecycle():
     assert not torch.allclose(out_before, out_with_seed)
 
     # Cull seed
-    model.cull_seed(slot="r0c0")
+    model.prune_seed(slot="r0c0")
 
     out_after = model(x)
     assert torch.allclose(out_before, out_after)

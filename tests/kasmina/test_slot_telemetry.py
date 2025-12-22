@@ -140,12 +140,12 @@ def test_sync_telemetry_blending_stage_uses_improvement():
     assert state.telemetry.accuracy_delta == 3.5
 
 
-def test_sync_telemetry_probationary_stage_uses_improvement():
-    """PROBATIONARY stage seeds should use improvement_since_stage_start."""
+def test_sync_telemetry_holding_stage_uses_improvement():
+    """HOLDING stage seeds should use improvement_since_stage_start."""
     from esper.kasmina.slot import SeedState
     from esper.leyline import SeedStage
 
-    state = SeedState(seed_id="s1", blueprint_id="conv", slot_id="r0c0", stage=SeedStage.PROBATIONARY)
+    state = SeedState(seed_id="s1", blueprint_id="conv", slot_id="r0c0", stage=SeedStage.HOLDING)
 
     state.metrics.record_accuracy(85.0)
     state.metrics.record_accuracy(86.0)

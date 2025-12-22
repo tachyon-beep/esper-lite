@@ -80,20 +80,23 @@ Esper treats neural modules like living organisms. They must earn their place in
 stateDiagram-v2
     [*] --> DORMANT
     DORMANT --> GERMINATED: Germinate Action
-    GERMINATED --> TRAINING: Auto-Start
-    TRAINING --> BLENDING: Advance (Gradient Health > 0.8)
-    TRAINING --> CULLED: Cull (Performance Drop)
-    BLENDING --> FOSSILIZED: Advance (Stability Check)
-    BLENDING --> CULLED: Cull (Regression)
+    GERMINATED --> TRAINING: Advance (G1)
+    TRAINING --> BLENDING: Advance (G2)
+    TRAINING --> PRUNED: Prune (Performance Drop)
+    BLENDING --> HOLDING: Advance (G3)
+    BLENDING --> PRUNED: Prune (Regression)
+    HOLDING --> FOSSILIZED: Fossilize (Stability Check)
     FOSSILIZED --> [*]: Terminal Success
-    CULLED --> EMBARGOED: Cleanup
-    EMBARGOED --> DORMANT: Cooldown Complete
+    PRUNED --> EMBARGOED: Cleanup
+    EMBARGOED --> RESETTING: Cooldown Complete
+    RESETTING --> DORMANT: Slot Recycled
 ```
 
 1. **Germinated:** Module created. Input connected, output detached.
 2. **Training:** Module trains on host errors. Host weights frozen relative to this path.
 3. **Blending:** Module output is alpha-blended into host stream.
-4. **Fossilized:** Weights permanently integrated. Module becomes part of the "Host" for future seeds.
+4. **Holding:** Full-amplitude hold (alpha≈1.0). Stable decision point for fossilization.
+5. **Fossilized:** Weights permanently integrated. Module becomes part of the "Host" for future seeds.
 
 -----
 
@@ -151,7 +154,7 @@ limited to picking a preset and runtime wiring:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--preset` | `cifar10` | Hyperparameter preset: `cifar10`, `cifar10_deep`, `tinystories` |
+| `--preset` | `cifar10` | Hyperparameter preset: `cifar10`, `cifar10_stable`, `cifar10_deep`, `cifar10_blind`, `tinystories` |
 | `--config-json` | (none) | Path to JSON config (strict: unknown keys fail) |
 | `--task` | `cifar10` | Task preset for dataloaders/topology |
 | `--device` | `cuda:0` | Primary compute device |
@@ -184,13 +187,16 @@ limited to picking a preset and runtime wiring:
 | `--telemetry-file` | (none) | Save telemetry to JSONL file |
 | `--telemetry-dir` | (none) | Save telemetry to timestamped folder |
 | `--telemetry-level` | `normal` | Verbosity: `off`, `minimal`, `normal`, `debug` |
-| `--no-telemetry` | off | Disable telemetry features (50-dim obs instead of 80-dim) |
-| `--tui` | off | Enable Rich terminal UI for live training monitoring |
+| `--telemetry-lifecycle-only` | off | Keep lightweight seed lifecycle telemetry even when ops telemetry is disabled |
+| `--no-tui` | off | Disable Rich terminal UI (uses console output instead) |
+| `--overwatch` | off | Launch Overwatch TUI for real-time monitoring (replaces Rich TUI) |
+| `--sanctum` | off | Launch Sanctum TUI for developer debugging (replaces Rich TUI) |
 | `--dashboard` | off | Enable real-time WebSocket dashboard (requires `pip install esper-lite[dashboard]`) |
 | `--dashboard-port` | 8000 | Dashboard server port |
 
 **Monitoring Interfaces:**
-- **`--tui`**: Full-screen terminal dashboard showing rewards, policy health (entropy, clip fraction, explained variance, KL divergence), seed states, action distribution, reward components, and losses. Color-coded health indicators (green/yellow/red) highlight training issues.
+- **Rich TUI (default)**: Full-screen terminal dashboard showing rewards, policy health (entropy, clip fraction, explained variance, KL divergence), seed states, action distribution, reward components, and losses. Disable with `--no-tui`.
+- **`--overwatch` / `--sanctum`**: Textual TUIs for monitoring and developer debugging (mutually exclusive).
 - **`--dashboard`**: Web-based dashboard accessible at `http://localhost:8000`. Listens on all network interfaces for remote access (e.g., `http://192.168.1.x:8000` on LAN). Displays clickable links for all available interfaces on startup.
 
 ### Heuristic Training (`esper.scripts.train heuristic`)
@@ -209,8 +215,9 @@ PYTHONPATH=src python -m esper.scripts.train heuristic [OPTIONS]
 | `--task` | `cifar10` | Task preset |
 | `--device` | `cuda:0` | Compute device |
 | `--seed` | 42 | Random seed |
-| `--slots` | `r0c1` | Seed slots to enable (canonical IDs: r0c0, r0c1, r0c2) |
+| `--slots` | `r0c0 r0c1 r0c2` | Canonical slot IDs to enable (e.g., `r0c0 r0c1 r0c2`) |
 | `--max-seeds` | unlimited | Maximum total seeds |
+| `--min-fossilize-improvement` | (task default) | Min improvement (%) required to fossilize a seed |
 
 Telemetry flags (`--telemetry-file`, `--telemetry-dir`, `--telemetry-level`) are also available.
 
@@ -219,6 +226,9 @@ Telemetry flags (`--telemetry-file`, `--telemetry-dir`, `--telemetry-level`) are
 ```bash
 # CIFAR-10 preset (default hyperparameters)
 PYTHONPATH=src python -m esper.scripts.train ppo --preset cifar10 --task cifar10
+
+# CIFAR-10 stable preset (slower, more reliable PPO updates)
+PYTHONPATH=src python -m esper.scripts.train ppo --preset cifar10_stable --task cifar10
 
 # Tinystories preset with AMP
 PYTHONPATH=src python -m esper.scripts.train ppo \

@@ -28,7 +28,7 @@ def test_event_log_creation():
 
     widget = EventLog()
     assert widget is not None
-    assert widget._max_events == 20
+    assert widget._max_events == 30  # Increased for more context
     assert widget.border_title == "EVENTS"
 
 
@@ -127,8 +127,8 @@ def test_event_log_color_mapping():
     assert "SEED_GERMINATED" in _EVENT_COLORS
     assert "SEED_STAGE_CHANGED" in _EVENT_COLORS
     assert "SEED_FOSSILIZED" in _EVENT_COLORS
-    assert "SEED_CULLED" in _EVENT_COLORS
-    assert "BATCH_COMPLETED" in _EVENT_COLORS
+    assert "SEED_PRUNED" in _EVENT_COLORS
+    assert "BATCH_EPOCH_COMPLETED" in _EVENT_COLORS
 
 
 def test_event_log_episode_grouping():
@@ -142,7 +142,7 @@ def test_event_log_episode_grouping():
         event_log=[
             EventLogEntry(
                 timestamp="12:33:12",
-                event_type="BATCH_COMPLETED",
+                event_type="BATCH_EPOCH_COMPLETED",
                 env_id=None,
                 message="Episode 4 complete",
                 episode=4,
@@ -190,9 +190,9 @@ def test_event_log_color_coding():
     # Test color mapping
     assert widget._get_event_color("SEED_GERMINATED") == "bright_yellow"
     assert widget._get_event_color("SEED_FOSSILIZED") == "bright_green"
-    assert widget._get_event_color("SEED_CULLED") == "bright_red"
+    assert widget._get_event_color("SEED_PRUNED") == "bright_red"
     assert widget._get_event_color("REWARD_COMPUTED") == "bright_cyan"
-    assert widget._get_event_color("BATCH_COMPLETED") == "bright_blue"
+    assert widget._get_event_color("BATCH_EPOCH_COMPLETED") == "bright_blue"
     assert widget._get_event_color("UNKNOWN_EVENT") == "white"  # Default
 
 
@@ -205,7 +205,7 @@ def test_event_log_emoji_mapping():
     # Test emoji mapping
     assert widget._get_event_emoji("SEED_GERMINATED") == "🌱"
     assert widget._get_event_emoji("SEED_FOSSILIZED") == "✅"
-    assert widget._get_event_emoji("SEED_CULLED") == "⚠️"
+    assert widget._get_event_emoji("SEED_PRUNED") == "⚠️"
     assert widget._get_event_emoji("REWARD_COMPUTED") == "📊"
-    assert widget._get_event_emoji("BATCH_COMPLETED") == "🏆"
+    assert widget._get_event_emoji("BATCH_EPOCH_COMPLETED") == "🏆"
     assert widget._get_event_emoji("UNKNOWN_EVENT") == ""  # No emoji for unknown

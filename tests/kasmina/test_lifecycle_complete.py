@@ -3,7 +3,7 @@
 Tests verify correct behavior through complete lifecycles:
 - Full happy path: DORMANT → FOSSILIZED
 - Early cull scenarios
-- Probation timeout behavior
+- Holding timeout behavior
 - Dwell epoch enforcement
 - Blending progress tracking
 """
@@ -22,6 +22,7 @@ from esper.leyline import (
     DEFAULT_MIN_FOSSILIZE_CONTRIBUTION,
     DEFAULT_GRADIENT_RATIO_THRESHOLD,
     DEFAULT_MAX_PROBATION_EPOCHS,
+    DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE,
 )
 
 
@@ -39,19 +40,21 @@ class TestFullLifecycleHappyPath:
         assert state.blueprint_id == "noop"
 
     def test_lifecycle_germinated_to_training(self):
-        """step_epoch() should advance GERMINATED → TRAINING."""
+        """advance_stage() should transition GERMINATED → TRAINING."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
 
-        slot.step_epoch()
+        result = slot.advance_stage(SeedStage.TRAINING)
 
+        assert result.passed
         assert slot.state.stage == SeedStage.TRAINING
 
     def test_lifecycle_training_to_blending(self):
-        """step_epoch() should advance TRAINING → BLENDING when gate passes."""
+        """advance_stage() should transition TRAINING → BLENDING when gate passes."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
-        slot.step_epoch()  # → TRAINING
+        result = slot.advance_stage(SeedStage.TRAINING)
+        assert result.passed
 
         # Simulate conditions for G2 gate
         slot.state.metrics.record_accuracy(50.0)
@@ -64,12 +67,13 @@ class TestFullLifecycleHappyPath:
         for _ in range(DEFAULT_MIN_BLENDING_EPOCHS):
             slot.state.metrics.epochs_in_current_stage += 1
 
-        slot.step_epoch()
+        result = slot.advance_stage(SeedStage.BLENDING)
 
+        assert result.passed
         assert slot.state.stage == SeedStage.BLENDING
 
-    def test_lifecycle_blending_to_probationary(self):
-        """step_epoch() should advance BLENDING → PROBATIONARY when complete."""
+    def test_lifecycle_blending_to_holding(self):
+        """advance_stage() should transition BLENDING → HOLDING when ready."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
         slot.state.transition(SeedStage.TRAINING)
@@ -90,17 +94,19 @@ class TestFullLifecycleHappyPath:
             slot.state.metrics.record_accuracy(65.0)  # G3 needs epochs_in_current_stage
             slot.step_epoch()
 
-        assert slot.state.stage == SeedStage.PROBATIONARY
+        result = slot.advance_stage(SeedStage.HOLDING)
+        assert result.passed
+        assert slot.state.stage == SeedStage.HOLDING
 
-    def test_lifecycle_probationary_to_fossilized(self):
-        """advance_stage() should transition PROBATIONARY → FOSSILIZED when gate passes."""
+    def test_lifecycle_holding_to_fossilized(self):
+        """advance_stage() should transition HOLDING → FOSSILIZED when gate passes."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
 
         # Progress through stages
         slot.state.transition(SeedStage.TRAINING)
         slot.state.transition(SeedStage.BLENDING)
-        slot.state.transition(SeedStage.PROBATIONARY)
+        slot.state.transition(SeedStage.HOLDING)
         slot.state.alpha = 1.0
 
         # Set up conditions for G5 gate
@@ -122,10 +128,11 @@ class TestEarlyCullScenarios:
         slot.germinate("noop", seed_id="test")
         slot.state.transition(SeedStage.TRAINING)
 
-        result = slot.cull(reason="test_cull")
+        result = slot.prune(reason="test_cull")
 
         assert result is True
-        assert slot.state is None
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.PRUNED
         assert slot.seed is None
 
     def test_cull_from_blending(self):
@@ -135,23 +142,25 @@ class TestEarlyCullScenarios:
         slot.state.transition(SeedStage.TRAINING)
         slot.state.transition(SeedStage.BLENDING)
 
-        result = slot.cull(reason="test_cull")
+        result = slot.prune(reason="test_cull")
 
         assert result is True
-        assert slot.state is None
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.PRUNED
 
-    def test_cull_from_probationary(self):
-        """Culling from PROBATIONARY should succeed."""
+    def test_cull_from_holding(self):
+        """Culling from HOLDING should succeed."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
         slot.state.transition(SeedStage.TRAINING)
         slot.state.transition(SeedStage.BLENDING)
-        slot.state.transition(SeedStage.PROBATIONARY)
+        slot.state.transition(SeedStage.HOLDING)
 
-        result = slot.cull(reason="test_cull")
+        result = slot.prune(reason="test_cull")
 
         assert result is True
-        assert slot.state is None
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.PRUNED
 
     def test_cull_fossilized_fails(self):
         """Culling FOSSILIZED seed should fail (permanent)."""
@@ -161,41 +170,42 @@ class TestEarlyCullScenarios:
         # Force to FOSSILIZED
         slot.state.stage = SeedStage.FOSSILIZED
 
-        result = slot.cull(reason="test_cull")
+        result = slot.prune(reason="test_cull")
 
         assert result is False
         assert slot.state is not None
         assert slot.state.stage == SeedStage.FOSSILIZED
 
 
-class TestProbationTimeout:
-    """Tests for probation timeout behavior."""
+class TestHoldingTimeout:
+    """Tests for holding timeout behavior."""
 
-    def test_probation_timeout_culls_seed(self):
-        """Exceeding max probation epochs should auto-cull."""
+    def test_holding_timeout_does_not_prune(self):
+        """Exceeding max holding epochs should not auto-prune."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
         slot.state.transition(SeedStage.TRAINING)
         slot.state.transition(SeedStage.BLENDING)
-        slot.state.transition(SeedStage.PROBATIONARY)
+        slot.state.transition(SeedStage.HOLDING)
 
-        # Simulate epochs in probation exceeding timeout
+        # Simulate epochs in holding exceeding timeout
         # Set counterfactual to non-negative so safety cull doesn't trigger first
         slot.state.metrics.counterfactual_contribution = 0.1
         slot.state.metrics.epochs_in_current_stage = DEFAULT_MAX_PROBATION_EPOCHS
 
         slot.step_epoch()
 
-        # Should be culled due to timeout
-        assert slot.state is None
+        # Should remain in holding without auto-prune
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.HOLDING
 
-    def test_probation_no_timeout_before_max_epochs(self):
-        """Seed should survive if under max probation epochs."""
+    def test_holding_no_timeout_before_max_epochs(self):
+        """Seed should survive if under max holding epochs."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
         slot.state.transition(SeedStage.TRAINING)
         slot.state.transition(SeedStage.BLENDING)
-        slot.state.transition(SeedStage.PROBATIONARY)
+        slot.state.transition(SeedStage.HOLDING)
 
         # Just under timeout
         slot.state.metrics.counterfactual_contribution = 0.1
@@ -203,44 +213,44 @@ class TestProbationTimeout:
 
         slot.step_epoch()
 
-        # Should still be in probation
+        # Should still be in holding
         assert slot.state is not None
-        assert slot.state.stage == SeedStage.PROBATIONARY
+        assert slot.state.stage == SeedStage.HOLDING
 
 
-class TestNegativeCounterfactualAutoCull:
-    """Tests for negative counterfactual auto-cull behavior."""
+class TestNegativeCounterfactualNoAutoPrune:
+    """Tests for negative counterfactual behavior without auto-prune."""
 
-    def test_negative_counterfactual_culls(self):
-        """Negative counterfactual in PROBATIONARY should auto-cull."""
+    def test_negative_counterfactual_does_not_auto_prune(self):
+        """Negative counterfactual in HOLDING should not auto-prune."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
         slot.state.transition(SeedStage.TRAINING)
         slot.state.transition(SeedStage.BLENDING)
-        slot.state.transition(SeedStage.PROBATIONARY)
+        slot.state.transition(SeedStage.HOLDING)
 
         # Set negative counterfactual
         slot.state.metrics.counterfactual_contribution = -1.0
 
         slot.step_epoch()
 
-        # Should be culled
-        assert slot.state is None
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.HOLDING
 
-    def test_zero_counterfactual_culls(self):
-        """Zero counterfactual in PROBATIONARY should auto-cull."""
+    def test_zero_counterfactual_does_not_auto_prune(self):
+        """Zero counterfactual in HOLDING should not auto-prune."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
         slot.state.transition(SeedStage.TRAINING)
         slot.state.transition(SeedStage.BLENDING)
-        slot.state.transition(SeedStage.PROBATIONARY)
+        slot.state.transition(SeedStage.HOLDING)
 
         slot.state.metrics.counterfactual_contribution = 0.0
 
         slot.step_epoch()
 
-        # Should be culled (0 is not positive contribution)
-        assert slot.state is None
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.HOLDING
 
     def test_positive_counterfactual_survives(self):
         """Positive counterfactual should not trigger auto-cull."""
@@ -248,13 +258,13 @@ class TestNegativeCounterfactualAutoCull:
         slot.germinate("noop", seed_id="test")
         slot.state.transition(SeedStage.TRAINING)
         slot.state.transition(SeedStage.BLENDING)
-        slot.state.transition(SeedStage.PROBATIONARY)
+        slot.state.transition(SeedStage.HOLDING)
 
         slot.state.metrics.counterfactual_contribution = 1.0
 
         slot.step_epoch()
 
-        # Should still be in probation
+        # Should still be in holding
         assert slot.state is not None
 
 
@@ -309,7 +319,7 @@ class TestG5GateBehavior:
         state = SeedState(
             seed_id="test",
             blueprint_id="noop",
-            stage=SeedStage.PROBATIONARY,
+            stage=SeedStage.HOLDING,
         )
 
         # No counterfactual set
@@ -327,7 +337,7 @@ class TestG5GateBehavior:
         state = SeedState(
             seed_id="test",
             blueprint_id="noop",
-            stage=SeedStage.PROBATIONARY,
+            stage=SeedStage.HOLDING,
         )
 
         # Below minimum threshold
@@ -347,7 +357,9 @@ class TestDwellEpochEnforcement:
         """TRAINING → BLENDING should not happen before dwell epochs."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
-        slot.step_epoch()  # → TRAINING
+        gate_result = slot.advance_stage(target_stage=SeedStage.TRAINING)
+        assert gate_result.passed
+        assert slot.state.stage == SeedStage.TRAINING
 
         # Set conditions that would pass G2 except for dwell
         slot.state.metrics.record_accuracy(50.0)
@@ -357,7 +369,8 @@ class TestDwellEpochEnforcement:
         # Only 1 epoch in TRAINING, but need more for dwell
         slot.state.metrics.epochs_in_current_stage = 0
 
-        slot.step_epoch()
+        gate_result = slot.advance_stage(target_stage=SeedStage.BLENDING)
+        assert not gate_result.passed
 
         # Should still be in TRAINING (dwell not satisfied)
         assert slot.state.stage == SeedStage.TRAINING
@@ -367,21 +380,21 @@ class TestBlendingProgressTracking:
     """Tests for blending progress tracking."""
 
     def test_blending_steps_done_increments(self):
-        """blending_steps_done should increment each step_epoch in BLENDING."""
+        """alpha_controller steps should increment each step_epoch in BLENDING."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
         slot.state.transition(SeedStage.TRAINING)
         slot.state.transition(SeedStage.BLENDING)
         slot.start_blending(total_steps=10)
 
-        initial_steps = slot.state.blending_steps_done
+        initial_steps = slot.state.alpha_controller.alpha_steps_done
 
         slot.step_epoch()
 
-        assert slot.state.blending_steps_done == initial_steps + 1
+        assert slot.state.alpha_controller.alpha_steps_done == initial_steps + 1
 
     def test_blending_steps_total_set_at_start(self):
-        """blending_steps_total should be set when blending starts."""
+        """alpha_controller steps_total should be set when blending starts."""
         slot = SeedSlot(slot_id="r0c0", channels=64)
         slot.germinate("noop", seed_id="test")
         slot.state.transition(SeedStage.TRAINING)
@@ -390,7 +403,7 @@ class TestBlendingProgressTracking:
         total_steps = 15
         slot.start_blending(total_steps=total_steps)
 
-        assert slot.state.blending_steps_total == total_steps
+        assert slot.state.alpha_controller.alpha_steps_total == total_steps
 
     def test_alpha_updates_during_blending(self):
         """Alpha should update each step during BLENDING."""
@@ -418,10 +431,16 @@ class TestRecycledSlot:
         # First lifecycle
         slot.germinate("noop", seed_id="seed1")
         slot.state.transition(SeedStage.TRAINING)
-        slot.cull()
+        slot.prune()
 
-        assert slot.state is None
+        assert slot.state is not None
+        assert slot.state.stage == SeedStage.PRUNED
         assert slot.seed is None
+
+        # Cooldown must complete before slot is available again.
+        for _ in range(DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE + 2):
+            slot.step_epoch()
+        assert slot.state is None
 
         # Second lifecycle
         state = slot.germinate("noop", seed_id="seed2")
@@ -438,7 +457,12 @@ class TestRecycledSlot:
         slot.state.metrics.record_accuracy(50.0)
         slot.state.metrics.record_accuracy(60.0)
         slot.state.transition(SeedStage.TRAINING)
-        slot.cull()
+        slot.prune()
+
+        # Cooldown must complete before slot is available again.
+        for _ in range(DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE + 2):
+            slot.step_epoch()
+        assert slot.state is None
 
         # Second lifecycle
         slot.germinate("noop", seed_id="seed2")

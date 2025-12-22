@@ -21,7 +21,9 @@ from hypothesis.stateful import (
     initialize,
 )
 
+from esper.kasmina.alpha_controller import AlphaController
 from esper.leyline import SeedStage
+from esper.leyline.alpha import AlphaMode
 from esper.tamiyo.heuristic import HeuristicTamiyo
 from esper.tamiyo.tracker import SignalTracker
 from esper.tamiyo.decisions import TamiyoDecision
@@ -91,12 +93,18 @@ class HeuristicPolicyStateMachine(RuleBasedStateMachine):
     )
     def make_decision_with_seed(self, stage, improvement, epochs_in_stage):
         """Make decision with an active seed."""
+        alpha = 0.5 if stage == SeedStage.BLENDING else 0.0
+        alpha_controller = AlphaController(alpha=alpha)
+        alpha_controller.alpha_target = 1.0
+        alpha_controller.alpha_mode = AlphaMode.UP
+
         seed = type('MockSeed', (), {
             'seed_id': f'seed_{self.epoch}',
             'stage': stage,
             'epochs_in_stage': epochs_in_stage,
-            'alpha': 0.5 if stage == SeedStage.BLENDING else 0.0,
+            'alpha': alpha,
             'blueprint_id': 'conv_light',
+            'alpha_controller': alpha_controller,
             'metrics': type('Metrics', (), {
                 'improvement_since_stage_start': improvement,
                 'total_improvement': improvement,
@@ -117,21 +125,26 @@ class HeuristicPolicyStateMachine(RuleBasedStateMachine):
         self.decision_count += 1
         self.epoch += 1
 
-        if decision.action.name == "CULL":
+        if decision.action.name == "PRUNE":
             self.cull_count += 1
-            self.policy._last_cull_epoch = self.epoch
+            self.policy._last_prune_epoch = self.epoch
 
     @rule(
         counterfactual=st.floats(min_value=-5.0, max_value=10.0, allow_nan=False),
     )
     def make_decision_probationary(self, counterfactual):
-        """Make decision with PROBATIONARY seed."""
+        """Make decision with HOLDING seed."""
+        alpha_controller = AlphaController(alpha=1.0)
+        alpha_controller.alpha_target = 1.0
+        alpha_controller.alpha_mode = AlphaMode.HOLD
+
         seed = type('MockSeed', (), {
             'seed_id': f'seed_{self.epoch}',
-            'stage': SeedStage.PROBATIONARY,
+            'stage': SeedStage.HOLDING,
             'epochs_in_stage': 5,
             'alpha': 1.0,
             'blueprint_id': 'conv_light',
+            'alpha_controller': alpha_controller,
             'metrics': type('Metrics', (), {
                 'improvement_since_stage_start': counterfactual,
                 'total_improvement': counterfactual,
@@ -152,7 +165,7 @@ class HeuristicPolicyStateMachine(RuleBasedStateMachine):
         self.decision_count += 1
         self.epoch += 1
 
-        if decision.action.name == "CULL":
+        if decision.action.name == "PRUNE":
             self.cull_count += 1
 
     @rule()
@@ -430,7 +443,7 @@ class TestResetCompleteness:
 
         # Add penalties
         policy._blueprint_penalties["conv_light"] = 5.0
-        policy._last_cull_epoch = 10
+        policy._last_prune_epoch = 10
 
         # Reset
         policy.reset()
@@ -439,7 +452,7 @@ class TestResetCompleteness:
         assert policy._blueprint_index == 0
         assert policy._germination_count == 0
         assert len(policy._decisions_made) == 0
-        assert policy._last_cull_epoch == -100
+        assert policy._last_prune_epoch == -100
         assert len(policy._blueprint_penalties) == 0
         assert policy._last_decay_epoch == -1
 

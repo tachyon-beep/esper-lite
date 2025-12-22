@@ -16,6 +16,7 @@ from hypothesis import strategies as st
 from hypothesis.strategies import composite
 
 from esper.leyline import SeedStage
+from esper.kasmina.alpha_controller import AlphaController
 from esper.tamiyo.heuristic import HeuristicPolicyConfig
 
 # Import shared strategies from tests.strategies
@@ -31,7 +32,7 @@ ACTIVE_STAGES = [
     SeedStage.GERMINATED,
     SeedStage.TRAINING,
     SeedStage.BLENDING,
-    SeedStage.PROBATIONARY,
+    SeedStage.HOLDING,
 ]
 
 # Early stages (before counterfactual is available)
@@ -43,7 +44,7 @@ PRE_BLENDING_STAGES = [
 # Stages where counterfactual contribution is available
 BLENDING_PLUS_STAGES = [
     SeedStage.BLENDING,
-    SeedStage.PROBATIONARY,
+    SeedStage.HOLDING,
 ]
 
 
@@ -87,6 +88,7 @@ class MockSeedState:
         self.epochs_in_stage = epochs_in_stage
         self.alpha = alpha
         self.blueprint_id = blueprint_id
+        self.alpha_controller = AlphaController(alpha=alpha)
         self.metrics = MockSeedMetrics(improvement, total, counterfactual)
 
 
@@ -134,12 +136,12 @@ def tamiyo_configs(draw) -> HeuristicPolicyConfig:
     return HeuristicPolicyConfig(
         plateau_epochs_to_germinate=draw(st.integers(min_value=1, max_value=10)),
         min_epochs_before_germinate=draw(st.integers(min_value=1, max_value=20)),
-        cull_after_epochs_without_improvement=draw(st.integers(min_value=1, max_value=10)),
-        cull_if_accuracy_drops_by=draw(bounded_floats(0.5, 5.0)),
+        prune_after_epochs_without_improvement=draw(st.integers(min_value=1, max_value=10)),
+        prune_if_accuracy_drops_by=draw(bounded_floats(0.5, 5.0)),
         min_improvement_to_fossilize=draw(bounded_floats(-1.0, 2.0)),
-        embargo_epochs_after_cull=draw(st.integers(min_value=0, max_value=10)),
+        embargo_epochs_after_prune=draw(st.integers(min_value=0, max_value=10)),
         blueprint_rotation=["conv_light", "conv_heavy", "attention"],
-        blueprint_penalty_on_cull=draw(bounded_floats(0.5, 5.0)),
+        blueprint_penalty_on_prune=draw(bounded_floats(0.5, 5.0)),
         blueprint_penalty_decay=draw(bounded_floats(0.1, 0.9)),
         blueprint_penalty_threshold=draw(bounded_floats(1.0, 10.0)),
     )
@@ -154,12 +156,12 @@ def strict_configs(draw) -> HeuristicPolicyConfig:
     return HeuristicPolicyConfig(
         plateau_epochs_to_germinate=1,
         min_epochs_before_germinate=draw(st.integers(min_value=0, max_value=3)),
-        cull_after_epochs_without_improvement=1,
-        cull_if_accuracy_drops_by=0.5,
+        prune_after_epochs_without_improvement=1,
+        prune_if_accuracy_drops_by=0.5,
         min_improvement_to_fossilize=0.0,
-        embargo_epochs_after_cull=draw(st.integers(min_value=0, max_value=2)),
+        embargo_epochs_after_prune=draw(st.integers(min_value=0, max_value=2)),
         blueprint_rotation=["conv_light"],
-        blueprint_penalty_on_cull=1.0,
+        blueprint_penalty_on_prune=1.0,
         blueprint_penalty_decay=0.5,
         blueprint_penalty_threshold=5.0,
     )
@@ -174,12 +176,12 @@ def lenient_configs(draw) -> HeuristicPolicyConfig:
     return HeuristicPolicyConfig(
         plateau_epochs_to_germinate=draw(st.integers(min_value=5, max_value=10)),
         min_epochs_before_germinate=draw(st.integers(min_value=10, max_value=30)),
-        cull_after_epochs_without_improvement=draw(st.integers(min_value=5, max_value=15)),
-        cull_if_accuracy_drops_by=draw(bounded_floats(3.0, 10.0)),
+        prune_after_epochs_without_improvement=draw(st.integers(min_value=5, max_value=15)),
+        prune_if_accuracy_drops_by=draw(bounded_floats(3.0, 10.0)),
         min_improvement_to_fossilize=draw(bounded_floats(0.5, 3.0)),
-        embargo_epochs_after_cull=draw(st.integers(min_value=5, max_value=15)),
+        embargo_epochs_after_prune=draw(st.integers(min_value=5, max_value=15)),
         blueprint_rotation=["conv_light", "conv_heavy", "attention", "norm", "depthwise"],
-        blueprint_penalty_on_cull=draw(bounded_floats(1.0, 5.0)),
+        blueprint_penalty_on_prune=draw(bounded_floats(1.0, 5.0)),
         blueprint_penalty_decay=draw(bounded_floats(0.3, 0.7)),
         blueprint_penalty_threshold=draw(bounded_floats(5.0, 15.0)),
     )
@@ -215,7 +217,7 @@ def mock_seed_states(draw, stage: SeedStage | None = None) -> MockSeedState:
         epochs = draw(st.integers(min_value=0, max_value=15))
     elif stage == SeedStage.BLENDING:
         epochs = draw(st.integers(min_value=0, max_value=20))
-    else:  # PROBATIONARY
+    else:  # HOLDING
         epochs = draw(st.integers(min_value=0, max_value=10))
 
     # Alpha based on stage (increases through lifecycle)
@@ -225,7 +227,7 @@ def mock_seed_states(draw, stage: SeedStage | None = None) -> MockSeedState:
         alpha = 0.0
     elif stage == SeedStage.BLENDING:
         alpha = draw(bounded_floats(0.0, 1.0))
-    else:  # PROBATIONARY
+    else:  # HOLDING
         alpha = 1.0
 
     return MockSeedState(
@@ -274,7 +276,7 @@ def failing_seed_states(draw) -> MockSeedState:
 @composite
 def succeeding_seed_states(draw) -> MockSeedState:
     """Generate seeds that are succeeding (positive improvement)."""
-    stage = draw(st.sampled_from([SeedStage.TRAINING, SeedStage.BLENDING, SeedStage.PROBATIONARY]))
+    stage = draw(st.sampled_from([SeedStage.TRAINING, SeedStage.BLENDING, SeedStage.HOLDING]))
 
     counterfactual = None
     if stage in BLENDING_PLUS_STAGES:
@@ -284,7 +286,7 @@ def succeeding_seed_states(draw) -> MockSeedState:
         seed_id=draw(st.text(min_size=1, max_size=8, alphabet="abcdefgh")),
         stage=stage,
         epochs_in_stage=draw(st.integers(min_value=1, max_value=10)),
-        alpha=1.0 if stage == SeedStage.PROBATIONARY else (
+        alpha=1.0 if stage == SeedStage.HOLDING else (
             draw(bounded_floats(0.3, 1.0)) if stage == SeedStage.BLENDING else 0.0
         ),
         blueprint_id=draw(st.sampled_from(["conv_light", "conv_heavy", "attention"])),
@@ -296,7 +298,7 @@ def succeeding_seed_states(draw) -> MockSeedState:
 
 @composite
 def probationary_seed_states(draw, with_counterfactual: bool = True) -> MockSeedState:
-    """Generate PROBATIONARY seeds for fossilization testing.
+    """Generate HOLDING seeds for fossilization testing.
 
     Args:
         with_counterfactual: Whether to include counterfactual contribution.
@@ -307,7 +309,7 @@ def probationary_seed_states(draw, with_counterfactual: bool = True) -> MockSeed
 
     return MockSeedState(
         seed_id=draw(st.text(min_size=1, max_size=8, alphabet="abcdefgh")),
-        stage=SeedStage.PROBATIONARY,
+        stage=SeedStage.HOLDING,
         epochs_in_stage=draw(st.integers(min_value=1, max_value=10)),
         alpha=1.0,
         blueprint_id=draw(st.sampled_from(["conv_light", "conv_heavy", "attention"])),
@@ -403,7 +405,7 @@ def fossilization_contexts(draw) -> tuple[MockTrainingSignals, list[MockSeedStat
     """Generate contexts where fossilization might trigger.
 
     Returns:
-        Tuple of (signals, active_seeds) with PROBATIONARY seed that has positive contribution.
+        Tuple of (signals, active_seeds) with HOLDING seed that has positive contribution.
     """
     signals = draw(stabilized_signals())
     seed = draw(probationary_seed_states(with_counterfactual=True))

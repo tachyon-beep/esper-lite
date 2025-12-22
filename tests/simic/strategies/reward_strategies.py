@@ -8,7 +8,7 @@ input space.
 from hypothesis import strategies as st
 from hypothesis.strategies import composite, sampled_from
 
-from esper.leyline import SeedStage, MIN_CULL_AGE
+from esper.leyline import SeedStage, MIN_PRUNE_AGE
 from esper.leyline.factored_actions import LifecycleOp
 from esper.simic.rewards import SeedInfo
 
@@ -17,7 +17,7 @@ ACTIVE_STAGES = [
     SeedStage.GERMINATED.value,
     SeedStage.TRAINING.value,
     SeedStage.BLENDING.value,
-    SeedStage.PROBATIONARY.value,
+    SeedStage.HOLDING.value,
     SeedStage.FOSSILIZED.value,
 ]
 
@@ -28,7 +28,7 @@ PRE_BLENDING_STAGES = [
 
 BLENDING_PLUS_STAGES = [
     SeedStage.BLENDING.value,
-    SeedStage.PROBATIONARY.value,
+    SeedStage.HOLDING.value,
     SeedStage.FOSSILIZED.value,
 ]
 
@@ -77,7 +77,13 @@ def seed_infos_at_stage(draw, stage: int):
 
 def lifecycle_ops():
     """Strategy for lifecycle operations."""
-    return sampled_from([LifecycleOp.WAIT, LifecycleOp.GERMINATE, LifecycleOp.CULL, LifecycleOp.FOSSILIZE])
+    return sampled_from([
+        LifecycleOp.WAIT,
+        LifecycleOp.GERMINATE,
+        LifecycleOp.PRUNE,
+        LifecycleOp.FOSSILIZE,
+        LifecycleOp.ADVANCE,
+    ])
 
 
 @composite
@@ -157,8 +163,8 @@ def ransomware_seed_inputs(draw):
     Ransomware pattern: high counterfactual contribution but negative
     total_improvement - the seed created dependencies without adding value.
     """
-    # Force BLENDING or PROBATIONARY stage (where counterfactual is available)
-    stage = draw(sampled_from([SeedStage.BLENDING.value, SeedStage.PROBATIONARY.value]))
+    # Force BLENDING or HOLDING stage (where counterfactual is available)
+    stage = draw(sampled_from([SeedStage.BLENDING.value, SeedStage.HOLDING.value]))
 
     seed_info = SeedInfo(
         stage=stage,
@@ -198,11 +204,11 @@ def fossilize_inputs(draw, valid: bool = True):
     """Generate inputs for FOSSILIZE action.
 
     Args:
-        valid: If True, generate valid fossilize context (PROBATIONARY stage).
+        valid: If True, generate valid fossilize context (HOLDING stage).
                If False, generate invalid context.
     """
     if valid:
-        stage = SeedStage.PROBATIONARY.value
+        stage = SeedStage.HOLDING.value
     else:
         stage = draw(sampled_from([
             SeedStage.GERMINATED.value,
@@ -235,11 +241,11 @@ def fossilize_inputs(draw, valid: bool = True):
 
 
 @composite
-def cull_inputs(draw, valid: bool = True):
-    """Generate inputs for CULL action.
+def prune_inputs(draw, valid: bool = True):
+    """Generate inputs for PRUNE action.
 
     Args:
-        valid: If True, generate valid cull context (not FOSSILIZED, meets age).
+        valid: If True, generate valid prune context (not FOSSILIZED, meets age).
                If False, generate invalid context.
     """
     if valid:
@@ -247,9 +253,9 @@ def cull_inputs(draw, valid: bool = True):
             SeedStage.GERMINATED.value,
             SeedStage.TRAINING.value,
             SeedStage.BLENDING.value,
-            SeedStage.PROBATIONARY.value,
+            SeedStage.HOLDING.value,
         ]))
-        seed_age = draw(st.integers(MIN_CULL_AGE, 25))
+        seed_age = draw(st.integers(MIN_PRUNE_AGE, 25))
     else:
         # Invalid: either fossilized or too young
         if draw(st.booleans()):
@@ -275,7 +281,7 @@ def cull_inputs(draw, valid: bool = True):
         seed_contribution = draw(st.floats(-5.0, 5.0, allow_nan=False))
 
     return {
-        "action": LifecycleOp.CULL,
+        "action": LifecycleOp.PRUNE,
         "seed_contribution": seed_contribution,
         "val_acc": draw(st.floats(50.0, 90.0, allow_nan=False)),
         "seed_info": seed_info,
@@ -304,7 +310,7 @@ def stage_sequences(draw, min_length: int = 3, max_length: int = 15):
     stage_order = [
         SeedStage.TRAINING.value,
         SeedStage.BLENDING.value,
-        SeedStage.PROBATIONARY.value,
+        SeedStage.HOLDING.value,
         SeedStage.FOSSILIZED.value,
     ]
 

@@ -11,7 +11,16 @@ import torch
 from esper.simic.agent import PPOAgent, signals_to_features
 from esper.tamiyo.policy.features import MULTISLOT_FEATURE_SIZE
 from esper.leyline import TrainingSignals, SeedTelemetry
-from esper.leyline.factored_actions import NUM_BLUEPRINTS, NUM_BLENDS, NUM_OPS
+from esper.leyline.factored_actions import (
+    NUM_ALPHA_ALGORITHMS,
+    NUM_ALPHA_CURVES,
+    NUM_ALPHA_SPEEDS,
+    NUM_ALPHA_TARGETS,
+    NUM_BLUEPRINTS,
+    NUM_BLENDS,
+    NUM_OPS,
+    NUM_TEMPO,
+)
 
 
 def _create_all_valid_masks(batch_size: int = 1) -> dict[str, torch.Tensor]:
@@ -20,6 +29,11 @@ def _create_all_valid_masks(batch_size: int = 1) -> dict[str, torch.Tensor]:
         "slot": torch.ones(batch_size, 3, dtype=torch.bool),              # 3 slots
         "blueprint": torch.ones(batch_size, NUM_BLUEPRINTS, dtype=torch.bool),
         "blend": torch.ones(batch_size, NUM_BLENDS, dtype=torch.bool),
+        "tempo": torch.ones(batch_size, NUM_TEMPO, dtype=torch.bool),
+        "alpha_target": torch.ones(batch_size, NUM_ALPHA_TARGETS, dtype=torch.bool),
+        "alpha_speed": torch.ones(batch_size, NUM_ALPHA_SPEEDS, dtype=torch.bool),
+        "alpha_curve": torch.ones(batch_size, NUM_ALPHA_CURVES, dtype=torch.bool),
+        "alpha_algorithm": torch.ones(batch_size, NUM_ALPHA_ALGORITHMS, dtype=torch.bool),
         "op": torch.ones(batch_size, NUM_OPS, dtype=torch.bool),
     }
 
@@ -54,6 +68,11 @@ class TestPPOFeatureCompatibility:
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
                 blend_mask=masks["blend"],
+                tempo_mask=masks["tempo"],
+                alpha_target_mask=masks["alpha_target"],
+                alpha_speed_mask=masks["alpha_speed"],
+                alpha_curve_mask=masks["alpha_curve"],
+                alpha_algorithm_mask=masks["alpha_algorithm"],
                 op_mask=masks["op"],
             )
 
@@ -88,6 +107,11 @@ class TestPPOFeatureCompatibility:
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
                 blend_mask=masks["blend"],
+                tempo_mask=masks["tempo"],
+                alpha_target_mask=masks["alpha_target"],
+                alpha_speed_mask=masks["alpha_speed"],
+                alpha_curve_mask=masks["alpha_curve"],
+                alpha_algorithm_mask=masks["alpha_algorithm"],
                 op_mask=masks["op"],
             )
 
@@ -120,11 +144,26 @@ class TestPPOFeatureCompatibility:
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
                 blend_mask=masks["blend"],
+                tempo_mask=masks["tempo"],
+                alpha_target_mask=masks["alpha_target"],
+                alpha_speed_mask=masks["alpha_speed"],
+                alpha_curve_mask=masks["alpha_curve"],
+                alpha_algorithm_mask=masks["alpha_algorithm"],
                 op_mask=masks["op"],
             )
 
         assert result.values.shape == (batch_size,)
-        for key in ["slot", "blueprint", "blend", "op"]:
+        for key in [
+            "slot",
+            "blueprint",
+            "blend",
+            "tempo",
+            "alpha_target",
+            "alpha_speed",
+            "alpha_curve",
+            "alpha_algorithm",
+            "op",
+        ]:
             assert result.actions[key].shape == (batch_size,), f"{key} actions should have batch dim"
 
 
@@ -143,6 +182,11 @@ class TestPPOForwardPass:
                 slot_mask=masks["slot"].unsqueeze(1),
                 blueprint_mask=masks["blueprint"].unsqueeze(1),
                 blend_mask=masks["blend"].unsqueeze(1),
+                tempo_mask=masks["tempo"].unsqueeze(1),
+                alpha_target_mask=masks["alpha_target"].unsqueeze(1),
+                alpha_speed_mask=masks["alpha_speed"].unsqueeze(1),
+                alpha_curve_mask=masks["alpha_curve"].unsqueeze(1),
+                alpha_algorithm_mask=masks["alpha_algorithm"].unsqueeze(1),
                 op_mask=masks["op"].unsqueeze(1),
             )
 
@@ -150,6 +194,11 @@ class TestPPOForwardPass:
         assert "slot_logits" in output
         assert "blueprint_logits" in output
         assert "blend_logits" in output
+        assert "tempo_logits" in output
+        assert "alpha_target_logits" in output
+        assert "alpha_speed_logits" in output
+        assert "alpha_curve_logits" in output
+        assert "alpha_algorithm_logits" in output
         assert "op_logits" in output
         assert "value" in output
         assert "hidden" in output
@@ -167,6 +216,11 @@ class TestPPOForwardPass:
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
                 blend_mask=masks["blend"],
+                tempo_mask=masks["tempo"],
+                alpha_target_mask=masks["alpha_target"],
+                alpha_speed_mask=masks["alpha_speed"],
+                alpha_curve_mask=masks["alpha_curve"],
+                alpha_algorithm_mask=masks["alpha_algorithm"],
                 op_mask=masks["op"],
             )
 
@@ -186,6 +240,11 @@ class TestPPOForwardPass:
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
                 blend_mask=masks["blend"],
+                tempo_mask=masks["tempo"],
+                alpha_target_mask=masks["alpha_target"],
+                alpha_speed_mask=masks["alpha_speed"],
+                alpha_curve_mask=masks["alpha_curve"],
+                alpha_algorithm_mask=masks["alpha_algorithm"],
                 op_mask=masks["op"],
             )
             result2 = agent.network.get_action(
@@ -193,11 +252,26 @@ class TestPPOForwardPass:
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
                 blend_mask=masks["blend"],
+                tempo_mask=masks["tempo"],
+                alpha_target_mask=masks["alpha_target"],
+                alpha_speed_mask=masks["alpha_speed"],
+                alpha_curve_mask=masks["alpha_curve"],
+                alpha_algorithm_mask=masks["alpha_algorithm"],
                 op_mask=masks["op"],
             )
 
         # Actions should be identical
-        for key in ["slot", "blueprint", "blend", "op"]:
+        for key in [
+            "slot",
+            "blueprint",
+            "blend",
+            "tempo",
+            "alpha_target",
+            "alpha_speed",
+            "alpha_curve",
+            "alpha_algorithm",
+            "op",
+        ]:
             assert torch.equal(result1.actions[key], result2.actions[key]), f"{key} actions should be deterministic"
         assert torch.allclose(result1.values, result2.values), "Values should be deterministic"
 
@@ -216,6 +290,11 @@ class TestPPOActionSampling:
             slot_mask=masks["slot"],
             blueprint_mask=masks["blueprint"],
             blend_mask=masks["blend"],
+            tempo_mask=masks["tempo"],
+            alpha_target_mask=masks["alpha_target"],
+            alpha_speed_mask=masks["alpha_speed"],
+            alpha_curve_mask=masks["alpha_curve"],
+            alpha_algorithm_mask=masks["alpha_algorithm"],
             op_mask=masks["op"],
             deterministic=False,
         )
@@ -224,10 +303,25 @@ class TestPPOActionSampling:
         assert 0 <= result.actions["slot"].item() < 3, "Slot action out of range"
         assert 0 <= result.actions["blueprint"].item() < NUM_BLUEPRINTS, "Blueprint action out of range"
         assert 0 <= result.actions["blend"].item() < NUM_BLENDS, "Blend action out of range"
+        assert 0 <= result.actions["tempo"].item() < NUM_TEMPO, "Tempo action out of range"
+        assert 0 <= result.actions["alpha_target"].item() < NUM_ALPHA_TARGETS, "Alpha target action out of range"
+        assert 0 <= result.actions["alpha_speed"].item() < NUM_ALPHA_SPEEDS, "Alpha speed action out of range"
+        assert 0 <= result.actions["alpha_curve"].item() < NUM_ALPHA_CURVES, "Alpha curve action out of range"
+        assert 0 <= result.actions["alpha_algorithm"].item() < NUM_ALPHA_ALGORITHMS, "Alpha algorithm action out of range"
         assert 0 <= result.actions["op"].item() < NUM_OPS, "Op action out of range"
 
         # Log probs should be negative
-        for key in ["slot", "blueprint", "blend", "op"]:
+        for key in [
+            "slot",
+            "blueprint",
+            "blend",
+            "tempo",
+            "alpha_target",
+            "alpha_speed",
+            "alpha_curve",
+            "alpha_algorithm",
+            "op",
+        ]:
             assert result.log_probs[key].item() <= 0, f"{key} log prob should be <= 0"
 
     def test_deterministic_action_selects_argmax(self):
@@ -237,13 +331,30 @@ class TestPPOActionSampling:
         masks = _create_all_valid_masks()
 
         # Get deterministic action multiple times
-        all_actions = {key: [] for key in ["slot", "blueprint", "blend", "op"]}
+        all_actions = {
+            key: [] for key in [
+                "slot",
+                "blueprint",
+                "blend",
+                "tempo",
+                "alpha_target",
+                "alpha_speed",
+                "alpha_curve",
+                "alpha_algorithm",
+                "op",
+            ]
+        }
         for _ in range(10):
             result = agent.network.get_action(
                 state, deterministic=True,
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
                 blend_mask=masks["blend"],
+                tempo_mask=masks["tempo"],
+                alpha_target_mask=masks["alpha_target"],
+                alpha_speed_mask=masks["alpha_speed"],
+                alpha_curve_mask=masks["alpha_curve"],
+                alpha_algorithm_mask=masks["alpha_algorithm"],
                 op_mask=masks["op"],
             )
             for key in all_actions:
@@ -267,6 +378,11 @@ class TestPPOActionSampling:
                 slot_mask=masks["slot"],
                 blueprint_mask=masks["blueprint"],
                 blend_mask=masks["blend"],
+                tempo_mask=masks["tempo"],
+                alpha_target_mask=masks["alpha_target"],
+                alpha_speed_mask=masks["alpha_speed"],
+                alpha_curve_mask=masks["alpha_curve"],
+                alpha_algorithm_mask=masks["alpha_algorithm"],
                 op_mask=masks["op"],
             )
             all_op_actions.append(result.actions["op"].item())
@@ -306,6 +422,11 @@ class TestPPOEndToEnd:
             slot_mask=masks["slot"],
             blueprint_mask=masks["blueprint"],
             blend_mask=masks["blend"],
+            tempo_mask=masks["tempo"],
+            alpha_target_mask=masks["alpha_target"],
+            alpha_speed_mask=masks["alpha_speed"],
+            alpha_curve_mask=masks["alpha_curve"],
+            alpha_algorithm_mask=masks["alpha_algorithm"],
             op_mask=masks["op"],
             deterministic=False,
         )
@@ -338,6 +459,11 @@ class TestPPOEndToEnd:
             slot_mask=masks["slot"],
             blueprint_mask=masks["blueprint"],
             blend_mask=masks["blend"],
+            tempo_mask=masks["tempo"],
+            alpha_target_mask=masks["alpha_target"],
+            alpha_speed_mask=masks["alpha_speed"],
+            alpha_curve_mask=masks["alpha_curve"],
+            alpha_algorithm_mask=masks["alpha_algorithm"],
             op_mask=masks["op"],
         )
 
@@ -356,6 +482,11 @@ class TestPPOEndToEnd:
             slot_mask=masks["slot"],
             blueprint_mask=masks["blueprint"],
             blend_mask=masks["blend"],
+            tempo_mask=masks["tempo"],
+            alpha_target_mask=masks["alpha_target"],
+            alpha_speed_mask=masks["alpha_speed"],
+            alpha_curve_mask=masks["alpha_curve"],
+            alpha_algorithm_mask=masks["alpha_algorithm"],
             op_mask=masks["op"],
         )
 
@@ -366,6 +497,11 @@ class TestPPOEndToEnd:
             slot_mask=masks["slot"],
             blueprint_mask=masks["blueprint"],
             blend_mask=masks["blend"],
+            tempo_mask=masks["tempo"],
+            alpha_target_mask=masks["alpha_target"],
+            alpha_speed_mask=masks["alpha_speed"],
+            alpha_curve_mask=masks["alpha_curve"],
+            alpha_algorithm_mask=masks["alpha_algorithm"],
             op_mask=masks["op"],
         )
 

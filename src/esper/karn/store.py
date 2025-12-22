@@ -11,6 +11,7 @@ analytics consume them, and outputs serialize them.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,11 +20,26 @@ from collections import deque
 
 from esper.karn.constants import AnomalyThresholds
 from esper.leyline import SeedStage
+from esper.karn.ingest import (
+    coerce_bool_or_none,
+    coerce_datetime,
+    coerce_float,
+    coerce_float_dict,
+    coerce_float_or_none,
+    coerce_int,
+    coerce_path,
+    coerce_seed_stage,
+    coerce_str_or_none,
+    filter_dataclass_kwargs,
+)
 
 
 def _utc_now() -> datetime:
     """Return current UTC time (timezone-aware)."""
     return datetime.now(timezone.utc)
+
+
+_logger = logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -147,8 +163,9 @@ class RewardComponents:
     accuracy_delta: float = 0.0
     bounded_attribution: float | None = None  # For contribution mode
     compute_rent: float = 0.0
+    alpha_shock: float = 0.0
     blending_warning: float = 0.0
-    probation_warning: float = 0.0
+    holding_warning: float = 0.0
     ratio_penalty: float = 0.0
     terminal_bonus: float = 0.0
 
@@ -162,7 +179,7 @@ class PolicySnapshot:
     observation_summary: dict[str, float] = field(default_factory=dict)  # Key stats
 
     # Action (what the agent did)
-    action_op: str = ""  # "WAIT", "GERMINATE", "CULL", etc.
+    action_op: str = ""  # "WAIT", "GERMINATE", "PRUNE", etc.
     action_slot: str | None = None
     action_blueprint: str | None = None
     action_was_masked: bool = False  # Was this action forced by mask?
@@ -449,6 +466,300 @@ class TelemetryStore:
         path = Path(path)
         store = cls()
 
+        def _coerce_tuple_pairs(value: Any, *, field: str) -> tuple[tuple[str, Any], ...]:
+            if value is None:
+                return ()
+            if isinstance(value, tuple):
+                seq = value
+            elif isinstance(value, list):
+                seq = value
+            else:
+                _logger.warning("Invalid %s=%r (expected list/tuple of pairs); using empty tuple", field, value)
+                return ()
+
+            result: list[tuple[str, Any]] = []
+            for item in seq:
+                if isinstance(item, (list, tuple)) and len(item) == 2:
+                    result.append((str(item[0]), item[1]))
+                else:
+                    _logger.warning("Invalid %s item=%r (expected pair); skipping", field, item)
+            return tuple(result)
+
+        def _coerce_slot_config(value: Any) -> tuple[tuple[str, int], ...]:
+            if value is None:
+                return ()
+            if isinstance(value, tuple):
+                seq = value
+            elif isinstance(value, list):
+                seq = value
+            else:
+                _logger.warning("Invalid slot_config=%r (expected list/tuple of pairs); using empty tuple", value)
+                return ()
+            result: list[tuple[str, int]] = []
+            for item in seq:
+                if not (isinstance(item, (list, tuple)) and len(item) == 2):
+                    _logger.warning("Invalid slot_config item=%r (expected pair); skipping", item)
+                    continue
+                slot_id = str(item[0])
+                width = coerce_int(item[1], field="slot_config.width", default=0, minimum=0)
+                result.append((slot_id, width))
+            return tuple(result)
+
+        def _parse_episode_context(raw: dict[str, Any]) -> EpisodeContext:
+            data = filter_dataclass_kwargs(EpisodeContext, raw, context="EpisodeContext")
+            ts = coerce_datetime(data.get("timestamp"), field="EpisodeContext.timestamp", default=None)
+            if ts is None:
+                data.pop("timestamp", None)
+            else:
+                data["timestamp"] = ts
+
+            data["base_seed"] = coerce_int(data.get("base_seed"), field="EpisodeContext.base_seed", default=42, minimum=0)
+            data["torch_seed"] = coerce_int(data.get("torch_seed"), field="EpisodeContext.torch_seed", default=42, minimum=0)
+            data["numpy_seed"] = coerce_int(data.get("numpy_seed"), field="EpisodeContext.numpy_seed", default=42, minimum=0)
+            data["max_epochs"] = coerce_int(data.get("max_epochs"), field="EpisodeContext.max_epochs", default=75, minimum=1)
+
+            data["hyperparameters"] = _coerce_tuple_pairs(data.get("hyperparameters"), field="EpisodeContext.hyperparameters")
+            data["slot_config"] = _coerce_slot_config(data.get("slot_config"))
+            return EpisodeContext(**data)
+
+        def _parse_host_baseline(raw: dict[str, Any]) -> HostBaseline:
+            data = filter_dataclass_kwargs(HostBaseline, raw, context="HostBaseline")
+            if "initial_checkpoint_path" in data:
+                data["initial_checkpoint_path"] = coerce_path(
+                    data.get("initial_checkpoint_path"),
+                    field="HostBaseline.initial_checkpoint_path",
+                )
+            return HostBaseline(**data)
+
+        def _parse_slot_snapshot(raw: dict[str, Any]) -> SlotSnapshot:
+            data = filter_dataclass_kwargs(SlotSnapshot, raw, context="SlotSnapshot")
+            data["stage"] = coerce_seed_stage(data.get("stage"), field="SlotSnapshot.stage", default=SeedStage.DORMANT)
+            data["epochs_in_stage"] = coerce_int(
+                data.get("epochs_in_stage"), field="SlotSnapshot.epochs_in_stage", default=0, minimum=0
+            )
+            data["seed_params"] = coerce_int(data.get("seed_params"), field="SlotSnapshot.seed_params", default=0, minimum=0)
+            data["alpha"] = coerce_float(data.get("alpha"), field="SlotSnapshot.alpha", default=0.0)
+            data["counterfactual_contribution"] = coerce_float_or_none(
+                data.get("counterfactual_contribution"), field="SlotSnapshot.counterfactual_contribution"
+            )
+            data["total_improvement"] = coerce_float_or_none(
+                data.get("total_improvement"), field="SlotSnapshot.total_improvement"
+            )
+            data["improvement_this_epoch"] = coerce_float(
+                data.get("improvement_this_epoch"), field="SlotSnapshot.improvement_this_epoch", default=0.0
+            )
+            data["activation_magnitude"] = coerce_float(
+                data.get("activation_magnitude"), field="SlotSnapshot.activation_magnitude", default=0.0
+            )
+            data["seed_id"] = coerce_str_or_none(data.get("seed_id"), field="SlotSnapshot.seed_id")
+            data["blueprint_id"] = coerce_str_or_none(data.get("blueprint_id"), field="SlotSnapshot.blueprint_id")
+            return SlotSnapshot(**data)
+
+        def _parse_host_snapshot(raw: dict[str, Any]) -> HostSnapshot:
+            data = filter_dataclass_kwargs(HostSnapshot, raw, context="HostSnapshot")
+            data["epoch"] = coerce_int(data.get("epoch"), field="HostSnapshot.epoch", default=0, minimum=0)
+            data["train_loss"] = coerce_float(data.get("train_loss"), field="HostSnapshot.train_loss", default=0.0)
+            data["train_accuracy"] = coerce_float(
+                data.get("train_accuracy"), field="HostSnapshot.train_accuracy", default=0.0
+            )
+            data["val_loss"] = coerce_float(data.get("val_loss"), field="HostSnapshot.val_loss", default=0.0)
+            data["val_accuracy"] = coerce_float(data.get("val_accuracy"), field="HostSnapshot.val_accuracy", default=0.0)
+            data["host_params"] = coerce_int(data.get("host_params"), field="HostSnapshot.host_params", default=0, minimum=0)
+            data["total_seed_params"] = coerce_int(
+                data.get("total_seed_params"), field="HostSnapshot.total_seed_params", default=0, minimum=0
+            )
+            data["total_params"] = coerce_int(data.get("total_params"), field="HostSnapshot.total_params", default=0, minimum=0)
+            data["fossilized_params"] = coerce_int(
+                data.get("fossilized_params"), field="HostSnapshot.fossilized_params", default=0, minimum=0
+            )
+            data["host_grad_norm"] = coerce_float(data.get("host_grad_norm"), field="HostSnapshot.host_grad_norm", default=0.0)
+            data["seed_grad_norms"] = coerce_float_dict(
+                data.get("seed_grad_norms"), field="HostSnapshot.seed_grad_norms"
+            )
+            data["grad_isolation_leakage"] = coerce_float_or_none(
+                data.get("grad_isolation_leakage"), field="HostSnapshot.grad_isolation_leakage"
+            )
+            return HostSnapshot(**data)
+
+        def _parse_reward_components(raw: dict[str, Any]) -> RewardComponents:
+            data = filter_dataclass_kwargs(RewardComponents, raw, context="RewardComponents")
+            for key in (
+                "total",
+                "accuracy_delta",
+                "compute_rent",
+                "alpha_shock",
+                "blending_warning",
+                "holding_warning",
+                "ratio_penalty",
+                "terminal_bonus",
+            ):
+                data[key] = coerce_float(data.get(key), field=f"RewardComponents.{key}", default=0.0)
+            data["bounded_attribution"] = coerce_float_or_none(
+                data.get("bounded_attribution"), field="RewardComponents.bounded_attribution"
+            )
+            return RewardComponents(**data)
+
+        def _parse_policy_snapshot(raw: dict[str, Any]) -> PolicySnapshot:
+            data = filter_dataclass_kwargs(PolicySnapshot, raw, context="PolicySnapshot")
+            data["observation_dim"] = coerce_int(
+                data.get("observation_dim"), field="PolicySnapshot.observation_dim", default=0, minimum=0
+            )
+            if "observation_summary" in data:
+                data["observation_summary"] = coerce_float_dict(
+                    data.get("observation_summary"), field="PolicySnapshot.observation_summary"
+                )
+            data["action_op"] = coerce_str_or_none(data.get("action_op"), field="PolicySnapshot.action_op") or ""
+            data["action_slot"] = coerce_str_or_none(data.get("action_slot"), field="PolicySnapshot.action_slot")
+            data["action_blueprint"] = coerce_str_or_none(
+                data.get("action_blueprint"), field="PolicySnapshot.action_blueprint"
+            )
+
+            masked = coerce_bool_or_none(data.get("action_was_masked"), field="PolicySnapshot.action_was_masked")
+            data["action_was_masked"] = False if masked is None else masked
+
+            if "action_log_probs" in data:
+                data["action_log_probs"] = coerce_float_dict(
+                    data.get("action_log_probs"), field="PolicySnapshot.action_log_probs"
+                )
+
+            data["value_estimate"] = coerce_float(data.get("value_estimate"), field="PolicySnapshot.value_estimate", default=0.0)
+            data["advantage"] = coerce_float_or_none(data.get("advantage"), field="PolicySnapshot.advantage")
+            data["reward_total"] = coerce_float(data.get("reward_total"), field="PolicySnapshot.reward_total", default=0.0)
+
+            reward_components_raw = data.get("reward_components")
+            if isinstance(reward_components_raw, dict):
+                data["reward_components"] = _parse_reward_components(reward_components_raw)
+            else:
+                data.pop("reward_components", None)
+
+            data["kl_divergence"] = coerce_float_or_none(data.get("kl_divergence"), field="PolicySnapshot.kl_divergence")
+            data["explained_variance"] = coerce_float_or_none(
+                data.get("explained_variance"), field="PolicySnapshot.explained_variance"
+            )
+            data["entropy"] = coerce_float_or_none(data.get("entropy"), field="PolicySnapshot.entropy")
+            return PolicySnapshot(**data)
+
+        def _parse_advantage_stats(raw: dict[str, Any]) -> AdvantageStats:
+            data = filter_dataclass_kwargs(AdvantageStats, raw, context="AdvantageStats")
+            for key in ("mean", "std", "min", "max", "fraction_clipped"):
+                data[key] = coerce_float(data.get(key), field=f"AdvantageStats.{key}", default=0.0)
+            return AdvantageStats(**data)
+
+        def _parse_ratio_stats(raw: dict[str, Any]) -> RatioStats:
+            data = filter_dataclass_kwargs(RatioStats, raw, context="RatioStats")
+            for key in ("mean", "fraction_clipped_high", "fraction_clipped_low"):
+                data[key] = coerce_float(data.get(key), field=f"RatioStats.{key}", default=0.0)
+            data["per_head_clip_rates"] = coerce_float_dict(
+                data.get("per_head_clip_rates"), field="RatioStats.per_head_clip_rates"
+            )
+            return RatioStats(**data)
+
+        def _parse_epoch_snapshot(raw: dict[str, Any]) -> EpochSnapshot:
+            data = filter_dataclass_kwargs(EpochSnapshot, raw, context="EpochSnapshot")
+            ts = coerce_datetime(data.get("timestamp"), field="EpochSnapshot.timestamp", default=None)
+            if ts is None:
+                data.pop("timestamp", None)
+            else:
+                data["timestamp"] = ts
+
+            data["epoch"] = coerce_int(data.get("epoch"), field="EpochSnapshot.epoch", default=0, minimum=0)
+            data["rank"] = coerce_int(data.get("rank"), field="EpochSnapshot.rank", default=0, minimum=0)
+            data["world_size"] = coerce_int(data.get("world_size"), field="EpochSnapshot.world_size", default=1, minimum=1)
+
+            reduced = coerce_bool_or_none(data.get("is_reduced"), field="EpochSnapshot.is_reduced")
+            data["is_reduced"] = False if reduced is None else reduced
+
+            host_raw = data.get("host")
+            if isinstance(host_raw, dict):
+                data["host"] = _parse_host_snapshot(host_raw)
+
+            slots_raw = data.get("slots")
+            if isinstance(slots_raw, dict):
+                data["slots"] = {k: _parse_slot_snapshot(v) for k, v in slots_raw.items() if isinstance(v, dict)}
+
+            policy_raw = data.get("policy")
+            if isinstance(policy_raw, dict):
+                data["policy"] = _parse_policy_snapshot(policy_raw)
+            else:
+                data["policy"] = None
+
+            advantage_raw = data.get("advantage_stats")
+            if isinstance(advantage_raw, dict):
+                data["advantage_stats"] = _parse_advantage_stats(advantage_raw)
+            else:
+                data["advantage_stats"] = None
+
+            ratio_raw = data.get("ratio_stats")
+            if isinstance(ratio_raw, dict):
+                data["ratio_stats"] = _parse_ratio_stats(ratio_raw)
+            else:
+                data["ratio_stats"] = None
+
+            return EpochSnapshot(**data)
+
+        def _parse_batch_metrics(raw: dict[str, Any]) -> BatchMetrics:
+            data = filter_dataclass_kwargs(BatchMetrics, raw, context="BatchMetrics")
+            data["epoch"] = coerce_int(data.get("epoch"), field="BatchMetrics.epoch", default=0, minimum=0)
+            data["batch_idx"] = coerce_int(data.get("batch_idx"), field="BatchMetrics.batch_idx", default=0, minimum=0)
+            data["loss"] = coerce_float(data.get("loss"), field="BatchMetrics.loss", default=0.0)
+            data["accuracy"] = coerce_float(data.get("accuracy"), field="BatchMetrics.accuracy", default=0.0)
+            data["host_grad_norm"] = coerce_float(
+                data.get("host_grad_norm"), field="BatchMetrics.host_grad_norm", default=0.0
+            )
+            data["seed_grad_norms"] = coerce_float_dict(data.get("seed_grad_norms"), field="BatchMetrics.seed_grad_norms")
+            data["isolation_leakage"] = coerce_float_or_none(
+                data.get("isolation_leakage"), field="BatchMetrics.isolation_leakage"
+            )
+            return BatchMetrics(**data)
+
+        def _parse_gate_evaluation_trace(raw: dict[str, Any]) -> GateEvaluationTrace:
+            data = filter_dataclass_kwargs(GateEvaluationTrace, raw, context="GateEvaluationTrace")
+            data["gate_id"] = coerce_str_or_none(data.get("gate_id"), field="GateEvaluationTrace.gate_id") or ""
+            data["slot_id"] = coerce_str_or_none(data.get("slot_id"), field="GateEvaluationTrace.slot_id") or ""
+            passed = coerce_bool_or_none(data.get("passed"), field="GateEvaluationTrace.passed")
+            data["passed"] = False if passed is None else passed
+            data["reason"] = coerce_str_or_none(data.get("reason"), field="GateEvaluationTrace.reason") or ""
+            data["metrics_at_evaluation"] = coerce_float_dict(
+                data.get("metrics_at_evaluation"), field="GateEvaluationTrace.metrics_at_evaluation"
+            )
+            data["thresholds_used"] = coerce_float_dict(
+                data.get("thresholds_used"), field="GateEvaluationTrace.thresholds_used"
+            )
+            return GateEvaluationTrace(**data)
+
+        def _parse_dense_trace(raw: dict[str, Any]) -> DenseTrace:
+            data = filter_dataclass_kwargs(DenseTrace, raw, context="DenseTrace")
+            ts = coerce_datetime(data.get("timestamp"), field="DenseTrace.timestamp", default=None)
+            if ts is None:
+                data.pop("timestamp", None)
+            else:
+                data["timestamp"] = ts
+
+            data["window_start_epoch"] = coerce_int(
+                data.get("window_start_epoch"), field="DenseTrace.window_start_epoch", default=0, minimum=0
+            )
+            data["window_end_epoch"] = coerce_int(
+                data.get("window_end_epoch"), field="DenseTrace.window_end_epoch", default=0, minimum=0
+            )
+
+            batch_metrics_raw = data.get("batch_metrics")
+            if isinstance(batch_metrics_raw, list):
+                data["batch_metrics"] = [
+                    _parse_batch_metrics(item)
+                    for item in batch_metrics_raw
+                    if isinstance(item, dict)
+                ]
+            else:
+                data.pop("batch_metrics", None)
+
+            gate_raw = data.get("gate_evaluation_details")
+            if isinstance(gate_raw, dict):
+                data["gate_evaluation_details"] = _parse_gate_evaluation_trace(gate_raw)
+            elif gate_raw is not None:
+                data.pop("gate_evaluation_details", None)
+
+            return DenseTrace(**data)
+
         with open(path) as f:
             for line in f:
                 if not line.strip():
@@ -458,20 +769,19 @@ class TelemetryStore:
                 data = record.get("data", {})
 
                 if record_type == "context":
-                    store.context = EpisodeContext(**data)
+                    if isinstance(data, dict):
+                        store.context = _parse_episode_context(data)
                 elif record_type == "baseline":
-                    store.baseline = HostBaseline(**data)
+                    if isinstance(data, dict):
+                        store.baseline = _parse_host_baseline(data)
                 elif record_type == "epoch":
-                    # Reconstruct nested dataclasses
-                    if "host" in data:
-                        data["host"] = HostSnapshot(**data["host"])
-                    if "policy" in data and data["policy"]:
-                        data["policy"] = PolicySnapshot(**data["policy"])
-                    if "slots" in data:
-                        data["slots"] = {k: SlotSnapshot(**v) for k, v in data["slots"].items()}
-                    store.epoch_snapshots.append(EpochSnapshot(**data))
+                    if isinstance(data, dict):
+                        store.epoch_snapshots.append(_parse_epoch_snapshot(data))
                 elif record_type == "dense_trace":
-                    store.dense_traces.append(DenseTrace(**data))
+                    if isinstance(data, dict):
+                        store.dense_traces.append(_parse_dense_trace(data))
+                else:
+                    _logger.debug("Ignoring unknown record type in %s: %r", path, record_type)
 
         return store
 

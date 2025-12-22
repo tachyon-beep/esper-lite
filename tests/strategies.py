@@ -129,11 +129,43 @@ def seed_stages(draw):
 
     Values:
         1=DORMANT, 2=GERMINATED, 3=TRAINING, 4=BLENDING,
-        5=SHADOWING (deprecated/reserved), 6=PROBATIONARY, 7=FOSSILIZED
+        5=SHADOWING (deprecated/reserved), 6=HOLDING, 7=FOSSILIZED
 
     Note: SeedStage is an IntEnum, so we return integers directly.
     """
     return draw(st.integers(min_value=1, max_value=7))
+
+
+@st.composite
+def tempo_actions(draw):
+    """Generate valid TempoAction enum values.
+
+    Returns:
+        TempoAction enum value (FAST=0, STANDARD=1, SLOW=2)
+
+    Example:
+        @given(tempo_actions())
+        def test_tempo_property(tempo):
+            assert tempo in TempoAction
+    """
+    from esper.leyline.factored_actions import TempoAction
+    return draw(st.sampled_from(list(TempoAction)))
+
+
+@st.composite
+def tempo_epochs(draw):
+    """Generate valid blend tempo epoch counts.
+
+    Returns:
+        int: Valid tempo epoch count (3, 5, or 8)
+
+    Example:
+        @given(tempo_epochs())
+        def test_tempo_epochs(epochs):
+            assert epochs in {3, 5, 8}
+    """
+    from esper.leyline.factored_actions import TEMPO_TO_EPOCHS
+    return draw(st.sampled_from(list(TEMPO_TO_EPOCHS.values())))
 
 
 @st.composite
@@ -151,9 +183,23 @@ def seed_telemetries(draw, seed_id: str | None = None):
         @given(seed_telemetries())
         def test_telemetry_features(telemetry):
             features = telemetry.to_features()
-            assert len(features) == 10
+            assert len(features) == 17
     """
     from esper.leyline import SeedTelemetry
+    from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
+
+    # Generate blend tempo epochs (3, 5, or 8)
+    blend_tempo = draw(tempo_epochs())
+
+    # Blending velocity is d(alpha)/d(epoch), bounded by 1/blend_tempo
+    max_velocity = 1.0 / blend_tempo
+    blending_vel = draw(bounded_floats(0.0, max_velocity))
+    alpha_steps_total = draw(st.integers(min_value=0, max_value=50))
+    alpha_steps_done = draw(st.integers(min_value=0, max_value=alpha_steps_total))
+    alpha_target = draw(probabilities())
+    alpha_mode = draw(st.sampled_from([mode.value for mode in AlphaMode]))
+    alpha_algorithm = draw(st.sampled_from([algo.value for algo in AlphaAlgorithm]))
+    alpha_velocity = draw(bounded_floats(-1.0, 1.0))
 
     return SeedTelemetry(
         seed_id=seed_id or draw(st.text(min_size=1, max_size=16)),
@@ -171,9 +217,19 @@ def seed_telemetries(draw, seed_id: str | None = None):
         # Stage context
         stage=draw(seed_stages()),
         alpha=draw(probabilities()),
+        alpha_target=alpha_target,
+        alpha_mode=alpha_mode,
+        alpha_steps_total=alpha_steps_total,
+        alpha_steps_done=alpha_steps_done,
+        time_to_target=max(alpha_steps_total - alpha_steps_done, 0),
+        alpha_velocity=alpha_velocity,
+        alpha_algorithm=alpha_algorithm,
         # Temporal context
         epoch=draw(st.integers(min_value=0, max_value=1000)),
         max_epochs=draw(st.integers(min_value=1, max_value=1000)),
+        # Tempo context (new)
+        blend_tempo_epochs=blend_tempo,
+        blending_velocity=blending_vel,
     )
 
 
@@ -250,7 +306,7 @@ def action_members(draw):
     for i in range(1, germinate_count + 1):
         members[f"GERMINATE_{i}"] = i
     members["FOSSILIZE"] = germinate_count + 1
-    members["CULL"] = germinate_count + 2
+    members["PRUNE"] = germinate_count + 2
     ActionEnum = IntEnum("TestAction", members)
     return draw(st.sampled_from(list(ActionEnum)))
 
@@ -442,7 +498,7 @@ def seed_stages_enum(draw, exclude_terminal: bool = False, exclude_failure: bool
     Args:
         draw: Hypothesis draw function
         exclude_terminal: If True, exclude FOSSILIZED (terminal success state)
-        exclude_failure: If True, exclude CULLED, EMBARGOED, RESETTING (failure states)
+        exclude_failure: If True, exclude PRUNED, EMBARGOED, RESETTING (failure states)
 
     Returns:
         SeedStage enum value
@@ -593,7 +649,7 @@ def seed_states_kasmina(draw, stage: "SeedStage | None" = None):
         alpha = 0.0
     elif stage == SeedStage.BLENDING:
         alpha = draw(alpha_values())
-    else:  # PROBATIONARY, FOSSILIZED
+    else:  # HOLDING, FOSSILIZED
         alpha = 1.0
 
     state = SeedState(
@@ -668,6 +724,8 @@ __all__ = [
     "seed_telemetries",
     "training_metrics",
     "training_signals",
+    "tempo_actions",
+    "tempo_epochs",
     # Simic
     "action_members",
     "seed_infos",

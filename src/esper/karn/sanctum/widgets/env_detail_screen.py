@@ -18,6 +18,8 @@ from textual.containers import Container, Grid, Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Static
 
+from esper.karn.sanctum.widgets.counterfactual_panel import CounterfactualPanel
+
 if TYPE_CHECKING:
     from esper.karn.sanctum.schema import EnvState, SeedState
 
@@ -27,10 +29,12 @@ STAGE_COLORS = {
     "DORMANT": "dim",
     "GERMINATED": "bright_blue",
     "TRAINING": "cyan",
-    "PROBATIONARY": "magenta",
+    "HOLDING": "magenta",
     "BLENDING": "yellow",
     "FOSSILIZED": "green",
-    "CULLED": "red",
+    "PRUNED": "red",
+    "EMBARGOED": "bright_red",
+    "RESETTING": "dim",
 }
 
 # Stage border styles for CSS classes
@@ -38,10 +42,12 @@ STAGE_CSS_CLASSES = {
     "DORMANT": "dormant",
     "GERMINATED": "training",  # Use training style for germinated
     "TRAINING": "training",
-    "PROBATIONARY": "blending",  # Use blending style
+    "HOLDING": "blending",  # Use blending style
     "BLENDING": "blending",
     "FOSSILIZED": "fossilized",
-    "CULLED": "culled",
+    "PRUNED": "pruned",
+    "EMBARGOED": "embargoed",
+    "RESETTING": "resetting",
 }
 
 
@@ -105,7 +111,7 @@ class SeedCard(Static):
         lines.append(Text(f"Blueprint: {blueprint}", style="white"))
 
         # Parameters
-        if seed.seed_params > 0:
+        if seed.seed_params and seed.seed_params > 0:
             if seed.seed_params >= 1_000_000:
                 params_str = f"{seed.seed_params / 1_000_000:.1f}M"
             elif seed.seed_params >= 1_000:
@@ -115,15 +121,26 @@ class SeedCard(Static):
             lines.append(Text(f"Params: {params_str}", style="dim"))
 
         # Alpha (blending progress)
-        if seed.alpha > 0 or seed.stage in ("BLENDING", "PROBATIONARY"):
+        if (seed.alpha and seed.alpha > 0) or seed.stage in ("BLENDING", "HOLDING"):
             alpha_bar = self._make_alpha_bar(seed.alpha)
             lines.append(Text(f"Alpha: {seed.alpha:.2f} {alpha_bar}"))
+
+        # Blend tempo (shown during BLENDING and for FOSSILIZED to show how they were blended)
+        if seed.stage in ("BLENDING", "FOSSILIZED") and seed.blend_tempo_epochs is not None:
+            tempo = seed.blend_tempo_epochs
+            tempo_name = "FAST" if tempo <= 3 else ("STANDARD" if tempo <= 5 else "SLOW")
+            tempo_arrows = "▸▸▸" if tempo <= 3 else ("▸▸" if tempo <= 5 else "▸")
+            # For fossilized, show "was blended" in past tense
+            if seed.stage == "FOSSILIZED":
+                lines.append(Text(f"Blended: {tempo_arrows} {tempo_name}", style="dim"))
+            else:
+                lines.append(Text(f"Tempo: {tempo_arrows} {tempo_name} ({tempo} epochs)"))
 
         # Accuracy delta (stage-aware display)
         # TRAINING/GERMINATED seeds have alpha=0 and cannot affect output
         if seed.stage in ("TRAINING", "GERMINATED"):
             lines.append(Text("Acc Δ: 0.0 (learning)", style="dim italic"))
-        elif seed.accuracy_delta != 0:
+        elif seed.accuracy_delta is not None and seed.accuracy_delta != 0:
             delta_style = "green" if seed.accuracy_delta > 0 else "red"
             lines.append(Text(f"Acc Δ: {seed.accuracy_delta:+.2f}%", style=delta_style))
         else:
@@ -135,7 +152,7 @@ class SeedCard(Static):
             grad_text.append("▲ EXPLODING", style="bold red")
         elif seed.has_vanishing:
             grad_text.append("▼ VANISHING", style="bold yellow")
-        elif seed.grad_ratio > 0:
+        elif seed.grad_ratio is not None and seed.grad_ratio > 0:
             grad_text.append(f"ratio={seed.grad_ratio:.2f}", style="green")
         else:
             grad_text.append("OK", style="green")
@@ -214,6 +231,20 @@ class EnvDetailScreen(ModalScreen[None]):
         padding-top: 1;
     }
 
+    EnvDetailScreen .counterfactual-section {
+        height: auto;
+        margin-top: 1;
+        border-top: solid $primary-lighten-2;
+        padding-top: 1;
+    }
+
+    EnvDetailScreen .graveyard-section {
+        height: auto;
+        margin-top: 1;
+        border-top: solid $primary-lighten-2;
+        padding-top: 1;
+    }
+
     EnvDetailScreen .footer-hint {
         height: 1;
         text-align: center;
@@ -259,6 +290,17 @@ class EnvDetailScreen(ModalScreen[None]):
             with Vertical(classes="metrics-section"):
                 yield Static(self._render_metrics(), id="detail-metrics")
 
+            # Counterfactual analysis section
+            with Vertical(classes="counterfactual-section"):
+                yield CounterfactualPanel(
+                    self._env.counterfactual_matrix,
+                    id="counterfactual-panel"
+                )
+
+            # Seed graveyard section
+            with Vertical(classes="graveyard-section"):
+                yield Static(self._render_graveyard(), id="seed-graveyard")
+
             # Footer hint
             yield Static(
                 "[dim]Press ESC or Q to close[/dim]",
@@ -289,6 +331,13 @@ class EnvDetailScreen(ModalScreen[None]):
         except Exception:
             pass  # Widget may not be mounted yet
 
+        # Update counterfactual panel
+        try:
+            cf_panel = self.query_one("#counterfactual-panel", CounterfactualPanel)
+            cf_panel.update_matrix(env_state.counterfactual_matrix)
+        except Exception:
+            pass
+
         # Update each seed card
         for slot_id in self._slot_ids:
             try:
@@ -297,6 +346,13 @@ class EnvDetailScreen(ModalScreen[None]):
                 card.update_seed(seed)
             except Exception:
                 pass  # Widget may not be mounted yet
+
+        # Update graveyard
+        try:
+            graveyard = self.query_one("#seed-graveyard", Static)
+            graveyard.update(self._render_graveyard())
+        except Exception:
+            pass
 
     def _render_header(self) -> Text:
         """Render the header bar with env summary."""
@@ -329,14 +385,44 @@ class EnvDetailScreen(ModalScreen[None]):
         header.append("  │  ")
 
         # Epochs since improvement
-        if env.epochs_since_improvement > 0:
-            stale_style = "red" if env.epochs_since_improvement > 10 else "yellow"
+        epochs_stale = env.epochs_since_improvement or 0
+        if epochs_stale > 0:
+            stale_style = "red" if epochs_stale > 10 else "yellow"
             header.append(
-                f"Stale: {env.epochs_since_improvement} epochs",
+                f"Stale: {epochs_stale} epochs",
                 style=stale_style,
             )
         else:
             header.append("Improving", style="green")
+
+        # Host params, seed params, and growth ratio
+        header.append("  │  ")
+
+        # Format params in human-readable form
+        def _format_params(p: int) -> str:
+            if p >= 1_000_000:
+                return f"{p / 1_000_000:.1f}M"
+            elif p >= 1_000:
+                return f"{p / 1_000:.1f}K"
+            return str(p)
+
+        host_str = _format_params(env.host_params or 0)
+        fossilized = env.fossilized_params or 0
+        seed_str = _format_params(fossilized)
+        growth = env.growth_ratio or 1.0
+
+        header.append(f"Host: {host_str}", style="dim")
+        header.append(f"  +Seed: {seed_str}", style="green" if fossilized > 0 else "dim")
+
+        # Growth ratio with color coding
+        # 1.0x = no growth (dim), 1.0-1.2x = normal (green), >1.2x = significant (yellow)
+        if growth > 1.2:
+            growth_style = "yellow"
+        elif growth > 1.0:
+            growth_style = "green"
+        else:
+            growth_style = "dim"
+        header.append(f"  = {growth:.2f}x", style=growth_style)
 
         return header
 
@@ -363,30 +449,33 @@ class EnvDetailScreen(ModalScreen[None]):
         seed_counts.append("  ")
         seed_counts.append(f"Fossilized: {env.fossilized_count}", style="green")
         seed_counts.append("  ")
-        seed_counts.append(f"Culled: {env.culled_count}", style="red")
+        seed_counts.append(f"Pruned: {env.pruned_count}", style="red")
         table.add_row("Seed Counts", seed_counts)
 
         # Fossilized params
-        if env.fossilized_params > 0:
-            if env.fossilized_params >= 1_000_000:
-                params_str = f"{env.fossilized_params / 1_000_000:.2f}M"
-            elif env.fossilized_params >= 1_000:
-                params_str = f"{env.fossilized_params / 1_000:.1f}K"
+        foss_params = env.fossilized_params or 0
+        if foss_params > 0:
+            if foss_params >= 1_000_000:
+                params_str = f"{foss_params / 1_000_000:.2f}M"
+            elif foss_params >= 1_000:
+                params_str = f"{foss_params / 1_000:.1f}K"
             else:
-                params_str = str(env.fossilized_params)
+                params_str = str(foss_params)
             table.add_row("Fossilized Params", params_str)
 
         # Action distribution
-        if env.total_actions > 0:
+        total_actions = env.total_actions or 0
+        if total_actions > 0:
             action_text = Text()
             for action, count in sorted(env.action_counts.items()):
-                pct = (count / env.total_actions) * 100
+                pct = (count / total_actions) * 100
                 # Color coding by action type
                 action_colors = {
                     "WAIT": "dim",
                     "GERMINATE": "cyan",
+                    "SET_ALPHA_TARGET": "yellow",
                     "FOSSILIZE": "green",
-                    "CULL": "red",
+                    "PRUNE": "red",
                 }
                 color = action_colors.get(action, "white")
                 action_text.append(f"{action}: {pct:.0f}%", style=color)
@@ -395,15 +484,17 @@ class EnvDetailScreen(ModalScreen[None]):
 
         # Reward components
         rc = env.reward_components
-        if rc.total != 0:
+        if rc.total is not None and rc.total != 0:
             reward_text = Text()
             reward_text.append(f"Total: {rc.total:+.3f}", style="bold")
-            if rc.base_acc_delta != 0:
+            if rc.base_acc_delta is not None and rc.base_acc_delta != 0:
                 style = "green" if rc.base_acc_delta > 0 else "red"
                 reward_text.append(f"  ΔAcc: {rc.base_acc_delta:+.3f}", style=style)
-            if rc.compute_rent != 0:
+            if rc.compute_rent is not None and rc.compute_rent != 0:
                 reward_text.append(f"  Rent: {rc.compute_rent:.3f}", style="red")
-            if rc.bounded_attribution != 0:
+            if rc.alpha_shock is not None and rc.alpha_shock != 0:
+                reward_text.append(f"  Shock: {rc.alpha_shock:.3f}", style="red")
+            if rc.bounded_attribution is not None and rc.bounded_attribution != 0:
                 style = "green" if rc.bounded_attribution > 0 else "red"
                 reward_text.append(f"  Attr: {rc.bounded_attribution:+.3f}", style=style)
             table.add_row("Reward Breakdown", reward_text)
@@ -414,3 +505,47 @@ class EnvDetailScreen(ModalScreen[None]):
             table.add_row("Recent Actions", recent)
 
         return table
+
+    def _render_graveyard(self) -> Panel:
+        """Render the seed graveyard showing per-blueprint lifecycle stats.
+
+        Shows how many seeds of each blueprint type have been:
+        - Spawned (germinated)
+        - Fossilized (successfully integrated)
+        - Pruned (removed due to poor performance)
+        """
+        env = self._env
+
+        # Combine all blueprints seen across spawns, fossilized, pruned
+        all_blueprints = set(env.blueprint_spawns.keys())
+        all_blueprints.update(env.blueprint_fossilized.keys())
+        all_blueprints.update(env.blueprint_prunes.keys())
+
+        if not all_blueprints:
+            content = Text("No seeds germinated yet", style="dim italic")
+            return Panel(content, title="Seed Graveyard", border_style="dim")
+
+        # Build graveyard display
+        lines = []
+        for blueprint in sorted(all_blueprints):
+            spawned = env.blueprint_spawns.get(blueprint, 0)
+            fossilized = env.blueprint_fossilized.get(blueprint, 0)
+            pruned = env.blueprint_prunes.get(blueprint, 0)
+
+            line = Text()
+            line.append(f"{blueprint:15s}", style="white")
+            line.append(f"  spawn:{spawned:2d}", style="cyan")
+            line.append(f"  foss:{fossilized:2d}", style="green")
+            line.append(f"  prun:{pruned:2d}", style="red")
+
+            # Calculate success rate if any have terminated
+            terminated = fossilized + pruned
+            if terminated > 0:
+                success_rate = fossilized / terminated * 100
+                rate_style = "green" if success_rate >= 50 else "yellow" if success_rate >= 25 else "red"
+                line.append(f"  ({success_rate:.0f}% success)", style=rate_style)
+
+            lines.append(line)
+
+        content = Text("\n").join(lines) if lines else Text("No activity", style="dim")
+        return Panel(content, title="Seed Graveyard", border_style="dim")

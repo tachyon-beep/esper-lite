@@ -258,7 +258,7 @@ where (f_H) is the host pathway at that slot, (f_s) is the seed pathway, and (\a
 The operational goal is not “add seeds forever”, but **selective growth and consolidation**:
 
 * seeds that add value are **fossilised** (retained),
-* seeds that don’t are **culled** (removed),
+* seeds that don’t are **pruned** (removed),
 * unused structure is pruned by **Emrakul** to maintain clarity and efficiency.
 
 ---
@@ -271,7 +271,7 @@ Seeds progress through discrete lifecycle stages governed by invariants, constra
 2. **GERMINATING:** seed instantiated; wiring validated; initial baselines captured.
 3. **ISOLATED TRAINING:** seed trained primarily against host residuals with mechanisms to limit destabilisation of host pathways (e.g., controlled routing / gradient isolation).
 4. **BLENDING:** seed integrated gradually via an (\alpha) schedule (or alternative blend algorithm).
-5. **PROBATION:** joint training continues; stability and net benefit assessed.
+5. **HOLDING:** joint training continues; stability and net benefit assessed.
 6. **FOSSILISE:** seed becomes permanent; lifecycle ends.
 7. **CULL:** seed removed; slot returns to EMPTY (optionally with cooldown).
 
@@ -433,7 +433,7 @@ Tamiyo’s observation vector is structured to preserve the information that mak
 
 2. **Per-slot seed state (for each slot)**
 
-   * lifecycle stage (e.g., GERMINATING / ISOLATED / BLENDING / PROBATION / FOSSILISED)
+   * lifecycle stage (e.g., GERMINATING / ISOLATED / BLENDING / HOLDING / FOSSILISED)
    * age (epochs-in-stage, wall-clock age, or update count)
    * current blend parameter (\alpha) and schedule position (where applicable)
    * improvement trajectory summaries (short/medium horizon deltas)
@@ -721,7 +721,7 @@ This is sufficient to drive the controller’s core operations:
 
 Because counterfactual evaluation itself can be expensive, the system can amortise cost by controlling cadence:
 
-* perform marginals at stage boundaries (e.g., during BLENDING and PROBATION),
+* perform marginals at stage boundaries (e.g., during BLENDING and HOLDING),
 * reduce frequency for stable fossilised seeds,
 * and increase frequency during turbulence (e.g., when instability triggers checkpointing or the turbulence budget is active).
 
@@ -1040,7 +1040,7 @@ Because metamorphosis relaxes host retention, a single scalar “health” metri
 
 ### 7.7 Summary: why this matters for control
 
-This taxonomy exists because **Tamiyo’s incentives and safety mechanisms depend on which regime is unfolding**. Symbiosis can be rewarded and fossilised with relatively simple gates. Parasitism must be culled early to avoid entrenched dependency. Metamorphosis must be allowed to proceed through bounded turbulence, after which Emrakul can consolidate the adult topology.
+This taxonomy exists because **Tamiyo’s incentives and safety mechanisms depend on which regime is unfolding**. Symbiosis can be rewarded and fossilised with relatively simple gates. Parasitism must be pruned early to avoid entrenched dependency. Metamorphosis must be allowed to proceed through bounded turbulence, after which Emrakul can consolidate the adult topology.
 
 The rest of the paper develops the practical machinery needed to make these regimes tractable:
 
@@ -1058,9 +1058,9 @@ The central operational difficulty in seed-grafted morphogenesis is that **paras
 
 * the host pathway degrades (sometimes sharply),
 * one or more seeds become counterfactually load-bearing,
-* multi-seed interaction terms can be negative during blending and early probation.
+* multi-seed interaction terms can be negative during blending and early holding.
 
-Yet the correct response differs. Parasitism should usually be culled early to prevent entrenched dependency. Metamorphosis often needs *time* to complete a successor circuit and may look “bad” before it looks good.
+Yet the correct response differs. Parasitism should usually be pruned early to prevent entrenched dependency. Metamorphosis often needs *time* to complete a successor circuit and may look “bad” before it looks good.
 
 This section frames regime identification as a tractable **trajectory inference** problem: regimes are weakly identifiable from instantaneous state, but become separable in expectation from **time-series statistics**.
 
@@ -1417,7 +1417,7 @@ Esper introduces **Emrakul** as a hygiene subsystem whose job is to make the evo
 
 We treat detritus as structure that is either **unreachable** (graph-dead) or **persistently low-traffic** (connected but functionally unused).
 
-**Unreachable structure.** A component is unreachable if it lies on no path from the model’s inputs to the loss under the current wiring. Unreachability is typically introduced by topology edits: a seed is culled, a bypass path is rewired, a slot’s blend operator changes, or a gating configuration is updated. These components should be removed aggressively: they do not affect behaviour and only impose overhead and bookkeeping complexity.
+**Unreachable structure.** A component is unreachable if it lies on no path from the model’s inputs to the loss under the current wiring. Unreachability is typically introduced by topology edits: a seed is pruned, a bypass path is rewired, a slot’s blend operator changes, or a gating configuration is updated. These components should be removed aggressively: they do not affect behaviour and only impose overhead and bookkeeping complexity.
 
 **Persistently low-traffic structure.** A component can be connected yet unused because its output is effectively ignored. In Esper, “traffic” may be measured in multiple ways depending on the architecture and blend mechanism, but the common requirement is that traffic be:
 
@@ -1830,7 +1830,7 @@ We begin with a bird’s-eye view of how often Esper converges to each integrati
 **Figure 1.** Representative trajectories for each regime:
 
 * (\mathcal{E}(M_t)) over training time,
-* lifecycle stage markers (germinate/blend/probation/fossilise/cull),
+* lifecycle stage markers (germinate/blend/holding/fossilise/cull),
 * parameter growth and/or seed count,
 * hygiene events (prune passes, detritus reductions),
 * (where enabled) stability signal (S_t) and energy allocation.
@@ -1845,7 +1845,7 @@ We begin with a bird’s-eye view of how often Esper converges to each integrati
 
 * “Across [tasks], [X%] of runs were labelled symbiotic, [Y%] parasitic, and [Z%] metamorphic.”
 * “Metamorphic runs exhibited an early negative interaction phase followed by recovery; median (\Delta \tilde{I}) over window (k) during the transition was [ ].”
-* “Parasitic runs exhibited persistently negative interaction with (\Delta \tilde{I} \le 0) for [ ]% of the blending/probation window.”
+* “Parasitic runs exhibited persistently negative interaction with (\Delta \tilde{I} \le 0) for [ ]% of the blending/holding window.”
 
 ---
 
@@ -1904,7 +1904,7 @@ computed under each ablation protocol.
 **Placeholders:**
 
 * “Marginal rankings were [stable/unstable] across protocols (median Spearman ρ = [ ]).”
-* “Protocol sensitivity increased during [BLENDING/PROBATION], consistent with [normalisation/routing] effects.”
+* “Protocol sensitivity increased during [BLENDING/HOLDING], consistent with [normalisation/routing] effects.”
 * “Recalibration reduced spurious deltas by [ ], improving protocol agreement to ρ = [ ].”
 
 ---

@@ -53,7 +53,7 @@ This stage connects the Overwatch TUI to live training telemetry, enabling real-
 | TelemetryEvent Type | TuiSnapshot Updates |
 |---------------------|---------------------|
 | `TRAINING_STARTED` | `run_id`, `task_name`, `connection.connected=True` |
-| `BATCH_COMPLETED` | `batch`, `episode`, `best_metric`, `runtime_s` |
+| `BATCH_EPOCH_COMPLETED` | `batch`, `episode`, `best_metric`, `runtime_s` |
 | `PPO_UPDATE_COMPLETED` | `TamiyoState.*` (kl, entropy, clip_fraction, etc.) |
 | `EPOCH_COMPLETED` | Per-env `EnvSummary.task_metric` |
 | `SEED_GERMINATED` | `SlotChipState` creation, `FeedEvent(GERM)` |
@@ -141,7 +141,7 @@ class TestBatchAndEpisodeTracking:
     """Test batch/episode progress updates."""
 
     def test_batch_completed_updates_progress(self):
-        """BATCH_COMPLETED updates batch and episode counters."""
+        """BATCH_EPOCH_COMPLETED updates batch and episode counters."""
         agg = TelemetryAggregator()
         agg.process_event(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
@@ -149,7 +149,7 @@ class TestBatchAndEpisodeTracking:
         ))
 
         agg.process_event(TelemetryEvent(
-            event_type=TelemetryEventType.BATCH_COMPLETED,
+            event_type=TelemetryEventType.BATCH_EPOCH_COMPLETED,
             data={
                 "batch_idx": 5,
                 "episodes_completed": 10,
@@ -380,7 +380,7 @@ class TestThreadSafety:
             try:
                 for i in range(100):
                     agg.process_event(TelemetryEvent(
-                        event_type=TelemetryEventType.BATCH_COMPLETED,
+                        event_type=TelemetryEventType.BATCH_EPOCH_COMPLETED,
                         data={"batch_idx": i, "avg_accuracy": 50.0 + i * 0.1},
                     ))
             except Exception as e:
@@ -582,7 +582,7 @@ class TelemetryAggregator:
                 )
 
     def _handle_batch_completed(self, event: "TelemetryEvent") -> None:
-        """Handle BATCH_COMPLETED event."""
+        """Handle BATCH_EPOCH_COMPLETED event."""
         data = event.data or {}
         self._batch = data.get("batch_idx", self._batch)
         self._episode = data.get("episodes_completed", self._episode)

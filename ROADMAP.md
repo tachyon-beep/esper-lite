@@ -169,7 +169,7 @@ We iterate **DataLoaders first** (batches), dispatch to **environments second** 
 
 **Changes:**
 
-* Simplified lifecycle: DORMANT → GERMINATED → TRAINING → BLENDING → PROBATIONARY → FOSSILIZED/CULLED
+* Simplified lifecycle: DORMANT → GERMINATED → TRAINING → BLENDING → HOLDING → FOSSILIZED/PRUNED
 * Removed SHADOWING stage (unnecessary complexity)
 * Wired param-ratio compute rent into reward
 * Added counterfactual validation for seed contribution

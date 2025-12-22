@@ -227,7 +227,7 @@ Sparse reward clamps to [-1, 1], but `sparse_reward_scale=2.5` would produce 1.9
 
 ---
 
-### H11: Probationary Indecision Penalty Exponential Growth
+### H11: Holding Indecision Penalty Exponential Growth
 **Files:** `rewards/rewards.py:594-599`
 **Source:** DRL Review (rewards/)
 

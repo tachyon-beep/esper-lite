@@ -6,9 +6,12 @@ Slot management is handled by MorphogeneticModel, not hosts directly.
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Protocol, TYPE_CHECKING, runtime_checkable
 
 from torch import Tensor
+
+if TYPE_CHECKING:
+    from esper.leyline import InjectionSpec
 
 
 @runtime_checkable
@@ -16,6 +19,7 @@ class HostProtocol(Protocol):
     """Contract for graftable host networks.
 
     Hosts are pure backbone networks that provide:
+    - injection_specs: Ordered injection boundary metadata
     - injection_points: Available segment boundaries for seed attachment
     - segment_channels: Channel dimensions at each boundary
     - forward_to_segment/forward_from_segment: Segment routing for MorphogeneticModel
@@ -23,6 +27,10 @@ class HostProtocol(Protocol):
 
     Slot management is handled by MorphogeneticModel, not hosts directly.
     """
+
+    def injection_specs(self) -> list["InjectionSpec"]:
+        """Return injection boundaries as InjectionSpec objects in network order."""
+        ...
 
     @property
     def injection_points(self) -> dict[str, int]:

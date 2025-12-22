@@ -20,7 +20,7 @@ class TestRewardComponentsTelemetry:
             WAIT = 0
             GERMINATE = 1
             FOSSILIZE = 2
-            CULL = 3
+            PRUNE = 3
 
         seed_info = SeedInfo(
             stage=3,  # TRAINING
@@ -84,6 +84,7 @@ class TestRewardComponentsTelemetry:
         computed_sum = (
             components.bounded_attribution
             + components.compute_rent
+            + components.alpha_shock
             + components.pbrs_bonus
             + components.action_shaping
             + components.terminal_bonus

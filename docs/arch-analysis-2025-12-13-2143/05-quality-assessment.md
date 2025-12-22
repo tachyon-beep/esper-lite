@@ -321,7 +321,7 @@ The esper-lite codebase demonstrates **high overall quality** with mature engine
    - Memory efficiency for long sequences
 
 7. **Review reward scale asymmetry**
-   - probation_warning (-10.0) vs others (~[-1, 1])
+   - holding_warning (-10.0) vs others (~[-1, 1])
 
 8. **Add LR warmup and decay schedules**
    - Standard practice for stable training

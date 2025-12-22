@@ -51,14 +51,14 @@ class TestAntiThrashing:
     def test_embargo_window_honored(self, embargo_epochs, cull_epoch):
         """Property: No germination possible within embargo window after cull."""
         config = HeuristicPolicyConfig(
-            embargo_epochs_after_cull=embargo_epochs,
+            embargo_epochs_after_prune=embargo_epochs,
             plateau_epochs_to_germinate=1,  # Easy to trigger
             min_epochs_before_germinate=0,  # No minimum
         )
         policy = HeuristicTamiyo(config=config, topology="cnn")
 
         # Simulate a cull
-        policy._last_cull_epoch = cull_epoch
+        policy._last_prune_epoch = cull_epoch
 
         # Test all epochs during embargo
         for offset in range(embargo_epochs):
@@ -85,13 +85,13 @@ class TestAntiThrashing:
     def test_embargo_expires(self, embargo_epochs, cull_epoch):
         """Property: Germination allowed after embargo expires."""
         config = HeuristicPolicyConfig(
-            embargo_epochs_after_cull=embargo_epochs,
+            embargo_epochs_after_prune=embargo_epochs,
             plateau_epochs_to_germinate=1,
             min_epochs_before_germinate=0,
         )
         policy = HeuristicTamiyo(config=config, topology="cnn")
 
-        policy._last_cull_epoch = cull_epoch
+        policy._last_prune_epoch = cull_epoch
 
         # Epoch exactly at embargo expiration
         post_embargo_epoch = cull_epoch + embargo_epochs
@@ -139,7 +139,7 @@ class TestBlueprintPenalty:
             blueprint_penalty_decay=0.5,  # Explicit for clarity
             plateau_epochs_to_germinate=1,
             min_epochs_before_germinate=0,
-            embargo_epochs_after_cull=0,
+            embargo_epochs_after_prune=0,
         )
         policy = HeuristicTamiyo(config=config, topology="cnn")
 
@@ -204,7 +204,7 @@ class TestBlueprintPenalty:
     def test_repeated_culls_accumulate_penalty(self, num_culls):
         """Property: Multiple culls of same blueprint accumulate penalty."""
         config = HeuristicPolicyConfig(
-            blueprint_penalty_on_cull=2.0,
+            blueprint_penalty_on_prune=2.0,
             blueprint_rotation=["conv_light"],
         )
         policy = HeuristicTamiyo(config=config, topology="cnn")
@@ -212,7 +212,7 @@ class TestBlueprintPenalty:
         for i in range(num_culls):
             policy._apply_blueprint_penalty("conv_light")
 
-        expected_penalty = num_culls * config.blueprint_penalty_on_cull
+        expected_penalty = num_culls * config.blueprint_penalty_on_prune
         actual_penalty = policy._blueprint_penalties.get("conv_light", 0.0)
 
         assert actual_penalty == expected_penalty, \
@@ -256,7 +256,7 @@ class TestStabilizationGating:
         config = HeuristicPolicyConfig(
             plateau_epochs_to_germinate=1,
             min_epochs_before_germinate=0,
-            embargo_epochs_after_cull=0,
+            embargo_epochs_after_prune=0,
         )
         policy = HeuristicTamiyo(config=config, topology="cnn")
 
@@ -344,7 +344,7 @@ class TestCounterfactualGuard:
 
         seed = type('MockSeed', (), {
             'seed_id': 'test_seed',
-            'stage': SeedStage.PROBATIONARY,
+            'stage': SeedStage.HOLDING,
             'epochs_in_stage': 5,
             'alpha': 1.0,
             'blueprint_id': 'conv_light',
@@ -421,7 +421,7 @@ class TestRansomwareDetection:
 
         seed = type('MockSeed', (), {
             'seed_id': 'ransomware_seed',
-            'stage': SeedStage.PROBATIONARY,
+            'stage': SeedStage.HOLDING,
             'epochs_in_stage': 10,
             'alpha': 1.0,
             'blueprint_id': 'conv_light',
@@ -441,6 +441,6 @@ class TestRansomwareDetection:
 
         decision = policy.decide(MockSignals(), active_seeds=[seed])
 
-        # Ransomware seeds should be CULLED, not FOSSILIZED
-        assert decision.action.name == "CULL", \
-            f"Ransomware pattern should trigger CULL, got {decision.action.name}"
+        # Ransomware seeds should be PRUNED, not FOSSILIZED
+        assert decision.action.name == "PRUNE", \
+            f"Ransomware pattern should trigger PRUNE, got {decision.action.name}"

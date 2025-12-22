@@ -78,7 +78,7 @@ class TestShapedModeBaseline:
             total_improvement=3.0,
             epochs_in_stage=1,
             seed_params=50_000,
-            previous_stage=SeedStage.PROBATIONARY.value,
+            previous_stage=SeedStage.HOLDING.value,
             previous_epochs_in_stage=3,
             seed_age_epochs=10,
         )
@@ -121,9 +121,9 @@ class TestShapedModeBaseline:
         )
 
     def test_fossilize_action_bonus(self):
-        """FOSSILIZE action in PROBATIONARY stage should get bonus."""
+        """FOSSILIZE action in HOLDING stage should get bonus."""
         seed_info = SeedInfo(
-            stage=SeedStage.PROBATIONARY.value,
+            stage=SeedStage.HOLDING.value,
             improvement_since_stage_start=0.5,
             total_improvement=2.0,
             epochs_in_stage=3,
@@ -150,7 +150,7 @@ class TestShapedModeBaseline:
         assert reward > 0, f"Valid FOSSILIZE should be rewarded, got {reward}"
 
     def test_invalid_fossilize_penalty(self):
-        """FOSSILIZE in non-PROBATIONARY stage should get penalty."""
+        """FOSSILIZE in non-HOLDING stage should get penalty."""
         seed_info = SeedInfo(
             stage=SeedStage.TRAINING.value,  # Can't fossilize from TRAINING
             improvement_since_stage_start=0.5,

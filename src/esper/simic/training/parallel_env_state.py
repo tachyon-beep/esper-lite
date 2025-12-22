@@ -66,6 +66,12 @@ class ParallelEnvState:
     # Per-slot counterfactual accumulators for multi-slot reward attribution
     cf_correct_accums: dict[str, torch.Tensor] = field(default_factory=dict)
     cf_totals: dict[str, int] = field(default_factory=dict)
+    # "All disabled" counterfactual for true pair synergy measurement
+    cf_all_disabled_accum: torch.Tensor | None = None
+    cf_all_disabled_total: int = 0
+    # Pair counterfactual accumulators for 3-4 seeds (key: tuple of slot indices)
+    cf_pair_accums: dict[tuple[int, int], torch.Tensor] = field(default_factory=dict)
+    cf_pair_totals: dict[tuple[int, int], int] = field(default_factory=dict)
     # LSTM hidden state for recurrent policy
     # Shape: (h, c) where each is [num_layers, 1, hidden_dim] for this single env
     # (Batched to [num_layers, num_envs, hidden_dim] during forward pass)
@@ -75,16 +81,19 @@ class ParallelEnvState:
     # Per-slot EMA tracking for seed gradient ratio (for G2 gate)
     # Smooths per-step ratio noise with momentum=0.9
     gradient_ratio_ema: dict[str, float] = field(default_factory=dict)
-    # Pending auto-cull penalty to be applied on next reward computation
+    # Pending auto-prune penalty to be applied on next reward computation
     # (DRL Expert review 2025-12-17: prevents degenerate WAIT-spam policies
     # that rely on environment cleanup rather than proactive lifecycle management)
-    pending_auto_cull_penalty: float = 0.0
+    pending_auto_prune_penalty: float = 0.0
+    # Previous alpha/param snapshots for convex shock penalty (Phase 5)
+    prev_slot_alphas: dict[str, float] = field(default_factory=dict)
+    prev_slot_params: dict[str, int] = field(default_factory=dict)
     # Pre-computed autocast decision for hot path performance
     # Avoids repeated device type checks and amp flag evaluation per batch
     autocast_enabled: bool = False
 
     def __post_init__(self) -> None:
-        # Initialize counters with LifecycleOp names (WAIT, GERMINATE, FOSSILIZE, CULL)
+        # Initialize counters with LifecycleOp names (WAIT, GERMINATE, SET_ALPHA_TARGET, PRUNE, FOSSILIZE, ADVANCE)
         # since factored actions use op.name for counting, not flat action enum names
         if not self.action_counts:
             base_counts = {op.name: 0 for op in LifecycleOp}
@@ -106,6 +115,18 @@ class ParallelEnvState:
             slot_id: torch.zeros(1, device=self.env_device) for slot_id in slots
         }
         self.cf_totals: dict[str, int] = {slot_id: 0 for slot_id in slots}
+        # "All disabled" accumulator for true pair synergy measurement
+        self.cf_all_disabled_accum = torch.zeros(1, device=self.env_device)
+        self.cf_all_disabled_total = 0
+        # Pair accumulators for 3-4 seeds (all C(n,2) pairs)
+        n = len(slots)
+        self.cf_pair_accums = {}
+        self.cf_pair_totals = {}
+        if 3 <= n <= 4:
+            for i in range(n):
+                for j in range(i + 1, n):
+                    self.cf_pair_accums[(i, j)] = torch.zeros(1, device=self.env_device)
+                    self.cf_pair_totals[(i, j)] = 0
 
     def zero_accumulators(self) -> None:
         """Zero accumulators at the start of each epoch (faster than reallocating).
@@ -125,6 +146,46 @@ class ParallelEnvState:
             self.cf_correct_accums[slot_id].zero_()
         for slot_id in self.cf_totals:
             self.cf_totals[slot_id] = 0
+        # Zero "all disabled" accumulator
+        if self.cf_all_disabled_accum is not None:
+            self.cf_all_disabled_accum.zero_()
+        self.cf_all_disabled_total = 0
+        # Zero pair accumulators
+        for pair_key in self.cf_pair_accums:
+            self.cf_pair_accums[pair_key].zero_()
+        for pair_key in self.cf_pair_totals:
+            self.cf_pair_totals[pair_key] = 0
+
+    def reset_episode_state(self, slots: list[str]) -> None:
+        """Reset per-episode state when reusing env instances."""
+        self.seeds_created = 0
+        self.seeds_fossilized = 0
+        self.contributing_fossilized = 0
+        self.episode_rewards.clear()
+
+        base_counts = {op.name: 0 for op in LifecycleOp}
+        self.action_counts = base_counts.copy()
+        self.successful_action_counts = base_counts.copy()
+
+        self.seed_optimizers.clear()
+        self.acc_at_germination.clear()
+        self.host_max_acc = 0.0
+        self.pending_auto_prune_penalty = 0.0
+        self.prev_slot_alphas = {slot_id: 0.0 for slot_id in slots}
+        self.prev_slot_params = {slot_id: 0 for slot_id in slots}
+        self.gradient_ratio_ema = {slot_id: 0.0 for slot_id in slots}
+        self.lstm_hidden = None
+        self.signal_tracker.reset()
+        self.governor.reset()
+        if self.health_monitor is not None:
+            self.health_monitor.reset()
+        if self.counterfactual_helper is not None:
+            self.counterfactual_helper._last_matrix = None
+
+        if self.train_loss_accum is None:
+            self.init_accumulators(slots)
+        else:
+            self.zero_accumulators()
 
 
 __all__ = ["ParallelEnvState"]

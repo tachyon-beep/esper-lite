@@ -305,7 +305,7 @@ class FeedEvent:
     """Single event for the Event Feed panel."""
 
     timestamp: str  # ISO format or display format like "12:00:03"
-    event_type: str  # GATE, STAGE, PPO, GERM, CULL, etc.
+    event_type: str  # GATE, STAGE, PPO, GERM, PRUNE, etc.
     env_id: int | None  # None for global events like PPO updates
     message: str
 

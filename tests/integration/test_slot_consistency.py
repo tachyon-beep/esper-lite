@@ -10,7 +10,16 @@ import pytest
 import torch
 
 from esper.leyline.slot_config import SlotConfig
-from esper.leyline.factored_actions import NUM_OPS, NUM_BLUEPRINTS, NUM_BLENDS
+from esper.leyline.factored_actions import (
+    NUM_ALPHA_ALGORITHMS,
+    NUM_ALPHA_CURVES,
+    NUM_ALPHA_SPEEDS,
+    NUM_ALPHA_TARGETS,
+    NUM_OPS,
+    NUM_BLUEPRINTS,
+    NUM_BLENDS,
+    NUM_TEMPO,
+)
 from esper.tamiyo.policy.features import get_feature_size, BASE_FEATURE_SIZE, SLOT_FEATURE_SIZE
 from esper.simic.agent import PPOAgent
 from esper.simic.agent import FactoredRecurrentActorCritic
@@ -93,6 +102,11 @@ class TestFeatureDimensionConsistency:
         assert output["slot_logits"].shape == (batch_size, seq_len, config.num_slots)
         assert output["blueprint_logits"].shape == (batch_size, seq_len, NUM_BLUEPRINTS)
         assert output["blend_logits"].shape == (batch_size, seq_len, NUM_BLENDS)
+        assert output["tempo_logits"].shape == (batch_size, seq_len, NUM_TEMPO)
+        assert output["alpha_target_logits"].shape == (batch_size, seq_len, NUM_ALPHA_TARGETS)
+        assert output["alpha_speed_logits"].shape == (batch_size, seq_len, NUM_ALPHA_SPEEDS)
+        assert output["alpha_curve_logits"].shape == (batch_size, seq_len, NUM_ALPHA_CURVES)
+        assert output["alpha_algorithm_logits"].shape == (batch_size, seq_len, NUM_ALPHA_ALGORITHMS)
         assert output["op_logits"].shape == (batch_size, seq_len, NUM_OPS)
         assert output["value"].shape == (batch_size, seq_len)
 
@@ -159,6 +173,71 @@ class TestMaskDimensionConsistency:
         )
 
         assert masks["blend"].shape[0] == NUM_BLENDS
+
+    def test_tempo_mask_matches_network_tempo_head(self):
+        """Tempo mask dimension should match NUM_TEMPO."""
+        config = SlotConfig.default()
+
+        slot_states = {slot_id: None for slot_id in config.slot_ids}
+        masks = compute_action_masks(
+            slot_states,
+            enabled_slots=list(config.slot_ids),
+            slot_config=config,
+        )
+
+        assert masks["tempo"].shape[0] == NUM_TEMPO
+
+    def test_alpha_target_mask_matches_network_head(self):
+        """Alpha target mask dimension should match NUM_ALPHA_TARGETS."""
+        config = SlotConfig.default()
+
+        slot_states = {slot_id: None for slot_id in config.slot_ids}
+        masks = compute_action_masks(
+            slot_states,
+            enabled_slots=list(config.slot_ids),
+            slot_config=config,
+        )
+
+        assert masks["alpha_target"].shape[0] == NUM_ALPHA_TARGETS
+
+    def test_alpha_speed_mask_matches_network_head(self):
+        """Alpha speed mask dimension should match NUM_ALPHA_SPEEDS."""
+        config = SlotConfig.default()
+
+        slot_states = {slot_id: None for slot_id in config.slot_ids}
+        masks = compute_action_masks(
+            slot_states,
+            enabled_slots=list(config.slot_ids),
+            slot_config=config,
+        )
+
+        assert masks["alpha_speed"].shape[0] == NUM_ALPHA_SPEEDS
+
+    def test_alpha_curve_mask_matches_network_head(self):
+        """Alpha curve mask dimension should match NUM_ALPHA_CURVES."""
+        config = SlotConfig.default()
+
+        slot_states = {slot_id: None for slot_id in config.slot_ids}
+        masks = compute_action_masks(
+            slot_states,
+            enabled_slots=list(config.slot_ids),
+            slot_config=config,
+        )
+
+        assert masks["alpha_curve"].shape[0] == NUM_ALPHA_CURVES
+
+    def test_alpha_algorithm_mask_matches_network_head(self):
+        """Alpha algorithm mask dimension should match NUM_ALPHA_ALGORITHMS."""
+        config = SlotConfig.default()
+
+        slot_states = {slot_id: None for slot_id in config.slot_ids}
+        masks = compute_action_masks(
+            slot_states,
+            enabled_slots=list(config.slot_ids),
+            slot_config=config,
+        )
+
+        assert masks["alpha_algorithm"].shape[0] == NUM_ALPHA_ALGORITHMS
 
 
 class TestMultiSlotConsistency:

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from esper.kasmina.slot import SeedSlot
 from esper.tamiyo.policy.features import TaskConfig
+from esper.leyline.alpha import AlphaAlgorithm
 from esper.leyline.stages import SeedStage
 
 
@@ -102,10 +103,10 @@ class TestSeedSlotCheckpoint:
 
 
 class TestAlphaScheduleCleanup:
-    """Test alpha_schedule is discarded after BLENDING."""
+    """Test alpha_schedule retention rules after BLENDING."""
 
-    def test_alpha_schedule_cleared_on_probationary_transition(self):
-        """alpha_schedule should be None after BLENDING -> PROBATIONARY."""
+    def test_alpha_schedule_kept_for_gate_on_holding_transition(self):
+        """alpha_schedule should remain for AlphaAlgorithm.GATE after BLENDING -> HOLDING."""
         slot = SeedSlot(
             slot_id="r0c0",
             channels=64,
@@ -123,7 +124,8 @@ class TestAlphaScheduleCleanup:
         slot.germinate(
             blueprint_id="norm",
             seed_id="test-seed",
-            blend_algorithm_id="linear",
+            blend_algorithm_id="gated",
+            alpha_algorithm=AlphaAlgorithm.GATE,
         )
         slot.state.transition(SeedStage.TRAINING)
         slot.state.transition(SeedStage.BLENDING)
@@ -132,11 +134,11 @@ class TestAlphaScheduleCleanup:
         # Verify schedule exists during BLENDING
         assert slot.alpha_schedule is not None
 
-        # Force transition to PROBATIONARY
+        # Force transition to HOLDING
         slot.state.alpha = 1.0
-        slot.state.transition(SeedStage.PROBATIONARY)
+        slot.state.transition(SeedStage.HOLDING)
         slot._on_blending_complete()  # Cleanup hook
 
-        # Schedule should be cleared
-        assert slot.alpha_schedule is None
+        # Schedule must persist for GATE (forward requires it).
+        assert slot.alpha_schedule is not None
         assert slot.state.alpha == 1.0

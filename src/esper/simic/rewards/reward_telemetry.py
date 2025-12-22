@@ -29,8 +29,9 @@ class RewardComponentsTelemetry:
 
     # Penalties
     compute_rent: float = 0.0
+    alpha_shock: float = 0.0  # Convex penalty on alpha deltas (Phase 5)
     blending_warning: float = 0.0  # Escalating penalty for negative trajectory during BLENDING
-    probation_warning: float = 0.0  # Escalating penalty for WAITing in PROBATIONARY
+    holding_warning: float = 0.0  # Escalating penalty for WAITing in HOLDING
 
     # Bonuses
     stage_bonus: float = 0.0
@@ -91,8 +92,9 @@ class RewardComponentsTelemetry:
             "attribution_discount": self.attribution_discount,
             "ratio_penalty": self.ratio_penalty,
             "compute_rent": self.compute_rent,
+            "alpha_shock": self.alpha_shock,
             "blending_warning": self.blending_warning,
-            "probation_warning": self.probation_warning,
+            "holding_warning": self.holding_warning,
             "stage_bonus": self.stage_bonus,
             "pbrs_bonus": self.pbrs_bonus,
             "action_shaping": self.action_shaping,

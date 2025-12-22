@@ -15,7 +15,15 @@ import torch
 from torch import nn
 
 from esper.leyline import TelemetryEvent, TelemetryEventType, DEFAULT_ENTROPY_COLLAPSE_THRESHOLD
-from esper.leyline.factored_actions import OP_NAMES, BLUEPRINT_IDS, BLEND_IDS
+from esper.leyline.factored_actions import (
+    OP_NAMES,
+    BLUEPRINT_IDS,
+    BLEND_IDS,
+    ALPHA_TARGET_VALUES,
+    ALPHA_SPEED_NAMES,
+    ALPHA_CURVE_NAMES,
+    ALPHA_ALGORITHM_NAMES,
+)
 from .debug_telemetry import LayerGradientStats
 from esper.nissa import get_hub
 
@@ -48,11 +56,11 @@ def emit_batch_completed(
     start_episode: int,
     requested_episodes: int,
 ) -> None:
-    """Emit batch completion telemetry with resume-aware totals."""
+    """Emit batch epoch completion telemetry with resume-aware totals."""
     clamped_completed = min(episodes_completed, total_episodes)
     hub.emit(
         TelemetryEvent(
-            event_type=TelemetryEventType.BATCH_COMPLETED,
+            event_type=TelemetryEventType.BATCH_EPOCH_COMPLETED,
             data={
                 "batch_idx": batch_idx,
                 "episodes_completed": clamped_completed,
@@ -75,6 +83,11 @@ def emit_last_action(
     slot_idx: int,
     blueprint_idx: int,
     blend_idx: int,
+    tempo_idx: int,
+    alpha_target_idx: int,
+    alpha_speed_idx: int,
+    alpha_curve_idx: int,
+    alpha_algorithm_idx: int,
     op_idx: int,
     slot_id: str,
     masked: dict[str, bool],
@@ -88,6 +101,7 @@ def emit_last_action(
         slot_idx: Slot action index
         blueprint_idx: Blueprint action index
         blend_idx: Blend action index
+        tempo_idx: Tempo action index
         op_idx: Lifecycle operation index
         slot_id: Target slot ID string
         masked: Dict of head -> was_masked flags
@@ -105,10 +119,20 @@ def emit_last_action(
         "slot_id": slot_id,
         "blueprint_id": BLUEPRINT_IDS[blueprint_idx],
         "blend_id": BLEND_IDS[blend_idx],
+        "tempo_idx": tempo_idx,
+        "alpha_target": ALPHA_TARGET_VALUES[alpha_target_idx],
+        "alpha_speed": ALPHA_SPEED_NAMES[alpha_speed_idx],
+        "alpha_curve": ALPHA_CURVE_NAMES[alpha_curve_idx],
+        "alpha_algorithm": ALPHA_ALGORITHM_NAMES[alpha_algorithm_idx],
         "op_masked": bool(masked.get("op", False)),
         "slot_masked": bool(masked.get("slot", False)),
         "blueprint_masked": bool(masked.get("blueprint", False)),
         "blend_masked": bool(masked.get("blend", False)),
+        "tempo_masked": bool(masked.get("tempo", False)),
+        "alpha_target_masked": bool(masked.get("alpha_target", False)),
+        "alpha_speed_masked": bool(masked.get("alpha_speed", False)),
+        "alpha_curve_masked": bool(masked.get("alpha_curve", False)),
+        "alpha_algorithm_masked": bool(masked.get("alpha_algorithm", False)),
         "action_success": success,
     }
     hub.emit(TelemetryEvent(

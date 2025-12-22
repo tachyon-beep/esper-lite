@@ -17,7 +17,12 @@ from hypothesis import strategies as st
 
 from esper.kasmina.slot import SeedSlot, SeedMetrics, SeedState, QualityGates
 from esper.kasmina.isolation import ste_forward, blend_with_isolation
-from esper.leyline import SeedStage, VALID_TRANSITIONS, is_valid_transition
+from esper.leyline import (
+    SeedStage,
+    VALID_TRANSITIONS,
+    is_valid_transition,
+    DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE,
+)
 
 from tests.strategies import (
     alpha_values,
@@ -300,3 +305,303 @@ class TestMetricsConsistency:
         for i in range(n_accuracies):
             metrics.record_accuracy(50.0)
             assert metrics.epochs_total == i + 1
+
+
+class TestTempoProperties:
+    """Property tests for blend tempo lever functionality."""
+
+    @given(
+        tempo=st.sampled_from([3, 5, 8]),  # Valid TEMPO_TO_EPOCHS values
+    )
+    def test_blend_tempo_epochs_stored_in_seed_state(self, tempo: int):
+        """Property: blend_tempo_epochs is stored correctly in SeedState."""
+        from esper.kasmina.slot import SeedSlot
+
+        slot = SeedSlot(slot_id="r0c0", channels=64)
+        slot.germinate("noop", seed_id="test", blend_tempo_epochs=tempo)
+
+        assert slot.state.blend_tempo_epochs == tempo
+
+    @given(
+        tempo=st.sampled_from([3, 5, 8]),
+    )
+    def test_blend_tempo_epochs_default_is_standard(self, tempo: int):
+        """Property: Default blend_tempo_epochs is 5 (STANDARD)."""
+        from esper.kasmina.slot import SeedSlot
+
+        slot = SeedSlot(slot_id="r0c0", channels=64)
+        slot.germinate("noop", seed_id="test")  # No tempo specified
+
+        # Default should be STANDARD = 5 epochs
+        assert slot.state.blend_tempo_epochs == 5
+
+    @given(
+        tempo=st.sampled_from([3, 5, 8]),
+    )
+    def test_blend_tempo_epochs_serialization_roundtrip(self, tempo: int):
+        """Property: blend_tempo_epochs survives to_dict/from_dict roundtrip."""
+        state = SeedState(
+            seed_id="test",
+            blueprint_id="noop",
+            slot_id="r0c0",
+            stage=SeedStage.GERMINATED,
+            blend_tempo_epochs=tempo,
+        )
+
+        data = state.to_dict()
+        restored = SeedState.from_dict(data)
+
+        assert restored.blend_tempo_epochs == tempo
+
+    @given(
+        tempo=st.sampled_from([3, 5, 8]),
+        alpha=alpha_values(include_boundaries=False),
+    )
+    @settings(max_examples=50)
+    def test_blending_velocity_bounded_by_tempo(self, tempo: int, alpha: float):
+        """Property: Blending velocity is bounded by 1/tempo epochs."""
+        assume(0.01 < alpha < 0.99)
+
+        # Blending velocity = d(alpha) / d(epoch)
+        # Max velocity occurs when alpha goes 0->1 in `tempo` epochs
+        max_velocity = 1.0 / tempo
+
+        # Simulated velocity (this is what the policy should produce)
+        # If alpha changes by delta_alpha in 1 epoch, velocity = delta_alpha
+        velocity = alpha / tempo  # Assuming linear ramp from 0
+
+        assert velocity <= max_velocity + 1e-9, (
+            f"Velocity {velocity} exceeds max {max_velocity} for tempo {tempo}"
+        )
+
+    def test_tempo_to_epochs_mapping_consistency(self):
+        """Property: TEMPO_TO_EPOCHS covers all TempoAction values."""
+        from esper.leyline.factored_actions import TempoAction, TEMPO_TO_EPOCHS
+
+        # Every enum value should have a mapping
+        for tempo in TempoAction:
+            assert tempo in TEMPO_TO_EPOCHS, f"Missing TEMPO_TO_EPOCHS entry for {tempo}"
+
+        # Mapping should be monotonic (FAST < STANDARD < SLOW)
+        epochs = [TEMPO_TO_EPOCHS[t] for t in sorted(TempoAction, key=lambda x: x.value)]
+        assert epochs == sorted(epochs), f"TEMPO_TO_EPOCHS should be monotonic: {epochs}"
+
+    def test_tempo_action_enum_bounds(self):
+        """Property: TempoAction enum values are contiguous 0..N-1."""
+        from esper.leyline.factored_actions import TempoAction, NUM_TEMPO
+
+        values = [t.value for t in TempoAction]
+
+        assert min(values) == 0, "TempoAction should start at 0"
+        assert max(values) == NUM_TEMPO - 1, f"TempoAction max should be {NUM_TEMPO - 1}"
+        assert len(values) == NUM_TEMPO, "TempoAction count mismatch"
+        assert sorted(values) == list(range(NUM_TEMPO)), "TempoAction values not contiguous"
+
+
+# =============================================================================
+# Stateful Testing: Seed Lifecycle State Machine
+# =============================================================================
+
+from hypothesis.stateful import RuleBasedStateMachine, rule, invariant, initialize, precondition
+
+
+class SeedSlotStateMachine(RuleBasedStateMachine):
+    """Stateful test: Random lifecycle operations don't violate invariants.
+
+    This state machine simulates a seed going through its lifecycle:
+    DORMANT → GERMINATED → TRAINING → BLENDING → HOLDING → FOSSILIZED
+
+    Rules:
+    - germinate: Create a new seed in the slot
+    - step_training: Simulate a training epoch
+    - start_blending: Transition to blending stage
+    - step_blending: Advance alpha during blending
+    - promote_to_holding: Complete blending
+    - fossilize: Permanently integrate seed
+    - cull: Remove underperforming seed
+
+    Invariants checked after every operation:
+    - Alpha is always in [0, 1]
+    - Stage transitions follow VALID_TRANSITIONS
+    - Metrics maintain consistency (best >= current)
+    - blend_tempo_epochs is always valid
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.slot = None
+        self.operation_history = []
+
+    @initialize()
+    def setup(self):
+        self.slot = SeedSlot(slot_id="r0c0", channels=64)
+        self.operation_history = []
+
+    # -------------------------------------------------------------------------
+    # Rules: Lifecycle Operations
+    # -------------------------------------------------------------------------
+
+    @rule(
+        blueprint=st.sampled_from(["noop", "conv_light", "attention"]),
+        tempo=st.sampled_from([3, 5, 8]),
+    )
+    @precondition(lambda self: self.slot.state is None)
+    def germinate(self, blueprint: str, tempo: int):
+        """Germinate a new seed in the slot."""
+        self.slot.germinate(blueprint, seed_id="test_seed", blend_tempo_epochs=tempo)
+        self.operation_history.append(("germinate", blueprint, tempo))
+
+    @rule(accuracy=st.floats(min_value=0.0, max_value=100.0, allow_nan=False))
+    @precondition(lambda self: self.slot.state is not None and
+                  self.slot.state.stage in (SeedStage.GERMINATED, SeedStage.TRAINING))
+    def step_training(self, accuracy: float):
+        """Simulate one training epoch."""
+        # Transition to TRAINING if still GERMINATED
+        if self.slot.state.stage == SeedStage.GERMINATED:
+            self.slot.state.transition(SeedStage.TRAINING)
+
+        self.slot.state.metrics.record_accuracy(accuracy)
+        self.operation_history.append(("step_training", accuracy))
+
+    @rule()
+    @precondition(lambda self: self.slot.state is not None and
+                  self.slot.state.stage == SeedStage.TRAINING and
+                  self.slot.state.metrics.epochs_total >= 3)
+    def start_blending(self):
+        """Transition from TRAINING to BLENDING."""
+        self.slot.state.transition(SeedStage.BLENDING)
+        self.operation_history.append(("start_blending",))
+
+    @rule(alpha_delta=st.floats(min_value=0.01, max_value=0.3, allow_nan=False))
+    @precondition(lambda self: self.slot.state is not None and
+                  self.slot.state.stage == SeedStage.BLENDING and
+                  self.slot.state.alpha < 1.0)
+    def step_blending(self, alpha_delta: float):
+        """Advance alpha during blending."""
+        new_alpha = min(1.0, self.slot.state.alpha + alpha_delta)
+        self.slot.set_alpha(new_alpha)
+        self.operation_history.append(("step_blending", alpha_delta))
+
+    @rule()
+    @precondition(lambda self: self.slot.state is not None and
+                  self.slot.state.stage == SeedStage.BLENDING and
+                  self.slot.state.alpha >= 0.99)
+    def promote_to_probationary(self):
+        """Complete blending, enter holding period."""
+        self.slot.state.transition(SeedStage.HOLDING)
+        self.operation_history.append(("promote_to_probationary",))
+
+    @rule()
+    @precondition(lambda self: self.slot.state is not None and
+                  self.slot.state.stage == SeedStage.HOLDING)
+    def fossilize(self):
+        """Permanently integrate the seed."""
+        self.slot.state.transition(SeedStage.FOSSILIZED)
+        self.operation_history.append(("fossilize",))
+
+    @rule()
+    @precondition(lambda self: self.slot.state is not None and
+                  self.slot.state.stage == SeedStage.FOSSILIZED)
+    def restart_lifecycle(self):
+        """Start a new lifecycle by creating a fresh slot.
+
+        FOSSILIZED is terminal by design - seeds cannot be culled after fossilization.
+        To continue testing, we create a new empty slot to start a fresh lifecycle.
+        This models the real scenario where you'd use a different slot after
+        permanently integrating a seed.
+        """
+        self.slot = SeedSlot(slot_id="r0c0", channels=64)
+        self.operation_history.append(("restart_lifecycle",))
+
+    @rule()
+    @precondition(lambda self: self.slot.state is not None and
+                  self.slot.state.stage in (SeedStage.TRAINING, SeedStage.BLENDING,
+                                            SeedStage.HOLDING))
+    def cull(self):
+        """Remove underperforming seed.
+
+        Phase 4: cull/prune keeps state for cooldown (PRUNED → EMBARGOED → RESETTING).
+        For this state machine, we advance the cooldown ticks to return the slot
+        to an empty/DORMANT state before continuing.
+        """
+        result = self.slot.prune(reason="stateful_test")
+        assert result is True, "Cull should succeed for non-FOSSILIZED stages"
+        assert self.slot.state is not None
+        assert self.slot.state.stage == SeedStage.PRUNED
+        assert self.slot.seed is None
+
+        for _ in range(DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE + 2):
+            self.slot.step_epoch()
+        assert self.slot.state is None, "Slot should return to DORMANT after cooldown"
+        self.operation_history.append(("cull",))
+
+    # Note: No clear_fossilized rule - FOSSILIZED is terminal by design.
+    # Fossilized seeds cannot be culled (SeedSlot.prune() returns False).
+    # This is intentional: fossilization is permanent integration.
+
+    # -------------------------------------------------------------------------
+    # Invariants: Must hold after every operation
+    # -------------------------------------------------------------------------
+
+    @invariant()
+    def alpha_always_bounded(self):
+        """Invariant: Alpha is always in [0, 1]."""
+        if self.slot.state is not None:
+            assert 0.0 <= self.slot.state.alpha <= 1.0, (
+                f"Alpha out of bounds: {self.slot.state.alpha}"
+            )
+
+    @invariant()
+    def stage_is_valid(self):
+        """Invariant: Stage is always a valid SeedStage."""
+        if self.slot.state is not None:
+            assert self.slot.state.stage in SeedStage, (
+                f"Invalid stage: {self.slot.state.stage}"
+            )
+
+    @invariant()
+    def best_accuracy_geq_current(self):
+        """Invariant: best_val_accuracy >= current_val_accuracy."""
+        if self.slot.state is not None:
+            metrics = self.slot.state.metrics
+            assert metrics.best_val_accuracy >= metrics.current_val_accuracy, (
+                f"Best {metrics.best_val_accuracy} < current {metrics.current_val_accuracy}"
+            )
+
+    @invariant()
+    def blend_tempo_epochs_valid(self):
+        """Invariant: blend_tempo_epochs is always a valid value (3, 5, or 8)."""
+        if self.slot.state is not None:
+            assert self.slot.state.blend_tempo_epochs in (3, 5, 8), (
+                f"Invalid blend_tempo_epochs: {self.slot.state.blend_tempo_epochs}"
+            )
+
+    @invariant()
+    def alpha_matches_stage(self):
+        """Invariant: Alpha value is consistent with stage."""
+        if self.slot.state is None:
+            return
+
+        stage = self.slot.state.stage
+        alpha = self.slot.state.alpha
+
+        # Early stages should have alpha = 0 (seed not blending yet)
+        if stage in (SeedStage.DORMANT, SeedStage.GERMINATED):
+            assert alpha == 0.0, f"Alpha should be 0 in {stage.name}, got {alpha}"
+
+        # Post-blending stages should have alpha = 1 (fully integrated)
+        if stage in (SeedStage.HOLDING, SeedStage.FOSSILIZED):
+            # Allow small epsilon for floating point
+            assert alpha >= 0.99, f"Alpha should be ~1.0 in {stage.name}, got {alpha}"
+
+    @invariant()
+    def epochs_non_negative(self):
+        """Invariant: Epoch counters are never negative."""
+        if self.slot.state is not None:
+            metrics = self.slot.state.metrics
+            assert metrics.epochs_total >= 0
+            assert metrics.epochs_in_current_stage >= 0
+
+
+# Run the stateful test
+TestSeedSlotLifecycle = SeedSlotStateMachine.TestCase

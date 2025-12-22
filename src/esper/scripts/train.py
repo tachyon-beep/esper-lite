@@ -114,7 +114,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ppo_parser.add_argument(
         "--preset",
-        choices=["cifar10", "cifar10_deep", "cifar10_blind", "tinystories"],
+        choices=["cifar10", "cifar10_stable", "cifar10_deep", "cifar10_blind", "tinystories"],
         default="cifar10",
         help="TrainingConfig preset to use (hyperparameters + slots)",
     )
@@ -337,6 +337,8 @@ def main():
             else:
                 if args.preset == "cifar10":
                     temp_config = TrainingConfig.for_cifar10()
+                elif args.preset == "cifar10_stable":
+                    temp_config = TrainingConfig.for_cifar10_stable()
                 elif args.preset == "cifar10_deep":
                     temp_config = TrainingConfig.for_cifar10_deep()
                 elif args.preset == "cifar10_blind":
@@ -368,6 +370,8 @@ def main():
             else:
                 if args.preset == "cifar10":
                     temp_config = TrainingConfig.for_cifar10()
+                elif args.preset == "cifar10_stable":
+                    temp_config = TrainingConfig.for_cifar10_stable()
                 elif args.preset == "cifar10_deep":
                     temp_config = TrainingConfig.for_cifar10_deep()
                 elif args.preset == "cifar10_blind":
@@ -427,6 +431,8 @@ def main():
                 else:
                     if args.preset == "cifar10":
                         config = TrainingConfig.for_cifar10()
+                    elif args.preset == "cifar10_stable":
+                        config = TrainingConfig.for_cifar10_stable()
                     elif args.preset == "cifar10_deep":
                         config = TrainingConfig.for_cifar10_deep()
                     elif args.preset == "cifar10_blind":
@@ -454,11 +460,14 @@ def main():
 
                 print(config.summary())
 
+                # Use task from config if specified, otherwise CLI arg
+                effective_task = config.task if config.task else args.task
+
                 from esper.simic.training import train_ppo_vectorized
                 train_ppo_vectorized(
                     device=args.device,
                     devices=args.devices,
-                    task=args.task,
+                    task=effective_task,
                     save_path=args.save,
                     resume_path=args.resume,
                     num_workers=args.num_workers,

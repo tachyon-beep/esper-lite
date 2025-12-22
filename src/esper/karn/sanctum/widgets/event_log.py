@@ -25,23 +25,23 @@ _EVENT_COLORS: dict[str, str] = {
     "SEED_GERMINATED": "bright_yellow",
     "SEED_STAGE_CHANGED": "bright_white",
     "SEED_FOSSILIZED": "bright_green",
-    "SEED_CULLED": "bright_red",
+    "SEED_PRUNED": "bright_red",
     # Tamiyo actions (cyan)
     "REWARD_COMPUTED": "bright_cyan",
     # Training events (blue)
     "TRAINING_STARTED": "bright_green",
     "EPOCH_COMPLETED": "bright_blue",
     "PPO_UPDATE_COMPLETED": "bright_magenta",
-    "BATCH_COMPLETED": "bright_blue",
+    "BATCH_EPOCH_COMPLETED": "bright_blue",
 }
 
 # Event type emoji mapping
 _EVENT_EMOJI: dict[str, str] = {
     "SEED_GERMINATED": "🌱",
     "SEED_FOSSILIZED": "✅",
-    "SEED_CULLED": "⚠️",
+    "SEED_PRUNED": "⚠️",
     "REWARD_COMPUTED": "📊",
-    "BATCH_COMPLETED": "🏆",
+    "BATCH_EPOCH_COMPLETED": "🏆",
 }
 
 
@@ -55,11 +55,11 @@ class EventLog(Static):
     - Emoji prefixes for quick scanning
     """
 
-    def __init__(self, max_events: int = 20, **kwargs) -> None:
+    def __init__(self, max_events: int = 30, **kwargs) -> None:
         """Initialize EventLog widget.
 
         Args:
-            max_events: Maximum events to display (default: 20)
+            max_events: Maximum events to display (default: 30)
         """
         super().__init__(**kwargs)
         self._max_events = max_events

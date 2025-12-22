@@ -34,7 +34,7 @@ class TestLiveModePolling:
         from esper.leyline import TelemetryEvent, TelemetryEventType
         backend.emit(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"run_id": "test-run", "task": "cifar10"},
+            data={"episode_id": "test-run", "task": "cifar10"},
         ))
 
         app = OverwatchApp(backend=backend)
@@ -61,7 +61,7 @@ class TestLiveModeUpdates:
         from esper.leyline import TelemetryEvent, TelemetryEventType
         backend.emit(TelemetryEvent(
             event_type=TelemetryEventType.TRAINING_STARTED,
-            data={"run_id": "live-test", "task": "cifar10", "num_envs": 2},
+            data={"episode_id": "live-test", "task": "cifar10", "n_envs": 2},
         ))
 
         app = OverwatchApp(backend=backend)

@@ -501,6 +501,12 @@ class TestTolariaGovernor:
         # Seed slot should be cleared (experimental seeds discarded)
         assert not model.seed_slots["r0c1"].is_active
         assert model.seed_slots["r0c1"].seed is None
+        assert model.seed_slots["r0c1"].state is not None
+        assert model.seed_slots["r0c1"].state.stage.name == "PRUNED"
+
+        from esper.leyline import DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE
+        for _ in range(DEFAULT_EMBARGO_EPOCHS_AFTER_PRUNE + 2):
+            model.seed_slots["r0c1"].step_epoch()
         assert model.seed_slots["r0c1"].state is None
 
     def test_execute_rollback_resets_consecutive_panics(self):
@@ -660,7 +666,7 @@ class TestTolariaGovernor:
         )
 
         # Cull the seed - removes seed parameters from model
-        model.seed_slots["r0c0"].cull("test_cull")
+        model.seed_slots["r0c0"].prune("test_cull")
         assert not model.seed_slots["r0c0"].is_active
 
         # Build minimal history for rollback

@@ -158,7 +158,7 @@ if factored_action.is_germinate:
 
 **RL Impact**: Silent training corruption - gradients applied to wrong parameters or detached tensors.
 
-**Recommendation**: Explicitly reset `seed_optimizer = None` when seeds are fossilized/culled:
+**Recommendation**: Explicitly reset `seed_optimizer = None` when seeds are fossilized/pruned:
 ```python
 elif factored_action.is_fossilize:
     # ... fossilize logic ...

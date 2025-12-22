@@ -66,14 +66,14 @@ def safe(v, default: float = 0.0, max_val: float = 100.0) -> float:
 # Base features (training state without per-slot features)
 BASE_FEATURE_SIZE = 23
 
-# Per-slot features: 4 state (is_active, stage, alpha, improvement) + 13 blueprint one-hot
-SLOT_FEATURE_SIZE = 17
+# Per-slot features: 5 state (is_active, stage, alpha, improvement, tempo) + 13 blueprint one-hot
+SLOT_FEATURE_SIZE = 18
 
-# Feature size (with telemetry off): 23 base + 3 slots * 17 features per slot = 74
-# Per-slot: 4 state (is_active, stage, alpha, improvement) + 13 blueprint one-hot
-# With telemetry on: + 3 slots * SeedTelemetry.feature_dim() (10) = 104 total
+# Feature size (with telemetry off): 23 base + 3 slots * 18 features per slot = 77
+# Per-slot: 5 state (is_active, stage, alpha, improvement, tempo) + 13 blueprint one-hot
+# With telemetry on: + 3 slots * SeedTelemetry.feature_dim() (17) = 128 total
 # NOTE: Default for 3-slot configuration. Use get_feature_size(slot_config) for dynamic slot counts.
-MULTISLOT_FEATURE_SIZE = 74
+MULTISLOT_FEATURE_SIZE = 77
 
 
 def get_feature_size(slot_config: SlotConfig) -> int:
@@ -127,12 +127,13 @@ def obs_to_multislot_features(
     - Total params: total_params (1)
     - Resource management: seed_utilization (1) [new - for resource awareness]
 
-    Per-slot features (9 dims each):
+    Per-slot features (18 dims each):
     - is_active: 1.0 if seed active, 0.0 otherwise
-    - stage: seed lifecycle stage (0-7)
+    - stage: seed lifecycle stage (SeedStage enum int, 0-10)
     - alpha: blending alpha (0.0-1.0)
     - improvement: counterfactual contribution delta
-    - blueprint_id: one-hot encoding of blueprint type (5 dims)
+    - tempo: blend tempo epochs normalized (0-1)
+    - blueprint_id: one-hot encoding of blueprint type (13 dims)
 
     This keeps each slot's local state visible, while still giving Tamiyo
     a single flat observation vector that standard PPO implementations
@@ -147,9 +148,9 @@ def obs_to_multislot_features(
     [16-20] Accuracy history (5 values)
     [21]    Total params
     [22]    Seed utilization
-    [23-31] Slot 0 (is_active, stage, alpha, improvement, blueprint[5])
-    [32-40] Slot 1 (is_active, stage, alpha, improvement, blueprint[5])
-    [41-49] Slot 2 (is_active, stage, alpha, improvement, blueprint[5])
+    [23-40] Slot 0 (is_active, stage, alpha, improvement, tempo, blueprint[13])
+    [41-58] Slot 1 (is_active, stage, alpha, improvement, tempo, blueprint[13])
+    [59-76] Slot 2 (is_active, stage, alpha, improvement, tempo, blueprint[13])
 
     Args:
         obs: Observation dictionary with optional 'slots' key
@@ -158,7 +159,7 @@ def obs_to_multislot_features(
         slot_config: Slot configuration (default: 3-slot config)
 
     Returns:
-        List of floats: 23 base + num_slots * 9 slot features
+        List of floats: 23 base + num_slots * 18 slot features
 
     Note (P2-9 Design Decision):
         Returns list[float] instead of torch.Tensor for flexibility during
@@ -191,12 +192,12 @@ def obs_to_multislot_features(
         float(seed_utilization),  # New: resource management
     ]
 
-    # Per-slot features (9 dims per slot, num_slots determined by slot_config)
-    # 4 state features + 5 blueprint one-hot
+    # Per-slot features (18 dims per slot, num_slots determined by slot_config)
+    # 5 state features + 13 blueprint one-hot
     slot_features = []
     for slot_id in slot_config.slot_ids:
         slot = obs.get('slots', {}).get(slot_id, {})
-        # State features (4 dims)
+        # State features (5 dims)
         slot_features.extend([
             float(slot.get('is_active', 0)),
             float(slot.get('stage', 0)),
@@ -205,8 +206,10 @@ def obs_to_multislot_features(
             # per-slot improvement/counterfactual (currently raw percentage points) and
             # align with the ~[-1, 1] normalization contract for stable policy learning.
             float(slot.get('improvement', 0.0)),
+            # Tempo normalized to 0-1 range (max is ~12 epochs)
+            float(slot.get('blend_tempo_epochs', 5)) / 12.0,
         ])
-        # Blueprint one-hot (5 dims)
+        # Blueprint one-hot (13 dims)
         blueprint_id = slot.get('blueprint_id', None)
         blueprint_idx = _BLUEPRINT_TO_INDEX.get(blueprint_id, -1) if blueprint_id else -1
         blueprint_one_hot = [0.0] * _NUM_BLUEPRINT_TYPES

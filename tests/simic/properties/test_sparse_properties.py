@@ -198,12 +198,12 @@ class TestMinimalRewardProperties:
 
     @given(st.integers(0, 4), st.integers(5, 25))
     @settings(max_examples=100, deadline=None)
-    def test_early_cull_penalty(self, young_age, old_age):
-        """INVARIANT: Culling young seeds gets penalty, old seeds don't."""
+    def test_early_prune_penalty(self, young_age, old_age):
+        """INVARIANT: Pruning young seeds gets penalty, old seeds don't."""
         config = ContributionRewardConfig(
             reward_mode=RewardMode.MINIMAL,
-            early_cull_threshold=5,
-            early_cull_penalty=-0.1,
+            early_prune_threshold=5,
+            early_prune_penalty=-0.1,
         )
 
         base_inputs = {
@@ -211,24 +211,24 @@ class TestMinimalRewardProperties:
             "total_params": 100_000,
             "epoch": 10,  # Non-terminal
             "max_epochs": 25,
-            "action": LifecycleOp.CULL,
+            "action": LifecycleOp.PRUNE,
             "config": config,
         }
 
         r_young = compute_minimal_reward(**base_inputs, seed_age=young_age)
         r_old = compute_minimal_reward(**base_inputs, seed_age=old_age)
 
-        assert r_young == -0.1, f"Young cull should get penalty, got {r_young}"
-        assert r_old == 0.0, f"Old cull should get no penalty, got {r_old}"
+        assert r_young == -0.1, f"Young prune should get penalty, got {r_young}"
+        assert r_old == 0.0, f"Old prune should get no penalty, got {r_old}"
 
     @given(st.sampled_from([LifecycleOp.WAIT, LifecycleOp.GERMINATE, LifecycleOp.FOSSILIZE]))
     @settings(max_examples=50, deadline=None)
-    def test_non_cull_no_penalty(self, action):
-        """INVARIANT: Non-CULL actions get no early-cull penalty."""
+    def test_non_prune_no_penalty(self, action):
+        """INVARIANT: Non-PRUNE actions get no early-prune penalty."""
         config = ContributionRewardConfig(
             reward_mode=RewardMode.MINIMAL,
-            early_cull_threshold=5,
-            early_cull_penalty=-0.1,
+            early_prune_threshold=5,
+            early_prune_penalty=-0.1,
         )
 
         reward = compute_minimal_reward(
@@ -241,15 +241,15 @@ class TestMinimalRewardProperties:
             config=config,
         )
 
-        # Non-terminal, non-CULL -> 0.0 (no penalty regardless of seed age)
-        assert reward == 0.0, f"Non-CULL action should get no penalty, got {reward}"
+        # Non-terminal, non-PRUNE -> 0.0 (no penalty regardless of seed age)
+        assert reward == 0.0, f"Non-PRUNE action should get no penalty, got {reward}"
 
     def test_minimal_equals_sparse_plus_penalty(self):
-        """INVARIANT: MINIMAL = SPARSE + early_cull_penalty (when applicable)."""
+        """INVARIANT: MINIMAL = SPARSE + early_prune_penalty (when applicable)."""
         config = ContributionRewardConfig(
             reward_mode=RewardMode.MINIMAL,
-            early_cull_threshold=5,
-            early_cull_penalty=-0.1,
+            early_prune_threshold=5,
+            early_prune_penalty=-0.1,
         )
 
         # Sparse base reward (non-terminal = 0.0)
@@ -261,17 +261,17 @@ class TestMinimalRewardProperties:
             config=config,
         )
 
-        # Minimal with young cull
+        # Minimal with young prune
         minimal_reward = compute_minimal_reward(
             host_max_acc=75.0,
             total_params=100_000,
             epoch=10,
             max_epochs=25,
-            action=LifecycleOp.CULL,
+            action=LifecycleOp.PRUNE,
             seed_age=3,
             config=config,
         )
 
-        assert minimal_reward == sparse_reward + config.early_cull_penalty, (
-            f"MINIMAL should equal SPARSE + penalty: {minimal_reward} != {sparse_reward} + {config.early_cull_penalty}"
+        assert minimal_reward == sparse_reward + config.early_prune_penalty, (
+            f"MINIMAL should equal SPARSE + penalty: {minimal_reward} != {sparse_reward} + {config.early_prune_penalty}"
         )

@@ -30,6 +30,15 @@ from esper.karn.store import (
     SeedStage,
 )
 from esper.karn.triggers import AnomalyDetector, PolicyAnomalyDetector
+from esper.karn.ingest import (
+    coerce_bool_or_none,
+    coerce_float,
+    coerce_float_or_none,
+    coerce_int,
+    coerce_seed_stage,
+    coerce_str,
+    coerce_str_or_none,
+)
 
 if TYPE_CHECKING:
     from esper.leyline.telemetry import TelemetryEvent
@@ -281,10 +290,23 @@ class KarnCollector:
         episode_id = data.get("episode_id") or event.event_id
         self.start_episode(
             episode_id=episode_id,
-            seed=data.get("seed", 42),
-            task_type=data.get("task", "classification"),
-            reward_mode=data.get("reward_mode", "shaped"),
-            max_epochs=data.get("max_epochs", 75),
+            seed=coerce_int(data.get("seed", 42), field="seed", default=42, minimum=0),
+            task_type=coerce_str(
+                data.get("task", "classification"),
+                field="task",
+                default="classification",
+            ),
+            reward_mode=coerce_str(
+                data.get("reward_mode", "shaped"),
+                field="reward_mode",
+                default="shaped",
+            ),
+            max_epochs=coerce_int(
+                data.get("max_epochs", 75),
+                field="max_epochs",
+                default=75,
+                minimum=1,
+            ),
         )
         # Start at epoch 1 to match Simic's range(1, max_epochs + 1)
         self.store.start_epoch(1)
@@ -293,7 +315,8 @@ class KarnCollector:
     def _handle_epoch_completed(self, event: "TelemetryEvent") -> None:
         """Handle EPOCH_COMPLETED event."""
         data = event.data or {}
-        epoch = event.epoch or data.get("epoch", 0)
+        raw_epoch = event.epoch if event.epoch is not None else data.get("epoch", 0)
+        epoch = coerce_int(raw_epoch, field="epoch", default=0, minimum=0)
 
         # Auto-start epoch if none exists
         if not self.store.current_epoch:
@@ -304,15 +327,26 @@ class KarnCollector:
         # (HostSnapshot.epoch mirrors this value for convenience.)
         self.store.current_epoch.epoch = epoch
         self.store.current_epoch.host.epoch = epoch
-        self.store.current_epoch.host.val_loss = data.get("val_loss", 0.0)
-        self.store.current_epoch.host.val_accuracy = data.get("val_accuracy", 0.0)
-        self.store.current_epoch.host.train_loss = data.get("train_loss", 0.0)
-        self.store.current_epoch.host.train_accuracy = data.get("train_accuracy", 0.0)
-        self.store.current_epoch.host.host_grad_norm = data.get("grad_norm", 0.0)
+        self.store.current_epoch.host.val_loss = coerce_float(
+            data.get("val_loss"), field="val_loss", default=0.0
+        )
+        self.store.current_epoch.host.val_accuracy = coerce_float(
+            data.get("val_accuracy"), field="val_accuracy", default=0.0
+        )
+        self.store.current_epoch.host.train_loss = coerce_float(
+            data.get("train_loss"), field="train_loss", default=0.0
+        )
+        self.store.current_epoch.host.train_accuracy = coerce_float(
+            data.get("train_accuracy"), field="train_accuracy", default=0.0
+        )
+        self.store.current_epoch.host.host_grad_norm = coerce_float(
+            data.get("grad_norm"), field="grad_norm", default=0.0
+        )
 
-        # P0 Fix: Increment epochs_in_stage for all active slots
+        # P0 Fix: Increment epochs_in_stage for all occupied slots
+        # (includes EMBARGOED/RESETTING dwell while excluding PRUNED + terminal).
         for slot in self.store.current_epoch.slots.values():
-            if slot.stage not in (SeedStage.DORMANT, SeedStage.CULLED, SeedStage.FOSSILIZED):
+            if slot.stage not in (SeedStage.DORMANT, SeedStage.PRUNED, SeedStage.FOSSILIZED):
                 slot.epochs_in_stage += 1
 
         # Tier 3: Check for anomalies before committing
@@ -348,15 +382,18 @@ class KarnCollector:
 
         data = event.data or {}
 
-        env_id = data.get("env_id")
-        if env_id is None:
+        if "env_id" not in data:
+            return
+        env_id = coerce_int(data.get("env_id"), field="env_id", default=-1, minimum=0)
+        if env_id < 0:
             return
 
         # Get raw slot_id
-        raw_slot_id = event.slot_id or data.get("slot_id", "unknown")
+        raw_slot_id = event.slot_id if event.slot_id is not None else data.get("slot_id", "unknown")
+        slot_id = coerce_str(raw_slot_id, field="slot_id", default="unknown").strip() or "unknown"
 
         # Namespace slot key by env_id to prevent multi-env collisions
-        slot_key = f"env{env_id}:{raw_slot_id}"
+        slot_key = f"env{env_id}:{slot_id}"
 
         # Get or create slot snapshot with namespaced key
         if slot_key not in self.store.current_epoch.slots:
@@ -375,28 +412,27 @@ class KarnCollector:
 
         if event_type == "SEED_GERMINATED":
             slot.stage = SeedStage.GERMINATED
-            slot.seed_id = data.get("seed_id")
-            slot.blueprint_id = data.get("blueprint_id")
-            slot.seed_params = data.get("params", 0)
+            slot.seed_id = coerce_str_or_none(data.get("seed_id"), field="seed_id")
+            slot.blueprint_id = coerce_str_or_none(data.get("blueprint_id"), field="blueprint_id")
+            slot.seed_params = coerce_int(data.get("params", 0), field="params", default=0, minimum=0)
         elif event_type == "SEED_STAGE_CHANGED":
-            stage_name = data.get("to", "DORMANT")
-            try:
-                slot.stage = SeedStage[stage_name]
-            except KeyError:
-                pass
-            slot.epochs_in_stage = 0
+            new_stage = coerce_seed_stage(data.get("to"), field="to", default=slot.stage)
+            if new_stage != slot.stage:
+                slot.stage = new_stage
+                slot.epochs_in_stage = 0
         elif event_type == "SEED_GATE_EVALUATED":
-            slot.last_gate_attempted = data.get("gate")
-            slot.last_gate_passed = data.get("passed")
-            slot.last_gate_reason = data.get("message")
+            slot.last_gate_attempted = coerce_str_or_none(data.get("gate"), field="gate")
+            slot.last_gate_passed = coerce_bool_or_none(data.get("passed"), field="passed")
+            slot.last_gate_reason = coerce_str_or_none(data.get("message"), field="message")
             if not slot.last_gate_reason:
                 checks_failed = data.get("checks_failed")
                 if isinstance(checks_failed, list) and checks_failed:
                     slot.last_gate_reason = ",".join(str(c) for c in checks_failed)
         elif event_type == "SEED_FOSSILIZED":
             slot.stage = SeedStage.FOSSILIZED
-        elif event_type == "SEED_CULLED":
-            slot.stage = SeedStage.CULLED
+        elif event_type == "SEED_PRUNED":
+            slot.stage = SeedStage.PRUNED
+            slot.epochs_in_stage = 0
 
     def _handle_ppo_update(self, event: "TelemetryEvent") -> None:
         """Handle PPO_UPDATE_COMPLETED event."""
@@ -410,9 +446,11 @@ class KarnCollector:
             self.store.current_epoch.policy = PolicySnapshot()
 
         policy = self.store.current_epoch.policy
-        policy.kl_divergence = data.get("kl_divergence")
-        policy.explained_variance = data.get("explained_variance")
-        policy.entropy = data.get("entropy")
+        policy.kl_divergence = coerce_float_or_none(data.get("kl_divergence"), field="kl_divergence")
+        policy.explained_variance = coerce_float_or_none(
+            data.get("explained_variance"), field="explained_variance"
+        )
+        policy.entropy = coerce_float_or_none(data.get("entropy"), field="entropy")
 
     def _handle_reward_computed(self, event: "TelemetryEvent") -> None:
         """Handle REWARD_COMPUTED event."""
@@ -425,8 +463,8 @@ class KarnCollector:
 
         data = event.data or {}
         policy = self.store.current_epoch.policy
-        policy.reward_total = data.get("total_reward", 0.0)
-        policy.action_op = data.get("action_name", "")
+        policy.reward_total = coerce_float(data.get("total_reward"), field="total_reward", default=0.0)
+        policy.action_op = coerce_str(data.get("action_name"), field="action_name", default="")
 
     def _handle_counterfactual_computed(self, event: "TelemetryEvent") -> None:
         """Handle COUNTERFACTUAL_COMPUTED event."""
@@ -434,25 +472,35 @@ class KarnCollector:
             return
 
         data = event.data or {}
-        env_id = data.get("env_id")
-        if env_id is None:
+        if "env_id" not in data:
             return
-        raw_slot_id = event.slot_id or data.get("slot_id")
-        if not raw_slot_id:
+        env_id = coerce_int(data.get("env_id"), field="env_id", default=-1, minimum=0)
+        if env_id < 0:
+            return
+        raw_slot_id = event.slot_id if event.slot_id is not None else data.get("slot_id")
+        slot_id = coerce_str(raw_slot_id, field="slot_id", default="").strip()
+        if not slot_id:
             return
 
-        slot_key = f"env{env_id}:{raw_slot_id}"
+        slot_key = f"env{env_id}:{slot_id}"
         if slot_key not in self.store.current_epoch.slots:
             self.store.current_epoch.slots[slot_key] = SlotSnapshot(slot_id=slot_key)
         slot = self.store.current_epoch.slots[slot_key]
 
-        if data.get("available", True) is False:
+        available = True
+        if "available" in data:
+            available_coerced = coerce_bool_or_none(data.get("available"), field="available")
+            available = True if available_coerced is None else available_coerced
+
+        if available is False:
             slot.counterfactual_contribution = None
             return
 
-        slot.counterfactual_contribution = data.get("contribution")
-        slot.total_improvement = data.get("total_improvement")
-        slot.improvement_this_epoch = data.get("improvement_this_epoch", 0.0)
+        slot.counterfactual_contribution = coerce_float_or_none(data.get("contribution"), field="contribution")
+        slot.total_improvement = coerce_float_or_none(data.get("total_improvement"), field="total_improvement")
+        slot.improvement_this_epoch = coerce_float(
+            data.get("improvement_this_epoch"), field="improvement_this_epoch", default=0.0
+        )
 
     def _handle_anomaly_event(self, event: "TelemetryEvent", event_type: str) -> None:
         """Handle Simic anomaly events for dense trace capture.
