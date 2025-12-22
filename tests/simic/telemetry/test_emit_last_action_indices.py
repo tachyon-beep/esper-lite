@@ -11,7 +11,9 @@ from esper.leyline.factored_actions import (
     ALPHA_SPEED_NAMES,
     ALPHA_CURVE_NAMES,
     STYLE_NAMES,
+    STYLE_ALPHA_ALGORITHMS,
 )
+from esper.leyline.alpha import AlphaAlgorithm
 from esper.simic.telemetry.emitters import emit_last_action
 
 
@@ -73,6 +75,40 @@ class TestEmitLastActionWithIndices:
         assert result["alpha_speed"] == ALPHA_SPEED_NAMES[alpha_speed_idx]
         assert result["alpha_curve"] == ALPHA_CURVE_NAMES[alpha_curve_idx]
         assert result["alpha_algorithm"] == fa.alpha_algorithm_value.name
+        assert result["alpha_algorithm_selected"] == fa.alpha_algorithm_value.name
+
+    def test_emit_prefers_active_alpha_algorithm_when_provided(self):
+        style_idx = 0
+        selected = STYLE_ALPHA_ALGORITHMS[style_idx]
+        active = AlphaAlgorithm.GATE if selected != AlphaAlgorithm.GATE else AlphaAlgorithm.ADD
+        result = emit_last_action(
+            env_id=0,
+            epoch=1,
+            slot_idx=0,
+            blueprint_idx=0,
+            style_idx=style_idx,
+            tempo_idx=0,
+            alpha_target_idx=0,
+            alpha_speed_idx=0,
+            alpha_curve_idx=0,
+            op_idx=0,
+            slot_id="r0c0",
+            masked={
+                "slot": False,
+                "blueprint": False,
+                "style": False,
+                "tempo": False,
+                "alpha_target": False,
+                "alpha_speed": False,
+                "alpha_curve": False,
+                "op": False,
+            },
+            success=True,
+            active_alpha_algorithm=active.name,
+        )
+
+        assert result["alpha_algorithm"] == active.name
+        assert result["alpha_algorithm_selected"] == selected.name
 
     def test_emit_with_all_ops(self):
         """All operation types produce correct op names."""

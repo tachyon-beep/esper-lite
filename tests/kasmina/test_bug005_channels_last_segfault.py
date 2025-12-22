@@ -8,8 +8,9 @@ This bug caused a segfault during backward() when:
 The root cause is a PyTorch bug with non-contiguous (channels_last)
 tensors combined with detach() in the autograd graph.
 
-The fix is in SeedSlot.forward() - making host_features contiguous
-before detach() when isolate_gradients=True.
+The fix is in SeedSlot.forward(): feed the seed a contiguous_format
+detached copy under isolation (avoid channels_last + detach in backward)
+without coercing the host_features stream.
 """
 
 import pytest

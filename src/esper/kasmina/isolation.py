@@ -73,10 +73,10 @@ def ste_forward(host_features: torch.Tensor, seed_features: torch.Tensor) -> tor
     This is torch.compile friendly - pure tensor operations, no control flow.
 
     Note:
-        When using channels_last memory format, callers must ensure host_features
-        is contiguous BEFORE calling this function. See BUG-005 and the workaround
-        in SeedSlot.forward(). The issue is a PyTorch segfault when backward()
-        encounters channels_last tensors with the STE + detach combination.
+        BUG-005 (channels_last + detach segfault): callers must ensure the
+        DETACHED seed input path never uses channels_last tensors during backward.
+        SeedSlot.forward enforces this by feeding the seed a contiguous_format
+        detached copy while keeping host_features in its original memory format.
     """
     return host_features + (seed_features - seed_features.detach())
 

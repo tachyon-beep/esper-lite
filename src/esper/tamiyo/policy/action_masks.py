@@ -97,7 +97,7 @@ def build_slot_states(
     slot_states: dict[str, MaskSeedInfo | None] = {}
     for slot_id in slots:
         report = slot_reports.get(slot_id)
-        if report is None or report.stage == SeedStage.DORMANT:
+        if report is None:
             slot_states[slot_id] = None
         else:
             slot_states[slot_id] = MaskSeedInfo(

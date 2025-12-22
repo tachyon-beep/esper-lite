@@ -19,6 +19,8 @@ venv/
 .pytest_cache/
 .coverage
 .hypothesis/
+.mypy_cache/
+.ruff_cache/
 
 # Jupyter
 .ipynb_checkpoints/
@@ -41,6 +43,8 @@ data/*
 *.log
 *.sqlite3
 *.db
+.pycache/
+.uv-cache/
 var/
 
 # Git worktrees (local)

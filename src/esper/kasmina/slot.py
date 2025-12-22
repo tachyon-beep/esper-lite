@@ -1185,6 +1185,12 @@ class SeedSlot(nn.Module):
                 checks_failed=["no_active_seed"],
             )
 
+        if target_stage is not None and is_failure_stage(target_stage):
+            raise ValueError(
+                f"advance_stage() cannot target failure stage {target_stage.name}; "
+                "use prune() and the cooldown pipeline instead."
+            )
+
         # Determine target stage
         if target_stage is None:
             valid_next = VALID_TRANSITIONS.get(self.state.stage, ())
@@ -1690,22 +1696,21 @@ class SeedSlot(nn.Module):
         #    (BLENDING+). The root cause is the combination of non-contiguous
         #    tensors (channels_last) with detach() in the autograd graph.
         #
-        #    The fix is to make host_features contiguous BEFORE detach, so that
-        #    the entire computation and its autograd graph use contiguous tensors.
+        #    The fix is to ensure the DETACHED seed input is contiguous_format.
+        #    We intentionally keep `host_features` in its current memory format
+        #    (often: channels_last) to preserve host CNN throughput.
         #
-        # TODO: [PERF EXPERIMENT] - Preserve channels_last under isolation.
-        # Current workaround coerces host_features to contiguous_format, which can
-        # reduce CNN throughput after a slot (host conv blocks lose channels_last).
-        # Hypothesis: keep host_features channels_last and instead feed the seed a
-        # contiguous_format detached copy:
-        #   seed_input = host_features.contiguous().detach()
-        # If attempted, update `tests/kasmina/test_isolation_channels_last_contracts.py`
-        # and re-run `tests/kasmina/test_bug005_channels_last_segfault.py`.
-        if self.isolate_gradients and not host_features.is_contiguous():
-            # Make contiguous to avoid channels_last + detach segfault (BUG-005)
-            host_features = host_features.contiguous()
-
-        seed_input = host_features.detach() if self.isolate_gradients else host_features
+        # PERF FIX (BUG-005): Preserve channels_last output under isolation.
+        # Avoid coercing host_features to contiguous_format; instead feed the seed a
+        # contiguous_format detached copy so backward never sees channels_last + detach.
+        if self.isolate_gradients:
+            seed_input = (
+                host_features.detach()
+                if host_features.is_contiguous()
+                else host_features.contiguous().detach()
+            )
+        else:
+            seed_input = host_features
         seed_features = self.seed(seed_input)
 
         # 3. INCUBATOR MODE (TRAINING stage, alpha == 0.0)

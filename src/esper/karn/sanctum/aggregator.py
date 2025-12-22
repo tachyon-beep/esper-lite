@@ -697,31 +697,36 @@ class SanctumAggregator:
                 )
 
         elif event_type == "SEED_PRUNED":
-            # Capture prune context before resetting (P1/P2 telemetry gap fix)
+            # Capture prune context (P1/P2 telemetry gap fix).
+            #
+            # Phase 4 contract: PRUNED/EMBARGOED/RESETTING are first-class states
+            # after physical removal (seed module is gone), so we must NOT reset
+            # the slot to DORMANT here. Kasmina will emit subsequent
+            # SEED_STAGE_CHANGED events through the cooldown pipeline and finally
+            # return to DORMANT when the slot is reusable.
             seed.prune_reason = data.get("reason", "")
             seed.improvement = data.get("improvement", 0.0)
             seed.auto_pruned = data.get("auto_pruned", False)
             seed.epochs_total = data.get("epochs_total", 0)
             seed.counterfactual = data.get("counterfactual", 0.0)
             pruned_blueprint = data.get("blueprint_id") or seed.blueprint_id
+            seed.blueprint_id = pruned_blueprint
 
-            # Track blueprint prune for graveyard BEFORE reset
+            # Track blueprint prune for graveyard.
             if pruned_blueprint:
                 env.blueprint_prunes[pruned_blueprint] = (
                     env.blueprint_prunes.get(pruned_blueprint, 0) + 1
                 )
 
-            # Reset slot to DORMANT
-            seed.stage = "DORMANT"
+            # Mark PRUNED (seed physically removed, slot unavailable until cooldown completes).
+            seed.stage = "PRUNED"
             seed.seed_params = 0
-            seed.blueprint_id = None
             seed.alpha = 0.0
             seed.accuracy_delta = 0.0
             seed.grad_ratio = 0.0
             seed.has_vanishing = False
             seed.has_exploding = False
             seed.epochs_in_stage = 0
-            seed.blend_tempo_epochs = 5
             env.pruned_count += 1
             env.active_seed_count = max(0, env.active_seed_count - 1)
 

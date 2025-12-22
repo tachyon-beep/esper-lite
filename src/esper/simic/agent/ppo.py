@@ -443,6 +443,7 @@ class PPOAgent:
 
         return max(annealed, floor)
 
+    # TODO: potential dead code - action_mask is not currently threaded through callers.
     def get_entropy_floor(self, action_mask: torch.Tensor | None = None) -> float:
         """Get entropy floor, optionally scaled by valid action count.
 

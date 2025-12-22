@@ -1641,6 +1641,7 @@ def train_ppo_vectorized(
             all_masks = []
             all_signals = []
             governor_panic_envs = []  # Track which envs need rollback
+            ordered_slots = validate_slot_ids(list(slots))
 
             for env_idx, env_state in enumerate(env_states):
                 model = env_state.model
@@ -1922,11 +1923,10 @@ def train_ppo_vectorized(
 
                 # Compute action mask based on current state (physical constraints only)
                 # Build slot states for ALL enabled slots (multi-slot masking)
-                ordered = validate_slot_ids(list(slots))
-                slot_states = build_slot_states(slot_reports, ordered)
+                slot_states = build_slot_states(slot_reports, ordered_slots)
                 mask = compute_action_masks(
                     slot_states=slot_states,
-                    enabled_slots=ordered,
+                    enabled_slots=ordered_slots,
                     total_seeds=model.total_seeds() if model else 0,
                     max_seeds=effective_max_seeds,
                     slot_config=slot_config,
@@ -2412,6 +2412,10 @@ def train_ppo_vectorized(
                 if hub and use_telemetry and (
                     telemetry_config is None or telemetry_config.should_collect("ops_normal")
                 ):
+                    post_slot_state = model.seed_slots[target_slot].state
+                    active_alpha_algorithm = (
+                        post_slot_state.alpha_algorithm.name if post_slot_state is not None else None
+                    )
                     # Use pre-computed batched mask stats (0 GPU syncs - already on CPU)
                     masked_flags = {key: bool(masked_cpu[key][env_idx]) for key in HEAD_NAMES}
                     for head, masked in masked_flags.items():
@@ -2432,6 +2436,7 @@ def train_ppo_vectorized(
                         slot_id=target_slot,
                         masked=masked_flags,
                         success=action_success,
+                        active_alpha_algorithm=active_alpha_algorithm,
                     )
 
                 # Emit reward telemetry if collecting (after action execution so we have action_success)

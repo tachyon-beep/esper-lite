@@ -24,9 +24,13 @@
   - Unit test: `stage=5` (reserved) is rejected.
   - Unit test: `stage=999` is rejected.
   - Unit test: valid `SeedStage` values round-trip via `to_dict()`/`from_dict()`.
-- **Status:** Open
+- **Status:** Resolved
 - **Links:**
   - Ingestion: `src/esper/leyline/telemetry.py:253`
   - Enum: `src/esper/leyline/stages.py:7`
   - Plan: `docs/plans/2025-12-22-stage-schema-hardening.md`
 
+## Fix Implemented
+
+- `SeedTelemetry.from_dict()` now validates `stage` is a valid `SeedStage` value and raises `ValueError` on reserved/out-of-range values.
+- Added tests covering `stage=5` (reserved gap) and an out-of-range stage value.

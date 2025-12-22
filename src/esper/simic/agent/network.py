@@ -471,13 +471,13 @@ class FactoredRecurrentActorCritic(nn.Module):
             style_mask_override = masks["style"]
             if style_mask_override is None:
                 style_mask_override = torch.ones_like(head_logits["style"], dtype=torch.bool)
+            # Avoid `.any()` (CPU sync) by applying the override unconditionally.
+            style_mask_override = style_mask_override.clone()
             style_irrelevant = (actions["op"] != LifecycleOp.GERMINATE) & (
                 actions["op"] != LifecycleOp.SET_ALPHA_TARGET
             )
-            if style_irrelevant.any():
-                style_mask_override = style_mask_override.clone()
-                style_mask_override[style_irrelevant] = False
-                style_mask_override[style_irrelevant, int(GerminationStyle.SIGMOID_ADD)] = True
+            style_mask_override[style_irrelevant] = False
+            style_mask_override[style_irrelevant, int(GerminationStyle.SIGMOID_ADD)] = True
             _sample_head("style", mask_override=style_mask_override)
             for key in [
                 "slot",
@@ -582,10 +582,10 @@ class FactoredRecurrentActorCritic(nn.Module):
                 style_irrelevant = (op_actions != LifecycleOp.GERMINATE) & (
                     op_actions != LifecycleOp.SET_ALPHA_TARGET
                 )
-                if style_irrelevant.any():
-                    mask = mask.clone()
-                    mask[style_irrelevant] = False
-                    mask[..., int(GerminationStyle.SIGMOID_ADD)][style_irrelevant] = True
+                # Avoid `.any()` (CPU sync) by applying the override unconditionally.
+                mask = mask.clone()
+                mask[style_irrelevant] = False
+                mask[..., int(GerminationStyle.SIGMOID_ADD)][style_irrelevant] = True
             mask_flat = mask.reshape(-1, action_dim)
 
             dist = MaskedCategorical(logits=logits_flat, mask=mask_flat)

@@ -530,7 +530,7 @@ class TestSanctumAggregator:
         assert env.seeds["r0c1"].epochs_in_stage == 5
 
     def test_seed_pruned_resets_slot(self):
-        """SEED_PRUNED should reset all seed fields and update counts."""
+        """SEED_PRUNED should keep PRUNED stage for cooldown pipeline."""
         agg = SanctumAggregator(num_envs=4)
 
         # First germinate a seed
@@ -566,10 +566,10 @@ class TestSanctumAggregator:
         env = snapshot.envs[0]
         seed = env.seeds["r0c1"]
 
-        # Verify all fields reset
-        assert seed.stage == "DORMANT"
+        # Verify stage is retained for Phase 4 cooldown pipeline (PRUNED → EMBARGOED → RESETTING → DORMANT)
+        assert seed.stage == "PRUNED"
         assert seed.seed_params == 0
-        assert seed.blueprint_id is None
+        assert seed.blueprint_id == "conv_light"
         assert seed.alpha == 0.0
         assert seed.accuracy_delta == 0.0
         assert seed.grad_ratio == 0.0
@@ -582,7 +582,7 @@ class TestSanctumAggregator:
         assert env.active_seed_count == 0
 
     def test_seed_pruned_resets_blend_tempo(self):
-        """SEED_PRUNED should reset blend tempo to default."""
+        """SEED_PRUNED should preserve blend tempo (postmortem context)."""
         agg = SanctumAggregator(num_envs=4)
 
         germ_event = MagicMock()
@@ -615,7 +615,53 @@ class TestSanctumAggregator:
         snapshot = agg.get_snapshot()
         seed = snapshot.envs[0].seeds["r0c1"]
 
-        assert seed.blend_tempo_epochs == 5
+        assert seed.blend_tempo_epochs == 3
+
+    def test_seed_pruned_preserves_blueprint_through_embargo_pipeline(self):
+        """SEED_PRUNED must not erase blueprint_id before EMBARGOED/RESETTING updates arrive."""
+        agg = SanctumAggregator(num_envs=1)
+
+        germ_event = MagicMock()
+        germ_event.event_type = MagicMock()
+        germ_event.event_type.name = "SEED_GERMINATED"
+        germ_event.timestamp = datetime.now(timezone.utc)
+        germ_event.slot_id = "r0c0"
+        germ_event.data = {
+            "env_id": 0,
+            "blueprint_id": "conv_light",
+            "params": 1000,
+        }
+        agg.process_event(germ_event)
+
+        prune_event = MagicMock()
+        prune_event.event_type = MagicMock()
+        prune_event.event_type.name = "SEED_PRUNED"
+        prune_event.timestamp = datetime.now(timezone.utc)
+        prune_event.slot_id = "r0c0"
+        prune_event.data = {
+            "env_id": 0,
+            "reason": "policy_prune",
+        }
+        agg.process_event(prune_event)
+
+        embargo_event = MagicMock()
+        embargo_event.event_type = MagicMock()
+        embargo_event.event_type.name = "SEED_STAGE_CHANGED"
+        embargo_event.timestamp = datetime.now(timezone.utc)
+        embargo_event.slot_id = "r0c0"
+        embargo_event.data = {
+            "env_id": 0,
+            "from": "PRUNED",
+            "to": "EMBARGOED",
+            "epochs_in_stage": 0,
+            "epochs_total": 10,
+        }
+        agg.process_event(embargo_event)
+
+        snapshot = agg.get_snapshot()
+        seed = snapshot.envs[0].seeds["r0c0"]
+        assert seed.stage == "EMBARGOED"
+        assert seed.blueprint_id == "conv_light"
 
     def test_batch_completed_resets_seed_state(self):
         """BATCH_EPOCH_COMPLETED should reset per-env seed state."""

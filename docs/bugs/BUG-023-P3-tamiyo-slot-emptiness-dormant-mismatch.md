@@ -14,9 +14,13 @@
 - **Hypotheses:** Legacy/defensive handling from pre-Phase-4 semantics where “DORMANT stage” might have been represented as an explicit state.
 - **Fix Plan:** Treat a slot as empty iff there is no report (i.e., `report is None`). If a report exists with `stage==DORMANT`, treat as non-empty and optionally assert/log because it should not happen in healthy runs.
 - **Validation Plan:** Unit test that a non-`None` report (even if stage==DORMANT) is treated as occupied for germination masking.
-- **Status:** Open
+- **Status:** Resolved
 - **Links:**
   - Mask builder: `src/esper/tamiyo/policy/action_masks.py:85`
   - Execution availability: `src/esper/simic/training/vectorized.py:2342`
   - Kasmina state clear: `src/esper/kasmina/slot.py:2133`
 
+## Fix Implemented
+
+- `build_slot_states()` now treats a slot as empty iff the report is missing (`report is None`).
+- Added a unit test ensuring a present `DORMANT` report is treated as occupied (masking matches execution contract).

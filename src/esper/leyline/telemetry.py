@@ -19,6 +19,7 @@ from typing import Any
 from uuid import uuid4
 
 from esper.leyline.alpha import AlphaAlgorithm, AlphaMode
+from esper.leyline.stages import SeedStage
 
 # Feature normalization constants for RL observation space
 # These define the expected ranges for seed telemetry values
@@ -255,6 +256,18 @@ class SeedTelemetry:
         """Reconstruct from primitive dict."""
         from datetime import datetime
 
+        stage_raw = data.get("stage", SeedStage.DORMANT.value)
+        if not isinstance(stage_raw, int) or isinstance(stage_raw, bool):
+            raise ValueError(
+                f"SeedTelemetry.stage must be an int SeedStage.value, got {stage_raw!r}"
+            )
+        try:
+            stage = SeedStage(stage_raw).value
+        except ValueError as e:
+            raise ValueError(
+                f"SeedTelemetry.stage must be a valid SeedStage.value, got {stage_raw!r}"
+            ) from e
+
         return cls(
             seed_id=data["seed_id"],
             blueprint_id=data.get("blueprint_id", ""),
@@ -266,7 +279,7 @@ class SeedTelemetry:
             accuracy=data.get("accuracy", 0.0),
             accuracy_delta=data.get("accuracy_delta", 0.0),
             epochs_in_stage=data.get("epochs_in_stage", 0),
-            stage=data.get("stage", 1),
+            stage=stage,
             alpha=data.get("alpha", 0.0),
             alpha_target=data.get("alpha_target", 0.0),
             alpha_mode=data.get("alpha_mode", AlphaMode.HOLD.value),

@@ -13,8 +13,12 @@
 - **Hypotheses:** No current call sites target PRUNED via `advance_stage()`, so this hasn’t surfaced; risk grows with future refactors.
 - **Fix Plan:** In `advance_stage()`, reject `target_stage` in failure stages (`PRUNED/EMBARGOED/RESETTING`) with a clear error, and require `prune()`/cooldown to manage those transitions.
 - **Validation Plan:** Unit test that `advance_stage(SeedStage.PRUNED)` fails and does not mutate state.
-- **Status:** Open
+- **Status:** Resolved
 - **Links:**
   - API: `src/esper/kasmina/slot.py:1176`
   - Cleanup path: `src/esper/kasmina/slot.py:1273`
 
+## Fix Implemented
+
+- `advance_stage()` now rejects explicit failure-stage targets with a clear error.
+- Added a unit test ensuring `advance_stage(SeedStage.PRUNED)` raises and does not mutate state.

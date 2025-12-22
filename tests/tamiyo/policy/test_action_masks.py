@@ -765,7 +765,13 @@ class TestBuildSlotStates:
 
     def test_empty_model_returns_none_states(self):
         """Empty slots return None for each slot."""
-        # build_slot_states imported at module level
+        slot_reports = {}
+
+        result = build_slot_states(slot_reports, ["r0c1"])
+        assert result == {"r0c1": None}
+
+    def test_dormant_report_is_treated_as_occupied(self):
+        """A present report (even if DORMANT) must not be treated as empty."""
         from esper.leyline import SeedMetrics, SeedStage, SeedStateReport
 
         slot_reports = {
@@ -773,7 +779,9 @@ class TestBuildSlotStates:
         }
 
         result = build_slot_states(slot_reports, ["r0c1"])
-        assert result == {"r0c1": None}
+
+        assert isinstance(result["r0c1"], MaskSeedInfo)
+        assert result["r0c1"].stage == SeedStage.DORMANT.value
 
     def test_active_seed_returns_mask_seed_info(self):
         """Active seed returns MaskSeedInfo with correct stage and age."""

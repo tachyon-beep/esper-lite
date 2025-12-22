@@ -3,6 +3,7 @@
 Tests end-to-end gradient collection, snapshot generation, and feature extraction.
 """
 
+import pytest
 import torch
 
 from esper.simic.telemetry import SeedGradientCollector
@@ -263,6 +264,24 @@ class TestSeedTelemetryFeatures:
         assert restored.time_to_target == telemetry.time_to_target
         assert restored.alpha_velocity == telemetry.alpha_velocity
         assert restored.alpha_algorithm == telemetry.alpha_algorithm
+
+    def test_telemetry_from_dict_rejects_reserved_stage_value(self):
+        """from_dict() must reject retired/reserved stage values (e.g., value 5)."""
+        telemetry = SeedTelemetry(seed_id="test")
+        data = telemetry.to_dict()
+        data["stage"] = 5  # reserved gap in SeedStage
+
+        with pytest.raises(ValueError, match="SeedTelemetry\\.stage"):
+            SeedTelemetry.from_dict(data)
+
+    def test_telemetry_from_dict_rejects_out_of_range_stage_value(self):
+        """from_dict() must reject out-of-range stage values."""
+        telemetry = SeedTelemetry(seed_id="test")
+        data = telemetry.to_dict()
+        data["stage"] = 999
+
+        with pytest.raises(ValueError, match="SeedTelemetry\\.stage"):
+            SeedTelemetry.from_dict(data)
 
 
 class TestTelemetryToFeaturesIntegration:

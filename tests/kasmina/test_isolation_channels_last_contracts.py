@@ -49,7 +49,7 @@ class TestIsolationChannelsLastContracts:
         # noop seed => seed_features == host_features, so lerp gradient collapses to 1.0
         assert torch.allclose(x.grad, torch.ones_like(x.grad))
 
-    def test_blending_forces_contiguous_before_detach_when_isolating(self) -> None:
+    def test_blending_preserves_channels_last_when_isolating(self) -> None:
         slot = _make_blending_noop_slot(isolate_gradients=True)
 
         x = torch.randn(2, 16, 8, 8).to(memory_format=torch.channels_last).detach().requires_grad_(True)
@@ -57,16 +57,10 @@ class TestIsolationChannelsLastContracts:
 
         out = slot.forward(x)
 
-        # BUG-005 workaround: isolate_gradients=True makes host_features contiguous()
-        # before detach(), which converts channels_last -> contiguous_format.
-        #
-        # TODO: [PERF EXPERIMENT] - Preserve channels_last output under isolation by
-        # making only the seed_input contiguous (keep host_features channels_last).
-        # If adopted, this assertion should flip to channels_last=True and the
-        # segfault regression `tests/kasmina/test_bug005_channels_last_segfault.py`
-        # must continue to pass.
-        assert out.is_contiguous()
-        assert not out.is_contiguous(memory_format=torch.channels_last)
+        # BUG-005 fix: preserve channels_last output under isolation by making
+        # only the DETACHED seed input contiguous_format (keep host_features channels_last).
+        assert not out.is_contiguous()
+        assert out.is_contiguous(memory_format=torch.channels_last)
         assert out.dtype == x.dtype
         assert out.device == x.device
 

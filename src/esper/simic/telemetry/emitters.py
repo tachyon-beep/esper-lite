@@ -92,6 +92,7 @@ def emit_last_action(
     slot_id: str,
     masked: dict[str, bool],
     success: bool,
+    active_alpha_algorithm: str | None = None,
 ) -> dict:
     """Emit per-step last-action detail for debugging and UIs.
 
@@ -106,11 +107,15 @@ def emit_last_action(
         slot_id: Target slot ID string
         masked: Dict of head -> was_masked flags
         success: Whether the action executed successfully
+        active_alpha_algorithm: The slot's currently active alpha algorithm (post-action),
+            if known. When omitted, telemetry falls back to the algorithm implied by the
+            sampled style index.
 
     Returns:
         The emitted data dict (for testing)
     """
     hub = get_hub()
+    selected_alpha_algorithm = STYLE_ALPHA_ALGORITHMS[style_idx].name
     data = {
         "kind": "last_action",
         "env_id": env_id,
@@ -124,7 +129,8 @@ def emit_last_action(
         "alpha_target": ALPHA_TARGET_VALUES[alpha_target_idx],
         "alpha_speed": ALPHA_SPEED_NAMES[alpha_speed_idx],
         "alpha_curve": ALPHA_CURVE_NAMES[alpha_curve_idx],
-        "alpha_algorithm": STYLE_ALPHA_ALGORITHMS[style_idx].name,
+        "alpha_algorithm": active_alpha_algorithm or selected_alpha_algorithm,
+        "alpha_algorithm_selected": selected_alpha_algorithm,
         "op_masked": bool(masked.get("op", False)),
         "slot_masked": bool(masked.get("slot", False)),
         "blueprint_masked": bool(masked.get("blueprint", False)),

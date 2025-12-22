@@ -1,6 +1,6 @@
 # SeedStage Schema Hardening (Retired/Reserved Stage Elimination)
 
-**Status:** PROPOSED  
+**Status:** IN PROGRESS (Phase 0 complete)  
 **Date:** 2025-12-22  
 **Owner:** Esper Core
 
@@ -31,7 +31,9 @@ This plan defines a target state where:
 
 ## Related Tickets
 
-- `docs/bugs/BUG-025-P2-leyline-stage-int-ingress-unvalidated.md` (unvalidated stage int ingress)
+- `docs/bugs/BUG-025-P2-leyline-stage-int-ingress-unvalidated.md` (Resolved in Phase 0)
+- `docs/bugs/BUG-023-P3-tamiyo-slot-emptiness-dormant-mismatch.md` (Resolved in Phase 0)
+- `docs/bugs/BUG-024-P3-kasmina-advance-stage-pruned-footgun.md` (Resolved in Phase 0)
 
 ## Current State (Where Invalid Stage Values Can Enter)
 
@@ -40,7 +42,7 @@ This plan defines a target state where:
 
 ### Int-based stage surfaces (risk)
 These are “stage as int” contracts where invalid values can enter if not validated:
-- `SeedTelemetry.stage` is an `int`, and `SeedTelemetry.from_dict()` currently accepts any `data["stage"]` without validation.
+- `SeedTelemetry.stage` is an `int`; `SeedTelemetry.from_dict()` now validates that `stage` is a real `SeedStage` value and fails fast on invalid/reserved values (Phase 0).
 - Observation feature extraction reads `slot["stage"]` from dicts and currently does not validate membership; it assumes upstream correctness.
   - Related: the new `GerminationStyle` factored head introduces another int-enum surface
     that should be validated anywhere actions are deserialized from dict/JSON to avoid
@@ -104,6 +106,8 @@ This prevents retired/reserved values from becoming “learnable states”, and 
 ### Phase 0 — Risk Reduction (bring to medium risk or lower)
 
 Goal: eliminate silent invalid stages *without* changing observation dimensions or training behavior more than necessary.
+
+**Status:** COMPLETED (stage validation + masking/footgun alignment)
 
 **Pre-phase risk reduction (before enforcing validation):**
 - **Artifact scan (telemetry + checkpoints):** search for stage integers not in `SeedStage` (especially reserved/retired values and out-of-range).

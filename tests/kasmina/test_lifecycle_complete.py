@@ -470,3 +470,24 @@ class TestRecycledSlot:
         # Metrics should be fresh
         assert slot.state.metrics.epochs_total == 0
         assert slot.state.metrics.best_val_accuracy == 0.0
+
+
+class TestAdvanceStageGuards:
+    """Tests for advance_stage() API footgun prevention."""
+
+    def test_advance_stage_rejects_failure_stage_target(self):
+        """advance_stage() must not allow targeting failure stages like PRUNED."""
+        slot = SeedSlot(slot_id="r0c0", channels=64)
+        slot.germinate("noop", seed_id="test")
+
+        assert slot.seed is not None
+        assert slot.state is not None
+        stage_before = slot.state.stage
+        seed_before = slot.seed
+
+        with pytest.raises(ValueError, match="cannot target failure stage"):
+            slot.advance_stage(target_stage=SeedStage.PRUNED)
+
+        assert slot.seed is seed_before
+        assert slot.state is not None
+        assert slot.state.stage == stage_before
