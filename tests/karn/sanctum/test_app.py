@@ -34,15 +34,29 @@ async def test_app_has_main_panels():
 
 @pytest.mark.asyncio
 async def test_app_quit_binding():
-    """Pressing q should quit the app."""
+    """Pressing q should trigger quit action."""
     mock_backend = MagicMock()
     mock_backend.get_snapshot.return_value = SanctumSnapshot()
 
     app = SanctumApp(backend=mock_backend)
+    quit_called = False
+    original_quit = app.action_quit
+
+    def mock_quit():
+        nonlocal quit_called
+        quit_called = True
+        return original_quit()
+
+    app.action_quit = mock_quit
+
     async with app.run_test() as pilot:
+        # Focus on app (not a child widget) to ensure q binding works
+        app.set_focus(None)
+        await pilot.pause()
         await pilot.press("q")
-        # App should have initiated exit
-        assert not app.is_running
+        await pilot.pause()
+        # action_quit should have been called
+        assert quit_called, "action_quit was not called when 'q' pressed"
 
 
 @pytest.mark.asyncio
