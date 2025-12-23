@@ -91,3 +91,14 @@ class SanctumBackend:
             New pin status (True if pinned, False if unpinned).
         """
         return self._aggregator.toggle_decision_pin(decision_id)
+
+    def toggle_best_run_pin(self, record_id: str) -> bool:
+        """Toggle pin status for a best run record.
+
+        Args:
+            record_id: ID of the record to toggle.
+
+        Returns:
+            New pin status (True if pinned, False if unpinned).
+        """
+        return self._aggregator.toggle_best_run_pin(record_id)

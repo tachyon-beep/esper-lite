@@ -468,10 +468,12 @@ def main():
                 if args.amp:
                     config.amp = True
                 # CLI amp_dtype overrides config only if explicitly set (not default 'auto')
-                if hasattr(args, 'amp_dtype') and args.amp_dtype:
+                # args.amp_dtype is always defined by argparse (lines 160-166 of this file)
+                if args.amp_dtype:
                     config.amp_dtype = args.amp_dtype
                 # CLI compile_mode overrides config
-                if hasattr(args, 'compile_mode') and args.compile_mode:
+                # args.compile_mode is always defined by argparse (lines 167-174 of this file)
+                if args.compile_mode:
                     config.compile_mode = args.compile_mode
                 if telemetry_config.level.name == "OFF":
                     config.use_telemetry = False

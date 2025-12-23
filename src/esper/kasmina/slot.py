@@ -267,9 +267,14 @@ class SeedMetrics:
             downstream_alpha_sum=self.downstream_alpha_sum,
         )
 
+    # Schema version for SeedMetrics serialization
+    # Increment when fields are added/removed/changed
+    _SCHEMA_VERSION: ClassVar[int] = 2  # v2: added _prev_contribution, contribution_velocity
+
     def to_dict(self) -> dict:
         """Convert to primitive dict for serialization."""
         return {
+            "_schema_version": self._SCHEMA_VERSION,
             "epochs_total": self.epochs_total,
             "epochs_in_current_stage": self.epochs_in_current_stage,
             "initial_val_accuracy": self.initial_val_accuracy,
@@ -295,29 +300,47 @@ class SeedMetrics:
 
     @classmethod
     def from_dict(cls, data: dict) -> "SeedMetrics":
-        """Reconstruct from primitive dict."""
+        """Reconstruct from primitive dict.
+
+        Raises KeyError if required fields are missing (no silent defaults).
+        """
+        # Check schema version - fail fast on mismatch
+        schema_version = data.get("_schema_version")
+        if schema_version is not None and schema_version != cls._SCHEMA_VERSION:
+            raise ValueError(
+                f"SeedMetrics schema version mismatch: "
+                f"expected {cls._SCHEMA_VERSION}, got {schema_version}"
+            )
+
         metrics = cls()
-        metrics.epochs_total = data.get("epochs_total", 0)
-        metrics.epochs_in_current_stage = data.get("epochs_in_current_stage", 0)
-        metrics.initial_val_accuracy = data.get("initial_val_accuracy", 0.0)
-        metrics.current_val_accuracy = data.get("current_val_accuracy", 0.0)
-        metrics.best_val_accuracy = data.get("best_val_accuracy", 0.0)
-        metrics.accuracy_at_stage_start = data.get("accuracy_at_stage_start", 0.0)
-        metrics.accuracy_at_blending_start = data.get("accuracy_at_blending_start", 0.0)
-        metrics.gradient_norm_avg = data.get("gradient_norm_avg", 0.0)
-        metrics.current_alpha = data.get("current_alpha", 0.0)
-        metrics.alpha_ramp_step = data.get("alpha_ramp_step", 0)
+        # Required fields - KeyError if missing (no silent defaults)
+        metrics.epochs_total = data["epochs_total"]
+        metrics.epochs_in_current_stage = data["epochs_in_current_stage"]
+        metrics.initial_val_accuracy = data["initial_val_accuracy"]
+        metrics.current_val_accuracy = data["current_val_accuracy"]
+        metrics.best_val_accuracy = data["best_val_accuracy"]
+        metrics.accuracy_at_stage_start = data["accuracy_at_stage_start"]
+        metrics.accuracy_at_blending_start = data["accuracy_at_blending_start"]
+        metrics.gradient_norm_avg = data["gradient_norm_avg"]
+        metrics.current_alpha = data["current_alpha"]
+        metrics.alpha_ramp_step = data["alpha_ramp_step"]
+        metrics._blending_started = data["_blending_started"]
+        metrics.seed_gradient_norm_ratio = data["seed_gradient_norm_ratio"]
+        metrics.host_param_count = data["host_param_count"]
+        metrics.seed_param_count = data["seed_param_count"]
+        metrics.interaction_sum = data["interaction_sum"]
+        metrics.boost_received = data["boost_received"]
+        metrics.upstream_alpha_sum = data["upstream_alpha_sum"]
+        metrics.downstream_alpha_sum = data["downstream_alpha_sum"]
+
+        # Optional fields - these can legitimately be None/missing
+        # counterfactual_contribution: None until counterfactual engine runs
         metrics.counterfactual_contribution = data.get("counterfactual_contribution")
+        # _prev_contribution: None until second counterfactual measurement
         metrics._prev_contribution = data.get("_prev_contribution")
+        # contribution_velocity: 0.0 until enough history exists
         metrics.contribution_velocity = data.get("contribution_velocity", 0.0)
-        metrics._blending_started = data.get("_blending_started", False)
-        metrics.seed_gradient_norm_ratio = data.get("seed_gradient_norm_ratio", 0.0)
-        metrics.host_param_count = data.get("host_param_count", 0)
-        metrics.seed_param_count = data.get("seed_param_count", 0)
-        metrics.interaction_sum = data.get("interaction_sum", 0.0)
-        metrics.boost_received = data.get("boost_received", 0.0)
-        metrics.upstream_alpha_sum = data.get("upstream_alpha_sum", 0.0)
-        metrics.downstream_alpha_sum = data.get("downstream_alpha_sum", 0.0)
+
         return metrics
 
 
@@ -520,51 +543,56 @@ class SeedState:
 
     @classmethod
     def from_dict(cls, data: dict) -> "SeedState":
-        """Reconstruct from primitive dict."""
+        """Reconstruct from primitive dict.
+
+        Raises KeyError/ValueError if required fields are missing (no silent defaults).
+        """
         from datetime import datetime
         from collections import deque
 
-        alpha_algorithm_raw = data.get("alpha_algorithm")
-        if alpha_algorithm_raw is None:
+        # Required field with explicit error message
+        if "alpha_algorithm" not in data:
             raise ValueError(
                 "Checkpoint seed_state is missing required 'alpha_algorithm' (Phase 3+)."
             )
 
-        state = cls(
-            seed_id=data["seed_id"],
-            blueprint_id=data["blueprint_id"],
-            slot_id=data["slot_id"],
-            stage=SeedStage(data["stage"]),
-            previous_stage=SeedStage(data["previous_stage"]) if data.get("previous_stage") is not None else None,
-            alpha_algorithm=AlphaAlgorithm(int(alpha_algorithm_raw)),
-        )
-        state.stage_entered_at = datetime.fromisoformat(data["stage_entered_at"])
-        state.alpha = data.get("alpha", 0.0)
-        alpha_controller = data.get("alpha_controller")
-        if not isinstance(alpha_controller, dict):
+        # Required field with explicit error message
+        if "alpha_controller" not in data or not isinstance(data["alpha_controller"], dict):
             raise ValueError(
                 "Checkpoint seed_state is missing required 'alpha_controller' (Phase 1+). "
                 "Pre-Phase-1 checkpoints are not supported for resume."
             )
-        state.alpha_controller = AlphaController.from_dict(alpha_controller)
+
+        state = cls(
+            seed_id=data["seed_id"],  # Required - KeyError if missing
+            blueprint_id=data["blueprint_id"],  # Required
+            slot_id=data["slot_id"],  # Required
+            stage=SeedStage(data["stage"]),  # Required
+            previous_stage=SeedStage(data["previous_stage"]) if data["previous_stage"] is not None else None,
+            alpha_algorithm=AlphaAlgorithm(int(data["alpha_algorithm"])),
+        )
+        state.stage_entered_at = datetime.fromisoformat(data["stage_entered_at"])  # Required
+        state.alpha = data["alpha"]  # Required - no silent default to 0.0
+        state.alpha_controller = AlphaController.from_dict(data["alpha_controller"])
         # Scalar alpha is the source of truth at runtime; keep controller synced.
         state.alpha_controller.alpha = state.alpha
         state.stage_history = deque(
             (
                 (SeedStage(stage), datetime.fromisoformat(ts))
-                for stage, ts in data.get("stage_history", [])
+                for stage, ts in data["stage_history"]  # Required - no silent default to []
             ),
             maxlen=PROBATION_HISTORY_MAXLEN,
         )
+        # metrics and telemetry are optional - they may not exist for newly created seeds
         if data.get("metrics"):
             state.metrics = SeedMetrics.from_dict(data["metrics"])
         if data.get("telemetry"):
             from esper.leyline.telemetry import SeedTelemetry
             state.telemetry = SeedTelemetry.from_dict(data["telemetry"])
-        state.blend_tempo_epochs = data.get("blend_tempo_epochs", 5)
-        state.is_healthy = data.get("is_healthy", True)
-        state.is_paused = data.get("is_paused", False)
-        state.previous_epochs_in_stage = data.get("previous_epochs_in_stage", 0)
+        state.blend_tempo_epochs = data["blend_tempo_epochs"]  # Required
+        state.is_healthy = data["is_healthy"]  # Required
+        state.is_paused = data["is_paused"]  # Required
+        state.previous_epochs_in_stage = data["previous_epochs_in_stage"]  # Required
         return state
 
 

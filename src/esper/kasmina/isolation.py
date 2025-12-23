@@ -10,6 +10,8 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
+from esper.kasmina.blend_ops import blend_add
+
 
 # Numerical stability constant for gradient ratio computation
 GRAD_RATIO_EPSILON: float = 1e-8
@@ -25,6 +27,9 @@ def blend_with_isolation(
     alpha: torch.Tensor,
 ) -> torch.Tensor:
     """Blend host and seed features with proper gradient flow.
+
+    This is a thin wrapper around blend_add that documents the gradient
+    isolation semantics. The actual blending math is in blend_ops.py.
 
     Gradient attribution:
         d_output/d_host_features = (1 - alpha)
@@ -57,15 +62,8 @@ def blend_with_isolation(
         alpha: Blending weight as tensor (must match device/dtype of features).
             MUST be a tensor (not scalar) for torch.compile compatibility.
     """
-    # torch.lerp is a fused operation: lerp(a, b, w) = a + w * (b - a)
-    # Clamp alpha to [0, 1] for safety
-    # Use Tensor.clamp() method for torch.compile compatibility with 0-dim tensors
-    alpha = alpha.clamp(0.0, 1.0)
-    # Ensure all tensors match host_features dtype (required for BF16 autocast compatibility)
-    target_dtype = host_features.dtype
-    seed_features = seed_features.to(target_dtype)
-    alpha = alpha.to(target_dtype)
-    return torch.lerp(host_features, seed_features, alpha)
+    # Delegate to blend_add which handles dtype alignment for BF16 compatibility
+    return blend_add(host_features, seed_features, alpha)
 
 
 def ste_forward(host_features: torch.Tensor, seed_features: torch.Tensor) -> torch.Tensor:

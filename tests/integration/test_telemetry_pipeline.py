@@ -170,57 +170,67 @@ class TestSeedTelemetryFeatures:
     def test_telemetry_features_gradient_norm_normalized(self):
         """Gradient norm should be normalized to [0, 1] range."""
         # Gradient norm of 5.0 should map to 0.5
+        # Feature layout: [0-9] stage one-hot, [10] gradient_norm
         telemetry = SeedTelemetry(
             seed_id="test",
             gradient_norm=5.0,
         )
 
         features = telemetry.to_features()
-        gradient_norm_feature = features[0]
+        gradient_norm_feature = features[10]  # Index 10 after stage one-hot
 
         assert abs(gradient_norm_feature - 0.5) < 1e-5
 
     def test_telemetry_features_gradient_health_direct(self):
         """Gradient health should pass through directly."""
+        # Feature layout: [0-9] stage one-hot, [11] gradient_health
         telemetry = SeedTelemetry(
             seed_id="test",
             gradient_health=0.75,
         )
 
         features = telemetry.to_features()
-        gradient_health_feature = features[1]
+        gradient_health_feature = features[11]  # Index 11 after stage one-hot
 
         assert abs(gradient_health_feature - 0.75) < 1e-5
 
     def test_telemetry_features_accuracy_normalized(self):
         """Accuracy should be normalized to [0, 1] range."""
         # Accuracy of 60% should map to 0.6
+        # Feature layout: [0-9] stage one-hot, [15] accuracy
         telemetry = SeedTelemetry(
             seed_id="test",
             accuracy=60.0,
         )
 
         features = telemetry.to_features()
-        accuracy_feature = features[5]
+        accuracy_feature = features[15]  # Index 15 after stage one-hot
 
         assert abs(accuracy_feature - 0.6) < 1e-5
 
-    def test_telemetry_features_stage_normalized(self):
-        """Stage should be normalized to [0, 1] range."""
-        # Stage 4 (out of 1-10) should map to 0.333...
+    def test_telemetry_features_stage_one_hot(self):
+        """Stage should be one-hot encoded in first 10 dims."""
+        # Stage 4 (BLENDING) should have 1.0 at its index in one-hot
+        from esper.leyline.stage_schema import STAGE_TO_INDEX, NUM_STAGES
         telemetry = SeedTelemetry(
             seed_id="test",
-            stage=4,
+            stage=4,  # BLENDING
         )
 
         features = telemetry.to_features()
-        stage_feature = features[7]
+        stage_one_hot = features[:NUM_STAGES]
 
-        # (4 - 1) / 9 = 3 / 9 = 0.333...
-        assert abs(stage_feature - (3.0 / 9.0)) < 1e-5
+        # Check one-hot properties
+        assert sum(stage_one_hot) == 1.0
+        expected_idx = STAGE_TO_INDEX[4]
+        assert stage_one_hot[expected_idx] == 1.0
 
     def test_telemetry_features_alpha_controller_normalized(self):
         """Alpha controller fields should be normalized and stable."""
+        # Feature layout: [0-9] stage one-hot, then +10 offset for all other features
+        # [19] alpha_target, [20] alpha_mode, [21] alpha_steps_total,
+        # [22] alpha_steps_done, [23] time_to_target, [24] alpha_velocity,
+        # [25] alpha_algorithm
         telemetry = SeedTelemetry(
             seed_id="test",
             alpha_target=0.7,
@@ -235,13 +245,13 @@ class TestSeedTelemetryFeatures:
 
         features = telemetry.to_features()
 
-        assert abs(features[10] - 0.7) < 1e-6
-        assert abs(features[11] - 1.0) < 1e-6  # DOWN -> 2 / 2
-        assert abs(features[12] - 0.5) < 1e-6  # 10 / 20
-        assert abs(features[13] - 0.2) < 1e-6  # 4 / 20
-        assert abs(features[14] - 0.3) < 1e-6  # 6 / 20
-        assert abs(features[15] + 0.1) < 1e-6
-        assert abs(features[16] - 1.0) < 1e-6  # (3-1)/(3-1)
+        assert abs(features[19] - 0.7) < 1e-6        # alpha_target
+        assert abs(features[20] - 1.0) < 1e-6       # alpha_mode: DOWN -> 2 / 2
+        assert abs(features[21] - 0.5) < 1e-6       # alpha_steps_total: 10 / 20
+        assert abs(features[22] - 0.2) < 1e-6       # alpha_steps_done: 4 / 20
+        assert abs(features[23] - 0.3) < 1e-6       # time_to_target: 6 / 20
+        assert abs(features[24] + 0.1) < 1e-6       # alpha_velocity: -0.1
+        assert abs(features[25] - 1.0) < 1e-6       # alpha_algorithm: (3-1)/(3-1)
 
     def test_telemetry_roundtrip_preserves_alpha_fields(self):
         """to_dict() -> from_dict() preserves alpha controller fields."""

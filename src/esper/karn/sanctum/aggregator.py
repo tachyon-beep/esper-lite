@@ -128,6 +128,14 @@ class SanctumAggregator:
     _batch_total_episodes: int = 0  # Total episodes in run
     _run_config: "RunConfig" = field(default_factory=lambda: RunConfig())
 
+    # Cumulative counts (never reset, tracks entire training run)
+    _cumulative_fossilized: int = 0
+    _cumulative_pruned: int = 0
+    # Cumulative graveyard (per-blueprint lifecycle stats across entire run)
+    _cumulative_blueprint_spawns: dict[str, int] = field(default_factory=dict)
+    _cumulative_blueprint_fossilized: dict[str, int] = field(default_factory=dict)
+    _cumulative_blueprint_prunes: dict[str, int] = field(default_factory=dict)
+
     # Per-env state: env_id -> EnvState
     _envs: dict[int, EnvState] = field(default_factory=dict)
 
@@ -149,6 +157,8 @@ class SanctumAggregator:
 
     # Slot configuration (dynamic - populated from training config or observed seeds)
     _slot_ids: list[str] = field(default_factory=list)
+    # Lock slot_ids after TRAINING_STARTED provides authoritative list
+    _slot_ids_locked: bool = False
 
     # Rolling average history (mean accuracy across all envs, updated per epoch)
     _mean_accuracy_history: deque[float] = field(default_factory=lambda: deque(maxlen=50))
@@ -165,10 +175,18 @@ class SanctumAggregator:
         self._gpu_devices = []
         self._best_runs = []
         self._slot_ids = []
+        self._slot_ids_locked = False
         self._mean_accuracy_history = deque(maxlen=self.max_history)
         self._start_time = time.time()
         self._lock = threading.Lock()
         self._run_config = RunConfig()
+
+        # Cumulative counters (never reset)
+        self._cumulative_fossilized = 0
+        self._cumulative_pruned = 0
+        self._cumulative_blueprint_spawns = {}
+        self._cumulative_blueprint_fossilized = {}
+        self._cumulative_blueprint_prunes = {}
 
         # Pre-create env states
         for i in range(self.num_envs):
@@ -244,6 +262,25 @@ class SanctumAggregator:
                 if decision.decision_id == decision_id:
                     decision.pinned = not decision.pinned
                     return decision.pinned
+        return False
+
+    def toggle_best_run_pin(self, record_id: str) -> bool:
+        """Toggle pin status for a best run record by ID.
+
+        Pinned records are never removed from the leaderboard, even when
+        newer records with higher accuracy are added.
+
+        Args:
+            record_id: The record_id to toggle.
+
+        Returns:
+            New pin status (True if now pinned, False if unpinned).
+        """
+        with self._lock:
+            for record in self._best_runs:
+                if record.record_id == record_id:
+                    record.pinned = not record.pinned
+                    return record.pinned
         return False
 
     def _get_snapshot_unlocked(self) -> SanctumSnapshot:
@@ -336,6 +373,12 @@ class SanctumAggregator:
             # Batch-level aggregates
             batch_avg_reward=self._batch_avg_reward,
             batch_total_episodes=self._batch_total_episodes,
+            # Cumulative counts (never reset, tracks entire training run)
+            cumulative_fossilized=self._cumulative_fossilized,
+            cumulative_pruned=self._cumulative_pruned,
+            cumulative_blueprint_spawns=dict(self._cumulative_blueprint_spawns),
+            cumulative_blueprint_fossilized=dict(self._cumulative_blueprint_fossilized),
+            cumulative_blueprint_prunes=dict(self._cumulative_blueprint_prunes),
         )
 
     # =========================================================================
@@ -393,10 +436,12 @@ class SanctumAggregator:
         slot_ids = data.get("slot_ids")
         if slot_ids and isinstance(slot_ids, (list, tuple)):
             self._slot_ids = list(slot_ids)
+            self._slot_ids_locked = True  # Lock - don't add more dynamically
         else:
             # Default to 2x2 grid (r0c0, r0c1, r1c0, r1c1)
             from esper.leyline.slot_id import format_slot_id
             self._slot_ids = [format_slot_id(r, c) for r in range(2) for c in range(2)]
+            self._slot_ids_locked = False  # Allow dynamic discovery
 
         # Reset and recreate env states
         self._envs.clear()
@@ -459,8 +504,8 @@ class SanctumAggregator:
             seed.has_vanishing = seed_telemetry.get("has_vanishing", seed.has_vanishing)
             seed.has_exploding = seed_telemetry.get("has_exploding", seed.has_exploding)
 
-            # Track slot_ids dynamically
-            if slot_id not in self._slot_ids and slot_id != "unknown":
+            # Track slot_ids dynamically (only if not locked by TRAINING_STARTED)
+            if not self._slot_ids_locked and slot_id not in self._slot_ids and slot_id != "unknown":
                 self._slot_ids.append(slot_id)
                 self._slot_ids.sort()
 
@@ -638,8 +683,8 @@ class SanctumAggregator:
         self._ensure_env(env_id)
         env = self._envs[env_id]
 
-        # Dynamically track slot_ids as we observe them
-        if slot_id and slot_id not in self._slot_ids and slot_id != "unknown":
+        # Dynamically track slot_ids (only if not locked by TRAINING_STARTED)
+        if not self._slot_ids_locked and slot_id and slot_id not in self._slot_ids and slot_id != "unknown":
             self._slot_ids.append(slot_id)
             # Keep sorted for consistent column order
             self._slot_ids.sort()
@@ -663,10 +708,13 @@ class SanctumAggregator:
             seed.epochs_in_stage = data.get("epochs_in_stage", 0)
             seed.blend_tempo_epochs = data.get("blend_tempo_epochs", 5)
             env.active_seed_count += 1
-            # Track blueprint spawn for graveyard
+            # Track blueprint spawn for graveyard (per-episode and cumulative)
             if seed.blueprint_id:
                 env.blueprint_spawns[seed.blueprint_id] = (
                     env.blueprint_spawns.get(seed.blueprint_id, 0) + 1
+                )
+                self._cumulative_blueprint_spawns[seed.blueprint_id] = (
+                    self._cumulative_blueprint_spawns.get(seed.blueprint_id, 0) + 1
                 )
 
         elif event_type == "SEED_STAGE_CHANGED":
@@ -689,11 +737,15 @@ class SanctumAggregator:
             # Preserve blend_tempo_epochs for fossilized display (already set at germination)
             env.fossilized_params += int(data.get("params_added", 0) or 0)
             env.fossilized_count += 1
+            self._cumulative_fossilized += 1  # Never resets
             env.active_seed_count = max(0, env.active_seed_count - 1)
-            # Track blueprint fossilization for graveyard
+            # Track blueprint fossilization for graveyard (per-episode and cumulative)
             if seed.blueprint_id:
                 env.blueprint_fossilized[seed.blueprint_id] = (
                     env.blueprint_fossilized.get(seed.blueprint_id, 0) + 1
+                )
+                self._cumulative_blueprint_fossilized[seed.blueprint_id] = (
+                    self._cumulative_blueprint_fossilized.get(seed.blueprint_id, 0) + 1
                 )
 
         elif event_type == "SEED_PRUNED":
@@ -712,10 +764,13 @@ class SanctumAggregator:
             pruned_blueprint = data.get("blueprint_id") or seed.blueprint_id
             seed.blueprint_id = pruned_blueprint
 
-            # Track blueprint prune for graveyard.
+            # Track blueprint prune for graveyard (per-episode and cumulative).
             if pruned_blueprint:
                 env.blueprint_prunes[pruned_blueprint] = (
                     env.blueprint_prunes.get(pruned_blueprint, 0) + 1
+                )
+                self._cumulative_blueprint_prunes[pruned_blueprint] = (
+                    self._cumulative_blueprint_prunes.get(pruned_blueprint, 0) + 1
                 )
 
             # Mark PRUNED (seed physically removed, slot unavailable until cooldown completes).
@@ -728,6 +783,7 @@ class SanctumAggregator:
             seed.has_exploding = False
             seed.epochs_in_stage = 0
             env.pruned_count += 1
+            self._cumulative_pruned += 1  # Never resets
             env.active_seed_count = max(0, env.active_seed_count - 1)
 
     def _handle_batch_epoch_completed(self, event: "TelemetryEvent") -> None:
@@ -756,6 +812,7 @@ class SanctumAggregator:
 
         # Capture best_runs from current episode (before reset clears env.best_accuracy)
         # Allow multiple entries per env to reflect distinct episodes; keep top 10 overall.
+        # PINNING: Pinned records are never removed from the leaderboard.
         n_envs = data.get("n_envs")
         if not isinstance(n_envs, int) or n_envs <= 0:
             env_accuracies = data.get("env_accuracies")
@@ -775,6 +832,7 @@ class SanctumAggregator:
                     if base_params > 0
                     else 1.0
                 )
+                # Create full snapshot for historical detail view
                 record = BestRunRecord(
                     env_id=env.env_id,
                     episode=episode_start + env.env_id,
@@ -782,13 +840,41 @@ class SanctumAggregator:
                     final_accuracy=env.host_accuracy,
                     epoch=env.best_accuracy_epoch,
                     seeds={k: SeedState(**v.__dict__) for k, v in env.best_seeds.items()},
+                    slot_ids=list(self._slot_ids),  # All slots for showing DORMANT in detail
                     growth_ratio=growth_ratio,
+                    # Interactive features
+                    record_id=str(uuid.uuid4())[:8],
+                    pinned=False,
+                    # Full env snapshot at peak
+                    reward_components=RewardComponents(**env.reward_components.__dict__)
+                        if env.reward_components else None,
+                    counterfactual_matrix=CounterfactualSnapshot(
+                        slot_ids=env.counterfactual_matrix.slot_ids,
+                        configs=list(env.counterfactual_matrix.configs),
+                        strategy=env.counterfactual_matrix.strategy,
+                        compute_time_ms=env.counterfactual_matrix.compute_time_ms,
+                    ) if env.counterfactual_matrix and env.counterfactual_matrix.slot_ids else None,
+                    action_history=list(env.action_history),
+                    reward_history=list(env.reward_history),
+                    accuracy_history=list(env.accuracy_history),
+                    host_loss=env.host_loss,
+                    host_params=env.host_params,
+                    fossilized_count=env.fossilized_count,
+                    pruned_count=env.pruned_count,
+                    reward_mode=env.reward_mode,
+                    # Seed graveyard: per-blueprint lifecycle stats
+                    blueprint_spawns=dict(env.blueprint_spawns),
+                    blueprint_fossilized=dict(env.blueprint_fossilized),
+                    blueprint_prunes=dict(env.blueprint_prunes),
                 )
                 self._best_runs.append(record)
 
-        # Sort by peak accuracy descending, keep top 10
+        # Sort by peak accuracy descending
         self._best_runs.sort(key=lambda r: r.peak_accuracy, reverse=True)
-        self._best_runs = self._best_runs[:10]
+        # Keep pinned records + top 10 unpinned
+        pinned = [r for r in self._best_runs if r.pinned]
+        unpinned = [r for r in self._best_runs if not r.pinned][:10]
+        self._best_runs = sorted(pinned + unpinned, key=lambda r: r.peak_accuracy, reverse=True)
 
         # Reset per-env state for next episode
         # ALL episode-scoped fields must reset here

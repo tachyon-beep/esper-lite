@@ -88,11 +88,13 @@ def signals_to_features(
     enabled_slots = validate_slot_ids(list(slots))
     enabled_set = set(enabled_slots)
 
-    loss_hist = list(signals.loss_history[-5:]) if getattr(signals, "loss_history", None) else []
+    # loss_history and accuracy_history are required fields on TrainingSignals
+    # (leyline/signals.py lines 79-80) with default empty lists
+    loss_hist = list(signals.loss_history[-5:]) if signals.loss_history else []
     while len(loss_hist) < 5:
         loss_hist.insert(0, 0.0)
 
-    acc_hist = list(signals.accuracy_history[-5:]) if getattr(signals, "accuracy_history", None) else []
+    acc_hist = list(signals.accuracy_history[-5:]) if signals.accuracy_history else []
     while len(acc_hist) < 5:
         acc_hist.insert(0, 0.0)
 
@@ -858,36 +860,43 @@ class PPOAgent:
         Raises:
             RuntimeError: If checkpoint architecture is incompatible
         """
-        import warnings
-
         checkpoint = torch.load(path, map_location=device, weights_only=True)
-        state_dict = checkpoint['network_state_dict']
-        optimizer_state_dict = checkpoint['optimizer_state_dict']
-        architecture = checkpoint.get('architecture', {})
-        config = checkpoint.get('config', {})
-        version = checkpoint.get('checkpoint_version', 0)
-        train_steps = checkpoint.get('train_steps', 0)
+
+        # Required checkpoint fields - fail fast if missing (no backwards compat)
+        try:
+            version = checkpoint['checkpoint_version']
+            state_dict = checkpoint['network_state_dict']
+            optimizer_state_dict = checkpoint['optimizer_state_dict']
+            architecture = checkpoint['architecture']
+            config = checkpoint['config']
+            train_steps = checkpoint['train_steps']
+        except KeyError as e:
+            raise RuntimeError(
+                f"Incompatible checkpoint format: missing required field {e}. "
+                f"This checkpoint was saved with an older version that is no longer supported. "
+                f"Please retrain the model to create a compatible checkpoint."
+            ) from e
 
         # M6: Free checkpoint memory immediately after extracting needed data.
         # Checkpoint holds a full copy of all model weights; waiting for GC to
         # free this can cause OOM when loading large models on GPU.
         del checkpoint
 
-        # === Legacy checkpoint warning ===
-        if version == 0:
-            warnings.warn(
-                f"Loading legacy checkpoint (version 0) from {path}. "
-                "Slot configuration will default to 3 slots. "
-                "Re-save checkpoint to upgrade format.",
-                DeprecationWarning,
-                stacklevel=2
+        # Version validation - only CHECKPOINT_VERSION is supported
+        if version != CHECKPOINT_VERSION:
+            raise RuntimeError(
+                f"Checkpoint version mismatch: got {version}, expected {CHECKPOINT_VERSION}. "
+                f"This checkpoint is incompatible. Please retrain the model."
             )
 
         # === Reconstruct SlotConfig ===
-        if 'slot_ids' in architecture:
-            slot_config = SlotConfig(slot_ids=tuple(architecture['slot_ids']))
-        else:
-            slot_config = SlotConfig.default()
+        # slot_ids is a required field in architecture (saved by save() since v1)
+        if 'slot_ids' not in architecture:
+            raise RuntimeError(
+                "Incompatible checkpoint: architecture.slot_ids is required. "
+                "Please retrain the model to create a compatible checkpoint."
+            )
+        slot_config = SlotConfig(slot_ids=tuple(architecture['slot_ids']))
 
         # === Pre-load validation ===
         expected_num_slots = slot_config.num_slots
@@ -897,7 +906,7 @@ class PPOAgent:
                 f"Checkpoint slot count mismatch: "
                 f"slot_config has {expected_num_slots} slots, "
                 f"but checkpoint weights have {actual_num_slots} slots. "
-                f"Saved slot_ids: {architecture.get('slot_ids', 'not saved (legacy)')}"
+                f"Saved slot_ids: {architecture['slot_ids']}"
             )
 
         # === Infer state_dim ===

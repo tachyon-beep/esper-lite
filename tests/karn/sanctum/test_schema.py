@@ -305,3 +305,72 @@ def test_env_state_status_hysteresis():
     env.add_accuracy(60.0, epoch=14)  # Better!
     assert env.stall_counter == 0
     assert env.status == "healthy"  # Improved but not > 80%
+
+
+def test_env_state_degraded_hysteresis():
+    """Degraded status requires 3 consecutive drops to trigger."""
+    env = EnvState(env_id=0)
+
+    # Start with good accuracy (must be >80.0, not ==80.0)
+    env.add_accuracy(85.0, epoch=0)
+    assert env.status == "excellent"
+    assert env.degraded_counter == 0
+
+    # First drop >1%
+    env.add_accuracy(83.5, epoch=1)  # -1.5% drop
+    assert env.degraded_counter == 1
+    assert env.status == "excellent"  # Not degraded yet
+
+    # Second drop >1%
+    env.add_accuracy(82.0, epoch=2)  # -1.5% drop
+    assert env.degraded_counter == 2
+    assert env.status == "excellent"  # Still not degraded
+
+    # Third drop >1% - should trigger degraded status
+    env.add_accuracy(80.5, epoch=3)  # -1.5% drop
+    assert env.degraded_counter == 3
+    assert env.status == "degraded"  # NOW it's degraded
+
+    # Improvement resets counter but status stays degraded (didn't beat best)
+    env.add_accuracy(81.0, epoch=4)  # +0.5% improvement over previous
+    assert env.degraded_counter == 0  # Counter resets on improvement
+    assert env.status == "degraded"  # Still degraded (didn't beat best of 85.0)
+
+    # New best accuracy - now status should change
+    env.add_accuracy(86.0, epoch=5)  # New best!
+    assert env.degraded_counter == 0
+    assert env.status == "excellent"  # Now excellent (new best >80%)
+
+
+def test_degraded_counter_persists_on_stable():
+    """Degraded counter should NOT reset when accuracy is stable (no improvement)."""
+    env = EnvState(env_id=0)
+
+    # Start with good accuracy (must be >80.0)
+    env.add_accuracy(85.0, epoch=0)
+    assert env.degraded_counter == 0
+
+    # First drop >1%
+    env.add_accuracy(83.5, epoch=1)  # -1.5% drop
+    assert env.degraded_counter == 1
+
+    # Second drop >1%
+    env.add_accuracy(82.0, epoch=2)  # -1.5% drop
+    assert env.degraded_counter == 2
+
+    # STABLE accuracy (no change) - counter should PERSIST
+    env.add_accuracy(82.0, epoch=3)  # 0% change
+    assert env.degraded_counter == 2  # Counter should NOT reset!
+    assert env.status == "excellent"  # Not degraded yet
+
+    # Another drop >1% - should NOW trigger degraded
+    env.add_accuracy(80.5, epoch=4)  # -1.5% drop
+    assert env.degraded_counter == 3
+    assert env.status == "degraded"
+
+    # Verify that only IMPROVEMENT resets counter
+    env.add_accuracy(80.5, epoch=5)  # Stable again
+    assert env.degraded_counter == 3  # Counter still persists
+
+    env.add_accuracy(81.0, epoch=6)  # +0.5% improvement
+    assert env.degraded_counter == 0  # NOW it resets

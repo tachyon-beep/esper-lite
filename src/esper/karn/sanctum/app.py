@@ -17,12 +17,13 @@ from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
 from textual.css.query import NoMatches
 from textual.screen import ModalScreen
-from textual.widgets import DataTable, Footer, Static
+from textual.widgets import DataTable, Footer, Input, Static
 
 from esper.karn.sanctum.widgets import (
     EnvDetailScreen,
     EnvOverview,
     EventLog,
+    HistoricalEnvDetail,
     RunHeader,
     Scoreboard,
     TamiyoBrain,
@@ -37,13 +38,18 @@ HELP_TEXT = """\
 [bold cyan]Sanctum Keyboard Shortcuts[/bold cyan]
 
 [bold]Navigation[/bold]
+  [cyan]h/l[/cyan] [cyan]←/→[/cyan]  Switch between left/right panels
+  [cyan]j/k[/cyan] [cyan]↑/↓[/cyan]  Navigate rows in table
+  [cyan]g/G[/cyan]       Jump to top/bottom
   [cyan]1-9, 0[/cyan]    Jump to environment 0-9
   [cyan]Tab[/cyan]       Cycle to next panel
-  [cyan]↑/↓[/cyan]       Navigate rows in table
-  [cyan]Enter[/cyan]     Open detail modal for selected env
-  [cyan]d[/cyan]         Open detail modal (same as Enter)
+  [cyan]Enter[/cyan]     Open detail modal for selected item
+  [cyan]d[/cyan]         Open env detail (same as Enter)
 
 [bold]Actions[/bold]
+  [cyan]/[/cyan]         Filter envs (by ID or status)
+  [cyan]Esc[/cyan]       Clear filter
+  [cyan]p[/cyan]         Toggle pin on Best Runs item
   [cyan]r[/cyan]         Manual refresh
   [cyan]q[/cyan]         Quit Sanctum
 
@@ -118,6 +124,12 @@ class SanctumApp(App):
         Binding("d", "show_env_detail", "Detail", show=True),
         Binding("tab", "focus_next", "Next Panel", show=False),
         Binding("shift+tab", "focus_previous", "Prev Panel", show=False),
+        # Vim-style navigation
+        Binding("j", "cursor_down", "Down", show=False),
+        Binding("k", "cursor_up", "Up", show=False),
+        Binding("g", "cursor_top", "Top", show=False),
+        Binding("G", "cursor_bottom", "Bottom", show=False),
+        # Number keys for quick env focus
         Binding("1", "focus_env(0)", "Env 0", show=False),
         Binding("2", "focus_env(1)", "Env 1", show=False),
         Binding("3", "focus_env(2)", "Env 2", show=False),
@@ -130,6 +142,14 @@ class SanctumApp(App):
         Binding("0", "focus_env(9)", "Env 9", show=False),
         Binding("r", "refresh", "Refresh", show=True),
         Binding("?", "toggle_help", "Help", show=True),
+        # Filter
+        Binding("/", "start_filter", "Filter", show=True),
+        Binding("escape", "clear_filter", "Clear", show=False, priority=True),
+        # Panel switching
+        Binding("h", "focus_left_panel", "Left Panel", show=False),
+        Binding("l", "focus_right_panel", "Right Panel", show=False),
+        Binding("left", "focus_left_panel", "Left Panel", show=False),
+        Binding("right", "focus_right_panel", "Right Panel", show=False),
     ]
 
     def __init__(
@@ -156,6 +176,7 @@ class SanctumApp(App):
         self._lock = threading.Lock()
         self._poll_count = 0  # Debug: track timer fires
         self._training_thread = training_thread  # Monitor thread status
+        self._filter_active = False  # Track filter input visibility
 
     def compose(self) -> ComposeResult:
         """Build the Sanctum layout.
@@ -167,6 +188,13 @@ class SanctumApp(App):
         - Footer: Keybindings
         """
         yield RunHeader(id="run-header")
+
+        # Filter input - hidden by default, shown when '/' pressed
+        yield Input(
+            placeholder="Filter: env ID or status (stalled, healthy...)",
+            id="filter-input",
+            classes="hidden",
+        )
 
         with Container(id="sanctum-main"):
             # Top section: Environment Overview and Scoreboard
@@ -299,6 +327,111 @@ class SanctumApp(App):
         """Toggle help display."""
         self.push_screen(HelpScreen())
 
+    def action_cursor_down(self) -> None:
+        """Move cursor down in EnvOverview table (vim: j)."""
+        try:
+            overview = self.query_one("#env-overview", EnvOverview)
+            overview.table.action_cursor_down()
+        except NoMatches:
+            pass
+
+    def action_cursor_up(self) -> None:
+        """Move cursor up in EnvOverview table (vim: k)."""
+        try:
+            overview = self.query_one("#env-overview", EnvOverview)
+            overview.table.action_cursor_up()
+        except NoMatches:
+            pass
+
+    def action_cursor_top(self) -> None:
+        """Move cursor to top of EnvOverview table (vim: gg)."""
+        try:
+            overview = self.query_one("#env-overview", EnvOverview)
+            overview.table.move_cursor(row=0)
+        except NoMatches:
+            pass
+
+    def action_cursor_bottom(self) -> None:
+        """Move cursor to bottom of EnvOverview table (vim: G)."""
+        try:
+            overview = self.query_one("#env-overview", EnvOverview)
+            overview.table.move_cursor(row=overview.table.row_count - 1)
+        except NoMatches:
+            pass
+
+    def action_start_filter(self) -> None:
+        """Show filter input and focus it (triggered by '/')."""
+        try:
+            filter_input = self.query_one("#filter-input", Input)
+            filter_input.remove_class("hidden")
+            filter_input.focus()
+            self._filter_active = True
+        except NoMatches:
+            pass
+
+    def action_clear_filter(self) -> None:
+        """Clear and hide filter input (triggered by ESC)."""
+        if not self._filter_active:
+            return  # Don't consume ESC if filter not active
+
+        try:
+            filter_input = self.query_one("#filter-input", Input)
+            filter_input.value = ""
+            filter_input.add_class("hidden")
+            self._filter_active = False
+
+            # Clear filter in EnvOverview
+            overview = self.query_one("#env-overview", EnvOverview)
+            overview.set_filter("")
+
+            # Return focus to the table
+            overview.table.focus()
+        except NoMatches:
+            pass
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        """Handle filter input changes - update EnvOverview filter."""
+        if event.input.id != "filter-input":
+            return
+
+        try:
+            overview = self.query_one("#env-overview", EnvOverview)
+            overview.set_filter(event.value)
+        except NoMatches:
+            pass
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle Enter on filter input - hide input, keep filter active."""
+        if event.input.id != "filter-input":
+            return
+
+        try:
+            filter_input = self.query_one("#filter-input", Input)
+            filter_input.add_class("hidden")
+            self._filter_active = False
+
+            # Focus back on table
+            overview = self.query_one("#env-overview", EnvOverview)
+            overview.table.focus()
+        except NoMatches:
+            pass
+
+    def action_focus_left_panel(self) -> None:
+        """Focus the left panel (EnvOverview table)."""
+        try:
+            overview = self.query_one("#env-overview", EnvOverview)
+            overview.table.focus()
+        except NoMatches:
+            pass
+
+    def action_focus_right_panel(self) -> None:
+        """Focus the right panel (Scoreboard table)."""
+        try:
+            scoreboard = self.query_one("#scoreboard", Scoreboard)
+            scoreboard.table.focus()
+        except NoMatches:
+            pass
+
     def action_show_env_detail(self) -> None:
         """Show detailed view of focused environment.
 
@@ -369,6 +502,43 @@ class SanctumApp(App):
         # Toggle pin in aggregator
         new_status = self._backend.toggle_decision_pin(event.decision_id)
         self.log.info(f"Decision {event.decision_id} pin toggled: {new_status}")
+
+        # Refresh to show updated pin status
+        self._poll_and_refresh()
+
+    def on_scoreboard_best_run_selected(
+        self, event: Scoreboard.BestRunSelected
+    ) -> None:
+        """Handle left-click on Best Runs row to show historical detail.
+
+        Opens a modal showing the frozen env snapshot from when the
+        run achieved its peak accuracy.
+
+        Args:
+            event: The selection event with the BestRunRecord.
+        """
+        self.push_screen(HistoricalEnvDetail(record=event.record))
+        self.log.info(
+            f"Opened historical detail for Ep {event.record.episode + 1} "
+            f"(peak: {event.record.peak_accuracy:.1f}%)"
+        )
+
+    def on_scoreboard_best_run_pin_toggled(
+        self, event: Scoreboard.BestRunPinToggled
+    ) -> None:
+        """Handle right-click on Best Runs row to toggle pin status.
+
+        Pinned records are never removed from the leaderboard.
+
+        Args:
+            event: The pin toggle event with record_id.
+        """
+        if self._backend is None:
+            return
+
+        # Toggle pin in aggregator
+        new_status = self._backend.toggle_best_run_pin(event.record_id)
+        self.log.info(f"Best run {event.record_id} pin toggled: {new_status}")
 
         # Refresh to show updated pin status
         self._poll_and_refresh()

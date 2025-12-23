@@ -348,8 +348,9 @@ class EnvState:
             self.degraded_counter += 1
             if self.degraded_counter >= HYSTERESIS_THRESHOLD:
                 self.status = "degraded"
-        else:
-            self.degraded_counter = 0  # Reset on stable/improving
+        elif curr_acc > prev_acc:  # Only reset on IMPROVEMENT
+            self.degraded_counter = 0
+        # Note: if stable (curr_acc == prev_acc), counter persists
 
         # Positive status updates (no hysteresis needed - immediate feedback is good)
         if self.epochs_since_improvement == 0:  # Just improved

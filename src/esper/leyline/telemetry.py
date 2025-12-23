@@ -285,7 +285,10 @@ class SeedTelemetry:
 
     @classmethod
     def from_dict(cls, data: dict) -> "SeedTelemetry":
-        """Reconstruct from primitive dict."""
+        """Reconstruct from primitive dict.
+
+        Raises KeyError/ValueError if required fields are missing (no silent defaults).
+        """
         from datetime import datetime
         from esper.leyline.stage_schema import STAGE_SCHEMA_VERSION
 
@@ -298,7 +301,8 @@ class SeedTelemetry:
                 f"Telemetry from incompatible version cannot be loaded."
             )
 
-        stage_raw = data.get("stage", SeedStage.DORMANT.value)
+        # Required: stage - validate type and enum membership
+        stage_raw = data["stage"]  # KeyError if missing
         if not isinstance(stage_raw, int) or isinstance(stage_raw, bool):
             raise ValueError(
                 f"SeedTelemetry.stage must be an int SeedStage.value, got {stage_raw!r}"
@@ -310,8 +314,8 @@ class SeedTelemetry:
                 f"SeedTelemetry.stage must be a valid SeedStage.value, got {stage_raw!r}"
             ) from e
 
-        # Validate alpha_mode (AlphaMode enum)
-        alpha_mode_raw = data.get("alpha_mode", AlphaMode.HOLD.value)
+        # Required: alpha_mode - validate type and enum membership
+        alpha_mode_raw = data["alpha_mode"]  # KeyError if missing
         if not isinstance(alpha_mode_raw, int) or isinstance(alpha_mode_raw, bool):
             raise ValueError(
                 f"SeedTelemetry.alpha_mode must be an int AlphaMode.value, got {alpha_mode_raw!r}"
@@ -323,8 +327,8 @@ class SeedTelemetry:
                 f"SeedTelemetry.alpha_mode must be a valid AlphaMode.value, got {alpha_mode_raw!r}"
             ) from e
 
-        # Validate alpha_algorithm (AlphaAlgorithm enum)
-        alpha_algorithm_raw = data.get("alpha_algorithm", AlphaAlgorithm.ADD.value)
+        # Required: alpha_algorithm - validate type and enum membership
+        alpha_algorithm_raw = data["alpha_algorithm"]  # KeyError if missing
         if not isinstance(alpha_algorithm_raw, int) or isinstance(alpha_algorithm_raw, bool):
             raise ValueError(
                 f"SeedTelemetry.alpha_algorithm must be an int AlphaAlgorithm.value, got {alpha_algorithm_raw!r}"
@@ -337,28 +341,29 @@ class SeedTelemetry:
             ) from e
 
         return cls(
+            # Required fields - KeyError if missing
             seed_id=data["seed_id"],
-            blueprint_id=data.get("blueprint_id", ""),
-            layer_id=data.get("layer_id", ""),
-            gradient_norm=data.get("gradient_norm", 0.0),
-            gradient_health=data.get("gradient_health", 1.0),
-            has_vanishing=data.get("has_vanishing", False),
-            has_exploding=data.get("has_exploding", False),
-            accuracy=data.get("accuracy", 0.0),
-            accuracy_delta=data.get("accuracy_delta", 0.0),
-            epochs_in_stage=data.get("epochs_in_stage", 0),
+            blueprint_id=data["blueprint_id"],
+            layer_id=data["layer_id"],
+            gradient_norm=data["gradient_norm"],
+            gradient_health=data["gradient_health"],
+            has_vanishing=data["has_vanishing"],
+            has_exploding=data["has_exploding"],
+            accuracy=data["accuracy"],
+            accuracy_delta=data["accuracy_delta"],
+            epochs_in_stage=data["epochs_in_stage"],
             stage=stage,
-            alpha=data.get("alpha", 0.0),
-            alpha_target=data.get("alpha_target", 0.0),
+            alpha=data["alpha"],
+            alpha_target=data["alpha_target"],
             alpha_mode=alpha_mode,
-            alpha_steps_total=data.get("alpha_steps_total", 0),
-            alpha_steps_done=data.get("alpha_steps_done", 0),
-            time_to_target=data.get("time_to_target", 0),
-            alpha_velocity=data.get("alpha_velocity", 0.0),
+            alpha_steps_total=data["alpha_steps_total"],
+            alpha_steps_done=data["alpha_steps_done"],
+            time_to_target=data["time_to_target"],
+            alpha_velocity=data["alpha_velocity"],
             alpha_algorithm=alpha_algorithm,
-            epoch=data.get("epoch", 0),
-            max_epochs=data.get("max_epochs", 25),
-            captured_at=datetime.fromisoformat(data["captured_at"]) if data.get("captured_at") else _utc_now(),
-            blend_tempo_epochs=data.get("blend_tempo_epochs", 5),
-            blending_velocity=data.get("blending_velocity", 0.0),
+            epoch=data["epoch"],
+            max_epochs=data["max_epochs"],
+            captured_at=datetime.fromisoformat(data["captured_at"]),
+            blend_tempo_epochs=data["blend_tempo_epochs"],
+            blending_velocity=data["blending_velocity"],
         )

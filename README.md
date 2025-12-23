@@ -253,3 +253,56 @@ PYTHONPATH=src python -m esper.scripts.train ppo \
     --dashboard \
     --dashboard-port 8080
 ```
+
+### TrainingConfig Reference
+
+All PPO hyperparameters are managed through `TrainingConfig`. Key parameters beyond the CLI flags:
+
+#### Quality Gates
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `permissive_gates` | `true` | Controls how strictly seeds are evaluated for lifecycle transitions |
+
+**Permissive Gates Mode** (`permissive_gates: true`):
+
+Quality gates (G2, G3, G5) only check structural requirements, allowing Tamiyo to learn quality thresholds through reward signals:
+
+- **G2 (TRAINING → BLENDING)**: Passes after 1 training epoch
+- **G3 (BLENDING → HOLDING)**: Passes when alpha blending completes
+- **G5 (HOLDING → FOSSILIZED)**: Passes if seed is healthy (no contribution threshold)
+
+**Strict Gates Mode** (`permissive_gates: false`):
+
+Gates enforce hard-coded thresholds for gradient ratios, improvement metrics, stability, and contribution levels. Use this for production deployments where you want deterministic quality control.
+
+```json
+{
+  "permissive_gates": true,
+  "n_episodes": 100,
+  "n_envs": 4,
+  ...
+}
+```
+
+#### Reward Configuration
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `reward_mode` | `"shaped"` | `"shaped"` (dense signals), `"simplified"` (cleaner gradients), or `"sparse"` |
+| `reward_family` | `"contribution"` | `"contribution"` (counterfactual) or `"loss"` (direct loss delta) |
+| `param_budget` | `500000` | Parameter budget for seeds (penalty if exceeded) |
+| `param_penalty_weight` | `0.1` | Weight of parameter budget penalty in reward |
+
+#### A/B Testing
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `ab_reward_modes` | `null` | Per-environment reward mode override (list matching `n_envs` length) |
+
+```json
+{
+  "n_envs": 8,
+  "ab_reward_modes": ["shaped", "shaped", "shaped", "shaped", "simplified", "simplified", "simplified", "simplified"]
+}
+```

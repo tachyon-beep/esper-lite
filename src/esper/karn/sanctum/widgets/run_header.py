@@ -208,6 +208,16 @@ class RunHeader(Static):
         row1.append(runtime, style="cyan")
         row1.append("  |  ", style="dim")
 
+        # Throughput: epochs/sec and batches/min
+        eps = s.vitals.epochs_per_second
+        bpm = s.vitals.batches_per_hour / 60  # Convert to per minute
+        if eps > 0 or bpm > 0:
+            row1.append(f"{eps:.1f}", style="cyan")
+            row1.append(" ep/s  ", style="dim")
+            row1.append(f"{bpm:.1f}", style="cyan")
+            row1.append(" batch/min", style="dim")
+            row1.append("  |  ", style="dim")
+
         # Best accuracy (global)
         best_accs = [e.best_accuracy for e in s.envs.values() if e.best_accuracy > 0]
         if best_accs:

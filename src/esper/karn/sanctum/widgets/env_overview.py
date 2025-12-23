@@ -53,6 +53,43 @@ class EnvOverview(Static):
         self.table = DataTable(zebra_stripes=True, cursor_type="row")
         self._snapshot: SanctumSnapshot | None = None
         self._current_slot_ids: list[str] = []  # Track slot_ids to detect column changes
+        self._filter_text: str = ""  # Filter text for env rows
+
+    def set_filter(self, text: str) -> None:
+        """Set filter text and refresh display.
+
+        Filter matches:
+        - Env ID (number): "3" matches env 3
+        - Status: "stall" matches stalled envs
+        - Empty string: shows all envs
+
+        Args:
+            text: Filter text.
+        """
+        self._filter_text = text.lower().strip()
+        self._refresh_table()
+
+    def _matches_filter(self, env: "EnvState") -> bool:
+        """Check if env matches current filter.
+
+        Args:
+            env: Environment state to check.
+
+        Returns:
+            True if env matches filter or filter is empty.
+        """
+        if not self._filter_text:
+            return True
+
+        # Match by env ID
+        if self._filter_text.isdigit():
+            return str(env.env_id) == self._filter_text
+
+        # Match by status
+        if self._filter_text in env.status.lower():
+            return True
+
+        return False
 
     def compose(self):
         """Compose the widget."""
@@ -86,6 +123,7 @@ class EnvOverview(Static):
         # Fixed columns - ordered: Identity → Performance → Trends → Reward breakdown
         self.table.add_column("Env", key="env")
         self.table.add_column("Acc", key="acc")
+        self.table.add_column("CF", key="cf")  # Counterfactual: synergy/interference
         self.table.add_column("Growth", key="growth")  # growth_ratio: (host+foss)/host
         self.table.add_column("Reward", key="reward")
         self.table.add_column("Acc▁▃▅", key="acc_spark")
@@ -106,29 +144,39 @@ class EnvOverview(Static):
     def _refresh_table(self) -> None:
         """Refresh table rows with current snapshot data.
 
-        Preserves cursor position across refresh cycles.
+        Preserves cursor position AND scroll position across refresh cycles.
+        Respects filter if set.
+        Applies visual quieting to OK/STALLED envs unless top 5 acc or has fossilized.
         """
         if self._snapshot is None:
             return
 
-        # Save cursor position before clearing
+        # Save cursor and scroll position before clearing
         saved_cursor_row = self.table.cursor_row
+        saved_scroll_y = self.table.scroll_y
 
         # Clear existing rows
         self.table.clear()
 
-        # Sort envs by ID for stable display
+        # Sort envs by ID for stable display, then filter
         sorted_envs = sorted(
             self._snapshot.envs.values(),
             key=lambda e: e.env_id
         )
+        filtered_envs = [e for e in sorted_envs if self._matches_filter(e)]
+
+        # Compute top 5 accuracy env IDs for visual quieting
+        all_envs = list(self._snapshot.envs.values())
+        top5_env_ids = self._compute_top5_accuracy_ids(all_envs)
 
         # Add row for each environment
-        for env in sorted_envs:
-            self._add_env_row(env)
+        for env in filtered_envs:
+            should_dim = self._should_dim_row(env, top5_env_ids)
+            self._add_env_row(env, dim=should_dim)
 
-        # Add aggregate row if multiple envs
-        if len(self._snapshot.envs) > 1:
+        # Add aggregate row if multiple filtered envs and no filter
+        # (aggregate doesn't make sense for filtered subset)
+        if not self._filter_text and len(self._snapshot.envs) > 1:
             self._add_separator_row()
             self._add_aggregate_row()
 
@@ -137,13 +185,84 @@ class EnvOverview(Static):
             target_row = min(saved_cursor_row, self.table.row_count - 1)
             self.table.move_cursor(row=target_row)
 
-    def _add_env_row(self, env: "EnvState") -> None:
-        """Add a single environment row."""
+        # Restore scroll position (after layout is computed)
+        if saved_scroll_y > 0:
+            self.table.scroll_y = saved_scroll_y
+
+    def _compute_top5_accuracy_ids(self, envs: list["EnvState"]) -> set[int]:
+        """Compute env IDs of top 5 by current accuracy.
+
+        Args:
+            envs: All environments.
+
+        Returns:
+            Set of env_ids for top 5 accuracy envs.
+        """
+        if len(envs) <= 5:
+            return {e.env_id for e in envs}
+
+        # Sort by accuracy descending, take top 5
+        sorted_by_acc = sorted(envs, key=lambda e: e.host_accuracy, reverse=True)
+        return {e.env_id for e in sorted_by_acc[:5]}
+
+    def _has_fossilized_seed(self, env: "EnvState") -> bool:
+        """Check if env has any fossilized seed.
+
+        Args:
+            env: Environment to check.
+
+        Returns:
+            True if any seed is in FOSSILIZED stage.
+        """
+        for seed in env.seeds.values():
+            if seed and seed.stage == "FOSSILIZED":
+                return True
+        return False
+
+    def _should_dim_row(self, env: "EnvState", top5_ids: set[int]) -> bool:
+        """Determine if row should be visually dimmed.
+
+        Visual quieting rules:
+        - Dim rows with status OK or STALLED
+        - EXCEPT: if env is in top 5 accuracy
+        - EXCEPT: if env has a fossilized seed
+
+        Args:
+            env: Environment to check.
+            top5_ids: Set of env IDs in top 5 accuracy.
+
+        Returns:
+            True if row should be dimmed.
+        """
+        # Only dim OK or STALLED statuses
+        if env.status not in ("healthy", "stalled"):
+            return False
+
+        # Don't dim if in top 5 accuracy
+        if env.env_id in top5_ids:
+            return False
+
+        # Don't dim if has fossilized seed
+        if self._has_fossilized_seed(env):
+            return False
+
+        return True
+
+    def _add_env_row(self, env: "EnvState", dim: bool = False) -> None:
+        """Add a single environment row.
+
+        Args:
+            env: Environment state to display.
+            dim: If True, apply dim styling for visual quieting.
+        """
         # Env ID with A/B test cohort pip
         env_id_cell = self._format_env_id(env)
 
         # Accuracy with color coding
         acc_cell = self._format_accuracy(env)
+
+        # Counterfactual: synergy/interference indicator
+        cf_cell = self._format_counterfactual(env)
 
         # Growth ratio: (host+fossilized)/host
         growth_cell = self._format_growth_ratio(env)
@@ -178,6 +297,7 @@ class EnvOverview(Static):
         row = [
             env_id_cell,
             acc_cell,
+            cf_cell,
             growth_cell,
             reward_cell,
             acc_spark,
@@ -190,6 +310,10 @@ class EnvOverview(Static):
             stale_cell,
             status_cell,
         ]
+
+        # Apply visual quieting (dim) if needed
+        if dim:
+            row = [self._apply_dim(cell) for cell in row]
 
         # Add row with key=env_id for row selection event handling
         self.table.add_row(*row, key=str(env.env_id))
@@ -228,6 +352,7 @@ class EnvOverview(Static):
         agg_row = [
             "[bold]Σ[/bold]",
             f"[bold]{self._snapshot.aggregate_mean_accuracy:.1f}%[/bold]",
+            "",  # CF - not aggregated
             f"[dim]{mean_growth:.2f}x[/dim]",  # Growth ratio mean
             f"[bold]{self._snapshot.aggregate_mean_reward:+.2f}[/bold]",
             "",  # Acc sparkline
@@ -281,19 +406,75 @@ class EnvOverview(Static):
             return f"[red]{ratio:.2f}x[/red]"
 
     def _format_accuracy(self, env: "EnvState") -> str:
-        """Format accuracy with color coding.
+        """Format accuracy with color coding and trend arrow.
 
-        Green if at best, yellow if stagnant >5 epochs.
+        Trend arrows: ↑ (improving), ↓ (declining), → (stable)
+        Color: Green if at best, yellow if stagnant >5 epochs.
         """
         acc_str = f"{env.host_accuracy:.1f}%"
 
+        # Compute trend from last 5 epochs of accuracy history
+        trend_arrow = self._compute_trend_arrow(list(env.accuracy_history))
+
         if env.best_accuracy > 0:
             if env.host_accuracy >= env.best_accuracy:
-                return f"[green]{acc_str}[/green]"
+                return f"[green]{trend_arrow}{acc_str}[/green]"
             elif env.epochs_since_improvement > 5:
-                return f"[yellow]{acc_str}[/yellow]"
+                return f"[yellow]{trend_arrow}{acc_str}[/yellow]"
 
-        return acc_str
+        return f"{trend_arrow}{acc_str}"
+
+    def _compute_trend_arrow(self, history: list[float], window: int = 5) -> str:
+        """Compute trend arrow from history.
+
+        Args:
+            history: List of values (newest at end).
+            window: Number of values to consider.
+
+        Returns:
+            ↑ if improving by >0.5%, ↓ if declining by >0.5%, → if stable.
+        """
+        if len(history) < 2:
+            return ""
+
+        # Compare recent average to earlier average
+        recent = history[-min(window, len(history)):]
+        if len(recent) < 2:
+            return ""
+
+        # Compare end vs start of window
+        delta = recent[-1] - recent[0]
+
+        if delta > 0.5:
+            return "↑"
+        elif delta < -0.5:
+            return "↓"
+        else:
+            return "→"
+
+    def _format_counterfactual(self, env: "EnvState") -> str:
+        """Format counterfactual synergy/interference indicator.
+
+        Shows:
+        - '+' (green): Synergy detected (seeds help each other)
+        - '-' (red): Interference detected (seeds hurt each other) - LOUD
+        - '.' (dim): Neutral or unavailable
+        """
+        cf = env.counterfactual_matrix
+        if cf is None or cf.strategy == "unavailable" or len(cf.slot_ids) < 2:
+            return "[dim]·[/dim]"
+
+        synergy = cf.total_synergy()
+
+        if synergy > 0.5:
+            # Positive synergy: seeds working together
+            return "[green]+[/green]"
+        elif synergy < -0.5:
+            # Negative synergy: interference!
+            return "[bold red]-[/bold red]"
+        else:
+            # Neutral
+            return "[dim]·[/dim]"
 
     def _format_reward(self, env: "EnvState") -> str:
         """Format reward (current and average).
@@ -472,3 +653,19 @@ class EnvOverview(Static):
         """Create sparkline from values using schema module."""
         from esper.karn.sanctum.schema import make_sparkline
         return make_sparkline(values, width)
+
+    def _apply_dim(self, text: str) -> str:
+        """Apply dim styling to text for visual quieting.
+
+        Wraps the entire cell content in [dim]...[/dim] markup.
+        This works with Rich markup - dim reduces contrast on all colors.
+
+        Args:
+            text: Cell content (may contain Rich markup).
+
+        Returns:
+            Dimmed version of the text.
+        """
+        if not text or text == "─":
+            return text
+        return f"[dim]{text}[/dim]"

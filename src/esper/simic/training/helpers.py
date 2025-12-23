@@ -71,7 +71,8 @@ def compute_rent_and_shock_inputs(
         if has_active_seed and slot.state is not None:
             # Use cached counts to avoid per-step parameter iteration and to be
             # invariant to BLEND_OUT requires_grad freezing.
-            slot_param_count = int(getattr(slot.state.metrics, "seed_param_count", 0))
+            # seed_param_count is a required field on SeedMetrics (slot.py line 148)
+            slot_param_count = int(slot.state.metrics.seed_param_count)
             if slot_param_count <= 0 and slot.seed is not None:
                 slot_param_count = sum(p.numel() for p in slot.seed.parameters())
 

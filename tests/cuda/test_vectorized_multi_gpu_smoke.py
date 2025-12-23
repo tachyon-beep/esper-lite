@@ -87,9 +87,9 @@ def test_vectorized_multi_gpu_smoke(monkeypatch):
     real_create_model = esper.tolaria.create_model
     created_on_devices: list[str] = []
 
-    def create_model_record(task="cifar10", device="cuda", slots=None):
+    def create_model_record(task="cifar10", device="cuda", slots=None, permissive_gates=True):
         created_on_devices.append(device)
-        return real_create_model(task=task, device=device, slots=slots)
+        return real_create_model(task=task, device=device, slots=slots, permissive_gates=permissive_gates)
 
     monkeypatch.setattr(esper.tolaria, "create_model", create_model_record, raising=True)
 

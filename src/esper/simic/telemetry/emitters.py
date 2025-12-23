@@ -412,10 +412,12 @@ class VectorizedEmitter:
             action_counts: dict[str, int] = {}
             success_counts: dict[str, int] = {}
             for env_state in env_states:
-                for action, count in getattr(env_state, "action_counts", {}).items():
+                # action_counts and successful_action_counts are required fields
+                # on ParallelEnvState (lines 49-50 in parallel_env_state.py)
+                for action, count in env_state.action_counts.items():
                     key = str(action)
                     action_counts[key] = action_counts.get(key, 0) + int(count)
-                for action, count in getattr(env_state, "successful_action_counts", {}).items():
+                for action, count in env_state.successful_action_counts.items():
                     key = str(action)
                     success_counts[key] = success_counts.get(key, 0) + int(count)
 

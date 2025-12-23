@@ -89,47 +89,55 @@ class TestPPOCheckpointRoundTrip:
 class TestPPOCheckpointValidation:
     """Validation catches mismatches."""
 
-    def test_corrupted_checkpoint_fails_with_clear_error(self, tmp_path: Path):
-        """Corrupted checkpoint (missing slot_ids) fails gracefully."""
+    def test_corrupted_checkpoint_missing_slot_ids_fails(self, tmp_path: Path):
+        """Corrupted checkpoint (missing slot_ids) fails with clear error."""
         # Save 5-slot agent
         slot_config = SlotConfig(slot_ids=("r0c0", "r0c1", "r0c2", "r1c0", "r1c1"))
         agent = PPOAgent(slot_config=slot_config, device="cpu", compile_network=False)
         agent.save(tmp_path / "agent.pt")
 
-        # Corrupt: remove slot_ids (simulates legacy or corrupted checkpoint)
+        # Corrupt: remove slot_ids
         checkpoint = torch.load(tmp_path / "agent.pt", weights_only=False)
         del checkpoint['architecture']['slot_ids']
         torch.save(checkpoint, tmp_path / "corrupted.pt")
 
-        # Should fail with clear error (legacy defaults to 3 slots)
-        with pytest.raises(RuntimeError, match="slot count mismatch"):
+        # Should fail with clear error about missing slot_ids
+        with pytest.raises(RuntimeError, match="architecture.slot_ids is required"):
             PPOAgent.load(tmp_path / "corrupted.pt", device="cpu")
 
 
-class TestPPOCheckpointBackwardsCompatibility:
-    """Legacy checkpoint handling."""
+class TestPPOCheckpointNoBackwardsCompatibility:
+    """Verify legacy checkpoints are rejected (No Legacy Code Policy)."""
 
-    def test_legacy_checkpoint_loads_with_warning(self, tmp_path: Path):
-        """Legacy checkpoint (3 slots) loads with deprecation warning."""
+    def test_legacy_checkpoint_fails_fast(self, tmp_path: Path):
+        """Legacy checkpoint (missing checkpoint_version) fails with clear error."""
         # Create checkpoint with current format
         agent = PPOAgent(device="cpu", compile_network=False)
         agent.save(tmp_path / "agent.pt")
 
-        # Strip to legacy format
+        # Strip to legacy format (missing required fields)
         checkpoint = torch.load(tmp_path / "agent.pt", weights_only=False)
         checkpoint.pop('checkpoint_version', None)
-        checkpoint['architecture'].pop('slot_ids', None)
-        checkpoint['architecture'].pop('num_slots', None)
         torch.save(checkpoint, tmp_path / "legacy.pt")
 
-        # Should load with warning
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            loaded = PPOAgent.load(tmp_path / "legacy.pt", device="cpu")
+        # Should fail with clear error - no backwards compatibility
+        with pytest.raises(RuntimeError, match="missing required field"):
+            PPOAgent.load(tmp_path / "legacy.pt", device="cpu")
 
-            assert any("legacy checkpoint" in str(x.message).lower() for x in w)
+    def test_wrong_checkpoint_version_fails(self, tmp_path: Path):
+        """Checkpoint with wrong version fails with clear error."""
+        # Create checkpoint with current format
+        agent = PPOAgent(device="cpu", compile_network=False)
+        agent.save(tmp_path / "agent.pt")
 
-        assert loaded.slot_config == SlotConfig.default()
+        # Change version to invalid
+        checkpoint = torch.load(tmp_path / "agent.pt", weights_only=False)
+        checkpoint['checkpoint_version'] = 999
+        torch.save(checkpoint, tmp_path / "wrong_version.pt")
+
+        # Should fail with version mismatch error
+        with pytest.raises(RuntimeError, match="Checkpoint version mismatch"):
+            PPOAgent.load(tmp_path / "wrong_version.pt", device="cpu")
 
 
 class TestPPOCheckpointVersion:
