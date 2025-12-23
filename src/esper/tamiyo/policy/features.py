@@ -83,19 +83,20 @@ def safe(v, default: float = 0.0, max_val: float = 100.0) -> float:
 # Base features (training state without per-slot features)
 BASE_FEATURE_SIZE = 23
 
-# Per-slot features (schema v1 - one-hot stage encoding):
+# Per-slot features (schema v2 - one-hot stage + scaffolding):
 # 1 is_active
 # + 10 stage one-hot (SeedStage categorical encoding via StageSchema)
-# + 11 state (alpha, improvement, fossilize_value, tempo, alpha_target, alpha_mode,
-#            alpha_steps_total, alpha_steps_done, time_to_target, alpha_velocity, alpha_algorithm)
+# + 15 state (alpha, contribution, velocity, tempo, alpha_target, alpha_mode,
+#            alpha_steps_total, alpha_steps_done, time_to_target, alpha_velocity, alpha_algorithm,
+#            interaction_sum, boost_received, upstream_alpha, downstream_alpha)
 # + 13 blueprint one-hot
-# Total: 1 + 10 + 11 + 13 = 35 dims per slot
-SLOT_FEATURE_SIZE = 35
+# Total: 1 + 10 + 15 + 13 = 39 dims per slot
+SLOT_FEATURE_SIZE = 39
 
-# Feature size (with telemetry off): 23 base + 3 slots * 35 features per slot = 128
-# With telemetry on: + 3 slots * SeedTelemetry.feature_dim() (26) = 206 total
+# Feature size (with telemetry off): 23 base + 3 slots * 39 features per slot = 140
+# With telemetry on: + 3 slots * SeedTelemetry.feature_dim() (26) = 218 total
 # NOTE: Default for 3-slot configuration. Use get_feature_size(slot_config) for dynamic slot counts.
-MULTISLOT_FEATURE_SIZE = 128
+MULTISLOT_FEATURE_SIZE = 140
 
 # Observation normalization bounds (kept local to avoid heavier imports on the HOT PATH)
 _IMPROVEMENT_CLAMP_PCT_PTS: float = 10.0  # Clamp improvement to ±10 percentage points → [-1, 1]
@@ -157,7 +158,7 @@ def obs_to_multislot_features(
     - Total params: total_params (1)
     - Resource management: seed_utilization (1)
 
-    Per-slot features (35 dims each, schema v1 - one-hot stage):
+    Per-slot features (39 dims each, schema v2 - one-hot stage + scaffolding):
     - is_active: 1.0 if seed active, 0.0 otherwise (1 dim)
     - stage_one_hot: categorical encoding via StageSchema (10 dims)
     - alpha: blending alpha (0.0-1.0)
@@ -171,13 +172,17 @@ def obs_to_multislot_features(
     - time_to_target: remaining controller steps normalized to [0, 1]
     - alpha_velocity: schedule velocity (clamped to [-1, 1])
     - alpha_algorithm: composition/gating mode normalized to [0, 1] (AlphaAlgorithm enum)
+    - interaction_sum: total synergy with other seeds (normalized to [0, 1])
+    - boost_received: strongest single interaction (normalized to [0, 1])
+    - upstream_alpha_sum: alpha of seeds in earlier slots (normalized to [0, 1])
+    - downstream_alpha_sum: alpha of seeds in later slots (normalized to [0, 1])
     - blueprint_id: one-hot encoding of blueprint type (13 dims)
 
     This keeps each slot's local state visible, while still giving Tamiyo
     a single flat observation vector that standard PPO implementations
     can consume without custom architecture changes.
 
-    Feature Layout (for default 3-slot config, total 128 dims):
+    Feature Layout (for default 3-slot config, total 140 dims):
     [0-1]   Timing (epoch, global_step)
     [2-4]   Losses (train, val, delta)
     [5-7]   Accuracies (train, val, delta)
@@ -186,9 +191,9 @@ def obs_to_multislot_features(
     [16-20] Accuracy history (5 values)
     [21]    Total params
     [22]    Seed utilization
-    [23-57]  Slot 0 (1 is_active + 10 stage + 11 state + 13 blueprint)
-    [58-92]  Slot 1 (1 is_active + 10 stage + 11 state + 13 blueprint)
-    [93-127] Slot 2 (1 is_active + 10 stage + 11 state + 13 blueprint)
+    [23-61]  Slot 0 (1 is_active + 10 stage + 15 state + 13 blueprint)
+    [62-100] Slot 1 (1 is_active + 10 stage + 15 state + 13 blueprint)
+    [101-139] Slot 2 (1 is_active + 10 stage + 15 state + 13 blueprint)
 
     Args:
         obs: Observation dictionary with optional 'slots' key
@@ -197,7 +202,7 @@ def obs_to_multislot_features(
         slot_config: Slot configuration (default: 3-slot config)
 
     Returns:
-        List of floats: 23 base + num_slots * 35 slot features
+        List of floats: 23 base + num_slots * 39 slot features
 
     Note (P2-9 Design Decision):
         Returns list[float] instead of torch.Tensor for flexibility during
@@ -259,6 +264,12 @@ def obs_to_multislot_features(
         alpha_algorithm_raw = max(_ALPHA_ALGO_MIN, min(alpha_algorithm_raw, _ALPHA_ALGO_MAX))
         alpha_algorithm_norm = (alpha_algorithm_raw - _ALPHA_ALGO_MIN) / _ALPHA_ALGO_RANGE
 
+        # Interaction and topology features (scaffolding support)
+        interaction_sum = safe(slot.get("interaction_sum", 0.0), 0.0, max_val=10.0) / 10.0
+        boost_received = safe(slot.get("boost_received", 0.0), 0.0, max_val=5.0) / 5.0
+        upstream_alpha = safe(slot.get("upstream_alpha_sum", 0.0), 0.0, max_val=3.0) / 3.0
+        downstream_alpha = safe(slot.get("downstream_alpha_sum", 0.0), 0.0, max_val=3.0) / 3.0
+
         # Extract and optionally validate stage value
         stage_val = int(slot.get('stage', 0))
         if _DEBUG_STAGE_VALIDATION:
@@ -282,7 +293,7 @@ def obs_to_multislot_features(
         slot_features.append(float(slot.get('is_active', 0)))
         # Stage one-hot (10 dims)
         slot_features.extend(stage_one_hot)
-        # Other state features (11 dims)
+        # Other state features (15 dims)
         slot_features.extend([
             alpha,
             contribution / _IMPROVEMENT_CLAMP_PCT_PTS,
@@ -296,6 +307,11 @@ def obs_to_multislot_features(
             time_to_target_norm,
             alpha_velocity,
             alpha_algorithm_norm,
+            # Scaffolding features
+            interaction_sum,
+            boost_received,
+            upstream_alpha,
+            downstream_alpha,
         ])
         # Blueprint one-hot (13 dims)
         blueprint_id = slot.get('blueprint_id', None)
@@ -370,14 +386,14 @@ def batch_obs_to_features(
     # [22] Seed utilization
     features[:, 22] = torch.tensor(total_seeds, device=device, dtype=torch.float32) / max(max_seeds, 1)
     
-    # 2. Extract Slot Features (23 + num_slots * 35)
-    # Per-slot layout: [is_active(1), stage_one_hot(10), state(11), blueprint(13)] = 35 dims
+    # 2. Extract Slot Features (23 + num_slots * 39)
+    # Per-slot layout: [is_active(1), stage_one_hot(10), state(15), blueprint(13)] = 39 dims
     max_epochs_den = float(max(max_epochs, 1))
 
     for slot_idx, slot_id in enumerate(slot_config.slot_ids):
         offset = BASE_FEATURE_SIZE + slot_idx * SLOT_FEATURE_SIZE
 
-        # Slot features: 1 is_active + 10 stage one-hot + 11 state + 13 blueprint = 35 dims
+        # Slot features: 1 is_active + 10 stage one-hot + 15 state + 13 blueprint = 39 dims
         for env_idx in range(n_envs):
             report = batch_slot_reports[env_idx].get(slot_id)
             if report:
@@ -405,7 +421,7 @@ def batch_obs_to_features(
                     features[env_idx, offset + 1 + stage_idx] = 1.0
                 # else: all zeros (already initialized)
 
-                # Other state features (offset + 11 to offset + 21, 11 dims)
+                # Other state features (offset + 11 to offset + 25, 15 dims)
                 features[env_idx, offset + 11] = report.metrics.current_alpha
                 features[env_idx, offset + 12] = max(-1.0, min(contribution / _IMPROVEMENT_CLAMP_PCT_PTS, 1.0))
                 features[env_idx, offset + 13] = velocity_norm  # Raw velocity
@@ -418,10 +434,16 @@ def batch_obs_to_features(
                 features[env_idx, offset + 20] = max(-1.0, min(report.alpha_velocity, 1.0))
                 features[env_idx, offset + 21] = float(report.alpha_algorithm - _ALPHA_ALGO_MIN) / _ALPHA_ALGO_RANGE
 
-                # Blueprint one-hot (offset + 22 to offset + 34, 13 dims)
+                # Scaffolding features (offset + 22 to offset + 25, 4 dims)
+                features[env_idx, offset + 22] = min(report.metrics.interaction_sum / 10.0, 1.0)
+                features[env_idx, offset + 23] = min(report.metrics.boost_received / 5.0, 1.0)
+                features[env_idx, offset + 24] = min(report.metrics.upstream_alpha_sum / 3.0, 1.0)
+                features[env_idx, offset + 25] = min(report.metrics.downstream_alpha_sum / 3.0, 1.0)
+
+                # Blueprint one-hot (offset + 26 to offset + 38, 13 dims) - shifted by 4
                 bp_idx = _BLUEPRINT_TO_INDEX.get(report.blueprint_id, -1)
                 if 0 <= bp_idx < _NUM_BLUEPRINT_TYPES:
-                    features[env_idx, offset + 22 + bp_idx] = 1.0
+                    features[env_idx, offset + 26 + bp_idx] = 1.0
             else:
                 # Slot inactive - already zeros from initialization except defaults
                 features[env_idx, offset + 21] = float(AlphaAlgorithm.ADD.value - _ALPHA_ALGO_MIN) / _ALPHA_ALGO_RANGE

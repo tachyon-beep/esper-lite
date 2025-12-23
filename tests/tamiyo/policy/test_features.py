@@ -1,15 +1,15 @@
 """Tests for multi-slot observation feature extraction.
 
-Note: Tests updated for schema v1 (one-hot stage encoding).
-Per-slot layout: [is_active(1), stage_one_hot(10), state(11), blueprint(13)] = 35 dims
-State features: alpha, improvement, contribution_velocity, tempo, 7 alpha controller params
+Note: Tests updated for schema v2 (one-hot stage encoding + scaffolding).
+Per-slot layout: [is_active(1), stage_one_hot(10), state(15), blueprint(13)] = 39 dims
+State features: alpha, improvement, contribution_velocity, tempo, 7 alpha controller params, 4 scaffolding params
 """
 
 # Slot feature layout constants for test clarity
 _STAGE_ONE_HOT_DIMS = 10
-_STATE_AFTER_STAGE_DIMS = 11  # alpha, improvement, velocity, tempo, 7 alpha controller
+_STATE_AFTER_STAGE_DIMS = 15  # alpha, improvement, velocity, tempo, 7 alpha controller, 4 scaffolding
 _BLUEPRINT_ONE_HOT_DIMS = 13
-_SLOT_FEATURE_SIZE = 35  # 1 + 10 + 11 + 13
+_SLOT_FEATURE_SIZE = 39  # 1 + 10 + 15 + 13
 
 
 def test_multislot_features():
@@ -42,9 +42,9 @@ def test_multislot_features():
 
     features = obs_to_multislot_features(obs)
 
-    # Base features (23) + per-slot (3 slots * 35 features) = 128
-    # Per-slot: 1 is_active + 10 stage one-hot + 11 state + 13 blueprint one-hot
-    assert len(features) == 128
+    # Base features (23) + per-slot (3 slots * 39 features) = 140
+    # Per-slot: 1 is_active + 10 stage one-hot + 15 state + 13 blueprint one-hot
+    assert len(features) == 140
 
     # Check r0c0 slot (inactive, stage 0 = UNKNOWN)
     slot_start = 23
@@ -56,7 +56,7 @@ def test_multislot_features():
     assert sum(stage_one_hot) == 1.0
 
     # Check r0c1 slot (active, stage 3 = TRAINING)
-    r0c1_start = slot_start + 35
+    r0c1_start = slot_start + 39
     assert features[r0c1_start] == 1.0  # is_active
     # stage one-hot: TRAINING (value 3) maps to index 3
     stage_one_hot_r0c1 = features[r0c1_start + 1:r0c1_start + 11]
@@ -194,12 +194,12 @@ def test_multislot_features_missing_slots():
 
     features = obs_to_multislot_features(obs)
 
-    # Should still produce 128 features, with slot features defaulting to 0 or defaults
-    assert len(features) == 128
-    # Each slot has 35 features
+    # Should still produce 140 features, with slot features defaulting to 0 or defaults
+    assert len(features) == 140
+    # Each slot has 39 features
     tempo_default = 5 / 12.0
     for i in range(3):  # 3 slots
-        slot_offset = 23 + i * 35
+        slot_offset = 23 + i * 39
         # is_active should be 0
         assert features[slot_offset] == 0.0
         # stage one-hot: stage 0 (UNKNOWN) -> index 0 set to 1.0
@@ -208,8 +208,8 @@ def test_multislot_features_missing_slots():
         assert sum(stage_one_hot) == 1.0
         # tempo at offset 14
         assert abs(features[slot_offset + 14] - tempo_default) < 1e-6
-        # Blueprint zeros (last 13 dims)
-        assert features[slot_offset + 22:slot_offset + 35] == [0.0] * 13
+        # Blueprint zeros (last 13 dims, offset 26-38)
+        assert features[slot_offset + 26:slot_offset + 39] == [0.0] * 13
 
 
 def test_multislot_feature_size_constant():
@@ -240,7 +240,7 @@ def test_multislot_feature_size_constant():
     features = obs_to_multislot_features(obs)
 
     assert len(features) == MULTISLOT_FEATURE_SIZE
-    assert MULTISLOT_FEATURE_SIZE == 128, "Expected 23 base + 105 slot features (3 slots × 35)"
+    assert MULTISLOT_FEATURE_SIZE == 140, "Expected 23 base + 117 slot features (3 slots × 39)"
 
 
 def test_seed_utilization_feature():
@@ -319,8 +319,8 @@ def test_blueprint_one_hot_encoding():
     features = obs_to_multislot_features(obs)
 
     # r0c0 slot starts at index 23
-    # Blueprint one-hot is at indices 45-57 (offset 22-34 within slot: after 1+10+11=22 state features)
-    r0c0_blueprint = features[45:58]  # conv_light = index 1
+    # Blueprint one-hot is at indices 49-61 (offset 26-38 within slot: after 1+10+15=26 state features)
+    r0c0_blueprint = features[49:62]  # conv_light = index 1
     expected = [0.0, 1.0] + [0.0] * 11  # 13-element one-hot with index 1 set
     assert r0c0_blueprint == expected, f"conv_light should be {expected}, got {r0c0_blueprint}"
 
@@ -332,9 +332,9 @@ def test_blueprint_one_hot_encoding():
     }}
     features = obs_to_multislot_features(obs)
 
-    # r0c1 slot starts at index 23 + 35 = 58
-    # Blueprint one-hot at offset 22 within slot = 58 + 22 = 80
-    r0c1_blueprint = features[80:93]  # attention = index 2
+    # r0c1 slot starts at index 23 + 39 = 62
+    # Blueprint one-hot at offset 26 within slot = 62 + 26 = 88
+    r0c1_blueprint = features[88:101]  # attention = index 2
     expected = [0.0, 0.0, 1.0] + [0.0] * 10  # 13-element one-hot with index 2 set
     assert r0c1_blueprint == expected, f"attention should be {expected}, got {r0c1_blueprint}"
 
@@ -346,9 +346,9 @@ def test_blueprint_one_hot_encoding():
     }}
     features = obs_to_multislot_features(obs)
 
-    # r0c2 slot starts at index 23 + 70 = 93
-    # Blueprint one-hot at offset 22 within slot = 93 + 22 = 115
-    r0c2_blueprint = features[115:128]  # noop = index 0
+    # r0c2 slot starts at index 23 + 78 = 101
+    # Blueprint one-hot at offset 26 within slot = 101 + 26 = 127
+    r0c2_blueprint = features[127:140]  # noop = index 0
     expected = [1.0] + [0.0] * 12  # 13-element one-hot with index 0 set
     assert r0c2_blueprint == expected, f"noop should be {expected}, got {r0c2_blueprint}"
 
@@ -360,12 +360,12 @@ def test_blueprint_one_hot_encoding():
     }}
     features = obs_to_multislot_features(obs)
 
-    mid_blueprint = features[80:93]  # r0c1 blueprint at offset 80
+    mid_blueprint = features[88:101]  # r0c1 blueprint at offset 88
     assert mid_blueprint == [0.0] * 13, f"No blueprint should be all zeros, got {mid_blueprint}"
 
 
 def test_dynamic_feature_size_3_slots():
-    """Feature extraction with 3 slots should return 128 features."""
+    """Feature extraction with 3 slots should return 140 features."""
     from esper.tamiyo.policy.features import obs_to_multislot_features, get_feature_size
     from esper.leyline.slot_config import SlotConfig
 
@@ -394,14 +394,14 @@ def test_dynamic_feature_size_3_slots():
 
     features = obs_to_multislot_features(obs, slot_config=slot_config)
 
-    # 23 base + 3 slots * 35 features = 128
+    # 23 base + 3 slots * 39 features = 140
     expected_size = get_feature_size(slot_config)
-    assert expected_size == 128, f"Expected feature size 128 for 3 slots, got {expected_size}"
+    assert expected_size == 140, f"Expected feature size 140 for 3 slots, got {expected_size}"
     assert len(features) == expected_size, f"Expected {expected_size} features, got {len(features)}"
 
 
 def test_dynamic_feature_size_5_slots():
-    """Feature extraction with 5 slots should return 198 features."""
+    """Feature extraction with 5 slots should return 218 features."""
     from esper.tamiyo.policy.features import obs_to_multislot_features, get_feature_size
     from esper.leyline.slot_config import SlotConfig
 
@@ -432,9 +432,9 @@ def test_dynamic_feature_size_5_slots():
 
     features = obs_to_multislot_features(obs, slot_config=slot_config)
 
-    # 23 base + 5 slots * 35 features = 198
+    # 23 base + 5 slots * 39 features = 218
     expected_size = get_feature_size(slot_config)
-    assert expected_size == 198, f"Expected feature size 198 for 5 slots, got {expected_size}"
+    assert expected_size == 218, f"Expected feature size 218 for 5 slots, got {expected_size}"
     assert len(features) == expected_size, f"Expected {expected_size} features, got {len(features)}"
 
 
@@ -467,8 +467,8 @@ def test_dynamic_slot_iteration():
 
     features = obs_to_multislot_features(obs, slot_config=slot_config)
 
-    # 23 base + 2 slots * 35 features = 93
-    assert len(features) == 93, f"Expected 93 features for 2 slots, got {len(features)}"
+    # 23 base + 2 slots * 39 features = 101
+    assert len(features) == 101, f"Expected 101 features for 2 slots, got {len(features)}"
 
     # Verify slot features are present with new layout
     # r0c0 slot at index 23: is_active at [23], stage one-hot at [24-33], alpha at [34]
@@ -479,13 +479,13 @@ def test_dynamic_slot_iteration():
     assert features[23 + 12] == 0.15, "r0c0 improvement should be normalized (1.5 -> 0.15)"
     assert features[23 + 13] == 0.0, "r0c0 contribution_velocity (not provided, defaults to 0)"
 
-    # r0c2 slot at index 23 + 35 = 58
-    assert features[58] == 1.0, "r0c2 should be active"
+    # r0c2 slot at index 23 + 39 = 62
+    assert features[62] == 1.0, "r0c2 should be active"
     # Stage 3 (TRAINING) maps to index 3 in one-hot
-    assert features[58 + 1 + 3] == 1.0, "r0c2 stage one-hot[3] should be 1.0 for TRAINING"
-    assert features[58 + 11] == 0.7, "r0c2 alpha should be 0.7"
-    assert features[58 + 12] == 0.2, "r0c2 improvement should be normalized (2.0 -> 0.2)"
-    assert features[58 + 13] == 0.0, "r0c2 contribution_velocity (not provided, defaults to 0)"
+    assert features[62 + 1 + 3] == 1.0, "r0c2 stage one-hot[3] should be 1.0 for TRAINING"
+    assert features[62 + 11] == 0.7, "r0c2 alpha should be 0.7"
+    assert features[62 + 12] == 0.2, "r0c2 improvement should be normalized (2.0 -> 0.2)"
+    assert features[62 + 13] == 0.0, "r0c2 contribution_velocity (not provided, defaults to 0)"
 
 
 def test_stage_one_hot_all_valid_stages():
@@ -570,3 +570,13 @@ def test_contribution_velocity_raw_not_fossilize_value():
     assert abs(velocity_feature - expected) < 1e-6, (
         f"Expected raw velocity {expected}, got {velocity_feature}"
     )
+
+
+def test_slot_features_include_interactions():
+    """Verify slot features include interaction and topology fields."""
+    from esper.tamiyo.policy.features import SLOT_FEATURE_SIZE
+
+    # New layout: 1 is_active + 10 stage + 15 state + 13 blueprint = 39 dims
+    # (was 35: 1 + 10 + 11 + 13)
+    # Added 4 dims: interaction_sum, boost_received, upstream_alpha, downstream_alpha
+    assert SLOT_FEATURE_SIZE == 39, f"Expected 39 dims/slot, got {SLOT_FEATURE_SIZE}"
