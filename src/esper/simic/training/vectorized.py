@@ -1745,6 +1745,19 @@ def train_ppo_vectorized(
             # Instead of iterating test data multiple times or performing sequential
             # forward passes, we stack all configurations into a single fused pass.
 
+            # CRITICAL: Reset scaffolding metrics at START of counterfactual phase.
+            # These metrics accumulate per-epoch interaction/topology data.
+            # Feature extraction expects per-epoch values, not cross-epoch accumulation.
+            for env_state in env_states:
+                for slot_id in slots:
+                    if env_state.model.has_active_seed_in_slot(slot_id):
+                        seed_state = env_state.model.seed_slots[slot_id].state
+                        if seed_state and seed_state.metrics:
+                            seed_state.metrics.interaction_sum = 0.0
+                            seed_state.metrics.boost_received = 0.0
+                            seed_state.metrics.upstream_alpha_sum = 0.0
+                            seed_state.metrics.downstream_alpha_sum = 0.0
+
             # 1. Determine configurations per environment
             env_configs: list[list[dict[str, float]]] = []
             for i, env_state in enumerate(env_states):
@@ -1974,7 +1987,10 @@ def train_ppo_vectorized(
                         shapley_results[i][cfg["_tuple"]] = (0.0, acc)
 
                 # Consolidate matrix reporting
-                active_slots = [sid for sid in baseline_accs[i].keys()]
+                # CRITICAL: Sort active_slots for position-based topology computation.
+                # Dict.keys() order is NOT guaranteed to match slot positions (r0c0, r0c1, r0c2...).
+                # Lexicographic sort on slot IDs ensures correct upstream/downstream alpha sums.
+                active_slots = sorted(baseline_accs[i].keys())
                 if active_slots:
                     emitters[i].on_counterfactual_matrix(
                         active_slots=active_slots,
@@ -1983,6 +1999,61 @@ def train_ppo_vectorized(
                         all_disabled_acc=all_disabled_accs.get(i),
                         pair_accs=pair_accs.get(i),
                     )
+
+                # Compute interaction terms and populate scaffolding metrics
+                if len(active_slots) >= 2 and i in pair_accs:
+                    all_off_acc = all_disabled_accs.get(i, 0.0)
+                    for (slot_a, slot_b), pair_acc in pair_accs[i].items():
+                        solo_a = baseline_accs[i].get(slot_a, 0.0)
+                        solo_b = baseline_accs[i].get(slot_b, 0.0)
+                        # I_ij = f({i,j}) - f({i}) - f({j}) + f(empty)
+                        interaction = pair_acc - solo_a - solo_b + all_off_acc
+
+                        # Update metrics for both seeds
+                        if env_state.model.has_active_seed_in_slot(slot_a):
+                            seed_a = env_state.model.seed_slots[slot_a].state
+                            if seed_a and seed_a.metrics:
+                                seed_a.metrics.interaction_sum += interaction
+                                seed_a.metrics.boost_received = max(
+                                    seed_a.metrics.boost_received, interaction
+                                )
+
+                        if env_state.model.has_active_seed_in_slot(slot_b):
+                            seed_b = env_state.model.seed_slots[slot_b].state
+                            if seed_b and seed_b.metrics:
+                                seed_b.metrics.interaction_sum += interaction
+                                seed_b.metrics.boost_received = max(
+                                    seed_b.metrics.boost_received, interaction
+                                )
+
+                # Compute topology features (upstream/downstream alpha sums)
+                # active_slots is now sorted by position (lexicographic), ensuring correct topology
+                for slot_idx, slot_id in enumerate(active_slots):
+                    if not env_state.model.has_active_seed_in_slot(slot_id):
+                        continue
+                    seed_state = env_state.model.seed_slots[slot_id].state
+                    if seed_state is None or seed_state.metrics is None:
+                        continue
+
+                    upstream_sum = 0.0
+                    downstream_sum = 0.0
+                    for other_idx, other_id in enumerate(active_slots):
+                        if other_id == slot_id:
+                            continue
+                        if not env_state.model.has_active_seed_in_slot(other_id):
+                            continue
+                        other_state = env_state.model.seed_slots[other_id].state
+                        if other_state is None:
+                            continue
+
+                        other_alpha = other_state.metrics.current_alpha if other_state.metrics else 0.0
+                        if other_idx < slot_idx:
+                            upstream_sum += other_alpha
+                        else:
+                            downstream_sum += other_alpha
+
+                    seed_state.metrics.upstream_alpha_sum = upstream_sum
+                    seed_state.metrics.downstream_alpha_sum = downstream_sum
 
                 # Feed Shapley results to helper
                 if i in shapley_results and env_state.counterfactual_helper:

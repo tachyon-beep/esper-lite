@@ -130,6 +130,11 @@ class SeedMetrics:
     # This is the TRUE causal attribution: real_acc - baseline_acc(alpha=0)
     counterfactual_contribution: float | None = None
 
+    # Contribution velocity tracking (EMA of contribution changes over time)
+    # Used for UI telemetry to show trend direction
+    _prev_contribution: float | None = None
+    contribution_velocity: float = 0.0
+
     # Flag to distinguish "never reached blending" from "started blending at 0% accuracy"
     _blending_started: bool = False
 
@@ -147,6 +152,13 @@ class SeedMetrics:
     # cleanup rather than proactive pruning, creating reward hacking via WAIT spam)
     auto_pruned: bool = False
     auto_prune_reason: str = ""
+
+    # Inter-slot interaction tracking (set by counterfactual engine)
+    # These scaffolding metrics are reset at the START of each epoch's counterfactual phase
+    interaction_sum: float = 0.0  # Σ I_ij for all j ≠ i (total synergy from interactions)
+    boost_received: float = 0.0  # max(I_ij) for j ≠ i (strongest interaction partner)
+    upstream_alpha_sum: float = 0.0  # Σ alpha_j for slots j < i (position-aware blending)
+    downstream_alpha_sum: float = 0.0  # Σ alpha_j for slots j > i (position-aware blending)
 
     # Known auto-prune reasons (catastrophic safety only; HOLDING auto-prunes removed in Phase 4).
     AUTO_PRUNE_REASONS: ClassVar[frozenset[str]] = frozenset({
@@ -249,6 +261,10 @@ class SeedMetrics:
             gradient_norm_avg=self.gradient_norm_avg,
             current_alpha=self.current_alpha,
             alpha_ramp_step=self.alpha_ramp_step,
+            interaction_sum=self.interaction_sum,
+            boost_received=self.boost_received,
+            upstream_alpha_sum=self.upstream_alpha_sum,
+            downstream_alpha_sum=self.downstream_alpha_sum,
         )
 
     def to_dict(self) -> dict:
@@ -265,10 +281,16 @@ class SeedMetrics:
             "current_alpha": self.current_alpha,
             "alpha_ramp_step": self.alpha_ramp_step,
             "counterfactual_contribution": self.counterfactual_contribution,
+            "_prev_contribution": self._prev_contribution,
+            "contribution_velocity": self.contribution_velocity,
             "_blending_started": self._blending_started,
             "seed_gradient_norm_ratio": self.seed_gradient_norm_ratio,
             "host_param_count": self.host_param_count,
             "seed_param_count": self.seed_param_count,
+            "interaction_sum": self.interaction_sum,
+            "boost_received": self.boost_received,
+            "upstream_alpha_sum": self.upstream_alpha_sum,
+            "downstream_alpha_sum": self.downstream_alpha_sum,
         }
 
     @classmethod
@@ -286,10 +308,16 @@ class SeedMetrics:
         metrics.current_alpha = data.get("current_alpha", 0.0)
         metrics.alpha_ramp_step = data.get("alpha_ramp_step", 0)
         metrics.counterfactual_contribution = data.get("counterfactual_contribution")
+        metrics._prev_contribution = data.get("_prev_contribution")
+        metrics.contribution_velocity = data.get("contribution_velocity", 0.0)
         metrics._blending_started = data.get("_blending_started", False)
         metrics.seed_gradient_norm_ratio = data.get("seed_gradient_norm_ratio", 0.0)
         metrics.host_param_count = data.get("host_param_count", 0)
         metrics.seed_param_count = data.get("seed_param_count", 0)
+        metrics.interaction_sum = data.get("interaction_sum", 0.0)
+        metrics.boost_received = data.get("boost_received", 0.0)
+        metrics.upstream_alpha_sum = data.get("upstream_alpha_sum", 0.0)
+        metrics.downstream_alpha_sum = data.get("downstream_alpha_sum", 0.0)
         return metrics
 
 
