@@ -21,6 +21,8 @@ from .helpers import (
 
 from .vectorized import train_ppo_vectorized
 
+from .dual_ab import train_dual_policy_ab
+
 __all__ = [
     # Environment state
     "ParallelEnvState",
@@ -32,4 +34,5 @@ __all__ = [
     "train_heuristic",
     "run_heuristic_episode",
     "train_ppo_vectorized",
+    "train_dual_policy_ab",
 ]
