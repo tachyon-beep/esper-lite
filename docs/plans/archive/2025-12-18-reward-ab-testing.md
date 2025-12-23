@@ -1,6 +1,8 @@
 # Reward A/B Testing Implementation Plan
 
 > **Status:** COMPLETED (2025-12-24)
+>
+> **⚠️ LIMITATION:** This implementation uses a **shared policy** trained with mixed reward signals. It does NOT train separate policies per reward mode. See "Known Limitations" below and `docs/plans/2025-12-24-dual-policy-ab-testing.md` for the proper dual-policy design.
 
 **Goal:** A/B test simplified (3-component) reward vs current (7-component) shaped reward with split environments
 
@@ -9,6 +11,50 @@
 **Tech Stack:** Python 3.11+, PyTorch, existing Simic/Leyline infrastructure
 
 **DRL Expert Recommendation:** The current 7-component reward creates conflicting gradients and an unlearnable landscape. The simplified 3-component reward preserves PBRS guarantees while letting the LSTM do temporal credit assignment.
+
+---
+
+## Known Limitations (Documented 2025-12-24)
+
+### Problem: Shared Policy Conflates Reward Mode Effects
+
+The current implementation trains **one shared policy** receiving gradients from environments with different reward modes. This means:
+
+| What It Measures | What It Does NOT Measure |
+|------------------|--------------------------|
+| Per-group accuracy under a shared policy | Policy quality when trained exclusively on one reward mode |
+| Whether one reward mode's environments achieve higher final accuracy | Whether one reward mode trains a better policy |
+
+### Why This Matters
+
+When Policy P is trained on mixed {SHAPED, SIMPLIFIED} rewards:
+- Gradients conflict (SHAPED may reward action X, SIMPLIFIED may not)
+- Policy converges to a compromise that satisfies neither optimally
+- Comparing group accuracies shows environment performance, not training signal quality
+
+### The Right Experiment
+
+To answer "Which reward mode trains a better policy?", you need:
+1. **Policy A**: Trained exclusively on SHAPED reward (all envs)
+2. **Policy B**: Trained exclusively on SIMPLIFIED reward (all envs)
+3. **Compare**: Final accuracy of Policy A vs Policy B
+
+### Workaround (Current)
+
+Run two separate training sessions:
+```bash
+# Session 1: SHAPED only
+esper ppo --reward-mode shaped --episodes 100 --save-path shaped_policy.pt
+
+# Session 2: SIMPLIFIED only
+esper ppo --reward-mode simplified --episodes 100 --save-path simplified_policy.pt
+
+# Compare final accuracies manually
+```
+
+### Proper Solution
+
+See `docs/plans/2025-12-24-dual-policy-ab-testing.md` for one-policy-per-GPU architecture.
 
 ---
 
