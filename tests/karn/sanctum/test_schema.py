@@ -136,6 +136,35 @@ class TestTamiyoState:
         assert tamiyo.advantage_min == -1.5
         assert tamiyo.advantage_max == 2.3
 
+    def test_history_deques(self):
+        """TamiyoState should have deque fields for sparkline history."""
+        tamiyo = TamiyoState()
+
+        # Should have history deques with maxlen=10
+        assert isinstance(tamiyo.policy_loss_history, deque)
+        assert isinstance(tamiyo.value_loss_history, deque)
+        assert isinstance(tamiyo.grad_norm_history, deque)
+        assert isinstance(tamiyo.entropy_history, deque)
+        assert isinstance(tamiyo.explained_variance_history, deque)
+
+        # Should have maxlen of 10
+        assert tamiyo.policy_loss_history.maxlen == 10
+        assert tamiyo.value_loss_history.maxlen == 10
+
+    def test_per_head_entropy_fields(self):
+        """TamiyoState should have per-head entropy for all 8 action heads."""
+        tamiyo = TamiyoState()
+
+        # Should have all 8 head entropy fields
+        assert hasattr(tamiyo, 'head_slot_entropy')
+        assert hasattr(tamiyo, 'head_blueprint_entropy')
+        assert hasattr(tamiyo, 'head_style_entropy')
+        assert hasattr(tamiyo, 'head_tempo_entropy')
+        assert hasattr(tamiyo, 'head_alpha_target_entropy')
+        assert hasattr(tamiyo, 'head_alpha_speed_entropy')
+        assert hasattr(tamiyo, 'head_alpha_curve_entropy')
+        assert hasattr(tamiyo, 'head_op_entropy')
+
 
 class TestSystemVitals:
     """SystemVitals must capture all system metrics."""

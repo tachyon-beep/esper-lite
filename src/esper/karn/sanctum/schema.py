@@ -411,6 +411,19 @@ class TamiyoState:
     head_slot_grad_norm: float = 0.0  # Gradient norm for slot head
     head_blueprint_entropy: float = 0.0  # Entropy for blueprint action head
     head_blueprint_grad_norm: float = 0.0  # Gradient norm for blueprint head
+    head_style_entropy: float = 0.0
+    head_tempo_entropy: float = 0.0
+    head_alpha_target_entropy: float = 0.0
+    head_alpha_speed_entropy: float = 0.0
+    head_alpha_curve_entropy: float = 0.0
+    head_op_entropy: float = 0.0
+
+    # History for trend sparklines (last 10 values)
+    policy_loss_history: deque[float] = field(default_factory=lambda: deque(maxlen=10))
+    value_loss_history: deque[float] = field(default_factory=lambda: deque(maxlen=10))
+    grad_norm_history: deque[float] = field(default_factory=lambda: deque(maxlen=10))
+    entropy_history: deque[float] = field(default_factory=lambda: deque(maxlen=10))
+    explained_variance_history: deque[float] = field(default_factory=lambda: deque(maxlen=10))
 
     # PPO inner loop context
     inner_epoch: int = 0  # Current inner optimization epoch
