@@ -102,7 +102,7 @@ class TelemetryEvent:
     seed_id: str | None = None
     slot_id: str | None = None
     epoch: int | None = None
-    group_id: str | None = None  # A/B testing group identifier (e.g., "A", "B")
+    group_id: str = "default"  # A/B testing group identifier (e.g., "A", "B")
 
     # Event data
     message: str = ""

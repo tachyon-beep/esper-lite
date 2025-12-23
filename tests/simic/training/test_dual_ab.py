@@ -143,4 +143,11 @@ class TestTelemetryGroupId:
 
         sig = inspect.signature(train_ppo_vectorized)
         assert "group_id" in sig.parameters
-        assert sig.parameters["group_id"].default is None
+        assert sig.parameters["group_id"].default == "default"
+
+    def test_telemetry_event_defaults_to_default_group(self):
+        """TelemetryEvent should default to 'default' group for non-A/B training."""
+        from esper.leyline import TelemetryEvent, TelemetryEventType
+
+        event = TelemetryEvent(event_type=TelemetryEventType.EPOCH_COMPLETED)
+        assert event.group_id == "default"

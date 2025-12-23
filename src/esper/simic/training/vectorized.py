@@ -508,7 +508,7 @@ def train_ppo_vectorized(
     quiet_analytics: bool = False,
     telemetry_dir: str | None = None,
     ready_event: "threading.Event | None" = None,
-    group_id: str | None = None,  # A/B testing group identifier
+    group_id: str = "default",  # A/B testing group identifier
 ) -> tuple[PPOAgent, list[dict]]:
     """Train PPO with vectorized environments using INVERTED CONTROL FLOW.
 
