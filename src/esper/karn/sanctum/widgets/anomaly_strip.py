@@ -52,6 +52,13 @@ class AnomalyStrip(Static):
         """Update widget with new snapshot data."""
         self._snapshot = snapshot
         self._compute_anomalies()
+
+        # Apply visual indicator when anomalies detected
+        if self.has_anomalies:
+            self.add_class("has-anomalies")
+        else:
+            self.remove_class("has-anomalies")
+
         self.refresh()
 
     def _compute_anomalies(self) -> None:
