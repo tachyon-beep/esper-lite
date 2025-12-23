@@ -1,10 +1,10 @@
-"""EventLog widget - Recent event feed with color coding and global rollup.
+"""EventLog widget - Scrolling event feed grouped by second.
 
 Enhanced design:
-- Only shows last 60 seconds of events (click for full history)
-- Color-coded by event type (green=lifecycle, cyan=tamiyo, yellow=warning, red=error)
-- Compact timestamps (:SS, MM:SS on minute change)
-- ALL identical messages rolled up globally with ×N suffix
+- Scrolls chronologically (newest at top)
+- Each second = one line with all event types rolled up
+- Format: "12:45 REWARD×4 GERMINATED×2 STAGE_CHANGED"
+- Click for full unrolled history in modal
 """
 from __future__ import annotations
 
@@ -46,14 +46,12 @@ _EVENT_EMOJI: dict[str, str] = {
 
 
 class EventLog(Static):
-    """Event log widget showing recent telemetry events.
+    """Scrolling event log grouped by second.
 
-    Enhanced features:
-    - Only shows last 60 seconds of events (click for full history)
-    - Compact timestamps (:SS, MM:SS on minute change)
-    - Color coding by event type
-    - ALL identical messages rolled up globally (×N suffix)
-    - Click anywhere to open full event history modal
+    Each second gets one line showing all event types that occurred:
+    - "12:45 REWARD×4 GERMINATED×2" (multiple types, counts if >1)
+    - Scrolls chronologically, newest at top
+    - Click anywhere to open full unrolled history modal
     """
 
     class DetailRequested(Message):
@@ -83,28 +81,25 @@ class EventLog(Static):
         return _EVENT_EMOJI.get(event_type, "")
 
     def render(self):
-        """Render the event log with global message rollup.
+        """Render the event log as scrolling list grouped by second.
 
-        Format optimized for fast-scrolling real-time events:
-        - Only shows events from last 60 seconds (click for full history)
-        - Compact time: :SS (shows MM:SS on minute change)
-        - Compact env: just the number (00, 01, etc.)
-        - ALL identical messages rolled up with ×N suffix (not just consecutive)
-        - Ordered by most recent occurrence
+        Format: Each second gets one line with all event types rolled up.
+        - Scrolls chronologically (newest at top)
+        - Events within same second grouped: "12:45 Reward ×4 Germinated ×2"
+        - Click for full unrolled history
         """
+        from collections import defaultdict
         from datetime import datetime, timezone
 
         if self._snapshot is None or not self._snapshot.event_log:
             return Text("Waiting for events...", style="dim")
 
-        # Filter to events from last 60 seconds only
-        # Use UTC since aggregator stores timestamps in UTC
+        # Filter to events from last 60 seconds
         now = datetime.now(timezone.utc)
         max_age_seconds = 60
 
         recent_events = []
         for entry in self._snapshot.event_log:
-            # Parse timestamp "HH:MM:SS" and compare with current UTC time
             try:
                 parts = entry.timestamp.split(":")
                 if len(parts) == 3:
@@ -114,70 +109,59 @@ class EventLog(Static):
                         second=int(parts[2]),
                         microsecond=0,
                     )
-                    # Handle midnight wraparound (event time > now means yesterday)
                     if event_time > now:
-                        continue  # Skip events from "tomorrow" (actually yesterday)
+                        continue
                     age = (now - event_time).total_seconds()
                     if age <= max_age_seconds:
                         recent_events.append(entry)
             except (ValueError, IndexError):
-                # If we can't parse, include the event
                 recent_events.append(entry)
 
         if not recent_events:
             return Text("No recent events (click for history)", style="dim")
 
-        events = recent_events[-self._max_events:]
+        # Group by timestamp (second), then count event types within each second
+        # Structure: {timestamp: {event_type: count}}
+        second_groups: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        for entry in recent_events:
+            second_groups[entry.timestamp][entry.event_type] += 1
 
-        # Global rollup: count all occurrences of each unique event TYPE
-        # (not message - messages have varying details like slot IDs)
-        # Track most recent entry and count for each event type
-        type_counts: dict[str, tuple[EventLogEntry, int]] = {}
-        for entry in events:
-            if entry.event_type in type_counts:
-                # Keep the most recent entry (latest in list), increment count
-                _, count = type_counts[entry.event_type]
-                type_counts[entry.event_type] = (entry, count + 1)
-            else:
-                type_counts[entry.event_type] = (entry, 1)
+        # Sort by timestamp descending (newest first)
+        sorted_seconds = sorted(second_groups.keys(), reverse=True)
 
-        # Sort by most recent timestamp (descending), then render
-        rolled_events = sorted(
-            type_counts.values(),
-            key=lambda x: x[0].timestamp,
-            reverse=True,
-        )
-
-        # Render rolled-up events (newest first)
+        # Render each second as one line
         lines = []
         last_minute = None
 
-        for entry, count in rolled_events:
-            color = self._get_event_color(entry.event_type)
+        for timestamp in sorted_seconds[-self._max_events:]:
+            type_counts = second_groups[timestamp]
             text = Text()
 
-            # Compact timestamp: show MM:SS on minute change, otherwise just :SS
-            # Pad to 6 chars total for vertical alignment: "MM:SS " or "  :SS "
-            parts = entry.timestamp.split(":")
+            # Timestamp with minute change detection
+            parts = timestamp.split(":")
             if len(parts) == 3:
                 current_minute = parts[1]
                 if current_minute != last_minute:
-                    text.append(f"{parts[1]}:{parts[2]} ", style="dim")  # "MM:SS "
+                    text.append(f"{parts[1]}:{parts[2]} ", style="dim")
                     last_minute = current_minute
                 else:
-                    text.append(f"  :{parts[2]} ", style="dim")  # "  :SS "
+                    text.append(f"  :{parts[2]} ", style="dim")
             else:
-                text.append(f"{entry.timestamp:>5} ", style="dim")
+                text.append(f"{timestamp:>5} ", style="dim")
 
-            # Compact env ID: only show if single occurrence
-            if count == 1 and entry.env_id is not None:
-                text.append(f"{entry.env_id:02d} ", style="bright_blue")
+            # All event types for this second, space-separated
+            first = True
+            for event_type, count in sorted(type_counts.items()):
+                if not first:
+                    text.append(" ", style="dim")
+                first = False
 
-            text.append(entry.message, style=color)
-
-            # Add rollup count if > 1
-            if count > 1:
-                text.append(f" ×{count}", style="dim")
+                color = self._get_event_color(event_type)
+                # Short label for event type
+                label = event_type.replace("SEED_", "").replace("_COMPLETED", "").replace("_COMPUTED", "")
+                text.append(label, style=color)
+                if count > 1:
+                    text.append(f"×{count}", style="dim")
 
             lines.append(text)
 
