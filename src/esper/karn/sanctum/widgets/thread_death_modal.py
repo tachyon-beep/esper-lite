@@ -5,7 +5,6 @@ This is a critical failure mode that requires operator attention.
 """
 from __future__ import annotations
 
-from rich.panel import Panel
 from rich.text import Text
 from textual.binding import Binding
 from textual.containers import Container
