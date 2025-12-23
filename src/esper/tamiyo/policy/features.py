@@ -100,7 +100,6 @@ MULTISLOT_FEATURE_SIZE = 128
 # Observation normalization bounds (kept local to avoid heavier imports on the HOT PATH)
 _IMPROVEMENT_CLAMP_PCT_PTS: float = 10.0  # Clamp improvement to ±10 percentage points → [-1, 1]
 _DEFAULT_MAX_EPOCHS_DEN: float = 25.0  # Fallback when obs['max_epochs'] not provided
-_FOSSILIZE_LOOKAHEAD_EPOCHS: float = 3.0  # Lookahead horizon for fossilize value estimate
 _ALPHA_MODE_MAX: int = max(mode.value for mode in AlphaMode)
 _ALPHA_ALGO_MIN: int = min(algo.value for algo in AlphaAlgorithm)
 _ALPHA_ALGO_MAX: int = max(algo.value for algo in AlphaAlgorithm)
@@ -163,7 +162,7 @@ def obs_to_multislot_features(
     - stage_one_hot: categorical encoding via StageSchema (10 dims)
     - alpha: blending alpha (0.0-1.0)
     - improvement: counterfactual contribution delta (normalized to [-1, 1])
-    - fossilize_value: estimated long-term value (contribution + velocity * lookahead)
+    - contribution_velocity: EMA of contribution delta (for trend detection, normalized to [-1, 1])
     - tempo: blend tempo epochs normalized (0-1)
     - alpha_target: controller target alpha (0.0-1.0)
     - alpha_mode: controller mode normalized to [0, 1] (AlphaMode enum)
@@ -275,12 +274,9 @@ def obs_to_multislot_features(
             # Fallback: all zeros (should not happen after Phase 0 validation)
             stage_one_hot = [0.0] * _NUM_STAGE_DIMS
 
-        # Compute fossilize value estimate: contribution + velocity * lookahead
+        # Compute normalized contribution and velocity (raw, not lookahead)
         contribution = safe(slot.get("improvement", 0.0), 0.0, max_val=_IMPROVEMENT_CLAMP_PCT_PTS)
         contribution_velocity = safe(slot.get("contribution_velocity", 0.0), 0.0, max_val=_IMPROVEMENT_CLAMP_PCT_PTS)
-        fossilize_value = contribution + contribution_velocity * _FOSSILIZE_LOOKAHEAD_EPOCHS
-        # Clamp to same range as contribution
-        fossilize_value = max(-_IMPROVEMENT_CLAMP_PCT_PTS, min(fossilize_value, _IMPROVEMENT_CLAMP_PCT_PTS))
 
         # is_active (1 dim)
         slot_features.append(float(slot.get('is_active', 0)))
@@ -290,7 +286,7 @@ def obs_to_multislot_features(
         slot_features.extend([
             alpha,
             contribution / _IMPROVEMENT_CLAMP_PCT_PTS,
-            fossilize_value / _IMPROVEMENT_CLAMP_PCT_PTS,  # Fossilize value estimate
+            contribution_velocity / _IMPROVEMENT_CLAMP_PCT_PTS,  # Raw velocity, not fossilize_value
             # Tempo normalized to 0-1 range (max is ~12 epochs)
             float(slot.get('blend_tempo_epochs', 5)) / 12.0,
             alpha_target,
@@ -389,11 +385,9 @@ def batch_obs_to_features(
                 if contribution is None:
                     contribution = report.metrics.improvement_since_stage_start
 
-                # Compute fossilize value: contribution + velocity * lookahead
+                # Get contribution velocity (raw, not lookahead)
                 velocity = report.metrics.contribution_velocity
-                fossilize_value = contribution + velocity * _FOSSILIZE_LOOKAHEAD_EPOCHS
-                # Clamp to same range as contribution
-                fossilize_value = max(-_IMPROVEMENT_CLAMP_PCT_PTS, min(fossilize_value, _IMPROVEMENT_CLAMP_PCT_PTS))
+                velocity_norm = max(-1.0, min(velocity / _IMPROVEMENT_CLAMP_PCT_PTS, 1.0))
 
                 # Paranoia check for valid stage value (debug-only)
                 stage_val = report.stage.value
@@ -414,7 +408,7 @@ def batch_obs_to_features(
                 # Other state features (offset + 11 to offset + 21, 11 dims)
                 features[env_idx, offset + 11] = report.metrics.current_alpha
                 features[env_idx, offset + 12] = max(-1.0, min(contribution / _IMPROVEMENT_CLAMP_PCT_PTS, 1.0))
-                features[env_idx, offset + 13] = fossilize_value / _IMPROVEMENT_CLAMP_PCT_PTS
+                features[env_idx, offset + 13] = velocity_norm  # Raw velocity
                 features[env_idx, offset + 14] = float(report.blend_tempo_epochs) / 12.0
                 features[env_idx, offset + 15] = report.alpha_target
                 features[env_idx, offset + 16] = float(report.alpha_mode) / _ALPHA_MODE_MAX

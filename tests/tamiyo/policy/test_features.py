@@ -2,11 +2,12 @@
 
 Note: Tests updated for schema v1 (one-hot stage encoding).
 Per-slot layout: [is_active(1), stage_one_hot(10), state(11), blueprint(13)] = 35 dims
+State features: alpha, improvement, contribution_velocity, tempo, 7 alpha controller params
 """
 
 # Slot feature layout constants for test clarity
 _STAGE_ONE_HOT_DIMS = 10
-_STATE_AFTER_STAGE_DIMS = 11  # alpha, improvement, fossilize, tempo, 7 alpha controller
+_STATE_AFTER_STAGE_DIMS = 11  # alpha, improvement, velocity, tempo, 7 alpha controller
 _BLUEPRINT_ONE_HOT_DIMS = 13
 _SLOT_FEATURE_SIZE = 35  # 1 + 10 + 11 + 13
 
@@ -121,10 +122,10 @@ def test_multislot_alpha_controller_features():
     alpha_algo_range = max(alpha_algo_max - alpha_algo_min, 1)
 
     # New offsets: is_active(1) + stage_one_hot(10) = 11, then state features
-    # alpha at offset 11, improvement at 12, fossilize at 13, tempo at 14
+    # alpha at offset 11, improvement at 12, velocity at 13, tempo at 14
     assert features[slot_start + 11] == 0.5  # alpha
     assert features[slot_start + 12] == 0.5  # improvement normalized (5.0/10)
-    assert features[slot_start + 13] == 0.5  # fossilize_value (same as improvement, no velocity)
+    assert features[slot_start + 13] == 0.0  # contribution_velocity (not provided, defaults to 0)
     assert abs(features[slot_start + 14] - (8 / 12.0)) < 1e-6  # tempo normalized
     assert features[slot_start + 15] == 1.0  # alpha_target
     assert features[slot_start + 16] == AlphaMode.UP.value / max(alpha_mode_max, 1)  # alpha_mode normalized
@@ -476,7 +477,7 @@ def test_dynamic_slot_iteration():
     assert features[23 + 1 + 2] == 1.0, "r0c0 stage one-hot[2] should be 1.0 for GERMINATED"
     assert features[23 + 11] == 0.3, "r0c0 alpha should be 0.3"
     assert features[23 + 12] == 0.15, "r0c0 improvement should be normalized (1.5 -> 0.15)"
-    assert features[23 + 13] == 0.15, "r0c0 fossilize_value should equal improvement (no velocity)"
+    assert features[23 + 13] == 0.0, "r0c0 contribution_velocity (not provided, defaults to 0)"
 
     # r0c2 slot at index 23 + 35 = 58
     assert features[58] == 1.0, "r0c2 should be active"
@@ -484,7 +485,7 @@ def test_dynamic_slot_iteration():
     assert features[58 + 1 + 3] == 1.0, "r0c2 stage one-hot[3] should be 1.0 for TRAINING"
     assert features[58 + 11] == 0.7, "r0c2 alpha should be 0.7"
     assert features[58 + 12] == 0.2, "r0c2 improvement should be normalized (2.0 -> 0.2)"
-    assert features[58 + 13] == 0.2, "r0c2 fossilize_value should equal improvement (no velocity)"
+    assert features[58 + 13] == 0.0, "r0c2 contribution_velocity (not provided, defaults to 0)"
 
 
 def test_stage_one_hot_all_valid_stages():
@@ -523,3 +524,49 @@ def test_stage_one_hot_all_valid_stages():
         assert sum(stage_one_hot) == 1.0, f"Stage {stage.name} one-hot should sum to 1.0"
         assert max(stage_one_hot) == 1.0, f"Stage {stage.name} one-hot should have max 1.0"
         assert min(stage_one_hot) == 0.0, f"Stage {stage.name} one-hot should have min 0.0"
+
+
+def test_contribution_velocity_raw_not_fossilize_value():
+    """Verify contribution_velocity is passed through raw, not as fossilize_value."""
+    from esper.tamiyo.policy.features import obs_to_multislot_features
+
+    obs = {
+        'epoch': 5,
+        'global_step': 50,
+        'train_loss': 0.5,
+        'val_loss': 0.6,
+        'loss_delta': -0.1,
+        'train_accuracy': 70.0,
+        'val_accuracy': 68.0,
+        'accuracy_delta': 0.5,
+        'plateau_epochs': 2,
+        'best_val_accuracy': 70.0,
+        'best_val_loss': 0.5,
+        'loss_history_5': [0.6, 0.55, 0.5, 0.52, 0.5],
+        'accuracy_history_5': [65.0, 66.0, 67.0, 68.0, 68.0],
+        'slots': {
+            'r0c0': {
+                'is_active': True,
+                'stage': 3,  # TRAINING
+                'alpha': 0.5,
+                'improvement': 2.0,  # contribution
+                'contribution_velocity': 0.8,  # raw velocity
+                'blueprint_id': 'conv_light',
+            },
+            'r0c1': {'is_active': False, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0},
+            'r0c2': {'is_active': False, 'stage': 0, 'alpha': 0.0, 'improvement': 0.0},
+        }
+    }
+
+    features = obs_to_multislot_features(obs, total_seeds=1, max_seeds=3)
+
+    # Slot 0 state features start at index 23 + 11 = 34 (after base + is_active + stage one-hot)
+    # [0] is_active, [1-10] stage one-hot, [11] alpha, [12] contribution, [13] velocity
+    velocity_idx = 23 + 13  # offset 36
+    velocity_feature = features[velocity_idx]
+
+    # Velocity should be 0.8 / 10.0 (normalized by _IMPROVEMENT_CLAMP_PCT_PTS)
+    expected = 0.8 / 10.0  # 0.08
+    assert abs(velocity_feature - expected) < 1e-6, (
+        f"Expected raw velocity {expected}, got {velocity_feature}"
+    )
