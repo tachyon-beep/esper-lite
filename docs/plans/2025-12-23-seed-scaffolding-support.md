@@ -2,11 +2,36 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
+**Status:** PARTIALLY IMPLEMENTED (~75%)
+
 **Goal:** Enable Tamiyo to learn and exploit seed scaffolding behavior - where one seed "primes" another, making the second seed more powerful, then gets pruned after its scaffolding role is complete.
 
 **Architecture:** Four-phase incremental approach: (1) Fix feature redundancy, (2) Add scaffolding observations, (3) Add reward shaping, (4) Optional auxiliary value head. Each phase is independently valuable and builds on the previous.
 
 **Tech Stack:** Python 3.11+, PyTorch 2.x, PPO with factored recurrent actor-critic (LSTM), counterfactual validation via fused forward passes.
+
+---
+
+## Implementation Status (Gap Analysis 2025-12-24)
+
+| Phase | Task | Status |
+|-------|------|--------|
+| **Phase 1** | Use raw contribution_velocity | ✅ Done |
+| **Phase 2.1** | Add interaction fields to SeedMetrics | ✅ Done |
+| **Phase 2.2** | Update feature extraction (SLOT_FEATURE_SIZE=39) | ✅ Done |
+| **Phase 2.3** | Compute interaction metrics in vectorized | ✅ Done |
+| **Phase 3.1** | Add synergy bonus to rewards | ✅ Done |
+| **Phase 3.2** | Scaffold hindsight credit | ❌ **NOT IMPLEMENTED** |
+| **Phase 3.3** | Increase GAE lambda to 0.98 | ❓ Unverified |
+| **Phase 4** | Optional aux value head | ⏸️ Skipped (by design) |
+
+### Gap: Scaffold Hindsight Credit (Phase 3.2)
+
+**What's missing:** `compute_scaffold_hindsight_credit()` function that gives retroactive reward to scaffolds when their beneficiary succeeds.
+
+**Impact:** Scaffolds that get pruned *before* their beneficiary fossilizes won't receive credit. The real-time synergy bonus (Phase 3.1 ✅) partially compensates, but full credit assignment for delayed scaffolding payoff is missing.
+
+**Decision needed:** Is this blocking for Phase 3 Transformers, or is the synergy bonus sufficient?
 
 ---
 
