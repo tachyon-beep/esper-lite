@@ -206,7 +206,11 @@ class TamiyoBrain(Static):
         gauge.append("█" * filled, style="cyan")
         gauge.append("░" * empty, style="dim")
         gauge.append("]")
-        gauge.append(f" {value:.2f}\n", style="cyan")
+        # Use more precision for small values (like KL divergence in 0.001-0.015 range)
+        if max_val < 1.0 and value < 0.1:
+            gauge.append(f" {value:.4f}\n", style="cyan")
+        else:
+            gauge.append(f" {value:.2f}\n", style="cyan")
         # Line 3: Description
         gauge.append(f'"{description}"', style="italic dim")
 
