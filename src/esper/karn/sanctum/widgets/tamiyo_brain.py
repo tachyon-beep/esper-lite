@@ -171,9 +171,10 @@ class TamiyoBrain(Static):
             if width > 0:
                 bar.append("▓" * width, style=colors.get(action, "white"))
 
-        bar.append("] ")
+        bar.append("]")
 
-        # Compact legend: G=50 W=25 F=25
+        # Fixed-width legend: G=09 A=02 F=00 P=06 W=60
+        # Always show all actions with 2-digit zero-padded percentages for stability
         abbrevs = {
             "GERMINATE": "G",
             "SET_ALPHA_TARGET": "A",
@@ -181,10 +182,18 @@ class TamiyoBrain(Static):
             "FOSSILIZE": "F",
             "PRUNE": "P",
         }
+        # Build legend as separate Text for right-justification
+        legend_parts = []
         for action in ["GERMINATE", "SET_ALPHA_TARGET", "FOSSILIZE", "PRUNE", "WAIT"]:
             pct = pcts.get(action, 0)
-            if pct > 0:
-                bar.append(f"{abbrevs[action]}={pct:.0f} ", style=colors.get(action, "white"))
+            legend_parts.append((f"{abbrevs[action]}={pct:02.0f}", colors.get(action, "white")))
+
+        # Add spacing then fixed-width legend
+        bar.append(" ")
+        for i, (text, color) in enumerate(legend_parts):
+            bar.append(text, style=color)
+            if i < len(legend_parts) - 1:
+                bar.append(" ", style="dim")
 
         return bar
 
