@@ -125,3 +125,19 @@ def test_interaction_metrics_extracted_from_seed_state():
     assert components.synergy_bonus > 0, (
         f"Synergy bonus should be positive, got {components.synergy_bonus}"
     )
+
+
+def test_scaffold_credit_on_beneficiary_success():
+    """Verify scaffold credit is added when beneficiary fossilizes."""
+    from esper.simic.rewards import compute_scaffold_hindsight_credit
+
+    # Seed A provided boost of 1.5 to seed B
+    # Seed B just fossilized with 3% improvement
+    credit = compute_scaffold_hindsight_credit(
+        boost_given=1.5,
+        beneficiary_improvement=3.0,
+        credit_weight=0.2,
+    )
+
+    assert credit > 0, f"Expected positive credit, got {credit}"
+    assert credit <= 0.2, f"Credit should be bounded by weight"

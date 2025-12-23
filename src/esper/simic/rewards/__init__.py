@@ -23,6 +23,7 @@ from .rewards import (
     compute_minimal_reward,
     compute_simplified_reward,
     compute_loss_reward,
+    compute_scaffold_hindsight_credit,
     # PBRS utilities
     compute_potential,
     compute_pbrs_bonus,
@@ -65,6 +66,7 @@ __all__ = [
     "compute_minimal_reward",
     "compute_simplified_reward",
     "compute_loss_reward",
+    "compute_scaffold_hindsight_credit",
     # PBRS utilities
     "compute_potential",
     "compute_pbrs_bonus",

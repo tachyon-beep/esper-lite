@@ -1210,6 +1210,35 @@ def _compute_synergy_bonus(
     return raw_bonus * synergy_weight
 
 
+def compute_scaffold_hindsight_credit(
+    boost_given: float,
+    beneficiary_improvement: float,
+    credit_weight: float = 0.2,
+) -> float:
+    """Compute retroactive credit for scaffold seeds.
+
+    When a beneficiary seed fossilizes successfully, the scaffold seed
+    that boosted it receives credit proportional to its contribution.
+
+    This implements Hindsight Credit Assignment for scaffolding:
+    the scaffold's value is only known after the beneficiary succeeds.
+
+    Args:
+        boost_given: The interaction term I_ij that scaffold provided
+        beneficiary_improvement: The improvement the beneficiary achieved
+        credit_weight: Maximum credit amount (default 0.2)
+
+    Returns:
+        Credit in [0, credit_weight]
+    """
+    if boost_given <= 0 or beneficiary_improvement <= 0:
+        return 0.0
+
+    # Credit is proportional to boost given and beneficiary success
+    raw_credit = math.tanh(boost_given * beneficiary_improvement * 0.1)
+    return raw_credit * credit_weight
+
+
 def _contribution_fossilize_shaping(
     seed_info: SeedInfo | None,
     seed_contribution: float | None,
@@ -1602,6 +1631,7 @@ __all__ = [
     "compute_minimal_reward",
     "compute_simplified_reward",
     "compute_loss_reward",
+    "compute_scaffold_hindsight_credit",
     # PBRS utilities
     "compute_potential",
     "compute_pbrs_bonus",
